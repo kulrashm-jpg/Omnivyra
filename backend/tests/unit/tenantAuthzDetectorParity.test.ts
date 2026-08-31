@@ -171,6 +171,129 @@ describe('detector parity — MUST NOT classify authorized (fail closed)', () =>
   });
 });
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * REPORTS-BINDER-PARITY-001 — the consolidated reports binder.
+ *
+ * Provenance matters more for this symbol than for any other: `resolveCompanyId`
+ * is an OVERLOADED name in this repository. lib/content/contentApiHelpers
+ * exports a resolveCompanyId(req) used by 13 content routes, and
+ * campaigns/performance-insights and settings/execution-config each define their
+ * own with different signatures. None of them authorizes anything, so crediting
+ * the bare name would clear all of them at once.
+ * ──────────────────────────────────────────────────────────────────────────── */
+const IMPORT_RCI = `import { resolveCompanyId } from '../../../backend/services/reportsCompanyAccessService';`;
+
+describe('reports binder — MUST clear', () => {
+  it('the canonical helper imported and called', () => {
+    const r = scanSource(`${IMPORT_RCI}
+      async function handler(req, res) {
+        const user = await getUser(req);
+        const companyId = await resolveCompanyId(user.id, req.query.company_id);
+        if (!companyId) return res.status(403).end();
+        await supabase.from('analytics_reports').select('*').eq('company_id', companyId);
+      }`);
+    expect(r).toMatchObject({ violation: false, reason: 'authorized', binder: 'resolveCompanyId' });
+  });
+
+  it('a second reports-style route using the same helper', () => {
+    const r = scanSource(`${IMPORT_RCI}
+      async function handler(req, res) {
+        const companyId = await resolveCompanyId(user.id, req.body.companyId);
+        if (!companyId) return res.status(403).json({ error: 'forbidden' });
+        await supabase.from('report_snapshots').insert({ company_id: companyId });
+      }`);
+    expect(r).toMatchObject({ violation: false, binder: 'resolveCompanyId' });
+  });
+
+  it('the ten real reports routes are non-violations', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const repo = path.resolve(__dirname, '../../..');
+    for (const f of ['automation-activity', 'automation-config', 'execute', 'generate', 'growth',
+                     'index', 'journey', 'performance', 'readiness', 'snapshot']) {
+      const src = fs.readFileSync(path.join(repo, `pages/api/reports/${f}.ts`), 'utf8');
+      expect({ f, ...scanSource(src) }).toMatchObject({ violation: false });
+    }
+  });
+});
+
+describe('reports binder — MUST NOT clear', () => {
+  it('a LOCAL function named resolveCompanyId', () => {
+    const r = scanSource(`
+      async function resolveCompanyId(userId, requested) { return requested; }
+      async function handler(req, res) {
+        const companyId = await resolveCompanyId(user.id, req.query.company_id);
+        await supabase.from('analytics_reports').select('*').eq('company_id', companyId);
+      }`);
+    expect(r.violation).toBe(true);
+  });
+
+  it('CRITICAL the same symbol name imported from a DIFFERENT module', () => {
+    // This is the content-route shape: same name, no authorization.
+    const r = scanSource(`import { resolveCompanyId } from '@/lib/content/contentApiHelpers';
+      async function handler(req, res) {
+        const requested = req.query.company_id;
+        const companyId = resolveCompanyId(req);
+        await supabase.from('analytics_reports').select('*').eq('company_id', companyId);
+      }`);
+    expect(r).toMatchObject({ violation: true, reason: 'authz_binder_not_established' });
+  });
+
+  it('the canonical helper imported but never called', () => {
+    const r = scanSource(`${IMPORT_RCI}
+      async function handler(req, res) {
+        const companyId = req.query.company_id;
+        await supabase.from('analytics_reports').select('*').eq('company_id', companyId);
+      }`);
+    expect(r).toMatchObject({ violation: true, reason: 'tenant_data_no_authz' });
+  });
+
+  it('the helper body copied inline into a route (the duplication this task removed)', () => {
+    const r = scanSource(`
+      async function resolveCompanyId(userId, requestedCompanyId) {
+        if (requestedCompanyId) {
+          const { data } = await supabase.from('user_company_roles').select('company_id')
+            .eq('user_id', userId).eq('company_id', requestedCompanyId).eq('status', 'active').maybeSingle();
+          return data?.company_id ?? null;
+        }
+        return null;
+      }
+      async function handler(req, res) {
+        const companyId = await resolveCompanyId(user.id, req.query.company_id);
+      }`);
+    expect(r.violation).toBe(true);
+  });
+
+  it('a route that imports the helper but calls a different local function', () => {
+    const r = scanSource(`${IMPORT_RCI}
+      async function pickCompany(req) { return req.query.company_id; }
+      async function handler(req, res) {
+        const companyId = await pickCompany(req);
+        await supabase.from('analytics_reports').select('*').eq('company_id', companyId);
+      }`);
+    expect(r.violation).toBe(true);
+  });
+
+  it('a similar helper that performs no membership authorization', () => {
+    const r = scanSource(`import { resolveCompanyId } from '../../../backend/services/someOtherService';
+      async function handler(req, res) {
+        const companyId = await resolveCompanyId(req.query.company_id);
+        await supabase.from('analytics_reports').select('*').eq('company_id', companyId);
+      }`);
+    expect(r.violation).toBe(true);
+  });
+
+  it('a service that merely receives a company id establishes nothing', () => {
+    const r = scanSource(`import { buildReport } from '../../../backend/services/reportBuilder';
+      async function handler(req, res) {
+        const companyId = req.query.company_id;
+        await buildReport(companyId);
+        await supabase.from('analytics_reports').select('*').eq('company_id', companyId);
+      }`);
+    expect(r.violation).toBe(true);
+  });
+});
+
 describe('detector parity — preserved behaviour', () => {
   it('a documented authz-ok suppression still clears', () => {
     const r = scanSource(`// authz-ok: tenant derived from the session\n${TENANT_SINK}`);

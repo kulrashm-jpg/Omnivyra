@@ -1,11 +1,11 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { buildAllOrchestratedReports, type OrchestratedReport } from '../../../backend/services/ReportOrchestrator';
 import { compareReportDelta, toOrchestratedReportFromStorage } from '../../../backend/services/ReportDeltaService';
 import { getLatestPersistedReport, persistOrchestratedReport } from '../../../backend/services/reportPersistenceService';
+import { resolveCompanyId } from '../../../backend/services/reportsCompanyAccessService';
 import {
   ActionPayloadSchema,
   ReportExecuteResponseSchema,
@@ -171,29 +171,6 @@ function extractTopPrioritiesFromApiReports(reports: {
     .map((action) => ActionPayloadSchema.parse(action));
 }
 
-async function resolveCompanyId(userId: string, requestedCompanyId?: string): Promise<string | null> {
-  if (requestedCompanyId) {
-    const { data } = await supabase
-      .from('user_company_roles')
-      .select('company_id')
-      .eq('user_id', userId)
-      .eq('company_id', requestedCompanyId)
-      .eq('status', 'active')
-      .maybeSingle();
-
-    return data?.company_id ?? null;
-  }
-
-  const { data } = await supabase
-    .from('user_company_roles')
-    .select('company_id')
-    .eq('user_id', userId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  return data?.company_id ?? null;
-}
 
 async function handler(
   req: NextApiRequest,

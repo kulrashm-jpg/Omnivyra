@@ -83,27 +83,11 @@ export function getReviewWindowCopy(latestReport: Record<string, any> | null): {
   return { days: 120, label: 'about 4 months' };
 }
 
-export async function resolveCompanyId(userId: string, requestedCompanyId?: string): Promise<string | null> {
-  if (requestedCompanyId) {
-    const { data } = await supabase
-      .from('user_company_roles')
-      .select('company_id')
-      .eq('user_id', userId)
-      .eq('company_id', requestedCompanyId)
-      .eq('status', 'active')
-      .maybeSingle();
-    return data?.company_id ?? null;
-  }
-
-  const { data } = await supabase
-    .from('user_company_roles')
-    .select('company_id')
-    .eq('user_id', userId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-  return data?.company_id ?? null;
-}
+/**
+ * REPORTS-BINDER-PARITY-001 — re-exported from the canonical binder so this
+ * module keeps its public surface while there is exactly ONE implementation.
+ */
+export { resolveCompanyId } from '../../services/reportsCompanyAccessService';
 
 export function buildAutomationHighlights(params: {
   config: Record<string, any> | null;

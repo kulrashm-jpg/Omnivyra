@@ -10,16 +10,6 @@
     "pages/api/extension/validate.ts",
     "pages/api/feature-completion.ts",
     "pages/api/readiness-score.ts",
-    "pages/api/reports/automation-activity.ts",
-    "pages/api/reports/automation-config.ts",
-    "pages/api/reports/execute.ts",
-    "pages/api/reports/generate.ts",
-    "pages/api/reports/growth.ts",
-    "pages/api/reports/index.ts",
-    "pages/api/reports/journey.ts",
-    "pages/api/reports/performance.ts",
-    "pages/api/reports/readiness.ts",
-    "pages/api/reports/snapshot.ts",
     "pages/api/settings/intelligence-access.ts"
   ]
 }

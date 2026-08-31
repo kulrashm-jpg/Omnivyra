@@ -1,6 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
   createFreeReport,
@@ -27,6 +26,7 @@ import {
   reserveCreditsForWork,
 } from '../../../backend/services/creditExecutionService';
 import { assertMonetizationBetaAccess } from '../../../backend/services/monetizationBetaAccessService';
+import { resolveCompanyId } from '../../../backend/services/reportsCompanyAccessService';
 
 type GenerateReportRequest = {
   companyId?: string;
@@ -48,29 +48,6 @@ type GenerateReportResponse = {
   correlationId?: string;
 };
 
-async function resolveCompanyId(userId: string, requestedCompanyId?: string): Promise<string | null> {
-  if (requestedCompanyId) {
-    const { data } = await supabase
-      .from('user_company_roles')
-      .select('company_id')
-      .eq('user_id', userId)
-      .eq('company_id', requestedCompanyId)
-      .eq('status', 'active')
-      .maybeSingle();
-
-    return data?.company_id ?? null;
-  }
-
-  const { data } = await supabase
-    .from('user_company_roles')
-    .select('company_id')
-    .eq('user_id', userId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  return data?.company_id ?? null;
-}
 
 async function handler(
   req: NextApiRequest,

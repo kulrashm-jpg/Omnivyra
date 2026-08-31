@@ -83,6 +83,19 @@ const APPROVED = [
   //   -> requireTenantAccess, returns early unless it passes, and exposes the
   //   authorized org as req.orgAccess.orgId.
   'requireCompanyContext', 'withOrgAccess',
+  // REPORTS-BINDER-PARITY-001 — the consolidated reports binder
+  // (backend/services/reportsCompanyAccessService). Verifies an ACTIVE
+  // membership in the requested company and returns the row's own company_id,
+  // so the request value never reaches a sink. Certified by
+  // REPORTS-BATCH-SEC-001 (70 tests) before extraction.
+  //
+  // PROVENANCE IS LOAD-BEARING HERE, not a formality: `resolveCompanyId` is an
+  // overloaded name in this repo. lib/content/contentApiHelpers exports a
+  // resolveCompanyId(req) used by 13 content routes, and campaigns/
+  // performance-insights and settings/execution-config each define their own
+  // with different signatures. None of those authorizes anything. Crediting the
+  // bare name would clear all of them.
+  'resolveCompanyId',
 ];
 const APPROVED_RE = new RegExp(`\\b(?:${APPROVED.join('|')})\\s*\\(`);
 
@@ -118,6 +131,7 @@ const APPROVED_RE = new RegExp(`\\b(?:${APPROVED.join('|')})\\s*\\(`);
 const PROVENANCE_REQUIRED = {
   requireCompanyContext: /companyContextGuardService/,
   withOrgAccess: /middleware\/withOrgAccess/,
+  resolveCompanyId: /reportsCompanyAccessService/,
 };
 
 /** Does this source DEFINE `name` itself (rather than import the real one)? */
