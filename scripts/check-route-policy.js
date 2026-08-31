@@ -142,6 +142,25 @@ const DB_READ_RE = /\b(?:supabase|serviceClient|adminClient|serviceRole\w*)\s*\.
 const PUBLISHED_FILTER_RE = /\.eq\(\s*['"]status['"]\s*,\s*['"]published['"]\s*\)/;
 const PUBLIC_CACHE_RE = /Cache-Control[^\n]*(?:\bpublic\b|s-maxage)/;
 
+/*
+ * AUTHZ-PUBLIC-CLASSIFICATION-001 — two further observable residues of the
+ * public contract, added because check-tenant-authz now CONSUMES these drift
+ * rules to decide PUBLIC-CERTIFIED. Without them a route could declare itself
+ * public and still ship a broad projection or a write.
+ *
+ * PUB-DRIFT-4 — a broad projection. `select('*')` on a service-role read hands
+ * an anonymous caller every column the table happens to grow, which is how an
+ * internal id or a moderation field reaches the public surface without anyone
+ * editing the route. The public routes state their columns explicitly.
+ *
+ * PUB-DRIFT-5 — a write. The four declared public contracts (Published /
+ * Search Engine / Embeddable Content, Embeddable Configuration) are all
+ * read-only projections; an unauthenticated write is outside every one of them.
+ */
+const BROAD_SELECT_RE = /\.select\(\s*['"]\s*\*/;
+const BROAD_SELECT_CONST_RE = /\b(?:const|let|var)\s+[A-Za-z0-9_]*SELECT[A-Za-z0-9_]*\s*=\s*['"]\s*\*\s*['"]/i;
+const PUBLIC_WRITE_RE = /\.(?:insert|update|upsert|delete)\s*\(/;
+
 // ── Task 3b Batch 2b: Contract Drift (design §3.7/§3.8; warn-only) ───────────
 // Public Contract registry — mirror of the §3.7 table. CONTRACT-DRIFT-1 checks
 // registry MEMBERSHIP (the mechanizable proxy); contract BEHAVIOR remains
@@ -201,6 +220,18 @@ function checkPolicyDrift(src, relPath, row) {
       drift.push({
         rule: 'PUB-DRIFT-2',
         message: "declared 'public' with in-file service-role DB reads and no status=published filter — published-only constraint may have been removed",
+      });
+    }
+    if (DB_READ_RE.test(src) && (BROAD_SELECT_RE.test(src) || BROAD_SELECT_CONST_RE.test(src))) {
+      drift.push({
+        rule: 'PUB-DRIFT-4',
+        message: "declared 'public' with a broad select('*') on a service-role read — the public projection must name its columns, or new columns reach anonymous callers automatically",
+      });
+    }
+    if (PUBLIC_WRITE_RE.test(src)) {
+      drift.push({
+        rule: 'PUB-DRIFT-5',
+        message: "declared 'public' but performs a write — every registered Public Contract is a read-only projection",
       });
     }
     // Contract Drift (v5 layer). CONTRACT-DRIFT-1: every public declaration

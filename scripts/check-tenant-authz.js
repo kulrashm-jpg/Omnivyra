@@ -188,6 +188,95 @@ const DB_RE = /\b(?:supabase|serviceClient|adminClient|serviceRole\w*)\s*\.\s*fr
 
 const SUPPRESS_RE = /\/\/\s*authz-ok:/;
 
+/*
+ * AUTHZ-PUBLIC-CLASSIFICATION-001 — "intentionally public" as a first-class
+ * classification instead of undifferentiated debt.
+ *
+ * Two independently audited routes (PUBLIC-BLOGS-SEC-001) sat in the
+ * grandfathered baseline indistinguishable from genuinely unaudited routes,
+ * because this detector had no way to say "unauthenticated ON PURPOSE, and the
+ * public contract is actually satisfied". That made the baseline number mean
+ * less each time it was used.
+ *
+ * A DECLARATION IS NOT A CERTIFICATION. `policy: { category: 'public' }` on its
+ * own proves nothing — treating it as an exemption would be a self-service
+ * authorization bypass. Certification is earned by passing the EXISTING public
+ * validator in check-route-policy.js, which is reused wholesale rather than
+ * reimplemented here:
+ *
+ *   V-1  public policy must not carry a tenant source
+ *   V-8/9/10  schema version, single declaration, non-placeholder justification
+ *   DRIFT-1 / PUB-DRIFT-1  no principal-authorization helper (declaration stale)
+ *   PUB-DRIFT-2  service-role reads must carry the status=published filter
+ *   PUB-DRIFT-4  no broad select('*') projection
+ *   PUB-DRIFT-5  no writes
+ *   CONTRACT-DRIFT-1  the justification must name a registered Public Contract
+ *
+ * Those rules are warn-only in the route-policy inventory. Consuming them here
+ * makes them BLOCKING for any route that claims to be public: a public route
+ * that fails one is a PUBLIC-VIOLATION and fails the build, which is strictly
+ * stronger than the previous behaviour where it was simply baselined debt.
+ */
+let routePolicy = null;
+try {
+  // eslint-disable-next-line global-require
+  routePolicy = require('./check-route-policy.js');
+} catch {
+  routePolicy = null; // validator unavailable → no route can be certified public
+}
+
+/**
+ * @returns null when the file declares no public policy; otherwise the
+ * certification verdict for that public route.
+ */
+/*
+ * PROVENANCE — the policy regexes are textual, so a declaration written inside
+ * a header comment, or pasted into a doc block as an example, would otherwise
+ * read as a real one. Two cheap guards close that:
+ *
+ *   1. comment-only lines are removed before scanning (this is how a fake
+ *      declaration realistically appears — inside a JSDoc block);
+ *   2. the declaration must sit inside the createApiRoute(...) call that
+ *      actually mounts the route, which is where all four real ones live.
+ *
+ * A route cannot certify itself by talking about a policy; it has to pass one
+ * to the factory. Same lesson as the withOrgAccess wrapper false-SAFE.
+ */
+function executableSource(src) {
+  return src
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+    })
+    .join('\n');
+}
+
+function publicCertification(src, relPath) {
+  if (!routePolicy || typeof routePolicy.scanSource !== 'function') return null;
+
+  const code = executableSource(src);
+  // The factory is imported under an alias (`createApiRoute as __createApiRoute`),
+  // so the call site is `__createApiRoute(`. No \b anchor: `_` is a word
+  // character, so \bcreateApiRoute would never match the aliased call.
+  const factoryAt = code.search(/createApiRoute\s*\(/);
+  const mounted = factoryAt !== -1 && /\bpolicy\s*:\s*\{/.test(code.slice(factoryAt));
+  if (!mounted) return null; // no declaration the route factory actually receives
+
+  const row = routePolicy.scanSource(code);
+  if (!row.declared || row.category !== 'public') return null;
+
+  // Fail closed: ANY policy issue or drift finding withdraws certification.
+  const failures = [
+    ...(row.issues || []),
+    ...(routePolicy.checkPolicyDrift(code, relPath, row) || []),
+  ].map((f) => f.rule);
+
+  return failures.length === 0
+    ? { certified: true }
+    : { certified: false, failures: [...new Set(failures)] };
+}
+
 function walk(dir, out) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -199,8 +288,26 @@ function walk(dir, out) {
 }
 
 /** Decide whether a single source string is a tenant-authz violation. */
-function scanSource(src) {
+function scanSource(src, relPath) {
   if (SUPPRESS_RE.test(src)) return { violation: false, reason: 'suppressed' };
+
+  /*
+   * A public route answers to the PUBLIC contract, not to tenant authorization
+   * — there is no principal to authorize. This is not a bypass: the public
+   * rules above are applied instead, and failing them is a violation here.
+   */
+  const pub = publicCertification(src, relPath);
+  if (pub) {
+    return pub.certified
+      ? { violation: false, reason: 'public_certified', classification: 'PUBLIC-CERTIFIED' }
+      : {
+          violation: true,
+          reason: 'public_policy_violation',
+          classification: 'PUBLIC-VIOLATION',
+          failures: pub.failures,
+        };
+  }
+
   const extractsTenant = REQ_MEMBER_RE.test(src) || REQ_DESTRUCTURE_RE.test(src);
   if (!extractsTenant) return { violation: false, reason: 'no_request_tenant_id' };
   const doesDb = DB_RE.test(src);
@@ -234,7 +341,8 @@ function scanRepo() {
   const violators = [];
   for (const file of files) {
     const src = fs.readFileSync(file, 'utf8');
-    if (scanSource(src).violation) violators.push(path.relative(ROOT, file));
+    const rel = path.relative(ROOT, file).split(path.sep).join('/');
+    if (scanSource(src, rel).violation) violators.push(path.relative(ROOT, file));
   }
   return { files, violators };
 }

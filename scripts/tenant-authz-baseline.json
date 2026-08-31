@@ -1,10 +1,8 @@
 {
-  "_comment": "HARDEN-007 tenant-authz grandfathered debt. New routes NOT on this list that access tenant data without an approved authorization call fail CI. Fix a route (add enforceCompanyAccess/requireCapability/etc. or a documented `// authz-ok:` comment) then delete it here.",
+  "_comment": "HARDEN-007 tenant-authz grandfathered debt. New routes NOT on this list that access tenant data without an approved authorization call fail CI. Fix a route (add enforceCompanyAccess/requireCapability/etc. or a documented `// authz-ok:` comment) then delete it here. Routes that are INTENTIONALLY PUBLIC are no longer carried here: they are classified PUBLIC-CERTIFIED by the detector when their policy declaration passes the check-route-policy public validator (V-1/8/9/10, DRIFT-1, PUB-DRIFT-1..4, CONTRACT-DRIFT-1). A public route that fails any of those is a PUBLIC-VIOLATION and fails the build. Everything still listed here is genuinely unaudited.",
   "grandfathered": [
     "pages/api/account-context/analyze.ts",
     "pages/api/admin/check-super-admin.ts",
-    "pages/api/blogs/[id]/public.ts",
-    "pages/api/blogs/public.ts",
     "pages/api/command-center/company-state.ts",
     "pages/api/domain/verification-status.ts",
     "pages/api/extension/validate.ts",
