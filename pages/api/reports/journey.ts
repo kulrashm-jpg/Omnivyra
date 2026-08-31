@@ -11,33 +11,10 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * Auth: Supabase access token (mirrors /api/reports/readiness).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getReportJourney } from '../../../backend/services/canonicalReport/reportJourneyOrchestrator';
+import { resolveCompanyId } from '../../../backend/services/reportsCompanyAccessService';
 
-async function resolveCompanyId(userId: string, requestedCompanyId?: string): Promise<string | null> {
-  if (requestedCompanyId) {
-    const { data } = await supabase
-      .from('user_company_roles')
-      .select('company_id')
-      .eq('user_id', userId)
-      .eq('company_id', requestedCompanyId)
-      .eq('status', 'active')
-      .maybeSingle();
-
-    return data?.company_id ?? null;
-  }
-
-  const { data } = await supabase
-    .from('user_company_roles')
-    .select('company_id')
-    .eq('user_id', userId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  return data?.company_id ?? null;
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {

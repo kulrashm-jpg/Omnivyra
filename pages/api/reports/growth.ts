@@ -1,12 +1,12 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { composeGrowthReport } from '../../../backend/services/growthReportService';
 import { resolveAnalyticsReportInput } from '../../../backend/services/analyticsInputResolver';
 import { getWebsiteReportSafe } from '../../../backend/services/websiteIntelligence/websiteIntelligenceRepository';
 import { getLeadReportSafe } from '../../../backend/services/leadIntelligence/leadIntelligenceSnapshotAdapter';
 import { getPluginsForReport, composePluginSnapshotMemoized, createCompositionContext } from '../../../backend/services/platformIntelligence/registry';
+import { resolveCompanyId } from '../../../backend/services/reportsCompanyAccessService';
 import '../../../backend/services/platformIntelligence/plugins'; // auto-register every plugin
 
 type GrowthReportApiResponse = {
@@ -37,29 +37,6 @@ type GrowthReportApiResponse = {
   code?: string;
 };
 
-async function resolveCompanyId(userId: string, requestedCompanyId?: string): Promise<string | null> {
-  if (requestedCompanyId) {
-    const { data } = await supabase
-      .from('user_company_roles')
-      .select('company_id')
-      .eq('user_id', userId)
-      .eq('company_id', requestedCompanyId)
-      .eq('status', 'active')
-      .maybeSingle();
-
-    return data?.company_id ?? null;
-  }
-
-  const { data } = await supabase
-    .from('user_company_roles')
-    .select('company_id')
-    .eq('user_id', userId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  return data?.company_id ?? null;
-}
 
 async function handler(
   req: NextApiRequest,

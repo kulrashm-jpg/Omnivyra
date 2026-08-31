@@ -2,32 +2,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { resolveCompanyId } from '../../../backend/services/reportsCompanyAccessService';
 import {
   ensureAutomationConfig,
   type AutomationFrequency,
 } from '../../../backend/services/reportAutomationService';
 
-async function resolveCompanyId(userId: string, requestedCompanyId?: string): Promise<string | null> {
-  if (requestedCompanyId) {
-    const { data } = await supabase
-      .from('user_company_roles')
-      .select('company_id')
-      .eq('user_id', userId)
-      .eq('company_id', requestedCompanyId)
-      .eq('status', 'active')
-      .maybeSingle();
-    return data?.company_id ?? null;
-  }
-
-  const { data } = await supabase
-    .from('user_company_roles')
-    .select('company_id')
-    .eq('user_id', userId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-  return data?.company_id ?? null;
-}
 
 async function resolveDomain(companyId: string, fallback?: string): Promise<string | null> {
   if (fallback && fallback.trim().length > 0) return fallback.trim().toLowerCase();

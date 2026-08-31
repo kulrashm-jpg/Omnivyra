@@ -4,7 +4,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
-import { AutomationContext, AutomationEvent, HighlightItem, HighlightTone, NotificationEvent, ScoredHighlight, buildAlertHighlights, buildAutomationHighlights, buildAutomationPrioritySignal, buildSnapshotPrioritySignal, formatDate, getReviewWindowCopy, isMissingTableError, readList, resolveCompanyId, timeAgo, toNumber } from '../../../backend/apiHandlers/reports/automationActivityShared';
+import { AutomationContext, AutomationEvent, HighlightItem, HighlightTone, NotificationEvent, ScoredHighlight, buildAlertHighlights, buildAutomationHighlights, buildAutomationPrioritySignal, buildSnapshotPrioritySignal, formatDate, getReviewWindowCopy, isMissingTableError, readList, timeAgo, toNumber } from '../../../backend/apiHandlers/reports/automationActivityShared';
+import { resolveCompanyId } from '../../../backend/services/reportsCompanyAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
