@@ -97,8 +97,15 @@ export {
   type TenantGovernanceConfig,
 } from './governance';
 export {
+  resolveLeadPersonId,
+  resolvePersonAnchor,
+  type PersonAnchorResolution,
+} from './personAnchor';
+export {
   evaluateTaskGovernance,
   evaluateBatchGovernance,
+  resolveCanonicalGovernance,
+  resolveCanonicalGovernanceWithAnchor,
   getLatestGovernanceDecision,
   getGovernanceHistory,
   loadTenantGovernanceConfig,
@@ -248,6 +255,7 @@ export {
   getOutreachTaskById,
   listOutreachTasksForLead,
   setOutreachTaskState,
+  setOutreachTaskPersonId,
   transitionOutreachTaskState,
   appendApproval,
   appendAttempt,
