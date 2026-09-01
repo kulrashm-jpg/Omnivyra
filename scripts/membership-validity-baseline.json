@@ -1,0 +1,30 @@
+{
+  "_readme": [
+    "AUTHZ-SERVICE-LAYER-DETECTOR-001 — reviewed findings for check-membership-validity.",
+    "",
+    "An entry here is NOT an exemption and NOT a suppression. It records a site that",
+    "matches the detector's shape — a company derived from the authenticated principal",
+    "with no membership-validity condition — but where source inspection established",
+    "the derived company does not authorize anything. Each entry must name what the",
+    "value IS used for, and what would have to change for it to become a defect.",
+    "",
+    "Adding an entry to silence a site that DOES authorize is the failure this file",
+    "exists to make visible. Fix such a site instead: add the status predicate, filter",
+    "in code, or route through an approved tenant primitive.",
+    "",
+    "Entries are keyed by file:line and go stale when code moves. The guard reports",
+    "stale keys so they are removed rather than left to rot into blanket cover."
+  ],
+  "accepted": [
+    {
+      "site": "pages/api/access/request.ts:108",
+      "classification": "attribution",
+      "reason": "The derived company is written to access_requests.organization_id on the requester's own PENDING row. It is never used as a tenant predicate for a read or a write, and it grants nothing: the row is a REQUEST for access, and approval is a separate super-admin flow that establishes access on its own terms.",
+      "caveat": "The field does influence which organisation an approver sees the request under, so a caller holding only a stale membership would have their request attributed to that organisation. That is a routing and disclosure question about a self-submitted request, not an authorization decision, and it does not confer access.",
+      "would_become_a_defect_if": "access_requests.organization_id is ever read back as the tenant for a subsequent read, write or approval decision without re-establishing membership.",
+      "owner": "platform-security",
+      "recorded": "2026-09-01",
+      "audit": "AUTHZ-SERVICE-LAYER-DETECTOR-001"
+    }
+  ]
+}
