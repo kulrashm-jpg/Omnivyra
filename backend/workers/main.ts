@@ -37,6 +37,12 @@ import { attachLeadJobFailureHandler } from '../queue/leadQueueHardening';
 import { processPublishJob }         from '../queue/jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from '../queue/jobProcessors/engagementPollingProcessor';
 import { processBoltJob }            from '../queue/jobProcessors/boltProcessor';
+import {
+  BOLT_STALLED_INTERVAL_MS,
+  attachBoltRunReconciliation,
+  releaseBoltRunClaimOnShutdown,
+} from '../services/boltExecutionRecovery';
+import { getHeldRunLocks } from '../services/boltExecutionLock';
 import { getIntelligencePollingWorker } from './intelligencePollingWorker';
 import { processCampaignPlanningJob } from '../queue/jobProcessors/campaignPlanningProcessor';
 import { runLeadThreadRecomputeWorker } from './leadThreadRecomputeWorker';
@@ -76,7 +82,13 @@ const boltConcurrency   = (() => {
 })();
 
 const publishWorker     = getWorker('publish', processPublishJob);
-const boltWorker        = getWorker('bolt-execution', processBoltJob, { concurrency: boltConcurrency });
+const boltWorker        = getWorker('bolt-execution', processBoltJob, {
+  concurrency: boltConcurrency,
+  // bolt-execution ONLY — every other queue keeps the 30-minute default.
+  stalledInterval: BOLT_STALLED_INTERVAL_MS,
+});
+// BullMQ recovers the JOB; only this recovers the bolt_execution_runs ROW.
+attachBoltRunReconciliation(boltWorker);
 const engagementWorker  = getWorker('engagement-polling', async () => {
   await processEngagementPollingJob();
 }, { concurrency: 1 });
@@ -492,7 +504,21 @@ async function main(): Promise<void> {
     stopPublishingJobsLoop();
     stopBaselineLoop();
     clearInterval(orphanRecoveryTimer);
-    await Promise.allSettled([
+    // Bounded drain. `worker.close()` waits for in-flight jobs, which is right
+    // — but a BOLT run takes minutes and no container grace period is that
+    // long, so an unbounded wait guarantees we are SIGKILLed mid-await and the
+    // reconciliation below never runs. Capping the wait trades "finish the job"
+    // (unachievable) for "record that the job was interrupted" (achievable).
+    const drainDeadlineMs = (() => {
+      const o = Number(process.env.WORKER_DRAIN_TIMEOUT_MS);
+      return Number.isFinite(o) && o >= 1000 && o <= 120_000 ? o : 15_000;
+    })();
+    const drainDeadline = new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, drainDeadlineMs);
+      if (typeof t.unref === 'function') t.unref();
+    });
+
+    await Promise.race([drainDeadline, Promise.allSettled([
       publishWorker.close(),
       boltWorker.close(),
       engagementWorker.close(),
@@ -506,7 +532,26 @@ async function main(): Promise<void> {
       // semantic, replay). Content/creator/whatsapp/analytics workers manage
       // their own lifecycle inside contentGenerationQueues (unchanged).
       ...sharedConsumers.workers.map((w) => w.close()),
-    ]);
+    ])]);
+
+    // Hand back every BOLT claim this process still holds. Graceful shutdown
+    // CANNOT guarantee a multi-minute run completes, so the honest goal is to
+    // make the interruption immediately visible instead of leaving the next
+    // attempt to wait out the lock TTL. Status is deliberately untouched: the
+    // job may still be retried, and declaring it failed here would make
+    // executeBoltPipelineRuntime refuse to re-enter.
+    const held = getHeldRunLocks();
+    if (held.length > 0) {
+      console.warn('[main] releasing in-flight BOLT claims', { count: held.length });
+      await Promise.allSettled(held.map(async ({ runId, token }) => {
+        const result = await releaseBoltRunClaimOnShutdown(runId, token);
+        // `strict: false` — narrow by member presence, not by the `ok` flag.
+        if ('error' in result) {
+          console.error('[main] BOLT claim release failed', { run_id: runId, error: result.error });
+        }
+      }));
+    }
+
     await closeConnections();
     console.info('[main] shutdown complete');
     process.exit(0);

@@ -39,13 +39,15 @@ import { supabase } from '../db/supabaseClient';
  * mid-stage and expose the run to a concurrent stale-recovery claim
  * by another worker.
  *
- * KNOWN GAP (deferred): `updateRun` currently writes `heartbeat_at` on
- * every state update but does NOT write `lock_expires_at`. A prior
- * comment claimed it did — it doesn't. Until that's wired in, the
- * lock is only extended at stage boundaries (acquireRunLock +
- * extendRunLock). 5 min gives margin even on 4-week schedule runs
- * because each stage *boundary* extends, and no individual stage in
- * the observed envelope exceeds the TTL.
+ * CORRECTED (Phase 168): the "KNOWN GAP" previously recorded here — that
+ * `updateRun` writes `heartbeat_at` but NOT `lock_expires_at` — is no longer
+ * true. `boltPipelineServiceModel.updateRun` sets
+ * `lock_expires_at = heartbeat + 2min` on every progress write, and production
+ * rows confirm it: `lock_expires_at` is exactly `updated_at + 120s` on live
+ * runs. So the lock is refreshed on every substage emission, not merely at
+ * stage boundaries, and a run silent for >2 minutes provably has no live owner.
+ * `BOLT_STALLED_INTERVAL_MS` is aligned to that window; leaving this comment
+ * stale would invite someone to widen it back on false premises.
  */
 export const DEFAULT_LOCK_TTL_MS = 5 * 60 * 1000;
 
@@ -54,6 +56,29 @@ export interface BoltRunLock {
   token: string;
   /** When the lock will expire if not extended. */
   expiresAt: string;
+}
+
+/**
+ * Locks this PROCESS currently holds: runId → token.
+ *
+ * Exists so shutdown can hand back exactly the claims we own and no others.
+ * Without the token, a shutdown handler could only release by run id, which
+ * would let a dying worker clear a lock that a replacement worker had already
+ * legitimately taken over.
+ *
+ * In-memory by design: it describes this process's state, and a process that
+ * disappears takes its claims with it (the DB lock then expires on its TTL).
+ */
+const _heldLocks = new Map<string, string>();
+
+/** Snapshot of the locks this process holds. */
+export function getHeldRunLocks(): Array<{ runId: string; token: string }> {
+  return Array.from(_heldLocks, ([runId, token]) => ({ runId, token }));
+}
+
+/** Test seam — clears the in-process lock registry. */
+export function __resetHeldRunLocksForTests(): void {
+  _heldLocks.clear();
 }
 
 /**
@@ -130,6 +155,7 @@ export async function acquireRunLock(
     // A live worker still holds the lock. Back off silently.
     return null;
   }
+  _heldLocks.set(runId, token);
   return { token, expiresAt };
 }
 
@@ -180,6 +206,9 @@ export async function extendRunLock(
  * a no-op, not an error.
  */
 export async function releaseRunLock(runId: string, token: string): Promise<void> {
+  // Deregister first: this process is done with the run either way, and a
+  // shutdown that raced the DB write must not try to re-release it.
+  if (_heldLocks.get(runId) === token) _heldLocks.delete(runId);
   const nowIso = new Date().toISOString();
   const { error } = await ownedDbTable('bolt_execution_runs')
     .update({
@@ -204,12 +233,22 @@ export async function getRunLockState(runId: string): Promise<{
   isStale: boolean;
   lockOwner: string | null;
   lockExpiresAt: string | null;
+  /**
+   * Non-null when the probe itself FAILED. A failed read is not evidence that
+   * nobody owns the run — previously the error was discarded and the caller
+   * received `isHeld: false`, which is the single most dangerous answer this
+   * function can give: it invites a second worker to claim a live run.
+   */
+  error: string | null;
 }> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('bolt_execution_runs')
     .select('lock_owner, lock_expires_at')
     .eq('id', runId)
     .maybeSingle();
+  if (error) {
+    return { isHeld: false, isStale: false, lockOwner: null, lockExpiresAt: null, error: error.message };
+  }
   const lockOwner = ((data as { lock_owner?: string | null } | null) ?? null)?.lock_owner ?? null;
   const lockExpiresAt = ((data as { lock_expires_at?: string | null } | null) ?? null)?.lock_expires_at ?? null;
   const isStale = lockExpiresAt ? new Date(lockExpiresAt).getTime() < Date.now() : false;
@@ -218,5 +257,6 @@ export async function getRunLockState(runId: string): Promise<{
     isStale: !!lockOwner && isStale,
     lockOwner,
     lockExpiresAt,
+    error: null,
   };
 }

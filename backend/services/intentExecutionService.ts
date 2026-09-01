@@ -158,6 +158,15 @@ const ALWAYS_RUN_JOBS = new Set([
   'confidenceCalibration',
   'governanceAudit',      // compliance — run even on inactive orgs
   'performanceAggregation', // lightweight daily aggregate
+  // Infrastructure recovery, NOT feature work. `staleExecutionSweep` is the
+  // only mechanism that transitions a BOLT execution out of `running` when its
+  // worker died (deploy restart, crash, OOM) and no new execution is started.
+  // Gating it on company activity made recovery depend on the very signal a
+  // stalled platform stops producing: `getActiveCompanyIds()` returns [] both
+  // when nothing is active AND when Redis errors, so a stuck run could never be
+  // reclaimed. Membership here exempts it from the inactive-company gate ONLY —
+  // the usage overlay, admin override, and interval check all still apply.
+  'staleExecutionSweep',
 ]);
 
 // Frequency tier → milliseconds

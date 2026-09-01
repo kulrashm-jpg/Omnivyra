@@ -29,6 +29,10 @@ import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcesso
 import { processPublishJob } from './jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from './jobProcessors/engagementPollingProcessor';
 import { processBoltJob } from './jobProcessors/boltProcessor';
+import {
+  BOLT_STALLED_INTERVAL_MS,
+  attachBoltRunReconciliation,
+} from '../services/boltExecutionRecovery';
 import { getIntelligencePollingWorker } from '../workers/intelligencePollingWorker';
 import { registerSharedConsumers, type SharedConsumerHandles } from './workerTopology';
 
@@ -183,7 +187,11 @@ export async function startWorkers(): Promise<void> {
   sharedConsumers = await registerSharedConsumers({ bootstrap: 'dev', onStage: _diag });
 
   publishWorker = getWorker('publish', processPublishJob);
-  boltWorker = getWorker('bolt-execution', processBoltJob, { concurrency: boltConcurrency });
+  boltWorker = getWorker('bolt-execution', processBoltJob, {
+    concurrency: boltConcurrency,
+    stalledInterval: BOLT_STALLED_INTERVAL_MS,
+  });
+  attachBoltRunReconciliation(boltWorker);
 
   // ── DISTRIBUTED PLANNER EVENT PROPAGATION ────────────────────────────────
   // Env-gated via DISTRIBUTED_EVENTS_ENABLED. When enabled, this worker
