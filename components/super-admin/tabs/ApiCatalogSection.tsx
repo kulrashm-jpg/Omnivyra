@@ -1,4 +1,7 @@
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+// Step-up adoption: reuse the existing, proven super-admin challenge helper (see SecurityTab).
+import { runStepUpFlowIfNeeded, describeStepUpOutcome, type StepUpOutcome } from '@/lib/security/superAdminStepUp';
+import { describeAuthFailure } from '@/lib/security/superAdminAuthFailure';
 import React, { useState, useEffect } from 'react';
 import { getAuthToken } from '@/utils/getAuthToken';
 import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
@@ -38,6 +41,8 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
   const [accountForm, setAccountForm] = useState({ account_name: '', api_key_env_name: '', api_key_value: '', oauth_client_id: '', oauth_client_secret: '', rate_limit_per_min: '', rate_limit_per_day: '', priority: '1', is_active: true });
   const [isSavingAccount, setIsSavingAccount] = useState(false);
   const [accountError, setAccountError] = useState<string | null>(null);
+  /** Progress text shown while the WebAuthn passkey challenge is on screen. Never a credential. */
+  const [stepUpMessage, setStepUpMessage] = useState<string | null>(null);
   const [dragSourceId, setDragSourceId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [checkingApiId, setCheckingApiId] = useState<string | null>(null);
@@ -205,6 +210,19 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
     setAccountModal({ apiId, apiName, authType, mode: 'edit', account: acct });
   };
 
+  /**
+   * Map a non-success step-up outcome to actionable guidance, delegating to the existing
+   * describe helpers rather than writing new copy. `describeAuthFailure` carries the richer
+   * message for auth failures (including bridge-cookie mode); `describeStepUpOutcome` covers
+   * cancellation and the "enrol a passkey" case. Neither can contain a credential.
+   */
+  const describeStepUpFailure = (outcome: StepUpOutcome): string => {
+    if (outcome.kind === 'session_lost' || outcome.kind === 'auth_banner') {
+      return describeAuthFailure(outcome.failure);
+    }
+    return describeStepUpOutcome(outcome);
+  };
+
   const saveAccount = async () => {
     if (!accountModal) return;
     if (!accountForm.account_name.trim()) { setAccountError('Account name is required.'); return; }
@@ -216,23 +234,72 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
       if (accountForm.oauth_client_id.trim()) credentials.oauth_client_id = accountForm.oauth_client_id.trim();
       if (accountForm.oauth_client_secret.trim()) credentials.oauth_client_secret = accountForm.oauth_client_secret.trim();
       const body: Record<string, unknown> = { account_name: accountForm.account_name.trim(), credentials, priority: Number(accountForm.priority) || 1, is_active: accountForm.is_active, rate_limit_per_min: accountForm.rate_limit_per_min ? Number(accountForm.rate_limit_per_min) : null, rate_limit_per_day: accountForm.rate_limit_per_day ? Number(accountForm.rate_limit_per_day) : null };
-      const res = accountModal.mode === 'add'
-        ? await fetchWithAuth('/api/provider-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, api_source_id: accountModal.apiId }) })
-        : await fetchWithAuth(`/api/provider-accounts/${accountModal.account!.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      // STEP-UP ADOPTION.
+      //
+      // `/api/provider-accounts` is gated by `requireCapability(INTEGRATION_PLATFORM_OAUTH_MANAGE)`,
+      // whose policy is PHISHING_RESISTANT_TRUSTED_TENMIN. The backend therefore CORRECTLY
+      // rejects the first, un-elevated request with 401 STEP_UP_REQUIRED.
+      //
+      // This previously did `throw new Error(d.error)`, which rendered the backend's
+      // "Step-up authentication required" string as a dead-end error: no challenge, no
+      // button, no way forward. The security control was working; the UI simply never
+      // responded to it.
+      //
+      // `runStepUpFlowIfNeeded` is the existing, proven helper (see SecurityTab). It
+      // classifies the response, launches the WebAuthn passkey challenge, mints a step-up
+      // session and retries the original request EXACTLY ONCE (`retryOnce` defaults true).
+      // `fire()` is a closure so the retry replays the identical request — the administrator
+      // never re-enters the credential.
+      const fire = () => (accountModal.mode === 'add'
+        ? fetchWithAuth('/api/provider-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, api_source_id: accountModal.apiId }) })
+        : fetchWithAuth(`/api/provider-accounts/${accountModal.account!.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
+
+      const initial = await fire();
+      const outcome = await runStepUpFlowIfNeeded(initial, fire, {
+        onChallengeStart: () => {
+          setAccountError(null);
+          setStepUpMessage('Confirm with your passkey to save this credential…');
+        },
+      });
+      setStepUpMessage(null);
+
+      if (outcome.kind !== 'success') {
+        // Modal stays open and the form — including the entered secret in its existing
+        // component state — is preserved, so a cancelled or failed challenge never costs
+        // the administrator their input.
+        setAccountError(describeStepUpFailure(outcome));
+        return;
+      }
+
+      const res = outcome.response;
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Failed to save'); }
       setAccountModal(null);
       await loadAccounts(accountModal.apiId);
     } catch (err) { setAccountError(err instanceof Error ? err.message : 'Failed to save account'); }
-    finally { setIsSavingAccount(false); }
+    finally { setIsSavingAccount(false); setStepUpMessage(null); }
   };
 
   const deleteAccount = async (accountId: string, apiId: string, accountName: string) => {
     if (!confirm(`Delete account "${accountName}"? This cannot be undone.`)) return;
+    setApiEnvSaveError(null);
     try {
-      const res = await fetchWithAuth(`/api/provider-accounts/${accountId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete');
+      // Same step-up treatment as save. DELETE carries the identical capability gate, and
+      // previously swallowed the 401 into a generic "Failed to delete account." string.
+      const fire = () => fetchWithAuth(`/api/provider-accounts/${accountId}`, { method: 'DELETE' });
+      const initial = await fire();
+      const outcome = await runStepUpFlowIfNeeded(initial, fire, {
+        onChallengeStart: () => setStepUpMessage('Confirm with your passkey to delete this account…'),
+      });
+      setStepUpMessage(null);
+
+      if (outcome.kind !== 'success') {
+        setApiEnvSaveError(describeStepUpFailure(outcome));
+        return;
+      }
+      if (!outcome.response.ok) throw new Error('Failed to delete');
       await loadAccounts(apiId);
     } catch { setApiEnvSaveError('Failed to delete account.'); }
+    finally { setStepUpMessage(null); }
   };
 
   const toggleAccountActive = async (acct: any, apiId: string) => {
@@ -485,12 +552,23 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
                       );
                     })()}
 
-                    {/* ── API Key / Env var (only when no accounts) ── */}
+                    {/* ── Provider Definition: env-var REFERENCE only (never a secret) ──
+                        This panel is the Provider Definition. It holds the NAME of an
+                        environment variable, quota and active state — never a credential.
+                        The secret lives on the account's Credentials form. Two near-identical
+                        forms with near-identical labels is what led an operator to try
+                        rotating a key here, so both sides are now labelled explicitly. */}
                     {!(accountsByApiId[catalogEntry?.id]?.length > 0) && (
                       <div>
+                        <div className="mb-2 rounded-md border border-amber-200 bg-amber-50/70 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-800">
+                          <span className="font-semibold">Provider Definition — environment managed.</span>{' '}
+                          This field takes the <em>name</em> of an environment variable, not the key
+                          itself. To store or rotate an actual secret, add an Account and use its
+                          Credentials form, where the value is encrypted at rest.
+                        </div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">
-                          API Key Env Var Name
-                          <span className="ml-1 font-normal text-gray-400">— set in .env, referenced by name only</span>
+                          Environment Variable Name
+                          <span className="ml-1 font-normal text-gray-400">— e.g. SERP_API_KEY (uppercase, no secrets)</span>
                         </label>
                         <input
                           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
@@ -663,13 +741,21 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
           <div className="w-full max-w-md rounded-xl bg-white shadow-xl">
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
               <div>
-                <h3 className="text-base font-semibold text-gray-900">{accountModal.mode === 'add' ? 'Add Account' : 'Edit Account'}</h3>
+                <h3 className="text-base font-semibold text-gray-900">{accountModal.mode === 'add' ? 'Add Account — Credentials' : 'Edit Account — Credentials'}</h3>
                 <p className="text-xs text-gray-500 mt-0.5">{accountModal.apiName}</p>
               </div>
               <button type="button" onClick={() => setAccountModal(null)} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
             </div>
             <div className="px-6 py-4 space-y-4">
-              {accountError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{accountError}</div>}
+              {/* Challenge progress — shown while the WebAuthn passkey prompt is on screen.
+                  Contains no credential and no internal security detail. */}
+              {stepUpMessage && (
+                <div role="status" className="flex items-start gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
+                  <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+                  <span>{stepUpMessage}</span>
+                </div>
+              )}
+              {accountError && <div role="alert" className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{accountError}</div>}
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Account Name *</label>
                 <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Primary Account, Account #2" value={accountForm.account_name} onChange={(e) => setAccountForm((p) => ({ ...p, account_name: e.target.value }))} />
@@ -680,8 +766,13 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
                   <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" placeholder="e.g. YOUTUBE_API_KEY_2" value={accountForm.api_key_env_name} onChange={(e) => setAccountForm((p) => ({ ...p, api_key_env_name: e.target.value }))} />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">API Key Value <span className="font-normal text-gray-400">— stored encrypted</span></label>
-                  <input type="password" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder={accountModal.mode === 'edit' ? '(unchanged)' : 'Enter API key'} value={accountForm.api_key_value} onChange={(e) => setAccountForm((p) => ({ ...p, api_key_value: e.target.value }))} />
+                  <label className="block text-xs font-medium text-gray-700 mb-1">API Key Value <span className="font-normal text-gray-400">— the secret itself; encrypted at rest</span></label>
+                  <input type="password" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder={accountModal.mode === 'edit' ? 'Leave blank to keep the current key' : 'Enter API key'} value={accountForm.api_key_value} onChange={(e) => setAccountForm((p) => ({ ...p, api_key_value: e.target.value }))} />
+                  <p className="mt-1 text-[10px] leading-relaxed text-gray-500">
+                    {accountModal.mode === 'edit'
+                      ? 'Enter a new key to rotate it. Leaving this blank preserves the stored credential — editing other fields will not erase it.'
+                      : 'Stored encrypted. It is never shown again after saving.'}
+                  </p>
                 </div>
               </>)}
               {accountModal.authType === 'oauth2' && (<>
