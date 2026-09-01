@@ -16,6 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import {
   analyzeCampaignPerformance,
   type SlotMetrics,
@@ -42,6 +43,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'campaignId is required' });
     }
+
+    /*
+     * CAMPAIGN-RESOURCE-AUTHZ-SEC-001 — authorization, before the first read.
+     *
+     * The check above proves *a* user is signed in. It never proved this user
+     * may see THIS campaign, and `campaignId` is caller-supplied, so without
+     * this gate any authenticated account could read another company's content
+     * calendar and overwrite its planner memory by naming their campaign id.
+     *
+     * This must stay ahead of the `daily_content_plans` read below: that query
+     * is keyed on campaign_id alone, against the service-role client, so it has
+     * no tenant predicate of its own to fall back on.
+     */
+    const access = await requireCampaignAccess(req, res, campaignId);
+    if (!access) return;
 
     // ── Fetch slots ──────────────────────────────────────────────────────────
     const { data: slots, error: slotsError } = await supabase
@@ -107,8 +123,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
     // ── Persist to campaign memory (non-fatal) ────────────────────────────────
-    // Resolve companyId: use stored context if available, else look up from campaigns table
-    const companyIdForMemory = campaignCtx?.company_id ?? await resolveCompanyId(campaignId);
+    /*
+     * The write is stamped with the company the caller was AUTHORIZED for, not
+     * one re-derived from the campaign row. Deriving it again would reintroduce
+     * the defect: the previous `campaignCtx?.company_id ?? resolveCompanyId()`
+     * read the target campaign's owning company and wrote under it, so a member
+     * of company A upserted into company B's campaign_context — a row keyed
+     * `onConflict: 'campaign_id'`, so B's stored planner memory was overwritten.
+     */
+    const companyIdForMemory = access.companyId;
     if (companyIdForMemory) {
       void updateCampaignMemory(campaignId, companyIdForMemory, insight).catch((err) => {
         console.warn('[PLANNER][PERFORMANCE][WARN] Memory persist failed (non-fatal):', err?.message ?? err);
@@ -131,24 +154,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Helper: resolve companyId for a campaignId (for memory upsert)
-// ---------------------------------------------------------------------------
-
-async function resolveCompanyId(campaignId: string): Promise<string | null> {
-  try {
-    // campaign_versions stores company_id alongside campaign_id
-    const { data } = await supabase
-      .from('campaign_versions')
-      .select('company_id')
-      .eq('campaign_id', campaignId)
-      .limit(1)
-      .single();
-    return typeof data?.company_id === 'string' ? data.company_id : null;
-  } catch {
-    return null;
-  }
-}
+/*
+ * The bespoke `resolveCompanyId` helper that stood here is deliberately gone.
+ * It resolved campaign_versions.company_id for a caller-supplied campaignId and
+ * that value was used as the tenant for a write — a resource's company_id
+ * treated as an authorization oracle. requireCampaignAccess performs the same
+ * resolution AND proves the caller may act on it, so a second unguarded
+ * resolver is exactly the thing this fix removes.
+ */
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
 export default __createApiRoute(handler, { route: '/api/campaigns/performance-insights' });

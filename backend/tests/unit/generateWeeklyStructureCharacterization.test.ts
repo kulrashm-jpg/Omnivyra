@@ -156,6 +156,24 @@ jest.mock('../../services/orchestration', () => ({
   runAuthoritativeGenerationGate: jest.fn(async () => {}),
   evaluateAuthoritativeDaily: jest.fn(async () => {}),
 }));
+/*
+ * CAMPAIGN-RESOURCE-AUTHZ-SEC-001 — the handler now authenticates and
+ * authorizes the campaign before generating. This suite characterizes
+ * GENERATION, so the caller is stubbed as an authorized member of the fixture
+ * campaign's company; the authorization boundary itself is proven separately in
+ * campaignResourceAuthzSec001.test.ts against the real chain.
+ */
+jest.mock('../../services/userContextService', () => ({
+  resolveUserContext: jest.fn(async () => ({
+    userId: 'user-1', role: 'admin', companyIds: ['co-1'],
+    defaultCompanyId: 'co-1', authenticated: true, authError: null,
+  })),
+}));
+jest.mock('../../services/campaignAccessService', () => ({
+  requireCampaignAccess: jest.fn(async (_req: unknown, _res: unknown, campaignId: string) => (
+    campaignId ? { userId: 'user-1', companyId: 'co-1', campaignId } : null
+  )),
+}));
 
 import generateWeeklyStructureHandler, {
   generateWeeklyStructure,
@@ -564,8 +582,15 @@ describe('Next handler adapter', () => {
   });
 
   it('maps other errors to 500 with the error message', async () => {
+    /*
+     * Body was `{}` before CAMPAIGN-RESOURCE-AUTHZ-SEC-001. That now stops at
+     * the authorization gate (a missing campaignId cannot be authorized), which
+     * is the correct new behaviour but no longer reaches the generator. A
+     * campaignId with no week still reaches it and raises the same validation
+     * error, so this keeps characterizing the 500 mapping rather than the gate.
+     */
     const res = mockRes();
-    await generateWeeklyStructureHandler({ method: 'POST', body: {} } as any, res);
+    await generateWeeklyStructureHandler({ method: 'POST', body: { campaignId: 'camp-1' } } as any, res);
     expect(res.statusCode).toBe(500);
     expect(res.body).toMatchObject({ error: 'campaignId and week (or weeks array) are required' });
   });
