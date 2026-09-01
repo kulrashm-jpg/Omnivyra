@@ -191,8 +191,26 @@ describe('B1 — a single deterministic match links, and nothing else does', () 
     expect(res.outcome).toBe('linked');
     expect(res.personId).toBe('p1');
     expect(contact('c1')?.unified_person_id).toBe('p1');
-    expect(res.claim).toBe('created');
     expect(claimInserts[0].person_id).toBe('p1');
+    // A match through `matched_claim` means an active claim for this identity
+    // ALREADY exists — that is how the person was found. So the write is always
+    // a benign 23505 on this path, and the link is what actually changed.
+    expect(res.claim).toBe('already_exists');
+    expect(res.failureCodes).toEqual([]);
+  });
+
+  it('the claim that produced the match is never rewritten', async () => {
+    seedPerson(ORG_A, 'p1');
+    seedLinkedClaim(ORG_A, 'p1', 'abc123');
+    seedContact(ORG_A, 'c1', 'abc123');
+
+    await resolveSocialContactIdentity({
+      organizationId: ORG_A, contactId: 'c1', platform: 'linkedin', platformUserId: 'abc123',
+    });
+
+    expect(tables.identity_claims).toHaveLength(1);
+    expect(tables.identity_claims[0].source).toBe('seed');   // untouched
+    expect(queries.some((q) => q.table === 'identity_claims' && q.op === 'update')).toBe(false);
   });
 
   it('normalises before matching — the raw handle is kept as raw_value', async () => {

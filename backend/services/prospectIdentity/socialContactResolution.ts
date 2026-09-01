@@ -313,6 +313,12 @@ export async function resolveSocialContactIdentity(
       resolution,
     });
 
+    // On the `matched_claim` path this is ALWAYS a benign `23505`: an active
+    // claim for this identity is exactly how the person was found. The claim is
+    // still attempted rather than skipped, because the resolution may have come
+    // from the spine, and a prior SELECT would be a race rather than a check.
+    // `persistClaims` inserts and catches — it never updates, so the claim that
+    // produced the match is not rewritten.
     const persisted = await persistClaims([claim], input.now);
     const claimError = persisted.errors[0];
     const claimOutcome: SocialClaimOutcome = persisted.inserted
