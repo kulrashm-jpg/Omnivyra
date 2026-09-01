@@ -22,12 +22,23 @@ import { getQueue, getEngagementPollingQueue } from '../queue/bullmqClient';
 import { createQueueJob } from '../db/queries';
 import { recordScheduler } from '../observability/metrics';
 
+// Both scheduler insert paths must agree on what "the DB index rejected this
+// insert" MEANS, so the classifier is imported from the shared idempotency
+// module rather than from the sibling scheduler module — that sibling is stubbed
+// out by several suites, and a guard that disappears when a neighbouring module
+// is mocked is not a guard.
+import { isLiveQueueJobDuplicateViolation } from '../services/boltScheduleIdempotency';
+
 export {
   enqueueScheduledPostAt,
   tryAcquireScheduledPostQueueLock,
   atomicCancelAndReEnqueueScheduledPost,
   cancelScheduledPostQueueEntry,
 } from './schedulerPostQueueControl';
+export {
+  isLiveQueueJobDuplicateViolation,
+  QUEUE_JOBS_LIVE_UNIQUE_INDEX,
+} from '../services/boltScheduleIdempotency';
 export * from './schedulerIntelligenceJobs';
 
 interface SchedulerResult {
@@ -251,7 +262,24 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
       created += eligible.length;
       bulkDone = true;
     } catch (bulkError: any) {
-      console.warn(`[scheduler] bulk enqueue failed (${bulkError?.message}) — falling back to per-post enqueue`);
+      // A 23505 from `uidx_queue_jobs_live_job_per_post` reaches here too, and
+      // it is NOT an anomaly: it means a concurrent writer queued one of these
+      // posts between our duplicate-guard SELECT and this INSERT. Postgres
+      // aborts the WHOLE multi-row statement on a constraint violation, so no
+      // partial rows are left behind and the per-post fallback below is the
+      // correct next step for ALL of `eligible` — it re-inserts each post
+      // individually, so the posts that are genuinely free still get queued and
+      // only the raced one is classified as a duplicate and counted as skipped.
+      // Logged at a lower level in that case so a healthy race does not read as
+      // an outage in the scheduler's logs.
+      if (isLiveQueueJobDuplicateViolation(bulkError)) {
+        console.log(
+          `[scheduler] bulk enqueue hit the live-job unique index — a concurrent writer queued one of ` +
+          `${eligible.length} due post(s); retrying per-post so the rest still enqueue`
+        );
+      } else {
+        console.warn(`[scheduler] bulk enqueue failed (${bulkError?.message}) — falling back to per-post enqueue`);
+      }
     }
 
     if (!bulkDone) {
@@ -288,6 +316,25 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
           console.log(`✅ Enqueued job ${queueJobId} for post ${post.id}`);
           created++;
         } catch (error: any) {
+          // `uidx_queue_jobs_live_job_per_post` rejecting this insert means
+          // another writer (a concurrent cron instance, /api/scheduler/retry, a
+          // reschedule) already queued this post between our duplicate-guard
+          // SELECT and this INSERT. That is the guard working, not a fault: the
+          // post IS queued, exactly once, so it belongs in `skipped` alongside
+          // the posts the read-side guard filtered out. Counting it as a
+          // failure would make a healthy race look like an outage, and — worse
+          // — leaving it unclassified would let a future "retry the failures"
+          // change enqueue the duplicate this index just prevented.
+          //
+          // `createQueueJob` throws BEFORE safeEnqueue is reached, so a
+          // rejected insert can never leave an orphan BullMQ job (queued, with
+          // no queue_jobs row behind it) that no worker could resolve or
+          // cancel.
+          if (isLiveQueueJobDuplicateViolation(error)) {
+            console.log(`⏭️  Skipping ${post.id} - concurrent writer already queued it (DB rejected duplicate)`);
+            skipped++;
+            continue;
+          }
           console.error(`❌ Failed to enqueue post ${post.id}:`, error.message);
           // Continue with other posts
         }
