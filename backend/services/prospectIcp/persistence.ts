@@ -49,7 +49,11 @@ const VERSIONS = 'prospect_icp_versions';
 const errCode = (e: unknown): string | undefined => (e as { code?: string } | null)?.code;
 const errMsg = (e: unknown): string => (e as { message?: string } | null)?.message ?? 'unknown error';
 
-const fail = (message: string, code: string): never => { throw new IcpContractError(message, code); };
+/** A declaration, not an arrow — see the note in `criteria.ts`: only a
+ *  declaration's `never` return participates in control-flow narrowing. */
+function fail(message: string, code: string): never {
+  throw new IcpContractError(message, code);
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -78,6 +82,18 @@ function translate(error: unknown, context: string): never {
 const VERSION_COLUMNS =
   'id, organization_id, icp_id, version, status, criteria, proposal, proposed_by_model, '
   + 'ratified_at, ratified_by, superseded_at, superseded_by_version, created_at';
+
+/**
+ * Rows from a `select`, as records.
+ *
+ * The client types `data` as a union that includes `GenericStringError[]`, so a
+ * direct cast is rejected as non-overlapping. Narrowing with `Array.isArray`
+ * first is both accepted and safer: a non-array `data` becomes no rows rather
+ * than an array-shaped lie.
+ */
+function asRows(data: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
+}
 
 function toVersionRecord(row: Record<string, unknown>): IcpVersionRecord {
   return {
@@ -241,7 +257,7 @@ export async function getIcpVersion(
     .eq('version', version)
     .limit(1);
   if (res.error) translate(res.error, 'version read failed');
-  const rows = (res.data ?? []) as Array<Record<string, unknown>>;
+  const rows = asRows(res.data);
   return rows.length ? toVersionRecord(rows[0]) : null;
 }
 
@@ -382,7 +398,7 @@ async function getRatifiedVersionRow(
     .eq('status', 'ratified')
     .limit(1);
   if (res.error) translate(res.error, 'ratified version read failed');
-  const rows = (res.data ?? []) as Array<Record<string, unknown>>;
+  const rows = asRows(res.data);
   return rows.length ? toVersionRecord(rows[0]) : null;
 }
 

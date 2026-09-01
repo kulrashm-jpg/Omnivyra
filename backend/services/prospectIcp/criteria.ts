@@ -123,9 +123,16 @@ export function attributesFor(subject: IcpSubject): string[] {
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
-const fail = (message: string, code: string): never => {
+/**
+ * A function DECLARATION, not a const arrow. TypeScript only propagates a
+ * `never` return into control-flow narrowing when the call target is a function
+ * declaration or an explicitly annotated const; as an arrow it would still
+ * throw at runtime, but every `if (!ok) fail(...)` below would fail to narrow
+ * and the code after it would be checked against the un-narrowed type.
+ */
+function fail(message: string, code: string): never {
   throw new IcpContractError(message, code);
-};
+}
 
 const CRITERION_ID = /^[a-z0-9]+(?:[_-][a-z0-9]+)*$/;
 
