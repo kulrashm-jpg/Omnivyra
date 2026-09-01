@@ -15,13 +15,17 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * data and this handler adds none. Disabled and maintenance-mode providers
  * are excluded by the resolver.
  *
- * Auth: any authenticated session (resolvePrincipal). The provider list is
- * not org-sensitive, so no company-scoped enforcement is required; an
- * unauthenticated caller gets 401.
+ * Auth: any authenticated session (resolvePrincipal). The provider LIST is not
+ * org-sensitive — resolveAvailableProviders takes no organization. But the
+ * geography used to tailor it IS read from the caller's organization, so that
+ * organization is authorized first (BILLING-ACTIVE-ORG-AUTHZ-SEC-001); when it
+ * cannot be, the route falls back to the conservative geography-unknown filter
+ * rather than failing. An unauthenticated caller gets 401.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolvePrincipal } from '../../../../backend/security/IdentityResolver';
+import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 import { resolveAvailableProviders } from '../../../../backend/services/billing/payments/paymentProviderPolicyResolver';
 import { resolveOrgBillingContext } from '../../../../backend/services/billing/payments/orgBillingContextResolver';
 
@@ -46,10 +50,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   let geographyKnown: boolean | undefined;
 
   if (!qpCountry && !qpCurrency) {
-    // No override — resolve from billing_context (lightweight) → company
-    // profile → none. When geography is NOT known, the resolver applies the
-    // conservative filter (geography-restricted providers are excluded).
-    const orgCtx = await resolveOrgBillingContext(auth.principal.activeOrgId);
+    /*
+     * BILLING-ACTIVE-ORG-AUTHZ-SEC-001 — this route is treated differently from
+     * its three siblings, deliberately.
+     *
+     * The provider list itself is NOT org-scoped: resolveAvailableProviders
+     * takes no organization and reads global governance config. The only
+     * tenant-sensitive act here is reading THIS organization's billing_context
+     * and company_billing_profiles to tailor the geography — and activeOrgId
+     * cannot authorize that, for the reasons set out in billing/profile.ts.
+     *
+     * So the org is authorized before it is used, but a failure is NOT an error
+     * response: it degrades to exactly the state this route already handles when
+     * a caller has no active organization at all — geography unknown, and the
+     * resolver's conservative filter excludes geography-restricted providers.
+     * assertTenantAccess is used rather than requireTenantAccess precisely
+     * because it returns a verdict instead of writing one, which is what makes
+     * that fallback expressible. Denying outright would be a behaviour
+     * regression on a resource that is not the caller's tenant data.
+     */
+    const orgAccess = await assertTenantAccess({
+      userId: auth.principal.userId,
+      supabaseUid: auth.principal.supabaseUid,
+      organizationId: auth.principal.activeOrgId,
+    });
+    const authorizedOrgId = orgAccess.ok === true ? orgAccess.access.organizationId : null;
+    const orgCtx = await resolveOrgBillingContext(authorizedOrgId);
     country = orgCtx.country;
     currency = orgCtx.currency;
     geographyKnown = orgCtx.country !== null;

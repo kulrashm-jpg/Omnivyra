@@ -23,6 +23,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import { resolveOrgBillingContext } from '../../../backend/services/billing/payments/orgBillingContextResolver';
 import {
   normalizeBillingGeographyInput,
@@ -44,11 +45,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(409).json({ error: 'no_active_organization' });
   }
 
+  /*
+   * BILLING-ACTIVE-ORG-AUTHZ-SEC-001 — see billing/profile.ts for the full
+   * reasoning. activeOrgId is `users.active_company_id` read verbatim, with no
+   * membership join and no company-status check, so it cannot authorize.
+   *
+   * Placed above the method split on purpose: GET discloses an organization's
+   * billing geography and PUT upserts company_billing_profiles, so both paths
+   * need it, and a guard inside one branch would leave the other open.
+   */
+  const tenant = await requireTenantAccess(req, res, organizationId);
+  if (!tenant) return;
+
   // ── GET — resolved geography (read path UNCHANGED) ────────────────────────
   if (req.method === 'GET') {
-    const ctx = await resolveOrgBillingContext(organizationId);
+    const ctx = await resolveOrgBillingContext(tenant.organizationId);
     return res.status(200).json({
-      organization_id: organizationId,
+      organization_id: tenant.organizationId,
       country: ctx.country,
       currency: ctx.currency,
       region: ctx.region,
@@ -66,7 +79,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const result = await captureBillingProfileGeography({
-    organizationId,
+    // The AUTHORIZED organization, not the pointer it came from.
+    organizationId: tenant.organizationId,
     sessionEmail: typeof auth.principal.email === 'string' ? auth.principal.email : null,
     geography: normalized.value,
   });

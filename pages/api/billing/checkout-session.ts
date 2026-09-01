@@ -22,6 +22,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import {
   orchestrateCheckoutSession,
   type CheckoutIntentType,
@@ -55,6 +56,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(409).json({ error: 'no_active_organization' });
   }
 
+  /*
+   * BILLING-ACTIVE-ORG-AUTHZ-SEC-001 — the highest-value of the four.
+   *
+   * activeOrgId is `users.active_company_id` read verbatim: no membership join,
+   * no company-status check. It proved WHO is calling, never that they may act
+   * for this organization — and in production 24 of 33 pointers name a company
+   * where the membership is `inactive`, 21 of those users still able to sign in.
+   *
+   * orchestrateCheckoutSession applies no tenant check of its own, and what sits
+   * behind it is not a read: the derived idempotency key is a hash over
+   * (organizationId, intentType, reference, provider), so an unauthorized caller
+   * REPLAYS that organization's persisted checkout session — redirect_url and
+   * all — then resolves a real amount from the hidden catalogue, dispatches to
+   * the payment provider, and INSERTs a billing_checkout_sessions row against
+   * them. The guard therefore has to precede orchestration entirely; validating
+   * the body first would only decide which unauthorized request proceeds.
+   */
+  const tenant = await requireTenantAccess(req, res, organizationId);
+  if (!tenant) return;
+
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
 
   // Geography override is prohibited — geography is backend-authoritative.
@@ -87,7 +108,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const result: OrchestrateCheckoutResult = await orchestrateCheckoutSession({
-    organizationId,
+    // The AUTHORIZED organization, not the pointer it came from.
+    organizationId: tenant.organizationId,
     initiatedByUserId: auth.principal.userId,
     provider: provider as SupportedProvider,
     intentType,
