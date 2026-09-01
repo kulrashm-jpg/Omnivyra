@@ -36,10 +36,37 @@ const INSERT_VERSION = `INSERT INTO public.prospect_icp_versions
   (organization_id, icp_id, version, status, criteria, ratified_at, ratified_by)
   VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`;
 
+/**
+ * Attempt an insert and report the SQLSTATE — 'ok' when the database accepted
+ * it.
+ *
+ * ⚠ THIS LEAVES NO ROW BEHIND. `attempt` wraps the statement in a SAVEPOINT and
+ * rolls back to it on EVERY path, success included, so it can prove that an
+ * insert is ACCEPTED and it can never make a row exist for a later statement.
+ *
+ * A test that needs the row to still be there must use `keepVersion` (or
+ * `ratifiedVersion`). Getting this wrong does not fail loudly: the follow-up
+ * statement simply matches zero rows, an UPDATE reports 'ok' without firing a
+ * single trigger, and the assertion passes while proving nothing. That is
+ * exactly what happened to the tenant-move test below.
+ */
 const insVersion = (
   org: string, icp: string, version: number, status: string,
   ratifiedAt: string | null = null, ratifiedBy: string | null = null,
 ) => attempt(INSERT_VERSION, [org, icp, version, status, CRITERIA, ratifiedAt, ratifiedBy]);
+
+/**
+ * Insert an unratified version and KEEP it, for tests whose subject is what
+ * happens to an EXISTING row. Uses `db.query` directly, so the row survives
+ * until `inRollback` unwinds the whole test.
+ */
+async function keepVersion(
+  org: string, icp: string, version: number, status: 'draft' | 'proposed' = 'draft',
+): Promise<string> {
+  const { rows } = await db.query(`${INSERT_VERSION} RETURNING id`,
+    [org, icp, version, status, CRITERIA, null, null]);
+  return rows[0].id;
+}
 
 const RATIFIED_AT = '2026-09-01T00:00:00Z';
 const RATIFIER = '00000000-0000-4000-8000-0000000000f1';
@@ -198,7 +225,13 @@ describe('D1 — tenancy', () => {
     await inRollback(async () => {
       await seedTenants();
       const icp = await newIcp(ORG_A);
-      await insVersion(ORG_A, icp, 1, 'draft');
+      await keepVersion(ORG_A, icp, 1, 'draft');
+      // Proven to be there BEFORE the delete, so `0` afterwards is a cascade
+      // and not the absence of a row that was never inserted.
+      const before = await db.query(
+        `SELECT count(*)::int c FROM public.prospect_icp_versions WHERE icp_id=$1`, [icp]);
+      expect(before.rows[0].c).toBe(1);
+
       await db.query(`DELETE FROM public.prospect_icps WHERE id=$1`, [icp]);
       const { rows } = await db.query(
         `SELECT count(*)::int c FROM public.prospect_icp_versions WHERE icp_id=$1`, [icp]);
@@ -229,8 +262,10 @@ describe('D1 contract 15 — exactly one ratified version', () => {
       const icp = await newIcp(ORG_A);
       await ratifiedVersion(ORG_A, icp, 1);
 
-      expect(await insVersion(ORG_A, icp, 2, 'draft')).toBe('ok');
-      expect(await insVersion(ORG_A, icp, 3, 'proposed')).toBe('ok');
+      // KEPT, so all four genuinely COEXIST at the end rather than each being
+      // inserted into an otherwise-empty table and rolled back.
+      await keepVersion(ORG_A, icp, 2, 'draft');
+      await keepVersion(ORG_A, icp, 3, 'proposed');
       // A superseded row carries its original ratification, and does not
       // collide with the live one — that is what makes history representable.
       expect(await attempt(
@@ -240,6 +275,22 @@ describe('D1 contract 15 — exactly one ratified version', () => {
          VALUES ($1,$2,4,'superseded',$3::jsonb,$4,$5,$4,5)`,
         [ORG_A, icp, CRITERIA, RATIFIED_AT, RATIFIER],
       )).toBe('ok');
+      await db.query(
+        `INSERT INTO public.prospect_icp_versions
+           (organization_id, icp_id, version, status, criteria, ratified_at, ratified_by,
+            superseded_at, superseded_by_version)
+         VALUES ($1,$2,4,'superseded',$3::jsonb,$4,$5,$4,5)`,
+        [ORG_A, icp, CRITERIA, RATIFIED_AT, RATIFIER]);
+
+      const { rows } = await db.query(
+        `SELECT status, count(*)::int c FROM public.prospect_icp_versions
+          WHERE organization_id=$1 AND icp_id=$2 GROUP BY status ORDER BY status`, [ORG_A, icp]);
+      expect(rows).toEqual([
+        { status: 'draft', c: 1 },
+        { status: 'proposed', c: 1 },
+        { status: 'ratified', c: 1 },     // still exactly ONE, alongside the rest
+        { status: 'superseded', c: 1 },
+      ]);
     });
   });
 
@@ -362,12 +413,24 @@ describe('D1 contract 16 — ratification coherence and immutability', () => {
     await inRollback(async () => {
       await seedTenants();
       const icp = await newIcp(ORG_A);
-      await insVersion(ORG_A, icp, 1, 'draft');
+      // KEPT, not attempted: the subject is what the trigger does to an
+      // EXISTING row, and an UPDATE that matches nothing fires no trigger.
+      await keepVersion(ORG_A, icp, 1, 'draft');
+
       // Even on an UNRATIFIED row, where content is otherwise editable.
       expect(await attempt(
         `UPDATE public.prospect_icp_versions SET organization_id=$3
           WHERE organization_id=$1 AND icp_id=$2 AND version=1`, [ORG_A, icp, ORG_B],
       )).toBe('23514');
+
+      // The other half of tenant isolation on a draft: re-pointing `icp_id` at
+      // another tenant's ICP is refused by the composite foreign key, because
+      // the (icp, ORG_A) pair it would need does not exist for ORG_B's ICP.
+      const icpB = await newIcp(ORG_B);
+      expect(await attempt(
+        `UPDATE public.prospect_icp_versions SET icp_id=$3
+          WHERE organization_id=$1 AND icp_id=$2 AND version=1`, [ORG_A, icp, icpB],
+      )).toBe('23503');
     });
   });
 
@@ -375,11 +438,18 @@ describe('D1 contract 16 — ratification coherence and immutability', () => {
     await inRollback(async () => {
       await seedTenants();
       const icp = await newIcp(ORG_A);
-      await insVersion(ORG_A, icp, 1, 'draft');
+      await keepVersion(ORG_A, icp, 1, 'draft');
       expect(await attempt(
         `UPDATE public.prospect_icp_versions SET criteria='[]'::jsonb, status='proposed'
           WHERE organization_id=$1 AND icp_id=$2 AND version=1`, [ORG_A, icp],
       )).toBe('ok');
+      // ...and the edit really landed on a real row, rather than an UPDATE
+      // matching nothing and reporting success.
+      const { rows } = await db.query(
+        `UPDATE public.prospect_icp_versions SET status='proposed'
+          WHERE organization_id=$1 AND icp_id=$2 AND version=1 RETURNING status`, [ORG_A, icp]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].status).toBe('proposed');
     });
   });
 
