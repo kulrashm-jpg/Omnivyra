@@ -200,11 +200,18 @@ describe('A3 — WS-3 invariants survived the retype', () => {
         `INSERT INTO public.outreach_decisions (company_id, task_id, gate, decision, decided_at)
          VALUES ($1, $2, 'suppression', 'allowed', now())`, [ORG_A, taskId]);
 
-      // 2F004 — the ERRCODE ws3_reject_mutation raises (restrict_violation).
+      // 23001 — `restrict_violation`, the ERRCODE ws3_reject_mutation raises.
+      //
+      // NOTE for whoever runs this first: every WS-3 UNIT test doubles this as
+      // `2F004`. That is wrong — 2F004 is `reading_sql_data_not_permitted`,
+      // while `USING ERRCODE = 'restrict_violation'` is class 23. Nothing in
+      // production branches on the code, so the mistake is inert, but this is
+      // the first assertion made against real PostgreSQL and it uses the code
+      // PostgreSQL actually returns.
       expect(await attempt(
-        `UPDATE public.outreach_decisions SET reason = 'rewritten' WHERE task_id = $1`, [taskId])).toBe('2F004');
+        `UPDATE public.outreach_decisions SET reason = 'rewritten' WHERE task_id = $1`, [taskId])).toBe('23001');
       expect(await attempt(
-        `DELETE FROM public.outreach_decisions WHERE task_id = $1`, [taskId])).toBe('2F004');
+        `DELETE FROM public.outreach_decisions WHERE task_id = $1`, [taskId])).toBe('23001');
     });
   });
 
@@ -216,7 +223,7 @@ describe('A3 — WS-3 invariants survived the retype', () => {
 
       // Identity and provenance remain immutable...
       expect(await attempt(
-        `UPDATE public.outreach_tasks SET lead_id = 'lead-2' WHERE id = $1`, [taskId])).toBe('2F004');
+        `UPDATE public.outreach_tasks SET lead_id = 'lead-2' WHERE id = $1`, [taskId])).toBe('23001');
 
       // ...but the anchor is deliberately NOT part of that contract: a task may
       // legitimately be anchored after materialisation.
