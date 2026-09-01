@@ -9,6 +9,8 @@ import { familyForCreatorType } from '../../../lib/creator-templates';
 import { loadCampaignTemplatePool, selectTemplateFromPool, type CampaignTemplatePool } from '../../../backend/services/creator/campaignDesignSystemService';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { resolveUserContext } from '../../../backend/services/userContextService';
 import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorCodes';
 import { validateDailyPlanRow } from '../../../lib/shared/bolt/validateDailyPlanRow';
 // Capability-aware eligibility (capability ∩ exclusive ∩ blocklist) — NOT the
@@ -408,7 +410,25 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         }
       : null;
 
-    const cid = (campaign as any)?.company_id ?? companyId;
+    /*
+     * CAMPAIGN-RESOURCE-AUTHZ-SEC-001 — the supplied company wins over the one
+     * read off the campaign row, and the order is deliberate.
+     *
+     * It used to be `campaign?.company_id ?? companyId`, where `companyId` came
+     * straight from the HTTP body. When the campaign row was missing or its
+     * company_id was null — true of 7 of 27 campaigns in production — an
+     * unauthenticated caller's body value became `cid`, which is the predicate
+     * for the sibling-campaign enumeration below.
+     *
+     * `companyId` is now always server-derived at every one of the four call
+     * sites: the HTTP handler passes the company requireCampaignAccess
+     * AUTHORIZED (never the body value, which it discards), and the three
+     * internal pipeline callers pass their own resolved company. Preferring it
+     * means the authorized tenant — not a column re-read from the resource —
+     * decides scope. The campaign row remains the fallback for internal callers
+     * that pass none (executionPlannerService passes '').
+     */
+    const cid = companyId || (campaign as any)?.company_id || null;
     let compressedContext: CampaignContext | undefined;
     const cached = cid ? getCampaignContext(String(campaignId)) : null;
     if (cached) {
@@ -2279,11 +2299,49 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  /*
+   * CAMPAIGN-RESOURCE-AUTHZ-SEC-001 — this route had no authentication and no
+   * authorization, against the service-role client. `generateWeeklyStructure`
+   * DELETEs and re-INSERTs a campaign's week plans and UPDATEs
+   * campaigns.start_date,
+   * all keyed on a body-supplied campaignId.
+   *
+   * The gate lives HERE, in the handler, not inside the service: the service is
+   * exported and also called by three trusted server-side pipelines that have
+   * no HTTP session (boltPipelineServiceRunExecWeekly,
+   * boltPipelineServiceRunExecOrchestrate, executionPlannerService). This
+   * handler is the only untrusted entry point, so guarding it is both
+   * sufficient and the only placement that does not break those callers.
+   *
+   * Identity is proven BEFORE requireCampaignAccess because that guard resolves
+   * the campaign's company before it authenticates, which would otherwise let
+   * an anonymous caller tell a real campaign id (401) from an invented one (404).
+   */
+  const body = (req.body || {}) as GenerateWeeklyStructureInput;
+
+  const identity = await resolveUserContext(req);
+  if (!identity?.userId) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+
+  const access = await requireCampaignAccess(req, res, String(body.campaignId ?? ''));
+  if (!access) return;
+
   // CAMPAIGN-OPS-001A: handler-level timer so a genuine generation failure emits
   // campaign.run.failure (the success counter is emitted inside the function).
   const handlerStartedAt = Date.now();
   try {
-    const result = await generateWeeklyStructure((req.body || {}) as GenerateWeeklyStructureInput);
+    /*
+     * The authorized identity REPLACES anything the body claimed. A caller may
+     * still send `companyId` for backwards compatibility, but it is overwritten
+     * here and can never reach a sink, become the authorization source, or
+     * supplement it.
+     */
+    const result = await generateWeeklyStructure({
+      ...body,
+      campaignId: access.campaignId,
+      companyId: access.companyId,
+    });
     return res.status(200).json(result);
   } catch (error) {
     const err = error as { code?: string };

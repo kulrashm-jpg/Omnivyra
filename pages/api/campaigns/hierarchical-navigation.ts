@@ -2,6 +2,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { resolveUserContext } from '../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -15,6 +17,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'Campaign ID required' });
     }
+
+    /*
+     * CAMPAIGN-RESOURCE-AUTHZ-SEC-001 — this route had no authentication and no
+     * authorization at all, against the service-role client. It was verified
+     * live in production: an anonymous GET answered 404 "Campaign not found"
+     * rather than 401, so it worked as an existence oracle, and for a real
+     * campaign it returned that tenant's name, description, weekly plans, the
+     * raw weekly_content_refinements rows, and its company_id.
+     *
+     * TWO gates, in this order, and the order is the point:
+     *
+     * 1. IDENTITY FIRST. requireCampaignAccess resolves the campaign's owning
+     *    company from campaign_versions BEFORE it authenticates, so on its own
+     *    it still answers 404 for an unknown campaign and 401 for a real one —
+     *    which leaves the oracle intact for anonymous callers. Hoisting the
+     *    same identity check it performs internally means an unauthenticated
+     *    request never reaches a campaign query at all.
+     *
+     * 2. THEN CAMPAIGN AUTHORIZATION. Being signed in is not permission to read
+     *    this campaign.
+     *
+     * Placed above the switch deliberately: `get-overview` and `get-weeks` each
+     * touch tenant data at different lines, so guarding inside one branch would
+     * leave the other open, as would any branch added later.
+     */
+    const identity = await resolveUserContext(req);
+    if (!identity?.userId) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
+
+    const access = await requireCampaignAccess(req, res, campaignId);
+    if (!access) return;
 
     switch (action) {
       case 'get-overview':
