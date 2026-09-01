@@ -55,6 +55,7 @@ import {
   CONTENT_ARCHITECT_READ,
   CONTENT_ARCHITECT_WRITE,
   PROSPECT_INGEST,
+  PROSPECT_ICP_MANAGE,
   // Phase: Platform Authority Isolation — platform-tier billing
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
@@ -124,6 +125,10 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     BILLING_GRANT_FREE_CREDITS,
     // Prospect identity spine. No hierarchy entry — it implies nothing.
     PROSPECT_INGEST,
+    // Prospect ICP definition + ratification. Also no hierarchy entry, and
+    // deliberately NOT implied by PROSPECT_INGEST: importing a person and
+    // defining who the tenant wants are separate authorities.
+    PROSPECT_ICP_MANAGE,
   ],
   COMPANY_ADMIN: [
     ORGANIZATION_MANAGE,        // org settings, member management (NOT delete)
@@ -141,6 +146,11 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     // no content-tier or VIEW_ONLY role may, because an ingested assertion is a
     // durable claim about a real person and cannot be unpublished.
     PROSPECT_INGEST,
+    // A tenant admin may define and ratify their own ICP. No content-tier or
+    // VIEW_ONLY role may, because a ratified ICP is an immutable input that
+    // governs how every prospect in the tenant is scored — a far wider effect
+    // than any single ingested record.
+    PROSPECT_ICP_MANAGE,
   ],
   CONTENT_ARCHITECT: [
     // Platform-level role: read+author across all companies.
