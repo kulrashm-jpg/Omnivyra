@@ -605,6 +605,10 @@ describe('B1 — an existing decision is never re-made', () => {
 
     expect(res.outcome).toBe('already_linked');
     expect(contact('c1')?.unified_person_id).toBe('p-other');
+    // The resolver's candidate is NOT reported as the contact's person: this
+    // call wrote nothing, and the row points at somebody else entirely.
+    expect(res.personId).toBeNull();
+    expect(res.reason).toContain('left alone');
   });
 });
 

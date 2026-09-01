@@ -372,7 +372,10 @@ export async function resolveSocialContactIdentity(
     return result(link.linked ? 'linked' : 'already_linked', link.linked
       ? resolution.reason
       : 'no unlinked contact row matched in this tenant; the existing state was left alone', {
-      personId: matched,
+      // Only report a person when THIS call put it there. Naming the resolver's
+      // candidate on a row we did not write would claim an edge that may not
+      // exist — the row could already point at somebody else entirely.
+      personId: link.linked ? matched : null,
       candidatePersonIds: resolution.candidatePersonIds,
       claim: claimOutcome,
       failureCodes,
