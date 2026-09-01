@@ -89,11 +89,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       throw claimErr;
     }
 
-    // Get org to apply credit transaction
+    /*
+     * Get org to apply credit transaction.
+     *
+     * MEMBERSHIP-DERIVATION-SWEEP-001 — the status filter is load-bearing.
+     * This lookup chooses which organisation's ledger RECEIVES the grant.
+     * user_company_roles carries non-active rows by design: inviting writes
+     * status='invited' with no acceptance and no session revocation, and
+     * deactivation writes status='inactive'. Without this predicate a user
+     * holding only a revoked or never-accepted membership had credits written
+     * into that organisation's ledger, and with several rows the unordered
+     * limit(1) could prefer a stale one over a live one.
+     */
     const { data: membership } = await serviceSb
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', user.id)
+      .eq('status', 'active')
       .limit(1)
       .maybeSingle();
 
