@@ -73,6 +73,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Invalid action' });
     }
 
+    /*
+     * ACTIVITY-WORKSPACE-CREDIT-AUTHZ-SEC-001 — the organization whose credits
+     * are spent must be one this caller actually belongs to.
+     *
+     * `companyId` above prefers `req.body.companyId`, so the caller named the
+     * tenant outright; the DB fallback (activity → campaign → company) is no
+     * better, because a caller can name an activity belonging to any company.
+     * Either way the value flowed straight into runReservedFixedWorkflow, which
+     * reserves and consumes credits against it. That is the whole defect: a
+     * member of company A could spend company B's credits by saying so.
+     *
+     * This is the same primitive, the same rejection and the same status code
+     * that `generate_master` already uses below — hoisted to where the tenant is
+     * ESTABLISHED rather than repeated per branch, so every consequential path
+     * that consumes this value is covered by construction, including any added
+     * later. assertOrgMembership delegates to assertTenantAccess, so an
+     * inactive, invited or revoked membership fails here exactly as a
+     * non-membership does, and a soft-deleted organization does too.
+     *
+     * Two deliberate exemptions:
+     *
+     *  - A null companyId is left alone. Nothing is authorized because nothing
+     *    is spent: runReservedFixedWorkflow itself rejects a null tenant with
+     *    400 before touching credits, and refine_variant rejects it earlier
+     *    still. Demanding an organization here would break the workspace-draft
+     *    flows that legitimately run without one.
+     *
+     *  - generate_master is skipped because it is already stricter: it IGNORES
+     *    body.companyId entirely, re-derives the org from the persisted
+     *    activity, and runs this same check on that server-derived value.
+     *    Running it twice would reject requests it legitimately serves today.
+     */
+    if (companyId && action !== 'generate_master') {
+      const isMember = await assertOrgMembership(user.id, companyId);
+      if (!isMember) {
+        return res.status(403).json({ error: 'ORG_SCOPE_VIOLATION' });
+      }
+    }
+
     if (action === 'improve_variant') {
       const improvementType = String((req.body as any)?.improvementType || '').trim() as ImprovementType;
       const variantRaw = asObject((req.body as any)?.variant);
