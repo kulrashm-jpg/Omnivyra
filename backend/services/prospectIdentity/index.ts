@@ -176,6 +176,27 @@ export {
   type AccountOutcome,
 } from './accountResolution';
 
+/**
+ * B1 — the social contact identity edge, closed at ingestion. Resolves a
+ * freshly-created `contacts` row against the canonical claims store, writes ONE
+ * `external_id` claim carrying the verdict, and links `unified_person_id` only
+ * on a single deterministic match. It never creates a person from a bare handle,
+ * never resolves on a profile URL, and never uses a name as an identity key.
+ * Additive and fail-open: it cannot break social signal ingestion.
+ */
+export {
+  resolveSocialContactIdentity,
+  buildSocialContactClaim,
+  classifySocialClaimFailure,
+  SOCIAL_CONTACT_RESOLUTION_VERSION,
+  SOCIAL_CONTACT_SOURCE,
+  SOCIAL_CONTACT_CLAIM_TYPE,
+  type SocialContactOutcome,
+  type SocialClaimOutcome,
+  type SocialContactIdentityInput,
+  type SocialContactResolutionResult,
+} from './socialContactResolution';
+
 /** Table names, so callers do not hand-write string literals. */
 export const PROSPECT_ACCOUNTS_TABLE = 'prospect_accounts';
 export const IDENTITY_CLAIMS_TABLE = 'identity_claims';
