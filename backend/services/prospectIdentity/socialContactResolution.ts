@@ -365,7 +365,13 @@ export async function resolveSocialContactIdentity(
       });
     }
 
-    return result(link.linked ? 'linked' : 'already_linked', resolution.reason, {
+    // No row updated and no error means the tenant-scoped, still-unlinked row
+    // was not there: either a concurrent linker already claimed it — whose
+    // decision we do not overwrite — or the contact is not this tenant's. Both
+    // leave the identity edge exactly as it was found, which is the safe result.
+    return result(link.linked ? 'linked' : 'already_linked', link.linked
+      ? resolution.reason
+      : 'no unlinked contact row matched in this tenant; the existing state was left alone', {
       personId: matched,
       candidatePersonIds: resolution.candidatePersonIds,
       claim: claimOutcome,
