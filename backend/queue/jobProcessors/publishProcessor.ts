@@ -8,9 +8,28 @@
  * - Updates scheduled_posts with platform_post_id and status
  * - Creates queue_job_logs entries for audit trail
  * 
- * Idempotency: Checks if job already processed by looking at:
- * - queue_jobs.status === 'completed'
- * - scheduled_posts.platform_post_id exists
+ * Idempotency — TWO boundaries, at two different identities:
+ *
+ *   1. JOB identity (re-delivery of ONE job). queue_jobs.status === 'completed'
+ *      plus the 'processing' replay-suppression window. This collapses broker
+ *      re-deliveries of the same BullMQ job id.
+ *
+ *   2. POST identity (two DIFFERENT executions for ONE scheduled post). A
+ *      durable, database-decided claim: a conditional UPDATE that moves
+ *      scheduled_posts.status into 'publishing' only when the row is still in
+ *      the status this execution observed. Implemented as
+ *      `claimScheduledPostForPublish` in backend/services/publishNowService.ts
+ *      and SHARED with the direct publish path, so the queue worker, the cron
+ *      safety net and the manual publish route all contend for one boundary.
+ *
+ * Boundary 1 alone is NOT sufficient. Two queue jobs for one scheduled post
+ * have two distinct queue_jobs rows and two distinct BullMQ job ids, so each
+ * one's job-level checks pass independently; both then read
+ * `platform_post_id IS NULL` and both publish. Worse, the cron safety net
+ * publishes with no queue_jobs row at all, so boundary 1 cannot see it.
+ * Boundary 2 is the fix, and it lives in the database (the UPDATE's
+ * affected-row count decides the winner) rather than in worker memory,
+ * because these paths run in more than one runtime.
  */
 
 import { Job } from 'bullmq';
@@ -27,7 +46,15 @@ import { publishToPlatform } from '../../adapters/platformAdapter';
 import { publishThread } from '../../services/threadRuntime/threadPublishOrchestrator';
 import { validatePublishReadiness } from '../../services/publishReadinessValidator';
 import { refreshDurableMediaBeforePublish } from '../../services/mediaReferenceResolver';
-import { refreshScheduledPostMediaFromRefs } from '../../services/publishNowService';
+import {
+  refreshScheduledPostMediaFromRefs,
+  // The post-level publish claim. Defined ONCE in publishNowService and shared
+  // with this worker, so the queue path and the direct path (cron safety net +
+  // manual publish) contend for the SAME boundary rather than two parallel
+  // mechanisms that cannot see each other. See the block comment there.
+  claimScheduledPostForPublish,
+  releaseScheduledPostPublishClaim,
+} from '../../services/publishNowService';
 import { resolvePublishingOrganization } from '../../services/creator/publishingOrganizationResolver';
 import { logPipelineEvent } from '../../../lib/shared/observability';
 import { categorizeError } from '../../services/errorRecoveryService';
@@ -182,6 +209,10 @@ async function processPublishJobInner(params: {
 
   console.log(`📝 Processing publish job ${jobId} for scheduled_post ${scheduled_post_id}`);
 
+  // Set once this execution owns the post-level claim, so the catch block
+  // knows whether it has anything to give back.
+  let heldClaimFromStatus: string | null = null;
+
   try {
     // Step 1: Idempotency check - verify job not already processed
     const queueJob = await getQueueJob(jobId as string);
@@ -302,6 +333,59 @@ async function processPublishJobInner(params: {
     // Step 4: Update job status to 'processing'
     await updateQueueJobStatus(jobId as string, 'processing');
     await createQueueJobLog(jobId as string, 'info', `Started processing scheduled_post ${scheduled_post_id}`);
+
+    // ── Step 4a: POST-LEVEL PUBLISH CLAIM ────────────────────────────────
+    //
+    // Everything above this line is keyed on the JOB. Two queue jobs for one
+    // scheduled post reach here independently, and the cron safety net reaches
+    // the platform without any job at all. This claim is the first thing that
+    // is keyed on the POST, and the database decides who wins it. It is the
+    // SAME helper the direct path calls (publishNowService), so a queue
+    // execution and a cron execution contend with each other, not past each
+    // other.
+    //
+    // Placed BEFORE the readiness gate and the media refreshes because those
+    // steps mutate the scheduled_posts row; the claim must cover them, not
+    // just the platform call.
+    //
+    // THREAD ROOTS ARE EXEMPT — deliberately, and for the same reason they
+    // are exempt from the Step-2 platform_post_id short-circuit. A thread root
+    // is not published by this function: Step 5 delegates to
+    // threadPublishOrchestrator, which runs its OWN per-node claim
+    // (`transitionRowStatus(row.id, fromStatus, 'publishing')`) starting from
+    // the root's current status. Pre-claiming the root here would move it to
+    // 'publishing' and the orchestrator's `assertCanTransition('publishing',
+    // 'publishing')` would throw — breaking every thread. The orchestrator's
+    // node-level claim is the same mechanism at finer granularity, so thread
+    // publishes are already covered; adding a second claim would only remove
+    // the coverage they have.
+    if (scheduledPost.is_thread_start !== true) {
+      const claim = await claimScheduledPostForPublish({
+        scheduledPostId:   scheduled_post_id,
+        snapshotStatus:    (scheduledPost as { status?: string | null }).status ?? null,
+        snapshotUpdatedAt: (scheduledPost as { updated_at?: string | null }).updated_at ?? null,
+      });
+
+      if (!claim.claimed) {
+        // Another execution owns this post. Do NOT call the platform: that is
+        // exactly the duplicate publish this boundary exists to prevent.
+        // Complete this job rather than throwing — the holder owns the retry,
+        // so a BullMQ retry here would only re-contend.
+        const message = claim.reason === 'already_published'
+          ? 'Already published (post-level claim: another execution completed it)'
+          : 'Duplicate publish suppressed (post-level claim held by another execution)';
+        console.warn(`⚠️ Job ${jobId}: ${message} — scheduled_post ${scheduled_post_id}`);
+        await updateQueueJobStatus(jobId as string, 'completed', {
+          result_data: { message, suppressed: true, reason: claim.reason },
+        });
+        await createQueueJobLog(jobId as string, 'warn', message, {
+          scheduled_post_id, reason: claim.reason,
+        });
+        return;
+      }
+
+      heldClaimFromStatus = claim.fromStatus;
+    }
 
     // Step 4b: Centralized publish-readiness gate (Round-4 item 1) — the
     // SAME validator the manual path uses (scheduled↔manual parity, no
@@ -562,7 +646,26 @@ async function processPublishJobInner(params: {
     }
   } catch (error: any) {
     console.error(`❌ Error processing job ${jobId}:`, error.message);
-    
+
+    // Give the post-level claim back before anything else. A compare-and-set
+    // on 'publishing', so it is a no-op when a terminal status was already
+    // written (success wrote 'published'; the handled-failure and readiness
+    // paths wrote 'failed'). It only fires on an UNEXPECTED throw, where it
+    // restores the exact status this execution claimed from — leaving the row
+    // as retryable as it was before, never more blocked.
+    if (heldClaimFromStatus) {
+      const restoreStatus = heldClaimFromStatus;
+      heldClaimFromStatus = null;
+      try {
+        await releaseScheduledPostPublishClaim(scheduled_post_id, restoreStatus);
+      } catch (releaseError) {
+        console.warn(
+          '[publishProcessor] publish-claim release threw (non-fatal):',
+          releaseError instanceof Error ? releaseError.message : String(releaseError),
+        );
+      }
+    }
+
     if (error?.skipQueueStatusUpdate) {
       throw error;
     }

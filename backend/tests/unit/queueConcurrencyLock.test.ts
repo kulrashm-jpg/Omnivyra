@@ -44,7 +44,11 @@ jest.mock('../../db/writeOwner', () => ({
       select: jest.fn(() => api),
       eq: jest.fn((k: string, v: any) => { filters[k] = v; return api; }),
       in: jest.fn((k: string, v: any[]) => {
-        if (payload) { ids = v; }
+        // Only `.in('id', …)` selects WHICH rows an update targets. A guard like
+        // `.in('status', ['pending','processing'])` is an additional predicate,
+        // not the id list — treating any `.in()` as the id list made a
+        // status-guarded update address the status strings as row ids.
+        if (payload && k === 'id') { ids = v; }
         filters[k] = v;
         return api;
       }),
@@ -65,11 +69,18 @@ jest.mock('../../db/writeOwner', () => ({
         if (table === 'queue_jobs') {
           if (payload) {
             ownedQueueJobOps.push({ kind: 'update', payload, ids });
-            // Apply update to in-memory rows so later reads reflect it
-            for (const id of ids) {
-              const row = queueJobRows.find((r) => r.id === id);
-              if (row) Object.assign(row, payload);
-            }
+            // Postgres evaluates an UPDATE's WHERE against the PRE-update rows
+            // and returns exactly those as the affected set. The previous fake
+            // applied the payload first and filtered afterwards, so a
+            // status-changing update guarded on the OLD status matched nothing
+            // and reported zero rows affected — the opposite of the real driver.
+            const targets = queueJobRows.filter((r) =>
+              ids.includes(r.id) &&
+              (!filters.scheduled_post_id || r.scheduled_post_id === filters.scheduled_post_id) &&
+              (!filters.status || (Array.isArray(filters.status) ? filters.status.includes(r.status) : r.status === filters.status))
+            );
+            for (const row of targets) Object.assign(row, payload);
+            return Promise.resolve({ data: targets, error: null }).then(resolve);
           }
           const matching = queueJobRows.filter((r) =>
             (!filters.scheduled_post_id || r.scheduled_post_id === filters.scheduled_post_id) &&
