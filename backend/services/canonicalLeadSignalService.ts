@@ -2,6 +2,8 @@ import { supabase } from '../db/supabaseClient';
 import { logLeadSignalEvent } from '../utils/leadSignalLogger';
 import { ownedDbTable } from '../db/writeOwner';
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
+import { resolveSocialContactIdentity } from './prospectIdentity/socialContactResolution';
+import { logger } from './logger';
 
 /**
  * Enforcement rule:
@@ -219,20 +221,27 @@ async function resolveContactId(input: CanonicalLeadSignalInput): Promise<string
         : null;
   const profileUrl = typeof metadata.profile_url === 'string' ? metadata.profile_url : null;
 
-  const { data, error } = await ownedDbTable('contacts')
-    .upsert(
-      {
-        organization_id: input.organization_id,
-        platform,
-        platform_user_id: platformUserId,
-        contact_key: contactKey,
-        display_name: displayName,
-        profile_url: profileUrl,
-      },
-      { onConflict: 'organization_id,platform,platform_user_id' }
-    )
-    .select('id')
-    .single();
+  const row = {
+    organization_id: input.organization_id,
+    platform,
+    platform_user_id: platformUserId,
+    contact_key: contactKey,
+    display_name: displayName,
+    profile_url: profileUrl,
+  };
+  const upsertContact = (columns: string) =>
+    ownedDbTable('contacts')
+      .upsert(row, { onConflict: 'organization_id,platform,platform_user_id' })
+      .select(columns)
+      .single();
+
+  // B1 reads `unified_person_id` so an existing link is never re-decided. If a
+  // deployment predates the W5 column, fall back to the original projection —
+  // an identity enhancement must never remove contact linkage that worked.
+  let { data, error } = await upsertContact('id, unified_person_id');
+  if (error && isMissingColumn(error, 'unified_person_id')) {
+    ({ data, error } = await upsertContact('id'));
+  }
 
   if (error) {
     if (isMissingRelation(error, 'contacts')) {
@@ -242,7 +251,67 @@ async function resolveContactId(input: CanonicalLeadSignalInput): Promise<string
     throw new Error(error.message || 'Failed to resolve contact');
   }
 
-  return ((data as { id?: string | null } | null)?.id ?? null) || null;
+  const contactRow = data as { id?: string | null; unified_person_id?: string | null } | null;
+  const contactId = (contactRow?.id ?? null) || null;
+
+  await linkContactIdentity({
+    organizationId: input.organization_id,
+    contactId,
+    platform,
+    platformUserId,
+    existingPersonId: contactRow?.unified_person_id ?? null,
+  });
+
+  return contactId;
+}
+
+/**
+ * B1 — close the social identity edge at the moment a contact is created.
+ *
+ * Until now a `contacts` row was written with six columns and no identity
+ * resolution at all, so `unified_person_id` was NULL on every row in production
+ * even though the column and its tenant-safe composite FK exist. This resolves
+ * the platform identity against the canonical claims store and links the
+ * contact when — and only when — exactly one person in this tenant matches.
+ *
+ * ADDITIVE AND FAIL-OPEN. The contact and the signal are already durable; the
+ * resolver never throws and this guard exists so that even a driver-level fault
+ * cannot cost the tenant a social signal. Failures are logged with SQLSTATEs and
+ * counts only — never an identifier, handle, name or URL.
+ */
+async function linkContactIdentity(input: {
+  organizationId: string;
+  contactId: string | null;
+  platform: string;
+  platformUserId: string;
+  existingPersonId: string | null;
+}): Promise<void> {
+  if (!input.contactId) return;
+  try {
+    const outcome = await resolveSocialContactIdentity({
+      organizationId: input.organizationId,
+      contactId: input.contactId,
+      platform: input.platform,
+      platformUserId: input.platformUserId,
+      existingPersonId: input.existingPersonId,
+    });
+
+    if (outcome.outcome === 'skipped' || outcome.outcome === 'already_linked') return;
+
+    logger.info('social_contact_identity_resolution', {
+      organizationId: input.organizationId,
+      contactId: input.contactId,
+      platform: input.platform,
+      outcome: outcome.outcome,
+      claim: outcome.claim,
+      candidatePersonCount: outcome.candidatePersonIds.length,
+      duplicatesParked: outcome.duplicatesParked,
+      failureCodes: outcome.failureCodes,
+    });
+  } catch {
+    // resolveSocialContactIdentity absorbs its own failures; this second guard
+    // exists so signal ingestion can never fail for a secondary identity write.
+  }
 }
 
 async function syncThreadContact(threadId: string | null | undefined, contactId: string | null): Promise<void> {
