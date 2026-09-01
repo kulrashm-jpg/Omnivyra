@@ -106,9 +106,14 @@ describe('A3 — the composite person foreign key', () => {
   });
 
   it('nulls ONLY the person leg — confirmed from the catalog, not the text', async () => {
+    // `attname` is `name`, so a bare array_agg yields `name[]` (OID 1003) — a type
+    // node-pg has no parser for, which arrives as the raw literal '{person_id}'
+    // rather than a JS array. The ::text cast makes it `text[]`, which node-pg
+    // does parse. This changes only how the value is transported; the assertion
+    // below is unchanged and still requires exactly one column, `person_id`.
     const { rows } = await db.query(`
       SELECT con.confdeltype,
-             (SELECT array_agg(a.attname ORDER BY a.attname)
+             (SELECT array_agg(a.attname::text ORDER BY a.attname)
                 FROM pg_attribute a
                WHERE a.attrelid = con.conrelid AND a.attnum = ANY(con.confdelsetcols)) setcols
         FROM pg_constraint con

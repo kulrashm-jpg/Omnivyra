@@ -82,8 +82,15 @@ export async function proofDatabase(): Promise<void> {
   // Provenance immutability. The value must actually CHANGE: the trigger tests
   // `IS DISTINCT FROM`, so `set col = col` is correctly a no-op rather than a
   // mutation, and asserting against it would prove nothing.
+  // `company_id` is `uuid` after A3, not `text`. `company_id || '-x'` would raise
+  // 42883 (no `uuid || text` operator) and the catch below would record that as
+  // "refused" — a green assertion that no longer exercises the trigger at all.
+  // `gen_random_uuid()` is a genuinely different, genuinely valid value, so the
+  // refusal it provokes is the provenance guard and nothing else.
+  // `lead_id` and `plan_task_id` remain `text` (A3 deliberately did not retype
+  // them), so their concatenation still mutates as intended.
   const mutation: Record<string, string> = {
-    company_id: `company_id || '-x'`, lead_id: `lead_id || '-x'`, plan_task_id: `plan_task_id || '-x'`,
+    company_id: `gen_random_uuid()`, lead_id: `lead_id || '-x'`, plan_task_id: `plan_task_id || '-x'`,
     planner_version: `planner_version || '-x'`, translation_version: `translation_version || '-x'`,
     governance_version: `governance_version || '-x'`, execution_runtime_version: `execution_runtime_version || '-x'`,
     materialized_at: `materialized_at + interval '1 day'`,

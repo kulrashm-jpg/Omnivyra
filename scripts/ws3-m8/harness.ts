@@ -13,6 +13,8 @@
  */
 /* eslint-disable no-console */
 
+import { randomUUID } from 'node:crypto';
+
 import type { EmailProviderPort, EmailProviderResponse } from '../../backend/services/leadOutreachExecution';
 
 const TARGET = String(process.env.SUPABASE_URL ?? '');
@@ -240,8 +242,31 @@ export async function realPlan(companyId: string, leadId: string, now: string): 
   return automation.buildAutomationSummary({ summary });
 }
 
-/** Unique tenant id per run — certenv rows are append-only and never deleted. */
+/**
+ * Unique tenant id per run — certenv rows are append-only and never deleted.
+ *
+ * MUST be a syntactically valid UUID. A3 retyped `company_id` on every
+ * `outreach_*` table from `text` to `uuid`, so the previous
+ * `m8-<tag>-<pid>-<seq>` shape now fails the whole harness with `22P02`
+ * (invalid_text_representation) on the first insert. This is a harness-only
+ * correction: it changes no production identity semantics, no schema decision,
+ * and no runtime code path.
+ *
+ * `randomUUID()` rather than a hand-rolled hex encoding of tag/pid/seq: the id
+ * must be a *valid* UUID, not merely UUID-shaped, and inventing an encoding to
+ * smuggle debug data into the identifier is exactly the kind of cleverness that
+ * later reads as meaningful. Traceability is preserved out-of-band by
+ * `tenantLabels`, so a failing certification run can still name the fixture.
+ */
 export const tenantId = (tag: string): string => {
   fixtureSeq += 1;
-  return `m8-${tag}-${process.pid}-${fixtureSeq}`;
+  const id = randomUUID();
+  tenantLabels.set(id, `m8-${tag}-${process.pid}-${fixtureSeq}`);
+  return id;
 };
+
+/** Debug-only map from generated tenant uuid → the human-readable fixture label. */
+const tenantLabels = new Map<string, string>();
+
+/** The fixture label a generated tenant id was minted for, for diagnostics. */
+export const tenantLabel = (id: string): string => tenantLabels.get(id) ?? id;
