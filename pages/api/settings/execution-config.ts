@@ -60,13 +60,32 @@ function validateBody(body: unknown): { valid: boolean; error?: string } {
   return { valid: true };
 }
 
-/** Resolve the company_id for the authenticated user from their profile. */
+/**
+ * Resolve the company_id for the authenticated user from their profile.
+ *
+ * SETTINGS-EXECUTION-CONFIG-SEC-001 — the status filter is load-bearing.
+ *
+ * user_company_roles carries NON-ACTIVE rows by design: inviting a user writes
+ * status='invited' (backend/apiHandlers/company/usersShared.ts) with no
+ * acceptance and no session revocation, and deactivation writes
+ * status='inactive'. Without this predicate a user who never accepted an
+ * invitation — or whose membership had been revoked — still resolved to that
+ * company and could READ and WRITE its execution configuration. With several
+ * rows, limit(1) has no ORDER BY, so a stale row could also be preferred over a
+ * live one.
+ *
+ * This matches every other resolver in the codebase (the reports binder,
+ * settings/intelligence-access, command-center/company-state) and
+ * assertTenantAccess, which rejects a non-active membership as
+ * STALE_MEMBERSHIP.
+ */
 async function resolveCompanyId(userId: string): Promise<string | null> {
   try {
     const { data } = await supabase
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', userId)
+      .eq('status', 'active')
       .limit(1)
       .maybeSingle();
     return data?.company_id ?? null;
