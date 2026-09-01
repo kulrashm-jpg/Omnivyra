@@ -747,9 +747,17 @@ export function getQueue(): Queue {
 export function getWorker(
   queueName: string = 'publish',
   processor: (job: any) => Promise<void>,
-  opts?: { concurrency?: number }
+  opts?: { concurrency?: number; stalledInterval?: number; maxStalledCount?: number }
 ): Worker {
   const concurrency = opts?.concurrency ?? 5;
+  // Per-queue stalled-recovery cadence. The 30-minute default below is a
+  // deliberate Redis-cost choice and stays the default for every queue that
+  // does not opt out; a queue whose jobs hold user-visible state for minutes
+  // (bolt-execution) can pay for a faster cadence WITHOUT changing any other
+  // queue's footprint. A live job is never mis-detected: BullMQ renews a job's
+  // lock on a timer for as long as the process is alive, and BOLT awaits
+  // network I/O, so the event loop stays free to renew.
+  const stalledInterval = opts?.stalledInterval ?? 1_800_000;
   // F-02 (Foundation Batch A): run every job inside a RequestContext seeded
   // from the job's trace metadata (or its identity). Purely additive ALS
   // scoping — fail-safe, never alters job execution or results.
@@ -765,7 +773,8 @@ export function getWorker(
     // Reduce idle Redis polling — default drainDelay=5s × 8 workers = ~138k cmds/day.
     // 300s drainDelay + 30-min stalledInterval keeps this under ~2.7k cmds/day.
     drainDelay: 300,
-    stalledInterval: 1_800_000,
+    stalledInterval,
+    ...(opts?.maxStalledCount !== undefined ? { maxStalledCount: opts.maxStalledCount } : {}),
   });
 
   worker.on('completed', (job) => {

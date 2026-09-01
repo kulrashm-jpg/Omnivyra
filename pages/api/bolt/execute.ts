@@ -138,6 +138,11 @@ import { BOLT_ERROR_CODE_FRIENDLY_MESSAGES } from '../../../lib/shared/bolt/bolt
 import { probeBoltSchemaReadiness } from '../../../backend/services/boltSchemaReadiness';
 import { computeSiblingDifferential } from '../../../backend/services/boltStrategyDifferential';
 import { resolveCampaignMode } from '../../../lib/shared/bolt/formatGovernance';
+import {
+  computeBoltRequestFingerprint,
+  isLiveBoltRequestDuplicateViolation,
+  BOLT_IDEMPOTENCY_PAYLOAD_KEY,
+} from '../../../backend/services/boltExecuteIdempotency';
 
 function normalizeOptionalUuid(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -289,7 +294,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const generatedCampaignId = payload.generatedCampaignId;
     if (generatedCampaignId && typeof generatedCampaignId === 'string' && generatedCampaignId.trim()) {
-      const { data: existingRun } = await supabase
+      // A query FAILURE is not "no existing run". Reading `data` while
+      // discarding `error` turns a transport/PostgREST fault into a silent
+      // green light to start a second execution — the exact class this guard
+      // exists to prevent.
+      const { data: existingRun, error: existingRunError } = await supabase
         .from('bolt_execution_runs')
         .select('id')
         .or(`campaign_id.eq.${generatedCampaignId},target_campaign_id.eq.${generatedCampaignId}`)
@@ -297,12 +306,65 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .limit(1)
         .maybeSingle();
 
+      if (existingRunError) {
+        console.error('[bolt/execute] duplicate-run lookup failed:', existingRunError);
+        return res.status(503).json({
+          error: 'Could not verify whether this campaign is already running. Please try again.',
+          code: 'DUPLICATE_CHECK_UNAVAILABLE',
+        });
+      }
+
       if (existingRun && (existingRun as { id?: string }).id) {
         return res.status(202).json({
           run_id: (existingRun as { id: string }).id,
           status: 'started',
         });
       }
+    }
+
+    // ── Request-level idempotency ────────────────────────────────────────
+    // The campaign-scoped guard above cannot fire when BOLT is launched from a
+    // recommendation card: `generatedCampaignId` is absent and the campaign
+    // does not exist until the pipeline's first stage. The fingerprint below
+    // identifies the REQUEST, so a double submission collapses onto the run
+    // already in flight instead of creating a second campaign.
+    const idempotencyKey = computeBoltRequestFingerprint({
+      companyId,
+      userId: normalizeOptionalUuid(access.userId) ?? null,
+      recId: payload.recId,
+      sourceOpportunityId: payload.sourceOpportunityId,
+      generatedCampaignId: payload.generatedCampaignId,
+      outcomeView: payload.outcomeView,
+      title: payload.title,
+      executionConfig: payload.executionConfig,
+      sourceStrategicTheme: payload.sourceStrategicTheme,
+    });
+
+    const { data: liveTwin, error: liveTwinError } = await supabase
+      .from('bolt_execution_runs')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq(`payload->>${BOLT_IDEMPOTENCY_PAYLOAD_KEY}`, idempotencyKey)
+      .in('status', ['running', 'started'])
+      .limit(1)
+      .maybeSingle();
+
+    if (liveTwinError) {
+      console.error('[bolt/execute] idempotency lookup failed:', liveTwinError);
+      return res.status(503).json({
+        error: 'Could not verify whether this request is already running. Please try again.',
+        code: 'DUPLICATE_CHECK_UNAVAILABLE',
+      });
+    }
+
+    if (liveTwin && (liveTwin as { id?: string }).id) {
+      // Same request, already in flight — hand back the ORIGINAL run so the
+      // client polls the execution that exists rather than starting a rival.
+      return res.status(202).json({
+        run_id: (liveTwin as { id: string }).id,
+        status: 'started',
+        deduplicated: true,
+      });
     }
 
     // Part 7 — sibling strategy differential. Computed at enqueue time
@@ -325,9 +387,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             : typeof themeForDiff.polished_title === 'string' ? themeForDiff.polished_title : null)
         : null,
     });
-    const payloadWithDiff = differential
-      ? { ...payload, sibling_differential: differential }
-      : payload;
+    // The fingerprint is stamped INTO the payload rather than a new column, so
+    // the guard works against the deployed schema today and the prepared
+    // partial unique index can arbitrate concurrent duplicates the moment it is
+    // applied — without a second migration to backfill a column.
+    const payloadWithDiff = {
+      ...(differential ? { ...payload, sibling_differential: differential } : payload),
+      [BOLT_IDEMPOTENCY_PAYLOAD_KEY]: idempotencyKey,
+    };
 
     const { data: run, error } = await supabase
       .from('bolt_execution_runs')
@@ -344,6 +411,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .single();
 
     if (error) {
+      // Concurrency arbitration. Two requests that both passed the pre-insert
+      // check race to INSERT; the live-request index lets exactly one win and
+      // rejects the other with 23505. The loser must resolve to the WINNER's
+      // run, never surface an error — from the user's side this was one click.
+      if (isLiveBoltRequestDuplicateViolation(error)) {
+        const { data: winner, error: winnerError } = await supabase
+          .from('bolt_execution_runs')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq(`payload->>${BOLT_IDEMPOTENCY_PAYLOAD_KEY}`, idempotencyKey)
+          .in('status', ['running', 'started'])
+          .limit(1)
+          .maybeSingle();
+
+        if (!winnerError && winner && (winner as { id?: string }).id) {
+          return res.status(202).json({
+            run_id: (winner as { id: string }).id,
+            status: 'started',
+            deduplicated: true,
+          });
+        }
+        // The winner vanished between the rejection and this read (it finished
+        // or was reclaimed). Report honestly rather than inventing a run id.
+        console.error('[bolt/execute] duplicate rejected but winner not found:', winnerError ?? null);
+        return res.status(409).json({
+          error: 'This campaign was just started. Please refresh to see it.',
+          code: 'DUPLICATE_EXECUTION_REQUEST',
+        });
+      }
       console.error('[bolt/execute] Insert failed:', error);
       return res.status(500).json({ error: 'Failed to create BOLT run' });
     }
