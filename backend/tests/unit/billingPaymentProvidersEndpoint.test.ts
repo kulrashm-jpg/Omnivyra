@@ -8,6 +8,25 @@
  */
 
 let __authOk = true;
+/*
+ * BILLING-ACTIVE-ORG-AUTHZ-SEC-001 — these routes now authorize the active
+ * organization before touching tenant data. This suite characterizes BILLING
+ * BEHAVIOUR, so the caller is stubbed as an authorized member; the
+ * authorization boundary itself is proven separately in
+ * billingActiveOrgAuthzSec001.test.ts against the real TenantGuard chain.
+ */
+jest.mock('../../security/TenantGuard', () => ({
+  requireTenantAccess: jest.fn(async (_req: any, _res: any, organizationId: any) => (
+    organizationId
+      ? { userId: 'u1', supabaseUid: 'sub-1', organizationId, role: 'COMPANY_ADMIN', bypass: false }
+      : null
+  )),
+  assertTenantAccess: jest.fn(async ({ organizationId }: any) => (
+    organizationId
+      ? { ok: true, access: { userId: 'u1', supabaseUid: 'sub-1', organizationId, role: 'COMPANY_ADMIN', bypass: false } }
+      : { ok: false, reason: 'NO_ORG_ID' }
+  )),
+}));
 jest.mock('../../security/IdentityResolver', () => ({
   resolvePrincipal: async () =>
     __authOk

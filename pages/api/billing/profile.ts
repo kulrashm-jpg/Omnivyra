@@ -14,6 +14,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import {
   normalizeBillingGeographyInput,
   captureBillingProfileGeography,
@@ -34,6 +35,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(409).json({ error: 'no_active_organization' });
   }
 
+  /*
+   * BILLING-ACTIVE-ORG-AUTHZ-SEC-001 — activeOrgId is a CONTEXT POINTER, not a
+   * credential.
+   *
+   * It is `users.active_company_id` read verbatim: no membership join, no
+   * company-status check. AuthenticatedPrincipal documents it as exactly that,
+   * and TenantGuard says so in terms — "There is no 'active_company_id'
+   * inference." In production 24 of 33 pointers name a company where the user's
+   * membership is `inactive`, and 21 of those users can still authenticate, so
+   * this was reachable rather than theoretical.
+   *
+   * requireTenantAccess is the canonical guard and covers BOTH halves the
+   * pointer misses: membership must be currently active (STALE_MEMBERSHIP) and
+   * the company itself must exist and be active (ORG_NOT_FOUND / ORG_INACTIVE).
+   * It reuses the already-resolved principal, so this costs no second identity
+   * round-trip, and it must stay AHEAD of captureBillingProfileGeography: that
+   * service applies no tenant check of its own, and on a first capture it
+   * stamps the CALLER's session email as the organization's billing_email.
+   */
+  const tenant = await requireTenantAccess(req, res, organizationId);
+  if (!tenant) return;
+
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
   const normalized = normalizeBillingGeographyInput(body);
   if (!normalized.ok) {
@@ -42,7 +65,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const result = await captureBillingProfileGeography({
-    organizationId,
+    // The AUTHORIZED organization, not the pointer it came from.
+    organizationId: tenant.organizationId,
     sessionEmail: typeof auth.principal.email === 'string' ? auth.principal.email : null,
     geography: normalized.value,
   });
