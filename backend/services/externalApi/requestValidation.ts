@@ -44,10 +44,12 @@ export const normalizeRecord = (value: any): Record<string, any> => {
 
 export const resolveEnvValue = (envName?: string | null): string | undefined => {
   if (!envName) return undefined;
+  // SECURITY: the literal-key fallback was REMOVED — see the identical note in
+  // `internalHelpers.resolveEnvValue`. A secret pasted into the NAME field must never
+  // function as a credential. An env-var NAME resolves to its value; anything else
+  // resolves to nothing.
   const fromEnv = process.env[envName];
   if (fromEnv) return fromEnv;
-  const looksLikeEnvVarName = /^[A-Z][A-Z0-9_]{1,}$/.test(envName);
-  if (!looksLikeEnvVarName) return envName;
   return undefined;
 };
 
