@@ -135,3 +135,7 @@ docs/governance-consumers/consumer-validation.json
 architecture-migration/reports/
 
 .vercel
+
+# Claude Code per-machine settings. Local-only by convention and has held
+# production credentials in permission rules - must never be committed.
+.claude/settings.local.json
