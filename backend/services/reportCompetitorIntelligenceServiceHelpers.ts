@@ -11,6 +11,8 @@ import { withinBudget, recordUsage } from './intelligence/costGovernance';
 import { getActiveScanId } from './intelligence/scanBudgetContext';
 // BETA-PHASE3-EXEC-001: structured provider-call telemetry parity with the LLM/Ahrefs adapters.
 import { logProviderCall } from './intelligence/productionPrimitives';
+// Canonical credential resolution — one path for every SERP call site.
+import { resolveProviderCredential } from './providerCredentialResolver';
 import {
   buildCompetitorFitRationale,
   buildCompetitorFitSignals,
@@ -26,6 +28,9 @@ import {
 } from './competitorEngineService';
 import type { CompetitorEnrichmentProfile } from './competitorEnrichmentKnowledge';
 import type { CompetitorSecondaryTag } from './competitorTaxonomy';
+// Phase 3: canonical two-axis relations carried through to the report payload.
+import type { CompetitorRelations } from './competitorRelationModel';
+import type { CompetitorDimensionScores, CompetitorDiscoverySource } from '../../types/competitor';
 
 type CompetitorClassification = 'direct_competitor' | 'seo_competitor' | 'authority_leader';
 type CompetitorSource = EngineCompetitorSource;
@@ -61,6 +66,17 @@ export type DetectedCompetitor = {
   enrichment: CompetitorEnrichmentProfile | null;
   enrichment_confidence_score: number;
   rationale: string;
+  /**
+   * Phase 3 — the canonical two-axis relations (product / market) attached by the ranking
+   * engine. `toDetectedCompetitor` already carries this through via spread; declaring it
+   * here makes it visible to the report composition without a second mapping step.
+   * Optional because legacy construction sites do not set it.
+   */
+  relations?: CompetitorRelations;
+  /** Discovery provenance, carried through from the ranked competitor. */
+  discoverySources?: CompetitorDiscoverySource[];
+  /** Score-card dimensions, carried through by `toDetectedCompetitor`. */
+  dimensions?: CompetitorDimensionScores;
   fit_signals?: {
     market_focus?: string | null;
     product_service?: string | null;
@@ -548,8 +564,18 @@ export function extractDecisionCompetitors(
 
 
 export async function fetchSerpDomainsForKeyword(keyword: string, geography: string | null): Promise<string[]> {
-  const serpApiKey = config.SERPAPI_API_KEY || config.SERP_API_KEY || config.SERPAPI_KEY || '';
-  if (!serpApiKey) return [];
+  // CANONICAL RESOLUTION — the same single path the acquisition service uses:
+  // managed Super Admin account → account env reference → source env fallback.
+  // Previously this read `config.*` directly, so a credential rotated in Super Admin had no
+  // effect here at all. The env names remain the fallback, so nothing regresses when no
+  // managed account exists.
+  const credential = await resolveProviderCredential('serpapi');
+  const serpApiKey = credential.value ?? '';
+  if (!serpApiKey) {
+    // `reason` is shape-only — it never contains a credential.
+    logProviderCall({ providerId: 'serp', operation: 'search', status: 'unavailable', reason: credential.reason });
+    return [];
+  }
 
   // BETA-PHASE1-EXEC-002: canonical budget gate BEFORE the paid SERP request — identical ordering to the
   // LLM/Ahrefs adapters. No active scan-budget context ⇒ no gating (prior behaviour, deterministic empty on abort).
@@ -614,10 +640,13 @@ export async function discoverCompetitorDomainsFromSerp(params: {
 }): Promise<{ domains: string[]; liveKeywordCount: number }> {
   const ranked = new Map<string, number>();
   let liveKeywordCount = 0;
-  const serpApiKey = config.SERPAPI_API_KEY || config.SERP_API_KEY || config.SERPAPI_KEY || '';
-  if (!serpApiKey) {
+  // Canonical resolution for the pre-flight warning too, so the log reflects the credential
+  // that will actually be used rather than a separate `config.*` read.
+  const preflight = await resolveProviderCredential('serpapi');
+  if (!preflight.value) {
     console.warn('[competitor-discovery][serp-disabled]', {
-      reason: 'missing_serp_api_key',
+      reason: preflight.reason, // shape-only; never a credential
+      source: preflight.source,
       keywords: params.keywords.slice(0, MAX_DISCOVERY_KEYWORDS),
     });
   }

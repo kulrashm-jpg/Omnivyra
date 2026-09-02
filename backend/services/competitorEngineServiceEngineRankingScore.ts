@@ -24,6 +24,8 @@ import type {
   CompetitorScaleSignals,
 } from './competitorEnrichmentKnowledge';
 import { findKnownCompetitorProfile } from './competitorEnrichmentKnowledge';
+// Phase 2: the two-view (product / market) relation model with abstention.
+import { deriveCompetitorRelations } from './competitorRelationModel';
 import {
   categoryAffinity,
   normalizeCompetitorCategory,
@@ -256,11 +258,11 @@ export function scoreCompetitorCandidate(
   return evaluateCompetitorCandidate(enrichedCandidate, context).score_card.overallScore;
 }
 
-function classifyByIndex(index: number): CompetitorClassification {
-  if (index === 0) return 'direct_competitor';
-  if (index === 1) return 'seo_competitor';
-  return 'authority_leader';
-}
+// Phase 2: `classifyByIndex(index)` was removed. It was the final fallback in
+// `item.classification ?? classificationFromTier(item.tier) ?? classifyByIndex(index)` —
+// and, since `classificationFromTier` is total over CompetitorTier and never returns
+// null, it was already unreachable there. It is deleted rather than left as dead code so
+// no future edit can reintroduce position-based classification.
 
 export function rankCompetitorCandidates(params: {
   candidates: CompetitorCandidate[];
@@ -345,9 +347,30 @@ export function rankCompetitorCandidates(params: {
       return true;
     })
     .slice(0, max)
-    .map((item, index) => ({
+    .map((item) => ({
       ...item,
-      classification: item.classification ?? classificationFromTier(item.tier) ?? classifyByIndex(index),
+      // Phase 2: evidence-derived only. `item.classification` is now null for every
+      // candidate builder (they run before scoring), so this resolves to the tier the
+      // engine actually computed from problem/ICP overlap.
+      classification: item.classification ?? classificationFromTier(item.tier),
+      // Phase 2: the two independent competitive views (Table A product / Table B market),
+      // derived from the dimensions this engine already computed. Either axis abstains when
+      // evidence is below the documented minimum, so a thinly-evidenced company is surfaced
+      // as "Discovered — Unclassified" instead of being given an authoritative category.
+      relations: deriveCompetitorRelations({
+        dimensions: item.score_card?.dimensions ?? null,
+        evidenceCount: (item.discoverySources?.length ?? 0)
+          + (item.enrichment ? 1 : 0)
+          + (item.domain ? 1 : 0),
+        sources: [...(item.discoverySources ?? [])],
+        // A public observation is a strong source: 'serp' (the company actually co-occurred
+        // in live search results) or 'provider' (an external data source returned it).
+        // 'manual' / 'stored' / 'ai-inferred' are supplied or derived, not observed, so a
+        // competitor known only that way scores as `inferred`, never `measured`.
+        hasStrongSource: (item.discoverySources ?? []).some(
+          (source) => source === 'serp' || source === 'provider',
+        ),
+      }),
     }));
 }
 
