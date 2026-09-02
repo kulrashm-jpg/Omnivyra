@@ -600,6 +600,9 @@ const outcomeRow = (over: Row = {}): Row => ({
 });
 
 const task1: OutreachTask = {
+  // A3: required field, nullable value. This fixture predates the person anchor,
+  // so `null` — never anchored — is the accurate value.
+  personId: null,
   id: 't1', companyId: 'co-a', leadId: 'L1', planTaskId: 'task-1-intro', taskOrder: 1,
   kind: 'outreach', action: 'Send intro email', channel: 'email', dependsOnPlanTaskId: null,
   estimatedDelayHours: 0, confidence: 0.8, explanation: 'x', status: 'delivered',
