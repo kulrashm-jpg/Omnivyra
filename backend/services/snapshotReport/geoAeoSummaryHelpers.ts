@@ -116,19 +116,45 @@ export function buildGeoAeoExecutiveSummary(params: {
       ? 'inferred'
       : 'measured';
 
-  const primaryGap =
-    (funnel.drop_off_reason_distribution.answer_gap_pct ?? 0) >=
-    Math.max(
-      funnel.drop_off_reason_distribution.structure_gap_pct ?? 0,
-      funnel.drop_off_reason_distribution.citation_gap_pct ?? 0,
-    )
+  // ── Phase 2: evidence gate ──────────────────────────────────────────────────
+  //
+  // BEFORE: `primary_gap` and `top_3_actions` were emitted UNCONDITIONALLY. With no AI
+  // evidence every drop-off percentage is null, `?? 0` turned each into 0, and the first
+  // branch's `0 >= max(0, 0)` was always true — so every report asserted "Answer coverage
+  // is too thin for AI visibility" and three hardcoded actions, while
+  // `overall_ai_visibility_score` correctly returned null. That is the exact
+  // score-says-nothing / narrative-says-something contradiction Phase 2 removes.
+  //
+  // AFTER: when no axis is measured the section abstains — null gap, empty actions. The
+  // absent score and the absent narrative now agree.
+  // Positive test, not a negative one: only 'measured' and 'inferred' carry a value that a
+  // diagnosis may rest on. Written this way so that if `ScoreState` ever gains another
+  // non-evidenced member ('estimated', say) it defaults to withholding rather than asserting.
+  const aiEvidenceSufficient: boolean =
+    overallAiVisibilityScoreState === 'measured' || overallAiVisibilityScoreState === 'inferred';
+
+  /** Measured drop-off signals only — a null stays null instead of collapsing to 0. */
+  const answerGapPct = funnel.drop_off_reason_distribution.answer_gap_pct;
+  const structureGapPct = funnel.drop_off_reason_distribution.structure_gap_pct;
+  const citationGapPct = funnel.drop_off_reason_distribution.citation_gap_pct;
+  const measuredGaps: Array<{ kind: 'answer' | 'structure' | 'citation'; pct: number }> = [
+    ...(typeof answerGapPct === 'number' ? [{ kind: 'answer' as const, pct: answerGapPct }] : []),
+    ...(typeof structureGapPct === 'number' ? [{ kind: 'structure' as const, pct: structureGapPct }] : []),
+    ...(typeof citationGapPct === 'number' ? [{ kind: 'citation' as const, pct: citationGapPct }] : []),
+  ].sort((left, right) => right.pct - left.pct);
+
+  const dominantGap = aiEvidenceSufficient ? measuredGaps[0] ?? null : null;
+
+  const primaryGap = dominantGap === null
+    ? null
+    : dominantGap.kind === 'answer'
       ? {
           title:
             missingQueries.length > 0
               ? 'Important answer queries are still missing coverage'
               : 'Answer coverage is too thin for AI visibility',
           type: 'answer_gap' as const,
-          severity: severityLabel(funnel.drop_off_reason_distribution.answer_gap_pct ?? 0),
+          severity: severityLabel(dominantGap.pct),
           reasoning:
             missingQueries.length > 0
               ? `${missingQueries.length} query clusters still lack full answer coverage, which makes the site harder to reuse in AI answer experiences.`
@@ -136,12 +162,11 @@ export function buildGeoAeoExecutiveSummary(params: {
           if_not_addressed:
             'If not addressed, AI answer visibility will remain constrained and citation-driven discovery will continue to underperform.',
         }
-      : (funnel.drop_off_reason_distribution.structure_gap_pct ?? 0) >=
-          (funnel.drop_off_reason_distribution.citation_gap_pct ?? 0)
+      : dominantGap.kind === 'structure'
         ? {
             title: 'Content structure is limiting answer extraction',
             type: 'structure_gap' as const,
-            severity: severityLabel(funnel.drop_off_reason_distribution.structure_gap_pct ?? 0),
+            severity: severityLabel(dominantGap.pct),
             reasoning:
               'The current page structure does not make answers easy to extract, summarize, and cite consistently.',
             if_not_addressed:
@@ -150,45 +175,87 @@ export function buildGeoAeoExecutiveSummary(params: {
         : {
             title: 'Citation readiness is still below what AI visibility requires',
             type: 'structure_gap' as const,
-            severity: severityLabel(funnel.drop_off_reason_distribution.citation_gap_pct ?? 0),
+            severity: severityLabel(dominantGap.pct),
             reasoning:
               'Clear summaries, evidence density, and citation-ready passages are still too uneven across important pages.',
             if_not_addressed:
               'If not addressed, authority in AI answer surfaces will remain weak even if technical SEO improves.',
           };
 
-  const top3Actions = [
+  // ── Phase 2: actions derived from MEASURED deficits ─────────────────────────
+  //
+  // BEFORE: a hardcoded three-element array, returned whether or not any AI evidence
+  // existed — generic AEO best practice presented as a diagnosis.
+  //
+  // AFTER: one action per measured axis deficit, each carrying the axis value that
+  // caused it. No measured deficit → no action. An empty array is the correct output
+  // for a company with no AI evidence, and is what the tests assert.
+  type AeoAxis = {
+    key: 'answer_coverage' | 'content_structure' | 'citation_readiness' | 'entity_clarity';
+    value: number;
+    title: string;
+    linked_visual: 'radar' | 'matrix' | 'funnel';
+    reason: (value: number) => string;
+  };
+  const measuredAxes: AeoAxis[] = ([
     {
-      action_title: 'Add direct-answer sections to the highest-value query pages',
-      priority: 'high' as const,
-      expected_impact: 'high' as const,
-      effort: 'medium' as const,
-      linked_visual: 'matrix' as const,
-      reasoning: 'This closes the biggest answer coverage gaps shown in the query coverage map.',
+      key: 'answer_coverage', value: radar.answer_coverage_score as number,
+      title: 'Add direct-answer sections to the highest-value query pages',
+      linked_visual: 'matrix',
+      reason: (v) => `Answer coverage is measured at ${v}/100${missingQueries.length > 0 ? ` with ${missingQueries.length} query cluster(s) uncovered` : ''}.`,
     },
     {
-      action_title: 'Improve page structure with stronger summaries, FAQs, and heading hierarchy',
-      priority: 'high' as const,
-      expected_impact: 'medium' as const,
-      effort: 'medium' as const,
-      linked_visual: 'funnel' as const,
-      reasoning: 'This improves answer extraction and raises structured content coverage for AI visibility.',
+      key: 'content_structure', value: radar.content_structure_score as number,
+      title: 'Improve page structure with stronger summaries, FAQs, and heading hierarchy',
+      linked_visual: 'funnel',
+      reason: (v) => `Content structure is measured at ${v}/100, which limits how reliably answers can be extracted.`,
     },
     {
-      action_title: 'Strengthen entity mentions and proof around the core brand and service terms',
-      priority: entities.length > 0 ? 'medium' as const : 'low' as const,
-      expected_impact: 'medium' as const,
-      effort: 'medium' as const,
-      linked_visual: 'radar' as const,
-      reasoning: 'This improves entity clarity and makes the site easier to interpret as an authoritative source.',
+      key: 'citation_readiness', value: radar.citation_readiness_score as number,
+      title: 'Make key passages citation-ready with clear summaries and supporting evidence',
+      linked_visual: 'funnel',
+      reason: (v) => `Citation readiness is measured at ${v}/100.`,
     },
-  ];
+    {
+      key: 'entity_clarity', value: radar.entity_clarity_score as number,
+      title: 'Strengthen entity mentions and proof around the core brand and service terms',
+      linked_visual: 'radar',
+      reason: (v) => `Entity clarity is measured at ${v}/100${entities.length > 0 ? ` across ${entities.length} detected entities` : ''}.`,
+    },
+  ] as AeoAxis[]).filter((axis) => typeof axis.value === 'number');
 
-  const topQuery =
-    missingQueries[0]
-    ?? params.geoAeoVisuals.query_answer_coverage_map.queries.sort(
-      (left, right) => right.answer_quality_score - left.answer_quality_score,
-    )[0];
+  /**
+   * An axis is a DEFICIT when it sits below the moderate band. 55 is the existing
+   * `MARKET_POSITION_BANDS.developing` cutoff already used across the report to separate
+   * "developing" from "competitive" — reused rather than invented so the AEO section
+   * agrees with the rest of the scoring governance about what "weak" means.
+   */
+  const AEO_DEFICIT_THRESHOLD = 55;
+  const top3Actions = !aiEvidenceSufficient
+    ? []
+    : measuredAxes
+      .filter((axis) => axis.value < AEO_DEFICIT_THRESHOLD)
+      .sort((left, right) => left.value - right.value)
+      .slice(0, 3)
+      .map((axis) => ({
+        action_title: axis.title,
+        priority: (axis.value < 30 ? 'high' : axis.value < 45 ? 'medium' : 'low') as 'high' | 'medium' | 'low',
+        expected_impact: (axis.value < 30 ? 'high' : 'medium') as 'high' | 'medium' | 'low',
+        effort: 'medium' as const,
+        linked_visual: axis.linked_visual,
+        reasoning: axis.reason(axis.value),
+      }));
+
+  // Phase 2: the opportunity is an AI-visibility claim like any other and is gated on the
+  // same evidence. Without a measured AI score, "improving this query would lift answer
+  // coverage" is an assertion about an unmeasured dimension — the contradiction regression
+  // test in reportEvidenceDiscipline.test.ts caught this surviving the first pass.
+  const topQuery = !aiEvidenceSufficient
+    ? undefined
+    : missingQueries[0]
+      ?? params.geoAeoVisuals.query_answer_coverage_map.queries.sort(
+        (left, right) => right.answer_quality_score - left.answer_quality_score,
+      )[0];
 
   return {
     overall_ai_visibility_score: overallAiVisibilityScore,
