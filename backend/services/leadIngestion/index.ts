@@ -59,9 +59,18 @@ export {
   type CrmLeadInput,
 } from './adapters/crmAdapter';
 
+export {
+  CSV_SOURCE,
+  csvAdapter,
+  csvExternalId,
+  toNormalizedCsvRecord,
+  type CsvLeadInput,
+} from './adapters/csvAdapter';
+
 import { hasLeadSourceAdapter, registerLeadSourceAdapter } from './registry';
 import { manualAdapter } from './adapters/manualAdapter';
 import { crmAdapter } from './adapters/crmAdapter';
+import { csvAdapter } from './adapters/csvAdapter';
 
 /**
  * Register the adapters that ship with the platform.
@@ -70,10 +79,11 @@ import { crmAdapter } from './adapters/crmAdapter';
  * duplicate-registration error, so a second call from a different entry point
  * cannot crash a process.
  *
- * Both built-ins are operator-supplied entry adapters — `manual` and `crm`.
- * Neither reaches a provider: `crm` is a NAMESPACE, not an integration, and is
- * unrelated to `crmIngestionService` and its scheduler. No provider adapter
- * exists, and none is registered optimistically.
+ * All three built-ins are operator-supplied entry adapters — `manual`, `crm`
+ * and `csv`. None reaches a provider: `crm` is a NAMESPACE, not an integration,
+ * and is unrelated to `crmIngestionService` and its scheduler, and `csv` receives
+ * rows the client already parsed, never a file. No provider adapter exists, and
+ * none is registered optimistically.
  */
 export function registerBuiltInLeadSources(): void {
   if (!hasLeadSourceAdapter(manualAdapter.source)) {
@@ -81,5 +91,8 @@ export function registerBuiltInLeadSources(): void {
   }
   if (!hasLeadSourceAdapter(crmAdapter.source)) {
     registerLeadSourceAdapter(crmAdapter);
+  }
+  if (!hasLeadSourceAdapter(csvAdapter.source)) {
+    registerLeadSourceAdapter(csvAdapter);
   }
 }
