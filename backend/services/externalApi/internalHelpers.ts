@@ -166,10 +166,23 @@ export const computeSignalConfidence = (input: {
 // ── Env / placeholder resolution ──────────────────────────────────────────────
 export const resolveEnvValue = (envName?: string | null): string | undefined => {
   if (!envName) return undefined;
+  // SECURITY: the literal-key fallback was REMOVED.
+  //
+  // This previously returned `envName` itself when the value did not look like an
+  // environment-variable name — i.e. a secret pasted into the NAME field silently became a
+  // working credential. That behaviour is exactly why four live provider keys ended up in
+  // `external_api_sources.api_key_env_name` and were served by the catalog API.
+  //
+  // Retiring it was gated on three checks, all now satisfied:
+  //   1. every affected credential was relocated into encrypted account storage;
+  //   2. write paths reject secret-shaped input (`isEnvVarName`);
+  //   3. read paths redact anything that fails that validation.
+  // Callers needing a real secret get it from `resolveAccountCredentials`, which takes
+  // precedence over this function at every call site in `execution.ts`.
+  //
+  // An env-var NAME resolves to its value; anything else resolves to nothing.
   const fromEnv = process.env[envName];
   if (fromEnv) return fromEnv;
-  const looksLikeEnvVarName = /^[A-Z][A-Z0-9_]{1,}$/.test(envName);
-  if (!looksLikeEnvVarName) return envName;
   return undefined;
 };
 

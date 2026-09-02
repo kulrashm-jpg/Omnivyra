@@ -7,22 +7,26 @@ import { ownedDbTable } from '../db/writeOwner';
  * getActiveAccountForApi()   — fetch highest-priority active account for an API
  * resolveAccountCredentials() — extract usable credential fields from an account
  *
- * Credential shape stored in api_provider_accounts.credentials_encrypted (plain JSON,
- * not individually encrypted — the JSON value itself may contain references to
- * already-encrypted blobs that were originally in external_api_sources):
+ * Credential shape stored in api_provider_accounts.credentials_encrypted — a JSON envelope
+ * whose SECRET-BEARING fields are individually encrypted with `encryptCredential`
+ * (AES-256-GCM). Non-secret fields (an env-var NAME) stay readable by design.
  *
- *   { "api_key_env_name": "YOUTUBE_API_KEY" }
- *   { "api_key_value": "<raw key>" }               ← SuperAdmin-entered literal
- *   { "oauth_client_id_ref": "<enc>",
- *     "oauth_client_secret_ref": "<enc>" }          ← reuse existing encrypted blobs
+ *   { "api_key_env_name": "YOUTUBE_API_KEY" }        ← a NAME, not a secret
+ *   { "api_key_value": "<iv:tag:ciphertext>" }        ← ENCRYPTED admin-entered secret
+ *   { "oauth_client_id_ref": "<iv:tag:ciphertext>",
+ *     "oauth_client_secret_ref": "<iv:tag:ciphertext>" }
  *
- * The field `credentials_encrypted` is named for future encryption of the
- * whole JSON blob.  In Phase 1 it stores plain JSON to avoid a re-encryption
- * migration on existing OAuth blobs.
+ * REMEDIATION HISTORY: `api_key_value` was previously written and read as PLAINTEXT, in a
+ * column named `credentials_encrypted`, while the OAuth fields beside it were encrypted.
+ * It is now encrypted on write and decrypted only in `resolveAccountCredentials`, at the
+ * moment a provider needs it. Legacy plaintext rows still resolve (so nothing breaks) but
+ * are flagged via `legacy_plaintext_key` so they can be reported and re-entered.
  */
 
 import { supabase } from '../db/supabaseClient';
-import { decryptCredential } from '../auth/credentialEncryption';
+import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
+// Remediation: one shared definition of secret / env-var-name / ciphertext shapes.
+import { classifyStoredKey, isEncryptedCredential } from '../security/credentialSafety';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -51,10 +55,16 @@ export type ResolvedAccountCredentials = {
   source: 'account' | 'fallback';
   accountId: string | null;
   api_key_env_name: string | null;
-  /** Literal API key value (resolved from env var or entered directly) */
+  /** Literal API key value (resolved from env var, or decrypted from the stored credential). */
   api_key_value: string | null;
   oauth_client_id: string | null;
   oauth_client_secret: string | null;
+  /**
+   * True when the stored key was LEGACY PLAINTEXT rather than ciphertext. A boolean only —
+   * it never carries any part of the value. Lets the migration and health surfaces report
+   * remaining plaintext without reading it.
+   */
+  legacy_plaintext_key?: boolean;
 };
 
 // ── Centralized resolution ────────────────────────────────────────────────────
@@ -217,9 +227,32 @@ export function resolveAccountCredentials(account: ProviderAccount): ResolvedAcc
     if (val) base.api_key_value = val;
   }
 
-  // Literal key value path (admin-entered raw key)
+  // Literal key value path (admin-entered raw key).
+  //
+  // REMEDIATION: this value is now ENCRYPTED at rest (`encryptCredential`), matching the
+  // OAuth fields beside it. It was previously written and read as plaintext, in a column
+  // named `credentials_encrypted`. Decryption happens HERE and only here — at the moment a
+  // provider actually needs the credential — and the plaintext is never persisted back,
+  // returned in an API response, or logged.
+  //
+  // Legacy plaintext is still accepted so a pre-migration row keeps working, but it is
+  // flagged so the migration and the health surface can report it. Silently accepting it
+  // forever is how the original defect persisted.
   if (typeof creds.api_key_value === 'string' && creds.api_key_value.trim()) {
-    base.api_key_value = creds.api_key_value.trim();
+    const stored = creds.api_key_value.trim();
+    if (isEncryptedCredential(stored)) {
+      try {
+        base.api_key_value = decryptCredential(stored);
+      } catch {
+        // Never log the ciphertext or any fragment of it.
+        console.warn('providerAccountService: failed to decrypt api_key_value', {
+          accountId: account.id,
+        });
+      }
+    } else {
+      base.api_key_value = stored;
+      base.legacy_plaintext_key = true;
+    }
   }
 
   // OAuth refs — reuse existing encrypted blobs from external_api_sources
@@ -311,4 +344,97 @@ export async function deactivateProviderAccount(id: string): Promise<void> {
     .eq('id', id);
 
   if (error) throw new Error(`deactivateProviderAccount: ${error.message}`);
+}
+
+// ── Credential envelope (write path) ──────────────────────────────────────────
+
+/**
+ * Build the stored credential envelope from admin-supplied fields, MERGING onto whatever is
+ * already stored.
+ *
+ * Two defects are fixed here, and both are fixed once rather than per-endpoint:
+ *
+ *  1. ENCRYPTION — `api_key_value` is encrypted with the same `encryptCredential` used for
+ *     the OAuth fields. Previously it was written verbatim into a column named
+ *     `credentials_encrypted`.
+ *  2. MERGE — the PUT path previously did `credentials_encrypted = JSON.stringify(new)`,
+ *     replacing the whole envelope. Editing an account and submitting only
+ *     `api_key_env_name` silently destroyed the stored secret. Only fields the caller
+ *     actually supplied are changed now; everything else is carried forward.
+ *
+ * Never logs, returns or echoes a secret. Throws only on encryption failure, so a caller can
+ * fail closed rather than storing plaintext.
+ */
+export function buildCredentialEnvelope(params: {
+  /** The account's existing `credentials_encrypted` JSON string, or null when creating. */
+  existing?: string | null;
+  /** Admin-supplied fields. Absent keys are left untouched; empty strings are ignored. */
+  supplied: Record<string, unknown>;
+}): string {
+  const next: Record<string, string> = {};
+
+  // Start from what is already stored so an unrelated edit cannot drop a credential.
+  if (params.existing) {
+    try {
+      const parsed = JSON.parse(params.existing) as Record<string, unknown>;
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'string' && value.trim()) next[key] = value;
+      }
+    } catch {
+      // An unparseable envelope is treated as empty rather than propagated.
+    }
+  }
+
+  const supplied = params.supplied ?? {};
+  const provided = (key: string): string | null => {
+    const value = supplied[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  };
+
+  // Env-var NAME — not a secret, stored readable. Validated by the API layer.
+  const envName = provided('api_key_env_name');
+  if (envName) next.api_key_env_name = envName;
+
+  // Secret — encrypted. Already-encrypted input is passed through unchanged so a
+  // round-trip cannot double-encrypt.
+  const keyValue = provided('api_key_value');
+  if (keyValue) {
+    next.api_key_value = isEncryptedCredential(keyValue) ? keyValue : encryptCredential(keyValue);
+  }
+
+  // OAuth — unchanged behaviour, preserved exactly.
+  const clientId = provided('oauth_client_id');
+  const clientIdRef = provided('oauth_client_id_ref');
+  if (clientIdRef) next.oauth_client_id_ref = clientIdRef;
+  else if (clientId) next.oauth_client_id_ref = encryptCredential(clientId);
+
+  const clientSecret = provided('oauth_client_secret');
+  const clientSecretRef = provided('oauth_client_secret_ref');
+  if (clientSecretRef) next.oauth_client_secret_ref = clientSecretRef;
+  else if (clientSecret) next.oauth_client_secret_ref = encryptCredential(clientSecret);
+
+  return JSON.stringify(next);
+}
+
+/**
+ * Shape-only description of what an account stores — for migration and health reporting.
+ * Returns booleans and states, never a credential value.
+ */
+export function describeAccountCredentialState(account: Pick<ProviderAccount, 'id' | 'credentials_encrypted'>): {
+  accountId: string;
+  keyState: ReturnType<typeof classifyStoredKey>;
+  hasEnvRef: boolean;
+  hasOauthRef: boolean;
+} {
+  let creds: Record<string, unknown> = {};
+  try {
+    const raw = account.credentials_encrypted?.trim();
+    if (raw && raw !== '{}') creds = JSON.parse(raw);
+  } catch { /* treated as empty */ }
+  return {
+    accountId: account.id,
+    keyState: classifyStoredKey(creds.api_key_value),
+    hasEnvRef: typeof creds.api_key_env_name === 'string' && Boolean(creds.api_key_env_name.trim()),
+    hasOauthRef: typeof creds.oauth_client_secret_ref === 'string' || typeof creds.oauth_client_id_ref === 'string',
+  };
 }

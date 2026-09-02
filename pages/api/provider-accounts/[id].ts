@@ -8,10 +8,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import {
+  buildCredentialEnvelope,
   updateProviderAccount,
   deactivateProviderAccount,
 } from '../../../backend/services/providerAccountService';
-import { encryptCredential } from '../../../backend/auth/credentialEncryption';
+// Remediation: shared env-var-name validation; encryption lives in the envelope builder.
+import { describeRejectedEnvVarName, isEnvVarName } from '../../../backend/security/credentialSafety';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
@@ -83,37 +85,42 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (typeof priority === 'number')            patch.priority = priority;
     if (typeof is_active === 'boolean')          patch.is_active = is_active;
 
-    // Re-encrypt updated credentials if provided
+    // ── Credential update — MERGE, never replace ──────────────────────────────
+    //
+    // REMEDIATION (two defects fixed here):
+    //
+    //  1. DESTRUCTIVE REPLACE. This previously built a fresh object and assigned
+    //     `credentials_encrypted = JSON.stringify(credToStore)`. Editing an account and
+    //     submitting only `api_key_env_name` silently DESTROYED the stored secret, with no
+    //     warning and no way to recover it. `buildCredentialEnvelope` now merges onto the
+    //     existing envelope, so only fields the caller actually supplied change.
+    //  2. PLAINTEXT. `api_key_value` was stored verbatim; it is now encrypted by the same
+    //     shared builder used on create.
     if (credentials && typeof credentials === 'object') {
-      const credToStore: Record<string, string> = {};
-
-      if (credentials.api_key_env_name)
-        credToStore.api_key_env_name = String(credentials.api_key_env_name);
-      if (credentials.api_key_value)
-        credToStore.api_key_value = String(credentials.api_key_value);
-
-      if (credentials.oauth_client_id && !credentials.oauth_client_id_ref) {
-        try {
-          credToStore.oauth_client_id_ref = encryptCredential(String(credentials.oauth_client_id));
-        } catch {
-          return res.status(500).json({ error: 'Failed to encrypt oauth_client_id' });
-        }
-      } else if (credentials.oauth_client_id_ref) {
-        credToStore.oauth_client_id_ref = String(credentials.oauth_client_id_ref);
+      // Server-side env-var-name validation — the client is not the security boundary.
+      if (credentials.api_key_env_name && !isEnvVarName(credentials.api_key_env_name)) {
+        return res.status(400).json({
+          error: 'INVALID_ENV_VAR_NAME',
+          detail: describeRejectedEnvVarName(credentials.api_key_env_name),
+        });
       }
 
-      if (credentials.oauth_client_secret && !credentials.oauth_client_secret_ref) {
-        try {
-          credToStore.oauth_client_secret_ref = encryptCredential(String(credentials.oauth_client_secret));
-        } catch {
-          return res.status(500).json({ error: 'Failed to encrypt oauth_client_secret' });
-        }
-      } else if (credentials.oauth_client_secret_ref) {
-        credToStore.oauth_client_secret_ref = String(credentials.oauth_client_secret_ref);
-      }
+      // Read the CURRENT envelope so unsupplied fields survive the update.
+      const { data: current } = await supabase
+        .from('api_provider_accounts')
+        .select('credentials_encrypted')
+        .eq('id', id)
+        .maybeSingle();
 
-      if (Object.keys(credToStore).length > 0) {
-        patch.credentials_encrypted = JSON.stringify(credToStore);
+      try {
+        const merged = buildCredentialEnvelope({
+          existing: (current as { credentials_encrypted?: string } | null)?.credentials_encrypted ?? null,
+          supplied: credentials,
+        });
+        if (merged && merged !== '{}') patch.credentials_encrypted = merged;
+      } catch {
+        // Fail CLOSED — never downgrade to storing plaintext.
+        return res.status(500).json({ error: 'Failed to encrypt credentials' });
       }
     }
 
