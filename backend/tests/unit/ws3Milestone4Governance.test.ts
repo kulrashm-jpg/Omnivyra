@@ -103,6 +103,11 @@ const NOW = '2026-08-05T12:00:00.000Z';
 
 const task = (over: Partial<OutreachTask> = {}): OutreachTask => ({
   id: 'task-uuid-1', companyId: 'co-a', leadId: 'L1', planTaskId: 'task-1-intro',
+  // A3: the person anchor is a REQUIRED field with a NULLABLE value — a task always
+  // carries the field, and `null` is the honest value for a fixture that was never
+  // anchored. Defaulting it here keeps every existing case exercising the
+  // unanchored path, which is what these governance tests were written against.
+  personId: null,
   taskOrder: 1, kind: 'outreach', action: 'Send intro', channel: 'email',
   dependsOnPlanTaskId: null, estimatedDelayHours: 0, confidence: 0.7, explanation: 'x',
   status: 'approved', deliveryStatus: null, requiresApproval: true,

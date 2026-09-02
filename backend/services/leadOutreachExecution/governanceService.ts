@@ -32,8 +32,17 @@ import {
 } from './governance';
 import { mayContact } from '../prospectIdentity/contactGovernance';
 import { loadGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
+import { resolveLeadPersonId, resolvePersonAnchor, type PersonAnchorResolution } from './personAnchor';
 import { recordFailure, recordGovernanceEvaluation, recordGovernanceFailure, recordGovernanceGate, recordStageOutcome } from './telemetry';
 import type { OutreachTask } from './types';
+
+/**
+ * A3 — `resolveLeadPersonId` moved to `personAnchor`, which now owns every step
+ * of Contract 13's order. Re-exported unchanged so existing callers and the
+ * LI-3D tests keep working against the same import path.
+ */
+export { resolveLeadPersonId };
+export type { PersonAnchorResolution, PersonAnchorSource } from './personAnchor';
 
 export const OUTREACH_GOVERNANCE_CONFIG_TABLE = 'outreach_governance_config';
 export const OUTREACH_SUPPRESSIONS_TABLE = 'outreach_suppressions';
@@ -145,26 +154,89 @@ export async function loadSuppressionMatches(
   };
 }
 
+/** The anchor as reported when the canonical layer was never consulted. */
+const NO_ANCHOR: PersonAnchorResolution = {
+  ok: true, personId: null, source: 'none', degraded: true, reason: 'canonical_layer_not_applicable',
+};
+
 /**
- * LI-3C — resolve the CANONICAL contact governance verdict for one task.
+ * LI-3C / A3 — resolve the CANONICAL contact governance verdict for one task,
+ * AND report which identity it was evaluated against.
  *
  * This is the impure edge: it loads tenant-scoped governance records and hands
  * them to `mayContact`, the single evaluator that owns the ADR's rules. No rule
- * is reimplemented here, and `mayContact` stays pure because it receives
- * records rather than a database.
+ * is reimplemented here, and `mayContact` stays pure because it receives records
+ * rather than a database.
  *
  * FAILS CLOSED, matching `loadSuppressionMatches`: an unreadable governance
- * table yields a BLOCK, never an absent verdict. Reading it as "nobody is
- * governed" would contact people who asked not to be.
+ * table — or an unreadable `leads` row, which leaves the person UNKNOWN — yields
+ * a BLOCK, never an absent verdict. Reading either as "nobody is governed" would
+ * contact people who asked not to be. That posture is unchanged by A3.
  *
- * Returns `null` only when the canonical layer genuinely does not apply —
- * no tenant, no channel, or no recipient anchor at all.
+ * `verdict: null` means the canonical layer genuinely does not apply: no tenant,
+ * no channel, or nothing at all to match on.
  *
- * KNOWN LIMIT (LI-3C finding): `OutreachTask` carries `leadId`, not a canonical
- * `unified_persons.id`, so the person anchor is supplied only when a caller
- * passes `options.personId`. No caller does today, which means target matching
- * is the operative path. A governance record anchored ONLY to a person is
- * therefore not yet reachable through Path B.
+ * A3 / CONTRACT 13. The person anchor is now resolved by `resolvePersonAnchor`
+ * in the frozen order — explicit id, then `outreach_tasks.person_id`, then
+ * `leads.unified_person_id`, then unresolved — and the resolution TRAVELS OUT
+ * with the verdict. LI-3C's known limit ("no caller supplies a person, so target
+ * matching is the operative path") is therefore closed twice over: by the stored
+ * Contract 12 anchor, and by the lead link LI-3D added. What remains is the
+ * genuinely unanchorable case, and that is no longer silent — the caller records
+ * it on the persisted decision.
+ */
+export async function resolveCanonicalGovernanceWithAnchor(
+  companyId: string,
+  task: OutreachTask,
+  recipient: string | null,
+  personId: string | null,
+  evaluatedAt: string,
+): Promise<{ verdict: CanonicalGovernanceVerdict | null; anchor: PersonAnchorResolution }> {
+  const channel = task.channel;
+  if (!companyId || !channel) return { verdict: null, anchor: NO_ANCHOR };
+
+  const anchor = await resolvePersonAnchor(companyId, task, personId);
+  if (!anchor.ok) {
+    // Unknown person link — fail closed, same posture as an unreadable
+    // governance table. Silently degrading to target-only matching here would
+    // reintroduce exactly the P2-1 miss this phase exists to close.
+    return { verdict: failClosed('governance_person_resolution_failed_failclosed'), anchor };
+  }
+
+  if (!recipient && !anchor.personId) return { verdict: null, anchor };
+
+  let loaded;
+  try {
+    loaded = await loadGovernanceRecords({ organizationId: companyId, personId: anchor.personId, target: recipient, channel });
+  } catch {
+    return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor };
+  }
+
+  if (!loaded.ok) return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor };
+
+  // Normalise explicitly with the SAME function the repository used for its
+  // query. Deriving it from a loaded record would be wrong: a record matched on
+  // person could carry a different target and would silently change what the
+  // evaluator compares against.
+  const normalizedTarget = normalizeGovernanceTarget(channel, recipient);
+
+  const verdict = mayContact({
+    organizationId: companyId,
+    personId: anchor.personId,
+    targetNormalized: normalizedTarget,
+    channel,
+    now: evaluatedAt,
+    records: loaded.records,
+  });
+  return { verdict, anchor };
+}
+
+/**
+ * LI-3C — the verdict alone.
+ *
+ * Kept at its original signature and return shape so LI-3C/LI-3D callers and
+ * their tests are untouched by A3. New callers that need to record WHICH
+ * identity was used should call `resolveCanonicalGovernanceWithAnchor`.
  */
 export async function resolveCanonicalGovernance(
   companyId: string,
@@ -173,50 +245,8 @@ export async function resolveCanonicalGovernance(
   personId: string | null,
   evaluatedAt: string,
 ): Promise<CanonicalGovernanceVerdict | null> {
-  const channel = task.channel;
-  if (!companyId || !channel) return null;
-
-  // LI-3D — the person anchor. An explicit caller-supplied id wins; otherwise it
-  // is resolved from the lead's existing canonical link. Resolving here rather
-  // than in the caller's Promise.all keeps the identity read inside the single
-  // edge that already owns canonical governance.
-  let resolvedPersonId = personId;
-  if (!resolvedPersonId) {
-    const resolved = await resolveLeadPersonId(companyId, task.leadId ?? null);
-    if (!resolved.ok) {
-      // Unknown person link — fail closed, same posture as an unreadable
-      // governance table. Silently degrading to target-only matching here would
-      // reintroduce exactly the P2-1 miss this phase exists to close.
-      return failClosed('governance_person_resolution_failed_failclosed');
-    }
-    resolvedPersonId = resolved.personId;
-  }
-
-  if (!recipient && !resolvedPersonId) return null;
-
-  let loaded;
-  try {
-    loaded = await loadGovernanceRecords({ organizationId: companyId, personId: resolvedPersonId, target: recipient, channel });
-  } catch {
-    return failClosed('governance_lookup_failed_failclosed');
-  }
-
-  if (!loaded.ok) return failClosed('governance_lookup_failed_failclosed');
-
-  // Normalise explicitly with the SAME function the repository used for its
-  // query. Deriving it from a loaded record would be wrong: a record matched on
-  // person could carry a different target and would silently change what the
-  // evaluator compares against.
-  const normalizedTarget = normalizeGovernanceTarget(channel, recipient);
-
-  return mayContact({
-    organizationId: companyId,
-    personId: resolvedPersonId,
-    targetNormalized: normalizedTarget,
-    channel,
-    now: evaluatedAt,
-    records: loaded.records,
-  });
+  const { verdict } = await resolveCanonicalGovernanceWithAnchor(companyId, task, recipient, personId, evaluatedAt);
+  return verdict;
 }
 
 /**
@@ -266,11 +296,13 @@ export interface EvaluateOptions {
   /** Recipient identifier to check against the suppression list. */
   recipient?: string | null;
   /**
-   * LI-3C — canonical `unified_persons.id`, when the caller knows it.
+   * A3 / Contract 13 — canonical `unified_persons.id`, when the caller knows it.
    *
-   * `OutreachTask` carries a `leadId`, not a canonical person id, so this is
-   * the only way the person anchor can reach governance. No caller supplies it
-   * today; until one does, canonical matching is target-based only.
+   * STEP 1 of the frozen anchor order, and the strongest evidence available: a
+   * caller that already holds the person knows more than any stored column.
+   * When it is absent the resolver falls through to `outreach_tasks.person_id`,
+   * then to `leads.unified_person_id`, then to target-only matching — see
+   * `personAnchor.resolvePersonAnchor`.
    */
   personId?: string | null;
   /** Recipient region (ISO 3166-1 alpha-2), when known. */
@@ -286,27 +318,16 @@ export interface GovernanceServiceResult {
   evaluation: GovernanceEvaluation | null;
   /** True when the decision was appended to the immutable log. */
   recorded: boolean;
+  /**
+   * A3 / Contract 13 — WHICH identity the canonical layer was evaluated
+   * against, and whether it degraded to target-only matching. Additive: the
+   * same fact is persisted on the decision row, and this exposes it to a caller
+   * that evaluated with `recordDecision: false`.
+   */
+  identity?: PersonAnchorResolution;
   error?: string;
 }
 
-/**
- * LI-3D — resolve the canonical person behind an outreach task's lead.
- *
- * `OutreachTask` carries a `leadId`; canonical governance is anchored to
- * `unified_persons.id`. LI-3C could therefore only match target-anchored
- * records, and the LI-3C audit classified that gap P2-1. The relationship it
- * needs already exists — `leads.unified_person_id` — so this resolves it rather
- * than inventing a second identity link.
- *
- * TENANT-SCOPED: the lead is read with `company_id` as the first predicate, so a
- * leadId belonging to another tenant resolves to nothing rather than to their
- * person.
- *
- * FAILS CLOSED via the `ok` flag. An unreadable `leads` row means we cannot know
- * whether a person-anchored DNC exists, and proceeding would contact someone we
- * were told not to. The caller turns `ok:false` into a block, exactly as it does
- * for an unreadable governance table.
- */
 /**
  * The one shape a canonical failure may take. Every fail-closed path returns
  * this, so "we could not evaluate" is always a BLOCK and can never be mistaken
@@ -322,27 +343,6 @@ const failClosed = (reason: string): CanonicalGovernanceVerdict => ({
   deferredUntil: null,
   version: 'li3c',
 });
-
-export async function resolveLeadPersonId(
-  companyId: string,
-  leadId: string | null,
-): Promise<{ ok: boolean; personId: string | null }> {
-  if (!companyId || !leadId) return { ok: true, personId: null };
-
-  const res = await safeDb<Row[]>(() =>
-    ownedDbTable('leads')
-      .select('id, unified_person_id')
-      .eq('company_id', companyId)          // TENANT FIRST, always
-      .eq('id', leadId)
-      .limit(1),
-  );
-  if (res.error) return { ok: false, personId: null };
-
-  const row = Array.isArray(res.data) ? res.data[0] : null;
-  // No lead, or a lead not yet canonicalised, is not a failure: it simply has no
-  // person anchor and target matching remains in force.
-  return { ok: true, personId: row ? str(row.unified_person_id) : null };
-}
 
 /**
  * Evaluate one task and (by default) record the decision.
@@ -366,15 +366,25 @@ export async function evaluateTaskGovernance(
   }
 
   let input: GovernanceEvaluationInput;
+  // A3 / Contract 13 — the identity this evaluation was performed against.
+  // Declared outside the try so it is still in scope at the point the decision
+  // is persisted: recording WHICH anchor was used is the whole obligation, and
+  // it must not be lost to a narrower scope.
+  let identity: PersonAnchorResolution = NO_ANCHOR;
   try {
-    const [config, suppressions, usage, canonicalGovernance] = await Promise.all([
+    const [config, suppressions, usage, canonical] = await Promise.all([
       loadTenantGovernanceConfig(companyId),
       loadSuppressionMatches(companyId, task, options.recipient ?? null),
       loadRateUsage(companyId, task.leadId, evaluatedAt),
       // LI-3C — the canonical verdict, computed once at the edge by the single
-      // evaluator that owns the ADR rules. Fails closed inside.
-      resolveCanonicalGovernance(companyId, task, options.recipient ?? null, options.personId ?? null, evaluatedAt),
+      // evaluator that owns the ADR rules. Fails closed inside. A3 has it also
+      // report the anchor it resolved, so the two can never disagree: the
+      // identity written to the log is by construction the identity the verdict
+      // was computed from.
+      resolveCanonicalGovernanceWithAnchor(companyId, task, options.recipient ?? null, options.personId ?? null, evaluatedAt),
     ]);
+    identity = canonical.anchor;
+    const canonicalGovernance = canonical.verdict;
     input = {
       task,
       config,
@@ -404,7 +414,7 @@ export async function evaluateTaskGovernance(
   for (const gate of evaluation.gates) recordGovernanceGate(gate.gate, gate.decision);
 
   if (options.recordDecision === false) {
-    return { ok: true, evaluation, recorded: false };
+    return { ok: true, evaluation, recorded: false, identity };
   }
 
   // Only the DECIDING gate is recorded — the log answers "why did this task
@@ -419,11 +429,18 @@ export async function evaluateTaskGovernance(
     scope: deciding.scope,
     limiterLayer: deciding.limiterLayer,
     governanceVersion: evaluation.governanceVersion,
+    // A3 / Contract 13 — the identity degradation, made VISIBLE. Until now an
+    // allowed decision taken with a full person anchor and one taken with none
+    // were indistinguishable in this log, even though the second could not have
+    // matched a person-anchored do-not-contact record at all.
+    personId: identity.personId,
+    identityAnchor: identity.source,
+    identityDegraded: identity.degraded,
     decidedAt: evaluatedAt,
   });
   if (!appended.ok) recordGovernanceFailure('persistence');
 
-  return { ok: true, evaluation, recorded: appended.ok, error: appended.ok ? undefined : appended.error };
+  return { ok: true, evaluation, recorded: appended.ok, identity, error: appended.ok ? undefined : appended.error };
 }
 
 /**

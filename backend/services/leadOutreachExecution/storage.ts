@@ -101,6 +101,10 @@ export function rowToOutreachTask(row: unknown): OutreachTask | null {
     companyId,
     leadId,
     planTaskId,
+    // A3 / Contract 12. Absent on a row read before the migration applied, and
+    // legitimately null on an unanchored task — both map to null, which the
+    // anchor resolver treats identically: fall through to the lead.
+    personId: str(r.person_id),
     taskOrder: num(r.task_order),
     kind: str(r.kind),
     action: str(r.action),
@@ -126,6 +130,11 @@ const taskToRow = (t: NewOutreachTask): Row => ({
   company_id: t.companyId,
   lead_id: t.leadId,
   plan_task_id: t.planTaskId,
+  // A3 / Contract 12. Optional at materialisation: a WS-2 plan carries a lead,
+  // not a canonical person. The composite foreign key refuses a value from
+  // another tenant, so no pre-check is written here — between a check and the
+  // insert the world can change, and a foreign key cannot.
+  person_id: t.personId ?? null,
   task_order: t.taskOrder ?? null,
   kind: t.kind ?? null,
   action: t.action ?? null,
@@ -217,6 +226,50 @@ export async function setOutreachTaskState(
     ownedDbTable(OUTREACH_TASKS_TABLE).update(patch).eq('company_id', companyId).eq('id', taskId),
   );
   return res.error ? { ok: false, error: errText(res.error) } : { ok: true };
+}
+
+/**
+ * A3 / Contract 12 — anchor a task to a canonical person, or unanchor it.
+ *
+ * The ONLY write path to `outreach_tasks.person_id`, deliberately separate from
+ * `setOutreachTaskState`: state is lifecycle and moves constantly, identity is a
+ * different kind of fact and should not be settable as a side effect of a status
+ * change.
+ *
+ * TENANT SAFETY IS THE DATABASE'S, NOT A PRE-CHECK'S. `company_id` scopes the
+ * row being updated, and `outreach_tasks_person_tenant_fk` refuses a person from
+ * another tenant with `23503` — reported here as the tenant error it is rather
+ * than as a raw SQLSTATE. A SELECT-then-UPDATE would be a race, not a guard:
+ * between the check and the write the person could move or vanish, and a
+ * composite foreign key cannot.
+ *
+ * `changed: false` is a legitimate outcome — no such task for this tenant — and
+ * is NOT reported as an error, matching `transitionOutreachTaskState`.
+ *
+ * Passing `null` unanchors, which is legal by design: identity resolution can
+ * be withdrawn as well as asserted, and the task must remain usable either way.
+ */
+export async function setOutreachTaskPersonId(
+  companyId: string,
+  taskId: string,
+  personId: string | null,
+): Promise<WriteResult<null> & { changed: boolean }> {
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable(OUTREACH_TASKS_TABLE)
+      .update({ person_id: personId, updated_at: new Date().toISOString() })
+      .eq('company_id', companyId)
+      .eq('id', taskId)
+      .select('id'),
+  );
+  if (res.error) {
+    const code = String((res.error as { code?: string }).code ?? '');
+    if (code === '23503') {
+      return { ok: false, changed: false, error: 'no such person in this tenant — a task may only anchor to its own tenant’s person' };
+    }
+    return { ok: false, changed: false, error: errText(res.error) };
+  }
+  const changed = Array.isArray(res.data) ? res.data.length > 0 : false;
+  return { ok: true, changed };
 }
 
 /**
@@ -391,6 +444,15 @@ export async function appendDecision(record: Omit<OutreachDecision, 'id'>): Prom
       scope: record.scope ?? null,
       limiter_layer: record.limiterLayer ?? null,
       governance_version: record.governanceVersion ?? null,
+      // A3 / Contract 13 — the identity this decision was actually evaluated
+      // against. `identityDegraded` is what makes a target-only evaluation
+      // visible; without it an allowed decision taken with full identity and one
+      // taken with none are indistinguishable in the log. `undefined` is written
+      // as null so a caller that predates A3 records "unknown" rather than
+      // asserting "not degraded", which would be a claim it never made.
+      person_id: record.personId ?? null,
+      identity_anchor: record.identityAnchor ?? null,
+      identity_degraded: record.identityDegraded ?? null,
       decided_at: record.decidedAt,
     }),
   );

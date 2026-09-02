@@ -158,6 +158,22 @@ export interface OutreachTask extends OutreachTaskProvenance {
    */
   planTaskId: string;
 
+  /**
+   * A3 / Contract 12 — the canonical `unified_persons.id` this task contacts.
+   *
+   * NULL is legal and is the current state of every task: anchoring is a
+   * capability, not an obligation. When it is null, governance falls back to
+   * resolving the person through `leads.unified_person_id` and, failing that,
+   * to target-only matching — which it then RECORDS as a degradation.
+   *
+   * Tenant-safe in the database via `outreach_tasks_person_tenant_fk`, so a
+   * value read from here always belongs to this task's own tenant. It is
+   * deliberately NOT part of the immutable provenance contract: a task may
+   * legitimately be anchored after materialisation, once identity resolution
+   * catches up with it.
+   */
+  personId: string | null;
+
   // Mirrored plan shape — see the module header on why this is a copy.
   taskOrder: number | null;
   kind: string | null;
@@ -177,10 +193,17 @@ export interface OutreachTask extends OutreachTaskProvenance {
   updatedAt: string | null;
 }
 
-/** Fields a caller supplies at materialisation. Status is not one of them. */
-export type NewOutreachTask = Omit<OutreachTask, 'id' | 'status' | 'deliveryStatus' | 'createdAt' | 'updatedAt'> & {
+/**
+ * Fields a caller supplies at materialisation. Status is not one of them.
+ *
+ * `personId` is OPTIONAL rather than required: translation derives a task from a
+ * WS-2 plan, which carries a lead and no canonical person. Forcing every
+ * materialiser to supply one would make them invent a value they do not have.
+ */
+export type NewOutreachTask = Omit<OutreachTask, 'id' | 'status' | 'deliveryStatus' | 'createdAt' | 'updatedAt' | 'personId'> & {
   status?: OutreachTaskStatus;
   deliveryStatus?: DeliveryStatus | null;
+  personId?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -269,6 +292,21 @@ export interface OutreachOutcome {
 /** WS-3 M7 — where a feedback record came from. Closed set. */
 export type FeedbackSource = 'provider_webhook' | 'provider_poll' | 'manual' | 'import' | 'derived' | 'internal';
 
+/**
+ * A3 / Contract 13 — which step of the frozen person-anchor order produced the
+ * identity a governance decision was evaluated against:
+ *
+ *   explicit — the caller supplied a canonical person id
+ *   task     — read from `outreach_tasks.person_id` (the Contract 12 anchor)
+ *   lead     — resolved through `leads.unified_person_id`
+ *   none     — no anchor could be established; target-only matching
+ *
+ * A closed set, and the SAME closed set the
+ * `outreach_decisions_identity_anchor_valid` CHECK constraint enforces. The
+ * resolution ORDER lives in `personAnchor.ts`; this is only its vocabulary.
+ */
+export type PersonAnchorSource = 'explicit' | 'task' | 'lead' | 'none';
+
 export interface OutreachDecision {
   id: string | null;
   companyId: string;
@@ -276,6 +314,23 @@ export interface OutreachDecision {
   gate: GovernanceGate;
   decision: 'allowed' | 'denied';
   reason: string | null;
+  /**
+   * A3 / Contract 13 — the canonical person this decision was evaluated
+   * against, when one could be established. Carries NO foreign key: an audit
+   * record must keep naming the person it was about even after that person is
+   * erased from the spine, and a referential action would fire the append-only
+   * trigger and make the person undeletable.
+   */
+  personId?: string | null;
+  /** Which step of the frozen order produced it. Null on pre-A3 rows. */
+  identityAnchor?: PersonAnchorSource | null;
+  /**
+   * TRUE when NO anchor could be established and the evaluation fell back to
+   * target-only matching — strictly weaker, because a person-anchored
+   * governance record cannot match a target. Recording it is the whole point:
+   * before A3 this degradation was invisible in the log.
+   */
+  identityDegraded?: boolean | null;
   scope: string | null;
   limiterLayer: LimiterLayer | null;
   governanceVersion: string | null;
