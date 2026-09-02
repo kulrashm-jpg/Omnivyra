@@ -166,6 +166,21 @@ describe('LI-2 — provider code cannot bypass the boundary', () => {
     // operation at all — asserted separately below, which is a stricter check
     // than the name scan it is exempted from.
     join('services', 'prospectIdentity', 'attributes.ts'),
+    // D1's ICP criteria contract, exempted on exactly the same grounds and held
+    // to exactly the same stricter check. It maps each LI-1 attribute to the
+    // PREDICATE KIND an ICP may express over it (`job_title: 'exact_text'`), and
+    // names the spine tables only in prose saying which table an attribute lives
+    // on. It imports the LI-1 contract and its own types and nothing else, so it
+    // has no way to reach a database. Evaluating an ICP is a read of values the
+    // boundary already wrote; it is never a write, and this exemption does not
+    // widen who may write.
+    join('services', 'prospectIcp', 'criteria.ts'),
+  ];
+
+  /** Files exempted from the name scan above, each of which must touch no database. */
+  const NAME_ONLY_FILES = [
+    'services/prospectIdentity/attributes.ts',
+    'services/prospectIcp/criteria.ts',
   ];
   const ATTRS = [...PERSON_ATTRIBUTE_COLUMNS, ...ACCOUNT_ATTRIBUTE_COLUMNS]
     .filter((c) => c !== 'attributes_source' && c !== 'attributes_updated_at' && c !== 'region' && c !== 'city');
@@ -198,9 +213,13 @@ describe('LI-2 — provider code cannot bypass the boundary', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the LI-1 contract file touches no database at all', () => {
-    const src = readFileSync(join(ROOT, 'services/prospectIdentity/attributes.ts'), 'utf8');
-    for (const dbVerb of [/ownedDbTable/, /supabase/, /\.insert\(/, /\.update\(/, /\.upsert\(/, /\.from\(/]) {
+  // Every file exempted from the name scan pays for the exemption here. This is
+  // the stricter check: the name scan only asks whether a column is mentioned
+  // beside a spine table, whereas this asks whether the file can reach a
+  // database at all. A file that fails here cannot be exempted above.
+  it.each(NAME_ONLY_FILES)('%s touches no database at all', (relative) => {
+    const src = readFileSync(join(ROOT, relative), 'utf8');
+    for (const dbVerb of [/ownedDbTable/, /supabase/, /\.insert\(/, /\.update\(/, /\.upsert\(/, /\.from\(/, /db\.query/, /createClient/]) {
       expect(src).not.toMatch(dbVerb);
     }
   });

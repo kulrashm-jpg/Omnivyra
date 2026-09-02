@@ -137,6 +137,41 @@ export const BILLING_GRANT_FREE_CREDITS = 'billing.grant_free_credits' as const;
  */
 export const PROSPECT_INGEST = 'prospect.ingest' as const;
 
+/**
+ * Create, propose and RATIFY a tenant's Ideal Customer Profile —
+ * `prospect_icps`, `prospect_icp_versions` (D1).
+ *
+ * PER-TENANT, and deliberately its own capability rather than a reuse of
+ * `PROSPECT_INGEST`, which is the nearest existing grant and would have been
+ * the cheap answer. It is a different authority over a different kind of
+ * object:
+ *
+ *   - `PROSPECT_INGEST` authorises an ASSERTION ABOUT ONE PERSON — "this
+ *     address belongs to this human". Its blast radius is one row, and the
+ *     principal stating it is stating a fact they observed.
+ *   - This capability authorises a DEFINITION THAT GOVERNS EVERY PROSPECT the
+ *     tenant will ever score — "these are the customers we want". A ratified
+ *     ICP is an input to scoring for the whole tenant, and by contract 16 it is
+ *     IMMUTABLE once ratified: the decision cannot be edited away, only
+ *     superseded by another deliberate decision.
+ *
+ * Conflating them would mean that granting someone permission to import a CSV
+ * silently granted them permission to redefine what the business considers a
+ * good customer. That is capability inflation of exactly the kind
+ * `PROSPECT_INGEST`'s own comment refuses, applied one level up.
+ *
+ * Granted EXACTLY as narrowly as `PROSPECT_INGEST` — COMPANY_ADMIN and
+ * SUPER_ADMIN, nothing else — and holding NO hierarchy relationship in either
+ * direction, so it neither implies nor is implied by anything. In particular it
+ * does NOT imply `PROSPECT_INGEST`: defining the profile and importing people
+ * are separate authorities, and someone may legitimately hold either alone.
+ *
+ * Deliberately NOT step-up-gated. Step-up is reserved for platform-tier and
+ * irreversible actions; ratification is a routine tenant decision whose effect
+ * is bounded by the tenant and reversible by ratifying a new version.
+ */
+export const PROSPECT_ICP_MANAGE = 'prospect.icp.manage' as const;
+
 // ── Content Architect (Wave Phase 1 — replaces synthetic userId='content_architect') ──
 /** Read campaign/company-profile data across companies. Content Architect role. */
 export const CONTENT_ARCHITECT_READ = 'content_architect.read' as const;
@@ -193,6 +228,8 @@ export const ALL_CAPABILITIES = [
   CONTENT_ARCHITECT_WRITE,
   // Prospect identity spine — per-tenant ingestion authority
   PROSPECT_INGEST,
+  // Prospect ICP — per-tenant authority to define and ratify the profile
+  PROSPECT_ICP_MANAGE,
   // Phase: Platform Authority Isolation — platform-tier billing capabilities
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
