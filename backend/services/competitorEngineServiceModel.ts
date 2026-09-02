@@ -12,6 +12,8 @@ import type {
 import { isAudienceLedArchetype, isArchetypeInfluential, isBusinessFirstOnlyArchetype } from './companyProfile/entityArchetype';
 import type { EntityArchetypeIntelligence } from './companyProfile/types';
 import type { ResolvedReportInput } from './reportInputResolver';
+// Phase 2: two-view competitive relations (product / market) with abstention.
+import type { CompetitorRelations } from './competitorRelationModel';
 import {
   enrichCompetitorCandidateSync,
   enrichCompetitorCandidates,
@@ -156,6 +158,13 @@ export type RankedCompetitor = {
   enrichment_confidence_score: number;
   rationale: string;
   competitor_intelligence: CompetitorIntelligence | null;
+  /**
+   * Phase 2 — the two independent competitive views (Table A product / Table B market)
+   * plus the composite relation, each able to abstain. Optional so existing constructors
+   * of RankedCompetitor-shaped objects (tests, fixtures) keep compiling; the ranking
+   * engine always populates it.
+   */
+  relations?: CompetitorRelations;
   fit_signals: {
     market_focus?: string | null;
     product_service?: string | null;

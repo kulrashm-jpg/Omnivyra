@@ -343,6 +343,34 @@ export async function generateReportPayload(
 
   await persistInputsForReportCategory(requestedCategory, resolvedInput);
 
+  // Phase 1A — ensure the snapshot report actually has website evidence to read.
+  //
+  // Every deterministic engine (technical / content / accessibility / brand) and the
+  // public-domain audit read `canonical_pages`. Nothing on the report path ever
+  // populated it, so reports composed against empty tables and abstained on
+  // everything. This reuses the EXISTING crawler and the EXISTING refresh-policy
+  // cooldown: fresh evidence is reused, absent or stale evidence is (re)crawled.
+  //
+  // Snapshot only — growth/performance reports read connected analytics sources, not
+  // the crawl. Never throws: a crawl failure leaves the report to abstain honestly.
+  if (requestedCategory === 'snapshot') {
+    const { ensureReportCrawlEvidence } = await import('./crawl/reportCrawlEvidenceService');
+    const crawlEvidence = await ensureReportCrawlEvidence({
+      companyId: report.company_id,
+      websiteDomain: resolvedInput.resolved.websiteDomain ?? report.domain ?? null,
+    });
+    console.info('[reportCardService] report_crawl_evidence', {
+      reportId: report.id,
+      companyId: report.company_id,
+      action: crawlEvidence.action,
+      pagesBefore: crawlEvidence.pagesBefore,
+      pagesAfter: crawlEvidence.pagesAfter,
+      durationMs: crawlEvidence.durationMs,
+      reason: crawlEvidence.reason,
+      error: crawlEvidence.error,
+    });
+  }
+
   const intelligence = await runCompanyBlogIntelligence(report.company_id);
 
   let composed_report: Record<string, unknown> | undefined;
