@@ -14,7 +14,7 @@
  * Health: GET http://localhost:8080/health
  *
  * Required env vars (validated at startup):
- *   REDIS_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY
+ *   REDIS_URL, SUPABASE_URL, SUPABASE_SECRET_KEY, OPENAI_API_KEY
  */
 
 import { config } from '@/config';

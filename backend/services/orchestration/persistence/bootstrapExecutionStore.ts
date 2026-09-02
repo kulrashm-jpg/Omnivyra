@@ -33,6 +33,7 @@ import {
   SupabaseExecutionStore,
   SupabaseExecutionStoreError,
 } from './supabaseExecutionStore';
+import { hasSupabaseSecretKey } from '../../../db/supabaseKeys';
 import { SupabaseCheckpointStore } from './supabaseCheckpointStore';
 import { SupabaseLeaseStore } from './supabaseLeaseStore';
 import {
@@ -165,7 +166,7 @@ function printBanner(result: BootstrapExecutionStoreResult): void {
 }
 
 function serviceRoleKeyPresent(): boolean {
-  return Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_URL);
+  return Boolean(hasSupabaseSecretKey() && process.env.SUPABASE_URL);
 }
 
 async function defaultSmokeTest(store: SupabaseExecutionStore): Promise<void> {

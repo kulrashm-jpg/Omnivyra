@@ -1,12 +1,13 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { checkEnvIsolationOnce } from '../../lib/env/namespace';
+import { requireSupabaseSecretKey } from './supabaseKeys';
 
 /**
  * Supabase Admin Client — lazy singleton.
  * Uses service role key (bypasses RLS). Backend / Railway only.
  *
  * Validation is deferred to first use so that Next.js can bundle API routes
- * on Vercel without requiring SUPABASE_SERVICE_ROLE_KEY at build time.
+ * on Vercel without requiring SUPABASE_SECRET_KEY at build time.
  * The error will still surface clearly at request time if the key is absent.
  */
 let _client: SupabaseClient | null = null;
@@ -44,14 +45,15 @@ function getSupabaseConfig(): { url: string; key: string } {
   // Fail fast instead — a missing SUPABASE_URL is a deploy bug, not a
   // recoverable runtime state.
   const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url) {
     throw new Error('SUPABASE_URL is missing in environment variables. Set SUPABASE_URL (not NEXT_PUBLIC_SUPABASE_URL) in your deployment env (Vercel/Railway Settings → Environment Variables).');
   }
-  if (!key) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing. Add it to your deployment environment variables (Vercel/Railway Settings → Environment Variables).');
-  }
+
+  // Single seam for the server credential: prefers SUPABASE_SECRET_KEY and
+  // throws with an actionable message when neither it nor the migration-only
+  // legacy fallback is set. See backend/db/supabaseKeys.ts.
+  const key = requireSupabaseSecretKey();
 
   return { url, key };
 }

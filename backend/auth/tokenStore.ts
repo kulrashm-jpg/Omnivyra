@@ -9,7 +9,7 @@ import { ownedDbTable } from '../db/writeOwner';
  * Environment Variables:
  * - ENCRYPTION_KEY (required, 32-byte hex string or base64)
  * - SUPABASE_URL (required)
- * - SUPABASE_SERVICE_ROLE_KEY (required)
+ * - SUPABASE_SECRET_KEY (required)
  * 
  * Security Notes:
  * - Never commit ENCRYPTION_KEY to version control

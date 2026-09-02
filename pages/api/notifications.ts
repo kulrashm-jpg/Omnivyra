@@ -15,6 +15,7 @@ import { setPrivateCache, CACHE_TTL } from '../../lib/platform/httpCache';
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerClient } from '@supabase/ssr';
+import { requireSupabasePublishableKey } from '../../lib/supabase/publishableKey';
 import { supabase } from '../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../backend/services/supabaseAuthService';
 
@@ -25,7 +26,7 @@ async function resolveUserId(req: NextApiRequest): Promise<string | null> {
   try {
     const ssrClient = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      requireSupabasePublishableKey(),
       {
         cookies: {
           getAll: () =>

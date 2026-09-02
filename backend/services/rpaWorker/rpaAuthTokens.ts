@@ -17,6 +17,12 @@ import { createHmac, timingSafeEqual, randomBytes } from 'crypto';
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
 function getSecret(): string {
+  // API-key migration note: the legacy variable below is used here as an HMAC
+  // SIGNING SECRET, not as a Supabase API key, so it is deliberately NOT
+  // migrated to SUPABASE_SECRET_KEY — changing the value would invalidate every
+  // already-issued token. Consequence: SUPABASE_SERVICE_ROLE_KEY must stay set
+  // in production until this chain gets a dedicated secret, otherwise signing
+  // silently falls through to the hardcoded development constant.
   return (
     process.env.RPA_AUTH_SECRET ||
     process.env.AUTH_SECRET ||

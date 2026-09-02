@@ -9,6 +9,8 @@
 
 import { z } from 'zod';
 import { normalizeRedisUrl, maskRedisUrl } from '@/lib/redis/sanitizer';
+import { resolveSupabaseSecretKey } from '@/backend/db/supabaseKeys';
+import { resolveSupabasePublishableKey } from '@/lib/supabase/publishableKey';
 
 /**
  * Parse and validate Redis URL string
@@ -69,20 +71,39 @@ export const envSchema = z.object({
     .url('SUPABASE_URL must be a valid URL')
     .describe('Supabase project URL'),
   
+  // Canonical server credential (Supabase new API-key model). Populated by the
+  // key seam below, so it is satisfied by either SUPABASE_SECRET_KEY or, during
+  // the migration, the legacy SUPABASE_SERVICE_ROLE_KEY.
+  SUPABASE_SECRET_KEY: z
+    .string()
+    .min(1, 'SUPABASE_SECRET_KEY cannot be empty (SUPABASE_SERVICE_ROLE_KEY is still accepted during the API-key migration)')
+    .describe('Supabase secret key — server only, never exposed to the browser'),
+
+  // MIGRATION-ONLY passthrough. Optional so an environment that carries only
+  // the new variable validates. Removed once the production cutover is done.
   SUPABASE_SERVICE_ROLE_KEY: z
     .string()
-    .min(1, 'SUPABASE_SERVICE_ROLE_KEY cannot be empty')
-    .describe('Supabase service role key'),
+    .optional()
+    .describe('DEPRECATED legacy Supabase service role key — superseded by SUPABASE_SECRET_KEY'),
   
   NEXT_PUBLIC_SUPABASE_URL: z
     .string()
     .url('NEXT_PUBLIC_SUPABASE_URL must be a valid URL')
     .describe('Public Supabase URL (client-side)'),
   
+  // Canonical browser credential (Supabase new API-key model). Populated by the
+  // key seam below; satisfied by either the publishable key or, during the
+  // migration, the legacy anon key.
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z
+    .string()
+    .min(1, 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY cannot be empty (NEXT_PUBLIC_SUPABASE_ANON_KEY is still accepted during the API-key migration)')
+    .describe('Public publishable key (client-side)'),
+
+  // MIGRATION-ONLY passthrough. See SUPABASE_SERVICE_ROLE_KEY above.
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z
     .string()
-    .min(1, 'NEXT_PUBLIC_SUPABASE_ANON_KEY cannot be empty')
-    .describe('Public anon key'),
+    .optional()
+    .describe('DEPRECATED legacy public anon key — superseded by NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'),
   
   // ── Redis (required) ───────────────────────────────────────────────────────
   REDIS_URL: z
@@ -369,8 +390,14 @@ export function validateEnv(): EnvConfig {
       
       // Supabase
       SUPABASE_URL: process.env.SUPABASE_URL,
+      // Both canonical key fields come from the single resolution seams, so
+      // config exposes one contract regardless of which variable a given
+      // deployment still carries. The legacy fields stay as raw passthroughs
+      // for the few consumers that must observe the old name directly.
+      SUPABASE_SECRET_KEY: resolveSupabaseSecretKey().key,
       SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
       NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: resolveSupabasePublishableKey().key,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
       
       // Redis

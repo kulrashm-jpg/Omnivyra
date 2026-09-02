@@ -7,6 +7,7 @@ import {
   normalizeCreatorFormat,
 } from '@/lib/shared/creatorGovernanceRegistry';
 import { bearerAuthorization } from '@/lib/httpAuthHeaders';
+import { getSupabasePublishableKey } from '@/lib/supabase/publishableKey';
 
 function extractAttachmentRowState(input: {
   dailyRaw: Record<string, unknown>;
@@ -210,8 +211,8 @@ async function resumePersistedUpload(input: {
   expectedRevision?: number;
 }): Promise<UploadMediaResult> {
   const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
-  const supabaseAnonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim();
-  if (!supabaseUrl || !supabaseAnonKey) {
+  const supabasePublishableKey = getSupabasePublishableKey();
+  if (!supabaseUrl || !supabasePublishableKey) {
     return { ok: false, message: 'Resumable uploads require Supabase configuration in the browser.' };
   }
   let tusModule: typeof import('tus-js-client');
@@ -368,8 +369,8 @@ async function postUploadFileResumable(input: {
   // Read Supabase config from the public environment. If not set, fall
   // back to multipart so dev/test environments still work.
   const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
-  const supabaseAnonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim();
-  if (!supabaseUrl || !supabaseAnonKey) {
+  const supabasePublishableKey = getSupabasePublishableKey();
+  if (!supabaseUrl || !supabasePublishableKey) {
     return postUploadFileDirect(input);
   }
 
@@ -472,7 +473,7 @@ async function postUploadFileResumable(input: {
       chunkSize: 6 * 1024 * 1024, // 6 MB — matches Supabase recommended chunk
       removeFingerprintOnSuccess: true,
       headers: {
-        authorization: bearerAuthorization(supabaseAnonKey),
+        authorization: bearerAuthorization(supabasePublishableKey),
         'x-upsert': 'true',
       },
       uploadDataDuringCreation: true,

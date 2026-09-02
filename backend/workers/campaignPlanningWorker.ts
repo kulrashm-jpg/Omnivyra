@@ -4,7 +4,7 @@
  * Processes 'campaign-planning' jobs from the ai-heavy BullMQ queue.
  *
  * Run: npm run worker:campaign-planning
- * Requires: REDIS_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY
+ * Requires: REDIS_URL, SUPABASE_URL, SUPABASE_SECRET_KEY, OPENAI_API_KEY
  *
  * Scaling:
  *   - concurrency: 3 (AI-heavy ops — limited by OpenAI rate limits)

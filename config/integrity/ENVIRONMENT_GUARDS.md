@@ -13,7 +13,9 @@ Approved environment assumptions:
 Forbidden runtime behaviors:
 
 - `npm run dev`, `npm run start`, and startup guards must not mutate auth, billing, schema, or data.
-- Frontend bundles must not reference `SUPABASE_SERVICE_ROLE_KEY`.
+- Frontend bundles must not reference a server Supabase credential —
+  `SUPABASE_SECRET_KEY` (canonical) or `SUPABASE_SERVICE_ROLE_KEY` (legacy).
+  The browser credential is `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
 - Runtime app code must not import `scripts/operator` or `scripts/archive`.
 - Environment validators must not write `.env*` files or perform database mutations.
 

@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerClient } from '@supabase/ssr';
+import { requireSupabasePublishableKey } from '../../../../lib/supabase/publishableKey';
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { hasCommunityAiCapability } from '../../../../backend/services/rbac/communityAiCapabilities';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
@@ -48,7 +49,7 @@ export const requireManageConnectors = async (
     try {
       const ssrClient = createServerClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        requireSupabasePublishableKey(),
         {
           cookies: {
             getAll: () =>

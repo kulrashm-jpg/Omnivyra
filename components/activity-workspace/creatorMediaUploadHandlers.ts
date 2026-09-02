@@ -18,6 +18,7 @@
  */
 
 import { createIdempotentOperation } from '../../lib/idempotency';
+import { getSupabasePublishableKey } from '../../lib/supabase/publishableKey';
 import {
   isAttachmentRequiredFormat,
   normalizeCreatorFormat,
@@ -220,8 +221,8 @@ export async function resumePersistedUpload(input: {
   expectedRevision?: number;
 }): Promise<UploadMediaResult> {
   const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
-  const supabaseAnonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim();
-  if (!supabaseUrl || !supabaseAnonKey) {
+  const supabasePublishableKey = getSupabasePublishableKey();
+  if (!supabaseUrl || !supabasePublishableKey) {
     return { ok: false, message: 'Resumable uploads require Supabase configuration in the browser.' };
   }
   try {
@@ -305,8 +306,8 @@ export async function postUploadFileResumable(input: {
   expectedRevision?: number;
 }): Promise<UploadMediaResult> {
   const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
-  const supabaseAnonKey = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim();
-  if (!supabaseUrl || !supabaseAnonKey) {
+  const supabasePublishableKey = getSupabasePublishableKey();
+  if (!supabaseUrl || !supabasePublishableKey) {
     return postUploadFileDirect(input);
   }
 
@@ -404,7 +405,7 @@ export async function postUploadFileResumable(input: {
       chunkSize: 6 * 1024 * 1024,
       removeFingerprintOnSuccess: true,
       headers: {
-        authorization: bearerAuthorization(supabaseAnonKey),
+        authorization: bearerAuthorization(supabasePublishableKey),
         'x-upsert': 'true',
       },
       uploadDataDuringCreation: true,

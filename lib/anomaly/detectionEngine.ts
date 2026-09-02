@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../../backend/db/writeOwner';
+import { requireSupabaseSecretKey } from '../../backend/db/supabaseKeys';
 /**
  * Anomaly Detection Engine — v2
  *
@@ -32,7 +33,7 @@ function getDb() {
   if (_db) return _db;
   _db = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    requireSupabaseSecretKey(),
     { auth: { persistSession: false, autoRefreshToken: false } },
   );
   return _db;

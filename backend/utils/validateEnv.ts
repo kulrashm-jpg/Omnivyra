@@ -7,18 +7,19 @@
  */
 
 import { getConfig } from '@/config';
+import { resolveSupabaseSecretKey, SECRET_KEY_VAR, LEGACY_SECRET_KEY_VAR } from '@/backend/db/supabaseKeys';
 
 const WORKER_REQUIRED = [
   'REDIS_URL',
   'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_SECRET_KEY',
   'OPENAI_API_KEY',
 ] as const;
 
 const CRON_REQUIRED = [
   'REDIS_URL',
   'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_SECRET_KEY',
 ] as const;
 
 // Hard-validated auth envelope vars. These are read directly from
@@ -27,7 +28,6 @@ const CRON_REQUIRED = [
 // runtime auth failures (token-rejection / cookie-not-minted).
 const AUTH_REQUIRED_VARS = [
   'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
   'SESSION_COOKIE_SECRET',
 ] as const;
 
@@ -41,7 +41,8 @@ const SESSION_COOKIE_SECRET_MIN_LENGTH = 32;
  *
  * Rules:
  *   - SUPABASE_URL: present, non-empty
- *   - SUPABASE_SERVICE_ROLE_KEY: present, non-empty
+ *   - SUPABASE_SECRET_KEY: present, non-empty (SUPABASE_SERVICE_ROLE_KEY is
+ *     still accepted during the API-key migration; see backend/db/supabaseKeys.ts)
  *   - SESSION_COOKIE_SECRET: present, length >= 32
  *
  * NO silent fallbacks. NO default values.
@@ -49,6 +50,12 @@ const SESSION_COOKIE_SECRET_MIN_LENGTH = 32;
 export function assertAuthEnvOrThrow(): void {
   const missing: string[] = [];
   const malformed: string[] = [];
+
+  // The Supabase server credential is resolved through the single key seam so
+  // either the canonical or the migration-only legacy variable satisfies it.
+  if (resolveSupabaseSecretKey().source === 'missing') {
+    missing.push(`${SECRET_KEY_VAR} (or ${LEGACY_SECRET_KEY_VAR} during the migration)`);
+  }
 
   for (const name of AUTH_REQUIRED_VARS) {
     const value = process.env[name];

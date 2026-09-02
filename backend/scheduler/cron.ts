@@ -15,7 +15,7 @@
  * 
  * Environment Variables:
  * - SUPABASE_URL (required)
- * - SUPABASE_SERVICE_ROLE_KEY (required)
+ * - SUPABASE_SECRET_KEY (required)
  * - REDIS_URL (required)
  * - CRON_INTERVAL_SECONDS=60 (optional, default 60)
  */
