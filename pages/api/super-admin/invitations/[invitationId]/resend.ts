@@ -39,6 +39,12 @@ function appUrl(): string {
 }
 
 function invitationSecret(): string {
+  // API-key migration note: the legacy variable below is used here as an HMAC
+  // SIGNING SECRET, not as a Supabase API key, so it is deliberately NOT
+  // migrated to SUPABASE_SECRET_KEY — changing the value would invalidate every
+  // already-issued invitation token. Consequence: SUPABASE_SERVICE_ROLE_KEY must
+  // stay set in production until this chain gets a dedicated secret, otherwise
+  // signing silently falls through to the hardcoded development constant.
   return (
     process.env.INVITATION_TOKEN_SECRET?.trim()
     || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()

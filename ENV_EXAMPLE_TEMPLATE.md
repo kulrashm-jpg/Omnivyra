@@ -11,8 +11,11 @@ Since `.env.example` is protected, copy this content to create `.env.example` ma
 
 # Supabase Configuration
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key_here
-SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key_here
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key_here
+SUPABASE_SECRET_KEY=sb_secret_your_key_here
+# DEPRECATED legacy keys — accepted only during the API-key migration:
+# NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key_here
+# SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key_here
 
 # Redis Configuration
 REDIS_URL=redis://localhost:6379

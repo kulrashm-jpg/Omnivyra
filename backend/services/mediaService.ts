@@ -17,7 +17,7 @@ import { ownedDbTable } from '../db/writeOwner';
  * 
  * Environment Variables:
  * - SUPABASE_URL (required)
- * - SUPABASE_SERVICE_ROLE_KEY (required)
+ * - SUPABASE_SECRET_KEY (required)
  */
 
 import { supabase } from '../db/supabaseClient';

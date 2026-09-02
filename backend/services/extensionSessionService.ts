@@ -10,6 +10,12 @@ type ExtensionSessionPayload = {
 };
 
 function getExtensionSessionSecret() {
+  // API-key migration note: the legacy variable below is used here as an HMAC
+  // SIGNING SECRET, not as a Supabase API key, so it is deliberately NOT
+  // migrated to SUPABASE_SECRET_KEY — changing the value would invalidate every
+  // already-issued token. Consequence: SUPABASE_SERVICE_ROLE_KEY must stay set
+  // in production until this chain gets a dedicated secret, otherwise signing
+  // silently falls through to the hardcoded development constant.
   return (
     process.env.EXTENSION_SESSION_SECRET ||
     process.env.AUTH_SECRET ||

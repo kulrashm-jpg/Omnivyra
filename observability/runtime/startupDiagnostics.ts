@@ -47,6 +47,7 @@ export function collectStartupDiagnostics(): DiagnosticCheck[] {
         'SUPABASE_URL',
         'SUPABASE_DB_URL',
         'DATABASE_URL',
+        'SUPABASE_SECRET_KEY',
         'SUPABASE_SERVICE_ROLE_KEY',
       ])).map(([key, state]) => `${key}=${state}`),
     },

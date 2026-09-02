@@ -77,7 +77,9 @@ export function collectEnvironmentIntegrityFindings(env = process.env): Integrit
   const workflow = fileExists('.github/workflows/auth-integrity.yml')
     ? readRepoFile('.github/workflows/auth-integrity.yml')
     : '';
-  if (workflow && !workflow.includes('NEXT_PUBLIC_SUPABASE_URL') || workflow && !workflow.includes('SUPABASE_SERVICE_ROLE_KEY')) {
+  const declaresServerKey =
+    workflow.includes('SUPABASE_SECRET_KEY') || workflow.includes('SUPABASE_SERVICE_ROLE_KEY');
+  if (workflow && (!workflow.includes('NEXT_PUBLIC_SUPABASE_URL') || !declaresServerKey)) {
     findings.push({
       severity: 'warning',
       code: 'AUTH_CI_ENV_CONTRACT_WEAKENED',

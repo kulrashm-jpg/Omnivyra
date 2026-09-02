@@ -73,7 +73,7 @@ export function resolveLatchedFeatureState(
 
 const supabase = createClient(
   requireStringConfig(config.SUPABASE_URL, 'SUPABASE_URL'),
-  requireStringConfig(config.SUPABASE_SERVICE_ROLE_KEY, 'SUPABASE_SERVICE_ROLE_KEY')
+  requireStringConfig(config.SUPABASE_SECRET_KEY, 'SUPABASE_SECRET_KEY')
 );
 
 /**

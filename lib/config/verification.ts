@@ -26,6 +26,7 @@
 import { getConfig, isConfigValid, getConfigError } from '@/config';
 import { getSharedRedisConnectionSync } from '@/lib/redis/client';
 import { supabase } from '@/backend/db/supabaseClient';
+import { hasSupabaseSecretKey, SECRET_KEY_VAR } from '@/backend/db/supabaseKeys';
 import type IORedis from 'ioredis';
 
 /**
@@ -187,9 +188,13 @@ async function runVerificationChecks(): Promise<VerificationReport> {
   const requiredVars = [
     'REDIS_URL',
     'SUPABASE_URL',
-    'SUPABASE_SERVICE_ROLE_KEY',
   ];
   const missingVars = requiredVars.filter(v => !process.env[v]);
+  // Resolved through the single key seam (backend/db/supabaseKeys.ts): either
+  // the canonical server key variable or the migration-only legacy one
+  // satisfies it. The name is taken from the seam's exported constant so this
+  // file never spells a server-credential variable itself.
+  if (!hasSupabaseSecretKey()) missingVars.push(SECRET_KEY_VAR);
   if (missingVars.length > 0) {
     issues.push({
       component: 'environment',
@@ -264,7 +269,7 @@ async function runVerificationChecks(): Promise<VerificationReport> {
       severity: 'critical',
       code: 'DATABASE_UNAVAILABLE',
       message: `Database connection failed: ${dbTest.error}`,
-      remediation: 'Check SUPABASE_SERVICE_ROLE_KEY is valid and Supabase is reachable',
+      remediation: `Check ${SECRET_KEY_VAR} is valid and Supabase is reachable`,
     });
     return buildReport(false, issues, checks);
   }

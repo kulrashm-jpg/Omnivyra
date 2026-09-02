@@ -1,12 +1,13 @@
 /**
  * Browser-side Supabase client — singleton.
- * Uses the anon key; respects RLS. Frontend / client components only.
+ * Uses the publishable key; respects RLS. Frontend / client components only.
  *
  * Import this (not the service-role client in backend/db/supabaseClient.ts)
  * wherever you need Supabase Auth or realtime in the browser.
  */
 
 import { createBrowserClient } from '@supabase/ssr';
+import { requireSupabasePublishableKey } from './supabase/publishableKey';
 import { processLock, type SupabaseClient } from '@supabase/supabase-js';
 
 // Attach to globalThis so the singleton survives Next.js HMR / Turbopack
@@ -29,7 +30,7 @@ export function getSupabaseBrowser(): SupabaseClient {
   if (!globalThis[GLOBAL_KEY]) {
     globalThis[GLOBAL_KEY] = createBrowserClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      requireSupabasePublishableKey(),
       {
         auth: {
           lock: processLock,

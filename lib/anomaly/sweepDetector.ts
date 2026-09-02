@@ -13,13 +13,14 @@
 import { createClient } from '@supabase/supabase-js';
 import { SWEEP_EVENT_MAP } from './types';
 import { evaluateAnomalyCount } from './detectionEngine';
+import { requireSupabaseSecretKey } from '../../backend/db/supabaseKeys';
 
 let _db: ReturnType<typeof createClient> | null = null;
 function getDb() {
   if (_db) return _db;
   _db = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    requireSupabaseSecretKey(),
     { auth: { persistSession: false, autoRefreshToken: false } },
   );
   return _db;

@@ -35,9 +35,9 @@ export interface PreflightReport {
  * without it; WARN = degraded/feature-specific (e.g. governed renders that
  * need OCR fail closed when CREATOR_OCR_ENDPOINT is unset in prod).
  */
-const REQUIRED_ENV: Array<{ key: string; severity: PreflightSeverity; note: string }> = [
+const REQUIRED_ENV: Array<{ key: string; severity: PreflightSeverity; note: string; legacyKey?: string }> = [
   { key: 'SUPABASE_URL', severity: 'critical', note: 'DB access' },
-  { key: 'SUPABASE_SERVICE_ROLE_KEY', severity: 'critical', note: 'service-role writes' },
+  { key: 'SUPABASE_SECRET_KEY', severity: 'critical', note: 'server-side writes', legacyKey: 'SUPABASE_SERVICE_ROLE_KEY' },
   { key: 'REDIS_URL', severity: 'critical', note: 'queue workers' },
   { key: 'OPENAI_API_KEY', severity: 'critical', note: 'content/creator generation' },
   { key: 'CREATOR_OCR_ENDPOINT', severity: 'warn', note: 'governed creator renders fail closed in prod without it' },
@@ -62,8 +62,14 @@ export async function runRenderParityPreflight(
 
   // 2. Env/asset contract.
   for (const e of REQUIRED_ENV) {
-    const v = env[e.key];
-    const present = typeof v === 'string' && v.trim().length > 0;
+    // legacyKey: during the Supabase API-key migration the canonical variable
+    // may not be set yet on a given deploy, and the legacy one still satisfies
+    // the contract. The item is always reported under the canonical name.
+    const candidates = e.legacyKey ? [e.key, e.legacyKey] : [e.key];
+    const present = candidates.some((k) => {
+      const v = env[k];
+      return typeof v === 'string' && v.trim().length > 0;
+    });
     items.push({ name: `env:${e.key}`, ok: present, severity: e.severity, detail: present ? undefined : e.note });
   }
 

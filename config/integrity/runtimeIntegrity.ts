@@ -14,6 +14,7 @@ const OPERATOR_REMOTE_TOKENS = [
   'SUPABASE_DB_URL',
   'DATABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_SECRET_KEY',
   'createClient(',
   'new Client(',
   'supabase.auth.admin',
@@ -96,14 +97,19 @@ export function collectRuntimeIntegrityFindings(): IntegrityFinding[] {
         recommendation: 'Keep operational tooling isolated from app runtime bundles and API handlers.',
       });
     }
-    if (!file.startsWith('pages/api/') && !file.startsWith('backend/') && source.includes('SUPABASE_SERVICE_ROLE_KEY')) {
-      findings.push({
-        severity: 'warning',
-        code: 'FRONTEND_SERVICE_ROLE_REFERENCE',
-        message: 'Frontend-facing file references SUPABASE_SERVICE_ROLE_KEY.',
-        file,
-        recommendation: 'Service-role keys must stay server-only.',
-      });
+    // Server-only Supabase credentials, legacy and canonical. The browser
+    // credential is NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY and is deliberately
+    // absent from this list — it is publishable by design.
+    for (const secretVar of ['SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY'] as const) {
+      if (!file.startsWith('pages/api/') && !file.startsWith('backend/') && source.includes(secretVar)) {
+        findings.push({
+          severity: 'warning',
+          code: 'FRONTEND_SERVICE_ROLE_REFERENCE',
+          message: `Frontend-facing file references ${secretVar}.`,
+          file,
+          recommendation: 'Server-side Supabase keys must stay server-only.',
+        });
+      }
     }
   }
 
