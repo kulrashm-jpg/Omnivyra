@@ -81,6 +81,15 @@ import {
 import { assertOriginality } from '../originalityGate';
 import { regenerateUntilOriginal } from '../originalityRegeneration';
 import { createContent, type CreateContentInput } from '../contentService';
+// B5 — platform-wide uniqueness (tier 0, advisory). Default-OFF; when the flag
+// is off nothing below is constructed and no platform query is issued.
+import {
+  evaluatePlatformNovelty,
+  recordPlatformFingerprint,
+  isPlatformUniquenessEnabled,
+  type PlatformNoveltySignal,
+} from '../platformNoveltyService';
+import { computeFingerprint } from '../../../../lib/content/originality/fingerprint';
 import {
   generateMasterContentFromIntent,
   buildPlatformVariantsFromMaster,
@@ -381,6 +390,33 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
   runtimeMetrics.retries(retries, metricLabels);
   runtimeMetrics.originalityTimeMs(originalityTimeMs, metricLabels);
 
+  // ── Stage 5b — PLATFORM UNIQUENESS (B5, tier 0, ADVISORY) ────────────────
+  // Runs AFTER the existing four tiers so it can never mask or downgrade a
+  // campaign/individual duplicate — those own the throwing paths and have
+  // already had their say by this point.
+  //
+  // Advisory means advisory: this block cannot throw, cannot reject, and cannot
+  // alter `master`. Its only output is a signal recorded for observability. One
+  // tenant's corpus must never become a denial-of-service against another's
+  // generation, which is why no branch here returns early or raises.
+  //
+  // Flag default-OFF: when disabled the service is never constructed and NO
+  // platform query is issued, so the path is byte-identical to pre-B5.
+  let platformNovelty: PlatformNoveltySignal | null = null;
+  if (isPlatformUniquenessEnabled() && master?.content) {
+    try {
+      stages.push('platform_novelty');
+      platformNovelty = await evaluatePlatformNovelty({
+        // The candidate's OWN fingerprint — no tenant identifier is passed,
+        // and the input type has no field that could carry one.
+        fingerprint: computeFingerprint(String(master.content)),
+        contentType: String(req.contentType),
+      });
+    } catch {
+      /* fail-open: a platform-tier failure is invisible to generation */
+    }
+  }
+
   // ── Stage 6 — Persistence (FAIL-OPEN; SKIPPED ENTIRELY in no-persist mode)
   // WS-1c-2 — `persist:false` skips the whole trio (createContent /
   // indexContentUnit / persistOriginality); `contentId` stays null and no
@@ -414,6 +450,23 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
         createdBy: (reqField<string>(req, 'createdBy')) ?? null,
       });
       contentId = created.id;
+
+      // B5 — ACCEPTANCE-ONLY platform fingerprint write.
+      //
+      // Deliberately placed AFTER createContent succeeded: reaching this line
+      // means the artifact survived every uniqueness tier and was persisted, so
+      // the platform corpus contains only content that was actually kept.
+      // Rejected candidates throw before here; superseded regeneration attempts
+      // never reach persistence at all.
+      //
+      // Fail-safe by contract (returns false, never throws) — the artifact is
+      // already accepted and this store is best-effort.
+      if (isPlatformUniquenessEnabled()) {
+        await recordPlatformFingerprint({
+          fingerprint: computeFingerprint(master.content ?? ''),
+          contentType: String(req.contentType),
+        });
+      }
 
       // F1 — the content_memory write MOVED OUT of this block into its own
       // stage below. It used to live here, which made the corpus depend on
@@ -554,6 +607,11 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
     stages,
     failures,
     ...(semanticRoot ? { semanticRootId: semanticRoot.semanticRootId } : {}),
+    // B5 — the advisory platform verdict, surfaced for observability only.
+    // Absent entirely when the flag is OFF. Carries band/score/dimensions and
+    // nothing else: PlatformNoveltySignal has no field that could identify
+    // another tenant, so putting it in metrics cannot leak one.
+    ...(platformNovelty ? { platformNovelty } : {}),
   };
 
   return {
