@@ -395,6 +395,12 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
     try {
       const created = await createContent({
         companyId: req.companyId,
+        // B4.1 — the campaign association. `req.campaignId` was already declared
+        // on GenerationRequest and consumed by promptAssembler/semanticSpine;
+        // this forwards the SAME value to the canonical row so the artifact
+        // carries the campaign its generation was scoped to. Never inferred:
+        // absent ⇒ null, exactly as before this line existed.
+        campaignId: req.campaignId ?? null,
         contentType: req.contentType as CanonicalContentType,
         title: trimmed(reqField(req, 'topic')) || trimmed(item.topic) || null,
         body: master.content ?? null,
