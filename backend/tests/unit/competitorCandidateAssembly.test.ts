@@ -13,16 +13,19 @@ import {
 } from '../../services/competitorCandidateAssembly';
 
 describe('serpDomainsToCompetitorCandidates', () => {
-  it('maps SERP domains to serp_live candidates with positional classification', () => {
+  // Phase 2: this previously asserted POSITIONAL classification — first SERP domain
+  // "direct_competitor", second "seo_competitor", rest "authority_leader" — a competitive
+  // category assigned by array index with no evidence behind it. Candidates are built
+  // before any scoring runs, so the only honest value at this stage is null; the ranking
+  // engine assigns a classification from the tier it actually computes.
+  it('maps SERP domains to serp_live candidates WITHOUT classifying them', () => {
     const candidates = serpDomainsToCompetitorCandidates(['alpha.com', 'beta.io', 'gamma.co'], {
       marketFocus: 'analytics software',
       geography: 'Global',
     });
     expect(candidates.map((c) => c.name)).toEqual(['Alpha', 'Beta', 'Gamma']);
     expect(candidates.every((c) => c.source === 'serp_live')).toBe(true);
-    expect(candidates[0].classification).toBe('direct_competitor');
-    expect(candidates[1].classification).toBe('seo_competitor');
-    expect(candidates[2].classification).toBe('authority_leader');
+    expect(candidates.every((c) => c.classification === null)).toBe(true);
     expect(candidates.every((c) => c.category === 'analytics software')).toBe(true);
   });
 
