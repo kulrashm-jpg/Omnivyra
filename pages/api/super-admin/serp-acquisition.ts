@@ -30,7 +30,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const body = req.body ?? {};
   const manualRows = Array.isArray(body.manual_results) ? body.manual_results as SerpProviderResult[] : [];
-  const provider = manualRows.length ? createManualSerpProvider(manualRows) : createConfiguredSerpApiProvider();
+  const provider = manualRows.length ? createManualSerpProvider(manualRows) : await createConfiguredSerpApiProvider();
   if (!provider) {
     return res.status(400).json({
       error: 'No compliant SERP provider configured and no manual_results payload supplied.',
@@ -60,7 +60,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     bootstrap,
     seeding,
     result,
-    provider_health: getConfiguredSerpProviderHealth(),
+    provider_health: await getConfiguredSerpProviderHealth(),
     external_competitive_status: refreshed.external_competitive_intelligence.status,
     serp_snapshot_count: refreshed.external_competitive_intelligence.freshness.serp_snapshot_count,
     competitor_domain_count: refreshed.external_competitive_intelligence.freshness.competitor_domain_count,

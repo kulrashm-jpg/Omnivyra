@@ -133,7 +133,7 @@ async function main() {
     provider_contracts: Object.fromEntries(
       Object.entries(ENTERPRISE_PROVIDER_CONTRACTS).map(([key, value]) => [key, value.canonical_status]),
     ),
-    serp_provider_health: getConfiguredSerpProviderHealth(),
+    serp_provider_health: await getConfiguredSerpProviderHealth(),
     opportunity_count: snapshotSecond.result.opportunities.length,
     attribution: {
       organic_conversion_pages: snapshotSecond.result.attribution.organic_conversion_pages.length,
