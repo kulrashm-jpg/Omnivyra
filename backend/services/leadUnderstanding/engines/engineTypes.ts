@@ -11,6 +11,7 @@ import type {
   LeadIdentityKey, LeadFacets, ScoreContribution, EvidenceRef, GraphEdge, ReasoningTrace, EvidenceKind,
 } from '../types';
 import { evidenceRef } from '../evidence';
+import type { RatifiedIcp } from '../../prospectIcp/types';
 
 // ── Raw structured inputs (from System A/B, enrichment, upstream Understandings) ────────────────
 export interface RawObservation { label: string; value?: string | number | boolean | null; source: string; observedAt: string; kind?: EvidenceKind; weight?: number; }
@@ -47,6 +48,20 @@ export interface LeadIntelligenceContext {
   relationships?: RawRelationship[];
   qualification?: Partial<Record<QualificationDimension, QualificationInput>>;
   icp?: { industryMatch?: boolean; sizeMatch?: boolean; geoMatch?: boolean; source?: string; observedAt?: string };
+  /**
+   * PI-P1-W03 — the tenant's RATIFIED ICP, already resolved.
+   *
+   * Resolved ASYNCHRONOUSLY and tenant-scoped by the caller that builds this
+   * context, through D1's own `getRatifiedIcp`. It arrives here already loaded
+   * because `assembleLeadUnderstanding` is synchronous and no engine may
+   * perform I/O.
+   *
+   * `null` is meaningful and must be preserved: it is "this tenant has ratified
+   * nothing", which the evaluator turns into an abstention. Deliberately NOT
+   * folded into the `icp` booleans above — those cannot carry criteria,
+   * evidence or an abstention reason, and nothing populates them.
+   */
+  ratifiedIcp?: RatifiedIcp | null;
   companyId?: string;                            // upstream Company Understanding node (graph ref only)
   offeringId?: string;
   competitorId?: string;

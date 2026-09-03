@@ -8,6 +8,7 @@
 
 import type { LeadIntelligenceContext, EngineOutput } from './engineTypes';
 import { runPersonaIcp } from './personaIcp';
+import { runProspectIcpFit } from './prospectIcpFit';
 import { runBuyingSignal } from './buyingSignal';
 import { runIntent } from './intent';
 import { runRelationship } from './relationship';
@@ -47,7 +48,7 @@ export function assembleLeadUnderstanding(ctx: LeadIntelligenceContext): Assembl
   // 1 — primary engines (independent evidence producers). Phase D contributors (enrichment/behavioral/
   // strategic) abstain when their optional inputs are absent ⇒ Phase C output is preserved unchanged.
   const primaries: EngineOutput[] = [
-    runPersonaIcp(ctx), runBuyingSignal(ctx), runIntent(ctx), runRelationship(ctx), runQualification(ctx),
+    runPersonaIcp(ctx), runProspectIcpFit(ctx), runBuyingSignal(ctx), runIntent(ctx), runRelationship(ctx), runQualification(ctx),
     runEnrichment(ctx), runBehavioral(ctx), runStrategic(ctx),
   ];
   // 2 — derived engines (synthesize evidence the primaries already produced).
