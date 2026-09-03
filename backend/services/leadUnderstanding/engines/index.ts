@@ -4,6 +4,7 @@
  */
 export * from './engineTypes';
 export { runPersonaIcp } from './personaIcp';
+export { runProspectIcpFit, toIcpSubjectFacts } from './prospectIcpFit';
 export { runBuyingSignal } from './buyingSignal';
 export { runIntent } from './intent';
 export { runRelationship } from './relationship';
