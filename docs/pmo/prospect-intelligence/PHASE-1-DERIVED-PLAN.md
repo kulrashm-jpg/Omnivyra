@@ -51,13 +51,32 @@ Measured against production, not repeated from prior reports.
 
 This single fact explains `source_records = 0` and `prospect_accounts = 0`.
 
-### Gate 2 — outreach has no producer
+### ~~Gate 2 — outreach has no producer~~ — **CORRECTED 2026-09-03: this gate was mis-diagnosed**
 
-`backend/queue/workerTopologyManifest.ts:69` states it plainly:
+**The original text below was wrong, and the W04 reconnaissance disproved it.** It is kept struck through rather than deleted, because the mistake is instructive: it read a queue manifest note as evidence about outreach, and the two are not the same subsystem.
 
-> `enqueuedBy: 'NONE YET — WS-6F wires the orchestrator enqueue (leadIntelligenceOrchestration/orchestrator.ts:378, gated AUTOMATION_RUNTIME_ENABLED)'` … `Runtime stays DARK until WS-6F.`
+> ~~`backend/queue/workerTopologyManifest.ts:69` states it plainly:~~
+> ~~`enqueuedBy: 'NONE YET — WS-6F wires the orchestrator enqueue …'` … `Runtime stays DARK until WS-6F.`~~
+> ~~The `automation-tasks` consumer is registered and healthy; nothing enqueues to it … This explains `outreach_tasks = 0` and `outreach_decisions = 0`.~~
 
-The `automation-tasks` consumer is registered and healthy; nothing enqueues to it. `AUTOMATION_RUNTIME_ENABLED` is also ABSENT in production. This explains `outreach_tasks = 0` and `outreach_decisions = 0`, and it means A3's person-anchoring — shipped and verified — has never executed on a real row.
+**What is actually true.** The outreach producer exists, is wired, and is reachable in production:
+
+```
+POST /api/super-admin/outreach/activate            (live — 401; a nonexistent sibling returns 404)
+  → runOutreachActivation / materializeOutreachForLead   backend/services/leadOutreachActivation.ts (WS-6A)
+  → materializeAutomationPlan                            leadOutreachExecution/materialization.ts:67
+  → insertOutreachTask                                   leadOutreachExecution/storage.ts
+  → outreach_tasks        (tenant-safe; A3 anchors person_id)
+       ↓  human approval — approveOutreachTaskForOperator
+  → dispatchApprovedOutreachForLead → evaluateTaskGovernance (fail-closed)
+  → dispatchInternalOutreachTask → outreach_decisions
+```
+
+**`outreach_tasks = 0` is not caused by a missing producer.** Dispatch requires a tenant with an `outreach_governance_config` row, and production has **zero**. See §5A.
+
+**`automation-tasks` is a different subsystem.** It transports an already-built `AutomationSummary`, and its processor states *"Deliberately NOT dispatching tasks yet"* — its body validates the payload, logs, and returns counts. It writes no `outreach_tasks`, evaluates no governance, and does not import `leadOutreachExecution`. Wiring the WS-6F enqueue would therefore produce **no** outreach task; it would add a queue hop ending in a log line.
+
+**WS-6F remains genuinely pending** as an `AutomationSummary` transport. It must **not** be marked complete, and must **not** be represented as the outreach producer.
 
 ### Gate 3 — the source adapter registry is empty of providers
 
@@ -90,8 +109,9 @@ Classification per PI-ADR-001: **shipped** · **structurally present but unused*
 | G7 | Consent / suppression / governance | **structurally present but unused** | `contactGovernance*.ts`, `suppressionService.ts`; 0 records |
 | G8 | Social chain → canonical person | **shipped and wired** | `canonicalLeadSignalService.ts:5` imports `resolveSocialContactIdentity` |
 | G9 | Tenant versioned ICP (storage + ratification) | **shipped** | D1; migration applied and certified |
-| G10 | ICP → scoring influence | **absent** | `personaIcp` ↔ `prospectIcp` = 0 refs |
-| G11 | Outreach materialisation / producer | **blocked** | `workerTopologyManifest.ts:69` — WS-6F |
+| G10 | ICP → scoring influence | **~~absent~~ → shipped, RUNTIME DARK** | W03 shipped it: `leadUnderstanding/engines/prospectIcpFit.ts`, registered in `engines/assembly.ts:11,51` where `runProspectIcpFit` runs beside `runPersonaIcp` — so the original "`personaIcp` ↔ `prospectIcp` = 0 refs" is no longer true (4 files in `leadUnderstanding/` reference `prospectIcp`). It influences NOTHING at runtime: `LEAD_UNDERSTANDING_ENABLED` (`leadUnderstanding/flags.ts:8`) is ABSENT in production. Activation is an operational decision, not remaining engineering |
+| G11 | Outreach materialisation / producer | **~~blocked~~ → CLOSED — already implemented** | `leadOutreachActivation.ts` (WS-6A) → `materializeAutomationPlan` → `insertOutreachTask`; reachable via `/api/super-admin/outreach/{activate,approve}`. The original "blocked / WS-6F" entry **conflated two separate concerns** — see §5A |
+| G11b | `AutomationSummary` queue transport (WS-6F) | **pending, and NOT an outreach producer** | `workerTopologyManifest.ts:69`; consumer deliberately does not dispatch |
 | G12 | Enrichment via existing providers | **partial** | `intelligence/adapters/**` is LLM/SEO/reputation; no people/firmographic provider |
 | G13 | Learning ICP from outcomes | **absent** | no module; `outreach_decisions` empty so no outcome corpus exists |
 | G14 | Buying committee / account intelligence | **absent** | requires G5 first |
@@ -144,7 +164,7 @@ Collision:       leadIngestion/registry.ts (single registration site — seriali
                  adapters are built concurrently)
 Migration:       NO
 Deployment:      YES
-Parallelisation: SERIAL with other adapter work; PARALLEL with W03/W04
+Parallelisation: SERIAL with other adapter work; PARALLEL with W03
 Acceptance:      adapter registered; a real source batch produces source_records with
                  correct provenance; re-ingesting the same payload yields outcome
                  'unchanged' (hash stability); no person minted on ambiguous evidence.
@@ -166,7 +186,7 @@ Downstream:      W06 (learning), W07
 Collision:       backend/services/prospectIcp/** (read-only), scoring module
 Migration:       NO
 Deployment:      YES
-Parallelisation: PARALLEL with W02/W04
+Parallelisation: PARALLEL with W02
 Acceptance:      with a ratified version, scoring reflects it; with none, the evaluator
                  ABSTAINS and scoring is unchanged (PI-ADR-001 §3.6); a draft or proposed
                  version never influences scoring (§3.5).
@@ -175,24 +195,45 @@ Non-goals:       AI proposal generation; changing the ratification contract.
 
 ```text
 ID:              PI-P1-W04
-Name:            Outreach producer (WS-6F)
-Objective:       Wire the orchestrator enqueue to automation-tasks so outreach
-                 materialises, behind AUTOMATION_RUNTIME_ENABLED.
-Schema scope:    NONE
-Existing impl:   leadIntelligenceOrchestration/orchestrator.ts:378; automationTaskWorker
-                 and automationTaskProcessor already registered and healthy
-Code/file scope: the enqueue site only
-API scope:       NONE
-Upstream deps:   none structurally; meaningful only once W01 supplies prospects
-Downstream:      W06, W07
-Collision:       backend/queue/** topology, workerTopologyManifest.ts
-Migration:       NO
-Deployment:      YES — Railway (worker)
-Parallelisation: SERIAL (queue topology)
-Acceptance:      manifest updated from 'NONE YET'; with the flag off nothing enqueues;
-                 with it on, one task materialises, A3 anchors a person_id, and governance
-                 fails closed on a suppressed contact.
-Non-goals:       new channels; changing governance semantics.
+Name:            Outreach producer
+Status:          CLOSED — ALREADY IMPLEMENTED / PLAN MIS-SCOPED  (2026-09-03)
+Verdict:         No engineering implementation required. No code was written.
+
+WHY THIS PACKAGE WAS WRONG
+                 The original entry conflated TWO SEPARATE CONCERNS:
+                 (1) the outreach materialisation/producer — ALREADY IMPLEMENTED and
+                     reachable through WS-6A `leadOutreachActivation.ts`; and
+                 (2) the WS-6F `AutomationSummary` queue transport — a separate async
+                     path whose consumer DELIBERATELY DOES NOT DISPATCH OUTREACH.
+                 Only (2) is pending, and (2) is not an outreach producer.
+
+WHAT ALREADY EXISTS
+                 super-admin outreach activation
+                   → runOutreachActivation / materializeOutreachForLead
+                   → materializeAutomationPlan
+                   → insertOutreachTask                       (writes outreach_tasks)
+                   → human approval
+                   → dispatchApprovedOutreachForLead
+                   → evaluateTaskGovernance                   (fail-closed)
+                   → dispatchInternalOutreachTask             (writes outreach_decisions)
+
+                 Safeguards already in place: tenant-safe task persistence; A3 canonical
+                 person anchoring; fail-closed governance; operator approval gate;
+                 database idempotency on (company_id, lead_id, plan_task_id); the existing
+                 durable lifecycle approved → queued → dispatching → sent.
+
+WHY NO QUEUE MAY BE ADDED
+                 `leadOutreachActivation.ts` records the decision in writing: "It adds no
+                 queue. `approved → queued → dispatching → sent` is already the durable
+                 state machine … A second queue would duplicate it and create a second
+                 source of truth for 'is this task in flight'." Introducing one would also
+                 violate this programme's own rule against a second outreach system.
+
+WS-6F STATUS      PENDING — and must NOT be marked complete, and must NOT be described as
+                 the outreach producer. The dormant `automation-tasks` path is an
+                 `AutomationSummary` transport only.
+
+REMAINING GAP     Operational, not engineering. See §5A.
 ```
 
 ```text
@@ -244,18 +285,41 @@ Schema scope:    read-only over outreach_decisions / outreach_tasks
 Existing impl:   leadOutreachExecution/feedbackIngestion.ts, feedbackSummary.ts
 Code/file scope: read-side only
 API scope:       NONE
-Upstream deps:   W04 (no outcomes exist until outreach runs)
+Upstream deps:   none in engineering terms — W04 is CLOSED (already implemented).
+                 W07 needs real OUTCOMES, which require a tenant enabled for outreach
+                 (§5A), not further outreach engineering.
 Downstream:      future ICP-learning package
 Collision:       leadOutreachExecution/**
 Migration:       NO
 Deployment:      NO (read-side; ships with the next deploy)
-Parallelisation: PARALLEL once W04 lands
+Parallelisation: PARALLEL — no longer gated on W04, which is closed
 Acceptance:      outcomes are attributable to the ratified ICP version in force at decision
                  time; abstention is recorded as abstention, never as a negative outcome.
 Non-goals:       automatic ICP mutation — ratification stays human (§3.5.13).
 ```
 
 ---
+
+## 5A. The remaining outreach gap is OPERATIONAL, not engineering
+
+Production currently has **`outreach_governance_config` = 0 rows**, so **no tenant is
+enabled for outreach**. That — not a missing producer — is why `outreach_tasks` and
+`outreach_decisions` are empty.
+
+`leadOutreachActivation.ts` states the design intent directly: *"Dispatch requires a tenant
+with an `outreach_governance_config` row, and production has none. The architecture
+deliberately made tenant enablement the single switch; adding a third global flag would
+contradict that and give operators two places to look when 'nothing dispatches'."*
+
+The same file records why the producer deliberately does not write that row: *"It never
+enables a tenant. `outreach_governance_config` is the single documented switch — 'enabling
+the tenant is the ONE step that makes it dispatchable' (WS-3 M8 proof). Writing it from here
+would move the switch into code and out of operations."*
+
+**Classification: operational / tenant-enablement decision — NOT a missing engineering
+implementation.** It is not a development task, and this plan does not schedule it. Enabling
+a tenant is a deliberate operational act with real-world consequences (it makes outreach
+dispatchable), and belongs to whoever owns that decision.
 
 ## 6. Dependency graph
 
@@ -265,7 +329,8 @@ W01 (flag)  ──┬──> W02 (adapter) ──┬──> W05 (accounts) ─�
               └──> (validates W03, W05, W06)
 
 W03 (ICP -> scoring)   independent of W01; validation improves after it
-W04 (outreach producer) independent structurally ──> W07
+W04 (outreach producer)  CLOSED — already implemented (see §5)
+                        W07's blocker is tenant enablement (§5A), not W04
 ```
 
 **Critical path:** `W01 → W02 → W05/W06`. W01 is a configuration change with no code, and it unblocks five packages.
@@ -277,9 +342,9 @@ W04 (outreach producer) independent structurally ──> W07
 | Group | Packages | Note |
 |---|---|---|
 | **Gate (orchestrator-only)** | W01 | config + deploy; nothing else proceeds meaningfully first |
-| **Parallel-safe after W01** | W03, W04 | disjoint file scopes: scoring consumer vs queue enqueue |
+| **Parallel-safe after W01** | W03 | scoring consumer; W04 is CLOSED and needs no slot |
 | **Serial** | W02 → W05 → W06 | all touch `prospectIdentity/**` or the single adapter registry |
-| **Deferred** | W07 | needs real outcomes from W04 |
+| **Deferred** | W07 | needs real outcomes, which need a tenant enabled for outreach (§5A) |
 
 Serialisation of W02/W05/W06 is forced by PI-ADR-001 §5.1: they share canonical identity modules and the closed-allow-list tests that have already caused one post-merge failure in this programme.
 
