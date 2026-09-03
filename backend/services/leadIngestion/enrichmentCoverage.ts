@@ -31,6 +31,7 @@
  */
 
 import { listDataSourcesByGroup } from '../integrations/dataSourceCatalogue';
+import { marketPulseAttributeCoverage } from '../marketPulse/prospectIntelligence';
 import type { SourceCoverage } from '../enrichment/planner';
 
 /**
@@ -48,19 +49,26 @@ export function availableEnrichmentSources(): string[] {
 /**
  * The coverage WS-4 offers the planner.
  *
- * `internal` and `marketPulse` are deliberately absent too. Attributes the
- * source itself supplied are already applied by LI-2 during this same
- * ingestion, so offering them as an enrichment source would plan work to
- * re-learn what was just written. MarketPulse reuse (C-1) belongs to WS-3,
- * which owns that seam.
+ * `internal` is deliberately absent: attributes the source itself supplied are
+ * already applied by LI-2 during this same ingestion, so offering them as an
+ * enrichment source would plan work to re-learn what was just written.
+ *
+ * `marketPulse` is ASKED rather than assumed. WS-3 owns read-only consumption
+ * of `market_pulse_*` (C-1) and is the only module entitled to answer what it
+ * covers; the frozen decision order puts it ahead of any external provider, so
+ * WS-4 must consult it instead of skipping to one. Its answer is empty today —
+ * MarketPulse is intelligence about the tenant's market, not about a specific
+ * external company — and calling the function rather than hardcoding that keeps
+ * the decision with its owner.
  */
 export function ingestionEnrichmentCoverage(): SourceCoverage {
+  const marketPulse = marketPulseAttributeCoverage();
   const sources = availableEnrichmentSources();
-  if (sources.length === 0) return { external: {} };
+  if (sources.length === 0) return { marketPulse, external: {} };
 
   // An available source with no attribute map can answer nothing. It is listed
   // with an empty attribute set rather than omitted, so the planner's reason
   // names it — "no source declares coverage for this attribute" is a different
   // and more useful finding than silence.
-  return { external: Object.fromEntries(sources.map((key) => [key, [] as string[]])) };
+  return { marketPulse, external: Object.fromEntries(sources.map((key) => [key, [] as string[]])) };
 }

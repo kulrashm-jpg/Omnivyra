@@ -79,6 +79,7 @@ import {
 } from '../../services/leadIngestion/enrichmentCoverage';
 import { applyEnrichmentResult, type EnrichmentPorts } from '../../services/enrichment/service';
 import { listDataSourcesByGroup } from '../../services/integrations/dataSourceCatalogue';
+import { marketPulseAttributeCoverage } from '../../services/marketPulse/prospectIntelligence';
 
 const ORG_A = '00000000-0000-4000-8000-0000000000aa';
 const ORG_B = '00000000-0000-4000-8000-0000000000bb';
@@ -139,10 +140,14 @@ describe('WS-4 coverage policy is DERIVED, not declared', () => {
     }
   });
 
-  it('offers no internal or MarketPulse coverage — WS-3 owns that seam', () => {
-    const cov = ingestionEnrichmentCoverage();
-    expect(cov.internal).toBeUndefined();
-    expect(cov.marketPulse).toBeUndefined();
+  it('offers no internal coverage — LI-2 already applied what the source said', () => {
+    expect(ingestionEnrichmentCoverage().internal).toBeUndefined();
+  });
+
+  it('does not answer for MarketPulse — it asks WS-3, which owns that seam', () => {
+    // The value is empty today; what matters is that it comes from WS-3 rather
+    // than being asserted here, so the decision stays with its owner.
+    expect(ingestionEnrichmentCoverage().marketPulse).toEqual(marketPulseAttributeCoverage());
   });
 });
 
