@@ -92,9 +92,13 @@ export function buildUnifiedIntelligenceSummary(params: {
       : channelDiff >= 12 ? 'seo' : channelDiff <= -12 ? 'geo_aeo' : 'balanced';
 
   const seoConstraint = params.seoSummary.primary_problem;
+  // Phase 2: `primary_gap` is null when AI visibility is unmeasured. A withheld AEO gap
+  // must never win the "primary constraint" comparison — with no AI evidence the SEO
+  // constraint is the only measured one, so it stands unopposed.
   const geoConstraint = params.geoAeoSummary.primary_gap;
   const primaryConstraint =
-    severityWeight(seoConstraint.severity) >= severityWeight(geoConstraint.severity)
+    geoConstraint === null
+      || severityWeight(seoConstraint.severity) >= severityWeight(geoConstraint.severity)
       ? {
           title: normalizeCoreProblem(params.coreProblem),
           source: 'seo' as const,
