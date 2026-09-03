@@ -192,6 +192,18 @@ export interface UpdateContentPatch {
 export interface ListContentFilter {
   contentType?: CanonicalContentType;
   status?: ContentLifecycleStatus;
+  /**
+   * B4.1 — restrict to one campaign's content (content.campaign_id).
+   *
+   * NARROWS the company-scoped result set; it can never widen it. `companyId`
+   * remains a separate, always-applied argument to listContent, so a campaign
+   * filter cannot substitute for or bypass company scoping. Backed by the
+   * existing `content_company_campaign_idx (company_id, campaign_id)`.
+   *
+   * Pass `null` to select campaign-INDEPENDENT content (campaign_id IS NULL);
+   * omit the key entirely for "no campaign filter".
+   */
+  campaignId?: string | null;
   limit?: number;
 }
 
@@ -467,6 +479,15 @@ export async function listContent(
 
   if (filter.contentType) query = query.eq('content_type', filter.contentType);
   if (filter.status) query = query.eq('lifecycle_status', filter.status);
+  // B4.1 — campaign narrowing, applied AFTER the company predicate above so it
+  // can only ever shrink the tenant-scoped set. `null` is a meaningful value
+  // here (campaign-independent content), which is why this tests for `undefined`
+  // rather than truthiness.
+  if (filter.campaignId !== undefined) {
+    query = filter.campaignId === null
+      ? query.is('campaign_id', null)
+      : query.eq('campaign_id', filter.campaignId);
+  }
   if (typeof filter.limit === 'number') query = query.limit(filter.limit);
 
   const { data, error } = await query;
