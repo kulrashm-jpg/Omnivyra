@@ -27,6 +27,8 @@
 
 import { ownedDbTable } from '../../db/writeOwner';
 import { normalizeEmail, normalizePhone } from '../identityResolutionService';
+import { recordDedupOutcome } from './telemetry';
+import { logger } from '../logger';
 
 /** ADR §3. Deterministic classes; there is deliberately no score. */
 export const DUPLICATE_CLASSIFICATIONS = ['definite', 'probable', 'possible'] as const;
@@ -217,6 +219,16 @@ export async function detectAndParkDuplicates(signals: DuplicateSignals): Promis
   let parked = 0;
   let alreadyOpen = 0;
 
+  // W06 — the CLEAN pass, recorded. A parked duplicate leaves a durable row in
+  // `person_duplicate_candidates`; a pass that found nothing leaves no trace at
+  // all, so "detection ran and the data is clean" and "detection never ran"
+  // were previously the same observation. This is the only thing that
+  // distinguishes them, and it is why the zero case is counted at all.
+  if (detected.length === 0) {
+    recordDedupOutcome('none');
+    return { detected, parked, alreadyOpen };
+  }
+
   for (const d of detected) {
     const res = await parkDuplicateCandidate({
       organizationId: signals.organizationId,
@@ -228,6 +240,32 @@ export async function detectAndParkDuplicates(signals: DuplicateSignals): Promis
     });
     if (res.parked) parked += 1;
     else alreadyOpen += 1;
+
+    // Per candidate, so the counter reports candidates and not passes. Ids and
+    // the deterministic signal only — never the email, phone or provider value
+    // that matched, which is the personal data the match was made on.
+    recordDedupOutcome(res.parked ? 'parked' : 'already_open');
+  }
+
+  // Tenant-scoped detail, beside the platform counter. The logger attaches
+  // request_id / correlation_id / org_id from the request context, so a parked
+  // candidate can be joined back to the ingestion that surfaced it.
+  //
+  // Fail-safe: a diagnostic must never turn a successful detection into a
+  // failed one, and detection failure is still reported by `detectPersonDuplicates`
+  // throwing — this observes the SUCCESS path only and swallows nothing else.
+  try {
+    logger.info('person_duplicates_parked', {
+      companyId: signals.organizationId,
+      personId: signals.personId,
+      detected: detected.length,
+      parked,
+      alreadyOpen,
+      classifications: detected.map((d) => d.classification),
+      matchedOn: detected.map((d) => d.matchedOn),
+    });
+  } catch {
+    /* observation must never break detection */
   }
 
   return { detected, parked, alreadyOpen };

@@ -34,6 +34,8 @@
 
 import { ownedDbTable } from '../../db/writeOwner';
 import { normalizeCompanyDomain } from './normalization';
+import { recordAccountResolutionOutcome } from './telemetry';
+import { logger } from '../logger';
 
 /** Bumped when resolution rules change, so a row can be traced to the logic that made it. */
 export const ACCOUNT_RESOLUTION_VERSION = 'w4.1';
@@ -140,6 +142,45 @@ export async function resolveAccountShadow(
 }
 
 /**
+ * W06 — record the outcome of a resolve-or-create.
+ *
+ * Observed HERE, at the decision authority, rather than at a caller: the
+ * orchestrator maps `ambiguous` to `null` — the same value it uses for "the
+ * source said nothing about an employer" — so by the time any caller sees the
+ * result, a REFUSED MERGE and an absent employer are the same non-event. A
+ * refusal to merge two accounts is a safety action and the only place it still
+ * exists is this return value.
+ *
+ * The ambiguous case is additionally logged at WARN with the tenant and the
+ * candidate ids, because it is the one outcome an operator may need to act on:
+ * the evidence genuinely points at two accounts and a human has to decide.
+ * `candidateAccountIds` are internal uuids, not personal data. The company
+ * name, domain and website are NOT logged — a domain identifies the prospect
+ * organisation, and nothing here needs it to be actionable.
+ *
+ * Fail-safe and behaviour-preserving: it returns its input unchanged, and
+ * observation never becomes a precondition for the resolution.
+ */
+function observeAccountOutcome(resolution: AccountResolution): AccountResolution {
+  try {
+    recordAccountResolutionOutcome(resolution.outcome);
+    if (resolution.outcome === 'ambiguous') {
+      logger.warn('prospect_account_ambiguous', {
+        companyId: resolution.organizationId,
+        candidateAccountIds: resolution.candidateAccountIds,
+        candidateCount: resolution.candidateAccountIds.length,
+        matchedBySourceKey: Boolean(resolution.sourceKey),
+        matchedByDomain: Boolean(resolution.normalizedDomain),
+        reason: resolution.reason,
+      });
+    }
+  } catch {
+    /* observation must never break resolution */
+  }
+  return resolution;
+}
+
+/**
  * Resolve, creating the account when nothing matches.
  *
  * Idempotent by database constraint. On a race, the loser's INSERT violates one
@@ -157,7 +198,7 @@ export async function resolveOrCreateAccount(
 ): Promise<AccountResolution> {
   const shadow = await resolveAccountShadow(organizationId, candidate);
   if (shadow.outcome !== 'insufficient_evidence' || (!shadow.sourceKey && !shadow.normalizedDomain)) {
-    return shadow;   // matched, ambiguous, or genuinely no evidence — never create
+    return observeAccountOutcome(shadow);   // matched, ambiguous, or genuinely no evidence — never create
   }
 
   const row = {
@@ -177,13 +218,13 @@ export async function resolveOrCreateAccount(
 
   const { data, error } = await ownedDbTable('prospect_accounts').insert(row).select('id').single();
   if (!error && data) {
-    return { ...shadow, accountId: (data as { id: string }).id, outcome: 'created',
-      candidateAccountIds: [(data as { id: string }).id], reason: 'no existing account matched; created from deterministic evidence' };
+    return observeAccountOutcome({ ...shadow, accountId: (data as { id: string }).id, outcome: 'created',
+      candidateAccountIds: [(data as { id: string }).id], reason: 'no existing account matched; created from deterministic evidence' });
   }
   if (error?.code === '23505') {
     // Another worker won. Re-resolve so both callers see the same account.
     const again = await resolveAccountShadow(organizationId, candidate);
-    return { ...again, reason: `${again.reason} (created concurrently by another worker)` };
+    return observeAccountOutcome({ ...again, reason: `${again.reason} (created concurrently by another worker)` });
   }
   throw new Error(`prospect_accounts insert failed: ${error?.message ?? 'unknown error'}`);
 }

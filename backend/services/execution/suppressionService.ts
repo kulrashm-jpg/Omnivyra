@@ -49,6 +49,12 @@ import { ownedDbTable } from '../../db/writeOwner';
 import { mayContact, type GovernanceType } from '../prospectIdentity/contactGovernance';
 import { loadGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
 import { recordContactGovernance, revokeContactGovernance } from '../prospectIdentity/contactGovernanceWriter';
+import {
+  recordGovernanceFailClosed,
+  recordGovernanceGateDecision,
+  type GovernanceFailClosedStage,
+} from '../prospectIdentity/telemetry';
+import { logger } from '../logger';
 
 const T = 'suppression_entries';
 const GLOBAL = '__global__';
@@ -130,23 +136,73 @@ async function canonicalVerdict(companyId: string, channel: string, target: stri
   };
 }
 
+/**
+ * W06 — record a suppression that happened because governance could not be
+ * ASKED, distinct from one the rules actually asserted.
+ *
+ * The counter is a platform aggregate with no tenant label; the log line
+ * carries the tenant, and the logger attaches request_id / correlation_id /
+ * org_id from the existing request context, so an operator can join a specific
+ * fail-closed suppression back to the request that caused it.
+ *
+ * The target is NEVER logged. It is an email or a phone number — precisely the
+ * personal data the suppression exists to protect. Channel and stage are enough
+ * to diagnose, and neither identifies a person.
+ *
+ * Returns the result it was given so a caller can `return observeFailClosed(...)`
+ * in one expression and cannot accidentally observe without returning, or
+ * return without observing.
+ */
+function observeFailClosed<T extends SuppressionResult>(
+  stage: GovernanceFailClosedStage,
+  companyId: string,
+  channel: string,
+  result: T,
+): T {
+  try {
+    recordGovernanceFailClosed(stage);
+    recordGovernanceGateDecision('suppressed', result.store ?? 'none');
+    logger.warn('contact_governance_failclosed', {
+      companyId: companyId || null,
+      channel,
+      stage,
+      reason: result.reason ?? null,
+      store: result.store ?? null,
+    });
+  } catch {
+    /* observation must never break the gate */
+  }
+  return result;
+}
+
 /** Is this target suppressed for this channel? Canonical first, then legacy. Fail-closed. */
 export async function isSuppressed(companyId: string, channel: string, target: string): Promise<SuppressionResult> {
   const t = norm(target);
+  // DELIBERATELY UNOBSERVED. An empty target is not a governance decision:
+  // governance was never consulted, and there is no contact to govern. Counting
+  // it would inflate the `allowed` series with non-events, which is the same
+  // reason LI-5E counts "only genuine resolutions" — a counter that includes
+  // non-events cannot be read as a rate.
   if (!t) return { suppressed: false };
 
   // A governance question without a tenant cannot be answered — `mayContact`
   // itself refuses one for the same reason — so it is refused rather than
   // guessed.
   if (!companyId || !String(companyId).trim()) {
-    return { suppressed: true, reason: 'suppression_no_tenant_failclosed' };
+    return observeFailClosed('no_tenant', companyId, channel, { suppressed: true, reason: 'suppression_no_tenant_failclosed' });
   }
 
   try {
     const canonical = await canonicalVerdict(companyId, channel, target);
-    if (canonical) return canonical;
+    if (canonical) {
+      // A REAL suppression: the rules answered. Counted separately from the
+      // fail-closed exits above so a governance outage can never hide inside
+      // the compliance signal.
+      recordGovernanceGateDecision('suppressed', 'canonical');
+      return canonical;
+    }
   } catch {
-    return { suppressed: true, reason: 'governance_lookup_failed_failclosed', store: 'canonical' };
+    return observeFailClosed('canonical_read', companyId, channel, { suppressed: true, reason: 'governance_lookup_failed_failclosed', store: 'canonical' });
   }
 
   // LEGACY — still authoritative for anything the canonical model cannot hold,
@@ -160,11 +216,19 @@ export async function isSuppressed(companyId: string, channel: string, target: s
       .in('channel', ['*', channel])
       .in('company_id', [GLOBAL, companyId])
       .limit(1);
-    if (error) return { suppressed: true, reason: 'suppression_lookup_error_failclosed', store: 'legacy' }; // fail-closed
+    if (error) return observeFailClosed('legacy_read', companyId, channel, { suppressed: true, reason: 'suppression_lookup_error_failclosed', store: 'legacy' }); // fail-closed
     const row = Array.isArray(data) && data[0] ? (data[0] as Record<string, unknown>) : null;
-    return row ? { suppressed: true, reason: String(row.reason), scope: String(row.scope), store: 'legacy' } : { suppressed: false };
+    if (row) {
+      recordGovernanceGateDecision('suppressed', 'legacy');
+      return { suppressed: true, reason: String(row.reason), scope: String(row.scope), store: 'legacy' };
+    }
+    // Allowed by ABSENCE — both stores were read and neither had anything to
+    // say. Counted so that "nobody is suppressed" and "we never checked" stop
+    // being the same observation.
+    recordGovernanceGateDecision('allowed', 'none');
+    return { suppressed: false };
   } catch {
-    return { suppressed: true, reason: 'suppression_exception_failclosed', store: 'legacy' };
+    return observeFailClosed('legacy_exception', companyId, channel, { suppressed: true, reason: 'suppression_exception_failclosed', store: 'legacy' });
   }
 }
 
