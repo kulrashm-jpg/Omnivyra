@@ -42,6 +42,22 @@ export const SENIORITY_VALUES = [
 ] as const;
 export type Seniority = typeof SENIORITY_VALUES[number];
 
+/**
+ * PI WS-7 FR-21. Buying roles. Mirrors `unified_persons_buying_role_valid`
+ * exactly; the database is the authority and this array must not drift from it.
+ *
+ * This is the ONE attribute WS-6/WS-7 added with a closed vocabulary, because
+ * the Playbook fixes it (§17). `authority` and `influence` name a concept
+ * without fixing its values, so they stay free text rather than being given a
+ * vocabulary invented here — an invented vocabulary becomes the contract the
+ * moment a provider maps onto it.
+ */
+export const BUYING_ROLES = [
+  'decision_maker', 'economic_buyer', 'champion',
+  'influencer', 'evaluator', 'blocker', 'unknown',
+] as const;
+export type BuyingRole = typeof BUYING_ROLES[number];
+
 /** Employee bands. Mirrors `prospect_accounts_employee_band_valid` exactly. */
 export const EMPLOYEE_BANDS = [
   '1-10', '11-50', '51-200', '201-500', '501-1000', '1001-5000', '5001-10000', '10001+',
@@ -75,6 +91,14 @@ export interface PersonAttributes {
   city?: string | null;
   /** IANA zone (e.g. 'Europe/London'). Contact governance will need it. */
   timezone?: string | null;
+
+  // ── PI WS-7 (FR-21) ───────────────────────────────────────────────────────
+  /** Decision authority, verbatim from a source. No vocabulary is imposed. */
+  authority?: string | null;
+  /** Influence, verbatim from a source. No vocabulary is imposed. */
+  influence?: string | null;
+  /** Closed vocabulary — the Playbook fixes these values. */
+  buyingRole?: BuyingRole | null;
 }
 
 /**
@@ -112,6 +136,14 @@ export interface AccountAttributes {
   fundingStage?: string | null;
   /** ISO-8601 instant of the most recent funding event. */
   lastFundingAt?: string | null;
+
+  // ── PI WS-6 (FR-16) ───────────────────────────────────────────────────────
+  /** Market/segment, verbatim. No vocabulary imposed (revenueBand precedent). */
+  market?: string | null;
+  /** How the account makes money, verbatim. No vocabulary imposed. */
+  businessModel?: string | null;
+  /** Growth STAGE — a stateable fact. A growth RATE would need a window. */
+  growthStage?: string | null;
 }
 
 /**
@@ -145,6 +177,10 @@ export function normalizeCountryCode(value?: string | null): string | null {
   if (typeof value !== 'string') return null;
   const cleaned = value.trim().toUpperCase();
   return /^[A-Z]{2}$/.test(cleaned) ? cleaned : null;
+}
+
+export function isBuyingRole(value: unknown): value is BuyingRole {
+  return typeof value === 'string' && (BUYING_ROLES as readonly string[]).includes(value);
 }
 
 export function isSeniority(value: unknown): value is Seniority {
@@ -268,6 +304,12 @@ export function toPersonAttributes(input: PersonAttributes): PersonAttributes {
     region: normalizeDisplayText(input.region),
     city: normalizeDisplayText(input.city),
     timezone: normalizeDisplayText(input.timezone),
+    // WS-7. Free text is cleaned for storage only; `buyingRole` is validated
+    // against the closed vocabulary and becomes null when a source asserts
+    // something outside it — an unrecognised role is not a role.
+    authority: normalizeDisplayText(input.authority),
+    influence: normalizeDisplayText(input.influence),
+    buyingRole: isBuyingRole(input.buyingRole) ? input.buyingRole : null,
   };
 }
 
@@ -308,13 +350,21 @@ export function toAccountAttributes(input: AccountAttributes): NormalizedAccount
     technologies: normalizeTechnologies(input.technologies),
     fundingStage: normalizeDisplayText(input.fundingStage),
     lastFundingAt: normalizeInstant(input.lastFundingAt),
+    // WS-6. Same display-text rule, for the same reason: no vocabulary exists
+    // for any of the three, so a provider's own label is the fact recorded.
+    market: normalizeDisplayText(input.market),
+    businessModel: normalizeDisplayText(input.businessModel),
+    growthStage: normalizeDisplayText(input.growthStage),
   };
 }
 
 /** Database column names, so callers do not hand-write them and drift. */
 export const PERSON_ATTRIBUTE_COLUMNS = [
   'full_name', 'first_name', 'last_name', 'job_title', 'department', 'seniority',
-  'country_code', 'region', 'city', 'timezone', 'attributes_source', 'attributes_updated_at',
+  'country_code', 'region', 'city', 'timezone',
+  // PI WS-7 (FR-21).
+  'authority', 'influence', 'buying_role',
+  'attributes_source', 'attributes_updated_at',
 ] as const;
 
 export const ACCOUNT_ATTRIBUTE_COLUMNS = [
@@ -324,5 +374,8 @@ export const ACCOUNT_ATTRIBUTE_COLUMNS = [
   // write any column outside this list, and the enforcement test derives its
   // scan from it — so these become both writable and protected in one step.
   'annual_revenue', 'revenue_band', 'founded_year', 'technologies', 'funding_stage', 'last_funding_at',
+  // PI WS-6 (FR-16). Same contract as P2A: listing them here is what makes them
+  // both writable through the boundary and protected from anything else.
+  'market', 'business_model', 'growth_stage',
   'attributes_source', 'attributes_updated_at',
 ] as const;

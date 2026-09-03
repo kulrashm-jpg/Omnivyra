@@ -37,7 +37,7 @@
 
 import {
   EMPLOYEE_BANDS, SENIORITY_VALUES,
-  isEmployeeBand, isSeniority,
+  isBuyingRole, isEmployeeBand, isSeniority,
   normalizeCountryCode, normalizeDisplayText,
 } from '../prospectIdentity/attributes';
 import {
@@ -85,6 +85,12 @@ const ACCOUNT_ATTRIBUTES: Readonly<Record<string, AttributeKind>> = {
   founded_year:   'numeric',
   technologies:   'string_array',
   funding_stage:  'exact_text',
+  // PI WS-6 (FR-16). Exact text for the same reason revenue_band and
+  // funding_stage are: no vocabulary exists for any of them, and CONTRACT 17
+  // admits no `contains`/`like`, so a criterion still matches exactly.
+  market:          'exact_text',
+  business_model:  'exact_text',
+  growth_stage:    'exact_text',
 };
 
 const PERSON_ATTRIBUTES: Readonly<Record<string, AttributeKind>> = {
@@ -94,6 +100,11 @@ const PERSON_ATTRIBUTES: Readonly<Record<string, AttributeKind>> = {
   country_code: 'country_code',
   region:       'exact_text',
   city:         'exact_text',
+  // PI WS-7 (FR-21). `buying_role` is a CLOSED vocabulary because the Playbook
+  // fixes it; `authority` and `influence` are not, because it does not.
+  authority:    'exact_text',
+  influence:    'exact_text',
+  buying_role:  'closed_vocabulary',
 };
 
 const ATTRIBUTES: Record<IcpSubject, Readonly<Record<string, AttributeKind>>> = {
@@ -110,6 +121,9 @@ const CLOSED_VOCABULARY: Readonly<Record<string, readonly string[]>> = {
 const GUARDS: Readonly<Record<string, (v: unknown) => boolean>> = {
   employee_band: isEmployeeBand,
   seniority:     isSeniority,
+  // PI WS-7. A criterion naming a role outside the vocabulary is refused at
+  // authoring time rather than evaluating as permanently `unknown`.
+  buying_role:   isBuyingRole,
 };
 
 export function attributeKind(subject: IcpSubject, attribute: string): AttributeKind | null {

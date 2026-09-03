@@ -174,17 +174,26 @@ describe('D1 contract 17 — criteria may use ONLY DB-enforced vocabularies', ()
   });
 
   it('the attribute surface is CLOSED — only real columns may be named', () => {
+    // WS-6 added market/business_model/growth_stage; WS-7 added
+    // authority/influence/buying_role. Every one is a real, writable column —
+    // which is precisely what this test exists to enforce.
     expect(attributesFor('account')).toEqual([
-      'annual_revenue', 'city', 'country_code', 'employee_band', 'employee_count',
-      'founded_year', 'funding_stage', 'industry', 'region', 'revenue_band', 'technologies',
+      'annual_revenue', 'business_model', 'city', 'country_code', 'employee_band',
+      'employee_count', 'founded_year', 'funding_stage', 'growth_stage', 'industry',
+      'market', 'region', 'revenue_band', 'technologies',
     ]);
     expect(attributesFor('person')).toEqual([
-      'city', 'country_code', 'department', 'job_title', 'region', 'seniority',
+      'authority', 'buying_role', 'city', 'country_code', 'department',
+      'influence', 'job_title', 'region', 'seniority',
     ]);
 
     // An invented attribute would be permanently `unknown` and would read as a
     // data gap rather than the modelling error it is.
-    for (const bad of ['mrr', 'headcount', 'arr', 'ideal_customer_profile', 'nps']) {
+    // 'product_alignment' and 'problem_relevance' are in this list deliberately:
+    // WS-6/WS-7 declined to add them because both are FIT concepts, not intrinsic
+    // attributes, and an ICP matching a value the ICP produced is circular.
+    for (const bad of ['mrr', 'headcount', 'arr', 'ideal_customer_profile', 'nps',
+      'product_alignment', 'problem_relevance']) {
       expect(codeOf(() => crit({ id: 'x', attribute: bad }))).toBe('attribute_unknown');
     }
     // Subject scoping is real: seniority is a person attribute, not an account one.
