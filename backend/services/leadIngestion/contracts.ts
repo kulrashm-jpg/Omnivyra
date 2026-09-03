@@ -220,6 +220,19 @@ export interface IngestionRecordOutcome {
    * without a canonical Prospect rather than minting a duplicate on replay.
    */
   prospectId?: string | null;
+  /**
+   * WS-4 → WS-2. A SUMMARY of the enrichment plan, present only when the caller
+   * supplied ports. Counts rather than the plan itself: the outcome is an
+   * ingestion report, and embedding a full plan would make it the plan's
+   * transport. `error` records a planning failure without failing the record.
+   */
+  enrichmentPlan?: {
+    planned: number;
+    counts?: Record<string, number>;
+    noAvailableSource?: number;
+    needsResolution?: number;
+    error?: string;
+  };
   /** LI-2's verdict: whether the evidence was new, unchanged, or changed. */
   provenanceOutcome?: 'created' | 'unchanged' | 'changed';
   /** Canonical attributes LI-2 applied and withheld — a withheld one is a finding. */

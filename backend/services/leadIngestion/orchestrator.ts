@@ -34,6 +34,8 @@ import { ingestSourceRecord } from '../prospectIdentity/ingestionBoundary';
 import { resolveUnifiedPerson } from '../identityResolutionService';
 import { resolveOrCreateAccount, attachPersonToAccount } from '../prospectIdentity/accountResolution';
 import { resolveOrCreateProspect } from '../prospectIdentity/prospectResolution';
+import { planProspectEnrichment, type EnrichmentPorts } from '../enrichment/service';
+import { ingestionEnrichmentCoverage } from './enrichmentCoverage';
 import { detectAndParkDuplicates } from '../prospectIdentity/personDuplicates';
 import type { AccountAttributes } from '../prospectIdentity/attributes';
 import {
@@ -164,7 +166,24 @@ async function resolveAccount(
  */
 export async function ingestNormalizedRecord(
   result: AdapterResult,
-  options: { ingestionRunId?: string | null; now?: string } = {},
+  options: {
+    ingestionRunId?: string | null;
+    now?: string;
+    /**
+     * WS-2 seam ports. OPTIONAL by design: without them no enrichment planning
+     * happens and ingestion behaves exactly as before, so wiring the planner
+     * adds no reads to the hot path and no new failure mode for callers that
+     * do not want it. Enrichment is never a prerequisite for the canonical
+     * Prospect — the plan is produced AFTER the Prospect already exists.
+     */
+    enrichmentPorts?: EnrichmentPorts;
+    /** Attributes the caller's next action needs. Absent by default: inventing
+     *  one here would be downstream sales logic WS-5/WS-8/WS-9 own. */
+    requiredForNextAction?: readonly string[];
+    /** Freshness policy. Absent means WS-2's documented default; WS-4 invents
+     *  no business freshness period of its own. */
+    stalenessDays?: number;
+  } = {},
 ): Promise<IngestionRecordOutcome> {
   const record = result.normalized;
   const at = options.now ?? new Date().toISOString();
@@ -243,6 +262,40 @@ export async function ingestNormalizedRecord(
     prospectId = prospect.prospectId;
   } catch (e) {
     return fail(externalId, 'prospect_resolution_failed', e);
+  }
+
+  // ── ENRICHMENT PLAN (WS-2 seam) ─────────────────────────────────────────
+  // Planning runs only when the caller supplied ports, and only once a
+  // canonical Prospect exists — a plan is about a Prospect, and there is
+  // nothing to plan for a record that resolved to none.
+  //
+  // It NEVER fails the record. A planning failure means we could not decide
+  // what to enrich; the person, employer and evidence are still durable and
+  // the record is still a successful ingestion. Reporting it as a failure
+  // would discard good intake over an advisory step.
+  let enrichmentPlan: IngestionRecordOutcome['enrichmentPlan'];
+  if (options.enrichmentPorts && prospectId) {
+    try {
+      const { plan } = await planProspectEnrichment({
+        organizationId: record.organizationId,
+        prospectId,
+        // Derived from the catalogue, never declared here. Today the enrichment
+        // group holds no available source, so every gap is honestly reported as
+        // no_available_source rather than pointed at an intake adapter.
+        coverage: ingestionEnrichmentCoverage(),
+        requiredForNextAction: options.requiredForNextAction,
+        stalenessDays: options.stalenessDays,
+        now: at,
+      }, options.enrichmentPorts);
+      enrichmentPlan = {
+        planned: plan.toEnrich.length,
+        counts: plan.counts,
+        noAvailableSource: plan.fields.filter((f) => f.action === 'no_available_source').length,
+        needsResolution: plan.fields.filter((f) => f.action === 'needs_resolution').length,
+      };
+    } catch (e) {
+      enrichmentPlan = { planned: 0, error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   // ── PROVENANCE ──────────────────────────────────────────────────────────
@@ -362,6 +415,7 @@ export async function ingestNormalizedRecord(
     personId,
     accountId,
     prospectId,
+    enrichmentPlan,
     provenanceOutcome: ingestion.outcome,
     canonicalApplied: ingestion.canonicalApplied,
     canonicalWithheld: ingestion.canonicalWithheld,
