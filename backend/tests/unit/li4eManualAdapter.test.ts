@@ -181,28 +181,35 @@ beforeEach(() => {
 });
 
 describe('LI-4E — 1/2. adapter contract and registry discovery', () => {
-  // LI-5E.4 added a SECOND built-in, `crm`. These three assertions counted the
-  // built-ins, so they move with it. What they protect has NOT been relaxed:
-  // both built-ins are operator-supplied entry adapters, and no provider adapter
-  // is registered. `crm` leaves the forbidden list below because it is a
-  // NAMESPACE, not an integration — it reaches no CRM. `manual` is unchanged.
-  it('registers exactly the two operator-supplied sources', () => {
+  // LI-5E.4 added a SECOND built-in, `crm`; PI-P1-W02 added a THIRD, `csv`.
+  // These three assertions counted the built-ins, so they move with each one.
+  // What they protect has NOT been relaxed: every built-in is an
+  // operator-supplied entry adapter, and no provider adapter is registered.
+  // `crm` left the forbidden list because it is a NAMESPACE, not an integration
+  // — it reaches no CRM. `csv` leaves it for the same kind of reason: the file
+  // is parsed by the client and arrives as ordinary records, so the adapter
+  // needs no credential, makes no network call and involves no vendor. `xlsx`
+  // STAYS forbidden — a spreadsheet is submitted through the `csv` source, and
+  // a second spelling would be a second population of the same person.
+  // `manual` is unchanged.
+  it('registers exactly the three operator-supplied sources', () => {
     expect(listLeadSources()).toEqual([
       { source: 'manual', label: 'Manual entry', capabilities: ['person_discovery', 'account_discovery'] },
       { source: 'crm', label: 'CRM record (operator-supplied)', capabilities: ['person_discovery', 'account_discovery'] },
+      { source: 'csv', label: 'CSV / Excel import', capabilities: ['person_discovery', 'account_discovery'] },
     ]);
   });
 
   it('registers NO provider adapter', () => {
     // Every entry below would require a credential, a network call or a vendor.
-    for (const p of ['apollo', 'linkedin', 'rapidapi', 'csv', 'xlsx', 'hubspot', 'salesforce', 'zoho']) {
+    for (const p of ['apollo', 'linkedin', 'rapidapi', 'xlsx', 'hubspot', 'salesforce', 'zoho']) {
       expect(hasLeadSourceAdapter(p)).toBe(false);
     }
   });
 
   it('registration is idempotent', () => {
     expect(() => { registerBuiltInLeadSources(); registerBuiltInLeadSources(); }).not.toThrow();
-    expect(listLeadSources()).toHaveLength(2);
+    expect(listLeadSources()).toHaveLength(3);
   });
 
   it('claims only capabilities it implements — it fetches, searches and enriches nothing', () => {
@@ -210,6 +217,17 @@ describe('LI-4E — 1/2. adapter contract and registry discovery', () => {
     expect(manualAdapter.capabilities).not.toContain('enrichment');
     expect(manualAdapter.capabilities).not.toContain('bulk_fetch');
     expect(manualAdapter.capabilities).not.toContain('single_record_fetch');
+  });
+
+  // The guarantee that let `csv` leave the forbidden list above, asserted rather
+  // than assumed: an entry adapter that cannot reach a network must never claim
+  // a capability that implies one.
+  it('every registered built-in fetches, searches and enriches nothing', () => {
+    for (const s of listLeadSources()) {
+      for (const forbidden of ['search', 'enrichment', 'bulk_fetch', 'single_record_fetch']) {
+        expect(s.capabilities).not.toContain(forbidden);
+      }
+    }
   });
 });
 

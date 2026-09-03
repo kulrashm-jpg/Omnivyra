@@ -22,8 +22,8 @@
  *
  * ─── IT ACTIVATES NOTHING ─────────────────────────────────────────────────
  * Every provider below is `available: false` — declared, not implemented. The
- * two exceptions are `manual` and `crm`, which are genuinely released
- * (LI-4E / LI-5E.4) and reachable through their own governed routes.
+ * three exceptions are `manual`, `crm` and `csv`, which are genuinely released
+ * (LI-4E / LI-5E.4 / PI-P1-W02) and reachable through their own governed routes.
  */
 
 /** Where a data source sits in the Company Admin integration hub. */
@@ -90,9 +90,9 @@ export const DATA_SOURCE_CATALOGUE: readonly DataSourceDefinition[] = Object.fre
     key: 'csv',
     label: 'CSV / Excel import',
     group: 'prospect_discovery',
-    available: false,
-    requires: ['file_upload'],
-    note: 'Declared only. No ingestion adapter exists yet.',
+    available: true,
+    requires: [],
+    note: 'Client-parsed spreadsheet rows. Released and reachable; no credential, no upload — the file never reaches the server.',
   },
   {
     key: 'linkedin_sales_navigator',
