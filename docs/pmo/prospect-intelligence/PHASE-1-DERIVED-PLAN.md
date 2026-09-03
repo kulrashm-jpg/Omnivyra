@@ -109,7 +109,7 @@ Classification per PI-ADR-001: **shipped** · **structurally present but unused*
 | G7 | Consent / suppression / governance | **structurally present but unused** | `contactGovernance*.ts`, `suppressionService.ts`; 0 records |
 | G8 | Social chain → canonical person | **shipped and wired** | `canonicalLeadSignalService.ts:5` imports `resolveSocialContactIdentity` |
 | G9 | Tenant versioned ICP (storage + ratification) | **shipped** | D1; migration applied and certified |
-| G10 | ICP → scoring influence | **absent** | `personaIcp` ↔ `prospectIcp` = 0 refs |
+| G10 | ICP → scoring influence | **~~absent~~ → shipped, RUNTIME DARK** | W03 shipped it: `leadUnderstanding/engines/prospectIcpFit.ts`, registered in `engines/assembly.ts:11,51` where `runProspectIcpFit` runs beside `runPersonaIcp` — so the original "`personaIcp` ↔ `prospectIcp` = 0 refs" is no longer true (4 files in `leadUnderstanding/` reference `prospectIcp`). It influences NOTHING at runtime: `LEAD_UNDERSTANDING_ENABLED` (`leadUnderstanding/flags.ts:8`) is ABSENT in production. Activation is an operational decision, not remaining engineering |
 | G11 | Outreach materialisation / producer | **~~blocked~~ → CLOSED — already implemented** | `leadOutreachActivation.ts` (WS-6A) → `materializeAutomationPlan` → `insertOutreachTask`; reachable via `/api/super-admin/outreach/{activate,approve}`. The original "blocked / WS-6F" entry **conflated two separate concerns** — see §5A |
 | G11b | `AutomationSummary` queue transport (WS-6F) | **pending, and NOT an outreach producer** | `workerTopologyManifest.ts:69`; consumer deliberately does not dispatch |
 | G12 | Enrichment via existing providers | **partial** | `intelligence/adapters/**` is LLM/SEO/reputation; no people/firmographic provider |
