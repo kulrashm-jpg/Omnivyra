@@ -197,6 +197,9 @@ export type IngestionRejection =
   | 'identity_failed'
   | 'duplicate_detection_failed'
   | 'account_resolution_failed'
+  /** WS-1's resolver raised. Distinct from a record that simply had no source
+   *  key, which resolves to a null prospectId and is NOT a failure. */
+  | 'prospect_resolution_failed'
   /** The ingestion capability is switched off. Reported, never thrown, so a
    *  batch stopped mid-flight still returns the outcomes it already had. */
   | 'ingestion_disabled';
@@ -209,6 +212,14 @@ export interface IngestionRecordOutcome {
   sourceRecordId?: string;
   personId?: string | null;
   accountId?: string | null;
+  /**
+   * WS-1 (FR-03) — the canonical Prospect (`canonical_leads.id`).
+   *
+   * Null when the source supplied no `externalId`: WS-1 will not synthesise an
+   * identity key, so such a record ingests its person, employer and evidence
+   * without a canonical Prospect rather than minting a duplicate on replay.
+   */
+  prospectId?: string | null;
   /** LI-2's verdict: whether the evidence was new, unchanged, or changed. */
   provenanceOutcome?: 'created' | 'unchanged' | 'changed';
   /** Canonical attributes LI-2 applied and withheld — a withheld one is a finding. */

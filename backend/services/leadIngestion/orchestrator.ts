@@ -7,6 +7,7 @@
  *     -> validate
  *     -> identity          (W1  resolveUnifiedPerson)
  *     -> account           (W4  resolveOrCreateAccount / attachPersonToAccount)
+ *     -> prospect          (WS-1 resolveOrCreateProspect)
  *     -> provenance        (LI-2 ingestSourceRecord)
  *     -> duplicate parking (LI-4C detectAndParkDuplicates)
  *
@@ -32,6 +33,7 @@
 import { ingestSourceRecord } from '../prospectIdentity/ingestionBoundary';
 import { resolveUnifiedPerson } from '../identityResolutionService';
 import { resolveOrCreateAccount, attachPersonToAccount } from '../prospectIdentity/accountResolution';
+import { resolveOrCreateProspect } from '../prospectIdentity/prospectResolution';
 import { detectAndParkDuplicates } from '../prospectIdentity/personDuplicates';
 import type { AccountAttributes } from '../prospectIdentity/attributes';
 import {
@@ -212,6 +214,37 @@ export async function ingestNormalizedRecord(
     return fail(externalId, 'account_resolution_failed', e);
   }
 
+  // ── PROSPECT (WS-1) ─────────────────────────────────────────────────────
+  // C-2 froze `canonical_leads` as the canonical Prospect, and until now this
+  // orchestrator never produced one: it resolved a person, an account and
+  // provenance and returned no prospect id, so BR-01 was unsatisfiable by
+  // intake. This step closes that, and does nothing else — the rules live in
+  // WS-1's resolver and are not restated here.
+  //
+  // Placed AFTER identity and employer so the Prospect can be anchored to an
+  // already-resolved person, and BEFORE provenance so the source record is
+  // written once the canonical row it describes exists.
+  //
+  // A record with no `externalId` yields `insufficient_evidence` and a null
+  // prospectId. That is NOT a failure: partial records must still ingest, and
+  // WS-1 refuses to synthesise an identity key precisely because a fabricated
+  // one would mint a new Prospect on every replay. Only a genuine resolver
+  // error fails the record, matching how employer resolution already behaves.
+  let prospectId: string | null = null;
+  try {
+    const prospect = await resolveOrCreateProspect(record.organizationId, {
+      externalLeadKey: record.externalId,
+      source: record.source,
+      personId,
+      email: record.person?.email ?? null,
+      phone: record.person?.phone ?? null,
+      fullName: record.person?.fullName ?? null,
+    }, at);
+    prospectId = prospect.prospectId;
+  } catch (e) {
+    return fail(externalId, 'prospect_resolution_failed', e);
+  }
+
   // ── PROVENANCE ──────────────────────────────────────────────────────────
   // LI-2 owns redaction, payload hashing, assertion recording and the canonical
   // update rules. A provenance failure fails the record: evidence recorded
@@ -317,6 +350,7 @@ export async function ingestNormalizedRecord(
         sourceRecordId: ingestion.sourceRecordId,
         personId,
         accountId,
+        prospectId,
       };
     }
   }
@@ -327,6 +361,7 @@ export async function ingestNormalizedRecord(
     sourceRecordId: ingestion.sourceRecordId,
     personId,
     accountId,
+    prospectId,
     provenanceOutcome: ingestion.outcome,
     canonicalApplied: ingestion.canonicalApplied,
     canonicalWithheld: ingestion.canonicalWithheld,
