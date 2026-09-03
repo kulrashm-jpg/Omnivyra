@@ -4,6 +4,8 @@ import {
   type SerpSnapshotInput,
 } from './externalCompetitiveIntelligenceService';
 import { assertAnalyticsMutationAllowed } from './analyticsEnvironmentGuardService';
+// The single credential authority: managed account → account env ref → source env fallback.
+import { resolveProviderCredential } from './providerCredentialResolver';
 import { ownedDbTable } from '../db/writeOwner';
 import { authorizeProviderCall, recordProviderUsage } from './providers/providerCostGovernor';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
@@ -159,8 +161,22 @@ function createGenericSerpProvider(): SerpAcquisitionProvider | null {
   };
 }
 
-function createSerpApiProvider(): SerpAcquisitionProvider | null {
-  const apiKey = process.env.SERPAPI_KEY || process.env.SERP_INTELLIGENCE_SERPAPI_KEY;
+/**
+ * SerpAPI provider.
+ *
+ * The credential comes from `resolveProviderCredential('serpapi')` and nowhere else. This
+ * factory previously read `SERPAPI_KEY || SERP_INTELLIGENCE_SERPAPI_KEY` directly, which
+ * could not see a Super Admin managed credential and missed the descriptor's canonical
+ * names (`SERPAPI_API_KEY`, `SERP_API_KEY`) — so a correctly configured SerpAPI account
+ * produced no provider at all and this path silently no-opped.
+ *
+ * Resolution is asynchronous, which is why this factory (and the construction path above
+ * it) is async. The `null` return is preserved exactly: no credential still means no
+ * provider, rather than a provider object that fails on first use.
+ */
+async function createSerpApiProvider(): Promise<SerpAcquisitionProvider | null> {
+  const credential = await resolveProviderCredential('serpapi');
+  const apiKey = credential.value;
   if (!apiKey) return null;
   return {
     id: 'serpapi',
@@ -264,26 +280,34 @@ function createDataForSeoProvider(): SerpAcquisitionProvider | null {
   };
 }
 
-export function configuredSerpProviders(): SerpAcquisitionProvider[] {
+/**
+ * Async because SerpAPI's credential resolves through the canonical provider resolver.
+ * Priority order, the null-means-unconfigured contract and the resulting provider list are
+ * unchanged; only how the SerpAPI credential is obtained differs.
+ */
+export async function configuredSerpProviders(): Promise<SerpAcquisitionProvider[]> {
   const requested = String(process.env.SERP_PROVIDER_PRIORITY ?? 'dataforseo,serpapi,scaleserp,generic')
     .split(',')
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
-  const factories: Record<string, () => SerpAcquisitionProvider | null> = {
+  const factories: Record<string, () => SerpAcquisitionProvider | null | Promise<SerpAcquisitionProvider | null>> = {
     dataforseo: createDataForSeoProvider,
     serpapi: createSerpApiProvider,
     scaleserp: createScaleSerpProvider,
     generic: createGenericSerpProvider,
     compliant_api: createGenericSerpProvider,
   };
-  return requested.flatMap((key) => {
-    const provider = factories[key]?.() ?? null;
-    return provider ? [provider] : [];
-  });
+  // Sequential rather than Promise.all so the requested priority order is preserved exactly.
+  const providers: SerpAcquisitionProvider[] = [];
+  for (const key of requested) {
+    const provider = (await factories[key]?.()) ?? null;
+    if (provider) providers.push(provider);
+  }
+  return providers;
 }
 
-export function getConfiguredSerpProviderHealth(): SerpProviderHealth[] {
-  const providers = configuredSerpProviders();
+export async function getConfiguredSerpProviderHealth(): Promise<SerpProviderHealth[]> {
+  const providers = await configuredSerpProviders();
   const configured = new Set(providers.map((provider) => provider.id));
   return (['dataforseo', 'serpapi', 'scaleserp', 'compliant_api'] as SerpProviderId[]).map((id) =>
     configuredProviderHealth(id, configured.has(id)),
@@ -316,8 +340,8 @@ async function recordProviderHealth(params: {
   });
 }
 
-export function createConfiguredSerpApiProvider(): SerpAcquisitionProvider | null {
-  const providers = configuredSerpProviders();
+export async function createConfiguredSerpApiProvider(): Promise<SerpAcquisitionProvider | null> {
+  const providers = await configuredSerpProviders();
   if (providers.length === 0) return null;
   if (providers.length === 1) return providers[0];
   const health = new Map<SerpProviderId, SerpProviderHealth>();

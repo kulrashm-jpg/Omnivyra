@@ -19,12 +19,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
   }
 
-  const provider = createConfiguredSerpApiProvider();
+  const provider = await createConfiguredSerpApiProvider();
   if (!provider) {
     return res.status(200).json({
       ok: false,
       status: 'provider_not_configured',
-      provider_health: getConfiguredSerpProviderHealth(),
+      provider_health: await getConfiguredSerpProviderHealth(),
       message: 'No compliant SERP provider is configured; no acquisition was attempted.',
     });
   }
@@ -51,7 +51,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ok: acquisition.status === 'completed' || acquisition.status === 'partial' || acquisition.status === 'skipped',
     seeding,
     acquisition,
-    provider_health: getConfiguredSerpProviderHealth(),
+    provider_health: await getConfiguredSerpProviderHealth(),
     external_competitive_status: refreshed.external_competitive_intelligence.status,
     serp_snapshot_count: refreshed.external_competitive_intelligence.freshness.serp_snapshot_count,
     competitor_domain_count: refreshed.external_competitive_intelligence.freshness.competitor_domain_count,
