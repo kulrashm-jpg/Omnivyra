@@ -177,13 +177,19 @@ export interface SnapshotReport {
   };
   geo_aeo_executive_summary: {
     overall_ai_visibility_score: number;
+    /**
+     * NULLABLE, matching the canonical declaration in `snapshotReportTypes.ts`: when AI
+     * visibility is `insufficient_signal` or `unavailable` there is no diagnosis to make,
+     * and the report must say nothing rather than assert a generic AEO deficiency.
+     * Consumers must handle null.
+     */
     primary_gap: {
       title: string;
       type: 'answer_gap' | 'entity_gap' | 'structure_gap';
       severity: 'critical' | 'moderate' | 'low';
       reasoning: string;
       if_not_addressed: string;
-    };
+    } | null;
     top_3_actions: Array<{
       action_title: string;
       priority: 'high' | 'medium' | 'low';

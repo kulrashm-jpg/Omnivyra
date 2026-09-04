@@ -246,13 +246,20 @@ export type ReportViewGeoAeoVisuals = {
 export type ReportViewGeoAeoExecutiveSummary = {
   overallAiVisibilityScore: number | null;
   overallAiVisibilityScoreState: ScoreState;
+  /**
+   * Null when AI evidence is insufficient to name a primary gap. `geoAeoSummaryHelpers`
+   * withholds it deliberately in that case, so the view layer must be able to represent
+   * its absence rather than substitute placeholder copy.
+   *
+   * The competitor summary's `primaryGap` is a SEPARATE contract and stays non-null.
+   */
   primaryGap: {
     title: string;
     type: 'answer_gap' | 'entity_gap' | 'structure_gap';
     severity: 'critical' | 'moderate' | 'low';
     reasoning: string;
     ifNotAddressed: string;
-  };
+  } | null;
   top3Actions: Array<{
     actionTitle: string;
     priority: 'high' | 'medium' | 'low';

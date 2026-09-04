@@ -10,6 +10,17 @@ import {
 } from './drawingHelpers';
 import type { PDFDoc, PdfNextStep, PdfReportPayload } from './pdfTypes';
 
+/**
+ * Copy used when the GEO/AEO summary carries no primary gap.
+ *
+ * The snapshot builder sets `primary_gap: null` when AI evidence is insufficient to name
+ * one. The export must state that absence rather than substitute a placeholder gap, which
+ * would read as a finding the report never measured.
+ */
+const NO_PRIMARY_GAP_TITLE = 'Primary gap not determined';
+const NO_PRIMARY_GAP_BODY =
+  'AI answer evidence was insufficient to identify a primary gap for this snapshot.';
+
 type SnapshotRendererParams = {
   doc: PDFDoc;
   pageWidth: number;
@@ -348,7 +359,10 @@ export function renderSnapshotPdfDynamic({
     });
   }
 
-  if (geo && (hasMeaningfulText(geo.primaryGap.reasoning) || geoVisuals)) {
+  // `geo.primaryGap` is null when AI evidence was insufficient to name one. The section
+  // still renders whenever there are answer-readiness visuals, but it states the
+  // abstention instead of inventing a gap title, severity, reasoning or consequence.
+  if (geo && (hasMeaningfulText(geo.primaryGap?.reasoning) || geoVisuals)) {
     drawRule();
     drawSectionTitle('GEO/AEO', 'AI Answer Visibility', 'Only included when answer-readiness signals are present.');
     drawSectionMetaPills([
@@ -356,9 +370,11 @@ export function renderSnapshotPdfDynamic({
       { type: 'label', value: 'Answer readiness' },
     ]);
     drawCard({
-      title: geo.primaryGap.title,
+      title: geo.primaryGap ? geo.primaryGap.title : NO_PRIMARY_GAP_TITLE,
       bodyLines: [
-        buildUniqueSectionNarrative('geo', [geo.primaryGap.reasoning], 2, ''),
+        geo.primaryGap
+          ? buildUniqueSectionNarrative('geo', [geo.primaryGap.reasoning], 2, '')
+          : NO_PRIMARY_GAP_BODY,
         geoVisuals
           ? `Coverage ${geoVisuals.aiAnswerPresenceRadar.answer_coverage_score ?? 'N/A'} | Citation ${geoVisuals.aiAnswerPresenceRadar.citation_readiness_score ?? 'N/A'}`
           : '',

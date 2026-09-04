@@ -43,7 +43,9 @@ export function buildTemplateVariables(payload: PdfReportPayload): Record<string
   const competitorSummary = safeText(payload.competitorIntelligenceSummary?.primaryGap.reasoning, 1);
   const decisionSummary = safeText(payload.decisionSnapshot?.whatToFixFirst, 1);
   const opportunitySummary = safeText(seo?.growthOpportunity?.title || seo?.growthOpportunity?.estimatedUpside, 1);
-  const geoSummary = safeText(geo?.primaryGap.reasoning || geo?.visibilityOpportunity?.title, 1);
+  // `primaryGap` is null when AI evidence could not name one; the optional chain stops at
+  // `geo`, so it must be guarded here or the export throws on an abstaining snapshot.
+  const geoSummary = safeText(geo?.primaryGap?.reasoning || geo?.visibilityOpportunity?.title, 1);
   const confidenceSummary = safeText(payload.confidenceSource, 1);
   const scoreLimitingFactors = (payload.scoreExplanation?.limitingFactors ?? [])
     .map((item) => safeText(item, 1))
@@ -146,7 +148,7 @@ export function buildTemplateVariables(payload: PdfReportPayload): Record<string
     crawl_depth: safeScore(visuals?.crawlHealthBreakdown.crawl_depth_issues),
     insight_title_1: safeText(seo?.primaryProblem.title || 'Primary constraint', 1),
     insight_text_1: safeText(seo?.primaryProblem.reasoning || payload.diagnosis, 1),
-    insight_title_2: safeText(geo?.primaryGap.title || 'Growth opportunity', 1),
+    insight_title_2: safeText(geo?.primaryGap?.title || 'Growth opportunity', 1),
     insight_text_2: geoSummary,
     insight_title_3: safeText(payload.competitorIntelligenceSummary?.primaryGap.title || 'Execution implication', 1),
     insight_text_3: competitorSummary,

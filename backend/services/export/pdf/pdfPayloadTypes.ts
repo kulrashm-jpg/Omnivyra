@@ -191,12 +191,13 @@ export type PdfReportPayload = {
   };
   geoAeoExecutiveSummary?: {
     overallAiVisibilityScore: number;
+    /** Null when AI evidence is insufficient to name a primary gap. */
     primaryGap: {
       title: string;
       type: 'answer_gap' | 'entity_gap' | 'structure_gap';
       severity: 'critical' | 'moderate' | 'low';
       reasoning: string;
-    };
+    } | null;
     top3Actions: Array<{
       actionTitle: string;
       priority: 'high' | 'medium' | 'low';

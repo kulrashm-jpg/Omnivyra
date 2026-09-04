@@ -253,12 +253,13 @@ export interface ReportData {
   };
   geoAeoExecutiveSummary?: {
     overallAiVisibilityScore: number;
+    /** Null when AI evidence is insufficient to name a primary gap — see reportViewTypes. */
     primaryGap: {
       title: string;
       type: 'answer_gap' | 'entity_gap' | 'structure_gap';
       severity: 'critical' | 'moderate' | 'low';
       reasoning: string;
-    };
+    } | null;
     top3Actions: {
       actionTitle: string;
       priority: 'high' | 'medium' | 'low';
