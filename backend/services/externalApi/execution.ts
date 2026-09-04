@@ -30,6 +30,9 @@ const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
 const AUTH_TYPES_REQUIRING_KEY = new Set(['api_key', 'bearer', 'query', 'header']);
 
+/** Stand-in for a credential in any record that may be surfaced to a caller. */
+const REDACTED_CREDENTIAL = '__REDACTED_CREDENTIAL__';
+
 const resolveAccessApiKeyEnvName = (
   source: ExternalApiSource,
   access?: { api_key_env_name?: string | null } | null
@@ -363,6 +366,25 @@ export const buildExternalApiRequest = (
     if (typeof value === 'undefined' || value === null || value === '') return;
     url.searchParams.set(key, value);
   });
+
+  // SECURITY: `resolveRecordPlaceholders(..., maskSecrets: true)` masks {{PLACEHOLDER}}
+  // tokens only. The credential injected above is a LITERAL that was already substituted,
+  // so it passed through the masked variants untouched — `maskedHeaders` really did carry
+  // `Bearer <secret>`. Redact the injected value explicitly, and do it BEFORE `maskedUrl`
+  // is assembled, so neither the masked headers nor the masked URL can carry a credential
+  // or a fragment of one.
+  if (apiKeyValue) {
+    for (const [key, value] of Object.entries(maskedHeaders.resolved)) {
+      if (typeof value === 'string' && value.includes(apiKeyValue)) {
+        maskedHeaders.resolved[key] = value.split(apiKeyValue).join(REDACTED_CREDENTIAL);
+      }
+    }
+    for (const [key, value] of Object.entries(maskedQuery.resolved)) {
+      if (typeof value === 'string' && value.includes(apiKeyValue)) {
+        maskedQuery.resolved[key] = value.split(apiKeyValue).join(REDACTED_CREDENTIAL);
+      }
+    }
+  }
 
   const maskedUrl = new URL(baseUrl);
   Object.entries(maskedQuery.resolved).forEach(([key, value]) => {
