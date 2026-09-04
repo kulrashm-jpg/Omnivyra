@@ -58,6 +58,13 @@ type HeaderChildItem = {
   href: string;
   description: string;
   contentSectionId?: ContentNavSection['id'];
+  /**
+   * Optional sub-group heading. The dropdown renders one flat list, so a third
+   * hierarchy level is expressed as a labelled section rather than a nested menu:
+   * Prospect > Lead Intelligence > Overview. Children without a group render
+   * exactly as before, so every existing menu is unchanged.
+   */
+  group?: string;
 };
 
 type HeaderNavItem = {
@@ -182,15 +189,40 @@ export const HEADER_NAV_ITEMS: HeaderNavItem[] = [
     ],
   },
   {
-    id: 'lead-intelligence',
-    label: 'Lead Intelligence',
-    href: '/lead-intelligence',
+    // PROSPECT-IA-001 — Prospect is the domain, not Lead Intelligence.
+    //
+    // `canonical_leads` IS the Prospect (prospectIntelligenceRead.ts maps
+    // prospectId -> canonical_leads.id), and Account and Person hang off that same
+    // row. Lead Intelligence is one lens over it, so it nests here rather than
+    // owning the top level. Account Intelligence is deliberately absent: the
+    // service exists but no UI does, and a menu entry to nothing is worse than
+    // no entry.
+    id: 'prospect',
+    label: 'Prospect',
+    href: '/prospects',
     icon: Radar,
-    description: 'One workspace for every lead source — capture setup, overview, list, and profiles.',
-    matchers: ['/lead-intelligence', '/website-setup', '/website-health', '/integrations', '/leads', '/lead-capture'],
+    description: 'The canonical prospect record and the lead intelligence read over it.',
+    // Website capture routes moved to Website & Capture, so '/integrations' and
+    // '/leads' are no longer claimed here — they were the only source of a
+    // double-active state between the two groups.
+    matchers: ['/prospects', '/lead-intelligence'],
     children: [
-      { label: 'Overview', href: '/lead-intelligence', description: 'Totals, intent, source and status distribution.' },
-      { label: 'All Leads', href: '/lead-intelligence?tab=leads', description: 'Unified, searchable list across every source.' },
+      { label: 'Prospects', href: '/prospects', description: 'Every prospect this company has, newest first.' },
+      { label: 'Overview', href: '/lead-intelligence', group: 'Lead Intelligence', description: 'Totals, intent, source and status distribution.' },
+      { label: 'All Leads', href: '/lead-intelligence?tab=leads', group: 'Lead Intelligence', description: 'Unified, searchable list across every source.' },
+    ],
+  },
+  {
+    // Source plumbing, not prospect intelligence: these configure how leads are
+    // captured and which systems feed them. They sat under Lead Intelligence and
+    // made that menu two unrelated concerns at once.
+    id: 'website-capture',
+    label: 'Website & Capture',
+    href: '/website-setup',
+    icon: Link2,
+    description: 'Website connection, tracking, forms and lead capture.',
+    matchers: ['/website-setup', '/website-health', '/integrations', '/leads', '/lead-capture'],
+    children: [
       { label: 'Website Setup', href: '/website-setup', description: 'Connect a website, verify your domain, install tracking, and activate lead capture.' },
       { label: 'Website Health', href: '/website-health', description: 'Operational command center: integration, tracking, lead capture, intelligence & one-click validation.' },
       { label: 'Website Integrations', href: '/integrations?focus=website', description: 'Manage CMS connections and lead webhooks.' },
@@ -560,19 +592,29 @@ export function NavDropdown({
       ) : open ? (
         <div className="absolute left-0 top-full z-50 mt-1.5 w-[272px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
           <div className="space-y-0.5 p-1">
-            {item.children.map((child) => {
+            {item.children.map((child, childIndex) => {
               const childActive = isPathMatch(router.pathname, child.href);
+              // A third hierarchy level inside a flat dropdown: the group name is
+              // rendered once, when it changes. Ungrouped children are untouched.
+              const previousGroup = childIndex > 0 ? item.children[childIndex - 1].group : undefined;
+              const showGroupHeading = Boolean(child.group) && child.group !== previousGroup;
               return (
-                <Link
-                  key={child.href}
-                  href={child.href}
-                  className={`block rounded-lg px-2.5 py-1.5 transition-colors ${
-                    childActive ? 'bg-sky-50 text-sky-800' : 'text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  <div className="text-sm font-semibold leading-4.5">{child.label}</div>
-                  <div className="mt-0.5 text-[11px] leading-4 text-slate-500">{child.description}</div>
-                </Link>
+                <React.Fragment key={child.href}>
+                  {showGroupHeading ? (
+                    <div className="px-2.5 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                      {child.group}
+                    </div>
+                  ) : null}
+                  <Link
+                    href={child.href}
+                    className={`block rounded-lg px-2.5 py-1.5 transition-colors ${
+                      childActive ? 'bg-sky-50 text-sky-800' : 'text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="text-sm font-semibold leading-4.5">{child.label}</div>
+                    <div className="mt-0.5 text-[11px] leading-4 text-slate-500">{child.description}</div>
+                  </Link>
+                </React.Fragment>
               );
             })}
           </div>
