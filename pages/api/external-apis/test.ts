@@ -6,9 +6,24 @@ import { normalizeExternalTrends } from '../../../backend/services/trendNormaliz
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { assertTestableEnvVarName } from '../../../backend/services/externalApi/testEnvAllowlist';
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_RESPONSE_CHARS = 2000;
+
+/** Auth types whose request actually carries the resolved credential. */
+const AUTH_TYPES_CONSUMING_KEY = new Set(['api_key', 'bearer', 'query', 'header']);
+
+/**
+ * Returned instead of the provider body when the request carried a credential.
+ *
+ * The body is attacker-influenced content: a caller-chosen `base_url` can echo the
+ * Authorization header or `apiKey` query parameter straight back, turning a connectivity
+ * check into a credential read. Status, ok and latency are enough to diagnose connectivity
+ * and cannot carry credential material.
+ */
+const CREDENTIAL_BODY_WITHHELD =
+  'Response body withheld: this request carried a credential, and provider content can reflect it.';
 
 const normalizeError = (error: any) => {
   if (error?.name === 'AbortError') return 'Request timed out';
@@ -49,6 +64,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!validation.ok) {
     return res.status(400).json({ error: validation.message || 'Invalid config' });
   }
+
+  // ── SECURITY: the credential this test may resolve ────────────────────────
+  //
+  // `api_key_env_name` arrives from the request body and previously reached
+  // `process.env[name]` unrestricted, so any server secret could be resolved and sent to
+  // the caller's own `base_url`. Only names the application already declares as
+  // external-API credentials are testable. See testEnvAllowlist.ts.
+  const envDecision = await assertTestableEnvVarName(input.api_key_env_name);
+  if (!envDecision.allowed) {
+    return res.status(400).json({
+      error: 'Unsupported api_key_env_name',
+      code: 'ENV_VAR_NOT_TESTABLE',
+      detail: envDecision.reason,
+    });
+  }
+  // A credential is only in play when the auth type actually consumes one.
+  const authTypeForTest = String(input.auth_type || 'none');
+  const credentialInPlay =
+    Boolean(envDecision.envName) && AUTH_TYPES_CONSUMING_KEY.has(authTypeForTest);
 
   try {
     const source = {
@@ -150,12 +184,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         stats: getCacheStats(),
       },
       health: null,
-      normalized_trends: normalizedTrends,
+      // SECURITY: derived from the provider payload, so it is withheld on the same
+      // condition as the body — reflected content must not re-enter through normalisation.
+      normalized_trends: credentialInPlay ? [] : normalizedTrends,
       response: {
         ok: responseOk,
         status: responseStatus,
         statusText: responseStatusText,
-        body: parsed,
+        // SECURITY: withheld when the request carried a credential — see
+        // CREDENTIAL_BODY_WITHHELD. Unauthenticated tests keep the full body.
+        body: credentialInPlay ? CREDENTIAL_BODY_WITHHELD : parsed,
       },
     });
   } catch (error: any) {
