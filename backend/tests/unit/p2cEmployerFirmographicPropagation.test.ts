@@ -35,6 +35,13 @@ jest.mock('../../services/prospectIdentity/accountResolution', () => ({
   attachPersonToAccount: jest.fn(async () => undefined),
 }));
 
+jest.mock('../../services/prospectIdentity/prospectResolution', () => ({
+  resolveOrCreateProspect: jest.fn(async () => ({
+    organizationId: 'org', prospectId: 'prospect-1', subjectId: 'subject-1',
+    outcome: 'created', externalLeadKey: 'K1', reason: 'created',
+  })),
+}));
+
 jest.mock('../../services/prospectIdentity/personDuplicates', () => ({
   detectAndParkDuplicates: jest.fn(async () => ({ detected: [], parked: 0, alreadyOpen: 0 })),
 }));

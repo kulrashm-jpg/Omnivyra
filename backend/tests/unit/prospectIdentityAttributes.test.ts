@@ -108,6 +108,9 @@ describe('toPersonAttributes', () => {
       fullName: 'Ada Lovelace', firstName: 'Ada', lastName: 'Lovelace',
       jobTitle: 'Head of Engines', department: 'Engineering', seniority: 'head',
       countryCode: 'GB', region: 'England', city: 'London', timezone: 'Europe/London',
+      // WS-7 (FR-21). Absent from the input, so null — the normaliser invents
+      // nothing, exactly as it does for every other unasserted field.
+      authority: null, influence: null, buyingRole: null,
     });
   });
 
@@ -144,10 +147,11 @@ describe('toAccountAttributes', () => {
     })).toEqual({
       industry: 'Software', employeeCount: 240, employeeBand: '201-500',
       countryCode: 'GB', region: 'England', city: 'London', description: 'A company',
-      // P2A widened the shape. Absent input still yields null for every new
-      // attribute — the normaliser invents nothing.
+      // P2A widened the shape, then WS-6 widened it again. Absent input still
+      // yields null for every new attribute — the normaliser invents nothing.
       annualRevenue: null, revenueBand: null, foundedYear: null,
       technologies: null, fundingStage: null, lastFundingAt: null,
+      market: null, businessModel: null, growthStage: null,
     });
   });
 
@@ -172,19 +176,32 @@ describe('toAccountAttributes', () => {
 });
 
 describe('column lists match the migration', () => {
-  it('person has the 12 LI-1 columns', () => {
+  it('person has the LI-1 columns plus the WS-7 buying-role surface', () => {
+    // WS-7 (FR-21) added three. The property this test protects is unchanged:
+    // the person attribute surface carries ATTRIBUTES only — never an identity
+    // column, and never a profile identifier (asserted below).
     expect([...PERSON_ATTRIBUTE_COLUMNS]).toEqual([
       'full_name', 'first_name', 'last_name', 'job_title', 'department', 'seniority',
-      'country_code', 'region', 'city', 'timezone', 'attributes_source', 'attributes_updated_at']);
+      'country_code', 'region', 'city', 'timezone',
+      'authority', 'influence', 'buying_role',
+      'attributes_source', 'attributes_updated_at']);
+    // Strengthened with WS-7: the person surface must carry no identity column
+    // either — the same guarantee the account list has always had.
+    for (const c of PERSON_ATTRIBUTE_COLUMNS) {
+      expect(['primary_email', 'primary_phone', 'external_keys', 'account_id', 'company_id'])
+        .not.toContain(c);
+    }
   });
 
   it('account has the LI-1 columns plus the P2A firmographics, and no identity column', () => {
-    // P2A added six. The property this test protects is unchanged: the account
-    // attribute surface carries FIRMOGRAPHICS only — never an identity column.
+    // P2A added six; WS-6 (FR-16) added three more. The property this test
+    // protects is unchanged: the account attribute surface carries
+    // FIRMOGRAPHICS only — never an identity column.
     expect([...ACCOUNT_ATTRIBUTE_COLUMNS]).toEqual([
       'industry', 'employee_count', 'employee_band', 'country_code', 'region', 'city',
       'description',
       'annual_revenue', 'revenue_band', 'founded_year', 'technologies', 'funding_stage', 'last_funding_at',
+      'market', 'business_model', 'growth_stage',
       'attributes_source', 'attributes_updated_at']);
     for (const c of ACCOUNT_ATTRIBUTE_COLUMNS) {
       expect(['name', 'legal_name', 'domain_normalized', 'website_url', 'source', 'source_reference'])

@@ -52,7 +52,7 @@ describe('LI-D301/303/305 new contributors abstain-safe', () => {
 describe('Phase C preserved: base context assembles identically with new engines present', () => {
   it('new engines contribute nothing when their inputs are absent', () => {
     const { understanding, engines } = assembleLeadUnderstanding(base());
-    expect(engines.length).toBe(11); // 8 (C) + 3 (D) all run; D ones abstain
+    expect(engines.length).toBe(12); // 9 (C) + 3 (D) all run; D ones abstain
     expect(engines.filter((e) => ['enrichment', 'behavioral', 'strategic'].includes(e.engine)).every((e) => e.abstained)).toBe(true);
     expect(understanding.score.dimensions.intent.value).toBeGreaterThan(0); // intent still from Phase C intent engine
   });

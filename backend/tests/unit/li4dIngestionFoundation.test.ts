@@ -61,6 +61,19 @@ jest.mock('../../services/prospectIdentity/accountResolution', () => ({
   }),
 }));
 
+// WS-4 wired the canonical Prospect step into the chain. Mocked here at the
+// same service level as every other step, so this suite keeps testing the
+// ORDER and the error semantics rather than WS-1's internals.
+let prospectThrows: Error | null = null;
+jest.mock('../../services/prospectIdentity/prospectResolution', () => ({
+  resolveOrCreateProspect: jest.fn(async () => {
+    calls.push('prospect');
+    if (prospectThrows) throw prospectThrows;
+    return { organizationId: 'org', prospectId: 'prospect-1', subjectId: 'subject-1',
+      outcome: 'created', externalLeadKey: 'K1', reason: 'created' };
+  }),
+}));
+
 jest.mock('../../services/prospectIdentity/personDuplicates', () => ({
   detectAndParkDuplicates: jest.fn(async (input: Record<string, unknown>) => {
     calls.push('duplicates');
@@ -230,7 +243,9 @@ describe('LI-4D — 3. provider-neutral orchestration', () => {
   it('runs the chain in the required order', async () => {
     registerLeadSourceAdapter(fakeAdapter());
     await ingestLeadBatch({ organizationId: ORG_A, source: 'test_source', records: [row({ domain: 'acme.test' })] });
-    expect(calls).toEqual(['identity', 'account', 'provenance', 'duplicates']);
+    // WS-4: the Prospect is resolved after the employer and before provenance,
+    // so the source record is written once the canonical row it describes exists.
+    expect(calls).toEqual(['identity', 'account', 'prospect', 'provenance', 'duplicates']);
   });
 
   it('an unsupported source fails the batch before anything is written', async () => {
@@ -589,7 +604,10 @@ describe('LI-4D — 15. no bypass is possible', () => {
     const translated = fakeAdapter().translate(row(), ORG_A);
     const o = await ingestNormalizedRecord(translated);
     expect(o.ok).toBe(true);
-    expect(calls).toEqual(['identity', 'provenance', 'duplicates']);
+    // No employer evidence, so 'account' is absent — but the Prospect step
+    // always runs: WS-1 decides for itself that a keyless record resolves to
+    // nothing, rather than the orchestrator pre-judging it.
+    expect(calls).toEqual(['identity', 'prospect', 'provenance', 'duplicates']);
   });
 
   it('the ingestion modules perform no outreach, governance or transport', () => {

@@ -7,6 +7,7 @@
  *     -> validate
  *     -> identity          (W1  resolveUnifiedPerson)
  *     -> account           (W4  resolveOrCreateAccount / attachPersonToAccount)
+ *     -> prospect          (WS-1 resolveOrCreateProspect)
  *     -> provenance        (LI-2 ingestSourceRecord)
  *     -> duplicate parking (LI-4C detectAndParkDuplicates)
  *
@@ -32,6 +33,9 @@
 import { ingestSourceRecord } from '../prospectIdentity/ingestionBoundary';
 import { resolveUnifiedPerson } from '../identityResolutionService';
 import { resolveOrCreateAccount, attachPersonToAccount } from '../prospectIdentity/accountResolution';
+import { resolveOrCreateProspect } from '../prospectIdentity/prospectResolution';
+import { planProspectEnrichment, type EnrichmentPorts } from '../enrichment/service';
+import { ingestionEnrichmentCoverage } from './enrichmentCoverage';
 import { detectAndParkDuplicates } from '../prospectIdentity/personDuplicates';
 import type { AccountAttributes } from '../prospectIdentity/attributes';
 import {
@@ -162,7 +166,24 @@ async function resolveAccount(
  */
 export async function ingestNormalizedRecord(
   result: AdapterResult,
-  options: { ingestionRunId?: string | null; now?: string } = {},
+  options: {
+    ingestionRunId?: string | null;
+    now?: string;
+    /**
+     * WS-2 seam ports. OPTIONAL by design: without them no enrichment planning
+     * happens and ingestion behaves exactly as before, so wiring the planner
+     * adds no reads to the hot path and no new failure mode for callers that
+     * do not want it. Enrichment is never a prerequisite for the canonical
+     * Prospect — the plan is produced AFTER the Prospect already exists.
+     */
+    enrichmentPorts?: EnrichmentPorts;
+    /** Attributes the caller's next action needs. Absent by default: inventing
+     *  one here would be downstream sales logic WS-5/WS-8/WS-9 own. */
+    requiredForNextAction?: readonly string[];
+    /** Freshness policy. Absent means WS-2's documented default; WS-4 invents
+     *  no business freshness period of its own. */
+    stalenessDays?: number;
+  } = {},
 ): Promise<IngestionRecordOutcome> {
   const record = result.normalized;
   const at = options.now ?? new Date().toISOString();
@@ -210,6 +231,71 @@ export async function ingestNormalizedRecord(
     if (accountId && personId) await attachPersonToAccount(record.organizationId, personId, accountId);
   } catch (e) {
     return fail(externalId, 'account_resolution_failed', e);
+  }
+
+  // ── PROSPECT (WS-1) ─────────────────────────────────────────────────────
+  // C-2 froze `canonical_leads` as the canonical Prospect, and until now this
+  // orchestrator never produced one: it resolved a person, an account and
+  // provenance and returned no prospect id, so BR-01 was unsatisfiable by
+  // intake. This step closes that, and does nothing else — the rules live in
+  // WS-1's resolver and are not restated here.
+  //
+  // Placed AFTER identity and employer so the Prospect can be anchored to an
+  // already-resolved person, and BEFORE provenance so the source record is
+  // written once the canonical row it describes exists.
+  //
+  // A record with no `externalId` yields `insufficient_evidence` and a null
+  // prospectId. That is NOT a failure: partial records must still ingest, and
+  // WS-1 refuses to synthesise an identity key precisely because a fabricated
+  // one would mint a new Prospect on every replay. Only a genuine resolver
+  // error fails the record, matching how employer resolution already behaves.
+  let prospectId: string | null = null;
+  try {
+    const prospect = await resolveOrCreateProspect(record.organizationId, {
+      externalLeadKey: record.externalId,
+      source: record.source,
+      personId,
+      email: record.person?.email ?? null,
+      phone: record.person?.phone ?? null,
+      fullName: record.person?.fullName ?? null,
+    }, at);
+    prospectId = prospect.prospectId;
+  } catch (e) {
+    return fail(externalId, 'prospect_resolution_failed', e);
+  }
+
+  // ── ENRICHMENT PLAN (WS-2 seam) ─────────────────────────────────────────
+  // Planning runs only when the caller supplied ports, and only once a
+  // canonical Prospect exists — a plan is about a Prospect, and there is
+  // nothing to plan for a record that resolved to none.
+  //
+  // It NEVER fails the record. A planning failure means we could not decide
+  // what to enrich; the person, employer and evidence are still durable and
+  // the record is still a successful ingestion. Reporting it as a failure
+  // would discard good intake over an advisory step.
+  let enrichmentPlan: IngestionRecordOutcome['enrichmentPlan'];
+  if (options.enrichmentPorts && prospectId) {
+    try {
+      const { plan } = await planProspectEnrichment({
+        organizationId: record.organizationId,
+        prospectId,
+        // Derived from the catalogue, never declared here. Today the enrichment
+        // group holds no available source, so every gap is honestly reported as
+        // no_available_source rather than pointed at an intake adapter.
+        coverage: ingestionEnrichmentCoverage(),
+        requiredForNextAction: options.requiredForNextAction,
+        stalenessDays: options.stalenessDays,
+        now: at,
+      }, options.enrichmentPorts);
+      enrichmentPlan = {
+        planned: plan.toEnrich.length,
+        counts: plan.counts,
+        noAvailableSource: plan.fields.filter((f) => f.action === 'no_available_source').length,
+        needsResolution: plan.fields.filter((f) => f.action === 'needs_resolution').length,
+      };
+    } catch (e) {
+      enrichmentPlan = { planned: 0, error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   // ── PROVENANCE ──────────────────────────────────────────────────────────
@@ -317,6 +403,7 @@ export async function ingestNormalizedRecord(
         sourceRecordId: ingestion.sourceRecordId,
         personId,
         accountId,
+        prospectId,
       };
     }
   }
@@ -327,6 +414,8 @@ export async function ingestNormalizedRecord(
     sourceRecordId: ingestion.sourceRecordId,
     personId,
     accountId,
+    prospectId,
+    enrichmentPlan,
     provenanceOutcome: ingestion.outcome,
     canonicalApplied: ingestion.canonicalApplied,
     canonicalWithheld: ingestion.canonicalWithheld,

@@ -11,8 +11,10 @@
  *      service-level gate stops the chain before its first write — the reason
  *      the gate exists at two levels rather than one.
  *
- * The four write dependencies are doubled so a call to ANY of them is a
- * detectable failure of the gate, not merely an unasserted side effect.
+ * EVERY write dependency of the chain is doubled so a call to ANY of them is a
+ * detectable failure of the gate, not merely an unasserted side effect. That
+ * list has to grow whenever the chain does: WS-1's prospect resolver is the
+ * most recent addition, and it writes `canonical_users` and `canonical_leads`.
  */
 
 const writes: string[] = [];
@@ -44,6 +46,16 @@ jest.mock('../../services/prospectIdentity/ingestionBoundary', () => ({
       sourceRecordId: 'sr-1', outcome: 'created',
       assertionsRecorded: 1, assertionsAlreadyPresent: 0,
       canonicalApplied: [], canonicalWithheld: [],
+    };
+  }),
+}));
+
+jest.mock('../../services/prospectIdentity/prospectResolution', () => ({
+  resolveOrCreateProspect: jest.fn(async () => {
+    writes.push('prospect');
+    return {
+      organizationId: 'org', prospectId: 'prospect-1', subjectId: 'subject-1',
+      outcome: 'created', externalLeadKey: 'EXT-1', reason: 'created',
     };
   }),
 }));
@@ -248,7 +260,7 @@ describe('enabled: the gate is a passthrough and existing behaviour is unchanged
     });
     expect(result.succeeded).toBe(1);
     expect(result.failed).toBe(0);
-    expect(writes).toEqual(['identity', 'provenance', 'duplicates']);
+    expect(writes).toEqual(['identity', 'prospect', 'provenance', 'duplicates']);
   });
 
   it("'1' enables the chain exactly as 'true' does", async () => {
@@ -270,6 +282,6 @@ describe('enabled: the gate is a passthrough and existing behaviour is unchanged
     expect(second).toMatchObject({ ok: false, rejection: 'ingestion_disabled' });
 
     // Only the first record's writes happened; the second added none.
-    expect(writes).toEqual(['identity', 'provenance', 'duplicates']);
+    expect(writes).toEqual(['identity', 'prospect', 'provenance', 'duplicates']);
   });
 });
