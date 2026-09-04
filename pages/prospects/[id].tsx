@@ -40,8 +40,8 @@ export default function ProspectDetailPage() {
               with the state the canonical services reported. Where a capability is not implemented or has not been
               evaluated, this page says so rather than showing a number.
             </p>
-            <Link href="/lead-intelligence" className="mt-3 inline-block text-xs font-medium text-purple-600 hover:underline">
-              ← Lead Intelligence workspace
+            <Link href="/prospects" className="mt-3 inline-block text-xs font-medium text-purple-600 hover:underline">
+              ← Prospects
             </Link>
           </header>
 
