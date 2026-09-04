@@ -47,6 +47,7 @@ import {
   type NormalizedIngestionRecord,
 } from './contracts';
 import { getLeadSourceAdapter, UnsupportedSourceError } from './registry';
+import { evaluateFeatureFlag } from '../featureFlagService';
 
 /** A batch bounded so a single call cannot be used to exhaust the platform. */
 export const MAX_BATCH_SIZE = 1_000;
@@ -66,6 +67,77 @@ export const MAX_BATCH_SIZE = 1_000;
 export function isLeadIngestionEnabled(): boolean {
   const raw = String(process.env.ENABLE_LEAD_INGESTION ?? '').trim().toLowerCase();
   return raw === '1' || raw === 'true';
+}
+
+/**
+ * The ONE flag key that governs prospect ingestion per tenant.
+ *
+ * Declared once and exported so an operator, a route and a test all name the
+ * same string. A second spelling anywhere would silently enable nobody.
+ */
+export const LEAD_INGESTION_FLAG_KEY = 'lead_ingestion';
+
+/** Why ingestion was permitted or refused for one tenant. */
+export interface IngestionGateDecision {
+  readonly allowed: boolean;
+  /** Machine-readable. Stable strings, safe to log. */
+  readonly reason: string;
+}
+
+/**
+ * THE canonical ingestion gate: the global kill switch AND the tenant's flag.
+ *
+ * ─── TWO SWITCHES, IN SERIES ──────────────────────────────────────────────
+ * `ENABLE_LEAD_INGESTION` remains the outer kill switch and is checked FIRST,
+ * because it is free: an operator who turns it off closes every tenant at once
+ * without a single database read. Only when it is on does the tenant's own
+ * `lead_ingestion` flag decide, so enabling one organisation never enables the
+ * other thirty-nine.
+ *
+ * ─── IT INTRODUCES NO FLAG SYSTEM ─────────────────────────────────────────
+ * Evaluation is `featureFlagService.evaluateFeatureFlag` over the existing
+ * org-scoped `feature_flags` table — the same mechanism billing already uses in
+ * production, with its own activation/rollback audit. Nothing here is
+ * PI-specific inside that service, and no schema is added.
+ *
+ * ─── IT FAILS CLOSED, ALWAYS ──────────────────────────────────────────────
+ * A missing tenant, a missing flag row, a disabled flag and a THROWN evaluation
+ * error all return `allowed: false`. An ingestion gate that opened because a
+ * lookup failed would be the one failure mode worth preventing above all
+ * others, so the catch below denies rather than propagating.
+ */
+export async function resolveLeadIngestionGate(
+  organizationId: string | null | undefined,
+): Promise<IngestionGateDecision> {
+  if (!isLeadIngestionEnabled()) {
+    return { allowed: false, reason: 'global_kill_switch_off' };
+  }
+  const org = String(organizationId ?? '').trim();
+  if (!org) {
+    // A tenant-scoped gate cannot answer without a tenant. Refusing is the only
+    // safe answer: the alternative is a global "yes" wearing tenant clothes.
+    return { allowed: false, reason: 'organization_required' };
+  }
+
+  try {
+    const result = await evaluateFeatureFlag({
+      organizationId: org,
+      flagKey: LEAD_INGESTION_FLAG_KEY,
+      // Ingestion is per-ORGANISATION, not per-user, so there is no cohort key
+      // to hash. A percentage rollout on this flag therefore resolves to
+      // `cohort_key_required_for_percent_rollout` — a refusal, which is the
+      // correct direction for a write surface.
+      cohortKey: null,
+    });
+    return result.enabled
+      ? { allowed: true, reason: `tenant_flag:${result.reason}` }
+      : { allowed: false, reason: `tenant_flag:${result.reason}` };
+  } catch (e) {
+    return {
+      allowed: false,
+      reason: `flag_evaluation_failed:${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
 }
 
 export interface IngestBatchInput {
@@ -183,6 +255,13 @@ export async function ingestNormalizedRecord(
     /** Freshness policy. Absent means WS-2's documented default; WS-4 invents
      *  no business freshness period of its own. */
     stalenessDays?: number;
+    /**
+     * The batch's already-resolved tenant gate. Supplied by `ingestLeadBatch`
+     * so one database read serves the whole batch instead of one per record.
+     * Omitted by a caller driving a single record, in which case the gate is
+     * resolved here — the surface is never left ungated either way.
+     */
+    gateDecision?: IngestionGateDecision;
   } = {},
 ): Promise<IngestionRecordOutcome> {
   const record = result.normalized;
@@ -199,8 +278,24 @@ export async function ingestNormalizedRecord(
   // the chain — so a flag flipped mid-batch stops the next record rather than
   // interrupting one already part-written. Nothing here is a rollback: it is
   // simply a boundary the write path has not yet crossed.
+  //
+  // The KILL SWITCH is re-read per record because it is free, which is what
+  // preserves the mid-batch-flip guarantee exactly as before. The TENANT flag
+  // is a database read, so a batch resolves it once and passes it in via
+  // `gateDecision`; a caller driving a single record without a batch supplies
+  // nothing and it is resolved here, so that surface stays closed.
   if (!isLeadIngestionEnabled()) {
     return fail(externalId, 'ingestion_disabled', new Error('lead ingestion is disabled'));
+  }
+
+  const gate = options.gateDecision
+    ?? await resolveLeadIngestionGate(record?.organizationId);
+  if (!gate.allowed) {
+    return fail(
+      externalId,
+      'ingestion_disabled',
+      new Error(`lead ingestion is not enabled for this tenant (${gate.reason})`),
+    );
   }
 
   const invalid = validateNormalizedRecord(record);
@@ -448,6 +543,27 @@ export async function ingestLeadBatch(input: IngestBatchInput): Promise<Ingestio
   const at = input.now ?? new Date().toISOString();
   const outcomes: IngestionRecordOutcome[] = [];
 
+  // ── TENANT GATE, ONCE PER BATCH ─────────────────────────────────────────
+  // Resolved here rather than per record because it is a database read, and
+  // passed down so every record is judged by the same decision. A refused
+  // tenant fails the WHOLE batch before a single adapter runs — there is
+  // nothing to translate for a tenant that may not ingest.
+  const gateDecision = await resolveLeadIngestionGate(organizationId);
+  if (!gateDecision.allowed) {
+    return {
+      organizationId,
+      source,
+      total: records.length,
+      succeeded: 0,
+      failed: records.length,
+      outcomes: records.map(() => fail(
+        null,
+        'ingestion_disabled',
+        new Error(`lead ingestion is not enabled for this tenant (${gateDecision.reason})`),
+      )),
+    };
+  }
+
   // An unsupported source fails the WHOLE batch, and before anything is written:
   // there is no adapter, so not one record could be translated anyway.
   let adapter;
@@ -500,6 +616,9 @@ export async function ingestLeadBatch(input: IngestBatchInput): Promise<Ingestio
     outcomes.push(await ingestNormalizedRecord(translated, {
       ingestionRunId: input.ingestionRunId ?? null,
       now: at,
+      // One decision for the batch. The kill switch is still re-read per
+      // record inside, so a mid-batch flip still stops the next one.
+      gateDecision,
     }));
   }
 

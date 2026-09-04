@@ -19,6 +19,13 @@
 
 const writes: string[] = [];
 
+// Tenant-scoped ingestion gate: this suite exercises orchestration, not the
+// gate, so the tenant flag is doubled ON. The gate's own behaviour — including
+// every DENY path — is proven in piTenantScopedIngestionGate.test.ts.
+jest.mock('../../services/featureFlagService', () => ({
+  evaluateFeatureFlag: jest.fn(async () => ({ enabled: true, reason: 'test_flag_enabled' })),
+}));
+
 jest.mock('../../services/identityResolutionService', () => ({
   resolveUnifiedPerson: jest.fn(async () => {
     writes.push('identity');                       // the FIRST write of the chain

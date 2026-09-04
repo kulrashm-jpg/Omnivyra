@@ -17,6 +17,7 @@ let registeredAtImport = 0;
 /** The capability gate. Enabled for every existing case; the gate's own tests
  *  flip it, so the disabled path is exercised through the SAME handler. */
 let ingestionEnabled = true;
+let tenantGateAllowed = true;
 
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: (...a: unknown[]) => enforceCompanyAccess(...a),
@@ -36,6 +37,10 @@ jest.mock('../../services/telemetry/telemetryDispatcher', () => ({
 jest.mock('../../services/leadIngestion/orchestrator', () => ({
   ingestLeadBatch: (...a: unknown[]) => ingestLeadBatch(...a),
   isLeadIngestionEnabled: () => ingestionEnabled,
+  // Tenant-scoped gate. Defaults ALLOW so this suite keeps testing the route's
+  // authorization ordering; the gate's own deny paths are proven in
+  // piTenantScopedIngestionGate.test.ts.
+  resolveLeadIngestionGate: async () => ({ allowed: tenantGateAllowed, reason: 'test' }),
   MAX_BATCH_SIZE: 1000,
 }));
 
