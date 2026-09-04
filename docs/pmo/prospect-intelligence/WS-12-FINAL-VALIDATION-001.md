@@ -418,7 +418,7 @@ directly; the flag gates the shadow/authoritative runtime, not this read.
 |---|---|---|
 | PI comprehensive (64 suites) | `jest piWs piP1 leadIngestion li4d li5e prospectIdentity p2a p2b d1Prospect csvAdapter leadIntelligence leadActions contactGovernance marketPulse ws3Milestone feedback` | **1739 / 1739 PASS** |
 | Typecheck | `npm run typecheck:ci` | **3/3 projects clean, at baseline** |
-| Certification | `npm run typecheck:certification` | **PASS · net-new 0** — recorded at this exact HEAD (`6e740f1f`) during the WS-10 gate run. A WS-12 re-run was launched and had not completed when this report was written; the only working-tree change since that PASS is this untracked `.md`, which cannot alter a TypeScript result. Stated with its provenance rather than as a fresh run |
+| Certification | `npm run typecheck:certification` | **PASS · net-new 0** — re-run under WS-12 at HEAD `6e740f1f`: `tsconfig.backend.json` 0/0 errors, `tsconfig.backend-tests.json` 260/260 (at baseline), FINGERPRINT PASS on both. Note: this run reported `attribution source: unavailable (git failed)`, so net-new is reported unattributed; the count is still 0 and an identical PASS with working attribution was recorded during the WS-10 gate at the same HEAD |
 | Lint | `eslint` on WS-10 files | clean |
 | `check:authz` | | **exit 0** |
 | `check:orgaccess-binding` | | **exit 0** |
