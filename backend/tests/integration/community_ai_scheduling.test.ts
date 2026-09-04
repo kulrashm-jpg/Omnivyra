@@ -9,9 +9,9 @@ import {
   createMockRes,
   playbookStore,
   resetCommunityAiStores,
+  seedConnectedAccount,
   seedPlaybook,
   setRole,
-  tokenStore,
 } from './communityAiTestHarness';
 
 jest.mock('../../services/userContextService', () => ({
@@ -33,8 +33,55 @@ jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn(), rpc: jest.fn() },
 }));
 
+// G3R #7 — mirror the certified token seam from
+// community_ai_action_connectors.test.ts. Production `getToken`
+// (platformTokenService.ts:141) resolves org -> users -> social_accounts and
+// then decrypts via auth/tokenStore; this routes that lookup through the
+// in-memory socialAccountStore and returns the plaintext the fixture seeded.
+jest.mock('../../auth/tokenStore', () => {
+  const harness = jest.requireActual('./communityAiTestHarness');
+  return {
+    getToken: jest.fn(async (socialAccountId: string) => {
+      const row = harness.socialAccountStore.find((r: any) => r.id === socialAccountId);
+      if (!row) return null;
+      return {
+        access_token: row.access_token,
+        refresh_token: row.refresh_token ?? undefined,
+        expires_at: row.token_expires_at ?? undefined,
+        token_type: 'Bearer',
+      };
+    }),
+    isTokenExpiringSoon: jest.fn(() => false),
+    setToken: jest.fn(async () => {}),
+  };
+});
+
+// Defence-in-depth: isTokenExpiringSoon is forced false above, so the refresh
+// branch of getToken is never reached by these tests.
+jest.mock('../../auth/tokenRefresh', () => ({
+  refreshPlatformToken: jest.fn(async () => null),
+  refreshTwitterTokenIfNeeded: jest.fn(async (input: any) => ({
+    access_token: input.access_token,
+    refresh_token: input.refresh_token ?? null,
+    token_expires_at: input.token_expires_at ?? null,
+    status: 'still_valid',
+  })),
+}));
+
+// G3R #7 — the mock must speak the connector contract. `normalizeConnectorResponse`
+// (communityAiActionExecutorContracts.ts:463-489) reads `success` as the
+// discriminant: `success === true` => 'verified' => status 'executed'. The old
+// `{ ok: true, platform }` shape has no `success` field at all, so it fell to the
+// legacy-connector inference branch, was classed 'permissive', and produced
+// 'sent_unverified'. The real linkedinConnector returns
+// `{ success: true, platform_id, platform_response }` (linkedinConnector.ts:109),
+// which is what this now mirrors.
 jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
-  executeAction: jest.fn().mockResolvedValue({ ok: true, platform: 'linkedin' }),
+  executeAction: jest.fn().mockResolvedValue({
+    success: true,
+    platform_id: 'urn:li:comment:1',
+    platform_response: { ok: true, platform: 'linkedin' },
+  }),
 }));
 
 jest.mock('../../services/rpaWorker/rpaWorkerService', () => ({
@@ -89,12 +136,20 @@ describe('Community-AI Scheduling', () => {
 
   it('scheduler executes due actions and logs execution', async () => {
     setRole('CONTENT_PUBLISHER');
-    tokenStore.push({
-      tenant_id: 'tenant-1',
-      organization_id: 'tenant-1',
-      platform: 'linkedin',
-      access_token: 'token-1',
-    });
+    // With `execution_mode: 'api'` the playbook gate now applies — it is skipped
+    // only for 'manual' (runtime :536). The fixture already names
+    // `playbook_id: 'playbook-1'`, but `resetCommunityAiStores` clears
+    // `playbookStore`, so the action would return PLAYBOOK_NOT_FOUND. Seeding the
+    // playbook it already claims completes the fixture.
+    // The API branch then needs a CONNECTED account. The original fixture wrote
+    // to `tokenStore` (community_ai_platform_tokens), which after the token
+    // consolidation holds metadata only — no token columns. `getToken`
+    // (platformTokenService.ts:148-152) resolves org -> users -> social_accounts,
+    // so the legacy row could never satisfy it and the action failed with
+    // 'Platform not connected'. `seedConnectedAccount` is the harness helper that
+    // writes the post-consolidation shape (social_accounts row + active
+    // membership), and is what the sibling connectors suite already uses.
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     const past = new Date(Date.now() - 1000).toISOString();
     actionStore.set('action-11', {
       id: 'action-11',
@@ -105,6 +160,16 @@ describe('Community-AI Scheduling', () => {
       target_id: 'post-11',
       suggested_text: 'Appreciate it!',
       playbook_id: 'playbook-1',
+      // G3R #7 — declares the mode this test intends to exercise rather than
+      // relying on inference. When `execution_mode` is absent,
+      // `resolveExecutionMode` (communityAiActionExecutorContracts.ts:393-414)
+      // probes for a token and returns 'api' only if one is found, else
+      // 'browser' — which dispatches and persists as 'pending'. That inference,
+      // combined with the dead token fixture below, is what produced the original
+      // 'pending'. Declaring the mode pins the intent so this test cannot
+      // silently degrade to the browser path again. Matches the sibling
+      // convention in community_ai_webhooks.test.ts.
+      execution_mode: 'api',
       status: 'approved',
       scheduled_at: past,
       requires_human_approval: false,

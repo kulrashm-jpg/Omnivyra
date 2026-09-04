@@ -4,6 +4,8 @@ import {
   type SerpSnapshotInput,
 } from './externalCompetitiveIntelligenceService';
 import { assertAnalyticsMutationAllowed } from './analyticsEnvironmentGuardService';
+// Canonical credential resolution — one path, managed account then environment fallback.
+import { resolveProviderCredential } from './providerCredentialResolver';
 import { ownedDbTable } from '../db/writeOwner';
 import { authorizeProviderCall, recordProviderUsage } from './providers/providerCostGovernor';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
@@ -160,12 +162,42 @@ function createGenericSerpProvider(): SerpAcquisitionProvider | null {
 }
 
 function createSerpApiProvider(): SerpAcquisitionProvider | null {
-  const apiKey = process.env.SERPAPI_KEY || process.env.SERP_INTELLIGENCE_SERPAPI_KEY;
-  if (!apiKey) return null;
+  // Phase 3 FIX — credential-name mismatch.
+  //
+  // This read only `SERPAPI_KEY` / `SERP_INTELLIGENCE_SERPAPI_KEY`, neither of which is set
+  // in any environment. The competitor-discovery path
+  // (`reportCompetitorIntelligenceServiceHelpers`) resolves the SAME SerpApi credential as
+  // `SERPAPI_API_KEY || SERP_API_KEY || SERPAPI_KEY` and does pick one up. The result was
+  // that the CANONICAL acquisition + persistence path — the one with the daily cron and the
+  // `analytics_serp_*` tables — saw no provider at all and silently no-opped, which is why
+  // `analytics_serp_acquisition_runs` has never had a single row. That is a defect
+  // INDEPENDENT of whether the credential is valid.
+  //
+  // Both paths now resolve the same names in the same order, so one credential configures
+  // the whole SERP surface. No new credential is introduced.
+  // Construction-time gate: the provider is offered when a credential COULD resolve — either
+  // a managed account exists (checked asynchronously at request time) or an env fallback is
+  // present. `SERP_MANAGED_CREDENTIALS=false` reverts to environment-only.
+  const managedEnabled = !/^(0|false|off|no)$/i.test(process.env.SERP_MANAGED_CREDENTIALS ?? '');
+  const envKey = process.env.SERPAPI_API_KEY
+    || process.env.SERP_API_KEY
+    || process.env.SERPAPI_KEY
+    || process.env.SERP_INTELLIGENCE_SERPAPI_KEY;
+  if (!envKey && !managedEnabled) return null;
   return {
     id: 'serpapi',
     costPerQueryUsd: Number(process.env.SERPAPI_COST_PER_QUERY_USD ?? 0.01),
     async fetch(query: string) {
+      // CANONICAL RESOLUTION. Previously this closed over a `process.env` read taken at
+      // construction, so the Super Admin credential store was bypassed entirely and a
+      // rotation there changed nothing. Resolution now happens per request through the one
+      // canonical path: managed account → account env ref → source env fallback.
+      const credential = await resolveProviderCredential('serpapi');
+      const apiKey = credential.value ?? envKey;
+      if (!apiKey) {
+        // `reason` is shape-only and safe to surface; it never contains a credential.
+        throw new Error(`SerpAPI credential unavailable: ${credential.reason}`);
+      }
       const url = new URL(process.env.SERPAPI_ENDPOINT ?? 'https://serpapi.com/search.json');
       url.searchParams.set('engine', 'google');
       url.searchParams.set('q', query);

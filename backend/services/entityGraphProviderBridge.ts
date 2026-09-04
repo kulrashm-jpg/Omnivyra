@@ -29,6 +29,10 @@ import {
   entityEvidenceAdapter, type EntityEvidenceInput,
 } from './evidencePlatform/providers/entity/entityEvidenceAdapter';
 import { getKnowledgeGraphProvider } from './intelligence/providerRegistry';
+// Phase 1A: the ONE canonical interpretation of WIKIDATA_ENABLED, shared with the
+// provider registry. Imported from the leaf `providerInterfaces` module (not from the
+// registry) so this bridge introduces no import cycle.
+import { isWikidataEnabled } from './intelligence/providerInterfaces';
 
 const PROVIDER_ID = 'entity_graph';
 const ENV_KEYS = ['WIKIDATA_ENABLED', 'GOOGLE_KG_API_KEY'];
@@ -49,9 +53,21 @@ export interface EntityProviderPayload {
   observedAt?: string | null;
 }
 
-/** True when any entity/knowledge-graph provider is enabled. */
+/**
+ * True when any entity/knowledge-graph provider is enabled.
+ *
+ * Phase 1A — gate consistency. This previously read `WIKIDATA_ENABLED === 'true'`
+ * (default OFF) while `providerRegistry` used `!== 'false'` (default ON). Because the
+ * REGISTRY is what actually drives the report path, the activation matrix reported
+ * `awaiting_credentials` for entity_graph while the report was genuinely running the
+ * Wikidata adapter — the matrix was reporting the opposite of reality.
+ *
+ * Both sides now call the canonical `isWikidataEnabled()` helper. Wikidata is free and
+ * keyless, so the canonical intent is ON by default, disabled only by an explicit
+ * `WIKIDATA_ENABLED=false`.
+ */
 export function isEntityProviderConfigured(): boolean {
-  return process.env.WIKIDATA_ENABLED === 'true' || Boolean(process.env.GOOGLE_KG_API_KEY);
+  return isWikidataEnabled() || Boolean(process.env.GOOGLE_KG_API_KEY);
 }
 
 /** Register the canonical entity_graph provider with auth/connection derived from env (idempotent). */

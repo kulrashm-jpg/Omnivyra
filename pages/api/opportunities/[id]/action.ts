@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import { requireTenantAccess } from '../../../../backend/security/TenantGuard';
 import { Role } from '../../../../backend/services/rbacService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import {
@@ -79,11 +80,26 @@ async function actionHandler(req: NextApiRequest, res: NextApiResponse) {
   if (companyId && companyId !== rowCompanyId) {
     return res.status(403).json({ error: 'Company does not match opportunity' });
   }
-
   const userId = (req as any)?.rbac?.userId;
   if (!userId) {
     return res.status(401).json({ error: 'User not identified' });
   }
+
+  // B4.3 — bind authorization to the company actually ACTED UPON.
+  //
+  // The mismatch check above only fires when body.companyId is present, but
+  // withRBAC accepts its subject from req.query.companyId TOO. A caller could
+  // therefore pass ?companyId=<own company> to satisfy RBAC, omit
+  // body.companyId, and act on another company's opportunity: resolvedCompanyId
+  // fell back to rowCompanyId, and promoteToCampaign / fillOpportunitySlots then
+  // mutated that company's state (promote creates a campaign under it).
+  //
+  // getOpportunity(id) is not company-scoped, so this is the only place the
+  // binding can be made. Unconditional — it closes the omitted-key path as well
+  // as the mismatch path. Placed AFTER the 401 so authentication still precedes
+  // authorization, and before every action so nothing mutates on a denial.
+  const tenantAccess = await requireTenantAccess(req, res, resolvedCompanyId);
+  if (!tenantAccess) return; // guard already responded (403 NOT_A_MEMBER)
 
   try {
     if (action === 'PROMOTED') {

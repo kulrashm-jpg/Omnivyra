@@ -1,0 +1,102 @@
+name: Real-Schema CI
+
+# Executes the canonical database invariants against a real PostgreSQL server.
+#
+# This is the gate the programme lacked through W0–W5. Every failure those
+# phases found in production — a missing column (42703), an uninferable
+# ON CONFLICT target (42P10), a tenant-boundary foreign key that was never
+# composite — is invisible to the mocked Supabase client the default jest
+# project uses, and would have been caught here.
+#
+# It never touches production: no production secrets are referenced, the
+# database is a service container that exists for the life of the job, and the
+# schema comes from a committed schema-only artifact.
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/_schema/**'
+      - 'scripts/ci/**'
+      - 'backend/tests/realschema/**'
+      - 'backend/db/**'
+      - 'backend/services/prospectIdentity/**'
+      - 'backend/services/identityResolutionService.ts'
+      - 'backend/queue/jobProcessors/whatsappWebhookProcessor.ts'
+      - 'jest.realschema.config.js'
+      - '.github/workflows/real-schema-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/_schema/**'
+      - 'scripts/ci/**'
+      - 'backend/tests/realschema/**'
+  workflow_dispatch:
+
+concurrency:
+  group: real-schema-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-schema:
+    name: Migration replay + canonical invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        # pgvector, because the governed schema declares vector(1536) columns.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: w6
+          POSTGRES_DB: w6
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d w6"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Localhost service container. Deliberately NOT a repository secret:
+      # this job must never be able to reach production.
+      W6_DB_URL: postgres://postgres:w6@localhost:5432/w6
+      PGPASSWORD: w6
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Migration quality gate
+        run: node scripts/check-migration-quality.js
+
+      - name: Tenant authorization gate
+        run: node scripts/check-tenant-authz.js
+
+      # The whole job: bootstrap -> baseline -> replay -> invariant suite.
+      # A failure in ANY stage fails the job. There is no continue-on-error
+      # anywhere in this workflow by design — a broken tenant boundary or an
+      # uninferable conflict target is not a warning.
+      - name: Real-schema CI
+        run: bash scripts/ci/real-schema-ci.sh
+
+      - name: Report failure context
+        if: failure()
+        run: |
+          echo "::group::Restore errors"
+          tail -50 /tmp/w6_restore.err 2>/dev/null || echo "(none)"
+          echo "::endgroup::"
+          echo "::group::Last migration output"
+          tail -50 /tmp/w6_mig.out 2>/dev/null || echo "(none)"
+          echo "::endgroup::"

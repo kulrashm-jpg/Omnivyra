@@ -168,7 +168,21 @@ function inferPageType(url: string): string {
   if (pathname.includes('/docs') || pathname.includes('/documentation')) return 'docs';
   if (pathname.includes('/contact')) return 'contact';
   // BETA-AUTHORITY-EXEC-002 (Wave-1) — legal-transparency page recognition via the existing classifier.
-  if (/(?:^|\/)(?:privacy|terms|terms-of-service|tos|cookie|cookies|imprint|impressum|legal|legal-notice|disclosure|disclaimer)(?:[-/]|$)/.test(pathname)) return 'legal';
+  //
+  // Phase 1A FIX: this returned 'legal', which is NOT in the `canonical_pages_page_type_valid`
+  // CHECK constraint (home|landing|blog|product|pricing|feature|docs|contact|other). Every site
+  // with a /privacy or /terms page therefore threw on insert and ABORTED the whole crawl part-way
+  // through. It was invisible because nothing on the report path ever ran a crawl; enabling the
+  // report-triggered crawl exposed it immediately (omnivyra.com aborted after 11 pages).
+  //
+  // Returning the constraint-legal 'other' costs nothing: legal-transparency detection in
+  // `publicDomainAuditService.structure.legal_pages` matches on `"${page_type} ${url}"`, so the
+  // URL alone ("/privacy", "/terms") still classifies the page correctly. No consumer reads
+  // `page_type === 'legal'` — production has zero such rows because none could ever be written.
+  //
+  // The semantically better fix is to add 'legal' to the CHECK constraint via a migration; that is
+  // deliberately deferred (Phase 1A adds no migrations).
+  if (/(?:^|\/)(?:privacy|terms|terms-of-service|tos|cookie|cookies|imprint|impressum|legal|legal-notice|disclosure|disclaimer)(?:[-/]|$)/.test(pathname)) return 'other';
   if (pathname.split('/').filter(Boolean).length <= 1) return 'landing';
   return 'other';
 }

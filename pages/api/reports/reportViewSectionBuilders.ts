@@ -289,13 +289,20 @@ export function buildGeoAeoExecutiveSummary(report: any): any {
   return {
     overallAiVisibilityScore: typeof summary.overall_ai_visibility_score === 'number' ? summary.overall_ai_visibility_score : null,
     overallAiVisibilityScoreState: summary.overall_ai_visibility_score_state || 'insufficient_signal',
-    primaryGap: {
-      title: summary.primary_gap?.title || 'Primary AI visibility gap still forming',
-      type: summary.primary_gap?.type || 'answer_gap',
-      severity: summary.primary_gap?.severity || 'low',
-      reasoning: summary.primary_gap?.reasoning || 'Current crawl evidence is limited, so this gap is directional and confidence is reduced.',
-      ifNotAddressed: summary.primary_gap?.if_not_addressed || 'If not addressed, AI answer visibility will remain constrained and citation performance will stay weak.',
-    },
+    // Phase 2: the view layer must NOT resurrect a gap the builder deliberately withheld.
+    // These `||` fallbacks previously substituted placeholder copy — including a confident
+    // "if not addressed" consequence — whenever `primary_gap` was null, re-introducing at
+    // the surface the customer sees exactly the contradiction the builder had just removed.
+    // Null in, null out.
+    primaryGap: summary.primary_gap
+      ? {
+          title: summary.primary_gap.title,
+          type: summary.primary_gap.type,
+          severity: summary.primary_gap.severity,
+          reasoning: summary.primary_gap.reasoning,
+          ifNotAddressed: summary.primary_gap.if_not_addressed,
+        }
+      : null,
     top3Actions: Array.isArray(summary.top_3_actions)
       ? summary.top_3_actions.map((item: any) => ({
           actionTitle: item.action_title || 'Priority action',

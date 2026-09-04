@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
@@ -142,6 +143,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!company_id || !Array.isArray(selected_recommendations) || selected_recommendations.length === 0) {
       return res.status(400).json({ error: 'company_id and selected_recommendations are required' });
     }
+
+    // B4.3 — verify the company this route READS FROM and BILLS.
+    //
+    // withRBAC resolves its subject from req.query.companyId / req.body.companyId
+    // (camelCase), but everything below acts on req.body.company_id (snake_case).
+    // A request carrying both keys passed RBAC on the caller's own company while
+    // loadLearningSignals() read another company's campaign_versions,
+    // campaign_learnings, ai_enhancement_logs and audit_logs, fed them to the
+    // model, returned the synthesis, and attributed the spend to that company via
+    // wirePhase2Route({ organizationId }).
+    //
+    // Placed BEFORE loadLearningSignals so no cross-tenant row is read at all.
+    const claimedCompanyId = typeof company_id === 'string' ? company_id.trim() : '';
+    const tenantAccess = await requireTenantAccess(req, res, claimedCompanyId);
+    if (!tenantAccess) return; // guard already responded (403 NOT_A_MEMBER)
 
     const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     let learningSignals: any = null;

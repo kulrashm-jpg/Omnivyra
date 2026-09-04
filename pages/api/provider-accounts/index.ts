@@ -11,10 +11,12 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { isPlatformSuperAdmin, isSuperAdmin } from '../../../backend/services/rbacService';
 import {
+  buildCredentialEnvelope,
   createProviderAccount,
   listAccountsForApi,
 } from '../../../backend/services/providerAccountService';
-import { encryptCredential } from '../../../backend/auth/credentialEncryption';
+// Remediation: server-side env-var-name validation (no secrets in a name field).
+import { describeRejectedEnvVarName, isEnvVarName } from '../../../backend/security/credentialSafety';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
@@ -105,37 +107,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'credentials must contain at least one credential field' });
     }
 
-    // Encrypt any raw OAuth fields before storing
-    const credToStore: Record<string, string> = {};
-    if (credentials.api_key_env_name) credToStore.api_key_env_name = String(credentials.api_key_env_name);
-    if (credentials.api_key_value)    credToStore.api_key_value    = String(credentials.api_key_value);
-
-    if (credentials.oauth_client_id && !credentials.oauth_client_id_ref) {
-      // Encrypt the raw value and store as a ref-style blob
-      try {
-        credToStore.oauth_client_id_ref = encryptCredential(String(credentials.oauth_client_id));
-      } catch {
-        return res.status(500).json({ error: 'Failed to encrypt oauth_client_id' });
-      }
-    } else if (credentials.oauth_client_id_ref) {
-      credToStore.oauth_client_id_ref = String(credentials.oauth_client_id_ref);
+    // REMEDIATION: reject a secret pasted into the env-var-NAME field. Server-side, because
+    // the client is not the security boundary — this is the exact path by which live provider
+    // secrets reached a readable column.
+    if (credentials.api_key_env_name && !isEnvVarName(credentials.api_key_env_name)) {
+      return res.status(400).json({
+        error: 'INVALID_ENV_VAR_NAME',
+        // Describes the shape; never echoes the submitted value.
+        detail: describeRejectedEnvVarName(credentials.api_key_env_name),
+      });
     }
 
-    if (credentials.oauth_client_secret && !credentials.oauth_client_secret_ref) {
-      try {
-        credToStore.oauth_client_secret_ref = encryptCredential(String(credentials.oauth_client_secret));
-      } catch {
-        return res.status(500).json({ error: 'Failed to encrypt oauth_client_secret' });
-      }
-    } else if (credentials.oauth_client_secret_ref) {
-      credToStore.oauth_client_secret_ref = String(credentials.oauth_client_secret_ref);
+    // REMEDIATION: one shared envelope builder encrypts `api_key_value` with the same
+    // `encryptCredential` already used for OAuth. Previously this endpoint wrote the raw key
+    // verbatim into a column named `credentials_encrypted`.
+    let credentialsEncrypted: string;
+    try {
+      credentialsEncrypted = buildCredentialEnvelope({ existing: null, supplied: credentials });
+    } catch {
+      // Fail CLOSED — never fall back to storing plaintext.
+      return res.status(500).json({ error: 'Failed to encrypt credentials' });
     }
 
     try {
       const account = await createProviderAccount({
         api_source_id,
         account_name: account_name.trim(),
-        credentials_encrypted: JSON.stringify(credToStore),
+        credentials_encrypted: credentialsEncrypted,
         rate_limit_per_min: typeof rate_limit_per_min === 'number' ? rate_limit_per_min : null,
         rate_limit_per_day: typeof rate_limit_per_day === 'number' ? rate_limit_per_day : null,
         priority: typeof priority === 'number' ? priority : 1,

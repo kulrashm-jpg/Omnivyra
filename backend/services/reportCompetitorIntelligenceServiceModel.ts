@@ -401,12 +401,14 @@ export function buildManualCompetitorCandidates(params: {
         name: domainValue ? domainToName(domainValue) : titleCase(String(item)),
         domain: domainValue,
         category: params.companyContext.marketFocus ?? params.businessType ?? 'Market peer',
-        classification:
-          index === 0
-            ? 'direct_competitor'
-            : index === 1
-              ? 'seo_competitor'
-              : 'authority_leader',
+        // Phase 2: candidates are built BEFORE any scoring, so at this point there is no
+        // evidence on which to classify. This previously read
+        // `index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader'`
+        // — a competitive category assigned by array position. Because the ranking engine
+        // resolves `item.classification ?? classificationFromTier(item.tier)`, that positional
+        // value WON over the evidence-derived one. Emitting null lets the tier-derived
+        // classification apply.
+        classification: null,
         source: 'manual',
         rationale: buildFitRationale(
           params.companyContext,
@@ -448,7 +450,14 @@ export function buildStoredCompetitorCandidates(params: {
       name: normalizeDomain(item.name) ? domainToName(normalizeDomain(item.name) ?? item.name) : titleCase(String(item.name)),
       domain: item.domain ?? normalizeDomain(item.name),
       category: params.companyContext.marketFocus ?? params.businessType ?? 'Stored market peer',
-      classification: index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader',
+      // Phase 2: candidates are built BEFORE any scoring, so at this point there is no
+        // evidence on which to classify. This previously read
+        // `index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader'`
+        // — a competitive category assigned by array position. Because the ranking engine
+        // resolves `item.classification ?? classificationFromTier(item.tier)`, that positional
+        // value WON over the evidence-derived one. Emitting null lets the tier-derived
+        // classification apply.
+        classification: null,
       source: 'website' as const,
       rationale: item.rationale ?? buildFitRationale(
         params.companyContext,
@@ -491,7 +500,14 @@ export function buildProviderCompetitorCandidates(params: {
         name: domain ? domainToName(domain) : titleCase(name),
         domain,
         category: params.companyContext.marketFocus ?? 'Provider supplied competitor',
-        classification: index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader',
+        // Phase 2: candidates are built BEFORE any scoring, so at this point there is no
+        // evidence on which to classify. This previously read
+        // `index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader'`
+        // — a competitive category assigned by array position. Because the ranking engine
+        // resolves `item.classification ?? classificationFromTier(item.tier)`, that positional
+        // value WON over the evidence-derived one. Emitting null lets the tier-derived
+        // classification apply.
+        classification: null,
         source: 'profile_ai' as const,
         rationale: buildFitRationale(
           params.companyContext,

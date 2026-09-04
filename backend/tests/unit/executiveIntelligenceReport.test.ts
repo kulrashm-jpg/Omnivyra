@@ -32,7 +32,9 @@ const CLEAR = ['AHREFS_API_KEY', 'GSC_OAUTH_CLIENT_ID', 'GA4_PROPERTY_ID', 'BING
 describe('BETA-RELEASE-002 — report composition (Phase 2/3)', () => {
   const saved = { ...process.env };
   afterEach(() => { process.env = { ...saved }; });
-  beforeEach(() => { for (const k of CLEAR) delete process.env[k]; });
+  // Phase 1A: keyless Wikidata is ON by default (canonical `isWikidataEnabled()`), so the
+  // "no active providers" baseline this suite asserts must now be stated explicitly.
+  beforeEach(() => { for (const k of CLEAR) delete process.env[k]; process.env.WIKIDATA_ENABLED = 'false'; });
 
   it('composes one canonical report: business-first sections, deduped roadmap, honest provider health', () => {
     const seo = evidencedSection('seo', 'SEO / Search', [m('impressions', 5000, 'count'), m('ctr', 0.005, 'ratio'), m('domain_authority', 15, 'score_0_100'), m('avg_position', 22, 'position')]);
@@ -60,7 +62,9 @@ describe('BETA-RELEASE-002 — report composition (Phase 2/3)', () => {
 describe('BETA-RELEASE-002 — Beta acceptance verifier (Phase 4/8)', () => {
   const saved = { ...process.env };
   afterEach(() => { process.env = { ...saved }; });
-  beforeEach(() => { for (const k of CLEAR) delete process.env[k]; });
+  // Phase 1A: keyless Wikidata is ON by default (canonical `isWikidataEnabled()`), so the
+  // "no active providers" baseline this suite asserts must now be stated explicitly.
+  beforeEach(() => { for (const k of CLEAR) delete process.env[k]; process.env.WIKIDATA_ENABLED = 'false'; });
 
   it('accepts a fully-evidenced report (traceable, no placeholders, honest status)', () => {
     const seo = evidencedSection('seo', 'SEO / Search', [m('impressions', 5000, 'count'), m('ctr', 0.005, 'ratio'), m('conversion_rate', 0.04, 'ratio'), m('revenue_per_conversion', 200, 'currency_amount')]);

@@ -32,7 +32,12 @@ jest.mock('../../../lib/identity/identityGateway', () => ({
   ensureUnifiedPerson: (...a: unknown[]) => ensureUnifiedPerson(...a),
 }));
 jest.mock('../../services/integrationCredentialService', () => ({
-  mergeConnectionConfig: jest.fn(async (_c: unknown, _n: unknown, cfg: unknown) => cfg),
+  // PHASE-1A: the real signature is (companyId, connectionId, nonSecretConfig,
+  // legacyConfig). The double mirrors it so this characterization keeps testing
+  // the contract that exists rather than the one that used to.
+  mergeConnectionConfig: jest.fn(
+    async (_company: unknown, _connection: unknown, _nonSecret: unknown, legacy: unknown) => legacy,
+  ),
 }));
 const adoptLead = jest.fn();
 jest.mock('../../services/leadIntelligence/leadIntelligenceRuntime', () => ({

@@ -78,6 +78,13 @@ import {
   emptyEnvelope,
   measuredEnvelope,
 } from './snapshotReport/canonicalScoreState';
+// Report 1 assembly: cross-source opportunities, priorities and the 30/60/90 plan.
+import { assembleDigitalSnapshot } from './digitalSnapshotAssembly';
+// Phase 4: performance + digital-experience intelligence over the existing crawl corpus.
+import { assessDigitalExperience } from './digitalExperience';
+import { collectPerformanceEvidence, loadExperiencePages } from './digitalExperienceRepository';
+// Phase 3: the two competition views, built from the canonical relation model.
+import { buildCompetitiveTables, buildCompetitorTableRows } from './competitiveTables';
 import { buildCanonicalReport } from './canonicalReport/canonicalReportBuilder';
 import type { CanonicalReport } from './canonicalReport/canonicalReportTypes';
 // BETA-PHASE1-AUDIT-005: composeSnapshotReport owns the report scan-budget lifecycle.
@@ -108,6 +115,7 @@ import {
 } from './websiteIntelligence/websiteIntelligenceRepository';
 import {
   SIGNAL_BUCKETS,
+  type ScoreState,
   type CompanyNarrativeContext,
   type MarketType,
   type NarrativeContext,
@@ -223,6 +231,23 @@ export async function composeSnapshotReportFromDecisions(params: {
   // BETA-EXEC-004: single deterministic engine-evidence digest, reused by insights, the executive
   // summary, and the canonical dimension rationales (read-only — no scoring/recalculation).
   const engineEvidenceDigest = { technical: wiTechnical, content: wiContent, accessibility: wiAccessibility, brand: wiBrand };
+
+  // Phase 4 — performance + digital experience. Both fail soft: a provider outage or an
+  // unreadable table degrades the report to honest abstention, never to a fabricated verdict.
+  const experiencePages = await loadExperiencePages(params.companyId).catch(() => []);
+  const performanceEvidence = await collectPerformanceEvidence({ pages: experiencePages }).catch(() => null);
+  const digitalExperience = assessDigitalExperience({
+    pages: experiencePages,
+    performance: performanceEvidence,
+  });
+
+  // Phase 3 tables, hoisted so the Report 1 assembler can read them.
+  const competitiveTables = buildCompetitiveTables(
+    buildCompetitorTableRows(
+      (competitorIntelligence.detected_competitors ?? []) as never,
+      { geography: params.resolvedInput?.resolved.geography ?? null },
+    ),
+  );
   const visualIntelligence = buildSnapshotVisualIntelligence({
     decisions: finalDecisions,
     score,
@@ -427,6 +452,42 @@ export async function composeSnapshotReportFromDecisions(params: {
       resilience_guidance: strategicContext.resilienceGuidance,
     },
     competitor_intelligence: competitorIntelligence,
+    // Phase 4 — performance + digital-experience evidence. Both read the EXISTING crawl
+    // corpus; PageSpeed is attempted only when a quota is configured, and reports
+    // `unavailable` with the real reason otherwise. Neither produces an Omnivyra score.
+    performance: performanceEvidence
+      ? {
+        state: performanceEvidence.state,
+        reasonUnavailable: performanceEvidence.reasonUnavailable,
+        coverage: performanceEvidence.coverage,
+        byFormFactor: performanceEvidence.byFormFactor,
+        observations: performanceEvidence.observations.map((o) => ({
+          url: o.url, formFactor: o.formFactor,
+          providerPerformanceScore: o.providerPerformanceScore,
+          overallCategory: o.overallCategory, observedAt: o.observedAt,
+          provider: o.provider, state: o.state, reasonUnavailable: o.reasonUnavailable,
+          metrics: o.metrics,
+        })),
+      }
+      : null,
+    digital_experience: digitalExperience
+      ? {
+        readiness: digitalExperience.readiness,
+        state: digitalExperience.state,
+        coverage: digitalExperience.coverage,
+        pillars: digitalExperience.pillars,
+        findings: digitalExperience.findings,
+        limitations: digitalExperience.limitations,
+        describesVisitorBehavior: false as const,
+      }
+      : null,
+    // Phase 3 — the two customer-facing competition views, rendered from the CANONICAL
+    // two-axis relation model. This service performs no classification of its own: it hands
+    // the already-ranked competitors to `buildCompetitorTableRows`, which reuses
+    // `deriveCompetitorRelations` (the sole owner) and cannot promote a competitor into a
+    // category. A competitor whose axes abstained appears in both tables with null scores
+    // and is listed under `unclassified`.
+    competitive_tables: competitiveTables,
     decision_snapshot: decisionSnapshot,
     top_priorities: topPriorities,
     pipeline_audit: {
@@ -467,6 +528,67 @@ export async function composeSnapshotReportFromDecisions(params: {
       engineEvidence: engineEvidenceDigest,
     },
   });
+
+  // Phase 2 — promote evidence coverage to a FIRST-CLASS report field.
+  //
+  // `resolveEvidenceReadiness` already runs inside the canonical builder and lands at
+  // `canonical.evidence_readiness`, three levels deep, where no report surface read it.
+  // A CMO needs to know how much of the report is actually measured BEFORE reading its
+  // conclusions, so the same object (not a recomputation) is lifted to the top level.
+  // Nothing is re-derived and no score is reduced: coverage and confidence stay separate
+  // from the scores themselves, exactly as the existing model intends.
+  const readiness = canonicalSnapshotShape.canonical?.evidence_readiness ?? null;
+  canonicalSnapshotShape.evidence_coverage = readiness
+    ? {
+      state: readiness.state,
+      disposition: readiness.disposition,
+      coverage_percentage: readiness.coverage_percentage,
+      ai_coverage_percentage: readiness.ai_coverage_percentage,
+      connected_sources: readiness.connected_sources,
+      total_sources: readiness.total_sources,
+      website_scanned: readiness.website_scanned,
+      authority_measured: readiness.authority_measured,
+      headline: readiness.headline,
+      gaps: readiness.gaps,
+      next_moves: readiness.next_moves,
+    }
+    : null;
+
+  // Report 1 assembly — cross-source opportunities, top priorities and the 30/60/90 plan.
+  // An ASSEMBLER over already-produced outputs: it recomputes no dimension, no pillar and no
+  // score, and `canonicalReportBuilder` remains the canonical owner. Runs last so it can read
+  // the finished canonical states and the evidence coverage. Rules abstain when their inputs
+  // are missing, so the plan shrinks rather than degrading into generic marketing activity
+  // when SERP, PageSpeed or competitive evidence is unavailable.
+  canonicalSnapshotShape.digital_snapshot = assembleDigitalSnapshot({
+    experienceFindings: digitalExperience?.findings ?? null,
+    dimensionStates: {
+      searchVisibility: visualIntelligence.seo_capability_radar.rank_tracking_score === null
+        ? 'unavailable' : 'measured',
+      aiVisibility: geoAeoExecutiveSummary.overall_ai_visibility_score_state,
+      performance: (performanceEvidence?.state ?? 'unavailable') as ScoreState,
+      content: wiContent?.contentScore == null ? 'unavailable' : 'measured',
+      technical: wiTechnical?.technicalScore == null ? 'unavailable' : 'measured',
+      competitive: (competitorIntelligence.detected_competitors ?? []).length === 0
+        ? 'unavailable' : 'measured',
+    },
+    contentSignals: wiContent
+      ? { score: wiContent.contentScore, weaknesses: wiContent.contentWeaknesses ?? null }
+      : null,
+    technicalSignals: wiTechnical
+      ? { score: wiTechnical.technicalScore, criticalIssues: wiTechnical.criticalIssues ?? null }
+      : null,
+    competitive: {
+      productCompetition: competitiveTables.productCompetition,
+      empty: competitiveTables.empty,
+    },
+    coverage: canonicalSnapshotShape.evidence_coverage ?? null,
+    positioning: {
+      hasCategory: Boolean(params.resolvedInput?.resolved.businessType),
+      hasOffering: (companyContext.productServices ?? []).length > 0,
+    },
+  });
+
   return canonicalSnapshotShape;
 }
 

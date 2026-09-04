@@ -234,6 +234,13 @@ export function useClickOutside(ref: React.RefObject<HTMLElement | null>, onClos
   }, [onClose, ref]);
 }
 
+/**
+ * Where the header credit pill navigates. This is the account's credits page
+ * (balance, ledger, top-up), not the public pricing table — the pill reports a
+ * balance, so its destination is where that balance is explained.
+ */
+const CREDITS_HREF = '/company/credits';
+
 export function CreditPill({
   status,
   total,
@@ -247,17 +254,23 @@ export function CreditPill({
   // behavior (backward compatible).
   const effective: CreditsStatus = status ?? 'ready';
 
-  // LOADING — animated placeholder, never a numeric 0.
+  // LOADING — animated placeholder, never a numeric 0. Still a Link: reaching
+  // the credits page does not depend on the balance having resolved. This
+  // branch previously rendered a bare <div>, so whenever the balance stayed
+  // unresolved the pill became silently dead — no affordance, and no route
+  // through to the page that would explain why.
   if (effective === 'loading') {
     return (
-      <div
+      <Link
+        href={CREDITS_HREF}
         aria-busy="true"
         aria-label="Loading credit balance"
-        className="hidden items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 sm:flex"
+        title="Loading credit balance…"
+        className="hidden items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 transition-colors hover:bg-slate-50 sm:flex"
       >
         <Zap className="h-3.5 w-3.5 text-slate-300" />
         <span className="h-3 w-8 animate-pulse rounded bg-slate-200" />
-      </div>
+      </Link>
     );
   }
 
@@ -265,7 +278,7 @@ export function CreditPill({
   if (effective === 'error') {
     return (
       <Link
-        href="/pricing#addons"
+        href={CREDITS_HREF}
         title="Credit balance unavailable — couldn't reach the billing service. Retrying automatically."
         aria-label="Credit balance unavailable"
         className="hidden items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-1.5 transition-colors hover:bg-amber-100 sm:flex"
@@ -280,7 +293,7 @@ export function CreditPill({
   if (effective === 'unavailable') {
     return (
       <Link
-        href="/pricing#addons"
+        href={CREDITS_HREF}
         title="No credit account yet for this workspace."
         aria-label="No credit account yet"
         className="hidden items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 transition-colors hover:bg-slate-50 sm:flex"
@@ -298,7 +311,7 @@ export function CreditPill({
 
   return (
     <Link
-      href="/pricing#addons"
+      href={CREDITS_HREF}
       title={`${remaining.toLocaleString()} of ${total.toLocaleString()} credits remaining`}
       className="hidden items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 transition-colors hover:bg-slate-50 sm:flex"
     >

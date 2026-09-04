@@ -140,13 +140,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const nowIso = new Date().toISOString();
-    const { data, error } = await supabase
+    // ── Re-offer rule, gated on proven client capability ──────────────────
+    //   A browser command is "queued" solely by this row, and the irreversible
+    //   platform action happens outside any database transaction. Re-offering a
+    //   command whose lease lapsed therefore hands a second session a live claim
+    //   for work the first may still be performing — the duplicate-DM path.
+    //
+    //   A renewal-capable client keeps its lease alive for as long as it is
+    //   genuinely executing, so a lapsed lease from such a client means the
+    //   client is gone. We still must not re-offer: the platform action may
+    //   already have happened and no result was ever recorded. Those rows
+    //   become `claimed / delivery unknown` and go to operator recovery.
+    //
+    //   v1.3.9 cannot renew. Applying the strict rule to it would strand every
+    //   command 90s after claim, so it keeps the legacy behaviour until the
+    //   renewal-capable build is published. The capability is PROVEN by an
+    //   explicit request header, never inferred from the capability-map version
+    //   (which self-heals and therefore cannot identify a client build).
+    const supportsRenewal = String(req.headers['x-omnivyra-dispatch-renewal'] || '').trim() === '1';
+
+    let query = supabase
       .from('community_ai_actions')
       .select('id, platform, action_type, target_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index')
       .eq('organization_id', session.orgId)
       .eq('status', 'pending')
-      .eq('execution_mode', 'browser')
-      .or(`dispatch_lease_expires_at.is.null,dispatch_lease_expires_at.lt.${nowIso}`)
+      .eq('execution_mode', 'browser');
+
+    if (supportsRenewal) {
+      // Strict: only work that has NEVER been claimed is offered.
+      query = query.is('dispatch_lease_id', null);
+    } else {
+      // Legacy (v1.3.9): unclaimed, or claimed with a lapsed lease.
+      query = query.or(`dispatch_lease_expires_at.is.null,dispatch_lease_expires_at.lt.${nowIso}`);
+    }
+
+    const { data, error } = await query
       .order('created_at', { ascending: false })
       .limit(10);
 

@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
 import {
   DEFAULT_BUILD_MODE_RECOMMENDATION,
@@ -30,6 +31,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!Array.isArray(groups) || groups.length === 0) {
       return res.status(400).json({ error: 'groups are required' });
     }
+
+    // B4.2 — verify the company this campaign will be OWNED by.
+    //
+    // The withRBAC wrapper on this route resolves its subject from
+    // `req.query.companyId` / `req.body.companyId` (camelCase), but this handler
+    // reads and persists `req.body.company_id` (snake_case). Those are two
+    // different keys, so the role check and the persisted owner could name two
+    // different companies. This check binds the verification to the value that
+    // is actually written to campaign_versions.company_id.
+    //
+    // Guarding here rather than in withRBAC deliberately: that middleware is
+    // shared by many routes and changing its key resolution is far outside this
+    // phase. requireTenantAccess responds and audits on denial itself.
+    const claimedCompanyId = typeof company_id === 'string' ? company_id.trim() : '';
+    const tenantAccess = await requireTenantAccess(req, res, claimedCompanyId);
+    if (!tenantAccess) return; // guard already responded (403 NOT_A_MEMBER)
 
     const snapshotHashes = selected_recommendations
       .map((item: any) => item?.snapshot_hash)

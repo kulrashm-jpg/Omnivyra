@@ -143,8 +143,23 @@ describe('Entity Provider — availability + failure governance (bridge)', () =>
   const saved = { ...process.env };
   afterEach(() => { process.env = { ...saved }; __clearProviderRegistry(); });
 
-  it('is UNAVAILABLE without flags (backward compatible)', () => {
+  // Phase 1A — gate consistency. This previously asserted default-OFF
+  // (`WIKIDATA_ENABLED === 'true'`), which contradicted the provider registry's
+  // default-ON gate (`!== 'false'`). Because the registry drives the report path,
+  // the old assertion locked in an activation matrix that reported the OPPOSITE of
+  // what the report actually did. Both now share `isWikidataEnabled()`: Wikidata is
+  // keyless and ON by default, OFF only on an explicit `WIKIDATA_ENABLED=false`.
+  it('is CONFIGURED with no flags — keyless Wikidata is on by default', () => {
     delete process.env.WIKIDATA_ENABLED; delete process.env.GOOGLE_KG_API_KEY;
+    expect(isEntityProviderConfigured()).toBe(true);
+    const d = registerEntityProvider();
+    expect(d.authStatus).toBe('authenticated');
+    expect(d.connectionStatus).toBe('connected');
+    expect(isEntityProviderAvailable()).toBe(true);
+  });
+
+  it('is UNAVAILABLE only when explicitly disabled', () => {
+    process.env.WIKIDATA_ENABLED = 'false'; delete process.env.GOOGLE_KG_API_KEY;
     expect(isEntityProviderConfigured()).toBe(false);
     const d = registerEntityProvider();
     expect(d.authStatus).toBe('unauthenticated');
@@ -167,8 +182,12 @@ describe('Entity Provider — availability + failure governance (bridge)', () =>
     expect(isEntityProviderAvailable()).toBe(true);
   });
 
-  it('fetch without flags returns canonical UNAVAILABLE evidence (no network, no lookup, no fabrication)', async () => {
-    delete process.env.WIKIDATA_ENABLED; delete process.env.GOOGLE_KG_API_KEY;
+  // Phase 1A: "without flags" is now expressed as an EXPLICIT disable, because the
+  // canonical default for keyless Wikidata is ON. The guarantee under test is
+  // unchanged: when the provider is unavailable there is no network call, no lookup
+  // and no fabricated value.
+  it('fetch when disabled returns canonical UNAVAILABLE evidence (no network, no lookup, no fabrication)', async () => {
+    process.env.WIKIDATA_ENABLED = 'false'; delete process.env.GOOGLE_KG_API_KEY;
     const ev = await fetchEntityEvidence('Acme Corp', 'acme.com', OBSERVED);
     expect(ev).toHaveLength(1);
     expect(ev[0].maturity).toBe('UNAVAILABLE');

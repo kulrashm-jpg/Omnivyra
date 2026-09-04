@@ -24,6 +24,17 @@ jest.mock('../../services/intelligenceExecutionContext', () => ({
 }));
 
 jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (h: any) => h }));
+// B4.3 — these routes now bind authorization to the campaign owner via
+// requireTenantAccess. This suite's subject is the COMPOSITION output, which is
+// why it already stubs withRBAC transparently above; the tenant guard is stubbed
+// the same way for the same reason. Authorization itself is proven for real in
+// backend/tests/unit/withRbacTenantSweepB43.test.ts.
+jest.mock('../../security/TenantGuard', () => ({
+  requireTenantAccess: jest.fn(async () => ({
+    userId: 'test-user', supabaseUid: 'test-uid', organizationId: 'test-org',
+    role: 'COMPANY_ADMIN', bypass: false, isPlatformSuperAdmin: false,
+  })),
+}));
 
 import { supabase } from '../../db/supabaseClient';
 import { getCampaignRoiIntelligence } from '../../services/CampaignRoiIntelligenceService';

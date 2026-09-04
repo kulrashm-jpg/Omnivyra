@@ -33,6 +33,26 @@ export interface ContentIntelligence {
 
 const ACTION_VERBS = ['get', 'start', 'try', 'book', 'request', 'buy', 'subscribe', 'sign up', 'download', 'contact', 'schedule', 'demo', 'free'];
 
+/**
+ * Presence scoring model (Phase 2).
+ *
+ * BEFORE, presence checks used arbitrary partial-credit floors — a site with no FAQ scored
+ * 30, no resources 30, no testimonials 25, a weak hero 45, low title coherence 45. None of
+ * those numbers had a benchmark, a derivation, or a comment. They silently inflated
+ * `contentScore`: a site missing EVERY trust page still scored 25/100 on each of those
+ * checks, so the aggregate never reflected the actual absence.
+ *
+ * AFTER, a presence check answers exactly the question it asks — is this present? Present
+ * = 100, absent = 0, and genuinely unobservable = `not_evaluable` (excluded from the
+ * aggregate by `aggregate()`, never scored as a zero). Composite checks state their
+ * sub-signals and split the 100 explicitly. Ratio checks report the real ratio.
+ *
+ * This LOWERS scores for sites that were being flattered by the floors. That is the point:
+ * the previous number was not a measurement of anything.
+ */
+const PRESENCE = { present: 100, absent: 0 } as const;
+const presence = (found: boolean): number => (found ? PRESENCE.present : PRESENCE.absent);
+
 export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[], nowMs: number): ContentIntelligence {
   const byPage = new Map<string, ContentBlock[]>();
   for (const b of blocks) { const a = byPage.get(b.page_id) || []; a.push(b); byPage.set(b.page_id, a); }
@@ -54,7 +74,14 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
     C('headline_clarity', 'Headline clarity (H1)', 'pass', pct(withH1, pages.length), `${withH1}/${pages.length} pages have an H1`);
     const withCta = pages.filter((p) => ctaCount(p) > 0).length;
     C('cta_quality', 'CTA presence', 'pass', pct(withCta, pages.length), `${withCta}/${pages.length} pages have a CTA`);
-    C('value_proposition', 'Value proposition (hero)', home ? 'pass' : 'not_evaluable', home ? (hasH1(home) && pageWords(home.id) >= 30 ? 90 : 45) : null, home ? undefined : 'No home page identified');
+    // Composite of two independently-observable sub-signals, 50 points each: the home page
+    // states a headline (H1), and states enough of a proposition to be readable (>=30 words).
+    // Replaces the previous 90/45 pair, where 45 was awarded for failing both.
+    const heroH1 = home ? hasH1(home) : false;
+    const heroWords = home ? pageWords(home.id) >= 30 : false;
+    C('value_proposition', 'Value proposition (hero)', home ? 'pass' : 'not_evaluable',
+      home ? (heroH1 ? 50 : 0) + (heroWords ? 50 : 0) : null,
+      home ? `H1 ${heroH1 ? 'present' : 'missing'}, hero copy ${heroWords ? 'sufficient' : 'thin'}` : 'No home page identified');
     const hier = pages.filter((p) => hasH1(p) && hasH2(p)).length;
     C('content_hierarchy', 'Content hierarchy', 'pass', pct(hier, pages.length));
     const readScores = pages.map((p) => fleschReadingEase((byPage.get(p.id) || []).map((b) => b.content_text || '').join(' '))).filter((s): s is number => s != null);
@@ -63,8 +90,8 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
     C('content_depth', 'Content depth', 'pass', clamp((avgWords / 400) * 100), `${Math.round(avgWords)} avg words/page`);
     const blogs = pages.filter((p) => matchesPage(p, ['blog', 'article', 'post', 'insight', 'resource'])).length;
     C('blog_coverage', 'Blog / resource coverage', 'pass', blogs >= 5 ? 100 : clamp((blogs / 5) * 100), `${blogs} content pages`);
-    C('resources', 'Resources', present ? 'pass' : 'not_evaluable', pages.some((p) => matchesPage(p, ['resource', 'guide', 'ebook', 'whitepaper', 'library'])) ? 100 : 30);
-    C('faq', 'FAQ', 'pass', pages.some((p) => matchesPage(p, ['faq', 'frequently asked', 'help', 'support'])) ? 100 : 30);
+    C('resources', 'Resources', present ? 'pass' : 'not_evaluable', presence(pages.some((p) => matchesPage(p, ['resource', 'guide', 'ebook', 'whitepaper', 'library']))), 'A resources / guides / library section');
+    C('faq', 'FAQ', 'pass', presence(pages.some((p) => matchesPage(p, ['faq', 'frequently asked', 'help', 'support']))), 'An FAQ / help / support section');
     // Duplicate content (titles / meta descriptions)
     const titles = pages.map((p) => norm(p.title)).filter(Boolean);
     const metas = pages.map((p) => norm(p.meta_description)).filter(Boolean);
@@ -77,7 +104,7 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
     const avgLinks = pages.reduce((a, p) => a + (p.internal_link_count || 0), 0) / pages.length;
     C('internal_linking', 'Internal linking', 'pass', clamp((avgLinks / 8) * 100), `${avgLinks.toFixed(1)} avg internal links/page`);
     // Presence / trust pages (absence is a finding, still evaluable)
-    const presence: Array<[string, string, string[]]> = [
+    const presencePages: Array<[string, string, string[]]> = [
       ['contact_info', 'Contact information', ['contact']],
       ['pricing_visibility', 'Pricing visibility', ['pricing', 'plans', 'price']],
       ['company_information', 'Company information', ['about', 'company', 'who we are']],
@@ -86,11 +113,25 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
       ['social_proof', 'Social proof', ['customers', 'trusted by', 'logos', 'press']],
       ['case_studies', 'Case studies', ['case study', 'case-stud', 'success story']],
     ];
-    for (const [key, label, kws] of presence) C(key, label, 'pass', pages.some((p) => matchesPage(p, kws)) ? 100 : 25);
+    for (const [key, label, kws] of presencePages) {
+      C(key, label, 'pass', presence(pages.some((p) => matchesPage(p, kws))), `${label} page detected on the site`);
+    }
     // ICP / messaging consistency — title coherence across the site
-    const tokenSets = titles.map((t) => new Set(t.split(' ')));
-    const common = tokenSets.length > 1 ? tokenSets.reduce((acc, s) => new Set([...acc].filter((x) => s.has(x)))).size : 0;
-    C('messaging_consistency', 'Messaging consistency', titles.length > 1 ? 'pass' : 'not_evaluable', titles.length > 1 ? clamp(common > 0 ? 75 : 45) : null, 'Shared brand terms across page titles');
+    // Real ratio, not a two-value floor. Score = the share of page titles carrying the
+    // site's most common title token — a direct measure of how consistently the brand /
+    // product vocabulary is repeated. Replaces the previous 75-if-any / 45-otherwise pair,
+    // which reported the same 45 for a site with zero shared vocabulary as for one that
+    // was merely inconsistent.
+    const titleTokens = titles.map((t) => t.split(' ').filter((token) => token.length > 2));
+    const tokenFrequency = new Map<string, number>();
+    for (const tokens of titleTokens) {
+      for (const token of new Set(tokens)) tokenFrequency.set(token, (tokenFrequency.get(token) ?? 0) + 1);
+    }
+    const topTokenCount = Math.max(0, ...tokenFrequency.values());
+    C('messaging_consistency', 'Messaging consistency',
+      titles.length > 1 ? 'pass' : 'not_evaluable',
+      titles.length > 1 ? clamp((topTokenCount / titles.length) * 100) : null,
+      `Most common title term appears on ${topTokenCount}/${titles.length} page titles`);
     C('icp_alignment', 'ICP alignment', 'not_evaluable', null, 'No stored ICP profile to compare against');
     // BETA-ROADMAP-EXEC-008 (Tier 1) — authorship-presence only (NO E-E-A-T semantics, NO trust weighting).
     // Reads crawl_metadata.signals.author (recovered EXEC-002). Absence is not_evaluable (not a defect for

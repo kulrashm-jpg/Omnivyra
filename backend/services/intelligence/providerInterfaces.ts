@@ -279,3 +279,21 @@ export function unavailableResult<T extends { state: ScoreState; evidence: Evide
 }
 
 export type ConfidenceBandFromCount = (count: number, hasStrong: boolean) => ConfidenceBand;
+
+// ── Canonical provider environment gates ──────────────────────────────────────
+
+/**
+ * THE single interpretation of `WIKIDATA_ENABLED` for the whole repository.
+ *
+ * Wikidata is free and keyless, so the canonical intent (Phase 0A) is that it is
+ * ON BY DEFAULT and disabled only by an explicit `WIKIDATA_ENABLED=false`.
+ *
+ * Before Phase 1A two gates disagreed: the provider registry used `!== 'false'`
+ * (default ON — and it is the registry that actually drives the report path) while
+ * `entityGraphProviderBridge` used `=== 'true'` (default OFF). The activation matrix
+ * therefore reported `awaiting_credentials` for entity_graph while the report was
+ * genuinely running the adapter. Both now call this helper so they cannot diverge.
+ */
+export function isWikidataEnabled(): boolean {
+  return process.env.WIKIDATA_ENABLED !== 'false';
+}

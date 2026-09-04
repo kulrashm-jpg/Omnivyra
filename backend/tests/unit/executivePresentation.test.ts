@@ -25,7 +25,13 @@ const CLEAR = ['AHREFS_API_KEY', 'MOZ_API_KEY', 'MAJESTIC_API_KEY', 'GSC_OAUTH_C
 describe('BETA-FINAL-001 — provider activation matrix (Phase 5)', () => {
   const saved = { ...process.env };
   afterEach(() => { process.env = { ...saved }; });
-  beforeEach(() => { for (const k of CLEAR) delete process.env[k]; });
+  beforeEach(() => {
+    for (const k of CLEAR) delete process.env[k];
+    // Phase 1A: keyless Wikidata is ON by default, so "unconfigured" must be stated
+    // explicitly. Clearing the env now yields an ACTIVE entity_graph provider — which
+    // is the truthful state the report path has always been in.
+    process.env.WIKIDATA_ENABLED = 'false';
+  });
 
   it('reports all 8 implemented providers as awaiting_credentials when unconfigured (honest, no fabrication)', () => {
     const matrix = buildProviderActivationMatrix();
@@ -102,9 +108,12 @@ describe('BETA-FINAL-001 — executive presentation assembler (Phase 2/3)', () =
 describe('BETA-FINAL-001 — executive dashboard (Phase 4)', () => {
   const saved = { ...process.env };
   afterEach(() => { process.env = { ...saved }; });
-
   it('composes provider health + coverage + opportunities + risks + roadmap', () => {
     for (const k of CLEAR) delete process.env[k];
+    // Phase 1A: this test asserts the "no active providers" dashboard. Keyless Wikidata is
+    // now ON by default (canonical `isWikidataEnabled()`), so clearing the env is no longer
+    // sufficient to express "unconfigured" — it must be disabled explicitly.
+    process.env.WIKIDATA_ENABLED = 'false';
     const evidence = [m('impressions', 5000, 'count'), m('ctr', 0.005, 'ratio'), m('domain_authority', 15, 'score_0_100'), m('avg_position', 22, 'position')];
     const correlations = correlateEvidence(evidence);
     const rootCauses = diagnoseRootCauses(correlations);

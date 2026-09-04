@@ -22,6 +22,19 @@ import { supabase } from '../../db/supabaseClient';
 // (shared primitive; shadow by default → never blocks; enforce blocks unsafe output).
 import { moderateBeforePersist, AiError } from '../ai/safety';
 import { canTransition } from '../../../lib/content/contentLifecycle';
+// PHASE A — the canonical persistence activation boundary. Default DENY, so the
+// Phase A foundation schema can be introduced while every canonical write stays
+// inert BY POLICY rather than merely because the tables are absent. Independent
+// of ORIGINALITY_GATE_ENABLED by design.
+import { assertCanonicalPersistenceAllowed } from './canonicalPersistencePolicy';
+// B7.2 — knowledge-graph enrichment. Advisory and failure-contained; the flag
+// defaults OFF so none of this executes unless deliberately enabled.
+import {
+  resolveTopicIdentity,
+  isPlatformKnowledgeGraphEnabled,
+} from './knowledgeGraph/topicResolutionService';
+import { recordTopicCoverage } from './knowledgeGraph/coverageService';
+import { recordRawCounter } from '../../observability';
 import type {
   CanonicalContent,
   CanonicalContentType,
@@ -58,6 +71,7 @@ function mapContentRow(row: any): CanonicalContent {
   return {
     id: row.id,
     companyId: row.company_id,
+    campaignId: row.campaign_id ?? null,
     contentType: row.content_type as CanonicalContentType,
     lifecycleStatus: row.lifecycle_status as ContentLifecycleStatus,
     title: row.title ?? null,
@@ -143,6 +157,18 @@ function snapshotFields(row: any): Record<string, unknown> {
 export interface CreateContentInput {
   companyId: string;
   contentType: CanonicalContentType;
+  /**
+   * Optional campaign association (content.campaign_id).
+   *
+   * Single-valued and nullable because that is what the data shows: content is
+   * often campaign-independent, and nothing in the codebase exhibits one
+   * artifact belonging to several campaigns. Variants and publication lineage
+   * inherit the campaign transitively via content_id, so they need no column of
+   * their own. NOT a foreign key — campaign deletion must never cascade content
+   * away, and 36 of 56 production daily_content_plans already reference deleted
+   * campaigns.
+   */
+  campaignId?: string | null;
   title?: string | null;
   body?: string | null;
   topic?: string | null;
@@ -172,6 +198,18 @@ export interface UpdateContentPatch {
 export interface ListContentFilter {
   contentType?: CanonicalContentType;
   status?: ContentLifecycleStatus;
+  /**
+   * B4.1 — restrict to one campaign's content (content.campaign_id).
+   *
+   * NARROWS the company-scoped result set; it can never widen it. `companyId`
+   * remains a separate, always-applied argument to listContent, so a campaign
+   * filter cannot substitute for or bypass company scoping. Backed by the
+   * existing `content_company_campaign_idx (company_id, campaign_id)`.
+   *
+   * Pass `null` to select campaign-INDEPENDENT content (campaign_id IS NULL);
+   * omit the key entirely for "no campaign filter".
+   */
+  campaignId?: string | null;
   limit?: number;
 }
 
@@ -223,6 +261,9 @@ export interface ExternalContentRow {
  * revision 1). Returns the persisted DTO.
  */
 export async function createContent(input: CreateContentInput): Promise<CanonicalContent> {
+  // PHASE A — canonical persistence boundary. Checked BEFORE moderation so a
+  // denied write costs nothing (moderation can call out to a provider).
+  assertCanonicalPersistenceAllowed('createContent');
   // WAVE-1B-001 — outbound moderation at THE canonical persistence boundary for
   // post/thread. Invoked exactly once before insert. Shadow (default) classifies +
   // audits without blocking; enforce blocks unsafe output (fail-closed) via AiError.
@@ -237,6 +278,11 @@ export async function createContent(input: CreateContentInput): Promise<Canonica
 
   const insertRow = {
     company_id: input.companyId,
+    // Nullable BY DESIGN: content is legitimately campaign-independent (17 of 24
+    // production scheduled_posts carry no campaign). `undefined` and `null` both
+    // persist as NULL — a campaign association is never invented for a caller
+    // that did not supply one.
+    campaign_id: input.campaignId ?? null,
     content_type: input.contentType,
     lifecycle_status: input.lifecycleStatus ?? 'draft',
     title: input.title ?? null,
@@ -270,6 +316,61 @@ export async function createContent(input: CreateContentInput): Promise<Canonica
   });
   if (revError) fail('createContent(revision)', revError);
 
+  // ── B7.2 — knowledge-graph enrichment (ADVISORY, FAILURE-CONTAINED) ──────
+  //
+  // createContent is the NARROWEST authoritative acceptance point: all five
+  // production paths (generationRuntime, boltScheduleBlockProcessor,
+  // runPostGeneration, runThreadGeneration, POST /api/content) reach canonical
+  // persistence through here, so one hook covers every path without touching
+  // any of them.
+  //
+  // Placed AFTER the content row and its revision are committed: reaching this
+  // line means the artifact is accepted, so the graph can only ever learn from
+  // content that was actually kept.
+  //
+  // FAILURE CONTAINMENT is the whole contract. This block cannot throw, cannot
+  // alter `data`, and cannot change what createContent returns. A graph failure
+  // leaves content acceptance exactly as it was before B7.2 — it does not
+  // replace originality validation, campaign uniqueness, or the canonical
+  // lifecycle, and it never fabricates a campaign or an angle.
+  //
+  // Flag default-OFF: when disabled nothing below is imported-and-run, so there
+  // is no query, no write, and no provider call of any kind.
+  if (isPlatformKnowledgeGraphEnabled()) {
+    try {
+      const resolution = await resolveTopicIdentity(input.topic, { source: 'content_acceptance' });
+      if (resolution.topicId) {
+        const outcome = await recordTopicCoverage({
+          companyId: input.companyId,
+          topicId: resolution.topicId,
+          contentId: String(data.id),
+          // Preserved when present, NULL otherwise. Never inferred from topic
+          // similarity, and no campaign is ever created here.
+          campaignId: input.campaignId ?? null,
+          // B7.3 owns angle extraction — deliberately not synthesised.
+          angleLabel: null,
+          source: 'content_acceptance',
+        });
+        // `'reason' in outcome` rather than `!outcome.ok`: this repo compiles
+        // with `strict: false`, under which discriminated-union narrowing on a
+        // boolean literal does not apply. The `in` operator narrows regardless.
+        if ('reason' in outcome) {
+          // Observable, not swallowed silently.
+          recordRawCounter('content.knowledge_graph.coverage_failed', 1, { reason: outcome.reason });
+        }
+      } else {
+        recordRawCounter('content.knowledge_graph.unresolved', 1, {
+          kind: resolution.kind, reason: resolution.reason,
+        });
+      }
+    } catch (graphError) {
+      // Defence in depth: both services are already non-throwing by contract.
+      recordRawCounter('content.knowledge_graph.error', 1, {
+        reason: (graphError as Error)?.message?.slice(0, 80) ?? 'unknown',
+      });
+    }
+  }
+
   return mapContentRow(data);
 }
 
@@ -298,6 +399,8 @@ export async function updateContent(
   patch: UpdateContentPatch,
   opts: { revisionType: ContentRevisionType },
 ): Promise<CanonicalContent> {
+  // PHASE A — writes `content` + a `content_revision` snapshot.
+  assertCanonicalPersistenceAllowed('updateContent');
   const existing = await getContent(id, companyId);
   if (!existing) fail('updateContent', { message: 'content not found for company' });
 
@@ -350,6 +453,15 @@ export async function listContent(
 
   if (filter.contentType) query = query.eq('content_type', filter.contentType);
   if (filter.status) query = query.eq('lifecycle_status', filter.status);
+  // B4.1 — campaign narrowing, applied AFTER the company predicate above so it
+  // can only ever shrink the tenant-scoped set. `null` is a meaningful value
+  // here (campaign-independent content), which is why this tests for `undefined`
+  // rather than truthiness.
+  if (filter.campaignId !== undefined) {
+    query = filter.campaignId === null
+      ? query.is('campaign_id', null)
+      : query.eq('campaign_id', filter.campaignId);
+  }
   if (typeof filter.limit === 'number') query = query.limit(filter.limit);
 
   const { data, error } = await query;
@@ -366,6 +478,8 @@ export async function setLifecycleStatus(
   companyId: string,
   status: ContentLifecycleStatus,
 ): Promise<CanonicalContent> {
+  // PHASE A — mutates `content.lifecycle_status`.
+  assertCanonicalPersistenceAllowed('setLifecycleStatus');
   const existing = await getContent(id, companyId);
   if (!existing) fail('setLifecycleStatus', { message: 'content not found for company' });
 
@@ -402,6 +516,8 @@ export async function upsertVariant(
   platform: string,
   data: UpsertVariantData,
 ): Promise<ContentVariant> {
+  // PHASE A — writes `content_variant`.
+  assertCanonicalPersistenceAllowed('upsertVariant');
   const row = {
     content_id: contentId,
     company_id: companyId,
@@ -450,6 +566,9 @@ export async function associateAsset(
   companyId: string,
   input: AssociateAssetInput,
 ): Promise<ContentAssetLink> {
+  // PHASE A — writes `content_asset` (SINGULAR; the legacy plural
+  // `content_assets` campaign table is NOT gated by this policy).
+  assertCanonicalPersistenceAllowed('associateAsset');
   const variantId = input.variantId ?? null;
   const version = input.version ?? 1;
 
@@ -546,6 +665,10 @@ export function adaptExternalContent(row: ExternalContentRow): CanonicalContent 
   return {
     id: row.id,
     companyId: row.companyId,
+    // Adapter-backed rows (blog/article/story) carry no campaign association:
+    // their legacy tables have no campaign column, so inventing one here would
+    // fabricate a relationship the source data does not express.
+    campaignId: null,
     contentType: row.contentType,
     lifecycleStatus: row.lifecycleStatus ?? 'adapted',
     title: row.title ?? null,

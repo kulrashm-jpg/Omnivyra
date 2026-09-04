@@ -93,7 +93,7 @@ export async function createIntegration(
     nonSecretConfig,
     status: 'pending',
   });
-  await upsertConnectionCredentials(connection.id, credentials);
+  await upsertConnectionCredentials(companyId, connection.id, credentials);
 
   const { data, error } = await ownedDbTable('company_integrations')
     .insert({
@@ -137,7 +137,7 @@ export async function updateIntegration(
     const normalizedConfig = normalizeIntegrationConfig(existing.type, updates.config);
     const { nonSecretConfig, credentials } = splitSecretConfig(normalizedConfig);
     if (existing.website_connection_id) {
-      await upsertConnectionCredentials(existing.website_connection_id, credentials);
+      await upsertConnectionCredentials(companyId, existing.website_connection_id, credentials);
       await ownedDbTable('website_connections')
         .update({ non_secret_config: nonSecretConfig, updated_at: new Date().toISOString() })
         .eq('id', existing.website_connection_id);
@@ -248,7 +248,7 @@ export async function getActiveIntegration(
 
 async function hydrateIntegration(row: Integration): Promise<Integration> {
   const nonSecretConfig = (row.non_secret_config ?? row.config ?? {}) as Record<string, string>;
-  const config = await mergeConnectionConfig(row.website_connection_id, nonSecretConfig, row.config);
+  const config = await mergeConnectionConfig(row.company_id, row.website_connection_id, nonSecretConfig, row.config);
   return {
     ...row,
     non_secret_config: nonSecretConfig,

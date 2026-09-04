@@ -276,6 +276,35 @@ export async function estimateLlmCostUsd(
 }
 
 /**
+ * B7.8-C — provider USD for an EMBEDDING call, with NO organization.
+ *
+ * Sibling of estimateLlmCostUsd above, differing only in pricing kind. It
+ * exists because platform/infrastructure spend (platform_topic_node embeddings)
+ * has no customer organization, and the org-scoped resolveEmbeddingCost below
+ * requires one solely to call fetchCreditRateUsd — a USD→CUSTOMER CREDITS
+ * conversion that is meaningless when nobody is charged.
+ *
+ * ADDITIVE: no existing caller, credit calculation or billing behaviour is
+ * changed. It reuses fetchModelPricingRow so no pricing value is duplicated.
+ */
+export async function estimateEmbeddingCostUsd(
+  provider: string,
+  model: string,
+  totalTokens: number,
+  timestamp?: string | Date,
+): Promise<{ unitCostPer1k: number; totalUsd: number; row: unknown }> {
+  const row = await fetchModelPricingRow(
+    requireNonEmpty(provider, 'provider').toLowerCase(),
+    requireNonEmpty(model, 'model').toLowerCase(),
+    'embedding',
+    normalizeTimestamp(timestamp),
+  );
+  const tokens = Math.max(0, Number(totalTokens ?? 0));
+  const per1k = Number(row.input_per_1k_usd ?? 0);
+  return { unitCostPer1k: per1k, totalUsd: (tokens / 1000) * per1k, row };
+}
+
+/**
  * Upper-bound credit estimate for the HOLD phase of a token-priced action.
  *
  * Returns ceil(ceiling_usd / credit_rate_usd) — i.e. the most credits this

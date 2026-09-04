@@ -11,6 +11,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { listDecisionObjects } from '../../../backend/services/decisionObjectService';
 import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
 import type { OptimizationProposal } from '../../../backend/types/CampaignOptimization';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 
 function proposalFromDecisionObjects(input: {
   campaignId: string;
@@ -70,6 +71,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (campaignError || !campaignRow?.company_id) {
     return res.status(404).json({ error: 'Campaign not found' });
   }
+
+  // B4.3 — bind authorization to the company actually READ FROM.
+  //
+  // withRBAC resolves its subject from req.query.companyId / req.body.companyId,
+  // but this route selects its subject with req.query.campaignId and then reads
+  // the intelligence of whatever company owns that campaign. A caller could pass
+  // ?companyId=<own company>&campaignId=<another company's campaign> to satisfy
+  // RBAC and receive that company’s decision intelligence.
+  const tenantAccess = await requireTenantAccess(req, res, String(campaignRow.company_id));
+  if (!tenantAccess) return; // guard already responded (403 NOT_A_MEMBER)
 
   const decisions = await runInApiReadContext('campaignOptimizationProposalApi', async () =>
     listDecisionObjects({

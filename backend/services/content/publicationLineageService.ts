@@ -15,6 +15,8 @@
  */
 
 import { supabase } from '../../db/supabaseClient';
+// PHASE A — canonical persistence activation boundary (default DENY).
+import { isCanonicalPersistenceEnabled } from './canonicalPersistencePolicy';
 
 const LINEAGE_TABLE = 'publication_lineage';
 
@@ -111,6 +113,12 @@ function mapRow(row: any): LineageEvent {
  */
 export async function recordEvent(input: RecordEventInput): Promise<LineageEvent | null> {
   try {
+    // PHASE A — canonical persistence boundary. `publication_lineage` is part of
+    // the Phase A foundation, so it stays inert while the policy denies. This
+    // writer is FAIL-SAFE by contract (never throws), so a refusal returns null
+    // exactly like any other unavailable-write path — byte-identical to today,
+    // where the same call fails against the missing table.
+    if (!isCanonicalPersistenceEnabled()) return null;
     if (!input?.companyId) return null;
     if (!LINEAGE_EVENT_TYPES.includes(input.eventType)) return null;
 

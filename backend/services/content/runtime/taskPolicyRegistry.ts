@@ -179,6 +179,18 @@ const MASTER_TASKS: ReadonlySet<WriterTask> = new Set<WriterTask>([
   'blog',
   'article',
   'story',
+  // B3.1 — poll/tweet are MASTER tasks for the same reason the other five are:
+  // they are produced by the generateMasterContent OPERATION. The long-form
+  // window is operation-keyed, not length-keyed — aiGatewayCore.ts:308 returns
+  // 240_000ms for any call whose operation is in LONG_FORM_OPERATIONS, which
+  // includes 'generateMasterContent'. So a poll or tweet generated as master
+  // content ALREADY receives the 240s window at the gateway today; listing them
+  // here makes the registry agree with observed runtime behaviour rather than
+  // changing it. variant/adapt stay short-form because they use DIFFERENT
+  // operations (generatePlatformVariants / regenerateContent), which are not in
+  // LONG_FORM_OPERATIONS.
+  'poll',
+  'tweet',
 ]);
 
 /**
@@ -241,6 +253,8 @@ export const ALL_WRITER_TASKS: readonly WriterTask[] = [
   'blog',
   'article',
   'story',
+  'poll',
+  'tweet',
   'variant',
   'adapt',
 ];

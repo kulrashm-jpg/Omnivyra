@@ -6,11 +6,11 @@
  * value here is IDENTICAL to the inline literal it replaces (behaviour-preserving; the
  * snapshot + score-model tests assert this).
  *
- * Where two previously-inline thresholds genuinely CONFLICTED (e.g. the executive impact
- * scale uses 72/48 while action-priority uses 70/60/45), both are retained here as distinct,
- * named, documented constants rather than silently unified — unifying would change displayed
- * classifications. Those discrepancies are called out as GOVERNANCE DEBT for a future
- * product decision.
+ * Phase 2 update: the one genuine CONFLICT — the executive impact scale using 72 while
+ * action-priority used 70 for the same "high impact" concept — is now RESOLVED. Both derive
+ * from `HIGH_IMPACT_THRESHOLD` (see its rationale below). Constants that encode genuinely
+ * different concepts (e.g. `CANONICAL_SCORE_BANDS` vs `MARKET_POSITION_BANDS`) remain
+ * deliberately distinct and are documented as such.
  *
  * Leaf module: imports nothing from the report pipeline (no circular dependencies).
  */
@@ -111,16 +111,62 @@ export const COVERAGE_GAP_PENALTY = 0.12 as const;
 
 // ── Priority / maturity thresholds ──────────────────────────────────────────────
 
+/**
+ * THE canonical "this impact counts as high" cutoff (Phase 2).
+ *
+ * RESOLVED GOVERNANCE DEBT. Two constants previously encoded the same concept with
+ * different values: `IMPACT_SCALE.high = 72` (executive impact scale) and
+ * `ACTION_PRIORITY.high_impact = 70` (per-action priority type). No document, comment or
+ * commit justified either number.
+ *
+ * Canonical value is 70, on three grounds:
+ *  1. USAGE — 70 backs three call sites in `actionPriorityService` (priority-type
+ *     classification plus two expected-upside branches); 72 backs one, in
+ *     `summaryDecisionHelpers`.
+ *  2. COHERENCE — the action ladder is {45, 60, 70}, all multiples of five. 72 is the
+ *     lone outlier in an otherwise regular scale.
+ *  3. DIRECTION — 70 is the more inclusive cutoff, so unifying widens rather than narrows
+ *     what is called high impact. Nothing that was previously labelled high impact loses
+ *     that label.
+ *
+ * Behaviour change, stated plainly: a first-priority action with impact in [70, 72) now
+ * yields an executive impact scale of "high" where it previously read "medium". That is
+ * the intended consequence of the two constants agreeing.
+ */
+export const HIGH_IMPACT_THRESHOLD = 70 as const;
+
 /** Executive impact-scale thresholds. Owner: summaryDecisionHelpers. */
-export const IMPACT_SCALE = { high: 72, medium: 48 } as const;
+export const IMPACT_SCALE = { high: HIGH_IMPACT_THRESHOLD, medium: 48 } as const;
+
+/** Action priority-type thresholds. Owner: actionPriorityService. */
+export const ACTION_PRIORITY = {
+  quick_win_impact: 45,
+  high_impact: HIGH_IMPACT_THRESHOLD,
+  mid_impact: 60,
+} as const;
 
 /**
- * Action priority-type thresholds. Owner: actionPriorityService.
- * GOVERNANCE DEBT: high=70 differs from IMPACT_SCALE.high=72, and mid=60 has no analogue
- * elsewhere. Retained distinct pending a product decision — unifying would change how
- * individual actions are labelled (quick_win / high_impact / strategic).
+ * Effort divisors for opportunity prioritisation (Phase 2).
+ *
+ * The intended framework is `Impact × Confidence ÷ Effort`, but the implementation ranked
+ * on `Impact × Confidence` only — effort reached the priority TYPE
+ * (`classifyPriorityType`) but never the ordering score, so a high-effort action could
+ * outrank an equally valuable low-effort one.
+ *
+ * Divisors are 1 / 1.5 / 2.25 — a constant 1.5× step per effort level. A geometric ladder
+ * keeps the penalty proportional (medium effort costs 50% more than low; high costs 50%
+ * more than medium) rather than letting a linear scale over-punish the top band. With the
+ * 0..100 impact range and 0..1 confidence range, ranking scores stay within 0..100, so the
+ * existing comparison logic and any stored ordering remain on the same scale.
  */
-export const ACTION_PRIORITY = { quick_win_impact: 45, high_impact: 70, mid_impact: 60 } as const;
+export const EFFORT_DIVISOR = { low: 1, medium: 1.5, high: 2.25 } as const;
+
+export type EffortLevel = keyof typeof EFFORT_DIVISOR;
+
+/** Resolve the divisor for an effort level, defaulting to medium when unknown. */
+export function effortDivisor(effort: EffortLevel | null | undefined): number {
+  return EFFORT_DIVISOR[effort ?? 'medium'] ?? EFFORT_DIVISOR.medium;
+}
 
 /** System-maturity thresholds. Owner: canonicalScoreState. */
 export const MATURITY_THRESHOLDS = { strongFoundation: 65, strongAuthority: 60, weakAuthority: 40 } as const;

@@ -1,4 +1,6 @@
 /** Part of the external-apis API (Agent-B split — backend module, not a route). */
+// Remediation: read-path redaction of any secret pasted into the env-var-name field.
+import { redactApiSourceRow } from '../../security/credentialSafety';
 import { requireExternalApiAccess, requirePlatformAdmin, parseUsageUserId } from './indexShared';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../db/supabaseClient';
@@ -59,6 +61,15 @@ export async function handleExternalApisGet(req: NextApiRequest, res: NextApiRes
               .eq('is_active', true)
               .order('created_at', { ascending: true })).data || []
           : await getPlatformConfigs(companyId, { skipCache });
+      // REMEDIATION — read-path redaction, applied at the API boundary for EVERY branch above.
+      //
+      // `api_key_env_name` is meant to hold an environment-variable NAME. Four provider rows
+      // were found holding live API secrets instead, and `select('*')` served them straight
+      // to the browser. Write-side validation now prevents new ones, but this guard is what
+      // makes an already-poisoned row unservable: any value that is not a valid env-var name
+      // is replaced with a marker before it leaves the server. Defence in depth — the UI is
+      // not the security boundary, and this must hold even if a row is written out-of-band.
+      const redactedApis = redactApiSourceRow(apis as Array<Record<string, unknown>>);
       const since = new Date();
       since.setDate(since.getDate() - 13);
       const sinceDate = since.toISOString().slice(0, 10);
@@ -143,7 +154,8 @@ export async function handleExternalApisGet(req: NextApiRequest, res: NextApiRes
         return acc;
       }, {});
 
-      const enriched = apis.map((api) => {
+      // Built from the REDACTED rows — this is the array that leaves the server.
+      const enriched = (redactedApis as typeof apis).map((api) => {
         const rows = usageByApi[api.id] || [];
         // Include all usage (feature + non-feature) so recommendation/campaign-driven API calls show in analytics
         const requestCount = rows.reduce(

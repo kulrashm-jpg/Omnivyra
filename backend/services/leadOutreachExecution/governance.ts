@@ -74,6 +74,23 @@ export interface TenantGovernanceConfig {
   dailyLimitLead: number | null;
 }
 
+/**
+ * LI-3C — the canonical governance verdict, structurally mirroring
+ * `MayContactResult` without importing it, so this module keeps no dependency
+ * on the identity spine. The producer is
+ * `prospectIdentity/contactGovernance.mayContact`; nothing here re-derives it.
+ */
+export interface CanonicalGovernanceVerdict {
+  decision: 'allowed' | 'blocked' | 'deferred';
+  gate: number | null;
+  governanceType: string | null;
+  recordId: string | null;
+  matchedBy: 'person' | 'target' | null;
+  reason: string;
+  deferredUntil: string | null;
+  version: string;
+}
+
 /** Active suppressions relevant to the task being evaluated. */
 export interface SuppressionMatches {
   task: boolean;
@@ -99,6 +116,15 @@ export interface GovernanceEvaluationInput {
   task: OutreachTask;
   config: TenantGovernanceConfig;
   suppressions: SuppressionMatches;
+  /**
+   * LI-3C — the canonical contact governance verdict, already computed by
+   * `prospectIdentity/contactGovernance.mayContact` and injected here.
+   *
+   * It is a RESULT, not a data source: the evaluator stays pure and this module
+   * gains no database access. `null` means the canonical layer was not
+   * consulted for this evaluation; it never means "nobody is governed".
+   */
+  canonicalGovernance: CanonicalGovernanceVerdict | null;
   usage: RateUsage;
   /** Global kill switch state, resolved by the caller (never read here). */
   globalKillSwitch: boolean;
@@ -145,11 +171,67 @@ export function evaluateKillSwitch(input: GovernanceEvaluationInput): GateEvalua
   return allow('kill_switch', 'tenant.enablement', 'no kill switch engaged and the tenant is enabled', { configured: true, enabled: true }, { scope: 'tenant' });
 }
 
-/** Task, lead, recipient and channel suppression. */
+/**
+ * Task, lead, recipient and channel suppression.
+ *
+ * LI-3C: the CANONICAL contact governance verdict is consulted first and is
+ * authoritative. It arrives already computed by
+ * `prospectIdentity/contactGovernance.mayContact` — the single evaluator that
+ * owns the ADR's governance rules. No rule is reimplemented here; this gate
+ * only translates that verdict into Path B's vocabulary.
+ *
+ * The legacy `SuppressionMatches` booleans still run underneath, because
+ * `outreach_suppressions` remains readable until Path A's removal conditions
+ * are met. They cannot override a canonical block; they can only add one.
+ */
 export function evaluateSuppression(input: GovernanceEvaluationInput): GateEvaluation {
-  const { suppressions, task, config } = input;
+  const { suppressions, task, config, canonicalGovernance } = input;
   const evidence = { ...suppressions, channel: task.channel };
 
+  // ── CANONICAL GOVERNANCE (LI-3B/LI-3C) — authoritative ────────────────────
+  // `null` means the canonical layer was not consulted (no tenant/target, or a
+  // caller that predates LI-3C), NOT that nobody is governed. A read FAILURE is
+  // reported by the loader as a canonical block, never as an absent verdict.
+  if (canonicalGovernance && canonicalGovernance.decision !== 'allowed') {
+    const canonicalEvidence = {
+      ...evidence,
+      canonical: {
+        governanceType: canonicalGovernance.governanceType,
+        recordId: canonicalGovernance.recordId,
+        matchedBy: canonicalGovernance.matchedBy,
+        gate: canonicalGovernance.gate,
+        version: canonicalGovernance.version,
+        // No address, number or person identifier is placed in evidence: the
+        // decision log is documented as never containing personal data.
+      },
+    };
+
+    if (canonicalGovernance.decision === 'deferred') {
+      // A deferment is backpressure, not a refusal — ADR §14 maps bands 3-6 to
+      // `blocked` except `deferred`, which is Path B's existing `deferred`.
+      return {
+        gate: 'suppression',
+        rule: `governance.${canonicalGovernance.governanceType ?? 'deferred'}`,
+        decision: 'deferred',
+        reason: canonicalGovernance.deferredUntil
+          ? `contact is deferred until ${canonicalGovernance.deferredUntil}`
+          : 'contact is deferred with no stated end date',
+        evidence: { ...canonicalEvidence, deferredUntil: canonicalGovernance.deferredUntil },
+        scope: 'recipient',
+        limiterLayer: null,
+      };
+    }
+
+    return block(
+      'suppression',
+      `governance.${canonicalGovernance.governanceType ?? 'blocked'}`,
+      canonicalGovernance.reason,
+      canonicalEvidence,
+      { scope: 'recipient' },
+    );
+  }
+
+  // ── LEGACY (Path A/B tables) — still consulted, cannot override the above ──
   // Recipient first: it is the compliance case, and the one with legal weight.
   if (suppressions.recipient) {
     return block('suppression', 'suppression.recipient', 'the recipient is on the do-not-contact list', evidence, { scope: 'recipient' });

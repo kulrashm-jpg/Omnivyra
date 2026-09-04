@@ -25,7 +25,33 @@ import type {
   TrustCoherenceProvider,
   TrustCoherenceResult,
 } from './providerInterfaces';
-import { AI_PROVIDERS, unavailableResult } from './providerInterfaces';
+import { AI_PROVIDERS, isWikidataEnabled, unavailableResult } from './providerInterfaces';
+
+// ── Phase 1A: STATIC adapter imports ─────────────────────────────────────────
+//
+// These were previously loaded with dynamic `require()` inside swallowed
+// `catch {}` blocks. That worked under plain Node but did NOT survive the
+// Next.js/Vercel server bundle: the modules were not reliably traced into the
+// lambda, every `require()` threw MODULE_NOT_FOUND, the empty catch hid it, and
+// the registry silently fell back to its `Unavailable*` defaults. The symptom in
+// production was a report whose citation cells all read "chatgpt adapter not
+// configured" even though OPENAI_API_KEY was set, and a knowledge_graph reading
+// "No knowledge-graph adapter is configured" even though Wikidata is keyless.
+//
+// Static top-level imports are always bundled and traced, so the adapters are
+// present at runtime. The env gates below are UNCHANGED — an adapter is still
+// registered only when its credential/flag is present. Only the *loading*
+// mechanism moved; the activation policy did not.
+import { WikidataAdapter } from './adapters/wikidataAdapter';
+import { ReportScoreHistoryAdapter } from './adapters/reportScoreHistoryAdapter';
+import { CanonicalTrajectoryHistoryStore } from './adapters/trajectoryHistoryStore';
+import { OpenAIChatGPTAdapter } from './adapters/openaiAdapter';
+import { AnthropicClaudeAdapter } from './adapters/anthropicAdapter';
+import { GeminiAdapter } from './adapters/geminiAdapter';
+import { PerplexityAdapter } from './adapters/perplexityAdapter';
+import { CopilotAdapter } from './adapters/copilotAdapter';
+import { AhrefsAdapter } from './adapters/ahrefsAdapter';
+import { BenchmarkDatasetAdapter } from './adapters/benchmarkDatasetAdapter';
 
 class UnavailableLLMProvider implements LLMVisibilityProvider {
   constructor(public readonly id: AIProviderId) {}
@@ -49,7 +75,12 @@ class UnavailableKnowledgeGraphProvider implements KnowledgeGraphProvider {
     return unavailableResult<EntityIntelligenceResult>({
       entity: null,
       score: null,
-      reason: 'No knowledge-graph adapter is configured. Wikidata adapter activates when WIKIDATA_ENABLED=true.',
+      // Phase 1A: Wikidata is keyless and ON by default (`isWikidataEnabled()`), so
+      // reaching this default means either it was explicitly disabled with
+      // WIKIDATA_ENABLED=false or the adapter failed to register — in which case
+      // `[providerRegistry] adapter_registration_failed` names the real cause.
+      reason: 'No knowledge-graph adapter is configured. Wikidata is keyless and enabled by default — '
+        + 'it is off only when WIKIDATA_ENABLED=false, or when adapter registration failed (check logs).',
     });
   }
 }
@@ -221,6 +252,34 @@ export function _resetIntelligenceRegistry(): void {
 }
 
 // ── Bootstrap: register real adapters when their env flags are set ────────────
+// ── Bootstrap: register real adapters when their env flags are set ────────────
+
+/**
+ * Phase 1A — adapter registration diagnostics.
+ *
+ * Every registration below was previously wrapped in an EMPTY `catch {}`. When the
+ * dynamic `require()` failed inside the serverless bundle the failure was invisible:
+ * the registry fell back to its `Unavailable*` defaults and the report rendered
+ * "adapter not configured", which is indistinguishable from "no credential set".
+ * That ambiguity is what hid the defect in production.
+ *
+ * `register()` keeps the same fail-soft behaviour (a broken adapter must never take
+ * the report down) but now emits a structured, greppable diagnostic so the two cases
+ * can never be confused again.
+ */
+function register(providerId: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (error) {
+    console.error('[providerRegistry] adapter_registration_failed', {
+      providerId,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack?.split('\n').slice(0, 4).join(' | ') : undefined,
+      hint: 'The credential/flag gate PASSED but the adapter failed to load. This is a build/bundle '
+        + 'or module-init failure, NOT a missing credential.',
+    });
+  }
+}
 
 function ensureBootstrapped(): void {
   if (_bootstrapped) return;
@@ -229,33 +288,24 @@ function ensureBootstrapped(): void {
   // ── Knowledge graph ─────────────────────────────────────────────────────────
   // Phase 0A: Wikidata is free + keyless → activated by default (disable with
   // WIKIDATA_ENABLED=false). Google KG still requires GOOGLE_KG_API_KEY.
-  if (process.env.WIKIDATA_ENABLED !== 'false') {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/wikidataAdapter');
-      registerKnowledgeGraphProvider(new mod.WikidataAdapter());
-    } catch (error) {
-      // Adapter not present yet; remain unavailable.
-    }
+  // Phase 1A: the gate is now the CANONICAL `isWikidataEnabled()` helper, shared
+  // with `entityGraphProviderBridge` so the registry and the activation matrix
+  // can no longer disagree about whether the adapter is live.
+  if (isWikidataEnabled()) {
+    register('wikidata', () => registerKnowledgeGraphProvider(new WikidataAdapter()));
   }
 
   // ── Authority trajectory ────────────────────────────────────────────────────
   if (process.env.AUTHORITY_TRAJECTORY_ENABLED === 'true') {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/reportScoreHistoryAdapter');
-      // BETA-PHASE2-EXEC-001: back the adapter with the canonical historical
-      // store (`getHistoricalStore()`) instead of the default NoopHistoryStore,
-      // so trajectory reads the SAME persisted snapshots as change-intelligence
-      // and forecast. Honest-empty until real snapshots exist; no synthesis.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const storeMod = require('./adapters/trajectoryHistoryStore');
+    // BETA-PHASE2-EXEC-001: back the adapter with the canonical historical
+    // store (`getHistoricalStore()`) instead of the default NoopHistoryStore,
+    // so trajectory reads the SAME persisted snapshots as change-intelligence
+    // and forecast. Honest-empty until real snapshots exist; no synthesis.
+    register('authority_trajectory', () =>
       registerTrajectoryProvider(
-        new mod.ReportScoreHistoryAdapter(new storeMod.CanonicalTrajectoryHistoryStore()),
-      );
-    } catch (error) {
-      // Adapter not present yet; remain unavailable.
-    }
+        new ReportScoreHistoryAdapter(new CanonicalTrajectoryHistoryStore()),
+      ),
+    );
   }
 
   // ── LLM providers ───────────────────────────────────────────────────────────
@@ -263,60 +313,24 @@ function ensureBootstrapped(): void {
   // themselves return `state: 'unavailable'` if they boot without credentials,
   // so the registry safely registers them even if the env var arrives later.
   if (process.env.OPENAI_API_KEY) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/openaiAdapter');
-      registerLLMProvider(new mod.OpenAIChatGPTAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+    register('chatgpt', () => registerLLMProvider(new OpenAIChatGPTAdapter()));
   }
   if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/anthropicAdapter');
-      registerLLMProvider(new mod.AnthropicClaudeAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+    register('claude', () => registerLLMProvider(new AnthropicClaudeAdapter()));
   }
   if (process.env.GEMINI_API_KEY) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/geminiAdapter');
-      registerLLMProvider(new mod.GeminiAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+    register('gemini', () => registerLLMProvider(new GeminiAdapter()));
   }
   if (process.env.PERPLEXITY_API_KEY) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/perplexityAdapter');
-      registerLLMProvider(new mod.PerplexityAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+    register('perplexity', () => registerLLMProvider(new PerplexityAdapter()));
   }
   if (process.env.AZURE_COPILOT_API_KEY) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/copilotAdapter');
-      registerLLMProvider(new mod.CopilotAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+    register('copilot', () => registerLLMProvider(new CopilotAdapter()));
   }
 
   // ── Authority inflow (backlinks) ────────────────────────────────────────────
   if (process.env.AHREFS_API_KEY) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/ahrefsAdapter');
-      registerAuthorityInflowProvider(new mod.AhrefsAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+    register('backlink.authority', () => registerAuthorityInflowProvider(new AhrefsAdapter()));
   }
   // NOTE: mozAdapter / majesticAdapter conditional registrations were
   // removed because the adapter files are not present in the repo and
@@ -325,9 +339,30 @@ function ensureBootstrapped(): void {
   // backend/services/intelligence/adapters/ and (b) the corresponding
   // MOZ_API_KEY / MAJESTIC_API_KEY are set in the runtime environment.
 
+  // ── Benchmark dataset ───────────────────────────────────────────────────────
+  if (process.env.BENCHMARK_DATASET_PATH) {
+    register('benchmark', () =>
+      registerBenchmarkProvider(
+        new BenchmarkDatasetAdapter(process.env.BENCHMARK_DATASET_PATH as string),
+      ),
+    );
+  }
+
+  // ── DB-coupled optional providers ───────────────────────────────────────────
+  //
+  // Phase 1A scope note: the three registrations below stay lazily required on
+  // purpose. Unlike the pure adapters above they reach the Supabase client and the
+  // review/commercial ingestion services, so hoisting them to static imports would
+  // pull the DB client into every consumer of this registry (including the
+  // evidence-platform bridges) and widen the module graph well beyond Phase 1A.
+  // All four flags are OFF in production today (no TRUST_COHERENCE_ENABLED /
+  // CRM_ENABLED / COMMERCIAL_EVIDENCE_ENABLED / SUPABASE_HISTORY_ENABLED), so none
+  // of them is on the Report 1 evidence path. What DOES change is that their
+  // failures are no longer silent — `register()` now reports them explicitly.
+
   // ── Trust coherence (review aggregator + extraction) ────────────────────────
   if (process.env.TRUST_COHERENCE_ENABLED === 'true') {
-    try {
+    register('trust_coherence', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/trustCoherenceAdapter');
       registerTrustCoherenceProvider(new mod.TrustCoherenceAdapter());
@@ -344,20 +379,7 @@ function ensureBootstrapped(): void {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const ing = require('../reviewIngestionService');
       agg.registerReviewSourceLoader(ing.createCanonicalReviewSourceLoader());
-    } catch (error) {
-      /* unavailable */
-    }
-  }
-
-  // ── Benchmark dataset ───────────────────────────────────────────────────────
-  if (process.env.BENCHMARK_DATASET_PATH) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/benchmarkDatasetAdapter');
-      registerBenchmarkProvider(new mod.BenchmarkDatasetAdapter(process.env.BENCHMARK_DATASET_PATH));
-    } catch (error) {
-      /* unavailable */
-    }
+    });
   }
 
   // ── Commercial outcomes (revenue / conversions) ─────────────────────────────
@@ -366,14 +388,12 @@ function ensureBootstrapped(): void {
   // loader reads the EXISTING `canonical_revenue_events` table (no new ingestion). Inert until CRM_ENABLED /
   // COMMERCIAL_EVIDENCE_ENABLED is set AND real commercial rows exist — ROI stays Not Quantifiable otherwise.
   if (process.env.CRM_ENABLED || process.env.COMMERCIAL_EVIDENCE_ENABLED) {
-    try {
+    register('commercial', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/commercialAdapter');
       registerCommercialProvider(new mod.CommercialAdapter());
       mod.registerCommercialSourceLoader(mod.createCanonicalRevenueLoader());
-    } catch (error) {
-      /* unavailable */
-    }
+    });
   }
 
   // ── Durable historical store (Authority Trajectory + change-intelligence + forecast) ──
@@ -387,7 +407,7 @@ function ensureBootstrapped(): void {
   // No fabrication: an empty/absent table degrades to `insufficient_history` via the
   // adapter's own try/catch; the report post-processing already guards store failures.
   if (process.env.SUPABASE_HISTORY_ENABLED === 'true') {
-    try {
+    register('historical_store', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const clientMod = require('../../db/supabaseClient');
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -395,8 +415,6 @@ function ensureBootstrapped(): void {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const histMod = require('./historicalPersistence');
       histMod.registerHistoricalStore(new storeMod.SupabaseHistoryStore(clientMod.supabase));
-    } catch (error) {
-      // Supabase unavailable in this env; retain the in-memory store.
-    }
+    });
   }
 }

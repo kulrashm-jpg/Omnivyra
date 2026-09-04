@@ -12,6 +12,7 @@ import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetSto
 import { getLatestAnalyticsReport, getLatestLearningInsights } from '../../../backend/db/performanceStore';
 import { ALL_ROLES } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -37,6 +38,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId || !campaignId) {
       return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
     }
+
+    // B4.3 — bind authorization to the company actually REPORTED ON.
+    //
+    // withRBAC accepts its subject from req.query.companyId OR req.body.companyId.
+    // Omitting it from the BODY while supplying it in the QUERY satisfied RBAC for
+    // the caller's own company, and the block above then re-derived companyId from
+    // the requested campaign — so ?companyId=<own>&body={campaignId:<other>}
+    // returned another company's health report and profile. The
+    // CAMPAIGN_NOT_IN_COMPANY check below cannot catch this: it verifies the
+    // campaign belongs to the derived company, which is true by construction.
+    const tenantAccess = await requireTenantAccess(req, res, String(companyId));
+    if (!tenantAccess) return; // guard already responded (403 NOT_A_MEMBER)
 
     const { data: ownershipRows, error: ownershipError } = await supabase
       .from('campaign_versions')

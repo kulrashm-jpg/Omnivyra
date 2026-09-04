@@ -29,6 +29,9 @@ import { type IntegrationType, type FocusArea, type TestResultState, type Integr
 import { ConnectionCard, EmptyConnections, CategoryAction, type WorkflowStatus, WebsiteCommandCenter, CmsDiagnosticsPanel } from './integrationsSupportB';
 import { GoogleAnalyticsGridCard, GoogleSearchConsoleGridCard, GoogleAnalyticsHelperPanel, GoogleSearchConsoleHelperPanel } from './integrationsSupportC';
 import { useIntegrationsPageController } from './integrationsController';
+// PHASE-1A: the shared hub nav. This page keeps its own content unchanged — the
+// nav is added above it so every integration area is reachable from one spine.
+import IntegrationHubNav from './integrations/IntegrationHubNav';
 
 export default function IntegrationsPage() {
   const f = useIntegrationsPageController();
@@ -72,6 +75,8 @@ export default function IntegrationsPage() {
             </button>
           )}
         </div>
+
+        <IntegrationHubNav active="api" />
 
         {showWebsiteFlow ? (
           <WebsiteCommandCenter

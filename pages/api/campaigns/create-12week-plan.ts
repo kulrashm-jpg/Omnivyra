@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getCampaignById } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 
 import { fromLegacyRefinements, fromStructuredPlan, blueprintWeeksToLegacyRefinements } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
@@ -29,6 +30,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     if (!hasStructuredPlan && !aiContent) {
       return res.status(400).json({ error: 'Either aiContent or structuredPlan.weeks is required' });
+    }
+
+    // B4.2 — a client-supplied companyId is an OWNERSHIP claim and is verified
+    // before anything is written. Authenticating the user is not sufficient: this
+    // value lands in campaign_versions.company_id, the record campaign
+    // authorization resolves ownership from, so an unverified value would let an
+    // authenticated user create a campaign owned by another company.
+    //
+    // requireTenantAccess is the established mechanism (planner-draft.ts, the
+    // sibling route, already guards a body-supplied companyId with it); it sends
+    // its own 401/403/404 with the project's existing vocabulary and audits the
+    // denial, so no new convention is introduced here.
+    //
+    // companyId stays OPTIONAL — the pre-existing contract. Absent ⇒ no check and
+    // no campaign_versions row, exactly as before. Nothing is defaulted.
+    // Normalised ONCE so the guard and the downstream `if (companyId && ...)`
+    // write cannot disagree: a whitespace-only value is truthy, so before this
+    // it skipped verification and still persisted `company_id: '   '`.
+    const claimedCompanyId = typeof companyId === 'string' ? companyId.trim() : '';
+    if (claimedCompanyId) {
+      const access = await requireTenantAccess(req, res, claimedCompanyId);
+      if (!access) return; // guard already responded (403 NOT_A_MEMBER on a foreign company)
+      companyId = access.organizationId; // use the VERIFIED value, never the raw body one
+    } else {
+      companyId = undefined; // absent means absent — never a blank string
     }
 
     const startDateObj = new Date(startDate);

@@ -46,9 +46,12 @@ export type CompetitorEvidenceInputs = {
   userGuidedProfile?: CompanyProfile | null;
 };
 
-function positionalClassification(index: number): CompetitorClassification {
-  return index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader';
-}
+// Phase 2: `positionalClassification(index)` was removed. It assigned a competitive
+// category from a candidate's position in the SERP results array — the first domain was
+// a "direct competitor", the second an "seo_competitor", the rest "authority_leader" —
+// with no reference to any evidence about those companies. Candidates now carry no
+// classification; the ranking engine derives one from the scored tier, and
+// `competitorRelationModel` derives the product/market relations from the dimensions.
 
 /** Map SERP-discovered domains to evidence candidates. Shared by every pipeline. */
 export function serpDomainsToCompetitorCandidates(
@@ -58,11 +61,11 @@ export function serpDomainsToCompetitorCandidates(
   return domains
     .map((domain) => ({ domain, name: domainToName(domain) }))
     .filter((entry): entry is { domain: string; name: string } => Boolean(entry.name))
-    .map((entry, index) => ({
+    .map((entry) => ({
       name: entry.name,
       domain: entry.domain,
       category: context?.marketFocus ?? context?.businessType ?? 'Search competitor',
-      classification: positionalClassification(index),
+      classification: null,
       source: 'serp_live' as const,
       rationale: context?.rationale ?? 'Discovered through SERP competitor discovery.',
       geography: context?.geography ?? null,

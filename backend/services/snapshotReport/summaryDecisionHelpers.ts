@@ -3,7 +3,7 @@ import {
   comparePriorityType,
 } from '../actionPriorityService';
 // BETA-EXEC-003: action-ranking weights + executive impact-scale thresholds from the registry.
-import { PRIORITY_RANK_WEIGHTS, IMPACT_SCALE } from '../canonicalReport/scoringGovernance';
+import { PRIORITY_RANK_WEIGHTS, IMPACT_SCALE, effortDivisor } from '../canonicalReport/scoringGovernance';
 // BETA-EXEC-004: deterministic measured-evidence clause for the executive summary.
 import { type EngineEvidenceInput, formatPrimaryConstraint } from './engineEvidenceNarrative';
 import type { CompetitorIntelligenceResult } from '../reportCompetitorIntelligenceService';
@@ -126,8 +126,23 @@ export function buildSummary(params: {
   );
 }
 
+/**
+ * Opportunity ranking score — `Impact × Confidence ÷ Effort` (Phase 2).
+ *
+ * The blended impact/confidence term is unchanged (`PRIORITY_RANK_WEIGHTS`, 0.58 / 0.42),
+ * so relative ordering among equal-effort actions is preserved exactly. What is new is the
+ * effort divisor: previously effort influenced only the priority TYPE and never the
+ * ordering, so a high-effort action could outrank an equally valuable low-effort one —
+ * the opposite of the intended framework.
+ *
+ * Ranges: impact_score 0..100, confidence_score 0..1 (scaled ×100 here), effort divisor
+ * 1 / 1.5 / 2.25. Result stays within 0..100.
+ */
 function topPriorityScore(action: SnapshotAction): number {
-  return action.impact_score * PRIORITY_RANK_WEIGHTS.impact + action.confidence_score * 100 * PRIORITY_RANK_WEIGHTS.confidence;
+  const impactConfidence =
+    action.impact_score * PRIORITY_RANK_WEIGHTS.impact
+    + action.confidence_score * 100 * PRIORITY_RANK_WEIGHTS.confidence;
+  return impactConfidence / effortDivisor(action.effort_level ?? action.effort ?? 'medium');
 }
 
 export function sortSectionActions(actions: SnapshotAction[]): SnapshotAction[] {

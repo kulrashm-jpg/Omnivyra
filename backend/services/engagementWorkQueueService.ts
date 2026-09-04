@@ -1,10 +1,19 @@
 /**
  * Engagement Work Queue Service
  * Daily work queue: actionable threads per platform.
- * Actionable = ignored=false, latest message from external, no org reply after.
+ *
+ * Actionable = ignored=false AND the latest authoritative turn is external.
+ *
+ * F1/F2: this service no longer resolves ownership itself. It consumes
+ * `ThreadSummary.actionable` from `engagementThreadService.getThreads`, which is
+ * the one place the canonical predicate (`isAuthorSelf` → author_id ↔
+ * connected-account map → unresolved ⇒ external) is evaluated. Previously this
+ * file carried its own copy of `getOrgAuthorIds` plus its own latest-message
+ * fetch and its own self-detection, which is exactly how the two surfaces
+ * drifted apart in the first place. One decision, three readers.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { getThreads } from './engagementThreadService';
 
 const PLATFORMS = ['linkedin', 'twitter', 'instagram', 'facebook', 'youtube', 'reddit'];
 
@@ -21,128 +30,63 @@ export type DailyWorkQueue = {
 };
 
 /**
- * Get org author IDs (platform_user_id from social_accounts linked to company users).
- * Returns Set of engagement_author IDs that belong to the org.
- */
-async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
-  const { data: roleUsers } = await supabase
-    .from('user_company_roles')
-    .select('user_id')
-    .eq('company_id', organizationId)
-    .eq('status', 'active');
-
-  const userIds = (roleUsers ?? []).map((r: { user_id: string }) => r.user_id);
-  if (userIds.length === 0) return new Set();
-
-  const { data: accounts } = await supabase
-    .from('social_accounts')
-    .select('platform, platform_user_id')
-    .in('user_id', userIds)
-    .eq('is_active', true);
-
-  if (!accounts?.length) return new Set();
-
-  const platformUserPairs = new Set(
-    (accounts as { platform: string; platform_user_id: string }[]).map(
-      (a) => `${(a.platform || '').toLowerCase()}:${a.platform_user_id || ''}`
-    )
-  );
-
-  const { data: authors } = await supabase
-    .from('engagement_authors')
-    .select('id, platform, platform_user_id')
-    .in(
-      'platform',
-      Array.from(new Set((accounts as { platform: string }[]).map((a) => (a.platform || '').toLowerCase())))
-    );
-
-  const orgAuthorIds = new Set<string>();
-  (authors ?? []).forEach((a: { id: string; platform: string; platform_user_id: string }) => {
-    const key = `${(a.platform || '').toLowerCase()}:${a.platform_user_id || ''}`;
-    if (platformUserPairs.has(key)) orgAuthorIds.add(a.id);
-  });
-  return orgAuthorIds;
-}
-
-/**
- * Thread is actionable if: ignored=false, latest message from external, no org reply after.
+ * Thread is actionable if: ignored=false and the latest turn is external.
  */
 export async function getDailyWorkQueue(organizationId: string): Promise<DailyWorkQueue> {
+  const empty = (): DailyWorkQueue => ({
+    platforms: PLATFORMS.map((p) => ({
+      platform: p, actionable_threads: 0, high_priority_threads: 0, unread_messages: 0,
+    })),
+    total_actionable_threads: 0,
+  });
+
   if (!organizationId) {
     return { platforms: [], total_actionable_threads: 0 };
   }
 
-  // OPT-010 A5: both reads key only on organizationId — run them concurrently.
-  const [orgAuthorIds, { data: threads, error: threadErr }] = await Promise.all([
-    getOrgAuthorIds(organizationId),
-    supabase
-      .from('engagement_threads')
-      .select('id, platform, priority_score, unread_count')
-      .eq('organization_id', organizationId)
-      .eq('ignored', false),
-  ]);
-
-  if (threadErr || !threads?.length) {
-    const result: PlatformWorkItem[] = PLATFORMS.map((p) => ({
-      platform: p,
-      actionable_threads: 0,
-      high_priority_threads: 0,
-      unread_messages: 0,
-    }));
-    return { platforms: result, total_actionable_threads: 0 };
+  let threads: Awaited<ReturnType<typeof getThreads>>;
+  try {
+    // Every non-ignored thread, across platforms. `actionable_only` is
+    // deliberately NOT set: this is an aggregate, not a page, so the counters
+    // need to see answered threads in order to exclude them explicitly rather
+    // than by absence — and `high_priority_threads` keeps its existing
+    // whole-population meaning.
+    threads = await getThreads({
+      organization_id: organizationId,
+      platform: null,
+      limit: 500,
+      exclude_ignored: true,
+    });
+  } catch (error) {
+    console.warn(
+      '[engagementWorkQueueService] getDailyWorkQueue error',
+      error instanceof Error ? error.message : String(error),
+    );
+    return empty();
   }
 
-  const threadIds = threads.map((t: { id: string }) => t.id);
+  if (threads.length === 0) return empty();
 
-  // OPT-010 A5: both reads depend only on threadIds — run them concurrently.
-  const [{ data: classifications }, { data: messages }] = await Promise.all([
-    supabase
-      .from('engagement_thread_classification')
-      .select('thread_id, triage_priority')
-      .in('thread_id', threadIds)
-      .eq('organization_id', organizationId),
-    supabase
-      .from('engagement_messages')
-      .select('id, thread_id, author_id, platform_created_at')
-      .in('thread_id', threadIds)
-      .order('platform_created_at', { ascending: false }),
-  ]);
-  const triageByThread = new Map<string, number>();
-  (classifications ?? []).forEach((c: { thread_id: string; triage_priority?: number }) => {
-    triageByThread.set(c.thread_id, Number(c.triage_priority ?? 0));
-  });
-
-  const latestByThread = new Map<string, { author_id: string | null }>();
-  for (const m of messages ?? []) {
-    const msg = m as { thread_id: string; author_id: string | null };
-    if (!latestByThread.has(msg.thread_id)) {
-      latestByThread.set(msg.thread_id, { author_id: msg.author_id });
-    }
-  }
-
-  const actionableByPlatform = new Map<string, { actionable: number; highPri: number; unread: number }>();
-  for (const p of PLATFORMS) {
-    actionableByPlatform.set(p, { actionable: 0, highPri: 0, unread: 0 });
-  }
+  const byPlatform = new Map<string, { actionable: number; highPri: number; unread: number }>();
+  for (const p of PLATFORMS) byPlatform.set(p, { actionable: 0, highPri: 0, unread: 0 });
 
   let totalActionable = 0;
 
   for (const t of threads) {
-    const th = t as { id: string; platform: string; priority_score?: number; unread_count?: number };
-    const platform = (th.platform || '').toLowerCase();
-    if (!actionableByPlatform.has(platform)) actionableByPlatform.set(platform, { actionable: 0, highPri: 0, unread: 0 });
+    const platform = (t.platform || '').toLowerCase();
+    if (!byPlatform.has(platform)) byPlatform.set(platform, { actionable: 0, highPri: 0, unread: 0 });
+    const cur = byPlatform.get(platform)!;
 
-    const latest = latestByThread.get(th.id);
-    const latestAuthorExternal = !latest?.author_id || !orgAuthorIds.has(latest.author_id);
-    const unread = Number(th.unread_count ?? 0) || 0;
-    const actionable = latestAuthorExternal || unread > 0;
-    const score = Number(th.priority_score ?? 0) ?? 0;
-    const triagePri = triageByThread.get(th.id) ?? 0;
-    const highPri = triagePri >= 7 || score >= 50;
+    // Canonical state — no local re-derivation.
+    const actionable = t.actionable;
+    // getThreads already zeroes unread on an answered thread; the guard keeps
+    // the two from ever drifting apart.
+    cur.unread += actionable ? Number(t.unread_count ?? 0) || 0 : 0;
 
-    const cur = actionableByPlatform.get(platform)!;
-    cur.unread += unread;
-    if (highPri) cur.highPri += 1;
+    const triagePri = Number(t.triage_priority ?? 0) || 0;
+    const score = Number(t.priority_score ?? 0) || 0;
+    if (triagePri >= 7 || score >= 50) cur.highPri += 1;
+
     if (actionable) {
       cur.actionable += 1;
       totalActionable += 1;
@@ -150,7 +94,7 @@ export async function getDailyWorkQueue(organizationId: string): Promise<DailyWo
   }
 
   const platforms: PlatformWorkItem[] = PLATFORMS.map((p) => {
-    const c = actionableByPlatform.get(p) ?? { actionable: 0, highPri: 0, unread: 0 };
+    const c = byPlatform.get(p) ?? { actionable: 0, highPri: 0, unread: 0 };
     return {
       platform: p,
       actionable_threads: c.actionable,
@@ -159,8 +103,5 @@ export async function getDailyWorkQueue(organizationId: string): Promise<DailyWo
     };
   });
 
-  return {
-    platforms,
-    total_actionable_threads: totalActionable,
-  };
+  return { platforms, total_actionable_threads: totalActionable };
 }

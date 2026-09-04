@@ -10,6 +10,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
 import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import { getCommunityEngagementMetrics } from '../../../backend/services/growthIntelligence';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -29,6 +30,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const companyContext = await requireCompanyContext({ req, res, companyId });
     if (!companyContext) return;
+
+    // B4.3 — `organizationId` is an independently supplied query parameter, so
+    // authorizing `companyId` and then reading with `organizationId` let
+    // ?companyId=A&organizationId=B return company B's community_ai_actions
+    // metrics to a company A caller. Verify the value actually read from.
+    // Skipped when it equals the already-authorized companyId (the default), so
+    // the common single-value call costs no extra check.
+    if (organizationId !== companyId) {
+      const tenantAccess = await requireTenantAccess(req, res, organizationId);
+      if (!tenantAccess) return; // guard already responded (403 NOT_A_MEMBER)
+    }
 
     const data = await getCommunityEngagementMetrics(supabase, organizationId);
     return res.status(200).json({ success: true, data });

@@ -1,5 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
+// Canonical credential resolution so Test Connection exercises the real active credential.
+import { resolveAccountForRequest } from '../../../backend/services/providerAccountService';
 import { buildExternalApiRequest, executeExternalApiRequest, validatePlatformConfig } from '../../../backend/services/externalApiService';
 import { buildCacheKey, getCacheStats, getCachedResponse, setCachedResponse } from '../../../backend/services/redisExternalApiCache';
 import { normalizeExternalTrends } from '../../../backend/services/trendNormalizationService';
@@ -68,7 +70,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       company_id: companyId ?? null,
     };
 
+    // ── Test the credential the RUNTIME will actually use ─────────────────────
+    //
+    // This previously built the request from the submitted `api_key_env_name` alone and
+    // never consulted the provider's active account. "Connection OK" therefore proved
+    // nothing about the credential a real request would use — which is precisely how
+    // SerpAPI reported OK while returning 401 in production.
+    //
+    // When testing a SAVED provider (`api_source_id` supplied), resolve its active account
+    // through the canonical resolver and hand the resulting credential to the request
+    // builder, exactly as `execution.ts` does. `buildExternalApiRequest` already accepts
+    // `accountCredentials` and gives it precedence, so no new mechanism is introduced.
+    //
+    // An UNSAVED secret is accepted transiently for a pre-activation test: it is used for
+    // this request only, is never persisted, never returned, and never logged. It reaches
+    // the request builder through the same `accountCredentials` seam.
+    let accountCredentials: Awaited<ReturnType<typeof resolveAccountForRequest>>['credentials'] = null;
+    const apiSourceId = typeof input.api_source_id === 'string' ? input.api_source_id.trim() : '';
+    if (apiSourceId) {
+      const resolved = await resolveAccountForRequest(apiSourceId).catch(() => null);
+      accountCredentials = resolved?.credentials ?? null;
+    }
+    const transientSecret = typeof input.api_key_value === 'string' ? input.api_key_value.trim() : '';
+    if (transientSecret) {
+      accountCredentials = {
+        source: 'account',
+        accountId: accountCredentials?.accountId ?? null,
+        api_key_env_name: accountCredentials?.api_key_env_name ?? null,
+        api_key_value: transientSecret,
+        oauth_client_id: accountCredentials?.oauth_client_id ?? null,
+        oauth_client_secret: accountCredentials?.oauth_client_secret ?? null,
+      };
+    }
+
     const request = buildExternalApiRequest(source, {
+      accountCredentials,
       runtimeValues: {
         category: input.category || '',
         geo: input.geo || '',

@@ -43,7 +43,7 @@ async function main() {
         status: integration.status || 'pending',
       });
 
-      await upsertConnectionCredentials(connection.id, credentials);
+      await upsertConnectionCredentials(String(company.id), connection.id, credentials);
       await ownedDbTable('company_integrations')
         .update({
           website_id: integration.website_id || website.id,

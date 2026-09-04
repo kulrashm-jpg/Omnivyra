@@ -14,6 +14,7 @@ import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
 import { onLeadEnrichmentChanged } from './leadIntelligenceActivation';
 import { ownedDbTable } from '../db/writeOwner';
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
+import { ingestSourceRecord } from './prospectIdentity/ingestionBoundary';
 
 export interface CrmLeadRecord {
   externalId?: string | null;
@@ -289,6 +290,73 @@ async function upsertRevenueEvent(params: {
   return (data as { id: string }).id;
 }
 
+/**
+ * LI-4B — record CRM-originated PROSPECT evidence through the LI-2 boundary.
+ *
+ * The LI-4A audit found this service to be the one live ingestion path that
+ * writes prospect data with no canonical provenance: 18 leads existed against 0
+ * source records. This closes that gap and nothing else.
+ *
+ * ─── PROSPECT ONLY. REVENUE IS DELIBERATELY EXCLUDED. ─────────────────────
+ * A `CrmLeadRecord` carries two different kinds of data, and the split is
+ * explicit in `ingestCrmRows`: the person fields are read unconditionally,
+ * while `revenue` / `currencyCode` / `campaignId` are used only inside the
+ * `row.revenue != null` branch that writes `canonical_revenue_events`. Only the
+ * person half is sent here. Pushing revenue through a prospect-identity
+ * boundary would make `source_assertions` — a person/account evidence table —
+ * the home of financial facts it has no vocabulary for.
+ *
+ * ─── NO SECOND IDENTITY RESOLVER ──────────────────────────────────────────
+ * The caller has already resolved the person via `resolveUnifiedPerson`; that
+ * id is passed in. This function never resolves, creates or matches identity.
+ *
+ * ─── BEST EFFORT, BY DESIGN ───────────────────────────────────────────────
+ * Provenance is evidence, not a gate. This path is LIVE and also carries a
+ * revenue pipeline, so a provenance failure must not destroy a CRM sync that
+ * would otherwise have succeeded — the same fail-open posture `adoptLead`
+ * already takes here. Governance, which MUST fail closed, is a separate
+ * concern on the outreach side and is untouched by this phase.
+ */
+async function recordCrmProspectProvenance(params: {
+  companyId: string;
+  row: CrmLeadRecord;
+  provider: string;
+  unifiedPersonId: string;
+  sourceRecordId: string;
+  observedAt: string | null;
+  ingestionRunId?: string | null;
+}): Promise<void> {
+  try {
+    await ingestSourceRecord({
+      organizationId: params.companyId,          // TENANT — never the prospect's employer
+      provider: params.provider,
+      entityType: 'person',
+      sourceRecordId: params.sourceRecordId,
+      // The prospect-shaped subset, verbatim. `redactSecrets` and the payload
+      // hash are applied by the boundary itself, so change detection and
+      // credential stripping are not re-implemented here.
+      rawPayload: {
+        externalId: params.row.externalId ?? null,
+        name: params.row.name ?? null,
+        email: params.row.email ?? null,
+        phone: params.row.phone ?? null,
+        source: params.row.source ?? null,
+        status: params.row.status ?? null,
+        createdAt: params.row.createdAt ?? null,
+      },
+      personId: params.unifiedPersonId,
+      observedAt: params.observedAt,
+      ingestionRunId: params.ingestionRunId ?? null,
+      // The only attribute CRM asserts about the person. LI-2's rules decide
+      // whether it may reach canonical: it fills a NULL when uncontested and
+      // never overwrites, so no provider precedence is introduced here.
+      personAttributes: { fullName: params.row.name ?? null },
+    });
+  } catch (err) {
+    console.warn('[crmIngestion] prospect provenance skipped:', (err as Error)?.message);
+  }
+}
+
 async function ingestCrmRows(
   companyId: string,
   rows: CrmLeadRecord[],
@@ -314,6 +382,25 @@ async function ingestCrmRows(
       email: row.email,
       phone: row.phone,
       externalKeys: buildCrmIdentityExternalKeys(row),
+    });
+
+    // LI-4B — retain the evidence behind this prospect BEFORE anything derived
+    // from it is written. The source record is the reason the canonical rows
+    // below exist, and provenance recorded after the fact is provenance that can
+    // be missing for every row that failed midway.
+    //
+    // `sourceRecordId` is the CRM's own identifier when it supplies one. When it
+    // does not, `leadKey` is the deterministic row identity the service already
+    // computes for this record — a hash, not a row number and not an email —
+    // which is exactly what the LI-2 contract asks of a file-shaped source.
+    await recordCrmProspectProvenance({
+      companyId,
+      row,
+      provider: source,
+      unifiedPersonId: identity.unifiedPersonId,
+      sourceRecordId: row.externalId?.trim() || leadKey,
+      observedAt: row.createdAt ?? null,
+      ingestionRunId: options.ingestionRunId ?? null,
     });
 
     const userId = await upsertCanonicalUser(companyId, row, userKey, identity.unifiedPersonId);

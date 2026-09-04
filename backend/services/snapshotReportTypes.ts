@@ -216,16 +216,136 @@ export interface SnapshotReport {
     };
   };
   /** @deprecated Phase 7. Read `canonical.ai_surface_presence` + `canonical.executive_insights`. */
+  /**
+   * Report 1 assembly — the CMO-facing decision layer: cross-source opportunities, at most
+   * five top priorities, and the evidence-driven 30/60/90 plan. Assembled last, from outputs
+   * the canonical builder and the Phase 3/4 modules already produced.
+   */
+  digital_snapshot?: SnapshotDigitalSnapshot;
+  /**
+   * Phase 4 — website performance and digital-experience intelligence.
+   *
+   * `performance` carries provider-supplied measurements only: metrics classified with
+   * Google's own CrUX categories, or against the published Core Web Vitals thresholds when
+   * only lab data exists. There is deliberately no Omnivyra performance score.
+   *
+   * `digital_experience` is a READINESS CLASSIFICATION plus evidence-linked findings, not a
+   * 0–100 score — no defensible benchmark for "digital experience" exists, and inventing one
+   * would reintroduce the false precision earlier phases removed. `describesVisitorBehavior`
+   * is permanently false: this describes the observed website, never observed visitors.
+   */
+  performance?: {
+    state: string;
+    reasonUnavailable: string | null;
+    coverage: { measured: number; attempted: number; eligible: number };
+    byFormFactor: Record<'mobile' | 'desktop', { measured: number; verdict: string }>;
+    observations: Array<{
+      url: string;
+      formFactor: 'mobile' | 'desktop';
+      providerPerformanceScore: number | null;
+      overallCategory: string;
+      observedAt: string;
+      provider: string;
+      state: string;
+      reasonUnavailable: string | null;
+      metrics: Array<{
+        key: string; label: string; value: number | null; unit: string;
+        category: string; verdict: string; source: string | null;
+        threshold: { good: number; poor: number } | null; state: string;
+      }>;
+    }>;
+  } | null;
+  digital_experience?: {
+    readiness: string;
+    state: string;
+    coverage: { pagesEvaluated: number; signalsEvaluated: number; signalsTotal: number };
+    pillars: Array<{
+      pillar: string; label: string; readiness: string; state: string;
+      coverage: { evaluated: number; total: number };
+      findings: SnapshotExperienceFinding[];
+    }>;
+    findings: SnapshotExperienceFinding[];
+    limitations: Array<{ kind: string; message: string; affects: string[] }>;
+    describesVisitorBehavior: false;
+  } | null;
+  /**
+   * Phase 3 — the two customer-facing competition views.
+   *
+   * Table A answers "who solves a substantially similar problem?"; Table B answers "who
+   * competes for the same customer decision?". They are DELIBERATELY separate: a company can
+   * be strong on one axis and weak on the other, and collapsing them into a single score is
+   * what previously made Semrush and HubSpot indistinguishable from a true direct rival.
+   *
+   * Both are rendered from the canonical `competitorRelationModel`; no consumer may classify.
+   * Customer-facing classification uses the evidence-derived vocabulary
+   * (direct / adjacent / substitute / strategic / not_competitive / unknown), NOT the legacy
+   * `direct_competitor | seo_competitor | authority_leader` field, which remains on
+   * `competitor_intelligence` for internal compatibility only.
+   */
+  competitive_tables?: {
+    productCompetition: Array<{
+      competitor: string;
+      domain: string | null;
+      productOverlap: number | null;
+      problemUseCaseOverlap: number | null;
+      evidence: string[];
+      classification: 'direct' | 'adjacent' | 'substitute' | 'none' | 'unknown';
+      confidence: string;
+      state: string;
+    }>;
+    marketCompetition: Array<{
+      competitor: string;
+      domain: string | null;
+      customerIcp: string | null;
+      segment: 'smb' | 'mid_market' | 'enterprise' | 'unknown';
+      geography: string | null;
+      marketOverlap: number | null;
+      evidence: string[];
+      classification: 'same_segment' | 'adjacent_segment' | 'different' | 'unknown';
+      confidence: string;
+      state: string;
+    }>;
+    unclassified: Array<{ competitor: string; domain: string | null; reason: string; signalCount: number }>;
+    summary: Record<'direct' | 'adjacent' | 'substitute' | 'strategic' | 'not_competitive' | 'unclassified', number>;
+    empty: boolean;
+    emptyReason: string | null;
+  };
+  /**
+   * Phase 2 — evidence coverage as a first-class report field.
+   *
+   * Lifted verbatim from `canonical.evidence_readiness` (no recomputation) so a reader can
+   * see what was measured, what could not be, why, and what would unlock it — before
+   * reading any conclusion. Deliberately SEPARATE from the scores: coverage describes how
+   * much is known, not how good the company is, and it never reduces a score.
+   */
+  evidence_coverage?: {
+    state: string;
+    disposition: string;
+    coverage_percentage: number;
+    ai_coverage_percentage: number | null;
+    connected_sources: number;
+    total_sources: number;
+    website_scanned: boolean;
+    authority_measured: boolean;
+    headline: string;
+    gaps: Array<{ area: string; why: string; impact: string; next_step: string; expected_benefit: string }>;
+    next_moves: string[];
+  } | null;
   geo_aeo_executive_summary: {
     overall_ai_visibility_score: number | null;
     overall_ai_visibility_score_state: ScoreState;
+    /**
+     * Phase 2: NULLABLE. When AI visibility is `insufficient_signal` or `unavailable`
+     * there is no diagnosis to make, and the report must say nothing rather than assert
+     * a generic AEO deficiency. Consumers must handle null.
+     */
     primary_gap: {
       title: string;
       type: 'answer_gap' | 'entity_gap' | 'structure_gap';
       severity: 'critical' | 'moderate' | 'low';
       reasoning: string;
       if_not_addressed: string;
-    };
+    } | null;
     top_3_actions: Array<{
       action_title: string;
       priority: 'high' | 'medium' | 'low';
@@ -529,3 +649,53 @@ export const SIGNAL_BUCKETS = {
   competitor: ['authority_comparison', 'content_depth', 'positioning'],
   opportunity: ['keyword_gap', 'missing_pages', 'intent_mismatch'],
 } as const;
+
+/**
+ * Phase 4 — one Digital Experience finding, in the Phase 2 recommendation contract:
+ * Problem → Evidence → Why it matters → Action → Effort → Priority(severity) → Measurement.
+ * Structurally typed so the report contract matches `digitalExperience.ExperienceFinding`
+ * without the types module importing the service.
+ */
+export type SnapshotExperienceFinding = {
+  pillar: string;
+  problem: string;
+  evidence: string;
+  whyItMatters: string;
+  action: string;
+  severity: string;
+  effort: string;
+  measurement: string;
+};
+
+/**
+ * Report 1 assembly output — the CMO-facing decision layer.
+ *
+ * Cross-source opportunities, at most five top priorities, and an evidence-driven 30/60/90
+ * plan. Produced by `digitalSnapshotAssembly`, which reads already-computed outputs and adds
+ * no score of its own. Structurally typed so this module does not import the assembler.
+ */
+export type SnapshotDigitalSnapshot = {
+  opportunities: Array<{
+    id: string; title: string; problem: string;
+    evidence: Array<{ source: string; statement: string; state: ScoreState }>;
+    businessImplication: string; action: string; expectedImpact: string;
+    impact: number; confidence: string; effort: string; priorityScore: number;
+    measurement: string; measurementAvailable: boolean;
+    sources: string[]; crossSource: boolean; horizon: string;
+  }>;
+  topPriorities: SnapshotDigitalSnapshot['opportunities'];
+  plan: {
+    days_0_30: SnapshotPlanItem[];
+    days_31_60: SnapshotPlanItem[];
+    days_61_90: SnapshotPlanItem[];
+    notes: string[];
+  };
+  unmeasuredDimensions: string[];
+  empty: boolean;
+};
+
+export type SnapshotPlanItem = {
+  title: string; action: string; why: string;
+  measurement: string; measurementAvailable: boolean;
+  effort: string; confidence: string; sources: string[];
+};

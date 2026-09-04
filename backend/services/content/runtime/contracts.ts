@@ -30,7 +30,14 @@ import type { CommunicationIntent, GenerationInstanceId } from '../../../platfor
  * lib/content/canonicalContent.ts (the DB content.content_type CHECK), restated
  * here so the runtime contracts carry no dependency on the persistence DTOs.
  */
-export type WriterContentType = 'post' | 'thread' | 'blog' | 'article' | 'story';
+export type WriterContentType =
+  | 'post'
+  | 'thread'
+  | 'blog'
+  | 'article'
+  | 'story'
+  | 'poll'
+  | 'tweet';
 
 /**
  * The tasks the task-policy registry can be asked about. Extends the content

@@ -1,4 +1,6 @@
 /** Part of the external-apis API (Agent-B split — backend module, not a route). */
+// Remediation: reject secrets pasted into the env-var-name field (server-side).
+import { describeRejectedEnvVarName, isEnvVarName } from '../../security/credentialSafety';
 import { requireExternalApiAccess, requirePlatformAdmin, parseUsageUserId } from './indexShared';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../db/supabaseClient';
@@ -186,7 +188,21 @@ export async function handleExternalApisPost(req: NextApiRequest, res: NextApiRe
       });
     }
 
+    // REMEDIATION — server-side env-var-NAME validation.
+    //
+    // This field is documented as holding the NAME of an environment variable. Nothing
+    // enforced that, and four provider rows were found holding live API secrets, which
+    // `select('*')` then served to clients. Rejecting here is the primary fix; the read-path
+    // redaction in `indexRead` is the backstop for rows written before this existed.
+    //
+    // The error describes the SHAPE of the problem and never echoes the submitted value.
     const resolvedApiKeyEnv = api_key_env_name || api_key_name || null;
+    if (resolvedApiKeyEnv && !isEnvVarName(resolvedApiKeyEnv)) {
+      return res.status(400).json({
+        error: 'INVALID_ENV_VAR_NAME',
+        detail: describeRejectedEnvVarName(resolvedApiKeyEnv),
+      });
+    }
     if (platformScopeRequested && !companyId) {
       const api = await savePlatformConfig({
         name,

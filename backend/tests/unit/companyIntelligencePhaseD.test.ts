@@ -70,7 +70,13 @@ describe('CI-D407 consumer adapter (seam; flag-gated)', () => {
     expect(r.source).toBe('legacy'); expect(r.fields.name).toBe('Acme');
     process.env.COMPANY_UNDERSTANDING_AUTHORITATIVE = 'true';
     const c = resolveCompanyProjection(profile());
-    expect(c.source).toBe('canonical'); expect(c.fields.name).toBe('Acme');
+    // G3R #1 — the projection path was renamed, not broken. `1d12eff5` split the
+    // single `'canonical'` source into three named paths
+    // (`canonical_profile` | `canonical_evidence` | `canonical_persisted`) so a
+    // reader can tell WHICH canonical route produced the value. With no
+    // persisted understanding and no evidence supplied, this fixture takes the
+    // profile-derived route.
+    expect(c.source).toBe('canonical_profile'); expect(c.fields.name).toBe('Acme');
     delete process.env.COMPANY_UNDERSTANDING_AUTHORITATIVE;
     expect(validateConsumerParity(profile()).matches).toBe(true);
   });

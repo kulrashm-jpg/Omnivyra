@@ -52,7 +52,14 @@ const CLEAR = ['AHREFS_API_KEY', 'MOZ_API_KEY', 'MAJESTIC_API_KEY', 'WIKIDATA_EN
 describe('BETA-ENGINE-005 — entity_graph adoption into the authority engine', () => {
   const saved = { ...process.env };
   afterEach(() => { process.env = { ...saved }; __clearProviderRegistry(); });
-  beforeEach(() => { for (const k of CLEAR) delete process.env[k]; __clearProviderRegistry(); });
+  beforeEach(() => {
+    for (const k of CLEAR) delete process.env[k];
+    // Phase 1A: keyless Wikidata is now ON by default (canonical `isWikidataEnabled()`), so
+    // simply CLEARING the env no longer means "no entity provider". These cases test the
+    // genuinely-no-provider baseline, which must now be stated explicitly.
+    process.env.WIKIDATA_ENABLED = 'false';
+    __clearProviderRegistry();
+  });
 
   it('backward compatible: no providers → authority stays INFERRED (unchanged baseline)', () => {
     const c = authorityConfidence(40);

@@ -39,6 +39,28 @@ jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn(),
 }));
 
+// G3R #4-6 — bridge the existing profile fixture into the migrated read seam.
+//
+// The community-AI routes stopped reading `companyProfileService.getProfile`.
+// `pages/api/community-ai/utils.ts:3` now imports
+// `getCanonicalProfile as getProfile` from `context/canonicalProfileAdapter`,
+// and that adapter reads through `companyProfileServiceRest1Rest2Pulse.getProfile`
+// (canonicalProfileAdapter.ts:36 -> :305). The mock above therefore stopped
+// being consumed, `resolveBrandVoice` (utils.ts:43-48) fell through to its
+// 'professional' default, and every brand_voice expectation failed.
+//
+// Rather than introduce a second profile abstraction, this delegates the
+// migrated seam to the SAME jest.fn the tests already configure, so each test's
+// existing `mockResolvedValueOnce(...)` setup semantics are preserved exactly —
+// the certified WS-2C bridge pattern from company_context_contract.test.ts.
+// `requireActual` is spread first so every other export of that module keeps its
+// real implementation; only the profile read is redirected.
+jest.mock('../../services/companyProfileServiceRest1Rest2Pulse', () => ({
+  ...jest.requireActual('../../services/companyProfileServiceRest1Rest2Pulse'),
+  getProfile: (...args: unknown[]) =>
+    (jest.requireMock('../../services/companyProfileService') as { getProfile: jest.Mock }).getProfile(...args),
+}));
+
 jest.mock('../../services/omnivyraClientV1', () => ({
   isOmnivyraEnabled: jest.fn().mockReturnValue(true),
   evaluateCommunityAiEngagement: jest.fn().mockResolvedValue({
