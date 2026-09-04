@@ -150,7 +150,9 @@ export function renderSection6AiVisibility(payload: PdfReportPayload, vars: Reco
   let bodySubsections: string[] = [];
   if (aiEligible && visuals) {
     const radarCard = `<article class="card card-accent-blue no-break"><div class="label">AI Answer Presence Radar</div><h3>How reusable the site looks for AI answers</h3>${aiRadar}<div class="tags" style="margin-top:10px;"><span class="badge badge-gray">${escapeHtml((visuals.aiAnswerPresenceRadar.data_source_strength || 'missing').toUpperCase())}</span>${(visuals.aiAnswerPresenceRadar.source_tags ?? []).slice(0, 3).map((tag) => `<span class="badge badge-blue">${escapeHtml(tag)}</span>`).join('')}</div></article>`;
-    const readoutCard = `<article class="card no-break"><h3>AI Visibility Readout</h3>${geo?.primaryGap.reasoning ? `<p>${escapeHtml(geo.primaryGap.reasoning)}</p>` : '<div class="pending-note">No AI visibility narrative available.</div>'}${geo?.visibilityOpportunity ? `<hr class="divider" /><div class="label">Visibility opportunity</div><p><strong>${escapeHtml(geo.visibilityOpportunity.title)}</strong></p><p>${escapeHtml(geo.visibilityOpportunity.estimatedAiExposure)}</p><p>${escapeHtml(geo.visibilityOpportunity.basedOn)}</p>` : ''}</article>`;
+    // Guarded: `primaryGap` is null when AI evidence could not name one, and the optional
+    // chain stops at `geo`. Falling through to the pending note states the absence honestly.
+    const readoutCard = `<article class="card no-break"><h3>AI Visibility Readout</h3>${geo?.primaryGap?.reasoning ? `<p>${escapeHtml(geo.primaryGap.reasoning)}</p>` : '<div class="pending-note">No AI visibility narrative available.</div>'}${geo?.visibilityOpportunity ? `<hr class="divider" /><div class="label">Visibility opportunity</div><p><strong>${escapeHtml(geo.visibilityOpportunity.title)}</strong></p><p>${escapeHtml(geo.visibilityOpportunity.estimatedAiExposure)}</p><p>${escapeHtml(geo.visibilityOpportunity.basedOn)}</p>` : ''}</article>`;
     bodySubsections = [
       renderSubsection(radarCard),
       renderSubsection(readoutCard),

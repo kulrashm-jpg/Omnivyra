@@ -5,12 +5,13 @@ import { Network } from 'lucide-react';
 type Props = {
   data: {
     overallAiVisibilityScore: number;
+    /** Null when AI evidence was insufficient to name a primary gap. */
     primaryGap: {
       title: string;
       type: 'answer_gap' | 'entity_gap' | 'structure_gap';
       severity: 'critical' | 'moderate' | 'low';
       reasoning: string;
-    };
+    } | null;
     top3Actions: Array<{
       actionTitle: string;
       priority: 'high' | 'medium' | 'low';
@@ -35,8 +36,14 @@ export default function GeoAeoExecutiveSummary({ data }: Props) {
         <div className="rounded-xl bg-teal-50 p-5">
           <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-teal-700"><Network size={14} />AI Visibility Summary</p>
           <p className="mt-4 text-4xl font-bold text-slate-900">{data.overallAiVisibilityScore}</p>
-          <p className="mt-2 text-sm text-slate-600">{data.primaryGap.title}</p>
-          <p className="mt-3 text-sm text-slate-600">{data.primaryGap.reasoning}</p>
+          {data.primaryGap ? (
+            <>
+              <p className="mt-2 text-sm text-slate-600">{data.primaryGap.title}</p>
+              <p className="mt-3 text-sm text-slate-600">{data.primaryGap.reasoning}</p>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-slate-500">AI answer evidence was insufficient to identify a primary gap for this snapshot.</p>
+          )}
         </div>
         <div className="rounded-xl bg-slate-50 p-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Top GEO/AEO Actions</p>

@@ -24,6 +24,16 @@ import {
   stripTimelinePrefix,
 } from './reportHtmlCoreUtils';
 
+/**
+ * Copy used when the GEO/AEO summary carries no primary gap.
+ *
+ * Kept in step with the PDF renderer: the snapshot builder sets `primary_gap: null` when AI
+ * evidence is insufficient, and the export states that absence rather than inventing a gap.
+ */
+const NO_PRIMARY_GAP_TITLE = 'Primary gap not determined';
+const NO_PRIMARY_GAP_BODY =
+  'AI answer evidence was insufficient to identify a primary gap for this snapshot.';
+
 export type SnapshotSectionStatus = 'complete' | 'partial' | 'missing';
 
 function estimateBlockUnits(text: string, base = 8): number {
@@ -480,7 +490,14 @@ export function renderGeoAeoFlow(payload: PdfReportPayload): string {
     }).join('')}</div>
   </div>` : '';
 
-  const gapCard = geo ? `<div class="card card-accent-amber no-break" style="height:100%;"><h3>Primary AI Visibility Gap</h3><p><strong>${escapeHtml(safeText(geo.primaryGap.title, 1))}</strong></p><p>${escapeHtml(safeText(geo.primaryGap.reasoning, 2))}</p><div class="tags" style="margin-top:6px;"><span class="badge badge-${geo.primaryGap.severity === 'critical' ? 'red' : geo.primaryGap.severity === 'moderate' ? 'amber' : 'green'}">${escapeHtml(geo.primaryGap.severity.toUpperCase())}</span><span class="badge badge-gray">${escapeHtml(geo.primaryGap.type.replace(/_/g, ' ').toUpperCase())}</span></div></div>` : '';
+  // `primaryGap` is null when AI evidence was insufficient to name one. Rendering the
+  // measured card in that case would fabricate a title, reasoning, severity and type the
+  // report never derived, so the slot states the abstention instead.
+  const gapCard = !geo
+    ? ''
+    : geo.primaryGap
+      ? `<div class="card card-accent-amber no-break" style="height:100%;"><h3>Primary AI Visibility Gap</h3><p><strong>${escapeHtml(safeText(geo.primaryGap.title, 1))}</strong></p><p>${escapeHtml(safeText(geo.primaryGap.reasoning, 2))}</p><div class="tags" style="margin-top:6px;"><span class="badge badge-${geo.primaryGap.severity === 'critical' ? 'red' : geo.primaryGap.severity === 'moderate' ? 'amber' : 'green'}">${escapeHtml(geo.primaryGap.severity.toUpperCase())}</span><span class="badge badge-gray">${escapeHtml(geo.primaryGap.type.replace(/_/g, ' ').toUpperCase())}</span></div></div>`
+      : `<div class="card card-accent-amber no-break" style="height:100%;"><h3>Primary AI Visibility Gap</h3><p><strong>${escapeHtml(NO_PRIMARY_GAP_TITLE)}</strong></p><p>${escapeHtml(NO_PRIMARY_GAP_BODY)}</p></div>`;
 
   const queryMap = visuals?.queryAnswerCoverageMap;
   const querySection = queryMap?.queries?.length ? `<div class="card no-break" style="margin-top:12px;"><h3>Query Answer Coverage</h3><div style="margin-top:8px;">${queryMap.queries.slice(0, 6).map((q) => {
