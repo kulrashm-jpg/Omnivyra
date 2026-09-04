@@ -202,7 +202,7 @@ export const HEADER_NAV_ITEMS: HeaderNavItem[] = [
     href: '/prospects',
     icon: Radar,
     description: 'The canonical prospect record and the lead intelligence read over it.',
-    // Website capture routes moved to Website & Capture, so '/integrations' and
+    // Website capture routes moved to Web & Capture, so '/integrations' and
     // '/leads' are no longer claimed here — they were the only source of a
     // double-active state between the two groups.
     matchers: ['/prospects', '/lead-intelligence'],
@@ -217,7 +217,7 @@ export const HEADER_NAV_ITEMS: HeaderNavItem[] = [
     // captured and which systems feed them. They sat under Lead Intelligence and
     // made that menu two unrelated concerns at once.
     id: 'website-capture',
-    label: 'Website & Capture',
+    label: 'Web & Capture',
     href: '/website-setup',
     icon: Link2,
     description: 'Website connection, tracking, forms and lead capture.',

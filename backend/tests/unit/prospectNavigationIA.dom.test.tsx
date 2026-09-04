@@ -65,10 +65,10 @@ describe('3/4 — Lead Intelligence nests under Prospect and keeps its two items
   });
 });
 
-describe('5/6 — Website & Capture is separate and complete', () => {
+describe('5/6 — Web & Capture is separate and complete', () => {
   it('is its own top-level group, not a child of Prospect', () => {
     expect(website()).toBeDefined();
-    expect(website().label).toBe('Website & Capture');
+    expect(website().label).toBe('Web & Capture');
     expect(childLabels('prospect')).not.toContain('Website Setup');
   });
 
@@ -97,11 +97,11 @@ describe('8 — matcher behaviour: no unintended double activation', () => {
     ['/prospects', 'Prospect'],
     ['/prospects/abc-123', 'Prospect'],
     ['/lead-intelligence', 'Prospect'],
-    ['/website-setup', 'Website & Capture'],
-    ['/website-health', 'Website & Capture'],
-    ['/integrations', 'Website & Capture'],
-    ['/leads', 'Website & Capture'],
-    ['/lead-capture', 'Website & Capture'],
+    ['/website-setup', 'Web & Capture'],
+    ['/website-health', 'Web & Capture'],
+    ['/integrations', 'Web & Capture'],
+    ['/leads', 'Web & Capture'],
+    ['/lead-capture', 'Web & Capture'],
   ])('%s activates exactly one group: %s', (pathname, expected) => {
     expect(activeGroups(pathname as string)).toEqual([expected]);
   });
@@ -121,8 +121,8 @@ describe('8 — matcher behaviour: no unintended double activation', () => {
 
   it('query strings do not change activation (normalizePath strips them)', () => {
     expect(activeGroups('/lead-intelligence?tab=leads')).toEqual(['Prospect']);
-    expect(activeGroups('/leads?tab=forms')).toEqual(['Website & Capture']);
-    expect(activeGroups('/integrations?focus=website')).toEqual(['Website & Capture']);
+    expect(activeGroups('/leads?tab=forms')).toEqual(['Web & Capture']);
+    expect(activeGroups('/integrations?focus=website')).toEqual(['Web & Capture']);
   });
 });
 
@@ -152,5 +152,90 @@ describe('9 — existing routes and deep links are unchanged', () => {
     const all = HEADER_NAV_ITEMS.flatMap((i) => i.children.map((c) => c.href));
     expect(all.filter((h) => h.startsWith('/lead-intelligence'))).toHaveLength(2);
     expect(all).toContain('/prospects');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Home is rendered by GlobalHeaderMain, NOT by HEADER_NAV_ITEMS.
+//
+// That component pulls in Supabase, the session client, the credits hook and the
+// tour context, so mounting it would mean mocking half the app to assert two
+// strings. The repository already uses source-level assertions for exactly this
+// case, so the contract is verified by reading the file — cheaper, and it fails
+// for the right reason when someone deletes the accessible name.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { readFileSync } = require('fs');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { join } = require('path');
+
+const HEADER_MAIN = readFileSync(
+  join(__dirname, '..', '..', '..', 'components', 'layout', 'GlobalHeaderMain.tsx'),
+  'utf8',
+) as string;
+
+/** The two `href="/dashboard"` Link blocks: [0] desktop nav, [1] mobile drawer. */
+const homeLinks = (): string[] => {
+  const out: string[] = [];
+  let from = 0;
+  for (;;) {
+    const at = HEADER_MAIN.indexOf('href="/dashboard"', from);
+    if (at < 0) break;
+    const open = HEADER_MAIN.lastIndexOf('<Link', at);
+    const close = HEADER_MAIN.indexOf('</Link>', at);
+    out.push(HEADER_MAIN.slice(open, close));
+    from = close;
+  }
+  return out;
+};
+
+describe('10 — Home stays outside the nav config and keeps its destination', () => {
+  it('Home is not a HEADER_NAV_ITEMS entry', () => {
+    expect(HEADER_NAV_ITEMS.map((i) => i.label)).not.toContain('Home');
+    expect(HEADER_NAV_ITEMS.flatMap((i) => i.children.map((c) => c.href))).not.toContain('/dashboard');
+  });
+
+  it('there are exactly two Home links — desktop and mobile', () => {
+    expect(homeLinks()).toHaveLength(2);
+  });
+
+  it('both still point at /dashboard', () => {
+    for (const link of homeLinks()) expect(link).toContain('href="/dashboard"');
+  });
+
+  it('active state is still computed from the path, not a label', () => {
+    for (const link of homeLinks()) expect(link).toContain("isPathMatch(router.pathname, '/dashboard')");
+  });
+});
+
+describe('11 — desktop Home is icon-only but not nameless', () => {
+  it('CRITICAL: carries an accessible name', () => {
+    const [desktop] = homeLinks();
+    expect(desktop).toContain('title="Home"');
+    expect(desktop).toContain('aria-label="Home"');
+  });
+
+  it('renders the icon', () => {
+    expect(homeLinks()[0]).toMatch(/<Home\s+className=/);
+  });
+
+  it('CRITICAL: no visible "Home" text node remains', () => {
+    const [desktop] = homeLinks();
+    // Strip attribute values so title=/aria-label= do not count as visible text.
+    const withoutAttrs = desktop.replace(/(title|aria-label)="Home"/g, '');
+    expect(withoutAttrs).not.toMatch(/>\s*Home\s*</);
+    expect(withoutAttrs.includes('\n              Home\n')).toBe(false);
+  });
+});
+
+describe('12 — mobile Home is unchanged', () => {
+  it('CRITICAL: keeps its visible label', () => {
+    const mobile = homeLinks()[1];
+    expect(mobile).toMatch(/<Home\s+className=[^>]*\/>\s*\n\s*Home/);
+  });
+
+  it('still closes the drawer on click', () => {
+    expect(homeLinks()[1]).toContain('setMobileOpen(false)');
   });
 });
