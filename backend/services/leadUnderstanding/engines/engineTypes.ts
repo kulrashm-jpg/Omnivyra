@@ -62,6 +62,22 @@ export interface LeadIntelligenceContext {
    * evidence or an abstention reason, and nothing populates them.
    */
   ratifiedIcp?: RatifiedIcp | null;
+  /**
+   * WS-6 (FR-16) — the ACCOUNT's observed attributes, for the ICP's `account`
+   * subject.
+   *
+   * D1's evaluator is explicit that "calling it twice — once with
+   * `subject: 'account'`, once with `subject: 'person'` — is how account fit
+   * and person fit are produced", and only the person call existed. This is
+   * the account half's input.
+   *
+   * Kept SEPARATE from `identity` on purpose: an account attribute must never
+   * be evaluated as though it described the person. Absent when the prospect
+   * has no account, which the evaluator reports as an abstention rather than a
+   * failed match. Only attributes the account genuinely holds appear — an
+   * omitted one is `unknown`, never a miss.
+   */
+  account?: { attributes: Record<string, unknown>; observedAt?: string | null };
   companyId?: string;                            // upstream Company Understanding node (graph ref only)
   offeringId?: string;
   competitorId?: string;
