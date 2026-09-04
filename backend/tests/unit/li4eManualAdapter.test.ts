@@ -53,6 +53,13 @@ function violatesUnique(table: string, row: Row): boolean {
   return false;
 }
 
+// Tenant-scoped ingestion gate: this suite exercises orchestration, not the
+// gate, so the tenant flag is doubled ON. The gate's own behaviour — including
+// every DENY path — is proven in piTenantScopedIngestionGate.test.ts.
+jest.mock('../../services/featureFlagService', () => ({
+  evaluateFeatureFlag: jest.fn(async () => ({ enabled: true, reason: 'test_flag_enabled' })),
+}));
+
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => {
     const filters: Array<[string, unknown]> = [];

@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { ingestLeadBatch, isLeadIngestionEnabled, MAX_BATCH_SIZE } from '../../../backend/services/leadIngestion/orchestrator';
+import { ingestLeadBatch, isLeadIngestionEnabled, resolveLeadIngestionGate, MAX_BATCH_SIZE } from '../../../backend/services/leadIngestion/orchestrator';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { PROSPECT_INGEST } from '../../../shared/contracts/security';
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
@@ -99,6 +99,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     reason: 'manual lead ingestion into the prospect identity spine',
   });
   if (guard.ok !== true) return;
+
+  // ── TENANT GATE ─────────────────────────────────────────────────────────
+  // AFTER authorization, deliberately. Checking a tenant's flag before
+  // membership would let an unauthenticated caller probe which organisations
+  // have ingestion enabled; only a verified admin of THIS tenant learns its
+  // state. The global kill switch above stays first because it is free and
+  // leaks nothing.
+  const gate = await resolveLeadIngestionGate(companyId);
+  if (!gate.allowed) {
+    return res.status(404).json({
+      error: 'Lead ingestion is not enabled.',
+      code: 'LEAD_INGESTION_DISABLED',
+      reason: gate.reason,
+    });
+  }
 
   const body = isRecord(req.body) ? req.body : null;
   if (!body) return res.status(400).json({ error: 'a JSON object body is required' });
