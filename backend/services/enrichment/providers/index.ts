@@ -31,6 +31,15 @@ export type { CostDecision, ExecuteEnrichmentPorts, ExecuteEnrichmentResult } fr
 export {
   PROVIDER_API_KEY, makeTenantCredentialPort, tenantCredentialPort,
 } from './credentials';
+
+// A3U — register the adapters that exist, at load, exactly as WS-4 does.
+// Importing this barrel is what makes `getProvider('clearbit')` answer.
+import { registerPiEnrichmentAdapters } from './adapters';
+registerPiEnrichmentAdapters();
+export {
+  PI_ENRICHMENT_ADAPTERS, registerPiEnrichmentAdapters,
+  clearbitEnrichmentAdapter, mapClearbitPayload, CLEARBIT_SUPPORTED_ATTRIBUTES,
+} from './adapters';
 export type { TenantCredentialPort, TenantCredentialPortOptions } from './credentials';
 
 export {

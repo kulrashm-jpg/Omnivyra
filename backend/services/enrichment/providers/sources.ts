@@ -21,7 +21,8 @@
  */
 
 import type { EnrichmentSubject } from './contract';
-import { hasCredential } from './registry';
+// A3V removed the `hasCredential` import with the env default it fed: this
+// module must not be able to read a global credential even by accident.
 
 /**
  * How a source physically acquires data. Not cosmetic — each type has
@@ -171,6 +172,38 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     note: 'Declared only. No adapter, no credential.',
   },
   {
+    // A3T declared it; A3U built its adapter. Neither made it usable.
+    //
+    // The PI adapter (`./adapters/clearbit.ts`) is a TRANSLATION of the WS-4
+    // company-intelligence spec, not a reuse of its provider: WS-4 resolves its
+    // credential from `process.env`, which is right for Omnivyra's own key and
+    // forbidden here, where the key is the tenant's. What remains outstanding
+    // is economics — `prospect_enrichment` is unregistered and unpriced, so the
+    // cost gate refuses before any egress no matter what a tenant configures.
+    id: 'clearbit',
+    displayName: 'Clearbit',
+    sourceType: 'external_api',
+    // A3U built the adapter, so these are no longer a guess: they are the five
+    // canonical attributes it can actually emit, and it emits nothing else.
+    capabilities: {
+      entities: ['account'],
+      attributes: ['employee_count', 'employee_band', 'founded_year', 'country_code', 'technologies'],
+    },
+    credentialEnvVar: 'CLEARBIT_API_KEY',
+    // `adapter` is satisfied as of A3U and has been removed rather than left to
+    // say something untrue. `credit_action` remains, and is what still refuses.
+    authorizationRequirements: ['api_key', 'credit_action'],
+    creditAction: null,
+    // Ordering only, with no effect while the source is unusable. It reflects
+    // A3I's finding that Clearbit has the most complete existing contract, so
+    // `auto` would reach it first once one is actually built.
+    priority: 25,
+    note:
+      'Declared only. Company firmographics keyed on domain. A tenant may store a '
+      + 'credential; PI cannot yet call it, because no PI adapter is registered and no '
+      + 'credit action is priced.',
+  },
+  {
     id: 'crunchbase',
     displayName: 'Crunchbase',
     sourceType: 'external_api',
@@ -212,11 +245,25 @@ export interface SourceStatus extends AcquisitionSourceDescriptor {
  *
  * `hasAdapter` is supplied by the caller from the adapter registry rather than
  * read here, so this module stays pure and testable without registration.
+ *
+ * ─── A3V: `credentialPresent` IS REQUIRED, AND USED TO DEFAULT TO env ─────
+ * It defaulted to `hasCredential(source.credentialEnvVar)` — a read of
+ * `process.env`. That was harmless only for as long as no adapter existed,
+ * because the `!hasAdapter` branch above returned first. A3U registered one,
+ * and the branch became reachable: with `CLEARBIT_API_KEY` set, a source no
+ * tenant had configured would have reported `connected` — "adapter registered
+ * and credential configured" — describing OMNIVYRA's environment while a
+ * caller read it as a statement about a tenant.
+ *
+ * PI credentials are tenant-owned (A3M), and this function has no tenant. So
+ * it no longer guesses: the caller must supply the answer from the tenant's
+ * own credential store, and a caller that cannot must pass `false` and get
+ * `credential_missing` rather than an inferred readiness.
  */
 export function resolveConnectionState(
   source: AcquisitionSourceDescriptor,
   hasAdapter: boolean,
-  credentialPresent: boolean = hasCredential(source.credentialEnvVar),
+  credentialPresent: boolean,
 ): { state: ConnectionState; reason: string } {
   if (source.sourceType === 'browser_extension') {
     // The extension needs no server credential. It is `available` because its
@@ -239,16 +286,23 @@ export function resolveConnectionState(
   if (!credentialPresent) {
     return {
       state: 'credential_missing',
-      reason: `${source.credentialEnvVar ?? 'the credential'} is not configured`,
+      reason: 'this tenant has not configured a credential for this source',
     };
   }
-  return { state: 'connected', reason: 'adapter registered and credential configured' };
+  return { state: 'connected', reason: 'adapter registered and this tenant has configured a credential' };
 }
 
-/** Every source with its live state. The authoritative "what can we use?". */
+/**
+ * Every source with its live state. The authoritative "what can we use?".
+ *
+ * `credentialPresent` is required for the reason given on
+ * `resolveConnectionState`: it is a question about a TENANT, and this module
+ * has none. A caller with a tenant answers it from the tenant credential
+ * store; a caller without one passes `() => false`.
+ */
 export function listSourceStatus(
   hasAdapter: (id: string) => boolean,
-  credentialPresent: (envVar: string | null) => boolean = hasCredential,
+  credentialPresent: (envVar: string | null) => boolean,
 ): readonly SourceStatus[] {
   return ACQUISITION_SOURCES
     .map((source) => {

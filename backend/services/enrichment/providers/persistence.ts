@@ -74,25 +74,121 @@ export async function resolveEnrichmentAccount(
   };
 }
 
-/**
- * Split provider fields into the attribute bags `ingestSourceRecord` expects.
+/* ───────────────────────────────────────────────────────────────────────────
+ * A3V — the PI → LI-2 vocabulary translation.
  *
- * Values are passed through as the provider gave them: normalisation belongs to
- * the ingestion boundary, which owns the canonical vocabulary. Doing it twice,
- * in two places, is how two spellings of the same value end up in one column.
+ * PI names attributes the way the ICP model does — `employee_count` — because
+ * that is the vocabulary a criterion is written in. LI-2's ingestion contract
+ * names the same attributes `employeeCount`, and maps them back to snake_case
+ * COLUMNS on the way to `source_assertions`. Both spellings are correct in
+ * their own layer; what was missing was the sentence between them.
+ *
+ * Until A3U there was no adapter, every test mocked the ingest, and the bag
+ * went straight through with PI's spelling. `toAccountAttributes` read
+ * `input.employeeCount`, found nothing, and normalised the whole record to
+ * nulls — so a provider's answer was accepted, carried, and silently discarded
+ * at the last step. Nothing failed; the evidence simply never arrived.
+ *
+ * ─── WHY AN EXPLICIT MAP AND NOT A snake_case→camelCase FUNCTION ──────────
+ * Because a generic transformer cannot refuse. It would happily invent
+ * `someNewThing` from `some_new_thing` and hand it to a contract that has no
+ * such field, reproducing the same silent loss one attribute later. The map
+ * below is a closed list: an attribute PI cannot express through LI-2 is
+ * REPORTED as unmapped rather than quietly dropped.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Canonical PI account attribute → the `AccountAttributes` key LI-2 reads.
+ *
+ * Deliberately NOT the whole of `toAccountAttributes`. `market`,
+ * `business_model` and `growth_stage` are normalised there but are absent from
+ * `pendingFromAccount`, so they would never become an assertion — including
+ * them here would re-create exactly the silent loss this map exists to end.
+ * They are excluded until that map carries them.
  */
-export function toAttributeBags(fields: readonly ProviderField[]): {
+export const ACCOUNT_ATTRIBUTE_TO_LI2: Readonly<Record<string, string>> = {
+  industry: 'industry',
+  employee_count: 'employeeCount',
+  employee_band: 'employeeBand',
+  country_code: 'countryCode',
+  region: 'region',
+  city: 'city',
+  description: 'description',
+  annual_revenue: 'annualRevenue',
+  revenue_band: 'revenueBand',
+  founded_year: 'foundedYear',
+  technologies: 'technologies',
+  funding_stage: 'fundingStage',
+  last_funding_at: 'lastFundingAt',
+};
+
+/**
+ * Canonical PI person attribute → the `PersonAttributes` key LI-2 reads.
+ *
+ * `authority`, `influence` and `buying_role` are excluded for the same reason
+ * as their account counterparts: `pendingFromPerson` does not carry them, so
+ * they normalise and then vanish. GAP-3 remains open regardless.
+ */
+export const PERSON_ATTRIBUTE_TO_LI2: Readonly<Record<string, string>> = {
+  full_name: 'fullName',
+  first_name: 'firstName',
+  last_name: 'lastName',
+  job_title: 'jobTitle',
+  department: 'department',
+  seniority: 'seniority',
+  country_code: 'countryCode',
+  region: 'region',
+  city: 'city',
+  timezone: 'timezone',
+};
+
+export interface AttributeBags {
   personAttributes: Record<string, unknown>;
   accountAttributes: Record<string, unknown>;
-} {
+  /**
+   * Canonical attributes the provider returned that LI-2 has no field for.
+   *
+   * Surfaced rather than discarded: an attribute silently disappearing between
+   * two layers is the defect this whole function exists to fix, and it must not
+   * be reintroduced for the next attribute somebody adds.
+   */
+  unmapped: readonly string[];
+}
+
+/**
+ * Split provider fields into the attribute bags `ingestSourceRecord` expects,
+ * translating PI's canonical names into LI-2's.
+ *
+ * Values are passed through exactly as the provider gave them: normalisation
+ * belongs to the ingestion boundary, which owns the canonical vocabulary. Doing
+ * it twice, in two places, is how two spellings of one value end up in one
+ * column. This function changes the KEY and never the VALUE.
+ */
+export function toAttributeBags(fields: readonly ProviderField[]): AttributeBags {
   const personAttributes: Record<string, unknown> = {};
   const accountAttributes: Record<string, unknown> = {};
+  const unmapped: string[] = [];
+
   for (const f of fields) {
     if (f.value === null || f.value === undefined || f.value === '') continue;
-    if (f.subject === 'person') personAttributes[f.attribute] = f.value;
-    else accountAttributes[f.attribute] = f.value;
+
+    const isPerson = f.subject === 'person';
+    const map = isPerson ? PERSON_ATTRIBUTE_TO_LI2 : ACCOUNT_ATTRIBUTE_TO_LI2;
+    const key = map[f.attribute];
+
+    if (!key) {
+      // Not silently dropped, and NOT passed through under its PI name either:
+      // an unknown key in the ingestion contract is indistinguishable from a
+      // typo, and LI-2 would ignore it exactly as it ignored all of them before.
+      unmapped.push(f.attribute);
+      continue;
+    }
+
+    if (isPerson) personAttributes[key] = f.value;
+    else accountAttributes[key] = f.value;
   }
-  return { personAttributes, accountAttributes };
+
+  return { personAttributes, accountAttributes, unmapped };
 }
 
 /**

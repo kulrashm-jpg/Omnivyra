@@ -74,9 +74,15 @@ export const DECLARED_PROVIDERS: readonly DeclaredProvider[] = [
 ];
 
 /**
- * Registered adapters. EMPTY, and that is the honest state of the platform:
- * no enrichment provider is operational. Tests inject their own adapters
- * rather than this list being seeded with something untested.
+ * Registered adapters.
+ *
+ * A3U registered the first one — Clearbit — through `./adapters`, so this map
+ * is no longer empty. That does NOT make any provider operational: an adapter
+ * only moves the refusal one step later, from `not_implemented` to whichever
+ * of "this tenant has no credential" or "this operation is unpriced" applies.
+ * Both still refuse, so no external call can occur.
+ *
+ * Tests continue to inject their own adapters rather than relying on this list.
  */
 const adapters = new Map<string, EnrichmentProviderAdapter>();
 

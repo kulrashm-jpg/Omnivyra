@@ -81,7 +81,10 @@ describe('A3 provenance — observations go through LI-2, never around it', () =
 
   it('splits fields into the person and account bags the boundary expects', () => {
     const bags = toAttributeBags(fields);
-    expect(bags.personAttributes).toEqual({ job_title: 'Marketing Manager' });
+    // A3V: the bag speaks LI-2's vocabulary. The adapter said `job_title`; the
+    // ingestion contract reads `jobTitle`, and the translation is what stopped
+    // the value being silently discarded at the boundary.
+    expect(bags.personAttributes).toEqual({ jobTitle: 'Marketing Manager' });
     expect(bags.accountAttributes).toEqual({ industry: 'Marketing Technology' });
   });
 
@@ -190,11 +193,14 @@ describe('A3 → ICP — enriched attributes reach the existing evaluator', () =
   });
 
   it('the SAME person, once enriched with job_title, evaluates and scores', () => {
-    // Exactly what an enrichment writes through LI-2 onto unified_persons.
-    const enriched = toAttributeBags([{
-      attribute: 'job_title', subject: 'person', value: 'Marketing Manager',
-      observedAt: '2026-08-01T00:00:00.000Z', confidence: 0.9, providerInferred: false,
-    }]).personAttributes;
+    // A3V correction. This used to build the evaluator's facts from
+    // `toAttributeBags`, which only worked because the bag happened to share
+    // PI's spelling. It does not: the bag is LI-2's INGESTION vocabulary, while
+    // the evaluator reads the CANONICAL attributes LI-2 later writes to the
+    // person's columns — the same `job_title` an ICP criterion names. Feeding
+    // one to the other conflated two layers; the canonical form is used here,
+    // exactly as the sibling test below already does.
+    const enriched = { job_title: 'Marketing Manager' };
 
     const out = evaluateIcpFit({
       ratified: ratified([UNION]),
@@ -296,9 +302,16 @@ describe('A3 — the full path, end to end through real contracts', () => {
     const rec = ingested as unknown as Record<string, unknown>;
     expect(rec.provider).toBe('fake');
     expect(rec.observedAt).toBe('2026-08-01T00:00:00.000Z');
-    expect(rec.personAttributes).toEqual({ job_title: 'Marketing Manager' });
+    // A3V: LI-2's vocabulary at the ingestion boundary. See the bag test above.
+    expect(rec.personAttributes).toEqual({ jobTitle: 'Marketing Manager' });
 
     // And the canonical value it produced is one the real evaluator can score.
+    //
+    // A3V: the evaluator is fed the CANONICAL attribute LI-2 writes to the
+    // person's columns — the `job_title` the criterion names — not the
+    // ingestion bag above, which is LI-2's own input vocabulary. The mock
+    // ingest reports exactly this as `canonicalApplied: ['job_title']`.
+    const canonical = { job_title: 'Marketing Manager' };
     const out = evaluateIcpFit({
       ratified: {
         organizationId: ORG, icpId: '44444444-4444-4444-8444-444444444444', icpKey: 'k', version: 1,
@@ -308,7 +321,7 @@ describe('A3 — the full path, end to end through real contracts', () => {
         }]),
         ratifiedAt: NOW, ratifiedBy: 'user-1',
       },
-      facts: { subject: 'person', attributes: rec.personAttributes as Record<string, unknown>, observedAt: NOW },
+      facts: { subject: 'person', attributes: canonical, observedAt: NOW },
       asOf: NOW,
     });
     expect(out.reason).toBe('evaluated');
