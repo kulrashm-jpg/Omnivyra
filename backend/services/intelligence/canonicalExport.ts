@@ -79,6 +79,8 @@ export type CanonicalExportPayload = {
     search_visibility: SnapshotReport['search_visibility'] | null;
     /** GAP-08 — identity fields with explicit provenance. */
     company_identity: SnapshotReport['company_identity'] | null;
+    /** GAP-10 — per-check website evidence. Null when nothing was evaluable. */
+    website_checks: SnapshotReport['website_checks'] | null;
   };
 
   // ── Analyst-only: evidence appendix + per-axis explanations ──────────────

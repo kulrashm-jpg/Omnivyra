@@ -73,6 +73,8 @@ import {
   SNAPSHOT_SECTION_DEFINITIONS,
 } from './snapshotReport/sectionAssemblyHelpers';
 import { signalAvailabilityFromDecisions } from './snapshotReport/signalAvailability';
+// GAP-10 — presentation grouping for the check evidence the engines already produced.
+import { buildWebsiteChecks } from './snapshotReport/websiteCheckGrouping';
 import {
   classifySystemMaturity,
   emptyEnvelope,
@@ -626,6 +628,26 @@ export async function composeSnapshotReportFromDecisions(params: {
     hasDeclared: identityFields.some((f) => f.declaredValue !== null),
     hasObserved: identityFields.some((f) => f.observedValue !== null),
   };
+
+  // GAP-10 — carry the per-check website evidence the engines already produced.
+  //
+  // `engineEvidenceDigest` above holds the technical, content and accessibility results for this
+  // run. Until now it fed narrative text only: `enrichRationale` compressed 60+ checks into one
+  // "weakest X; strongest Y" sentence and the checks themselves were discarded before persistence.
+  // A production report therefore stated `pagesEvaluated: 27` while `robots_txt`, `sitemap_xml`,
+  // `structured_data`, `hreflang` and `duplicate_titles` had ZERO occurrences in the stored
+  // `composed_report` — the site had been measured and the customer was never told what was found.
+  //
+  // Nothing is re-evaluated, re-scored or re-thresholded here; the existing results are carried
+  // across with their own statuses intact. `buildWebsiteChecks` returns null when no check was
+  // evaluable, so a company with no crawled pages abstains instead of rendering an all-"not
+  // evaluated" section (GAP-02's rule, applied to this surface).
+  canonicalSnapshotShape.website_checks = buildWebsiteChecks({
+    technical: engineEvidenceDigest.technical,
+    content: engineEvidenceDigest.content,
+    accessibility: engineEvidenceDigest.accessibility,
+    pagesEvaluated: digitalExperience?.coverage?.pagesEvaluated ?? experiencePages.length,
+  });
 
   // GAP-06 — public-domain search visibility.
   //

@@ -706,3 +706,77 @@ export function renderCompanyIdentity(
     </section>
   `;
 }
+
+type WebsiteChecks = NonNullable<Report1['website_checks']>;
+type WebsiteCheck = WebsiteChecks['groups'][number]['checks'][number];
+
+/**
+ * Section — website checks (GAP-10).
+ *
+ * The deterministic engines evaluate 60+ checks on every run and, until now, the customer saw one
+ * compressed sentence. This renders what was actually found, grouped the way a reader looks for it.
+ *
+ * Two rules carry the whole section:
+ *
+ *   1. `not_evaluable` renders as "Not evaluated", NEVER as a zero and never as a pass. The engines
+ *      use it to mean "no stored data for this" — a single-language site has no hreflang to read,
+ *      a static crawl cannot see JavaScript errors. Presenting either as a failure would invent a
+ *      defect, and presenting it as a pass would invent a measurement.
+ *
+ *   2. An evaluated check that observed nothing keeps its own detail ("0 pages returned 4xx/5xx").
+ *      That is a real finding and reads differently from "we did not look".
+ *
+ * No score, band, percentage or aggregate is computed here. The engines' per-check numeric score is
+ * not even carried into the contract, so this renderer cannot accidentally surface one.
+ */
+export function renderWebsiteChecks(
+  payload: CanonicalExportPayload,
+  eyebrow: string,
+): string {
+  const checks = payload.report1?.website_checks as WebsiteChecks | null | undefined;
+  if (!checks || checks.groups.length === 0) return '';
+
+  const STATUS_LABEL: Record<WebsiteCheck['status'], string> = {
+    pass: 'Observed',
+    warn: 'Needs attention',
+    fail: 'Problem found',
+    not_evaluable: 'Not evaluated',
+  };
+
+  // Muted for anything not actually evaluated, so the eye separates evidence from absence.
+  const statusPill = (status: WebsiteCheck['status']): string =>
+    `<span class="ds-pill"${status === 'not_evaluable' ? ' style="opacity:0.6;"' : ''}>${escape(STATUS_LABEL[status])}</span>`;
+
+  const row = (check: WebsiteCheck): string => `
+    <div class="ds-methodology-row">
+      <dt class="ds-methodology-label">${escape(check.label)} ${statusPill(check.status)}</dt>
+      <dd class="ds-methodology-body">${
+        check.status === 'not_evaluable'
+          ? `<span style="color:#64748b;">${escape(check.detail || 'No stored data for this check on the pages read.')}</span>`
+          : escape(check.detail || 'Evaluated against the pages read.')
+      }</dd>
+    </div>`;
+
+  return `
+    <section class="ds-section">
+      ${renderSectionHeader(
+        'Website Checks',
+        'What did reading your pages actually establish?',
+        eyebrow,
+      )}
+      <p class="ds-framing">${escape(
+        `${checks.evaluated} of ${checks.total} checks could be evaluated against the ${checks.pagesEvaluated} page(s) read from your site. ` +
+        'Checks marked "Not evaluated" had no stored data to read — that is a gap in what a public crawl can see, not a fault found on your site. ' +
+        'These are observations, not a score: nothing here is weighted or totalled into a rating.',
+      )}</p>
+      ${checks.groups.map((group) => `
+        <div style="margin-top:5mm;">
+          <h4 class="ds-subhead">${escape(group.label)}</h4>
+          <dl class="ds-methodology-list">
+            ${group.checks.map(row).join('')}
+          </dl>
+        </div>
+      `).join('')}
+    </section>
+  `;
+}

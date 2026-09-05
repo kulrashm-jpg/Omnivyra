@@ -490,6 +490,7 @@ export function mapComposedReport(
     evidenceAcquisition: report.evidence_acquisition ?? null,
     searchVisibility: report.search_visibility ?? null,
     companyIdentity: report.company_identity ?? null,
+    websiteChecks: report.website_checks ?? null,
     scoreExplanation: report.score ? {
       dimensions: Array.isArray(report.score.dimensions)
         ? report.score.dimensions.map((item) => ({

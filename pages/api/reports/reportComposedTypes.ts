@@ -615,4 +615,6 @@ export type ComposedReportData = {
   search_visibility?: SnapshotReport['search_visibility'];
   /** GAP-08 — identity fields with explicit provenance. */
   company_identity?: SnapshotReport['company_identity'];
+  /** GAP-10 — the per-check website evidence the deterministic engines already produced. */
+  website_checks?: SnapshotReport['website_checks'];
 };
