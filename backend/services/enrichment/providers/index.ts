@@ -29,6 +29,11 @@ export {
 export type { CostDecision, ExecuteEnrichmentPorts, ExecuteEnrichmentResult } from './execute';
 
 export {
+  PROVIDER_API_KEY, makeTenantCredentialPort, tenantCredentialPort,
+} from './credentials';
+export type { TenantCredentialPort, TenantCredentialPortOptions } from './credentials';
+
+export {
   defaultPersistObservation, makePersistObservation, resolveEnrichmentAccount,
   toAttributeBags, UNSAFE_ACCOUNT_OUTCOMES,
 } from './persistence';

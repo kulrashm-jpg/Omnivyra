@@ -38,7 +38,7 @@ import {
   type EnrichmentOutcome, type EnrichmentRequest, type EnrichmentProviderAdapter,
   type ProviderResponse,
 } from './contract';
-import { getProvider, hasCredential } from './registry';
+import { getProvider } from './registry';
 
 export const ENRICHMENT_EXECUTOR_VERSION = 'a3.1';
 
@@ -64,6 +64,30 @@ export interface ExecuteEnrichmentPorts {
 
   /** Release a reservation when the call produced nothing billable. */
   releaseCost(holdId: string | null, reason: string): Promise<void>;
+
+  /**
+   * A3M — resolve THIS TENANT's credential for this provider.
+   *
+   * Required, not optional, and deliberately so. Before A3M the executor asked
+   * "is an environment variable present?" and treated the answer as evidence
+   * that a tenant could use a provider. It is not: `process.env` holds ONE key
+   * for the whole platform, so a tenant that had authorised nothing would have
+   * spent Omnivyra's key under Omnivyra's bill, and every tenant would have
+   * shared one rate limit. Nothing in the type system objected, because there
+   * was no tenant in the question.
+   *
+   * Making this a REQUIRED port means a caller that has no tenant credential
+   * source cannot construct a valid executor at all. An optional port would
+   * have re-created the defect the moment someone omitted it.
+   *
+   * Returns null when this tenant has no credential for this provider. Null is
+   * final: the executor answers `credential_missing` and stops. It MUST NOT
+   * fall back to the environment — see `credentials.ts`.
+   */
+  resolveCredential(input: {
+    organizationId: string;
+    providerId: string;
+  }): Promise<string | null>;
 
   /**
    * The most recent equivalent observation, for duplicate suppression.
@@ -169,10 +193,19 @@ export async function executeEnrichment(
       `no adapter is registered for provider '${providerId}'`);
   }
 
-  // ── credential ───────────────────────────────────────────────────────────
-  if (!adapter.isAvailable() || !hasCredential(adapter.credentialEnvVar)) {
+  // ── credential — TENANT-OWNED, never the environment (A3M) ───────────────
+  // `adapter.isAvailable()` and `hasCredential(adapter.credentialEnvVar)` used
+  // to stand here. Both read `process.env`, so both answered a question about
+  // OMNIVYRA rather than about this tenant, and either one passing would have
+  // let Tenant A spend a key Tenant A never supplied. They are gone from the
+  // execution path on purpose; `listProviderStatus` still uses `isAvailable`
+  // to describe an adapter, which is a display concern, not an authorisation.
+  const credential = await ports.resolveCredential({
+    organizationId, providerId: adapter.id,
+  });
+  if (!credential) {
     return outcomeResult('credential_missing', request, adapter.id,
-      `${adapter.credentialEnvVar ?? 'the credential'} is not configured for '${adapter.id}'`);
+      `no credential is configured for '${adapter.id}' by this tenant`);
   }
 
   const supported = request.attributes.filter((a) => adapter.supports.includes(a));
@@ -206,7 +239,9 @@ export async function executeEnrichment(
   // ── the single call ──────────────────────────────────────────────────────
   let response: ProviderResponse;
   try {
-    response = await adapter.enrich({ ...request, organizationId, attributes: supported });
+    // The tenant's credential is injected HERE and nowhere earlier: it lives
+    // for the duration of one call and is never persisted, logged or returned.
+    response = await adapter.enrich({ ...request, organizationId, attributes: supported, credential });
   } catch (err) {
     // One call, one classification, no retry. An unrecognised error becomes
     // `provider_unavailable`, never `no_match`.

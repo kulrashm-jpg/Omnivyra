@@ -73,6 +73,22 @@ export interface EnrichmentRequest {
   readonly purpose: string;
   /** Correlates the attempt across logs, cost and provenance. */
   readonly correlationId: string;
+  /**
+   * A3M — the TENANT's provider credential, resolved and injected by the
+   * executor immediately before the call.
+   *
+   * An adapter must use this and must NOT read `process.env` for a credential.
+   * Reading the environment would resolve one shared Omnivyra key for every
+   * tenant, which is the defect A3M exists to remove: the caller would believe
+   * it authorised Tenant A while the bill and the rate limit belong to
+   * whoever's key happens to be configured.
+   *
+   * Optional only because the executor is what populates it; by the time an
+   * adapter sees the request it is always present, because a null credential
+   * ends the attempt at `credential_missing` before any adapter is reached.
+   * Never logged, never persisted, never returned in a result.
+   */
+  readonly credential?: string;
 }
 
 /**

@@ -52,6 +52,10 @@ const portsWith = (
   cost: Pick<ExecuteEnrichmentPorts, 'authorizeCost' | 'releaseCost'>,
 ): ExecuteEnrichmentPorts => ({
   ...cost,
+  // A3M: the tenant credential port. Present so cost remains the thing under
+  // test — a null here would end every attempt at `credential_missing` before
+  // the cost gate was ever reached.
+  resolveCredential: async () => 'tenant-scoped-test-secret',
   findRecentObservation: async () => null,
   persistObservation: async () => ({ sourceRecordId: 'src-1', canonicalWithheld: [] }),
   now: () => '2026-09-05T00:00:00.000Z',

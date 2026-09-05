@@ -72,6 +72,9 @@ function ports(over: Partial<ExecuteEnrichmentPorts> & { rec?: Recorded } = {}):
       return { authorized: true, holdId: 'hold-1', cost: { kind: 'free' } };
     }),
     releaseCost: over.releaseCost ?? (async (_h, reason) => { rec.released.push(reason); }),
+    // A3M: tenant-owned credential. Defaults to present so the tests below stay
+    // about what they were about; the absence case has its own suite.
+    resolveCredential: over.resolveCredential ?? (async () => 'tenant-scoped-test-secret'),
     findRecentObservation: over.findRecentObservation ?? (async () => null),
     persistObservation: over.persistObservation ?? (async () => {
       rec.persisted += 1;
@@ -81,9 +84,11 @@ function ports(over: Partial<ExecuteEnrichmentPorts> & { rec?: Recorded } = {}):
   };
 }
 
-// The executor checks the credential itself, independently of the adapter's own
-// `isAvailable()` — defence in depth. The fake therefore needs a configured
-// credential for every test that expects a call to happen.
+// A3M changed what this env var is for. The EXECUTOR no longer consults it —
+// it asks the tenant credential port — but the fake adapter's own
+// `isAvailable()` and the registry's `hasCredential` still describe an
+// adapter's configuration, and `listProviderStatus` reports on it. It is set
+// here for those, never as evidence that a tenant may spend.
 beforeEach(() => { process.env.FAKE_API_KEY = 'test-only-not-a-real-key'; });
 afterEach(() => {
   delete process.env.FAKE_API_KEY;
@@ -181,11 +186,18 @@ describe('A3 — refusals that cost nothing', () => {
     expect(wasFree(r.outcome)).toBe(true);
   });
 
-  it('refuses when the credential is missing', async () => {
-    const adapter = fakeAdapter({ isAvailable: () => false }) as EnrichmentProviderAdapter & { calls: unknown[] };
-    const r = await executeEnrichment(request(), 'fake', ports(), { adapter });
+  // A3M retargeted this at the condition that actually authorises a call. It
+  // used to force `isAvailable() => false` and assert the reason named the ENV
+  // VAR — i.e. it pinned "Omnivyra has no key" as the refusal. The refusal that
+  // matters is "THIS TENANT has no credential", and the adapter below reports
+  // itself perfectly available to prove the executor no longer cares.
+  it('refuses when THIS TENANT has no credential, however available the adapter claims to be', async () => {
+    const adapter = fakeAdapter({ isAvailable: () => true }) as EnrichmentProviderAdapter & { calls: unknown[] };
+    const r = await executeEnrichment(
+      request(), 'fake', ports({ resolveCredential: async () => null }), { adapter },
+    );
     expect(r.outcome).toBe('credential_missing');
-    expect(r.reason).toContain('FAKE_API_KEY');
+    expect(r.reason).toContain('this tenant');
     expect(adapter.calls).toHaveLength(0);
     expect(wasFree(r.outcome)).toBe(true);
   });
@@ -291,12 +303,14 @@ describe('A3 — provenance and non-fabrication', () => {
 
 describe('A3 — a failure never touches a canonical identity', () => {
   it.each([
-    ['credential missing', fakeAdapter({ isAvailable: () => false })],
-    ['provider error', fakeAdapter({ enrich: async () => { throw new Error('boom'); } })],
-    ['no match', fakeAdapter({ response: { outcome: 'no_match', fields: [], notReturned: [] } })],
-  ])('writes nothing on %s', async (_label, adapter) => {
+    // A3M: "credential missing" is now a TENANT fact, so it is expressed
+    // through the port rather than by crippling the adapter.
+    ['credential missing', fakeAdapter(), { resolveCredential: async () => null }],
+    ['provider error', fakeAdapter({ enrich: async () => { throw new Error('boom'); } }), {}],
+    ['no match', fakeAdapter({ response: { outcome: 'no_match', fields: [], notReturned: [] } }), {}],
+  ])('writes nothing on %s', async (_label, adapter, over) => {
     const rec: Recorded = { authorized: 0, released: [], persisted: 0 };
-    await executeEnrichment(request(), 'fake', ports({ rec }), { adapter });
+    await executeEnrichment(request(), 'fake', ports({ rec, ...(over as object) }), { adapter });
     expect(rec.persisted).toBe(0);
   });
 });

@@ -273,6 +273,8 @@ describe('A3 — the full path, end to end through real contracts', () => {
     const ports: ExecuteEnrichmentPorts = {
       authorizeCost: async () => ({ authorized: true, holdId: 'h', cost: { kind: 'free' } }),
       releaseCost: async () => { /* not reached */ },
+      // A3M: tenant-owned credential, present so identity remains under test.
+      resolveCredential: async () => 'tenant-scoped-test-secret',
       findRecentObservation: async () => null,
       persistObservation: makePersistObservation((async (record: unknown) => {
         ingested = record as Record<string, unknown>;
