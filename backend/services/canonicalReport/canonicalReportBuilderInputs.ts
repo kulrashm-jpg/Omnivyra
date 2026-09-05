@@ -29,6 +29,8 @@ import {
 // BETA-EXEC-003: canonical scoring-governance registry (aggregation formula + confidence
 // thresholds). Consolidation only — identical behaviour.
 import { geometricMean, confidenceBandFromCount, CONFIDENCE_EVIDENCE } from './scoringGovernance';
+// GAP-07 — the provenance policy, now with a runtime consumer. Imported, never re-implemented.
+import { isReport1Source, provenanceForSource, type EvidenceProvenanceClass } from '../evidenceProvenance';
 import { buildImprovementTodos } from './improvementTodoBuilder';
 import { resolveReportRoiDeterminability } from './reportRoiDeterminability';
 import { resolveTrajectoryProvenance, resolveCompetitorProvenance } from './reportProvenance';
@@ -111,29 +113,216 @@ export function resolveAuthorityInflowState(rawState: ScoreState, sourceTags: re
   return rawState === 'measured' && !isRealBacklinkProvider ? 'inferred' : rawState;
 }
 
-function buildEvidence(params: {
-  observations: EvidenceObservation[];
-}): EvidenceTrace {
-  const sources = new Set<EvidenceSourceKind>();
-  for (const obs of params.observations) sources.add(obs.source);
+/**
+ * GAP-07 — translate a radar `source_tag` into the canonical evidence vocabulary.
+ *
+ * The previous expression was `tag === 'crawler' ? 'crawler' : 'heuristic'`, which collapsed
+ * EVERY non-crawler tag into `heuristic` — including the literal `'GSC'` tag the radar attaches to
+ * its Search-Console-derived axes. Private analytics did not merely slip past the boundary; it
+ * arrived already wearing an INFERRED label, so no downstream guard could ever have caught it.
+ * Enforcement is only as good as the classification feeding it, so the classification is fixed
+ * first and the mapping is explicit rather than an else-branch.
+ *
+ * Unknown tags stay `heuristic` (INFERRED), matching prior behaviour: they are derived signals,
+ * not observations, and must never be promoted to `crawler`.
+ */
+function evidenceSourceFromTag(tag: string): EvidenceSourceKind {
+  const normalized = tag.trim().toLowerCase();
+  if (normalized === 'crawler' || normalized.startsWith('website_intelligence:')) return 'crawler';
+  if (normalized === 'gsc') return 'gsc';
+  if (normalized === 'backlink_signals' || normalized === 'backlink_api') return 'backlink_api';
+  if (normalized === 'competitor_intelligence') return 'competitor_intelligence';
+  if (normalized === 'social_links') return 'social_links';
+  return 'heuristic';
+}
+
+/**
+ * GAP-07 — enforce the boundary on a trace built OUTSIDE `buildEvidence`.
+ *
+ * The provider merges (`mergeAiSurfaceDimension`, `mergeEntityDimension`,
+ * `mergeAuthorityInflowDimension`) substitute a dimension's score with one carrying the PROVIDER'S
+ * own evidence trace. Those traces never passed through `buildEvidence`, so they were the one way a
+ * provider could put evidence into Report 1 with no provenance check at all — the exact hole this
+ * gap exists to close, one level below where it was first spotted.
+ *
+ * `count` is preserved when nothing is excluded, because provider traces set it deliberately (the
+ * AI citation matrix counts mentions, not observation rows) and rewriting it would change
+ * confidence bands — a scoring change. When something IS excluded the count drops by exactly that
+ * many, which is the honest outcome: confidence must not be earned from evidence the report is not
+ * permitted to assert on.
+ */
+export function enforceTraceProvenance(trace: EvidenceTrace): EvidenceTrace {
+  const retained: EvidenceObservation[] = [];
+  const excluded: EvidenceObservation[] = [];
+  for (const obs of trace.observations) {
+    (isReport1Source(obs.source) ? retained : excluded).push(obs);
+  }
+  const excludedSources = trace.sources.filter((source) => !isReport1Source(source));
+  const retainedSources = trace.sources.filter(isReport1Source);
+  const classes = new Set<EvidenceProvenanceClass>();
+  for (const source of retainedSources) classes.add(provenanceForSource(source));
+
+  const nothingExcluded = excluded.length === 0 && excludedSources.length === 0;
   return {
-    count: params.observations.length,
-    sources: [...sources],
-    freshness: { last_observed_at: null, age_hours: null },
-    observations: params.observations,
+    ...trace,
+    count: nothingExcluded ? trace.count : Math.max(0, trace.count - excluded.length),
+    sources: retainedSources,
+    observations: retained,
+    provenance: {
+      classes: [...classes],
+      excluded,
+      excludedSources: [...new Set(excludedSources)],
+      report1Clean: nothingExcluded,
+    },
   };
 }
 
+/**
+ * GAP-07 — stamp a provenance verdict on an AGGREGATE trace.
+ *
+ * `aggregatePillarScore` and `aggregateOverallScore` build their traces inline rather than through
+ * `buildEvidence`, because their `count` is a deliberate SUM of child counts, not a length. Routing
+ * them through the filter would silently change that sum and therefore the confidence band — a
+ * scoring change, which this gap must not make.
+ *
+ * So they are stamped instead of filtered. Their sources are already clean by construction (every
+ * child trace was filtered on the way in); what this adds is the verdict, and the child exclusions
+ * rolled up, so a pillar can report that something was withheld beneath it rather than looking
+ * clean merely because the withholding happened one level down.
+ */
+function stampAggregateProvenance(
+  trace: EvidenceTrace,
+  children: ReadonlyArray<EvidenceTrace>,
+): EvidenceTrace {
+  const classes = new Set<EvidenceProvenanceClass>();
+  for (const source of trace.sources) {
+    if (isReport1Source(source)) classes.add(provenanceForSource(source));
+  }
+  const excluded = children.flatMap((child) => child.provenance?.excluded ?? []);
+  const excludedSources = new Set<EvidenceSourceKind>();
+  for (const child of children) {
+    for (const source of child.provenance?.excludedSources ?? []) excludedSources.add(source);
+  }
+  return {
+    ...trace,
+    // Defence in depth: an aggregate must never surface a private source even if a child leaked one.
+    sources: trace.sources.filter(isReport1Source),
+    provenance: {
+      classes: [...classes],
+      excluded,
+      excludedSources: [...excludedSources],
+      report1Clean: excluded.length === 0 && trace.sources.every(isReport1Source),
+    },
+  };
+}
+
+/**
+ * GAP-07 — THE runtime provenance boundary for Report 1 evidence.
+ *
+ * `evidenceProvenance.ts` has always held the correct taxonomy — including the entry that matters
+ * most, `gsc → CONNECTED_SOURCE` — but nothing called it. The policy was a document. Evidence
+ * became authoritative Report 1 evidence with no check at all that its origin was inside the
+ * public-domain boundary the report claims for itself.
+ *
+ * Every canonical dimension routes its observations through this one function, so this is the
+ * smallest place the policy can become an invariant rather than an intention. Enforcing here
+ * instead of in renderers is deliberate: a renderer guard protects one surface, while the object
+ * itself stays wrong for the API, the stored row and Report 2.
+ *
+ * WHAT ENFORCEMENT MEANS HERE:
+ *
+ *   • Observations whose provenance is inside `REPORT1_PROVENANCE` (public-observed, inferred,
+ *     estimated, unavailable) are RETAINED and are what `count`/`sources` describe.
+ *   • Observations outside it (connected private analytics, company-declared facts, Omnivyra's own
+ *     history) are MOVED to `provenance.excluded` with their real source intact — never deleted.
+ *     Rule 4: silently dropping them would make the coverage read as "no evidence" when the truth
+ *     is "evidence we are not permitted to assert on here".
+ *   • `count` therefore counts only permitted evidence. That is the point: confidence must not be
+ *     earned from evidence the report may not use.
+ *
+ * This does not reclassify anything. `provenanceForSource` is the sole authority, and the source
+ * of each observation is decided by its producer.
+ */
+function buildEvidence(params: {
+  observations: EvidenceObservation[];
+}): EvidenceTrace {
+  const retained: EvidenceObservation[] = [];
+  const excluded: EvidenceObservation[] = [];
+  const classes = new Set<EvidenceProvenanceClass>();
+  const excludedSources = new Set<EvidenceSourceKind>();
+
+  for (const obs of params.observations) {
+    if (isReport1Source(obs.source)) {
+      retained.push(obs);
+      classes.add(provenanceForSource(obs.source));
+    } else {
+      excluded.push(obs);
+      excludedSources.add(obs.source);
+    }
+  }
+
+  const sources = new Set<EvidenceSourceKind>();
+  for (const obs of retained) sources.add(obs.source);
+
+  return {
+    count: retained.length,
+    sources: [...sources],
+    freshness: { last_observed_at: null, age_hours: null },
+    observations: retained,
+    provenance: {
+      classes: [...classes],
+      excluded,
+      excludedSources: [...excludedSources],
+      report1Clean: excluded.length === 0,
+    },
+  };
+}
+
+/**
+ * GAP-04 — the one place a `CanonicalScore` is built, and therefore the one place the
+ * state/value invariant can be made structural rather than remembered.
+ *
+ * THE INVARIANT
+ *
+ *     state ∈ { insufficient_signal, unavailable }  →  value === null
+ *     state ∈ { measured, inferred }                →  value may be numeric (0 included)
+ *
+ * Before this, `scoreFromAxis` copied `value` through verbatim, so a caller that computed a
+ * number and then classified the evidence as insufficient produced `{ value: 10, state:
+ * 'insufficient_signal' }`. `aggregateOverallScore` did exactly that: it computes the geometric
+ * mean of whatever pillars ARE measured, then sets the state from how many of them there were —
+ * and when fewer than half qualified it returned the number anyway. That object was observed in
+ * six live production reports and flowed into the stored record, the JSON API and the Report 2
+ * baseline. Every HTML renderer re-checked the state and rendered `—`, which is why it stayed
+ * invisible: the defect only surfaced where a consumer trusted `.value` alone.
+ *
+ * Nulling here rather than at each call site is deliberate. There are eleven dimension mappers
+ * plus two aggregators feeding this function; a per-caller guard would be thirteen chances to
+ * forget, and the next dimension added would be the fourteenth. This makes the unsafe object
+ * unconstructible.
+ *
+ * A MEASURED ZERO IS NOT AFFECTED. `isMeasured` tests `typeof value === 'number'`, so a genuine
+ * 0 with a measured/inferred state passes through untouched — "we looked and found nothing" and
+ * "we could not look" stay different readings, which is the whole point.
+ *
+ * `inferred` deliberately keeps its number. It is a labelled, evidence-backed reading the report
+ * already renders (authority inflow is downgraded to `inferred` precisely so it can carry a
+ * heuristic value honestly); stripping it would be a scoring-model change, not an integrity fix.
+ */
 function scoreFromAxis(params: {
   value: number | null;
   state: ScoreState;
   evidence: EvidenceTrace;
 }): CanonicalScore {
+  const value = isMeasured(params.value, params.state) ? params.value : null;
   return {
-    value: params.value,
+    value,
     state: params.state,
     confidence: bandFromCount(params.evidence.count, params.evidence.sources.includes('crawler') || params.evidence.sources.includes('decisions') || params.evidence.sources.includes('gsc')),
-    band: canonicalBandFromValue(params.value, params.state),
+    // Derived from the value actually stored, not the raw input. `canonicalBandFromValue` already
+    // returns 'insufficient' for a denying state, so this is behaviour-identical today — it simply
+    // removes the possibility of the band and the value disagreeing if that function ever changes.
+    band: canonicalBandFromValue(value, params.state),
     evidence: params.evidence,
     benchmark: { value: null, label: null },
   };
@@ -163,7 +352,7 @@ function aggregatePillarScore(dimensions: CanonicalDimension[]): CanonicalScore 
     : measuredValues.length > 0
       ? 'inferred'
       : 'insufficient_signal';
-  return scoreFromAxis({ value: avg, state, evidence });
+  return scoreFromAxis({ value: avg, state, evidence: stampAggregateProvenance(evidence, dimensions.map((d) => d.score.evidence)) });
 }
 
 export function aggregateOverallScore(pillars: CanonicalPillarScore[]): CanonicalScore {
@@ -187,7 +376,7 @@ export function aggregateOverallScore(pillars: CanonicalPillarScore[]): Canonica
     : measured.length >= Math.ceil(pillars.length / 2)
       ? 'inferred'
       : 'insufficient_signal';
-  return scoreFromAxis({ value, state, evidence });
+  return scoreFromAxis({ value, state, evidence: stampAggregateProvenance(evidence, pillars.map((p) => p.score.evidence)) });
 }
 
 // ── Dimension mappers ─────────────────────────────────────────────────────────
@@ -215,7 +404,7 @@ function dimIndexIntegrity(ctx: DimensionContext): CanonicalDimension {
   const state: ScoreState = radar.axis_states?.technical_seo_score ?? (typeof value === 'number' ? 'measured' : 'insufficient_signal');
   const sources: EvidenceObservation[] = (radar.source_tags?.technical_seo_score ?? []).map((tag) => ({
     signal: `technical_seo:${tag}`,
-    source: tag === 'crawler' ? 'crawler' : 'heuristic',
+    source: evidenceSourceFromTag(tag),
     observed_at: null,
   }));
   return {

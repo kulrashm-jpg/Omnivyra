@@ -111,7 +111,7 @@ import {
 import type { CanonicalReport } from '../canonicalReport/canonicalReportTypes';
 
 /** Optional brand-presence inputs threaded from the canonical pipeline. */
-import { PILLAR_LABEL, escape, sentence } from './exportRendererCore';
+import { PILLAR_LABEL, escape, formatReportDate, sentence } from './exportRendererCore';
 
 
 function renderAIRetrievalReliability(rel: AIRetrievalReliability): string {
@@ -467,6 +467,71 @@ export function renderReportDisclosures(payload: CanonicalExportPayload): string
   // BETA-REPORT-EXEC-010: render the payload truth (EXEC-005/007/008/009) faithfully — no recompute, no
   // derivation. Executive language only; renders ONLY elements that are present/material; empty ⇒ nothing.
   const rows: Array<[string, string]> = [];
+
+  // ── GAP-09 · evidence acquisition ──────────────────────────────────────────
+  //
+  // The report previously disclosed what it CONCLUDED but never what it FETCHED. A document whose
+  // sections all abstain is only interpretable if the reader can tell the two causes apart: a site
+  // that was crawled and found healthy, and a site that was never crawled at all. These rows state
+  // the acquisition record for the run — counts and reasons produced by the acquisition services
+  // themselves, never re-derived here, and rendered only when the producer supplied them.
+
+  const crawl = payload.report1?.evidence_acquisition?.crawl;
+  if (crawl) {
+    // `pagesAfter` is the denominator under every crawl-derived percentage in this report, so it is
+    // stated plainly. A zero-page outcome is reported as a zero-page outcome — the composition
+    // completing is not evidence that anything was fetched.
+    const fetchedNow = crawl.pagesAfter > crawl.pagesBefore;
+    const outcome = crawl.pagesAfter === 0
+      ? 'No pages were obtained'
+      : `${crawl.pagesAfter} page${crawl.pagesAfter === 1 ? '' : 's'} available${fetchedNow ? ` (${crawl.pagesAfter - crawl.pagesBefore} fetched for this report)` : ' (reused from a recent scan)'}`;
+    const observed = crawl.lastCrawledAt ? ` Last observed ${formatReportDate(crawl.lastCrawledAt)}.` : '';
+    const why = crawl.pagesAfter === 0 || crawl.error
+      ? ` ${crawl.error ? `The crawl failed: ${crawl.error}` : crawl.reason}`
+      : '';
+    rows.push([
+      'Website crawl',
+      `${outcome}. Outcome: ${crawl.action.replace(/_/g, ' ')}.${observed}${why}`,
+    ]);
+  }
+
+  const matrixCoverage = payload.ai_surface_presence?.citation_matrix?.coverage;
+  if (matrixCoverage && matrixCoverage.total_cells > 0) {
+    // Stated as a fraction, not a percentage alone — "1 of 20" is harder to misread as broad
+    // coverage than "5%", and the unqueried providers are named so absence is attributable.
+    const unqueried = (payload.ai_surface_presence?.citation_matrix?.by_provider ?? [])
+      .filter((p) => p.state !== 'measured')
+      .map((p) => p.provider);
+    rows.push([
+      'AI answer-engine coverage',
+      `${matrixCoverage.measured_cells} of ${matrixCoverage.total_cells} provider × question-type checks returned data.`
+        + `${unqueried.length > 0 ? ` No result from: ${unqueried.join(', ')}.` : ''}`
+        + `${matrixCoverage.measured_cells === 0 ? ' No AI visibility conclusion is drawn from this run.' : ''}`,
+    ]);
+  }
+
+  const serp = payload.report1?.evidence_acquisition?.serp;
+  if (serp) {
+    const serpBody = serp.status === 'live'
+      ? `Live search results were retrieved${serp.keywordCount != null ? ` across ${serp.keywordCount} quer${serp.keywordCount === 1 ? 'y' : 'ies'}` : ''}${serp.domainsFound != null ? `, returning ${serp.domainsFound} distinct domain${serp.domainsFound === 1 ? '' : 's'}` : ''}.`
+      : serp.status === 'fallback'
+        ? `Search queries ran${serp.keywordCount != null ? ` (${serp.keywordCount})` : ''} but returned no usable competitor domains, so competitive findings rest on other evidence.`
+        : 'No search-result acquisition ran for this report.';
+    rows.push(['Search-result acquisition', serpBody]);
+  }
+
+  // Sources the evidence model expects but could not read. Each reason is the producer's own
+  // string — the report says why a source is missing rather than leaving a silent hole.
+  const unavailable: Array<[string, string | null | undefined]> = [
+    ['Page performance', payload.report1?.performance?.reasonUnavailable],
+    ['Backlink authority', payload.authority_inflow?.profile?.reason_unavailable],
+    ['Reputation / reviews', payload.trust_coherence?.signals?.reason_unavailable],
+    ['Knowledge graph', payload.knowledge_graph?.entity?.reason_unavailable],
+    ['Peer benchmark', payload.benchmark?.overlay?.reason_unavailable],
+  ];
+  for (const [label, reason] of unavailable) {
+    if (typeof reason === 'string' && reason.trim()) rows.push([`${label} — unavailable`, reason.trim()]);
+  }
 
   const roi = payload.commercial_roi;
   if (roi) {

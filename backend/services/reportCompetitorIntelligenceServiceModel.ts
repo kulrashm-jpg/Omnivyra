@@ -181,6 +181,19 @@ export type CompetitorIntelligenceResult = {
     weak_answers: string[];
     strong_answers: string[];
   };
+  /**
+   * GAP-06 — the company's OWN public search rows, harvested from the same SERP responses this
+   * engine already pays for. Deliberately NOT competitor data: competitor discovery filters the own
+   * domain out by design, so this is the only place that evidence survives. Carried here purely as
+   * the vehicle that already flows to the report composer — no second acquisition, no second store.
+   */
+  own_domain_search_observations?: import('./reportCompetitorIntelligenceServiceHelpers').SerpSearchObservation[];
+  /** GAP-06 — SERP acquisition outcome for the run, so the surface can be honest about why. */
+  search_acquisition?: {
+    status: 'ok' | 'unavailable' | 'failed';
+    reason: string | null;
+    requests_made: number;
+  };
   discovery_metadata?: {
     keyword_count: number;
     serp_domains_found: number;

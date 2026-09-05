@@ -60,6 +60,7 @@ import {
   type ResolvedReportInput,
 } from './reportInputResolver';
 import { evaluateResolvedReportReadiness } from './reportReadinessService';
+import type { SnapshotCrawlEvidence } from './snapshotReportTypes';
 import {
   persistSnapshotReportInputs,
   resolveSnapshotReportInput,
@@ -353,25 +354,39 @@ export async function generateReportPayload(
   //
   // Snapshot only — growth/performance reports read connected analytics sources, not
   // the crawl. Never throws: a crawl failure leaves the report to abstain honestly.
+  let crawlEvidence: SnapshotCrawlEvidence | null = null;
   if (requestedCategory === 'snapshot') {
     const { ensureReportCrawlEvidence } = await import('./crawl/reportCrawlEvidenceService');
-    const crawlEvidence = await ensureReportCrawlEvidence({
+    const crawlResult = await ensureReportCrawlEvidence({
       companyId: report.company_id,
       websiteDomain: resolvedInput.resolved.websiteDomain ?? report.domain ?? null,
     });
     console.info('[reportCardService] report_crawl_evidence', {
       reportId: report.id,
       companyId: report.company_id,
-      action: crawlEvidence.action,
-      pagesBefore: crawlEvidence.pagesBefore,
-      pagesAfter: crawlEvidence.pagesAfter,
-      durationMs: crawlEvidence.durationMs,
-      reason: crawlEvidence.reason,
-      error: crawlEvidence.error,
+      action: crawlResult.action,
+      pagesBefore: crawlResult.pagesBefore,
+      pagesAfter: crawlResult.pagesAfter,
+      durationMs: crawlResult.durationMs,
+      reason: crawlResult.reason,
+      error: crawlResult.error,
     });
+    // GAP-09: the same result, narrowed to the fields a reader needs, carried into composition.
+    crawlEvidence = {
+      action: crawlResult.action,
+      pagesAfter: crawlResult.pagesAfter,
+      pagesBefore: crawlResult.pagesBefore,
+      lastCrawledAt: crawlResult.lastCrawledAt,
+      durationMs: crawlResult.durationMs,
+      reason: crawlResult.reason,
+      ...(crawlResult.error ? { error: crawlResult.error } : {}),
+    };
   }
 
   const intelligence = await runCompanyBlogIntelligence(report.company_id);
+  // GAP-09: hand the crawl outcome to the composer so the report can state whether the website it
+  // describes was actually fetched. `crawlEvidence` is set only on the snapshot branch above — a
+  // growth/performance run does not crawl, and must record `null` rather than a false success.
 
   let composed_report: Record<string, unknown> | undefined;
   try {
@@ -386,6 +401,7 @@ export async function generateReportPayload(
       composed_report = await composeSnapshotReport(report.company_id, {
         resolvedInput,
         readiness,
+        crawlEvidence,
       }) as unknown as Record<string, unknown>;
     }
   } catch (composeError) {

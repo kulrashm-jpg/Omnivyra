@@ -15,6 +15,20 @@
 // canonical.* only — no legacy field consumption anywhere.
 
 import type { CanonicalExportPayload } from './canonicalExport';
+// GAP-01 — Report 1 decision-layer sections (opportunities, priorities, 90-day plan,
+// website evidence, two-axis competition). Each is a pure display of an existing producer's
+// output and renders '' when that producer abstained.
+import {
+  EYEBROW_DECISION,
+  EYEBROW_EVIDENCE,
+  renderCompanyIdentity,
+  renderCompetitiveTables,
+  renderDigitalSnapshotOpportunities,
+  renderDigitalSnapshotPriorities,
+  renderNinetyDayPlan,
+  renderSearchVisibility,
+  renderWebsiteExperienceEvidence,
+} from './exportRendererReport1';
 import type {
   CanonicalPillarScore,
   CanonicalScore,
@@ -297,7 +311,31 @@ function renderStrategicActionPlan(
   section: StrategicActionPlanSection,
   surfaces: { execution_window: ExecutionWindow },
   sectionNumber: string,
+  /**
+   * GAP-05 — true when the Digital Snapshot decision layer already answered "what should happen
+   * next". An EMPTY legacy playbook then has nothing to add and must not contradict it.
+   */
+  decisionLayerPopulated: boolean,
 ): string {
+  // GAP-05 — the legacy playbook and the Digital Snapshot decision layer read DIFFERENT evidence:
+  // `buildActionPlaybook` derives from decision objects (SEO / GEO / competitor summaries), while
+  // `assembleDigitalSnapshot` derives from the crawl, digital-experience and competitive surfaces.
+  // A company with crawl evidence but no decision objects therefore produced a populated decision
+  // layer AND an empty playbook, and this section rendered
+  // `buildStrategicPlaybook([]).sequence_narrative` — "No actions could be derived from the current
+  // evidence" — on the same page as five evidence-backed opportunities and a filled 90-day plan.
+  //
+  // When the playbook has NO actions and the decision layer HAS them, this section can only mislead:
+  // its groups are all empty, so the only thing it contributes is the contradiction. It is dropped
+  // whole rather than having its sentence patched, because the transition ("Execution begins") and
+  // the execution window are equally hollow with nothing to execute.
+  //
+  // Nothing is manufactured and nothing is hidden: a playbook WITH actions renders exactly as
+  // before, and when BOTH are empty the honest empty state still renders, because then no other
+  // section is claiming actions exist.
+  const legacyHasActions = section.groups.some((group) => group.actions.length > 0);
+  if (!legacyHasActions && decisionLayerPopulated) return '';
+
   // Editorial transition: the dossier pivots from diagnosis to
   // execution. A single italic sentence carries the beat — no new
   // section type, just a felt change in voice from observer to
@@ -463,6 +501,22 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
       : [],
   };
 
+  // GAP-05 — is the Digital Snapshot decision layer authoritative for this report?
+  //
+  // The Digital Snapshot is the authoritative answer to "what should happen next": it is evidence
+  // gated (`passesEvidenceGate`), contradiction guarded, and ranked by Impact × Confidence ÷ Effort.
+  // Where it has decisions, no other section may tell the reader that none could be derived.
+  //
+  // Read from the assembler's own output — `empty` is the flag it sets when no opportunity survived
+  // its evidence gate — so this reflects the decision layer's own verdict rather than a second
+  // opinion formed here.
+  const decisionLayer = payload.report1?.digital_snapshot;
+  const decisionLayerPopulated = Boolean(
+    decisionLayer
+      && !decisionLayer.empty
+      && (decisionLayer.opportunities.length > 0 || decisionLayer.topPriorities.length > 0),
+  );
+
   // Brand presence: prefer the explicit brand inputs threaded in by the
   // canonical pipeline; fall back to the export payload's company_id.
   const brandName = (branding?.brandName ?? payload.company_id ?? '').trim() || payload.company_id;
@@ -508,17 +562,47 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
 
           ${renderExecutiveReadinessSummary(payload)}
           ${renderExecutiveRealitySnapshot(dossier, payload, surfaces)}
+          ${/* GAP-01 — the Report 1 decision layer, as front matter.
+
+                Placed after the executive snapshot and BEFORE the numbered chapters because
+                priorities are what a CMO reads before any diagnosis detail — and because the
+                numbered chapters 01–12 keep their existing numbers, so no reader's bookmark,
+                no stored PDF and no test fixture shifts underneath them. The document already
+                carries unnumbered sections (readiness, reality snapshot, declared evidence,
+                disclosures, methodology, closing), so this is the established convention rather
+                than a new one.
+
+                Each renders '' when its producer abstained. A report with no Report 1 payload —
+                a legacy row, or a run where the assembler found nothing supportable — is
+                therefore byte-identical to the pre-GAP-01 document. */ ''}
+          ${renderDigitalSnapshotPriorities(payload, EYEBROW_DECISION)}
+          ${renderDigitalSnapshotOpportunities(payload, EYEBROW_DECISION)}
+          ${renderNinetyDayPlan(payload, EYEBROW_DECISION)}
           ${renderAuthorityPosition(sections.authority_position, dossier.authority_shape, surfaces, '01')}
           ${renderScoreDriversAndLimitersSection(surfaces, '02')}
+          ${/* GAP-01 — the page-level observations behind the foundation scores. Sits directly
+                after the score drivers because it is the evidence those drivers summarise: a
+                reader who has just been told the foundation is weak can here see which URLs
+                error and which pages carry no onward path, and check them. */ ''}
+          ${renderWebsiteExperienceEvidence(payload, EYEBROW_EVIDENCE)}
           ${renderAiDiscoverability(sections.ai_discoverability, surfaces, '03')}
           ${renderTrustConsistency(sections.trust_consistency, '04')}
           ${renderStrategicConstraints(sections.strategic_constraints, payload, surfaces, '05')}
           ${renderMarketPosition(sections.market_position, surfaces, '06')}
+          ${/* GAP-08 — identity fields, each labelled with the provenance the composer assigned.
+                Sits with Market Position: that is where the report characterises the company. */ ''}
+          ${renderCompanyIdentity(payload, EYEBROW_EVIDENCE)}
           ${renderCompetitiveLandscapeSection(surfaces, '07')}
+          ${/* GAP-01 — the two-axis public-domain competition views. Sits with §07 rather than
+                as its own chapter because it is the same subject at higher evidence resolution:
+                §07 ranks competitive pressure, this states who solves the same problem and who
+                chases the same buyer, and refuses to merge the two. */ ''}
+          ${renderSearchVisibility(payload, EYEBROW_EVIDENCE)}
+          ${renderCompetitiveTables(payload, EYEBROW_EVIDENCE)}
           ${renderMomentumMaturity(sections.momentum_maturity, surfaces, '08')}
           ${renderDataConfidenceCoverageSection(surfaces, '09')}
-          ${renderChannelStrategySection(surfaces, '10')}
-          ${renderStrategicActionPlan(sections.strategic_action_plan, surfaces, '11')}
+          ${renderChannelStrategySection(surfaces, '10', decisionLayerPopulated)}
+          ${renderStrategicActionPlan(sections.strategic_action_plan, surfaces, '11', decisionLayerPopulated)}
           ${renderImprovementPlan(payload.improvement_todos, '12')}
           ${renderDeclaredEvidence(payload)}
           ${renderReportDisclosures(payload)}

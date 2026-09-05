@@ -151,7 +151,30 @@ export async function ensureReportCrawlEvidence(params: {
   // `crawlCompanyWebsite` resolves the company's website itself when no rootUrl is
   // given; pass the resolver's domain when we have it so the report and the crawl
   // agree on the target. A company with no website at all is skipped honestly.
-  const rootUrl = params.websiteDomain?.trim() || undefined;
+  //
+  // GAP-03 — the value handed in here is a BARE DOMAIN, not a URL.
+  //
+  // `reportInputResolver.normalizeDomain` deliberately strips the scheme
+  // (`raw.replace(/^https?:\/\//i, '')`), and `reports.domain` is stored the same way, so this
+  // path supplied e.g. `calendly.com`. `crawlCompanyWebsite` immediately calls
+  // `normalizeUrl(rootUrl)`, which is a bare `new URL(rawUrl)` — and `new URL('calendly.com')`
+  // throws `TypeError: Invalid URL`. The throw happened BEFORE `ensureCanonicalDomain` and
+  // before the fetch loop, so not even the loop's fetch-error row was written: the company ended
+  // with zero `canonical_pages`, which is exactly the production state this gap describes.
+  //
+  // Every other caller escapes this because they route through `resolveCompanyWebsite`, which
+  // already applies the codebase's established convention:
+  //
+  //     return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  //
+  // Only the report path bypassed that helper. The same expression is applied here rather than
+  // relaxing `normalizeUrl`, because the crawler's contract genuinely is a URL — every other
+  // caller honours it — and loosening the shared parser would let malformed input through for
+  // callers that currently fail fast on it.
+  const websiteDomain = params.websiteDomain?.trim() || '';
+  const rootUrl = websiteDomain
+    ? (/^https?:\/\//i.test(websiteDomain) ? websiteDomain : `https://${websiteDomain}`)
+    : undefined;
   if (!rootUrl) {
     const { data: company } = await supabase
       .from('companies')

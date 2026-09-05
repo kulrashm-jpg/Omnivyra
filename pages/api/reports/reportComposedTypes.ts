@@ -1,4 +1,17 @@
 import type { PriorityType } from '../../../backend/services/actionPriorityService';
+// GAP-01 — the canonical Report 1 contract.
+//
+// `composed_report` is a verbatim persistence of the `SnapshotReport` produced by
+// `composeSnapshotReport` (see reportCardServiceAssembly.enrichComposedReportWithInputContext,
+// which spreads it). Every canonical Report 1 field below therefore ALREADY exists on the stored
+// row; it was simply absent from this type, so the mapper could not read it without an `as any`
+// escape and the renderer never saw it.
+//
+// These are TYPE-ONLY re-uses of the producer's own declarations. No parallel schema is
+// introduced: if `SnapshotReport` changes shape, this contract changes with it and the compiler
+// reports every consumer that must follow.
+import type { CanonicalReport } from '../../../backend/services/canonicalReport/canonicalReportTypes';
+import type { ScoreState, SnapshotReport, SystemMaturityClass } from '../../../backend/services/snapshotReportTypes';
 
 export type ComposedReportSection = {
   section_name?: string;
@@ -52,6 +65,16 @@ export type ComposedReportData = {
   score?: {
     available?: boolean;
     value?: number | null;
+    /**
+     * GAP-01 — the evidence state that authorises `value`.
+     *
+     * `buildReportScoreModel` has always emitted this, but this type omitted it, so the mapper
+     * had to read it through `(report.score as any)?.state`. That cast is what decides whether
+     * the UI shows a number or "Insufficient signal", which makes it exactly the wrong place
+     * for an unchecked escape: a typo in the property name would have silently downgraded
+     * every measured score to `insufficient_signal` with no compiler complaint.
+     */
+    state?: ScoreState;
     label?: string | null;
     dimensions?: Array<{ key?: string; label?: string; value?: number; explanation?: string }>;
     weakest_dimensions?: Array<{ key?: string; label?: string; value?: number }>;
@@ -565,4 +588,31 @@ export type ComposedReportData = {
     outcome_confidence?: 'high' | 'medium' | 'low';
   };
   sections?: ComposedReportSection[];
+
+  // ── Canonical Report 1 contract (GAP-01) ────────────────────────────────────
+  //
+  // Optional because a legacy stored report (composed before these phases shipped) will not
+  // carry them. Absent stays absent — the mapper maps `null`/`undefined` through unchanged and
+  // the renderer omits the corresponding section rather than inventing an empty one.
+
+  /** Canonical report layer (Phase 2). Previously reachable only via `(report as any).canonical`. */
+  canonical?: CanonicalReport;
+  /** @deprecated legacy maturity mirror — kept because `mapComposedReport` still reads it. */
+  system_maturity?: SystemMaturityClass;
+  /** Report 1 assembly: cross-source opportunities, top priorities, 30/60/90 plan. */
+  digital_snapshot?: SnapshotReport['digital_snapshot'];
+  /** Phase 2 evidence coverage, lifted verbatim from `canonical.evidence_readiness`. */
+  evidence_coverage?: SnapshotReport['evidence_coverage'];
+  /** Phase 4 digital-experience readiness + evidence-linked findings. */
+  digital_experience?: SnapshotReport['digital_experience'];
+  /** Phase 4 provider-supplied performance measurements. No Omnivyra performance score. */
+  performance?: SnapshotReport['performance'];
+  /** Phase 3 two-axis public-domain competition views. */
+  competitive_tables?: SnapshotReport['competitive_tables'];
+  /** GAP-09 — what evidence acquisition did on this run (crawl outcome + SERP state). */
+  evidence_acquisition?: SnapshotReport['evidence_acquisition'];
+  /** GAP-06 — public-domain search visibility, sourced from public SERP acquisition only. */
+  search_visibility?: SnapshotReport['search_visibility'];
+  /** GAP-08 — identity fields with explicit provenance. */
+  company_identity?: SnapshotReport['company_identity'];
 };

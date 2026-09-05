@@ -223,6 +223,24 @@ export interface SnapshotReport {
    */
   digital_snapshot?: SnapshotDigitalSnapshot;
   /**
+   * GAP-09 — what evidence acquisition actually did on this run (crawl outcome + SERP state).
+   *
+   * Persisted so a stored report can be interrogated later: a report whose sections all abstain
+   * is only trustworthy if the record shows whether that is because the site was healthy, or
+   * because nothing was ever fetched.
+   */
+  evidence_acquisition?: SnapshotEvidenceAcquisition | null;
+  /**
+   * GAP-06 — what public search results establish about this domain. Sourced exclusively from
+   * public SERP acquisition; never from Search Console or any other connected private analytics.
+   */
+  search_visibility?: SnapshotSearchVisibility | null;
+  /**
+   * GAP-08 — the customer-facing identity fields with their provenance made explicit, so declared
+   * information can never be read as public observation.
+   */
+  company_identity?: SnapshotCompanyIdentity | null;
+  /**
    * Phase 4 — website performance and digital-experience intelligence.
    *
    * `performance` carries provider-supplied measurements only: metrics classified with
@@ -585,6 +603,156 @@ export type SnapshotReportOptions = {
   resolvedInput?: ResolvedReportInput | null;
   readiness?: ReportReadinessResult | null;
   publicAudit?: Awaited<ReturnType<typeof buildPublicDomainAuditDecisions>> | null;
+  /**
+   * GAP-09 — the outcome of the report-triggered crawl.
+   *
+   * `ensureReportCrawlEvidence` runs in `generateReportPayload` BEFORE composition and its result
+   * was only ever `console.info`'d, so a report could not state whether the website it describes
+   * was actually fetched. The caller now hands the existing result down; the composer stores it
+   * verbatim. Optional — a growth/performance run does not crawl, and a legacy caller omits it.
+   */
+  crawlEvidence?: SnapshotCrawlEvidence | null;
+};
+
+/**
+ * GAP-09 — the run's evidence-acquisition record.
+ *
+ * Deliberately a RECORD OF WHAT HAPPENED, not a score and not a judgement. It answers one
+ * question the report previously could not: *was the website actually crawled, and what came
+ * back?* A report that abstains everywhere is credible only if it can say why, and "we never
+ * fetched the site" and "we fetched the site and it is healthy" are the two readings the reader
+ * must never have to guess between.
+ *
+ * Nothing here is derived. `crawl` is the existing `ReportCrawlEvidenceResult` narrowed to the
+ * fields a reader needs; `serp` is read from the competitor engine's existing
+ * `discovery_metadata`. No new acquisition, no second evidence model.
+ */
+export type SnapshotCrawlEvidence = {
+  /** Existing `ReportCrawlAction`: reused | crawled | refreshed | partial | skipped_no_domain | failed. */
+  action: string;
+  /** Pages in `canonical_pages` after the decision — the number every crawl-derived percentage is over. */
+  pagesAfter: number;
+  /** Pages present before it ran; `pagesAfter > pagesBefore` means this run fetched new evidence. */
+  pagesBefore: number;
+  /** Most recent `last_crawled_at` seen for the company, when any page exists. */
+  lastCrawledAt: string | null;
+  durationMs: number;
+  /** The service's own decision reason — never customer copy on its own, but honest when surfaced. */
+  reason: string;
+  /** Present only when the crawl was attempted and threw. */
+  error?: string;
+};
+
+/**
+ * GAP-06 — public-domain search visibility.
+ *
+ * Answers ONE question: *what can public search results currently establish about this domain?*
+ * It deliberately does not answer "what does the connected Search Console property say" — that is
+ * private, customer-granted data and belongs to a different report. Every value here originates
+ * from a public SERP response.
+ *
+ * `position === null` on an observation means the domain was not found in the returned window.
+ * That is a finding, not a zero: a rank of 0 does not exist, and rendering one would convert an
+ * absence into a measurement.
+ */
+export type SnapshotSearchObservation = {
+  query: string;
+  /** The provider's own rank. Null when the domain did not appear in the returned rows. */
+  position: number | null;
+  url: string | null;
+  title: string | null;
+  snippet: string | null;
+  /** Organic rows returned for this query — the window the position was (or was not) found in. */
+  resultCount: number;
+};
+
+export type SnapshotSearchVisibility = {
+  /**
+   * `measured`            — queries ran and the domain was observed at least once.
+   * `insufficient_signal` — queries ran but the domain was not observed in any of them.
+   * `unavailable`         — acquisition could not run (no credential, or budget exhausted).
+   * `failed`              — acquisition was attempted and the provider errored.
+   */
+  state: 'measured' | 'insufficient_signal' | 'unavailable' | 'failed';
+  /** Provider identifier, never a credential or an environment-variable name. */
+  provider: string | null;
+  /**
+   * GAP-07 — the evidence source and its provenance class, carried on the surface itself.
+   *
+   * Stamped so this can never be confused with the GSC-derived rank signal: that one is
+   * CONNECTED_SOURCE (the customer's authenticated property), this one is PUBLIC_OBSERVED (rows
+   * anyone can see). Both describe the same search engine; only one belongs in a public-domain
+   * report as observation.
+   */
+  source: 'serp';
+  provenance: 'PUBLIC_OBSERVED';
+  observedAt: string | null;
+  queriesRun: number;
+  /** Queries where the company's own domain appeared. */
+  queriesRanked: number;
+  /** Best (lowest) observed position across all queries; null when never observed. */
+  bestPosition: number | null;
+  observations: SnapshotSearchObservation[];
+  /** External SERP requests attributable to this report run. */
+  requestsMade: number;
+  reason: string | null;
+};
+
+/**
+ * GAP-08 — one customer-facing identity field, with its provenance made explicit.
+ *
+ * The Brand Brief renders Offering / Positioning / Market / Differentiation with a `measured`
+ * state and no marker, while every one of those values comes from the company's own profile.
+ * `company_context.homepage_headline` is the sharpest case: the NAME says the crawler read it off
+ * the home page; the VALUE is `profile.key_messages`, typed into an onboarding form.
+ *
+ * The fix is labelling, never deletion — declared information is useful, it simply must not wear
+ * an observed field's clothes. Where a public observation also exists the two are reconciled and
+ * the disagreement, if any, stays visible rather than being silently resolved in favour of either.
+ *
+ * `provenance` is the GAP-07 vocabulary, not a second taxonomy.
+ */
+export type SnapshotIdentityField = {
+  key: 'offering' | 'positioning' | 'market' | 'differentiation';
+  label: string;
+  /** The value shown to the customer — observed when one exists, otherwise declared. */
+  value: string;
+  provenance: 'PUBLIC_OBSERVED' | 'COMPANY_CONFIRMED' | 'INFERRED';
+  /** What the company told us. Retained even when an observation supersedes it. */
+  declaredValue: string | null;
+  /** What the public web actually shows, when it could be read. */
+  observedValue: string | null;
+  /**
+   * `observed_only` — the public web established it and nothing was declared.
+   * `declared_only`  — the company stated it and no public observation exists.
+   * `agree`          — both exist and match.
+   * `differ`         — both exist and disagree. Rendered as a disagreement, never collapsed.
+   */
+  agreement: 'observed_only' | 'declared_only' | 'agree' | 'differ';
+};
+
+export type SnapshotCompanyIdentity = {
+  fields: SnapshotIdentityField[];
+  /** True when at least one field rests on company-declared input. Drives the section note. */
+  hasDeclared: boolean;
+  /** True when at least one field could be read from the public web. */
+  hasObserved: boolean;
+};
+
+export type SnapshotEvidenceAcquisition = {
+  crawl: SnapshotCrawlEvidence | null;
+  /**
+   * SERP acquisition state for this run, lifted from `competitor_intelligence.discovery_metadata`.
+   * `live` = at least one keyword returned usable domains; `fallback` = the queries ran but
+   * yielded nothing usable; `unavailable` = no discovery metadata was produced at all.
+   */
+  serp: {
+    status: 'live' | 'fallback' | 'unavailable';
+    keywordCount: number | null;
+    domainsFound: number | null;
+  };
+  /** When this record was assembled — the report's own observation time for acquisition. */
+  observedAt: string;
 };
 
 export type SnapshotSectionDefinition = {

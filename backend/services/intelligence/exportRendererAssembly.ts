@@ -460,9 +460,16 @@ export function renderDataConfidenceCoverageSection(
 export function renderChannelStrategySection(
   surfaces: { execution_channel_mix: import('./dossier/intelligenceSurfaces').ExecutionChannelMix },
   sectionNumber: string,
+  /** GAP-05 — true when the Digital Snapshot decision layer already lists actions. */
+  decisionLayerPopulated = false,
 ): string {
   const mix = surfaces.execution_channel_mix;
   if (mix.state === 'insufficient_signal') {
+    // GAP-05 — the same contradiction as the strategic action plan, from the same cause:
+    // `buildExecutionChannelMix` reads `strategic_playbook.actions`, so an empty legacy playbook
+    // renders 'the action playbook is still forming' while the Digital Snapshot lists actions.
+    // Suppressed only in that combination; when both layers are empty the honest state still shows.
+    if (decisionLayerPopulated) return '';
     return `
       <section class="ds-section">
         ${renderSectionHeader('Execution Channel Mix', 'Which teams own the moves that change the trajectory?', sectionNumber)}

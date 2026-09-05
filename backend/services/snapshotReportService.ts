@@ -125,6 +125,7 @@ import {
   type SnapshotInsight,
   type SnapshotOpportunity,
   type SnapshotReport,
+  type SnapshotCrawlEvidence,
   type SnapshotReportOptions,
   type SnapshotReportSection,
   type SnapshotSectionDefinition,
@@ -165,6 +166,8 @@ export async function composeSnapshotReportFromDecisions(params: {
   readiness?: ReportReadinessResult | null;
   publicAudit?: Awaited<ReturnType<typeof buildPublicDomainAuditDecisions>> | null;
   competitorIntelligenceOverride?: CompetitorIntelligenceResult | null;
+  /** GAP-09 — the report-triggered crawl's own result, handed down by the caller that ran it. */
+  crawlEvidence?: SnapshotCrawlEvidence | null;
 }): Promise<SnapshotReport> {
   const supplementalGrowthDecisions = params.supplementalGrowthDecisions ?? [];
   const baseCombined = uniqueById([...params.snapshotDecisions, ...supplementalGrowthDecisions]);
@@ -554,6 +557,140 @@ export async function composeSnapshotReportFromDecisions(params: {
     }
     : null;
 
+  // GAP-08 — customer-facing identity fields, each carrying its own provenance.
+  //
+  // The Brand Brief has always rendered Offering / Positioning / Market / Differentiation with a
+  // `measured` state and no marker, while every value came from the company's own profile. The
+  // sharpest case is `homepage_headline`: the NAME says the crawler read it off the home page, the
+  // VALUE is `profile.key_messages` typed into an onboarding form.
+  //
+  // Provenance is decided HERE, where the value is chosen and both candidates are in scope — not in
+  // the renderer, which cannot know where a string came from. The vocabulary is GAP-07's; nothing
+  // is reclassified and no second taxonomy is introduced.
+  //
+  // The observed headline is read from `experiencePages`, already loaded above for the digital-
+  // experience assessment, so this costs no extra query and no extra request.
+  const homepage = experiencePages.find((page) => /home/i.test(String(page.page_type ?? '')))
+    ?? experiencePages.find((page) => (page.crawl_depth ?? 0) === 0)
+    ?? null;
+  const observedHeadline = (() => {
+    if (!homepage) return null;
+    const h1 = (homepage.headings ?? []).find((h) => Number(h?.level ?? 0) === 1)?.text;
+    const candidate = (typeof h1 === 'string' && h1.trim()) || (typeof homepage.title === 'string' && homepage.title.trim()) || '';
+    return candidate || null;
+  })();
+  const declaredPositioning = companyContext.positioning ?? companyContext.homepageHeadline ?? null;
+
+  const normalizeForComparison = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase();
+  const identityField = (params: {
+    key: 'offering' | 'positioning' | 'market' | 'differentiation';
+    label: string;
+    declared: string | null;
+    observed: string | null;
+    /** Provenance to use when only the declared value exists. */
+    declaredProvenance?: 'COMPANY_CONFIRMED' | 'INFERRED';
+  }): NonNullable<SnapshotReport['company_identity']>['fields'][number] | null => {
+    const declared = params.declared?.trim() || null;
+    const observed = params.observed?.trim() || null;
+    if (!declared && !observed) return null;
+    if (observed && !declared) {
+      return { key: params.key, label: params.label, value: observed, provenance: 'PUBLIC_OBSERVED', declaredValue: null, observedValue: observed, agreement: 'observed_only' };
+    }
+    if (declared && !observed) {
+      return { key: params.key, label: params.label, value: declared, provenance: params.declaredProvenance ?? 'COMPANY_CONFIRMED', declaredValue: declared, observedValue: null, agreement: 'declared_only' };
+    }
+    // Both exist. The OBSERVED value is what the public web actually shows, so it is what the
+    // report presents — but when the two disagree the declared version is retained beside it
+    // rather than being quietly discarded, because the disagreement is itself a finding.
+    const agrees = normalizeForComparison(declared!) === normalizeForComparison(observed!);
+    return {
+      key: params.key, label: params.label, value: observed!, provenance: 'PUBLIC_OBSERVED',
+      declaredValue: declared, observedValue: observed, agreement: agrees ? 'agree' : 'differ',
+    };
+  };
+
+  const identityFields = [
+    // Declared only: the profile's product/service list has no crawl counterpart the report reads.
+    identityField({ key: 'offering', label: 'Offering', declared: companyContext.primaryOffering ?? null, observed: null }),
+    // The audit's original finding — declared `key_messages` reconciled against the crawled H1.
+    identityField({ key: 'positioning', label: 'Positioning', declared: declaredPositioning, observed: observedHeadline }),
+    // Composed from declared business type + geography.
+    identityField({ key: 'market', label: 'Market', declared: companyContext.marketContext ?? null, observed: null }),
+    // A conclusion, but one derived from DECLARED inputs — so company-confirmed, not inferred-from-
+    // observation. Labelling it `INFERRED` would imply an evidential base it does not have.
+    identityField({ key: 'differentiation', label: 'Differentiation', declared: strategicContext.positioningNarrative ?? strategicContext.positioningGap ?? null, observed: null }),
+  ].filter((field): field is NonNullable<typeof field> => field !== null);
+
+  canonicalSnapshotShape.company_identity = {
+    fields: identityFields,
+    hasDeclared: identityFields.some((f) => f.declaredValue !== null),
+    hasObserved: identityFields.some((f) => f.observedValue !== null),
+  };
+
+  // GAP-06 — public-domain search visibility.
+  //
+  // Built ENTIRELY from the own-domain rows the competitor engine harvested out of its own SERP
+  // responses. No request is issued here, and no Search Console data touches this surface: the
+  // report's existing rank signal (`visual_intelligence.seo_capability_radar.rank_tracking_score`)
+  // is GSC-derived and deliberately NOT consulted, because "what does the connected property's
+  // private analytics say" is a different question from "what do public search results establish".
+  //
+  // The four states are kept distinct on purpose. `insufficient_signal` means queries ran and the
+  // domain was not found — a real, reportable finding. It is not `unavailable` (acquisition could
+  // not run) and it is emphatically not a position of 0, which does not exist as a rank.
+  const searchObservations = competitorIntelligence.own_domain_search_observations ?? [];
+  const searchAcquisition = competitorIntelligence.search_acquisition;
+  const rankedObservations = searchObservations.filter((o) => typeof o.position === 'number');
+  const searchState: NonNullable<SnapshotReport['search_visibility']>['state'] =
+    searchObservations.length === 0
+      ? (searchAcquisition?.status === 'failed' ? 'failed' : 'unavailable')
+      : rankedObservations.length > 0
+        ? 'measured'
+        : 'insufficient_signal';
+  canonicalSnapshotShape.search_visibility = {
+    state: searchState,
+    // Provider identity only — never a credential, never an environment-variable name.
+    provider: searchObservations.length > 0 || searchAcquisition?.status === 'ok' ? 'serpapi' : null,
+    // GAP-07 — self-describing provenance. This surface is public-record evidence; the GSC-derived
+    // rank signal on the radar is CONNECTED_SOURCE and is deliberately a different thing.
+    source: 'serp',
+    provenance: 'PUBLIC_OBSERVED',
+    observedAt: searchObservations.length > 0 ? nowIso() : null,
+    queriesRun: searchObservations.length,
+    queriesRanked: rankedObservations.length,
+    bestPosition: rankedObservations.length > 0
+      ? Math.min(...rankedObservations.map((o) => o.position as number))
+      : null,
+    observations: searchObservations,
+    requestsMade: searchAcquisition?.requests_made ?? 0,
+    reason: searchState === 'measured'
+      ? null
+      : searchState === 'insufficient_signal'
+        ? `The domain did not appear in the public results returned for ${searchObservations.length} quer${searchObservations.length === 1 ? 'y' : 'ies'}.`
+        : searchAcquisition?.reason ?? 'Public search results could not be retrieved for this report.',
+  };
+
+  // GAP-09 — record what evidence acquisition actually did on this run.
+  //
+  // The crawl outcome arrives from the caller that ran it (`generateReportPayload`), where it was
+  // previously only logged; the SERP state is read from the competitor engine's existing
+  // `discovery_metadata`. Both are stored verbatim. Nothing is derived, and a missing input stays
+  // missing — an absent crawl result records `null`, never a manufactured success.
+  //
+  // This is deliberately assembled even when every other surface abstains: a report where
+  // everything reads "insufficient" is only interpretable if the reader can tell whether the site
+  // was fetched and found healthy, or never fetched at all.
+  const discoveryMetadata = competitorIntelligence.discovery_metadata ?? null;
+  canonicalSnapshotShape.evidence_acquisition = {
+    crawl: params.crawlEvidence ?? null,
+    serp: {
+      status: discoveryMetadata?.serp_status ?? 'unavailable',
+      keywordCount: discoveryMetadata?.keyword_count ?? null,
+      domainsFound: discoveryMetadata?.serp_domains_found ?? null,
+    },
+    observedAt: nowIso(),
+  };
+
   // Report 1 assembly — cross-source opportunities, top priorities and the 30/60/90 plan.
   // An ASSEMBLER over already-produced outputs: it recomputes no dimension, no pillar and no
   // score, and `canonicalReportBuilder` remains the canonical owner. Runs last so it can read
@@ -563,8 +700,18 @@ export async function composeSnapshotReportFromDecisions(params: {
   canonicalSnapshotShape.digital_snapshot = assembleDigitalSnapshot({
     experienceFindings: digitalExperience?.findings ?? null,
     dimensionStates: {
-      searchVisibility: visualIntelligence.seo_capability_radar.rank_tracking_score === null
-        ? 'unavailable' : 'measured',
+      // GAP-07 — the Digital Snapshot's search state now comes from the PUBLIC surface (GAP-06),
+      // never from `rank_tracking_score`. That radar axis is tagged `['GSC']`: it describes the
+      // customer's authenticated Search Console property, which is CONNECTED_SOURCE and outside
+      // Report 1's evidence boundary. Deriving a public-domain search reading from it was Rule 1's
+      // exact prohibition — a private signal acquiring public-observed standing merely by entering
+      // a Report 1 dimension. `failed` and `unavailable` both mean the public check could not
+      // establish anything, so both map to `unavailable`.
+      searchVisibility: canonicalSnapshotShape.search_visibility?.state === 'measured'
+        ? 'measured'
+        : canonicalSnapshotShape.search_visibility?.state === 'insufficient_signal'
+          ? 'insufficient_signal'
+          : 'unavailable',
       aiVisibility: geoAeoExecutiveSummary.overall_ai_visibility_score_state,
       performance: (performanceEvidence?.state ?? 'unavailable') as ScoreState,
       content: wiContent?.contentScore == null ? 'unavailable' : 'measured',
@@ -644,6 +791,7 @@ export async function composeSnapshotReport(
         readiness: options?.readiness ?? null,
         publicAudit,
         competitorIntelligenceOverride: activeCompetitorIntelligence,
+        crawlEvidence: options?.crawlEvidence ?? null,
       });
     });
   } finally {
