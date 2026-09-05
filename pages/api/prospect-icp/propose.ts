@@ -6,6 +6,7 @@ import { PROSPECT_ICP_MANAGE } from '../../../shared/contracts/security';
 import {
   createIcpVersion, ensureIcp, IcpContractError,
 } from '../../../backend/services/prospectIcp';
+import { generateIcpProposal } from '../../../backend/services/prospectIcp/generator';
 
 /**
  * D1 — PROPOSE a version of the tenant's Ideal Customer Profile.
@@ -111,6 +112,54 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({
       error: "status must be 'draft' or 'proposed' — a version is never created ratified",
       code: 'STATUS_NOT_CREATABLE',
+    });
+  }
+
+  // ─── A1 — AI GENERATION MODE ───────────────────────────────────────────────
+  // `generate: true` derives the criteria from this tenant's Company Profile
+  // instead of taking them from the body. Additive: every existing caller,
+  // which supplies `criteria` and no `generate`, takes the path below unchanged.
+  //
+  // It is the SAME door deliberately. A separate `/generate-icp` route would be
+  // a second way to create an ICP version, and the two would drift on tenant
+  // verification, capability and refusal rules — all of which are already
+  // settled above and apply here untouched. The generator never sees a tenant
+  // id from the body: `companyId` is the value `enforceCompanyAccess` verified.
+  if (body.generate === true) {
+    if ('criteria' in body) {
+      return res.status(400).json({
+        error: "'criteria' is not accepted with generate:true — the generator derives them from the Company Profile",
+        code: 'CRITERIA_NOT_SUPPLIABLE_WHEN_GENERATING',
+      });
+    }
+    const generated = await generateIcpProposal({
+      organizationId: companyId,           // the VERIFIED tenant, never the body's
+      icpKey,
+      name: typeof body.name === 'string' ? body.name : null,
+    });
+    // `ok !== true`, not `!ok`: the root tsconfig sets `strict: false`, which
+    // disables union narrowing on a negated boolean discriminant. This is the
+    // same idiom `requireCapability` above uses, for the same reason.
+    if (generated.ok !== true) {
+      // 422: the request was well formed and authorised; the EVIDENCE could not
+      // support a proposal, or the model's output could not. Nothing was written.
+      return res.status(422).json({
+        error: generated.detail,
+        code: generated.reason.toUpperCase(),
+        ...(generated.diagnostics ? { refused: generated.diagnostics.dropped } : {}),
+      });
+    }
+    return res.status(200).json({
+      icpId: generated.icpId,
+      versionId: generated.versionId,
+      version: generated.version,
+      status: 'proposed',
+      generated: true,
+      criteriaCount: generated.criteriaCount,
+      targetCount: generated.targetCount,
+      proposedByModel: generated.model,
+      refused: generated.diagnostics.dropped,
+      unrepresentable: generated.diagnostics.unrepresentable,
     });
   }
 
