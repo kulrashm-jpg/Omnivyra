@@ -37,6 +37,8 @@ export type ReportViewCompetitiveTables = NonNullable<SnapshotReport['competitiv
 export type ReportViewEvidenceAcquisition = NonNullable<SnapshotReport['evidence_acquisition']>;
 export type ReportViewSearchVisibility = NonNullable<SnapshotReport['search_visibility']>;
 export type ReportViewCompanyIdentity = NonNullable<SnapshotReport['company_identity']>;
+/** GAP-10 — website check evidence, carried verbatim from the producer. */
+export type ReportViewWebsiteChecks = NonNullable<SnapshotReport['website_checks']>;
 
 export type ReportViewPayload = {
   reportId: string;
@@ -91,6 +93,7 @@ export type ReportViewPayload = {
   evidenceAcquisition: ReportViewEvidenceAcquisition | null;
   searchVisibility: ReportViewSearchVisibility | null;
   companyIdentity: ReportViewCompanyIdentity | null;
+  websiteChecks: ReportViewWebsiteChecks | null;
   scoreExplanation?: {
     dimensions: Array<{ key: string; label: string; value: number; explanation: string }>;
     weakestDimensions: Array<{ key: string; label: string; value: number }>;

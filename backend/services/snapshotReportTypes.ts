@@ -8,6 +8,8 @@ import type { PriorityType } from './actionPriorityService';
 import type { buildReportScoreModel } from './reportScoreModelService';
 import type { ScoreState, SystemMaturityClass } from './snapshotReport/canonicalScoreState';
 import type { CanonicalReport } from './canonicalReport/canonicalReportTypes';
+// GAP-10 — the provenance vocabulary is owned by `evidenceProvenance.ts`; imported, never restated.
+import type { EvidenceProvenanceClass } from './evidenceProvenance';
 
 export type { ScoreState, SystemMaturityClass } from './snapshotReport/canonicalScoreState';
 
@@ -240,6 +242,13 @@ export interface SnapshotReport {
    * information can never be read as public observation.
    */
   company_identity?: SnapshotCompanyIdentity | null;
+  /**
+   * GAP-10 — the per-check website evidence the deterministic engines already produce.
+   *
+   * `null` when nothing was evaluable (a company with no crawled pages), so the section abstains
+   * rather than rendering a wall of "not evaluated".
+   */
+  website_checks?: SnapshotWebsiteChecks | null;
   /**
    * Phase 4 — website performance and digital-experience intelligence.
    *
@@ -737,6 +746,71 @@ export type SnapshotCompanyIdentity = {
   hasDeclared: boolean;
   /** True when at least one field could be read from the public web. */
   hasObserved: boolean;
+};
+
+/**
+ * GAP-10 — one website check, exactly as the deterministic engine already computed it.
+ *
+ * The technical, content and accessibility engines evaluate 60+ checks on every snapshot run, and
+ * every one of them was discarded before persistence: `engineEvidenceDigest` fed narrative text
+ * only, so `robots_txt`, `sitemap_xml`, `structured_data`, `hreflang` and `duplicate_titles` had
+ * ZERO occurrences in a persisted `composed_report` while the same report stated that 27 pages had
+ * been evaluated. This carries the existing results through — it does not re-evaluate anything.
+ *
+ * `status` is the engine's own verdict and is never rewritten. In particular `not_evaluable`
+ * (the engine had no data) stays distinct from an evaluated check that observed zero findings —
+ * "we did not look" and "we looked and found none" are different statements about the site.
+ *
+ * The engine's numeric `score` is DELIBERATELY not carried. It is a per-check pass percentage,
+ * and GAP-10 delivers observations, not a second scoring surface. Counts the customer needs are
+ * already present in `detail` ("3 duplicate titles", "12 sitemap URLs"), written by the engine.
+ */
+export type SnapshotWebsiteCheck = {
+  /** The engine's own key, e.g. `robots_txt`. Never renamed. */
+  key: string;
+  /** The engine's own label, e.g. "robots.txt". */
+  label: string;
+  /** The engine's own verdict. `not_evaluable` means no stored data, never a failure. */
+  status: 'pass' | 'warn' | 'fail' | 'not_evaluable';
+  /** The engine's own observed detail, carrying the counts. Null when the engine wrote none. */
+  detail: string | null;
+  /** Which deterministic engine produced it — for grouping and for honest attribution. */
+  engine: 'technical' | 'content' | 'accessibility';
+};
+
+/** GAP-10 — presentation grouping. Names follow the section's own vocabulary, not a new taxonomy. */
+export type SnapshotWebsiteCheckGroup = {
+  id:
+    | 'reachability'
+    | 'indexability'
+    | 'metadata'
+    | 'structured_data'
+    | 'linking'
+    | 'rendering'
+    | 'content_structure'
+    | 'accessibility';
+  label: string;
+  checks: SnapshotWebsiteCheck[];
+};
+
+export type SnapshotWebsiteChecks = {
+  groups: SnapshotWebsiteCheckGroup[];
+  /**
+   * Coverage disclosure in the GAP-09 idiom ("9 of 10 signals"): how many checks the engines could
+   * actually evaluate. These are COUNTS OF CHECKS, deliberately not a ratio, percentage, band or
+   * score — GAP-10 introduces no scoring surface of any kind.
+   */
+  evaluated: number;
+  notEvaluable: number;
+  total: number;
+  /** Pages the crawl corpus held for this run, as already reported by the digital-experience read. */
+  pagesEvaluated: number;
+  /**
+   * GAP-07 vocabulary. Every check here derives from the public crawl, so the class is resolved by
+   * `provenanceForSource('public_audit')` — `evidenceProvenance.ts` stays the sole authority and
+   * this surface follows it, rather than asserting a literal that could silently diverge from it.
+   */
+  provenance: EvidenceProvenanceClass;
 };
 
 export type SnapshotEvidenceAcquisition = {

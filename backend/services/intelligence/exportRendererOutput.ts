@@ -27,6 +27,7 @@ import {
   renderDigitalSnapshotPriorities,
   renderNinetyDayPlan,
   renderSearchVisibility,
+  renderWebsiteChecks,
   renderWebsiteExperienceEvidence,
 } from './exportRendererReport1';
 import type {
@@ -585,6 +586,10 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
                 reader who has just been told the foundation is weak can here see which URLs
                 error and which pages carry no onward path, and check them. */ ''}
           ${renderWebsiteExperienceEvidence(payload, EYEBROW_EVIDENCE)}
+          ${/* GAP-10 — the per-check results behind that page-level evidence. Sits immediately
+                after it: the reader has just seen which pages were read, and this states what
+                reading them established, check by check, including what could not be read. */ ''}
+          ${renderWebsiteChecks(payload, EYEBROW_EVIDENCE)}
           ${renderAiDiscoverability(sections.ai_discoverability, surfaces, '03')}
           ${renderTrustConsistency(sections.trust_consistency, '04')}
           ${renderStrategicConstraints(sections.strategic_constraints, payload, surfaces, '05')}
