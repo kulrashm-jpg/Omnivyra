@@ -52,3 +52,12 @@ export {
 export type {
   IneligibilityReason, SelectionCandidate, SelectionMode, SelectionOutcome, SelectionRequest,
 } from './selection';
+
+export {
+  EXTENSION_SOURCE_ID, EXTENSION_SUPPLIED_ATTRIBUTES, NO_ATTRIBUTE_REASON,
+  bridgeExtensionObservation, defaultExtensionBridgePorts, normalizeExtensionObservation,
+} from './extensionBridge';
+export type {
+  BridgeOutcome, BridgeResult, ExtensionAuthorObservation, ExtensionBridgePorts,
+  NormalizationOutcome, NormalizedExtensionObservation,
+} from './extensionBridge';
