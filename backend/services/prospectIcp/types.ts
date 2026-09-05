@@ -127,6 +127,123 @@ export interface IcpProposal {
   status?: 'ai_suggested' | 'approved' | 'edited' | 'rejected' | 'regenerate_requested';
   guidance?: string | null;
   updated_at?: string | null;
+
+  // ── ICP-SELECTION-CONTRACT-001 §13 — the ranked shortlist and its provenance
+  //
+  // PROPOSAL METADATA ONLY. The evaluator never reads these, and they never
+  // become criteria: §10 is explicit that the selected titles form ONE union
+  // `one_of` criterion, because `satisfied / evaluable` would score a person
+  // matching one of five role-criteria at 0.2.
+  //
+  // NAMING: the six fields above are snake_case because they mirror
+  // `UserGuidedStrategicField` verbatim. These three are camelCase because
+  // §13 names them that way, and the frozen contract owns its own field names.
+  targets?: IcpTarget[];
+  rejected?: IcpRejected[];
+  stageAssumption?: IcpStageAssumption;
+}
+
+// ── ICP-SELECTION-CONTRACT-001 vocabularies ─────────────────────────────────
+/**
+ * §12's role types. Deliberately NOT `BUYING_ROLES` from
+ * `prospectIdentity/attributes.ts`, for two reasons that both point the same
+ * way: §13 forbids extending `BUYING_ROLES` (it mirrors a database CHECK), and
+ * the two describe different things — `buying_role` is an OBSERVED attribute of
+ * a real person, while this is the archetype a PROPOSED target represents. The
+ * overlap is intentional and the values are spelled identically where they
+ * coincide, so a later reconciliation is a rename and not a re-modelling.
+ */
+export const ICP_TARGET_ROLE_TYPES = [
+  'user', 'evaluator', 'economic_buyer', 'decision_maker', 'influencer', 'sponsor',
+] as const;
+export type IcpTargetRoleType = typeof ICP_TARGET_ROLE_TYPES[number];
+
+/** §12. An inferred title is never presented as a directly observed fact. */
+export const ICP_TARGET_DERIVATIONS = ['directly_evidenced', 'inferred'] as const;
+export type IcpTargetDerivation = typeof ICP_TARGET_DERIVATIONS[number];
+
+/**
+ * The repository's existing categorical confidence vocabulary
+ * (`'high' | 'medium' | 'low'`, used by `outcomeEvaluator`, the analytics
+ * services and the campaign engines). Re-declared structurally rather than
+ * imported, for exactly the reason recorded above `IcpProposal`: importing
+ * `lib/campaigns/**` here would make the prospect spine depend on the campaign
+ * module. The VALUES are identical on purpose.
+ */
+export const ICP_CONFIDENCE_LEVELS = ['high', 'medium', 'low'] as const;
+export type IcpConfidenceLevel = typeof ICP_CONFIDENCE_LEVELS[number];
+
+/** §4's `ORG_STAGE`, normalised onto the existing employee bands. */
+export const ICP_ORG_STAGES = ['micro', 'smb', 'structured'] as const;
+export type IcpOrgStage = typeof ICP_ORG_STAGES[number];
+
+/** §7's confidence multiplier, keyed by the same vocabulary. */
+export const ICP_CONFIDENCE_MULTIPLIER: Readonly<Record<IcpConfidenceLevel, number>> = {
+  high: 1, medium: 0.8, low: 0.5,
+};
+
+/**
+ * §7's five additive factors plus the confidence multiplier. Each is 0–2 and
+ * each traces to a named field; `rank_score = (e + p + b + f + r) x c`.
+ *
+ * `e` is typed `1 | 2` and not `0 | 1 | 2`: §7 makes `E = 0` a HARD EXCLUSION,
+ * so a candidate scoring 0 there is not a target at all. The type says so.
+ */
+export type IcpFactorScore = 0 | 1 | 2;
+
+export interface IcpTargetFactors {
+  /** Evidence directness. 2 = named verbatim, 1 = implied. 0 excludes. */
+  e: 1 | 2;
+  /** Problem ownership. */
+  p: IcpFactorScore;
+  /** Buying authority at the assumed stage. */
+  b: IcpFactorScore;
+  /** Organizational fit — does the role exist at that stage. */
+  f: IcpFactorScore;
+  /** Product relevance. */
+  r: IcpFactorScore;
+  /** Confidence multiplier. Must agree with the target's `confidence`. */
+  c: number;
+}
+
+/**
+ * One recommended target. §8 calls the set a RANKED SHORTLIST, not five
+ * filters — the whole set collapses into a single union criterion downstream.
+ */
+export interface IcpTarget {
+  /** 1-based, unique and contiguous across the shortlist. */
+  rank: number;
+  /** The job title as it will appear in the union `one_of` criterion. */
+  title: string;
+  /**
+   * §14 assigns SEVERAL role types to one target — a founder at micro scale is
+   * decision maker, economic buyer and sponsor at once — so a scalar could not
+   * round-trip the frozen worked example.
+   */
+  roleTypes: IcpTargetRoleType[];
+  derivation: IcpTargetDerivation;
+  confidence: IcpConfidenceLevel;
+  /** Named source fields. Never empty — §5: no evidence, no candidate. */
+  evidenceFields: string[];
+  /** Verbatim quotes. Required when `derivation` is `directly_evidenced`. */
+  evidenceQuotes: string[];
+  /** The organizational assumption that put this role on the list. */
+  orgAssumption: string;
+  factors: IcpTargetFactors;
+}
+
+/** §8's alternates. A rejection with no reason is not auditable. */
+export interface IcpRejected {
+  /** The candidate that was considered and refused. */
+  title: string;
+  reason: string;
+}
+
+/** §4's `ORG_STAGE` conclusion, with the evidence it was read from. */
+export interface IcpStageAssumption {
+  stage: IcpOrgStage;
+  evidenceFields: string[];
+  rationale?: string | null;
 }
 
 export interface IcpVersionRecord {

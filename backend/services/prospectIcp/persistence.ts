@@ -37,6 +37,7 @@
 
 import { ownedDbTable } from '../../db/writeOwner';
 import { validateCriteria } from './criteria';
+import { withValidatedTargets } from './proposalTargets';
 import {
   IcpContractError,
   type IcpCriterion, type IcpProposal, type IcpVersionRecord, type IcpVersionStatus,
@@ -218,6 +219,14 @@ export async function createIcpVersion(input: CreateVersionInput): Promise<Creat
   // never reaches storage and a caller learns exactly which one was refused.
   const criteria: IcpCriterion[] = validateCriteria(input.criteria);
 
+  // ICP-SELECTION-CONTRACT-001 §12/§13, enforced on the SAME terms and in the
+  // same place: refused before the write, normalised for byte-identical
+  // storage, never repaired. `withValidatedTargets` reads only `proposal` and
+  // returns only `proposal` — the ranked shortlist has no route into `criteria`,
+  // which is what §10 requires. It is additive: a proposal that names no
+  // targets comes back unchanged, so pre-contract shapes still store as before.
+  const proposal: IcpProposal = withValidatedTargets(input.proposal);
+
   const version = input.version ?? await nextVersionNumber(input.organizationId, input.icpId);
   if (!Number.isInteger(version) || version < 1) fail('version must be a positive integer', 'version_invalid');
 
@@ -227,7 +236,7 @@ export async function createIcpVersion(input: CreateVersionInput): Promise<Creat
     version,
     status,
     criteria,
-    proposal: input.proposal ?? {},
+    proposal,
     proposed_by_model: input.proposedByModel?.trim() || null,
   }).select('id').single();
 
