@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { useCompanyContext } from './CompanyContext';
 import { apiFetch } from '../lib/apiFetch';
+import LeadSourcesPanel from './prospects/LeadSourcesPanel';
 import {
   CheckCircle2,
   AlertCircle,
@@ -558,6 +559,21 @@ export default function SocialPlatformsView({ d }: { d: S }) {
                       )}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* ── Lead Sources tab (A3R) ──
+                  Self-contained: it reads and writes ONLY the A3P credential
+                  API, so nothing in this view's existing state or fetch cycle
+                  is shared with it and no existing tab can be affected. */}
+              {activeTab === 'lead-sources' && (
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+                  <h2 className="text-base font-semibold text-gray-900 mb-1">Lead Sources</h2>
+                  <p className="text-sm text-gray-500 mb-5">
+                    Connect the prospect-data providers this company has its own account with.
+                    Each key is stored encrypted against this company alone.
+                  </p>
+                  <LeadSourcesPanel companyId={selectedCompanyId ?? null} />
                 </div>
               )}
 

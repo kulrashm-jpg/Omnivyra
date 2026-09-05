@@ -27,6 +27,7 @@ import {
   TrendingUp,
   ImageIcon,
   PlusCircle,
+  Target,
   Send,
   ClipboardList,
   Settings2,
@@ -145,7 +146,11 @@ export function useSocialPlatforms() {
   const [showHiddenTrend, setShowHiddenTrend] = useState(false);
   const [showHiddenImage, setShowHiddenImage] = useState(false);
   const [showHiddenCommunityApi, setShowHiddenCommunityApi] = useState(false);
-  const [activeTab, setActiveTab] = useState<'social' | 'trend' | 'community' | 'image' | 'request-new' | 'queue'>('social');
+  // The tab vocabulary is written twice in this file — here and in the `TabId`
+  // type beside ALL_TABS. They must stay in step: widening only one leaves the
+  // state setter unable to accept a tab the tab bar can render, which the
+  // compiler reports at the CALL SITE in SocialPlatformsView rather than here.
+  const [activeTab, setActiveTab] = useState<'social' | 'trend' | 'community' | 'image' | 'lead-sources' | 'request-new' | 'queue'>('social');
   const [catalogApis, setCatalogApis] = useState<any[]>([]);
   const [loadingCatalogApis, setLoadingCatalogApis] = useState(false);
   const [companyConfigs, setCompanyConfigs] = useState<any[]>([]);
@@ -1079,12 +1084,14 @@ export function useSocialPlatforms() {
   const connectedCommunityOAuth = communityPlatforms.filter((p) => p.connected);
   const archivedCommunityList = communityPlatforms.filter((p) => archivedCommunity.has(p.platform_key));
 
-  type TabId = 'social' | 'trend' | 'community' | 'image' | 'request-new' | 'queue';
+  // A3R adds `lead-sources`: a sibling tab, not a second connections page.
+  type TabId = 'social' | 'trend' | 'community' | 'image' | 'lead-sources' | 'request-new' | 'queue';
   const ALL_TABS: Array<{ id: TabId; label: string; icon: React.ReactNode; dividerBefore?: boolean }> = [
     { id: 'social',       label: 'Social',       icon: <Share2 className="h-4 w-4" /> },
     { id: 'trend',        label: 'Trend',        icon: <TrendingUp className="h-4 w-4" /> },
     { id: 'community',    label: 'Community',    icon: <Users className="h-4 w-4" /> },
     { id: 'image',        label: 'Image',        icon: <ImageIcon className="h-4 w-4" /> },
+    { id: 'lead-sources', label: 'Lead Sources', icon: <Target className="h-4 w-4" /> },
     { id: 'request-new',  label: 'Request API',  icon: <PlusCircle className="h-4 w-4" />, dividerBefore: true },
     { id: 'queue',        label: 'API Queue',    icon: <ClipboardList className="h-4 w-4" /> },
   ];
