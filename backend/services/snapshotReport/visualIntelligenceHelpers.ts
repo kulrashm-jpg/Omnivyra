@@ -181,7 +181,33 @@ export function buildSnapshotVisualIntelligence(params: {
         },
       };
 
-  const metadataIssues = params.publicAudit?.decisions
+  // GAP-02 — the audit only counts as technical evidence when it actually evaluated pages.
+  //
+  // The four counters below are `decisions.filter(...).reduce(fn, 0)`. On an empty decision list
+  // `reduce` returns 0, not undefined — so an audit that saw NO crawled pages produced four zeros,
+  // `technicalPenalty` computed as `100 - 0`, and the axis reported a MEASURED 100. Absence of
+  // evidence was scored as absence of defects. That is the prohibited unavailable-as-fact
+  // transition, and it reached live reports: companies with `canonical_pages = 0` carried a
+  // Foundation pillar of 100 while the same document said the site had never been scanned.
+  //
+  // `buildPublicDomainAuditDecisions` returns early with `decisions: []` when `pages.length === 0`,
+  // and that early return is distinguishable from a real audit that simply found no defects:
+  // `site_structure.homepage` is null and every `geo_aeo_context` percentage is null ONLY in the
+  // zero-page case (each is computed as `pages.length > 0 ? … : null`). Narrowing on that keeps
+  // the two cases apart, which matters — an audit over 15 pages that finds no metadata, structure,
+  // link or depth defect legitimately scores 100, and must keep doing so.
+  //
+  // The counters then read from this narrowed local instead of `params.publicAudit`, so the
+  // zero-page case yields `undefined` (as it already did when no audit ran at all) and the
+  // existing `!= null` guard on `technicalPenalty` finally fires.
+  const auditWithPages = params.publicAudit
+    && (params.publicAudit.site_structure.homepage != null
+      || params.publicAudit.geo_aeo_context.answerable_content_pct != null
+      || params.publicAudit.geo_aeo_context.structured_content_pct != null)
+    ? params.publicAudit
+    : null;
+
+  const metadataIssues = auditWithPages?.decisions
     .filter((decision) => decision.title === 'Metadata coverage is too weak to support strong search visibility')
     .reduce((sum, decision) => {
       const evidence = (decision.evidence ?? {}) as Record<string, unknown>;
@@ -191,7 +217,7 @@ export function buildSnapshotVisualIntelligence(params: {
         Number(evidence.thin_meta_count ?? 0) +
         Number(evidence.duplicate_meta_title_count ?? 0);
     }, 0);
-  const structureIssues = params.publicAudit?.decisions
+  const structureIssues = auditWithPages?.decisions
     .filter((decision) =>
       decision.issue_type === 'weak_content_depth' ||
       decision.title === 'Core pages are too thin or weakly structured to perform well in search')
@@ -199,14 +225,14 @@ export function buildSnapshotVisualIntelligence(params: {
       const evidence = (decision.evidence ?? {}) as Record<string, unknown>;
       return sum + Number(evidence.thin_page_count ?? 0) + Number(evidence.pages_without_h1_count ?? 0);
     }, 0);
-  const internalLinkIssues = params.publicAudit?.decisions
+  const internalLinkIssues = auditWithPages?.decisions
     .filter((decision) => decision.title === 'Technical crawlability and internal linking are leaving pages under-supported')
     .reduce((sum, decision) => {
       const evidence = (decision.evidence ?? {}) as Record<string, unknown>;
       return sum + Number(evidence.orphan_like_page_count ?? 0);
     }, 0);
-  const crawlDepthIssues = params.publicAudit?.site_structure
-    ? params.publicAudit.decisions
+  const crawlDepthIssues = auditWithPages
+    ? auditWithPages.decisions
         .filter((decision) => decision.title === 'Technical crawlability and internal linking are leaving pages under-supported')
         .reduce((sum, decision) => {
           const evidence = (decision.evidence ?? {}) as Record<string, unknown>;

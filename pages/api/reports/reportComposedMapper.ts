@@ -54,7 +54,11 @@ export function mapComposedReport(
       ? Math.max(0, Math.min(100, report.score.value))
       : null;
   const overallScore: number = measuredOverallScore ?? 0;
-  const overallScoreState: ScoreState = (report.score as any)?.state || (measuredOverallScore == null ? 'insufficient_signal' : 'measured');
+  // GAP-01: read the producer's own state instead of casting to `any`. `??` not `||` — the
+  // state is a non-empty string union, so the two behave identically today, but `??` states the
+  // intent (fall back only when the producer emitted nothing) rather than "fall back on any
+  // falsy value", which would silently swallow a future empty-string state.
+  const overallScoreState: ScoreState = report.score?.state ?? (measuredOverallScore == null ? 'insufficient_signal' : 'measured');
 
   const insights: ReportViewInsight[] = flattened.insights.slice(0, 6).map((insight: any) => ({
     text: insight.title || insight.recommendation || 'Key insight identified',
@@ -468,8 +472,24 @@ export function mapComposedReport(
     summary,
     overallScore,
     overallScoreState,
-    systemMaturity: ((report as any).system_maturity || 'building_baseline') as SystemMaturityClass,
-    canonical: (report as any).canonical ?? null,
+    systemMaturity: report.system_maturity ?? 'building_baseline',
+    // GAP-01 — the canonical Report 1 contract, carried through typed.
+    //
+    // These six fields were produced by `composeSnapshotReport` and persisted verbatim in
+    // `reports.data.composed_report`, but `ComposedReportData` did not declare them, so
+    // `canonical` survived only through an `as any` cast and the other five were dropped
+    // entirely. Pass-through only: nothing is derived, defaulted or reshaped here — a surface
+    // the producer did not emit stays `null` so the renderer can omit it honestly rather than
+    // render an empty one.
+    canonical: report.canonical ?? null,
+    digitalSnapshot: report.digital_snapshot ?? null,
+    evidenceCoverage: report.evidence_coverage ?? null,
+    digitalExperience: report.digital_experience ?? null,
+    performanceEvidence: report.performance ?? null,
+    competitiveTables: report.competitive_tables ?? null,
+    evidenceAcquisition: report.evidence_acquisition ?? null,
+    searchVisibility: report.search_visibility ?? null,
+    companyIdentity: report.company_identity ?? null,
     scoreExplanation: report.score ? {
       dimensions: Array.isArray(report.score.dimensions)
         ? report.score.dimensions.map((item) => ({

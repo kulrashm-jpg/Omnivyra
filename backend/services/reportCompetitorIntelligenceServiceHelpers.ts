@@ -563,29 +563,88 @@ export function extractDecisionCompetitors(
 }
 
 
-export async function fetchSerpDomainsForKeyword(keyword: string, geography: string | null): Promise<string[]> {
-  // CANONICAL RESOLUTION — the same single path the acquisition service uses:
-  // managed Super Admin account → account env reference → source env fallback.
-  // Previously this read `config.*` directly, so a credential rotated in Super Admin had no
-  // effect here at all. The env names remain the fallback, so nothing regresses when no
-  // managed account exists.
+/**
+ * GAP-06 — one organic SERP row, as the provider supplied it.
+ *
+ * `position` is the provider's own rank and is never re-derived. Filtering the array and reusing
+ * the index would silently renumber results — a domain at rank 7 would be reported as rank 2 once
+ * the six above it were dropped as blocked hosts. That is why the rank travels with the row from
+ * the moment it is parsed.
+ */
+export type SerpOrganicRow = {
+  position: number | null;
+  url: string | null;
+  domain: string;
+  title: string | null;
+  snippet: string | null;
+};
+
+/**
+ * GAP-06 — one public query and what it established about the company's own domain.
+ *
+ * `position === null` means the domain was NOT observed in the rows returned. That is a real
+ * finding — "we looked and it was not there" — and is deliberately not expressible as `0`, which
+ * a reader would misread as a rank.
+ */
+export type SerpSearchObservation = {
+  query: string;
+  position: number | null;
+  url: string | null;
+  title: string | null;
+  snippet: string | null;
+  /** Organic rows the provider returned for this query — the window the position was found in. */
+  resultCount: number;
+};
+
+export type SerpKeywordResult = {
+  /** `ok` = the provider answered. `unavailable` = no credential / budget. `failed` = it threw. */
+  status: 'ok' | 'unavailable' | 'failed';
+  rows: SerpOrganicRow[];
+  reason: string | null;
+};
+
+/**
+ * GAP-06 — how many organic rows to request per query.
+ *
+ * SerpApi bills per SEARCH, not per result, so raising this costs nothing and adds no requests.
+ * Ten is page one: "does this company appear on the first page for its own category?" is the
+ * question the search-visibility surface exists to answer, and five could not answer it.
+ *
+ * Competitor discovery deliberately keeps its own `.slice(0, 5)` below, so its behaviour is
+ * unchanged by this — the extra rows are visible only to the own-domain scan.
+ */
+const SERP_RESULTS_PER_QUERY = 10;
+/** Competitor discovery's historical window. Unchanged — see above. */
+const SERP_COMPETITOR_WINDOW = 5;
+
+/**
+ * GAP-06 — THE single SERP fetch. One request per keyword, returning the provider's rows intact.
+ *
+ * Previously the only fetch (`fetchSerpDomainsForKeyword`) mapped straight to `string[]` of
+ * domains, so `position`, `url`, `title` and `snippet` were discarded at the moment of parsing and
+ * the company's own row was then filtered out as "not a competitor". Report 1 was paying for
+ * public search evidence on every run and throwing all of it away.
+ *
+ * This returns the rows; the domain-only helper below is now a thin projection of it, so there is
+ * still exactly one request per keyword and competitor discovery sees byte-identical input.
+ */
+export async function fetchSerpResultsForKeyword(
+  keyword: string,
+  geography: string | null,
+): Promise<SerpKeywordResult> {
   const credential = await resolveProviderCredential('serpapi');
   const serpApiKey = credential.value ?? '';
   if (!serpApiKey) {
-    // `reason` is shape-only — it never contains a credential.
     logProviderCall({ providerId: 'serp', operation: 'search', status: 'unavailable', reason: credential.reason });
-    return [];
+    return { status: 'unavailable', rows: [], reason: credential.reason ?? 'No SERP provider credential is configured.' };
   }
 
-  // BETA-PHASE1-EXEC-002: canonical budget gate BEFORE the paid SERP request — identical ordering to the
-  // LLM/Ahrefs adapters. No active scan-budget context ⇒ no gating (prior behaviour, deterministic empty on abort).
   const scanId = getActiveScanId();
   if (scanId) {
     const gate = withinBudget(scanId, { requests: 1, cost_usd: null });
     if (!gate.ok) {
-      // BETA-PHASE3-EXEC-001: telemetry parity — observability only (console.info; no report/score/store effect).
       logProviderCall({ providerId: 'serp', operation: 'search', status: 'unavailable', reason: gate.reason ?? 'budget_exceeded:serp' });
-      return [];
+      return { status: 'unavailable', rows: [], reason: gate.reason ?? 'Search budget for this report run was exhausted.' };
     }
   }
 
@@ -593,51 +652,71 @@ export async function fetchSerpDomainsForKeyword(keyword: string, geography: str
   try {
     const query = geography ? `${keyword} ${geography}` : keyword;
     const response = await axios.get('https://serpapi.com/search.json', {
-      params: {
-        engine: 'google',
-        q: query,
-        num: 5,
-        api_key: serpApiKey,
-      },
+      params: { engine: 'google', q: query, num: SERP_RESULTS_PER_QUERY, api_key: serpApiKey },
       timeout: 8000,
     });
-    // Record the paid SERP call against the canonical scan budget exactly once, only on success (a throw
-    // skips this via the catch). Cost null — SERP per-search pricing is not response-derivable → request ceiling.
     if (scanId) {
       recordUsage(scanId, {
-        provider_id: 'serp',
-        operation: 'search',
-        request_count: 1,
-        cost_usd: null,
-        cache_hit: false,
-        observed_at: new Date().toISOString(),
+        provider_id: 'serp', operation: 'search', request_count: 1, cost_usd: null,
+        cache_hit: false, observed_at: new Date().toISOString(),
       });
     }
     const organic = Array.isArray(response.data?.organic_results) ? response.data.organic_results : [];
-    const domains = organic
-      .slice(0, 5)
-      .map((item: { link?: string }) => normalizeDomain(item.link))
-      .filter((domain): domain is string => Boolean(domain));
+    const rows: SerpOrganicRow[] = organic.map((item: {
+      position?: unknown; link?: string; title?: string; snippet?: string;
+    }, index: number) => ({
+      // Trust the provider's rank; fall back to 1-based ordinal only when it omits one entirely.
+      position: typeof item.position === 'number' && Number.isFinite(item.position) ? item.position : index + 1,
+      url: typeof item.link === 'string' && item.link.trim() ? item.link.trim() : null,
+      domain: normalizeDomain(item.link) ?? '',
+      title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : null,
+      snippet: typeof item.snippet === 'string' && item.snippet.trim() ? item.snippet.trim() : null,
+    }));
     logProviderCall({ providerId: 'serp', operation: 'search', status: 'ok', duration_ms: Date.now() - startedAt });
-    return Array.from(new Set<string>(domains));
+    return { status: 'ok', rows, reason: null };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     logProviderCall({ providerId: 'serp', operation: 'search', status: 'unavailable', reason, duration_ms: Date.now() - startedAt });
-    console.warn('[competitor-discovery][serp-keyword-failed]', {
-      keyword,
-      geography,
-      error: reason,
-    });
-    return [];
+    console.warn('[competitor-discovery][serp-keyword-failed]', { keyword, geography, error: reason });
+    return { status: 'failed', rows: [], reason };
   }
 }
 
+/**
+ * Competitor-discovery projection of {@link fetchSerpResultsForKeyword}. Behaviour is unchanged:
+ * the same top-5 window, the same normalisation, the same de-duplication, the same empty array on
+ * any failure. Retained as the public contract its existing callers already depend on.
+ */
+export async function fetchSerpDomainsForKeyword(keyword: string, geography: string | null): Promise<string[]> {
+  const result = await fetchSerpResultsForKeyword(keyword, geography);
+  return Array.from(new Set(
+    result.rows.slice(0, SERP_COMPETITOR_WINDOW).map((row) => row.domain).filter(Boolean),
+  ));
+}
 
 export async function discoverCompetitorDomainsFromSerp(params: {
   keywords: string[];
   ownDomain: string;
   geography: string | null;
-}): Promise<{ domains: string[]; liveKeywordCount: number }> {
+}): Promise<{
+  domains: string[];
+  liveKeywordCount: number;
+  /**
+   * GAP-06 — the company's OWN rows, harvested from the very same responses.
+   *
+   * These are not competitor data and must not be confused with it: competitor discovery drops
+   * the own domain by design (`isBlockedSerpDomain` returns true for it), which is precisely why
+   * the company's public search evidence was being thrown away. Collecting here means one request
+   * per keyword still serves both purposes, and an own-domain observation survives even when
+   * competitor qualification later rejects every other domain on the page.
+   */
+  searchObservations: SerpSearchObservation[];
+  /** Acquisition status for the run, so the surface can distinguish unavailable from failed. */
+  acquisitionStatus: 'ok' | 'unavailable' | 'failed';
+  acquisitionReason: string | null;
+  /** External SERP requests actually issued by this discovery run. */
+  requestsMade: number;
+}> {
   const ranked = new Map<string, number>();
   let liveKeywordCount = 0;
   // Canonical resolution for the pre-flight warning too, so the log reflects the credential
@@ -651,10 +730,49 @@ export async function discoverCompetitorDomainsFromSerp(params: {
     });
   }
 
+  // GAP-06 — own-domain evidence, gathered from the same responses competitor discovery reads.
+  const searchObservations: SerpSearchObservation[] = [];
+  const seenQueries = new Set<string>();
+  let requestsMade = 0;
+  let acquisitionStatus: 'ok' | 'unavailable' | 'failed' = preflight.value ? 'failed' : 'unavailable';
+  let acquisitionReason: string | null = preflight.value ? null : (preflight.reason ?? 'No SERP provider credential is configured.');
+  const ownDomain = normalizeDomain(params.ownDomain);
+
   const runKeywordBatch = async (keywords: string[], retry: boolean): Promise<void> => {
     for (const keyword of keywords.slice(0, MAX_DISCOVERY_KEYWORDS)) {
-      const domains = (await fetchSerpDomainsForKeyword(keyword, params.geography))
-        .filter((domain) => !isBlockedSerpDomain(domain, params.ownDomain));
+      const result = await fetchSerpResultsForKeyword(keyword, params.geography);
+      if (result.status === 'ok') {
+        requestsMade += 1;
+        // One successful call is enough to say acquisition worked; a later failure does not
+        // retroactively erase the evidence already gathered.
+        acquisitionStatus = 'ok';
+        acquisitionReason = null;
+      } else if (acquisitionStatus !== 'ok') {
+        acquisitionStatus = result.status;
+        acquisitionReason = result.reason;
+      }
+
+      // Own-domain scan across the FULL returned window, before any competitor filtering.
+      // `normalizeDomain` is the same canonicalisation competitor discovery uses, so
+      // `example.com`, `www.example.com` and `https://example.com/path` all match identically —
+      // and nothing else does.
+      if (result.status === 'ok' && ownDomain && !seenQueries.has(keyword)) {
+        seenQueries.add(keyword);
+        const own = result.rows.find((row) => row.domain === ownDomain);
+        searchObservations.push({
+          query: keyword,
+          // The provider's own rank, never the post-filter array index.
+          position: own?.position ?? null,
+          url: own?.url ?? null,
+          title: own?.title ?? null,
+          snippet: own?.snippet ?? null,
+          resultCount: result.rows.length,
+        });
+      }
+
+      const domains = Array.from(new Set(
+        result.rows.slice(0, SERP_COMPETITOR_WINDOW).map((row) => row.domain).filter(Boolean),
+      )).filter((domain) => !isBlockedSerpDomain(domain, params.ownDomain));
       if (domains.length >= MIN_SERP_DOMAINS_PER_KEYWORD) {
         liveKeywordCount += 1;
       }
@@ -684,6 +802,10 @@ export async function discoverCompetitorDomainsFromSerp(params: {
     .map(([domain]) => domain)
     .slice(0, MAX_COMPETITORS + 3),
     liveKeywordCount,
+    searchObservations,
+    acquisitionStatus,
+    acquisitionReason,
+    requestsMade,
   };
 }
 

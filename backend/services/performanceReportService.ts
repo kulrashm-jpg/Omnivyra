@@ -535,9 +535,39 @@ async function buildSnapshotFoundationForPerformance(params: {
     const overview = canonical?.authority_overview;
     const executive = canonical?.executive_insights;
 
+    // GAP-04 — a score may only become numeric authority if its own state says it was measured.
+    //
+    // This read was `overview?.overall_score?.value ?? snapshot.score?.value ?? null`. Two ways it
+    // let unmeasured evidence across the report boundary as fact:
+    //
+    //   1. The canonical score could itself be `{ value: 10, state: 'insufficient_signal' }`.
+    //      That is fixed at the constructor now, so the value arrives null.
+    //   2. `??` then falls through to the LEGACY score. Nulling the canonical value therefore
+    //      does not close the hole on its own — it opens the fallback. The legacy model happens
+    //      to null its own value when insufficient, but relying on that coincidence is exactly
+    //      the kind of unstated coupling this defect was made of.
+    //
+    // Both sources are now gated on their own state before they can be read, so an unmeasured
+    // Report 1 hands Report 2 a null baseline instead of a number. `inferred` still qualifies:
+    // it is a labelled, evidence-backed reading, and demoting it here would silently blank the
+    // baseline for most real companies — a scoring change, not an integrity fix.
+    const isUsable = (score: { value?: number | null; state?: string } | null | undefined): boolean =>
+      Boolean(score) && typeof score!.value === 'number'
+        && score!.state !== 'insufficient_signal' && score!.state !== 'unavailable';
+
+    // Resolve the winning source ONCE, then read its score and its label from that same source —
+    // so a band can never describe a number the other source produced.
+    const legacyScore = snapshot.score as { value?: number | null; state?: string; label?: string } | undefined;
+    const authority: { value: number; band: string } | null =
+      isUsable(overview?.overall_score)
+        ? { value: overview!.overall_score.value as number, band: overview!.overall_score.band }
+        : isUsable(legacyScore)
+          ? { value: legacyScore!.value as number, band: legacyScore!.label ?? 'insufficient' }
+          : null;
+
     return {
-      authority_score: overview?.overall_score?.value ?? snapshot.score?.value ?? null,
-      authority_band: overview?.overall_score?.band ?? snapshot.score?.label ?? 'insufficient',
+      authority_score: authority?.value ?? null,
+      authority_band: authority?.band ?? 'insufficient',
       maturity_label: canonical?.maturity_stage?.label ?? String(snapshot.system_maturity ?? 'Baseline forming'),
       headline:
         executive?.headline_thesis?.text ||

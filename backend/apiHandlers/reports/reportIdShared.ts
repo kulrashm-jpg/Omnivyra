@@ -81,6 +81,16 @@ export function buildGeneratingPayload(
     overallScoreState: 'insufficient_signal',
     systemMaturity: 'building_baseline',
     canonical: null,
+    // GAP-01 — a report still generating has produced no Report 1 surfaces yet. Null, never
+    // an empty object: the renderer must omit these sections rather than show them as empty.
+    digitalSnapshot: null,
+    evidenceCoverage: null,
+    digitalExperience: null,
+    performanceEvidence: null,
+    competitiveTables: null,
+    evidenceAcquisition: null,
+    searchVisibility: null,
+    companyIdentity: null,
     confidenceSource: '',
     insights: [],
     metrics: [],

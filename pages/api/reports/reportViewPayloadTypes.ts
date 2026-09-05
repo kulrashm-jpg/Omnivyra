@@ -19,8 +19,24 @@ import type {
   SystemMaturityClass,
 } from './reportViewTypes';
 import type { CanonicalReport } from '../../../backend/services/canonicalReport/canonicalReportTypes';
+import type { SnapshotReport } from '../../../backend/services/snapshotReportTypes';
 
 export type CanonicalReportPayload = CanonicalReport;
+
+// GAP-01 — the Report 1 payload carried alongside `canonical`.
+//
+// `canonical` owns scores, pillars, playbook and evidence trace. These five fields are the
+// Report 1 surfaces the canonical builder does NOT own: they are produced by the Phase 3/4
+// modules and by `digitalSnapshotAssembly`, and were previously dropped between the stored
+// report and the renderer. Types are re-used from the producer verbatim.
+export type ReportViewDigitalSnapshot = NonNullable<SnapshotReport['digital_snapshot']>;
+export type ReportViewEvidenceCoverage = NonNullable<SnapshotReport['evidence_coverage']>;
+export type ReportViewDigitalExperience = NonNullable<SnapshotReport['digital_experience']>;
+export type ReportViewPerformanceEvidence = NonNullable<SnapshotReport['performance']>;
+export type ReportViewCompetitiveTables = NonNullable<SnapshotReport['competitive_tables']>;
+export type ReportViewEvidenceAcquisition = NonNullable<SnapshotReport['evidence_acquisition']>;
+export type ReportViewSearchVisibility = NonNullable<SnapshotReport['search_visibility']>;
+export type ReportViewCompanyIdentity = NonNullable<SnapshotReport['company_identity']>;
 
 export type ReportViewPayload = {
   reportId: string;
@@ -65,6 +81,16 @@ export type ReportViewPayload = {
   // unified_intelligence_summary / competitor_intelligence_summary / decision_snapshot
   // surfaces. New UI consumes only `canonical`.
   canonical: CanonicalReportPayload | null;
+  // GAP-01 — Report 1 surfaces carried beside `canonical`. `null` means the stored report did
+  // not produce this surface; the renderer omits the section rather than rendering an empty one.
+  digitalSnapshot: ReportViewDigitalSnapshot | null;
+  evidenceCoverage: ReportViewEvidenceCoverage | null;
+  digitalExperience: ReportViewDigitalExperience | null;
+  performanceEvidence: ReportViewPerformanceEvidence | null;
+  competitiveTables: ReportViewCompetitiveTables | null;
+  evidenceAcquisition: ReportViewEvidenceAcquisition | null;
+  searchVisibility: ReportViewSearchVisibility | null;
+  companyIdentity: ReportViewCompanyIdentity | null;
   scoreExplanation?: {
     dimensions: Array<{ key: string; label: string; value: number; explanation: string }>;
     weakestDimensions: Array<{ key: string; label: string; value: number }>;

@@ -94,6 +94,20 @@ export function renderCanonicalReportHtml(payload: ReportViewPayload): string {
     tenantId: payload.companyId,
     companyId: payload.companyId,
     report: payload.canonical,
+    // GAP-01 — carry the Report 1 surfaces into the export. These were computed by
+    // `composeSnapshotReport`, persisted in `composed_report`, and previously discarded here
+    // because the export payload had no slot for them. Pass-through: `null` where the
+    // producer abstained, so the renderer omits rather than invents.
+    report1: {
+      digital_snapshot: payload.digitalSnapshot ?? null,
+      evidence_coverage: payload.evidenceCoverage ?? null,
+      digital_experience: payload.digitalExperience ?? null,
+      performance: payload.performanceEvidence ?? null,
+      competitive_tables: payload.competitiveTables ?? null,
+      evidence_acquisition: payload.evidenceAcquisition ?? null,
+      search_visibility: payload.searchVisibility ?? null,
+      company_identity: payload.companyIdentity ?? null,
+    },
   });
   // Brand presence: thread companyName, domain, logoUrl, and faviconUrl
   // from the sanitised view payload's companyContext into the renderer.

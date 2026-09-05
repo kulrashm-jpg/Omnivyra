@@ -83,7 +83,7 @@ import type {
 
 // ── Score-state helpers ───────────────────────────────────────────────────────
 
-import { isMeasured, aggregateOverallScore, type WebsiteBrandEvidence, type WebsiteAccessibilityEvidence, type DimensionContext, DIMENSION_BUILDERS, groupDimensionsByPillar, buildActionPlaybook } from './canonicalReportBuilderInputs';
+import { isMeasured, aggregateOverallScore, enforceTraceProvenance, type WebsiteBrandEvidence, type WebsiteAccessibilityEvidence, type DimensionContext, DIMENSION_BUILDERS, groupDimensionsByPillar, buildActionPlaybook } from './canonicalReportBuilderInputs';
 
 function buildHeadlineNarrative(params: {
   overall: CanonicalScore;
@@ -248,10 +248,11 @@ function mergeAiSurfaceDimension(
       ...baseline,
       score: {
         ...matrix.overall_score,
-        evidence: {
+        // GAP-07: a provider trace entering Report 1 passes the same boundary as any other.
+        evidence: enforceTraceProvenance({
           ...matrix.overall_score.evidence,
           sources: [...new Set<EvidenceSourceKind>([...matrix.overall_score.evidence.sources, 'llm_probe'])],
-        },
+        }),
       },
     };
   }
@@ -270,7 +271,8 @@ function mergeEntityDimension(
         state: 'measured',
         confidence: confidenceBandFromCount(result.evidence.count),
         band: canonicalBandFromValue(result.score, 'measured'),
-        evidence: result.evidence,
+        // GAP-07: provider evidence crosses the same boundary as crawl evidence.
+        evidence: enforceTraceProvenance(result.evidence),
         benchmark: { value: null, label: null },
       },
     };
@@ -290,7 +292,8 @@ export function mergeAuthorityInflowDimension(
         state: 'measured',
         confidence: confidenceBandFromCount(result.evidence.count),
         band: canonicalBandFromValue(result.score, 'measured'),
-        evidence: result.evidence,
+        // GAP-07: provider evidence crosses the same boundary as crawl evidence.
+        evidence: enforceTraceProvenance(result.evidence),
         benchmark: { value: null, label: null },
       },
     };
@@ -375,7 +378,7 @@ function trustScoreFromSignals(result: TrustCoherenceResult): CanonicalScore {
       state: result.state,
       confidence: 'low',
       band: 'insufficient',
-      evidence: result.evidence,
+      evidence: enforceTraceProvenance(result.evidence),
       benchmark: { value: null, label: null },
     };
   }
@@ -384,7 +387,7 @@ function trustScoreFromSignals(result: TrustCoherenceResult): CanonicalScore {
     state: 'measured',
     confidence: confidenceBandFromCount(result.evidence.count),
     band: canonicalBandFromValue(result.score, 'measured'),
-    evidence: result.evidence,
+    evidence: enforceTraceProvenance(result.evidence),
     benchmark: { value: null, label: null },
   };
 }

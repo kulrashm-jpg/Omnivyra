@@ -77,6 +77,10 @@ const PROVENANCE_BY_SOURCE: Record<EvidenceSourceKind, EvidenceProvenanceClass> 
   crawler: 'PUBLIC_OBSERVED',
   public_audit: 'PUBLIC_OBSERVED',
   competitor_intelligence: 'PUBLIC_OBSERVED',
+  // GAP-06/07: own-domain rows read from public search results. Publicly observable by anyone —
+  // deliberately distinct from `gsc`, which describes the same search engine but through the
+  // customer's authenticated, private property.
+  serp: 'PUBLIC_OBSERVED',
   social_links: 'PUBLIC_OBSERVED',
   wikidata: 'PUBLIC_OBSERVED',
   google_kg: 'PUBLIC_OBSERVED',

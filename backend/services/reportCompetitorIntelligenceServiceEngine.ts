@@ -275,6 +275,9 @@ function emptyCompetitorIntelligenceResult(input: {
   keywordCount: number;
   serpDomainsFound: number;
   serpStatus: 'live' | 'fallback';
+  /** GAP-06 — own-domain search rows survive even when NO competitor qualifies. */
+  ownSearchObservations?: CompetitorIntelligenceResult['own_domain_search_observations'];
+  searchAcquisition?: CompetitorIntelligenceResult['search_acquisition'];
 }): CompetitorIntelligenceResult {
   return {
     summary: `Public competitive evidence for ${input.domain} was insufficient to name peers without fabrication. No competitors are shown rather than inventing them.`,
@@ -286,6 +289,8 @@ function emptyCompetitorIntelligenceResult(input: {
     competitive_summary: buildCompetitiveSummary({ competitors: [], companyContext: input.companyContext, domain: input.domain }),
     keyword_gap: { missing_keywords: [], weak_keywords: [], strong_keywords: [] },
     answer_gap: { missing_answers: [], weak_answers: [], strong_answers: [] },
+    own_domain_search_observations: input.ownSearchObservations ?? [],
+    search_acquisition: input.searchAcquisition,
     discovery_metadata: {
       keyword_count: input.keywordCount,
       serp_domains_found: input.serpDomainsFound,
@@ -456,6 +461,12 @@ export async function buildCompetitorIntelligenceActive(params: {
   });
   let serpDomains = serpDiscovery.domains;
   let liveKeywordCount = serpDiscovery.liveKeywordCount;
+  // GAP-06 — accumulate the company's own public search rows across BOTH discovery batches. These
+  // come from responses already fetched for competitor discovery; no additional request is issued.
+  const ownSearchObservations = [...serpDiscovery.searchObservations];
+  let searchAcquisitionStatus = serpDiscovery.acquisitionStatus;
+  let searchAcquisitionReason = serpDiscovery.acquisitionReason;
+  let searchRequestsMade = serpDiscovery.requestsMade;
   if (serpDomains.length < MIN_SERP_DOMAINS_PER_KEYWORD) {
     const expandedKeywords = expandDiscoveryKeywords(keywords, companyContext, businessContext);
     const expandedDiscovery = await discoverCompetitorDomainsFromSerp({
@@ -468,6 +479,16 @@ export async function buildCompetitorIntelligenceActive(params: {
       return merged;
     }, []);
     liveKeywordCount += expandedDiscovery.liveKeywordCount;
+    for (const observation of expandedDiscovery.searchObservations) {
+      if (!ownSearchObservations.some((existing) => existing.query === observation.query)) {
+        ownSearchObservations.push(observation);
+      }
+    }
+    searchRequestsMade += expandedDiscovery.requestsMade;
+    if (expandedDiscovery.acquisitionStatus === 'ok') {
+      searchAcquisitionStatus = 'ok';
+      searchAcquisitionReason = null;
+    }
   }
   const serpStatus: 'live' | 'fallback' =
     serpDomains.length >= MIN_SERP_DOMAINS_PER_KEYWORD || liveKeywordCount > 0 ? 'live' : 'fallback';
@@ -537,6 +558,8 @@ export async function buildCompetitorIntelligenceActive(params: {
       keywordCount: keywords.length,
       serpDomainsFound: serpDomains.length,
       serpStatus,
+      ownSearchObservations: ownSearchObservations,
+      searchAcquisition: { status: searchAcquisitionStatus, reason: searchAcquisitionReason, requests_made: searchRequestsMade },
     });
   }
 
@@ -642,6 +665,8 @@ export async function buildCompetitorIntelligenceActive(params: {
       weak_answers: weakAnswers,
       strong_answers: strongAnswers,
     },
+    own_domain_search_observations: ownSearchObservations,
+    search_acquisition: { status: searchAcquisitionStatus, reason: searchAcquisitionReason, requests_made: searchRequestsMade },
     discovery_metadata: {
       keyword_count: keywords.length,
       serp_domains_found: serpDomains.length,

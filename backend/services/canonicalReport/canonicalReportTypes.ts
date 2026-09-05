@@ -79,12 +79,18 @@ export const PILLAR_META: Record<PillarKey, PillarMeta> = {
 // of any number is one click from the user. Phase 2 establishes the architecture;
 // the drill-down UI lands in Phase 3.
 
+// GAP-07 — the provenance vocabulary is owned by `evidenceProvenance.ts`. Imported as a type so
+// the canonical evidence contract and the policy can never drift into two different taxonomies.
+import type { EvidenceProvenanceClass } from '../evidenceProvenance';
+
 export type EvidenceSourceKind =
   | 'crawler'
   | 'gsc'
   | 'decisions'
   | 'public_audit'
   | 'competitor_intelligence'
+  /** GAP-06/07 — public search-results evidence (own-domain SERP rows). Public-domain. */
+  | 'serp'
   | 'social_links'
   | 'heuristic'
   | 'wikidata'
@@ -109,6 +115,26 @@ export type EvidenceTrace = {
   sources: EvidenceSourceKind[];
   freshness: { last_observed_at: string | null; age_hours: number | null };
   observations: EvidenceObservation[];
+  /**
+   * GAP-07 — the provenance verdict for this trace, stamped where the trace is built.
+   *
+   * `count`, `sources` and `observations` describe evidence Report 1 is PERMITTED to assert on.
+   * Anything outside that boundary — connected private analytics, company-declared facts,
+   * Omnivyra's own prior history — is moved to `excluded` rather than dropped, so a reader (and
+   * GAP-08) can tell "we had no evidence" apart from "we had evidence we may not use here".
+   *
+   * Optional so every pre-existing construction site stays valid. Absent means the trace was
+   * built outside the enforcement boundary and carries no verdict — not that it is clean.
+   */
+  provenance?: {
+    /** Distinct provenance classes among the RETAINED observations. */
+    classes: EvidenceProvenanceClass[];
+    /** Out-of-boundary observations, kept with their true source so nothing vanishes silently. */
+    excluded: EvidenceObservation[];
+    excludedSources: EvidenceSourceKind[];
+    /** True when nothing had to be excluded. */
+    report1Clean: boolean;
+  };
 };
 
 export function emptyEvidenceTrace(): EvidenceTrace {
@@ -117,6 +143,10 @@ export function emptyEvidenceTrace(): EvidenceTrace {
     sources: [],
     freshness: { last_observed_at: null, age_hours: null },
     observations: [],
+    // GAP-07 — an empty trace is trivially clean, and saying so keeps every trace in the report
+    // self-describing. Without this, a dimension or pillar that abstained would be indistinguishable
+    // from one built outside the enforcement boundary: both would simply have no verdict.
+    provenance: { classes: [], excluded: [], excludedSources: [], report1Clean: true },
   };
 }
 
