@@ -270,6 +270,31 @@ export async function getIcpVersion(
   return rows.length ? toVersionRecord(rows[0]) : null;
 }
 
+/**
+ * Every version of one ICP, newest first. Read-only.
+ *
+ * A2 needs enumeration because the reviewer has to see WHICH version they are
+ * reviewing, and `getIcpVersion` can only answer about a version whose number
+ * the caller already knows. Nothing here interprets the list: it does not
+ * nominate a "current" proposal, because no such concept exists in the model —
+ * exactly one version may be `ratified`, and any number may be `proposed`.
+ * Choosing between several proposals is a human act, so the list is returned
+ * as it is and the caller shows the ambiguity rather than resolving it.
+ */
+export async function listIcpVersions(
+  organizationId: string, icpId: string,
+): Promise<IcpVersionRecord[]> {
+  assertTenant(organizationId);
+  if (!UUID.test(String(icpId ?? '').trim())) fail('icpId must be a uuid', 'icp_id_invalid');
+  const res = await ownedDbTable(VERSIONS)
+    .select(VERSION_COLUMNS)
+    .eq('organization_id', organizationId)
+    .eq('icp_id', icpId)
+    .order('version', { ascending: false });
+  if (res.error) translate(res.error, 'version list read failed');
+  return asRows(res.data).map(toVersionRecord);
+}
+
 // ── Ratification (contract 16) ──────────────────────────────────────────────
 export interface RatifyInput {
   organizationId: string;

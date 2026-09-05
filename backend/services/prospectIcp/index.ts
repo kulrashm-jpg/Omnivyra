@@ -50,7 +50,7 @@ export { evaluateIcpFit } from './evaluate';
 export type { IcpEvaluationInput } from './evaluate';
 
 export {
-  createIcpVersion, ensureIcp, getIcpVersion, getRatifiedIcp,
+  createIcpVersion, ensureIcp, getIcpVersion, getRatifiedIcp, listIcpVersions,
   nextVersionNumber, ratifyIcpVersion, resolveIcpByKey,
 } from './persistence';
 export type {
