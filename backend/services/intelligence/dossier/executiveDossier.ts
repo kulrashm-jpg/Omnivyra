@@ -16,6 +16,8 @@
 // fabricated; every absent field surfaces as an honest "not yet measured"
 // in the rendered dossier.
 
+// GAP-12 — measured-coverage gate for AI absence language.
+import { aiCoverageGate, aiCoverageQualifier } from './aiCoverageGate';
 import type {
   CanonicalAction,
   CanonicalNarrative,
@@ -320,6 +322,12 @@ function buildPositioningParagraph(report: CanonicalReport): string {
   }
   if (value >= 30) {
     return 'AI discoverability is the surface where buyer attention has shifted most rapidly. The brand is partially retrievable — closing the gap converts a known weakness into market advantage.';
+  }
+  // GAP-12 — "largely absent here" generalises across surfaces the report may never have queried.
+  const coverage = aiCoverageGate(report);
+  if (!coverage.supportsGeneralClaim) {
+    return 'AI discoverability is the surface where buyer attention has shifted most rapidly. '
+      + `The brand was not retrieved in the surfaces measured.${aiCoverageQualifier(coverage)}`;
   }
   return 'AI discoverability is the surface where buyer attention has shifted most rapidly. The brand is largely absent here — the strategic cost of inaction grows each quarter.';
 }

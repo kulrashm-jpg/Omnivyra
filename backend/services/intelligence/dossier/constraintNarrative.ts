@@ -19,6 +19,8 @@
 //   - No alarmist forward forecasting
 //   - Calm, analytical, executive-grade language only
 
+// GAP-12 — measured-coverage gate for AI absence language.
+import { aiCoverageGate, aiCoverageQualifier } from './aiCoverageGate';
 import type {
   CanonicalPillarScore,
   CanonicalReport,
@@ -115,7 +117,12 @@ export function aiDiscoverabilityConstraint(report: CanonicalReport): Constraint
       ? `AI surface presence reads ${value}/100. The brand is meaningfully retrievable, but coverage is not yet uniform across providers and query classes.${coverageHint}`
       : value >= 30
         ? `AI surface presence reads ${value}/100. The brand is partially retrievable — some surfaces find it, others do not.${coverageHint}`
-        : `AI surface presence reads ${value}/100. The brand is largely absent from the surfaces buyers increasingly query.${coverageHint}`;
+        // GAP-12 — "absent from the surfaces buyers increasingly query" speaks for surfaces that
+        // may never have been queried at all. Scope it to what was measured unless all providers
+        // answered. `coverageHint` still follows, unchanged.
+        : aiCoverageGate(report).supportsGeneralClaim
+          ? `AI surface presence reads ${value}/100. The brand is largely absent from the surfaces buyers increasingly query.${coverageHint}`
+          : `AI surface presence reads ${value}/100 across the surfaces measured. The brand was not retrieved in them.${aiCoverageQualifier(aiCoverageGate(report))}${coverageHint}`;
 
   const why_matters =
     value >= 60

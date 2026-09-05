@@ -11,6 +11,8 @@
 // Cards are derived from real canonical fields. No SEO-tool phrasing,
 // no generic "improve your visibility" filler.
 
+// GAP-12 — measured-coverage gate for AI absence language.
+import { aiCoverageGate, aiCoverageQualifier } from './aiCoverageGate';
 import type {
   CanonicalAction,
   CanonicalPillarScore,
@@ -159,7 +161,11 @@ function aiVisibilityCard(report: CanonicalReport): InsightCard | null {
         ? 'The brand is meaningfully retrievable in AI answer surfaces. Citation patterns reinforce its presence where buyers increasingly start research.'
         : value >= 30
           ? 'Retrieval is uneven. Some surfaces find the brand; others do not — the inconsistency is the story.'
-          : 'The brand is largely absent from AI answer surfaces. The cost of absence grows each quarter as buyer research shifts further toward AI-mediated discovery.',
+          // GAP-12 — only claim absence ACROSS AI answer surfaces when they were all queried.
+          // The observation line above already states the measured cell count.
+          : aiCoverageGate(report).supportsGeneralClaim
+            ? 'The brand is largely absent from AI answer surfaces. The cost of absence grows each quarter as buyer research shifts further toward AI-mediated discovery.'
+            : `The brand was not retrieved in the AI answer surfaces measured.${aiCoverageQualifier(aiCoverageGate(report))}`,
     business_impact:
       'AI surfaces are the discoverability layer that grew most in the last 24 months. Gains here translate directly into top-of-funnel attention captured.',
     strategic_direction:
