@@ -411,8 +411,19 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
           <div className="hidden h-5 w-px shrink-0 bg-slate-200 md:block" />
 
           <nav className="hidden flex-1 items-center gap-1 md:flex">
+            {/*
+              Icon-only on desktop to reclaim header width — the nav row is a
+              single non-wrapping flex line, so every label competes for space.
+              The text is REQUIRED to survive as an accessible name: a bare SVG
+              leaves the link nameless for a screen reader. `title` + `aria-label`
+              is the convention already used in this header (the Command Center
+              logo link, and the mobile toggle). Destination and active-state
+              behaviour are unchanged. The mobile drawer keeps its visible label.
+            */}
             <Link
               href="/dashboard"
+              title="Home"
+              aria-label="Home"
               className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold transition-colors ${
                 isPathMatch(router.pathname, '/dashboard')
                   ? 'bg-sky-50 text-sky-700'
@@ -420,7 +431,6 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
               }`}
             >
               <Home className="h-4 w-4" />
-              Home
             </Link>
 
             {visibleNavItems.map((item) => (
