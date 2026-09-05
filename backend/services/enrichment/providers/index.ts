@@ -48,7 +48,12 @@ export {
 } from './persistence';
 export type { ResolvedEnrichmentTarget } from './persistence';
 
-export { creditCostPort, makeCreditCostPort, PROSPECT_ENRICHMENT_ACTION, FORBIDDEN_BORROWED_ACTION } from './cost';
+export {
+  creditCostPort, makeCreditCostPort, PROSPECT_ENRICHMENT_ACTION, FORBIDDEN_BORROWED_ACTION,
+  // A3X — tenant-funded provider economics. See `cost.ts`.
+  tenantFundedExecutionPort, makeTenantFundedExecutionPort,
+} from './cost';
+export type { TenantFundedPortOptions } from './cost';
 export type { CreditCostPortOptions } from './cost';
 
 export {

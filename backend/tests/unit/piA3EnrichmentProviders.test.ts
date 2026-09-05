@@ -142,12 +142,21 @@ describe('A3 — cost is authorised BEFORE any provider call', () => {
     expect(r.reason).toContain('no credit action');
   });
 
-  it('the default cost port refuses — no prospect-enrichment credit action exists', async () => {
+  // A3X retargeted this. The default port used to RESERVE Omnivyra credits and
+  // therefore refused, because no prospect-enrichment action was priced. Under
+  // BYO-provider there is nothing of Omnivyra's to reserve: the tenant holds
+  // the vendor subscription and is invoiced directly, so the port authorises
+  // and takes no hold. The refusal that still matters — a tenant with no
+  // credential — happens earlier, and is asserted above.
+  it('the default port authorises tenant-funded execution and reserves nothing', async () => {
     const decision = await defaultCostPort.authorizeCost({
       organizationId: ORG, providerId: 'fake', attributes: ['job_title'], correlationId: 'c',
     });
-    expect(decision.authorized).toBe(false);
-    if ('reason' in decision) expect(decision.reason).toContain('credit action');
+    expect(decision.authorized).toBe(true);
+    if (decision.authorized) {
+      expect(decision.holdId).toBeNull();
+      expect(decision.cost).toEqual({ kind: 'unknown' });
+    }
   });
 
   it('releases the reservation when the provider errors', async () => {

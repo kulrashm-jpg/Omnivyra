@@ -77,8 +77,15 @@ export interface AcquisitionSourceDescriptor {
   /** What must be true before this source can be used. */
   readonly authorizationRequirements: readonly string[];
   /**
-   * The credit action this source's calls would be charged to. `null` means
-   * unpriced, which the cost gate treats as a refusal.
+   * The OMNIVYRA credit action this source's calls are charged to.
+   *
+   * A3X: `null` for every external provider, and that is the settled model
+   * rather than a gap. Provider subscription, credits, licensing and usage
+   * charges are TENANT-OWNED AND TENANT-FUNDED — the tenant holds the Clearbit
+   * subscription and the Apollo credits and is billed by that vendor directly,
+   * so Omnivyra charges nothing for the vendor's work and must not invent a
+   * credit price to represent someone else's invoice. Non-null belongs only to
+   * an operation Omnivyra itself performs and pays for.
    */
   readonly creditAction: string | null;
   /** For `gateway_api`: the concrete vendor APIs behind it. */
@@ -138,7 +145,7 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     sourceType: 'external_api',
     capabilities: { entities: [], attributes: [] },
     credentialEnvVar: 'APOLLO_API_KEY',
-    authorizationRequirements: ['api_key', 'adapter', 'credit_action'],
+    authorizationRequirements: ['api_key', 'adapter', 'tenant_provider_subscription'],
     creditAction: null,
     priority: 20,
     note: 'Declared only. No adapter, no credential. Capabilities are empty because no observed API contract exists.',
@@ -149,7 +156,7 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     sourceType: 'gateway_api',
     capabilities: { entities: [], attributes: [] },
     credentialEnvVar: 'RAPIDAPI_KEY',
-    authorizationRequirements: ['api_key', 'sub_provider_selected', 'adapter', 'credit_action'],
+    authorizationRequirements: ['api_key', 'sub_provider_selected', 'adapter', 'tenant_provider_subscription'],
     creditAction: null,
     gatewayProviders: [{
       id: 'unselected',
@@ -166,20 +173,23 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     sourceType: 'external_api',
     capabilities: { entities: [], attributes: [] },
     credentialEnvVar: 'ZOOMINFO_API_KEY',
-    authorizationRequirements: ['api_key', 'adapter', 'credit_action'],
+    authorizationRequirements: ['api_key', 'adapter', 'tenant_provider_subscription'],
     creditAction: null,
     priority: 40,
     note: 'Declared only. No adapter, no credential.',
   },
   {
-    // A3T declared it; A3U built its adapter. Neither made it usable.
+    // A3T declared it; A3U built its adapter; A3X settled its economics.
     //
     // The PI adapter (`./adapters/clearbit.ts`) is a TRANSLATION of the WS-4
     // company-intelligence spec, not a reuse of its provider: WS-4 resolves its
     // credential from `process.env`, which is right for Omnivyra's own key and
-    // forbidden here, where the key is the tenant's. What remains outstanding
-    // is economics — `prospect_enrichment` is unregistered and unpriced, so the
-    // cost gate refuses before any egress no matter what a tenant configures.
+    // forbidden here, where the key is the tenant's.
+    //
+    // What remains outstanding is the TENANT's: their own Clearbit
+    // subscription, and their own key stored through the Lead Sources API.
+    // Omnivyra charges nothing for the call and reserves no credits against
+    // it, because the tenant is the one Clearbit invoices.
     id: 'clearbit',
     displayName: 'Clearbit',
     sourceType: 'external_api',
@@ -191,17 +201,18 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     },
     credentialEnvVar: 'CLEARBIT_API_KEY',
     // `adapter` is satisfied as of A3U and has been removed rather than left to
-    // say something untrue. `credit_action` remains, and is what still refuses.
-    authorizationRequirements: ['api_key', 'credit_action'],
+    // say something untrue. What remains is the tenant's own provider
+    // subscription, which Omnivyra never buys on their behalf.
+    authorizationRequirements: ['api_key', 'tenant_provider_subscription'],
     creditAction: null,
     // Ordering only, with no effect while the source is unusable. It reflects
     // A3I's finding that Clearbit has the most complete existing contract, so
     // `auto` would reach it first once one is actually built.
     priority: 25,
     note:
-      'Declared only. Company firmographics keyed on domain. A tenant may store a '
-      + 'credential; PI cannot yet call it, because no PI adapter is registered and no '
-      + 'credit action is priced.',
+      'Company firmographics keyed on domain. Requires the tenant\'s own Clearbit '
+      + 'subscription and API key: the tenant is billed by Clearbit directly, and '
+      + 'Omnivyra neither buys nor resells that usage.',
   },
   {
     id: 'crunchbase',
@@ -209,7 +220,7 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     sourceType: 'external_api',
     capabilities: { entities: [], attributes: [] },
     credentialEnvVar: 'CRUNCHBASE_API_KEY',
-    authorizationRequirements: ['api_key', 'adapter', 'credit_action'],
+    authorizationRequirements: ['api_key', 'adapter', 'tenant_provider_subscription'],
     creditAction: null,
     priority: 50,
     note: 'Declared only. Account firmographics. No adapter, no credential.',

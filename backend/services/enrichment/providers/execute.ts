@@ -118,14 +118,19 @@ export interface ExecuteEnrichmentPorts {
 }
 
 /**
- * The default cost port — registry-backed, and refusing today.
+ * The default authorization port — A3X, tenant-funded.
  *
- * It asks the live monetization registry whether a prospect-enrichment credit
- * action exists. None does, so it refuses; the refusal is derived rather than
- * hardcoded, which means registering and pricing the action turns it on with no
- * change here. See `cost.ts` for why the action cannot simply be added.
+ * It used to be `creditCostPort`, which asked the monetization registry to
+ * reserve Omnivyra credits before provider spend. That is the right instrument
+ * only when Omnivyra pays the vendor; under BYO-provider the tenant holds the
+ * subscription and is billed directly, so pricing the action would have meant
+ * inventing an Omnivyra charge for someone else's invoice.
+ *
+ * Authorization did not go away with billing: a tenant reaches this port only
+ * after supplying its own credential, and platform capacity or rate limits
+ * attach here through `makeTenantFundedExecutionPort({ allow })`. See `cost.ts`.
  */
-export { creditCostPort as defaultCostPort } from './cost';
+export { tenantFundedExecutionPort as defaultCostPort } from './cost';
 
 export interface ExecuteEnrichmentResult {
   readonly outcome: EnrichmentOutcome;

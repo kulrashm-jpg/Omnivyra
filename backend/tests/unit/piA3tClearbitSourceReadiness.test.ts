@@ -98,9 +98,12 @@ describe('A3T — declared is not operational', () => {
 
   // A3U satisfied `adapter`, and it was removed rather than left saying
   // something untrue. `credit_action` is what still refuses.
-  it('its outstanding requirements name the credit action, and no longer the adapter', () => {
+  it('its outstanding requirement is the TENANT own provider subscription', () => {
     const reqs = getSource('clearbit')!.authorizationRequirements;
-    expect(reqs).toContain('credit_action');
+    // A3X: the vendor bill is the tenant's, so the outstanding item is their
+    // own subscription — never an Omnivyra credit action.
+    expect(reqs).toContain('tenant_provider_subscription');
+    expect(reqs).not.toContain('credit_action');
     expect(reqs).not.toContain('adapter');
   });
 
@@ -146,8 +149,9 @@ describe('A3T — A3P discovers it from the registry, with no hard-coded list', 
     ));
     expect(status.configured).toBe(false);
     expect(status.operational).toBe(false);
-    // A3U satisfied the adapter requirement; economics is what still refuses.
-    expect(status.operationalReason).toMatch(/credit_action/);
+    // A3U satisfied the adapter requirement. A3X named what actually remains:
+    // the tenant's own subscription with the vendor — not an Omnivyra charge.
+    expect(status.operationalReason).toMatch(/held and paid for by your company/);
   });
 
   it('configuring a credential still does NOT make it operational', async () => {

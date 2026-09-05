@@ -163,9 +163,93 @@ export function makeCreditCostPort(
 }
 
 /**
- * The port the executor uses by default.
+ * The credit-reserving port.
  *
- * Refuses today, for a reason read from the live registry rather than asserted
- * here: `prospect_enrichment` is not a registered credit action.
+ * NO LONGER the executor's default — see `tenantFundedExecutionPort` below for
+ * why. It is kept, exported and tested because it is the guard that stops an
+ * unregistered action silently resolving to `reports.snapshot`, and because a
+ * FUTURE Omnivyra-billable capability (something Omnivyra itself performs and
+ * pays for, not a vendor pass-through) would legitimately use it.
  */
 export const creditCostPort = makeCreditCostPort();
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * A3X — TENANT-FUNDED PROVIDER ECONOMICS.
+ *
+ * Third-party provider subscription, credits, licensing and usage charges are
+ * TENANT-OWNED AND TENANT-FUNDED. Omnivyra must not model provider charges as
+ * Omnivyra customer credits. Omnivyra may independently enforce platform
+ * capacity, rate limits, authorization and operational controls.
+ *
+ * ─── WHY THE CREDIT GATE WAS THE WRONG INSTRUMENT ─────────────────────────
+ * `creditCostPort` exists to RESERVE Omnivyra credits before spending money.
+ * That is the right shape when Omnivyra pays the vendor. Under BYO-provider it
+ * pays nobody: the tenant holds the Clearbit subscription, the Apollo credits,
+ * the Sales Navigator licence, and is billed by that vendor directly. Pricing
+ * `prospect_enrichment` would have required inventing an Omnivyra credit price
+ * to stand for a cost Omnivyra does not incur — a charge for someone else's
+ * invoice — and A3B correctly refused to invent one. The blocker was never a
+ * missing number; it was a category error.
+ *
+ * ─── WHAT THIS PORT STILL REFUSES ─────────────────────────────────────────
+ * Removing a billing gate is not removing a safeguard. Authorization stays,
+ * and the executor's order is unchanged: adapter → TENANT CREDENTIAL →
+ * capability → duplicate suppression → this port → one call. A tenant with no
+ * stored credential never reaches here, because a credential IS the tenant's
+ * act of authorising and funding the call.
+ *
+ * `allow` is injectable so platform-side controls — capacity, per-tenant rate
+ * limits, an operator disabling a source — attach here without reintroducing
+ * monetization. It defaults to permitting, and a caller that wants a limit
+ * supplies one rather than this file inventing a policy it cannot know.
+ *
+ * ─── COST IS `unknown`, NEVER `free` ──────────────────────────────────────
+ * The call is free to OMNIVYRA'S LEDGER and emphatically not free to the
+ * tenant. `planner.ts` warns that treating unknown as free makes a planner
+ * prefer an unpriced paid provider over a genuinely free internal one; saying
+ * `free` here would spend the tenant's vendor credits preferentially. Omnivyra
+ * does not know the tenant's per-call vendor price, so it says so.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+export interface TenantFundedPortOptions {
+  /**
+   * Platform-side authorization: capacity, rate limit, operator disable.
+   * Returns null to permit, or a reason to refuse. NOT a billing decision.
+   */
+  readonly allow?: (input: {
+    organizationId: string;
+    providerId: string;
+    attributes: readonly string[];
+    correlationId: string;
+  }) => Promise<string | null>;
+}
+
+export function makeTenantFundedExecutionPort(
+  options: TenantFundedPortOptions = {},
+): Pick<ExecuteEnrichmentPorts, 'authorizeCost' | 'releaseCost'> {
+  return {
+    async authorizeCost(input): Promise<CostDecision> {
+      if (options.allow) {
+        const refusal = await options.allow(input);
+        if (refusal) return { authorized: false, reason: refusal };
+      }
+      // No hold, because nothing of Omnivyra's is reserved. `holdId: null` is
+      // the honest value and `releaseCost` correspondingly has nothing to undo.
+      return { authorized: true, holdId: null, cost: { kind: 'unknown' } };
+    },
+
+    async releaseCost() {
+      // Nothing was reserved: the vendor bills the tenant directly, and
+      // Omnivyra holds no credits against this call to release.
+    },
+  };
+}
+
+/**
+ * The port the executor uses by default.
+ *
+ * Authorises tenant-funded provider execution and reserves no Omnivyra
+ * credits. A tenant that has not stored a credential is already refused
+ * upstream with `credential_missing`, before this is reached.
+ */
+export const tenantFundedExecutionPort = makeTenantFundedExecutionPort();

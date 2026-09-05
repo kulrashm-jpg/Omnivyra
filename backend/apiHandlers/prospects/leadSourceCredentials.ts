@@ -135,14 +135,25 @@ const ports = (p: LeadSourceCredentialPorts = {}) => ({
 /**
  * Why a provider cannot be activated yet, from ITS OWN descriptor.
  *
- * Derived rather than written, so it cannot drift from the registry: the day a
- * provider gains an adapter and a credit action, its requirements shrink and
- * this sentence shrinks with them.
+ * Derived rather than written, so it cannot drift from the registry: as a
+ * provider's requirements are satisfied they leave the list and this sentence
+ * shrinks with them.
+ *
+ * A3X: `tenant_provider_subscription` is stated as the TENANT's own account
+ * with the vendor. The wording matters — a status line implying Omnivyra pays
+ * for, resells, or consumes Omnivyra credits against a tenant's Clearbit or
+ * Apollo usage would be false. Omnivyra stores the key and makes the call; the
+ * vendor invoices the tenant.
  */
 function operationalReasonFor(source: AcquisitionSourceDescriptor): string {
-  const outstanding = source.authorizationRequirements.filter((r) => r !== 'api_key');
+  const outstanding = source.authorizationRequirements
+    .filter((r) => r !== 'api_key')
+    .map((r) => (r === 'tenant_provider_subscription'
+      ? 'an active subscription with this provider, held and paid for by your company'
+      : r));
+
   if (!outstanding.length) {
-    return 'a credential can be stored; activation still requires a registered credit action';
+    return 'a credential can be stored; this provider is not yet available for lead building';
   }
   return `storing a credential does not activate this provider — still required: ${outstanding.join(', ')}`;
 }
