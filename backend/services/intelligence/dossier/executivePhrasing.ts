@@ -9,6 +9,8 @@
 // All framing sentences are deterministic from canonical fields. There is no
 // fabrication, no peer claims, no fake forward forecasting.
 
+// GAP-12 — measured-coverage gate for AI absence language.
+import { aiCoverageGate, aiCoverageQualifier } from './aiCoverageGate';
 import type {
   CanonicalPillarScore,
   CanonicalReport,
@@ -66,6 +68,13 @@ export function aiDiscoverabilityFraming(report: CanonicalReport): string {
   const value = score.value as number;
   if (value >= 60) return 'AI surfaces retrieve the brand. The question is whether coverage holds as peers invest in the same surface.';
   if (value >= 30) return 'AI surfaces find the brand inconsistently. The inconsistency itself is the story.';
+  // GAP-12 — "AI surfaces do not yet retrieve the brand" speaks for every AI surface. It may only
+  // be said when every provider in the matrix actually answered; otherwise the same measured
+  // result is reported, scoped to what was measured, with the unqueried providers named.
+  const gate = aiCoverageGate(report);
+  if (!gate.supportsGeneralClaim) {
+    return `The brand was not retrieved in the AI surfaces measured.${aiCoverageQualifier(gate)}`;
+  }
   return 'AI surfaces do not yet retrieve the brand. The cost of absence grows each quarter buyer research shifts.';
 }
 

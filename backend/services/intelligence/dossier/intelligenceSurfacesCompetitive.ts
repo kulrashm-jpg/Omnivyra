@@ -18,6 +18,8 @@
 // Each module returns a plain typed shape that the renderer maps to its
 // editorial visualisation.
 
+// GAP-12 — measured-coverage gate for AI absence language.
+import { aiCoverageGate, aiCoverageQualifier } from './aiCoverageGate';
 import type {
   CanonicalDimension,
   CanonicalDimensionKey,
@@ -255,7 +257,19 @@ export function buildAIVisibilityState(report: CanonicalReport): AIVisibilitySta
     if (aiValue >= 25) return 'partial';        // developing+
     return 'absent';                            // foundational
   })();
-  const state_label = state === 'identified' ? 'Identified' : state === 'partial' ? 'Partially Identified' : state === 'absent' ? 'Not Identified' : 'Not Yet Measured';
+  // GAP-12 — the measured-coverage gate. `state` itself is NOT changed: it derives from the
+  // aggregate score, which `aiCitationMatrixService` already computes from measured cells only.
+  // What is gated is how far the resulting LABEL and reading are allowed to generalise.
+  const coverage = aiCoverageGate(report);
+
+  // "Not Identified" is a true statement about the cells that were measured, so it stays — but
+  // rendered as a bare "Identification: Not Identified" it reads as a verdict on the whole AI
+  // landscape. When providers went unqueried it is scoped to what was actually looked at.
+  const state_label = state === 'identified' ? 'Identified'
+    : state === 'partial' ? 'Partially Identified'
+      : state === 'absent'
+        ? (coverage.supportsGeneralClaim ? 'Not Identified' : 'Not Identified in measured surfaces')
+        : 'Not Yet Measured';
 
   // Entity record state — derived from knowledge_graph entity payload.
   const entity_state: AIEntityState = (() => {
@@ -295,6 +309,13 @@ export function buildAIVisibilityState(report: CanonicalReport): AIVisibilitySta
       return entity_state === 'absent'
         ? 'AI systems find the brand inconsistently and cannot anchor it to a structured entity. The two gaps reinforce each other — closing entity recognition compounds into retrieval lift across providers.'
         : 'AI systems find the brand on some surfaces but not reliably across providers. The story is unevenness, not absence — uniformity of coverage is the strategic question.';
+    }
+    // GAP-12 — "AI systems do not reliably retrieve the brand" quantifies over every AI system.
+    // With providers unqueried that is a claim about silence the report never listened for, so the
+    // same measured finding is stated against the surfaces that actually answered.
+    if (!coverage.supportsGeneralClaim) {
+      return `The brand was not retrieved in the AI surfaces measured.${aiCoverageQualifier(coverage)} `
+        + 'What the unqueried surfaces return is unknown, not absent.';
     }
     return 'AI systems do not reliably retrieve the brand. The cost is not theoretical — each quarter buyer research migrates further toward AI-mediated answers, the gap costs more.';
   })();
