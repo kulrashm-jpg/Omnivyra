@@ -33,3 +33,6 @@ export {
   toAttributeBags, UNSAFE_ACCOUNT_OUTCOMES,
 } from './persistence';
 export type { ResolvedEnrichmentTarget } from './persistence';
+
+export { creditCostPort, makeCreditCostPort, PROSPECT_ENRICHMENT_ACTION, FORBIDDEN_BORROWED_ACTION } from './cost';
+export type { CreditCostPortOptions } from './cost';

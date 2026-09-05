@@ -94,27 +94,14 @@ export interface ExecuteEnrichmentPorts {
 }
 
 /**
- * The default cost port. It REFUSES.
+ * The default cost port — registry-backed, and refusing today.
  *
- * `executeWithCredits` is the canonical reservation seam, but it asserts a
- * canonical credit action and `featureRegistry` registers none for prospect
- * enrichment — `internal.profile_enrichment` is company-profile enrichment and
- * charging prospect work to it would mis-attribute the spend. Until an action
- * is registered, the honest answer is that cost cannot be authorised, so no
- * paid call may happen. Registering the action is what turns this on; no code
- * here changes.
+ * It asks the live monetization registry whether a prospect-enrichment credit
+ * action exists. None does, so it refuses; the refusal is derived rather than
+ * hardcoded, which means registering and pricing the action turns it on with no
+ * change here. See `cost.ts` for why the action cannot simply be added.
  */
-export const defaultCostPort: Pick<ExecuteEnrichmentPorts, 'authorizeCost' | 'releaseCost'> = {
-  async authorizeCost() {
-    return {
-      authorized: false,
-      reason:
-        'no prospect-enrichment credit action is registered in featureRegistry, so provider spend '
-        + 'cannot be reserved; refusing before any external call',
-    };
-  },
-  async releaseCost() { /* nothing was reserved */ },
-};
+export { creditCostPort as defaultCostPort } from './cost';
 
 export interface ExecuteEnrichmentResult {
   readonly outcome: EnrichmentOutcome;
