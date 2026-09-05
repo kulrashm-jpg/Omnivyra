@@ -26,6 +26,9 @@
 export {
   ICP_CRITERION_KINDS, ICP_SUBJECTS, ICP_VERSION_STATUSES, RATIFIED_STATUS,
   IcpContractError,
+  // ICP-SELECTION-CONTRACT-001 vocabularies. Proposal metadata only.
+  ICP_CONFIDENCE_LEVELS, ICP_CONFIDENCE_MULTIPLIER, ICP_ORG_STAGES,
+  ICP_TARGET_DERIVATIONS, ICP_TARGET_ROLE_TYPES,
 } from './types';
 
 export type {
@@ -33,9 +36,15 @@ export type {
   IcpEvaluationReason, IcpFitEvaluation, IcpPredicate, IcpPredicateOp, IcpProposal,
   IcpScoreDimension, IcpSubject, IcpSubjectFacts, IcpVersionRecord, IcpVersionStatus,
   RatifiedIcp,
+  // ICP-SELECTION-CONTRACT-001 §12/§13.
+  IcpConfidenceLevel, IcpFactorScore, IcpOrgStage, IcpRejected, IcpStageAssumption,
+  IcpTarget, IcpTargetDerivation, IcpTargetFactors, IcpTargetRoleType,
 } from './types';
 
 export { attributeKind, attributesFor, validateCriteria, validateCriterion, MAX_CRITERIA } from './criteria';
+
+export { validateProposalTargets, withValidatedTargets, MAX_ICP_TARGETS } from './proposalTargets';
+export type { ValidatedProposalTargets } from './proposalTargets';
 
 export { evaluateIcpFit } from './evaluate';
 export type { IcpEvaluationInput } from './evaluate';
