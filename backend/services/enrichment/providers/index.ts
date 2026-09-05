@@ -36,3 +36,19 @@ export type { ResolvedEnrichmentTarget } from './persistence';
 
 export { creditCostPort, makeCreditCostPort, PROSPECT_ENRICHMENT_ACTION, FORBIDDEN_BORROWED_ACTION } from './cost';
 export type { CreditCostPortOptions } from './cost';
+
+export {
+  ACQUISITION_SOURCES, CONNECTION_STATES, SOURCE_TYPES, USABLE_STATES,
+  getSource, listSourceStatus, resolveConnectionState, supportsRequest,
+} from './sources';
+export type {
+  AcquisitionSourceDescriptor, ConnectionState, GatewaySubProvider,
+  SourceCapabilities, SourceStatus, SourceType,
+} from './sources';
+
+export {
+  AUTO_SELECTION, INELIGIBILITY_REASONS, evaluateSource, selectAcquisitionSource,
+} from './selection';
+export type {
+  IneligibilityReason, SelectionCandidate, SelectionMode, SelectionOutcome, SelectionRequest,
+} from './selection';
