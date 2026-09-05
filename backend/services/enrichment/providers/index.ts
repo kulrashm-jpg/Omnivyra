@@ -55,9 +55,11 @@ export type {
 
 export {
   EXTENSION_SOURCE_ID, EXTENSION_SUPPLIED_ATTRIBUTES, NO_ATTRIBUTE_REASON,
-  bridgeExtensionObservation, defaultExtensionBridgePorts, normalizeExtensionObservation,
+  bridgeExtensionObservation, bridgeExtensionObservationSafely, defaultExtensionBridgePorts,
+  normalizeExtensionObservation, observationFromExtensionEvent, REFUSED_CONTEXT_MAPPINGS,
+  extensionEventBridgePorts, makeShadowIdentityPort,
 } from './extensionBridge';
 export type {
-  BridgeOutcome, BridgeResult, ExtensionAuthorObservation, ExtensionBridgePorts,
+  BridgeOutcome, BridgeResult, ExtensionAuthorObservation, ExtensionBridgePorts, ExtensionEventData,
   NormalizationOutcome, NormalizedExtensionObservation,
 } from './extensionBridge';

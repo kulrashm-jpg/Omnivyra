@@ -7,32 +7,33 @@
  * person-linked ones. This module is the missing hand-off, and nothing more.
  *
  * ─── IT COMPOSES; IT IMPLEMENTS ALMOST NOTHING ────────────────────────────
- * Identity is B1's `resolveSocialContactIdentity`, which already asks the W1
- * shadow resolver whether the tenant knows this platform identity, records one
- * `external_id` claim, links only on a single deterministic match, parks a
- * duplicate candidate on ambiguity, and NEVER mints a person from a bare
- * handle. Evidence is LI-2's `ingestSourceRecord`. Both already exist, are
- * tested against live Postgres, and are not reimplemented here.
+ * Identity is the W1 shadow resolver — the same primitive B1 itself calls —
+ * which answers whether the tenant already knows this platform identity, agrees
+ * on at most one person, and NEVER mints a person from a bare handle. Evidence
+ * is LI-2's `ingestSourceRecord`. Both already exist, are tested against live
+ * Postgres, and are not reimplemented here.
  *
  * ─── WHAT THE EXTENSION ACTUALLY GIVES US, AND WHAT IT DOES NOT ───────────
- * Traced end to end through `/api/extension/events/{comments,dms}`:
+ * Traced end to end through three routes, correcting an earlier claim that
+ * `raw_context` never leaves the extension — it does:
  *
- *   comments → author_name, author_handle, author_self
- *   dms      → participant_name, participant_username, participant_avatar_url
- *   stored   → engagement_authors(platform, platform_user_id, username,
- *              display_name, profile_url, avatar_url)
+ *   /events/comments → author_name, author_handle, author_self
+ *   /events/dms      → participant_name, participant_username, avatar
+ *   /events          → author_name, author_profile_url, author_username AND
+ *                      data.raw_context { company, headline, location } from the
+ *                      Sales Navigator and Recruiter scraper surfaces, persisted
+ *                      by `extensionEventIngestionService` onto the message
  *
- * That is IDENTITY evidence. It is not ICP evidence: no `job_title`,
- * `department`, `country_code`, `region` or `city` reaches the server.
+ * So profile context IS available. It is still not ICP evidence, for reasons
+ * specific to each field — see `REFUSED_CONTEXT_MAPPINGS`. A headline is
+ * marketing copy, not a job title; a company name is not an account identity;
+ * "San Francisco Bay Area" is not an ISO country.
  *
- * The LinkedIn scraper does build `rawContext: { company, headline, location }`
- * for Sales Navigator and Recruiter surfaces — but `rawContext` appears only in
- * `platforms/linkedin/scraper.js`, no transport sends it, and no route accepts
- * it. So it does not exist as far as the platform is concerned.
- *
- * This module therefore produces identity evidence and, today, ZERO attribute
- * assertions. It says so rather than inferring a title from a name, which is
- * the one thing that would make extension evidence look richer than it is.
+ * This module therefore produces identity evidence, retains profile context as
+ * labelled source evidence, and asserts ZERO canonical attributes. Mapping a
+ * headline onto `job_title` would not merely be useless — `job_title` is matched
+ * by exact `one_of`, so it would never match — it would let LI-2 overwrite a
+ * real title with a slogan.
  *
  * PURE except where noted: `normalizeExtensionObservation` does no I/O.
  */
@@ -43,6 +44,7 @@ import {
 import {
   resolveSocialContactIdentity, type SocialContactResolutionResult,
 } from '../../prospectIdentity/socialContactResolution';
+import { resolveIdentityShadow } from '../../prospectIdentity/shadowResolver';
 import type { ProviderField } from './contract';
 
 /** The acquisition source id. Matches the descriptor in `sources.ts`. */
@@ -75,7 +77,41 @@ export interface ExtensionAuthorObservation {
   readonly observedAt?: string | null;
   /** The engagement record this came from, for correlation only. */
   readonly sourceReference: string;
+  /**
+   * Free-form profile text the scraper captured on Sales Navigator and
+   * Recruiter surfaces and transmitted as `data.raw_context`.
+   *
+   * Retained as EVIDENCE and never converted into a canonical attribute — see
+   * `REFUSED_CONTEXT_MAPPINGS`.
+   */
+  readonly profileContext?: {
+    readonly headline?: string | null;
+    readonly company?: string | null;
+    readonly location?: string | null;
+  } | null;
 }
+
+/**
+ * Context the extension really does transmit, and why each is NOT mapped to the
+ * canonical attribute it superficially resembles.
+ *
+ * This is the difference between an acquisition source that is honest and one
+ * that quietly degrades the spine. Each refusal below is specific:
+ */
+export const REFUSED_CONTEXT_MAPPINGS: Readonly<Record<string, string>> = {
+  // A LinkedIn headline is marketing copy — "Helping SaaS teams scale | ex-Google"
+  // — not a job title. `job_title` is matched by EXACT `one_of`, so a headline
+  // would never match; worse, LI-2 would apply it as the canonical `job_title`
+  // and overwrite a real one with a slogan.
+  headline: 'job_title',
+  // A company NAME is not an account identity. W4 requires a provider reference
+  // or a domain precisely because two companies share a name every day, and no
+  // domain is transmitted.
+  company: 'account',
+  // "San Francisco Bay Area" is not a city, a region or an ISO-3166 country.
+  // Splitting it into one would be inference presented as observation.
+  location: 'city / region / country_code',
+};
 
 export type NormalizationOutcome =
   | 'usable'
@@ -152,6 +188,20 @@ export function normalizeExtensionObservation(
   if (displayName) rawPayload.display_name = displayName;
   if (profileUrl) rawPayload.profile_url = profileUrl;
 
+  // Profile context is kept as EVIDENCE under its own key, verbatim and clearly
+  // labelled as unmapped. A reviewer can read it; the evaluator never sees it,
+  // and no canonical column is written from it. See REFUSED_CONTEXT_MAPPINGS.
+  const context: Record<string, string> = {};
+  for (const key of ['headline', 'company', 'location'] as const) {
+    const value = clean(input.profileContext?.[key]);
+    if (value) context[key] = value;
+  }
+  if (Object.keys(context).length) {
+    rawPayload.observed_profile_context = context;
+    rawPayload.observed_profile_context_note =
+      'retained as source evidence only; deliberately not mapped to a canonical attribute';
+  }
+
   return {
     ...base,
     outcome: 'usable',
@@ -189,6 +239,61 @@ export interface ExtensionBridgePorts {
 export const defaultExtensionBridgePorts: ExtensionBridgePorts = {
   ingest: ingestSourceRecord,
   resolveIdentity: resolveSocialContactIdentity,
+  now: () => new Date().toISOString(),
+};
+
+/**
+ * The identity port for the EXTENSION EVENT path.
+ *
+ * B1's `resolveSocialContactIdentity` links a `contacts` row — it ends in
+ * `.eq('id', contactId)` against `contacts`. The extension event path creates
+ * `engagement_authors`, not `contacts`, so handing it an engagement author id
+ * would address a row that does not exist and silently link nothing.
+ *
+ * Rather than change B1 (its semantics are frozen) or make the engagement path
+ * write a `contacts` row it has never written, this port calls the SAME W1
+ * primitive B1 itself calls — `resolveIdentityShadow` — and returns the same
+ * result shape. The identity question is identical; only the contact-linking
+ * half, which has nothing to link here, is absent.
+ *
+ * It reads. It never writes an identity, and never creates a person.
+ */
+export function makeShadowIdentityPort(
+  resolveShadow: typeof resolveIdentityShadow = resolveIdentityShadow,
+): ExtensionBridgePorts['resolveIdentity'] {
+  return (async (input: {
+    organizationId: string; platform: string | null | undefined;
+    platformUserId: string | null | undefined; now?: string;
+  }) => {
+    const resolution = await resolveShadow(
+      input.organizationId,
+      [{ claimType: 'external_id', value: input.platformUserId, platform: input.platform }],
+      input.now,
+    );
+
+    // W1's vocabulary mapped onto B1's, so the bridge sees one shape.
+    const outcome = resolution.outcome === 'matched_claim' || resolution.outcome === 'matched_spine'
+      ? 'linked'
+      : resolution.outcome === 'ambiguous' ? 'ambiguous'
+        : resolution.outcome === 'unusable' ? 'unusable' : 'unresolved';
+
+    return {
+      outcome,
+      // Attached ONLY on a single agreed person. Ambiguity yields null.
+      personId: outcome === 'linked' ? resolution.personId : null,
+      claim: 'not_attempted' as const,
+      candidatePersonIds: resolution.candidatePersonIds,
+      duplicatesParked: 0,
+      failureCodes: [],
+      reason: resolution.verdicts[0]?.reason ?? `w1 shadow: ${resolution.outcome}`,
+    };
+  }) as ExtensionBridgePorts['resolveIdentity'];
+}
+
+/** Ports for the extension event path: LI-2 for evidence, W1 for identity. */
+export const extensionEventBridgePorts: ExtensionBridgePorts = {
+  ingest: ingestSourceRecord,
+  resolveIdentity: makeShadowIdentityPort(),
   now: () => new Date().toISOString(),
 };
 
@@ -275,5 +380,94 @@ export async function bridgeExtensionObservation(
     reason: outcome === 'observed_and_linked'
       ? `observation recorded and linked to ${linkedPersonId}`
       : `observation recorded; canonical linkage withheld (${identity.outcome}: ${identity.reason})`,
+  };
+}
+
+/**
+ * Bridge an observation and NEVER let its failure touch the caller.
+ *
+ * The production caller is the extension ingestion path, which has already
+ * written a valid engagement record by the time this runs. PI acquisition is
+ * strictly additive: a bridge failure must leave that engagement capture
+ * intact, so this swallows the error and returns a `not_observed` result
+ * carrying the reason. The failure is reported, never silent, and never
+ * rethrown into a path that would discard a real engagement event.
+ */
+export async function bridgeExtensionObservationSafely(
+  organizationId: string,
+  contactId: string,
+  observation: ExtensionAuthorObservation,
+  ports: ExtensionBridgePorts = defaultExtensionBridgePorts,
+): Promise<BridgeResult> {
+  try {
+    return await bridgeExtensionObservation(organizationId, contactId, observation, ports);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Observable, not swallowed: the engagement write stands, and the PI
+    // failure is stated with its cause.
+    console.warn('[pi.extensionBridge] observation failed; engagement capture is unaffected', {
+      platform: observation.platform,
+      sourceReference: observation.sourceReference,
+      reason: message,
+    });
+    return {
+      outcome: 'not_observed', sourceRecordId: null, personId: null, identityOutcome: null,
+      candidatePersonIds: [], assertionsRecorded: 0,
+      reason: `PI observation failed; engagement capture unaffected: ${message}`,
+    };
+  }
+}
+
+/** The `data` an extension event carries, narrowed to what PI can use. */
+export interface ExtensionEventData {
+  readonly author_name?: string | null;
+  readonly author_username?: string | null;
+  readonly author_profile_url?: string | null;
+  readonly author_self?: boolean | null;
+  readonly created_at?: string | number | null;
+  readonly raw_context?: Record<string, unknown> | null;
+}
+
+const contextString = (ctx: Record<string, unknown> | null | undefined, key: string): string | null =>
+  (ctx && typeof ctx[key] === 'string' ? (ctx[key] as string) : null);
+
+/**
+ * Map one extension event onto an observation.
+ *
+ * The platform identity is `author_username` or the profile URL — NOT the
+ * engagement layer's synthesised author id, which is derived from a message id
+ * and identifies an event rather than a person. Using it would create a new
+ * "identity" per comment.
+ */
+export function observationFromExtensionEvent(input: {
+  readonly platform: string;
+  readonly platformMessageId: string;
+  readonly data: ExtensionEventData;
+}): ExtensionAuthorObservation | null {
+  const handle = clean(input.data.author_username);
+  const profileUrl = clean(input.data.author_profile_url);
+  // A profile URL is a durable platform identity; a display name is not.
+  const identity = handle ?? profileUrl;
+  if (!identity) return null;
+
+  const ctx = input.data.raw_context ?? null;
+  const createdAt = typeof input.data.created_at === 'string' ? input.data.created_at : null;
+
+  return {
+    platform: input.platform,
+    platformUserId: handle ? null : profileUrl,
+    handle: handle ?? profileUrl,
+    displayName: clean(input.data.author_name),
+    profileUrl,
+    self: input.data.author_self === true,
+    observedAt: createdAt,
+    sourceReference: input.platformMessageId,
+    profileContext: ctx
+      ? {
+        headline: contextString(ctx, 'headline'),
+        company: contextString(ctx, 'company'),
+        location: contextString(ctx, 'location'),
+      }
+      : null,
   };
 }
