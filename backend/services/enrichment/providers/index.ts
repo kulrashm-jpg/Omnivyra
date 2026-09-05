@@ -27,3 +27,9 @@ export {
   defaultCostPort, executeEnrichment, wasFree,
 } from './execute';
 export type { CostDecision, ExecuteEnrichmentPorts, ExecuteEnrichmentResult } from './execute';
+
+export {
+  defaultPersistObservation, makePersistObservation, resolveEnrichmentAccount,
+  toAttributeBags, UNSAFE_ACCOUNT_OUTCOMES,
+} from './persistence';
+export type { ResolvedEnrichmentTarget } from './persistence';
