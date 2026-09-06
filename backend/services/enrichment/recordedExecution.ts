@@ -44,8 +44,10 @@ import {
   completeAttempt,
   nextAttemptNumber,
   claimEnrichmentWork,
+  markProviderCallPending,
   NON_CALLING_ATTEMPT_OUTCOMES,
 } from './attempts';
+import type { ProviderCallState } from './attempts';
 
 /**
  * A4N — raised when the work item is already claimed by another worker.
@@ -88,6 +90,8 @@ export interface AttemptRecorder {
   readonly nextNumber?: typeof nextAttemptNumber;
   /** A4N — the atomic claim, used only when `options.lease` is supplied. */
   readonly claim?: typeof claimEnrichmentWork;
+  /** A4Q — persists "transport is about to be entered". */
+  readonly markPending?: typeof markProviderCallPending;
   readonly now?: () => string;
 }
 
@@ -148,6 +152,7 @@ export async function executeEnrichmentRecorded(
   const complete = rec.complete ?? completeAttempt;
   const nextNumber = rec.nextNumber ?? nextAttemptNumber;
   const claim = rec.claim ?? claimEnrichmentWork;
+  const markPending = rec.markPending ?? markProviderCallPending;
   const now = rec.now ?? (() => new Date().toISOString());
 
   const startedAt = now();
@@ -252,12 +257,50 @@ export async function executeEnrichmentRecorded(
   // exactly one call, and still sees an adapter with identical behaviour.
   const baseAdapter = options.adapter ?? getProvider(providerId);
   let providerCalled = false;
+  // A4Q: set when the pre-transport mark fails on a fail-closed caller. Stashed
+  // rather than thrown through the executor, which would misclassify it.
+  let markFailure: unknown = null;
   const observed: EnrichmentProviderAdapter | undefined = baseAdapter
     ? {
       ...baseAdapter,
-      enrich: (req) => {
-        // Set BEFORE awaiting: transport has been initiated, which is exactly
-        // what the executor itself reports when `enrich` throws.
+      enrich: async (req) => {
+        // ── A4Q (B3): persist the intent BEFORE the call ────────────────────
+        // The in-memory flag below is enough while the process survives. It is
+        // worth nothing if the process dies here, and the row would still hold
+        // its insert-time `not_called` — telling a reclaimer no provider was
+        // paid when one was. `unknown` cannot be inferred afterwards, so it is
+        // written beforehand and overwritten by the proven answer on
+        // completion. A row left at `unknown` IS the process-death case.
+        //
+        // This runs BEFORE `providerCalled` is set, and that order is
+        // load-bearing: if the mark fails we never reach transport, so the
+        // attempt must NOT be recorded as called. Marking after the flag would
+        // report a paid call that never happened — the mirror image of B3, and
+        // just as wrong.
+        if (attemptId) {
+          try {
+            await markPending({ organizationId: request.organizationId, attemptId });
+          } catch (err) {
+            // For an AUTOMATED caller this must fail closed: proceeding would
+            // recreate exactly the ambiguity B3 exists to remove, and nobody is
+            // waiting on the result. The manual path keeps A4A's fail-open
+            // behaviour — it is no worse off than before this existed.
+            //
+            // The error is stashed rather than thrown onward, because throwing
+            // here lands in the EXECUTOR's own catch around `adapter.enrich`,
+            // which would classify our storage failure as `provider_unavailable`
+            // — blaming the vendor for our fault and, worse, reporting
+            // `providerCalled: true` for a call that never left the building.
+            // It is re-thrown below, outside the executor's reach.
+            if (options.lease) {
+              markFailure = err;
+              throw err;
+            }
+          }
+        }
+
+        // Set BEFORE awaiting the call: transport has been initiated, which is
+        // exactly what the executor itself reports when `enrich` throws.
         providerCalled = true;
         return baseAdapter.enrich(req);
       },
@@ -270,6 +313,7 @@ export async function executeEnrichmentRecorded(
   const close = async (fields: {
     outcome: EnrichmentOutcome | null;
     providerCalled: boolean;
+    providerCallState: ProviderCallState;
     sourceRecordId?: string | null;
     attributesReturned?: readonly string[];
     detail: string | null;
@@ -290,6 +334,20 @@ export async function executeEnrichmentRecorded(
     }
   };
 
+  const rethrowMarkFailure = async (): Promise<void> => {
+    if (!markFailure) return;
+    // No transport occurred: the mark failed before `providerCalled` was set,
+    // so the attempt closes as not_called and the caller sees OUR error, not a
+    // fabricated provider verdict.
+    await close({
+      outcome: null,
+      providerCalled: false,
+      providerCallState: 'not_called',
+      detail: 'execution stopped: the provider-call state could not be recorded before transport',
+    });
+    throw markFailure;
+  };
+
   let result: ExecuteEnrichmentResult;
   try {
     result = await executeEnrichment(request, providerId, ports, {
@@ -297,6 +355,7 @@ export async function executeEnrichmentRecorded(
       adapter: observed,
     });
   } catch (err) {
+    await rethrowMarkFailure();
     // G1. The provider may already have been contacted and the tenant's quota
     // already spent. Leaving the row open with its insert-time
     // `provider_called: false` would tell a future retry loop that no call was
@@ -310,17 +369,24 @@ export async function executeEnrichmentRecorded(
     await close({
       outcome: null,
       providerCalled,
+      // A4Q: the process SURVIVED to run this, so the observed flag is proof
+      // either way. `unknown` is never written here — it belongs solely to the
+      // case where nothing gets to run at all.
+      providerCallState: providerCalled ? 'called' : 'not_called',
       detail: `execution failed after ${providerCalled ? 'the provider was called' : 'no provider call'}: `
         + (err instanceof Error ? err.message : String(err)),
     });
     throw err;   // the original failure, unchanged and unswallowed
   }
 
+  await rethrowMarkFailure();
+
   await close({
     outcome: result.outcome,
     // The executor's own answer when it has one; it is the only thing that
     // knows whether a duplicate was suppressed before egress.
     providerCalled: result.providerCalled,
+    providerCallState: result.providerCalled ? 'called' : 'not_called',
     sourceRecordId: result.sourceRecordId,
     attributesReturned: result.attributesReturned,
     detail: result.reason,
