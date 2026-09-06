@@ -139,7 +139,7 @@ describe('GAP-14 — Report 2 reads the persisted Report 1 baseline', () => {
     it('carries the persisted score, band, maturity, headline and constraint', async () => {
       const foundation = await buildFoundation([
         row('r1', '2026-09-06T10:00:00Z', { composed_report: composedReport() }),
-      ]) as Record<string, unknown>;
+      ]) as unknown as Record<string, unknown>;
       expect(foundation).not.toBeNull();
       expect(foundation.authority_score).toBe(39);
       expect(foundation.authority_band).toBe('developing');
@@ -222,7 +222,7 @@ describe('GAP-14 — Report 2 reads the persisted Report 1 baseline', () => {
       });
       const foundation = await buildFoundation([
         row('r1', '2026-09-06T10:00:00Z', { composed_report: gated }),
-      ]) as Record<string, unknown>;
+      ]) as unknown as Record<string, unknown>;
       expect(foundation.authority_score).toBeNull();
       expect(foundation.authority_band).toBe('insufficient');
     });
@@ -237,14 +237,14 @@ describe('GAP-14 — Report 2 reads the persisted Report 1 baseline', () => {
       });
       const foundation = await buildFoundation([
         row('r1', '2026-09-06T10:00:00Z', { composed_report: gated }),
-      ]) as Record<string, unknown>;
+      ]) as unknown as Record<string, unknown>;
       expect(foundation.authority_score).toBeNull();
     });
 
     it('keeps a measured score usable', async () => {
       const foundation = await buildFoundation([
         row('r1', '2026-09-06T10:00:00Z', { composed_report: composedReport() }),
-      ]) as Record<string, unknown>;
+      ]) as unknown as Record<string, unknown>;
       expect(foundation.authority_score).toBe(39);
     });
 
@@ -257,7 +257,7 @@ describe('GAP-14 — Report 2 reads the persisted Report 1 baseline', () => {
       });
       const foundation = await buildFoundation([
         row('r1', '2026-09-06T10:00:00Z', { composed_report: inferred }),
-      ]) as Record<string, unknown>;
+      ]) as unknown as Record<string, unknown>;
       expect(foundation.authority_score).toBe(31);
     });
   });
@@ -291,7 +291,7 @@ describe('GAP-14 — Report 2 reads the persisted Report 1 baseline', () => {
       const foundation = await buildFoundation([
         row('r-new', '2026-09-06T12:00:00Z', { composed_report: newer }),
         row('r-old', '2026-09-01T09:00:00Z', { composed_report: older }),
-      ], captured) as Record<string, unknown>;
+      ], captured) as unknown as Record<string, unknown>;
       expect(foundation.maturity_label).toBe('NEWEST');
       expect(captured.order).toEqual(['created_at', { ascending: false }]);
     });
@@ -300,7 +300,7 @@ describe('GAP-14 — Report 2 reads the persisted Report 1 baseline', () => {
       const foundation = await buildFoundation([
         row('perf', '2026-09-06T13:00:00Z', { composed_report: { sections: [] } }),
         row('r1', '2026-09-06T12:00:00Z', { composed_report: composedReport() }),
-      ]) as Record<string, unknown>;
+      ]) as unknown as Record<string, unknown>;
       expect(foundation.maturity_label).toBe('Emerging');
     });
 
