@@ -25,7 +25,7 @@ import type { PillarKey } from '../canonicalReport/canonicalReportTypes';
 // every test/build that doesn't need it.
 type SupabaseClientShape = {
   from: (table: string) => {
-    insert: (rows: unknown[]) => { error: unknown };
+    insert: (rows: unknown[]) => PromiseLike<{ data: unknown[] | null; error: unknown }>;
     select: (columns?: string) => {
       eq: (column: string, value: unknown) => unknown;
       gte: (column: string, value: unknown) => unknown;
@@ -52,8 +52,14 @@ export class SupabaseHistoryStore implements HistoricalStore {
   }
 
   async writeSnapshot(params: Parameters<HistoricalStore['writeSnapshot']>[0]): Promise<void> {
-    // Each table is written serially. The writes are idempotent on
-    // (company_id, observed_at) so partial writes can be retried safely.
+    // Each table is written serially and each insert is AWAITED: a PostgREST
+    // builder is a lazy thenable, so an un-awaited `insert()` is never sent and
+    // its `error` is always undefined — a silent no-op that reports success.
+    // A rejected insert throws, so the caller sees the failure instead of
+    // recording `persisted: true` against rows that were never written.
+    // Retries are NOT idempotent: `id` is the primary key and
+    // (company_id, observed_at) is UNIQUE, so replaying a partially-written
+    // bundle raises 23505 rather than overwriting history.
     const tables: Array<[string, unknown[]]> = [
       ['report_score_history', [serializeSnapshot(params.snapshot)]],
       ['report_pillar_history', params.pillars.map(serializePillar)],
@@ -65,9 +71,9 @@ export class SupabaseHistoryStore implements HistoricalStore {
 
     for (const [table, rows] of tables) {
       if (rows.length === 0) continue;
-      const { error } = this.client.from(table).insert(rows);
+      const { error } = await this.client.from(table).insert(rows);
       if (error) {
-        throw new Error(`SupabaseHistoryStore.writeSnapshot failed for ${table}: ${String(error)}`);
+        throw new Error(`SupabaseHistoryStore.writeSnapshot failed for ${table}: ${describeError(error)}`);
       }
     }
   }
@@ -123,6 +129,20 @@ export class SupabaseHistoryStore implements HistoricalStore {
     if (result.error) throw new Error(`SupabaseHistoryStore.${table} query failed: ${String(result.error)}`);
     return (result.data as T[]) ?? [];
   }
+}
+
+/**
+ * PostgREST returns a plain error object, so `String(error)` renders "[object Object]"
+ * and hides the reason a durable write was rejected. Surface the real message.
+ */
+function describeError(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const e = error as { message?: unknown; code?: unknown; details?: unknown };
+    const parts = [e.code ? `[${String(e.code)}]` : '', e.message ? String(e.message) : '', e.details ? String(e.details) : '']
+      .filter(Boolean);
+    if (parts.length > 0) return parts.join(' ');
+  }
+  return String(error);
 }
 
 // ── Serializers (shape canonical records → DB row shape) ──────────────────────
