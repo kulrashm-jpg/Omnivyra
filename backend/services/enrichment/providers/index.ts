@@ -57,16 +57,16 @@ export type { TenantFundedPortOptions } from './cost';
 export type { CreditCostPortOptions } from './cost';
 
 export {
-  ACQUISITION_SOURCES, CONNECTION_STATES, SOURCE_TYPES, USABLE_STATES,
+  ACQUISITION_SOURCES, CONNECTION_STATES, FUNDING_MODELS, SOURCE_TYPES, USABLE_STATES,
   getSource, listSourceStatus, resolveConnectionState, supportsRequest,
 } from './sources';
 export type {
-  AcquisitionSourceDescriptor, ConnectionState, GatewaySubProvider,
+  AcquisitionSourceDescriptor, ConnectionState, FundingModel, GatewaySubProvider,
   SourceCapabilities, SourceStatus, SourceType,
 } from './sources';
 
 export {
-  AUTO_SELECTION, INELIGIBILITY_REASONS, evaluateSource, selectAcquisitionSource,
+  AUTO_SELECTION, INELIGIBILITY_REASONS, evaluateEconomics, evaluateSource, selectAcquisitionSource,
 } from './selection';
 export type {
   IneligibilityReason, SelectionCandidate, SelectionMode, SelectionOutcome, SelectionRequest,

@@ -37,14 +37,27 @@ const rejected = (o: SelectionOutcome): Rejected => {
   return o;
 };
 
-/** Promote one source to fully usable, for selection tests. */
+/**
+ * Promote one source to fully usable, for selection tests.
+ *
+ * A3Z: the default economics are the REAL ones — tenant-funded with no
+ * Omnivyra credit action. This helper used to default to
+ * `creditAction: 'prospect_enrichment'`, which was correct while every call was
+ * expected to be Omnivyra-funded, but is now a contradiction: a source cannot
+ * both be paid for by the tenant's own vendor subscription and charged to an
+ * Omnivyra credit action. Fixtures that carried one were the reason this
+ * suite could not see that `selection.ts` had stopped matching the descriptors.
+ */
 const usable = (
-  id: string, attributes: string[], creditAction: string | null = 'prospect_enrichment',
+  id: string, attributes: string[],
+  economics: Partial<Pick<SourceStatus, 'creditAction' | 'fundingModel'>> = {},
 ): Partial<SourceStatus> => ({
   connectionState: 'connected',
   usable: true,
   stateReason: 'test: connected',
-  creditAction,
+  creditAction: null,
+  fundingModel: 'tenant_provider_subscription',
+  ...economics,
   capabilities: { entities: ['person'], attributes },
 });
 
@@ -225,12 +238,34 @@ describe('A3C — auto selection is deterministic and explainable', () => {
     expect(rejected(out).considered.find((c) => c.sourceId === 'apollo')?.ineligibility).toBe('attributes_unsupported');
   });
 
-  it('never selects an UNPRICED source — auto cannot bypass the cost gate', () => {
+  it('never selects an OMNIVYRA-FUNDED source with no credit action — auto cannot bypass the cost gate', () => {
+    // A3Z retargeted this from "creditAction is null" to "Omnivyra pays but
+    // nothing authorises the spend". The safety property is identical and is
+    // still enforced; it is simply no longer applied to sources nobody expected
+    // Omnivyra to pay for, which is what made every source unselectable.
     const out = selectAcquisitionSource(PERSON_REQUEST, statuses({
-      apollo: usable('apollo', ['job_title'], null),
+      apollo: usable('apollo', ['job_title'], { fundingModel: 'omnivyra_funded', creditAction: null }),
     }));
     expect(out.selected).toBe(false);
     expect(rejected(out).considered.find((c) => c.sourceId === 'apollo')?.ineligibility).toBe('unpriced');
+  });
+
+  it('a TENANT-FUNDED source with no credit action is selectable — that is the settled model', () => {
+    const out = selectAcquisitionSource(PERSON_REQUEST, statuses({
+      apollo: usable('apollo', ['job_title']),   // tenant-funded, creditAction null
+    }));
+    expect(out.selected).toBe(true);
+    expect(out.selected && out.sourceId).toBe('apollo');
+  });
+
+  it('a source that claims BOTH tenant funding and an Omnivyra credit action refuses', () => {
+    const out = selectAcquisitionSource(PERSON_REQUEST, statuses({
+      apollo: usable('apollo', ['job_title'],
+        { fundingModel: 'tenant_provider_subscription', creditAction: 'prospect_enrichment' }),
+    }));
+    expect(out.selected).toBe(false);
+    expect(rejected(out).considered.find((c) => c.sourceId === 'apollo')?.ineligibility)
+      .toBe('unknown_economics');
   });
 
   it('reports no eligible source rather than inventing one', () => {

@@ -33,10 +33,99 @@ export const INELIGIBILITY_REASONS = [
   'manual_not_automatable',
   'entity_unsupported',
   'attributes_unsupported',
+  /** OMNIVYRA-funded, but no credit action exists to authorise the spend. */
   'unpriced',
+  /** The declared economics are absent or self-contradictory. Fails closed. */
+  'unknown_economics',
   'no_eligible_source',
 ] as const;
 export type IneligibilityReason = typeof INELIGIBILITY_REASONS[number];
+
+/**
+ * A3Z — the economics gate.
+ *
+ * Answers one question: is it settled who pays for this call?
+ *
+ * ─── WHY THIS IS NOT SIMPLY `!creditAction` ANY MORE ──────────────────────
+ * It used to be. That was right while every provider call was Omnivyra-funded:
+ * no credit action meant no way to authorise the spend, so `unpriced` refused
+ * it. A3X then settled the tenant-funded model — the tenant holds the vendor
+ * subscription and the vendor invoices them — and correctly removed every
+ * credit action, because pricing someone else's invoice would be a fabricated
+ * charge. `selection.ts` was not reconciled, so the absence of a credit action
+ * came to mean two incompatible things at once and EVERY source, including a
+ * fully connected one with a tenant credential, was refused as "unpriced".
+ *
+ * The check is therefore not deleted, it is RE-ANCHORED: it now asks the
+ * declared `fundingModel` who pays, and only then whether the artefact that
+ * funding model requires is present. Omnivyra-funded without a credit action
+ * still refuses, exactly as before — the safety property is preserved, it is
+ * simply no longer applied to sources nobody expected Omnivyra to pay for.
+ *
+ * ─── EVERY CONTRADICTION FAILS CLOSED ─────────────────────────────────────
+ * A tenant-funded source that ALSO carries an Omnivyra credit action, an
+ * external API that claims nothing is paid, or a funding model outside the
+ * vocabulary are all refused as `unknown_economics`. Each would mean the
+ * question "who is billed for this call?" has no single answer, and guessing
+ * one is how a tenant silently gets charged for something they did not buy.
+ */
+export function evaluateEconomics(
+  source: AcquisitionSourceDescriptor,
+): { ok: true } | { ok: false; ineligibility: IneligibilityReason; reason: string } {
+  const model = source.fundingModel;
+
+  if (model === 'tenant_provider_subscription') {
+    // The tenant is invoiced by the vendor. Omnivyra must charge nothing, so a
+    // credit action here is a contradiction, not a bonus.
+    if (source.creditAction) {
+      return {
+        ok: false, ineligibility: 'unknown_economics',
+        reason: `${source.displayName} declares tenant funding AND an Omnivyra credit action `
+          + `('${source.creditAction}') — it cannot be billed twice, so it is refused`,
+      };
+    }
+    return { ok: true };
+  }
+
+  if (model === 'omnivyra_funded') {
+    // Unchanged from A3C: Omnivyra pays, so the spend must be authorisable.
+    if (!source.creditAction) {
+      return {
+        ok: false, ineligibility: 'unpriced',
+        reason: `${source.displayName} has no credit action, so its calls cannot be authorised`,
+      };
+    }
+    return { ok: true };
+  }
+
+  if (model === 'none') {
+    // Nothing is paid — true only for operator entry and the user's own
+    // session. An API we call over the network always costs somebody something.
+    if (source.sourceType === 'external_api' || source.sourceType === 'gateway_api') {
+      return {
+        ok: false, ineligibility: 'unknown_economics',
+        reason: `${source.displayName} is a ${source.sourceType} that claims nobody is billed — `
+          + 'an external call always costs someone, so its economics are unresolved',
+      };
+    }
+    if (source.creditAction) {
+      return {
+        ok: false, ineligibility: 'unknown_economics',
+        reason: `${source.displayName} claims nobody is billed yet carries the credit action `
+          + `'${source.creditAction}'`,
+      };
+    }
+    return { ok: true };
+  }
+
+  // Outside the vocabulary — including absent, which TypeScript cannot prevent
+  // for a descriptor arriving from a cast or a test fixture. Never assumed.
+  return {
+    ok: false, ineligibility: 'unknown_economics',
+    reason: `${source.displayName} declares no recognised funding model `
+      + `(${String(model ?? 'absent')}) — who pays for this call is unknown`,
+  };
+}
 
 export interface SelectionCandidate {
   readonly sourceId: string;
@@ -96,13 +185,14 @@ export function evaluateSource(
       reason: `${source.displayName} supplies none of: ${request.attributes.join(', ')}`,
     };
   }
-  // An unpriced source cannot pass the cost gate, so offering it would produce
-  // a refusal one layer later with a less useful explanation.
-  if (!source.creditAction) {
-    return {
-      ...base, eligible: false, ineligibility: 'unpriced',
-      reason: `${source.displayName} has no credit action, so its calls cannot be authorised`,
-    };
+  // A source whose economics are unresolved cannot pass the authorization gate,
+  // so offering it would produce a refusal one layer later with a less useful
+  // explanation. A3Z: the question is who PAYS, not whether Omnivyra priced it.
+  const economics = evaluateEconomics(source);
+  if ('reason' in economics) {
+    // `'reason' in economics`, not `!economics.ok`: the root tsconfig sets
+    // `strict: false`, which disables union narrowing on a negated discriminant.
+    return { ...base, eligible: false, ineligibility: economics.ineligibility, reason: economics.reason };
   }
   return { ...base, eligible: true, reason: `${source.displayName} is connected and supplies the requested attributes` };
 }

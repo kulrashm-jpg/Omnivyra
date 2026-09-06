@@ -37,6 +37,38 @@ export const SOURCE_TYPES = [
 export type SourceType = typeof SOURCE_TYPES[number];
 
 /**
+ * WHO PAYS the external party. Declared per source, never inferred.
+ *
+ * ─── WHY THIS FIELD HAD TO EXIST ──────────────────────────────────────────
+ * A3C gated selection on `creditAction`: a source with none was refused as
+ * `unpriced`, because at the time every provider call was expected to be
+ * Omnivyra-funded and therefore priced in the monetization registry. A3X then
+ * settled the opposite model — the tenant holds the vendor subscription and is
+ * invoiced directly — and correctly set `creditAction: null` everywhere,
+ * because inventing an Omnivyra price for someone else's invoice would be a
+ * fabricated charge.
+ *
+ * A3X did not touch `selection.ts`, so the two became contradictory: EVERY
+ * source, including a fully connected one with a tenant credential, was refused
+ * as "unpriced". The absence of an Omnivyra credit action had come to mean two
+ * incompatible things — "the tenant pays the vendor" and "nobody has priced
+ * this" — and one boolean cannot carry both.
+ *
+ * This field separates them, so the refusal is decided by a DECLARED funding
+ * model rather than by the absence of a value. Nothing is priced here and no
+ * vendor cost is invented: it records who is billed, not how much.
+ */
+export const FUNDING_MODELS = [
+  /** The tenant's own subscription. The vendor invoices them; Omnivyra charges nothing. */
+  'tenant_provider_subscription',
+  /** Omnivyra pays the vendor, so an Omnivyra credit action is mandatory. */
+  'omnivyra_funded',
+  /** Nothing external is paid at all — operator entry, or the user's own session. */
+  'none',
+] as const;
+export type FundingModel = typeof FUNDING_MODELS[number];
+
+/**
  * Why a source can or cannot be used right now.
  *
  * `not_connected` and `credential_missing` are separated deliberately: the
@@ -88,6 +120,13 @@ export interface AcquisitionSourceDescriptor {
    * an operation Omnivyra itself performs and pays for.
    */
   readonly creditAction: string | null;
+  /**
+   * Who pays the vendor. REQUIRED, so a new source cannot be added without
+   * stating it — an omitted funding model would otherwise be indistinguishable
+   * from a tenant-funded one, which is precisely the ambiguity that produced
+   * the A3X/A3C contradiction. See `FUNDING_MODELS`.
+   */
+  readonly fundingModel: FundingModel;
   /** For `gateway_api`: the concrete vendor APIs behind it. */
   readonly gatewayProviders?: readonly GatewaySubProvider[];
   /** Lower runs first in `auto`. Deterministic, never a quality judgement. */
@@ -131,6 +170,8 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     credentialEnvVar: null,
     authorizationRequirements: ['extension_installed', 'hmac_signed_session', 'user_platform_session'],
     creditAction: null,
+    // A3Z: the extension runs in the USER's own authenticated session; no vendor is billed.
+    fundingModel: 'none',
     priority: 10,
     note:
       'Installed and operational as an ENGAGEMENT runtime: it posts LinkedIn comment/DM '
@@ -147,6 +188,8 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     credentialEnvVar: 'APOLLO_API_KEY',
     authorizationRequirements: ['api_key', 'adapter', 'tenant_provider_subscription'],
     creditAction: null,
+    // A3Z: the tenant holds the Apollo subscription and Apollo invoices them.
+    fundingModel: 'tenant_provider_subscription',
     priority: 20,
     note: 'Declared only. No adapter, no credential. Capabilities are empty because no observed API contract exists.',
   },
@@ -164,6 +207,8 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
       selected: false,
       note: 'RapidAPI is a marketplace. The specific enrichment API has not been chosen, so no adapter can exist.',
     }],
+    // A3Z: the tenant holds the RapidAPI subscription and RapidAPI invoices them.
+    fundingModel: 'tenant_provider_subscription',
     priority: 30,
     note: 'Gateway declared only. Capabilities are empty until a concrete sub-provider is selected.',
   },
@@ -175,6 +220,8 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     credentialEnvVar: 'ZOOMINFO_API_KEY',
     authorizationRequirements: ['api_key', 'adapter', 'tenant_provider_subscription'],
     creditAction: null,
+    // A3Z: the tenant holds the ZoomInfo subscription and ZoomInfo invoices them.
+    fundingModel: 'tenant_provider_subscription',
     priority: 40,
     note: 'Declared only. No adapter, no credential.',
   },
@@ -208,6 +255,8 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     // Ordering only, with no effect while the source is unusable. It reflects
     // A3I's finding that Clearbit has the most complete existing contract, so
     // `auto` would reach it first once one is actually built.
+    // A3Z: the tenant holds the Clearbit subscription and Clearbit invoices them.
+    fundingModel: 'tenant_provider_subscription',
     priority: 25,
     note:
       'Company firmographics keyed on domain. Requires the tenant\'s own Clearbit '
@@ -222,6 +271,8 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     credentialEnvVar: 'CRUNCHBASE_API_KEY',
     authorizationRequirements: ['api_key', 'adapter', 'tenant_provider_subscription'],
     creditAction: null,
+    // A3Z: the tenant holds the Crunchbase subscription and Crunchbase invoices them.
+    fundingModel: 'tenant_provider_subscription',
     priority: 50,
     note: 'Declared only. Account firmographics. No adapter, no credential.',
   },
@@ -237,6 +288,8 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     credentialEnvVar: null,
     authorizationRequirements: [],
     creditAction: null,
+    // A3Z: an operator typed it; no vendor is contacted and nothing is billed.
+    fundingModel: 'none',
     priority: 90,
     note: 'Operator-entered records through the released ingestion routes. No provider is contacted, so nothing is charged.',
   },
