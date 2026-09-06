@@ -43,8 +43,23 @@ import {
   recordAttempt,
   completeAttempt,
   nextAttemptNumber,
+  claimEnrichmentWork,
   NON_CALLING_ATTEMPT_OUTCOMES,
 } from './attempts';
+
+/**
+ * A4N — raised when the work item is already claimed by another worker.
+ *
+ * Distinct from `AttemptRecordRequiredError`: nothing failed. Another worker
+ * legitimately holds the live slot, and the correct response is to do nothing.
+ * A scheduler treats this as a no-op tick, not an incident.
+ */
+export class EnrichmentWorkClaimedError extends Error {
+  constructor(detail: string) {
+    super(`enrichment work is already claimed: ${detail}`);
+    this.name = 'EnrichmentWorkClaimedError';
+  }
+}
 
 /**
  * A4J (B1) — raised when a fail-closed caller could not establish the attempt.
@@ -71,6 +86,8 @@ export interface AttemptRecorder {
   readonly record?: typeof recordAttempt;
   readonly complete?: typeof completeAttempt;
   readonly nextNumber?: typeof nextAttemptNumber;
+  /** A4N — the atomic claim, used only when `options.lease` is supplied. */
+  readonly claim?: typeof claimEnrichmentWork;
   readonly now?: () => string;
 }
 
@@ -106,23 +123,80 @@ export async function executeEnrichmentRecorded(
      * recorded ⇒ the provider may be called; not recorded ⇒ it must not be.
      */
     requireAttemptRecord?: boolean;
+    /**
+     * A4N — claim the work item before executing.
+     *
+     * Presence switches attempt creation from a plain INSERT to an atomic
+     * CLAIM arbitrated by the live partial unique index, so two concurrent
+     * workers cannot both reach a provider for the same (tenant, entity,
+     * provider). Claiming implies fail-closed: losing the claim, or failing to
+     * establish it, both stop execution before any transport.
+     *
+     * Absent on the manual, user-initiated path, which does not claim and
+     * keeps A4A/A4J behaviour exactly.
+     */
+    lease?: {
+      /** Worker/process identifier. Never a credential, never a user. */
+      readonly claimedBy: string;
+      /** How long the lease is held before an abandoned attempt may be taken. */
+      readonly ttlMs: number;
+    };
   } = {},
 ): Promise<RecordedEnrichmentResult> {
   const rec = options.recorder ?? {};
   const record = rec.record ?? recordAttempt;
   const complete = rec.complete ?? completeAttempt;
   const nextNumber = rec.nextNumber ?? nextAttemptNumber;
+  const claim = rec.claim ?? claimEnrichmentWork;
   const now = rec.now ?? (() => new Date().toISOString());
 
   const startedAt = now();
   let attemptId: string | null = null;
   let attemptNumber: number | null = null;
 
-  // ── open the attempt ──────────────────────────────────────────────────────
-  // A recording failure must NOT prevent the enrichment: the tenant asked for
-  // work, and losing the audit row is a smaller harm than refusing to do it.
-  // The failure is surfaced through a null attemptId rather than swallowed.
-  try {
+  // ── A4N: claim before anything else ───────────────────────────────────────
+  // When a lease is requested the work item is CLAIMED rather than merely
+  // recorded. The arbiter is the database's live partial unique index, not
+  // this code: of two racing workers exactly one INSERT survives. A lost claim
+  // returns here, before adapter resolution, credential resolution, duplicate
+  // suppression, cost authorisation and any egress — so the loser performs
+  // zero provider transport.
+  //
+  // This is deliberately NOT inside the fail-open try/catch below. A claim
+  // refusal is not a recording failure to be tolerated; it is the whole point.
+  if (options.lease) {
+    const startNumber = await nextNumber({
+      organizationId: request.organizationId,
+      subject: request.subject,
+      entityId: request.entityId,
+      providerId,
+    });
+    const claimedUntil = new Date(Date.parse(startedAt) + Math.max(1, options.lease.ttlMs)).toISOString();
+    const outcome = await claim({
+      organizationId: request.organizationId,
+      subject: request.subject,
+      entityId: request.entityId,
+      providerId,
+      requestedAttributes: request.attributes,
+      correlationId: request.correlationId,
+      attemptNumber: startNumber,
+      startedAt,
+      claimedBy: options.lease.claimedBy,
+      claimedUntil,
+    });
+    // `'reason' in outcome`, not `!outcome.claimed`: the root tsconfig sets
+    // `strict: false`, which disables union narrowing on a negated discriminant.
+    if ('reason' in outcome) throw new EnrichmentWorkClaimedError(outcome.detail);
+
+    attemptId = outcome.attemptId;
+    attemptNumber = outcome.attemptNumber;
+  } else try {
+    // ── open the attempt, unclaimed ─────────────────────────────────────────
+    // The manual, user-initiated path. A recording failure must NOT prevent
+    // the enrichment: the tenant asked for work, and losing the audit row is a
+    // smaller harm than refusing to do it — unless the caller said otherwise
+    // via `requireAttemptRecord` (A4J). Surfaced as a null attemptId, never
+    // swallowed.
     attemptNumber = await nextNumber({
       organizationId: request.organizationId,
       subject: request.subject,

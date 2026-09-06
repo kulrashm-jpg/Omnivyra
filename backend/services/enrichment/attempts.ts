@@ -72,7 +72,32 @@ export interface RecordAttemptInput extends AttemptSubjectRef {
   /** 1 for a first attempt; the caller supplies the retry number. */
   readonly attemptNumber: number;
   readonly startedAt: string;
+  /**
+   * A4N — the lease, when this attempt is being claimed rather than merely
+   * recorded. Absent on the manual, user-initiated path, which does not claim.
+   */
+  readonly claimedBy?: string;
+  readonly claimedUntil?: string;
 }
+
+/**
+ * A4N — the outcome of trying to claim a work item.
+ *
+ * `claimed: false` is not an error. It is the normal answer when another
+ * worker holds the live slot, and the ONLY correct response to it is to do
+ * nothing — in particular, not to contact a provider.
+ */
+export type AttemptClaim =
+  | { readonly claimed: true; readonly attemptId: string; readonly attemptNumber: number; readonly reclaimed: boolean }
+  | { readonly claimed: false; readonly reason: 'held_by_another_worker'; readonly detail: string };
+
+/** PostgreSQL's unique-violation SQLSTATE. The arbiter's own answer. */
+const UNIQUE_VIOLATION = '23505';
+
+const isUniqueViolation = (e: unknown): boolean =>
+  typeof e === 'object' && e !== null
+  && ((e as { code?: string }).code === UNIQUE_VIOLATION
+    || /duplicate key value violates unique constraint/i.test(String((e as { message?: string }).message ?? '')));
 
 export interface CompleteAttemptInput {
   readonly organizationId: string;
@@ -176,12 +201,150 @@ export async function recordAttempt(input: RecordAttemptInput): Promise<{ attemp
     correlation_id: input.correlationId,
     provider_called: false,
     started_at: input.startedAt,
+    ...(input.claimedBy ? { claimed_by: input.claimedBy } : {}),
+    ...(input.claimedUntil ? { claimed_until: input.claimedUntil } : {}),
   };
 
   const { data, error } = await ownedDbTable('prospect_enrichment_attempts')
     .insert(row).select('id').single();
-  if (error) throw new Error(`prospect_enrichment_attempts insert failed: ${error.message}`);
+  if (error) {
+    // The SQLSTATE is preserved on the thrown error so `claimEnrichmentWork`
+    // can tell "another worker holds the live slot" from a real insert failure.
+    // Collapsing them would make a lost race indistinguishable from a broken
+    // database, and only one of those is safe to treat as a no-op.
+    throw Object.assign(
+      new Error(`prospect_enrichment_attempts insert failed: ${error.message}`),
+      { code: (error as { code?: string }).code },
+    );
+  }
   return { attemptId: (data as { id: string }).id };
+}
+
+/**
+ * A4N — claim one enrichment work item, atomically.
+ *
+ * ─── THE ARBITER IS THE DATABASE, NOT THIS FUNCTION ───────────────────────
+ * A4J made a lost attempt-record fail closed, which stopped UNRECORDED
+ * provider calls. It did not stop two RECORDED ones: read-then-increment lets
+ * worker B compute a different attempt number and proceed in parallel. Distinct
+ * attempt numbers are two independent executions, not safe concurrency.
+ *
+ * So the claim is not a number this function chooses — it is the INSERT itself,
+ * arbitrated by the partial unique index over live (open) attempts that
+ * migration 20261016000000 adds. Of two racing workers the database rejects
+ * exactly one with 23505. There is no window in which both proceed, and no
+ * dependence on the two workers agreeing on anything.
+ *
+ * ─── RECLAIM IS A CONDITIONAL UPDATE, FOR THE SAME REASON ─────────────────
+ * A process that dies mid-execution leaves an open row (A4E, deliberately),
+ * which would otherwise hold the slot forever. Reclaiming steals it only when
+ * the lease has expired, through a conditional UPDATE whose WHERE re-checks
+ * expiry — PostgreSQL takes the row lock and re-evaluates after acquiring it,
+ * so of two racing reclaimers exactly one gets a row back. This is the same
+ * mechanism `supabaseExecutionQueue` documents for its own atomic claim.
+ *
+ * ─── IT FAILS CLOSED ──────────────────────────────────────────────────────
+ * Anything other than a definite success returns `claimed: false` or throws.
+ * A caller that cannot prove it holds the claim must not contact a provider.
+ */
+export async function claimEnrichmentWork(input: {
+  organizationId: string;
+  subject: EnrichmentSubject;
+  entityId: string;
+  providerId: string;
+  requestedAttributes: readonly string[];
+  correlationId: string;
+  attemptNumber: number;
+  startedAt: string;
+  claimedBy: string;
+  /** Lease deadline. After this an abandoned attempt may be reclaimed. */
+  claimedUntil: string;
+  /** Injected for testability; defaults to the real writers. */
+  ports?: {
+    record?: typeof recordAttempt;
+    reclaim?: typeof reclaimExpiredAttempt;
+  };
+}): Promise<AttemptClaim> {
+  requireScope(input.organizationId, input.entityId);
+  if (!input.claimedBy?.trim()) throw new Error('claimedBy is required to claim enrichment work');
+  if (!input.claimedUntil?.trim()) throw new Error('claimedUntil is required to claim enrichment work');
+
+  const record = input.ports?.record ?? recordAttempt;
+  const reclaim = input.ports?.reclaim ?? reclaimExpiredAttempt;
+
+  try {
+    const opened = await record({
+      organizationId: input.organizationId,
+      subject: input.subject,
+      entityId: input.entityId,
+      providerId: input.providerId,
+      requestedAttributes: input.requestedAttributes,
+      correlationId: input.correlationId,
+      attemptNumber: input.attemptNumber,
+      startedAt: input.startedAt,
+      claimedBy: input.claimedBy,
+      claimedUntil: input.claimedUntil,
+    });
+    return { claimed: true, attemptId: opened.attemptId, attemptNumber: input.attemptNumber, reclaimed: false };
+  } catch (err) {
+    // A real failure — not a lost race — must still fail closed, loudly.
+    if (!isUniqueViolation(err)) throw err;
+  }
+
+  // A live attempt already exists. It may be another worker's active execution,
+  // or an abandoned one whose lease has expired. Only the second may be taken.
+  const stolen = await reclaim({
+    organizationId: input.organizationId,
+    subject: input.subject,
+    entityId: input.entityId,
+    providerId: input.providerId,
+    claimedBy: input.claimedBy,
+    claimedUntil: input.claimedUntil,
+    now: input.startedAt,
+  });
+  if (stolen) {
+    return { claimed: true, attemptId: stolen.attemptId, attemptNumber: stolen.attemptNumber, reclaimed: true };
+  }
+
+  return {
+    claimed: false,
+    reason: 'held_by_another_worker',
+    detail: `a live enrichment attempt for '${input.providerId}' on this ${input.subject} is already claimed`,
+  };
+}
+
+/**
+ * A4N — take over a live attempt whose lease has expired.
+ *
+ * Returns null when there is nothing to take: no live row, or one whose lease
+ * is still valid. Never steals an active claim — the expiry comparison is in
+ * the WHERE clause, so the check and the take are one atomic statement rather
+ * than a read followed by a racing write.
+ */
+export async function reclaimExpiredAttempt(input: {
+  organizationId: string;
+  subject: EnrichmentSubject;
+  entityId: string;
+  providerId: string;
+  claimedBy: string;
+  claimedUntil: string;
+  now: string;
+}): Promise<{ attemptId: string; attemptNumber: number } | null> {
+  requireScope(input.organizationId, input.entityId);
+
+  const { data, error } = await ownedDbTable('prospect_enrichment_attempts')
+    .update({ claimed_by: input.claimedBy, claimed_until: input.claimedUntil })
+    .eq('organization_id', input.organizationId)                            // tenant — never optional
+    .eq(input.subject === 'person' ? 'person_id' : 'account_id', input.entityId)
+    .eq('provider_key', input.providerId)
+    .is('completed_at', null)                                               // live only
+    .lt('claimed_until', input.now)                                         // expired only
+    .select('id, attempt_number');
+
+  if (error) throw new Error(`prospect_enrichment_attempts reclaim failed: ${error.message}`);
+  const rows = (data ?? []) as Array<{ id: string; attempt_number: number }>;
+  if (!rows.length) return null;
+  return { attemptId: String(rows[0].id), attemptNumber: Number(rows[0].attempt_number) };
 }
 
 /**
