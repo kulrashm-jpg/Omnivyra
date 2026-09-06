@@ -46,6 +46,12 @@ export {
   defaultPersistObservation, makePersistObservation, resolveEnrichmentAccount,
   toAttributeBags, UNSAFE_ACCOUNT_OUTCOMES,
 } from './persistence';
+
+// A4J (B2) — the production duplicate-suppression read.
+export {
+  defaultFindRecentObservation, makeFindRecentObservation, pickRecentObservation,
+} from './observations';
+export type { AssertionObservationRow, AssertionReader } from './observations';
 export type { ResolvedEnrichmentTarget } from './persistence';
 
 export {

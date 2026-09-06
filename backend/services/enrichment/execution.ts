@@ -152,6 +152,14 @@ export interface ExecutePlannedFieldInput {
   /** Test seam, passed straight through to the executor. */
   readonly adapter?: EnrichmentProviderAdapter;
   readonly recorder?: AttemptRecorder;
+  /**
+   * A4J (B1) — refuse provider transport unless the attempt was recorded.
+   *
+   * Passed straight through to the recorder. Defaults to false, preserving the
+   * existing user-initiated behaviour; an automated caller sets it so that a
+   * lost attempt row can never become an unrecorded paid call.
+   */
+  readonly requireAttemptRecord?: boolean;
 }
 
 const text = (v: unknown): string | null => {
@@ -316,6 +324,7 @@ export async function executePlannedField(
     freshnessDays: input.freshnessDays,
     adapter: input.adapter,
     recorder: input.recorder,
+    requireAttemptRecord: input.requireAttemptRecord,
   });
   const { result } = recorded;
 
