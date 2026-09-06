@@ -1,5 +1,7 @@
 import { composeReport } from './reportComposerService';
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
+import type { SnapshotReport } from './snapshotReportTypes';
 import {
   listCompanyIntelligenceUnits,
   mapDecisionToIntelligenceUnit,
@@ -521,16 +523,120 @@ async function withReportTimeout<T>(label: string, promise: Promise<T>, timeoutM
   }
 }
 
-async function buildSnapshotFoundationForPerformance(params: {
+/**
+ * GAP-14 — Report 2 reads the PERSISTED Report 1 baseline.
+ *
+ * `buildSnapshotFoundationForPerformance` used to call `composeSnapshotReport()` live, which
+ * recomputed the whole of Report 1 — crawl, SERP and LLM acquisition included — every time a
+ * performance report was built. The baseline it produced was also a different object from the
+ * Report 1 the customer had actually been shown, so the two reports could disagree.
+ *
+ * Selection: the most recent COMPLETED report for the company whose stored `composed_report`
+ * carries `canonical` — the Report 1 signature. Filtering on the shape rather than hard-coding a
+ * `report_type` string keeps this correct if the monetization mapping renames the type, and
+ * performance reports (composed by `composePerformanceIntelligenceReport`) do not carry it.
+ * No new status value is invented: `completed` is the existing `ReportStatus`.
+ *
+ * When there is no completed Report 1, this returns null and the existing empty-baseline state
+ * renders. It NEVER falls back to recomposing Report 1.
+ */
+const BASELINE_CANDIDATE_LIMIT = 20;
+
+type PersistedSnapshotBaseline = {
+  reportId: string;
+  createdAt: string | null;
+  composed: Record<string, unknown>;
+};
+
+async function loadLatestCompletedSnapshotBaseline(
+  companyId: string,
+): Promise<PersistedSnapshotBaseline | null> {
+  const { data, error } = await ownedDbTable('reports')
+    .select('id, created_at, data')
+    .eq('company_id', companyId)
+    .eq('status', 'completed')
+    .order('created_at', { ascending: false })
+    .limit(BASELINE_CANDIDATE_LIMIT);
+
+  if (error || !Array.isArray(data)) return null;
+
+  for (const row of data as Array<{ id: string; created_at: string | null; data?: unknown }>) {
+    const composed = (row.data as { composed_report?: unknown } | null | undefined)?.composed_report;
+    if (composed && typeof composed === 'object' && 'canonical' in (composed as object)) {
+      return { reportId: row.id, createdAt: row.created_at ?? null, composed: composed as Record<string, unknown> };
+    }
+  }
+  return null;
+}
+
+/**
+ * `digital_snapshot.topPriorities` is the canonical priority source
+ * (`SnapshotReport.top_priorities` is marked deprecated in LEGACY_ELIMINATION_TRACKING).
+ * A present `digital_snapshot.topPriorities` always wins; the legacy array is read ONLY for
+ * baselines persisted before that field existed, and never overrides it.
+ *
+ * `CrossSourceOpportunity.confidence` is a three-level ordinal and the foundation field is
+ * numeric, so the levels are rendered on a coarse 30/60/90 scale. That is an ordinal rendering,
+ * not a measured percentage — no finer precision is implied or available.
+ */
+const ORDINAL_CONFIDENCE: Record<string, number> = { high: 90, medium: 60, low: 30 };
+
+function baselineTopPriorities(composed: Record<string, unknown>): PerformanceSnapshotFoundation['top_priorities'] {
+  const digital = composed.digital_snapshot as { topPriorities?: unknown } | null | undefined;
+  const canonicalPriorities = Array.isArray(digital?.topPriorities) ? digital!.topPriorities : null;
+
+  if (canonicalPriorities && canonicalPriorities.length > 0) {
+    return canonicalPriorities.slice(0, 3).map((raw) => {
+      const item = raw as {
+        title?: string; problem?: string; businessImplication?: string;
+        expectedImpact?: string; confidence?: string;
+      };
+      return {
+        title: item.title || 'Priority action',
+        why_now: item.problem || item.businessImplication || 'This action came from the Digital Snapshot foundation.',
+        impact: item.expectedImpact || 'Authority and conversion readiness',
+        confidence: ORDINAL_CONFIDENCE[String(item.confidence)] ?? 0,
+      };
+    });
+  }
+
+  // Legacy compatibility: baselines that predate `digital_snapshot.topPriorities`.
+  const legacy = composed.top_priorities;
+  if (!Array.isArray(legacy)) return [];
+  return legacy.slice(0, 3).map((raw) => {
+    const item = raw as {
+      title?: string; why_now?: string; expected_outcome?: string; impact?: string;
+      expected_upside?: string; confidence_score?: number; impact_score?: number;
+    };
+    return {
+      title: item.title || 'Priority action',
+      why_now: item.why_now || item.expected_outcome || 'This action came from the Digital Snapshot foundation.',
+      impact: item.impact || item.expected_upside || 'Authority and conversion readiness',
+      confidence: (() => {
+        const value = Number(item.confidence_score ?? item.impact_score ?? 0);
+        return value > 0 && value <= 1 ? value * 100 : value;
+      })(),
+    };
+  });
+}
+
+/** Exported so the GAP-14 baseline-read contract can be tested directly. */
+export async function buildSnapshotFoundationForPerformance(params: {
   companyId: string;
   resolvedInput?: ResolvedReportInput | null;
 }): Promise<PerformanceSnapshotFoundation | null> {
   try {
-    const { composeSnapshotReport } = await import('./snapshotReportService');
-    const snapshot = await composeSnapshotReport(params.companyId, {
-      resolvedInput: params.resolvedInput ?? null,
-      readiness: null,
-    });
+    const baseline = await loadLatestCompletedSnapshotBaseline(params.companyId);
+    if (!baseline) {
+      console.warn('[performance-report][snapshot-foundation-absent]', {
+        company_id: params.companyId,
+        reason: 'no completed Digital Snapshot is persisted for this company',
+      });
+      return null;
+    }
+    // `composed_report` IS the stored composed snapshot, so it has the same shape the live call
+    // returned and every downstream read below is unchanged.
+    const snapshot = baseline.composed as unknown as SnapshotReport;
     const canonical = snapshot.canonical;
     const overview = canonical?.authority_overview;
     const executive = canonical?.executive_insights;
@@ -581,15 +687,7 @@ async function buildSnapshotFoundationForPerformance(params: {
         'Primary authority constraint is still being classified.',
       market_position: snapshot.company_context?.market_position_statement ?? snapshot.company_context?.market_position ?? null,
       positioning: snapshot.company_context?.positioning ?? snapshot.company_context?.positioning_narrative ?? null,
-      top_priorities: (snapshot.top_priorities ?? []).slice(0, 3).map((item) => ({
-        title: item.title || 'Priority action',
-        why_now: item.why_now || item.expected_outcome || 'This action came from the Digital Snapshot foundation.',
-        impact: item.impact || item.expected_upside || 'Authority and conversion readiness',
-        confidence: (() => {
-          const value = Number(item.confidence_score ?? item.impact_score ?? 0);
-          return value > 0 && value <= 1 ? value * 100 : value;
-        })(),
-      })),
+      top_priorities: baselineTopPriorities(baseline.composed),
       pillar_scores: Object.values(canonical?.pillars ?? {}).slice(0, 5).map((pillar) => ({
         label: pillar.label,
         value: pillar.score.value,
