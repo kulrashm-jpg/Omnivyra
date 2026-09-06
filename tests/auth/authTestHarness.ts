@@ -4,21 +4,59 @@ import path from 'node:path';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import {
+  assertNonProductionE2EEnvironment,
+  loadE2EEnvFile,
+  type E2EGuardResult,
+} from './e2eEnvironmentGuard';
 
-dotenv.config({ path: '.env.local' });
+// NEVER load .env.local here: it points at the PRODUCTION Supabase project and
+// this suite creates and deletes real users. The E2E environment comes from an
+// E2E-specific file (default .env.e2e, gitignored) or from CI-supplied env vars.
+// There is deliberately no fallback to .env.local.
+loadE2EEnvFile(dotenv.config);
 
 export const BASE_URL = process.env.AUTH_E2E_BASE_URL || 'http://127.0.0.1:3000';
 export const TEST_PASSWORD = 'CodexTest9!';
 const DEFAULT_TIMEOUT_MS = Number(process.env.AUTH_E2E_TIMEOUT_MS ?? 120_000);
 const POLL_INTERVAL_MS = 250;
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseUrl =
+  process.env.E2E_SUPABASE_URL ||
+  process.env.E2E_NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey =
+  process.env.E2E_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-assert(supabaseUrl, 'SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL is required for auth E2E tests');
-assert(serviceRoleKey, 'SUPABASE_SERVICE_ROLE_KEY is required for auth E2E tests');
+// Fail-closed: refuses production, empty, malformed, local and placeholder
+// targets. Runs at module load, i.e. before any admin API call is reachable.
+// This replaces the two `assert` calls that only checked for presence — a
+// present-but-production URL was exactly the hazard.
+export const e2eEnvironment: E2EGuardResult = assertNonProductionE2EEnvironment({
+  supabaseUrl,
+  serviceRoleKey,
+  expectedProjectRef: process.env.AUTH_E2E_EXPECTED_PROJECT_REF ?? undefined,
+});
 
-export const adminSupabase = createClient(supabaseUrl, serviceRoleKey, {
+/**
+ * Re-asserts the guard immediately before every privileged admin call, so that
+ * removing the module-level assertion alone cannot re-open the production path.
+ */
+function assertGuardedAdminCall(operation: string): void {
+  try {
+    assertNonProductionE2EEnvironment({
+      supabaseUrl,
+      serviceRoleKey,
+      expectedProjectRef: process.env.AUTH_E2E_EXPECTED_PROJECT_REF ?? undefined,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`refusing admin operation "${operation}": ${reason}`);
+  }
+}
+
+export const adminSupabase = createClient(supabaseUrl as string, serviceRoleKey as string, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
@@ -57,6 +95,7 @@ export async function warmAuthRoutes(): Promise<void> {
 }
 
 export async function createConfirmedUser(email: string): Promise<string> {
+  assertGuardedAdminCall('createUser');
   const { data, error } = await adminSupabase.auth.admin.createUser({
     email,
     password: TEST_PASSWORD,
@@ -68,6 +107,7 @@ export async function createConfirmedUser(email: string): Promise<string> {
 }
 
 export async function createSignupLink(email: string): Promise<string> {
+  assertGuardedAdminCall('generateLink');
   const { data, error } = await adminSupabase.auth.admin.generateLink({
     type: 'signup',
     email,
@@ -80,6 +120,7 @@ export async function createSignupLink(email: string): Promise<string> {
 }
 
 export async function cleanupUsersByEmail(emails: string[]): Promise<void> {
+  assertGuardedAdminCall('listUsers/deleteUser');
   for (const email of emails) {
     const { data } = await adminSupabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
     const user = data?.users.find((candidate) => candidate.email?.toLowerCase() === email.toLowerCase());
