@@ -48,6 +48,7 @@ import {
 } from '../snapshotReport/canonicalScoreState';
 import type { SnapshotReport } from '../snapshotReportTypes';
 import { buildAICitationMatrix, deriveCitationQueries } from '../intelligence/aiCitationMatrixService';
+import { resolveObservedBrandName } from '../intelligence/observedBrandName';
 import {
   getKnowledgeGraphProvider,
   getAuthorityInflowProvider,
@@ -447,6 +448,16 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   // — adapters return measured results only when their env flags are on.
   const brandName = options?.brandName ?? snapshot.company_context.company_name;
   const domain = options?.domain ?? snapshot.company_context.domain;
+  // GAP-17: the AI surface needs a brand LABEL to phrase its branded queries ("What is X?").
+  // When the profile carries no company name the `branded` class produced no queries at all and
+  // every one of its cells was recorded unavailable — a measurement gap, not a provider failure.
+  // Fall back to the name the site itself declares on the pages already crawled for this domain.
+  // Deliberately scoped to the AI-surface subsystem: the knowledge-graph and trust providers below
+  // keep using the profile-declared `brandName`, so entity resolution cannot shift on a site label.
+  const aiSurfaceBrandName = brandName ?? await resolveObservedBrandName({
+    companyId: options?.companyId ?? null,
+    domain,
+  });
   // BETA-EVIDENCE-EXEC-001: maximise AI query coverage from ALREADY-AVAILABLE evidence. The competitor engine
   // has already detected named peers onto the snapshot; reuse them for the `competitive` query class instead
   // of relying only on user-supplied competitors. Reuse only — no fabrication, no new detection, no scoring
@@ -456,7 +467,7 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
     .filter((n) => n.length > 0);
   const competitorsForQueries = [...new Set([...(options?.competitors ?? []), ...detectedCompetitors])].slice(0, 5);
   const queries = deriveCitationQueries({
-    brandName,
+    brandName: aiSurfaceBrandName,
     domain,
     category: options?.category ?? null,
     competitors: competitorsForQueries,
@@ -476,7 +487,7 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
     trajectoryResult,
     commercialResult,
   } = await (async () => {
-    const matrix = await buildAICitationMatrix({ brandName, domain, queries });
+    const matrix = await buildAICitationMatrix({ brandName: aiSurfaceBrandName, domain, queries });
 
     const knowledgeGraphProvider = getKnowledgeGraphProvider();
     const entityResult = await knowledgeGraphProvider.lookup({
