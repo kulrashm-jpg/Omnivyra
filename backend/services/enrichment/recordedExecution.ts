@@ -33,7 +33,12 @@ import {
   type ExecuteEnrichmentResult,
   ENRICHMENT_EXECUTOR_VERSION,
 } from './providers/execute';
-import type { EnrichmentProviderAdapter, EnrichmentRequest } from './providers/contract';
+// Direct, not through `./providers` — that barrel registers adapters on import,
+// and the recorder must not cause registration as a side effect of being loaded.
+import { getProvider } from './providers/registry';
+import type {
+  EnrichmentOutcome, EnrichmentProviderAdapter, EnrichmentRequest,
+} from './providers/contract';
 import {
   recordAttempt,
   completeAttempt,
@@ -111,31 +116,94 @@ export async function executeEnrichmentRecorded(
     attemptNumber = null;
   }
 
-  // ── the existing executor, unchanged ──────────────────────────────────────
-  const result = await executeEnrichment(request, providerId, ports, {
-    freshnessDays: options.freshnessDays,
-    adapter: options.adapter,
-  });
+  // ── observe transport (A4E) ───────────────────────────────────────────────
+  // The executor can throw AFTER `adapter.enrich` has already succeeded —
+  // `persistObservation` and `releaseCost` are both unguarded. When it does,
+  // there is no result to read `providerCalled` from, and the exception cannot
+  // say whether egress happened: a persistence failure and a credential-store
+  // failure both arrive as a thrown Error. Inferring from the message would
+  // make "how many paid calls did this tenant make" depend on string matching.
+  //
+  // So the truth is taken from the one event that defines it — `enrich()` being
+  // entered. The adapter the executor would have resolved is resolved here and
+  // passed back through the existing `options.adapter` seam, wrapped so that
+  // entering it flips the flag. The executor is still unmodified, still makes
+  // exactly one call, and still sees an adapter with identical behaviour.
+  const baseAdapter = options.adapter ?? getProvider(providerId);
+  let providerCalled = false;
+  const observed: EnrichmentProviderAdapter | undefined = baseAdapter
+    ? {
+      ...baseAdapter,
+      enrich: (req) => {
+        // Set BEFORE awaiting: transport has been initiated, which is exactly
+        // what the executor itself reports when `enrich` throws.
+        providerCalled = true;
+        return baseAdapter.enrich(req);
+      },
+    }
+    : undefined;   // no adapter registered — the executor answers not_implemented
 
-  // ── close it ──────────────────────────────────────────────────────────────
-  if (attemptId) {
+  // ── close the attempt, on every exit ──────────────────────────────────────
+  // Best-effort: a recorder that cannot write must not turn a completed
+  // enrichment into a failure, nor replace the caller's error with its own.
+  const close = async (fields: {
+    outcome: EnrichmentOutcome | null;
+    providerCalled: boolean;
+    sourceRecordId?: string | null;
+    attributesReturned?: readonly string[];
+    detail: string | null;
+  }): Promise<void> => {
+    if (!attemptId) return;
     try {
       await complete({
         organizationId: request.organizationId,
         attemptId,
-        outcome: result.outcome,
-        providerCalled: result.providerCalled,
-        sourceRecordId: result.sourceRecordId,
-        attributesReturned: result.attributesReturned,
-        detail: result.reason,
+        sourceRecordId: null,
+        ...fields,
         executorVersion: ENRICHMENT_EXECUTOR_VERSION,
         completedAt: now(),
       });
     } catch {
-      // Left open deliberately. An open row is a truthful "started, end
-      // unknown"; inventing a completion would be worse than the gap.
+      // Left open. An open row is a truthful "started, end unknown"; inventing
+      // a completion would be worse than the gap.
     }
+  };
+
+  let result: ExecuteEnrichmentResult;
+  try {
+    result = await executeEnrichment(request, providerId, ports, {
+      freshnessDays: options.freshnessDays,
+      adapter: observed,
+    });
+  } catch (err) {
+    // G1. The provider may already have been contacted and the tenant's quota
+    // already spent. Leaving the row open with its insert-time
+    // `provider_called: false` would tell a future retry loop that no call was
+    // made, and it would spend that quota a second time — the precise harm the
+    // attempt record exists to prevent.
+    //
+    // `outcome` stays null: the provider issued no verdict, and every value in
+    // ENRICHMENT_OUTCOMES describes either what a provider said or a refusal we
+    // made before reaching one. Borrowing `provider_unavailable` would blame
+    // the vendor for our own persistence failure. See `CompleteAttemptInput`.
+    await close({
+      outcome: null,
+      providerCalled,
+      detail: `execution failed after ${providerCalled ? 'the provider was called' : 'no provider call'}: `
+        + (err instanceof Error ? err.message : String(err)),
+    });
+    throw err;   // the original failure, unchanged and unswallowed
   }
+
+  await close({
+    outcome: result.outcome,
+    // The executor's own answer when it has one; it is the only thing that
+    // knows whether a duplicate was suppressed before egress.
+    providerCalled: result.providerCalled,
+    sourceRecordId: result.sourceRecordId,
+    attributesReturned: result.attributesReturned,
+    detail: result.reason,
+  });
 
   return { result, attemptId, attemptNumber };
 }
