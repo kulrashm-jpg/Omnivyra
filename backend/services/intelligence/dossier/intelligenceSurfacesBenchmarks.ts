@@ -486,7 +486,19 @@ export function buildDataSourceStatusPanels(report: CanonicalReport): DataSource
       status: statusFromScore(trustCoherence),
       status_label: '',
       current_state: trustCoherence.state === 'measured'
-        ? `Trust coherence reads ${trustCoherence.value}/100 across consistency, review, and expertise signals.`
+        // GAP-20 — name the evidence that actually produced the number.
+        //
+        // This read "across consistency, review, and expertise signals", which tells the customer
+        // review evidence contributed. It does not: `trust_coherence` is measured from the
+        // Brand Intelligence engine's on-site brand-health proxy — one observation, `brand_health`,
+        // with `sources: ["crawler"]` — while `review_sources` holds zero rows. The VALUE was never
+        // wrong; only the sentence describing where it came from was.
+        //
+        // The replacement reuses the canonical contract's own phrasing for this dimension
+        // ("Measured from on-site brand-health evidence", canonicalReportTypes.ts) rather than
+        // inventing a second vocabulary for the same thing. `what_unlocks` below still names review
+        // parity — correctly, as something not yet contributing.
+        ? `Trust coherence reads ${trustCoherence.value}/100 from on-site brand-health evidence.`
         : trustCoherence.state === 'inferred'
           ? 'Trust signals are inferred from public-facing surfaces only.'
           : 'No review or reputation source is connected yet.',
