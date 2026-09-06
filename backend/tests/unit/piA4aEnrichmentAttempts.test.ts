@@ -410,13 +410,37 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
     expect(out.attemptId).toBeNull();              // and the gap is visible
   });
 
-  it('the seam has no automatic production caller — A4A connects no trigger', () => {
+  it('the seam has no automatic production caller — nothing triggers enrichment', () => {
     const { execSync } = require('child_process');
-    const hits = execSync(
-      'git grep -l "executeEnrichmentRecorded" -- "backend" "pages" || true',
+    const callers = (symbol: string, ignore: string[]): string[] => execSync(
+      `git grep -l "${symbol}" -- "backend" "pages" || true`,
       { encoding: 'utf8' },
-    ).split('\n').filter(Boolean).filter((f: string) => !f.includes('/tests/') && !f.includes('recordedExecution.ts'));
-    expect(hits).toEqual([]);
+    ).split('\n').filter(Boolean)
+      .filter((f: string) => !f.includes('/tests/') && !ignore.some((i) => f.includes(i)));
+
+    // A4B connected the PLAN to this seam, so `execution.ts` is now a caller
+    // and must be. The invariant this test protects was never "nobody calls
+    // it" for its own sake — it is that nothing calls it AUTOMATICALLY. So the
+    // assertion moved one link down the chain rather than being relaxed: the
+    // only caller is A4B's seam, and A4B's seam is itself called by nobody.
+    expect(callers('executeEnrichmentRecorded', ['recordedExecution.ts']))
+      .toEqual(['backend/services/enrichment/execution.ts']);
+
+    // The chain therefore still terminates with no trigger: no scheduler, no
+    // cron, no queue and no route reaches it. That remains A4C's decision.
+    expect(callers('executePlannedField', ['enrichment/execution.ts'])).toEqual([]);
+
+    // And nothing along the chain schedules ITSELF. Asserted on code with
+    // comments stripped, because these modules necessarily discuss the
+    // scheduler they deliberately do not contain.
+    const fs = require('fs');
+    const path = require('path');
+    for (const rel of ['execution.ts', 'recordedExecution.ts', 'attempts.ts']) {
+      const code = fs.readFileSync(path.join(__dirname, '../../services/enrichment', rel), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/(^|[^:])\/\/.*$/gm, '$1');
+      expect(code).not.toMatch(/setInterval|setTimeout|node-cron|cron\.|bullmq|new Queue|new Worker|\.schedule\(/);
+    }
   });
 
   it('the record version is stated, so a row traces to its writer', () => {
