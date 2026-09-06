@@ -41,6 +41,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
+import { canonicalAttributeSet, toPgTextArrayLiteral } from './attributeSet';
 import type { EnrichmentOutcome, EnrichmentSubject } from './providers/contract';
 
 /** Bumped when the recording contract changes, so a row traces to its writer. */
@@ -225,11 +226,19 @@ export async function recordAttempt(input: RecordAttemptInput): Promise<{ attemp
   if (!input.providerId?.trim()) throw new Error('providerId is required');
   if (!input.correlationId?.trim()) throw new Error('correlationId is required');
 
+  // A4Y — the attribute set is part of work-item identity, so it is stored in
+  // exactly one representation. Order and duplicates are repaired (they carry
+  // no information); a malformed token throws rather than being trimmed into
+  // something the capability layer would have refused. The database enforces
+  // the same rule via `pi_canonical_attribute_set`, so a writer that skipped
+  // this would be rejected rather than silently creating a second identity.
+  const requestedAttributes = canonicalAttributeSet(input.requestedAttributes);
+
   const row = {
     organization_id: input.organizationId,
     ...subjectColumns(input.subject, input.entityId),
     provider_key: input.providerId,
-    requested_attributes: [...input.requestedAttributes],
+    requested_attributes: [...requestedAttributes],
     attempt_number: input.attemptNumber,
     correlation_id: input.correlationId,
     provider_called: false,
@@ -336,6 +345,11 @@ export async function claimEnrichmentWork(input: {
     subject: input.subject,
     entityId: input.entityId,
     providerId: input.providerId,
+    // A4Y — reclaim the SAME work item or none. Passing this was the missing
+    // half: it was already given to `record`, so an insert collided correctly,
+    // but reclaim had no attribute predicate and could take over another set's
+    // abandoned attempt.
+    requestedAttributes: input.requestedAttributes,
     claimedBy: input.claimedBy,
     claimedUntil: input.claimedUntil,
     now: input.startedAt,
@@ -388,6 +402,16 @@ export interface ReclaimAttemptInput {
   readonly subject: EnrichmentSubject;
   readonly entityId: string;
   readonly providerId: string;
+  /**
+   * A4Y — the work item being reclaimed, not merely the entity and provider.
+   *
+   * Required, and canonicalised here: without it a worker executing
+   * `[founded_year]` could take over an abandoned attempt whose row says
+   * `[employee_count]`, leaving a record that misreports what was asked. A
+   * different set — including a subset or a superset — is a DIFFERENT work
+   * item and must be opened alongside, never stolen.
+   */
+  readonly requestedAttributes: readonly string[];
   readonly claimedBy: string;
   readonly claimedUntil: string;
   readonly now: string;
@@ -424,6 +448,13 @@ const dbReclaim: AttemptReclaimPort = async (input) => {
     .eq('organization_id', input.organizationId)                            // tenant — never optional
     .eq(input.subject === 'person' ? 'person_id' : 'account_id', input.entityId)
     .eq('provider_key', input.providerId)
+    // A4Y — the work item, not just the entity and provider. A different
+    // attribute set (subset and superset included) is different work and is
+    // never taken over. Rendered as a quoted PostgreSQL array literal rather
+    // than joined bare, so an element containing a comma or quote cannot
+    // silently widen or narrow which row matches.
+    .filter('requested_attributes', 'eq',
+      toPgTextArrayLiteral(canonicalAttributeSet(input.requestedAttributes)))
     .is('completed_at', null);                                              // live only
 
   // Expired lease, OR — only when the caller supplied a cutoff — an unleased
@@ -521,6 +552,12 @@ export async function listAttempts(input: {
   subject: EnrichmentSubject;
   entityId: string;
   providerId?: string;
+  /**
+   * A4Y — narrow to one work item. Omitted, the read is unchanged: the whole
+   * attempt history for this entity, across every attribute set. Supplied, it
+   * is the history of ONE work item, which is what `nextAttemptNumber` needs.
+   */
+  requestedAttributes?: readonly string[];
   limit?: number;
 }): Promise<readonly EnrichmentAttemptRow[]> {
   requireScope(input.organizationId, input.entityId);
@@ -531,6 +568,10 @@ export async function listAttempts(input: {
     .eq(input.subject === 'person' ? 'person_id' : 'account_id', input.entityId);
 
   if (input.providerId) query = query.eq('provider_key', input.providerId);
+  if (input.requestedAttributes) {
+    query = query.filter('requested_attributes', 'eq',
+      toPgTextArrayLiteral(canonicalAttributeSet(input.requestedAttributes)));
+  }
 
   const { data, error } = await query
     .order('started_at', { ascending: false })
@@ -555,16 +596,26 @@ export async function listAttempts(input: {
 }
 
 /**
- * The next attempt number for one (tenant, entity, provider).
+ * The next attempt number for one WORK ITEM — (tenant, entity, provider,
+ * canonical attribute set).
  *
  * Arithmetic over recorded history, not a policy: it says which number a retry
  * WOULD carry, never whether a retry should happen.
+ *
+ * ─── WHY THE ATTRIBUTE SET BELONGS HERE (A4Y) ─────────────────────────────
+ * Scoped to the entity alone, the first ever attempt at `[founded_year]` would
+ * be numbered 2 merely because `[employee_count]` had been tried once, and
+ * `attempt_number` would stop meaning "the Nth try of this work item" — making
+ * a per-work-item retry budget underivable from the record. Scoped to the work
+ * item, set A and set B each legitimately start at 1, which is exactly what the
+ * A4A unique indexes now permit.
  */
 export async function nextAttemptNumber(input: {
   organizationId: string;
   subject: EnrichmentSubject;
   entityId: string;
   providerId: string;
+  requestedAttributes: readonly string[];
 }): Promise<number> {
   const prior = await listAttempts({ ...input, limit: 1 });
   return prior.length ? prior[0].attemptNumber + 1 : 1;

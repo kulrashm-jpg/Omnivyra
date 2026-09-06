@@ -28,10 +28,21 @@ jest.mock('../../db/writeOwner', () => ({
     let order: { col: string; asc: boolean } | null = null;
     let limit = 1000;
 
+    // A4Y — `requested_attributes` is a text[] column filtered through a
+    // PostgreSQL array literal, so it is compared as one rather than by the
+    // reference equality the scalar filters use.
+    const arrayFilters: Record<string, string> = {};
+    const literal = (v: unknown): string =>
+      (Array.isArray(v) && v.length
+        ? `{${v.map((e) => `"${String(e).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join(',')}}`
+        : '{}');
+
     const matches = (r: Record<string, unknown>) =>
-      Object.entries(filters).every(([k, v]) => r[k] === v);
+      Object.entries(filters).every(([k, v]) => r[k] === v)
+      && Object.entries(arrayFilters).every(([k, v]) => literal(r[k]) === v);
 
     const q: Record<string, unknown> = {};
+    q.filter = (col: string, _op: string, val: string) => { arrayFilters[col] = val; return q; };
     q.insert = (p: Record<string, unknown>) => { mode = 'insert'; payload = p; return q; };
     q.update = (p: Record<string, unknown>) => { mode = 'update'; payload = p; return q; };
     q.select = () => q;
@@ -185,7 +196,11 @@ describe('A4A — history is preserved', () => {
       providerCalled: true, detail: 'HTTP 500', completedAt: NOW,
     });
 
-    const n = await nextAttemptNumber({ organizationId: ORG_A, subject: 'account', entityId: ACCOUNT, providerId: 'clearbit' });
+    // A4Y — numbering is per WORK ITEM, so the set `open()` used must be named.
+    const n = await nextAttemptNumber({
+      organizationId: ORG_A, subject: 'account', entityId: ACCOUNT,
+      providerId: 'clearbit', requestedAttributes: ['employee_count'],
+    });
     expect(n).toBe(2);
 
     const second = await open({ attemptNumber: n, correlationId: 'corr-2' });
@@ -202,14 +217,16 @@ describe('A4A — history is preserved', () => {
 
   it('the first attempt number is 1 and is derived from history, not invented', async () => {
     await expect(nextAttemptNumber({
-      organizationId: ORG_A, subject: 'account', entityId: ACCOUNT, providerId: 'clearbit',
+      organizationId: ORG_A, subject: 'account', entityId: ACCOUNT,
+      providerId: 'clearbit', requestedAttributes: ['employee_count'],
     })).resolves.toBe(1);
   });
 
   it('attempt numbering is per provider — one provider’s history does not advance another’s', async () => {
     await open({ providerId: 'clearbit' });
     await expect(nextAttemptNumber({
-      organizationId: ORG_A, subject: 'account', entityId: ACCOUNT, providerId: 'apollo',
+      organizationId: ORG_A, subject: 'account', entityId: ACCOUNT,
+      providerId: 'apollo', requestedAttributes: ['employee_count'],
     })).resolves.toBe(1);
   });
 
