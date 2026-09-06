@@ -77,7 +77,18 @@ export interface RecordAttemptInput extends AttemptSubjectRef {
 export interface CompleteAttemptInput {
   readonly organizationId: string;
   readonly attemptId: string;
-  readonly outcome: EnrichmentOutcome;
+  /**
+   * The provider's verdict, or `null` when there is none to record.
+   *
+   * A4E: null is not "unknown", it is "no provider verdict exists" — the
+   * execution failed on OUR side (canonical persistence, cost release) after
+   * the provider had already answered. Every value in `ENRICHMENT_OUTCOMES`
+   * describes either what the provider said or a refusal we made before
+   * contacting them, so none of them can name this without blaming the vendor
+   * for our failure. The column is already nullable; `completed_at` being set
+   * is what distinguishes "finished with no verdict" from "still in flight".
+   */
+  readonly outcome: EnrichmentOutcome | null;
   readonly providerCalled: boolean;
   readonly sourceRecordId?: string | null;
   readonly attributesReturned?: readonly string[];
