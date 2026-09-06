@@ -119,6 +119,11 @@ function adopt(
     status: check.status,
     detail: check.detail ?? null,
     engine,
+    // GAP-11A — carried across only when the engine supplied them, and never for a check that was
+    // not evaluated: `not_evaluable` means no data was read, so it can have observed no pages.
+    ...(check.status !== 'not_evaluable' && check.examples && check.examples.length > 0
+      ? { examples: check.examples.map((example) => ({ url: example.url })) }
+      : {}),
   }));
 }
 

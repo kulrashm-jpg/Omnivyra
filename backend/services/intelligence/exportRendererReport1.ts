@@ -747,6 +747,22 @@ export function renderWebsiteChecks(
   const statusPill = (status: WebsiteCheck['status']): string =>
     `<span class="ds-pill"${status === 'not_evaluable' ? ' style="opacity:0.6;"' : ''}>${escape(STATUS_LABEL[status])}</span>`;
 
+  // GAP-11A — the pages behind the count, for the checks that retained them. Rendered inline with
+  // the check rather than as a separate list, because the URLs are only meaningful as the answer
+  // to "which pages produced that number?". Labelled "Example pages" and never presented as the
+  // complete set: the producer caps the list, so calling it exhaustive would overstate it.
+  const examples = (check: WebsiteCheck): string => {
+    const rows = check.examples ?? [];
+    if (rows.length === 0) return '';
+    return `
+      <div style="margin-top:1.5mm; font-size:9.5pt; color:#475569;">
+        <span style="color:#64748b;">Example pages</span>
+        <ul style="margin:1mm 0 0; padding-left:4mm;">
+          ${rows.map((example) => `<li style="margin:0.4mm 0;">${escape(example.url)}</li>`).join('')}
+        </ul>
+      </div>`;
+  };
+
   const row = (check: WebsiteCheck): string => `
     <div class="ds-methodology-row">
       <dt class="ds-methodology-label">${escape(check.label)} ${statusPill(check.status)}</dt>
@@ -754,7 +770,7 @@ export function renderWebsiteChecks(
         check.status === 'not_evaluable'
           ? `<span style="color:#64748b;">${escape(check.detail || 'No stored data for this check on the pages read.')}</span>`
           : escape(check.detail || 'Evaluated against the pages read.')
-      }</dd>
+      }${check.status === 'not_evaluable' ? '' : examples(check)}</dd>
     </div>`;
 
   return `

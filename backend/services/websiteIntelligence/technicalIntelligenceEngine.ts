@@ -28,9 +28,40 @@ export interface TechnicalIntelligence {
   platformEvidence?: Evidence[];
 }
 
+/**
+ * GAP-11A — how many example pages a check may show. Small and fixed: enough to act on, never
+ * enough to read as an exhaustive list of everything affected.
+ */
+const MAX_CHECK_EXAMPLES = 5;
+
 export function scoreTechnicalIntelligence(pages: PageRow[], nowMs: number): TechnicalIntelligence {
   const checks: CheckResult[] = [];
-  const C = (key: string, label: string, status: CheckResult['status'], score: number | null, detail?: string) => checks.push({ key, label, status, score, detail });
+  const C = (
+    key: string,
+    label: string,
+    status: CheckResult['status'],
+    score: number | null,
+    detail?: string,
+    examples?: CheckResult['examples'],
+  ) => checks.push({ key, label, status, score, detail, ...(examples && examples.length > 0 ? { examples } : {}) });
+
+  /**
+   * GAP-11A — bounded, deterministic example pages taken from rows the check ALREADY filtered.
+   *
+   * The counts below were computed as `pages.filter(predicate).length`; the only change is that
+   * the filtered array is now named so its rows can be shown. Same predicate, same count — the
+   * calculation is untouched, the rows simply stop being discarded.
+   *
+   * Ordering is by URL, not by crawl order, so two runs over the same corpus produce the same
+   * examples regardless of when each page happened to be fetched. Deduplicated, capped, and
+   * empty when nothing was affected — an observed zero must not acquire examples.
+   */
+  const examplesFrom = (affected: PageRow[]): CheckResult['examples'] => {
+    const urls = [...new Set(affected.map((p) => p.url).filter((u): u is string => Boolean(u)))]
+      .sort()
+      .slice(0, MAX_CHECK_EXAMPLES);
+    return urls.length > 0 ? urls.map((url) => ({ url })) : undefined;
+  };
   const pct = (n: number, d: number) => (d > 0 ? clamp((n / d) * 100) : 0);
   const metaTags = (p: PageRow) => p.crawl_metadata?.meta_tags || {};
   const anyMeta = pages.some((p) => Object.keys(metaTags(p)).length > 0);
@@ -46,10 +77,19 @@ export function scoreTechnicalIntelligence(pages: PageRow[], nowMs: number): Tec
   } else {
     const n = pages.length;
     C('https', 'HTTPS', 'pass', pct(pages.filter((p) => /^https:\/\//i.test(p.url)).length, n), 'Pages served over HTTPS');
-    const broken = pages.filter((p) => (p.http_status ?? 200) >= 400).length;
-    C('broken_links', 'Broken pages (4xx/5xx)', 'pass', clamp(100 - (broken / n) * 100), `${broken} pages returned 4xx/5xx`);
-    const redirects = pages.filter((p) => { const s = p.http_status ?? 200; return s >= 300 && s < 400; }).length;
-    C('redirect_chains', 'Redirects', 'pass', clamp(100 - (redirects / n) * 100), `${redirects} redirecting pages`);
+    // GAP-11A — the predicates and counts are unchanged; the filtered rows are simply named so the
+    // affected pages can be shown alongside the count they produced.
+    const brokenPages = pages.filter((p) => (p.http_status ?? 200) >= 400);
+    const broken = brokenPages.length;
+    C('broken_links', 'Broken pages (4xx/5xx)', 'pass', clamp(100 - (broken / n) * 100), `${broken} pages returned 4xx/5xx`, examplesFrom(brokenPages));
+    const redirectPages = pages.filter((p) => { const s = p.http_status ?? 200; return s >= 300 && s < 400; });
+    const redirects = redirectPages.length;
+    C('redirect_chains', 'Redirects', 'pass', clamp(100 - (redirects / n) * 100), `${redirects} redirecting pages`, examplesFrom(redirectPages));
+    // GAP-11A — deliberately AGGREGATE-ONLY. This check counts pages that DID return 200, so the
+    // only example set matching its population would be pages that worked, which tells a reader
+    // nothing. Showing the complement instead would put "Pages returning 200" directly above a list
+    // of 3xx/4xx/5xx URLs — a contradiction. The non-200 population is already carried, correctly
+    // matched to its own aggregate, by `redirect_chains` (3xx) and `broken_links` (4xx/5xx).
     C('crawlability', 'Crawlability', 'pass', pct(pages.filter((p) => (p.http_status ?? 200) === 200).length, n), 'Pages returning 200');
     C('meta_tags', 'Meta title + description', 'pass', pct(pages.filter((p) => p.title && p.meta_description).length, n), 'Pages with title + description');
     const titles = pages.map((p) => norm(p.title)).filter(Boolean);
@@ -61,13 +101,17 @@ export function scoreTechnicalIntelligence(pages: PageRow[], nowMs: number): Tec
     C('heading_structure', 'Heading structure (single H1)', 'pass', pct(oneH1, n), 'Pages with exactly one H1');
     const avgLinks = pages.reduce((a, p) => a + (p.internal_link_count || 0), 0) / n;
     C('internal_linking', 'Internal linking', 'pass', clamp((avgLinks / 8) * 100), `${avgLinks.toFixed(1)} avg internal links`);
-    const deep = pages.filter((p) => (p.crawl_depth ?? 0) > 3).length;
-    C('page_depth', 'Page depth', 'pass', clamp(100 - (deep / n) * 100), `${deep} pages deeper than 3 clicks`);
+    const deepPages = pages.filter((p) => (p.crawl_depth ?? 0) > 3);
+    const deep = deepPages.length;
+    C('page_depth', 'Page depth', 'pass', clamp(100 - (deep / n) * 100), `${deep} pages deeper than 3 clicks`, examplesFrom(deepPages));
     // Meta-tag derived (captured only when the page exposes <meta>)
     C('open_graph', 'Open Graph tags', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? pct(pages.filter((p) => Object.keys(metaTags(p)).some((k) => k.startsWith('og:'))).length, n) : null);
     C('twitter_cards', 'Twitter Cards', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? pct(pages.filter((p) => Object.keys(metaTags(p)).some((k) => k.startsWith('twitter:'))).length, n) : null);
-    const noindex = pages.filter((p) => norm(metaTags(p)['robots']).includes('noindex')).length;
-    C('indexability', 'Indexability', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? clamp(100 - (noindex / n) * 100) : null, `${noindex} pages marked noindex`);
+    const noindexPages = pages.filter((p) => norm(metaTags(p)['robots']).includes('noindex'));
+    const noindex = noindexPages.length;
+    // `anyMeta` false ⇒ the check is not_evaluable, so it carries no examples: a check that could
+    // not be evaluated must never look as though it observed pages.
+    C('indexability', 'Indexability', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? clamp(100 - (noindex / n) * 100) : null, `${noindex} pages marked noindex`, anyMeta ? examplesFrom(noindexPages) : undefined);
     // BETA-ROADMAP-EXEC-002 — now recovered by the static parser (crawl_metadata.signals). Evaluated when
     // signal data exists for this crawl; otherwise honestly not_evaluable (older crawls, no regression).
     const sn = withSig.length;

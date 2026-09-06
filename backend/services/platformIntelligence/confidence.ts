@@ -21,6 +21,15 @@ export interface CheckResult {
   status: 'pass' | 'warn' | 'fail' | 'not_evaluable';
   score: number | null;
   detail?: string;
+  /**
+   * GAP-11A — example pages from the SAME population the aggregate counted.
+   *
+   * Optional and additive: a check supplies this only when its own computation already holds the
+   * affected page rows, so no URL is ever derived, inferred or reconstructed. Absent means the
+   * check is aggregate-only — never that no pages were affected. Bounded and deduplicated by the
+   * producer; deliberately NOT presented as exhaustive.
+   */
+  examples?: Array<{ url: string }>;
 }
 
 export const clamp = (n: number, lo = 0, hi = 100): number => Math.max(lo, Math.min(hi, Math.round(n)));

@@ -776,6 +776,18 @@ export type SnapshotWebsiteCheck = {
   detail: string | null;
   /** Which deterministic engine produced it — for grouping and for honest attribution. */
   engine: 'technical' | 'content' | 'accessibility';
+  /**
+   * GAP-11A — example pages drawn from the SAME rows the aggregate counted.
+   *
+   * "3 duplicate titles" is a number a reader cannot act on; "which pages?" is the next question.
+   * Only checks whose own computation already holds the affected page rows supply this, so a URL
+   * here was always fetched and counted — never derived from a domain, path, title or count.
+   *
+   * Absent means the check is aggregate-only, NOT that nothing was affected. Bounded by the
+   * producer and deliberately not exhaustive, so the renderer must never present it as the
+   * complete list.
+   */
+  examples?: Array<{ url: string }>;
 };
 
 /** GAP-10 — presentation grouping. Names follow the section's own vocabulary, not a new taxonomy. */
