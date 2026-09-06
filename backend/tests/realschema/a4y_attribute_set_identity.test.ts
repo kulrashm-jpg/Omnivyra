@@ -71,6 +71,10 @@ beforeAll(async () => { await seedTenants(); });
 afterEach(async () => {
   await db.query(`DELETE FROM public.prospect_enrichment_attempts WHERE provider_key LIKE 'a4y-%'`);
   await db.query(`DELETE FROM public.prospect_accounts WHERE source = 'a4y'`);
+  // Case D creates a canonical person, and these suites share one database.
+  // Leaving it behind breaks any sibling asserting that a tenant holds none —
+  // `b1_social_contact_identity` does exactly that. Same cleanup as A4N's.
+  await db.query(`DELETE FROM public.unified_persons WHERE company_id = ANY($1::uuid[])`, [[ORG_A, ORG_B]]);
 });
 
 describe('A4Y — array equality is why canonical form exists', () => {
@@ -128,7 +132,13 @@ describe('A4Y — the CHECK refuses non-canonical rows', () => {
     expect(def).toBeTruthy();
     // `IS NOT DISTINCT FROM`, not `=`: a plain `=` yields NULL for malformed
     // input and a CHECK PASSES on NULL — admitting what it exists to refuse.
-    expect(def).toMatch(/IS NOT DISTINCT FROM/i);
+    //
+    // PostgreSQL normalises `x IS NOT DISTINCT FROM y` when it echoes a
+    // constraint back, storing it as `NOT (x IS DISTINCT FROM y)`. The stored
+    // form is what must be asserted; the two are the same predicate, and the
+    // rejection cases below prove the behaviour rather than the spelling.
+    expect(def).toMatch(/NOT \(requested_attributes IS DISTINCT FROM/i);
+    expect(def).not.toMatch(/requested_attributes = pi_canonical_attribute_set/i);
   });
 
   it.each([
@@ -171,9 +181,12 @@ describe('A4Y — index definitions carry the attribute set', () => {
   });
 
   it('the live indexes stay partial on completed_at IS NULL', async () => {
+    // Scoped to this table: `%_live` alone also matches unrelated indexes such
+    // as `idx_source_assertions_live`.
     const { rows } = await db.query(
       `SELECT indexname, indexdef FROM pg_indexes
-        WHERE schemaname='public' AND indexname LIKE '%_live'`);
+        WHERE schemaname='public' AND tablename='prospect_enrichment_attempts'
+          AND indexname LIKE '%_live'`);
     expect(rows).toHaveLength(2);
     rows.forEach((r) => expect(r.indexdef).toMatch(/completed_at IS NULL/));
   });
