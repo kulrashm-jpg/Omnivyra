@@ -56,6 +56,9 @@ export const FEATURE_AREA_MAP: Record<string, string> = {
   profileEnrichment:                 'Company Profile',
   profileExtraction:                 'Company Profile',
 
+  // Prospect Intelligence
+  generateProspectIcpProposal:       'Prospect Intelligence',
+
   // Recommendations
   generateRecommendation:            'Recommendations',
   generateCampaignRecommendations:   'Recommendations',

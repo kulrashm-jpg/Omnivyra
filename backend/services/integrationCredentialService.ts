@@ -159,6 +159,120 @@ export async function getConnectionCredentials(
   return credentials;
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * A3M — the TENANT-OWNED PROVIDER branch.
+ *
+ * The functions above own a credential through a website connection, three
+ * hops from the tenant (credential → website_connection → website → company).
+ * A Prospect Intelligence provider has no website, and inventing a synthetic
+ * `website_connections` row to hang one off would make that ownership chain a
+ * fiction — a credential store whose ownership proof is fiction cannot be
+ * audited. So a provider credential is owned DIRECTLY by the company.
+ *
+ * ─── WHY THE TENANT IS THE PREDICATE, NOT A PRE-CHECK ─────────────────────
+ * The connection path must LOOK UP the owner and compare it, because the
+ * caller supplies a connection id. Here the caller supplies a company id and a
+ * provider key, and both are part of the WHERE clause — so a row belonging to
+ * another tenant is not refused after being found, it is never found. There is
+ * no id a caller could supply that reaches across tenants, which is a stronger
+ * guarantee than a check, because there is no check to forget.
+ *
+ * `CrossTenantCredentialError` therefore does not arise on this path. Absence
+ * and non-entitlement are deliberately the same answer — an empty map — for
+ * the same reason `resolveCredential` returns null rather than throwing: a
+ * caller learning WHY it cannot have a secret learns something about another
+ * tenant's configuration.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** Both keys are required. A tenant-less or provider-less lookup is refused. */
+function requireProviderScope(companyId: string, providerKey: string): void {
+  if (!companyId?.trim()) {
+    throw new Error('companyId is required — credential access is never tenant-less');
+  }
+  if (!providerKey?.trim()) {
+    throw new Error('providerKey is required — a credential is never provider-less');
+  }
+}
+
+/**
+ * Store (or replace) a tenant's credentials for one provider.
+ *
+ * `rotated_at` moves on every write, so replacement and rotation are the same
+ * operation and neither leaves the previous secret behind.
+ */
+export async function upsertProviderCredentials(
+  companyId: string,
+  providerKey: string,
+  credentials: CredentialMap,
+): Promise<void> {
+  requireProviderScope(companyId, providerKey);
+
+  const entries = Object.entries(credentials).filter(([, value]) => value?.trim());
+  if (entries.length === 0) return;
+
+  const rows = entries.map(([credential_key, value]) => ({
+    company_id: companyId,
+    provider_key: providerKey,
+    connection_id: null,
+    credential_key,
+    encrypted_value: encryptCredential(value),
+    rotated_at: new Date().toISOString(),
+  }));
+
+  const { error } = await ownedDbTable('integration_credentials')
+    .upsert(rows, { onConflict: 'company_id,provider_key,credential_key' });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Read a tenant's credentials for one provider. Absent ⇒ `{}`, never a throw.
+ *
+ * A value that fails to decrypt yields '' exactly as the connection path does:
+ * a corrupt secret is an absent secret, and callers already treat an empty
+ * credential as "not configured".
+ */
+export async function getProviderCredentials(
+  companyId: string,
+  providerKey: string,
+): Promise<CredentialMap> {
+  requireProviderScope(companyId, providerKey);
+
+  const { data, error } = await ownedDbTable('integration_credentials')
+    .select('credential_key, encrypted_value')
+    .eq('company_id', companyId)
+    .eq('provider_key', providerKey);
+  if (error) throw new Error(error.message);
+
+  const credentials: CredentialMap = {};
+  for (const row of (data || []) as Array<{ credential_key: string; encrypted_value: string }>) {
+    try {
+      credentials[row.credential_key] = decryptCredential(row.encrypted_value);
+    } catch {
+      credentials[row.credential_key] = '';
+    }
+  }
+  return credentials;
+}
+
+/**
+ * Revoke a tenant's credentials for one provider.
+ *
+ * Deletes rather than blanking: an encrypted value nobody can reach is still a
+ * secret at rest, and revocation should leave nothing to reach.
+ */
+export async function deleteProviderCredentials(
+  companyId: string,
+  providerKey: string,
+): Promise<void> {
+  requireProviderScope(companyId, providerKey);
+
+  const { error } = await ownedDbTable('integration_credentials')
+    .delete()
+    .eq('company_id', companyId)
+    .eq('provider_key', providerKey);
+  if (error) throw new Error(error.message);
+}
+
 export async function mergeConnectionConfig(
   companyId: string,
   connectionId: string | null | undefined,

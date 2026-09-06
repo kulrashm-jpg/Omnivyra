@@ -22,11 +22,22 @@
  * state, not an incomplete one.
  */
 
-import { createVendorAdapter, field, fields, joinList, pick } from './vendorAdapter';
+import { createVendorAdapter, field, fields, joinList, pick, type VendorSpec } from './vendorAdapter';
 import type { CompanyEnrichmentProvider } from '../contract';
 
-/** Clearbit — firmographics and identity. Strong, well-normalised company records. */
-export const clearbitProvider: CompanyEnrichmentProvider = createVendorAdapter({
+/**
+ * Clearbit — firmographics and identity. Strong, well-normalised company records.
+ *
+ * A3U: the SPEC is exported separately from the built provider so PI can reuse
+ * the parts that are vendor facts — the host, the URL, the auth header — without
+ * inheriting the parts that are WS-4 policy: `createVendorAdapter` resolves its
+ * credential from `process.env`, which is correct for company intelligence
+ * (Omnivyra's own key doing Omnivyra's own work) and forbidden for PI, where the
+ * credential belongs to the tenant. Exporting the spec changes nothing about
+ * this provider's behaviour; `clearbitProvider` is built from it exactly as
+ * before.
+ */
+export const clearbitSpec: VendorSpec = {
   id: 'clearbit',
   credentialEnv: 'CLEARBIT_API_KEY',
   host: 'company.clearbit.com',
@@ -61,7 +72,9 @@ export const clearbitProvider: CompanyEnrichmentProvider = createVendorAdapter({
       field('country', pick(payload, 'geo', 'country'), 0.9, req.asOf),
     );
   },
-});
+};
+
+export const clearbitProvider: CompanyEnrichmentProvider = createVendorAdapter(clearbitSpec);
 
 /** Apollo — broad coverage, self-reported headcount, good hiring signal. */
 export const apolloProvider: CompanyEnrichmentProvider = createVendorAdapter({
