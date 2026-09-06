@@ -46,6 +46,26 @@ import {
   NON_CALLING_ATTEMPT_OUTCOMES,
 } from './attempts';
 
+/**
+ * A4J (B1) — raised when a fail-closed caller could not establish the attempt.
+ *
+ * Deliberately an error and not an `EnrichmentOutcome`: nothing about the
+ * provider happened, so there is no verdict to record, and A4F froze that
+ * vocabulary as provider-facing. A scheduler catches this and skips the tick.
+ */
+export class AttemptRecordRequiredError extends Error {
+  readonly cause?: unknown;
+  constructor(cause?: unknown) {
+    super(
+      'the enrichment attempt could not be recorded, and this execution requires a '
+      + 'recorded attempt before any provider call'
+      + (cause instanceof Error ? `: ${cause.message}` : ''),
+    );
+    this.name = 'AttemptRecordRequiredError';
+    this.cause = cause;
+  }
+}
+
 /** Injectable so the seam is testable without a database. */
 export interface AttemptRecorder {
   readonly record?: typeof recordAttempt;
@@ -77,6 +97,15 @@ export async function executeEnrichmentRecorded(
     freshnessDays?: number;
     adapter?: EnrichmentProviderAdapter;
     recorder?: AttemptRecorder;
+    /**
+     * A4J (B1) — refuse to contact a provider unless the attempt was recorded.
+     *
+     * Defaults to FALSE, preserving A4A's fail-open behaviour for the existing
+     * user-initiated path, which no repository evidence says should change.
+     * An automated caller sets it to true and gets the guarantee it needs:
+     * recorded ⇒ the provider may be called; not recorded ⇒ it must not be.
+     */
+    requireAttemptRecord?: boolean;
   } = {},
 ): Promise<RecordedEnrichmentResult> {
   const rec = options.recorder ?? {};
@@ -111,9 +140,27 @@ export async function executeEnrichmentRecorded(
       startedAt,
     });
     attemptId = opened.attemptId;
-  } catch {
+  } catch (err) {
     attemptId = null;
     attemptNumber = null;
+
+    // ── A4J (B1): fail closed when the caller requires a record ─────────────
+    // A4A's fail-open is right for a USER-INITIATED action: the tenant asked
+    // for work, and losing the audit row is a smaller harm than refusing it.
+    // It is wrong for an AUTOMATED one, where nobody is waiting and the row is
+    // the only thing standing between a retry loop and a second paid call.
+    //
+    // Concretely: `nextAttemptNumber` is read-then-increment, so two workers
+    // racing on the same (tenant, entity, provider) can compute the same
+    // number. The partial unique index rejects the loser's INSERT — and before
+    // this, the loser swallowed that rejection and called the provider anyway,
+    // producing two provider calls and one attempt row. The record understated
+    // the spend in exactly the case a scheduler creates.
+    //
+    // Throwing HERE is what makes it safe: this is before adapter resolution,
+    // before credential resolution, before cost authorisation and before any
+    // egress, so a caller that cannot be recorded cannot reach a provider.
+    if (options.requireAttemptRecord) throw new AttemptRecordRequiredError(err);
   }
 
   // ── observe transport (A4E) ───────────────────────────────────────────────
