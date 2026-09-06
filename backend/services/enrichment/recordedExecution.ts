@@ -175,6 +175,9 @@ export async function executeEnrichmentRecorded(
       subject: request.subject,
       entityId: request.entityId,
       providerId,
+      // A4Y — numbered within this work item, so the first try of a new
+      // attribute set is attempt 1 rather than inheriting another set's count.
+      requestedAttributes: request.attributes,
     });
     const claimedUntil = new Date(Date.parse(startedAt) + Math.max(1, options.lease.ttlMs)).toISOString();
     const outcome = await claim({
@@ -207,6 +210,7 @@ export async function executeEnrichmentRecorded(
       subject: request.subject,
       entityId: request.entityId,
       providerId,
+      requestedAttributes: request.attributes,     // A4Y — same work-item scope
     });
     const opened = await record({
       organizationId: request.organizationId,
