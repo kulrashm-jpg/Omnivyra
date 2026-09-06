@@ -292,6 +292,11 @@ export async function claimEnrichmentWork(input: {
   claimedBy: string;
   /** Lease deadline. After this an abandoned attempt may be reclaimed. */
   claimedUntil: string;
+  /**
+   * A4U — cutoff at which an UNLEASED open attempt counts as abandoned.
+   * Omitted ⇒ only an expired lease is recoverable, exactly as A4N behaved.
+   */
+  abandonedBefore?: string;
   /** Injected for testability; defaults to the real writers. */
   ports?: {
     record?: typeof recordAttempt;
@@ -334,6 +339,7 @@ export async function claimEnrichmentWork(input: {
     claimedBy: input.claimedBy,
     claimedUntil: input.claimedUntil,
     now: input.startedAt,
+    abandonedBefore: input.abandonedBefore,
   });
   if (stolen) {
     return { claimed: true, attemptId: stolen.attemptId, attemptNumber: stolen.attemptNumber, reclaimed: true };
@@ -377,38 +383,98 @@ export async function markProviderCallPending(input: {
   if (error) throw new Error(`prospect_enrichment_attempts call-state mark failed: ${error.message}`);
 }
 
-/**
- * A4N — take over a live attempt whose lease has expired.
- *
- * Returns null when there is nothing to take: no live row, or one whose lease
- * is still valid. Never steals an active claim — the expiry comparison is in
- * the WHERE clause, so the check and the take are one atomic statement rather
- * than a read followed by a racing write.
- */
-export async function reclaimExpiredAttempt(input: {
-  organizationId: string;
-  subject: EnrichmentSubject;
-  entityId: string;
-  providerId: string;
-  claimedBy: string;
-  claimedUntil: string;
-  now: string;
-}): Promise<{ attemptId: string; attemptNumber: number } | null> {
-  requireScope(input.organizationId, input.entityId);
+export interface ReclaimAttemptInput {
+  readonly organizationId: string;
+  readonly subject: EnrichmentSubject;
+  readonly entityId: string;
+  readonly providerId: string;
+  readonly claimedBy: string;
+  readonly claimedUntil: string;
+  readonly now: string;
+  /**
+   * A4U — the cutoff at which an UNLEASED open attempt counts as abandoned.
+   *
+   * Omit it and behaviour is byte-identical to A4N: only an expired lease is
+   * recoverable. Supply it and an attempt that was never leased — the manual
+   * path never leases — becomes recoverable once it started before this
+   * instant. See `reclaimExpiredAttempt` for why it is required rather than
+   * assumed.
+   */
+  readonly abandonedBefore?: string;
+}
 
-  const { data, error } = await ownedDbTable('prospect_enrichment_attempts')
+/** The atomic storage operation. Injectable so the rule is testable. */
+export type AttemptReclaimPort =
+  (input: ReclaimAttemptInput) => Promise<{ attemptId: string; attemptNumber: number } | null>;
+
+/**
+ * The conditional UPDATE. Atomic for the reason `supabaseExecutionQueue`
+ * documents: PostgreSQL takes the row lock and re-evaluates the WHERE after
+ * acquiring it, so of two racing recoverers exactly one gets a row back.
+ *
+ * It writes ONLY ownership. `provider_call_state`, `provider_called`,
+ * `outcome`, `source_record_id`, `attributes_returned`, `requested_attributes`
+ * and `correlation_id` are all untouched — recovery changes who is working on
+ * an attempt, never what is known about it. That is what keeps `unknown` from
+ * decaying into `not_called`.
+ */
+const dbReclaim: AttemptReclaimPort = async (input) => {
+  const q = ownedDbTable('prospect_enrichment_attempts')
     .update({ claimed_by: input.claimedBy, claimed_until: input.claimedUntil })
     .eq('organization_id', input.organizationId)                            // tenant — never optional
     .eq(input.subject === 'person' ? 'person_id' : 'account_id', input.entityId)
     .eq('provider_key', input.providerId)
-    .is('completed_at', null)                                               // live only
-    .lt('claimed_until', input.now)                                         // expired only
-    .select('id, attempt_number');
+    .is('completed_at', null);                                              // live only
 
+  // Expired lease, OR — only when the caller supplied a cutoff — an unleased
+  // attempt that started before it. Both alternatives sit INSIDE one WHERE, so
+  // the check and the take remain a single atomic statement.
+  const scoped = input.abandonedBefore
+    ? q.or(`claimed_until.lt.${input.now},and(claimed_until.is.null,started_at.lt.${input.abandonedBefore})`)
+    : q.lt('claimed_until', input.now);
+
+  const { data, error } = await scoped.select('id, attempt_number');
   if (error) throw new Error(`prospect_enrichment_attempts reclaim failed: ${error.message}`);
   const rows = (data ?? []) as Array<{ id: string; attempt_number: number }>;
   if (!rows.length) return null;
   return { attemptId: String(rows[0].id), attemptNumber: Number(rows[0].attempt_number) };
+};
+
+/**
+ * A4N + A4U — take over a live attempt that nobody is working on.
+ *
+ * ─── WHY AN UNLEASED ROW NEEDED A CUTOFF (A4T Blocker 1) ──────────────────
+ * A4N made the live partial unique index the concurrency arbiter, and recovery
+ * its escape hatch: `completed_at IS NULL AND claimed_until < now`. The manual
+ * path never sets `claimed_until` — it does not claim — so an abandoned manual
+ * attempt has a NULL lease, and `NULL < now()` evaluates to NULL, which a WHERE
+ * clause treats as false. The row could never be reclaimed while the live index
+ * went on blocking every future attempt for that work item. One dead manual
+ * execution, or one failed completion write, wedged it permanently.
+ *
+ * ─── WHY NOT SIMPLY RECLAIM EVERY NULL LEASE ──────────────────────────────
+ * `claimed_until IS NULL` does not mean "dead", it means "unleased" — and an
+ * unleased execution may be perfectly alive, because that is how the manual
+ * path runs. Taking every NULL-lease row on sight would steal work from a
+ * running execution and let two workers call one provider, which is precisely
+ * what A4N exists to prevent.
+ *
+ * ─── THE DISCRIMINATOR IS TEMPORAL, AND THAT IS A HEURISTIC ───────────────
+ * The schema affords exactly one way to tell a live unleased execution from a
+ * dead one: how long ago it started. So `abandonedBefore` is REQUIRED from the
+ * caller rather than assumed here — the same treatment the lease TTL already
+ * gets — and omitting it preserves A4N exactly. A caller that supplies a
+ * generous cutoff is choosing a policy, not receiving a proof: a genuinely slow
+ * manual execution can exceed any threshold. Making that distinction provable
+ * would require every attempt to carry a liveness deadline, which is a change
+ * to A4A/A4N semantics and is deliberately not made here.
+ */
+export async function reclaimExpiredAttempt(
+  input: ReclaimAttemptInput & { ports?: { reclaim?: AttemptReclaimPort } },
+): Promise<{ attemptId: string; attemptNumber: number } | null> {
+  requireScope(input.organizationId, input.entityId);
+  const run = input.ports?.reclaim ?? dbReclaim;
+  return run(input);
 }
 
 /**
