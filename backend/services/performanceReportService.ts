@@ -506,18 +506,101 @@ function renderEnterpriseMarketIntelligence(snapshot: AnalyticsEnterpriseSnapsho
   `;
 }
 
-async function withReportTimeout<T>(label: string, promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+/**
+ * Report 2 failure-path instrumentation.
+ *
+ * `composePerformanceIntelligenceReport` races composition against a 45s liveness boundary in
+ * `runDedupedReport`. When that boundary fires, the composition's local `stageTimings` object dies
+ * with the rejected promise, so `stage_timings_ms` — which is only attached to the SUCCESS and
+ * early-return payloads — is never emitted. The result is that a production timeout tells us the
+ * report took longer than 45s and nothing about WHERE the time went.
+ *
+ * The trace below is written by the stage wrappers themselves rather than assembled on the success
+ * path, so it survives the rejection. It is a diagnostic projection of the SAME measurements the
+ * existing `stageTimings` record already takes — not a second timing system, and not a change to
+ * any stage's execution, ordering, timeout or result.
+ *
+ * A stage still in flight when the boundary fires is reported as `running`, never as completed:
+ * an unfinished stage must not read as a successful one. Stages that settle after the boundary
+ * emit their own late line, so work that outlives the request stays visible.
+ */
+type StageStatus = 'running' | 'completed' | 'timed_out' | 'failed';
+
+type StageRecord = {
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+  status: StageStatus;
+  error?: string;
+};
+
+export type PerformanceStageTrace = Record<string, StageRecord>;
+
+/** Open a stage. Returns a closer that records the outcome exactly once. */
+function beginStage(trace: PerformanceStageTrace | undefined, label: string) {
+  const startedAtMs = performance.now();
+  if (trace) {
+    trace[label] = {
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      duration_ms: null,
+      status: 'running',
+    };
+  }
+  let settled = false;
+  return (status: Exclude<StageStatus, 'running'>, error?: unknown) => {
+    if (settled) return;
+    settled = true;
+    if (!trace || !trace[label]) return;
+    trace[label] = {
+      ...trace[label],
+      completed_at: new Date().toISOString(),
+      duration_ms: elapsedSince(startedAtMs),
+      status,
+      ...(error === undefined ? {} : { error: classifyStageError(error) }),
+    };
+  };
+}
+
+/** Error shape only — never the message body, which can carry customer content. */
+function classifyStageError(error: unknown): string {
+  if (error instanceof Error) return error.name || 'Error';
+  return typeof error;
+}
+
+/** Exported so the failure-path instrumentation contract can be tested directly. */
+export async function withReportTimeout<T>(
+  label: string,
+  promise: Promise<T>,
+  timeoutMs: number,
+  trace?: PerformanceStageTrace,
+): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const closeStage = beginStage(trace, label);
+  let timedOut = false;
+  // The underlying work is NOT cancelled here (unchanged behaviour). When it settles after the
+  // stage timeout, say so rather than leaving the trace claiming it was still running.
+  promise.then(
+    () => { if (timedOut) console.warn('[performance-report][stage-late-settle]', { stage: label, outcome: 'completed_after_stage_timeout' }); },
+    (error) => {
+      if (timedOut) console.warn('[performance-report][stage-late-settle]', { stage: label, outcome: 'failed_after_stage_timeout', error: classifyStageError(error) });
+      else closeStage('failed', error);
+    },
+  );
   try {
-    return await Promise.race([
+    const result = await Promise.race([
       promise,
       new Promise<null>((resolve) => {
         timer = setTimeout(() => {
+          timedOut = true;
           console.warn('[performance-report][stage-timeout]', { stage: label, timeout_ms: timeoutMs });
+          closeStage('timed_out');
           resolve(null);
         }, timeoutMs);
       }),
     ]);
+    closeStage('completed');
+    return result;
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -809,13 +892,21 @@ export function renderPerformanceReport(
 async function composePerformanceIntelligenceReportInternal(
   companyId: string,
   opts?: PerformanceIntelligenceOptions,
+  trace?: PerformanceStageTrace,
 ): Promise<PerformanceIntelligenceReportResponse> {
   const reportStarted = performance.now();
   const stageTimings: Record<string, number> = {};
   const baseStarted = performance.now();
-  const base = await composeBehaviorReport(companyId, opts);
+  // `composeBehaviorReport` carries no timeout wrapper, so it is opened and closed explicitly —
+  // an unbounded stage is exactly the one a timeout trace must be able to show as `running`.
+  const closeBehaviorReport = beginStage(trace, 'behavior_report');
+  const base = await composeBehaviorReport(companyId, opts).then(
+    (value) => { closeBehaviorReport('completed'); return value; },
+    (error) => { closeBehaviorReport('failed', error); throw error; },
+  );
   stageTimings.behavior_report = elapsedSince(baseStarted);
 
+  const closeProviderStage = beginStage(trace, 'provider_and_snapshot');
   const providerStarted = performance.now();
   const [providerReadiness, enterpriseSnapshot] = await Promise.all([
     getGoogleProviderReadiness(companyId).catch(() => null),
@@ -828,6 +919,7 @@ async function composePerformanceIntelligenceReportInternal(
     }),
   ]);
   stageTimings.provider_and_snapshot = elapsedSince(providerStarted);
+  closeProviderStage('completed');
   const analyticsHealth: AnalyticsHealthSummary | null = enterpriseSnapshot ? {
     company_id: companyId,
     generated_at: enterpriseSnapshot.generated_at,
@@ -856,7 +948,7 @@ async function composePerformanceIntelligenceReportInternal(
       provider_uptime: enterpriseSnapshot.observability.provider_uptime,
       quota_warnings: enterpriseSnapshot.observability.quota_warnings,
     },
-  } : await withReportTimeout('analytics_health', getAnalyticsHealthSummary(companyId), 8000);
+  } : await withReportTimeout('analytics_health', getAnalyticsHealthSummary(companyId), 8000, trace);
 
   if (base.status === 'no_data' || base.status === 'low_data') {
     return {
@@ -893,7 +985,7 @@ async function composePerformanceIntelligenceReportInternal(
         message: error instanceof Error ? error.message : String(error),
       });
       return null;
-    }), 15000),
+    }), 15000, trace),
     withReportTimeout('behavior_intelligence', buildPerformanceBehaviorIntelligence({
       companyId,
       currentData: reportData,
@@ -904,7 +996,7 @@ async function composePerformanceIntelligenceReportInternal(
         message: error instanceof Error ? error.message : String(error),
       });
       return null;
-    }), 15000),
+    }), 15000, trace),
     opts?.resolvedInput
       ? Promise.resolve(opts.resolvedInput)
       : withReportTimeout('resolve_competitor_input', resolveInputForCompetitorStrategy({
@@ -917,7 +1009,7 @@ async function composePerformanceIntelligenceReportInternal(
           message: error instanceof Error ? error.message : String(error),
         });
         return null;
-      }), 12000),
+      }), 12000, trace),
   ]);
   stageTimings.parallel_intelligence = elapsedSince(intelligenceStarted);
   const sharedPrimitives = buildSharedPerformanceIntelligencePrimitives({
@@ -949,7 +1041,7 @@ async function composePerformanceIntelligenceReportInternal(
     ? await withReportTimeout('snapshot_foundation', buildSnapshotFoundationForPerformance({
       companyId,
       resolvedInput,
-    }), 7000)
+    }), 7000, trace)
     : null;
   stageTimings.snapshot_foundation = elapsedSince(snapshotStarted);
   const competitivePressure = buildCompetitivePressureSafely({
@@ -1013,13 +1105,33 @@ export async function composePerformanceIntelligenceReport(
   const resolvedKey = opts?.resolvedInput
     ? `${opts.resolvedInput.resolved.companyName ?? opts.resolvedInput.profile?.name ?? 'resolved'}`
     : 'auto';
-  const { result, metadata } = await runDedupedReport({
-    key: `performance:${companyId}:${resolvedKey}`,
-    timeoutMs: 45_000,
-    run: () => composePerformanceIntelligenceReportInternal(companyId, opts),
-  });
-  return {
-    ...result,
-    concurrency: metadata,
-  } as PerformanceIntelligenceReportResponse;
+  // Failure-path instrumentation: the trace lives OUTSIDE the raced promise, so when the boundary
+  // below rejects it is still readable. Emitting is synchronous logging only — it adds no await and
+  // therefore cannot extend the request past the existing boundary. The failure is re-thrown
+  // unchanged: this records what happened, it does not handle it.
+  const trace: PerformanceStageTrace = {};
+  const startedAt = performance.now();
+  try {
+    const { result, metadata } = await runDedupedReport({
+      key: `performance:${companyId}:${resolvedKey}`,
+      timeoutMs: 45_000,
+      run: () => composePerformanceIntelligenceReportInternal(companyId, opts, trace),
+    });
+    return {
+      ...result,
+      concurrency: metadata,
+    } as PerformanceIntelligenceReportResponse;
+  } catch (error) {
+    console.warn('[performance-report][composition-failed]', {
+      company_id: companyId,
+      elapsed_ms: elapsedSince(startedAt),
+      error: classifyStageError(error),
+      // Stages left `running` were still in flight when composition failed — they are NOT
+      // completed, and the unaccounted remainder of elapsed_ms belongs to them or to work that
+      // never opened a stage at all.
+      stages_still_running: Object.entries(trace).filter(([, s]) => s.status === 'running').map(([k]) => k),
+      stage_trace: trace,
+    });
+    throw error;
+  }
 }
