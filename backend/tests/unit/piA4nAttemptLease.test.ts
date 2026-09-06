@@ -151,6 +151,9 @@ const recorder = (s: ReturnType<typeof store>) => ({
   nextNumber: s.nextNumber,
   record: s.record,
   complete: s.complete,
+  // A4Q added the pre-transport call-state marker to the recorder port set.
+  // Stubbed here like its siblings so this suite stays database-free.
+  markPending: async () => { /* proven in piA4qProviderCallState */ },
   claim: (i: Record<string, unknown>) => claimEnrichmentWork({
     ...i, ports: { record: s.record as never, reclaim: s.reclaim as never },
   } as never),
@@ -392,7 +395,10 @@ describe('A4N — A4E and A4J semantics are unchanged', () => {
     for (const rel of ['services/enrichment/attempts.ts', 'services/enrichment/recordedExecution.ts']) {
       const src = code(rel);
       expect(src).not.toMatch(/setInterval|setTimeout|node-cron|new Queue|new Worker|\.schedule\(/);
-      expect(src).not.toMatch(/next_retry_at|retry_class|prior_attempt_id|retry_policy_version|execution_status|provider_call_state/);
+      // `provider_call_state` was on this list at A4N time because it was
+      // deferred. A4Q introduced it deliberately, so it is no longer forbidden;
+      // the rest of the list remains correctly absent.
+      expect(src).not.toMatch(/next_retry_at|retry_class|prior_attempt_id|retry_policy_version|execution_status/);
     }
   });
 });

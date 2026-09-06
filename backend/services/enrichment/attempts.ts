@@ -47,6 +47,29 @@ import type { EnrichmentOutcome, EnrichmentSubject } from './providers/contract'
 export const ATTEMPT_RECORD_VERSION = 'a4a.1';
 
 /**
+ * A4Q (B3) — what we can PROVE about provider transport.
+ *
+ * Three values because the question has three answers, and the boolean
+ * `provider_called` can only carry two. Nothing here is inferred: `outcome` is
+ * null for both "never asked" and "died mid-call", `completed_at` is null for
+ * both "in flight" and "abandoned", and the row's existence proves only that an
+ * attempt began. Every available signal is silent on the one question that
+ * matters, so the third value says so rather than guessing.
+ *
+ * `unknown` MUST NEVER be collapsed into `not_called`: that is the collapse
+ * that lets a retry loop spend a tenant's provider quota twice.
+ */
+export const PROVIDER_CALL_STATES = [
+  /** Transport was never entered. Provable: the pre-transport marker was never written. */
+  'not_called',
+  /** Transport was definitely entered. The executor observed it. */
+  'called',
+  /** Transport was about to be entered and the process did not survive to say what happened. */
+  'unknown',
+] as const;
+export type ProviderCallState = typeof PROVIDER_CALL_STATES[number];
+
+/**
  * Outcomes that mean the provider was NOT contacted.
  *
  * Imported in spirit from `NON_CALLING_OUTCOMES`, but stated here as a
@@ -114,7 +137,15 @@ export interface CompleteAttemptInput {
    * is what distinguishes "finished with no verdict" from "still in flight".
    */
   readonly outcome: EnrichmentOutcome | null;
+  /**
+   * "We can prove a call happened." Unchanged and still load-bearing across
+   * A3/A4A/A4E/A4J/A4N — but it answers a NARROWER question than
+   * `providerCallState`, and false covers both `not_called` and `unknown`.
+   * Retry logic must read the state, never this.
+   */
   readonly providerCalled: boolean;
+  /** A4Q — the three-valued truth. Defaults from `providerCalled` when omitted. */
+  readonly providerCallState?: ProviderCallState;
   readonly sourceRecordId?: string | null;
   readonly attributesReturned?: readonly string[];
   readonly detail?: string | null;
@@ -132,6 +163,8 @@ export interface EnrichmentAttemptRow {
   readonly correlationId: string;
   readonly outcome: EnrichmentOutcome | null;
   readonly providerCalled: boolean;
+  /** A4Q — authoritative for retry safety. See `PROVIDER_CALL_STATES`. */
+  readonly providerCallState: ProviderCallState;
   readonly sourceRecordId: string | null;
   readonly startedAt: string;
   readonly completedAt: string | null;
@@ -314,6 +347,37 @@ export async function claimEnrichmentWork(input: {
 }
 
 /**
+ * A4Q (B3) — record that transport is ABOUT to be entered.
+ *
+ * This is the whole mechanism. `unknown` cannot be derived after the fact,
+ * because after a process death there is nothing left to derive from: `outcome`
+ * is null for both "never asked" and "died mid-call", `completed_at` is null
+ * for both "in flight" and "abandoned", and the row's existence proves only
+ * that an attempt began. So the intent is written BEFORE the call, and the
+ * proven answer overwrites it after.
+ *
+ * A row still holding `unknown` is therefore exactly a process that did not
+ * survive its own provider call — the one thing the boolean could never say.
+ *
+ * Tenant-scoped, and narrowed to the still-open attempt: a completed row is
+ * never re-opened by this.
+ */
+export async function markProviderCallPending(input: {
+  organizationId: string;
+  attemptId: string;
+}): Promise<void> {
+  requireScope(input.organizationId);
+  if (!input.attemptId?.trim()) throw new Error('attemptId is required');
+
+  const { error } = await ownedDbTable('prospect_enrichment_attempts')
+    .update({ provider_call_state: 'unknown' })
+    .eq('id', input.attemptId)
+    .eq('organization_id', input.organizationId)     // tenant — never optional
+    .is('completed_at', null);
+  if (error) throw new Error(`prospect_enrichment_attempts call-state mark failed: ${error.message}`);
+}
+
+/**
  * A4N — take over a live attempt whose lease has expired.
  *
  * Returns null when there is nothing to take: no live row, or one whose lease
@@ -361,6 +425,12 @@ export async function completeAttempt(input: CompleteAttemptInput): Promise<void
     .update({
       outcome: input.outcome,
       provider_called: input.providerCalled,
+      // A4Q: when the caller does not state it, derive from the boolean —
+      // which is safe here and ONLY here, because completion means the process
+      // survived and therefore knows. `unknown` is never produced by this
+      // path; it is written before transport and survives only a process death.
+      provider_call_state: input.providerCallState
+        ?? (input.providerCalled ? 'called' : 'not_called'),
       source_record_id: input.sourceRecordId ?? null,
       attributes_returned: input.attributesReturned ? [...input.attributesReturned] : null,
       detail: safeDetail(input.detail),
@@ -390,7 +460,7 @@ export async function listAttempts(input: {
   requireScope(input.organizationId, input.entityId);
 
   let query = ownedDbTable('prospect_enrichment_attempts')
-    .select('id, organization_id, person_id, account_id, provider_key, attempt_number, correlation_id, outcome, provider_called, source_record_id, started_at, completed_at')
+    .select('id, organization_id, person_id, account_id, provider_key, attempt_number, correlation_id, outcome, provider_called, provider_call_state, source_record_id, started_at, completed_at')
     .eq('organization_id', input.organizationId)
     .eq(input.subject === 'person' ? 'person_id' : 'account_id', input.entityId);
 
@@ -411,6 +481,7 @@ export async function listAttempts(input: {
     correlationId: String(r.correlation_id),
     outcome: (r.outcome as EnrichmentOutcome | null) ?? null,
     providerCalled: Boolean(r.provider_called),
+    providerCallState: (r.provider_call_state as ProviderCallState | null) ?? 'not_called',
     sourceRecordId: (r.source_record_id as string | null) ?? null,
     startedAt: String(r.started_at),
     completedAt: (r.completed_at as string | null) ?? null,
