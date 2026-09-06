@@ -111,6 +111,29 @@ export interface SourceCoverage {
   readonly marketPulse?: readonly string[];
   /** Attributes a configured external source could answer, keyed by source. */
   readonly external?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * A3Z — external source keys the CALLER has already proven executable.
+   *
+   * ─── WHY THE CATALOGUE ALONE CANNOT ANSWER THIS ──────────────────────────
+   * `resolveDataSourceStatus` derives connection from `company_integrations`,
+   * which is the admin integrations hub. A PI enrichment provider is connected
+   * by a TENANT PROVIDER CREDENTIAL (A3M, `integration_credentials.provider_key`)
+   * and needs a registered adapter besides — neither of which the catalogue
+   * knows about. So a provider that is genuinely callable can be entirely
+   * absent from the catalogue, as Clearbit was, and the planner would report
+   * `unknown_source` for the one source that actually works.
+   *
+   * A key listed here is treated as `connected` INSTEAD of being re-derived
+   * from the catalogue. That is not a weaker check: the caller establishes it
+   * from A3's own `evaluateSource`, which tests adapter, tenant credential,
+   * entity support, attribute support and funding model — strictly more than
+   * the catalogue tests. The planner still performs no I/O and still learns
+   * nothing about adapters; it consumes a verdict from the layer that owns it,
+   * exactly as it already consumes `external` attribute coverage on trust.
+   *
+   * Absent ⇒ empty ⇒ the catalogue path is the only path. Fails closed.
+   */
+  readonly verifiedExternal?: readonly string[];
 }
 
 export interface EnrichmentPlanInput {
@@ -217,16 +240,25 @@ function selectSource(
   const candidates: Array<{ key: string; status: DataSourceStatus; cost: SourceCost }> = [];
   const unavailable: string[] = [];
 
+  const verified = new Set(coverage.verifiedExternal ?? []);
+
   for (const [key, attrs] of Object.entries(coverage.external ?? {})) {
     if (!attrs.includes(attribute)) continue;
+    const priced = input.costs?.[key];
+    const cost: SourceCost = priced ? { kind: 'known', ...priced } : UNKNOWN_COST;
+
+    // A3Z: a caller-verified source is already known connected by the layer
+    // that owns PI provider connection. Re-deriving it from the admin
+    // catalogue would ask a different, weaker question of a different table.
+    if (verified.has(key)) { candidates.push({ key, status: 'connected', cost }); continue; }
+
     const definition = getDataSourceDefinition(key);
     if (!definition) { unavailable.push(`${key}:unknown_source`); continue; }
 
     const { status } = resolveDataSourceStatus(definition, rows);
     if (status !== 'connected') { unavailable.push(`${key}:${status}`); continue; }
 
-    const priced = input.costs?.[key];
-    candidates.push({ key, status, cost: priced ? { kind: 'known', ...priced } : UNKNOWN_COST });
+    candidates.push({ key, status, cost });
   }
 
   if (candidates.length === 0) {

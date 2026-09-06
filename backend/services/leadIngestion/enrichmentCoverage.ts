@@ -33,6 +33,22 @@
 import { listDataSourcesByGroup } from '../integrations/dataSourceCatalogue';
 import { marketPulseAttributeCoverage } from '../marketPulse/prospectIntelligence';
 import type { SourceCoverage } from '../enrichment/planner';
+import { evaluateSource } from '../enrichment/providers/selection';
+import type { SourceStatus } from '../enrichment/providers/sources';
+
+/**
+ * A3Z — what the caller knows about the tenant's PI acquisition sources.
+ *
+ * `statuses` comes from `listSourceStatus(hasAdapter, credentialPresent)`, and
+ * ABSENT MEANS NONE. That default is the safety property: a caller that has
+ * not resolved this tenant's provider credentials cannot accidentally publish
+ * a global capability as a tenant one. A provider being installed, registered
+ * or configured for Omnivyra makes it executable for nobody until a tenant's
+ * own credential says so — the A3V defect, refused by construction here.
+ */
+export interface EnrichmentCoverageOptions {
+  readonly statuses?: readonly SourceStatus[];
+}
 
 /**
  * Enrichment sources the platform can actually use today.
@@ -61,14 +77,37 @@ export function availableEnrichmentSources(): string[] {
  * external company — and calling the function rather than hardcoding that keeps
  * the decision with its owner.
  */
-export function ingestionEnrichmentCoverage(): SourceCoverage {
+export function ingestionEnrichmentCoverage(
+  options: EnrichmentCoverageOptions = {},
+): SourceCoverage {
   const marketPulse = marketPulseAttributeCoverage();
-  const sources = availableEnrichmentSources();
-  if (sources.length === 0) return { marketPulse, external: {} };
 
-  // An available source with no attribute map can answer nothing. It is listed
-  // with an empty attribute set rather than omitted, so the planner's reason
-  // names it — "no source declares coverage for this attribute" is a different
-  // and more useful finding than silence.
-  return { marketPulse, external: Object.fromEntries(sources.map((key) => [key, [] as string[]])) };
+  // ── the catalogue's declared enrichment sources ──────────────────────────
+  // Kept, because a declared-but-unusable source is still worth naming: the
+  // planner's reason then says WHICH source could not serve the attribute
+  // rather than staying silent. It contributes no executable coverage.
+  const declared = Object.fromEntries(
+    availableEnrichmentSources().map((key) => [key, [] as string[]]),
+  ) as Record<string, string[]>;
+
+  // ── A3Z: the executable ones, from the registry that actually knows ──────
+  const external: Record<string, string[]> = { ...declared };
+  const verifiedExternal: string[] = [];
+
+  for (const source of options.statuses ?? []) {
+    // Ask A3's OWN eligibility function, per attribute and per entity, rather
+    // than re-implementing any part of it here. Whatever it accepts is exactly
+    // what `selectAcquisitionSource` will accept later, so coverage can never
+    // promise the planner work that selection would then refuse.
+    const attributes = source.capabilities.attributes.filter((attribute) =>
+      source.capabilities.entities.some((subject) =>
+        evaluateSource(source, source.connectionState, source.stateReason,
+          { subject, attributes: [attribute], mode: source.id }).eligible));
+
+    if (attributes.length === 0) continue;
+    external[source.id] = attributes;
+    verifiedExternal.push(source.id);
+  }
+
+  return { marketPulse, external, verifiedExternal };
 }
