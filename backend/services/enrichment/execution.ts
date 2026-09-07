@@ -351,7 +351,16 @@ export async function executePlannedField(
   };
 
   const recorded = await executeEnrichmentRecorded(request, providerId, ports, {
-    freshnessDays: input.freshnessDays,
+    // M9 — one window governs one enrichment decision.
+    //
+    // The planner already honoured a caller-supplied staleness window when it
+    // decided this field was worth enriching; before this, the executor then
+    // evaluated suppression against its OWN default, so a caller who asked for
+    // 45 days got 45 in planning and 30 in execution and had no way to see it.
+    // `plan.stalenessDays` is the caller's value or null, so an explicit
+    // argument here still wins, and when nobody supplied anything BOTH sides
+    // keep their own defaults exactly as before.
+    freshnessDays: input.freshnessDays ?? plan.stalenessDays ?? undefined,
     adapter: input.adapter,
     recorder: input.recorder,
     requireAttemptRecord: input.requireAttemptRecord,

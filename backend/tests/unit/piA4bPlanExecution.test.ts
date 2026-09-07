@@ -86,6 +86,10 @@ const plan = (over: Partial<EnrichmentPlan> = {}): EnrichmentPlan => ({
   toEnrich: [],
   counts: { known: 0, missing: 1, stale: 0, conflicting: 0 },
   empty: false,
+  // M9 — the plan states the window its caller supplied. `null` is the honest
+  // value here: this fixture supplies none, so the executor keeps its own
+  // default exactly as it did before the field existed.
+  stalenessDays: null,
   ...over,
 });
 

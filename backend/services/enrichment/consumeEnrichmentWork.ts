@@ -109,6 +109,16 @@ export interface ConsumeEnrichmentWorkInput {
    */
   readonly abandonedBefore?: string;
   /**
+   * M9 — the staleness/freshness window, supplied by the caller.
+   *
+   * This seam never consults the planner, so before this the executor's own
+   * default was the only freshness authority on the consumer path while the
+   * planner path could be told something else. A scheduler must be able to
+   * state one window and have it govern both. Omitted preserves the executor's
+   * existing default exactly.
+   */
+  readonly freshnessDays?: number;
+  /**
    * The production port composition. REQUIRED and never defaulted here — see
    * the header. Only the RETRY_PROVIDER branch uses it.
    */
@@ -211,6 +221,10 @@ export async function consumeEnrichmentWork(
             // recoverable, the claim's 23505 fallback adopts that exact row
             // instead of opening a second one.
             abandonedBefore: input.abandonedBefore,
+            // M9: the caller's window, forwarded so suppression is judged by
+            // the same number the caller reasoned with. Omitted leaves the
+            // executor's default untouched.
+            freshnessDays: input.freshnessDays,
             // A4J: no provider call without a recorded attempt.
             requireAttemptRecord: true,
           },

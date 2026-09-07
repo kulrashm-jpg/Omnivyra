@@ -36,6 +36,10 @@
  */
 
 import { resolveMonetizationFeature } from '../../../../shared/monetization/featureRegistry';
+// M1 — the platform-side capacity control this file's `allow` seam was written
+// to receive. Imported for the singleton below only; the factory keeps no
+// default, so a caller that builds its own port still gets no ceiling.
+import { makeDailyCallCeilingAllow } from './spendCeiling';
 import type { CostDecision, ExecuteEnrichmentPorts } from './execute';
 
 /**
@@ -251,5 +255,21 @@ export function makeTenantFundedExecutionPort(
  * Authorises tenant-funded provider execution and reserves no Omnivyra
  * credits. A tenant that has not stored a credential is already refused
  * upstream with `credential_missing`, before this is reached.
+ *
+ * ─── M1: THE SINGLETON CARRIES THE CEILING ────────────────────────────────
+ * `allow` is supplied here rather than by each caller, because a limit every
+ * caller had to remember to pass is a limit the first forgetful caller
+ * removes — the same reasoning that made the production port set a default in
+ * A7A. Supplying it on the SINGLETON also keeps one production port instance,
+ * so the identity guards that prove suppression and cost are real continue to
+ * hold: this is still the object they compare against.
+ *
+ * It changes nothing until an operator opts in. `makeDailyCallCeilingAllow`
+ * checks a free global switch first and returns permitting before any I/O, so
+ * with no ceiling configured this port behaves exactly as it did — including
+ * performing no additional read. The factory above is deliberately left
+ * unchanged, so every test that constructs its own port still gets no ceiling.
  */
-export const tenantFundedExecutionPort = makeTenantFundedExecutionPort();
+export const tenantFundedExecutionPort = makeTenantFundedExecutionPort({
+  allow: makeDailyCallCeilingAllow(),
+});
