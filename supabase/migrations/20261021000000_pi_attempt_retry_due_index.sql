@@ -10,12 +10,16 @@
 -- WHY NO EXISTING INDEX SERVES IT. There are eight indexes on this table and
 -- not one can answer "which attempts are due":
 --
---   *_person_unique / *_account_unique   (org, entity, provider, attempt_number)
---   *_person_live   / *_account_live     (org, entity, provider) WHERE completed_at IS NULL
+--   *_person_unique / *_account_unique   (org, entity, provider, attrs, attempt_number)
+--   *_person_live   / *_account_live     (org, entity, provider, attrs)
+--                                          WHERE completed_at IS NULL
 --   _tenant_recent                       (org, started_at DESC)
 --   _outcome                             (org, provider_key, outcome)
 --   _expired_claims                      (org, claimed_until) WHERE completed_at IS NULL
 --   _call_state                          (org, provider_call_state) WHERE completed_at IS NULL
+--
+-- (`attrs` is `requested_attributes`, which A4Y/20261018 added to all four when
+-- it made the attribute SET part of a work item's identity.)
 --
 -- Three carry `WHERE completed_at IS NULL`, which is the exact OPPOSITE of a
 -- retry predicate: a retryable attempt is by definition finished, so those

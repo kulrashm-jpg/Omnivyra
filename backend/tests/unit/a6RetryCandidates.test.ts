@@ -229,20 +229,69 @@ describe('A6 — retry candidates', () => {
   describe('E. concurrent workers cannot both hold live work for one item', () => {
     const fs = require('fs');
     const path = require('path');
-    const migrations = ['20261015000000_pi_enrichment_attempt_record.sql', '20261016000000_pi_enrichment_attempt_lease.sql',
-      '20261017000000_pi_provider_call_state.sql', '20261018000000_pi_attempt_attribute_set_identity.sql']
-      .map((f) => { try { return fs.readFileSync(path.join(__dirname, '../../../supabase/migrations', f), 'utf8'); } catch { return ''; } })
-      .join('\n');
+    const FILES = ['20261015000000_pi_enrichment_attempt_record.sql', '20261016000000_pi_enrichment_attempt_lease.sql',
+      '20261017000000_pi_provider_call_state.sql', '20261018000000_pi_attempt_attribute_set_identity.sql'];
+
+    /**
+     * The EFFECTIVE definition of each index, by replaying every CREATE and DROP
+     * in migration order.
+     *
+     * Matching the CONCATENATED text instead would be satisfied by a superseded
+     * statement, which is not a hypothetical: A4Y (20261018) DROPs all four of
+     * the 20261015/16 indexes and rebuilds them with `requested_attributes`. The
+     * pre-A4Y shape is therefore still written in 20261015, and an assertion over
+     * the concatenation would pass even if the current index were wrong — or gone.
+     */
+    const effective = (): Map<string, string> => {
+      const live = new Map<string, string>();
+      for (const f of FILES) {
+        let sql = '';
+        try { sql = fs.readFileSync(path.join(__dirname, '../../../supabase/migrations', f), 'utf8'); } catch { continue; }
+        // Line comments are stripped first, so prose that names an index cannot
+        // be read as a statement about one.
+        sql = sql.replace(/^[^\S\n]*--.*$/gm, '');
+        for (const raw of sql.split(';')) {
+          const stmt = raw.replace(/\s+/g, ' ').trim();
+          const drop = /^DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(?:public\.)?(\w+)/i.exec(stmt);
+          if (drop) { live.delete(drop[1]); continue; }
+          const create = /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/i.exec(stmt);
+          if (create) live.set(create[1], stmt);
+        }
+      }
+      return live;
+    };
+    const INDEXES = effective();
+    const def = (name: string) => INDEXES.get('prospect_enrichment_attempts_' + name) ?? '';
 
     it('the database — not application code — is the arbiter, via unique indexes', () => {
       // Two guarantees, both enforced by the DB: one attempt per attempt_number,
-      // and at most ONE LIVE attempt per (tenant, entity, provider). The second
-      // is what makes `nextAttemptNumber`'s read-then-increment safe: even if
-      // two workers compute the same number, only one INSERT survives.
-      expect(migrations).toMatch(/UNIQUE INDEX[\s\S]*?\(organization_id, person_id, provider_key, attempt_number\)/);
-      expect(migrations).toMatch(/UNIQUE INDEX[\s\S]*?\(organization_id, account_id, provider_key, attempt_number\)/);
-      expect(migrations).toMatch(/UNIQUE INDEX[\s\S]*?person_live[\s\S]*?WHERE person_id IS NOT NULL AND completed_at IS NULL/);
-      expect(migrations).toMatch(/UNIQUE INDEX[\s\S]*?account_live[\s\S]*?WHERE account_id IS NOT NULL AND completed_at IS NULL/);
+      // and at most ONE LIVE attempt per WORK ITEM. The second is what makes
+      // `nextAttemptNumber`'s read-then-increment safe: even if two workers
+      // compute the same number, only one INSERT survives.
+      //
+      // A work item is (tenant, entity, provider, attribute SET) since A4Y, so
+      // `requested_attributes` belongs to both identities and is asserted here.
+      for (const leg of ['person', 'account']) {
+        expect(def(leg + '_unique')).toMatch(new RegExp(
+          'UNIQUE INDEX .*\\(organization_id, ' + leg + '_id, provider_key, requested_attributes, attempt_number\\) WHERE ' + leg + '_id IS NOT NULL'));
+        expect(def(leg + '_live')).toMatch(new RegExp(
+          'UNIQUE INDEX .*\\(organization_id, ' + leg + '_id, provider_key, requested_attributes\\) WHERE ' + leg + '_id IS NOT NULL AND completed_at IS NULL'));
+      }
+    });
+
+    it('and reads the CURRENT definition, not a superseded one', () => {
+      // The guard on the guard. If this ever degrades back to matching raw
+      // concatenated text, the pre-A4Y shape still written in 20261015 would
+      // satisfy it again — so assert that shape is NOT the effective one.
+      for (const leg of ['person', 'account']) {
+        expect(def(leg + '_unique')).not.toMatch(/provider_key, attempt_number\)/);
+        expect(def(leg + '_live')).not.toMatch(/provider_key\) WHERE/);
+      }
+      // All four survive the A4Y drop-and-rebuild.
+      expect(['person_unique', 'account_unique', 'person_live', 'account_live']
+        .filter((n) => def(n) !== '')).toHaveLength(4);
+      // What PostgreSQL actually built is proven against a real database in
+      // backend/tests/realschema/a6a_retry_horizon.test.ts.
     });
 
     it('a retry candidate names the work item, so a claim can be scoped to it', async () => {
