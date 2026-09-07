@@ -72,6 +72,10 @@ function attemptStore() {
       return { attemptId: id };
     },
     complete: async () => { /* closing is A4E's concern, proven there */ },
+    // A4V — the pre-transport marker now fails closed on EVERY path. Without a
+    // stub this fell through to the real writer; the manual path used to
+    // swallow that failure, so these tests passed despite never marking.
+    markPending: async () => { /* the mark succeeds; A4V proves the failure case */ },
   };
 }
 

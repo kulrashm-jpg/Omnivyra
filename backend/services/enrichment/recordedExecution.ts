@@ -285,21 +285,33 @@ export async function executeEnrichmentRecorded(
           try {
             await markPending({ organizationId: request.organizationId, attemptId });
           } catch (err) {
-            // For an AUTOMATED caller this must fail closed: proceeding would
-            // recreate exactly the ambiguity B3 exists to remove, and nobody is
-            // waiting on the result. The manual path keeps A4A's fail-open
-            // behaviour — it is no worse off than before this existed.
+            // A4V — fail closed on EVERY path, leased or manual.
             //
-            // The error is stashed rather than thrown onward, because throwing
-            // here lands in the EXECUTOR's own catch around `adapter.enrich`,
-            // which would classify our storage failure as `provider_unavailable`
-            // — blaming the vendor for our fault and, worse, reporting
-            // `providerCalled: true` for a call that never left the building.
-            // It is re-thrown below, outside the executor's reach.
-            if (options.lease) {
-              markFailure = err;
-              throw err;
-            }
+            // This was once gated on `options.lease`, on the reasoning that the
+            // manual path should keep A4A's fail-open posture and was "no worse
+            // off than before this existed". That reasoning does not hold once
+            // the row exists. A4A's fail-open is about a MISSING attempt row: no
+            // row, nothing to misread, and `requireAttemptRecord` (A4J) lets a
+            // caller demand one. This branch is the opposite case — the row is
+            // already there and we failed to move it to `unknown`. Proceeding
+            // leaves a row asserting `not_called` while the tenant's quota is
+            // being spent, and a process death in that window makes the lie
+            // permanent: recovery can no longer tell "never called" from
+            // "called". A leased worker and a user-initiated one spend exactly
+            // the same tenant money, so they get exactly the same guarantee.
+            //
+            // The invariant, now unconditional:
+            //   no durable `unknown` ⇒ no provider transport.
+            //
+            // The error is STASHED as well as thrown, because throwing here
+            // lands in the EXECUTOR's own catch around `adapter.enrich`, which
+            // would classify our storage failure as `provider_unavailable` —
+            // blaming the vendor for our fault and reporting a call that never
+            // left the building. `rethrowMarkFailure` re-raises the original
+            // error outside the executor's reach and closes the attempt as
+            // `not_called`, which is what actually happened.
+            markFailure = err;
+            throw err;
           }
         }
 
