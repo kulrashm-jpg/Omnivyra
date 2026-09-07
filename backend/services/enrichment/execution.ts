@@ -52,6 +52,7 @@ import {
   type AttemptRecorder,
 } from './recordedExecution';
 import type { ExecuteEnrichmentPorts } from './providers/execute';
+import { makeProductionEnrichmentPorts } from './productionPorts';
 import type {
   EnrichmentOutcome, EnrichmentProviderAdapter, EnrichmentRequest, EnrichmentSubject,
 } from './providers/contract';
@@ -235,7 +236,12 @@ const refusal = (
  */
 export async function executePlannedField(
   input: ExecutePlannedFieldInput,
-  ports: ExecuteEnrichmentPorts,
+  // A7A — defaults to the real ports, so duplicate suppression is on unless a
+  // caller deliberately replaces it. Every existing test still injects its own
+  // set; the default only applies when nothing is supplied. Before this, a
+  // caller that forgot got no suppression AND no error, and would pay a
+  // provider for evidence the tenant already holds.
+  ports: ExecuteEnrichmentPorts = makeProductionEnrichmentPorts(),
 ): Promise<PlanFieldExecution> {
   const { plan, field, snapshot } = input;
   const correlationId = text(input.correlationId) ?? randomUUID();
