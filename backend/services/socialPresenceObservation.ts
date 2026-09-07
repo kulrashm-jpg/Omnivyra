@@ -14,9 +14,12 @@
  * WHAT AN OBSERVATION IS, AND IS NOT
  * A social URL sitting in a company profile is NOT evidence that the profile exists publicly — that
  * conflation is the defect G-8 corrected at the persistence layer, and it is not reintroduced here.
- * An entry becomes `observed` only when a returned search result URL normalises to the SAME profile
- * URL on the SAME platform. Everything else stays `declared`. If the provider could not answer at
- * all, every candidate is `unreachable`, so "we did not look" never reads as "nothing is there".
+ * An entry becomes `observed` only when TWO things hold: the candidate's own shape is a company
+ * profile (F-1 — the existing `isGenericSocialUrl` / `isLikelyCompanySocialLink` guards), and a
+ * returned search result URL normalises to the SAME profile URL on the SAME platform. Everything
+ * else stays `declared`. If the provider could not answer at all, every ELIGIBLE candidate is
+ * `unreachable`, so "we did not look" never reads as "nothing is there"; an ineligible candidate is
+ * settled on its shape alone and stays `declared` regardless of provider state.
  *
  * An indexed result also does NOT prove the profile is currently active — only that the public index
  * holds it. Nothing in this module claims recency, activity, reach, or audience.
@@ -24,12 +27,17 @@
  * BUDGET
  * ONE query per report, not one per platform: a single brand-anchored query surfaces the company's
  * profiles across platforms in the same result set. The call goes through the existing
- * `fetchSerpResultsForKeyword`, so the established scan-budget gate, provider-call logging, cost
- * ledger and the H2 deadline signal all apply unchanged — this module adds no provider, no
- * credential, no timeout and no retry policy of its own.
+ * `fetchSerpResultsForKeyword`, so the established scan-budget gate, provider-call logging and cost
+ * ledger all apply unchanged — this module adds no provider, no credential, no timeout and no retry
+ * policy of its own. The H2 deadline seam is likewise reused rather than bypassed, though no H2
+ * deadline is active on this path (see the note at the call site in `snapshotReportService`).
  */
 
-import { normalizeSocialUrl } from './companyProfile/normalization';
+import {
+  normalizeSocialUrl,
+  isGenericSocialUrl,
+  isLikelyCompanySocialLink,
+} from './companyProfile/normalization';
 import type { CanonicalSocialPresenceEntry } from './canonicalReport/canonicalReportTypes';
 import type { SerpKeywordResult } from './reportCompetitorIntelligenceServiceHelpers';
 
@@ -120,25 +128,48 @@ export async function observeSocialPresence(
   const now = params.now ?? (() => new Date());
 
   // De-duplicate candidates by profile identity, keeping the first representation seen.
-  const candidates: Array<{ key: string; platform: string; url: string }> = [];
+  const candidates: Array<{ key: string; platform: string; url: string; observable: boolean }> = [];
   const seen = new Set<string>();
   for (const raw of params.candidateUrls) {
     const key = profileKey(raw);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    candidates.push({ key, platform: key.slice(0, key.indexOf(':')), url: raw });
+    const platform = key.slice(0, key.indexOf(':'));
+    const normalized = normalizeSocialUrl(raw) ?? raw;
+    // F-1 — a candidate must LOOK like a company profile before it is eligible to be called one.
+    //
+    // Candidates reach here from the report form and from stored report defaults as well as from
+    // the crawl, and only the crawl path is gated upstream. Without this, a URL such as
+    // `linkedin.com/feed/` would key to `linkedin:/feed`, match a search result carrying that same
+    // URL, and be published to the customer as a publicly observed social identity.
+    //
+    // Both guards are the repository's existing ones, unchanged and unduplicated:
+    //   isGenericSocialUrl        rejects platform-level pages (bare host, share/sharer, watch/results)
+    //   isLikelyCompanySocialLink rejects shapes that are not a profile (LinkedIn must be /company/,
+    //                             X a single handle segment, YouTube a channel, Reddit /r/, …)
+    //
+    // A rejected candidate is NOT dropped — silence would be indistinguishable from "not supplied".
+    // It stays in the output as `declared`, which is the existing honest non-observed state: the
+    // company gave us this URL and nothing established it as a public profile.
+    const observable = !isGenericSocialUrl(normalized) && isLikelyCompanySocialLink(platform, normalized);
+    candidates.push({ key, platform, url: raw, observable });
   }
   if (candidates.length === 0) return [];
 
-  const query = buildSocialObservationQuery(params);
+  // A candidate that cannot be a profile is settled on its own shape — no provider state changes
+  // that, so it is reported `declared` even when the provider is unavailable.
+  const observableCandidates = candidates.filter((candidate) => candidate.observable);
+
+  const query = observableCandidates.length > 0 ? buildSocialObservationQuery(params) : null;
   if (!query) {
-    // No identity anchor ⇒ no query can be formed. That is an inability to look, not an absence.
-    return candidates.map((candidate) => unreachable(candidate));
+    // No identity anchor, or nothing worth asking about ⇒ no query is issued. An inability to look
+    // is not an absence, so eligible candidates are `unreachable` rather than `declared`.
+    return candidates.map((candidate) => (candidate.observable ? unreachable(candidate) : declared(candidate)));
   }
 
   const result = await params.fetchSerp(query, params.geography ?? null);
   if (result.status !== 'ok') {
-    return candidates.map((candidate) => unreachable(candidate));
+    return candidates.map((candidate) => (candidate.observable ? unreachable(candidate) : declared(candidate)));
   }
 
   // Index the returned rows by the SAME profile identity used for candidates, so a match means the
@@ -153,19 +184,12 @@ export async function observeSocialPresence(
 
   const observedAt = now().toISOString();
   return candidates.map((candidate) => {
-    const hit = observedByKey.get(candidate.key);
+    // F-1 — an ineligible candidate can never be matched, whatever the result set contains.
+    const hit = candidate.observable ? observedByKey.get(candidate.key) : undefined;
     if (!hit) {
-      // The provider answered and this profile was not in the public result set. Honest state:
-      // the company declared it, the public index did not confirm it.
-      return {
-        platform: candidate.platform,
-        url: candidate.url,
-        status: 'declared' as const,
-        observed_at: null,
-        name: null,
-        description: null,
-        source: 'unspecified' as const,
-      };
+      // Either the shape disqualified it, or the provider answered and this profile was not in the
+      // public result set. Honest state either way: the company declared it, nothing observed it.
+      return declared(candidate);
     }
     return {
       platform: candidate.platform,
@@ -178,6 +202,18 @@ export async function observeSocialPresence(
       source: 'serp' as const,
     };
   });
+}
+
+function declared(candidate: { platform: string; url: string }): CanonicalSocialPresenceEntry {
+  return {
+    platform: candidate.platform,
+    url: candidate.url,
+    status: 'declared',
+    observed_at: null,
+    name: null,
+    description: null,
+    source: 'unspecified',
+  };
 }
 
 function unreachable(candidate: { platform: string; url: string }): CanonicalSocialPresenceEntry {

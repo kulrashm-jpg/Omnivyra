@@ -830,7 +830,14 @@ export async function composeSnapshotReport(
       // G-1 — public social observation. Deliberately INSIDE this scope: the comment above names it
       // the single owner of every paid provider, and this issues one SERP query through the same
       // `fetchSerpResultsForKeyword` the competitor engine uses, so the budget gate, provider-call
-      // logging, cost ledger and H2 deadline signal all apply with no new plumbing.
+      // logging and cost ledger all apply with no new plumbing.
+      //
+      // On H2, precisely: `fetchSerpResultsForKeyword` reads the deadline signal from
+      // `reportDeadlineContext`, so the seam is reused rather than bypassed — but that scope is
+      // opened only by `performanceReportService` (Report 2), and GAP-14 severed Report 2's edge to
+      // `composeSnapshotReport`. This Report 1 invocation therefore runs with NO active H2
+      // deadline, and `getReportDeadlineSignal()` returns null here. Report 1 has no 45s boundary;
+      // its liveness is governed by the scan budget above.
       const socialPresence = await observeSocialPresence({
         candidateUrls: options?.resolvedInput?.resolved.socialLinks ?? [],
         companyName: options?.resolvedInput?.resolved.companyName ?? null,

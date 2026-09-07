@@ -152,6 +152,58 @@ describe('G-1 — public social presence observation', () => {
     });
   });
 
+  // -- F-1. Candidate ownership gate --------------------------------------------
+  describe('F-1. a candidate that is not a profile can never be observed', () => {
+    it('refuses a generic platform page even when the result set contains that exact URL', async () => {
+      // The audit's concrete case: /feed keys to linkedin:/feed and would otherwise self-match.
+      const FEED = 'https://www.linkedin.com/feed/';
+      const { run } = observe([FEED], serpOk([{ url: FEED, title: 'Feed | LinkedIn' }]));
+      const [entry] = await run();
+      expect(entry.status).not.toBe('observed');
+      expect(entry.status).toBe('declared');
+      expect(entry.source).not.toBe('serp');
+      expect(provenanceForSource(entry.source)).not.toBe('PUBLIC_OBSERVED');
+      // Nothing from the result set is carried onto a rejected candidate.
+      expect(entry.name).toBeNull();
+      expect(entry.observed_at).toBeNull();
+    });
+
+    it('refuses other non-profile shapes that self-match', async () => {
+      for (const url of [
+        'https://www.youtube.com/watch?v=abc',
+        'https://www.facebook.com/sharer/sharer.php',
+        'https://www.linkedin.com/',
+      ]) {
+        const { run } = observe([url], serpOk([{ url, title: 'whatever' }]));
+        const [entry] = await run();
+        expect(entry.status).toBe('declared');
+        expect(provenanceForSource(entry.source)).not.toBe('PUBLIC_OBSERVED');
+      }
+    });
+
+    it('still observes a valid profile URL returned by the same result set', async () => {
+      const { run } = observe([LINKEDIN], serpOk([{ url: LINKEDIN, title: 'Northwind | LinkedIn' }]));
+      const [entry] = await run();
+      expect(entry.status).toBe('observed');
+      expect(entry.source).toBe('serp');
+      expect(provenanceForSource(entry.source)).toBe('PUBLIC_OBSERVED');
+    });
+
+    it('keeps a rejected candidate declared even when the provider is unavailable', async () => {
+      // Its shape settles it; no provider state can turn it into an observation, and calling it
+      // "unreachable" would imply we might yet observe it.
+      const { run } = observe(['https://www.linkedin.com/feed/'], serpDown('unavailable'));
+      const [entry] = await run();
+      expect(entry.status).toBe('declared');
+    });
+
+    it('reports a rejected candidate rather than dropping it', async () => {
+      const { run } = observe(['https://www.linkedin.com/feed/', LINKEDIN], serpOk([{ url: LINKEDIN }]));
+      const entries = await run();
+      expect(entries.map((e) => e.status)).toEqual(['declared', 'observed']);
+    });
+  });
+
   // -- 6. Multiple platforms ----------------------------------------------------
   describe('6. platforms coexist without overwriting each other', () => {
     it('resolves each candidate independently', async () => {
