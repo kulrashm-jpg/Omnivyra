@@ -431,6 +431,26 @@ export function renderDeclaredEvidence(payload: CanonicalExportPayload): string 
     const domains = de.same_as.domains.slice(0, 8).join(', ');
     rows.push(['Declared identity links', `${de.same_as.count} sameAs link${de.same_as.count === 1 ? '' : 's'}${types ? ` (${types})` : ''}${domains ? `. ${domains}` : ''}.`]);
   }
+  // G-1 — publicly observed social identity, kept strictly apart from what the company declares.
+  // Presentation only: no score, no ranking, no advice. An entry is only called observed when a
+  // public search result actually resolved to that profile URL.
+  const social = de.social_presence ?? [];
+  if (social.length > 0) {
+    const observed = social.filter((s) => s.status === 'observed');
+    const declared = social.filter((s) => s.status === 'declared');
+    const unreachable = social.filter((s) => s.status === 'unreachable');
+    const parts: string[] = [];
+    if (observed.length > 0) {
+      parts.push(`Publicly observed: ${observed.map((s) => escape(s.name ? `${s.platform} (${s.name})` : s.platform)).join(', ')}.`);
+    }
+    if (declared.length > 0) {
+      parts.push(`Declared but not found in public search: ${declared.map((s) => escape(s.platform)).join(', ')}.`);
+    }
+    if (unreachable.length > 0) {
+      parts.push(`Not checked (observation unavailable): ${unreachable.map((s) => escape(s.platform)).join(', ')}.`);
+    }
+    rows.push(['Social identity', `${parts.join(' ')} Observation confirms the profile is indexed publicly; it is not a measure of activity or audience.`]);
+  }
   if (de.declared_certifications.count > 0) {
     rows.push(['Declared certifications', `${de.declared_certifications.count} declared (not independently verified): ${de.declared_certifications.items.slice(0, 8).join(', ')}.`]);
   }

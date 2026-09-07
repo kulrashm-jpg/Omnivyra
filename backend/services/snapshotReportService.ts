@@ -92,6 +92,8 @@ import type { CanonicalReport } from './canonicalReport/canonicalReportTypes';
 // BETA-PHASE1-AUDIT-005: composeSnapshotReport owns the report scan-budget lifecycle.
 import { startScanBudget, endScanBudget } from './intelligence/costGovernance';
 import { runWithScanBudget } from './intelligence/scanBudgetContext';
+import { observeSocialPresence } from './socialPresenceObservation';
+import { fetchSerpResultsForKeyword } from './reportCompetitorIntelligenceServiceHelpers';
 import { policyFor } from './intelligence/executionPolicies';
 import { randomUUID } from 'crypto';
 import {
@@ -825,6 +827,23 @@ export async function composeSnapshotReport(
   let report: SnapshotReport | null = null;
   try {
     report = await runWithScanBudget(scanId, async () => {
+      // G-1 — public social observation. Deliberately INSIDE this scope: the comment above names it
+      // the single owner of every paid provider, and this issues one SERP query through the same
+      // `fetchSerpResultsForKeyword` the competitor engine uses, so the budget gate, provider-call
+      // logging, cost ledger and H2 deadline signal all apply with no new plumbing.
+      const socialPresence = await observeSocialPresence({
+        candidateUrls: options?.resolvedInput?.resolved.socialLinks ?? [],
+        companyName: options?.resolvedInput?.resolved.companyName ?? null,
+        websiteDomain: options?.resolvedInput?.resolved.websiteDomain ?? null,
+        geography: options?.resolvedInput?.resolved.geography ?? null,
+        fetchSerp: fetchSerpResultsForKeyword,
+      }).catch(() => []);
+      // Additive: the existing declared-evidence object is carried through untouched when there is
+      // nothing to add, so `same_as` and the rest are byte-identical on every existing path.
+      const auditWithSocial = socialPresence.length > 0 && publicAudit.declared_evidence
+        ? { ...publicAudit, declared_evidence: { ...publicAudit.declared_evidence, social_presence: socialPresence } }
+        : publicAudit;
+
       const activeCompetitorIntelligence = await buildCompetitorIntelligenceActive({
         companyId,
         decisions: uniqueById([...snapshotComposition.decisions, ...growthSupplement, ...publicAudit.decisions]),
@@ -837,7 +856,7 @@ export async function composeSnapshotReport(
         supplementalGrowthDecisions: growthSupplement,
         resolvedInput: options?.resolvedInput ?? null,
         readiness: options?.readiness ?? null,
-        publicAudit,
+        publicAudit: auditWithSocial,
         competitorIntelligenceOverride: activeCompetitorIntelligence,
         crawlEvidence: options?.crawlEvidence ?? null,
       });
