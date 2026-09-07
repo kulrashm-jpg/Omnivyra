@@ -312,7 +312,10 @@ describe('A4Q — the boolean and its consumers are untouched', () => {
     for (const rel of ['services/enrichment/attempts.ts', 'services/enrichment/recordedExecution.ts']) {
       const src = code(rel);
       expect(src).not.toMatch(/setInterval|setTimeout|node-cron|new Queue|new Worker|\.schedule\(/);
-      expect(src).not.toMatch(/next_retry_at|retry_class|prior_attempt_id|retry_policy_version|execution_status/);
+      // A5 introduced `execution_status` deliberately, exactly as A4Q did for
+      // `provider_call_state`, so it is no longer forbidden. Everything else on
+      // this list remains correctly absent: no retry metadata, no lineage.
+      expect(src).not.toMatch(/next_retry_at|retry_class|prior_attempt_id|retry_policy_version/);
     }
   });
 });

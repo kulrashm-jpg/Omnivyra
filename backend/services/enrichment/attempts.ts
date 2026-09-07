@@ -71,6 +71,61 @@ export const PROVIDER_CALL_STATES = [
 export type ProviderCallState = typeof PROVIDER_CALL_STATES[number];
 
 /**
+ * A5 — how the EXECUTION ended, as distinct from what the provider said.
+ *
+ * ─── WHY THIS IS A SEPARATE DIMENSION ──────────────────────────────────────
+ * The attempt row already carries two answers and needs a third. They answer
+ * genuinely different questions and must not be collapsed:
+ *
+ *   `outcome`             what the PROVIDER said (or the refusal we made)
+ *   `provider_call_state` whether transport happened  (A4Q: the three-valued truth)
+ *   `execution_status`    how OUR execution ended
+ *
+ * A4T found the gap concretely: a post-provider persistence failure and a
+ * pre-transport marker failure both close with `outcome = NULL`, and were
+ * separable only by reading free-text `detail`. Yet they have OPPOSITE retry
+ * safety — one was paid for, the other provably was not. No amount of care with
+ * the existing two columns can express that, because `outcome` has no value
+ * that names OUR failure without blaming the vendor.
+ *
+ * ─── WHY IT CANNOT BE DERIVED ──────────────────────────────────────────────
+ * A tempting shortcut is to infer this from the other two. It does not work:
+ * `refused_pre_call` and `completed` BOTH carry an outcome and both may be
+ * `not_called`, so nothing in the existing columns separates "we declined to
+ * ask" from "they answered". That is why `executionStatus` is REQUIRED on
+ * `CompleteAttemptInput` rather than optional — an omitted value would leave a
+ * finished row still claiming `in_flight`, which is worse than not having the
+ * column at all.
+ *
+ * ─── THIS RECORDS; IT DOES NOT DECIDE ──────────────────────────────────────
+ * Nothing here expresses retry policy. There is deliberately no `retrying`,
+ * `retry_exhausted`, `waiting`, `queued` or `scheduled`: those describe a
+ * scheduler's intentions, not an execution's history, and no scheduler exists.
+ */
+export const EXECUTION_STATUSES = [
+  /** Opened or claimed; has not reached any terminal state. The insert-time value. */
+  'in_flight',
+  /** WE declined before transport — no credential, no adapter, cost denied, fresh duplicate. */
+  'refused_pre_call',
+  /** The pre-transport marker could not be persisted, so A4V forbade transport. */
+  'mark_failed',
+  /** OUR failure. Transport may or may not have happened — `provider_call_state` says which. */
+  'platform_failed',
+  /** The execution ran to its end and the provider's verdict (or our refusal) is recorded. */
+  'completed',
+  /**
+   * Opened and never closed; the process did not survive.
+   *
+   * A4T established this is currently a DERIVED condition — `completed_at IS
+   * NULL` past a lease or staleness cutoff — with no writer, because no
+   * reclaimer exists. It is registered here so the vocabulary and the CHECK are
+   * complete, and is deliberately never written by this module.
+   */
+  'abandoned',
+] as const;
+export type ExecutionStatus = typeof EXECUTION_STATUSES[number];
+
+/**
  * Outcomes that mean the provider was NOT contacted.
  *
  * Imported in spirit from `NON_CALLING_OUTCOMES`, but stated here as a
@@ -147,6 +202,13 @@ export interface CompleteAttemptInput {
   readonly providerCalled: boolean;
   /** A4Q — the three-valued truth. Defaults from `providerCalled` when omitted. */
   readonly providerCallState?: ProviderCallState;
+  /**
+   * A5 — how OUR execution ended. REQUIRED, and deliberately not derivable:
+   * `refused_pre_call` and `completed` both carry an outcome, so no default
+   * could tell them apart, and a wrong default would leave a finished row
+   * claiming `in_flight`. Every close site must state which case it is in.
+   */
+  readonly executionStatus: ExecutionStatus;
   readonly sourceRecordId?: string | null;
   readonly attributesReturned?: readonly string[];
   readonly detail?: string | null;
@@ -166,6 +228,8 @@ export interface EnrichmentAttemptRow {
   readonly providerCalled: boolean;
   /** A4Q — authoritative for retry safety. See `PROVIDER_CALL_STATES`. */
   readonly providerCallState: ProviderCallState;
+  /** A5 — how the execution ended. See EXECUTION_STATUSES. */
+  readonly executionStatus: ExecutionStatus;
   readonly sourceRecordId: string | null;
   readonly startedAt: string;
   readonly completedAt: string | null;
@@ -242,6 +306,9 @@ export async function recordAttempt(input: RecordAttemptInput): Promise<{ attemp
     attempt_number: input.attemptNumber,
     correlation_id: input.correlationId,
     provider_called: false,
+    // A5: an attempt begins in flight. Stated explicitly rather than left to the
+    // column default, so the TypeScript vocabulary stays the source of truth.
+    execution_status: 'in_flight' satisfies ExecutionStatus,
     started_at: input.startedAt,
     ...(input.claimedBy ? { claimed_by: input.claimedBy } : {}),
     ...(input.claimedUntil ? { claimed_until: input.claimedUntil } : {}),
@@ -528,6 +595,8 @@ export async function completeAttempt(input: CompleteAttemptInput): Promise<void
       // path; it is written before transport and survives only a process death.
       provider_call_state: input.providerCallState
         ?? (input.providerCalled ? 'called' : 'not_called'),
+      // A5: stated by the caller, never inferred here. See EXECUTION_STATUSES.
+      execution_status: input.executionStatus,
       source_record_id: input.sourceRecordId ?? null,
       attributes_returned: input.attributesReturned ? [...input.attributesReturned] : null,
       detail: safeDetail(input.detail),
@@ -563,7 +632,7 @@ export async function listAttempts(input: {
   requireScope(input.organizationId, input.entityId);
 
   let query = ownedDbTable('prospect_enrichment_attempts')
-    .select('id, organization_id, person_id, account_id, provider_key, attempt_number, correlation_id, outcome, provider_called, provider_call_state, source_record_id, started_at, completed_at')
+    .select('id, organization_id, person_id, account_id, provider_key, attempt_number, correlation_id, outcome, provider_called, provider_call_state, execution_status, source_record_id, started_at, completed_at')
     .eq('organization_id', input.organizationId)
     .eq(input.subject === 'person' ? 'person_id' : 'account_id', input.entityId);
 
@@ -589,6 +658,7 @@ export async function listAttempts(input: {
     outcome: (r.outcome as EnrichmentOutcome | null) ?? null,
     providerCalled: Boolean(r.provider_called),
     providerCallState: (r.provider_call_state as ProviderCallState | null) ?? 'not_called',
+    executionStatus: (r.execution_status as ExecutionStatus | null) ?? 'in_flight',
     sourceRecordId: (r.source_record_id as string | null) ?? null,
     startedAt: String(r.started_at),
     completedAt: (r.completed_at as string | null) ?? null,

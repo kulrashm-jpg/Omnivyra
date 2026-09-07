@@ -131,7 +131,7 @@ describe('A4A — tenant isolation', () => {
     const { attemptId } = await open();
     await completeAttempt({
       organizationId: ORG_B, attemptId, outcome: 'enriched',
-      providerCalled: true, completedAt: NOW,
+      providerCalled: true, executionStatus: 'completed', completedAt: NOW,
     });
     // the update matched no row: A's attempt is still open
     const [a] = await listAttempts({ organizationId: ORG_A, subject: 'account', entityId: ACCOUNT });
@@ -155,7 +155,10 @@ describe('A4A — the canonical outcome vocabulary is reused, not duplicated', (
     const { attemptId } = await open();
     await completeAttempt({
       organizationId: ORG_A, attemptId, outcome,
-      providerCalled: !NON_CALLING_ATTEMPT_OUTCOMES.includes(outcome), completedAt: NOW,
+      providerCalled: !NON_CALLING_ATTEMPT_OUTCOMES.includes(outcome),
+      // A5: a non-calling outcome is a refusal WE made before transport.
+      executionStatus: NON_CALLING_ATTEMPT_OUTCOMES.includes(outcome) ? 'refused_pre_call' : 'completed',
+      completedAt: NOW,
     });
     const [a] = await listAttempts({ organizationId: ORG_A, subject: 'account', entityId: ACCOUNT });
     expect(a.outcome).toBe(outcome);
@@ -181,7 +184,7 @@ describe('A4A — the canonical outcome vocabulary is reused, not duplicated', (
     const { attemptId } = await open();
     await completeAttempt({
       organizationId: ORG_A, attemptId, outcome: 'duplicate_suppressed',
-      providerCalled: false, completedAt: NOW,
+      providerCalled: false, executionStatus: 'refused_pre_call', completedAt: NOW,
     });
     const [a] = await listAttempts({ organizationId: ORG_A, subject: 'account', entityId: ACCOUNT });
     expect(a.outcome).toBe('duplicate_suppressed');
@@ -197,7 +200,7 @@ describe('A4A — history is preserved', () => {
     const first = await open();
     await completeAttempt({
       organizationId: ORG_A, attemptId: first.attemptId, outcome: 'provider_unavailable',
-      providerCalled: true, detail: 'HTTP 500', completedAt: NOW,
+      providerCalled: true, executionStatus: 'completed', detail: 'HTTP 500', completedAt: NOW,
     });
 
     // A4Y — numbering is per WORK ITEM, so the set `open()` used must be named.
@@ -210,7 +213,7 @@ describe('A4A — history is preserved', () => {
     const second = await open({ attemptNumber: n, correlationId: 'corr-2' });
     await completeAttempt({
       organizationId: ORG_A, attemptId: second.attemptId, outcome: 'enriched',
-      providerCalled: true, completedAt: NOW,
+      providerCalled: true, executionStatus: 'completed', completedAt: NOW,
     });
 
     const all = await listAttempts({ organizationId: ORG_A, subject: 'account', entityId: ACCOUNT });
@@ -296,6 +299,7 @@ describe('A4A — no secret can reach the record', () => {
     const { attemptId } = await open();
     await completeAttempt({
       organizationId: ORG_A, attemptId, outcome: 'provider_declined', providerCalled: true,
+      executionStatus: 'completed',
       detail: `401 authorization: Bearer ${SECRET}`, completedAt: NOW,
     });
     expect(JSON.stringify(captured)).not.toContain(SECRET);
@@ -315,6 +319,7 @@ describe('A4A — no secret can reach the record', () => {
     const { attemptId } = await open();
     await completeAttempt({
       organizationId: ORG_A, attemptId, outcome: 'enriched', providerCalled: true,
+      executionStatus: 'completed',
       sourceRecordId: 'src-1', attributesReturned: ['employee_count'], completedAt: NOW,
     });
     const p = captured.find((c) => c.op === 'update')!.payload as Record<string, unknown>;

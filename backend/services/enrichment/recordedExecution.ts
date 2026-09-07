@@ -47,7 +47,7 @@ import {
   markProviderCallPending,
   NON_CALLING_ATTEMPT_OUTCOMES,
 } from './attempts';
-import type { ProviderCallState } from './attempts';
+import type { ExecutionStatus, ProviderCallState } from './attempts';
 
 /**
  * A4N — raised when the work item is already claimed by another worker.
@@ -330,6 +330,7 @@ export async function executeEnrichmentRecorded(
     outcome: EnrichmentOutcome | null;
     providerCalled: boolean;
     providerCallState: ProviderCallState;
+    executionStatus: ExecutionStatus;
     sourceRecordId?: string | null;
     attributesReturned?: readonly string[];
     detail: string | null;
@@ -359,6 +360,9 @@ export async function executeEnrichmentRecorded(
       outcome: null,
       providerCalled: false,
       providerCallState: 'not_called',
+      // A5: OUR bookkeeping failed before transport. Provably not_called, and
+      // therefore the one failure class that is freely retryable.
+      executionStatus: 'mark_failed',
       detail: 'execution stopped: the provider-call state could not be recorded before transport',
     });
     throw markFailure;
@@ -389,6 +393,10 @@ export async function executeEnrichmentRecorded(
       // either way. `unknown` is never written here — it belongs solely to the
       // case where nothing gets to run at all.
       providerCallState: providerCalled ? 'called' : 'not_called',
+      // A5: OUR failure either way. Whether it is retryable is decided by
+      // provider_call_state above, not by this value — which is exactly why the
+      // two are separate columns.
+      executionStatus: 'platform_failed',
       detail: `execution failed after ${providerCalled ? 'the provider was called' : 'no provider call'}: `
         + (err instanceof Error ? err.message : String(err)),
     });
@@ -403,6 +411,10 @@ export async function executeEnrichmentRecorded(
     // knows whether a duplicate was suppressed before egress.
     providerCalled: result.providerCalled,
     providerCallState: result.providerCalled ? 'called' : 'not_called',
+    // A5: a refusal WE made before transport is not a completed execution. The
+    // discriminator is the executor's own observation of egress, not a list of
+    // outcome values — the evidence, not a lookup that could drift from it.
+    executionStatus: result.providerCalled ? 'completed' : 'refused_pre_call',
     sourceRecordId: result.sourceRecordId,
     attributesReturned: result.attributesReturned,
     detail: result.reason,
