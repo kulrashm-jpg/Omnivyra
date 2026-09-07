@@ -240,6 +240,25 @@ export interface EnrichmentAttemptRow {
   readonly sourceRecordId: string | null;
   readonly startedAt: string;
   readonly completedAt: string | null;
+  /**
+   * A7C — the decision-relevant columns, exposed so the state can be READ.
+   *
+   * A5 and A6A added `execution_status` and `next_retry_at`, and A4N added the
+   * lease, but this row projected none of the last three. A reader could see
+   * how an execution ended and not who owns it, when it may next be attempted,
+   * or which work item it belongs to — so a deterministic consumer could not
+   * evaluate WAIT, RECLAIM or lease ownership at all. Widening the projection
+   * is all that was missing; every column already existed.
+   *
+   * Nullability mirrors the database exactly. `claimedUntil` null means the
+   * attempt was never claimed through the lease path, NOT that a lease expired;
+   * `nextRetryAt` null means the provider expressed no opinion, NOT "retry now".
+   */
+  readonly claimedBy: string | null;
+  readonly claimedUntil: string | null;
+  readonly nextRetryAt: string | null;
+  /** A4Y — the canonical attribute set that identifies this work item. */
+  readonly requestedAttributes: readonly string[];
 }
 
 /** Refuse a tenant-less or subject-less write rather than guessing. */
@@ -641,7 +660,7 @@ export async function listAttempts(input: {
   requireScope(input.organizationId, input.entityId);
 
   let query = ownedDbTable('prospect_enrichment_attempts')
-    .select('id, organization_id, person_id, account_id, provider_key, attempt_number, correlation_id, outcome, provider_called, provider_call_state, execution_status, source_record_id, started_at, completed_at')
+    .select('id, organization_id, person_id, account_id, provider_key, attempt_number, correlation_id, outcome, provider_called, provider_call_state, execution_status, source_record_id, started_at, completed_at, claimed_by, claimed_until, next_retry_at, requested_attributes')
     .eq('organization_id', input.organizationId)
     .eq(input.subject === 'person' ? 'person_id' : 'account_id', input.entityId);
 
@@ -671,6 +690,18 @@ export async function listAttempts(input: {
     sourceRecordId: (r.source_record_id as string | null) ?? null,
     startedAt: String(r.started_at),
     completedAt: (r.completed_at as string | null) ?? null,
+    // A7C: nullability mirrors the column. No default is manufactured — a null
+    // lease and a null horizon each mean something specific, and inventing a
+    // value would erase the distinction a consumer has to act on.
+    claimedBy: (r.claimed_by as string | null) ?? null,
+    claimedUntil: (r.claimed_until as string | null) ?? null,
+    nextRetryAt: (r.next_retry_at as string | null) ?? null,
+    // NOT NULL in the schema, DEFAULT '{}'. Passed through verbatim: the stored
+    // value is already canonical (A4Y's CHECK guarantees it), so re-sorting or
+    // filtering here could only corrupt the work-item identity.
+    requestedAttributes: Array.isArray(r.requested_attributes)
+      ? (r.requested_attributes as string[]).map(String)
+      : [],
   }));
 }
 

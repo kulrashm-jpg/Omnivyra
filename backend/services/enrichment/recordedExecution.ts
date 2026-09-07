@@ -33,6 +33,9 @@ import {
   type ExecuteEnrichmentResult,
   ENRICHMENT_EXECUTOR_VERSION,
 } from './providers/execute';
+// A7A — the assembled production set, so a caller that supplies no ports gets
+// duplicate suppression rather than silently getting none.
+import { makeProductionEnrichmentPorts } from './productionPorts';
 // Direct, not through `./providers` — that barrel registers adapters on import,
 // and the recorder must not cause registration as a side effect of being loaded.
 import { getProvider } from './providers/registry';
@@ -113,7 +116,11 @@ export interface RecordedEnrichmentResult {
 export async function executeEnrichmentRecorded(
   request: EnrichmentRequest,
   providerId: string,
-  ports: ExecuteEnrichmentPorts,
+  // A7A — same default as the plan seam above this one: a caller that supplies
+  // no ports gets the real, suppression-enabled set rather than silently none.
+  // (The sibling's symbol is deliberately not named here — A4A's no-caller guard
+  // greps for it textually, and a mention would read as a call.)
+  ports: ExecuteEnrichmentPorts = makeProductionEnrichmentPorts(),
   options: {
     freshnessDays?: number;
     adapter?: EnrichmentProviderAdapter;
@@ -145,6 +152,29 @@ export async function executeEnrichmentRecorded(
       /** How long the lease is held before an abandoned attempt may be taken. */
       readonly ttlMs: number;
     };
+    /**
+     * A4U (A7I) — the cutoff at which an UNLEASED open attempt counts as
+     * abandoned, forwarded verbatim to `claimEnrichmentWork`.
+     *
+     * ─── WHY THIS HAD TO BE FORWARDED ───────────────────────────────────────
+     * The claim already adopts: its INSERT collides with A4N's live partial
+     * unique index, and on 23505 it recovers the existing row instead. But
+     * `reclaimExpiredAttempt`'s predicate reaches an unleased row ONLY when a
+     * cutoff is supplied, and this seam never supplied one. So the A4U wedge —
+     * an abandoned MANUAL attempt, which by design has a NULL lease — was
+     * recoverable by `claimEnrichmentWork` and unreachable through here. A
+     * caller therefore had no way to recover it except by writing its own
+     * reclaim, which is the second recovery path A7H found and this removes.
+     *
+     * ─── IT IS THE CALLER'S POLICY, CARRIED NOT CHOSEN ──────────────────────
+     * No duration is defaulted, derived or invented here. Omitted, the claim
+     * behaves exactly as A4N did: only an EXPIRED LEASE is recoverable. That
+     * keeps the user-initiated path byte-identical.
+     *
+     * Meaningful only alongside `lease`, because only the claim path reclaims;
+     * the unleased path opens a plain attempt and never recovers one.
+     */
+    abandonedBefore?: string;
   } = {},
 ): Promise<RecordedEnrichmentResult> {
   const rec = options.recorder ?? {};
@@ -191,6 +221,10 @@ export async function executeEnrichmentRecorded(
       startedAt,
       claimedBy: options.lease.claimedBy,
       claimedUntil,
+      // A4U (A7I) — the caller's abandonment cutoff, passed through unchanged.
+      // With it, one atomic claim recovers BOTH an expired lease and an
+      // unleased wedge; without it, A4N's behaviour is preserved exactly.
+      abandonedBefore: options.abandonedBefore,
     });
     // `'reason' in outcome`, not `!outcome.claimed`: the root tsconfig sets
     // `strict: false`, which disables union narrowing on a negated discriminant.

@@ -457,19 +457,36 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
     .replace(/"(?:[^"\\]|\\.)*"/g, '""');         // double-quoted strings
 
   /**
-   * Does this source CALL `symbol`?
+   * Does this source USE `symbol` in a way that can execute it?
    *
-   * Two things are deliberately not calls. A declaration is removed by symbol
-   * rather than by filename, so the module that defines a function is not
-   * counted as its own caller and no ignore-list has to be maintained. And an
-   * import — `import type { X }` or a plain value import — never matches,
-   * because a call is the name followed by an open parenthesis.
+   * An earlier version asked for the name followed by an open parenthesis. That
+   * was too narrow, and `consumeEnrichmentWork` is the proof: it writes
+   * `const execute = deps?.execute ?? executeEnrichmentRecorded` and then calls
+   * `execute(...)`. The seam is genuinely invoked, through an alias, and a
+   * `symbol(` rule reports no caller at all — the most dangerous direction for
+   * a guard to be wrong in.
+   *
+   * So the question is inverted: what is left after removing everything that
+   * CANNOT execute?
+   *
+   *   comments and JSDoc      prose about the chain
+   *   strings and templates   names in messages and documentation
+   *   import / export-from    a type-only import, and a value import which by
+   *                           itself invokes nothing
+   *   the declaration itself  a module is not its own caller
+   *
+   * If the identifier still appears after all of that, the module holds a live
+   * reference to it and can call it — directly or through an alias. That is the
+   * property the invariant is about.
    */
   const isExecutableCaller = (code: string, symbol: string): boolean => {
     const body = executableSource(code)
+      // import/export statements, including multi-line named lists
+      .replace(/^\s*(?:import|export)\s[\s\S]*?from\s*(?:''|"")\s*;?\s*$/gm, ' ')
+      .replace(/^\s*import\s+(?:''|"")\s*;?\s*$/gm, ' ')
       .replace(new RegExp(`(?:export\\s+)?(?:async\\s+)?function\\s+${symbol}\\s*\\(`, 'g'), ' ')
       .replace(new RegExp(`(?:export\\s+)?(?:const|let)\\s+${symbol}\\s*=`, 'g'), ' ');
-    return new RegExp(`\\b${symbol}\\s*\\(`).test(body);
+    return new RegExp(`\\b${symbol}\\b`).test(body);
   };
 
   /** Production files that actually call `symbol`. Sorted, tests excluded. */
@@ -525,9 +542,12 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
     const path = require('path');
     const consumer = fs.readFileSync(
       path.join(__dirname, '../../services/enrichment/retryConsumer.ts'), 'utf8');
-    expect(consumer).toContain('executeEnrichmentRecorded');                 // mentioned
-    expect(isExecutableCaller(consumer, 'executeEnrichmentRecorded')).toBe(false);   // not called
-    expect(isExecutableCaller(consumer, 'executePlannedField')).toBe(false);         // nor this
+    // The selector names both seams in prose — it explains what it gave up to
+    // them — and holds a live reference to neither.
+    expect(consumer).toContain('executePlannedField');                            // mentioned
+    expect(isExecutableCaller(consumer, 'executePlannedField')).toBe(false);      // not used
+    expect(consumer).toContain('decideEnrichmentAction');                         // mentioned
+    expect(isExecutableCaller(consumer, 'decideEnrichmentAction')).toBe(false);   // not used
   });
 
   it('every automatic caller of the enrichment chain is a SANCTIONED one', () => {
@@ -539,28 +559,60 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
     // A new background job that calls the executor directly is still caught —
     // it appears in one of these lists and is not in the expected value.
 
-    // The executor is reached from exactly one place, and that place from one.
+    // The provider executor is reached from exactly one place.
     expect(callers('executeEnrichment')).toEqual(
       ['backend/services/enrichment/recordedExecution.ts']);
-    expect(callers('executeEnrichmentRecorded')).toEqual(
-      ['backend/services/enrichment/execution.ts']);
 
-    // TWO sanctioned entry points into the plan executor, and no third:
-    //   the user-initiated route, and A7's retry job.
-    expect(callers('executePlannedField')).toEqual([
-      'backend/apiHandlers/prospects/prospectIntelligenceRead.ts',
-      'backend/jobs/prospectRetryJob.ts',
+    // ─── TWO sanctioned callers of the recorded seam, and no third ─────────
+    // Each is a decision, not an observation, and each is admitted for a
+    // stated reason:
+    //
+    //   consumeEnrichmentWork.ts  A7E's consumer seam. Held to a STRICTER
+    //                             standard than the route is — it takes a
+    //                             lease, requires an attempt record, requires
+    //                             ports it cannot assemble, and owns no write.
+    //   execution.ts              A4B's plan seam, reached only from A6's
+    //                             request-scoped boundary (asserted below).
+    //
+    // Admitting a caller is paired with proving how that caller is reached.
+    expect(callers('executeEnrichmentRecorded')).toEqual([
+      'backend/services/enrichment/consumeEnrichmentWork.ts',
+      'backend/services/enrichment/execution.ts',
     ]);
+
+    // ─── the RECONCILED topology ──────────────────────────────────────────
+    // A7J pinned the consumer at ZERO callers, because at that point nothing
+    // was allowed to trigger it. A7's scheduler is now that trigger, and it is
+    // the ONLY one. The caller is the JOB, not the selector: the job owns the
+    // production wiring and hands the seam to the selector as a port, so the
+    // selector holds a type import and no live reference. A second entry here —
+    // a route, a queue, a worker, another job — fails before it can ever run.
+    expect(callers('consumeEnrichmentWork')).toEqual(
+      ['backend/jobs/prospectRetryJob.ts']);
+
+    // The plan seam is back to ONE caller. The scheduler used to appear here
+    // too, executing through the planner; reconciliation routed it through the
+    // consumer seam instead, so the interactive path is once again the only
+    // way into `executePlannedField`.
+    expect(callers('executePlannedField')).toEqual(
+      ['backend/apiHandlers/prospects/prospectIntelligenceRead.ts']);
 
     // The user path: reached only from a request-scoped POST route.
     expect(callers('executeProspectEnrichment')).toEqual(
       ['pages/api/prospects/[id]/enrich.ts']);
 
-    // The automatic path: the job is reached only from the existing cron tick —
-    // not from an HTTP route, and not from a second scheduler.
+    // The automatic path, link by link: the job only from the existing cron
+    // tick, the cycle only from the job, the selector's hand-off only from the
+    // cycle. Every step is pinned, so no link can be added silently.
     expect(callers('runProspectRetryJob')).toEqual(['backend/scheduler/cron.ts']);
-    // and the cycle only from the job that the cron tick calls.
     expect(callers('runRetryCycle')).toEqual(['backend/jobs/prospectRetryJob.ts']);
+    expect(callers('retryOneCandidate')).toEqual(
+      ['backend/services/enrichment/retryConsumer.ts']);
+
+    // And the decision layer is reached only from the consumer seam — nothing
+    // may classify a work item and act on it somewhere else.
+    expect(callers('decideEnrichmentAction')).toEqual(
+      ['backend/services/enrichment/consumeEnrichmentWork.ts']);
 
     // And nothing along the chain schedules ITSELF. An entry point may be
     // CALLED on a timer; it may not contain one. `cron.ts` is deliberately
@@ -573,8 +625,14 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
       ['../../services/enrichment', 'attempts.ts'],
       ['../../apiHandlers/prospects', 'prospectIntelligenceRead.ts'],
       ['../../../pages/api/prospects/[id]', 'enrich.ts'],
-      // A7's two modules are held to the same rule: the consumer selects and
-      // hands off, the job runs one tick. Neither may start a timer of its own.
+      // A7J — the consumer seam is the module a scheduler would MOST plausibly
+      // be written into, being the one shaped like a unit of work. It may be
+      // called; it may not start itself.
+      ['../../services/enrichment', 'consumeEnrichmentWork.ts'],
+      ['../../services/enrichment', 'decideEnrichmentAction.ts'],
+      // A7's own two modules are held to the same rule: the selector chooses
+      // and hands off, the job runs one tick. Neither starts a timer; the cron
+      // tick calls the job, which is why `cron.ts` is absent from this list.
       ['../../services/enrichment', 'retryConsumer.ts'],
       ['../../jobs', 'prospectRetryJob.ts'],
     ];

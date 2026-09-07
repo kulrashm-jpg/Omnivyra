@@ -1,27 +1,28 @@
 /**
- * A7 — the cron-runtime wrapper for the enrichment retry consumer.
+ * A7 — the cron-runtime wrapper for the enrichment retry scheduler.
  *
- * This is the TRIGGER and the production wiring, and nothing else. The decision
- * of what to retry lives in `retryConsumer.ts`; the decision of whether a thing
- * is retryable at all lives in `retryCandidates.ts`; every step of the execution
- * itself already lives behind `executePlannedField`. This file only says WHEN,
- * FOR WHOM, and AS WHOM.
+ * This is the TRIGGER and the production wiring, and nothing else. What to do
+ * with a work item is `decideEnrichmentAction`'s; doing it is
+ * `consumeEnrichmentWork`'s; the ports are `makeProductionEnrichmentPorts`'s;
+ * which items are worth looking at is `listDueRetryCandidates`'s. This file only
+ * says WHEN, FOR WHOM, and AS WHOM.
  *
  * ─── INERT BY DEFAULT, AND ON TWO INDEPENDENT SWITCHES ────────────────────
  * Registering a job in `scheduler/cron.ts` makes it run on the next deploy, so
  * the flag is opt-IN rather than opt-out: absent the flag, this returns
  * immediately having read nothing. It then also requires an explicit tenant
  * allow-list. Both must be set, deliberately, for a single provider call to
- * become possible.
+ * become possible — and both gates return before the production port set is
+ * even constructed.
  *
  * ─── WHY AN ALLOW-LIST AND NOT TENANT DISCOVERY ───────────────────────────
  * `listDueRetryCandidates` refuses to have an "all tenants" mode on purpose: a
  * cross-tenant read is how one customer's quota ends up answering another's
- * question. Discovering tenants by scanning the attempts table for distinct
- * organizations would reintroduce exactly that read, one layer up, and would
- * make the blast radius of enabling the flag "every tenant at once". Naming the
- * tenants keeps activation a per-tenant act. Broadening this is a deliberate
- * decision with its own evidence, not a default.
+ * question. Discovering tenants by scanning the attempts table would
+ * reintroduce exactly that read one layer up, and would make the blast radius
+ * of enabling the flag "every tenant at once". Naming the tenants keeps
+ * activation a per-tenant act. Broadening this is a deliberate decision with
+ * its own evidence, not a default.
  *
  * ─── IT NEVER THROWS ──────────────────────────────────────────────────────
  * Cron ticks are shared. A retry failure is reported and the tick continues, in
@@ -37,14 +38,11 @@ import {
   type RetryCycleSummary,
 } from '../services/enrichment/retryConsumer';
 import { listDueRetryCandidates } from '../services/enrichment/retryCandidates';
-import { planProspectEnrichment } from '../services/enrichment/service';
-import { executePlannedField } from '../services/enrichment/execution';
-import { ingestionEnrichmentCoverage } from '../services/leadIngestion/enrichmentCoverage';
-import {
-  defaultEnrichmentPorts,
-  defaultExecuteEnrichmentPorts,
-  tenantSourceStatuses,
-} from '../apiHandlers/prospects/prospectIntelligenceRead';
+import { consumeEnrichmentWork } from '../services/enrichment/consumeEnrichmentWork';
+import { makeProductionEnrichmentPorts } from '../services/enrichment/productionPorts';
+import { defaultFindRecentObservation } from '../services/enrichment/providers/observations';
+import { DEFAULT_FRESHNESS_DAYS } from '../services/enrichment/providers/execute';
+import { tenantSourceStatuses } from '../apiHandlers/prospects/prospectIntelligenceRead';
 import { ownedDbTable } from '../db/writeOwner';
 
 /** Opt-IN. Absent or anything but `'true'` and this job does nothing at all. */
@@ -66,6 +64,7 @@ export interface RetryJobReport {
   readonly ran: boolean;
   readonly tenants: number;
   readonly discovered: number;
+  readonly handed: number;
   readonly executed: number;
   readonly failures: number;
   readonly durationMs: number;
@@ -73,7 +72,8 @@ export interface RetryJobReport {
 }
 
 const IDLE: RetryJobReport = {
-  ran: false, tenants: 0, discovered: 0, executed: 0, failures: 0, durationMs: 0, summaries: [],
+  ran: false, tenants: 0, discovered: 0, handed: 0, executed: 0,
+  failures: 0, durationMs: 0, summaries: [],
 };
 
 /** Tenants in scope, from the allow-list. Deduplicated, order preserved. */
@@ -87,63 +87,71 @@ export function retrySchedulerEnabled(env: NodeJS.ProcessEnv = process.env): boo
   return env[RETRY_SCHEDULER_FLAG] === 'true';
 }
 
+/** Whole days between two instants, as `execute.ts` measures freshness. */
+const daysBetween = (a: string, b: string): number =>
+  Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
+
 /**
- * Bind the consumer to production.
+ * Bind the selector to production.
  *
- * Every port here is an EXISTING production function. The one piece of new
- * reading is `resolveProspect`, because the attempt record is anchored on the
- * canonical entity and a plan is built for a lead — see the port's own
- * documentation for why the choice of lead cannot affect what is enriched.
+ * Every capability here is an EXISTING production singleton or seam:
+ * `listDueRetryCandidates`, `consumeEnrichmentWork`,
+ * `makeProductionEnrichmentPorts`, `defaultFindRecentObservation`,
+ * `tenantSourceStatuses`. Nothing is reimplemented, and the enrichment port set is
+ * forwarded whole rather than assembled here — A7A owns that composition, and a
+ * second one is how suppression gets lost.
  */
-export function productionRetryPorts(now: () => string): RetryConsumerPorts {
+export function productionRetryPorts(): RetryConsumerPorts {
   return {
     listCandidates: (input) => listDueRetryCandidates(input),
 
-    async resolveProspect({ organizationId, subject, entityId }) {
-      // A person is reached directly; an account is reached through the people
-      // who work there. Ordered by id so the choice is deterministic across
-      // workers and across cycles — the entity, not the lead, is then asserted
-      // by the consumer before anything is executed.
-      let personIds: string[] = [];
-      if (subject === 'person') {
-        personIds = [entityId];
-      } else {
-        const people = await ownedDbTable('unified_persons')
-          .select('id')
-          .eq('company_id', organizationId)        // tenant boundary — never optional
-          .eq('account_id', entityId)
-          .order('id', { ascending: true })
-          .limit(RETRY_BATCH_SIZE);
-        if (people.error) throw new Error(`unified_persons read failed: ${people.error.message}`);
-        personIds = ((people.data ?? []) as Array<{ id: string }>).map((r) => r.id);
-      }
-      if (personIds.length === 0) return null;
-
-      const leads = await ownedDbTable('canonical_leads')
-        .select('id')
-        .eq('company_id', organizationId)          // tenant boundary — never optional
-        .in('unified_person_id', personIds)
-        .order('id', { ascending: true })
-        .limit(1);
-      if (leads.error) throw new Error(`canonical_leads read failed: ${leads.error.message}`);
-      const row = ((leads.data ?? []) as Array<{ id: string }>)[0];
-      return row?.id ?? null;
+    async loadEntity({ organizationId, subject, entityId }) {
+      // The canonical row the attempt is anchored on. Tenant-scoped on the
+      // column each table actually uses for the tenant.
+      const table = subject === 'person' ? 'unified_persons' : 'prospect_accounts';
+      const tenantColumn = subject === 'person' ? 'company_id' : 'organization_id';
+      const res = await ownedDbTable(table)
+        .select('*')
+        .eq('id', entityId)
+        .eq(tenantColumn, organizationId)          // tenant boundary — never optional
+        .maybeSingle();
+      if (res.error) throw new Error(`${table} read failed: ${res.error.message}`);
+      return (res.data ?? null) as Readonly<Record<string, unknown>> | null;
     },
 
-    plan: (input) => planProspectEnrichment({
-      organizationId: input.organizationId,
-      prospectId: input.prospectId,
-      coverage: ingestionEnrichmentCoverage(),
-      now: input.now,
-    }, defaultEnrichmentPorts()),
+    async freshEvidenceCovers({ organizationId, entityId, providerId, attributes, now }) {
+      // A7A's lookup, and A3's freshness window — the same question the executor
+      // enforces, asked with the same threshold so the two cannot diverge. This
+      // answer only lets the decision refuse EARLY; suppression is still
+      // enforced inside the executor regardless of what is reported here.
+      const recent = await defaultFindRecentObservation({
+        organizationId, entityId, providerId, attributes,
+      });
+      return Boolean(recent && daysBetween(now, recent.observedAt) < DEFAULT_FRESHNESS_DAYS);
+    },
 
-    statuses: (organizationId) => tenantSourceStatuses(organizationId),
+    async sourceReadiness({ organizationId, providerId }) {
+      // The EXISTING tenant-aware source read, reused whole. Writing a second
+      // credential probe here would re-create the A3V defect it was written to
+      // fix — a source reporting `connected` on the strength of Omnivyra's own
+      // key rather than the tenant's.
+      const statuses = await tenantSourceStatuses(organizationId);
+      const status = statuses.find((s) => s.id === providerId) ?? null;
+      return {
+        // `credential_missing` is the one state that names this specifically;
+        // every other unusable state is a different blocker, and A7D reports
+        // them differently.
+        credentialAvailable: status !== null && status.connectionState !== 'credential_missing',
+        // A3C: exactly one state permits an acquisition attempt.
+        sourceOperational: Boolean(status?.usable),
+      };
+    },
 
-    // The executor, bound to the real production ports. The consumer never sees
-    // them, so it cannot reach a credential, a cost decision or a provider.
-    execute: (input) => executePlannedField(input, defaultExecuteEnrichmentPorts()),
+    enrichmentPorts: () => makeProductionEnrichmentPorts(),
 
-    emit: (event, fields) => logger.info(`pi_retry_${event}`, { ...fields, at: now() }),
+    consume: (input) => consumeEnrichmentWork(input),
+
+    emit: (event, fields) => logger.info(`pi_retry_${event}`, fields),
   };
 }
 
@@ -171,7 +179,7 @@ export async function runProspectRetryJob(deps: {
   }
 
   const started = Date.now();
-  const ports = deps.ports ?? productionRetryPorts(now);
+  const ports = deps.ports ?? productionRetryPorts();
   const workerId = deps.workerId ?? WORKER_ID;
   const summaries: RetryCycleSummary[] = [];
   let failures = 0;
@@ -196,6 +204,7 @@ export async function runProspectRetryJob(deps: {
     ran: true,
     tenants: tenants.length,
     discovered: summaries.reduce((n, s) => n + s.discovered, 0),
+    handed: summaries.reduce((n, s) => n + s.handed, 0),
     executed: summaries.reduce((n, s) => n + s.executed, 0),
     failures,
     durationMs: Date.now() - started,
