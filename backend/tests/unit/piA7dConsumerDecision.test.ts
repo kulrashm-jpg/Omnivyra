@@ -66,9 +66,9 @@ const ask = (over: Partial<Parameters<typeof decideEnrichmentAction>[0]> = {}) =
 // ── the vocabulary ──────────────────────────────────────────────────────────
 
 describe('A7D — the decision vocabulary is closed', () => {
-  it('is exactly the six A7B decisions', () => {
+  it('is exactly the five decisions — A7I retired RECLAIM', () => {
     expect([...ENRICHMENT_DECISIONS]).toEqual([
-      'NO_ACTION', 'WAIT', 'RECLAIM', 'RETRY_PROVIDER', 'TERMINAL', 'OPERATOR_REVIEW',
+      'NO_ACTION', 'WAIT', 'RETRY_PROVIDER', 'TERMINAL', 'OPERATOR_REVIEW',
     ]);
   });
 
@@ -122,13 +122,17 @@ describe('A7D — a live lease outranks everything', () => {
     // Matches `claimed_until < now` in dbReclaim: strictly-greater means live.
     expect(ask({ attempt: attempt({ completedAt: null, executionStatus: 'in_flight',
       providerCallState: 'not_called', claimedBy: 'w', claimedUntil: NOW }) })
-      .decision).toBe('RECLAIM');
+      .decision).toBe('RETRY_PROVIDER');
   });
 
-  it('an expired lease → RECLAIM', () => {
+  it('an expired lease → RETRY_PROVIDER, adopted by the claim (A7I)', () => {
+    // Was RECLAIM. The claim already adopts an expired-lease row on 23505, so a
+    // separate recovery action was both redundant and the source of the
+    // RECLAIM → WAIT → RECLAIM livelock.
     expect(ask({ attempt: attempt({ completedAt: null, executionStatus: 'in_flight',
       providerCallState: 'not_called', claimedBy: 'w', claimedUntil: PAST }) }))
-      .toEqual({ decision: 'RECLAIM', reason: 'expired uncalled attempt requires reclaim' });
+      .toEqual({ decision: 'RETRY_PROVIDER',
+        reason: 'expired uncalled attempt is adopted by the claim' });
   });
 
   it('a live lease is never overridden by fresh evidence or a blocker', () => {
@@ -147,8 +151,10 @@ describe('A7D — unleased attempts use the caller\'s cutoff, never an invented 
     claimedBy: null, claimedUntil: null, startedAt,
   });
 
-  it('stale past the supplied cutoff → RECLAIM', () => {
-    expect(ask({ attempt: unleased(LONG_AGO), abandonedBefore: CUTOFF }).decision).toBe('RECLAIM');
+  it('stale past the supplied cutoff → RETRY_PROVIDER, adopted by the claim (A7I)', () => {
+    expect(ask({ attempt: unleased(LONG_AGO), abandonedBefore: CUTOFF }))
+      .toEqual({ decision: 'RETRY_PROVIDER',
+        reason: 'unleased attempt is abandoned past the cutoff and is adopted by the claim' });
   });
 
   it('not yet stale → WAIT', () => {
@@ -174,7 +180,7 @@ describe('A7D — ambiguity is never resolved into a retry', () => {
         reason: 'provider call state is unknown; retry is unsafe' });
   });
 
-  it('unknown with an EXPIRED lease is still OPERATOR_REVIEW, not RECLAIM', () => {
+  it('unknown with an EXPIRED lease is still OPERATOR_REVIEW, never a retry', () => {
     expect(ask({ attempt: attempt({ completedAt: null, executionStatus: 'in_flight',
       providerCallState: 'unknown', claimedUntil: PAST }) }).decision).toBe('OPERATOR_REVIEW');
   });

@@ -53,20 +53,18 @@ const ports = {} as ExecuteEnrichmentPorts;
 /** Records every primitive interaction so behaviour is assertable, not assumed. */
 function harness(opts: {
   attempt?: EnrichmentAttemptRow | null;
-  reclaimTaken?: boolean;
   executeThrows?: unknown;
 } = {}) {
-  const calls = { list: [] as unknown[], reclaim: [] as unknown[], execute: [] as unknown[] };
+  // A7I: there is no `reclaim` dependency any more. Recovery is not a step this
+  // module performs, so there is nothing here to record — the adoption happens
+  // inside the claim, and is proven against the live index in A4N/A4U.
+  const calls = { list: [] as unknown[], execute: [] as unknown[] };
   return {
     calls,
     deps: {
       list: (async (i: unknown) => {
         calls.list.push(i);
         return opts.attempt === undefined ? [] : opts.attempt === null ? [] : [opts.attempt];
-      }) as never,
-      reclaim: (async (i: unknown) => {
-        calls.reclaim.push(i);
-        return opts.reclaimTaken ? { attemptId: 'attempt-1', attemptNumber: 1 } : null;
       }) as never,
       execute: (async (req: unknown, provider: unknown, p: unknown, o: unknown) => {
         calls.execute.push({ req, provider, p, o });
@@ -95,7 +93,6 @@ describe('A7E — every decision but one is inert', () => {
 
     expect(out).toMatchObject({ decision: 'NO_ACTION', executed: false });
     expect(h.calls.execute).toHaveLength(0);
-    expect(h.calls.reclaim).toHaveLength(0);
   });
 
   it('WAIT (live lease): zero provider calls, nothing claimed', async () => {
@@ -106,7 +103,6 @@ describe('A7E — every decision but one is inert', () => {
 
     expect(out).toMatchObject({ decision: 'WAIT', executed: false });
     expect(h.calls.execute).toHaveLength(0);
-    expect(h.calls.reclaim).toHaveLength(0);
   });
 
   it('TERMINAL: zero provider calls, the outcome is left intact', async () => {
@@ -125,7 +121,6 @@ describe('A7E — every decision but one is inert', () => {
 
     expect(out).toMatchObject({ decision: 'OPERATOR_REVIEW', executed: false });
     expect(h.calls.execute).toHaveLength(0);
-    expect(h.calls.reclaim).toHaveLength(0);   // an ambiguous paid call is never reclaimed
   });
 
   it('OPERATOR_REVIEW (platform_failed + called): zero provider calls', async () => {
@@ -148,41 +143,92 @@ describe('A7E — every decision but one is inert', () => {
   });
 });
 
-// ── reclaim ─────────────────────────────────────────────────────────────────
+// ── recovery, A7I ───────────────────────────────────────────────────────────
 
-describe('A7E — reclaim uses the existing mechanism and nothing more', () => {
-  const abandoned = attempt({
+describe('A7E — abandoned work is recovered BY the claim, not before it', () => {
+  const expiredLease = attempt({
     completedAt: null, executionStatus: 'in_flight',
     providerCallState: 'not_called', claimedBy: 'dead', claimedUntil: PAST });
 
-  it('an expired lease reclaims through reclaimExpiredAttempt', async () => {
-    const h = harness({ attempt: abandoned, reclaimTaken: true });
+  const unleasedStale = attempt({
+    completedAt: null, executionStatus: 'in_flight', providerCallState: 'not_called',
+    claimedBy: null, claimedUntil: null, startedAt: LONG_AGO });
+
+  it('an EXPIRED LEASE routes through execution, which the claim adopts', async () => {
+    const h = harness({ attempt: expiredLease });
     const out = await run(h);
 
-    expect(out).toMatchObject({ decision: 'RECLAIM', reclaimed: true, executed: false });
-    expect(h.calls.reclaim).toHaveLength(1);
-    expect(h.calls.execute).toHaveLength(0);   // no provider call chains from a reclaim
+    // Was RECLAIM + executed:false. The recovery write is gone; the claim's
+    // 23505 fallback does it, and the same call goes on to the provider.
+    expect(out).toMatchObject({ decision: 'RETRY_PROVIDER', executed: true });
+    expect(h.calls.execute).toHaveLength(1);
   });
 
-  it('losing the reclaim is a normal outcome, not an error or a call', async () => {
-    const h = harness({ attempt: abandoned, reclaimTaken: false });
-    const out = await run(h);
+  it('an UNLEASED STALE attempt routes through execution with the cutoff', async () => {
+    const h = harness({ attempt: unleasedStale });
+    const out = await run(h, { abandonedBefore: CUTOFF });
 
-    expect(out).toMatchObject({ decision: 'RECLAIM', reclaimed: false, executed: false });
-    expect(h.calls.execute).toHaveLength(0);
+    expect(out).toMatchObject({ decision: 'RETRY_PROVIDER', executed: true });
+    expect(h.calls.execute).toHaveLength(1);
   });
 
-  it('the reclaim preserves work-item identity and the A4U cutoff', async () => {
-    const h = harness({ attempt: attempt({
-      completedAt: null, executionStatus: 'in_flight', providerCallState: 'not_called',
-      claimedBy: null, claimedUntil: null, startedAt: LONG_AGO }), reclaimTaken: true });
+  it('abandonedBefore is FORWARDED into the recorded execution, unchanged', async () => {
+    const h = harness({ attempt: unleasedStale });
     await run(h, { abandonedBefore: CUTOFF });
 
-    expect(h.calls.reclaim[0]).toMatchObject({
-      organizationId: ORG, subject: 'account', entityId: ACCOUNT, providerId: 'clearbit',
-      requestedAttributes: ['employee_count', 'founded_year'],
-      abandonedBefore: CUTOFF, now: NOW,
+    // The cutoff A7D judged with is the cutoff the claim recovers with. If these
+    // diverged, the consumer could decide to retry work the claim then refuses.
+    expect((h.calls.execute[0] as { o: Record<string, unknown> }).o).toMatchObject({
+      abandonedBefore: CUTOFF,
+      requireAttemptRecord: true,
+      lease: { claimedBy: 'worker-1', ttlMs: 60_000 },
     });
+  });
+
+  it('omitting the cutoff forwards undefined — A4N behaviour, never an invented one', async () => {
+    // Without a cutoff an unleased row is not judged abandoned at all, so use
+    // the expired-lease shape, which needs no cutoff to be recoverable.
+    const h = harness({ attempt: expiredLease });
+    await run(h);
+
+    const o = (h.calls.execute[0] as { o: Record<string, unknown> }).o;
+    expect(o.abandonedBefore).toBeUndefined();
+  });
+
+  it('the work-item identity reaching execution is A4Y-verbatim', async () => {
+    const h = harness({ attempt: unleasedStale });
+    await run(h, { abandonedBefore: CUTOFF });
+
+    expect((h.calls.execute[0] as { req: Record<string, unknown> }).req).toMatchObject({
+      organizationId: ORG, subject: 'account', entityId: ACCOUNT,
+      attributes: ['employee_count', 'founded_year'],
+    });
+    expect((h.calls.execute[0] as { provider: string }).provider).toBe('clearbit');
+  });
+
+  it('THE LIVELOCK IS GONE: recovery cannot return without executing', async () => {
+    // The old shape was RECLAIM → executed:false → (next cycle) WAIT on our own
+    // fresh lease → expiry → RECLAIM again, forever, with the work item wedged
+    // behind A4N's live index. Neither recoverable shape can produce that now:
+    // both execute, and execution drives the attempt to a terminal state.
+    for (const row of [expiredLease, unleasedStale]) {
+      const h = harness({ attempt: row });
+      const out = await run(h, { abandonedBefore: CUTOFF });
+      expect(out.decision).toBe('RETRY_PROVIDER');
+      expect(out.executed).toBe(true);
+      expect(h.calls.execute).toHaveLength(1);
+    }
+  });
+
+  it('the module owns no recovery write at all', () => {
+    // Structural, not behavioural: the reclaim primitive is not reachable from
+    // this module, so no future edit can reintroduce a second recovery path
+    // without this failing. Comments stripped — the header discusses it.
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '../..', 'services/enrichment/consumeEnrichmentWork.ts'),
+      'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    expect(src).not.toMatch(/reclaimExpiredAttempt|claimEnrichmentWork|ownedDbTable/);
   });
 });
 

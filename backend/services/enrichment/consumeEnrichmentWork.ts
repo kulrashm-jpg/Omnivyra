@@ -6,8 +6,26 @@
  * A7D classifies. This module is the only thing that turns a classification into
  * an action, and it does so exclusively through primitives that already exist:
  * `listAttempts` (A7C) to load state, `decideEnrichmentAction` (A7D) to decide,
- * `reclaimExpiredAttempt` (A4U) to recover, and `executeEnrichmentRecorded`
- * (A4A/A4N) to execute. It contains NO state machine of its own.
+ * and `executeEnrichmentRecorded` (A4A/A4N) to execute. It contains NO state
+ * machine of its own.
+ *
+ * ─── A7I: THIS MODULE OWNS NO RECOVERY WRITE ──────────────────────────────
+ * It briefly did, and that was the defect. A separate RECLAIM branch took a
+ * fresh lease on an abandoned attempt and returned without executing; the next
+ * cycle then saw that live lease and waited, the lease expired, and the same
+ * branch reclaimed again — a closed RECLAIM → WAIT → RECLAIM loop in which the
+ * attempt never completed and A4N's live index went on blocking the work item
+ * permanently.
+ *
+ * The step was redundant as well as harmful. `claimEnrichmentWork` already
+ * recovers: its INSERT collides with the live index and, on 23505, it adopts
+ * the existing row rather than opening a second one. So recovery is not a
+ * decision this module routes — it is what the claim does when it finds the
+ * slot occupied by abandoned work. The only thing that was missing was the
+ * caller's abandonment cutoff, which now travels with the execution.
+ *
+ * The consequence is structural: there is no write here at all. Every path
+ * either returns inert or goes through the recorded execution seam.
  *
  * It is deliberately NOT a scheduler. It selects nothing, loops over nothing,
  * runs on no timer and is called by nobody. Selection, cadence and triggering
@@ -38,7 +56,6 @@
 
 import {
   listAttempts,
-  reclaimExpiredAttempt,
   type EnrichmentAttemptRow,
 } from './attempts';
 import {
@@ -82,7 +99,14 @@ export interface ConsumeEnrichmentWorkInput {
   readonly freshEvidenceCoversRequest: boolean;
   readonly credentialAvailable: boolean;
   readonly sourceOperational: boolean;
-  /** A4U — caller-supplied cutoff. Omitted preserves A4N behaviour exactly. */
+  /**
+   * A4U — caller-supplied cutoff. Omitted preserves A4N behaviour exactly.
+   *
+   * A7I: forwarded to BOTH the decision and the execution, and it must be the
+   * same value in both. A7D uses it to judge an unleased attempt abandoned; the
+   * claim uses it to actually adopt that row. Diverging would let the consumer
+   * decide to retry work the claim then refuses to recover.
+   */
   readonly abandonedBefore?: string;
   /**
    * The production port composition. REQUIRED and never defaulted here — see
@@ -96,7 +120,6 @@ export interface ConsumeEnrichmentWorkInput {
   /** Injected for testability; defaults to the real primitives. */
   readonly deps?: {
     readonly list?: typeof listAttempts;
-    readonly reclaim?: typeof reclaimExpiredAttempt;
     readonly execute?: typeof executeEnrichmentRecorded;
   };
 }
@@ -106,8 +129,6 @@ export interface ConsumeEnrichmentWorkResult {
   readonly reason: string;
   /** True only when a provider execution was actually attempted. */
   readonly executed: boolean;
-  /** Present only for RECLAIM: whether ownership actually transferred. */
-  readonly reclaimed?: boolean;
   /** Present only when execution ran and completed. */
   readonly result?: RecordedEnrichmentResult;
   /** Set when execution was refused for a normal, safe reason. */
@@ -125,7 +146,6 @@ export async function consumeEnrichmentWork(
   input: ConsumeEnrichmentWorkInput,
 ): Promise<ConsumeEnrichmentWorkResult> {
   const list = input.deps?.list ?? listAttempts;
-  const reclaim = input.deps?.reclaim ?? reclaimExpiredAttempt;
   const execute = input.deps?.execute ?? executeEnrichmentRecorded;
   const w = input.workItem;
 
@@ -164,29 +184,6 @@ export async function consumeEnrichmentWork(
     case 'OPERATOR_REVIEW':
       return { decision, reason, executed: false };
 
-    // ── recover abandoned ownership, and stop there ────────────────────────
-    case 'RECLAIM': {
-      const taken = await reclaim({
-        organizationId: w.organizationId,
-        subject: w.subject,
-        entityId: w.entityId,
-        providerId: w.providerId,
-        requestedAttributes: w.requestedAttributes,
-        claimedBy: input.lease.claimedBy,
-        claimedUntil: new Date(Date.parse(input.now) + Math.max(1, input.lease.ttlMs)).toISOString(),
-        now: input.now,
-        abandonedBefore: input.abandonedBefore,
-      });
-      // A null result means another worker took it first. That is a normal
-      // concurrency outcome, not an error, and it authorises nothing.
-      //
-      // Execution does NOT chain from here. Adopting a reclaimed attempt into
-      // the recorded execution path has no existing seam — `executeEnrichmentRecorded`
-      // always opens or claims its own attempt — and inventing one would be new
-      // infrastructure. The next cycle re-reads and re-decides.
-      return { decision, reason, executed: false, reclaimed: taken !== null };
-    }
-
     // ── the ONLY path to a provider ────────────────────────────────────────
     case 'RETRY_PROVIDER': {
       try {
@@ -208,6 +205,12 @@ export async function consumeEnrichmentWork(
             // A4N: the claim is the arbiter. Of two schedulers seeing the same
             // work, the database admits exactly one.
             lease: input.lease,
+            // A4U (A7I) — the SAME cutoff A7D judged with. This is what makes
+            // recovery a route through the claim rather than a step before it:
+            // if the decision above concluded an abandoned attempt is
+            // recoverable, the claim's 23505 fallback adopts that exact row
+            // instead of opening a second one.
+            abandonedBefore: input.abandonedBefore,
             // A4J: no provider call without a recorded attempt.
             requireAttemptRecord: true,
           },
