@@ -48,6 +48,23 @@ import { assessOutreachReadiness } from '../../services/prospectOutreach/readine
 import { readProspectOutcomeCorpus } from '../../services/prospectOutcomes/corpus';
 import { planProspectEnrichment } from '../../services/enrichment/service';
 import { ingestionEnrichmentCoverage } from '../../services/leadIngestion/enrichmentCoverage';
+// A6 — the production execution boundary. Every one of these is an EXISTING
+// production singleton or the existing canonical executor; none is new.
+import { executePlannedField, type PlanFieldExecution } from '../../services/enrichment/execution';
+import {
+  defaultCostPort,
+  tenantCredentialPort,
+  defaultFindRecentObservation,
+  defaultPersistObservation,
+  listSourceStatus,
+  getProvider,
+  ACQUISITION_SOURCES,
+} from '../../services/enrichment/providers';
+import type {
+  ExecuteEnrichmentPorts,
+  SourceStatus,
+  EnrichmentProviderAdapter,
+} from '../../services/enrichment/providers';
 import { SCORE_DIMENSIONS } from '../../services/leadUnderstanding/types';
 import type { TenantIntegrationRow } from '../../services/integrations/dataSourceCatalogue';
 
@@ -477,4 +494,149 @@ function defaultEnrichmentPorts() {
       throw new Error('the prospect read surface does not persist enrichment results');
     },
   };
+}
+
+// ─── A6 — the production ENRICHMENT EXECUTION boundary ──────────────────────
+//
+// The audits established that every piece of the executor already exists and is
+// correct, and that exactly two things were missing: a composition of the four
+// real production ports, and one write-capable entry point. This is the first.
+//
+// It lives here, beside `defaultEnrichmentPorts`, for the reason that function
+// already records: the seams take ports so they are testable without a database,
+// so the binding belongs at the API boundary that needs it rather than inside a
+// frozen contract. No container, no framework, no second execution engine.
+//
+// ─── WHY THE IDENTITY OF THESE FOUR MATTERS ────────────────────────────────
+// `findRecentObservation` is the executor's only defence against paying a
+// provider for evidence already on file. Thirteen `async () => null` stubs
+// satisfy its type perfectly and disable it completely, and they are the most
+// copied shape in the repository. TypeScript can prove the port is PRESENT; it
+// cannot prove it is REAL. `a6ExecutorBoundary.test.ts` asserts function
+// identity against these exact singletons for that reason — a shape assertion
+// would pass for a stub and is deliberately not what is written there.
+
+/**
+ * The production `ExecuteEnrichmentPorts`.
+ *
+ * Every member is the existing production singleton, referenced — never
+ * re-implemented, wrapped or approximated:
+ *
+ *   authorizeCost / releaseCost  `defaultCostPort` (= `tenantFundedExecutionPort`),
+ *                                which `execute.ts` itself names as the default
+ *   resolveCredential            `tenantCredentialPort` — THIS tenant's key, never
+ *                                `process.env`
+ *   findRecentObservation        `defaultFindRecentObservation` — fail-closed
+ *   persistObservation           `defaultPersistObservation` — LI-2's write
+ */
+export function defaultExecuteEnrichmentPorts(): ExecuteEnrichmentPorts {
+  return {
+    // Spread, so `authorizeCost` and `releaseCost` remain the SAME function
+    // objects the singleton holds and the identity guard can see them.
+    ...defaultCostPort,
+    resolveCredential: tenantCredentialPort.resolveCredential,
+    findRecentObservation: defaultFindRecentObservation,
+    persistObservation: defaultPersistObservation,
+    now: () => new Date().toISOString(),
+  };
+}
+
+/**
+ * Live source states for this tenant.
+ *
+ * `listSourceStatus` asks whether a credential is present by ENV VAR because it
+ * has no tenant. We do, so the answer is taken from the tenant credential store
+ * and mapped back onto the descriptor's env var. Passing `hasCredential` (the
+ * platform-wide `process.env` check) here would re-create the A3V defect where a
+ * source reported `connected` on the strength of Omnivyra's own key.
+ */
+async function tenantSourceStatuses(organizationId: string): Promise<readonly SourceStatus[]> {
+  const withTenantCredential = new Set<string>();
+  await Promise.all(ACQUISITION_SOURCES.map(async (source) => {
+    if (!source.credentialEnvVar || !getProvider(source.id)) return;
+    const key = await tenantCredentialPort
+      .resolveCredential({ organizationId, providerId: source.id })
+      .catch(() => null);
+    if (key) withTenantCredential.add(source.credentialEnvVar);
+  }));
+  return listSourceStatus(
+    (id) => Boolean(getProvider(id)),
+    (envVar) => Boolean(envVar && withTenantCredential.has(envVar)),
+  );
+}
+
+export interface ExecuteProspectEnrichmentInput {
+  readonly organizationId: string;
+  readonly prospectId: string;
+  /** The attribute to enrich. Named by the caller — never chosen here. */
+  readonly attribute: string;
+  readonly subject: 'person' | 'account';
+  readonly now: string;
+  readonly stalenessDays?: number;
+  /** Test seams. Production supplies neither. */
+  readonly ports?: ExecuteEnrichmentPorts;
+  readonly adapter?: EnrichmentProviderAdapter;
+}
+
+export type ExecuteProspectEnrichmentResult =
+  | { readonly status: 'not_planned'; readonly reason: string }
+  | { readonly status: 'executed'; readonly execution: PlanFieldExecution };
+
+/**
+ * Execute ONE planned enrichment field.
+ *
+ * This is an entry point, not a second orchestrator. It plans, locates the field
+ * the caller named, and hands both to `executePlannedField`. Ordering, refusal
+ * taxonomy, suppression, cost, attempt claim and terminal state all stay where
+ * they already live.
+ *
+ * ─── THE ATTRIBUTE IS THE CALLER'S CHOICE ─────────────────────────────────
+ * It does not scan the plan and pick something to spend on. A caller names one
+ * attribute; if the planner did not mark that attribute for enrichment, this
+ * refuses and reports the planner's own reason. Choosing here would be a
+ * scheduling policy, and no scheduler exists yet.
+ */
+export async function executeProspectEnrichment(
+  input: ExecuteProspectEnrichmentInput,
+): Promise<ExecuteProspectEnrichmentResult> {
+  const { plan, snapshot } = await planProspectEnrichment({
+    organizationId: input.organizationId,
+    prospectId: input.prospectId,
+    coverage: ingestionEnrichmentCoverage(),
+    stalenessDays: input.stalenessDays,
+    now: input.now,
+  }, defaultEnrichmentPorts());
+
+  const field = plan.fields.find(
+    (f) => f.attribute === input.attribute && f.subject === input.subject);
+  if (!field) {
+    return { status: 'not_planned', reason: `${input.subject}.${input.attribute} is not in this plan` };
+  }
+  if (field.action !== 'enrich') {
+    // The planner's verdict, quoted rather than overridden.
+    return { status: 'not_planned', reason: `${field.action}: ${field.reason}` };
+  }
+
+  const execution = await executePlannedField({
+    plan,
+    field,
+    snapshot,
+    statuses: await tenantSourceStatuses(input.organizationId),
+    // ─── A4J (B1) — the mandatory safety configuration ────────────────────
+    // Automated production execution must not proceed to provider egress when
+    // the attempt record cannot be established. The default is fail-OPEN, which
+    // is right for a user-initiated action and wrong here: a lost attempt row
+    // would become an unrecorded paid call, understating the tenant's spend in
+    // exactly the case a scheduler creates.
+    //
+    // `lease` would be stronger still, but `executePlannedField` does not
+    // forward it to the recorder, and adding a pass-through would change a
+    // frozen contract. `requireAttemptRecord` is therefore the strongest
+    // configuration available without altering the executor, and it throws
+    // BEFORE adapter, credential, suppression, cost and egress.
+    requireAttemptRecord: true,
+    adapter: input.adapter,
+  }, input.ports ?? defaultExecuteEnrichmentPorts());
+
+  return { status: 'executed', execution };
 }
