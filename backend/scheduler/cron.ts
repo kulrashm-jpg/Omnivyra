@@ -123,6 +123,7 @@ import { sweepStaleExecutions } from '../services/queueHealth';
 import { runReconciliationPass } from '../services/operationalReconciler';
 import { runIntelligenceEventCleanup } from '../jobs/intelligenceEventCleanup';
 import { runSettlementExpirySweepJob } from '../jobs/settlementExpirySweepJob';
+import { runProspectRetryJob } from '../jobs/prospectRetryJob';
 import { runSettlementMetricsRetention, pruneRolledSettlementMetrics } from '../services/billing/payments/settlementMetricsRetention';
 import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
 import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefreshJob';
@@ -204,6 +205,12 @@ const INTELLIGENCE_EVENT_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per 
 // sessions to `expired`. Deterministic + idempotent (re-entrancy lock + the
 // append-only event ledger), so a frequent interval is safe.
 const SETTLEMENT_EXPIRY_SWEEP_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
+// A7 enrichment retry sweep — hand due retry candidates to the existing
+// enrichment executor. INERT unless PI_RETRY_SCHEDULER_ENABLED='true' AND a
+// tenant allow-list is set: with either absent the job reads nothing and
+// returns. The interval is the discovery cadence, not a retry policy — the
+// horizon each candidate waits for is the provider's own `Retry-After`.
+const PROSPECT_RETRY_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
 // Settlement metrics rollup — compact closed time buckets of the append-only
 // operational metrics ledger. Deterministic + idempotent.
 const SETTLEMENT_METRICS_RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
@@ -334,6 +341,7 @@ let lastCampaignHealthEvaluationRun = 0;
 let lastDailyIntelligenceRun = 0;
 let lastIntelligenceEventCleanupRun = 0;
 let lastSettlementExpirySweepRun = 0;
+let lastProspectRetryRun = 0;
 let lastSettlementMetricsRetentionRun = 0;
 let lastWeeklyPricingAnalysisRun = 0;
 let lastEngagementDigestRun = 0;
@@ -1387,6 +1395,25 @@ async function runSchedulerCycle(opts: { includePublishSafetyNet?: boolean } = {
       }
     } catch (error: unknown) {
       console.error('❌ Settlement expiry sweep error:', formatCaughtError(error));
+    }
+  }
+
+  // A7 enrichment retries. Bounded per tick: one batch per tenant in scope,
+  // one candidate at a time, each claimed through the existing attempt lease so
+  // two schedulers — or two containers — cannot execute the same work item.
+  // The job is flag-dark and never throws.
+  if (shouldRunCronJob("prospectEnrichmentRetry", PROSPECT_RETRY_INTERVAL_MS, lastProspectRetryRun)) {
+    lastProspectRetryRun = Date.now();
+    try {
+      const result = await runProspectRetryJob();
+      if (result.ran && (result.executed > 0 || result.failures > 0)) {
+        console.log(
+          `✅ Prospect enrichment retry: ${result.executed} executed of ${result.discovered} due `
+          + `across ${result.tenants} tenant(s), ${result.failures} failure(s)`
+        );
+      }
+    } catch (error: unknown) {
+      console.error('❌ Prospect enrichment retry error:', formatCaughtError(error));
     }
   }
 

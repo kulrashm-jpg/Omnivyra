@@ -425,7 +425,7 @@ export async function getProspectDetail(
  * binding lives here — at the API boundary that needs it — rather than being
  * pushed into WS-2, whose contract is frozen.
  */
-function defaultEnrichmentPorts() {
+export function defaultEnrichmentPorts() {
   return {
     async loadSnapshot(organizationId: string, prospectId: string) {
       const lead = await ownedDbTable('canonical_leads')
@@ -550,7 +550,7 @@ export function defaultExecuteEnrichmentPorts(): ExecuteEnrichmentPorts {
  * platform-wide `process.env` check) here would re-create the A3V defect where a
  * source reported `connected` on the strength of Omnivyra's own key.
  */
-async function tenantSourceStatuses(organizationId: string): Promise<readonly SourceStatus[]> {
+export async function tenantSourceStatuses(organizationId: string): Promise<readonly SourceStatus[]> {
   const withTenantCredential = new Set<string>();
   await Promise.all(ACQUISITION_SOURCES.map(async (source) => {
     if (!source.credentialEnvVar || !getProvider(source.id)) return;
