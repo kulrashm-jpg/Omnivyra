@@ -3,6 +3,10 @@ import { getGoogleSearchConsoleReadiness } from './googleProviderReadinessServic
 import { saveProfile, type CompanyProfile } from './companyProfileService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
+  normalizeSocialUrl,
+  isLikelyCompanySocialLink,
+} from './companyProfile/normalization';
+import {
   assertCompetitorOutputPartition,
   buildCandidatesFromNames,
   extractCompetitiveContextFromResolvedInput,
@@ -510,22 +514,77 @@ export async function resolveReportInput(params: {
   return resolvedInput;
 }
 
-export async function persistResolvedReportInputs(input: ResolvedReportInput): Promise<void> {
-  const socialProfiles = input.resolved.socialLinks
-    .slice(0, 20)
-    .map((url) => ({
-      platform: url.toLowerCase().includes('linkedin') ? 'linkedin' :
-        url.toLowerCase().includes('instagram') ? 'instagram' :
-          url.toLowerCase().includes('facebook') ? 'facebook' :
-            url.toLowerCase().includes('youtube') ? 'youtube' :
-              url.toLowerCase().includes('tiktok') ? 'tiktok' :
-                url.toLowerCase().includes('reddit') ? 'reddit' :
-                  url.toLowerCase().includes('twitter') || url.toLowerCase().includes('x.com') ? 'x' :
-                    'other',
+function platformForSocialUrl(url: string): string {
+  const lower = url.toLowerCase();
+  if (lower.includes('linkedin')) return 'linkedin';
+  if (lower.includes('instagram')) return 'instagram';
+  if (lower.includes('facebook')) return 'facebook';
+  if (lower.includes('youtube')) return 'youtube';
+  if (lower.includes('tiktok')) return 'tiktok';
+  if (lower.includes('reddit')) return 'reddit';
+  if (lower.includes('twitter') || lower.includes('x.com')) return 'x';
+  return 'other';
+}
+
+/**
+ * G-8 — persist social links WITHOUT inventing their provenance.
+ *
+ * THE DEFECT. Every resolved URL was stamped `source: 'report_input', confidence: 'high'`. Two
+ * things went wrong at once:
+ *
+ *   1. `resolved.socialLinks` is a blend. `buildDefaults` flattens the crawl-populated typed
+ *      fields (`profile.linkedin_url`, …) together with `report_settings.default_inputs` and
+ *      `other_social_links`, and `resolveSocialLinks` then merges in whatever the customer typed
+ *      into the report form. After that flattening the origin of any single URL is unrecoverable —
+ *      so declaring the whole set `high` confidence asserted ownership evidence that does not
+ *      exist for the typed ones.
+ *   2. The write REPLACED `profile.social_profiles`, discarding the per-entry `source` /
+ *      `confidence` that `buildSocialProfileList` had already carried through from extraction
+ *      (`'website' | 'social' | 'inferred' | 'user'`). Real provenance was overwritten with a
+ *      fabricated constant.
+ *
+ * THE CORRECTION, in that order:
+ *   • an entry already known to the profile keeps its established source and confidence — a link
+ *     genuinely observed on the company's own site stays observed;
+ *   • anything else reaching this function came from the form or from stored report defaults, which
+ *     is the company declaring an identity, so it is recorded as `'user'`;
+ *   • confidence is only `'High'` when `isLikelyCompanySocialLink` actually holds — a LinkedIn URL
+ *     must be a `/company/` page, an X URL a single handle segment, a YouTube URL a channel. A
+ *     hostname containing a platform name is not evidence of ownership, so it stays `'Low'`.
+ *
+ * The returned SET, ORDER and 20-entry cap are unchanged, so `resolved.socialLinks` — and the
+ * legacy social-link count signal that reads it — are untouched by this change.
+ */
+function buildPersistedSocialProfiles(
+  input: ResolvedReportInput,
+): Array<{ platform: string; url: string; source: string; confidence: string }> {
+  const known = new Map<string, { platform?: string; url: string; source?: string; confidence?: string }>();
+  for (const entry of input.profile?.social_profiles ?? []) {
+    const key = normalizeSocialUrl(entry?.url ?? '') ?? (entry?.url ?? '');
+    if (key) known.set(key.toLowerCase(), entry);
+  }
+
+  return input.resolved.socialLinks.slice(0, 20).map((url) => {
+    const normalized = normalizeSocialUrl(url) ?? url;
+    const existing = known.get(normalized.toLowerCase());
+    const platform = existing?.platform ?? platformForSocialUrl(url);
+
+    // Established provenance wins: never overwrite an observation with a declaration.
+    if (existing?.source) {
+      return { platform, url, source: existing.source, confidence: existing.confidence ?? 'Low' };
+    }
+
+    return {
+      platform,
       url,
-      source: 'report_input',
-      confidence: 'high',
-    }));
+      source: 'user',
+      confidence: isLikelyCompanySocialLink(platform, normalized) ? 'High' : 'Low',
+    };
+  });
+}
+
+export async function persistResolvedReportInputs(input: ResolvedReportInput): Promise<void> {
+  const socialProfiles = buildPersistedSocialProfiles(input);
 
   const reportSettings = {
     ...(input.profile?.report_settings ?? {}),

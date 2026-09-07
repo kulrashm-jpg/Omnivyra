@@ -139,3 +139,42 @@ export function summarizeProvenance(sources: readonly EvidenceSourceKind[]): Pro
     report1Clean: privateSources.length === 0,
   };
 }
+
+/**
+ * G-8 — provenance of a persisted `social_profiles` entry.
+ *
+ * THE DEFECT THIS ANSWERS
+ * `persistResolvedReportInputs` stamped every resolved social URL with
+ * `source: 'report_input', confidence: 'high'`, overwriting the per-entry `source` the refinement
+ * pipeline had already established (`buildSocialProfileList` carries the extraction's own
+ * `source`/`confidence` through). A URL the company typed into the report form was therefore
+ * stored as indistinguishable from one observed on the company's own website.
+ *
+ * The two are not the same kind of evidence: a declared link is the company asserting an identity,
+ * a discovered link is a public observation of one. This maps the EXISTING per-entry vocabulary
+ * onto the EXISTING provenance taxonomy — it adds no field, no table and no second taxonomy.
+ *
+ *   'website' | 'social'          the link was read off a public page          → PUBLIC_OBSERVED
+ *   'user' | 'report_input'       the company supplied it                      → COMPANY_CONFIRMED
+ *   'inferred'                    derived rather than seen                     → INFERRED
+ *   'missing' | absent | unknown  no evidence of origin survives               → UNAVAILABLE
+ *
+ * UNAVAILABLE for the unknown case is deliberate and matches `unspecified` in the source table
+ * above: an untagged entry must never be readable as a public measurement.
+ */
+export function provenanceForSocialProfileSource(
+  source: string | null | undefined,
+): EvidenceProvenanceClass {
+  switch ((source ?? '').trim().toLowerCase()) {
+    case 'website':
+    case 'social':
+      return 'PUBLIC_OBSERVED';
+    case 'user':
+    case 'report_input':
+      return 'COMPANY_CONFIRMED';
+    case 'inferred':
+      return 'INFERRED';
+    default:
+      return 'UNAVAILABLE';
+  }
+}
