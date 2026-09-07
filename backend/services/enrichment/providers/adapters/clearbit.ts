@@ -46,6 +46,7 @@ import { normalizeCompanyDomain } from '../../../../../lib/shared/domain/company
 import {
   refuse,
   classifyEnrichmentError,
+  parseRetryAfter,
   type EnrichmentProviderAdapter,
   type EnrichmentRequest,
   type ProviderField,
@@ -238,7 +239,18 @@ export const clearbitEnrichmentAdapter: EnrichmentProviderAdapter = {
     }
 
     if (!response.ok) {
-      return refuse(classifyStatus(response.status), notReturned, `HTTP ${response.status}`);
+      // A6A: the ONLY place a retry horizon exists. Read from the response's own
+      // header — never synthesised, and null unless the provider supplied
+      // something usable. Passed through on every refusal here, not only 429: a
+      // 503 may also carry one, and the header's presence is the provider's
+      // statement, not ours to filter by status code.
+      // Optional-chained deliberately: a transport that yields no `headers` must
+      // not throw here. Throwing would land in the outer catch and reclassify a
+      // rate limit as `provider_unavailable` — turning a precise, actionable
+      // provider verdict into a vague one because we reached for a header.
+      // Absent headers mean absent horizon, which is the honest answer anyway.
+      const retryAfterAt = parseRetryAfter(response.headers?.get?.('retry-after') ?? null, new Date());
+      return refuse(classifyStatus(response.status), notReturned, `HTTP ${response.status}`, retryAfterAt);
     }
 
     let payload: unknown;

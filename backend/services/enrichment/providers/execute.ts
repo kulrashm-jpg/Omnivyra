@@ -145,6 +145,13 @@ export interface ExecuteEnrichmentResult {
   readonly normalized: EnrichmentResult | null;
   readonly reason: string;
   readonly correlationId: string;
+  /**
+   * A6A — the provider's own retry horizon, ISO-8601, or null.
+   *
+   * Null means the provider said nothing usable, NOT "retry now". Never
+   * synthesised: no backoff, no fixed duration, nothing from the attempt number.
+   */
+  readonly retryAfterAt: string | null;
 }
 
 const outcomeResult = (
@@ -161,6 +168,7 @@ const outcomeResult = (
   normalized: null,
   reason,
   correlationId: request.correlationId,
+  retryAfterAt: null,          // A6A: only a provider response can supply one
 });
 
 const daysBetween = (a: string, b: string): number =>
@@ -265,6 +273,9 @@ export async function executeEnrichment(
       ...outcomeResult(response.outcome === 'enriched' ? 'field_not_found' : response.outcome,
         request, adapter.id, response.detail ?? 'the provider returned no usable field', true),
       attributesNotReturned: response.notReturned.length ? response.notReturned : supported,
+      // A6A: a rate-limited or unavailable provider answers HERE, and this is
+      // the only branch that can carry a horizon.
+      retryAfterAt: response.retryAfterAt ?? null,
     };
   }
 
@@ -298,6 +309,7 @@ export async function executeEnrichment(
 
   return {
     outcome: 'enriched',
+    retryAfterAt: null,          // A6A: a successful call imposes no wait
     providerId: adapter.id,
     providerCalled: true,
     attributesReturned: normalized.returnedAttributes,

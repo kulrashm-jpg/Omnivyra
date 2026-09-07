@@ -331,6 +331,7 @@ export async function executeEnrichmentRecorded(
     providerCalled: boolean;
     providerCallState: ProviderCallState;
     executionStatus: ExecutionStatus;
+    retryAfterAt?: string | null;
     sourceRecordId?: string | null;
     attributesReturned?: readonly string[];
     detail: string | null;
@@ -415,6 +416,9 @@ export async function executeEnrichmentRecorded(
     // discriminator is the executor's own observation of egress, not a list of
     // outcome values — the evidence, not a lookup that could drift from it.
     executionStatus: result.providerCalled ? 'completed' : 'refused_pre_call',
+    // A6A: the provider's own horizon, when it sent one. The two failure closes
+    // above cannot carry one — no provider response exists on either path.
+    retryAfterAt: result.retryAfterAt,
     sourceRecordId: result.sourceRecordId,
     attributesReturned: result.attributesReturned,
     detail: result.reason,

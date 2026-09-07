@@ -209,6 +209,13 @@ export interface CompleteAttemptInput {
    * claiming `in_flight`. Every close site must state which case it is in.
    */
   readonly executionStatus: ExecutionStatus;
+  /**
+   * A6A — the provider's own retry horizon, ISO-8601, or null/absent.
+   *
+   * Recorded, never decided. Null means the provider expressed no opinion — it
+   * does NOT mean "retry now". Only a provider response can supply one.
+   */
+  readonly retryAfterAt?: string | null;
   readonly sourceRecordId?: string | null;
   readonly attributesReturned?: readonly string[];
   readonly detail?: string | null;
@@ -597,6 +604,8 @@ export async function completeAttempt(input: CompleteAttemptInput): Promise<void
         ?? (input.providerCalled ? 'called' : 'not_called'),
       // A5: stated by the caller, never inferred here. See EXECUTION_STATUSES.
       execution_status: input.executionStatus,
+      // A6A: the provider's statement, or null. Never synthesised here.
+      next_retry_at: input.retryAfterAt ?? null,
       source_record_id: input.sourceRecordId ?? null,
       attributes_returned: input.attributesReturned ? [...input.attributesReturned] : null,
       detail: safeDetail(input.detail),
