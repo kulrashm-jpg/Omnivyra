@@ -22,6 +22,7 @@ import { buildExternalCompetitiveIntelligence, type ExternalCompetitiveIntellige
 import { discoverAndPersistCompetitorDomains, type CompetitorDiscoveryResult } from './competitorDiscoveryEngineService';
 import { bootstrapCompetitorDataset, type CompetitorBootstrapResult } from './competitiveDatasetBootstrapService';
 import { seedSerpQueryQueue, type SerpQuerySeed } from './serpAcquisitionService';
+import { runWithReportDeadline, throwIfReportDeadlineExceeded } from './intelligence/reportDeadlineContext';
 import { buildPredictiveStrategicIntelligence, type PredictiveStrategicIntelligence } from './predictiveStrategicIntelligenceService';
 import { buildAuthorityMarketPosition, type AuthorityMarketPosition } from './authorityMarketPositionService';
 // PRODUCT-RESTORE-001 Phase 1: explicit domain name (was the ambiguous `RecommendationIntelligence`).
@@ -354,7 +355,24 @@ async function persistSnapshot(snapshot: AnalyticsEnterpriseSnapshot): Promise<v
     }, { onConflict: 'company_id,snapshot_type,canonical_fingerprint' });
 }
 
-export async function getAnalyticsEnterpriseSnapshot(companyId: string): Promise<AnalyticsEnterpriseSnapshot> {
+/**
+ * `options.signal` is the owning report's deadline (see `reportDeadlineContext`). It is optional:
+ * cron, super-admin and every other caller keeps the existing uncancellable behaviour.
+ *
+ * IN-FLIGHT LIFECYCLE. The dedupe map used to be cleared only when the computation finally settled.
+ * A cancelled report stops awaiting immediately, so between the abort and that late settlement the
+ * map still advertised an abandoned computation, and the next request for the same fingerprint
+ * would silently await work nobody was waiting on any more. The entry is now evicted the moment the
+ * signal aborts, so a subsequent request starts its own computation.
+ *
+ * Eviction is identity-checked in both places. Without that check, request A's late `finally`
+ * would delete the entry request B had legitimately installed after A was cancelled — trading one
+ * stale-promise bug for another.
+ */
+export async function getAnalyticsEnterpriseSnapshot(
+  companyId: string,
+  options?: { signal?: AbortSignal },
+): Promise<AnalyticsEnterpriseSnapshot> {
   const canonical = await latestCanonicalFingerprint(companyId);
   const cached = await readSnapshot(companyId, canonical.fingerprint);
   if (cached) return cached;
@@ -366,18 +384,30 @@ export async function getAnalyticsEnterpriseSnapshot(companyId: string): Promise
     return { ...snapshot, cache_status: 'memory_hit' };
   }
 
-  const computePromise = computeAnalyticsEnterpriseSnapshot(companyId, canonical);
+  const signal = options?.signal;
+  // Opening the scope here makes `options.signal` self-sufficient: a caller that holds a deadline
+  // reaches the AI and SERP leaves through it even without opening a scope of its own. Report 2
+  // already opens one with the same signal, and re-entering with an identical value is inert.
+  const computePromise = signal
+    ? runWithReportDeadline(signal, () => computeAnalyticsEnterpriseSnapshot(companyId, canonical, signal))
+    : computeAnalyticsEnterpriseSnapshot(companyId, canonical);
   inflightSnapshots.set(inflightKey, computePromise);
+  const evictIfCurrent = () => {
+    if (inflightSnapshots.get(inflightKey) === computePromise) inflightSnapshots.delete(inflightKey);
+  };
+  signal?.addEventListener('abort', evictIfCurrent, { once: true });
   try {
     return await computePromise;
   } finally {
-    inflightSnapshots.delete(inflightKey);
+    signal?.removeEventListener('abort', evictIfCurrent);
+    evictIfCurrent();
   }
 }
 
 async function computeAnalyticsEnterpriseSnapshot(
   companyId: string,
   canonical: Awaited<ReturnType<typeof latestCanonicalFingerprint>>,
+  signal?: AbortSignal,
 ): Promise<AnalyticsEnterpriseSnapshot> {
   const [correlation, gscIntelligence, ingestionHistory] = await Promise.all([
     buildAnalyticsCorrelationContext(companyId).catch(() => ({ provenance: { ga: 'missing' as const, gsc: 'missing' as const }, insights: [] })),
@@ -402,11 +432,16 @@ async function computeAnalyticsEnterpriseSnapshot(
     ...correlation.insights.map(opportunityFromCorrelation),
     ...buildSeoOpportunities(gscIntelligence),
   ]);
+  // Each phase below is individually `.catch()`ed, which would swallow an abort and carry on to
+  // the next one. These checkpoints are what actually terminate the computation: the profile
+  // auto-refinement reached through the two calls below is the proven consumer of the budget.
+  throwIfReportDeadlineExceeded('analytics_enterprise_snapshot.competitor_discovery', signal);
   const competitorDiscovery = await discoverAndPersistCompetitorDomains({ companyId, gsc: gscIntelligence }).catch(() => ({
     status: 'unavailable' as const,
     discovered: [],
     suppressed: 0,
   }));
+  throwIfReportDeadlineExceeded('analytics_enterprise_snapshot.competitor_bootstrap', signal);
   const [competitorBootstrap, serpQuerySeeding] = await Promise.all([
     bootstrapCompetitorDataset({ companyId, gsc: gscIntelligence }).catch((error) => ({
       status: 'failed' as const,
@@ -421,6 +456,7 @@ async function computeAnalyticsEnterpriseSnapshot(
       seeds: [],
     })),
   ]);
+  throwIfReportDeadlineExceeded('analytics_enterprise_snapshot.external_competitive_intelligence', signal);
   const [externalCompetitiveIntelligence] = await Promise.all([
     buildExternalCompetitiveIntelligence({ companyId, gsc: gscIntelligence }).catch(() => ({
       status: 'unavailable' as const,

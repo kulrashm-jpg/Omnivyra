@@ -4,6 +4,7 @@ import { classifyDecisionType } from './decisionTypeRegistry';
 import { impactScore } from './reportDecisionUtils';
 import { supabase } from '../db/supabaseClient';
 import axios from 'axios';
+import { getReportDeadlineSignal } from './intelligence/reportDeadlineContext';
 import { config } from '@/config';
 // BETA-PHASE1-EXEC-002: bring SERP under the SAME canonical scan-budget governance as the paid LLM/Ahrefs
 // adapters — reuse only the existing helpers (no new context, budget service, ledger, or interface).
@@ -654,6 +655,11 @@ export async function fetchSerpResultsForKeyword(
     const response = await axios.get('https://serpapi.com/search.json', {
       params: { engine: 'google', q: query, num: SERP_RESULTS_PER_QUERY, api_key: serpApiKey },
       timeout: 8000,
+      // Report 2 deadline (reportDeadlineContext), reusing axios's own abort seam alongside the
+      // existing 8s per-request timeout — neither replaces the other. Reached from Report 2 via
+      // runProfileRefinement → discoverRefineCompetitorCandidates; null on every other path
+      // (Report 1 included), where behaviour is unchanged.
+      signal: getReportDeadlineSignal() ?? undefined,
     });
     if (scanId) {
       recordUsage(scanId, {
