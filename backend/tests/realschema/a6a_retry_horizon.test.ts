@@ -6,7 +6,9 @@
  *     nothing" is storable as NULL rather than as a fabricated instant;
  *   - it is `timestamptz`, matching every other instant on this table, so a
  *     horizon is comparable to `now()` without a cast;
- *   - adding it introduced no retry classification, lineage or policy column.
+ *   - adding it introduced no retry classification, lineage or policy column;
+ *   - and, since A6B, that the ONE index built for the horizon is exactly the
+ *     one the retry-candidate reader was written against.
  *
  * NOT EXECUTED BY THE AUTHOR: this suite requires `W6_DB_URL` and a disposable
  * database (scripts/ci/real-schema-ci.sh). It is written to the same contract as
@@ -64,11 +66,67 @@ describe('A6A — the column is shaped for "no opinion"', () => {
     }
   });
 
-  it('no index was added for it — no reader scans by horizon yet', async () => {
-    const { rows } = await db.query(
-      `SELECT indexdef FROM pg_indexes
-        WHERE schemaname='public' AND tablename='prospect_enrichment_attempts'`);
-    expect(rows.some((r) => /next_retry_at/.test(r.indexdef))).toBe(false);
+  // ─── SUPERSEDED BY A6B, DELIBERATELY INVERTED ───────────────────────────
+  // This assertion used to read `.toBe(false)`: A6A added the column and no
+  // index, because its own migration said an index "would only pay off for a
+  // scheduler scanning for due work, and no such reader exists". A6B built that
+  // reader (`listDueRetryCandidates`), so the precondition is gone and migration
+  // 20261021000000 adds the index. The invariant is inverted rather than deleted:
+  // the question "is the horizon indexed, and correctly?" still has to be
+  // answered here, because only real PostgreSQL can answer it.
+  describe('A6B — the horizon index', () => {
+    const NAME = 'idx_prospect_enrichment_attempts_retry_due';
+
+    it('exists, under the name the migration gives it', async () => {
+      const { rows } = await db.query(
+        `SELECT indexname FROM pg_indexes
+          WHERE schemaname='public' AND tablename='prospect_enrichment_attempts'
+            AND indexname=$1`, [NAME]);
+      expect(rows).toHaveLength(1);
+    });
+
+    it('leads on organization_id and follows with next_retry_at, in that order', async () => {
+      // Read from the catalogue, not from indexdef text: the column ORDER is the
+      // property that makes this index serve the reader's equality-then-range
+      // predicate and its ORDER BY, and a text match could be satisfied by a
+      // definition that happens to contain both names.
+      const { rows } = await db.query(
+        `SELECT a.attname
+           FROM pg_index i
+           JOIN pg_class c ON c.oid = i.indexrelid
+           JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+           JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+          WHERE c.relname = $1
+          ORDER BY k.ord`, [NAME]);
+      // Tenant first — isolation is structural, not conventional. The horizon
+      // second, because it is both the range predicate and the sort.
+      expect(rows.map((r) => r.attname)).toEqual(['organization_id', 'next_retry_at']);
+    });
+
+    it('is PARTIAL on next_retry_at IS NOT NULL — a row with no horizon is not stored', async () => {
+      const { rows } = await db.query(
+        `SELECT i.indpred IS NOT NULL AS partial,
+                pg_get_expr(i.indpred, i.indrelid) AS predicate,
+                i.indisunique AS unique
+           FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+          WHERE c.relname = $1`, [NAME]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].partial).toBe(true);
+      // NULL is the normal case and 20261020 is explicit that it does NOT mean
+      // "retry now", so those rows are excluded from the index rather than kept.
+      expect(rows[0].predicate).toBe('(next_retry_at IS NOT NULL)');
+      // An access path, never a constraint: two attempts may share a horizon.
+      expect(rows[0].unique).toBe(false);
+    });
+
+    it('is the ONLY index on the horizon — no duplicate access path came with it', async () => {
+      const { rows } = await db.query(
+        `SELECT indexname FROM pg_indexes
+          WHERE schemaname='public' AND tablename='prospect_enrichment_attempts'
+            AND indexdef LIKE '%next_retry_at%'
+          ORDER BY indexname`);
+      expect(rows.map((r) => r.indexname)).toEqual([NAME]);
+    });
   });
 });
 

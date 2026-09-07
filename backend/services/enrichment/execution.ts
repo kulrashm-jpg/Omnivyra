@@ -160,6 +160,30 @@ export interface ExecutePlannedFieldInput {
    * lost attempt row can never become an unrecorded paid call.
    */
   readonly requireAttemptRecord?: boolean;
+  /**
+   * A6C — take the work item ATOMICALLY instead of merely recording it.
+   *
+   * Passed straight through to the recorder, which already implements it: with
+   * a lease, `claimEnrichmentWork` runs before adapter, credential, suppression
+   * and cost, and a lost claim throws before any egress. The arbiter is the
+   * database's live partial unique index, so of two workers racing the same
+   * (tenant, entity, provider) work item exactly one proceeds.
+   *
+   * `requireAttemptRecord` is the weaker guarantee and remains the right one for
+   * the user-initiated route: it ensures no call happens WITHOUT a row, but the
+   * loser of a race learns that by being refused. An automated caller wants the
+   * stronger one — it must not race at all, and after a process death the lease
+   * expiry is what makes the work reclaimable rather than stranded.
+   *
+   * Omitted, behaviour is exactly as before: unleased, and governed by
+   * `requireAttemptRecord` alone.
+   */
+  readonly lease?: {
+    /** Worker/process identifier. Never a credential, never a user. */
+    readonly claimedBy: string;
+    /** How long the claim is held before an abandoned attempt may be taken. */
+    readonly ttlMs: number;
+  };
 }
 
 const text = (v: unknown): string | null => {
@@ -325,6 +349,7 @@ export async function executePlannedField(
     adapter: input.adapter,
     recorder: input.recorder,
     requireAttemptRecord: input.requireAttemptRecord,
+    lease: input.lease,
   });
   const { result } = recorded;
 
