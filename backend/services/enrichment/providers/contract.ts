@@ -123,6 +123,15 @@ export interface ProviderResponse {
    * except through the persistence port.
    */
   readonly payloadHash?: string | null;
+  /**
+   * A6A — when the provider says it may be asked again, as an ISO-8601 instant.
+   *
+   * Present ONLY when the provider actually supplied a usable horizon. It is
+   * never synthesised: no backoff, no fixed duration, nothing derived from the
+   * attempt number. Absent means the provider said nothing usable, which a
+   * future consumer must treat as "no opinion" rather than "retry now".
+   */
+  readonly retryAfterAt?: string | null;
   /** The raw payload, for `source_records.raw_payload`. Adapter-shaped. */
   readonly rawPayload?: unknown;
 }
@@ -155,7 +164,60 @@ export interface EnrichmentProviderAdapter {
 /** A refusal that costs nothing and calls nobody. */
 export const refuse = (
   outcome: EnrichmentOutcome, notReturned: readonly string[], detail?: string,
-): ProviderResponse => ({ outcome, fields: [], notReturned, detail });
+  retryAfterAt?: string | null,
+): ProviderResponse => ({ outcome, fields: [], notReturned, detail, retryAfterAt: retryAfterAt ?? null });
+
+/**
+ * A6A — read a provider's `Retry-After` as an ABSOLUTE instant.
+ *
+ * ─── WHY THIS IS PARSED AND NOT INVENTED ──────────────────────────────────
+ * A6 found this the one piece of information the pipeline actually DESTROYS.
+ * A rate-limited attempt records THAT it was limited and nothing about when the
+ * limit lifts, so a future consumer could only guess — and guessing at a
+ * vendor's reset is how a tenant's account gets hammered. Everything else a
+ * scheduler needs is derivable from what is already stored; this is not,
+ * because it exists only in a response header that is currently dropped.
+ *
+ * ─── ABSOLUTE, NOT RELATIVE ───────────────────────────────────────────────
+ * RFC 9110 allows two forms, and only one of them survives storage. A
+ * delta-seconds value is meaningless once written to a row — "120 seconds" from
+ * WHEN? — so it is resolved against `now` at the moment of reading and stored as
+ * an instant. `now` is a parameter rather than a call to the clock so the
+ * conversion is deterministic and testable.
+ *
+ * ─── MALFORMED MEANS ABSENT, NEVER A GUESS ────────────────────────────────
+ * Anything unusable returns null: a non-numeric non-date, a negative or
+ * fractional delta, an unparseable date, or a date already in the past. Absent
+ * is a truthful "the provider said nothing usable"; a fabricated timestamp
+ * would be indistinguishable from a real one and would licence a retry the
+ * provider never authorised. This mirrors the conservatism of
+ * `classifyEnrichmentError`, which turns anything unrecognised into
+ * `provider_unavailable` rather than a confident verdict.
+ *
+ * Returns an ISO-8601 instant, matching every other timestamp in this
+ * programme (`startedAt`, `completedAt`, `observedAt`).
+ */
+export function parseRetryAfter(header: string | null | undefined, now: Date): string | null {
+  if (typeof header !== 'string') return null;
+  const raw = header.trim();
+  if (!raw) return null;
+
+  // delta-seconds: a non-negative INTEGER count. `Number()` alone would accept
+  // '1e3', '0x10' and ' 12 ', so the shape is asserted before it is trusted.
+  if (/^\d+$/.test(raw)) {
+    const seconds = Number(raw);
+    if (!Number.isSafeInteger(seconds)) return null;
+    return new Date(now.getTime() + seconds * 1000).toISOString();
+  }
+
+  // HTTP-date. A horizon already in the past authorises nothing, so it is
+  // treated as absent rather than as "retry immediately" — the provider may
+  // have meant a clock we do not share.
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return null;
+  if (at <= now.getTime()) return null;
+  return new Date(at).toISOString();
+}
 
 /**
  * Map a transport/provider error onto the outcome vocabulary.

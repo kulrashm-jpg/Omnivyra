@@ -401,7 +401,11 @@ describe('A4N — A4E and A4J semantics are unchanged', () => {
       // A5 introduced `execution_status` deliberately, exactly as A4Q did for
       // `provider_call_state`, so it is no longer forbidden. Everything else on
       // this list remains correctly absent: no retry metadata, no lineage.
-      expect(src).not.toMatch(/next_retry_at|retry_class|prior_attempt_id|retry_policy_version/);
+      // A6A introduced `next_retry_at` deliberately — the one field A6 proved is
+      // NOT derivable, because the provider states it in a header that was being
+      // dropped. The rest of this list remains correctly absent: no retry class,
+      // no lineage, no policy version.
+      expect(src).not.toMatch(/retry_class|prior_attempt_id|retry_policy_version/);
     }
   });
 });
