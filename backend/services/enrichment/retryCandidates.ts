@@ -21,12 +21,15 @@
  * permanent outcome is not a candidate, and an attempt with a retryable outcome
  * but no horizon is not one either — nothing has said it is time.
  *
- * ─── `unknown` IS EXCLUDED ON PURPOSE ─────────────────────────────────────
+ * ─── `unknown` IS NEVER RETRIED — SETTLED POLICY, NOT AN OPEN QUESTION ────
  * `provider_call_state = 'unknown'` means transport was entered and the process
  * did not survive to say whether the provider answered. Retrying might be free
  * or might be the second charge for one question, and the row cannot tell us
- * which. That is a spend decision, not a scheduling one, so these are withheld
- * from the candidate set and surfaced separately for a human policy.
+ * which. Asked and decided (2026-09-07): these are NEVER retried automatically.
+ * The alternative — retry and risk double-billing a tenant for one question —
+ * trades a visible gap for an invisible charge, and only one of those can be
+ * noticed and corrected by the person paying. They remain listable so the gap
+ * IS visible; re-running one is an explicit human act, never a scheduled one.
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
@@ -220,12 +223,13 @@ export async function listDueRetryCandidates(input: {
 }
 
 /**
- * Attempts withheld because transport is uncertain (`provider_call_state =
- * 'unknown'`) and their horizon has arrived.
+ * Why an attempt with uncertain transport is not a candidate, however due it is.
  *
- * Reported, never scheduled. Their existence is the evidence a policy decision
- * is needed; silently dropping them would hide the question.
+ * Reported, never scheduled — and that is the settled answer, not a placeholder
+ * waiting for one. Silently dropping these would hide work that never finished;
+ * scheduling them would risk billing a tenant twice for one question.
  */
-export const UNKNOWN_TRANSPORT_REQUIRES_POLICY =
+export const UNKNOWN_TRANSPORT_NEVER_RETRIED =
   'provider_call_state=unknown: transport was entered and the outcome is unrecorded. '
-  + 'Retrying may be a second charge for one question. Withheld from retry pending policy.';
+  + 'Retrying may be a second charge for one question, so it is never retried '
+  + 'automatically. Re-running it is an explicit human decision.';
