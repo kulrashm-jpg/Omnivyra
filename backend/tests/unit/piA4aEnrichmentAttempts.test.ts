@@ -436,7 +436,7 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
     expect(out.attemptId).toBeNull();              // and the gap is visible
   });
 
-  it('the seam has no automatic production caller — nothing triggers enrichment', () => {
+  it('the seam has no AUTOMATIC production caller — only a request triggers enrichment', () => {
     const { execSync } = require('child_process');
     const callers = (symbol: string, ignore: string[]): string[] => execSync(
       `git grep -l "${symbol}" -- "backend" "pages" || true`,
@@ -452,17 +452,37 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
     expect(callers('executeEnrichmentRecorded', ['recordedExecution.ts']))
       .toEqual(['backend/services/enrichment/execution.ts']);
 
-    // The chain therefore still terminates with no trigger: no scheduler, no
-    // cron, no queue and no route reaches it. That remains A4C's decision.
-    expect(callers('executePlannedField', ['enrichment/execution.ts'])).toEqual([]);
+    // A6 connected the seam to production, so the assertion moves one link
+    // further down the chain for the same reason it moved once before — the
+    // invariant was never "nobody calls it", it is that nothing calls it
+    // AUTOMATICALLY. `executePlannedField` now has exactly ONE caller, the A6
+    // composition boundary, and no other.
+    expect(callers('executePlannedField', ['enrichment/execution.ts']))
+      .toEqual(['backend/apiHandlers/prospects/prospectIntelligenceRead.ts']);
+
+    // And that boundary is reached from exactly ONE place: a request-scoped
+    // POST route. No scheduler, no cron and no queue reaches it, which is what
+    // A4C's decision actually protects. A second entry appearing here — or any
+    // entry outside `pages/api` — is the regression this line exists to catch.
+    expect(callers('executeProspectEnrichment', ['prospectIntelligenceRead.ts']))
+      .toEqual(['pages/api/prospects/[id]/enrich.ts']);
 
     // And nothing along the chain schedules ITSELF. Asserted on code with
     // comments stripped, because these modules necessarily discuss the
     // scheduler they deliberately do not contain.
     const fs = require('fs');
     const path = require('path');
-    for (const rel of ['execution.ts', 'recordedExecution.ts', 'attempts.ts']) {
-      const code = fs.readFileSync(path.join(__dirname, '../../services/enrichment', rel), 'utf8')
+    const chain: Array<[string, string]> = [
+      ['../../services/enrichment', 'execution.ts'],
+      ['../../services/enrichment', 'recordedExecution.ts'],
+      ['../../services/enrichment', 'attempts.ts'],
+      // A6's boundary and its route are part of the chain now, so they are held
+      // to the same rule: an entry point may be CALLED, it may not self-trigger.
+      ['../../apiHandlers/prospects', 'prospectIntelligenceRead.ts'],
+      ['../../../pages/api/prospects/[id]', 'enrich.ts'],
+    ];
+    for (const [dir, rel] of chain) {
+      const code = fs.readFileSync(path.join(__dirname, dir, rel), 'utf8')
         .replace(/\/\*[\s\S]*?\*\//g, ' ')
         .replace(/(^|[^:])\/\/.*$/gm, '$1');
       expect(code).not.toMatch(/setInterval|setTimeout|node-cron|cron\.|bullmq|new Queue|new Worker|\.schedule\(/);
