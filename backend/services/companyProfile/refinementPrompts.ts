@@ -4,6 +4,7 @@
  */
 
 import { runCompletionWithOperation } from '../aiGateway';
+import { getReportDeadlineSignal } from '../intelligence/reportDeadlineContext';
 import { parseModelOutputOr } from '../ai/safety';
 import { CompanyProfile, CompanyProfileExtractionOutput, EntityArchetypeIntelligence } from './types';
 import { buildArchetypePromptContext, isAudienceLedArchetype, isArchetypeInfluential } from './entityArchetype';
@@ -43,6 +44,10 @@ export const cleanEvidenceWithAi = async (
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
+    // Report 2 deadline (reportDeadlineContext). The gateway already honours `signal`
+    // (GatewayRequest.signal → GatewayAbortError); this only supplies it. Null outside a report
+    // scope, which is every other caller and is the pre-existing behaviour.
+    signal: getReportDeadlineSignal() ?? undefined,
   });
 
   const raw = result.output?.trim() || '{}';
@@ -245,6 +250,10 @@ export const generateMissingFieldQuestions = async (
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
+    // Report 2 deadline (reportDeadlineContext). The gateway already honours `signal`
+    // (GatewayRequest.signal → GatewayAbortError); this only supplies it. Null outside a report
+    // scope, which is every other caller and is the pre-existing behaviour.
+    signal: getReportDeadlineSignal() ?? undefined,
   });
 
   const raw = result.output?.trim() || '{}';

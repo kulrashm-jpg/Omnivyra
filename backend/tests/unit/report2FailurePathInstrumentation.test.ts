@@ -163,9 +163,13 @@ describe('Report 2 — failure-path stage instrumentation', () => {
       expect((SOURCE.match(/, 15000, trace\)/g) || [])).toHaveLength(2);
     });
 
-    it('introduces no cancellation — that is deliberately a separate change', () => {
-      expect(SOURCE).not.toContain('AbortController');
-      expect(SOURCE).not.toContain('AbortSignal');
+    it('takes its cancellation from the report boundary, never from a timer of its own', () => {
+      // Superseded by fix(report2): propagate deadline cancellation. Cancellation has landed, so
+      // the guard that matters now is narrower and stricter: this file must not mint a deadline.
+      // It may only enter the scope of the one the 45s boundary already owns.
+      expect(SOURCE).not.toContain('new AbortController');
+      expect(SOURCE).toContain('runWithReportDeadline');
+      expect((SOURCE.match(/timeoutMs: 45_000/g) || [])).toHaveLength(1);
     });
 
     it('still emits stage_timings_ms on the success and early-return payloads', () => {

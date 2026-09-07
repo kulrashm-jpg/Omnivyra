@@ -27,6 +27,7 @@ import { getGoogleProviderReadiness } from './googleProviderReadinessService';
 import { getAnalyticsHealthSummary, type AnalyticsHealthSummary } from './analyticsHealthService';
 import { getAnalyticsEnterpriseSnapshot, type AnalyticsEnterpriseSnapshot } from './analyticsEnterpriseSnapshotService';
 import { runDedupedReport, type ReportConcurrencyMetadata } from './reportConcurrencyService';
+import { runWithReportDeadline } from './intelligence/reportDeadlineContext';
 import {
   getTrafficSources,
   getTopPages,
@@ -893,6 +894,7 @@ async function composePerformanceIntelligenceReportInternal(
   companyId: string,
   opts?: PerformanceIntelligenceOptions,
   trace?: PerformanceStageTrace,
+  signal?: AbortSignal,
 ): Promise<PerformanceIntelligenceReportResponse> {
   const reportStarted = performance.now();
   const stageTimings: Record<string, number> = {};
@@ -910,7 +912,9 @@ async function composePerformanceIntelligenceReportInternal(
   const providerStarted = performance.now();
   const [providerReadiness, enterpriseSnapshot] = await Promise.all([
     getGoogleProviderReadiness(companyId).catch(() => null),
-    getAnalyticsEnterpriseSnapshot(companyId).catch((error) => {
+    // The stage proven to hold the budget past the boundary. The signal is passed explicitly here
+    // (not only ambiently) because the snapshot layer needs it for its own in-flight bookkeeping.
+    getAnalyticsEnterpriseSnapshot(companyId, { signal }).catch((error) => {
       console.warn('[performance-report][enterprise-snapshot-failed]', {
         company_id: companyId,
         message: error instanceof Error ? error.message : String(error),
@@ -1115,7 +1119,13 @@ export async function composePerformanceIntelligenceReport(
     const { result, metadata } = await runDedupedReport({
       key: `performance:${companyId}:${resolvedKey}`,
       timeoutMs: 45_000,
-      run: () => composePerformanceIntelligenceReportInternal(companyId, opts, trace),
+      // `signal` is produced by the 45,000 ms boundary on the line above — the same and only
+      // deadline. Composition runs inside its scope so the AI and SERP calls underneath
+      // `provider_and_snapshot` stop when this report is failed instead of outliving it.
+      run: (signal) => runWithReportDeadline(
+        signal,
+        () => composePerformanceIntelligenceReportInternal(companyId, opts, trace, signal),
+      ),
     });
     return {
       ...result,

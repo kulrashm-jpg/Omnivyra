@@ -18,6 +18,7 @@ import {
   writeInputsFromProfileAndExtraction,
 } from './companyIntelligence';
 import { runCompletionWithOperation } from './aiGateway';
+import { getReportDeadlineSignal } from './intelligence/reportDeadlineContext';
 import { refineLanguageOutput } from './languageRefinementService';
 import { supabase } from '../db/supabaseClient';
 
@@ -376,6 +377,9 @@ const runProfileRefinement = async (
         { role: 'system', content: extractionPrompt.systemPrompt },
         { role: 'user', content: extractionPrompt.userPrompt },
       ],
+      // Report 2 deadline (reportDeadlineContext). 7,774 ms of the observed provider_and_snapshot
+      // budget in capture 3878545e. The gateway already honours `signal`; this only supplies it.
+      signal: getReportDeadlineSignal() ?? undefined,
     }),
     (async () => {
       try {
