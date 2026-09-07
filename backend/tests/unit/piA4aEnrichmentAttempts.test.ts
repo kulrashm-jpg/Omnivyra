@@ -436,55 +436,150 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
     expect(out.attemptId).toBeNull();              // and the gap is visible
   });
 
-  it('the seam has no AUTOMATIC production caller — only a request triggers enrichment', () => {
+  /**
+   * The executable half of a source file: comments and literals removed.
+   *
+   * A4C's guard used to ask `git grep -l <symbol>`, which is a TEXT match over
+   * whole files. That was sound only while no module discussed the chain in
+   * prose. A7's retry consumer explains in a doc comment which branch of
+   * `executeEnrichmentRecorded` a lease takes — and was thereby counted as a
+   * caller of a function it never calls, and cannot: its only runtime imports
+   * are two predicates, everything else is `import type`.
+   *
+   * So mentions are stripped before anything is asked about calls. A symbol that
+   * survives here is one the compiler would emit.
+   */
+  const executableSource = (code: string): string => code
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')            // block comments, JSDoc included
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')           // line comments, but not `://`
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``')          // template literals
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")          // single-quoted strings
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""');         // double-quoted strings
+
+  /**
+   * Does this source CALL `symbol`?
+   *
+   * Two things are deliberately not calls. A declaration is removed by symbol
+   * rather than by filename, so the module that defines a function is not
+   * counted as its own caller and no ignore-list has to be maintained. And an
+   * import — `import type { X }` or a plain value import — never matches,
+   * because a call is the name followed by an open parenthesis.
+   */
+  const isExecutableCaller = (code: string, symbol: string): boolean => {
+    const body = executableSource(code)
+      .replace(new RegExp(`(?:export\\s+)?(?:async\\s+)?function\\s+${symbol}\\s*\\(`, 'g'), ' ')
+      .replace(new RegExp(`(?:export\\s+)?(?:const|let)\\s+${symbol}\\s*=`, 'g'), ' ');
+    return new RegExp(`\\b${symbol}\\s*\\(`).test(body);
+  };
+
+  /** Production files that actually call `symbol`. Sorted, tests excluded. */
+  const callers = (symbol: string): string[] => {
     const { execSync } = require('child_process');
-    const callers = (symbol: string, ignore: string[]): string[] => execSync(
-      `git grep -l "${symbol}" -- "backend" "pages" || true`,
-      { encoding: 'utf8' },
-    ).split('\n').filter(Boolean)
-      .filter((f: string) => !f.includes('/tests/') && !ignore.some((i) => f.includes(i)));
+    const fs = require('fs');
+    return execSync(`git grep -l "${symbol}" -- "backend" "pages" || true`, { encoding: 'utf8' })
+      .split('\n').filter(Boolean)
+      .filter((f: string) => !f.includes('/tests/'))
+      .filter((f: string) => isExecutableCaller(fs.readFileSync(f, 'utf8'), symbol))
+      .sort();
+  };
 
-    // A4B connected the PLAN to this seam, so `execution.ts` is now a caller
-    // and must be. The invariant this test protects was never "nobody calls
-    // it" for its own sake — it is that nothing calls it AUTOMATICALLY. So the
-    // assertion moved one link down the chain rather than being relaxed: the
-    // only caller is A4B's seam, and A4B's seam is itself called by nobody.
-    expect(callers('executeEnrichmentRecorded', ['recordedExecution.ts']))
-      .toEqual(['backend/services/enrichment/execution.ts']);
+  it('a mention is not a call — comments, docs, strings and type imports do not count', () => {
+    // The precision the topology assertion depends on, held on its own so a
+    // regression in the detector is distinguishable from a regression in the
+    // architecture. Each snippet below is a way a symbol can appear in a file
+    // that does not execute it.
+    const mentions = [
+      '// executeEnrichmentRecorded is used here',
+      '/** Calls executeEnrichmentRecorded(request, id) internally. */',
+      "const doc = 'executeEnrichmentRecorded(request)';",
+      'const msg = `executeEnrichmentRecorded(${x})`;',
+      "import type { executeEnrichmentRecorded } from './recordedExecution';",
+      "import { executeEnrichmentRecorded } from './recordedExecution';",
+    ];
+    for (const snippet of mentions) {
+      expect(isExecutableCaller(snippet, 'executeEnrichmentRecorded')).toBe(false);
+    }
 
-    // A6 connected the seam to production, so the assertion moves one link
-    // further down the chain for the same reason it moved once before — the
-    // invariant was never "nobody calls it", it is that nothing calls it
-    // AUTOMATICALLY. `executePlannedField` now has exactly ONE caller, the A6
-    // composition boundary, and no other.
-    expect(callers('executePlannedField', ['enrichment/execution.ts']))
-      .toEqual(['backend/apiHandlers/prospects/prospectIntelligenceRead.ts']);
+    // And the things that ARE calls still are.
+    for (const snippet of [
+      'const out = await executeEnrichmentRecorded(request, providerId, ports, {});',
+      'return executeEnrichmentRecorded(r, p, ports);',
+      'execute: (i) => executeEnrichmentRecorded(i),',
+    ]) {
+      expect(isExecutableCaller(snippet, 'executeEnrichmentRecorded')).toBe(true);
+    }
 
-    // And that boundary is reached from exactly ONE place: a request-scoped
-    // POST route. No scheduler, no cron and no queue reaches it, which is what
-    // A4C's decision actually protects. A second entry appearing here — or any
-    // entry outside `pages/api` — is the regression this line exists to catch.
-    expect(callers('executeProspectEnrichment', ['prospectIntelligenceRead.ts']))
-      .toEqual(['pages/api/prospects/[id]/enrich.ts']);
+    // A module that declares the function is not its own caller...
+    expect(isExecutableCaller(
+      'export async function executeEnrichmentRecorded(request, id) { return 1; }',
+      'executeEnrichmentRecorded')).toBe(false);
+    // ...but a module that declares it AND calls it elsewhere still is.
+    expect(isExecutableCaller(
+      'export async function executeEnrichmentRecorded(r) { return 1; }\n'
+      + 'export const again = (r) => executeEnrichmentRecorded(r);',
+      'executeEnrichmentRecorded')).toBe(true);
 
-    // And nothing along the chain schedules ITSELF. Asserted on code with
-    // comments stripped, because these modules necessarily discuss the
-    // scheduler they deliberately do not contain.
+    // The live proof of the false positive this detector was written for: the
+    // retry consumer names the seam in prose and does not call it.
+    const fs = require('fs');
+    const path = require('path');
+    const consumer = fs.readFileSync(
+      path.join(__dirname, '../../services/enrichment/retryConsumer.ts'), 'utf8');
+    expect(consumer).toContain('executeEnrichmentRecorded');                 // mentioned
+    expect(isExecutableCaller(consumer, 'executeEnrichmentRecorded')).toBe(false);   // not called
+    expect(isExecutableCaller(consumer, 'executePlannedField')).toBe(false);         // nor this
+  });
+
+  it('every automatic caller of the enrichment chain is a SANCTIONED one', () => {
+    // ─── WHAT THIS INVARIANT IS NOW ────────────────────────────────────────
+    // A4C's rule was "nothing calls the chain automatically", and it held while
+    // no scheduler existed. A7 built one deliberately, so the rule is inverted
+    // rather than deleted, exactly as A6B inverted A6A's no-index invariant: the
+    // chain may be reached automatically ONLY through an entry point named here.
+    // A new background job that calls the executor directly is still caught —
+    // it appears in one of these lists and is not in the expected value.
+
+    // The executor is reached from exactly one place, and that place from one.
+    expect(callers('executeEnrichment')).toEqual(
+      ['backend/services/enrichment/recordedExecution.ts']);
+    expect(callers('executeEnrichmentRecorded')).toEqual(
+      ['backend/services/enrichment/execution.ts']);
+
+    // TWO sanctioned entry points into the plan executor, and no third:
+    //   the user-initiated route, and A7's retry job.
+    expect(callers('executePlannedField')).toEqual([
+      'backend/apiHandlers/prospects/prospectIntelligenceRead.ts',
+      'backend/jobs/prospectRetryJob.ts',
+    ]);
+
+    // The user path: reached only from a request-scoped POST route.
+    expect(callers('executeProspectEnrichment')).toEqual(
+      ['pages/api/prospects/[id]/enrich.ts']);
+
+    // The automatic path: the job is reached only from the existing cron tick —
+    // not from an HTTP route, and not from a second scheduler.
+    expect(callers('runProspectRetryJob')).toEqual(['backend/scheduler/cron.ts']);
+    // and the cycle only from the job that the cron tick calls.
+    expect(callers('runRetryCycle')).toEqual(['backend/jobs/prospectRetryJob.ts']);
+
+    // And nothing along the chain schedules ITSELF. An entry point may be
+    // CALLED on a timer; it may not contain one. `cron.ts` is deliberately
+    // absent from this list — it IS the sanctioned timer.
     const fs = require('fs');
     const path = require('path');
     const chain: Array<[string, string]> = [
       ['../../services/enrichment', 'execution.ts'],
       ['../../services/enrichment', 'recordedExecution.ts'],
       ['../../services/enrichment', 'attempts.ts'],
-      // A6's boundary and its route are part of the chain now, so they are held
-      // to the same rule: an entry point may be CALLED, it may not self-trigger.
       ['../../apiHandlers/prospects', 'prospectIntelligenceRead.ts'],
       ['../../../pages/api/prospects/[id]', 'enrich.ts'],
+      // A7's two modules are held to the same rule: the consumer selects and
+      // hands off, the job runs one tick. Neither may start a timer of its own.
+      ['../../services/enrichment', 'retryConsumer.ts'],
+      ['../../jobs', 'prospectRetryJob.ts'],
     ];
     for (const [dir, rel] of chain) {
-      const code = fs.readFileSync(path.join(__dirname, dir, rel), 'utf8')
-        .replace(/\/\*[\s\S]*?\*\//g, ' ')
-        .replace(/(^|[^:])\/\/.*$/gm, '$1');
+      const code = executableSource(fs.readFileSync(path.join(__dirname, dir, rel), 'utf8'));
       expect(code).not.toMatch(/setInterval|setTimeout|node-cron|cron\.|bullmq|new Queue|new Worker|\.schedule\(/);
     }
   });
