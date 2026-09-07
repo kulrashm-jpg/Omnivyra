@@ -449,8 +449,36 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
     // it" for its own sake — it is that nothing calls it AUTOMATICALLY. So the
     // assertion moved one link down the chain rather than being relaxed: the
     // only caller is A4B's seam, and A4B's seam is itself called by nobody.
+    //
+    // A7J admits the SECOND sanctioned caller. Each entry below is a decision,
+    // not an observation, and each is admitted for a stated reason:
+    //
+    //   consumeEnrichmentWork.ts  A7E's consumer seam. Admitted because it is
+    //                             held to a STRICTER standard than the route
+    //                             is — it holds a lease, requires an attempt
+    //                             record, requires ports it cannot assemble,
+    //                             owns no write, and is asserted below to have
+    //                             ZERO callers of its own.
+    //   execution.ts              A4B's plan seam, reached only from A6's
+    //                             request-scoped boundary (asserted next).
+    //
+    // Admitting a caller is therefore paired with proving that caller cannot
+    // fire by itself. A third entry here fails, and so does any entry whose own
+    // reachability is not established somewhere in this test.
+    const SANCTIONED_RECORDED_CALLERS = [
+      'backend/services/enrichment/consumeEnrichmentWork.ts',
+      'backend/services/enrichment/execution.ts',
+    ];
     expect(callers('executeEnrichmentRecorded', ['recordedExecution.ts']))
-      .toEqual(['backend/services/enrichment/execution.ts']);
+      .toEqual(SANCTIONED_RECORDED_CALLERS);
+
+    // A7J — and the consumer is reached from NOWHERE. This is the assertion
+    // that carries the invariant for that half of the chain: admitting a
+    // caller above without pinning it here would have traded a real guarantee
+    // for a longer list. A scheduler, cron, queue, route or worker wiring
+    // itself to the consumer appears here first, before it can ever run.
+    expect(callers('consumeEnrichmentWork', ['consumeEnrichmentWork.ts']))
+      .toEqual([]);
 
     // A6 connected the seam to production, so the assertion moves one link
     // further down the chain for the same reason it moved once before — the
@@ -480,6 +508,12 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
       // to the same rule: an entry point may be CALLED, it may not self-trigger.
       ['../../apiHandlers/prospects', 'prospectIntelligenceRead.ts'],
       ['../../../pages/api/prospects/[id]', 'enrich.ts'],
+      // A7J — the consumer is the module a scheduler would MOST plausibly be
+      // written into, since it is the one shaped like a unit of work. Held to
+      // the same rule as every other link: it may be called, it may not start
+      // itself. This is the third leg of the reconciliation — sanctioned as a
+      // caller, pinned at zero callers, and scanned for self-triggering.
+      ['../../services/enrichment', 'consumeEnrichmentWork.ts'],
     ];
     for (const [dir, rel] of chain) {
       const code = fs.readFileSync(path.join(__dirname, dir, rel), 'utf8')

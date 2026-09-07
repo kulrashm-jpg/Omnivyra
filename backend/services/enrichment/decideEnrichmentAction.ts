@@ -24,7 +24,7 @@
  *   2. ambiguity               a call may already have been paid for
  *   3. fresh evidence          we already have what was asked for
  *   4. credential / source     we cannot call at all
- *   5. reclaimable             the work is abandoned and recoverable
+ *   5. recoverable             the work is abandoned — retry ADOPTS it
  *   6. the attempt's own end   terminal, transient, or provably unpaid
  *   7. anything else           OPERATOR_REVIEW
  *
@@ -45,9 +45,13 @@ export const ENRICHMENT_DECISIONS = [
   'NO_ACTION',
   /** Someone else holds it, or a provider told us when we may return. */
   'WAIT',
-  /** Abandoned and recoverable. The RECLAIM itself belongs to the caller. */
-  'RECLAIM',
-  /** Provably safe to contact the provider. */
+  /**
+   * Provably safe to contact the provider — including when doing so means
+   * ADOPTING an abandoned attempt rather than opening a new one. See A7I below:
+   * there is deliberately no separate RECLAIM verb, because recovery is not a
+   * different action, it is the same action taking a different route inside the
+   * claim.
+   */
   'RETRY_PROVIDER',
   /** The provider answered and the answer stands for this evidence. */
   'TERMINAL',
@@ -89,9 +93,10 @@ export interface DecideEnrichmentActionInput {
   /**
    * A4U — the cutoff at which an UNLEASED open attempt counts as abandoned.
    *
-   * Caller-supplied, exactly as `reclaimExpiredAttempt` requires. Omitted means
-   * only an expired lease is reclaimable, which is A4N's behaviour. No duration
-   * is invented here.
+   * Caller-supplied, exactly as the claim requires. A7I: the SAME value the
+   * caller forwards into execution, so what this function judges recoverable is
+   * precisely what the claim will recover. Omitted means only an expired lease
+   * is recoverable, which is A4N's behaviour. No duration is invented here.
    */
   readonly abandonedBefore?: string;
 }
@@ -180,22 +185,50 @@ export function decideEnrichmentAction(
   if (blocked) return decide('NO_ACTION', blocked);
 
   // ── 5. abandoned and recoverable ─────────────────────────────────────────
+  //
+  // ─── A7I: RECOVERY IS NOT A SEPARATE ACTION ──────────────────────────────
+  // This branch used to answer RECLAIM, on the reading that recovering an
+  // abandoned attempt and calling a provider were two different things a caller
+  // did in two steps. They are not, and treating them as two produced a
+  // livelock: the caller reclaimed, took a fresh lease, and on the next cycle
+  // rule 1 saw its own live lease and said WAIT — after which the lease expired
+  // and this branch said RECLAIM again, forever. Nothing ever executed, nothing
+  // ever completed, and A4N's live index went on blocking every new attempt for
+  // that work item. That is the exact permanent wedge A4U was written to end.
+  //
+  // The recovery step was never needed, because `claimEnrichmentWork` already
+  // performs it: its INSERT collides with the live index, and on 23505 it
+  // reclaims and ADOPTS the existing row instead of opening a second one. So
+  // RETRY_PROVIDER is the honest answer for both shapes below. The caller does
+  // one thing, the database arbitrates it atomically, and the attempt reaches a
+  // terminal state instead of circling.
+  //
+  // Both shapes are provably UNPAID — `in_flight` + `not_called` is asserted
+  // immediately below — so adopting one and calling the provider spends the
+  // tenant's quota exactly once, for a call that never happened.
   if (a.completedAt === null) {
     if (a.executionStatus !== 'in_flight' || a.providerCallState !== 'not_called') {
       return decide('OPERATOR_REVIEW', 'unrecognised attempt state requires operator review');
     }
     if (a.claimedUntil !== null) {
       // Reached only when the lease has expired — a live one returned above.
-      return decide('RECLAIM', 'expired uncalled attempt requires reclaim');
+      // `reclaimExpiredAttempt`'s base predicate covers this with no cutoff.
+      return decide('RETRY_PROVIDER',
+        'expired uncalled attempt is adopted by the claim');
     }
     // Unleased. A4U: staleness is the caller's cutoff, never a duration we pick.
     const cutoff = asMs(input.abandonedBefore);
     const startedAt = asMs(a.startedAt);
     if (cutoff === null || startedAt === null) {
+      // Without a cutoff an unleased row is indistinguishable from a live
+      // manual execution, and stealing one would let two workers call a
+      // provider. Waiting is the only safe answer, and it is not a livelock:
+      // the row is untouched, so supplying a cutoff later resolves it.
       return decide('WAIT', 'unleased attempt is open and no abandonment cutoff was supplied');
     }
     if (startedAt < cutoff) {
-      return decide('RECLAIM', 'expired uncalled attempt requires reclaim');
+      return decide('RETRY_PROVIDER',
+        'unleased attempt is abandoned past the cutoff and is adopted by the claim');
     }
     return decide('WAIT', 'unleased attempt is open and not yet past the abandonment cutoff');
   }
