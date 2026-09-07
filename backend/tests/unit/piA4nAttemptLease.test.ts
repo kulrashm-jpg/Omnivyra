@@ -398,7 +398,10 @@ describe('A4N — A4E and A4J semantics are unchanged', () => {
       // `provider_call_state` was on this list at A4N time because it was
       // deferred. A4Q introduced it deliberately, so it is no longer forbidden;
       // the rest of the list remains correctly absent.
-      expect(src).not.toMatch(/next_retry_at|retry_class|prior_attempt_id|retry_policy_version|execution_status/);
+      // A5 introduced `execution_status` deliberately, exactly as A4Q did for
+      // `provider_call_state`, so it is no longer forbidden. Everything else on
+      // this list remains correctly absent: no retry metadata, no lineage.
+      expect(src).not.toMatch(/next_retry_at|retry_class|prior_attempt_id|retry_policy_version/);
     }
   });
 });
