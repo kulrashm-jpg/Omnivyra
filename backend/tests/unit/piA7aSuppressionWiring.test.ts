@@ -23,6 +23,16 @@
  */
 
 import { makeProductionEnrichmentPorts } from '../../services/enrichment/productionPorts';
+// A7K — the singletons the composition must BE, and the factories it must not
+// call; plus A6's exported name, which is asserted to be the same function.
+import {
+  tenantFundedExecutionPort, makeTenantFundedExecutionPort,
+} from '../../services/enrichment/providers/cost';
+import {
+  tenantCredentialPort, makeTenantCredentialPort,
+} from '../../services/enrichment/providers/credentials';
+import { defaultPersistObservation } from '../../services/enrichment/providers/persistence';
+import { defaultExecuteEnrichmentPorts } from '../../apiHandlers/prospects/prospectIntelligenceRead';
 import { defaultFindRecentObservation, pickRecentObservation } from '../../services/enrichment/providers/observations';
 import { executeEnrichmentRecorded } from '../../services/enrichment/recordedExecution';
 import type { ExecuteEnrichmentPorts } from '../../services/enrichment/providers/execute';
@@ -105,6 +115,59 @@ describe('A7A — the production default set carries the real finder', () => {
     // silently dropping the tenant scope or the fail-closed behaviour.
     expect(makeProductionEnrichmentPorts().findRecentObservation)
       .toBe(defaultFindRecentObservation);
+  });
+
+  it('A7K — EVERY port is the production singleton, not an equivalent copy', () => {
+    // This suite previously asserted identity for the finder alone and shape
+    // for the rest, which let the composition call `make*()` for the other
+    // three. Those closures behave identically and are a SECOND dependency
+    // graph: a later change to a singleton would reach only half the
+    // production paths, and no test would notice. So identity is asserted for
+    // every member that has a production instance.
+    const ports = makeProductionEnrichmentPorts();
+    expect(ports.authorizeCost).toBe(tenantFundedExecutionPort.authorizeCost);
+    expect(ports.releaseCost).toBe(tenantFundedExecutionPort.releaseCost);
+    expect(ports.resolveCredential).toBe(tenantCredentialPort.resolveCredential);
+    expect(ports.findRecentObservation).toBe(defaultFindRecentObservation);
+    expect(ports.persistObservation).toBe(defaultPersistObservation);
+  });
+
+  it('A7K — the guard has teeth: a factory-built port is NOT the singleton', () => {
+    // Demonstrates what the assertion above actually catches. Both of these
+    // satisfy the type and behave the same; only one is the production
+    // instance, and that is the difference the identity check exists to see.
+    expect(makeTenantFundedExecutionPort().authorizeCost)
+      .not.toBe(tenantFundedExecutionPort.authorizeCost);
+    expect(makeTenantCredentialPort().resolveCredential)
+      .not.toBe(tenantCredentialPort.resolveCredential);
+  });
+
+  it('A7K — there is ONE composition: A6\'s boundary name IS this function', () => {
+    // Not "the two agree" but "there is only one". A6 exported its own
+    // assembly; since A7K that export is bound to this function, so the two
+    // cannot drift and a future edit cannot apply to only one of them.
+    expect(defaultExecuteEnrichmentPorts).toBe(makeProductionEnrichmentPorts);
+  });
+
+  it('A7K — the service layer owns it: enrichment never imports the API handler', () => {
+    // The composition lives here rather than in `prospectIntelligenceRead.ts`
+    // because the executors need it too, and a service importing an API handler
+    // would invert the layering and drag the whole PI read surface — engagement
+    // intelligence, account intelligence, lead understanding, outreach
+    // readiness, the outcome corpus — into the recorder's import graph as a
+    // side effect of being loaded.
+    //
+    // Scoped to `enrichment/` rather than all of `backend/services`: one
+    // unrelated pre-existing violation exists elsewhere in the repository
+    // (`context/canonicalAdoptionMetrics.ts`), and widening this assertion to
+    // cover it would make an enrichment guard fail for a reason that has
+    // nothing to do with enrichment.
+    const { execSync } = require('child_process');
+    const offenders = execSync(
+      `git grep -l "apiHandlers" -- "backend/services/enrichment" || true`,
+      { encoding: 'utf8' },
+    ).split('\n').filter(Boolean).filter((f: string) => !f.includes('/tests/'));
+    expect(offenders).toEqual([]);
   });
 
   it('construction performs no I/O and reads no credential', () => {

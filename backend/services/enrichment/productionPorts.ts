@@ -1,17 +1,34 @@
 /**
  * A7A — the production port set for enrichment execution.
  *
- * ─── THE GAP THIS CLOSES ───────────────────────────────────────────────────
- * Every port the executor needs already had a production factory:
+ * ─── THE CANONICAL PRODUCTION COMPOSITION ─────────────────────────────────
+ * This is the ONE place the production port set is assembled. A6's boundary
+ * exports `defaultExecuteEnrichmentPorts`, and since A7K that name IS this
+ * function — re-exported, not reimplemented — so the two cannot drift apart.
+ * The composition lives here rather than in the API handler because both the
+ * handler and the service-layer executors need it, and a service must not
+ * import an API handler to obtain its own dependencies.
  *
- *   authorizeCost / releaseCost   `makeTenantFundedExecutionPort`   (cost.ts)
- *   resolveCredential             `makeTenantCredentialPort`        (credentials.ts)
+ * ─── IDENTITY IS THE CONTRACT, NOT SHAPE ──────────────────────────────────
+ * Every member below is the exact production SINGLETON, referenced. This is
+ * load-bearing rather than stylistic: `async () => null` satisfies
+ * `findRecentObservation`'s type perfectly and disables suppression completely,
+ * and thirteen such stubs exist in this repository. TypeScript can prove a port
+ * is PRESENT; only identity can prove it is REAL. Calling `make*()` here would
+ * produce behaviourally identical closures that fail that check — a second
+ * dependency graph that looks correct in review and is invisible in a diff.
+ *
+ * ─── THE GAP THIS CLOSES ───────────────────────────────────────────────────
+ * Every port the executor needs already had a production singleton:
+ *
+ *   authorizeCost / releaseCost   `tenantFundedExecutionPort`       (cost.ts)
+ *   resolveCredential             `tenantCredentialPort`            (credentials.ts)
  *   findRecentObservation         `defaultFindRecentObservation`    (observations.ts)
- *   persistObservation            `makePersistObservation`          (persistence.ts)
+ *   persistObservation            `defaultPersistObservation`       (persistence.ts)
  *
  * What did not exist was anything that COMPOSED them. `ExecuteEnrichmentPorts`
- * appeared in the codebase only as a TYPE: both `executePlannedField` and
- * `executeEnrichmentRecorded` took it as a parameter, and every caller was a
+ * appeared in the codebase only as a TYPE: both the plan seam and the recorded
+ * execution seam took it as a parameter, and every caller was a
  * test supplying its own stubs. So the duplicate-suppression lookup — built,
  * unit-proven and fail-closed since A4J — was exported and injected nowhere.
  *
@@ -44,13 +61,18 @@
  * `provider_call_state` or `next_retry_at`.
  */
 
-import { makeTenantFundedExecutionPort } from './providers/cost';
-import { makeTenantCredentialPort } from './providers/credentials';
+// A7K — the SINGLETONS, not the factories. Every one of these is the exact
+// instance the rest of the platform already uses; see the identity note below
+// for why that distinction is the whole contract.
+//
 // Imported from the modules directly rather than through `providers/index.ts`:
 // the barrel re-exports the whole provider surface, and a narrow import keeps
-// this seam from depending on things it does not use.
+// this seam from depending on things it does not use. It is the same binding
+// either way — the barrel re-exports these exports — so identity is unaffected.
+import { tenantFundedExecutionPort } from './providers/cost';
+import { tenantCredentialPort } from './providers/credentials';
 import { defaultFindRecentObservation } from './providers/observations';
-import { makePersistObservation } from './providers/persistence';
+import { defaultPersistObservation } from './providers/persistence';
 import type { ExecuteEnrichmentPorts } from './providers/execute';
 
 /**
@@ -64,13 +86,17 @@ import type { ExecuteEnrichmentPorts } from './providers/execute';
 export function makeProductionEnrichmentPorts(
   overrides: Partial<ExecuteEnrichmentPorts> = {},
 ): ExecuteEnrichmentPorts {
-  const credential = makeTenantCredentialPort();
-
   return {
-    // Tenant-funded: authorises without reserving, releases nothing.
-    ...makeTenantFundedExecutionPort(),
+    // Tenant-funded: authorises without reserving, releases nothing. SPREAD, so
+    // `authorizeCost` and `releaseCost` remain the SAME function objects the
+    // singleton holds — see the identity note above.
+    ...tenantFundedExecutionPort,
 
-    resolveCredential: (input) => credential.resolveCredential(input),
+    // The singleton's method, referenced. NOT `(i) => port.resolveCredential(i)`:
+    // a delegating arrow is a different function object and would defeat the
+    // identity check while behaving identically, which is exactly the kind of
+    // difference that is invisible in review.
+    resolveCredential: tenantCredentialPort.resolveCredential,
 
     // A7A — THE WIRING. The A4J implementation, unchanged: tenant-scoped,
     // provider-scoped, attribute-scoped, superseded-excluding, requiring TOTAL
@@ -78,8 +104,11 @@ export function makeProductionEnrichmentPorts(
     // second lookup was written; this is the same object the tests prove.
     findRecentObservation: defaultFindRecentObservation,
 
-    persistObservation: makePersistObservation(),
+    persistObservation: defaultPersistObservation,
 
+    // The one member that is legitimately fresh per call, and the one the
+    // identity contract deliberately does not cover: a clock holds no state and
+    // has no production instance to diverge from.
     now: () => new Date().toISOString(),
 
     ...overrides,
