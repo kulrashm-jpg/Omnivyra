@@ -629,11 +629,18 @@ export async function executeProspectEnrichment(
     // would become an unrecorded paid call, understating the tenant's spend in
     // exactly the case a scheduler creates.
     //
-    // `lease` would be stronger still, but `executePlannedField` does not
-    // forward it to the recorder, and adding a pass-through would change a
-    // frozen contract. `requireAttemptRecord` is therefore the strongest
-    // configuration available without altering the executor, and it throws
-    // BEFORE adapter, credential, suppression, cost and egress.
+    // A6C — `lease` IS now forwarded by `executePlannedField`, and it is the
+    // stronger guarantee: it CLAIMS the work item against the live partial
+    // unique index, so of two racing workers exactly one proceeds, and an
+    // expired lease makes work abandoned by a dead process reclaimable.
+    //
+    // This route deliberately does not take one. It is user-initiated: there
+    // is no worker identity to claim as, and a person is present to read a
+    // refusal and decide whether to ask again. `requireAttemptRecord` is the
+    // right guarantee here — it throws BEFORE adapter, credential,
+    // suppression, cost and egress, so a lost attempt row can never become an
+    // unrecorded paid call. An AUTOMATED caller is the one that needs the
+    // lease, and it should pass `lease: { claimedBy, ttlMs }` here.
     requireAttemptRecord: true,
     adapter: input.adapter,
   }, input.ports ?? defaultExecuteEnrichmentPorts());
