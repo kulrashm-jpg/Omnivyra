@@ -70,13 +70,21 @@ describe('A5 — the column and its constraint exist', () => {
     }
   });
 
-  it('no retry, lineage or rate-limit column was added alongside it', async () => {
+  it('only the A6A horizon joined it — no retry policy, lineage or ceiling', async () => {
     const { rows } = await db.query(
       `SELECT column_name FROM information_schema.columns
         WHERE table_schema='public' AND table_name='prospect_enrichment_attempts'`);
     const names = rows.map((r) => r.column_name);
-    for (const forbidden of ['next_retry_at', 'retry_class', 'terminal',
-      'prior_attempt_id', 'retry_policy_version', 'rate_limit_reset_at']) {
+    // A6A shipped `next_retry_at` deliberately — the one field the A6 audit
+    // proved is NOT derivable, because the provider states it in a header that
+    // was being dropped. Asserted PRESENT rather than merely un-forbidden, so
+    // this guard proves A6A landed instead of silently tolerating its absence.
+    expect(names).toContain('next_retry_at');
+    // Everything else remains correctly absent: no retry classification, no
+    // terminality flag, no lineage pointer, no policy version, no second
+    // horizon, no attempt ceiling.
+    for (const forbidden of ['retry_class', 'terminal', 'prior_attempt_id',
+      'retry_policy_version', 'rate_limit_reset_at', 'max_attempts']) {
       expect(names).not.toContain(forbidden);
     }
   });
