@@ -177,6 +177,21 @@ export interface EnrichmentPlan {
   readonly counts: Readonly<Record<FieldState, number>>;
   /** True when nothing is worth enriching. A valid, common outcome. */
   readonly empty: boolean;
+  /**
+   * M9 — the staleness window the CALLER supplied, or null when they supplied
+   * none.
+   *
+   * Deliberately the caller's value and not the effective one. The planner and
+   * the executor each hold their own default for their own reason
+   * (`DEFAULT_STALENESS_DAYS` here, `DEFAULT_FRESHNESS_DAYS` in the executor),
+   * and publishing the effective value would silently make this file's default
+   * the executor's too. What was actually broken is narrower: a caller who
+   * asked for a window got it honoured HERE and then silently replaced
+   * downstream, so one enrichment decision was judged by two different numbers.
+   * Carrying the caller's value — and only theirs — lets the executor honour
+   * the same instruction while both defaults stay exactly as they were.
+   */
+  readonly stalenessDays: number | null;
 }
 
 const asMs = (iso: string | null | undefined): number | null => {
@@ -293,8 +308,11 @@ export function planEnrichment(input: EnrichmentPlanInput): EnrichmentPlan {
   if (!input.organizationId?.trim()) throw new Error('organizationId is required to plan enrichment');
   if (!input.prospectId?.trim()) throw new Error('prospectId is required to plan enrichment');
 
-  const stalenessDays = typeof input.stalenessDays === 'number' && input.stalenessDays >= 0
-    ? input.stalenessDays : DEFAULT_STALENESS_DAYS;
+  // M9 — the caller's value, kept separate from the effective one. Only the
+  // former travels downstream; the latter stays this file's own default.
+  const suppliedStalenessDays = typeof input.stalenessDays === 'number' && input.stalenessDays >= 0
+    ? input.stalenessDays : null;
+  const stalenessDays = suppliedStalenessDays ?? DEFAULT_STALENESS_DAYS;
   const required = new Set(input.requiredForNextAction ?? []);
 
   const fields: PlannedField[] = input.fields.map((field) => {
@@ -353,5 +371,6 @@ export function planEnrichment(input: EnrichmentPlanInput): EnrichmentPlan {
     toEnrich,
     counts,
     empty: toEnrich.length === 0,
+    stalenessDays: suppliedStalenessDays,
   };
 }
