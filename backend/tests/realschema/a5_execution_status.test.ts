@@ -97,9 +97,16 @@ describe('A5 — the default and the closed set are enforced', () => {
       await expect(open(ORG_A, a, { status })).resolves.toBeTruthy();
     });
 
-  it.each(['retrying', 'retry_exhausted', 'waiting', 'queued', 'scheduled', '', 'COMPLETED'])(
-    'a value outside the vocabulary (%s) is REJECTED', async (status) => {
-      const a = await newAccount(ORG_A, { domain: `a5-bad-${status || 'empty'}.w6`, source: 'a5' });
+  it.each(['retrying', 'retry_exhausted', 'waiting', 'queued', 'scheduled', '', 'COMPLETED']
+    .map((status, i) => [status, i] as const))(
+    'a value outside the vocabulary (%s) is REJECTED', async (status, i) => {
+      // The domain is derived from the INDEX, never from the status. `COMPLETED`
+      // is deliberately uppercase — it proves the CHECK is case-sensitive — but
+      // interpolating it produced `a5-bad-COMPLETED.w6`, which violates
+      // `prospect_accounts_domain_normalized_shape`. `newAccount` then threw
+      // OUTSIDE the `expect(...).rejects` wrapper, so the assertion under test
+      // never ran at all. A fixture must never depend on the value it is testing.
+      const a = await newAccount(ORG_A, { domain: `a5-bad-${i}.w6`, source: 'a5' });
       await expect(open(ORG_A, a, { status })).rejects.toMatchObject({ code: '23514' });
     });
 
