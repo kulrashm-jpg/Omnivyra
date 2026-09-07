@@ -372,14 +372,42 @@ describe('A7E — no second state machine, no provider bypass, no suppression co
     expect(code).not.toMatch(/setInterval|setTimeout|node-cron|new Queue|new Worker|\.schedule\(/);
   });
 
-  it('is called by nothing in production — it is a seam, not a trigger', () => {
+  it('is reached from exactly ONE sanctioned trigger, and nothing else', () => {
+    // ─── SUPERSEDED, DELIBERATELY, AND NARROWED RATHER THAN RELAXED ────────
+    // This asserted `[]`: A7E was a seam with no trigger, because no scheduler
+    // was allowed to exist yet. A7's retry scheduler is now that trigger, and
+    // routing it through this seam is the whole point of the reconciliation —
+    // it is what stopped the scheduler from becoming a second consumer with its
+    // own decision layer and its own port composition.
+    //
+    // The invariant is not weaker for naming a caller. "Zero" and "exactly this
+    // one" both fail the moment a route, a queue, a worker or a second job
+    // wires itself in; what changed is which single value is correct. The
+    // caller's OWN reachability is pinned in `piA4aEnrichmentAttempts` — cron →
+    // job → cycle → hand-off — so admitting it here does not admit a path that
+    // can fire by itself.
+    // This is a REFERENCE check, not a call check: `git grep` sees any mention,
+    // so the two files below are the complete set of production modules that
+    // name the seam at all. Exactly one of them invokes it —
+    //
+    //   prospectRetryJob.ts   binds it as a port: the real caller
+    //   retryConsumer.ts      `import type { ConsumeEnrichmentWorkResult }`,
+    //                         plus prose; it receives the seam as a port and
+    //                         holds no live reference to the module
+    //
+    // — and which is which is proven by the call-aware detector in
+    // `piA4aEnrichmentAttempts`, rather than by a second detector here.
     const { execSync } = require('child_process');
     // The module's own file is excluded so this holds whether or not it is
-    // committed yet; what matters is that nothing ELSE reaches it.
-    const callers = execSync('git grep -l "consumeEnrichmentWork" -- "backend" "pages" || true',
+    // committed yet; what matters is what ELSE reaches it.
+    const referrers = execSync('git grep -l "consumeEnrichmentWork" -- "backend" "pages" || true',
       { encoding: 'utf8' }).split('\n').filter(Boolean)
       .filter((f: string) => !f.includes('/tests/'))
-      .filter((f: string) => !f.endsWith('consumeEnrichmentWork.ts'));
-    expect(callers).toEqual([]);
+      .filter((f: string) => !f.endsWith('consumeEnrichmentWork.ts'))
+      .sort();
+    expect(referrers).toEqual([
+      'backend/jobs/prospectRetryJob.ts',
+      'backend/services/enrichment/retryConsumer.ts',
+    ]);
   });
 });

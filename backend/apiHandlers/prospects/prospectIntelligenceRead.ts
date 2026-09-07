@@ -558,7 +558,7 @@ export const defaultExecuteEnrichmentPorts = makeProductionEnrichmentPorts;
  * platform-wide `process.env` check) here would re-create the A3V defect where a
  * source reported `connected` on the strength of Omnivyra's own key.
  */
-async function tenantSourceStatuses(organizationId: string): Promise<readonly SourceStatus[]> {
+export async function tenantSourceStatuses(organizationId: string): Promise<readonly SourceStatus[]> {
   const withTenantCredential = new Set<string>();
   await Promise.all(ACQUISITION_SOURCES.map(async (source) => {
     if (!source.credentialEnvVar || !getProvider(source.id)) return;

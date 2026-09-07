@@ -118,6 +118,9 @@ export interface RetryCandidateRow {
   readonly outcome: EnrichmentOutcome;
   readonly executionStatus: ExecutionStatus;
   readonly providerCallState: ProviderCallState;
+  /** A7 — already selected and already required by the rule; now surfaced, so
+   *  a consumer can re-assert eligibility from the row instead of approximating it. */
+  readonly completedAt: string;
   readonly nextRetryAt: string;
 }
 
@@ -218,6 +221,7 @@ export async function listDueRetryCandidates(input: {
       outcome: r.outcome as EnrichmentOutcome,
       executionStatus: r.execution_status as ExecutionStatus,
       providerCallState: (r.provider_call_state as ProviderCallState) ?? 'not_called',
+      completedAt: String(r.completed_at),
       nextRetryAt: String(r.next_retry_at),
     }));
 }
