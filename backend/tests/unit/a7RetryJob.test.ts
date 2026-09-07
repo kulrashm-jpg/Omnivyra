@@ -34,10 +34,11 @@ function silentPorts() {
   const asked: string[] = [];
   const ports: RetryConsumerPorts = {
     listCandidates: async (i) => { asked.push(i.organizationId); return []; },
-    resolveProspect: async () => null,
-    plan: async () => { throw new Error('unreachable: no candidate'); },
-    statuses: async () => [] as never,
-    execute: async () => { throw new Error('unreachable: no candidate'); },
+    loadEntity: async () => null,
+    freshEvidenceCovers: async () => false,
+    sourceReadiness: async () => ({ credentialAvailable: false, sourceOperational: false }),
+    enrichmentPorts: () => { throw new Error('unreachable: no candidate'); },
+    consume: async () => { throw new Error('unreachable: no candidate'); },
     emit: () => { /* asserted elsewhere */ },
   };
   return { ports, asked };
@@ -168,7 +169,7 @@ describe('A7 — worker failure is answered by the existing attempt semantics', 
     const ports: RetryConsumerPorts = {
       ...silentPorts().ports,
       listCandidates: async () => { cycles += 1; return rows; },
-      resolveProspect: async () => { throw new Error('worker died'); },
+      loadEntity: async () => { throw new Error('worker died'); },
     };
     await runProspectRetryJob({ env, now: () => NOW, ports });
     await runProspectRetryJob({ env, now: () => NOW, ports });
@@ -181,10 +182,57 @@ describe('A7 — worker failure is answered by the existing attempt semantics', 
     // which the job could close, reopen or re-time an attempt.
     const surface = Object.keys(silentPorts().ports);
     expect(surface).toEqual([
-      'listCandidates', 'resolveProspect', 'plan', 'statuses', 'execute', 'emit',
+      'listCandidates', 'loadEntity', 'freshEvidenceCovers', 'sourceReadiness',
+      'enrichmentPorts', 'consume', 'emit',
     ]);
     for (const forbidden of ['complete', 'record', 'claim', 'reclaim', 'update']) {
       expect(surface.join(',')).not.toContain(forbidden);
     }
+  });
+});
+
+describe('A7 — the scheduler forwards the REAL production port composition', () => {
+  it('hands the executor A7A\'s singletons, by identity — not a lookalike set', async () => {
+    // ─── WHY IDENTITY, AND WHY HERE ────────────────────────────────────────
+    // A7A's own doctrine: `async () => null` satisfies `findRecentObservation`
+    // perfectly and disables suppression completely. TypeScript can prove a port
+    // is PRESENT; only identity can prove it is REAL.
+    //
+    // The selector's suite asserts the port set travels through UNCHANGED, which
+    // is the right assertion there — it is given a set and must not touch it.
+    // Nothing asserted that the JOB hands it the real one, so a binding that
+    // returned a stub type-checked, passed every selector test, and would have
+    // paid a provider for evidence the tenant already holds.
+    const { productionRetryPorts } = await import('../../jobs/prospectRetryJob');
+    const { tenantFundedExecutionPort } = await import('../../services/enrichment/providers/cost');
+    const { tenantCredentialPort } = await import('../../services/enrichment/providers/credentials');
+    const { defaultFindRecentObservation } = await import('../../services/enrichment/providers/observations');
+    const { defaultPersistObservation } = await import('../../services/enrichment/providers/persistence');
+
+    const ports = productionRetryPorts().enrichmentPorts();
+
+    expect(ports.findRecentObservation).toBe(defaultFindRecentObservation);
+    expect(ports.persistObservation).toBe(defaultPersistObservation);
+    expect(ports.resolveCredential).toBe(tenantCredentialPort.resolveCredential);
+    expect(ports.authorizeCost).toBe(tenantFundedExecutionPort.authorizeCost);
+    expect(ports.releaseCost).toBe(tenantFundedExecutionPort.releaseCost);
+    // The clock is the one member legitimately fresh per call.
+    expect(typeof ports.now).toBe('function');
+  });
+
+  it('routes execution through the mainline consumer seam, not around it', async () => {
+    // The seam is bound as a port rather than reimplemented. Proven by identity
+    // for the same reason as above: a binding that called the recorded seam
+    // directly would skip the decision layer entirely.
+    const { productionRetryPorts } = await import('../../jobs/prospectRetryJob');
+    const consumer = await import('../../services/enrichment/consumeEnrichmentWork');
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '../../jobs/prospectRetryJob.ts'), 'utf8');
+    expect(typeof productionRetryPorts().consume).toBe('function');
+    // The job names the seam and nothing below it.
+    expect(src).toContain('consumeEnrichmentWork(input)');
+    expect(src).not.toContain('executeEnrichmentRecorded(');
+    expect(src).not.toContain('executePlannedField(');
+    expect(typeof consumer.consumeEnrichmentWork).toBe('function');
   });
 });

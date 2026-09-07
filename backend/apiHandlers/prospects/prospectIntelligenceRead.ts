@@ -425,7 +425,7 @@ export async function getProspectDetail(
  * binding lives here — at the API boundary that needs it — rather than being
  * pushed into WS-2, whose contract is frozen.
  */
-export function defaultEnrichmentPorts() {
+function defaultEnrichmentPorts() {
   return {
     async loadSnapshot(organizationId: string, prospectId: string) {
       const lead = await ownedDbTable('canonical_leads')
