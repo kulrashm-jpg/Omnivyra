@@ -47,6 +47,10 @@ jest.mock('../../db/writeOwner', () => ({
     q.update = (p: Record<string, unknown>) => { mode = 'update'; payload = p; return q; };
     q.select = () => q;
     q.eq = (col: string, val: unknown) => { filters[col] = val; return q; };
+    // A4V — `markProviderCallPending` narrows with `.is('completed_at', null)`.
+    // The mock lacked it, so the real marker threw; before A4V the manual path
+    // swallowed that, and these tests passed only because of the defect.
+    q.is = (col: string, val: unknown) => { filters[col] = val; return q; };
     q.order = (col: string, o: { ascending: boolean }) => { order = { col, asc: o.ascending }; return q; };
     q.limit = (n: number) => { limit = n; return q; };
 

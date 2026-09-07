@@ -188,6 +188,10 @@ function harness(opts: {
       return { attemptId: 'attempt-1' };
     },
     complete: async (i: unknown) => { completions.push(i as Record<string, unknown>); },
+    // A4V — the pre-transport marker now fails closed on EVERY path. Without a
+    // stub this fell through to the real writer; the manual path used to
+    // swallow that failure, so these tests passed despite never marking.
+    markPending: async () => { /* the mark succeeds; A4V proves the failure case */ },
   };
 
   return {

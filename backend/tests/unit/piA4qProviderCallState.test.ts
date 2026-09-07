@@ -250,7 +250,7 @@ describe('A4Q — B3: a process that dies around the call leaves unknown', () =>
 
 // ── the marker's own failure policy ─────────────────────────────────────────
 
-describe('A4Q — the marker fails closed for automated callers only', () => {
+describe('A4Q — the marker fails closed on EVERY path (widened by A4V)', () => {
   it('a leased execution does NOT call the provider if the mark cannot be written', async () => {
     const s = store();
     const calls: unknown[] = [];
@@ -267,15 +267,25 @@ describe('A4Q — the marker fails closed for automated callers only', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('the manual path keeps A4A fail-open — the tenant still gets their work', async () => {
+  it('the MANUAL path also refuses transport when the mark cannot be written', async () => {
+    // A4V widened this. It previously asserted the opposite — that a manual
+    // execution proceeded to the provider on a mark failure, "keeping A4A
+    // fail-open". That reasoning conflated two different things: A4A's
+    // fail-open concerns a MISSING attempt row (nothing to misread), whereas
+    // this is a row that EXISTS and could not be moved to `unknown`. Proceeding
+    // left the row asserting `not_called` while the tenant's quota was spent,
+    // and a process death in that window made the lie permanent. A manual call
+    // spends the same money as a leased one, so it gets the same guarantee.
     const s = store();
     const calls: unknown[] = [];
-    const broken = { ...recorder(s), markPending: async () => { throw new Error('mark failed'); } };
-    const out = await executeEnrichmentRecorded(request, 'clearbit', ports(),
-      { adapter: adapter(calls), recorder: broken as never });
+    const boom = new Error('mark failed');
+    const broken = { ...recorder(s), markPending: async () => { throw boom; } };
 
-    expect(out.result.outcome).toBe('enriched');
-    expect(calls).toHaveLength(1);
+    await expect(executeEnrichmentRecorded(request, 'clearbit', ports(),
+      { adapter: adapter(calls), recorder: broken as never })).rejects.toBe(boom);
+
+    expect(calls).toHaveLength(0);          // no durable unknown ⇒ no transport
+    expect(s.row.state).toBe('not_called'); // and the row says what happened
   });
 });
 
