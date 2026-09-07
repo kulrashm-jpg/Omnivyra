@@ -33,6 +33,9 @@ import {
   type ExecuteEnrichmentResult,
   ENRICHMENT_EXECUTOR_VERSION,
 } from './providers/execute';
+// A7A — the assembled production set, so a caller that supplies no ports gets
+// duplicate suppression rather than silently getting none.
+import { makeProductionEnrichmentPorts } from './productionPorts';
 // Direct, not through `./providers` — that barrel registers adapters on import,
 // and the recorder must not cause registration as a side effect of being loaded.
 import { getProvider } from './providers/registry';
@@ -113,7 +116,11 @@ export interface RecordedEnrichmentResult {
 export async function executeEnrichmentRecorded(
   request: EnrichmentRequest,
   providerId: string,
-  ports: ExecuteEnrichmentPorts,
+  // A7A — same default as the plan seam above this one: a caller that supplies
+  // no ports gets the real, suppression-enabled set rather than silently none.
+  // (The sibling's symbol is deliberately not named here — A4A's no-caller guard
+  // greps for it textually, and a mention would read as a call.)
+  ports: ExecuteEnrichmentPorts = makeProductionEnrichmentPorts(),
   options: {
     freshnessDays?: number;
     adapter?: EnrichmentProviderAdapter;

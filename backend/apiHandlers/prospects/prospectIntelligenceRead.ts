@@ -51,11 +51,11 @@ import { ingestionEnrichmentCoverage } from '../../services/leadIngestion/enrich
 // A6 — the production execution boundary. Every one of these is an EXISTING
 // production singleton or the existing canonical executor; none is new.
 import { executePlannedField, type PlanFieldExecution } from '../../services/enrichment/execution';
+// A7K — the canonical production composition, assembled once in the service
+// layer and re-exported below under the name this boundary already used.
+import { makeProductionEnrichmentPorts } from '../../services/enrichment/productionPorts';
 import {
-  defaultCostPort,
   tenantCredentialPort,
-  defaultFindRecentObservation,
-  defaultPersistObservation,
   listSourceStatus,
   getProvider,
   ACQUISITION_SOURCES,
@@ -519,27 +519,35 @@ function defaultEnrichmentPorts() {
 /**
  * The production `ExecuteEnrichmentPorts`.
  *
- * Every member is the existing production singleton, referenced — never
- * re-implemented, wrapped or approximated:
+ * A7K — this is no longer a composition, it is the SAME FUNCTION as
+ * `makeProductionEnrichmentPorts`, re-exported under the name A6's boundary and
+ * its tests already use. Every member is still the existing production
+ * singleton, referenced — never re-implemented, wrapped or approximated:
  *
- *   authorizeCost / releaseCost  `defaultCostPort` (= `tenantFundedExecutionPort`),
+ *   authorizeCost / releaseCost  `tenantFundedExecutionPort` (= `defaultCostPort`),
  *                                which `execute.ts` itself names as the default
  *   resolveCredential            `tenantCredentialPort` — THIS tenant's key, never
  *                                `process.env`
  *   findRecentObservation        `defaultFindRecentObservation` — fail-closed
  *   persistObservation           `defaultPersistObservation` — LI-2's write
+ *
+ * ─── WHY A RE-EXPORT AND NOT A SECOND ASSEMBLY ────────────────────────────
+ * A7A introduced the same set as an executor DEFAULT, so the platform briefly
+ * had two functions building one dependency graph. They agreed behaviourally
+ * and differed in instance identity, which is the worst shape for this: the
+ * suppression lookup, the credential resolver and the cost port were all real
+ * in both, so nothing would fail, and a later edit to one would silently apply
+ * to only half the production paths.
+ *
+ * The composition therefore lives in the service layer, where both this handler
+ * and the executors can reach it — a service must not import an API handler to
+ * obtain its own dependencies — and this name is bound to it. Aliasing rather
+ * than delegating is deliberate: a wrapper would be a distinct function object,
+ * and `a6ExecutorBoundary.test.ts` asserts these are the same one. A `const`
+ * binding rather than `export { … as … }`, because `executeProspectEnrichment`
+ * below calls it by this name too and an export alias creates no local binding.
  */
-export function defaultExecuteEnrichmentPorts(): ExecuteEnrichmentPorts {
-  return {
-    // Spread, so `authorizeCost` and `releaseCost` remain the SAME function
-    // objects the singleton holds and the identity guard can see them.
-    ...defaultCostPort,
-    resolveCredential: tenantCredentialPort.resolveCredential,
-    findRecentObservation: defaultFindRecentObservation,
-    persistObservation: defaultPersistObservation,
-    now: () => new Date().toISOString(),
-  };
-}
+export const defaultExecuteEnrichmentPorts = makeProductionEnrichmentPorts;
 
 /**
  * Live source states for this tenant.
