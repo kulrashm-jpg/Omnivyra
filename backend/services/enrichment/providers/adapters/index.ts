@@ -13,11 +13,13 @@
 
 import { registerProvider } from '../registry';
 import { clearbitEnrichmentAdapter } from './clearbit';
+import { apolloEnrichmentAdapter } from './apollo';
 
 export { clearbitEnrichmentAdapter, mapClearbitPayload, CLEARBIT_SUPPORTED_ATTRIBUTES } from './clearbit';
+export { apolloEnrichmentAdapter, mapApolloPayload, APOLLO_SUPPORTED_ATTRIBUTES } from './apollo';
 
 /** Every PI adapter that exists. Registered together, so none is forgotten. */
-export const PI_ENRICHMENT_ADAPTERS = [clearbitEnrichmentAdapter] as const;
+export const PI_ENRICHMENT_ADAPTERS = [clearbitEnrichmentAdapter, apolloEnrichmentAdapter] as const;
 
 /** Idempotent: `registerProvider` keys by adapter id, so a repeat is a no-op. */
 export function registerPiEnrichmentAdapters(): void {
