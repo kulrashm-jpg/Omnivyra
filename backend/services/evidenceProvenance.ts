@@ -85,7 +85,18 @@ const PROVENANCE_BY_SOURCE: Record<EvidenceSourceKind, EvidenceProvenanceClass> 
   wikidata: 'PUBLIC_OBSERVED',
   google_kg: 'PUBLIC_OBSERVED',
   schema_org: 'PUBLIC_OBSERVED',
-  llm_probe: 'PUBLIC_OBSERVED',
+  // D1 — a retrieval-grounded answer engine returned the sources behind its
+  // answer. Anyone can open those URLs and check them, which is exactly what
+  // PUBLIC_OBSERVED means here.
+  answer_engine: 'PUBLIC_OBSERVED',
+  // D1 — DEMOTED, and this is the entry that let a fabrication reach Report 1.
+  // A chat model answering "What is {brand}?" from its weights has observed
+  // nothing: the question contains the brand, so a confabulated answer names it
+  // by construction and scored identically to a genuine citation. Classing that
+  // as PUBLIC_OBSERVED made the provenance boundary — the mechanism built to
+  // keep unverifiable evidence out — wave it through. A model's recall is an
+  // inference about the world, never an observation of it.
+  llm_probe: 'INFERRED',
   backlink_api: 'PUBLIC_OBSERVED',
   review_aggregator: 'PUBLIC_OBSERVED',
   expertise_extractor: 'INFERRED',

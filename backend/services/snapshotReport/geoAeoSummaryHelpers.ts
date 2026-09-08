@@ -110,11 +110,22 @@ export function buildGeoAeoExecutiveSummary(params: {
   const overallAiVisibilityScore = measuredAxisValues.length === 0
     ? null
     : Math.round(measuredAxisValues.reduce((sum, value) => sum + value, 0) / measuredAxisValues.length);
+  // D1 — a structural composite is NEVER `measured` AI visibility.
+  //
+  // Every axis above is an honest measurement OF THE WEBSITE: the share of pages
+  // carrying two or more headings, the share matching citation-shaped phrasing, a
+  // weighted mention tally. None of them observed an AI system doing anything. The
+  // old rule promoted the mean of three such axes to `measured`, and the field is
+  // called `overall_ai_visibility_score` — so the report asserted a measurement of
+  // AI visibility that nobody took.
+  //
+  // These signals predict CITABILITY, which is a legitimate inference and worth
+  // reporting. `inferred` is the ceiling for it. Real external AI observation
+  // arrives on a different path entirely (a retrieval-grounded answer engine, via
+  // `resolveProbeOutcome`), and the two must stay visibly different to a reader.
   const overallAiVisibilityScoreState: ScoreState = measuredAxisValues.length === 0
     ? 'insufficient_signal'
-    : measuredAxisValues.length < 3
-      ? 'inferred'
-      : 'measured';
+    : 'inferred';
 
   // ── Phase 2: evidence gate ──────────────────────────────────────────────────
   //
@@ -127,11 +138,17 @@ export function buildGeoAeoExecutiveSummary(params: {
   //
   // AFTER: when no axis is measured the section abstains — null gap, empty actions. The
   // absent score and the absent narrative now agree.
-  // Positive test, not a negative one: only 'measured' and 'inferred' carry a value that a
-  // diagnosis may rest on. Written this way so that if `ScoreState` ever gains another
-  // non-evidenced member ('estimated', say) it defaults to withholding rather than asserting.
-  const aiEvidenceSufficient: boolean =
-    overallAiVisibilityScoreState === 'measured' || overallAiVisibilityScoreState === 'inferred';
+  // Positive test, not a negative one: only a state that carries evidence may
+  // support a diagnosis. Written this way so that if `ScoreState` ever gains
+  // another non-evidenced member ('estimated', say) it defaults to withholding
+  // rather than asserting.
+  //
+  // D1 — 'measured' was an arm here and is now unreachable: this composite is
+  // structural, so it tops out at 'inferred' (see the state assignment above).
+  // The arm is removed rather than cast away, because a comparison against a
+  // value the type can no longer hold is exactly the dead branch that lets a
+  // future edit quietly restore the claim.
+  const aiEvidenceSufficient: boolean = overallAiVisibilityScoreState === 'inferred';
 
   /** Measured drop-off signals only — a null stays null instead of collapsing to 0. */
   const answerGapPct = funnel.drop_off_reason_distribution.answer_gap_pct;

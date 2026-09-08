@@ -303,6 +303,13 @@ export function reshapeCompletionToPerplexityResponse(
 
 export class PerplexityAdapter extends LLMAdapterBase {
   public readonly id: AIProviderId = PRODUCT_PROVIDER_ID;
+  /**
+   * D1 — sonar retrieves from the live web and returns the sources it used, so
+   * an answer from it is an observation of something outside the model. This is
+   * the ONLY adapter in the repo for which `measured` is defensible, and even
+   * here it holds only on runs that actually carried citations.
+   */
+  public readonly retrieval_grounded = true;
   protected readonly config: LLMAdapterConfig = {
     id: PRODUCT_PROVIDER_ID,
     envKey: 'PERPLEXITY_API_KEY',
@@ -333,12 +340,25 @@ export class PerplexityAdapter extends LLMAdapterBase {
 
   protected extractAnswer(response: unknown): string {
     const json = response as PerplexityResponse;
-    const answer = json.choices?.[0]?.message?.content ?? '';
-    // Append citation URLs to the answer body — these are first-class signal
-    // for our extractor (a domain mention in the citation list still counts).
+    // D1 — the answer is the ANSWER. Citations used to be concatenated onto it
+    // ("\nSources: …") so a regex could find a domain in the list, which
+    // conflated two different facts: that the engine NAMED the brand in its
+    // prose, and that it CITED the brand's site as a source. It also destroyed
+    // the structured evidence — the one externally checkable thing in the whole
+    // path — by flattening it into text. Citations are now carried intact by
+    // `extractGroundingSources` and compared by host, not by substring.
+    return json.choices?.[0]?.message?.content ?? '';
+  }
+
+  /**
+   * D1 — sonar's grounded `citations[]`, verbatim. This is what makes a
+   * Perplexity observation checkable by the customer, and it is the reason this
+   * adapter is the only one that may reach `measured`.
+   */
+  protected extractGroundingSources(response: unknown): string[] {
+    const json = response as PerplexityResponse;
     const citations = json.citations ?? [];
-    if (citations.length === 0) return answer;
-    return `${answer}\nSources: ${citations.join(', ')}`;
+    return Array.isArray(citations) ? citations.filter((c): c is string => typeof c === 'string') : [];
   }
 
   /**

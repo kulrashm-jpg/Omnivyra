@@ -96,7 +96,17 @@ export type EvidenceSourceKind =
   | 'wikidata'
   | 'google_kg'
   | 'schema_org'
+  /**
+   * D1 — a language model's ANSWER. Not an observation: the probe queries name
+   * the brand, so a confabulation mentions it by construction. Inference at best.
+   */
   | 'llm_probe'
+  /**
+   * D1 — a retrieval-grounded answer engine that returned the sources it used.
+   * Publicly checkable by anyone, which `llm_probe` is not. Deliberately distinct
+   * so a chat completion can never inherit an observation's provenance.
+   */
+  | 'answer_engine'
   | 'backlink_api'
   | 'review_aggregator'
   | 'expertise_extractor'

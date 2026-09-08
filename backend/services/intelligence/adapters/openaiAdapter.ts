@@ -26,8 +26,13 @@ import {
   withRetry,
 } from '../productionPrimitives';
 import { extractCitation } from '../citationExtractor';
+// D1 — the single seam that decides whether a probe may be called `measured`.
+import { resolveProbeOutcome } from '../aiVisibilityGrounding';
 import { formatQueryForProvider } from '../queryOrchestrator';
-import type { EvidenceTrace } from '../../canonicalReport/canonicalReportTypes';
+import type {
+  EvidenceSourceKind,
+  EvidenceTrace,
+} from '../../canonicalReport/canonicalReportTypes';
 // BETA-PHASE1-EXEC-001: canonical cost governance — gate paid calls + record usage against the active scan budget.
 import { withinBudget, recordUsage, estimateCost } from '../costGovernance';
 import { getActiveScanId } from '../scanBudgetContext';
@@ -132,6 +137,14 @@ export function reshapeCompletionToOpenAiResponse(
 
 export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
   public readonly id: AIProviderId = PRODUCT_PROVIDER_ID;
+  /**
+   * D1 — Chat Completions answers from model weights. It performs no retrieval,
+   * so this adapter can never produce a `measured` AI-visibility observation,
+   * however confident its prose. This is the property that closes the defect:
+   * the probe asked "What is {brand}?" — a question containing the brand — and
+   * a regex over the reply was reported as a measurement.
+   */
+  public readonly retrieval_grounded = false;
   private readonly cache = new TtlCache<CitationMention>(CACHE_TTL_SECONDS);
   private readonly limiter = getRateLimiter(this.id, RATE_CAPACITY, RATE_REFILL_PER_SEC);
 
@@ -194,6 +207,7 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
         provider: this.id,
         query_class: probe.query_class,
         state: 'unavailable',
+        observation_outcome: 'no_provider',
         citation_rate: null,
         mean_prominence: null,
         mentions: [],
@@ -207,6 +221,7 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
         provider: this.id,
         query_class: probe.query_class,
         state: 'unavailable',
+        observation_outcome: 'no_queries',
         citation_rate: null,
         mean_prominence: null,
         mentions: [],
@@ -310,21 +325,34 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
       }
     }
 
+    // D1 — the same seam the shared base uses. This adapter keeps its own probe
+    // body (Chat Completions has a fixed payload shape), but it does NOT keep its
+    // own opinion about what counts as measured.
+    const resolution = resolveProbeOutcome({
+      retrievalGrounded: this.retrieval_grounded,
+      observations: mentions,
+      failureReason: firstFailureReason,
+    });
+
     if (mentions.length === 0) {
+      const reason = firstFailureReason ?? 'OpenAI probe returned no observations.';
       return {
         provider: this.id,
         query_class: probe.query_class,
-        state: 'unavailable',
+        state: resolution.state,
+        observation_outcome: resolution.outcome,
         citation_rate: null,
         mean_prominence: null,
         mentions: [],
-        evidence: unavailableEvidence(firstFailureReason ?? `OpenAI probe returned no observations.`),
-        reason_unavailable: firstFailureReason ?? 'OpenAI probe returned no observations.',
+        evidence: unavailableEvidence(reason),
+        reason_unavailable: reason,
       };
     }
 
+    const measured = resolution.state === 'measured';
+    const sourceKind: EvidenceSourceKind = measured ? 'answer_engine' : 'llm_probe';
+
     const appeared = mentions.filter((m) => m.appeared);
-    const citationRate = mentions.length === 0 ? null : appeared.length / mentions.length;
     const meanProminence =
       appeared.length === 0
         ? 0
@@ -333,11 +361,11 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
     const observedAt = mentions[mentions.length - 1].observed_at;
     const evidence: EvidenceTrace = {
       count: mentions.length,
-      sources: ['llm_probe'],
+      sources: [sourceKind],
       freshness: freshnessFromTimestamp(observedAt),
       observations: mentions.map((m) => ({
         signal: `openai:${probe.query_class}:${m.appeared ? 'cited' : 'absent'}`,
-        source: 'llm_probe',
+        source: sourceKind,
         observed_at: m.observed_at,
       })),
     };
@@ -345,12 +373,13 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
     return {
       provider: this.id,
       query_class: probe.query_class,
-      state: 'measured',
-      citation_rate: Number(citationRate?.toFixed(3) ?? '0'),
-      mean_prominence: Number(meanProminence.toFixed(3)),
+      state: resolution.state,
+      observation_outcome: resolution.outcome,
+      citation_rate: measured ? Number((appeared.length / mentions.length).toFixed(3)) : null,
+      mean_prominence: measured ? Number(meanProminence.toFixed(3)) : null,
       mentions,
       evidence,
-      reason_unavailable: null,
+      reason_unavailable: resolution.reason,
     };
   }
 }
