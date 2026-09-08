@@ -189,3 +189,99 @@ export function provenanceForSocialProfileSource(
       return 'UNAVAILABLE';
   }
 }
+
+// ── D3 — DECISION-LEVEL PROVENANCE ──────────────────────────────────────────
+//
+// WHY THIS EXISTS. The table above classifies an EvidenceSourceKind, and
+// `enforceTraceProvenance` applies it to every EvidenceTrace entering Report 1.
+// But Report 1's `visual_intelligence` surface is not built from traces — it is
+// built from persisted DECISION OBJECTS, so it never passed that gate.
+//
+// The consequence was a live contract violation. `seoIntelligenceService` reads
+// the customer's connected Search Console property and emits `report_tier:
+// 'snapshot'` decisions carrying `impressions`, `clicks`, `ctr` and
+// `avg_position`. Those flowed into `search_visibility_funnel` (stamped
+// `confidence: 'high'`), into `seo_capability_radar.rank_tracking_score` (tagged
+// `['GSC']`, state `measured`) and into `opportunity_coverage_matrix` — and out
+// through the Report 1 payload.
+//
+// GAP-07 had already named this exact hazard and closed half of it: Report 1
+// stopped DERIVING its search-visibility and digital-snapshot readings from the
+// GSC axis, because "a private signal acquiring public-observed standing merely
+// by entering a Report 1 dimension" was the prohibition. What it did not do was
+// stop Report 1 from SHIPPING the axis. Not deriving from private evidence and
+// not publishing it are two different things; only the first was done.
+//
+// This is deliberately part of the existing provenance module rather than a
+// second one. There is one provenance vocabulary; this adds the decision-shaped
+// entry point to it.
+
+/**
+ * Services whose decisions carry CONNECTED_SOURCE evidence.
+ *
+ * Membership is a claim about where a service gets its facts, established by
+ * reading what it consumes — not inferred from its name:
+ *
+ *   seoIntelligenceService         Search Console via `searchConsoleProviderBridge`
+ *                                  + `keyword_metrics` (GSC ingestion)
+ *   intentIntelligenceService      `searchConsoleProviderBridge` + `keyword_metrics`
+ *   geoStrategyIntelligenceService `searchConsoleProviderBridge` + `keyword_metrics`
+ *   trafficIntelligenceService     GA4 `canonical_sessions`
+ *   distributionIntelligenceService            GA4 `canonical_sessions`
+ *   advancedRevenueAttributionIntelligenceService  GA4 `canonical_sessions`
+ *
+ * Of these, only `seoIntelligenceService` currently emits snapshot-tier
+ * decisions, so only it can reach Report 1 today. The others are listed because
+ * the boundary must hold the moment one of them does, and an architectural test
+ * asserts that this set stays in step with what actually emits snapshot tier.
+ */
+export const CONNECTED_SOURCE_DECISION_SERVICES: ReadonlySet<string> = new Set([
+  'seoIntelligenceService',
+  'intentIntelligenceService',
+  'geoStrategyIntelligenceService',
+  'trafficIntelligenceService',
+  'distributionIntelligenceService',
+  'advancedRevenueAttributionIntelligenceService',
+]);
+
+/**
+ * The provenance class of a decision, from the service that produced it.
+ *
+ * Anything not known to read a connected source is `PUBLIC_OBSERVED` — the
+ * decision producers are crawl-, SERP- and audit-derived by default, and the
+ * connected ones are the enumerated exception. A service added later that reads
+ * private data and is NOT listed here would be misclassified, which is what the
+ * architectural guard in the D3 suite exists to catch.
+ */
+export function provenanceForDecisionService(
+  sourceService: string | null | undefined,
+): EvidenceProvenanceClass {
+  const service = (sourceService ?? '').trim();
+  if (!service) return 'UNAVAILABLE';
+  return CONNECTED_SOURCE_DECISION_SERVICES.has(service) ? 'CONNECTED_SOURCE' : 'PUBLIC_OBSERVED';
+}
+
+/** True when a decision's evidence may appear on a Report 1 public surface. */
+export function isReport1Decision(decision: { source_service?: string | null }): boolean {
+  return isReport1Provenance(provenanceForDecisionService(decision.source_service));
+}
+
+/**
+ * Split decisions into what Report 1 may present and what it may not.
+ *
+ * Returns both halves rather than only the allowed one, on purpose: the
+ * connected half is legitimate evidence for the surfaces entitled to it, and a
+ * filter that simply discarded it would invite a caller to re-derive it from
+ * somewhere else. Report 2 and the enterprise analytics path read that data from
+ * their own sources and are untouched by this.
+ */
+export function partitionDecisionsForReport1<T extends { source_service?: string | null }>(
+  decisions: readonly T[],
+): { publicEvidence: T[]; connectedEvidence: T[] } {
+  const publicEvidence: T[] = [];
+  const connectedEvidence: T[] = [];
+  for (const decision of decisions) {
+    (isReport1Decision(decision) ? publicEvidence : connectedEvidence).push(decision);
+  }
+  return { publicEvidence, connectedEvidence };
+}
