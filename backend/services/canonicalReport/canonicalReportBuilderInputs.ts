@@ -521,8 +521,22 @@ function dimTopicalAuthority(ctx: DimensionContext): CanonicalDimension {
 function dimAiSurfacePresence(ctx: DimensionContext): CanonicalDimension {
   const radar = ctx.snapshot.geo_aeo_visuals.ai_answer_presence_radar;
   const value = radar.answer_coverage_score;
-  const stateHint = radar.axis_states?.answer_coverage_score;
-  const state: ScoreState = stateHint ?? (typeof value === 'number' ? 'measured' : 'insufficient_signal');
+  // D1 — SECOND PATH TO THE SAME FALSE CLAIM, and the one the adapter fix does
+  // not reach.
+  //
+  // `answer_coverage_score` is a crawl heuristic: how answer-shaped the site's
+  // own pages look. It observed no AI system. This used to be stamped `measured`
+  // for any numeric value, and because the dossier's `isMeasuredScore` admits
+  // anything that is not insufficient/unavailable, that number flowed straight
+  // into "AI systems reliably identify the brand" — even with every answer engine
+  // unconfigured and the citation matrix correctly reporting nothing.
+  //
+  // Structural readiness predicts citability; it never witnesses it. `inferred`
+  // is the ceiling, and it is applied here rather than trusting `axis_states`,
+  // whose hint is computed from value-presence alone. The individual axis states
+  // are left untouched: they are honest measurements OF THE WEBSITE, and only
+  // their use AS an AI-visibility score was the lie.
+  const state: ScoreState = typeof value === 'number' ? 'inferred' : 'insufficient_signal';
   const observations: EvidenceObservation[] = [];
   if (typeof radar.answer_coverage_score === 'number') {
     observations.push({ signal: 'answer_coverage', source: 'crawler', observed_at: null });

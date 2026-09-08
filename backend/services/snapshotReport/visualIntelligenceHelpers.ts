@@ -91,6 +91,12 @@ export function buildSnapshotVisualIntelligence(params: {
     }
   }
 
+  // D3 — which services actually produced the keyword coverage, so its source
+  // tag can describe them rather than assert a fixed provider.
+  const coverageServices = new Set(
+    [...keywordTopics.values()].map((decision) => String(decision.source_service ?? '').trim()),
+  );
+
   const opportunityCoverage = [...keywordTopics.entries()]
     .map(([keyword, decision]) => {
       const evidence = (decision.evidence ?? {}) as Record<string, unknown>;
@@ -334,7 +340,19 @@ export function buildSnapshotVisualIntelligence(params: {
   const crawlConfidence: 'high' | 'medium' | 'low' =
     technicalPenalty != null ? 'high' : 'low';
   const technicalSourceTags = wiTechnicalUsable ? ['website_intelligence:technical', 'crawler'] : technicalPenalty != null ? ['crawler'] : null;
-  const keywordSourceTags = opportunityCoverage.length > 0 ? ['GSC', 'heuristic'] : null;
+  // D3 — this was the literal `['GSC', 'heuristic']`, which is now false in BOTH
+  // directions. Report 1 no longer receives connected-source decisions, so GSC
+  // cannot have contributed; and tagging public crawl/audit evidence as GSC
+  // would mislabel public data as private, which is the same defect running the
+  // other way. The tag is derived from the decisions that actually produced the
+  // coverage, so it cannot drift from them again.
+  const keywordSourceTags = opportunityCoverage.length > 0
+    ? [
+        ...(coverageServices.has('publicDomainAuditService') ? ['crawler'] : []),
+        ...(coverageServices.has('reportCompetitorIntelligenceService') ? ['competitor_intelligence'] : []),
+        'heuristic',
+      ]
+    : null;
   const rankSourceTags = searchKeywordRows.length > 0 ? ['GSC'] : null;
   const backlinksSourceTags = backlinksScore != null
     ? params.decisions.some((decision) => isAuthorityDecision(decision)) ? ['backlink_signals', 'heuristic'] : ['heuristic']

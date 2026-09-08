@@ -23,7 +23,12 @@ import {
   withRetry,
 } from '../productionPrimitives';
 import { extractCitation } from '../citationExtractor';
-import type { EvidenceTrace } from '../../canonicalReport/canonicalReportTypes';
+// D1 — the single seam that decides whether a probe may be called `measured`.
+import { resolveProbeOutcome } from '../aiVisibilityGrounding';
+import type {
+  EvidenceSourceKind,
+  EvidenceTrace,
+} from '../../canonicalReport/canonicalReportTypes';
 // BETA-PHASE1-EXEC-001: canonical cost governance — gate paid calls + record usage against the active scan budget.
 import { withinBudget, recordUsage, estimateCost } from '../costGovernance';
 import { getActiveScanId } from '../scanBudgetContext';
@@ -69,6 +74,28 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
   protected abstract extractAnswer(response: unknown): string;
 
   /**
+   * D1 — whether this provider RETRIEVES from the live web.
+   *
+   * Default `false`: a chat model answers from its weights, and that is not an
+   * observation of AI visibility no matter how confident the prose. Only an
+   * answer engine overrides this, and only then can a probe reach `measured`.
+   */
+  public readonly retrieval_grounded: boolean = false;
+
+  /**
+   * D1 — the source URLs the provider itself returned for this answer.
+   *
+   * Default empty, so a subclass that does not retrieve cannot accidentally
+   * claim grounding. This exists because `extractAnswer` collapses the response
+   * to a string: Perplexity's `citations[]` used to be stringified into the
+   * answer prose (`"\nSources: …"`) and then regex-matched, which destroyed the
+   * one piece of externally checkable evidence in the whole path.
+   */
+  protected extractGroundingSources(_response: unknown): string[] {
+    return [];
+  }
+
+  /**
    * Transport seam (PA-004). Default = the legacy direct-HTTP path
    * (buildRequest → production fetch → parsed JSON). A subclass MAY override this
    * to route transport through the canonical Platform gateway dispatcher while
@@ -100,6 +127,7 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
         provider: this.id,
         query_class: probe.query_class,
         state: 'unavailable',
+        observation_outcome: 'no_provider',
         citation_rate: null,
         mean_prominence: null,
         mentions: [],
@@ -113,6 +141,7 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
         provider: this.id,
         query_class: probe.query_class,
         state: 'unavailable',
+        observation_outcome: 'no_queries',
         citation_rate: null,
         mean_prominence: null,
         mentions: [],
@@ -181,6 +210,9 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
           });
         }
         const answer = this.extractAnswer(json);
+        // D1 — read the provider's structured citations BEFORE the response is
+        // reduced to a string, so the grounding evidence survives.
+        const groundedSources = this.retrieval_grounded ? this.extractGroundingSources(json) : [];
         const observedAt = new Date().toISOString();
         const mention = extractCitation({
           provider: this.id,
@@ -189,6 +221,7 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
           answer,
           brandName,
           domain,
+          groundedSources,
           observedAt,
         });
         mentions.push(mention);
@@ -212,32 +245,46 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
       }
     }
 
+    // D1 — one decision, in one place, for every adapter that extends this base.
+    const resolution = resolveProbeOutcome({
+      retrievalGrounded: this.retrieval_grounded,
+      observations: mentions,
+      failureReason: firstFailureReason,
+    });
+
     if (mentions.length === 0) {
+      const reason = firstFailureReason ?? `${this.id} probe returned no observations.`;
       return {
         provider: this.id,
         query_class: probe.query_class,
-        state: 'unavailable',
+        state: resolution.state,
+        observation_outcome: resolution.outcome,
         citation_rate: null,
         mean_prominence: null,
         mentions: [],
-        evidence: unavailableEvidence(firstFailureReason ?? `${this.id} probe returned no observations.`),
-        reason_unavailable: firstFailureReason ?? `${this.id} probe returned no observations.`,
+        evidence: unavailableEvidence(reason),
+        reason_unavailable: reason,
       };
     }
 
+    const measured = resolution.state === 'measured';
+    // D1 — the source kind follows the evidence, not the transport. A grounded
+    // answer-engine observation is something anyone could check; a model's recall
+    // is not, and must not enter Report 1 wearing a public-observation label.
+    const sourceKind: EvidenceSourceKind = measured ? 'answer_engine' : 'llm_probe';
+
     const appeared = mentions.filter((m) => m.appeared);
-    const citationRate = mentions.length === 0 ? null : appeared.length / mentions.length;
     const meanProminence =
       appeared.length === 0 ? 0 : appeared.reduce((sum, m) => sum + m.prominence, 0) / appeared.length;
 
     const observedAt = mentions[mentions.length - 1].observed_at;
     const evidence: EvidenceTrace = {
       count: mentions.length,
-      sources: ['llm_probe'],
+      sources: [sourceKind],
       freshness: freshnessFromTimestamp(observedAt),
       observations: mentions.map((m) => ({
         signal: `${this.id}:${probe.query_class}:${m.appeared ? 'cited' : 'absent'}`,
-        source: 'llm_probe',
+        source: sourceKind,
         observed_at: m.observed_at,
       })),
     };
@@ -245,12 +292,16 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
     return {
       provider: this.id,
       query_class: probe.query_class,
-      state: 'measured',
-      citation_rate: Number(citationRate?.toFixed(3) ?? '0'),
-      mean_prominence: Number(meanProminence.toFixed(3)),
+      state: resolution.state,
+      observation_outcome: resolution.outcome,
+      // D1 — a rate is published ONLY for a measured observation. Deriving one
+      // from ungrounded answers is what produced a perfect score from a
+      // confabulation.
+      citation_rate: measured ? Number((appeared.length / mentions.length).toFixed(3)) : null,
+      mean_prominence: measured ? Number(meanProminence.toFixed(3)) : null,
       mentions,
       evidence,
-      reason_unavailable: null,
+      reason_unavailable: resolution.reason,
     };
   }
 }

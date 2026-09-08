@@ -106,6 +106,9 @@ import {
 import { buildCompetitiveSnapshotReport } from './reportCompetitorStrategyService';
 import { buildUnifiedIntelligenceSummary } from './snapshotReport/unifiedSummaryHelpers';
 import { buildSnapshotVisualIntelligence } from './snapshotReport/visualIntelligenceHelpers';
+// D3 — the canonical provenance boundary, in its decision-shaped form. Same
+// module and same vocabulary as `enforceTraceProvenance`; no second engine.
+import { partitionDecisionsForReport1 } from './evidenceProvenance';
 // BETA-EXEC-001: reuse the existing Website Intelligence engines (Technical/Content) as
 // measured evidence for the Authority radar — fully implemented but previously wired only
 // into the separate Website Health report. Consumed directly (no recomputation).
@@ -253,8 +256,31 @@ export async function composeSnapshotReportFromDecisions(params: {
       { geography: params.resolvedInput?.resolved.geography ?? null },
     ),
   );
+  // ── D3 — THE REPORT 1 PROVENANCE BOUNDARY ───────────────────────────────
+  //
+  // `visual_intelligence` is built from decision objects, so it never passed
+  // `enforceTraceProvenance` — the gate that keeps CONNECTED_SOURCE evidence out
+  // of Report 1. `seoIntelligenceService` reads the customer's connected Search
+  // Console property and emits snapshot-tier decisions, so its impressions,
+  // clicks and CTR flowed straight into `search_visibility_funnel`,
+  // `rank_tracking_score` (tagged ['GSC'], state `measured`) and
+  // `opportunity_coverage_matrix`, and out through the Report 1 payload.
+  //
+  // GAP-07 named this hazard and closed half of it: the search-visibility and
+  // digital-snapshot readings stopped DERIVING from the GSC axis. What remained
+  // was Report 1 still SHIPPING it. This closes the other half at the earliest
+  // point the public surface is assembled.
+  //
+  // The connected half is NOT relabelled and NOT deleted from the system — it is
+  // simply not this surface's evidence. Report 2, the enterprise snapshot and the
+  // analytics path read that data from their own sources and are untouched.
+  //
+  // What the customer sees instead is the helper's existing honest degradation:
+  // null volumes at `confidence: 'low'`, and `insufficient_signal` axis states.
+  // No value becomes zero, and nothing is re-derived to fill the gap.
+  const { publicEvidence: report1Decisions } = partitionDecisionsForReport1(finalDecisions);
   const visualIntelligence = buildSnapshotVisualIntelligence({
-    decisions: finalDecisions,
+    decisions: report1Decisions,
     score,
     competitorIntelligence,
     publicAudit: params.publicAudit ?? null,

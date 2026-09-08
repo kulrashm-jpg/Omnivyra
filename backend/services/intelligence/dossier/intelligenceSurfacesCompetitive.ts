@@ -243,7 +243,25 @@ export function buildAIVisibilityState(report: CanonicalReport): AIVisibilitySta
   const aiScore = report.ai_surface_presence.score;
   const matrix = report.ai_surface_presence.citation_matrix;
   const entity = report.knowledge_graph.entity;
-  const aiValue = isMeasuredScore(aiScore) ? (aiScore.value as number) : null;
+  // D1 — this block writes "AI systems reliably identify the brand", so it must
+  // know WHERE its number came from, not merely how confident the number is.
+  //
+  // `isMeasuredScore` admits `inferred`, and that alone was enough: with every
+  // answer engine unconfigured, `ai_surface_presence` falls back to the baseline
+  // dimension, whose value is `answer_coverage_score` — a crawl heuristic counting
+  // how answer-shaped the company's OWN pages look. It witnessed no AI system, yet
+  // it drove this narrative.
+  //
+  // The honest gate is provenance, not confidence: at least one AI-surface cell
+  // must actually have been measured. That keeps GAP-12's partially-covered runs
+  // speaking (a real observation of some providers is still a real observation,
+  // and the coverage gate below scopes how far it may generalise), while a purely
+  // structural score falls to `unmeasured` — whose copy already exists and is
+  // honest. Since a cell can only reach `measured` through `resolveProbeOutcome`,
+  // "measured cells exist" now means "a retrieval-grounded engine answered with
+  // sources".
+  const observedAiCells = matrix?.coverage.measured_cells ?? 0;
+  const aiValue = observedAiCells > 0 && isMeasuredScore(aiScore) ? (aiScore.value as number) : null;
 
   // Identity state — derived from AI score using the canonical band
   // boundaries (foundational < 25, developing 25–49, operational

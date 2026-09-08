@@ -29,11 +29,18 @@ import { AI_PROVIDERS, unavailableResult } from './providerInterfaces';
 
 class UnavailableLLMProvider implements LLMVisibilityProvider {
   constructor(public readonly id: AIProviderId) {}
+  /**
+   * D1 — a provider that does not exist retrieves nothing. False here is not a
+   * placeholder: it is what keeps the stub incapable of yielding `measured`.
+   */
+  public readonly retrieval_grounded = false;
   async isAvailable(): Promise<boolean> { return false; }
   async probe(probe: AIVisibilityProbe): Promise<AIVisibilityProbeResult> {
     return unavailableResult<AIVisibilityProbeResult>({
       provider: this.id,
       query_class: probe.query_class,
+      // D1 — we never asked, which is a different finding from asking and failing.
+      observation_outcome: 'no_provider',
       citation_rate: null,
       mean_prominence: null,
       mentions: [],

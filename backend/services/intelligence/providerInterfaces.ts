@@ -12,6 +12,11 @@ import type {
   ScoreState,
   SystemMaturityClass,
 } from '../canonicalReport/canonicalReportTypes';
+// D1 — the grounding vocabulary. Re-exported so a consumer of the probe contract
+// never has to reach past it to name an outcome.
+import type { ProbeObservationOutcome } from './aiVisibilityGrounding';
+
+export type { ProbeObservationOutcome };
 
 // ── AI Visibility ─────────────────────────────────────────────────────────────
 
@@ -38,13 +43,26 @@ export type CitationMention = {
   provider: AIProviderId;
   query: string;
   query_class: AIQueryClass;
-  // Whether the brand was cited or mentioned in the answer at all.
+  // Whether the brand name appeared in the answer text at all.
+  //
+  // D1: this is a string match, NOT evidence of AI visibility on its own. The
+  // probe queries contain the brand, so a model that confabulates a fluent
+  // answer sets this to `true` by construction. Read it together with
+  // `grounded_sources` / `citation_corroborated`; never alone.
   appeared: boolean;
   // 0-1: how prominent the mention was within the answer (e.g., headline citation
   // = 1.0, footnote = 0.3, bare URL = 0.15).
   prominence: number;
   // The verbatim citation string (URL or quoted phrase) for traceability.
   evidence_excerpt: string | null;
+  // D1 — the source URLs the provider itself returned for this answer. Empty for
+  // any provider that does not retrieve. This is the only field that can carry a
+  // claim about the world rather than about the model.
+  grounded_sources: string[];
+  // D1 — the company's OWN domain is among `grounded_sources`: an answer engine
+  // pointed a reader at the company's pages. Host equality or a true subdomain,
+  // never substring.
+  citation_corroborated: boolean;
   observed_at: string;
 };
 
@@ -59,11 +77,22 @@ export type AIVisibilityProbe = {
 export type AIVisibilityProbeResult = {
   provider: AIProviderId;
   query_class: AIQueryClass;
-  // `state: 'unavailable'` when no adapter is configured. `'measured'` when the
-  // adapter actually queried the LLM. `'inferred'` is not allowed for AI visibility.
+  // D1 — decided ONLY by `resolveProbeOutcome`, never written as a literal.
+  //
+  // The previous rule was "`measured` when the adapter actually queried the LLM",
+  // and that sentence is the defect: querying a language model is not observing
+  // the world. `measured` now additionally requires a retrieval-grounded provider
+  // that returned source evidence. An ungrounded answer is `insufficient_signal`
+  // — we looked, and what came back cannot support the claim.
   state: ScoreState;
-  // null when state is unavailable.
-  citation_rate: number | null; // 0-1 fraction of queries where the brand appeared
+  // D1 — what actually happened, at a finer grain than the four-value state
+  // vocabulary can express: "we never asked" and "we asked and it broke" are
+  // both `unavailable` but are different findings.
+  observation_outcome: ProbeObservationOutcome;
+  // D1 — null unless `state === 'measured'`. A rate computed from ungrounded
+  // answers is a measurement of the model, not of the brand's visibility, and
+  // publishing it is what produced "AI systems reliably identify the brand".
+  citation_rate: number | null; // 0-1 fraction of grounded answers naming the brand
   mean_prominence: number | null; // 0-1 average prominence across mentions
   mentions: CitationMention[];
   evidence: EvidenceTrace;
@@ -72,6 +101,11 @@ export type AIVisibilityProbeResult = {
 
 export interface LLMVisibilityProvider {
   readonly id: AIProviderId;
+  // D1 — whether this provider RETRIEVES from the live web (an answer engine)
+  // rather than answering from model weights. A fixed property of the adapter,
+  // never inferred from a response: a chat model that emits a URL has still
+  // retrieved nothing. Only a grounded provider can reach `measured`.
+  readonly retrieval_grounded: boolean;
   // True when an adapter is wired AND credentials/connectivity are healthy.
   isAvailable(): Promise<boolean>;
   // Run a probe against this provider. MUST return `state: 'unavailable'` when not

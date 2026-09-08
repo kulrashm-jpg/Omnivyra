@@ -21,8 +21,11 @@ const input: AIVisibilityEvidenceInput = {
 };
 
 const mkResult = (provider: AIProviderId, appeared: boolean, citationRate: number, opts: Partial<AIVisibilityProbeResult> = {}): AIVisibilityProbeResult => ({
-  provider, query_class: 'branded', state: 'measured', citation_rate: citationRate,
-  mean_prominence: appeared ? 0.6 : 0, mentions: appeared ? [{ provider, query: 'q', query_class: 'branded', appeared: true, prominence: 0.6, evidence_excerpt: `cite-${provider}`, observed_at: OBSERVED }] : [],
+  // D1 — a `measured` result is by definition a grounded observation, so the
+  // fixture carries a source. An internally inconsistent fixture (measured with
+  // no grounding) would quietly assert the very thing D1 forbids.
+  provider, query_class: 'branded', state: 'measured', observation_outcome: 'grounded_observation', citation_rate: citationRate,
+  mean_prominence: appeared ? 0.6 : 0, mentions: appeared ? [{ provider, query: 'q', query_class: 'branded', appeared: true, prominence: 0.6, evidence_excerpt: `cite-${provider}`, grounded_sources: [`https://${provider}.test/source`], citation_corroborated: false, observed_at: OBSERVED }] : [],
   evidence: { count: 1, sources: [provider], freshness: { last_observed_at: OBSERVED, age_hours: 0 }, observations: [] },
   reason_unavailable: null, ...opts,
 });
@@ -124,7 +127,7 @@ describe('AI Visibility Provider — deterministic multi-ecosystem consolidation
   it('excludes unavailable ecosystems from aggregates but counts them as probed (missing retrieval visible)', () => {
     const results: AIVisibilityProbeResult[] = [
       mkResult('chatgpt', true, 0.5),
-      { provider: 'gemini', query_class: 'branded', state: 'unavailable', citation_rate: null, mean_prominence: null, mentions: [], evidence: { count: 0, sources: [], freshness: { last_observed_at: OBSERVED, age_hours: 0 }, observations: [] }, reason_unavailable: 'no key' },
+      { provider: 'gemini', query_class: 'branded', state: 'unavailable', observation_outcome: 'no_provider', citation_rate: null, mean_prominence: null, mentions: [], evidence: { count: 0, sources: [], freshness: { last_observed_at: OBSERVED, age_hours: 0 }, observations: [] }, reason_unavailable: 'no key' },
     ];
     const c = consolidateProbeResults(results, OBSERVED);
     expect(c.ecosystemsProbed).toBe(2);
@@ -134,7 +137,7 @@ describe('AI Visibility Provider — deterministic multi-ecosystem consolidation
 
   it('all-unavailable yields a null aggregate (no fabrication)', () => {
     const results: AIVisibilityProbeResult[] = [
-      { provider: 'chatgpt', query_class: 'branded', state: 'unavailable', citation_rate: null, mean_prominence: null, mentions: [], evidence: { count: 0, sources: [], freshness: { last_observed_at: OBSERVED, age_hours: 0 }, observations: [] }, reason_unavailable: 'no key' },
+      { provider: 'chatgpt', query_class: 'branded', state: 'unavailable', observation_outcome: 'no_provider', citation_rate: null, mean_prominence: null, mentions: [], evidence: { count: 0, sources: [], freshness: { last_observed_at: OBSERVED, age_hours: 0 }, observations: [] }, reason_unavailable: 'no key' },
     ];
     const c = consolidateProbeResults(results, OBSERVED);
     expect(c.ecosystemsResponding).toBe(0);
@@ -145,7 +148,7 @@ describe('AI Visibility Provider — deterministic multi-ecosystem consolidation
   it('deduplicates identical citations across ecosystems', () => {
     const shared = (provider: AIProviderId): AIVisibilityProbeResult => ({
       provider, query_class: 'category', state: 'measured', citation_rate: 0.5, mean_prominence: 0.5,
-      mentions: [{ provider, query: 'q', query_class: 'category', appeared: true, prominence: 0.5, evidence_excerpt: 'https://acme.com/pricing', observed_at: OBSERVED }],
+      mentions: [{ provider, query: 'q', query_class: 'category', appeared: true, prominence: 0.5, evidence_excerpt: 'https://acme.com/pricing', grounded_sources: [], citation_corroborated: false, observed_at: OBSERVED }],
       evidence: { count: 1, sources: [provider], freshness: { last_observed_at: OBSERVED, age_hours: 0 }, observations: [] }, reason_unavailable: null,
     });
     const c = consolidateProbeResults([shared('chatgpt'), shared('claude')], OBSERVED);

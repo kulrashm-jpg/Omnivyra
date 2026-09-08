@@ -10,8 +10,16 @@ import { CheckResult, Freshness, Provenance, IntelHealth, aggregate, clamp, fres
 import { buildWebsiteEngineEvidence, type Evidence } from '../evidencePlatform';
 // BETA-ROADMAP-EXEC-002: static-parser signals recovered into crawl_metadata (type-only import).
 import type { PageSignals } from '../crawlerService';
+// D2 — the canonical reachability classifier. The crawler writes what it observed;
+// this reads it. One vocabulary, so the two cannot drift apart.
+import {
+  hasHttpResponse,
+  isHttpErrorOutcome,
+  reachabilityForPage,
+  type PersistedReachability,
+} from '../crawl/reachabilityOutcome';
 
-interface PageRow { id: string; url: string; title: string | null; meta_description: string | null; headings: Array<{ level: number; text: string }> | null; internal_link_count: number | null; http_status: number | null; crawl_depth: number | null; last_crawled_at: string | null; crawl_metadata: { meta_tags?: Record<string, string>; signals?: PageSignals } | null }
+interface PageRow { id: string; url: string; title: string | null; meta_description: string | null; headings: Array<{ level: number; text: string }> | null; internal_link_count: number | null; http_status: number | null; crawl_depth: number | null; last_crawled_at: string | null; crawl_metadata: { meta_tags?: Record<string, string>; signals?: PageSignals; reachability?: PersistedReachability | null } | null }
 
 export interface TechnicalIntelligence {
   technicalScore: number | null;
@@ -77,20 +85,59 @@ export function scoreTechnicalIntelligence(pages: PageRow[], nowMs: number): Tec
   } else {
     const n = pages.length;
     C('https', 'HTTPS', 'pass', pct(pages.filter((p) => /^https:\/\//i.test(p.url)).length, n), 'Pages served over HTTPS');
-    // GAP-11A — the predicates and counts are unchanged; the filtered rows are simply named so the
-    // affected pages can be shown alongside the count they produced.
-    const brokenPages = pages.filter((p) => (p.http_status ?? 200) >= 400);
-    const broken = brokenPages.length;
-    C('broken_links', 'Broken pages (4xx/5xx)', 'pass', clamp(100 - (broken / n) * 100), `${broken} pages returned 4xx/5xx`, examplesFrom(brokenPages));
-    const redirectPages = pages.filter((p) => { const s = p.http_status ?? 200; return s >= 300 && s < 400; });
-    const redirects = redirectPages.length;
-    C('redirect_chains', 'Redirects', 'pass', clamp(100 - (redirects / n) * 100), `${redirects} redirecting pages`, examplesFrom(redirectPages));
-    // GAP-11A — deliberately AGGREGATE-ONLY. This check counts pages that DID return 200, so the
-    // only example set matching its population would be pages that worked, which tells a reader
-    // nothing. Showing the complement instead would put "Pages returning 200" directly above a list
-    // of 3xx/4xx/5xx URLs — a contradiction. The non-200 population is already carried, correctly
-    // matched to its own aggregate, by `redirect_chains` (3xx) and `broken_links` (4xx/5xx).
-    C('crawlability', 'Crawlability', 'pass', pct(pages.filter((p) => (p.http_status ?? 200) === 200).length, n), 'Pages returning 200');
+    // ── D2 — REACHABILITY, FROM WHAT THE CRAWLER ACTUALLY OBSERVED ──────────
+    //
+    // These three checks used to read `(p.http_status ?? 200)`. Two things were
+    // wrong with that, and together they made the result meaningless:
+    //
+    //   1. `fetchHtml` threw on 4xx/5xx, so a broken page was persisted with the
+    //      0 sentinel. `0 >= 400` is false, so `broken_links` counted nothing —
+    //      on every site, always. It reported "0 pages returned 4xx/5xx" and
+    //      scored 100 whether the site was healthy or entirely down.
+    //   2. `?? 200` DEFAULTS AN UNOBSERVED PAGE TO SUCCESS. A row we never got a
+    //      response for was counted as a working page.
+    //
+    // Reachability is now read through the canonical classifier, which separates
+    // "the page answered with an error" from "we never got an answer". Only the
+    // first is evidence of a broken page; the second is evidence about the crawl.
+    const observed = pages.map((p) => ({ page: p, reach: reachabilityForPage(p) }));
+    const responded = observed.filter((o) => hasHttpResponse(o.reach.outcome));
+    const unreachable = observed.filter((o) => !hasHttpResponse(o.reach.outcome));
+
+    if (responded.length === 0) {
+      // Not one page answered. Any percentage here would describe a corpus we
+      // never observed, so all three abstain rather than reporting a clean site.
+      const noResponse = `No page returned an HTTP response (${unreachable.length} unreachable) — reachability could not be established`;
+      C('broken_links', 'Broken pages (4xx/5xx)', 'not_evaluable', null, noResponse);
+      C('redirect_chains', 'Redirects', 'not_evaluable', null, noResponse);
+      C('crawlability', 'Crawlability', 'not_evaluable', null, noResponse);
+    } else {
+      // Denominator is the pages that ANSWERED. Counting over pages we never
+      // reached would silently dilute a real error rate toward zero.
+      const d = responded.length;
+      const partial = unreachable.length > 0
+        ? ` (of ${d} that responded; ${unreachable.length} unreachable)`
+        : '';
+
+      const brokenPages = responded.filter((o) => isHttpErrorOutcome(o.reach.outcome)).map((o) => o.page);
+      const broken = brokenPages.length;
+      C('broken_links', 'Broken pages (4xx/5xx)', 'pass', clamp(100 - (broken / d) * 100), `${broken} pages returned 4xx/5xx${partial}`, examplesFrom(brokenPages));
+
+      const redirectPages = responded.filter((o) => o.reach.outcome === 'redirect').map((o) => o.page);
+      const redirects = redirectPages.length;
+      C('redirect_chains', 'Redirects', 'pass', clamp(100 - (redirects / d) * 100), `${redirects} redirecting pages${partial}`, examplesFrom(redirectPages));
+
+      // GAP-11A — deliberately AGGREGATE-ONLY. This check counts pages that DID return 200, so the
+      // only example set matching its population would be pages that worked, which tells a reader
+      // nothing. Showing the complement instead would put "Pages returning 200" directly above a list
+      // of 3xx/4xx/5xx URLs — a contradiction. The non-200 population is already carried, correctly
+      // matched to its own aggregate, by `redirect_chains` (3xx) and `broken_links` (4xx/5xx).
+      //
+      // D2 — crawlability keeps the FULL page count as its denominator: an
+      // unreachable page is precisely a page that could not be crawled, so it
+      // belongs in this ratio even though it is excluded from the two above.
+      C('crawlability', 'Crawlability', 'pass', pct(responded.filter((o) => o.reach.outcome === 'success').length, n), 'Pages returning 200');
+    }
     C('meta_tags', 'Meta title + description', 'pass', pct(pages.filter((p) => p.title && p.meta_description).length, n), 'Pages with title + description');
     const titles = pages.map((p) => norm(p.title)).filter(Boolean);
     const descs = pages.map((p) => norm(p.meta_description)).filter(Boolean);

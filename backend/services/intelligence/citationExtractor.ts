@@ -4,8 +4,17 @@
 // receive a real LLM answer. Output: a `CitationMention` whose `appeared` and
 // `prominence` fields are derived deterministically from the answer string —
 // not synthesized.
+//
+// ─── D1: WHAT THIS FUNCTION IS NOT ─────────────────────────────────────────
+// It reports what the answer TEXT contains. It does not, and cannot, establish
+// that anything was retrieved. The probe queries name the brand, so `appeared`
+// is true by construction whenever the model answers fluently — including when
+// it invents the company outright. Whether an observation may be called
+// `measured` is decided by `resolveProbeOutcome`, from the provider's grounding
+// property and the sources it returned. Nothing here promotes an answer.
 
 import type { AIProviderId, AIQueryClass, CitationMention } from './providerInterfaces';
+import { isCitationCorroborated } from './aiVisibilityGrounding';
 
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -44,9 +53,17 @@ export function extractCitation(params: {
   answer: string;
   brandName: string;
   domain: string | null;
+  /**
+   * D1 — the source URLs the PROVIDER returned for this answer. Empty for any
+   * provider that does not retrieve. Carried onto the mention verbatim so the
+   * state decision, and a reader, can check it.
+   */
+  groundedSources?: readonly string[];
   observedAt: string;
 }): CitationMention {
   const answer = params.answer ?? '';
+  const groundedSources = [...(params.groundedSources ?? [])];
+  const citationCorroborated = isCitationCorroborated(params.domain, groundedSources);
   if (!answer) {
     return {
       provider: params.provider,
@@ -55,6 +72,8 @@ export function extractCitation(params: {
       appeared: false,
       prominence: 0,
       evidence_excerpt: null,
+      grounded_sources: groundedSources,
+      citation_corroborated: citationCorroborated,
       observed_at: params.observedAt,
     };
   }
@@ -98,6 +117,8 @@ export function extractCitation(params: {
       appeared: false,
       prominence: 0,
       evidence_excerpt: null,
+      grounded_sources: groundedSources,
+      citation_corroborated: citationCorroborated,
       observed_at: params.observedAt,
     };
   }
@@ -111,6 +132,8 @@ export function extractCitation(params: {
     appeared: true,
     prominence,
     evidence_excerpt: extractExcerpt(answer, best.position, best.mentionLength),
+    grounded_sources: groundedSources,
+    citation_corroborated: citationCorroborated,
     observed_at: params.observedAt,
   };
 }

@@ -108,8 +108,14 @@ describe('PA-003 — flag-gated routing + parity', () => {
       expect.objectContaining({ temperature: 0, max_tokens: 600, apiKey: 'test-key' }),
     );
     expect(fetchProdMock).not.toHaveBeenCalled();
-    expect(result.state).toBe('measured');
-    expect(result.citation_rate).toBe(1);
+    // D1 — this test is about TRANSPORT, and `state: 'measured'` used to stand in
+    // for "the answer reached the scorer". It cannot any more: OpenAI does not
+    // retrieve, so no answer of its can be a measured AI-visibility observation.
+    // Assert the thing actually under test — the answer arrived and was scored —
+    // and pin the honest state alongside it.
+    expect(result.mentions[0].appeared).toBe(true);
+    expect(result.state).toBe('insufficient_signal');
+    expect(result.observation_outcome).toBe('ungrounded_answer');
   });
 
   it('flag OFF uses the legacy direct-transport path (not the dispatcher)', async () => {
@@ -124,8 +130,11 @@ describe('PA-003 — flag-gated routing + parity', () => {
     const result = await new OpenAIChatGPTAdapter().probe(PROBE as never);
     expect(fetchProdMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).not.toHaveBeenCalled();
-    expect(result.state).toBe('measured');
-    expect(result.citation_rate).toBe(1);
+    // D1 — see the note on the flag-ON case: transport parity is what is asserted,
+    // and an ungrounded provider's answer is never a measurement.
+    expect(result.mentions[0].appeared).toBe(true);
+    expect(result.state).toBe('insufficient_signal');
+    expect(result.observation_outcome).toBe('ungrounded_answer');
   });
 
   it('probe parity: gateway and legacy produce the same scored result for the same answer', async () => {
