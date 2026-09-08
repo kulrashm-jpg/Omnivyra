@@ -40,6 +40,18 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
+/**
+ * A plain JSON object, which is what `metadata` must be.
+ *
+ * Arrays are excluded deliberately: `typeof [] === 'object'`, and a JSON array
+ * would be accepted by a naive check and then stored as policy nobody can read
+ * by key. `null` is excluded for a harder reason — the column is
+ * `jsonb NOT NULL`, so null is a constraint violation rather than a way to
+ * clear a value. Callers clearing policy send `{}`.
+ */
+const isPolicyObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
 async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   const body = (req.body ?? {}) as Record<string, unknown>;
   const companyId = String(body.companyId ?? '');
@@ -58,6 +70,18 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   }
   try {
     if (action === 'upsert') {
+      // `metadata` is validated rather than coerced, unlike its siblings above.
+      // Those default a wrong type to null, which is harmless for a cohort
+      // string; for tenant policy it would accept a malformed ceiling and
+      // silently store nothing, leaving a flag that looks configured and
+      // enforces nothing. Omitted stays omitted so the service can tell "not
+      // supplied" from "supplied empty" — see `upsertFeatureFlag`.
+      if ('metadata' in body && !isPolicyObject(body.metadata)) {
+        return res.status(400).json({
+          error: 'metadata must be a JSON object',
+          detail: 'null, arrays and primitives are rejected; send {} to clear policy',
+        });
+      }
       const result = await upsertFeatureFlag({
         organizationId: companyId,
         flagKey: String(body.flagKey ?? ''),
@@ -65,6 +89,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         rolloutCohort: typeof body.rolloutCohort === 'string' ? body.rolloutCohort : null,
         rolloutPercent: typeof body.rolloutPercent === 'number' ? body.rolloutPercent : null,
         rationale: typeof body.rationale === 'string' ? body.rationale : null,
+        ...(isPolicyObject(body.metadata) ? { metadata: body.metadata } : {}),
         createdBy: ctx.userId,
       });
       return res.status(200).json({ ok: true, flag: result });
