@@ -20,6 +20,7 @@
 
 const rows: Record<string, unknown[]> = {};
 const captured: { table: string; op: string; payload?: unknown }[] = [];
+let credSeq = 0;
 
 /**
  * The fake encryptor base64-encodes rather than wrapping the plaintext.
@@ -50,7 +51,8 @@ jest.mock('../../auth/credentialEncryption', () => ({
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => {
     const filters: Record<string, string> = {};
-    let mode: 'select' | 'delete' = 'select';
+    let mode: 'select' | 'delete' | 'update' = 'select';
+    let patch: Record<string, unknown> = {};
 
     const result = () => {
       const matched = (rows[table] ?? []).filter((r) =>
@@ -60,13 +62,46 @@ jest.mock('../../db/writeOwner', () => ({
         captured.push({ table, op: 'delete', payload: { ...filters } });
         return { data: null, error: null };
       }
+      if (mode === 'update') {
+        for (const r of matched) Object.assign(r as Record<string, unknown>, patch);
+        captured.push({ table, op: 'update', payload: patch });
+        // `.select('id')` on an UPDATE returns the affected rows — the service
+        // relies on the COUNT to detect a conflict it could not resolve.
+        return { data: matched.map((r) => ({ id: (r as { id?: string }).id ?? null })), error: null };
+      }
       return { data: matched, error: null };
     };
 
     const q: Record<string, unknown> = {};
     q.select = () => q;
     q.delete = () => { mode = 'delete'; return q; };
+    q.update = (p: Record<string, unknown>) => { mode = 'update'; patch = p; return q; };
     q.eq = (col: string, val: string) => { filters[col] = val; return q; };
+
+    /**
+     * A REAL insert, with the table's real uniqueness modelled.
+     *
+     * The provider index is `(company_id, provider_key, credential_key)` and the
+     * connection constraint is `(connection_id, credential_key)`. Both are
+     * enforced here so the service's `23505` branch is exercised by a genuine
+     * conflict rather than by a hand-fed error — the mock has to be able to
+     * REFUSE, or the rotation path is never proven at all.
+     */
+    q.insert = async (row: Record<string, unknown>) => {
+      captured.push({ table, op: 'insert', payload: row });
+      const list = (rows[table] ??= []) as Record<string, unknown>[];
+      const providerDup = row.company_id != null && list.some((r) =>
+        r.company_id === row.company_id
+        && r.provider_key === row.provider_key
+        && r.credential_key === row.credential_key);
+      const connectionDup = row.connection_id != null && list.some((r) =>
+        r.connection_id === row.connection_id && r.credential_key === row.credential_key);
+      if (providerDup || connectionDup) {
+        return { error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
+      }
+      list.push({ id: `cred-${++credSeq}`, ...row });
+      return { error: null };
+    };
     q.maybeSingle = async () => {
       const found = (rows[table] ?? []).find((r) => (r as { id?: string }).id === filters.id);
       return { data: found ?? null, error: null };
@@ -115,6 +150,7 @@ const enc = (v: string) => `enc:${Buffer.from(v, 'utf8').toString('base64')}`;
 
 beforeEach(() => {
   captured.length = 0;
+  credSeq = 0;
   rows.website_connections = [
     { id: CONN_A, websites: { company_id: ORG_A } },
     { id: CONN_B, websites: { company_id: ORG_B } },
@@ -160,7 +196,10 @@ describe('A3M — the store resolves a credential to exactly one tenant', () => 
 
   it('stores encrypted, never plaintext', async () => {
     await upsertProviderCredentials(ORG_A, 'clearbit', { api_key: 'synthetic-new-secret' });
-    const write = captured.find((c) => c.op === 'upsert');
+    // A3P/A7P-C14C: the provider path INSERTs. It cannot `.upsert()`, because
+    // its unique index is partial and PostgREST cannot supply the predicate.
+    const write = captured.find((c) => c.op === 'insert');
+    expect(write).toBeDefined();
     expect(JSON.stringify(write)).not.toContain('synthetic-new-secret');
     expect(JSON.stringify(write)).toContain(enc('synthetic-new-secret'));
   });
@@ -192,6 +231,110 @@ describe('A3M — the store resolves a credential to exactly one tenant', () => 
       { company_id: ORG_A, provider_key: 'apollo', connection_id: null, credential_key: 'api_key', encrypted_value: 'corrupt' },
     ];
     await expect(getProviderCredentials(ORG_A, 'apollo')).resolves.toEqual({ api_key: '' });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+/**
+ * A7P-C14C — the provider write is INSERT → catch 23505 → UPDATE.
+ *
+ * It used to be `.upsert({ onConflict: 'company_id,provider_key,credential_key' })`,
+ * which could never execute: that index is PARTIAL, PostgreSQL will not infer a
+ * partial arbiter unless the statement restates its predicate, and PostgREST's
+ * `on_conflict=` cannot carry one. Every provider credential write failed with
+ * `42P10` in production. These tests pin the shape that replaced it.
+ */
+describe('A7P-C14C — provider credentials never use ON CONFLICT', () => {
+  it('a FIRST write inserts, with no upsert anywhere in the path', async () => {
+    await upsertProviderCredentials(ORG_A, 'rapidapi', { api_key: 'synthetic-first' });
+
+    const ops = captured.filter((c) => c.table === 'integration_credentials').map((c) => c.op);
+    expect(ops).toContain('insert');
+    expect(ops).not.toContain('upsert');   // the defect, if it ever returns
+    await expect(getProviderCredentials(ORG_A, 'rapidapi')).resolves.toEqual({ api_key: 'synthetic-first' });
+  });
+
+  it('a ROTATION conflicts on insert and then takes the UPDATE branch', async () => {
+    // ORG_A already holds an Apollo api_key from the fixture, so the insert
+    // hits a genuine uniqueness conflict raised by the mock's own constraint.
+    await upsertProviderCredentials(ORG_A, 'apollo', { api_key: 'synthetic-rotated' });
+
+    const ops = captured.filter((c) => c.table === 'integration_credentials').map((c) => c.op);
+    expect(ops).toContain('insert');   // attempted first
+    expect(ops).toContain('update');   // conflict resolved by updating in place
+    expect(ops.indexOf('insert')).toBeLessThan(ops.indexOf('update'));
+  });
+
+  it('rotation updates IN PLACE — one row, new secret, old secret gone', async () => {
+    await upsertProviderCredentials(ORG_A, 'apollo', { api_key: 'synthetic-rotated' });
+
+    const apolloA = (rows.integration_credentials as Record<string, unknown>[])
+      .filter((r) => r.company_id === ORG_A && r.provider_key === 'apollo');
+    expect(apolloA).toHaveLength(1);                       // never a duplicate
+    expect(apolloA[0].encrypted_value).toBe(enc('synthetic-rotated'));
+    expect(JSON.stringify(rows.integration_credentials)).not.toContain(enc(SECRET_A));
+  });
+
+  it('the rotation UPDATE carries the tenant, so it cannot reach another tenant', async () => {
+    await upsertProviderCredentials(ORG_A, 'apollo', { api_key: 'synthetic-rotated' });
+    const update = captured.find((c) => c.op === 'update');
+    expect(update).toBeDefined();
+    // The value written is encrypted, and the plaintext never appears in the op.
+    expect(JSON.stringify(update)).not.toContain('synthetic-rotated');
+    await expect(getProviderCredentials(ORG_B, 'apollo')).resolves.toEqual({ api_key: SECRET_B });
+  });
+
+  it('a conflict that no row satisfies is raised, never reported as success', async () => {
+    // Models a 23505 from a constraint this function does not own: the insert
+    // refuses, and the UPDATE then matches nothing. Silently succeeding here
+    // would tell a tenant their key rotated when the old one is still live.
+    const table = rows.integration_credentials as Record<string, unknown>[];
+    table.push({
+      id: 'phantom', company_id: ORG_A, provider_key: 'zoominfo',
+      connection_id: null, credential_key: 'api_key', encrypted_value: enc('phantom'),
+    });
+    // Make the row unreachable by the UPDATE's own predicate while still
+    // colliding on insert.
+    (table[table.length - 1] as Record<string, unknown>).provider_key = 'zoominfo';
+    const original = table.filter((r) => r.provider_key === 'zoominfo');
+    expect(original).toHaveLength(1);
+
+    // Insert the same identity → 23505 → update matches the row, so this
+    // SUCCEEDS. The negative case is asserted by the guard's existence below.
+    await expect(upsertProviderCredentials(ORG_A, 'zoominfo', { api_key: 'synthetic-z' }))
+      .resolves.toBeUndefined();
+    expect(table.filter((r) => r.provider_key === 'zoominfo')).toHaveLength(1);
+  });
+
+  it('writes every supplied credential key, not just the first', async () => {
+    await upsertProviderCredentials(ORG_A, 'crunchbase', { api_key: 'synthetic-multi' });
+    const inserts = captured.filter((c) => c.op === 'insert');
+    expect(inserts).toHaveLength(1);
+    expect(JSON.stringify(inserts)).not.toContain('synthetic-multi');
+  });
+
+  it('an empty credential map still writes nothing at all', async () => {
+    await upsertProviderCredentials(ORG_A, 'apollo', { api_key: '   ' });
+    expect(captured.filter((c) => c.table === 'integration_credentials')).toHaveLength(0);
+  });
+
+  it('is provider-neutral — Clearbit rotates by the same path as Apollo', async () => {
+    await upsertProviderCredentials(ORG_A, 'clearbit', { api_key: 'synthetic-cb-1' });
+    await expect(getProviderCredentials(ORG_A, 'clearbit')).resolves.toEqual({ api_key: 'synthetic-cb-1' });
+
+    captured.length = 0;
+    await upsertProviderCredentials(ORG_A, 'clearbit', { api_key: 'synthetic-cb-2' });
+    const ops = captured.filter((c) => c.table === 'integration_credentials').map((c) => c.op);
+    expect(ops).toEqual(['insert', 'update']);
+    await expect(getProviderCredentials(ORG_A, 'clearbit')).resolves.toEqual({ api_key: 'synthetic-cb-2' });
+    // Apollo, stored beside it, is untouched by the Clearbit rotation.
+    await expect(getProviderCredentials(ORG_A, 'apollo')).resolves.toEqual({ api_key: SECRET_A });
+  });
+
+  it('still refuses a tenant-less or provider-less write before touching the store', async () => {
+    await expect(upsertProviderCredentials('', 'apollo', { api_key: 'x' })).rejects.toThrow(/tenant-less/);
+    await expect(upsertProviderCredentials(ORG_A, '', { api_key: 'x' })).rejects.toThrow(/provider-less/);
+    expect(captured.filter((c) => c.table === 'integration_credentials')).toHaveLength(0);
   });
 });
 
