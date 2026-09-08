@@ -214,10 +214,23 @@ describe('Report 1 evidence discipline — competitors', () => {
 
 describe('Report 1 evidence discipline — provenance boundary', () => {
   it('public sources are Report 1 eligible', () => {
-    for (const source of ['crawler', 'public_audit', 'wikidata', 'llm_probe', 'competitor_intelligence'] as const) {
+    // D1 — `llm_probe` was in this list, and that was the defect rather than the
+    // test: a language model answering from its weights observed nothing, so it
+    // could never be a PUBLIC observation. `answer_engine` takes its place —
+    // a retrieval-grounded engine that returned the sources behind its answer,
+    // which anyone can open and check.
+    for (const source of ['crawler', 'public_audit', 'wikidata', 'answer_engine', 'competitor_intelligence'] as const) {
       expect(provenanceForSource(source)).toBe('PUBLIC_OBSERVED');
       expect(isReport1Source(source)).toBe(true);
     }
+  });
+
+  it('a model probe is INFERRED — eligible, but never a public observation', () => {
+    // Still admissible to Report 1, because an inference is a legitimate thing to
+    // report. What it may not do is claim to have observed the outside world.
+    expect(provenanceForSource('llm_probe')).toBe('INFERRED');
+    expect(isReport1Source('llm_probe')).toBe(true);
+    expect(provenanceForSource('llm_probe')).not.toBe('PUBLIC_OBSERVED');
   });
 
   it('connected + Omnivyra-owned sources are NOT Report 1 eligible', () => {
