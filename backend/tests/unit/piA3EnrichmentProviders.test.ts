@@ -189,7 +189,11 @@ describe('A3 — cost is authorised BEFORE any provider call', () => {
 
 describe('A3 — refusals that cost nothing', () => {
   it('refuses when no adapter is registered', async () => {
-    const r = await executeEnrichment(request(), 'apollo', ports());
+    // `zoominfo`, not `apollo`: A7P-C4 gave Apollo an adapter, so it is no
+    // longer a stand-in for "unimplemented". The invariant is unchanged — a
+    // provider with no adapter refuses for free, before any egress — and it
+    // needs a provider that is still genuinely declared-only to express it.
+    const r = await executeEnrichment(request(), 'zoominfo', ports());
     expect(r.outcome).toBe('not_implemented');
     expect(r.providerCalled).toBe(false);
     expect(wasFree(r.outcome)).toBe(true);

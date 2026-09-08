@@ -184,14 +184,30 @@ export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
     id: 'apollo',
     displayName: 'Apollo',
     sourceType: 'external_api',
-    capabilities: { entities: [], attributes: [] },
+    // The adapter exists as of A7P-C4, so these are no longer empty — but they
+    // are deliberately narrow. `GET /organizations/enrich` also returns
+    // `founded_year`, `country` and `technology_names`; none is advertised here.
+    // Planner eligibility is derived from THIS list, so anything named becomes
+    // work the executor promises to do, and a promise made against a response
+    // shape nobody has verified is how fabricated attributes reach real people.
+    // `estimated_num_employees` is claimed because it maps to `employee_count`
+    // as a plain integer, with no transformation and no inference.
+    capabilities: { entities: ['account'], attributes: ['employee_count'] },
     credentialEnvVar: 'APOLLO_API_KEY',
-    authorizationRequirements: ['api_key', 'adapter', 'tenant_provider_subscription'],
+    // `adapter` is satisfied as of A7P-C4 and has been removed rather than left
+    // to say something untrue. What remains is the tenant's own Apollo
+    // subscription and their stored key — neither of which Omnivyra provides.
+    authorizationRequirements: ['api_key', 'tenant_provider_subscription'],
     creditAction: null,
     // A3Z: the tenant holds the Apollo subscription and Apollo invoices them.
     fundingModel: 'tenant_provider_subscription',
     priority: 20,
-    note: 'Declared only. No adapter, no credential. Capabilities are empty because no observed API contract exists.',
+    note:
+      'Adapter implemented for account.employee_count only, mapped from '
+      + 'estimated_num_employees. What remains outstanding is the TENANT’s: their own '
+      + 'Apollo subscription and their own key stored through the Lead Sources API. '
+      + 'Apollo bills 1 credit per organization enriched and its documentation does not '
+      + 'state that a miss is refunded, so a no_match must be assumed billable.',
   },
   {
     id: 'rapidapi',

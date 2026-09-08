@@ -290,10 +290,16 @@ describe('A3X — 4/5. provider outcomes stay provider outcomes', () => {
 // ───────────────────────────────────────────────────────────────────────────
 describe('A3X — 9. explicit provider selection cannot be substituted', () => {
   it('an unimplemented provider is not silently replaced by the one that works', async () => {
-    store[`${ORG_A}::apollo`] = { [PROVIDER_API_KEY]: 'synthetic-tenant-a-apollo-key' };
-    const result = await executeEnrichment(req(), 'apollo', ports());
+    // `zoominfo`, not `apollo`: A7P-C4 implemented an Apollo adapter, so Apollo
+    // no longer expresses "unimplemented". The property under test is unchanged
+    // and is the important one — asking for a provider that cannot be called
+    // must refuse naming THAT provider, never quietly call a different vendor.
+    // A credential is stored deliberately, so the refusal is proven to come
+    // from the missing adapter rather than from a missing key.
+    store[`${ORG_A}::zoominfo`] = { [PROVIDER_API_KEY]: 'synthetic-tenant-a-zoominfo-key' };
+    const result = await executeEnrichment(req(), 'zoominfo', ports());
     expect(result.outcome).toBe('not_implemented');
-    expect(result.providerId).toBe('apollo');
+    expect(result.providerId).toBe('zoominfo');
     expect(fetchCalls).toHaveLength(0);
   });
 

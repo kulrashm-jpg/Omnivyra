@@ -8,9 +8,11 @@
  * `dataSourceCatalogue.ts` already takes this position for ingestion sources
  * and its header is worth restating: a status we write is a value, not a fact.
  * So a provider here is `operational` only when an adapter exists AND its
- * credential is configured. Every provider PI has named — Apollo, ZoomInfo,
- * Crunchbase, RapidAPI — is `declared`: no adapter is registered for any of
- * them, and no credential for any of them exists in this environment.
+ * credential is configured. The remaining named providers — ZoomInfo,
+ * Crunchbase, RapidAPI — are `declared`: no adapter is registered for any of
+ * them, and no credential for any of them exists in this environment. Clearbit
+ * and Apollo have adapters and are `implemented`; neither is callable for a
+ * tenant that has not stored its own key.
  *
  * That is deliberate. Writing an adapter against a response shape nobody here
  * has ever received would produce normalization code that compiles, passes its
@@ -43,13 +45,12 @@ export interface DeclaredProvider {
  * `dataSourceCatalogue.ts`, which says the same thing to the admin UI.
  */
 export const DECLARED_PROVIDERS: readonly DeclaredProvider[] = [
-  {
-    id: 'apollo',
-    label: 'Apollo enrichment',
-    credentialEnvVar: 'APOLLO_API_KEY',
-    requires: ['adapter', 'api_key', 'credit_action'],
-    note: 'Declared only. No adapter is registered and no credential is configured.',
-  },
+  // Apollo was here until A7P-C4 gave it an adapter, and was removed for the
+  // same reason Clearbit is absent: this list means "named but NOT
+  // implemented". `listProviderStatus` already skips a declaration an adapter
+  // supersedes, so leaving Apollo here would have changed nothing at runtime —
+  // it would simply have been a false entry, which is exactly what this
+  // registry's header refuses to keep.
   {
     id: 'zoominfo',
     label: 'ZoomInfo enrichment',
