@@ -4,6 +4,15 @@ import { ownedDbTable } from '../db/writeOwner';
 // CKRE-001 §1 — boundary instrumentation for the Website Intelligence crawl
 // (reuses the AUTH-001 event infra; correlation ties to the company journey).
 import { emitCrawlEvent, resolveCrawlCorrelationId } from './crawl/crawlEventService';
+// D2 — canonical reachability vocabulary. One classifier, used by the crawler and
+// by the checks that read what it wrote.
+import {
+  classifyFetchError,
+  isHttpErrorOutcome,
+  observationFromStatus,
+  NO_HTTP_RESPONSE_STATUS,
+  type ReachabilityObservation,
+} from './crawl/reachabilityOutcome';
 
 /**
  * BETA-ROADMAP-EXEC-002 — static-parser evidence depth. Signals recovered from the SAME regex/static
@@ -54,6 +63,8 @@ export interface CrawlPageResult {
   metaTags: Record<string, string>;
   signals: PageSignals;
   httpStatus: number;
+  /** D2 — what the fetch actually observed. Optional so existing constructors stay valid. */
+  reachability?: ReachabilityObservation;
   crawlDepth: number;
 }
 
@@ -345,21 +356,46 @@ function parsePage(html: string, url: string, depth: number, headers: Record<str
   };
 }
 
-async function fetchHtml(url: string, timeoutMs: number): Promise<{ html: string; status: number; headers: Record<string, string> }> {
+/**
+ * D2 — the observed result of one page fetch.
+ *
+ * `html` is present only when the page answered with a readable 2xx/3xx body;
+ * every other outcome carries the observation instead. The old contract THREW
+ * on 4xx/5xx, which is why the status never reached the database: the crawl
+ * loop's catch could only record that "something failed".
+ */
+type FetchHtmlResult =
+  | { readonly ok: true; readonly html: string; readonly status: number; readonly headers: Record<string, string>; readonly reachability: ReachabilityObservation }
+  | { readonly ok: false; readonly reachability: ReachabilityObservation };
+
+async function fetchHtml(url: string, timeoutMs: number): Promise<FetchHtmlResult> {
   // HARDEN-005: crawl target is user-controlled — SSRF-safe fetch (validated
   // host, DNS-pinned, each redirect hop re-validated up to the cap, 10MB cap).
-  // Preserves the old 200–399 "ok" contract (throw on 4xx/5xx like axios did).
   const { safeFetch, readCapped } = await import('../../lib/security/safeFetch');
-  const response = await safeFetch(url, {
-    method: 'GET',
-    headers: {
-      'User-Agent': 'OmnivyraBot/1.0 (+https://omnivyra.com)',
-      Accept: 'text/html,application/xhtml+xml',
-    },
-  }, { timeoutMs, maxRedirects: 5, maxBytes: 10 * 1024 * 1024 });
+  let response: Awaited<ReturnType<typeof safeFetch>>;
+  try {
+    response = await safeFetch(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'OmnivyraBot/1.0 (+https://omnivyra.com)',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+    }, { timeoutMs, maxRedirects: 5, maxBytes: 10 * 1024 * 1024 });
+  } catch (error) {
+    // No HTTP response existed. DNS failure, connection refusal, an SSRF
+    // refusal or a timeout — distinguished here, because "we never got an
+    // answer" is a different finding from "the page answered 404".
+    return { ok: false, reachability: classifyFetchError(error) };
+  }
 
-  if (response.status < 200 || response.status >= 400) {
-    throw new Error(`Request failed with status ${response.status}`);
+  const reachability = observationFromStatus(response.status);
+
+  // D2 — the page ANSWERED with an error. Previously this threw, and the status
+  // was replaced downstream by the 0 sentinel, so `broken_links` could never
+  // see it. The body is not read (an error page's HTML is not site content),
+  // but the observation is preserved and is what the check now counts.
+  if (isHttpErrorOutcome(reachability.outcome)) {
+    return { ok: false, reachability };
   }
 
   // Retain the HTTP response headers so security / compression / caching
@@ -367,7 +403,7 @@ async function fetchHtml(url: string, timeoutMs: number): Promise<{ html: string
   const headers: Record<string, string> = {};
   response.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
   const html = (await readCapped(response)).toString('utf8');
-  return { html, status: response.status, headers };
+  return { ok: true, html, status: response.status, headers, reachability };
 }
 
 async function persistCrawledPage(companyId: string, domainId: string, page: CrawlPageResult): Promise<{
@@ -397,6 +433,9 @@ async function persistCrawledPage(companyId: string, domainId: string, page: Cra
           cta_count: page.ctas.length,
           // BETA-ROADMAP-EXEC-002: recovered static + response-header signals (single representation).
           signals: page.signals,
+          // D2 — the observed reachability of THIS page. Written for successful
+          // fetches too, so every crawled row carries the same evidence shape.
+          ...(page.reachability ? { reachability: page.reachability } : {}),
         },
       },
       { onConflict: 'company_id,url' }
@@ -496,10 +535,18 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
     if (visited.has(current.url)) continue;
     visited.add(current.url);
 
-    let fetched;
+    let fetched: FetchHtmlResult;
     try {
       fetched = await fetchHtml(current.url, timeoutMs);
     } catch (error) {
+      // Defensive only: fetchHtml classifies its own failures. Anything reaching
+      // here is a bug in this function, not a network condition — record it as a
+      // transport failure rather than losing the page entirely.
+      fetched = { ok: false, reachability: classifyFetchError(error) };
+    }
+
+    if (!fetched.ok) {
+      const { reachability } = fetched;
       await ownedDbTable('canonical_pages')
         .upsert(
           {
@@ -507,11 +554,21 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
             domain_id: domain.id,
             url: current.url,
             page_type: inferPageType(current.url),
-            http_status: 0,
+            // D2 — the REAL status when the page answered (404, 500, …). The 0
+            // sentinel is used only when no HTTP response existed at all. It
+            // used to be written for both, which is what made "0 pages returned
+            // 4xx/5xx" true on every site regardless of the site.
+            http_status: reachability.status ?? NO_HTTP_RESPONSE_STATUS,
             crawl_depth: current.depth,
             last_crawled_at: new Date().toISOString(),
             crawl_metadata: {
-              fetch_error: (error as Error)?.message ?? String(error),
+              // Retained for backward compatibility — existing readers of this
+              // free-text field keep working unchanged.
+              fetch_error: reachability.reason ?? 'Fetch failed.',
+              // D2 — the structured observation. Existing JSONB column, so no
+              // migration; this is what lets a reader tell a 404 from a DNS
+              // failure, which the free text above never reliably could.
+              reachability,
             },
           },
           { onConflict: 'company_id,url' }
@@ -521,6 +578,7 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
 
     const parsed = parsePage(fetched.html, current.url, current.depth, fetched.headers);
     parsed.httpStatus = fetched.status;
+    parsed.reachability = fetched.reachability;
     // Attach the one-time domain-level robots/sitemap signals to the root page.
     if (current.depth === 0 && siteFiles) parsed.signals.site = siteFiles;
 

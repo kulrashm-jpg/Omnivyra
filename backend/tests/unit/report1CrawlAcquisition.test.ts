@@ -208,14 +208,28 @@ describe('GAP-03 · Test D — a genuinely unreachable target is never dressed u
     expect(result.pagesInserted).toBe(0);
     const pages = canonicalPagesFor('gap03-500');
     expect(pages).toHaveLength(1);
-    expect(pages[0].http_status).toBe(0);
+    // D2 — this asserted `http_status: 0`, which was the DEFECT, not the intent.
+    // The intent ("an unreachable target is never dressed up as evidence") is
+    // unchanged and still holds: no page was inserted. But collapsing the 500 to
+    // 0 also destroyed the only fact that made it actionable, and `broken_links`
+    // — which counts `>= 400` — could therefore never see it. The real status is
+    // now preserved, so the assertion states the truth and says more than before.
+    expect(pages[0].http_status).toBe(500);
     expect(JSON.stringify(pages[0].crawl_metadata)).toContain('fetch_error');
+    expect((pages[0].crawl_metadata as { reachability?: { outcome?: string } })?.reachability?.outcome)
+      .toBe('server_error');
   });
 
   it('invents nothing for a host that does not resolve', async () => {
     const result = await crawlCompanyWebsite({ companyId: 'gap03-dns', rootUrl: 'https://unreachable.test', maxPages: 1, timeoutMs: 4000 });
     expect(result.pagesInserted).toBe(0);
-    for (const p of canonicalPagesFor('gap03-dns')) expect(p.http_status).toBe(0);
+    // Still the 0 sentinel, and correctly so: there was no HTTP response at all,
+    // so there is no status to record. That is the distinction D2 exists to keep.
+    for (const p of canonicalPagesFor('gap03-dns')) {
+      expect(p.http_status).toBe(0);
+      expect((p.crawl_metadata as { reachability?: { outcome?: string } })?.reachability?.outcome)
+        .toBe('transport_failure');
+    }
   });
 });
 
