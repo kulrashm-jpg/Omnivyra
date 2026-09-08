@@ -204,6 +204,8 @@ export type CompetitorIntelligenceResult = {
    * the vehicle that already flows to the report composer — no second acquisition, no second store.
    */
   own_domain_search_observations?: import('./reportCompetitorIntelligenceServiceHelpers').SerpSearchObservation[];
+  /** DG-001 — non-organic SERP features. Sibling evidence; never ranking input. */
+  own_domain_feature_observations?: import('./reportCompetitorIntelligenceServiceHelpers').SerpFeatureObservation[];
   /** GAP-06 — SERP acquisition outcome for the run, so the surface can be honest about why. */
   search_acquisition?: {
     status: 'ok' | 'unavailable' | 'failed';

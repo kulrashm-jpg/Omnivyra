@@ -32,6 +32,16 @@ export type SerpResultInput = {
   url: string | null;
   domain: string | null;
   title?: string | null;
+  /**
+   * DG-001 — the provider result summary.
+   *
+   * Required by competitor enrichment, which builds a profile from
+   * `title + snippet` prose and consults no rank at all. Neither the previous
+   * canonical row nor the report observation carried it, so without this the
+   * canonical client could not replace the enrichment path without silently
+   * degrading its confidence.
+   */
+  snippet?: string | null;
   result_type?: SerpResultType;
   /**
    * DG-001 — the provider's own evidence for this feature, preserved verbatim.

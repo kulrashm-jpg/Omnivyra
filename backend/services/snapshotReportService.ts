@@ -84,6 +84,7 @@ import {
 import { assembleDigitalSnapshot } from './digitalSnapshotAssembly';
 // Phase 4: performance + digital-experience intelligence over the existing crawl corpus.
 import { assessDigitalExperience } from './digitalExperience';
+import { buildSearchFeatures } from './snapshotReport/searchFeatureHelpers';
 import { collectPerformanceEvidence, loadExperiencePages } from './digitalExperienceRepository';
 // Phase 3: the two competition views, built from the canonical relation model.
 import { buildCompetitiveTables, buildCompetitorTableRows } from './competitiveTables';
@@ -736,6 +737,9 @@ export async function composeSnapshotReportFromDecisions(params: {
     bestPosition: rankedObservations.length > 0
       ? Math.min(...rankedObservations.map((o) => o.position as number))
       : null,
+    // ORGANIC ONLY. `searchObservations` carries own-domain organic rows and
+    // nothing else — DG-001's feature evidence travels in `features` below, and
+    // the four fields above are computed without ever consulting it.
     observations: searchObservations,
     requestsMade: searchAcquisition?.requests_made ?? 0,
     reason: searchState === 'measured'
@@ -743,6 +747,20 @@ export async function composeSnapshotReportFromDecisions(params: {
       : searchState === 'insufficient_signal'
         ? `The domain did not appear in the public results returned for ${searchObservations.length} quer${searchObservations.length === 1 ? 'y' : 'ies'}.`
         : searchAcquisition?.reason ?? 'Public search results could not be retrieved for this report.',
+    // ─── DG-001 — sibling feature evidence ─────────────────────────────────
+    // What the results page showed BESIDE the organic ten, from the very same
+    // responses: no extra request, no extra spend. Observation only — which
+    // features appeared, how many, and whether the company owned one where that
+    // is establishable. No answer-readiness score and no opportunity: turning
+    // these into an AEO verdict is DG-007's job, deliberately not done here.
+    //
+    // `state` mirrors acquisition rather than re-deriving it, so "we could not
+    // look" stays distinguishable from "we looked and there were none".
+    features: buildSearchFeatures(
+      competitorIntelligence.own_domain_feature_observations ?? [],
+      searchObservations.length,
+      searchAcquisition?.status ?? null,
+    ),
   };
 
   // GAP-09 — record what evidence acquisition actually did on this run.

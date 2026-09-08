@@ -129,8 +129,19 @@ function parseProviderResults(rawResults: any[]): SerpSnapshotInput['results'] {
     }
 
     const urlValue = String(row.url ?? row.link ?? row.link_url ?? '').trim();
-    const domain = normalizeDomain(String(row.domain ?? row.displayed_link ?? row.source ?? '').trim())
-      || domainFromUrl(urlValue);
+    // DG-001 — the URL is the reliable source of a domain; the declared fields
+    // are a fallback and are VALIDATED before use.
+    //
+    // `displayed_link` is a breadcrumb, not a hostname: SerpAPI returns
+    // "site.test › pricing › plans". The previous order preferred it and
+    // `normalizeDomain` only splits on "/", so that string survived intact and
+    // became the domain — every SerpAPI row would have carried a domain no
+    // comparison could ever match. Deriving from the URL first, and accepting a
+    // declared value only when it actually looks like a hostname, is what makes
+    // the canonical row safe for a consumer that trusts `domain`.
+    const declared = normalizeDomain(String(row.domain ?? row.displayed_link ?? row.source ?? '').trim());
+    const looksLikeHostname = declared !== '' && !/\s/.test(declared) && declared.includes('.');
+    const domain = domainFromUrl(urlValue) || (looksLikeHostname ? declared : '');
     const title = typeof row.title === 'string' && row.title.trim() !== ''
       ? row.title
       : (typeof row.question === 'string' && row.question.trim() !== '' ? row.question : null);
@@ -156,11 +167,19 @@ function parseProviderResults(rawResults: any[]): SerpSnapshotInput['results'] {
     if (seen.has(key)) return;
     seen.add(key);
 
+    // DG-001 (D4) — the result text. Competitor enrichment builds a profile
+    // from `title + snippet`, so dropping it would silently lower that
+    // profile's confidence rather than fail visibly.
+    const snippet = typeof row.snippet === 'string' && row.snippet.trim() !== ''
+      ? row.snippet
+      : (typeof row.description === 'string' && row.description.trim() !== '' ? row.description : null);
+
     out.push({
       position,
       url: urlValue || null,
       domain: domain || null,
       title,
+      snippet,
       result_type: resultType,
     });
   });

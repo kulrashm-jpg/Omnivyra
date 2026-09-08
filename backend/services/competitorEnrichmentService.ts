@@ -12,6 +12,14 @@ import {
 } from './competitorEnrichmentKnowledge';
 import { normalizeCompetitorCategory, normalizeCompetitorTags } from './competitorTaxonomy';
 import { ownedDbTable } from '../db/writeOwner';
+import { fetchCanonicalSerp } from './serp/canonicalSerpClient';
+
+/**
+ * DG-001 — enrichment acquisition depth. Five, because this consumer needs
+ * snippets rather than ranks. Named so a change is a deliberate edit rather than
+ * a magic number drifting toward the report depth of ten.
+ */
+const SERP_ENRICHMENT_DEPTH = 5;
 
 const memoryCache = new Map<string, CompetitorEnrichmentProfile>();
 const STORED_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -233,23 +241,39 @@ async function fetchHomepageProfile(name: string, domain?: string | null): Promi
   }
 }
 
+/**
+ * DG-001 — enrichment profile from public search snippets.
+ *
+ * ─── WHAT CHANGED, AND WHY ────────────────────────────────────────────────
+ * This read `config.SERPAPI_API_KEY` directly and called SerpAPI with its own
+ * axios request. That was blind to Super Admin managed credentials — the exact
+ * defect the canonical resolver was written to fix — and it passed through no
+ * scan budget, no provider cost governor and no provider telemetry, so a
+ * Report 1 run could bill SerpAPI through a path that appeared in no ledger.
+ *
+ * It now goes through the canonical client. What this function DOES is
+ * unchanged: depth stays 5, the top five rows are still joined as
+ * `title + snippet`, and `profileFromText` still receives the same text at the
+ * same `baseConfidence`. Rank and result type are deliberately not consulted —
+ * this consumer wants prose, not positions.
+ */
 async function fetchSerpProfile(name: string, domain?: string | null): Promise<CompetitorEnrichmentProfile | null> {
-  const serpApiKey = config.SERPAPI_API_KEY || config.SERP_API_KEY || config.SERPAPI_KEY || '';
-  if (!serpApiKey) return null;
   try {
-    const response = await axios.get('https://serpapi.com/search.json', {
-      params: {
-        engine: 'google',
-        q: domain ? `${name} ${domain}` : name,
-        num: 5,
-        api_key: serpApiKey,
-      },
-      timeout: 8000,
-    });
-    const organic = Array.isArray(response.data?.organic_results) ? response.data.organic_results : [];
-    const snippets = organic
-      .slice(0, 5)
-      .map((item: { title?: string; snippet?: string }) => [item.title, item.snippet].filter(Boolean).join(' '))
+    const { __parseProviderResultsForTest: parse } = await import('./serpAcquisitionService');
+    const result = await fetchCanonicalSerp({
+      query: domain ? `${name} ${domain}` : name,
+      // ENRICHMENT DEPTH — five. It needs snippets, not ranks; see the client's
+      // depth note. Never substituted with the report or warehouse depth.
+      depth: SERP_ENRICHMENT_DEPTH,
+      operation: 'competitor_enrichment',
+    }, parse);
+    if (result.status !== 'ok') return null;
+    const snippets = result.rows
+      // Prose comes from organic rows. A knowledge panel or PAA entry is a
+      // different kind of claim and is not folded into a competitor's profile.
+      .filter((row) => (row.result_type ?? 'organic') === 'organic')
+      .slice(0, SERP_ENRICHMENT_DEPTH)
+      .map((row) => [row.title, row.snippet].filter(Boolean).join(' '))
       .filter(Boolean)
       .join(' ');
     if (!snippets) return null;

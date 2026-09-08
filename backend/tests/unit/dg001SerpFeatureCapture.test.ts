@@ -106,7 +106,9 @@ describe('DG-001 — organic and featured-snippet parsing are unchanged', () => 
     const [row] = parse([{ position: 3, url: 'https://northwind.test/x', title: 'X' }]);
     expect(row).toEqual({
       position: 3, url: 'https://northwind.test/x', domain: 'northwind.test',
-      title: 'X', result_type: 'organic',
+      // DG-001 (D4) — `snippet` joined the canonical row so competitor
+      // enrichment could stop parsing SerpAPI itself. Absent here, so null.
+      title: 'X', snippet: null, result_type: 'organic',
     });
   });
 
@@ -145,7 +147,7 @@ describe('DG-001 — the discarded features are now observed', () => {
     const [row] = parse([{ type: 'people_also_ask', question: 'What is Northwind?' }]);
     expect(row).toEqual({
       position: null, url: null, domain: null,
-      title: 'What is Northwind?', result_type: 'people_also_ask',
+      title: 'What is Northwind?', snippet: null, result_type: 'people_also_ask',
     });
   });
 
@@ -323,7 +325,7 @@ describe('DG-001 — the DataForSEO adapter stops discarding what it paid for', 
     const organicRow = (out?.results ?? []).find((r) => r.result_type === 'organic');
     expect(organicRow).toEqual({
       position: 1, url: 'https://northwind.test/a', domain: 'northwind.test',
-      title: 'A', result_type: 'organic',
+      title: 'A', snippet: null, result_type: 'organic',
     });
   });
 
@@ -331,5 +333,46 @@ describe('DG-001 — the DataForSEO adapter stops discarding what it paid for', 
     const out = await runAdapter();
     const paa = (out?.results ?? []).find((r) => r.result_type === 'people_also_ask');
     expect(paa).toMatchObject({ position: null, url: null, domain: null, title: 'What is Northwind?' });
+  });
+});
+
+// ── the domain a consumer can trust ─────────────────────────────────────────
+
+describe('DG-001 — domain derivation prefers the URL and validates the fallback', () => {
+  /**
+   * REGRESSION. The fallback order used to prefer `displayed_link`, which
+   * SerpAPI returns as a BREADCRUMB — "site.test › pricing › plans". Because
+   * `normalizeDomain` only splits on "/", that whole string became the domain,
+   * so every SerpAPI row carried a value no comparison could match: own-domain
+   * detection and competitor discovery would both have silently found nothing.
+   */
+  it('ignores a breadcrumb displayed_link and derives the domain from the URL', () => {
+    const [row] = parse([{
+      type: 'organic', position: 1,
+      link: 'https://northwind.test/pricing',
+      displayed_link: 'northwind.test › pricing › plans',
+      title: 'Pricing',
+    }]);
+    expect(row.domain).toBe('northwind.test');
+  });
+
+  it('accepts a declared domain only when it looks like a hostname', () => {
+    // A real hostname with no URL to derive from is usable. Note the PROVIDER
+    // label — 'local' is the canonical name and is deliberately not an alias.
+    const [ok] = parse([{ type: 'local_pack', domain: 'northwind.test', title: 'Office', position: 1 }]);
+    expect(ok.domain).toBe('northwind.test');
+
+    // ...but prose is not a domain, and inventing one from it would be worse
+    // than having none.
+    const rows = parse([{ type: 'local_pack', domain: 'Northwind Office Ltd', title: 'Office', position: 1 }]);
+    expect(rows[0].domain).toBe(null);
+  });
+
+  it('still derives the domain for DataForSEO rows, which supply a real one', () => {
+    const [row] = parse([{
+      type: 'organic', rank_group: 1, domain: 'northwind.test',
+      url: 'https://northwind.test/a', title: 'A',
+    }]);
+    expect(row.domain).toBe('northwind.test');
   });
 });

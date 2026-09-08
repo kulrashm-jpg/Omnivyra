@@ -327,6 +327,7 @@ function emptyCompetitorIntelligenceResult(input: {
   serpStatus: 'live' | 'fallback';
   /** GAP-06 — own-domain search rows survive even when NO competitor qualifies. */
   ownSearchObservations?: CompetitorIntelligenceResult['own_domain_search_observations'];
+  ownFeatureObservations?: CompetitorIntelligenceResult['own_domain_feature_observations'];
   searchAcquisition?: CompetitorIntelligenceResult['search_acquisition'];
 }): CompetitorIntelligenceResult {
   return {
@@ -340,6 +341,7 @@ function emptyCompetitorIntelligenceResult(input: {
     keyword_gap: { missing_keywords: [], weak_keywords: [], strong_keywords: [] },
     answer_gap: { missing_answers: [], weak_answers: [], strong_answers: [] },
     own_domain_search_observations: input.ownSearchObservations ?? [],
+    own_domain_feature_observations: input.ownFeatureObservations ?? [],
     search_acquisition: input.searchAcquisition,
     discovery_metadata: {
       keyword_count: input.keywordCount,
@@ -531,6 +533,8 @@ export async function buildCompetitorIntelligenceActive(params: {
   // GAP-06 — accumulate the company's own public search rows across BOTH discovery batches. These
   // come from responses already fetched for competitor discovery; no additional request is issued.
   const ownSearchObservations = [...serpDiscovery.searchObservations];
+  // DG-001 — feature evidence travels beside the organic observations, never inside them.
+  const ownFeatureObservations = [...serpDiscovery.featureObservations];
   let searchAcquisitionStatus = serpDiscovery.acquisitionStatus;
   let searchAcquisitionReason = serpDiscovery.acquisitionReason;
   let searchRequestsMade = serpDiscovery.requestsMade;
@@ -736,6 +740,7 @@ export async function buildCompetitorIntelligenceActive(params: {
       strong_answers: strongAnswers,
     },
     own_domain_search_observations: ownSearchObservations,
+    own_domain_feature_observations: ownFeatureObservations,
     search_acquisition: { status: searchAcquisitionStatus, reason: searchAcquisitionReason, requests_made: searchRequestsMade },
     discovery_metadata: {
       keyword_count: keywords.length,

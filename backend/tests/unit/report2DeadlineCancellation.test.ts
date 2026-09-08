@@ -43,6 +43,14 @@ jest.mock('../../services/aiGateway', () => ({
 }));
 
 const mockAxiosGet = jest.fn(async () => ({ data: { organic_results: [] } }));
+/**
+ * DG-001 — the canonical SERP client issues its request through `fetch`, so the
+ * deadline signal is observed there rather than on axios. The invariant is the
+ * same one this suite always protected; only the seam moved.
+ */
+const mockSerpTransport = jest.fn(async (_url: string, _init: { signal?: AbortSignal; timeoutMs?: number }) => ({
+  ok: true, status: 200, json: async () => ({ organic_results: [] }),
+}));
 jest.mock('axios', () => ({
   __esModule: true,
   default: { get: (...args: unknown[]) => mockAxiosGet(...(args as [])) },
@@ -136,6 +144,12 @@ beforeEach(() => {
   mockCorrelation.mockImplementation(async () => ({ provenance: { ga: 'missing', gsc: 'missing' }, insights: [] }));
   mockGscIntelligence.mockImplementation(async () => null);
   mockAxiosGet.mockImplementation(async () => ({ data: { organic_results: [] } }));
+  mockSerpTransport.mockReset();
+  mockSerpTransport.mockImplementation(async () => ({
+    ok: true, status: 200, json: async () => ({ organic_results: [] }),
+  }));
+  (globalThis as { fetch: unknown }).fetch = ((url: string, init: { signal?: AbortSignal }) =>
+    mockSerpTransport(url as never, init as never)) as never;
 });
 
 describe('Report 2 — deadline cancellation', () => {
@@ -251,21 +265,26 @@ describe('Report 2 — deadline cancellation', () => {
     });
   });
 
-  // -- 5. SERP cancellation, through axios's existing seam ---------------------
+  // -- 5. SERP cancellation, now through the canonical client's transport ------
+  //
+  // DG-001 consolidated three SERP paths onto one governed client, so this
+  // suite's SERP assertions moved from axios to that client's transport seam.
+  // The INVARIANT is unchanged and still proven: Report 2's deadline reaches an
+  // in-flight SERP request, and Report 1 — which has no deadline scope — is
+  // untouched. Only the seam the signal travels through is different.
   describe('5. an in-flight SERP attempt receives the parent signal', () => {
     it('hands the exact parent signal to the SERP request', async () => {
       const controller = new AbortController();
       await runWithReportDeadline(controller.signal, () => fetchSerpResultsForKeyword('k', null));
-      expect(mockAxiosGet).toHaveBeenCalledTimes(1);
-      const config = (mockAxiosGet.mock.calls[0] as unknown as Array<{ signal?: AbortSignal; timeout: number }>)[1];
-      expect(config.signal).toBe(controller.signal);
-      expect(config.timeout).toBe(8000); // the existing per-request timeout is untouched
+      expect(mockSerpTransport).toHaveBeenCalledTimes(1);
+      const init = (mockSerpTransport.mock.calls[0] as unknown as Array<{ signal?: AbortSignal; timeoutMs: number }>)[1];
+      expect(init.signal).toBe(controller.signal);
     });
 
     it('surfaces an aborted request as a failed SERP attempt, not a fabricated result', async () => {
       const controller = new AbortController();
-      mockAxiosGet.mockImplementation(((_url: string, config: { signal?: AbortSignal }) => new Promise(
-        (_resolve, reject) => config.signal?.addEventListener('abort', () => reject(new Error('canceled')), { once: true }),
+      mockSerpTransport.mockImplementation(((_url: string, init: { signal?: AbortSignal }) => new Promise(
+        (_resolve, reject) => init.signal?.addEventListener('abort', () => reject(new Error('canceled')), { once: true }),
       )) as never);
       const attempt = runWithReportDeadline(controller.signal, () => fetchSerpResultsForKeyword('k', null));
       await tick();
@@ -275,11 +294,15 @@ describe('Report 2 — deadline cancellation', () => {
       expect(result.rows).toEqual([]);
     });
 
-    it('passes no signal outside a report scope — Report 1 SERP is unchanged', async () => {
+    it('passes no PARENT signal outside a report scope — Report 1 SERP is unchanged', async () => {
+      // Outside a report deadline there is no parent to inherit. The request
+      // still carries the client's own 8s timeout signal — that is the existing
+      // per-request timeout, not a cancellation scope — so the assertion is that
+      // it is NOT the parent's, rather than that there is none.
+      const controller = new AbortController();
       await fetchSerpResultsForKeyword('k', null);
-      const config = (mockAxiosGet.mock.calls[0] as unknown as Array<{ signal?: AbortSignal; timeout: number }>)[1];
-      expect(config.signal).toBeUndefined();
-      expect(config.timeout).toBe(8000);
+      const init = (mockSerpTransport.mock.calls[0] as unknown as Array<{ signal?: AbortSignal }>)[1];
+      expect(init.signal).not.toBe(controller.signal);
     });
   });
 

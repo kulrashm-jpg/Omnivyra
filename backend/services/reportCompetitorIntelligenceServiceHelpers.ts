@@ -5,17 +5,11 @@ import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
 import { impactScore } from './reportDecisionUtils';
 import { supabase } from '../db/supabaseClient';
-import axios from 'axios';
-import { getReportDeadlineSignal } from './intelligence/reportDeadlineContext';
 import { config } from '@/config';
-// BETA-PHASE1-EXEC-002: bring SERP under the SAME canonical scan-budget governance as the paid LLM/Ahrefs
-// adapters — reuse only the existing helpers (no new context, budget service, ledger, or interface).
-import { withinBudget, recordUsage } from './intelligence/costGovernance';
-import { getActiveScanId } from './intelligence/scanBudgetContext';
-// BETA-PHASE3-EXEC-001: structured provider-call telemetry parity with the LLM/Ahrefs adapters.
-import { logProviderCall } from './intelligence/productionPrimitives';
 // Canonical credential resolution — one path for every SERP call site.
 import { resolveProviderCredential } from './providerCredentialResolver';
+import { fetchCanonicalSerp } from './serp/canonicalSerpClient';
+import type { SerpResultType } from './serp/serpResultTypes';
 import {
   buildCompetitorFitRationale,
   buildCompetitorFitSignals,
@@ -621,11 +615,48 @@ export type SerpSearchObservation = {
   resultCount: number;
 };
 
+/**
+ * DG-001 — one non-organic SERP feature observed for a query.
+ *
+ * Deliberately a DIFFERENT type from `SerpOrganicRow`. Sharing one row type is
+ * how a People Also Ask entry ends up in a ranking average: the two are not the
+ * same kind of fact, so they are not the same shape.
+ */
+export type SerpFeatureRow = {
+  result_type: SerpResultType;
+  /** Null for every feature without a meaningful rank. Never zero. */
+  position: number | null;
+  url: string | null;
+  domain: string | null;
+  title: string | null;
+};
+
+/**
+ * DG-001 — one non-organic feature observed for one query.
+ *
+ * `ownedByCompany` is THREE-valued on purpose. A feature that carries no URL —
+ * People Also Ask, most knowledge panels — cannot establish ownership either
+ * way, and `null` says exactly that. Collapsing it to `false` would turn "we
+ * cannot tell" into "they do not own it", which is a claim the evidence does
+ * not support.
+ */
+export type SerpFeatureObservation = {
+  query: string;
+  result_type: SerpResultType;
+  position: number | null;
+  url: string | null;
+  domain: string | null;
+  title: string | null;
+  ownedByCompany: boolean | null;
+};
+
 export type SerpKeywordResult = {
   /** `ok` = the provider answered. `unavailable` = no credential / budget. `failed` = it threw. */
   status: 'ok' | 'unavailable' | 'failed';
   rows: SerpOrganicRow[];
   reason: string | null;
+  /** DG-001 — sibling evidence. Never merged into `rows`. */
+  features: SerpFeatureRow[];
 };
 
 /**
@@ -657,59 +688,66 @@ export async function fetchSerpResultsForKeyword(
   keyword: string,
   geography: string | null,
 ): Promise<SerpKeywordResult> {
-  const credential = await resolveProviderCredential('serpapi');
-  const serpApiKey = credential.value ?? '';
-  if (!serpApiKey) {
-    logProviderCall({ providerId: 'serp', operation: 'search', status: 'unavailable', reason: credential.reason });
-    return { status: 'unavailable', rows: [], reason: credential.reason ?? 'No SERP provider credential is configured.' };
+  // ─── DG-001: the CANONICAL client, not a private provider call ───────────
+  // The credential, the scan budget, the provider cost governor and the
+  // telemetry all live inside it now — this function used to own three of those
+  // and lacked the fourth (the governor), so a Report 1 run could bill SerpAPI
+  // past a spend ceiling the platform believed it was enforcing.
+  //
+  // Depth stays ten. It is a semantic boundary rather than a knob: at fifty an
+  // own-domain rank of 11–50 would appear where the report previously said "not
+  // found", flipping a customer-facing evidence state.
+  const { __parseProviderResultsForTest: parse } = await import('./serpAcquisitionService');
+  const result = await fetchCanonicalSerp({
+    query: keyword,
+    geography,
+    depth: SERP_RESULTS_PER_QUERY,
+    operation: 'search',
+  }, parse);
+
+  if (result.status !== 'ok') {
+    if (result.status === 'failed') {
+      console.warn('[competitor-discovery][serp-keyword-failed]', { keyword, geography, error: result.reason });
+    }
+    return {
+      status: result.status,
+      rows: [],
+      reason: result.reason ?? 'Public search results could not be retrieved.',
+      features: [],
+    };
   }
 
-  const scanId = getActiveScanId();
-  if (scanId) {
-    const gate = withinBudget(scanId, { requests: 1, cost_usd: null });
-    if (!gate.ok) {
-      logProviderCall({ providerId: 'serp', operation: 'search', status: 'unavailable', reason: gate.reason ?? 'budget_exceeded:serp' });
-      return { status: 'unavailable', rows: [], reason: gate.reason ?? 'Search budget for this report run was exhausted.' };
-    }
-  }
+  // ─── ORGANIC ROWS: DERIVED EXACTLY AS BEFORE ─────────────────────────────
+  // `domain` is taken from the URL and from nowhere else. The canonical parser
+  // also falls back to `displayed_link`/`source`, which this path never
+  // consulted — adopting that would resolve domains the old code left blank and
+  // would therefore change which five domains competitor discovery sees. The
+  // ranking window is a frozen invariant of this consolidation, so the old
+  // derivation is preserved deliberately rather than inherited by accident.
+  const organicRows = result.rows.filter((row) => (row.result_type ?? 'organic') === 'organic');
+  const rows: SerpOrganicRow[] = organicRows.map((row) => ({
+    position: row.position,
+    url: row.url,
+    domain: normalizeDomain(row.url) ?? '',
+    title: row.title ?? null,
+    snippet: row.snippet ?? null,
+  }));
 
-  const startedAt = Date.now();
-  try {
-    const query = geography ? `${keyword} ${geography}` : keyword;
-    const response = await axios.get('https://serpapi.com/search.json', {
-      params: { engine: 'google', q: query, num: SERP_RESULTS_PER_QUERY, api_key: serpApiKey },
-      timeout: 8000,
-      // Report 2 deadline (reportDeadlineContext), reusing axios's own abort seam alongside the
-      // existing 8s per-request timeout — neither replaces the other. Reached from Report 2 via
-      // runProfileRefinement → discoverRefineCompetitorCandidates; null on every other path
-      // (Report 1 included), where behaviour is unchanged.
-      signal: getReportDeadlineSignal() ?? undefined,
-    });
-    if (scanId) {
-      recordUsage(scanId, {
-        provider_id: 'serp', operation: 'search', request_count: 1, cost_usd: null,
-        cache_hit: false, observed_at: new Date().toISOString(),
-      });
-    }
-    const organic = Array.isArray(response.data?.organic_results) ? response.data.organic_results : [];
-    const rows: SerpOrganicRow[] = organic.map((item: {
-      position?: unknown; link?: string; title?: string; snippet?: string;
-    }, index: number) => ({
-      // Trust the provider's rank; fall back to 1-based ordinal only when it omits one entirely.
-      position: typeof item.position === 'number' && Number.isFinite(item.position) ? item.position : index + 1,
-      url: typeof item.link === 'string' && item.link.trim() ? item.link.trim() : null,
-      domain: normalizeDomain(item.link) ?? '',
-      title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : null,
-      snippet: typeof item.snippet === 'string' && item.snippet.trim() ? item.snippet.trim() : null,
+  // ─── FEATURE ROWS: SIBLING EVIDENCE, NEVER RANKING ───────────────────────
+  // Returned alongside the organic rows and never merged into them. Everything
+  // that computes visibility reads `rows`; nothing that computes visibility
+  // reads `features`.
+  const features: SerpFeatureRow[] = result.rows
+    .filter((row) => (row.result_type ?? 'organic') !== 'organic')
+    .map((row) => ({
+      result_type: row.result_type ?? 'other',
+      position: row.position,
+      url: row.url,
+      domain: row.domain,
+      title: row.title ?? null,
     }));
-    logProviderCall({ providerId: 'serp', operation: 'search', status: 'ok', duration_ms: Date.now() - startedAt });
-    return { status: 'ok', rows, reason: null };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    logProviderCall({ providerId: 'serp', operation: 'search', status: 'unavailable', reason, duration_ms: Date.now() - startedAt });
-    console.warn('[competitor-discovery][serp-keyword-failed]', { keyword, geography, error: reason });
-    return { status: 'failed', rows: [], reason };
-  }
+
+  return { status: 'ok', rows, reason: null, features };
 }
 
 /**
@@ -741,6 +779,14 @@ export async function discoverCompetitorDomainsFromSerp(params: {
    * competitor qualification later rejects every other domain on the page.
    */
   searchObservations: SerpSearchObservation[];
+  /**
+   * DG-001 — non-organic SERP features observed across the same responses.
+   *
+   * Sibling evidence. Never merged into `searchObservations`, because
+   * everything that computes search visibility reads that array and a feature
+   * has no organic rank to contribute.
+   */
+  featureObservations: SerpFeatureObservation[];
   /** Acquisition status for the run, so the surface can distinguish unavailable from failed. */
   acquisitionStatus: 'ok' | 'unavailable' | 'failed';
   acquisitionReason: string | null;
@@ -762,7 +808,9 @@ export async function discoverCompetitorDomainsFromSerp(params: {
 
   // GAP-06 — own-domain evidence, gathered from the same responses competitor discovery reads.
   const searchObservations: SerpSearchObservation[] = [];
+  const featureObservations: SerpFeatureObservation[] = [];
   const seenQueries = new Set<string>();
+  const seenFeatureQueries = new Set<string>();
   let requestsMade = 0;
   let acquisitionStatus: 'ok' | 'unavailable' | 'failed' = preflight.value ? 'failed' : 'unavailable';
   let acquisitionReason: string | null = preflight.value ? null : (preflight.reason ?? 'No SERP provider credential is configured.');
@@ -800,6 +848,24 @@ export async function discoverCompetitorDomainsFromSerp(params: {
         });
       }
 
+      // DG-001 — feature evidence from the SAME response, collected once per
+      // query alongside the own-domain scan. No extra request is issued.
+      if (result.status === 'ok' && !seenFeatureQueries.has(keyword)) {
+        seenFeatureQueries.add(keyword);
+        for (const feature of result.features) {
+          featureObservations.push({
+            query: keyword,
+            result_type: feature.result_type,
+            position: feature.position,
+            url: feature.url,
+            domain: feature.domain,
+            title: feature.title,
+            // Only a feature that carries a domain can establish ownership.
+            ownedByCompany: feature.domain ? feature.domain === ownDomain : null,
+          });
+        }
+      }
+
       const domains = Array.from(new Set(
         result.rows.slice(0, SERP_COMPETITOR_WINDOW).map((row) => row.domain).filter(Boolean),
       )).filter((domain) => !isBlockedSerpDomain(domain, params.ownDomain));
@@ -833,6 +899,7 @@ export async function discoverCompetitorDomainsFromSerp(params: {
     .slice(0, MAX_COMPETITORS + 3),
     liveKeywordCount,
     searchObservations,
+    featureObservations,
     acquisitionStatus,
     acquisitionReason,
     requestsMade,
