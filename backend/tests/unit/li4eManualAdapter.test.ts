@@ -793,3 +793,109 @@ describe('LI-4E — 14/15. no network, and security', () => {
     expect(a1).not.toBe(b);
   });
 });
+
+/**
+ * A7P-C9 — the correlation id passes through, and `referenceId` is untouched.
+ *
+ * The database column was widened to text; this half proves the APPLICATION did
+ * not compensate for the old type and must not start. Nothing between the route
+ * and LI-2 may validate, generate or rewrite a correlation id — the field is
+ * telemetry, and a UUID manufactured here would destroy the correlation a
+ * caller supplied it to preserve.
+ */
+describe('A7P-C9 — ingestion run correlation id', () => {
+  const ingestWithRun = (records: Array<Record<string, unknown>>, ingestionRunId: string | null) =>
+    ingestLeadBatch({
+      organizationId: ORG_A, source: MANUAL_SOURCE, records,
+      ingestionRunId, now: '2026-08-15T00:00:00.000Z',
+    });
+
+  // Each is a value a real writer produces. None is a UUID except the one that
+  // is, and it is here to prove the widening did not exclude the old shape.
+  const CORRELATIONS: Array<[string, string | null]> = [
+    ['the pilot batch label that produced 22P02', 'pi-pilot-001'],
+    ['a uuid, as execution.ts generates by default', '550e8400-e29b-41d4-a716-446655440000'],
+    ['an extension platform urn', 'urn:li:comment:7234'],
+    ['an A7E worker correlation', 'a7e-00000000-0000-4000-8000-00000000000a-1757330000000'],
+    ['omitted', null],
+  ];
+
+  it.each(CORRELATIONS)('persists %s verbatim on the source record', async (_label, value) => {
+    const r = await ingestWithRun([person({ referenceId: 'pi-pilot-001' })], value);
+
+    expect(r.succeeded).toBe(1);
+    expect(r.outcomes[0].ok).toBe(true);
+    expect(db.source_records).toHaveLength(1);
+    // Verbatim: not coerced, not hashed into a uuid, not replaced by a generated one.
+    expect(db.source_records[0].ingestion_run_id).toBe(value);
+  });
+
+  it('is not part of source identity — a second batch updates rather than duplicates', async () => {
+    await ingestWithRun([person({ referenceId: 'pi-pilot-001' })], 'batch-a');
+    await ingestWithRun([person({ referenceId: 'pi-pilot-001' })], 'batch-b');
+
+    // One provider record, one row. The identity key is
+    // (organization_id, provider, source_entity_type, source_record_id), and the
+    // correlation id is deliberately absent from it.
+    expect(db.source_records).toHaveLength(1);
+    expect(db.unified_persons).toHaveLength(1);
+  });
+
+  it('no layer validates or generates a correlation id', () => {
+    // A repository scan rather than a behavioural assertion, because the defect
+    // this guards against is a well-meant "let's just normalise it to a UUID"
+    // added later in a layer no test happens to cover.
+    const sources = [
+      'pages/api/lead-ingestion/manual.ts',
+      'pages/api/lead-ingestion/csv.ts',
+      'pages/api/lead-ingestion/crm.ts',
+      'backend/services/leadIngestion/orchestrator.ts',
+      'backend/services/prospectIdentity/ingestionBoundary.ts',
+    ];
+    for (const rel of sources) {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../../..', rel), 'utf8') as string;
+      const runIdLines = src.split('\n')
+        .filter((l) => /ingestionRunId|ingestion_run_id/.test(l) && !l.trim().startsWith('*') && !l.trim().startsWith('//'));
+      expect(runIdLines.length).toBeGreaterThan(0);
+      for (const line of runIdLines) {
+        // Generation: a manufactured UUID discards the correlation a caller supplied.
+        expect([rel, line]).not.toEqual([rel, expect.stringMatching(/randomUUID|uuidv4/)]);
+        // Validation: the column is text precisely so no layer needs to do this.
+        expect([rel, line]).not.toEqual([rel, expect.stringMatching(/isUuid|isValidUuid|UUID_RE|uuidRegex/i)]);
+      }
+    }
+  });
+});
+
+describe('A7P-C9 — referenceId keeps its meaning', () => {
+  // The pilot's surviving rows key on this exact string in
+  // unified_persons.external_keys, identity_claims.normalized_value and
+  // canonical_leads.external_lead_key. It is external identity, not a run id,
+  // and it was never the cause of the 22P02.
+  const PILOT_REF = 'pi-pilot-001';
+
+  it('accepts an arbitrary external identity string, with no UUID requirement', () => {
+    const rec = toNormalizedManualRecord({ organizationId: ORG_A, referenceId: PILOT_REF });
+    expect(rec.externalId).toBe(PILOT_REF);
+    expect(rec.person?.externalKeys).toEqual({ [MANUAL_SOURCE]: { external_id: PILOT_REF } });
+  });
+
+  it('alone satisfies the identity requirement — no email or phone needed', () => {
+    expect(() => validateManualInput({ organizationId: ORG_A, referenceId: PILOT_REF })).not.toThrow();
+    expect(() => validateManualInput({ organizationId: ORG_A })).toThrow(ManualInputError);
+  });
+
+  it('reaches the source record as the provider record key, which is text', async () => {
+    await ingestLeadBatch({
+      organizationId: ORG_A, source: MANUAL_SOURCE,
+      records: [{ referenceId: PILOT_REF, companyName: 'Omnivyra', companyDomain: 'omnivyra.com' }],
+      ingestionRunId: PILOT_REF, now: '2026-08-15T00:00:00.000Z',
+    });
+    const personRecord = db.source_records.find((r) => r.source_entity_type === 'person');
+    expect(personRecord?.source_record_id).toBe(PILOT_REF);
+    // The same string in both columns — which is exactly the payload that
+    // failed in production, and only one of the two columns was ever at fault.
+    expect(personRecord?.ingestion_run_id).toBe(PILOT_REF);
+  });
+});

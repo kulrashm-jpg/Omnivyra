@@ -339,3 +339,130 @@ describe('LI-2 — the canonical spine is unchanged', () => {
     });
   });
 });
+
+/**
+ * A7P-C9 — the correlation id accepts what the application actually sends.
+ *
+ * These exist because the first real pilot ingestion failed with
+ * `22P02: invalid input syntax for type uuid: "pi-pilot-001"` AFTER it had
+ * already created a person, an identity claim, an account and a canonical
+ * lead. Nothing above the column validated or generated a UUID; the column
+ * alone imposed a format the API never advertised.
+ *
+ * Every value below is one a production writer really produces. None has been
+ * rewritten into a UUID to make a test pass — doing that would re-encode the
+ * defect as the expectation.
+ */
+describe('A7P-C9 — ingestion_run_id is a soft correlation id, not an identifier', () => {
+  it('is text, nullable, and constrains nothing', async () => {
+    const { rows } = await db.query(
+      `SELECT format_type(a.atttypid, a.atttypmod) t, a.attnotnull
+         FROM pg_attribute a
+        WHERE a.attrelid='public.source_records'::regclass
+          AND a.attname='ingestion_run_id' AND NOT a.attisdropped`);
+    expect(rows[0].t).toBe('text');
+    expect(rows[0].attnotnull).toBe(false);
+
+    // It must stay out of every index and constraint: source identity is
+    // (organization_id, provider, source_entity_type, source_record_id), and a
+    // correlation id joining that key would make re-ingestion under a new batch
+    // label create a duplicate row instead of updating one.
+    const attnum = `(SELECT attnum FROM pg_attribute
+                      WHERE attrelid='public.source_records'::regclass
+                        AND attname='ingestion_run_id')`;
+    const { rows: idx } = await db.query(
+      `SELECT count(*)::int n FROM pg_index x
+        WHERE x.indrelid='public.source_records'::regclass
+          AND ${attnum} = ANY(x.indkey::int2[])`);
+    expect(idx[0].n).toBe(0);
+
+    const { rows: con } = await db.query(
+      `SELECT count(*)::int n FROM pg_constraint
+        WHERE conrelid='public.source_records'::regclass
+          AND ${attnum} = ANY(conkey)`);
+    expect(con[0].n).toBe(0);
+  });
+
+  // THE REGRESSION. This is the exact value and the exact column that produced
+  // 22P02 in production on 2026-09-08. It is deliberately NOT a UUID.
+  it('accepts the pilot batch label that produced 22P02', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      expect(await attempt(
+        `INSERT INTO public.source_records
+           (organization_id,provider,source_entity_type,source_record_id,raw_payload,payload_hash,ingestion_run_id)
+         VALUES ($1,'manual','person','pi-pilot-001','{}'::jsonb,$2,'pi-pilot-001')`,
+        [ORG_A, h('pilot')])).toBe('ok');
+    });
+  });
+
+  it('accepts every correlation shape production writers emit', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const shapes: Array<[string, string | null]> = [
+        // manual / csv / crm routes and crmIngestionService — an operator or pipeline label
+        ['operator batch label', 'pi-pilot-001'],
+        // execution.ts defaults correlationId to randomUUID()
+        ['uuid', '550e8400-e29b-41d4-a716-446655440000'],
+        // extensionBridge.ts — observation.sourceReference is a platform URN
+        ['platform urn', 'urn:li:comment:7234'],
+        // consumeEnrichmentWork.ts — `a7e-${entityId}-${now}`
+        ['a7e worker id', 'a7e-00000000-0000-4000-8000-00000000000a-1757330000000'],
+        // omitted: metadata, never identity, so absence stays legal
+        ['omitted', null],
+      ];
+      for (const [label, value] of shapes) {
+        const code = await attempt(
+          `INSERT INTO public.source_records
+             (organization_id,provider,source_entity_type,source_record_id,raw_payload,payload_hash,ingestion_run_id)
+           VALUES ($1,'manual','person',$2,'{}'::jsonb,$3,$4)`,
+          [ORG_A, `SHAPE-${label}`, h(label), value]);
+        expect([label, code]).toEqual([label, 'ok']);
+      }
+    });
+  });
+
+  it('stores the correlation id verbatim — no coercion, no normalisation', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const rec = await insertSource(ORG_A, {
+        source_record_id: 'VERBATIM', ingestion_run_id: 'urn:li:comment:7234',
+      });
+      const { rows } = await db.query(
+        `SELECT ingestion_run_id FROM public.source_records WHERE id=$1`, [rec]);
+      expect(rows[0].ingestion_run_id).toBe('urn:li:comment:7234');
+    });
+  });
+
+  it('a new correlation id does not create a second row for the same source record', async () => {
+    // The identity guarantee the widening must not disturb: two batches naming
+    // the same provider record still collide on the source identity index.
+    await inRollback(async () => {
+      await seedTenants();
+      await insertSource(ORG_A, { source_record_id: 'IDENT-1', ingestion_run_id: 'batch-a' });
+      expect(await attempt(
+        `INSERT INTO public.source_records
+           (organization_id,provider,source_entity_type,source_record_id,raw_payload,payload_hash,ingestion_run_id)
+         VALUES ($1,'testprov','person','IDENT-1','{}'::jsonb,$2,'batch-b')`,
+        [ORG_A, h('second')])).toBe('23505');
+    });
+  });
+
+  it('the real identifiers on this table are still uuid', async () => {
+    // The widening was one column. Anything that names a row stays typed.
+    const { rows } = await db.query(
+      `SELECT attname, format_type(atttypid, atttypmod) t
+         FROM pg_attribute
+        WHERE attrelid='public.source_records'::regclass AND NOT attisdropped
+          AND attname = ANY(ARRAY['id','organization_id','person_id','account_id'])
+        ORDER BY attname`);
+    expect(rows.map((r: any) => [r.attname, r.t])).toEqual([
+      ['account_id', 'uuid'], ['id', 'uuid'], ['organization_id', 'uuid'], ['person_id', 'uuid'],
+    ]);
+
+    const { rows: assertions } = await db.query(
+      `SELECT format_type(atttypid, atttypmod) t FROM pg_attribute
+        WHERE attrelid='public.source_assertions'::regclass AND attname='source_record_id'`);
+    expect(assertions[0].t).toBe('uuid');   // it references source_records.id
+  });
+});
