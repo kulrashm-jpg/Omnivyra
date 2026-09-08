@@ -1,5 +1,12 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
+// D4 - the source-boundary contract for the one Google Trends feed this route reads.
+import {
+  fetchHotTrendsFeed,
+  googleTrendsTopic,
+  googleTrendsUnavailable,
+  parseHotTrendsFeed,
+} from '../../../backend/services/trends/googleTrendsContract';
 
 // One Specialized Source Per Platform Type for Best Results
 const getTrendingData = async () => {
@@ -35,35 +42,25 @@ const getTrendingData = async () => {
 };
 
 // Google Trends - Free, no API key needed
+//
+// D4 — this used to return `searchVolume: "High"`, `trend: "Rising"` and
+// `category: "General"` for every topic. Only `keyword` came from the feed; the
+// other three were hardcoded literals stamped with a real provider's name, and
+// the UI rendered "High search volume" from them. The failure path was worse
+// still: three invented topics attributed to Google Trends.
+//
+// The feed establishes one thing — that a term is on Google's currently-trending
+// list. That is what is returned now, through the contract that says so.
 const fetchGoogleTrends = async () => {
-  try {
-    // Google Trends RSS feed (free)
-    const response = await fetch('https://trends.google.com/trends/hottrends/atom/feed');
-    if (!response.ok) throw new Error('Google Trends API failed');
-    
-    const xmlText = await response.text();
-    // Parse XML to extract trending topics
-    const topics = xmlText.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/g) || [];
-    const trendingTopics = topics.slice(0, 5).map(topic => {
-      const title = topic.replace(/<title><!\[CDATA\[(.*?)\]\]><\/title>/, '$1');
-      return {
-        keyword: title,
-        searchVolume: "High",
-        trend: "Rising",
-        category: "General",
-        source: "Google Trends"
-      };
-    });
-    
-    return trendingTopics;
-  } catch (error) {
-    console.error('Google Trends error:', error);
-    return [
-      { keyword: "ChatGPT", searchVolume: "High", trend: "Rising", category: "AI", source: "Google Trends" },
-      { keyword: "Climate Change", searchVolume: "Very High", trend: "Stable", category: "Environment", source: "Google Trends" },
-      { keyword: "Electric Vehicles", searchVolume: "High", trend: "Rising", category: "Automotive", source: "Google Trends" },
-    ];
+  const xmlText = await fetchHotTrendsFeed();
+  if (xmlText === null) {
+    console.error('Google Trends error: hot-trends feed could not be read');
+    // Honest silence. Manufacturing topics under a provider's name is a larger
+    // falsehood than a mislabelled measurement, and the consumer already renders
+    // nothing for an empty list.
+    return googleTrendsUnavailable();
   }
+  return parseHotTrendsFeed(xmlText).slice(0, 5).map(googleTrendsTopic);
 };
 
 
@@ -142,11 +139,9 @@ const fetchYouTubeTrending = async () => {
 // Fallback data when APIs fail
 const getFallbackTrendingData = () => {
   return {
-    linkedin: [
-      { keyword: "ChatGPT", searchVolume: "High", trend: "Rising", category: "AI", source: "Google Trends" },
-      { keyword: "Climate Change", searchVolume: "Very High", trend: "Stable", category: "Environment", source: "Google Trends" },
-      { keyword: "Electric Vehicles", searchVolume: "High", trend: "Rising", category: "Automotive", source: "Google Trends" },
-    ],
+    // D4 - these three topics were invented and attributed to Google Trends.
+    // Nothing was ever observed here, so nothing is claimed.
+    linkedin: googleTrendsUnavailable(),
     twitter: [
       { keyword: "AI Revolution", upvotes: 15420, subreddit: "technology", category: "Reddit", source: "Reddit" },
       { keyword: "Remote Work", upvotes: 12300, subreddit: "workfromhome", category: "Reddit", source: "Reddit" },
@@ -182,7 +177,10 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
         source: "Google Trends",
         platform: "LinkedIn",
         category: trend.category,
-        searchVolume: trend.searchVolume,
+        // D4 - was `searchVolume: trend.searchVolume`, which carried the hardcoded
+        // "High" into the suggestion. The feed supports the trending signal only.
+        trend: trend.trend,
+        searchVolumeState: trend.search_volume_state,
         clickable: true
       });
     });

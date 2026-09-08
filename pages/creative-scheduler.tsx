@@ -581,7 +581,11 @@ export default function CreativeScheduler() {
                                   <div className="flex items-center justify-between">
                                     <div>
                                       <span className="text-white font-medium text-sm">{trend.keyword}</span>
-                                      <div className="text-xs text-gray-400">{trend.searchVolume} search volume</div>
+                                      {/* D4 — was `{trend.searchVolume} search volume`, which rendered
+                                          the hardcoded "High search volume". The hot-trends feed
+                                          establishes that a term is currently trending on Google, and
+                                          carries no volume figure, so that is what is shown. */}
+                                      <div className="text-xs text-gray-400">Currently trending on Google</div>
                                     </div>
                                     <div className="flex items-center gap-2">
                                       <span className="text-xs text-blue-400">💼</span>
