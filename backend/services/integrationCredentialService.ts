@@ -199,6 +199,34 @@ function requireProviderScope(companyId: string, providerKey: string): void {
  *
  * `rotated_at` moves on every write, so replacement and rotation are the same
  * operation and neither leaves the previous secret behind.
+ *
+ * ─── WHY THIS IS NOT `.upsert()` ──────────────────────────────────────────
+ * It was, and it could never have worked. The provider index is PARTIAL:
+ *
+ *   CREATE UNIQUE INDEX integration_credentials_provider_unique
+ *     ON integration_credentials (company_id, provider_key, credential_key)
+ *     WHERE company_id IS NOT NULL;
+ *
+ * PostgreSQL only accepts a partial index as an ON CONFLICT arbiter when the
+ * statement RESTATES the index predicate, and PostgREST's `on_conflict=` can
+ * carry a column list and nothing else. Inference therefore failed at PLAN
+ * time with `42P10` — "there is no unique or exclusion constraint matching the
+ * ON CONFLICT specification" — for every provider and every tenant, which is
+ * why this table has never held a single provider-scoped row.
+ *
+ * `upsertConnectionCredentials` above keeps its `.upsert()` deliberately: its
+ * arbiter, `integration_credentials_connection_key_unique`, is NOT partial, so
+ * inference succeeds there. The two paths differ because the indexes differ.
+ *
+ * So this uses the repository's established shape instead — INSERT, catch
+ * `23505`, UPDATE — the same one `upsertSourceRecord`, `resolveOrCreateAccount`
+ * and `persistClaims` use, and for the same reason: idempotency belongs to a
+ * database constraint, never to a SELECT-then-INSERT that a concurrent writer
+ * can slip between. Two racing rotations therefore yield one row, not two.
+ *
+ * ROTATION IS THE POINT, so the conflict branch must UPDATE. An insert-only
+ * "skip if present" would accept a rotated key, report success, and leave the
+ * revoked secret in place — the failure mode this comment exists to prevent.
  */
 export async function upsertProviderCredentials(
   companyId: string,
@@ -210,18 +238,49 @@ export async function upsertProviderCredentials(
   const entries = Object.entries(credentials).filter(([, value]) => value?.trim());
   if (entries.length === 0) return;
 
-  const rows = entries.map(([credential_key, value]) => ({
-    company_id: companyId,
-    provider_key: providerKey,
-    connection_id: null,
-    credential_key,
-    encrypted_value: encryptCredential(value),
-    rotated_at: new Date().toISOString(),
-  }));
+  for (const [credentialKey, value] of entries) {
+    // Encrypted before it is ever handed to the driver, exactly as before. The
+    // plaintext never reaches a row object, a log line or an error message.
+    const encrypted = encryptCredential(value);
+    const rotatedAt = new Date().toISOString();
 
-  const { error } = await ownedDbTable('integration_credentials')
-    .upsert(rows, { onConflict: 'company_id,provider_key,credential_key' });
-  if (error) throw new Error(error.message);
+    const insert = await ownedDbTable('integration_credentials').insert({
+      company_id: companyId,
+      provider_key: providerKey,
+      // Provider credentials are tenant-scoped, never connection-scoped. NULL
+      // here is what keeps them outside the website-path unique index.
+      connection_id: null,
+      credential_key: credentialKey,
+      encrypted_value: encrypted,
+      rotated_at: rotatedAt,
+    });
+
+    if (!insert.error) continue;
+
+    const code = (insert.error as { code?: string }).code;
+    if (code !== '23505') throw new Error(insert.error.message);
+
+    // The row already exists — this write is a rotation, or another worker won
+    // the race. Either way the tenant's intent is "this must be the credential
+    // now", so the stored value is replaced rather than left alone.
+    const update = await ownedDbTable('integration_credentials')
+      .update({ encrypted_value: encrypted, rotated_at: rotatedAt })
+      .eq('company_id', companyId)        // TENANT — never optional
+      .eq('provider_key', providerKey)
+      .eq('credential_key', credentialKey)
+      .select('id');
+
+    if (update.error) throw new Error(update.error.message);
+
+    // A conflict that no row satisfies means the 23505 came from a constraint
+    // this function does not own. Reporting success there would tell a tenant
+    // their key was rotated when it was not, so it is raised instead.
+    if (!((update.data as unknown[] | null)?.length)) {
+      throw new Error(
+        'integration_credentials: provider credential conflicted but no matching row could be updated',
+      );
+    }
+  }
 }
 
 /**

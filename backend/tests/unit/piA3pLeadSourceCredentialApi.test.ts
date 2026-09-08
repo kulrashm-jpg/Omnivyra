@@ -448,3 +448,87 @@ describe('A3P — lifecycle, end to end with the PI resolver', () => {
     expect(adapter.calls).toHaveLength(0);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+/**
+ * A7P-C14C — the route no longer 500s on a valid credential write.
+ *
+ * In production this PUT returned `500 CREDENTIAL_OPERATION_FAILED` for every
+ * provider and every tenant: `upsertProviderCredentials` issued an ON CONFLICT
+ * against a PARTIAL unique index, which PostgreSQL rejects at plan time with
+ * `42P10`, and the route's catch-all rendered the throw as a 500.
+ *
+ * The store is faked here, so these cannot execute SQL — the real statement is
+ * proven in backend/tests/realschema/integration_credentials.test.ts. What they
+ * pin is the route contract either side of it, plus a source guard so the
+ * `.upsert()` cannot quietly return.
+ */
+describe('A7P-C14C — the credential PUT succeeds and stays secret-safe', () => {
+  it('a valid Apollo write returns 200, not 500', async () => {
+    const res = await call('PUT', { companyId: ORG_A }, {
+      provider: 'apollo', credentials: { api_key: SECRET_A },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toEqual({ error: 'CREDENTIAL_OPERATION_FAILED' });
+    expect(res.body.provider.providerId).toBe('apollo');
+    expect(res.body.provider.configured).toBe(true);
+    expect(JSON.stringify(res.body)).not.toContain(SECRET_A);
+  });
+
+  it('a valid Clearbit write returns 200 too — the path is provider-neutral', async () => {
+    const res = await call('PUT', { companyId: ORG_A }, {
+      provider: 'clearbit', credentials: { api_key: SECRET_A },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.provider.providerId).toBe('clearbit');
+    expect(res.body.provider.configured).toBe(true);
+    expect(JSON.stringify(res.body)).not.toContain(SECRET_A);
+  });
+
+  it('a rotation through the route also returns 200 and reports configured', async () => {
+    await call('PUT', { companyId: ORG_A }, { provider: 'apollo', credentials: { api_key: SECRET_A } });
+    const res = await call('PUT', { companyId: ORG_A }, { provider: 'apollo', credentials: { api_key: SECRET_A2 } });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.provider.configured).toBe(true);
+    expect(JSON.stringify(res.body)).not.toContain(SECRET_A2);
+  });
+
+  it('the provider write path contains no ON CONFLICT — the defect cannot return', () => {
+    // A source scan, because the fake store cannot reach a planner and no
+    // behavioural assertion here could catch a reintroduced `.upsert()`.
+    const src: string = require('fs').readFileSync(
+      require('path').join(__dirname, '../../services/integrationCredentialService.ts'), 'utf8');
+
+    const fn = src.slice(
+      src.indexOf('export async function upsertProviderCredentials'),
+      src.indexOf('export async function getProviderCredentials'));
+    expect(fn.length).toBeGreaterThan(0);
+
+    expect(fn).not.toMatch(/\.upsert\(/);
+    expect(fn).not.toMatch(/onConflict/);
+    // …and it must still be an INSERT with a 23505 branch that UPDATEs.
+    expect(fn).toMatch(/\.insert\(/);
+    expect(fn).toMatch(/'23505'/);
+    expect(fn).toMatch(/\.update\(/);
+
+    // The CONNECTION path keeps its upsert: its arbiter is a plain unique
+    // constraint, so ON CONFLICT is correct there and must not be "fixed".
+    const connFn = src.slice(
+      src.indexOf('export async function upsertConnectionCredentials'),
+      src.indexOf('export async function getConnectionCredentials'));
+    expect(connFn).toMatch(/onConflict: 'connection_id,credential_key'/);
+  });
+
+  it('the rotation UPDATE is tenant-scoped in the source, never provider-only', () => {
+    const src: string = require('fs').readFileSync(
+      require('path').join(__dirname, '../../services/integrationCredentialService.ts'), 'utf8');
+    const fn = src.slice(
+      src.indexOf('export async function upsertProviderCredentials'),
+      src.indexOf('export async function getProviderCredentials'));
+    // All three legs of the identity must appear on the update, or a rotation
+    // could reach another tenant's row for the same provider.
+    expect(fn).toMatch(/\.eq\('company_id', companyId\)/);
+    expect(fn).toMatch(/\.eq\('provider_key', providerKey\)/);
+    expect(fn).toMatch(/\.eq\('credential_key', credentialKey\)/);
+  });
+});
