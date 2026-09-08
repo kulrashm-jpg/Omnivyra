@@ -24,6 +24,30 @@ export async function upsertFeatureFlag(input: {
   rolloutCohort?: string | null;
   rolloutPercent?: number | null;
   rationale?: string | null;
+  /**
+   * Tenant policy carried on the flag. Optional, and deliberately NOT nullable.
+   *
+   * ─── WHY THIS EXISTS ────────────────────────────────────────────────────
+   * `feature_flags.metadata` has always been in the schema and is returned on
+   * every read (`select('*')`), but nothing could write it: this payload
+   * omitted the column, so a governed caller could create a flag and never
+   * attach policy to it. A9's enrichment spend ceiling reads its per-tenant
+   * limit from exactly this field, which made the gap load-bearing — the flag
+   * could be created enabled and still enforce nothing.
+   *
+   * ─── OMITTED MEANS UNTOUCHED, NOT CLEARED ───────────────────────────────
+   * The key is spread in only when the caller supplied it. On an INSERT that
+   * lets the column take its own default; on an UPDATE the column is not in
+   * the SET list at all, so existing policy survives a caller that only meant
+   * to flip `enabled`. Defaulting to `{}` here would silently erase a tenant's
+   * ceiling every time someone toggled a flag.
+   *
+   * ─── NULL IS NOT A VALUE THIS COLUMN ACCEPTS ────────────────────────────
+   * `metadata` is `jsonb NOT NULL DEFAULT '{}'`, and `FeatureFlag` types it as
+   * a non-nullable `Record`. So `null` is not "clear it" — it is a constraint
+   * violation, and the type says so. Callers wanting to clear policy pass `{}`.
+   */
+  metadata?: Record<string, unknown>;
   createdBy: string | null;
 }): Promise<FeatureFlag> {
   const payload = {
@@ -34,6 +58,8 @@ export async function upsertFeatureFlag(input: {
     rollout_percent: input.rolloutPercent ?? null,
     rationale: input.rationale ?? null,
     created_by: input.createdBy,
+    // Present only when supplied — see the contract note above.
+    ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
   };
   const { data: existing } = await ownedDbTable('feature_flags')
     .select('id')
