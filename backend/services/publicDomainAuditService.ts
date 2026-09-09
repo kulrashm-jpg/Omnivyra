@@ -3,6 +3,7 @@ import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { clamp } from './intelligenceEngineUtils';
 import type { CanonicalDeclaredEvidence } from './canonicalReport/canonicalReportTypes';
+import { hasHttpResponse, isHttpErrorOutcome, reachabilityForPage } from './crawl/reachabilityOutcome';
 
 // ── BETA-EVIDENCE-EXEC-003 — declared (non-scored) evidence aggregation ────────
 // Reuses signals already extracted by the crawler (crawl_metadata.signals) + the existing legal-page
@@ -371,7 +372,42 @@ export async function buildPublicDomainAuditDecisions(params: {
         return sum + (contentByPage.get(page.id) ?? []).reduce((inner, row) => inner + safeWords(row.content_text), 0);
       }, 0) / Math.max(1, structure.product_pages.length)
     : 0;
-  const internalLinkAvg = pages.reduce((sum, page) => sum + Number(page.internal_link_count ?? 0), 0) / Math.max(1, pages.length);
+  // ── PDA — A CRAWL CLAIM MAY ONLY DESCRIBE A PAGE THE CRAWLER ACTUALLY READ ──
+  //
+  // `canonical_pages` is NOT the crawler's private table. `ga4IngestionService.
+  // upsertPage` (ga4IngestionService.ts:358) upserts a row for every analytics
+  // path it sees, writing only company_id / domain_id / url plus a `page_type`
+  // derived from the path SHAPE alone — 'home' when the path is "/", otherwise
+  // 'landing' (ga4IngestionService.ts:360). Such a row has `http_status = NULL`
+  // (the crawler always writes a status: the real one, or D2's 0 sentinel —
+  // crawlerService.ts:430 and :561) and takes the column default
+  // `internal_link_count = 0` (20260429_data_ingestion_layer.sql:12).
+  //
+  // Read naively, that row asserted "an important landing page with zero
+  // inbound links" — an orphan. Not one part of that was observed: the page was
+  // never fetched, so the zero is a default, the 'landing' label is a guess
+  // from the URL, and the absence of an inbound link is the absence of a crawl.
+  // A two-row GA4-only company produced a crawlability finding naming two URLs
+  // as orphans on zero page evidence.
+  //
+  // The same partition also settles the `0` sentinel: a request that never got
+  // an answer has no status, so it cannot belong to a population counted as
+  // "pages that returned an error". It is reported in its own right instead of
+  // being either miscounted or silently dropped.
+  //
+  // Classification is delegated to D2's canonical contract
+  // (crawl/reachabilityOutcome.ts): one crawl observation, one interpretation,
+  // several readers. No second reachability vocabulary is defined here.
+  const observations = pages.map((page) => ({ page, outcome: reachabilityForPage(page).outcome }));
+  const respondedPages = observations.filter((item) => hasHttpResponse(item.outcome)).map((item) => item.page);
+  const unreachablePages = observations.filter((item) => !hasHttpResponse(item.outcome)).map((item) => item.page);
+  /** False when not one page answered — every crawl-derived claim must abstain. */
+  const crawlEvidenceAvailable = respondedPages.length > 0;
+
+  // Denominator is the pages that ANSWERED. Averaging over rows we never
+  // fetched drags the mean toward the column default and manufactures a
+  // "weak internal linking" finding out of an unmeasured corpus.
+  const internalLinkAvg = respondedPages.reduce((sum, page) => sum + Number(page.internal_link_count ?? 0), 0) / Math.max(1, respondedPages.length);
   const pagesMissingTitles = pages.filter((page) => textLength(page.meta_title) === 0 && textLength(page.title) === 0);
   const pagesMissingMeta = pages.filter((page) => textLength(page.meta_description) === 0);
   const pagesWithThinMeta = pages.filter((page) => textLength(page.meta_description) > 0 && textLength(page.meta_description) < 70);
@@ -389,8 +425,11 @@ export async function buildPublicDomainAuditDecisions(params: {
     const importantPage = /home|pricing|product|feature|landing|contact/.test(normalizeText(page.page_type));
     return importantPage && wordCount > 0 && wordCount < 120;
   });
-  const pagesWithStatusErrors = pages.filter((page) => Number(page.http_status ?? 200) >= 400 || Number(page.http_status ?? 200) === 0);
-  const orphanLikePages = pages.filter((page) => {
+  // "Returned an error" means the page ANSWERED and the answer was 4xx/5xx.
+  // A page we never reached is a finding about the crawl, carried separately
+  // below as `unreachable_pages`.
+  const pagesWithStatusErrors = observations.filter((item) => isHttpErrorOutcome(item.outcome)).map((item) => item.page);
+  const orphanLikePages = respondedPages.filter((page) => {
     const incomingLinks = links.filter((link) => link.to_page_id === page.id || normalizeText(link.to_url) === normalizeText(page.url));
     const importantPage = /pricing|product|feature|landing|blog/.test(normalizeText(page.page_type));
     return importantPage && incomingLinks.length === 0;
@@ -550,7 +589,10 @@ export async function buildPublicDomainAuditDecisions(params: {
     }));
   }
 
-  if (internalLinkAvg < 2 || (!pricingExists && !contactExists) || !productExists) {
+  // PDA — the link-density disjunct only participates when a page actually
+  // answered. The other two disjuncts are derived from URLs and page types, so
+  // they stand on their own without a crawl.
+  if ((crawlEvidenceAvailable && internalLinkAvg < 2) || (!pricingExists && !contactExists) || !productExists) {
     decisions.push(createDecision({
       companyId: params.companyId,
       reportTier,
@@ -559,14 +601,25 @@ export async function buildPublicDomainAuditDecisions(params: {
       description: 'Public site structure suggests the path from homepage to product understanding to action is too fragmented.',
       recommendation: 'Tighten the journey from homepage to product pages to pricing/contact, and reduce dead-end navigation patterns.',
       actionType: 'fix_distribution',
-      actionPayload: { optimization_focus: 'user_journey', internal_link_avg: internalLinkAvg },
+      actionPayload: {
+        optimization_focus: 'user_journey',
+        internal_link_avg: crawlEvidenceAvailable ? internalLinkAvg : null,
+        internal_link_avg_state: crawlEvidenceAvailable ? 'measured' : 'insufficient_signal',
+      },
       impactTraffic: 22,
       impactConversion: 66,
       impactRevenue: 58,
       priorityScore: 69,
       effortScore: 36,
       confidenceScore: 0.76,
-      evidence: { internal_link_avg: internalLinkAvg, product_exists: productExists, pricing_exists: pricingExists, contact_exists: contactExists },
+      evidence: {
+        internal_link_avg: crawlEvidenceAvailable ? internalLinkAvg : null,
+        internal_link_avg_state: crawlEvidenceAvailable ? 'measured' : 'insufficient_signal',
+        pages_observed: respondedPages.length,
+        product_exists: productExists,
+        pricing_exists: pricingExists,
+        contact_exists: contactExists,
+      },
     }));
   }
 
@@ -686,7 +739,10 @@ export async function buildPublicDomainAuditDecisions(params: {
     }));
   }
 
-  if (pagesWithStatusErrors.length > 0 || orphanLikePages.length >= 2 || internalLinkAvg < 1.5) {
+  // PDA — every disjunct below is a crawl observation, so the whole finding
+  // abstains when nothing answered. Emitting it from an analytics-only corpus
+  // told the reader the site had crawl problems that were never looked for.
+  if (crawlEvidenceAvailable && (pagesWithStatusErrors.length > 0 || orphanLikePages.length >= 2 || internalLinkAvg < 1.5)) {
     decisions.push(createDecision({
       companyId: params.companyId,
       reportTier,
@@ -699,6 +755,9 @@ export async function buildPublicDomainAuditDecisions(params: {
         optimization_focus: 'crawlability_internal_links',
         error_pages: pagesWithStatusErrors.map((page) => page.url).slice(0, 5),
         orphan_like_pages: orphanLikePages.map((page) => page.url).slice(0, 5),
+        // Distinct remediation: a 404 is fixed on the page, an unreachable URL
+        // is fixed at the host. Merging them under one list hid that.
+        unreachable_pages: unreachablePages.map((page) => page.url).slice(0, 5),
       },
       impactTraffic: 56,
       impactConversion: 22,
@@ -710,6 +769,10 @@ export async function buildPublicDomainAuditDecisions(params: {
         status_error_count: pagesWithStatusErrors.length,
         orphan_like_page_count: orphanLikePages.length,
         internal_link_avg: Number(internalLinkAvg.toFixed(2)),
+        // The denominator every count above is measured against, plus the rows
+        // set aside — stated rather than silently subtracted.
+        pages_observed: respondedPages.length,
+        unreachable_page_count: unreachablePages.length,
       },
     }));
   }
