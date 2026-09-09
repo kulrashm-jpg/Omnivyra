@@ -191,11 +191,15 @@ describe('D4 — the rest of the trending route is untouched', () => {
 
   it('other providers keep their own signals and are not renamed', async () => {
     // Scope discipline: D4 is the Google Trends attribution. Reddit's upvotes and
-    // YouTube's shape are deliberately left exactly as they were.
+    // YouTube's shape were deliberately left exactly as they were by D4.
     trendsOnly(HOT_TRENDS_FEED);
     const body = await invoke('linkedin,twitter,youtube');
     expect(body.trending.twitter[0]).toHaveProperty('upvotes');
-    expect(body.trending.youtube[0]).toHaveProperty('views');
+    // D5 superseded the YouTube half of this assertion: `youtube[0].views` was the
+    // fabricated "5.2M" this suite was preserving, and D5 removed the rows that
+    // carried it. What D4 must still hold is that ITS fix did not rename or
+    // repurpose the YouTube key — the key is still present and still a list.
+    expect(Array.isArray(body.trending.youtube)).toBe(true);
   });
 
   it('the keyword itself — the one thing the feed DID supply — survives', () => {
