@@ -121,6 +121,21 @@ type CompanyContextValue = {
   companies: CompanyOption[];
   selectedCompanyId: string;
   selectedCompanyName: string;
+  /**
+   * A7P-C16 — the user belongs to MORE THAN ONE company and has not chosen
+   * between them, so no tenant may be assumed.
+   *
+   * It exists because the previous resolution ended in `companyIds[0]`, which
+   * silently picked a tenant the user never selected. That is how an Apollo
+   * credential was stored against the wrong company: the operator was
+   * authorised for both, the server correctly wrote the one it was told, and
+   * nothing on screen said which one that was.
+   *
+   * Tenant-scoped WRITE surfaces must refuse to act while this is true.
+   * `selectedCompanyId` is '' in exactly that case, so a consumer that already
+   * guards on the empty id keeps working unchanged.
+   */
+  companySelectionAmbiguous: boolean;
   isLoading: boolean;
   isAuthenticated: boolean;
   /** true once the Supabase session has been validated against the backend.
@@ -202,6 +217,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [rolesByCompany, setRolesByCompany] = useState<Record<string, string>>({});
   const [companies, setCompanies] = useState<CompanyOption[]>([]);
   const [selectedCompanyId, setSelectedCompanyIdInternal] = useState<string>('');
+  const [companySelectionAmbiguous, setCompanySelectionAmbiguous] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
@@ -288,6 +304,8 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return;
     }
     setSelectedCompanyIdInternal(companyId);
+    // An explicit choice is the thing ambiguity was waiting for.
+    setCompanySelectionAmbiguous(false);
     setUserRole(rolesByCompany[companyId] || null);
     if (typeof window !== 'undefined') {
       setUserScopedLocalStorage('selected_company_id', user?.userId ?? null, companyId);
@@ -552,12 +570,19 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setRolesByCompany(rolesMap);
 
       const stored = resolveStoredCompanyId(resolvedUserId);
+      // A7P-C16 — the server's active company, then the user's own stored
+      // choice, then a SINGLE membership. What is deliberately absent is the
+      // old `companyIds[0]` tail: with more than one membership that picked a
+      // tenant nobody chose, and every tenant-scoped read and write downstream
+      // inherited the guess.
+      const soleMembership = companyIds.length === 1 ? companyIds[0] : '';
       const resolvedId =
         activeCompanyId && list.some((c) => c.company_id === activeCompanyId)
           ? activeCompanyId
           : stored && list.some((c) => c.company_id === stored)
             ? stored
-            : companyIds[0] || '';
+            : soleMembership;
+      setCompanySelectionAmbiguous(!resolvedId && companyIds.length > 1);
       setUserRole(rolesMap[resolvedId] || firstRole);
       if (resolvedId) {
         setSelectedCompanyIdInternal(resolvedId);
@@ -614,8 +639,11 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setUserRole(isSuperAdmin ? 'SUPER_ADMIN' : 'CONTENT_ARCHITECT');
       const storageUserId = isSuperAdmin ? 'legacy_super_admin' : 'content_architect';
       const stored = resolveStoredCompanyId(storageUserId);
-      const fallbackId = companyIds[0] || '';
-      const resolvedId = stored && companyIds.includes(stored) ? stored : fallbackId;
+      // Same rule on the legacy path: one membership resolves itself, several
+      // require a choice. See the ambiguity note on the context type.
+      const soleMembership = companyIds.length === 1 ? companyIds[0] : '';
+      const resolvedId = stored && companyIds.includes(stored) ? stored : soleMembership;
+      setCompanySelectionAmbiguous(!resolvedId && companyIds.length > 1);
       if (resolvedId) {
         setSelectedCompanyIdInternal(resolvedId);
         if (typeof window !== 'undefined') {
@@ -758,6 +786,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       userRole,
       companies,
       selectedCompanyId,
+      companySelectionAmbiguous,
       selectedCompanyName,
       isLoading,
       isAuthenticated,
@@ -773,7 +802,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       refreshCompanies,
       hasPermission: (action: PermissionAction) => hasPermissionForRole(userRole, action),
     }),
-    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, isLoading, isAuthenticated, authChecked, authUserId, companiesResolved, authError, authFsm]
+    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, companySelectionAmbiguous, isLoading, isAuthenticated, authChecked, authUserId, companiesResolved, authError, authFsm]
   );
 
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;

@@ -77,7 +77,9 @@ function messageFor(status: number, body: unknown): string {
   return 'The request could not be completed. Please try again.';
 }
 
-export default function LeadSourcesPanel({ companyId }: { companyId: string | null }) {
+export default function LeadSourcesPanel(
+  { companyId, companyName }: { companyId: string | null; companyName?: string | null },
+) {
   const [providers, setProviders] = useState<LeadSourceStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -107,6 +109,23 @@ export default function LeadSourcesPanel({ companyId }: { companyId: string | nu
     } finally {
       setLoading(false);
     }
+  }, [companyId]);
+
+  /**
+   * A7P-C16 — a tenant change DISCARDS the previous tenant's answer first.
+   *
+   * `load()` sets `loading` but leaves `providers` populated while the next
+   * request is in flight, so for one render the panel showed Company A's
+   * "Configured" badges under Company B's name. A credential status is a
+   * statement about one tenant and must never outlive it.
+   */
+  useEffect(() => {
+    setProviders([]);
+    setLoadError(null);
+    setEditing(null);
+    setDraftKey('');
+    setRowError(null);
+    setConfirmRevoke(null);
   }, [companyId]);
 
   useEffect(() => { void load(); }, [load]);
@@ -165,10 +184,17 @@ export default function LeadSourcesPanel({ companyId }: { companyId: string | nu
     }
   };
 
+  // No tenant, no operations. `load`, `submitKey` and `revoke` all key off
+  // `companyId`, and returning here keeps a credential request structurally
+  // unreachable rather than merely unlikely.
   if (!companyId) {
     return (
-      <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500">
-        Select a company to manage its lead sources.
+      <div
+        data-testid="lead-sources-no-tenant"
+        className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900"
+      >
+        Choose a company before managing its lead sources. Provider keys are stored against one
+        company only, so Omnivyra will not guess which one you mean.
       </div>
     );
   }
@@ -213,11 +239,34 @@ export default function LeadSourcesPanel({ companyId }: { companyId: string | nu
 
   return (
     <div className="space-y-4">
+      {/*
+        A7P-C16 — the tenant is NAMED, above everything it governs.
+
+        Every status below and every key saved here belongs to this one company.
+        The panel previously said "this company" without ever saying which, and
+        the tenant it used came from a silent fallback — so an operator with two
+        memberships could read a correct status for one company while believing
+        it described the other. Naming it is the whole fix.
+      */}
+      <div
+        data-testid="lead-sources-tenant"
+        data-company-id={companyId}
+        className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5"
+      >
+        <p className="text-[11px] font-medium uppercase tracking-wide text-indigo-500">
+          Managing lead sources for
+        </p>
+        <p className="mt-0.5 text-sm font-semibold text-indigo-900" data-testid="lead-sources-tenant-name">
+          {companyName || 'This company'}
+        </p>
+      </div>
+
       <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
         <Lock className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-amber-600" />
         <p className="text-xs text-amber-800">
-          Keys are encrypted and stored against this company only. Omnivyra never displays a key
-          after it is saved, and saving one does not contact the provider.
+          Keys are encrypted and stored against{' '}
+          <span className="font-semibold">{companyName || 'this company'}</span> only. Omnivyra
+          never displays a key after it is saved, and saving one does not contact the provider.
         </p>
       </div>
 

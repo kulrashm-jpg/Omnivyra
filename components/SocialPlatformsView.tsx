@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { useCompanyContext } from './CompanyContext';
 import { apiFetch } from '../lib/apiFetch';
-import LeadSourcesPanel from './prospects/LeadSourcesPanel';
+import LeadSourcesSection from './prospects/LeadSourcesSection';
 import {
   CheckCircle2,
   AlertCircle,
@@ -573,7 +573,7 @@ export default function SocialPlatformsView({ d }: { d: S }) {
                     Connect the prospect-data providers this company has its own account with.
                     Each key is stored encrypted against this company alone.
                   </p>
-                  <LeadSourcesPanel companyId={selectedCompanyId ?? null} />
+                  <LeadSourcesSection />
                 </div>
               )}
 
