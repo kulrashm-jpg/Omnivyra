@@ -620,7 +620,14 @@ export default function CreativeScheduler() {
                                     </div>
                                     <div className="flex items-center gap-2">
                                       <span className="text-xs text-sky-400">𝕏</span>
-                                      <span className="text-sky-400 text-xs">{trend.upvotes}</span>
+                                      {/* D6 — was a bare `{trend.upvotes}`, which rendered invented
+                                          counts (15,420 / 12,300) as observed Reddit engagement
+                                          whenever the listing failed. Rows now exist only when a
+                                          post was read, and Reddit withholds the score on new
+                                          posts, so the score renders only when Reddit published it. */}
+                                      <span className="text-sky-400 text-xs">
+                                        {trend.upvotes_state === 'measured' ? trend.upvotes : 'Score hidden'}
+                                      </span>
                                     </div>
                                   </div>
                                 </div>
@@ -687,7 +694,11 @@ export default function CreativeScheduler() {
                                     </div>
                                     <div className="flex items-center gap-2">
                                       <span className="text-xs text-indigo-400">👥</span>
-                                      <span className="text-indigo-400 text-xs">{trend.upvotes}</span>
+                                      {/* D6 — same defect, same fix: this lane reads the SAME Reddit
+                                          call, and carried its own invented pair (18,700 / 14,200). */}
+                                      <span className="text-indigo-400 text-xs">
+                                        {trend.upvotes_state === 'measured' ? trend.upvotes : 'Score hidden'}
+                                      </span>
                                     </div>
                                   </div>
                                 </div>
