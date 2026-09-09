@@ -358,3 +358,82 @@ describe('G-1 — public social presence observation', () => {
     });
   });
 });
+
+// ── DG-011 RECONCILIATION — gaps the mutation battery exposed ────────────────
+//
+// The original suite proved the observation logic but left two things
+// unconstrained: the SHAPE of what is exposed, and the WIRING into Report 1.
+// A fabricated follower count could be added to the contract, and the whole
+// surface could be disconnected from the report, with all 30 tests still green.
+
+describe('DG-011 — the exposed contract carries no metric it did not observe', () => {
+  it('an entry exposes exactly the observed fields and nothing audience-shaped', async () => {
+    // The capability observes that a profile is indexed publicly. It observes
+    // nothing about followers, engagement, posting activity or reach — so no
+    // such field may exist to be populated later "just to fill the schema".
+    const out = await observeSocialPresence({
+      companyName: 'Northwind',
+      domain: 'northwind.test',
+      candidateUrls: ['https://www.linkedin.com/company/northwind'],
+      geography: null,
+      fetchSerp: async () => serpOk([
+        { url: 'https://www.linkedin.com/company/northwind', title: 'Northwind', snippet: 'CRM' },
+      ]),
+    } as never);
+    expect(out).toHaveLength(1);
+    expect(Object.keys(out[0]).sort()).toEqual(
+      ['description', 'name', 'observed_at', 'platform', 'source', 'status', 'url'].sort(),
+    );
+    for (const forbidden of ['follower_count', 'followers', 'engagement', 'engagement_rate',
+      'post_count', 'posts', 'likes', 'subscribers', 'reach', 'impressions', 'verified']) {
+      expect(out[0]).not.toHaveProperty(forbidden);
+    }
+  });
+
+  it('the canonical type declares no audience-shaped field either', () => {
+    // Guards the contract itself, not just one produced value: a field added to
+    // `CanonicalSocialPresenceEntry` would otherwise pass unnoticed.
+    const fs = require('fs');
+    const src: string = fs.readFileSync('backend/services/canonicalReport/canonicalReportTypes.ts', 'utf8');
+    const decl = src.slice(
+      src.indexOf('export type CanonicalSocialPresenceEntry'),
+      src.indexOf('export type CanonicalDeclaredEvidence'),
+    );
+    // Matched as FIELD DECLARATIONS, not as substrings: 'reach' occurs inside the
+    // legitimate status value 'unreachable', and a substring test would reject the
+    // very vocabulary this capability depends on.
+    const fields = decl
+      .split('\n')
+      .map((line) => /^\s*([a-z_]+)\s*\??:/.exec(line)?.[1])
+      .filter((name): name is string => Boolean(name));
+    for (const forbidden of ['follower_count', 'followers', 'engagement', 'engagement_rate',
+      'post_count', 'posts', 'likes', 'subscribers', 'reach', 'impressions', 'verified']) {
+      expect(fields).not.toContain(forbidden);
+    }
+    // And the fields it DOES declare are exactly the observed set.
+    expect(fields.sort()).toEqual(
+      ['description', 'name', 'observed_at', 'platform', 'source', 'status', 'url'].sort(),
+    );
+  });
+});
+
+describe('DG-011 — the observation is actually wired into Report 1', () => {
+  it('snapshotReportService attaches social_presence to declared evidence', () => {
+    // Without this the entire capability can be disconnected from the report
+    // while every behavioural test above still passes — the surface would simply
+    // never reach a customer.
+    const fs = require('fs');
+    const src: string = fs.readFileSync('backend/services/snapshotReportService.ts', 'utf8');
+    const executable = src
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    expect(executable).toContain('observeSocialPresence');
+    expect(executable).toMatch(/social_presence:\s*socialPresence/);
+  });
+
+  it('the renderer consumes it from declared evidence', () => {
+    const fs = require('fs');
+    const src: string = fs.readFileSync('backend/services/intelligence/exportRendererSectionsB.ts', 'utf8');
+    expect(src).toContain('de.social_presence');
+  });
+});
