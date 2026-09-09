@@ -127,7 +127,11 @@ describe('A3R — providers come from the server, not from this file', () => {
 
   it('asks for a company before fetching anything when none is selected', () => {
     render(<LeadSourcesPanel companyId={null} />);
-    expect(screen.getByText(/Select a company/i)).toBeInTheDocument();
+    // A7P-C16 reworded this prompt (it now says Omnivyra will not guess which
+    // company you mean). The assertion that matters is unchanged: a tenant is
+    // demanded, and nothing is fetched until one is given.
+    expect(screen.getByTestId('lead-sources-no-tenant')).toBeInTheDocument();
+    expect(screen.getByText(/Choose a company/i)).toBeInTheDocument();
     expect(fetchCalls).toHaveLength(0);
   });
 });
@@ -386,7 +390,14 @@ describe('A3R — the tab is a sibling, not a second connections surface', () =>
     const view = require('fs').readFileSync(
       require('path').join(process.cwd(), 'components/SocialPlatformsView.tsx'), 'utf8');
     expect(view).toContain("activeTab === 'lead-sources'");
-    expect(view).toContain('LeadSourcesPanel');
+    // A7P-C16 put a tenant boundary in front of the panel: the view now renders
+    // LeadSourcesSection, which resolves the company and then renders the panel.
+    // Both halves are asserted, so "inside the existing view" still holds and
+    // the panel cannot be reached without the tenant gate.
+    expect(view).toContain('LeadSourcesSection');
+    const section = require('fs').readFileSync(
+      require('path').join(process.cwd(), 'components/prospects/LeadSourcesSection.tsx'), 'utf8');
+    expect(section).toContain('LeadSourcesPanel');
     const pages = require('fs').readdirSync(require('path').join(process.cwd(), 'pages'));
     expect(pages).not.toContain('lead-sources.tsx');
   });
