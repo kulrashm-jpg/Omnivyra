@@ -25,6 +25,14 @@
  */
 import type { ScoreState } from './snapshotReport/canonicalScoreState';
 import type { PerformanceEvidence, PerformanceVerdict } from './performanceEvidence';
+// D7 — the canonical reachability contract established by D2. This reader
+// consumes it; it does not re-derive one.
+import {
+  hasHttpResponse,
+  isHttpErrorOutcome,
+  reachabilityForPage,
+  type PersistedReachability,
+} from './crawl/reachabilityOutcome';
 
 export type ExperiencePillar =
   | 'information_accessibility'
@@ -89,7 +97,14 @@ export interface ExperiencePage {
   http_status?: number | null;
   crawl_depth?: number | null;
   wordCount?: number | null;
-  crawl_metadata?: { signals?: { form_count?: number; img_count?: number; img_with_alt?: number } } | null;
+  // D7 — the repository already selects and maps the whole `crawl_metadata`
+  // object through, so D2's persisted observation was present at runtime but
+  // invisible to the type. Declaring it is what lets this reader consume the
+  // canonical contract instead of re-deriving one from the status column.
+  crawl_metadata?: {
+    signals?: { form_count?: number; img_count?: number; img_with_alt?: number };
+    reachability?: PersistedReachability | null;
+  } | null;
 }
 
 const PILLAR_LABEL: Record<ExperiencePillar, string> = {
@@ -139,7 +154,9 @@ function readinessFrom(findings: ExperienceFinding[], evaluated: number): Experi
  * The output is an evidence limitation, never a content diagnosis.
  */
 export function detectClientSideRendering(pages: readonly ExperiencePage[]): boolean {
-  const ok = pages.filter((p) => (p.http_status ?? 200) === 200);
+  // D7 — `?? 200` counted a never-fetched row as a live 200 page, inflating the
+  // shell ratio with pages that have no words because nobody read them.
+  const ok = pages.filter((p) => reachabilityForPage(p).outcome === 'success');
   if (ok.length < 3) return false;
   const shells = ok.filter((p) => {
     const words = Number(p.wordCount ?? 0);
@@ -157,7 +174,25 @@ export function assessDigitalExperience(params: {
   pages: readonly ExperiencePage[];
   performance?: PerformanceEvidence | null;
 }): DigitalExperienceResult {
-  const pages = [...(params.pages ?? [])];
+  // ── D7 — assess only pages the crawler actually observed ─────────────────
+  //
+  // Every finding below describes what a fetched page contains: its internal
+  // links, its word count, its title, its CTAs. A row with no HTTP observation
+  // has none of those because nobody read it — not because the page lacks them.
+  //
+  // This mattered in production rather than in theory. `ga4IngestionService`
+  // upserts `canonical_pages` rows from analytics paths with no `http_status`
+  // column at all, so every URL GA4 has seen but the crawler has never fetched
+  // sat in the table with a NULL status. The predicates below read that as
+  // `(http_status ?? 200)` — a live 200 page — and then reported it to the
+  // customer as an orphan, as thin content, and as missing a title, naming a URL
+  // nobody had ever looked at. The denominator was inflated to match.
+  //
+  // Classification is delegated to D2's canonical contract, not re-derived here:
+  // one crawl observation, one interpretation, several readers.
+  const submitted = [...(params.pages ?? [])];
+  const pages = submitted.filter((page) => hasHttpResponse(reachabilityForPage(page).outcome));
+  const unobserved = submitted.length - pages.length;
   const limitations: EvidenceLimitation[] = [];
   const n = pages.length;
 
@@ -178,6 +213,16 @@ export function assessDigitalExperience(params: {
       state: 'unavailable',
       describesVisitorBehavior: false,
     };
+  }
+
+  // D7 — say so when rows were set aside, rather than quietly shrinking the
+  // denominator. "We assessed the pages we actually read" is itself evidence.
+  if (unobserved > 0) {
+    limitations.push({
+      kind: 'no_crawl',
+      message: `${unobserved} known URL${unobserved === 1 ? '' : 's'} returned no HTTP response to the crawler and ${unobserved === 1 ? 'was' : 'were'} excluded — the findings below describe the ${n} page${n === 1 ? '' : 's'} that were actually read.`,
+      affects: ['information_accessibility', 'value_communication', 'conversion_readiness'],
+    });
   }
 
   const csr = detectClientSideRendering(pages);
@@ -209,7 +254,9 @@ export function assessDigitalExperience(params: {
     });
   }
 
-  const orphans = pages.filter((p) => Number(p.internal_link_count ?? 0) === 0 && (p.http_status ?? 200) === 200);
+  // D7 — a page with no observed response has a null link count because it was
+  // never crawled, which is not the same finding as a page that has no links.
+  const orphans = pages.filter((p) => Number(p.internal_link_count ?? 0) === 0 && reachabilityForPage(p).outcome === 'success');
   iaEvaluated += 1;
   if (orphans.length > 0) {
     add({
@@ -223,7 +270,10 @@ export function assessDigitalExperience(params: {
     });
   }
 
-  const broken = pages.filter((p) => Number(p.http_status ?? 200) >= 400);
+  // D7 — the second broken-pages reader, and the one that reaches Report 1 via
+  // assembleDigitalSnapshot. Only a page that ANSWERED with an error counts:
+  // a transport failure or timeout returned nothing and is not a 4xx/5xx.
+  const broken = pages.filter((p) => isHttpErrorOutcome(reachabilityForPage(p).outcome));
   iaEvaluated += 1;
   if (broken.length > 0) {
     add({
@@ -257,7 +307,8 @@ export function assessDigitalExperience(params: {
     }
   }
 
-  const thin = pages.filter((p) => (p.http_status ?? 200) === 200 && Number(p.wordCount ?? 0) < THIN_PAGE_WORDS);
+  // D7 — a never-fetched page has zero words for a reason that is not thinness.
+  const thin = pages.filter((p) => reachabilityForPage(p).outcome === 'success' && Number(p.wordCount ?? 0) < THIN_PAGE_WORDS);
   vcEvaluated += 1;
   // Suppressed when client-side rendering is suspected — thin HTML is then an evidence
   // limitation, already reported above, not a content finding.
