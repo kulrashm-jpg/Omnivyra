@@ -148,6 +148,10 @@ export function renderExecutiveRealitySnapshot(
     brand_brief: BrandBrief;
     strategic_posture: StrategicPosture;
     strategic_position_4: StrategicPositionFourState;
+    // DG-008 — the snapshot states "AI visibility is …", so it needs the same
+    // provenance fact the AI section already carries. Consumed, never recomputed:
+    // `buildAIVisibilityState` is the one place that decides it (D1).
+    ai_visibility_state: AIVisibilityState;
   },
 ): string {
   const sections = dossier.sections;
@@ -176,7 +180,17 @@ export function renderExecutiveRealitySnapshot(
     ? sentence(weakest.signal, `${PILLAR_LABEL[weakest.pillar]} is the largest visible constraint.`, 120)
     : 'The evidence base does not yet isolate one dominant constraint.';
 
-  const aiVisibility = isMeasuredScore(aiScore)
+  // DG-008 — `isMeasuredScore` admits `inferred`, and after D1 the AI surface score
+  // is PERMANENTLY `inferred` whenever no answer engine answered: its value is
+  // `answer_coverage_score`, a crawl heuristic counting how answer-shaped the
+  // company's OWN pages look. Gating this line on confidence alone therefore printed
+  // "AI visibility is operationally visible" from a number that witnessed no AI
+  // system — in the same document whose AI section correctly said "Not Yet Measured".
+  // The gate is provenance, and it is the one D1 already established: the AI-visibility
+  // surface reaches a state other than `unmeasured` only when a grounded AI cell was
+  // actually observed. This consumes that decision; it does not make a second one.
+  const aiObserved = surfaces.ai_visibility_state.state !== 'unmeasured';
+  const aiVisibility = aiObserved && isMeasuredScore(aiScore)
     ? `AI visibility is ${bandLanguage(aiScore)}`
     : 'AI visibility is not yet sufficiently measured';
 
@@ -519,6 +533,20 @@ export function renderAiDiscoverability(
   sectionNumber: string,
 ): string {
   const matrix = section.citation_matrix;
+  // DG-008 — Block 1 asks "Can AI systems reliably identify the brand?", so every
+  // number under that heading is read as an answer to it. D1 stopped the STRUCTURAL
+  // proxy driving the words (`buildAIVisibilityState` returns `unmeasured` unless a
+  // grounded AI cell was observed) but not the figures beside them: the block still
+  // rendered "AI surface 62/100" and planted a marker on an Absent→Retrievable→Cited
+  // spectrum, from `answer_coverage_score` — a crawl heuristic about the company's own
+  // pages — directly under the chip reading "Not Yet Measured". That is the exact
+  // artefact D1 was raised against, printed beside D1's own honest copy.
+  //
+  // Same gate, same owner: the figures appear only when the AI-visibility surface is
+  // something other than `unmeasured`. Nothing is lost — the structural score keeps its
+  // own honest home as the "AI Surface Presence" axis in the dimension breakdown, where
+  // its rationale says what it actually measures.
+  const aiObserved = surfaces.ai_visibility_state.state !== 'unmeasured';
   const surfaceValue = scoreNumber(section.surface_score);
   const entityValue = scoreNumber(section.entity_score);
 
@@ -605,12 +633,20 @@ export function renderAiDiscoverability(
       <div class="ds-aiblock">
         <p class="ds-aiblock-eyebrow">01 · AI Visibility State</p>
         <h3 class="ds-aiblock-title">Can AI systems reliably identify the brand?</h3>
-        ${renderAISurfaceSpectrum(section.surface_score.value, section.surface_score.state)}
+        ${/* DG-008 — value withheld, not restated as a different state: passing `null`
+              makes the spectrum render "—" with no marker, which is what "we did not
+              observe this" looks like. The score's own state is passed through
+              unchanged, so nothing here contradicts what the score says it is. */ ''}
+        ${renderAISurfaceSpectrum(aiObserved ? section.surface_score.value : null, section.surface_score.state)}
         <div class="ds-aistate-chips">
           <div class="ds-aistate-chip ${stateChipClass(visibilityState.state)}">
             <span class="ds-aistate-chip-label">Identification</span>
             <span class="ds-aistate-chip-value">${escape(visibilityState.state_label)}</span>
-            <span class="ds-aistate-chip-detail">${escape(`AI surface ${surfaceValue}/100`)}</span>
+            <span class="ds-aistate-chip-detail">${escape(
+              aiObserved
+                ? `AI surface ${surfaceValue}/100`
+                : 'No answer engine returned a grounded result for this run',
+            )}</span>
           </div>
           <div class="ds-aistate-chip ${stateChipClass(visibilityState.entity_state)}">
             <span class="ds-aistate-chip-label">Entity Record</span>
