@@ -1,4 +1,6 @@
 /** Competitor intelligence — types, classification, profile helpers — split from reportCompetitorIntelligenceService.ts (barrel preserved; importers unchanged). */
+import type { ScoreState } from './snapshotReport/canonicalScoreState';
+import type { CompetitorCrawlOutcome } from './competitor/competitorMetricsEvidence';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
@@ -61,7 +63,6 @@ import {
   dedupeCompetitors,
   countCategory,
   computeCompanyMetrics,
-  liftMetrics,
   subtractMetrics,
   averageCompetitorMetrics,
   type CompanyCompetitiveContext,
@@ -128,8 +129,23 @@ export type DetectedCompetitor = {
 
 export type CompetitorComparisonEntry = {
   competitor: DetectedCompetitor;
-  metrics: ComparisonMetrics;
-  deltas_vs_company: ComparisonMetrics;
+  /**
+   * D8 — NULL when this competitor was never observed. A null here is the honest
+   * absence of evidence and must stay null: it is not a zero, and it must never be
+   * back-filled from the customer's own metrics.
+   */
+  metrics: ComparisonMetrics | null;
+  deltas_vs_company: ComparisonMetrics | null;
+  /**
+   * D8 — canonical ScoreState. `inferred` when derived from this competitor's own
+   * observed public pages; `unavailable` when nothing was observed. Never `measured`:
+   * a page-text proxy is not a measurement of authority or engagement.
+   */
+  metrics_state: ScoreState;
+  /** Why the metrics are in that state, in the producer's own words. */
+  metrics_basis: string;
+  /** How the attempt to observe this competitor ended (D2 reachability vocabulary). */
+  crawl_outcome: CompetitorCrawlOutcome;
 };
 
 export type CompetitorGapType = 'content_gap' | 'authority_gap' | 'visibility_gap' | 'trust_gap' | 'aeo_gap';
@@ -199,6 +215,13 @@ export type CompetitorIntelligenceResult = {
     serp_domains_found: number;
     serp_status: 'live' | 'fallback';
     is_fallback_used: boolean;
+    /**
+     * D8 — how many competitors had comparison metrics derived from their OWN observed
+     * public pages, and how many did not. Published so a consumer can tell a real
+     * comparison from an empty one without inferring it from the entries.
+     */
+    competitors_with_observed_metrics?: number;
+    competitors_without_observed_metrics?: number;
     /** Canonical evidence status — honest empty-state signal (never fabricated to hit a count). */
     competitor_evidence_status?: CompetitorEvidenceStatus;
   };

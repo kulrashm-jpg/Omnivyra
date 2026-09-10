@@ -1,3 +1,5 @@
+import type { ScoreState } from './snapshotReport/canonicalScoreState';
+import type { CompetitorCrawlOutcome } from './competitor/competitorMetricsEvidence';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
@@ -92,8 +94,23 @@ export type DetectedCompetitor = {
 
 export type CompetitorComparisonEntry = {
   competitor: DetectedCompetitor;
-  metrics: ComparisonMetrics;
-  deltas_vs_company: ComparisonMetrics;
+  /**
+   * D8 — NULL when this competitor was never observed. A null here is the honest
+   * absence of evidence and must stay null: it is not a zero, and it must never be
+   * back-filled from the customer's own metrics.
+   */
+  metrics: ComparisonMetrics | null;
+  deltas_vs_company: ComparisonMetrics | null;
+  /**
+   * D8 — canonical ScoreState. `inferred` when derived from this competitor's own
+   * observed public pages; `unavailable` when nothing was observed. Never `measured`:
+   * a page-text proxy is not a measurement of authority or engagement.
+   */
+  metrics_state: ScoreState;
+  /** Why the metrics are in that state, in the producer's own words. */
+  metrics_basis: string;
+  /** How the attempt to observe this competitor ended (D2 reachability vocabulary). */
+  crawl_outcome: CompetitorCrawlOutcome;
 };
 
 export type CompetitorGapType = 'content_gap' | 'authority_gap' | 'visibility_gap' | 'trust_gap' | 'aeo_gap';
@@ -149,6 +166,13 @@ export type CompetitorIntelligenceResult = {
     serp_domains_found: number;
     serp_status: 'live' | 'fallback';
     is_fallback_used: boolean;
+    /**
+     * D8 — how many competitors had comparison metrics derived from their OWN observed
+     * public pages, and how many did not. Published so a consumer can tell a real
+     * comparison from an empty one without inferring it from the entries.
+     */
+    competitors_with_observed_metrics?: number;
+    competitors_without_observed_metrics?: number;
   };
 };
 
@@ -954,29 +978,22 @@ export function computeCompanyMetrics(params: {
 }
 
 
-export function liftMetrics(
-  base: ComparisonMetrics,
-  competitor: DetectedCompetitor,
-  index: number,
-): ComparisonMetrics {
-  const variation = [4, 1, 6, 3][index] ?? 2;
-  const lift =
-    competitor.classification === 'authority_leader'
-      ? { content_depth: 12, authority_score: 20, publishing_frequency: 9, engagement_score: 10, seo_coverage: 12, geo_presence: 6, aeo_readiness: 12 }
-      : competitor.classification === 'seo_competitor'
-        ? { content_depth: 10, authority_score: 8, publishing_frequency: 6, engagement_score: 5, seo_coverage: 16, geo_presence: 4, aeo_readiness: 10 }
-        : { content_depth: 8, authority_score: 6, publishing_frequency: 5, engagement_score: 4, seo_coverage: 7, geo_presence: 8, aeo_readiness: 6 };
-
-  return {
-    content_depth: clamp(base.content_depth + lift.content_depth + variation, 28, 95),
-    authority_score: clamp(base.authority_score + lift.authority_score + variation, 28, 97),
-    publishing_frequency: clamp(base.publishing_frequency + lift.publishing_frequency + Math.round(variation / 2), 24, 92),
-    engagement_score: clamp(base.engagement_score + lift.engagement_score + Math.round(variation / 2), 24, 92),
-    seo_coverage: clamp(base.seo_coverage + lift.seo_coverage + variation, 28, 97),
-    geo_presence: clamp(base.geo_presence + lift.geo_presence + Math.round(variation / 2), 20, 92),
-    aeo_readiness: clamp(base.aeo_readiness + lift.aeo_readiness + variation, 24, 95),
-  };
-}
+/**
+ * D8 — `liftMetrics()` was REMOVED, not merely left unused.
+ *
+ * It synthesised a competitor's comparison metrics as
+ *   companyMetric + classificationLift + variation[index]
+ * i.e. entirely from the CUSTOMER's own numbers plus a table keyed by the competitor's
+ * label and its position in the list. No observation of the competitor was involved, yet
+ * the output was published as competitor metrics driving comparison tables, gap
+ * narratives and recommendations. The lifts were also large enough to clear the gap
+ * thresholds in buildGapDefinitions, so it did not merely produce a number — it produced
+ * the conclusion that the customer was losing.
+ *
+ * A competitor with no observation now resolves to `metrics: null` with state
+ * `unavailable` via services/competitor/competitorMetricsEvidence. The function is gone
+ * so it cannot be called again by accident.
+ */
 
 
 export function subtractMetrics(left: ComparisonMetrics, right: ComparisonMetrics): ComparisonMetrics {
@@ -992,14 +1009,23 @@ export function subtractMetrics(left: ComparisonMetrics, right: ComparisonMetric
 }
 
 
-export function averageCompetitorMetrics(entries: CompetitorComparisonEntry[]): ComparisonMetrics {
+/**
+ * D8 — averages ONLY over competitors whose metrics were actually derived from
+ * observation. Returns null when none were, so a caller cannot average an empty set into
+ * a confident-looking zero and compare the customer against it.
+ */
+export function averageCompetitorMetrics(entries: CompetitorComparisonEntry[]): ComparisonMetrics | null {
+  const observed = entries
+    .map((entry) => entry.metrics)
+    .filter((metrics): metrics is ComparisonMetrics => metrics != null);
+  if (observed.length === 0) return null;
   return {
-    content_depth: average(entries.map((entry) => entry.metrics.content_depth)),
-    authority_score: average(entries.map((entry) => entry.metrics.authority_score)),
-    publishing_frequency: average(entries.map((entry) => entry.metrics.publishing_frequency)),
-    engagement_score: average(entries.map((entry) => entry.metrics.engagement_score)),
-    seo_coverage: average(entries.map((entry) => entry.metrics.seo_coverage)),
-    geo_presence: average(entries.map((entry) => entry.metrics.geo_presence)),
-    aeo_readiness: average(entries.map((entry) => entry.metrics.aeo_readiness)),
+    content_depth: average(observed.map((metrics) => metrics.content_depth)),
+    authority_score: average(observed.map((metrics) => metrics.authority_score)),
+    publishing_frequency: average(observed.map((metrics) => metrics.publishing_frequency)),
+    engagement_score: average(observed.map((metrics) => metrics.engagement_score)),
+    seo_coverage: average(observed.map((metrics) => metrics.seo_coverage)),
+    geo_presence: average(observed.map((metrics) => metrics.geo_presence)),
+    aeo_readiness: average(observed.map((metrics) => metrics.aeo_readiness)),
   };
 }

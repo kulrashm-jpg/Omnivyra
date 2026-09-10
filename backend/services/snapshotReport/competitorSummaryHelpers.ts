@@ -58,6 +58,21 @@ function averageCompetitorRadarScore(item: {
   ]);
 }
 
+/**
+ * D8 — which competitors may be drawn on the customer-facing comparison radar.
+ *
+ * The radar plots competitors against the customer, so a competitor may appear only when
+ * its metrics were derived from its own observed public pages. An unobserved competitor
+ * carries `metrics: null` and is excluded rather than plotted at zero, which would draw a
+ * real-looking shape asserting the competitor has no capability.
+ *
+ * Named and exported so the rule is a contract the D8 suite asserts directly, rather than
+ * an inline filter that could be relaxed without any test noticing.
+ */
+export function competitorEntriesEligibleForRadar<T extends { metrics: unknown }>(entries: readonly T[]): T[] {
+  return entries.filter((entry) => entry.metrics != null);
+}
+
 export function buildCompetitorVisuals(params: {
   competitorIntelligence: CompetitorIntelligenceResult;
   visualIntelligence: SnapshotReport['visual_intelligence'];
@@ -102,19 +117,24 @@ export function buildCompetitorVisuals(params: {
     ),
   };
 
-  const competitorRadar = comparisonEntries.slice(0, 4).map((entry) => ({
-    name: entry.competitor.name,
-    domain: entry.competitor.domain ?? '',
-    content_score: clamp(Math.round(entry.metrics.content_depth), 0, 100),
-    keyword_coverage_score: clamp(Math.round(entry.metrics.seo_coverage), 0, 100),
-    authority_score: clamp(Math.round(entry.metrics.authority_score), 0, 100),
-    technical_score: clamp(
-      Math.round((entry.metrics.seo_coverage * 0.7) + (entry.metrics.publishing_frequency * 0.3)),
-      0,
-      100,
-    ),
-    ai_answer_presence_score: clamp(Math.round(entry.metrics.aeo_readiness), 0, 100),
-  }));
+  const competitorRadar = competitorEntriesEligibleForRadar(comparisonEntries)
+    .slice(0, 4)
+    .map((entry) => {
+      const metrics = entry.metrics!;
+      return {
+        name: entry.competitor.name,
+        domain: entry.competitor.domain ?? '',
+        content_score: clamp(Math.round(metrics.content_depth), 0, 100),
+        keyword_coverage_score: clamp(Math.round(metrics.seo_coverage), 0, 100),
+        authority_score: clamp(Math.round(metrics.authority_score), 0, 100),
+        technical_score: clamp(
+          Math.round((metrics.seo_coverage * 0.7) + (metrics.publishing_frequency * 0.3)),
+          0,
+          100,
+        ),
+        ai_answer_presence_score: clamp(Math.round(metrics.aeo_readiness), 0, 100),
+      };
+    });
 
   const matrixOpportunities = params.visualIntelligence.opportunity_coverage_matrix.opportunities ?? [];
   const competitorKeywordGap = params.competitorIntelligence.keyword_gap ?? null;

@@ -33,15 +33,20 @@ function getCompetitorBadgeLabel(classification: string, source: string): string
   return 'Direct';
 }
 
-function getCompetitorStandingTone(standing: 'Behind' | 'At Par' | 'Ahead'): string {
+function getCompetitorStandingTone(standing: 'Behind' | 'At Par' | 'Ahead' | 'Not Observed'): string {
   if (standing === 'Ahead') return 'badge-green';
   if (standing === 'At Par') return 'badge-gray';
+  // D8 — an unobserved competitor is not a competitive warning; it is an empty cell.
+  if (standing === 'Not Observed') return 'badge-gray';
   return 'badge-amber';
 }
 
-function getCompetitorStandingLabel(standing: 'Behind' | 'At Par' | 'Ahead'): string {
+function getCompetitorStandingLabel(standing: 'Behind' | 'At Par' | 'Ahead' | 'Not Observed'): string {
   if (standing === 'Ahead') return 'Leading';
   if (standing === 'At Par') return 'Competitive';
+  // D8 — say the comparison was not observed rather than defaulting to 'Behind', which
+  // asserts the customer is losing to a competitor nothing was observed about.
+  if (standing === 'Not Observed') return 'Not observed';
   return 'Behind';
 }
 
@@ -668,7 +673,7 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
       threat_level: 'low' | 'medium' | 'high';
     } | null;
     rationale: string;
-    standing: 'Behind' | 'At Par' | 'Ahead';
+    standing: 'Behind' | 'At Par' | 'Ahead' | 'Not Observed';
     radarItem: typeof radar extends { competitors: Array<infer T> } ? T | null : null;
   }>();
 
