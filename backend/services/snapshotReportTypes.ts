@@ -599,6 +599,12 @@ export interface SnapshotReport {
     resolver_inputs_present: number;
     snapshot_decisions: number;
     supplemental_growth_decisions: number;
+    /**
+     * D3 — how many submitted decisions were withheld from this public surface because
+     * their producing service reads a connected customer source. Present so the boundary
+     * is observable in the payload rather than an invisible filter.
+     */
+    connected_source_decisions_withheld: number;
     competitor_gap_decisions_added: number;
     fallback_decisions_added: number;
     final_decisions: number;

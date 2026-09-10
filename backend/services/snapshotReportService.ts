@@ -177,7 +177,35 @@ export async function composeSnapshotReportFromDecisions(params: {
   crawlEvidence?: SnapshotCrawlEvidence | null;
 }): Promise<SnapshotReport> {
   const supplementalGrowthDecisions = params.supplementalGrowthDecisions ?? [];
-  const baseCombined = uniqueById([...params.snapshotDecisions, ...supplementalGrowthDecisions]);
+  const submittedDecisions = uniqueById([...params.snapshotDecisions, ...supplementalGrowthDecisions]);
+  /**
+   * D3 CONSUMER BOUNDARY — applied ONCE, here, before any consumer sees a decision.
+   *
+   * D3 established the rule and the classifier; it applied them at a single consumer
+   * (the visual-intelligence builder). Every OTHER consumer in this composer still
+   * received the raw list, so connected-source evidence continued to reach Report 1 by
+   * nine other routes: positioning/market assessment, the primary narrative, the score
+   * model, section assembly, the section floor, the SEO executive summary, competitor
+   * visuals, signal availability, and competitor candidate extraction — the last of
+   * which reads `action_payload.competitor_name`, so a private-source decision could put
+   * a competitor into Report 1's competitor set.
+   *
+   * Concretely, `seoIntelligenceService` derives `impact_traffic` and `priority_score`
+   * from private Search Console impressions and carries `evidence.avg_position`. Through
+   * section assembly that reached `evidenceSignalFromDecision`, which printed
+   * "avg position 12.4" verbatim into customer-facing prose, and through
+   * `rankByImpactConfidence` it led the Report 1 recommendation ranking.
+   *
+   * The fix is the boundary moving UPSTREAM of the consumers, not a guard added to each
+   * of them: one gate, the existing classifier, no second filter and no renderer-level
+   * checks. Report 2, the enterprise snapshot and the analytics path do not use this
+   * composer and are untouched — they read connected data from their own sources.
+   *
+   * The withheld half is counted in `pipeline_audit` rather than silently dropped, so
+   * the exclusion is observable.
+   */
+  const { publicEvidence: baseCombined, connectedEvidence: withheldConnectedDecisions } =
+    partitionDecisionsForReport1(submittedDecisions);
   const competitorIntelligence = enforceFinalCompetitorIntelligenceSync({
     result: params.competitorIntelligenceOverride ?? buildCompetitorIntelligence({
       decisions: baseCombined,
@@ -258,20 +286,13 @@ export async function composeSnapshotReportFromDecisions(params: {
       { geography: params.resolvedInput?.resolved.geography ?? null },
     ),
   );
-  // ── D3 — THE REPORT 1 PROVENANCE BOUNDARY ───────────────────────────────
+  // ── D3 — THE REPORT 1 PROVENANCE BOUNDARY (applied upstream) ────────────
   //
-  // `visual_intelligence` is built from decision objects, so it never passed
-  // `enforceTraceProvenance` — the gate that keeps CONNECTED_SOURCE evidence out
-  // of Report 1. `seoIntelligenceService` reads the customer's connected Search
-  // Console property and emits snapshot-tier decisions, so its impressions,
-  // clicks and CTR flowed straight into `search_visibility_funnel`,
-  // `rank_tracking_score` (tagged ['GSC'], state `measured`) and
-  // `opportunity_coverage_matrix`, and out through the Report 1 payload.
-  //
-  // GAP-07 named this hazard and closed half of it: the search-visibility and
-  // digital-snapshot readings stopped DERIVING from the GSC axis. What remained
-  // was Report 1 still SHIPPING it. This closes the other half at the earliest
-  // point the public surface is assembled.
+  // The partition now runs once at the top of this function, so EVERY consumer —
+  // not just this one — receives public evidence only. The second application that
+  // used to sit here has been removed rather than kept as belt-and-braces: two gates
+  // for one rule is a duplicate boundary, and the one that runs second would quietly
+  // become the only one anybody maintains.
   //
   // The connected half is NOT relabelled and NOT deleted from the system — it is
   // simply not this surface's evidence. Report 2, the enterprise snapshot and the
@@ -280,9 +301,9 @@ export async function composeSnapshotReportFromDecisions(params: {
   // What the customer sees instead is the helper's existing honest degradation:
   // null volumes at `confidence: 'low'`, and `insufficient_signal` axis states.
   // No value becomes zero, and nothing is re-derived to fill the gap.
-  const { publicEvidence: report1Decisions } = partitionDecisionsForReport1(finalDecisions);
   const visualIntelligence = buildSnapshotVisualIntelligence({
-    decisions: report1Decisions,
+    // Public evidence only — `finalDecisions` descends from the partitioned set.
+    decisions: finalDecisions,
     score,
     competitorIntelligence,
     publicAudit: params.publicAudit ?? null,
@@ -527,6 +548,10 @@ export async function composeSnapshotReportFromDecisions(params: {
       resolver_inputs_present: resolverInputsPresent(params.resolvedInput),
       snapshot_decisions: params.snapshotDecisions.length,
       supplemental_growth_decisions: supplementalGrowthDecisions.length,
+      // D3 — decisions withheld from this public surface because they came from a
+      // connected source. Counted, not silently dropped: a boundary nobody can see is a
+      // boundary nobody can verify.
+      connected_source_decisions_withheld: withheldConnectedDecisions.length,
       competitor_gap_decisions_added: competitorDecisions.length,
       fallback_decisions_added: 0,
       final_decisions: finalDecisions.length,
