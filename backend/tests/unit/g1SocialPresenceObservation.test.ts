@@ -45,9 +45,16 @@ const serpOk = (rows: Array<{ url: string; title?: string | null; snippet?: stri
     snippet: row.snippet ?? null,
   })),
   reason: null,
+  // UNION (DG-011 × DG-001) — DG-001 made `features` a required sibling of `rows`,
+  // so a SerpKeywordResult always carries it. These fixtures model responses with
+  // no SERP features, which is a real and valid result. Social presence is decided
+  // from organic `rows` alone (socialPresenceObservation never reads `features`),
+  // so this changes the fixture's shape, not what DG-011 observes.
+  features: [],
 });
 
-const serpDown = (status: 'unavailable' | 'failed'): SerpKeywordResult => ({ status, rows: [], reason: 'x' });
+// Same shape DG-001's own failure path returns: no rows, no features.
+const serpDown = (status: 'unavailable' | 'failed'): SerpKeywordResult => ({ status, rows: [], reason: 'x', features: [] });
 
 const observe = (
   candidateUrls: string[],
