@@ -7,7 +7,7 @@
  * the routing holds with all three present rather than trusting DG-001's own suite,
  * which ran before either of them landed.
  *
- * Kept separate from unionInteractionMatrix.test.ts because it replaces the canonical
+ * Kept separate from the other unionMatrix* suites because it replaces the canonical
  * client for the whole module — the question here is what each consumer ASKS FOR.
  *
  * SECRETS: all synthetic. No network, no credential, no provider call.

@@ -22,8 +22,12 @@
 const fs = require('fs');
 const { execSync } = require('child_process');
 
+// The matrix is split by concern so no file exceeds the 500-line limit; the battery
+// runs all four together, exactly as it ran the single file before the split.
 const SUITES = [
-  'backend/tests/unit/unionInteractionMatrix.test.ts',
+  'backend/tests/unit/unionMatrixEvidence.test.ts',
+  'backend/tests/unit/unionMatrixReport1.test.ts',
+  'backend/tests/unit/unionMatrixSources.test.ts',
   'backend/tests/unit/unionSerpRouting.test.ts',
 ].join(' ');
 
