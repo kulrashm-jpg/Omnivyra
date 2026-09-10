@@ -25,7 +25,7 @@ jest.mock('../../services/serp/canonicalSerpClient', () => ({
   REPORT_SERP_PROVIDER: 'serpapi',
 }));
 
-import { fetchSerpResultsForKeyword } from '../../services/reportCompetitorIntelligenceServiceHelpers';
+import { fetchSerpResultsForKeyword, featureOwnership } from '../../services/reportCompetitorIntelligenceServiceHelpers';
 import { enrichCompetitorCandidate } from '../../services/competitorEnrichmentService';
 
 /** One organic row and one of every feature the client can return. */
@@ -146,6 +146,59 @@ describe('DG-001 — competitor enrichment asks for depth 5 and keeps snippets',
 });
 
 // ── the consolidation itself ────────────────────────────────────────────────
+
+describe('DG-001 — the three depths are distinct, stated boundaries', () => {
+  /**
+   * Depth 10 and depth 5 are asserted behaviourally above, from what each
+   * consumer ASKS the client for. The warehouse depth of 50 had no assertion at
+   * all — it was documented in a comment and nowhere else, so it could be
+   * changed silently, which is exactly what the comment says must not happen.
+   *
+   * It lives inside a provider closure that only runs against a live endpoint,
+   * so it is pinned at the source, in the same idiom this suite already uses for
+   * the call-site guard below.
+   */
+  const fsm = require('fs');
+
+  it('the warehouse path still requests depth 50 by default', () => {
+    const source: string = fsm.readFileSync('backend/services/serpAcquisitionService.ts', 'utf8');
+    expect(source).toContain('depth: Number(process.env.SERP_RESULT_DEPTH ?? 50)');
+  });
+
+  it('the three depths are different numbers, and each is named once', () => {
+    // Collapsing any two would erase a semantic boundary: the report ranking
+    // window, the enrichment prose window, and the warehouse crawl are not the
+    // same question and must not silently become the same request.
+    const report: string = fsm.readFileSync('backend/services/reportCompetitorIntelligenceServiceHelpers.ts', 'utf8');
+    const enrichment: string = fsm.readFileSync('backend/services/competitorEnrichmentService.ts', 'utf8');
+    const warehouse: string = fsm.readFileSync('backend/services/serpAcquisitionService.ts', 'utf8');
+
+    expect(report).toContain('const SERP_RESULTS_PER_QUERY = 10;');
+    expect(enrichment).toContain('const SERP_ENRICHMENT_DEPTH = 5;');
+    expect(warehouse).toContain('SERP_RESULT_DEPTH ?? 50');
+
+    expect(report).not.toContain('const SERP_RESULTS_PER_QUERY = 50;');
+    expect(enrichment).not.toContain('const SERP_ENRICHMENT_DEPTH = 10;');
+  });
+});
+
+describe('DG-001 — feature ownership is three-valued', () => {
+  it('a feature with no domain yields NULL, never false', () => {
+    // A People Also Ask entry and a knowledge panel carry no link. `false` would
+    // assert the feature is NOT the company's, which the evidence cannot support.
+    expect(featureOwnership(null, 'northwind.test')).toBeNull();
+    expect(featureOwnership(undefined, 'northwind.test')).toBeNull();
+    expect(featureOwnership('', 'northwind.test')).toBeNull();
+    expect(featureOwnership(null, 'northwind.test')).not.toBe(false);
+  });
+
+  it('ownership is only decided when BOTH domains are known', () => {
+    expect(featureOwnership('northwind.test', 'northwind.test')).toBe(true);
+    expect(featureOwnership('rival.test', 'northwind.test')).toBe(false);
+    // No own-domain to compare against is equally undecidable.
+    expect(featureOwnership('rival.test', null)).toBeNull();
+  });
+});
 
 describe('DG-001 — the sanctioned SERP call sites, and no others', () => {
   /**

@@ -684,6 +684,28 @@ const SERP_COMPETITOR_WINDOW = 5;
  * This returns the rows; the domain-only helper below is now a thin projection of it, so there is
  * still exactly one request per keyword and competitor discovery sees byte-identical input.
  */
+/**
+ * DG-001 — whether an observed SERP feature belongs to the company.
+ *
+ * THREE-VALUED, and the third value is the point. Many features — a People Also
+ * Ask entry, a knowledge panel — carry no link at all, so ownership cannot be
+ * established either way. `null` says exactly that. Collapsing it to `false`
+ * would assert "this feature is NOT the company's" on evidence that does not
+ * exist, and a reader counting unowned features would count those as losses.
+ *
+ * Named and exported so the rule is a contract the DG-001 suite asserts
+ * directly, rather than an inline expression that could be relaxed to a bare
+ * equality without any test noticing.
+ */
+export function featureOwnership(
+  featureDomain: string | null | undefined,
+  ownDomain: string | null | undefined,
+): boolean | null {
+  if (!featureDomain) return null;
+  if (!ownDomain) return null;
+  return featureDomain === ownDomain;
+}
+
 export async function fetchSerpResultsForKeyword(
   keyword: string,
   geography: string | null,
@@ -860,8 +882,7 @@ export async function discoverCompetitorDomainsFromSerp(params: {
             url: feature.url,
             domain: feature.domain,
             title: feature.title,
-            // Only a feature that carries a domain can establish ownership.
-            ownedByCompany: feature.domain ? feature.domain === ownDomain : null,
+            ownedByCompany: featureOwnership(feature.domain, ownDomain),
           });
         }
       }
