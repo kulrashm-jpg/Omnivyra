@@ -214,32 +214,67 @@ const SIBLING_FEATURE_KEYS: ReadonlyArray<readonly [string, string]> = [
   ['ads', 'ads'],
 ];
 
-function collectSiblingFeatureItems(body: any): any[] {
-  const items: any[] = [];
+/** A raw provider entry, once established to be a non-null object. Still untrusted. */
+type ProviderEntry = Record<string, unknown>;
+
+/**
+ * The shape check every raw provider value must pass before a field is read.
+ *
+ * Deliberately `typeof === 'object' && !== null` and nothing narrower: it is exactly
+ * the predicate this collector always applied (`x && typeof x === 'object'`), so
+ * typing the input as `unknown` changes no outcome. It does not exclude arrays —
+ * the pre-existing behaviour, and the parser's identifying-evidence rules decide
+ * what an odd entry is worth. `lib/preview`'s `isObject` was not reused: it
+ * excludes arrays, which would change behaviour, and it would make this backend
+ * service depend on a module that imports a frontend component.
+ */
+function isProviderEntry(value: unknown): value is ProviderEntry {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Raw provider JSON is untrusted input, so it is typed `unknown` and nothing is
+ * read from any level until that level is proven to be an object. The output is
+ * still raw: every entry goes on to `parseProviderResults`, which alone decides
+ * type, identity, rank and de-duplication.
+ */
+function collectSiblingFeatureItems(body: unknown): ProviderEntry[] {
+  const items: ProviderEntry[] = [];
+  if (!isProviderEntry(body)) return items;
   for (const [key, typeLabel] of SIBLING_FEATURE_KEYS) {
-    const block = body?.[key];
+    const block = body[key];
     if (Array.isArray(block)) {
       for (const entry of block) {
-        if (entry && typeof entry === 'object') items.push({ ...entry, type: typeLabel });
+        // `type` is written LAST, so the key's canonical label always wins over
+        // any `type` the provider put on the entry itself.
+        if (isProviderEntry(entry)) items.push({ ...entry, type: typeLabel });
       }
-    } else if (block && typeof block === 'object') {
+    } else if (isProviderEntry(block)) {
       // A knowledge graph arrives as a single object, not an array.
       items.push({ ...block, type: typeLabel });
     }
   }
   // Sitelinks are nested INSIDE organic results rather than beside them.
-  const organic = Array.isArray(body?.organic_results) ? body.organic_results : [];
+  const organic: unknown[] = Array.isArray(body.organic_results) ? body.organic_results : [];
   for (const result of organic) {
-    const nested = result?.sitelinks;
-    const list = Array.isArray(nested)
+    if (!isProviderEntry(result)) continue;
+    const nested = result.sitelinks;
+    const list: unknown[] = Array.isArray(nested)
       ? nested
-      : Array.isArray(nested?.inline) ? nested.inline : Array.isArray(nested?.expanded) ? nested.expanded : [];
+      : isProviderEntry(nested) && Array.isArray(nested.inline) ? nested.inline
+        : isProviderEntry(nested) && Array.isArray(nested.expanded) ? nested.expanded : [];
     for (const link of list) {
-      if (link && typeof link === 'object') items.push({ ...link, type: 'sitelink' });
+      if (isProviderEntry(link)) items.push({ ...link, type: 'sitelink' });
     }
   }
   return items;
 }
+
+/**
+ * DG-001 — the sibling-feature collector, exposed for its narrowing tests, in
+ * the same `__..ForTest` idiom as the parser: not a second public entry point.
+ */
+export const __collectSiblingFeatureItemsForTest = collectSiblingFeatureItems;
 
 /**
  * DG-001 — the parser, exposed for the feature-capture tests.

@@ -47,19 +47,22 @@
  * report claim observed competitor superiority in the first place.
  */
 import type { ScoreState } from '../snapshotReport/canonicalScoreState';
-import type { ReachabilityOutcome } from '../crawl/reachabilityOutcome';
-import type { ComparisonMetrics } from '../reportCompetitorIntelligenceServiceModel';
-import type { DomainCrawlSignals } from '../reportCompetitorIntelligenceServiceHelpers';
+// The shared structural types come from a leaf module, never from the modules that
+// consume this seam: importing ComparisonMetrics from the Model and DomainCrawlSignals
+// from the Helpers — while both import CompetitorCrawlOutcome from here — made the
+// seam and its consumers depend on each other (eight dependency cycles).
+import type {
+  ComparisonMetrics,
+  CompetitorCrawlOutcome,
+  DomainCrawlSignals,
+} from './competitorMetricsTypes';
 
 /**
- * How the attempt to observe a competitor's public site ended.
- *
- * Reuses D2's ReachabilityOutcome for every case where a fetch was actually attempted,
- * and adds the one state D2 has no reason to model: we never looked. "Never looked" and
- * "looked and got a 404" are different facts about the world and must not be merged —
- * merging them is precisely what produced the defect this module closes.
+ * How the attempt to observe a competitor's public site ended — D2's
+ * ReachabilityOutcome plus 'not_attempted'. Defined in competitorMetricsTypes and
+ * re-exported here, so existing imports of it from this module are unchanged.
  */
-export type CompetitorCrawlOutcome = ReachabilityOutcome | 'not_attempted';
+export type { CompetitorCrawlOutcome };
 
 /** No page answered, so nothing about this competitor was observed. */
 export function isUnobservedCrawl(outcome: CompetitorCrawlOutcome): boolean {

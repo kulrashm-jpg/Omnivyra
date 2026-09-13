@@ -1,6 +1,6 @@
 /** Competitor intelligence — types, classification, profile helpers — split from reportCompetitorIntelligenceService.ts (barrel preserved; importers unchanged). */
 import type { ScoreState } from './snapshotReport/canonicalScoreState';
-import type { CompetitorCrawlOutcome } from './competitor/competitorMetricsEvidence';
+import type { ComparisonMetrics, CompetitorCrawlOutcome } from './competitor/competitorMetricsTypes';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
@@ -76,15 +76,9 @@ export { generateDiscoveryKeywords } from "./reportCompetitorIntelligenceService
 export type CompetitorClassification = 'direct_competitor' | 'seo_competitor' | 'authority_leader';
 type CompetitorSource = EngineCompetitorSource;
 
-export type ComparisonMetrics = {
-  content_depth: number;
-  authority_score: number;
-  publishing_frequency: number;
-  engagement_score: number;
-  seo_coverage: number;
-  geo_presence: number;
-  aeo_readiness: number;
-};
+// Defined in competitor/competitorMetricsTypes so the D8 seam can use it without
+// importing this module; re-exported here so existing importers are unchanged.
+export type { ComparisonMetrics };
 
 export type DetectedCompetitor = {
   name: string;

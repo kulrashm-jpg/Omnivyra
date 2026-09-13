@@ -1,5 +1,5 @@
 import type { ScoreState } from './snapshotReport/canonicalScoreState';
-import type { CompetitorCrawlOutcome } from './competitor/competitorMetricsEvidence';
+import type { CompetitorCrawlOutcome, DomainCrawlSignals } from './competitor/competitorMetricsTypes';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
@@ -927,15 +927,9 @@ export async function discoverCompetitorDomainsFromSerp(params: {
   };
 }
 
-export type DomainCrawlSignals = {
-  contentScore: number;
-  keywordCoverageScore: number;
-  authorityProxy: number;
-  technicalScore: number;
-  aiAnswerPresenceScore: number;
-  extractedKeywords: string[];
-  answerTopics: string[];
-};
+// Defined in competitor/competitorMetricsTypes so the D8 seam can use it without
+// importing this module; re-exported here so existing importers are unchanged.
+export type { DomainCrawlSignals };
 
 
 export function extractTitle(html: string): string {
