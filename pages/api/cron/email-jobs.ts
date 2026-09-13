@@ -4,7 +4,10 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  * Phase 2.A.1 — async email delivery worker.
  *
- * Cron-triggered: configured at every minute in vercel.json. Each invocation:
+ * Cron-triggered: scheduled every 10 minutes (the email-jobs entry in vercel.json),
+ * so a queued email (e.g. a Super Admin invite) normally gets its first
+ * delivery attempt within ~10 minutes (up to BATCH_SIZE jobs per tick). This
+ * route is the ONLY drain of email_jobs. Each invocation:
  *   1. Authenticates the caller via CRON_SECRET bearer (same pattern as
  *      pages/api/cron/process-scheduled-posts.ts).
  *   2. Claims up to BATCH_SIZE jobs atomically via claim_email_jobs RPC

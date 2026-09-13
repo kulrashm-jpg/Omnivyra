@@ -210,8 +210,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── Invitation + ASYNC email delivery (Phase 2.A.1) ──────────────────────
   // Identity provisioning is synchronous; email send is enqueued only. The
-  // cron worker at /api/cron/email-jobs drains the queue, calls the Edge
-  // Function, and writes delivery audit events.
+  // cron worker at /api/cron/email-jobs (every 10 minutes, vercel.json)
+  // drains the queue, calls the Edge Function, and writes delivery audit
+  // events.
   //
   // Temp passwords are encrypted-at-rest inside the queued payload via
   // AES-256-GCM (emailJobsService.encryptSensitiveField). The plaintext
