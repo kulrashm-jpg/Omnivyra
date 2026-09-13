@@ -220,62 +220,83 @@ const REQUIRED_COLUMNS = [
 
 async function main() {
   loadEnvLocal();
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) {
+
+  // ─── WHY THIS DOES NOT GO THROUGH PostgREST ──────────────────────────────
+  // It used to. `client.from('information_schema.columns')` resolves as the
+  // TABLE `public."information_schema.columns"`, which does not exist, so
+  // PostgREST answered "Could not find the table 'public.information_schema.
+  // columns' in the schema cache" for the FIRST table and the verifier exited
+  // 2 every single time. `predeploy-check.js` maps exit 2 to
+  // "schema parity: SKIPPED (env unavailable)" and continues — so this gate
+  // reported an environmental excuse on every run and never once compared a
+  // column. The credentials were present the whole time; the query mechanism
+  // was wrong.
+  //
+  // `information_schema` is reachable over a direct Postgres connection, which
+  // is what every other schema probe in this repository already uses. Exit 2
+  // is now reserved for a genuinely absent connection string or a real
+  // connection failure — never for a lookup this script chose incorrectly.
+  const dbUrl = process.env.SUPABASE_POOLER_DB_URL
+    || process.env.SUPABASE_DB_URL
+    || process.env.DATABASE_URL;
+  if (!dbUrl) {
     process.stderr.write(JSON.stringify({
       event: 'schema_parity.error',
       reason: 'missing_credentials',
-      missing: [!url && 'SUPABASE_URL', !key && 'SUPABASE_SERVICE_ROLE_KEY'].filter(Boolean),
+      missing: ['SUPABASE_POOLER_DB_URL'],
+      hint: 'A direct Postgres connection string is required; information_schema is not reachable over PostgREST.',
     }) + '\n');
     process.exit(2);
   }
 
-  // Query information_schema directly via PostgREST. We can't use
-  // information_schema.columns through the standard table API because
-  // it's not exposed; instead use the RPC fallback via raw SQL run
-  // through `rest/v1/rpc/exec_sql`-like patterns. Since that helper
-  // isn't guaranteed to exist, we use the supabase-js client.
-  let createClient;
+  let Client;
   try {
-    ({ createClient } = require('@supabase/supabase-js'));
+    ({ Client } = require('pg'));
   } catch (e) {
     process.stderr.write(JSON.stringify({
       event: 'schema_parity.error',
-      reason: 'missing_supabase_js',
+      reason: 'missing_pg',
       hint: 'Run from project root after `npm install`.',
     }) + '\n');
     process.exit(2);
   }
-  const client = createClient(url, key, { auth: { persistSession: false } });
+
+  const db = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  try {
+    await db.connect();
+  } catch (e) {
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.error',
+      reason: 'connection_failed',
+      message: (e && e.message) || String(e),
+    }) + '\n');
+    process.exit(2);
+  }
 
   // Build the set of unique tables we need to introspect.
   const tables = [...new Set(REQUIRED_COLUMNS.map((r) => r.table))];
 
-  // Query existing columns per table. information_schema is queryable via
-  // the standard PostgREST path on Supabase as long as the service role
-  // has access (it does by default).
+  // One query for every table at once. A THROWN query is an environmental
+  // failure and exits 2; it must never be caught and read as "this table has
+  // no columns", which would turn an outage into a fabricated parity failure.
   const observed = new Map();
-  for (const table of tables) {
-    const { data, error } = await client
-      .from('information_schema.columns')
-      .select('column_name, data_type, is_nullable')
-      .eq('table_schema', 'public')
-      .eq('table_name', table);
-    if (error) {
-      // Fallback: try the rpc approach if information_schema isn't
-      // exposed (PostgREST doesn't always whitelist it). Use raw SQL
-      // via a one-off PG connection if available; otherwise report.
-      process.stderr.write(JSON.stringify({
-        event: 'schema_parity.error',
-        reason: 'information_schema_query_failed',
-        table,
-        supabase_error: error.message,
-        hint: 'Expose information_schema to service_role or use direct SQL via Supabase Studio.',
-      }) + '\n');
-      process.exit(2);
-    }
-    observed.set(table, new Set((data ?? []).map((r) => r.column_name)));
+  try {
+    const res = await db.query(
+      `SELECT table_name, column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ANY($1)`,
+      [tables],
+    );
+    for (const t of tables) observed.set(t, new Set());
+    for (const row of res.rows) observed.get(row.table_name).add(row.column_name);
+  } catch (e) {
+    await db.end().catch(() => {});
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.error',
+      reason: 'information_schema_query_failed',
+      message: (e && e.message) || String(e),
+    }) + '\n');
+    process.exit(2);
   }
 
   const missing = [];
@@ -308,33 +329,39 @@ async function main() {
   let ledgerDesyncDetected = false;
   let ledgerProbeNote = null;
   try {
-    const { data: ledgerRows, error: ledgerErr } = await client
-      .schema('supabase_migrations')
-      .from('schema_migrations')
-      .select('version', { count: 'exact', head: true });
-    // Migration file count is best-effort: read the local directory.
-    // If we can't (e.g. running from a CI dir without filesystem
-    // access), skip the probe rather than guess.
+    // A REAL count. The previous probe selected with `head: true`, which
+    // returns no rows, then derived the count from `data.length` — so it read
+    // zero every time and reported desync unconditionally whenever more than
+    // 20 local files existed. A gate that always fires carries no signal.
+    const ledgerRes = await db.query(
+      'SELECT count(*)::int AS n FROM supabase_migrations.schema_migrations');
+    const ledgerCount = ledgerRes.rows[0].n;
+
+    // Migration file count is best-effort: read the local directory. Only
+    // top-level `.sql` files are candidates — `rollbacks/` and `_`-prefixed
+    // directories are never applied, so counting them would overstate drift.
     const migrationsDir = path.join(process.cwd(), 'supabase', 'migrations');
     let localCount = null;
     if (fs.existsSync(migrationsDir)) {
-      localCount = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).length;
+      localCount = fs.readdirSync(migrationsDir, { withFileTypes: true })
+        .filter((d) => d.isFile() && d.name.endsWith('.sql')).length;
     }
-    if (!ledgerErr && localCount != null) {
-      // ledger row count via head:true comes back in the response's
-      // count property — the supabase client returns it on data/error
-      // ; older clients fall back to data array length. Use either.
-      const ledgerCount = Array.isArray(ledgerRows) ? ledgerRows.length : 0;
+
+    if (localCount != null) {
       ledgerProbeNote = { ledger_recorded: ledgerCount, local_files: localCount };
       if (localCount > 20 && ledgerCount < localCount * 0.5) {
         ledgerDesyncDetected = true;
       }
-    } else if (ledgerErr) {
-      ledgerProbeNote = { skipped: true, reason: ledgerErr.message };
+    } else {
+      ledgerProbeNote = { ledger_recorded: ledgerCount, local_files: null, skipped: 'no local migrations dir' };
     }
   } catch (e) {
+    // The ledger probe is advisory; the column check above is authoritative.
+    // A probe failure is recorded, never converted into a parity verdict.
     ledgerProbeNote = { skipped: true, reason: (e && e.message) || String(e) };
   }
+
+  await db.end().catch(() => {});
 
   const out = {
     event: 'schema_parity.check',
