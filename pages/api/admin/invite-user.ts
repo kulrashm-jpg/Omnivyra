@@ -8,6 +8,11 @@ import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
 import { isNonWorkEmailDomain } from '../../../backend/services/domainEligibilityService';
+import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
+import { isPlatformSuperAdminPrincipal } from '../../../backend/security/platformCapabilities';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { IDENTITY_ADMIN_ASSIGN } from '../../../shared/contracts/security';
+import { insertAuditLogStrict } from '../../../backend/services/auditActorService';
 
 const VALID_ROLES = new Set([
   'COMPANY_ADMIN',
@@ -49,21 +54,35 @@ async function handler(
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  const { data: superAdminRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
+  // Platform SUPER_ADMIN is decided by the canonical principal (an active
+  // SUPER_ADMIN membership — the predicate the former user_company_roles query
+  // applied). resolvePrincipal is memoized per request, so requireCapability
+  // below reuses this resolution.
+  const principalResult = await resolvePrincipal(req);
+  const isSuperAdmin =
+    principalResult.ok === true && isPlatformSuperAdminPrincipal(principalResult.principal);
 
   let companyId: string;
-  if (superAdminRow) {
+  let actorUserId: string = user.id;
+  if (isSuperAdmin) {
     if (!bodyCompanyId) {
       return res.status(400).json({ error: 'companyId is required for super admin invitations' });
     }
     companyId = bodyCompanyId.trim();
+
+    // Cross-organization invitation: the same boundary as the canonical
+    // super-admin identity-assignment routes (users/create, invitation
+    // resend). IDENTITY_ADMIN_ASSIGN is platform-tier and step-up mandatory
+    // (passkey on a trusted device, 10-min freshness); it runs before any
+    // read or write of the target company or invitee.
+    const guard = await requireCapability(req, res, {
+      capability: IDENTITY_ADMIN_ASSIGN,
+      reason: `super-admin invites ${normalizedEmail} to company ${companyId} as ${role} (admin/invite-user)`,
+      organizationId: companyId,
+      resourceId: normalizedEmail,
+    });
+    if (guard.ok !== true) return;
+    actorUserId = guard.principal.userId || user.id;
   } else {
     const { data: roleRow } = await supabase
       .from('user_company_roles')
@@ -80,10 +99,11 @@ async function handler(
     companyId = (roleRow as any).company_id;
   }
 
-  // Bible rule: work email only. Non-super-admin (company-admin) invites must
-  // use a work email — no personal/free or disposable domains. SUPER_ADMIN
-  // (superAdminRow) is the deliberate backend override and is exempt.
-  if (!superAdminRow && (await isNonWorkEmailDomain(normalizedEmail.split('@')[1] ?? ''))) {
+  // Bible rule: work email only — no personal/free or disposable domains — for
+  // every caller. This route has no authorized personal-email override (the
+  // canonical super-admin route requires an explicit, audited
+  // allowPersonalEmail flag), so SUPER_ADMIN is not exempt here.
+  if (await isNonWorkEmailDomain(normalizedEmail.split('@')[1] ?? '')) {
     return res.status(400).json({
       error: 'Team members must be invited with a work email address, not a personal or disposable one.',
     });
@@ -103,6 +123,21 @@ async function handler(
     return res.status(409).json({ error: `An active invitation for ${normalizedEmail} already exists.`, code: 'INVITE_EXISTS' });
   }
 
+  // Audit context. Never the invite link, its token, or any credential.
+  const auditBase = {
+    actorUserId,
+    action: isSuperAdmin ? 'SUPER_ADMIN_INVITE_CREATE' : 'COMPANY_ADMIN_INVITE_CREATE',
+    targetUserId: null,
+    companyId,
+  };
+  const auditMetadata = {
+    route: '/api/admin/invite-user',
+    authority: isSuperAdmin ? 'super_admin' : 'company_admin',
+    capability: isSuperAdmin ? IDENTITY_ADMIN_ASSIGN : null,
+    target_email: normalizedEmail,
+    role,
+  };
+
   try {
     const invitation = await createAndSendInvitation({
       email: normalizedEmail,
@@ -110,6 +145,17 @@ async function handler(
       role,
       invitedBy: user.id,
       idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+    });
+
+    await insertAuditLogStrict({
+      ...auditBase,
+      metadata: {
+        ...auditMetadata,
+        outcome: 'created',
+        invitation_id: invitation.id,
+        replayed: invitation.replayed,
+        delivery: 'queued',
+      },
     });
 
     // Soft-enforcement signal — non-blocking log when a company-admin issues
@@ -123,6 +169,14 @@ async function handler(
     return res.status(201).json({ invitationId: invitation.id });
   } catch (error: any) {
     logger.error('admin_invite_user_failed', { userId: user.id, companyId, email: normalizedEmail, message: error?.message || String(error) });
+    await insertAuditLogStrict({
+      ...auditBase,
+      metadata: {
+        ...auditMetadata,
+        outcome: 'failed',
+        error: String(error?.message ?? error).replace(/token=[^&\s"']+/gi, 'token=[redacted]').slice(0, 200),
+      },
+    });
     return res.status(500).json({ error: 'Failed to create and send invitation' });
   }
 }
