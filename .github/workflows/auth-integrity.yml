@@ -11,15 +11,35 @@ name: Auth Integrity
 #    it runs when its secrets exist and SKIPS (never fails) while they do not.
 #    This is a LIVE-Supabase E2E gate — tests/auth/authTestHarness.ts creates,
 #    confirms and deletes real users via the Supabase admin API and exercises real
-#    login/callback/logout flows. It requires a NON-production Supabase project's
-#    secrets (NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-#    SUPABASE_URL, SUPABASE_SECRET_KEY, SESSION_COOKIE_SECRET, ENCRYPTION_KEY; the
-#    legacy *_ANON_KEY / *_SERVICE_ROLE_KEY secret names are read as a
-#    migration-only fallback). Redis is NOT a secret: the job brings its own
+#    login/callback/logout flows. Redis is NOT a secret: the job brings its own
 #    ephemeral loopback `redis:7-alpine` service container. Placeholders are
 #    impossible for Supabase (admin.createUser needs a real backend); prod must
-#    NOT be used (the suite deletes users) and is refused twice before the app
-#    server starts.
+#    NOT be used (the suite deletes users) and is refused before the app server
+#    starts (preflight, two job steps, and again at harness load).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# E2E-SPECIFIC SECRET NAMES — the E2E half reads E2E_-prefixed secrets ONLY.
+# The plain names (SUPABASE_URL, SUPABASE_SECRET_KEY / SUPABASE_SERVICE_ROLE_KEY,
+# NEXT_PUBLIC_SUPABASE_*, SESSION_COOKIE_SECRET) are consumed by
+# platform-parity.yml, which audits the PRODUCTION deployment and needs the
+# production values. Filling the plain names with E2E values would silently
+# repoint that workflow at the E2E project; filling them with production values
+# would point THIS suite at production, where it creates and deletes real users.
+# The prefix makes both mistakes impossible. tests/auth/
+# authIntegrityWorkflow.spec.ts fails if a plain secret name is reintroduced.
+#
+# TARGET: the dedicated non-production project `omnivyra-e2e`
+# (ref lomndxmrpyudaegddpef). Never klkiseupptzbecbxwrky (production).
+#
+# Repo secrets that activate the live half (6 values):
+#   E2E_SUPABASE_URL
+#   E2E_NEXT_PUBLIC_SUPABASE_URL          (optional — falls back to E2E_SUPABASE_URL)
+#   E2E_SUPABASE_SECRET_KEY               (or legacy E2E_SUPABASE_SERVICE_ROLE_KEY)
+#   E2E_NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (or legacy E2E_NEXT_PUBLIC_SUPABASE_ANON_KEY)
+#   E2E_SESSION_COOKIE_SECRET
+#   E2E_ENCRYPTION_KEY                    (64 hex characters)
+# E2E_REDIS_URL is no longer read: Redis is the ephemeral service container.
+# ─────────────────────────────────────────────────────────────────────────────
 #
 # WHY THE SPLIT: the static check enforces two invariants that are live-relevant
 # right now — the auth callback must fail CLOSED (no auth.getSession() fallback,
@@ -71,9 +91,11 @@ jobs:
         run: node scripts/check-auth-integrity-invariants.js
 
   # ── PROVISIONING PREFLIGHT ──────────────────────────────────────────────────
-  # Reports ONLY whether the E2E secrets exist. It never echoes a secret, and
-  # never fails: an unprovisioned repo yields provisioned=false and the E2E job
-  # below is skipped rather than failed.
+  # Reports ONLY whether the E2E_-prefixed secrets exist. It never echoes a
+  # secret. It does not fail on absence — an unprovisioned repo yields
+  # provisioned=false and the E2E job below is skipped rather than failed. It
+  # DOES fail loudly if a supplied E2E URL points at production, because that is
+  # a misconfiguration which must never be silently skipped past.
   e2e-secrets-preflight:
     name: E2E provisioning preflight
     runs-on: ubuntu-latest
@@ -83,18 +105,31 @@ jobs:
     steps:
       - name: Detect E2E secret provisioning
         id: check
+        # Same expressions as the job env below. E2E_ names ONLY (see header).
         env:
-          S1: ${{ secrets.SUPABASE_URL }}
-          S2: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          S3: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          S4: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          S5: ${{ secrets.SESSION_COOKIE_SECRET }}
-          S6: ${{ secrets.ENCRYPTION_KEY }}
-        # REDIS_URL is deliberately NOT a required secret any more: the E2E job
-        # runs its own ephemeral loopback Redis service (see `services:` below),
-        # so no externally hosted Redis — the only one that exists is
-        # production — can ever be wired into this suite.
+          S1: ${{ secrets.E2E_SUPABASE_URL }}
+          S2: ${{ secrets.E2E_SUPABASE_SECRET_KEY || secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
+          S3: ${{ secrets.E2E_NEXT_PUBLIC_SUPABASE_URL || secrets.E2E_SUPABASE_URL }}
+          S4: ${{ secrets.E2E_NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || secrets.E2E_NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          S5: ${{ secrets.E2E_SESSION_COOKIE_SECRET }}
+          S6: ${{ secrets.E2E_ENCRYPTION_KEY }}
+          PRODUCTION_PROJECT_REF: klkiseupptzbecbxwrky
+        # REDIS_URL is deliberately NOT a required secret: the E2E job runs its
+        # own ephemeral loopback Redis service (see `services:` below), so no
+        # externally hosted Redis — the only one that exists is production —
+        # can ever be wired into this suite.
         run: |
+          # Fail closed and loudly if a production target has been configured,
+          # whether or not the rest of the provisioning is complete.
+          for url in "${S1:-}" "${S3:-}"; do
+            case "$url" in
+              *"$PRODUCTION_PROJECT_REF"*)
+                echo "::error::E2E secrets point at the PRODUCTION Supabase project. Refusing to run."
+                exit 1
+                ;;
+            esac
+          done
+
           missing=0
           for v in S1 S2 S3 S4 S5 S6; do
             if [ -z "${!v}" ]; then missing=$((missing+1)); fi
@@ -150,11 +185,19 @@ jobs:
       # first ran this suite green in CI: with 127.0.0.1 the callback specs fail.
       AUTH_E2E_BASE_URL: http://localhost:3000
       AUTH_E2E_TIMEOUT_MS: '120000'
-      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET }}
+      # E2E_-prefixed secrets ONLY — see the header. `.env.local` is never
+      # created or read by this job. The harness and check:auth-e2e-target read
+      # the E2E_* names first; the dev server and config/env.schema.ts read the
+      # canonical unprefixed names, so the SAME E2E values are bound to both.
+      # Each env var is set from an E2E secret — never from the plain repo
+      # secrets that platform-parity.yml uses for production.
+      E2E_SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}
+      E2E_SUPABASE_SECRET_KEY: ${{ secrets.E2E_SUPABASE_SECRET_KEY || secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.E2E_NEXT_PUBLIC_SUPABASE_URL || secrets.E2E_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.E2E_NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || secrets.E2E_NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.E2E_SUPABASE_SECRET_KEY || secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
+      SESSION_COOKIE_SECRET: ${{ secrets.E2E_SESSION_COOKIE_SECRET }}
       # Phase 138 finding: config/env.schema.ts requires BOTH of these and the
       # job supplied neither, so `npm run dev` died at config validation and the
       # readiness poll timed out with a message that looked like an auth failure.
@@ -163,7 +206,7 @@ jobs:
       # because the port is published on IPv4 loopback only and Node may resolve
       # localhost to ::1 first.
       REDIS_URL: redis://127.0.0.1:6379
-      ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+      ENCRYPTION_KEY: ${{ secrets.E2E_ENCRYPTION_KEY }}
       # config/env.schema.ts marks OPENAI_API_KEY required and validateEnv()
       # calls process.exit(1) on a miss: the dev server boots, serves the warmup
       # routes, then dies the moment a route imports the config module —
@@ -224,17 +267,19 @@ jobs:
       # If SUPABASE_URL ever points at the production project this job must die
       # BEFORE the server starts. Compares against the known production ref and
       # prints only a boolean verdict, never the URL.
+      # Checks the job-level values (bound from the E2E_ secrets above) that the
+      # server AND the browser client will actually use.
       - name: Refuse to run against production
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         run: |
           node -e "
             const PROD='klkiseupptzbecbxwrky';
-            const url=String(process.env.SUPABASE_URL||'');
-            if (!url) { console.error('SUPABASE_URL empty'); process.exit(1); }
-            if (url.includes(PROD)) {
-              console.error('REFUSING TO RUN: SUPABASE_URL points at the PRODUCTION project.');
-              process.exit(1);
+            for (const name of ['SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'E2E_SUPABASE_URL']) {
+              const url=String(process.env[name]||'');
+              if (!url) { console.error(name + ' empty'); process.exit(1); }
+              if (url.includes(PROD)) {
+                console.error('REFUSING TO RUN: ' + name + ' points at the PRODUCTION project.');
+                process.exit(1);
+              }
             }
             console.log('Target is non-production: OK');
           "
