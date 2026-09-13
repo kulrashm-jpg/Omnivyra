@@ -50,7 +50,7 @@ BEGIN
       AND column_name = 'refinement_version'
   ) THEN
     ALTER TABLE public.campaign_week_plan
-      ADD COLUMN refinement_version INT NOT NULL DEFAULT 0;
+      ADD COLUMN IF NOT EXISTS refinement_version INT NOT NULL DEFAULT 0;
   END IF;
 
   IF NOT EXISTS (
@@ -60,7 +60,7 @@ BEGIN
       AND column_name = 'refinement_parent_version'
   ) THEN
     ALTER TABLE public.campaign_week_plan
-      ADD COLUMN refinement_parent_version INT;
+      ADD COLUMN IF NOT EXISTS refinement_parent_version INT;
   END IF;
 
   IF NOT EXISTS (
@@ -70,7 +70,7 @@ BEGIN
       AND column_name = 'refinement_source'
   ) THEN
     ALTER TABLE public.campaign_week_plan
-      ADD COLUMN refinement_source TEXT;
+      ADD COLUMN IF NOT EXISTS refinement_source TEXT;
   END IF;
 
   IF NOT EXISTS (
@@ -80,7 +80,7 @@ BEGIN
       AND column_name = 'refined_at'
   ) THEN
     ALTER TABLE public.campaign_week_plan
-      ADD COLUMN refined_at TIMESTAMPTZ;
+      ADD COLUMN IF NOT EXISTS refined_at TIMESTAMPTZ;
   END IF;
 
   -- refinement_source is constrained to the three sanctioned origins.
