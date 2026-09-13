@@ -9,6 +9,8 @@ import {
   loadE2EEnvFile,
   type E2EGuardResult,
 } from './e2eEnvironmentGuard';
+import { findAuthStateKeys, isAuthStateKey } from './authStateKeys';
+import { cleanupIdentity } from './e2eIdentityCleanup';
 
 // NEVER load .env.local here: it points at the PRODUCTION Supabase project and
 // this suite creates and deletes real users. The E2E environment comes from an
@@ -124,13 +126,23 @@ export async function createSignupLink(email: string): Promise<string> {
   return data.properties.action_link;
 }
 
+/**
+ * Removes the Supabase auth user AND every application-side row created for the
+ * test identity (see e2eIdentityCleanup.ts for the verified dependency order).
+ * Idempotent. Failures are aggregated and rethrown rather than swallowed, so a
+ * cleanup that silently leaves residue can no longer pass unnoticed.
+ */
 export async function cleanupUsersByEmail(emails: string[]): Promise<void> {
   assertGuardedAdminCall('listUsers/deleteUser');
+  const failures: string[] = [];
   for (const email of emails) {
-    const { data } = await adminSupabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    const user = data?.users.find((candidate) => candidate.email?.toLowerCase() === email.toLowerCase());
-    if (user?.id) await adminSupabase.auth.admin.deleteUser(user.id).catch(() => undefined);
+    try {
+      await cleanupIdentity(adminSupabase, email);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
   }
+  if (failures.length) throw new Error(`auth E2E cleanup failed: ${failures.join(' | ')}`);
 }
 
 export async function withBrowser<T>(
@@ -229,14 +241,25 @@ export async function waitForLoggedOutState(page: Page, label = 'logout'): Promi
     lastState = state;
     return (
       state.identity.email === null &&
-      !state.cookies.includes('omnivyra_session') &&
-      !state.cookies.some((name) => name.startsWith('sb-')) &&
-      !state.localStorageKeys.some((key) => key.startsWith('sb-')) &&
-      !state.localStorageKeys.includes('selected_company_id') &&
-      !state.localStorageKeys.includes('company_id') &&
-      state.sessionStorageKeys.length === 0
+      !state.cookies.some(isAuthStateKey) &&
+      // Auth-specific, not "storage must be empty": anonymous visitor telemetry
+      // (omn_anon_id / omn_session / omn_journey) legitimately survives logout.
+      // isAuthStateKey mirrors the product's own definition of auth/tenant
+      // state, so new anonymous keys are allowed and new auth keys are caught.
+      findAuthStateKeys(state.localStorageKeys).length === 0 &&
+      findAuthStateKeys(state.sessionStorageKeys).length === 0
     );
-  }, () => `expected logged-out state during ${label}. Last state: ${formatSnapshot(lastState)}`, DEFAULT_TIMEOUT_MS);
+  }, () => {
+    const offenders = lastState
+      ? [
+          ...findAuthStateKeys(lastState.cookies).map((k) => `cookie:${k}`),
+          ...findAuthStateKeys(lastState.localStorageKeys).map((k) => `local:${k}`),
+          ...findAuthStateKeys(lastState.sessionStorageKeys).map((k) => `session:${k}`),
+        ]
+      : [];
+    const detail = offenders.length ? ` Residual auth keys: ${offenders.join(', ')}.` : '';
+    return `expected logged-out state during ${label}.${detail} Last state: ${formatSnapshot(lastState)}`;
+  }, DEFAULT_TIMEOUT_MS);
 }
 
 export async function waitForCompanyContext(page: Page, label = 'company context'): Promise<void> {
@@ -296,7 +319,11 @@ export async function snapshot(page: Page): Promise<BrowserAuthSnapshot> {
 export function assertNoResidualAuth(state: BrowserAuthSnapshot): void {
   assert.equal(state.identity.email, null, 'Supabase identity must be absent');
   assertCookieState(state, { omnivyra: 'absent', supabase: 'absent' });
-  assert(!state.localStorageKeys.some((key) => key.startsWith('sb-')), 'Supabase localStorage auth must be absent');
+  const residual = [
+    ...findAuthStateKeys(state.localStorageKeys).map((key) => `local:${key}`),
+    ...findAuthStateKeys(state.sessionStorageKeys).map((key) => `session:${key}`),
+  ];
+  assert.deepEqual(residual, [], `no auth-state storage keys may remain, found: ${residual.join(', ')}`);
   assertStorageIsolation(state);
 }
 
