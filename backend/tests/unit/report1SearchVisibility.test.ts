@@ -13,21 +13,37 @@
  * is now a projection of it, so competitor discovery sees byte-identical input and there is still
  * exactly ONE request per keyword. The own-domain scan reads the same responses.
  *
- * TEST SEAM. Only the HTTP client (`axios`) is replaced, so credential resolution, the scan-budget
- * gate, parsing, normalisation, competitor filtering, composition and rendering are all real.
+ * TEST SEAM. Only the network is replaced, so credential resolution, the scan-budget gate, the
+ * provider cost governor, parsing, normalisation, competitor filtering, composition and rendering
+ * are all real. DG-001 routes the SERP request through the canonical client's `fetch`, so the seam
+ * is global `fetch` (answered below for serpapi.com only) plus `safeFetch` (always refused). No
+ * request from this suite can leave the process — see backend/tests/helpers/hermeticNetwork.ts.
  */
+import { installHermeticFetch, type HermeticFetchHandle } from '../helpers/hermeticNetwork';
+
+jest.mock('../../../lib/security/safeFetch', () =>
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/hermeticNetwork').hermeticSafeFetchModule());
+
+// Nothing on these paths may fall back to axios; if something does, it fails loudly here instead of
+// reaching the network.
+jest.mock('axios', () => {
+  const refuse = async () => { throw new Error('axios is not a SERP seam any more (DG-001) — use fetch'); };
+  return { __esModule: true, default: { get: refuse, post: refuse }, get: refuse, post: refuse };
+});
+
 const serpCalls: Array<{ q: string; num: unknown }> = [];
 let serpHandler: (query: string) => { data: unknown } | Promise<{ data: unknown }> = () => ({ data: { organic_results: [] } });
 
-jest.mock('axios', () => ({
-  __esModule: true,
-  default: {
-    get: async (_url: string, cfg: { params?: { q?: string; num?: unknown } }) => {
-      serpCalls.push({ q: String(cfg?.params?.q ?? ''), num: cfg?.params?.num });
-      return serpHandler(String(cfg?.params?.q ?? ''));
-    },
-  },
-}));
+const network: HermeticFetchHandle = installHermeticFetch(async ({ url }) => {
+  if (url.hostname !== 'serpapi.com') return undefined; // refused, never sent
+  const q = url.searchParams.get('q') ?? '';
+  serpCalls.push({ q, num: Number(url.searchParams.get('num')) });
+  // A handler that throws makes the request reject, exactly as a transport failure would.
+  const { data } = await serpHandler(q);
+  return { body: data };
+});
+afterAll(() => network.restore());
 
 // A managed credential is not present in the test environment, so the env fallback is what
 // resolves. Setting it here exercises the real `resolveProviderCredential` path rather than
@@ -404,5 +420,16 @@ describe('GAP-06 · Test J — prior invariants hold', () => {
     // GAP-05 — an empty decision layer keeps the honest legacy message.
     expect(report.digital_snapshot.empty).toBe(true);
     expect(renderOf(report as unknown as Record<string, unknown>)).toContain('No actions could be derived');
+  });
+});
+
+describe('hermeticity — this suite never reaches the network', () => {
+  it('answered every SERP request from the stub, and refused everything else unsent', () => {
+    // SERP requests were issued (the suite is not vacuously hermetic) ...
+    expect(network.answered.some(({ url }) => url.hostname === 'serpapi.com')).toBe(true);
+    // ... and nothing addressed to serpapi.com was ever refused, i.e. ever a candidate to leave.
+    expect(network.refused.filter((target) => target.includes('serpapi.com'))).toEqual([]);
+    // eslint-disable-next-line no-console
+    if (network.refused.length > 0) console.info('[hermetic] refused (never sent):', network.refused);
   });
 });
