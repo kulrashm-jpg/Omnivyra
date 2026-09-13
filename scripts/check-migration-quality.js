@@ -10,6 +10,17 @@
  *   2. Idempotency — additive statements must be guarded so re-application is
  *      safe: CREATE TABLE / CREATE [UNIQUE] INDEX / ADD COLUMN require
  *      `IF NOT EXISTS`.
+ *   3. Anonymous exposure (migrations >= SECURITY_RULES_FROM, STEP 3AH-70).
+ *      Supabase grants ALL on every new public table, and EXECUTE on every new
+ *      function, to anon/authenticated, and PostgREST serves them to anyone
+ *      holding the publishable key. So:
+ *        a. every CREATE TABLE in public must ENABLE ROW LEVEL SECURITY on that
+ *           table in the same migration;
+ *        b. every SECURITY DEFINER function must REVOKE EXECUTE ... FROM PUBLIC
+ *           in the same migration (it runs as the owner and bypasses RLS);
+ *        c. a policy that grants anon/public unconditional access
+ *           (USING (true) / WITH CHECK (true)) needs an explicit justification
+ *           comment `-- rls-public-ok: <reason>` on the line above it.
  *
  * Historical migrations are IMMUTABLE. The set of files that existed when this
  * gate landed is frozen in scripts/migrations/historical-baseline.txt; every
@@ -61,6 +72,68 @@ function idempotencyViolations(sql) {
   return v;
 }
 
+// Security rules apply from the anonymous-exposure fix onward; earlier migrations
+// were remediated in bulk by 20261026000000_close_anon_rls_exposure.sql.
+const SECURITY_RULES_FROM = '20261026000000';
+
+const stripSqlComments = (sql) => sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, '');
+// Remove dollar-quoted bodies ($$...$$ / $tag$...$tag$) so words inside function bodies never match.
+const stripDollarBodies = (sql) => sql.replace(/(\$[A-Za-z_]*\$)[\s\S]*?\1/g, ' ');
+const lineOf = (sql, idx) => sql.slice(0, idx).split('\n').length;
+const tableName = (raw) => raw.replace(/"/g, '').toLowerCase();
+
+function securityViolations(sql) {
+  const v = [];
+  const clean = stripDollarBodies(stripSqlComments(sql));
+  // (a) CREATE TABLE public.X → ENABLE ROW LEVEL SECURITY on X.
+  const createRe = /\bCREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?)/gi;
+  for (const m of clean.matchAll(createRe)) {
+    const full = tableName(m[1]);
+    if (full.includes('.') && !full.startsWith('public.')) continue;
+    const name = full.replace(/^public\./, '');
+    const rls = new RegExp(`\\bALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?(?:"?public"?\\.)?"?${name}"?\\s+ENABLE\\s+ROW\\s+LEVEL\\s+SECURITY`, 'i');
+    // Search comment-stripped SQL WITH dollar bodies: RLS is often enabled inside a DO block.
+    if (!rls.test(stripSqlComments(sql))) {
+      v.push({ line: lineOf(sql, sql.search(new RegExp(`CREATE\\s+(?:UNLOGGED\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:"?public"?\\.)?"?${name}\\b`, 'i'))),
+        rule: `table public.${name} must ENABLE ROW LEVEL SECURITY in the same migration (anon/authenticated are granted ALL by default)`, text: m[0].trim() });
+    }
+  }
+  // (b) SECURITY DEFINER function → REVOKE EXECUTE ... FROM PUBLIC.
+  const noComments = stripSqlComments(sql);
+  const fnRe = /\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+((?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?)\s*\(/gi;
+  for (const m of noComments.matchAll(fnRe)) {
+    const rest = noComments.slice(m.index);
+    const body = rest.match(/(\$[A-Za-z_]*\$)[\s\S]*?\1/);
+    const end = body ? rest.indexOf(';', body.index + body[0].length) : rest.indexOf(';');
+    const stmt = stripDollarBodies(rest.slice(0, end < 0 ? undefined : end + 1));
+    if (!/\bSECURITY\s+DEFINER\b/i.test(stmt)) continue;
+    const full = tableName(m[1]);
+    if (full.includes('.') && !full.startsWith('public.')) continue;
+    const name = full.replace(/^public\./, '');
+    const revoke = new RegExp(`\\bREVOKE\\s+(?:ALL|EXECUTE)[\\s\\S]{0,40}?ON\\s+FUNCTION\\s+(?:"?public"?\\.)?"?${name}"?[\\s\\S]{0,400}?FROM\\s+[^;]*\\bPUBLIC\\b`, 'i');
+    if (!revoke.test(clean)) {
+      v.push({ line: lineOf(sql, m.index), rule: `SECURITY DEFINER function public.${name} must REVOKE EXECUTE ... FROM PUBLIC (and grant only the roles that need it)`, text: m[0].trim() });
+    }
+  }
+  // (c) unconditional anon/public policies need an explicit, reviewed justification.
+  const lines = sql.split('\n');
+  const polRe = /\bCREATE\s+POLICY\b[\s\S]*?;/gi;
+  const src = sql.replace(/--[^\n]*/g, (c) => ' '.repeat(c.length));
+  for (const m of src.matchAll(polRe)) {
+    const stmt = m[0];
+    const toClause = (stmt.match(/\bTO\s+([^;]*?)(?=\bUSING\b|\bWITH\s+CHECK\b|;)/i) || [])[1];
+    const publicTarget = !toClause || /\b(public|anon)\b/i.test(toClause);
+    const unconditional = /\bUSING\s*\(\s*true\s*\)/i.test(stmt) || /\bWITH\s+CHECK\s*\(\s*true\s*\)/i.test(stmt);
+    if (!publicTarget || !unconditional) continue;
+    const ln = lineOf(sql, m.index);
+    const prev = lines.slice(Math.max(0, ln - 3), ln - 1).join('\n');
+    if (!/--\s*rls-public-ok:\s*\S/.test(prev)) {
+      v.push({ line: ln, rule: 'policy grants anon/public unconditional access (USING/WITH CHECK true) — add `-- rls-public-ok: <reason>` above it or scope it to a role/condition', text: stmt.split('\n')[0].trim() });
+    }
+  }
+  return v;
+}
+
 function main() {
   if (!fs.existsSync(MIG_DIR)) { console.log('[migration-quality] no supabase/migrations — skip'); process.exit(0); }
   const baseline = new Set(
@@ -99,6 +172,13 @@ function main() {
     for (const viol of idempotencyViolations(sql)) {
       errors.push(`${f}:${viol.line}\n    ✗ ${viol.rule}\n      ${viol.text}`);
     }
+    // 4. Anonymous exposure
+    const ver = versionPrefix(f);
+    if (ver && ver.length === 14 && ver >= SECURITY_RULES_FROM) {
+      for (const viol of securityViolations(sql)) {
+        errors.push(`${f}:${viol.line}\n    ✗ ${viol.rule}\n      ${viol.text}`);
+      }
+    }
   }
 
   const out = {
@@ -123,4 +203,6 @@ function main() {
   process.exit(0);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { securityViolations, idempotencyViolations, SECURITY_RULES_FROM };
