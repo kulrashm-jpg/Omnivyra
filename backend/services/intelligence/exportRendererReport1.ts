@@ -635,10 +635,90 @@ export function renderSearchVisibility(
           </ul>
         </div>
       ` : ''}
+      ${renderSerpFeatures(search)}
       <p style="font-size:9pt; margin:3mm 0 0; color:#64748b; font-family:'Inter',system-ui,sans-serif;">
         Source: public search results${search.provider ? ` via ${escape(search.provider)}` : ''}${search.observedAt ? ` · observed ${escape(search.observedAt.slice(0, 10))}` : ''} · ${escape(String(search.requestsMade))} quer${search.requestsMade === 1 ? 'y' : 'ies'} issued for this report
       </p>
     </section>
+  `;
+}
+
+/** Human labels for the canonical vocabulary. Presentation only. */
+const SERP_FEATURE_LABEL: Record<string, string> = {
+  featured_snippet: 'Featured snippet',
+  people_also_ask: 'People Also Ask',
+  knowledge_panel: 'Knowledge panel',
+  sitelink: 'Sitelinks',
+  local: 'Local pack',
+  image: 'Image results',
+  video: 'Video results',
+  news: 'Top stories',
+  shopping: 'Shopping results',
+  paid: 'Paid results',
+  other: 'Other feature',
+};
+
+/**
+ * DG-001 — what the results page showed beside the organic ten.
+ *
+ * ─── OBSERVATION, NOT ADVICE ──────────────────────────────────────────────
+ * This block says what appeared and whether this domain owned it where that is
+ * establishable. It does not say what to do about it: no answer-readiness
+ * score, no gap percentage, no recommendation. That is DG-007's, and writing it
+ * here would turn an evidence surface into an unevidenced verdict.
+ *
+ * ─── BACKWARD COMPATIBLE BY CONSTRUCTION ──────────────────────────────────
+ * Every report composed before DG-001 lacks `features` entirely, so the absent
+ * case returns an empty string and the section renders exactly as it always did.
+ */
+function renderSerpFeatures(search: SearchVisibility): string {
+  const features = search.features;
+  if (!features) return '';                                   // pre-DG-001 report
+  if (features.state === 'unavailable' || features.state === 'failed') return '';
+
+  if (features.state === 'insufficient_signal' || features.observed.length === 0) {
+    return `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Search features</p>
+          <p class="ds-playbook-group-desc">The queries ran and returned no answer boxes, panels or other result features. That is an observation about these queries, not a judgement about the site.</p>
+        </div>
+      </div>
+    `;
+  }
+
+  const ordered = Object.entries(features.counts)
+    .filter(([, count]) => (count ?? 0) > 0)
+    .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0));
+  // Ownership is three-valued: a feature with no URL cannot establish it either
+  // way, and is counted as neither owned nor not-owned.
+  const owned = features.observed.filter((o) => o.ownedByCompany === true).length;
+  const undeterminable = features.observed.filter((o) => o.ownedByCompany === null).length;
+
+  return `
+    <div class="ds-playbook-group">
+      <div class="ds-playbook-group-header">
+        <p class="ds-playbook-group-label">Search features observed</p>
+        <p class="ds-playbook-group-desc">What the results pages showed beyond the ten organic links, gathered from the same queries. These do not affect the positions above — a feature is not an organic rank.</p>
+      </div>
+      <p style="font-size:10.5pt; line-height:1.6; margin:0 0 2.5mm; color:#1a2332;">
+        ${escape(String(features.observed.length))} feature${features.observed.length === 1 ? '' : 's'} observed across ${escape(String(search.queriesRun))} quer${search.queriesRun === 1 ? 'y' : 'ies'}${owned > 0 ? `, of which this domain owned ${escape(String(owned))}` : ''}.
+        ${undeterminable > 0 ? `${escape(String(undeterminable))} carried no link, so ownership could not be established either way.` : ''}
+      </p>
+      <ul style="margin:0; padding-left:5mm; font-size:10pt; line-height:1.6; color:#334155;">
+        ${ordered.map(([type, count]) => `<li style="margin:0 0 1mm;">${escape(SERP_FEATURE_LABEL[type] ?? type)} <span style="color:#64748b;">— ${escape(String(count))}</span></li>`).join('')}
+      </ul>
+      ${features.observed.filter((o) => o.title).slice(0, 6).map((o) => `
+        <div style="margin:2.5mm 0 0;">
+          <p style="font-size:10pt; margin:0; color:#1a2332;">
+            <span class="ds-pill">${escape(SERP_FEATURE_LABEL[o.result_type] ?? o.result_type)}</span>
+            ${escape(o.title ?? '')}
+            ${o.ownedByCompany === true ? '<span style="color:#64748b;"> — this domain</span>' : ''}
+          </p>
+          <p style="font-size:9pt; margin:0.5mm 0 0; color:#64748b;">for “${escape(o.query)}”</p>
+        </div>
+      `).join('')}
+    </div>
   `;
 }
 

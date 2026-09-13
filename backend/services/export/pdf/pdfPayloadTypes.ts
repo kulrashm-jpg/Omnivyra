@@ -400,7 +400,7 @@ export type PdfReportPayload = {
         sources?: string[];
       } | null;
       rationale: string;
-      standing: 'Behind' | 'At Par' | 'Ahead';
+      standing: 'Behind' | 'At Par' | 'Ahead' | 'Not Observed';
     }>;
     marketAlternatives?: Array<{
       name: string;

@@ -23,8 +23,13 @@ const MUTATIONS = [
     id: 'M1',
     name: 'reintroduce CONNECTED_SOURCE decisions into public Report 1',
     file: COMPOSER,
-    from: '  const { publicEvidence: report1Decisions } = partitionDecisionsForReport1(finalDecisions);',
-    to: '  const report1Decisions = finalDecisions;',
+    // UNION — the D3 consumer follow-up moved the partition upstream, from
+    // `partitionDecisionsForReport1(finalDecisions)` (one consumer) to
+    // `partitionDecisionsForReport1(submittedDecisions)` (every consumer). Re-pointed so
+    // this tests the SAME invariant where the code now lives, rather than reporting
+    // NOT APPLICABLE against code that no longer exists.
+    from: "  const { publicEvidence: baseCombined, connectedEvidence: withheldConnectedDecisions } =\n    partitionDecisionsForReport1(submittedDecisions);",
+    to: "  const baseCombined = submittedDecisions;\n  const withheldConnectedDecisions: typeof submittedDecisions = [];",
   },
   {
     id: 'M2',
@@ -51,8 +56,10 @@ const MUTATIONS = [
     id: 'M5',
     name: 'remove ALL visual intelligence instead of filtering only private data',
     file: COMPOSER,
-    from: '  const { publicEvidence: report1Decisions } = partitionDecisionsForReport1(finalDecisions);',
-    to: '  const report1Decisions: typeof finalDecisions = [];',
+    // UNION — re-pointed with M1, for the same reason. The over-correction it tests is
+    // now "drop the public half as well": every consumer would receive nothing.
+    from: "  const { publicEvidence: baseCombined, connectedEvidence: withheldConnectedDecisions } =\n    partitionDecisionsForReport1(submittedDecisions);",
+    to: "  const baseCombined: typeof submittedDecisions = [];\n  const withheldConnectedDecisions = submittedDecisions;",
   },
   {
     id: 'M6',

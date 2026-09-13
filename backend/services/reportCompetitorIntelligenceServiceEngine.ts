@@ -59,7 +59,6 @@ import {
   dedupeCompetitors,
   countCategory,
   computeCompanyMetrics,
-  liftMetrics,
   subtractMetrics,
   averageCompetitorMetrics,
   type CompanyCompetitiveContext,
@@ -71,8 +70,30 @@ export { generateDiscoveryKeywords } from "./reportCompetitorIntelligenceService
 
 import { type CompetitorClassification, type ComparisonMetrics, type CompetitorComparisonEntry, type CompetitorGap, type CompetitorIntelligenceResult, groupCompetitorsByTier, buildCompetitiveSummary, MAX_COMPETITORS, MAX_COMPETITOR_ENGINE_OUTPUT, MAX_COMPETITOR_PAGES, MAX_CRAWL_DEPTH, MIN_SERP_DOMAINS_PER_KEYWORD, toDetectedCompetitor, devCompetitorScoringDebug, buildManualCompetitorCandidates, buildStoredCompetitorCandidates, buildProviderCompetitorCandidates, expandDiscoveryKeywords, extractTopKeywords } from './reportCompetitorIntelligenceServiceModel';
 import { assembleEvidenceCompetitorCandidates, deriveCompetitorEvidenceStatus, type CompetitorEvidenceStatus } from './competitorCandidateAssembly';
+// D8 — reachability classification reused from the canonical D2 contract; competitor
+// crawl failures are classified with the same vocabulary as every other crawl.
+import { classifyHttpStatus, classifyFetchError } from './crawl/reachabilityOutcome';
+// D8 — the single seam deciding whether a competitor's metrics are evidence-supported.
+import {
+  resolveCompetitorMetrics,
+  type CompetitorCrawlOutcome,
+} from './competitor/competitorMetricsEvidence';
 
-async function crawlDomainSignals(domain: string, referenceKeywords: string[]): Promise<DomainCrawlSignals | null> {
+/**
+ * D8 — the crawl reports WHY it has no signals.
+ *
+ * This previously returned a bare `null` for every failure mode, so "this competitor has
+ * no domain", "the site 404'd", "the server 500'd", "it timed out" and "DNS failed" were
+ * indistinguishable to the caller — which then filled the silence with synthetic metrics.
+ * The outcome now travels with the result, classified through D2's canonical
+ * reachability contract rather than a second status vocabulary.
+ */
+export type CompetitorDomainCrawlResult = {
+  readonly signals: DomainCrawlSignals | null;
+  readonly outcome: CompetitorCrawlOutcome;
+};
+
+export async function crawlDomainSignals(domain: string, referenceKeywords: string[]): Promise<CompetitorDomainCrawlResult> {
   const seedUrls = [
     `https://${domain}/`,
     `https://${domain}/pricing`,
@@ -85,6 +106,9 @@ async function crawlDomainSignals(domain: string, referenceKeywords: string[]): 
   const pages: Array<{ title: string; headings: string[]; text: string; html: string }> = [];
   const queue = [...urls];
   const visited = new Set<string>();
+  // D8 — the outcome of the LAST attempt that failed, kept so a page-less crawl can say
+  // what actually happened instead of collapsing every cause into `null`.
+  let failureOutcome: CompetitorCrawlOutcome = 'not_attempted';
   while (queue.length > 0 && pages.length < MAX_COMPETITOR_PAGES) {
     const url = queue.shift()!;
     if (visited.has(url)) continue;
@@ -100,7 +124,12 @@ async function crawlDomainSignals(domain: string, referenceKeywords: string[]): 
           Accept: 'text/html,application/xhtml+xml',
         },
       }, { timeoutMs: 8000, maxRedirects: 3, maxBytes: 5 * 1024 * 1024 });
-      if (response.status < 200 || response.status >= 400) continue;
+      if (response.status < 200 || response.status >= 400) {
+        // Classified through D2's canonical contract so a competitor 4xx/5xx means the
+        // same thing here as it does everywhere else in the platform.
+        failureOutcome = classifyHttpStatus(response.status);
+        continue;
+      }
       const html = (await readCapped(response)).toString('utf8');
       const title = extractTitle(html);
       const headings = extractHeadings(html);
@@ -112,12 +141,18 @@ async function crawlDomainSignals(domain: string, referenceKeywords: string[]): 
           queue.push(nextUrl);
         }
       });
-    } catch {
+    } catch (error) {
+      // No HTTP response existed (DNS, connection, SSRF refusal) or the request was
+      // abandoned. D2 already knows how to tell those apart from an error object.
+      failureOutcome = classifyFetchError(error).outcome;
       // continue with remaining pages
     }
   }
 
-  if (pages.length === 0) return null;
+  // D8 — no page answered. Return the reason rather than an anonymous null: the caller
+  // must be able to distinguish "unreachable" from "we never looked", and must never be
+  // able to read this as permission to synthesise metrics.
+  if (pages.length === 0) return { signals: null, outcome: failureOutcome };
 
   const anchorTexts = pages.flatMap((page) => extractAnchors(page.html));
   const joinedText = pages.map((page) => `${page.title} ${page.headings.join(' ')} ${anchorTexts.join(' ')} ${page.text}`).join(' ');
@@ -141,6 +176,8 @@ async function crawlDomainSignals(domain: string, referenceKeywords: string[]): 
   const faqMentions = (joinedText.match(/\b(faq|how to|what is|why|guide)\b/gi) ?? []).length;
 
   return {
+    outcome: 'success',
+    signals: {
     contentScore: clamp(Math.round((wordCount / 2600) * 100), 20, 96),
     keywordCoverageScore: clamp(Math.round(keywordCoverage), 15, 98),
     authorityProxy: clamp(35 + linkMentions * 2 + (hasSchema ? 8 : 0), 20, 95),
@@ -157,17 +194,30 @@ async function crawlDomainSignals(domain: string, referenceKeywords: string[]): 
     ),
     extractedKeywords,
     answerTopics,
+    },
   };
 }
 
-function buildGapDefinitions(params: {
+/**
+ * Exported for the D8 evidence-integrity suite: the rule that a gap narrative may only
+ * name competitors whose metrics were actually observed is asserted directly here.
+ */
+export function buildGapDefinitions(params: {
   domain: string;
   businessContext: string;
   entries: CompetitorComparisonEntry[];
   companyMetrics: ComparisonMetrics;
 }): CompetitorGap[] {
-  const averageMetrics = averageCompetitorMetrics(params.entries);
-  const leadingCompetitors = params.entries.slice(0, 3).map((entry) => entry.competitor.domain ?? entry.competitor.name);
+  // D8 — a gap narrative is a claim that named competitors are ahead of the customer.
+  // It may only be made from competitors whose metrics were actually derived from their
+  // own observed pages. Unobserved competitors are excluded from the average AND from
+  // `leading_competitors`, so no company is named as a leader on evidence that does not
+  // exist. When nothing was observed there is no comparison to narrate, and the report
+  // says nothing rather than something confident.
+  const observedEntries = params.entries.filter((entry) => entry.metrics != null);
+  const averageMetrics = averageCompetitorMetrics(observedEntries);
+  if (!averageMetrics) return [];
+  const leadingCompetitors = observedEntries.slice(0, 3).map((entry) => entry.competitor.domain ?? entry.competitor.name);
   const gaps: CompetitorGap[] = [];
 
   const contentGap = averageMetrics.content_depth - params.companyMetrics.content_depth;
@@ -277,6 +327,7 @@ function emptyCompetitorIntelligenceResult(input: {
   serpStatus: 'live' | 'fallback';
   /** GAP-06 — own-domain search rows survive even when NO competitor qualifies. */
   ownSearchObservations?: CompetitorIntelligenceResult['own_domain_search_observations'];
+  ownFeatureObservations?: CompetitorIntelligenceResult['own_domain_feature_observations'];
   searchAcquisition?: CompetitorIntelligenceResult['search_acquisition'];
 }): CompetitorIntelligenceResult {
   return {
@@ -290,6 +341,7 @@ function emptyCompetitorIntelligenceResult(input: {
     keyword_gap: { missing_keywords: [], weak_keywords: [], strong_keywords: [] },
     answer_gap: { missing_answers: [], weak_answers: [], strong_answers: [] },
     own_domain_search_observations: input.ownSearchObservations ?? [],
+    own_domain_feature_observations: input.ownFeatureObservations ?? [],
     search_acquisition: input.searchAcquisition,
     discovery_metadata: {
       keyword_count: input.keywordCount,
@@ -363,12 +415,24 @@ export function buildCompetitorIntelligence(params: {
     });
   }
 
-  const comparisonEntries = discovered.map((competitor, index) => {
-    const metrics = liftMetrics(companyMetrics, competitor, index);
+  // D8 — the sync path performs NO crawl at all (it cannot await one). It therefore has
+  // no observation of any competitor, and previously filled that void with
+  // `liftMetrics()`: the customer's own numbers plus a classification/index-keyed lift,
+  // published as competitor metrics with `is_fallback_used: false`. There is nothing to
+  // state here, so nothing is stated.
+  const comparisonEntries = discovered.map((competitor) => {
+    const resolution = resolveCompetitorMetrics({
+      signals: null,
+      crawlOutcome: 'not_attempted',
+      companyMetrics,
+    });
     return {
       competitor,
-      metrics,
-      deltas_vs_company: subtractMetrics(metrics, companyMetrics),
+      metrics: resolution.metrics,
+      deltas_vs_company: resolution.metrics ? subtractMetrics(resolution.metrics, companyMetrics) : null,
+      metrics_state: resolution.state,
+      metrics_basis: resolution.basis,
+      crawl_outcome: resolution.crawl_outcome,
     } satisfies CompetitorComparisonEntry;
   });
 
@@ -417,8 +481,13 @@ export function buildCompetitorIntelligence(params: {
       keyword_count: discoveryKeywords.length,
       serp_domains_found: 0,
       serp_status: 'fallback',
-      is_fallback_used: false,
+      // D8 — the sync path observes no competitor, so every metric here is absent. That
+      // is a fallback by any reading; reporting `false` told consumers (which downgrade
+      // confidence on this flag) that a comparison had been observed when none had.
+      is_fallback_used: true,
       competitor_evidence_status: evidenceStatus,
+      competitors_with_observed_metrics: 0,
+      competitors_without_observed_metrics: comparisonEntries.length,
     },
     ...devCompetitorScoringDebug(),
   };
@@ -464,6 +533,8 @@ export async function buildCompetitorIntelligenceActive(params: {
   // GAP-06 — accumulate the company's own public search rows across BOTH discovery batches. These
   // come from responses already fetched for competitor discovery; no additional request is issued.
   const ownSearchObservations = [...serpDiscovery.searchObservations];
+  // DG-001 — feature evidence travels beside the organic observations, never inside them.
+  const ownFeatureObservations = [...serpDiscovery.featureObservations];
   let searchAcquisitionStatus = serpDiscovery.acquisitionStatus;
   let searchAcquisitionReason = serpDiscovery.acquisitionReason;
   let searchRequestsMade = serpDiscovery.requestsMade;
@@ -592,29 +663,32 @@ export async function buildCompetitorIntelligenceActive(params: {
 
   for (let index = 0; index < discovered.length; index += 1) {
     const competitor = discovered[index];
-    const signals = competitor.domain
+    // D8 — a competitor with no domain was never looked at; that is a different fact
+    // from a crawl that was attempted and failed, and the two no longer share a `null`.
+    const crawl = competitor.domain
       ? await crawlDomainSignals(competitor.domain, keywords)
-      : null;
+      : { signals: null, outcome: 'not_attempted' as CompetitorCrawlOutcome };
+    const signals = crawl.signals;
 
-    const metrics = signals
-      ? {
-          content_depth: clamp(Math.round((companyMetrics.content_depth + signals.contentScore) / 2 + 6), 24, 98),
-          authority_score: clamp(Math.round((companyMetrics.authority_score + signals.authorityProxy) / 2 + 8), 24, 98),
-          publishing_frequency: clamp(Math.round((companyMetrics.publishing_frequency + signals.contentScore * 0.6) / 1.6), 22, 95),
-          engagement_score: clamp(Math.round((companyMetrics.engagement_score + signals.authorityProxy * 0.65) / 1.65), 20, 94),
-          seo_coverage: clamp(Math.round((companyMetrics.seo_coverage + signals.keywordCoverageScore) / 2 + 9), 24, 99),
-          geo_presence: clamp(Math.round((companyMetrics.geo_presence + signals.technicalScore * 0.55) / 1.55), 20, 92),
-          aeo_readiness: clamp(Math.round((companyMetrics.aeo_readiness + signals.aiAnswerPresenceScore) / 2 + 7), 20, 99),
-        }
-      : liftMetrics(companyMetrics, competitor, index);
+    // D8 — the unconditional +6/+8/+9/+7 constants are gone, and so is the
+    // `liftMetrics()` fallback. Metrics are either derived from this competitor's own
+    // observed pages, or they are null. The seam owns that decision.
+    const resolution = resolveCompetitorMetrics({
+      signals,
+      crawlOutcome: crawl.outcome,
+      companyMetrics,
+    });
 
     (signals?.extractedKeywords ?? []).forEach((keyword) => competitorKeywordSet.add(keyword.toLowerCase()));
     (signals?.answerTopics ?? []).forEach((topic) => competitorAnswerSet.add(topic.toLowerCase()));
 
     comparisonEntries.push({
       competitor,
-      metrics,
-      deltas_vs_company: subtractMetrics(metrics, companyMetrics),
+      metrics: resolution.metrics,
+      deltas_vs_company: resolution.metrics ? subtractMetrics(resolution.metrics, companyMetrics) : null,
+      metrics_state: resolution.state,
+      metrics_basis: resolution.basis,
+      crawl_outcome: resolution.crawl_outcome,
     });
   }
 
@@ -666,13 +740,24 @@ export async function buildCompetitorIntelligenceActive(params: {
       strong_answers: strongAnswers,
     },
     own_domain_search_observations: ownSearchObservations,
+    own_domain_feature_observations: ownFeatureObservations,
     search_acquisition: { status: searchAcquisitionStatus, reason: searchAcquisitionReason, requests_made: searchRequestsMade },
     discovery_metadata: {
       keyword_count: keywords.length,
       serp_domains_found: serpDomains.length,
       serp_status: serpStatus,
-      is_fallback_used: ranked.some((competitor) => competitor.source === 'market_substitute'),
+      // D8 — this previously tracked DISCOVERY source only, so a competitor found via a
+      // live SERP whose own site then 404'd, 500'd or timed out produced fully synthetic
+      // metrics while this flag stayed false and `serp_status` stayed 'live'. Downstream
+      // consumers use exactly this flag to decide whether to downgrade confidence, so
+      // fabricated comparisons were being published at high confidence. It now also
+      // reflects whether the metrics themselves were observed.
+      is_fallback_used:
+        ranked.some((competitor) => competitor.source === 'market_substitute')
+        || comparisonEntries.some((entry) => entry.metrics == null),
       competitor_evidence_status: evidenceStatus,
+      competitors_with_observed_metrics: comparisonEntries.filter((entry) => entry.metrics != null).length,
+      competitors_without_observed_metrics: comparisonEntries.filter((entry) => entry.metrics == null).length,
     },
     ...devCompetitorScoringDebug(),
   };

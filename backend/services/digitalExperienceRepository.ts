@@ -7,6 +7,9 @@
  */
 import { supabase } from '../db/supabaseClient';
 import type { ExperiencePage } from './digitalExperience';
+// D7 — the same canonical reachability contract the assessment reader uses, so
+// probe eligibility and finding eligibility cannot disagree about a page.
+import { reachabilityForPage } from './crawl/reachabilityOutcome';
 import {
   aggregatePerformanceEvidence,
   fetchPageSpeed,
@@ -92,7 +95,10 @@ export async function collectPerformanceEvidence(params: {
   pages: readonly ExperiencePage[];
   enabled?: boolean;
 }): Promise<PerformanceEvidence> {
-  const eligible = params.pages.filter((p) => (p.http_status ?? 200) === 200 && p.url);
+  // D7 — `?? 200` made every never-fetched row an eligible probe target, so a URL
+  // GA4 had seen but the crawler had never reached could be sent to PageSpeed as
+  // though it were a known-good page. Only a page observed to return 200 qualifies.
+  const eligible = params.pages.filter((p) => reachabilityForPage(p).outcome === 'success' && p.url);
 
   if (!(params.enabled ?? pageSpeedEnabled())) {
     return {

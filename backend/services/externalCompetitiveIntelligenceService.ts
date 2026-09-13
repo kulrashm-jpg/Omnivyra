@@ -1,5 +1,9 @@
 import { createHash } from 'crypto';
 import { ownedDbTable } from '../db/writeOwner';
+import {
+  isPersistableSerpResultType,
+  type SerpResultType,
+} from './serp/serpResultTypes';
 import { assertAnalyticsMutationAllowed } from './analyticsEnvironmentGuardService';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
 
@@ -16,11 +20,38 @@ export type CompetitorDomainRecord = {
 };
 
 export type SerpResultInput = {
-  position: number;
-  url: string;
-  domain: string;
+  /**
+   * DG-001 — null where a rank is not meaningful.
+   *
+   * A People Also Ask entry or a knowledge panel occupies the page but holds no
+   * rank among the organic results, and stamping one on it is how a visibility
+   * average silently becomes wrong. `hasMeaningfulPosition` decides per type.
+   */
+  position: number | null;
+  /** DG-001 — null where the feature legitimately links nowhere (PAA, knowledge panel). */
+  url: string | null;
+  domain: string | null;
   title?: string | null;
-  result_type?: 'organic' | 'featured_snippet' | 'paid' | 'other';
+  /**
+   * DG-001 — the provider result summary.
+   *
+   * Required by competitor enrichment, which builds a profile from
+   * `title + snippet` prose and consults no rank at all. Neither the previous
+   * canonical row nor the report observation carried it, so without this the
+   * canonical client could not replace the enrichment path without silently
+   * degrading its confidence.
+   */
+  snippet?: string | null;
+  result_type?: SerpResultType;
+  /**
+   * DG-001 — the provider's own evidence for this feature, preserved verbatim.
+   *
+   * Never interpreted here and never persisted to a typed column; it exists so
+   * a later consumer can read what the provider actually said instead of
+   * re-deriving it. Absent when the provider supplied nothing beyond the
+   * identifying fields.
+   */
+  feature_metadata?: Record<string, unknown>;
 };
 
 export type SerpSnapshotInput = {
@@ -73,7 +104,14 @@ function snapshotFingerprint(input: SerpSnapshotInput): string {
     query: input.query.trim().toLowerCase(),
     geography: input.geography ?? 'global',
     device: input.device ?? 'desktop',
-    results: input.results.map((row) => ({ position: row.position, domain: normalizeDomain(row.domain), url: row.url })),
+    results: input.results.map((row) => ({
+      position: row.position,
+      domain: row.domain ? normalizeDomain(row.domain) : null,
+      url: row.url,
+      // DG-001 — the type participates in identity: the same URL appearing as an
+      // organic result and inside a sitelink block are two observations.
+      result_type: row.result_type ?? 'organic',
+    })),
   })).digest('hex');
 }
 
@@ -99,7 +137,13 @@ export async function upsertCompetitorDomain(input: CompetitorDomainRecord): Pro
   }, { onConflict: 'company_id,domain' });
 }
 
-export async function ingestSerpSnapshot(input: SerpSnapshotInput): Promise<{ snapshot_id: string | null; result_count: number; deduped: boolean }> {
+export async function ingestSerpSnapshot(input: SerpSnapshotInput): Promise<{
+  snapshot_id: string | null;
+  result_count: number;
+  deduped: boolean;
+  /** DG-001 — observations the deployed schema cannot hold. See the note below. */
+  withheld_unpersistable: number;
+}> {
   assertAnalyticsMutationAllowed('serp_acquisition');
   const fingerprint = snapshotFingerprint(input);
   const capturedAt = input.capturedAt ?? new Date().toISOString();
@@ -123,19 +167,40 @@ export async function ingestSerpSnapshot(input: SerpSnapshotInput): Promise<{ sn
 
   if (snapshot.error) throw new Error(`Failed to upsert SERP snapshot: ${snapshot.error.message}`);
   const snapshotId = snapshot.data?.id ?? null;
-  if (!snapshotId || input.results.length === 0) return { snapshot_id: snapshotId, result_count: 0, deduped: true };
+  if (!snapshotId || input.results.length === 0) {
+    return { snapshot_id: snapshotId, result_count: 0, deduped: true, withheld_unpersistable: 0 };
+  }
 
-  const rows = input.results
-    .filter((row) => row.position > 0 && row.url && row.domain)
+  // ── DG-001: persist only what the deployed schema can represent ──────────
+  // `analytics_serp_results` (migration 20260660) constrains
+  // `result_type IN ('organic','featured_snippet','paid','other')` and declares
+  // `url`, `domain` and `position` NOT NULL. The acquisition layer now observes
+  // richer features than that column can hold, so the honest options are to
+  // widen the schema or to withhold — never to relabel a People Also Ask entry
+  // as `other` so it fits, which would put a wrong value in an evidence table.
+  //
+  // Withholding is what happens here, and it is COUNTED rather than silent: the
+  // return value reports exactly how many observations the schema could not
+  // hold, so a caller can see the loss instead of inferring it from a total.
+  // Migration `20261025000000_serp_result_feature_types.sql` is written and
+  // deliberately NOT applied; until it is, these counts are the evidence for
+  // applying it.
+  const persistable = input.results.filter((row) =>
+    typeof row.position === 'number' && row.position > 0
+    && Boolean(row.url) && Boolean(row.domain)
+    && isPersistableSerpResultType(row.result_type ?? 'organic'));
+  const withheld = input.results.length - persistable.length;
+
+  const rows = persistable
     .slice(0, 50)
     .map((row) => ({
       snapshot_id: snapshotId,
       company_id: input.companyId,
       query: input.query.trim(),
       captured_at: capturedAt,
-      position: row.position,
-      url: row.url,
-      domain: normalizeDomain(row.domain),
+      position: row.position as number,
+      url: row.url as string,
+      domain: normalizeDomain(row.domain as string),
       title: row.title ?? null,
       result_type: row.result_type ?? 'organic',
     }));
@@ -144,7 +209,7 @@ export async function ingestSerpSnapshot(input: SerpSnapshotInput): Promise<{ sn
     .upsert(rows, { onConflict: 'snapshot_id,position,domain,url' });
   if (result.error) throw new Error(`Failed to upsert SERP results: ${result.error.message}`);
 
-  return { snapshot_id: snapshotId, result_count: rows.length, deduped: false };
+  return { snapshot_id: snapshotId, result_count: rows.length, deduped: false, withheld_unpersistable: withheld };
 }
 
 export async function buildExternalCompetitiveIntelligence(params: {

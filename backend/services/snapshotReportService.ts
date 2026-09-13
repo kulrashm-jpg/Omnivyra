@@ -84,6 +84,7 @@ import {
 import { assembleDigitalSnapshot } from './digitalSnapshotAssembly';
 // Phase 4: performance + digital-experience intelligence over the existing crawl corpus.
 import { assessDigitalExperience } from './digitalExperience';
+import { buildSearchFeatures } from './snapshotReport/searchFeatureHelpers';
 import { collectPerformanceEvidence, loadExperiencePages } from './digitalExperienceRepository';
 // Phase 3: the two competition views, built from the canonical relation model.
 import { buildCompetitiveTables, buildCompetitorTableRows } from './competitiveTables';
@@ -92,6 +93,8 @@ import type { CanonicalReport } from './canonicalReport/canonicalReportTypes';
 // BETA-PHASE1-AUDIT-005: composeSnapshotReport owns the report scan-budget lifecycle.
 import { startScanBudget, endScanBudget } from './intelligence/costGovernance';
 import { runWithScanBudget } from './intelligence/scanBudgetContext';
+import { observeSocialPresence } from './socialPresenceObservation';
+import { fetchSerpResultsForKeyword } from './reportCompetitorIntelligenceServiceHelpers';
 import { policyFor } from './intelligence/executionPolicies';
 import { randomUUID } from 'crypto';
 import {
@@ -175,7 +178,35 @@ export async function composeSnapshotReportFromDecisions(params: {
   crawlEvidence?: SnapshotCrawlEvidence | null;
 }): Promise<SnapshotReport> {
   const supplementalGrowthDecisions = params.supplementalGrowthDecisions ?? [];
-  const baseCombined = uniqueById([...params.snapshotDecisions, ...supplementalGrowthDecisions]);
+  const submittedDecisions = uniqueById([...params.snapshotDecisions, ...supplementalGrowthDecisions]);
+  /**
+   * D3 CONSUMER BOUNDARY — applied ONCE, here, before any consumer sees a decision.
+   *
+   * D3 established the rule and the classifier; it applied them at a single consumer
+   * (the visual-intelligence builder). Every OTHER consumer in this composer still
+   * received the raw list, so connected-source evidence continued to reach Report 1 by
+   * nine other routes: positioning/market assessment, the primary narrative, the score
+   * model, section assembly, the section floor, the SEO executive summary, competitor
+   * visuals, signal availability, and competitor candidate extraction — the last of
+   * which reads `action_payload.competitor_name`, so a private-source decision could put
+   * a competitor into Report 1's competitor set.
+   *
+   * Concretely, `seoIntelligenceService` derives `impact_traffic` and `priority_score`
+   * from private Search Console impressions and carries `evidence.avg_position`. Through
+   * section assembly that reached `evidenceSignalFromDecision`, which printed
+   * "avg position 12.4" verbatim into customer-facing prose, and through
+   * `rankByImpactConfidence` it led the Report 1 recommendation ranking.
+   *
+   * The fix is the boundary moving UPSTREAM of the consumers, not a guard added to each
+   * of them: one gate, the existing classifier, no second filter and no renderer-level
+   * checks. Report 2, the enterprise snapshot and the analytics path do not use this
+   * composer and are untouched — they read connected data from their own sources.
+   *
+   * The withheld half is counted in `pipeline_audit` rather than silently dropped, so
+   * the exclusion is observable.
+   */
+  const { publicEvidence: baseCombined, connectedEvidence: withheldConnectedDecisions } =
+    partitionDecisionsForReport1(submittedDecisions);
   const competitorIntelligence = enforceFinalCompetitorIntelligenceSync({
     result: params.competitorIntelligenceOverride ?? buildCompetitorIntelligence({
       decisions: baseCombined,
@@ -256,20 +287,13 @@ export async function composeSnapshotReportFromDecisions(params: {
       { geography: params.resolvedInput?.resolved.geography ?? null },
     ),
   );
-  // ── D3 — THE REPORT 1 PROVENANCE BOUNDARY ───────────────────────────────
+  // ── D3 — THE REPORT 1 PROVENANCE BOUNDARY (applied upstream) ────────────
   //
-  // `visual_intelligence` is built from decision objects, so it never passed
-  // `enforceTraceProvenance` — the gate that keeps CONNECTED_SOURCE evidence out
-  // of Report 1. `seoIntelligenceService` reads the customer's connected Search
-  // Console property and emits snapshot-tier decisions, so its impressions,
-  // clicks and CTR flowed straight into `search_visibility_funnel`,
-  // `rank_tracking_score` (tagged ['GSC'], state `measured`) and
-  // `opportunity_coverage_matrix`, and out through the Report 1 payload.
-  //
-  // GAP-07 named this hazard and closed half of it: the search-visibility and
-  // digital-snapshot readings stopped DERIVING from the GSC axis. What remained
-  // was Report 1 still SHIPPING it. This closes the other half at the earliest
-  // point the public surface is assembled.
+  // The partition now runs once at the top of this function, so EVERY consumer —
+  // not just this one — receives public evidence only. The second application that
+  // used to sit here has been removed rather than kept as belt-and-braces: two gates
+  // for one rule is a duplicate boundary, and the one that runs second would quietly
+  // become the only one anybody maintains.
   //
   // The connected half is NOT relabelled and NOT deleted from the system — it is
   // simply not this surface's evidence. Report 2, the enterprise snapshot and the
@@ -278,9 +302,9 @@ export async function composeSnapshotReportFromDecisions(params: {
   // What the customer sees instead is the helper's existing honest degradation:
   // null volumes at `confidence: 'low'`, and `insufficient_signal` axis states.
   // No value becomes zero, and nothing is re-derived to fill the gap.
-  const { publicEvidence: report1Decisions } = partitionDecisionsForReport1(finalDecisions);
   const visualIntelligence = buildSnapshotVisualIntelligence({
-    decisions: report1Decisions,
+    // Public evidence only — `finalDecisions` descends from the partitioned set.
+    decisions: finalDecisions,
     score,
     competitorIntelligence,
     publicAudit: params.publicAudit ?? null,
@@ -525,6 +549,10 @@ export async function composeSnapshotReportFromDecisions(params: {
       resolver_inputs_present: resolverInputsPresent(params.resolvedInput),
       snapshot_decisions: params.snapshotDecisions.length,
       supplemental_growth_decisions: supplementalGrowthDecisions.length,
+      // D3 — decisions withheld from this public surface because they came from a
+      // connected source. Counted, not silently dropped: a boundary nobody can see is a
+      // boundary nobody can verify.
+      connected_source_decisions_withheld: withheldConnectedDecisions.length,
       competitor_gap_decisions_added: competitorDecisions.length,
       fallback_decisions_added: 0,
       final_decisions: finalDecisions.length,
@@ -709,6 +737,9 @@ export async function composeSnapshotReportFromDecisions(params: {
     bestPosition: rankedObservations.length > 0
       ? Math.min(...rankedObservations.map((o) => o.position as number))
       : null,
+    // ORGANIC ONLY. `searchObservations` carries own-domain organic rows and
+    // nothing else — DG-001's feature evidence travels in `features` below, and
+    // the four fields above are computed without ever consulting it.
     observations: searchObservations,
     requestsMade: searchAcquisition?.requests_made ?? 0,
     reason: searchState === 'measured'
@@ -716,6 +747,20 @@ export async function composeSnapshotReportFromDecisions(params: {
       : searchState === 'insufficient_signal'
         ? `The domain did not appear in the public results returned for ${searchObservations.length} quer${searchObservations.length === 1 ? 'y' : 'ies'}.`
         : searchAcquisition?.reason ?? 'Public search results could not be retrieved for this report.',
+    // ─── DG-001 — sibling feature evidence ─────────────────────────────────
+    // What the results page showed BESIDE the organic ten, from the very same
+    // responses: no extra request, no extra spend. Observation only — which
+    // features appeared, how many, and whether the company owned one where that
+    // is establishable. No answer-readiness score and no opportunity: turning
+    // these into an AEO verdict is DG-007's job, deliberately not done here.
+    //
+    // `state` mirrors acquisition rather than re-deriving it, so "we could not
+    // look" stays distinguishable from "we looked and there were none".
+    features: buildSearchFeatures(
+      competitorIntelligence.own_domain_feature_observations ?? [],
+      searchObservations.length,
+      searchAcquisition?.status ?? null,
+    ),
   };
 
   // GAP-09 — record what evidence acquisition actually did on this run.
@@ -825,6 +870,30 @@ export async function composeSnapshotReport(
   let report: SnapshotReport | null = null;
   try {
     report = await runWithScanBudget(scanId, async () => {
+      // G-1 — public social observation. Deliberately INSIDE this scope: the comment above names it
+      // the single owner of every paid provider, and this issues one SERP query through the same
+      // `fetchSerpResultsForKeyword` the competitor engine uses, so the budget gate, provider-call
+      // logging and cost ledger all apply with no new plumbing.
+      //
+      // On H2, precisely: `fetchSerpResultsForKeyword` reads the deadline signal from
+      // `reportDeadlineContext`, so the seam is reused rather than bypassed — but that scope is
+      // opened only by `performanceReportService` (Report 2), and GAP-14 severed Report 2's edge to
+      // `composeSnapshotReport`. This Report 1 invocation therefore runs with NO active H2
+      // deadline, and `getReportDeadlineSignal()` returns null here. Report 1 has no 45s boundary;
+      // its liveness is governed by the scan budget above.
+      const socialPresence = await observeSocialPresence({
+        candidateUrls: options?.resolvedInput?.resolved.socialLinks ?? [],
+        companyName: options?.resolvedInput?.resolved.companyName ?? null,
+        websiteDomain: options?.resolvedInput?.resolved.websiteDomain ?? null,
+        geography: options?.resolvedInput?.resolved.geography ?? null,
+        fetchSerp: fetchSerpResultsForKeyword,
+      }).catch(() => []);
+      // Additive: the existing declared-evidence object is carried through untouched when there is
+      // nothing to add, so `same_as` and the rest are byte-identical on every existing path.
+      const auditWithSocial = socialPresence.length > 0 && publicAudit.declared_evidence
+        ? { ...publicAudit, declared_evidence: { ...publicAudit.declared_evidence, social_presence: socialPresence } }
+        : publicAudit;
+
       const activeCompetitorIntelligence = await buildCompetitorIntelligenceActive({
         companyId,
         decisions: uniqueById([...snapshotComposition.decisions, ...growthSupplement, ...publicAudit.decisions]),
@@ -837,7 +906,7 @@ export async function composeSnapshotReport(
         supplementalGrowthDecisions: growthSupplement,
         resolvedInput: options?.resolvedInput ?? null,
         readiness: options?.readiness ?? null,
-        publicAudit,
+        publicAudit: auditWithSocial,
         competitorIntelligenceOverride: activeCompetitorIntelligence,
         crawlEvidence: options?.crawlEvidence ?? null,
       });

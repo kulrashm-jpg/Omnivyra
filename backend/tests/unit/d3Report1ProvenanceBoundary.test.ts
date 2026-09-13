@@ -294,15 +294,28 @@ describe('D3 — the boundary cannot be bypassed or drift out of date', () => {
   });
 
   it('Report 1 composition routes decisions through the boundary', () => {
-    // A guard at the canonical boundary, not a scattered check: if the composer
-    // ever passes raw decisions to the visual-intelligence builder again, the
-    // whole surface is unguarded and this fails.
+    // A guard at the canonical boundary, not a scattered check.
+    //
+    // D3 FOLLOW-UP: this previously pinned the partition at the visual-intelligence
+    // consumer — `partitionDecisionsForReport1(finalDecisions)`. That gated ONE of ten
+    // consumers; the other nine received the raw list. The boundary now runs once,
+    // upstream of every consumer, so the assertion moves with it and gets stronger:
+    // the gate must sit on the SUBMITTED decisions, before anything derives from them.
     const source: string = fs.readFileSync('backend/services/snapshotReportService.ts', 'utf8');
     const executable = source
       .replace(/\/\*[\s\S]*?\*\//g, ' ')
       .replace(/(^|[^:])\/\/.*$/gm, '$1');
-    expect(executable).toContain('partitionDecisionsForReport1(finalDecisions)');
-    expect(executable).not.toMatch(/buildSnapshotVisualIntelligence\(\{\s*decisions:\s*finalDecisions/);
+    expect(executable).toContain('partitionDecisionsForReport1(submittedDecisions)');
+
+    // The ungated list must be inert: it may be DECLARED and PARTITIONED, and nothing
+    // else. Any third executable mention means a consumer found its way back to it.
+    const ungatedMentions = executable.match(/\bsubmittedDecisions\b/g) ?? [];
+    expect(ungatedMentions).toHaveLength(2);
+
+    // And no consumer may be handed the raw parameter directly, bypassing both. Anchored
+    // so the legitimate telemetry line `snapshot_decisions: params.snapshotDecisions.length`
+    // cannot satisfy it.
+    expect(executable).not.toMatch(/(?<![_A-Za-z])decisions:\s*params\.snapshotDecisions\b/);
   });
 
   it('no second provenance classifier was introduced', () => {

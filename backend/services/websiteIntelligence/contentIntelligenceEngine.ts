@@ -140,35 +140,52 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
     const withSig = pages.filter((p) => p.crawl_metadata?.signals);
     const anyAuthor = withSig.some(hasAuthor);
     C('authorship', 'Authorship signals', anyAuthor ? 'pass' : 'not_evaluable', anyAuthor ? pct(withSig.filter(hasAuthor).length, withSig.length) : null, anyAuthor ? 'Pages exposing an author / byline' : 'No authorship metadata detected');
-    // CONTENT FRESHNESS — from DECLARED publication dates only.
+    // CONTENT FRESHNESS — declared STALENESS, from DECLARED content dates only.
     //
-    // Reads `crawl_metadata.signals.published_time`, which the crawler recovers from the page's own
-    // `article:published_time`, JSON-LD `datePublished`, or `<time datetime>`. That is the page's
-    // claim about when it was published. It is NOT `last_crawled_at`, which records when we looked —
-    // relabelling crawl age as content freshness would report our own scan schedule back to the
-    // customer as if it were their publishing cadence.
+    // Reads `crawl_metadata.signals.published_time` and `.modified_time`, which the crawler recovers
+    // from the page's own `article:published_time` / JSON-LD `datePublished` / `<time datetime>` and
+    // `article:modified_time` / JSON-LD `dateModified`. Both are the page's own claim about itself.
+    // Neither is `last_crawled_at`, which records when WE looked — relabelling crawl age as content
+    // freshness would report our own scan schedule back to the customer as their publishing cadence.
+    //
+    // DG-010: the page's date is the LATER of the two. A page published in 2019 and declared as
+    // updated last month is not stale, and reading only `published_time` reported it as stale.
+    //
+    // This is STALENESS, not DECAY. Decay means traffic or ranking falling over time; measuring it
+    // needs per-page history, and this platform has none — `canonical_pages` is upserted on
+    // (company_id, url) and `page_content` / `page_links` are deleted and reinserted on every
+    // re-crawl, so the previous state of a page is destroyed the moment it is crawled again.
+    // Nothing here may be described, labelled or read as decay.
     //
     // Most sites declare a date on few pages or none. Below MIN_DATED_PAGES there is no honest
     // freshness statement to make, so the check abstains and says how thin the evidence is.
     const MIN_DATED_PAGES = 3;
-    const publishedAtMs = (p: PageRow): number | null => {
-      const raw = p.crawl_metadata?.signals?.published_time;
+    /** One declared date → epoch ms, or null when it is absent or not usable as evidence. */
+    const declaredMs = (raw: unknown): number | null => {
       if (typeof raw !== 'string' || raw.trim().length === 0) return null;
       const ms = Date.parse(raw.trim());
       // A future date is a malformed declaration, not evidence of freshness.
       return Number.isNaN(ms) || ms > nowMs ? null : ms;
     };
-    const datedMs = pages.map(publishedAtMs).filter((ms): ms is number => ms !== null);
+    /** The page's latest usable declared content date. Never synthesised: no declaration → null. */
+    const contentDateMs = (p: PageRow): number | null => {
+      const published = declaredMs(p.crawl_metadata?.signals?.published_time);
+      const modified = declaredMs(p.crawl_metadata?.signals?.modified_time);
+      if (published === null) return modified;
+      if (modified === null) return published;
+      return Math.max(published, modified);
+    };
+    const datedMs = pages.map(contentDateMs).filter((ms): ms is number => ms !== null);
     if (datedMs.length >= MIN_DATED_PAGES) {
       const TWELVE_MONTHS_MS = 365 * 24 * 60 * 60 * 1000;
       const recent = datedMs.filter((ms) => nowMs - ms <= TWELVE_MONTHS_MS).length;
       C('content_freshness', 'Content freshness', 'pass', pct(recent, datedMs.length),
-        `${recent}/${datedMs.length} dated pages published in the last 12 months`);
+        `${recent}/${datedMs.length} dated pages declare publication or update within the last 12 months`);
     } else {
       C('content_freshness', 'Content freshness', 'not_evaluable', null,
         datedMs.length === 0
-          ? 'No page declares a publication date'
-          : `Only ${datedMs.length} of ${pages.length} pages declare a publication date`);
+          ? 'No page declares a publication or update date'
+          : `Only ${datedMs.length} of ${pages.length} pages declare a publication or update date`);
     }
     // BETA-ROADMAP-EXEC-008 Tier 2 — presence-only signals (NO accessibility/quality judgement, NO headless).
     // Absence → not_evaluable (not a defect: many sites convert off-site, or have no tabular data).

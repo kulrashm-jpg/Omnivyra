@@ -7,6 +7,10 @@
  * it as "content freshness" would hand the customer our own scan schedule back as their publishing
  * cadence. These tests hold that line, and hold the abstention floor: in production only 3 of 147
  * crawled pages declare a date, so the honest answer for almost every site today is "not evaluable".
+ *
+ * DG-010 extends the same rule to the DECLARED update date (`article:modified_time` / JSON-LD
+ * `dateModified`): the page's date is the LATER of the two declarations. The detail copy therefore
+ * reads "publication or update". Nothing else about the check moved.
  */
 import { scoreContentIntelligence } from '../../services/websiteIntelligence/contentIntelligenceEngine';
 
@@ -46,7 +50,7 @@ describe('content freshness — declared publication dates only', () => {
       ]);
       expect(check.status).toBe('pass');
       expect(check.score).toBe(50);
-      expect(check.detail).toBe('2/4 dated pages published in the last 12 months');
+      expect(check.detail).toBe('2/4 dated pages declare publication or update within the last 12 months');
     });
 
     it('reports 100 when every dated page is recent', () => {
@@ -65,7 +69,7 @@ describe('content freshness — declared publication dates only', () => {
         page('a', daysAgo(30)), page('b', daysAgo(30)), page('c', daysAgo(30)),
         page('d', null), page('e', null),
       ]);
-      expect(check.detail).toBe('3/3 dated pages published in the last 12 months');
+      expect(check.detail).toBe('3/3 dated pages declare publication or update within the last 12 months');
     });
   });
 
@@ -75,7 +79,7 @@ describe('content freshness — declared publication dates only', () => {
       const check = freshness([page('a', null), page('b', null)]);
       expect(check.status).toBe('not_evaluable');
       expect(check.score).toBeNull();
-      expect(check.detail).toBe('No page declares a publication date');
+      expect(check.detail).toBe('No page declares a publication or update date');
     });
 
     it('abstains on the production case — one dated page out of many', () => {
@@ -83,7 +87,7 @@ describe('content freshness — declared publication dates only', () => {
       const check = freshness(pages);
       expect(check.status).toBe('not_evaluable');
       expect(check.score).toBeNull();
-      expect(check.detail).toBe('Only 1 of 27 pages declare a publication date');
+      expect(check.detail).toBe('Only 1 of 27 pages declare a publication or update date');
     });
 
     it('abstains at two dated pages', () => {
@@ -124,12 +128,12 @@ describe('content freshness — declared publication dates only', () => {
       const future = new Date(NOW + 90 * 24 * 60 * 60 * 1000).toISOString();
       const check = freshness([page('a', future), page('b', daysAgo(10)), page('c', daysAgo(10))]);
       expect(check.status).toBe('not_evaluable');
-      expect(check.detail).toBe('Only 2 of 3 pages declare a publication date');
+      expect(check.detail).toBe('Only 2 of 3 pages declare a publication or update date');
     });
 
     it('ignores an empty string', () => {
       const check = freshness([page('a', '   '), page('b', null), page('c', null)]);
-      expect(check.detail).toBe('No page declares a publication date');
+      expect(check.detail).toBe('No page declares a publication or update date');
     });
   });
 

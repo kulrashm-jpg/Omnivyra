@@ -33,6 +33,23 @@ export interface PageSignals {
   form_count: number;
   table_count: number;
   published_time: string | null;
+  /**
+   * DG-010 — the page's own DECLARED last-update date, read from `article:modified_time` or JSON-LD
+   * `dateModified`. Same evidence class as `published_time`: a claim the page makes about itself,
+   * recovered from the SAME static parse (no extra fetch, no headless).
+   *
+   * Deliberately NOT sourced from:
+   *   • the HTTP `Last-Modified` response header — it is emitted by the server, not declared by the
+   *     page. Dynamically rendered and CDN-served pages routinely return the response time, so
+   *     reading it would report "updated today" for every such site. That is a fabricated date.
+   *   • sitemap `<lastmod>` — commonly auto-stamped by the CMS for every URL at build time, so it
+   *     records a deploy, not a content change.
+   * Both are in scope at the call site and are left unread on purpose.
+   *
+   * Optional so every existing constructor and already-stored `crawl_metadata` row stays valid.
+   * Absence means the page declared nothing — that is `unavailable`, never a guess.
+   */
+  modified_time?: string | null;
   author: string | null;
   /**
    * BETA-AUTHORITY-EXEC-002 (Wave-1) — declared entity identity + credentials parsed from the already-fetched
@@ -215,6 +232,8 @@ function extractPageSignals(rawHtml: string, metaTags: Record<string, string>, h
     for (const t of ld[1].matchAll(/"@type"\s*:\s*"([^"]+)"/g)) if (!jsonldTypes.includes(t[1])) jsonldTypes.push(t[1]);
   }
   const ldDatePublished = /"datePublished"\s*:\s*"([^"]+)"/i.exec(rawHtml)?.[1] ?? null;
+  // DG-010 — the declared last-update date, from the page's own JSON-LD.
+  const ldDateModified = /"dateModified"\s*:\s*"([^"]+)"/i.exec(rawHtml)?.[1] ?? null;
   const ldAuthor = /"author"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"/i.exec(rawHtml)?.[1] ?? null;
 
   // BETA-AUTHORITY-EXEC-002 (Wave-1) — declared entity identity (sameAs) + declared credentials, parsed from
@@ -264,6 +283,10 @@ function extractPageSignals(rawHtml: string, metaTags: Record<string, string>, h
     form_count: count(/<form\b/gi),
     table_count: count(/<table\b/gi),
     published_time: metaTags['article:published_time'] ?? ldDatePublished ?? /<time[^>]+datetime=["']([^"']+)["']/i.exec(rawHtml)?.[1] ?? null,
+    // DG-010 — declared update date. There is deliberately NO `<time datetime>` fallback here: that
+    // element carries the PUBLICATION date on virtually every template, so reusing it would silently
+    // copy `published_time` into a field that claims to mean something else.
+    modified_time: metaTags['article:modified_time'] ?? ldDateModified ?? null,
     author: metaTags['author'] ?? ldAuthor ?? null,
     same_as: [...new Set(sameAs)].slice(0, 25),
     declared_credentials: [...new Set(declaredCredentials)].slice(0, 25),

@@ -200,7 +200,9 @@ export interface ReportData {
         sources?: string[];
       } | null;
       rationale: string;
-      standing: 'Behind' | 'At Par' | 'Ahead';
+      // D8 — 'Not Observed' when this competitor's public site was never observed, so
+      // the view states that rather than a comparative verdict it has no evidence for.
+      standing: 'Behind' | 'At Par' | 'Ahead' | 'Not Observed';
     }[];
     marketAlternatives?: {
       name: string;

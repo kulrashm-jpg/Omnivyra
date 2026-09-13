@@ -146,15 +146,19 @@ export default function ReportPageContent({
     return 'Direct';
   };
 
-  const getStandingLabel = (standing: 'Behind' | 'At Par' | 'Ahead') => {
+  const getStandingLabel = (standing: 'Behind' | 'At Par' | 'Ahead' | 'Not Observed') => {
     if (standing === 'Ahead') return 'Leading';
     if (standing === 'At Par') return 'Competitive';
+    // D8 — this competitor's public site was not observed, so there is no comparison to
+    // report. Saying 'Behind' here would assert a loss on no evidence.
+    if (standing === 'Not Observed') return 'Not observed';
     return 'Behind (needs improvement)';
   };
 
-  const getStandingStyles = (standing: 'Behind' | 'At Par' | 'Ahead') => {
+  const getStandingStyles = (standing: 'Behind' | 'At Par' | 'Ahead' | 'Not Observed') => {
     if (standing === 'Ahead') return 'bg-emerald-100 text-emerald-700';
     if (standing === 'At Par') return 'bg-slate-100 text-slate-700';
+    if (standing === 'Not Observed') return 'bg-slate-100 text-slate-500';
     return 'bg-amber-100 text-amber-700';
   };
 
@@ -170,8 +174,18 @@ export default function ReportPageContent({
       return 'You are currently benchmarking against your market, but the strongest gap is still forming.';
     }
 
+    // D8 — only observed comparisons can establish where the customer stands. An
+    // unobserved competitor is excluded rather than ranked, so it cannot become the
+    // 'weakest standing' that drives this sentence.
     const standingOrder = { Behind: 0, 'At Par': 1, Ahead: 2 } as const;
-    const weakestStanding = competitors.reduce<'Behind' | 'At Par' | 'Ahead'>((lowest, competitor) => {
+    const observedStandings = competitors.filter(
+      (competitor): competitor is typeof competitor & { standing: 'Behind' | 'At Par' | 'Ahead' } =>
+        competitor.standing !== 'Not Observed',
+    );
+    if (observedStandings.length === 0) {
+      return 'No competitor site could be observed for this run, so there is no benchmark to report yet.';
+    }
+    const weakestStanding = observedStandings.reduce<'Behind' | 'At Par' | 'Ahead'>((lowest, competitor) => {
       return standingOrder[competitor.standing] < standingOrder[lowest] ? competitor.standing : lowest;
     }, 'Ahead');
 

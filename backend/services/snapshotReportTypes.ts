@@ -1,4 +1,5 @@
 import type { PersistedDecisionObject } from './decisionObjectService';
+import type { SerpResultType } from './serp/serpResultTypes';
 import type { ReportReadinessResult } from './reportReadinessService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import type { CompetitorIntelligenceResult } from './reportCompetitorIntelligenceService';
@@ -599,6 +600,12 @@ export interface SnapshotReport {
     resolver_inputs_present: number;
     snapshot_decisions: number;
     supplemental_growth_decisions: number;
+    /**
+     * D3 — how many submitted decisions were withheld from this public surface because
+     * their producing service reads a connected customer source. Present so the boundary
+     * is observable in the payload rather than an invisible filter.
+     */
+    connected_source_decisions_withheld: number;
     competitor_gap_decisions_added: number;
     fallback_decisions_added: number;
     final_decisions: number;
@@ -701,10 +708,59 @@ export type SnapshotSearchVisibility = {
   queriesRanked: number;
   /** Best (lowest) observed position across all queries; null when never observed. */
   bestPosition: number | null;
+  /**
+   * ORGANIC observations only.
+   *
+   * `bestPosition`, `queriesRanked`, `state` and this array are all computed
+   * over organic results and nothing else. A People Also Ask entry, a knowledge
+   * panel or an ad is not an organic rank, and letting one in would silently
+   * redefine what "search visibility" means to a customer.
+   */
   observations: SnapshotSearchObservation[];
   /** External SERP requests attributable to this report run. */
   requestsMade: number;
   reason: string | null;
+  /**
+   * DG-001 — non-organic SERP features observed on the same responses.
+   *
+   * SIBLING EVIDENCE. Deliberately optional: reports composed before DG-001 do
+   * not carry it, and every reader must render without it. Nothing here feeds
+   * `bestPosition`, `queriesRanked` or `state`.
+   *
+   * This is observation, not interpretation — no answer-readiness score, no
+   * opportunity, no recommendation. Turning these observations into an AEO
+   * verdict is DG-007's job and is deliberately not done here.
+   */
+  features?: SnapshotSearchFeatures | null;
+};
+
+/** DG-001 — what the SERP showed beyond the organic ten. */
+export type SnapshotSearchFeatures = {
+  /**
+   * `measured`            — acquisition ran and at least one feature was observed.
+   * `insufficient_signal` — acquisition ran and no feature was observed.
+   * `unavailable`/`failed` — mirrors the parent surface; acquisition never ran.
+   */
+  state: 'measured' | 'insufficient_signal' | 'unavailable' | 'failed';
+  observed: SnapshotSearchFeatureObservation[];
+  /** Deterministic per-type tally over `observed`. */
+  counts: Partial<Record<SerpResultType, number>>;
+};
+
+export type SnapshotSearchFeatureObservation = {
+  query: string;
+  result_type: SerpResultType;
+  /** Null for every feature without a meaningful rank. Never zero. */
+  position: number | null;
+  url: string | null;
+  domain: string | null;
+  title: string | null;
+  /**
+   * Three-valued. `null` means the feature carries no URL, so ownership cannot
+   * be established either way — never collapsed to `false`, which would assert
+   * something the evidence does not support.
+   */
+  ownedByCompany: boolean | null;
 };
 
 /**

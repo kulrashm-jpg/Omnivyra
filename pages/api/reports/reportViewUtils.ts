@@ -74,8 +74,14 @@ export function sortReportActions<T extends { priorityType: PriorityType; impact
   return [...items].sort((left, right) => comparePriorityType(left, right));
 }
 
-export function buildCompetitorStanding(delta?: ComposedDelta): 'Behind' | 'At Par' | 'Ahead' {
-  if (!delta) return 'At Par';
+/**
+ * D8 — a standing is a comparative claim about the customer versus one competitor, so it
+ * requires an observed comparison. Absent deltas previously returned 'At Par', which
+ * states parity — a positive finding — on no evidence at all. When the competitor was
+ * never observed the table now says so instead.
+ */
+export function buildCompetitorStanding(delta?: ComposedDelta): 'Behind' | 'At Par' | 'Ahead' | 'Not Observed' {
+  if (!delta) return 'Not Observed';
   const values = [
     Number(delta.content_depth ?? 0),
     Number(delta.authority_score ?? 0),

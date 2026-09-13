@@ -7,6 +7,19 @@ import {
   googleTrendsUnavailable,
   parseHotTrendsFeed,
 } from '../../../backend/services/trends/googleTrendsContract';
+// D5 - the source-boundary contract for the YouTube trending signal this route
+// has no sanctioned way to acquire.
+import {
+  youTubeTrendingUnavailable,
+  youTubeTrendsAcquisition,
+} from '../../../backend/services/trends/youtubeTrendsContract';
+import type { YouTubeTrendingObservation } from '../../../backend/services/trends/youtubeTrendsContract';
+// D6 - the source-boundary contract for the one Reddit listing this route reads.
+import {
+  fetchPopularListing,
+  redditTrendingPosts,
+  redditTrendingUnavailable,
+} from '../../../backend/services/trends/redditTrendingContract';
 
 // One Specialized Source Per Platform Type for Best Results
 const getTrendingData = async () => {
@@ -65,29 +78,25 @@ const fetchGoogleTrends = async () => {
 
 
 // Reddit Trending - Free, no auth needed
+//
+// D6 — the live call here was real; the failure path was not. On any error this
+// returned two invented posts — "AI Revolution" at 15,420 upvotes in
+// r/technology, "Remote Work" at 12,300 in r/workfromhome — attributed to Reddit
+// and rendered as observed engagement. Nothing had been observed.
+//
+// The listing establishes, for posts actually read: the title, the community,
+// and the score Reddit publishes. All three are kept, through the contract that
+// says so. A listing that could not be read establishes nothing.
 const fetchRedditTrending = async () => {
-  try {
-    // Reddit's trending subreddits (free)
-    const response = await fetch('https://www.reddit.com/r/popular.json?limit=5');
-    if (!response.ok) throw new Error('Reddit API failed');
-    
-    const data = await response.json();
-    const trendingPosts = data.data.children.slice(0, 5).map(post => ({
-      keyword: post.data.title,
-      upvotes: post.data.ups,
-      subreddit: post.data.subreddit,
-      category: "Reddit",
-      source: "Reddit"
-    }));
-    
-    return trendingPosts;
-  } catch (error) {
-    console.error('Reddit API error:', error);
-    return [
-      { keyword: "AI Revolution", upvotes: 15420, subreddit: "technology", category: "Reddit", source: "Reddit" },
-      { keyword: "Remote Work", upvotes: 12300, subreddit: "workfromhome", category: "Reddit", source: "Reddit" },
-    ];
+  const listing = await fetchPopularListing();
+  if (listing === null) {
+    console.error('Reddit error: r/popular listing could not be read');
+    // Honest silence. Manufacturing posts, subreddits and upvote counts under a
+    // provider's name is a larger falsehood than a mislabelled measurement, and
+    // the consumer already renders nothing for an empty list.
+    return redditTrendingUnavailable();
   }
+  return redditTrendingPosts(listing);
 };
 
 // GitHub Trending - Free, no auth needed
@@ -116,24 +125,37 @@ const fetchGitHubTrending = async () => {
   }
 };
 
-// YouTube Trending - Free tier (10,000 quota units/day)
-const fetchYouTubeTrending = async () => {
-  try {
-    // Note: In production, you'd need a YouTube Data API key
-    // For now, we'll use mock data that simulates real trending videos
-    const mockTrendingVideos = [
-      { keyword: "AI Revolution", views: "2.3M", growth: "+45%", category: "Technology", source: "YouTube" },
-      { keyword: "Remote Work Tips", views: "1.8M", growth: "+32%", category: "Business", source: "YouTube" },
-      { keyword: "Sustainable Living", views: "3.1M", growth: "+67%", category: "Lifestyle", source: "YouTube" },
-      { keyword: "Mental Health", views: "4.2M", growth: "+89%", category: "Health", source: "YouTube" },
-      { keyword: "Cryptocurrency", views: "1.5M", growth: "+23%", category: "Finance", source: "YouTube" },
-    ];
-    
-    return mockTrendingVideos;
-  } catch (error) {
-    console.error('YouTube API error:', error);
-    return [];
+// YouTube Trending
+//
+// D5 — this used to return five hardcoded videos with invented `views`
+// ("2.3M"…"4.2M") and invented `growth` ("+45%"…"+89%"), every one stamped
+// `source: "YouTube"`. The `try` block held nothing but that literal array, so
+// no request was ever made and the `catch` under it was unreachable. Its own
+// comment admitted the rows were mock data; nothing downstream did.
+//
+// The architecture was audited before anything was written here: the YouTube
+// adapters are per-account OAuth publishers, the "YouTube Trends" entry in
+// externalApiPresets is a super-admin preset for the external-API executor and
+// not a provider this route may call, and YOUTUBE_API_KEY is registered neither
+// in config/env.schema.ts nor in PROVIDER_CREDENTIALS. There is no sanctioned
+// path, so nothing is claimed — see youtubeTrendsContract for the full record.
+const fetchYouTubeTrending = async (): Promise<YouTubeTrendingObservation[]> => {
+  const acquisition = youTubeTrendsAcquisition();
+  // Narrowed with `in` rather than `!acquisition.available`: this repo sets
+  // `"strict": false`, which disables discriminated-union narrowing by negation,
+  // so `.reason` would not be visible on the false branch. `in` is the idiom the
+  // codebase already uses for exactly this trap.
+  if ('reason' in acquisition) {
+    console.error('YouTube trending error:', acquisition.reason);
+    // Honest silence. Manufacturing videos, view counts and growth rates under a
+    // provider's name is a larger falsehood than a mislabelled measurement, and
+    // the consumer already renders nothing for an empty list.
+    return youTubeTrendingUnavailable();
   }
+  // Reachable only once the contract declares supported evidence, which requires
+  // a credential, a registered provider and a real endpoint. Writing an
+  // acquisition body before those exist is exactly how the mock array was born.
+  return youTubeTrendingUnavailable();
 };
 
 // Fallback data when APIs fail
@@ -142,23 +164,17 @@ const getFallbackTrendingData = () => {
     // D4 - these three topics were invented and attributed to Google Trends.
     // Nothing was ever observed here, so nothing is claimed.
     linkedin: googleTrendsUnavailable(),
-    twitter: [
-      { keyword: "AI Revolution", upvotes: 15420, subreddit: "technology", category: "Reddit", source: "Reddit" },
-      { keyword: "Remote Work", upvotes: 12300, subreddit: "workfromhome", category: "Reddit", source: "Reddit" },
-    ],
-    instagram: [
-      { keyword: "AI Revolution", views: "2.3M", growth: "+45%", category: "Technology", source: "YouTube" },
-      { keyword: "Remote Work Tips", views: "1.8M", growth: "+32%", category: "Business", source: "YouTube" },
-    ],
-    facebook: [
-      { keyword: "Mental Health", upvotes: 18700, subreddit: "selfimprovement", category: "Reddit", source: "Reddit" },
-      { keyword: "Community Building", upvotes: 14200, subreddit: "socialskills", category: "Reddit", source: "Reddit" },
-    ],
-    youtube: [
-      { keyword: "AI Tutorials", views: "5.2M", growth: "+78%", category: "Education", source: "YouTube" },
-      { keyword: "Tech Reviews", views: "3.8M", growth: "+56%", category: "Technology", source: "YouTube" },
-      { keyword: "Gaming Content", views: "4.1M", growth: "+43%", category: "Entertainment", source: "YouTube" },
-    ],
+    // D6 - two invented posts, with subreddits and precise upvote counts, were
+    // attributed to Reddit here. Nothing was ever observed, so nothing is claimed.
+    twitter: redditTrendingUnavailable(),
+    // D5 - two invented videos with invented view counts and growth rates,
+    // attributed to YouTube. Nothing was ever observed here, so nothing is claimed.
+    instagram: youTubeTrendingUnavailable(),
+    // D6 - the same defect a second time: the Facebook lane reads the SAME Reddit
+    // call, so it carried its own pair of invented rows (18,700 and 14,200).
+    facebook: redditTrendingUnavailable(),
+    // D5 - three more invented videos under the same provider name.
+    youtube: youTubeTrendingUnavailable(),
     lastUpdated: new Date().toISOString()
   };
 };
@@ -196,7 +212,10 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
         source: "Reddit",
         platform: "Twitter",
         category: "Community",
+        // D6 - the number alone could not distinguish a score Reddit published
+        // from one it withheld (or, pre-fix, from one nobody observed at all).
         upvotes: trend.upvotes,
+        upvotesState: trend.upvotes_state,
         clickable: true
       });
     });
@@ -207,12 +226,18 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
     trendingData.instagram?.forEach(trend => {
       suggestions.push({
         type: "instagram_trend",
-        text: `📸 "${trend.keyword}" trending with ${trend.views} views`,
+        // D5 - was `trending with ${trend.views} views`, which carried an invented
+        // view count into the suggestion text. Membership of a trending list is
+        // the only thing such a row could ever establish.
+        text: `📸 "${trend.keyword}" trending on YouTube`,
         icon: "📸",
         source: "YouTube",
         platform: "Instagram",
         category: trend.category,
-        engagement: trend.growth,
+        // D5 - was `engagement: trend.growth`, an invented "+45%". No YouTube
+        // surface publishes a growth rate, so only the state travels.
+        viewsState: trend.views_state,
+        growthState: trend.growth_state,
         clickable: true
       });
     });
@@ -228,7 +253,9 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
         source: "Reddit",
         platform: "Facebook",
         category: "Social",
+        // D6 - as above; the Facebook lane reads the same Reddit observation.
         upvotes: trend.upvotes,
+        upvotesState: trend.upvotes_state,
         clickable: true
       });
     });
@@ -239,12 +266,14 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
     trendingData.youtube?.forEach(trend => {
       suggestions.push({
         type: "youtube_trend",
-        text: `📺 "${trend.keyword}" trending with ${trend.views} views`,
+        // D5 - same invented view count, same removal.
+        text: `📺 "${trend.keyword}" trending on YouTube`,
         icon: "📺",
         source: "YouTube",
         platform: "YouTube",
         category: trend.category,
-        engagement: trend.growth,
+        viewsState: trend.views_state,
+        growthState: trend.growth_state,
         clickable: true
       });
     });
@@ -274,9 +303,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             sources: [
               { name: "Google Trends", platform: "LinkedIn", status: "100% Free", description: "Professional & business trends" },
               { name: "Reddit", platform: "Twitter", status: "100% Free", description: "Real-time discussions & viral topics" },
-              { name: "YouTube", platform: "Instagram/TikTok", status: "Free Tier", description: "Visual content & viral videos" },
+              // D5 - "Free Tier" advertised a live YouTube integration to the
+              // customer. There is none: no credential, no registered provider,
+              // no endpoint. The status now says so.
+              { name: "YouTube", platform: "Instagram/TikTok", status: "Unavailable", description: "No sanctioned YouTube trending source is configured" },
               { name: "Reddit", platform: "Facebook", status: "100% Free", description: "Community-driven social topics" },
-              { name: "YouTube", platform: "YouTube", status: "Free Tier", description: "Video content & trending videos" }
+              { name: "YouTube", platform: "YouTube", status: "Unavailable", description: "No sanctioned YouTube trending source is configured" }
             ]
     });
 

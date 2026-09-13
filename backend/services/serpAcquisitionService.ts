@@ -9,6 +9,12 @@ import { resolveProviderCredential } from './providerCredentialResolver';
 import { ownedDbTable } from '../db/writeOwner';
 import { authorizeProviderCall, recordProviderUsage } from './providers/providerCostGovernor';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
+import {
+  normalizeSerpResultType,
+  hasMeaningfulPosition,
+  requiresUrl,
+  type SerpResultType,
+} from './serp/serpResultTypes';
 
 export type SerpProviderId = 'manual_import' | 'compliant_api' | 'dataforseo' | 'serpapi' | 'scaleserp';
 
@@ -78,19 +84,171 @@ function domainFromUrl(value: string): string {
   }
 }
 
+/**
+ * DG-001 — the single SERP parser, now feature-aware.
+ *
+ * ─── ORGANIC AND FEATURED SNIPPET ARE UNCHANGED ───────────────────────────
+ * An item with no recognised type, or the explicit `featured_snippet` flag,
+ * takes exactly the path it took before: same position derivation, same URL and
+ * domain fallbacks, same drop rule. That is deliberate and is asserted by the
+ * regression tests — the point of this change is what USED to be discarded, not
+ * what already worked.
+ *
+ * ─── AN UNRECOGNISED BLOCK PRODUCES NOTHING ───────────────────────────────
+ * `normalizeSerpResultType` returns null for a label the vocabulary does not
+ * know. When the item also carries no `type` at all it is treated as organic —
+ * the historical behaviour, and correct for the `organic_results` arrays every
+ * provider is read through. When it carries a type that is NOT recognised, the
+ * item is REJECTED rather than relabelled: a block Omnivyra cannot name is not
+ * evidence about the page.
+ *
+ * ─── IDENTIFYING EVIDENCE IS REQUIRED, PER TYPE ───────────────────────────
+ * A result that must link somewhere and does not is dropped. A feature that
+ * legitimately links nowhere — People Also Ask, a knowledge panel — must still
+ * carry a title, or there is nothing to observe. Neither case invents a URL.
+ */
 function parseProviderResults(rawResults: any[]): SerpSnapshotInput['results'] {
-  return rawResults.slice(0, 50).map((row: any, index: number): SerpSnapshotInput['results'][number] => {
+  const seen = new Set<string>();
+  const out: SerpSnapshotInput['results'] = [];
+
+  rawResults.slice(0, 50).forEach((row: any, index: number) => {
+    if (!row || typeof row !== 'object') return;
+
+    // A missing type is the historical organic case. A present-but-unknown type
+    // is a block this vocabulary cannot name, and is refused.
+    const rawType = row.type ?? row.result_type ?? null;
+    let resultType: SerpResultType;
+    if (row.featured_snippet === true) {
+      resultType = 'featured_snippet';
+    } else if (rawType === null || rawType === undefined || rawType === '') {
+      resultType = 'organic';
+    } else {
+      const normalized = normalizeSerpResultType(rawType);
+      if (!normalized) return;              // unknown block → no observation
+      resultType = normalized;
+    }
+
     const urlValue = String(row.url ?? row.link ?? row.link_url ?? '').trim();
-    const domain = normalizeDomain(String(row.domain ?? row.displayed_link ?? row.source ?? '').trim()) || domainFromUrl(urlValue);
-    return {
-      position: Number(row.position ?? row.rank ?? row.rank_absolute ?? index + 1),
-      url: urlValue,
-      domain,
-      title: row.title ?? null,
-      result_type: row.featured_snippet || row.type === 'featured_snippet' ? 'featured_snippet' : 'organic',
-    };
-  }).filter((row) => row.url && row.domain && row.position > 0);
+    // DG-001 — the URL is the reliable source of a domain; the declared fields
+    // are a fallback and are VALIDATED before use.
+    //
+    // `displayed_link` is a breadcrumb, not a hostname: SerpAPI returns
+    // "site.test › pricing › plans". The previous order preferred it and
+    // `normalizeDomain` only splits on "/", so that string survived intact and
+    // became the domain — every SerpAPI row would have carried a domain no
+    // comparison could ever match. Deriving from the URL first, and accepting a
+    // declared value only when it actually looks like a hostname, is what makes
+    // the canonical row safe for a consumer that trusts `domain`.
+    const declared = normalizeDomain(String(row.domain ?? row.displayed_link ?? row.source ?? '').trim());
+    const looksLikeHostname = declared !== '' && !/\s/.test(declared) && declared.includes('.');
+    const domain = domainFromUrl(urlValue) || (looksLikeHostname ? declared : '');
+    const title = typeof row.title === 'string' && row.title.trim() !== ''
+      ? row.title
+      : (typeof row.question === 'string' && row.question.trim() !== '' ? row.question : null);
+
+    // Identifying evidence. A linked type without a link, or an unlinked type
+    // without a title, is not an observation.
+    if (requiresUrl(resultType)) {
+      if (!urlValue || !domain) return;
+    } else if (!title) {
+      return;
+    }
+
+    // Rank only where a rank means something.
+    const rawPosition = Number(row.position ?? row.rank ?? row.rank_absolute ?? row.rank_group ?? index + 1);
+    const position = hasMeaningfulPosition(resultType) && Number.isFinite(rawPosition) && rawPosition > 0
+      ? rawPosition
+      : null;
+    if (hasMeaningfulPosition(resultType) && position === null) return;
+
+    // De-duplicate within one response. Type participates: the same URL as an
+    // organic result and inside a sitelink block are two distinct observations.
+    const key = `${resultType}|${position ?? 'n'}|${domain ?? ''}|${urlValue}|${title ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    // DG-001 (D4) — the result text. Competitor enrichment builds a profile
+    // from `title + snippet`, so dropping it would silently lower that
+    // profile's confidence rather than fail visibly.
+    const snippet = typeof row.snippet === 'string' && row.snippet.trim() !== ''
+      ? row.snippet
+      : (typeof row.description === 'string' && row.description.trim() !== '' ? row.description : null);
+
+    out.push({
+      position,
+      url: urlValue || null,
+      domain: domain || null,
+      title,
+      snippet,
+      result_type: resultType,
+    });
+  });
+
+  return out;
 }
+
+/**
+ * DG-001 — collect the feature blocks that sit BESIDE `organic_results`.
+ *
+ * SerpAPI and ScaleSERP are read through `organic_results` alone, so every
+ * other block they return has been discarded. Each key below is stamped with
+ * the canonical type it represents and handed to the one parser, which applies
+ * the same identifying-evidence and de-duplication rules to it.
+ *
+ * ─── HONEST LIMIT ──────────────────────────────────────────────────────────
+ * This repository contains no fixture or schema for these providers' responses,
+ * and no credential was available to obtain one. A key that is absent yields
+ * nothing, and an entry without identifying evidence is rejected by the parser,
+ * so reading them cannot fabricate — but the presence of this code is NOT
+ * evidence that these providers deliver these blocks. See the implementation
+ * report: only DataForSEO's richer stream is proven from the repository.
+ */
+const SIBLING_FEATURE_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ['related_questions', 'related_questions'],
+  ['knowledge_graph', 'knowledge_graph'],
+  ['local_results', 'local_results'],
+  ['inline_images', 'inline_images'],
+  ['inline_videos', 'inline_videos'],
+  ['top_stories', 'top_stories'],
+  ['shopping_results', 'shopping_results'],
+  ['ads', 'ads'],
+];
+
+function collectSiblingFeatureItems(body: any): any[] {
+  const items: any[] = [];
+  for (const [key, typeLabel] of SIBLING_FEATURE_KEYS) {
+    const block = body?.[key];
+    if (Array.isArray(block)) {
+      for (const entry of block) {
+        if (entry && typeof entry === 'object') items.push({ ...entry, type: typeLabel });
+      }
+    } else if (block && typeof block === 'object') {
+      // A knowledge graph arrives as a single object, not an array.
+      items.push({ ...block, type: typeLabel });
+    }
+  }
+  // Sitelinks are nested INSIDE organic results rather than beside them.
+  const organic = Array.isArray(body?.organic_results) ? body.organic_results : [];
+  for (const result of organic) {
+    const nested = result?.sitelinks;
+    const list = Array.isArray(nested)
+      ? nested
+      : Array.isArray(nested?.inline) ? nested.inline : Array.isArray(nested?.expanded) ? nested.expanded : [];
+    for (const link of list) {
+      if (link && typeof link === 'object') items.push({ ...link, type: 'sitelink' });
+    }
+  }
+  return items;
+}
+
+/**
+ * DG-001 — the parser, exposed for the feature-capture tests.
+ *
+ * Named with a `__..ForTest` prefix so it is unmistakably not a second public
+ * entry point: `parseProviderResults` remains internal and remains the only
+ * parser every provider flows through.
+ */
+export const __parseProviderResultsForTest = parseProviderResults;
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
@@ -194,7 +352,10 @@ async function createSerpApiProvider(): Promise<SerpAcquisitionProvider | null> 
         query,
         geography: body.search_parameters?.location ?? body.search_information?.detected_location ?? 'global',
         device: body.search_parameters?.device ?? 'desktop',
-        results: parseProviderResults(Array.isArray(body.organic_results) ? body.organic_results : []),
+        results: parseProviderResults([
+          ...(Array.isArray(body.organic_results) ? body.organic_results : []),
+          ...collectSiblingFeatureItems(body),
+        ]),
         provider_metadata: {
           provider: 'serpapi',
           search_id: body.search_metadata?.id ?? null,
@@ -223,7 +384,10 @@ function createScaleSerpProvider(): SerpAcquisitionProvider | null {
         query,
         geography: body.request_info?.location ?? body.search_parameters?.location ?? 'global',
         device: body.request_info?.device ?? 'desktop',
-        results: parseProviderResults(Array.isArray(body.organic_results) ? body.organic_results : []),
+        results: parseProviderResults([
+          ...(Array.isArray(body.organic_results) ? body.organic_results : []),
+          ...collectSiblingFeatureItems(body),
+        ]),
         provider_metadata: {
           provider: 'scaleserp',
           search_id: body.request_info?.id ?? null,
@@ -268,7 +432,12 @@ function createDataForSeoProvider(): SerpAcquisitionProvider | null {
         query,
         geography: task?.data?.location_name ?? payload[0].location_name,
         device: task?.data?.device ?? payload[0].device,
-        results: parseProviderResults(items.filter((item: any) => item.type === 'organic' || item.type === 'featured_snippet')),
+        // DG-001 — the whole mixed item stream, not two of its types. This
+        // filter used to drop People Also Ask, knowledge panels, local packs,
+        // images, video, news, shopping and paid blocks that the endpoint had
+        // already returned and the tenant had already paid for. The parser now
+        // rejects what it cannot name, so the filter is no longer the gate.
+        results: parseProviderResults(Array.isArray(items) ? items : []),
         provider_metadata: {
           provider: 'dataforseo',
           task_id: task?.id ?? null,

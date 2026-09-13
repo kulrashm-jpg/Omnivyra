@@ -191,11 +191,28 @@ describe('D4 — the rest of the trending route is untouched', () => {
 
   it('other providers keep their own signals and are not renamed', async () => {
     // Scope discipline: D4 is the Google Trends attribution. Reddit's upvotes and
-    // YouTube's shape are deliberately left exactly as they were.
+    // YouTube's shape were deliberately left exactly as they were by D4.
     trendsOnly(HOT_TRENDS_FEED);
     const body = await invoke('linkedin,twitter,youtube');
-    expect(body.trending.twitter[0]).toHaveProperty('upvotes');
-    expect(body.trending.youtube[0]).toHaveProperty('views');
+    // D5 + D6 — RECONCILED. This fixture deliberately fails every provider except
+    // Google Trends, and neither Reddit nor YouTube answers a failure with invented
+    // rows any more, so BOTH lanes are now honestly empty.
+    //
+    // Asserted exactly, on both sides, and deliberately NOT as `Array.isArray`:
+    // that would pass just as happily if the fabricated rows came back — Reddit's
+    // 15,420 upvotes or YouTube's "5.2M" views. `toEqual([])` is the only form that
+    // distinguishes "the lane is honestly empty" from "the lane is full of
+    // fabrications", which is the entire point of both fixes.
+    //
+    // D4's own scope claim is unchanged and still tested: it did not rename or
+    // repurpose either key. Both keys are still present, and still lists.
+    expect(body.trending.twitter).toEqual([]);
+    expect(body.trending.youtube).toEqual([]);
+    // Neither provider's invented literals may appear anywhere in the payload.
+    const payload = JSON.stringify(body.trending);
+    for (const invented of ['15420', '12300', '18700', '14200', '2.3M', '1.8M', '5.2M', '+45%', '+78%']) {
+      expect(payload).not.toContain(invented);
+    }
   });
 
   it('the keyword itself — the one thing the feed DID supply — survives', () => {

@@ -9,9 +9,16 @@ jest.mock('../../db/supabaseClient', () => ({
   },
 }));
 
-jest.mock('axios', () => ({
-  get: jest.fn(() => Promise.resolve({ data: { organic_results: [] } })),
-}));
+// Hermetic network. DG-001 moved the SERP request from axios to the canonical client's `fetch`,
+// so an axios mock no longer intercepts it. SerpAPI is answered with the same empty page the axios
+// mock used to return; every other fetch and every safeFetch is refused before it is sent.
+jest.mock('../../../lib/security/safeFetch', () =>
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/hermeticNetwork').hermeticSafeFetchModule());
+jest.mock('axios', () => {
+  const refuse = async () => { throw new Error('axios is not a SERP seam any more (DG-001) — use fetch'); };
+  return { __esModule: true, default: { get: refuse, post: refuse }, get: refuse, post: refuse };
+});
 
 import type { ResolvedReportInput } from '../../services/reportInputResolver';
 import { buildCompetitorIntelligence } from '../../services/reportCompetitorIntelligenceService';
@@ -21,6 +28,11 @@ import {
   buildCompetitiveStrategyMap,
 } from '../../services/reportCompetitorStrategyService';
 import { assertValidCompetitorList } from '../helpers/assertValidCompetitor';
+import { installHermeticFetch } from '../helpers/hermeticNetwork';
+
+const network = installHermeticFetch(({ url }) =>
+  url.hostname === 'serpapi.com' ? { body: { organic_results: [] } } : undefined);
+afterAll(() => network.restore());
 
 function makeOmnivyraInput(): ResolvedReportInput {
   return {

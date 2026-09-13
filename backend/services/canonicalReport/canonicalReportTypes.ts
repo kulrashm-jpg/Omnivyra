@@ -466,7 +466,40 @@ export type CanonicalNarrative = {
 // BETA-EVIDENCE-EXEC-003: a presentation-only evidence surface. Carries measured on-site evidence
 // that INTENTIONALLY has NO score, NO band, NO confidence, NO maturity, and NO recommendation — it
 // exists solely to make already-extracted evidence visible to customers with honest provenance.
+/**
+ * G-1 — one publicly observable social profile, or an honest statement that it was not observed.
+ *
+ * Presentation-only, exactly like the rest of `CanonicalDeclaredEvidence`: no score, no band, no
+ * confidence, no maturity, no recommendation. It never feeds an aggregation.
+ *
+ * `status` is the whole point of the shape. A social URL appearing in a company profile is NOT a
+ * public observation of that profile, so the three states are kept apart:
+ *
+ *   observed     a public search result actually resolved to this profile URL
+ *   declared     the company supplied the URL; the public index did not confirm it
+ *   unreachable  the observation could not be attempted (no credential, budget, or provider error)
+ *
+ * `name` and `description` are present ONLY when the observation actually returned them, and are
+ * null otherwise — never synthesised. There is deliberately no follower or engagement field: the
+ * approved observation source does not expose one, and inventing it is what G-3 exists to prevent.
+ *
+ * `source` carries the existing `EvidenceSourceKind` vocabulary so `provenanceForSource` keeps
+ * working unchanged: an observation is `serp` (PUBLIC_OBSERVED); anything not observed is
+ * `unspecified` (UNAVAILABLE), which can never be mistaken for a public measurement.
+ */
+export type CanonicalSocialPresenceEntry = {
+  platform: string;
+  url: string;
+  status: 'observed' | 'declared' | 'unreachable';
+  observed_at: string | null;
+  name: string | null;
+  description: string | null;
+  source: EvidenceSourceKind;
+};
+
 export type CanonicalDeclaredEvidence = {
+  /** G-1 — optional/additive. Absent when no social candidate existed. */
+  social_presence?: CanonicalSocialPresenceEntry[];
   same_as: {
     count: number;
     domains: string[];
