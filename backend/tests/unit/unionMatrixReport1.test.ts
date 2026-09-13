@@ -63,6 +63,13 @@ import {
   resolvedInput,
   executable,
 } from '../helpers/unionMatrixFixtures';
+import { installHermeticFetch } from '../helpers/hermeticNetwork';
+
+// The OTHER outbound seam. safeFetch is stubbed above, but Report 1 composition also reaches
+// the Wikidata adapter through global `fetch`, which the header's "no network" promise must
+// cover too. Nothing here is answered: every request is refused before it is sent.
+const network = installHermeticFetch(() => undefined);
+afterAll(() => network.restore());
 
 beforeEach(() => {
   mockFrom.mockReset();
