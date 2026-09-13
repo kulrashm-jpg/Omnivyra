@@ -112,6 +112,7 @@
     "check:rbac-binding": "node scripts/check-withrbac-binding.js",
     "check:orgaccess-binding": "node scripts/check-orgaccess-binding.js",
     "check:route-policy": "node scripts/check-route-policy.js",
+    "check:membership-validity": "node scripts/check-membership-validity.js",
     "verify:auth001-migration": "node scripts/verify-auth001-migration-readiness.js",
     "verify:onboard001-domains": "node scripts/verify-onboard001-domain-reconciliation.js",
     "predeploy:check": "node scripts/predeploy-check.js",
