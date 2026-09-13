@@ -11,8 +11,13 @@
  * 400 IDEMPOTENCY_KEY_REQUIRED and could never elevate.
  *
  * These pin the client half of that contract: every mutation carries a key,
- * a step-up challenge is run at most once, and the retry reuses the SAME key
- * so elevation cannot turn one logical action into two mutations.
+ * a step-up challenge is run at most once, and the post-elevation retry carries
+ * a FRESH key. withIdempotency stores the first attempt's step-up denial as a
+ * completed response and replays it for a reused key, so a same-key retry never
+ * reaches the handler (stepUpRetryIdempotency.test.ts). The refused attempt
+ * wrote nothing — requireCapability runs before any write — so a fresh key
+ * still yields exactly one mutation. `idempotentServer()` below models that
+ * server behaviour so the "exactly once" claim is asserted, not assumed.
  */
 
 import React from 'react';
@@ -77,6 +82,57 @@ function seedLoad() {
   });
 }
 
+const STEP_UP_DENIAL = { error: 'Step-up required', code: 'STEP_UP_REQUIRED', capability: 'identity.admin.assign' };
+
+/**
+ * Server model for PATCH /api/super-admin/users, faithful to the two facts the
+ * contract depends on:
+ *   - requireCapability refuses with 401 STEP_UP_REQUIRED BEFORE any write
+ *     until the operator is elevated;
+ *   - withIdempotency stores every non-5xx response per key and replays it.
+ * The step-up helper is modelled as: refused → passkey ceremony (elevate) →
+ * retry once.
+ */
+function idempotentServer() {
+  const stored = new Map<string, { status: number; body: unknown }>();
+  const state = { elevated: false, mutations: 0 };
+  mockFetch.mockImplementation(async (url: string, init?: { method?: string; headers?: Record<string, string> }) => {
+    if (init?.method === 'PATCH') {
+      const key = init.headers?.['Idempotency-Key'] ?? '';
+      if (!stored.has(key)) {
+        if (state.elevated) {
+          state.mutations += 1;
+          stored.set(key, { status: 200, body: { user: { status: 'inactive' } } });
+        } else {
+          stored.set(key, { status: 401, body: STEP_UP_DENIAL });
+        }
+      }
+      const r = stored.get(key)!;
+      return json(r.body, r.status);
+    }
+    if (url.startsWith('/api/super-admin/companies')) {
+      return json({ companies: [{ id: COMPANY, name: 'Ingestion Activation Test' }] });
+    }
+    if (url.startsWith('/api/super-admin/users')) {
+      return json({ users: [{
+        user_id: USER, email: 'target@example.test', company_id: COMPANY,
+        company_name: 'Ingestion Activation Test', role: 'COMPANY_ADMIN',
+        status: 'active', account_status: 'active', created_at: '2026-08-21T00:00:00Z',
+      }] });
+    }
+    return json({});
+  });
+  mockStepUp.mockImplementation(async (initial: Response, retry: () => Promise<Response>) => {
+    if (initial.status !== 401) return { kind: 'success', response: initial };
+    state.elevated = true; // passkey ceremony succeeded
+    const retried = await retry();
+    return retried.ok
+      ? { kind: 'success', response: retried }
+      : { kind: 'auth_banner', failure: { kind: 'step_up_required' }, response: retried };
+  });
+  return state;
+}
+
 /** Render and wait for the seeded membership row to appear. */
 async function renderTab() {
   render(<CompanyUsersTab authError={null} />);
@@ -137,7 +193,7 @@ describe('step-up elevation', () => {
       kind: 'success', response: await retry(),
     }));
 
-  it('CRITICAL: the post-elevation retry reuses the SAME Idempotency-Key', async () => {
+  it('CRITICAL: the post-elevation retry carries a FRESH Idempotency-Key', async () => {
     elevateThenRetry();
     await renderTab();
     fireEvent.click(screen.getByTitle('Make Inactive'));
@@ -145,9 +201,19 @@ describe('step-up elevation', () => {
 
     const [first, second] = patchCalls();
     expect(keyOf(first)).toBeTruthy();
-    // Same key ⇒ the server treats the retry as a replay, not a second
-    // mutation. A fresh key here would mutate twice after one click.
-    expect(keyOf(second)).toBe(keyOf(first));
+    expect(keyOf(second)).toBeTruthy();
+    // A reused key would replay the stored step-up denial instead of reaching
+    // the handler; the refused first attempt mutated nothing.
+    expect(keyOf(second)).not.toBe(keyOf(first));
+  });
+
+  it('CRITICAL: against the idempotent server, the refused attempt does not mutate and the action mutates exactly once', async () => {
+    const server = idempotentServer();
+    await renderTab();
+    fireEvent.click(screen.getByTitle('Make Inactive'));
+    await waitFor(() => expect(patchCalls().length).toBe(2));
+    await waitFor(() => expect(server.mutations).toBe(1));
+    expect(window.alert).not.toHaveBeenCalled();
   });
 
   it('elevation produces exactly ONE retry, not a loop', async () => {
@@ -241,14 +307,36 @@ describe('role mutation — same governed contract', () => {
     await waitFor(() => expect(mockStepUp).toHaveBeenCalledTimes(1));
   });
 
-  it('reuses the SAME key across elevation', async () => {
+  it('uses a FRESH key across elevation', async () => {
     mockStepUp.mockImplementation(async (_i: Response, retry: () => Promise<Response>) => ({
       kind: 'success', response: await retry(),
     }));
     await renderTab();
     selectRole();
     await waitFor(() => expect(patchCalls().length).toBe(2));
-    expect(keyOf(patchCalls()[1])).toBe(keyOf(patchCalls()[0]));
+    expect(keyOf(patchCalls()[1])).toBeTruthy();
+    expect(keyOf(patchCalls()[1])).not.toBe(keyOf(patchCalls()[0]));
+  });
+
+  it('against the idempotent server, the refused attempt does not mutate and the role change applies exactly once', async () => {
+    const server = idempotentServer();
+    await renderTab();
+    selectRole();
+    await waitFor(() => expect(patchCalls().length).toBe(2));
+    await waitFor(() => expect(server.mutations).toBe(1));
+    expect(window.alert).not.toHaveBeenCalled();
+  });
+
+  it('a cancelled challenge on the role change issues NO retry and no mutation', async () => {
+    const server = idempotentServer();
+    mockStepUp.mockImplementation(async (initial: Response) => ({
+      kind: 'step_up_user_cancelled', failure: { kind: 'step_up_required' }, response: initial,
+    }));
+    await renderTab();
+    selectRole();
+    await waitFor(() => expect(window.alert).toHaveBeenCalledWith('step-up cancelled'));
+    expect(patchCalls()).toHaveLength(1);
+    expect(server.mutations).toBe(0);
   });
 
   it('sends only userId/companyId/role — no status field leaks in', async () => {

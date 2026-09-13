@@ -374,13 +374,15 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Are you sure you want to mark this user as ${nextStatus}?`)) return;
     setIsLoading(true);
     try {
-      // ONE key for the whole logical action. runStepUpFlowIfNeeded retries the
-      // SAME request after elevation, and reusing the key is precisely what
-      // makes that retry idempotent instead of a second mutation.
-      const idempotencyKey = newIdempotencyKey();
+      // A FRESH key per attempt. This route is wrapped in withIdempotency,
+      // which stores the step-up denial of the first attempt as a completed
+      // response and replays it for the same key, so a retry reusing the key
+      // would never reach the handler (stepUpRetryIdempotency.test.ts). The
+      // refused attempt wrote nothing — requireCapability runs before any
+      // write — so the action still mutates at most once.
       const fire = () => fetchWithAuth('/api/super-admin/users', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({ userId, companyId, status: nextStatus }),
       });
       // identity.admin.assign is step-up gated (phishing-resistant + trusted
@@ -416,10 +418,10 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Change this user's role to ${nextRole}?`)) return;
     setIsLoading(true);
     try {
-      const idempotencyKey = newIdempotencyKey();
+      // A FRESH key per attempt — see handleUserStatusChange.
       const fire = () => fetchWithAuth('/api/super-admin/users', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({ userId, companyId, role: nextRole }),
       });
       const outcome = await runStepUpFlowIfNeeded(await fire(), fire);
