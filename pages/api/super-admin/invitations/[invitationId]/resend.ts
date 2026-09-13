@@ -12,7 +12,8 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
  *   - The invitation row itself is NOT modified (token, expiry, etc).
  *   - Any pending/failed email_jobs row for this invitation is marked
  *     dead with reason='admin_resend' (audit trail preserved).
- *   - A fresh email_jobs row is enqueued for the worker to drain.
+ *   - A fresh email_jobs row is enqueued for the worker to drain
+ *     (/api/cron/email-jobs, every 10 minutes per vercel.json).
  *
  * Auth:
  *   - requireCapability(IDENTITY_ADMIN_ASSIGN) — same gate as create

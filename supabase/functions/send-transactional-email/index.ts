@@ -29,6 +29,7 @@
 
 import { SESClient, SendEmailCommand } from "npm:@aws-sdk/client-ses@3.658.1";
 import { authorizeServiceCaller } from "./auth.ts";
+import { escapeHtml, safeHref } from "./escape.ts";
 
 type Template =
   | { type: "team_invite"; recipientEmail: string; inviteUrl: string }
@@ -84,17 +85,26 @@ function getAppUrl(): string {
   return (Deno.env.get("APP_URL") ?? "https://omnivyra.com").replace(/\/$/, "");
 }
 
+// `body` is intentional template markup: every caller-supplied value inside it
+// must already have been passed through escapeHtml()/mailtoLink(). The CTA URL is
+// caller-influenced and is allow-listed here by safeHref().
 function actionLayout(title: string, body: string, ctaLabel: string, ctaUrl: string): string {
   return [
     `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#10233d">`,
-    `<h2 style="margin:0 0 16px">${title}</h2>`,
+    `<h2 style="margin:0 0 16px">${escapeHtml(title)}</h2>`,
     `<p style="margin:0 0 20px;line-height:1.6">${body}</p>`,
     `<p style="margin:0 0 24px">`,
-    `<a href="${ctaUrl}" style="display:inline-block;background:#0A66C2;color:#fff;padding:12px 18px;border-radius:999px;text-decoration:none;font-weight:600">${ctaLabel}</a>`,
+    `<a href="${safeHref(ctaUrl)}" style="display:inline-block;background:#0A66C2;color:#fff;padding:12px 18px;border-radius:999px;text-decoration:none;font-weight:600">${escapeHtml(ctaLabel)}</a>`,
     `</p>`,
     `<p style="margin:0;color:#6B7C93;font-size:13px">If you did not request this, you can ignore this email.</p>`,
     `</div>`,
   ].join("");
+}
+
+// A mailto: link whose address is caller-supplied: allow-listed href, escaped text.
+function mailtoLink(address: string): string {
+  const href = safeHref(typeof address === "string" ? `mailto:${address}` : null, { allowMailto: true });
+  return `<a href="${href}">${escapeHtml(address)}</a>`;
 }
 
 function render(t: Template): Envelope {
@@ -114,14 +124,14 @@ function render(t: Template): Envelope {
     case "company_referral": {
       const who = t.admin?.name?.trim() || t.admin?.email || null;
       const companyLine = t.companyName
-        ? `Your company <strong>${t.companyName}</strong> already has an Omnivyra account.`
+        ? `Your company <strong>${escapeHtml(t.companyName)}</strong> already has an Omnivyra account.`
         : `Your company already has an Omnivyra account.`;
       const body = t.admin
         ? `${companyLine} Please reach out to your administrator to request access:<br/><br/>` +
-          `<strong>${who}</strong><br/>` +
-          `<a href="mailto:${t.admin.email}">${t.admin.email}</a>`
+          `<strong>${escapeHtml(who)}</strong><br/>` +
+          mailtoLink(t.admin.email)
         : `${companyLine} Its administrator is not currently active. ` +
-          `Please email <a href="mailto:${t.supportEmail}">${t.supportEmail}</a> for help joining your team.`;
+          `Please email ${mailtoLink(t.supportEmail)} for help joining your team.`;
       return {
         to: t.recipientEmail,
         subject: "Your company is already using Omnivyra",
@@ -135,13 +145,13 @@ function render(t: Template): Envelope {
     }
 
     case "inbound_signup_notice": {
-      const companyClause = t.companyName ? ` for <strong>${t.companyName}</strong>` : "";
+      const companyClause = t.companyName ? ` for <strong>${escapeHtml(t.companyName)}</strong>` : "";
       const body =
-        `<strong>${t.prospectEmail}</strong> just verified their email and tried to create an Omnivyra account${companyClause}. ` +
+        `<strong>${escapeHtml(t.prospectEmail)}</strong> just verified their email and tried to create an Omnivyra account${companyClause}. ` +
         `Because your account already owns this domain, we did not auto-add them to your company.<br/><br/>` +
         `If they should have access, please invite them from your team settings. ` +
         `If not, no action is needed — their account stays unattached.<br/><br/>` +
-        `Need help? Reach out at <a href="mailto:${t.supportEmail}">${t.supportEmail}</a>.`;
+        `Need help? Reach out at ${mailtoLink(t.supportEmail)}.`;
       return {
         to: t.recipientEmail,
         subject: "Someone tried to join your Omnivyra company",
@@ -157,16 +167,16 @@ function render(t: Template): Envelope {
     case "team_invite_credentials": {
       // One-shot credentials envelope. The temporary password is rendered
       // inline (the whole point of this template). Never echoed to logs.
-      const greeting = t.fullName?.trim() ? `Hi ${t.fullName},` : "Hi,";
+      const greeting = t.fullName?.trim() ? `Hi ${escapeHtml(t.fullName)},` : "Hi,";
       const orgLine = t.companyName
-        ? `You've been added to <strong>${t.companyName}</strong> on Omnivyra as <strong>${t.role}</strong>.`
-        : `You've been added to Omnivyra as <strong>${t.role}</strong>.`;
+        ? `You've been added to <strong>${escapeHtml(t.companyName)}</strong> on Omnivyra as <strong>${escapeHtml(t.role)}</strong>.`
+        : `You've been added to Omnivyra as <strong>${escapeHtml(t.role)}</strong>.`;
       const body =
         `${greeting}<br/><br/>` +
         `${orgLine}<br/><br/>` +
         `Your sign-in details:<br/>` +
-        `<strong>Email:</strong> ${t.recipientEmail}<br/>` +
-        `<strong>Temporary password:</strong> <code style="background:#f1f4f8;padding:4px 8px;border-radius:4px">${t.temporaryPassword}</code><br/><br/>` +
+        `<strong>Email:</strong> ${escapeHtml(t.recipientEmail)}<br/>` +
+        `<strong>Temporary password:</strong> <code style="background:#f1f4f8;padding:4px 8px;border-radius:4px">${escapeHtml(t.temporaryPassword)}</code><br/><br/>` +
         `For your security, you'll be asked to choose a new password the first time you sign in.`;
       return {
         to: t.recipientEmail,
@@ -182,7 +192,7 @@ function render(t: Template): Envelope {
 
     case "domain_verification_reminder": {
       const body =
-        `You're almost done setting up <strong>${t.finalDomain}</strong>.<br/><br/>` +
+        `You're almost done setting up <strong>${escapeHtml(t.finalDomain)}</strong>.<br/><br/>` +
         `To complete setup:<br/>` +
         `1. Add your verification record<br/>` +
         `2. Click verify in your dashboard<br/><br/>` +
@@ -200,8 +210,8 @@ function render(t: Template): Envelope {
     }
     case "activation_outreach": {
       const n = t.missingMilestones.length;
-      const list = t.missingMilestones.map((m) => `&bull;&nbsp;${m}`).join("<br/>");
-      const greeting = t.companyName ? `Hi ${t.companyName} — ` : "Hi — ";
+      const list = t.missingMilestones.map((m) => `&bull;&nbsp;${escapeHtml(m)}`).join("<br/>");
+      const greeting = t.companyName ? `Hi ${escapeHtml(t.companyName)} — ` : "Hi — ";
       const body =
         `${greeting}you're ${n} step${n === 1 ? "" : "s"} away from finishing your Omnivyra setup.<br/><br/>` +
         `Remaining:<br/>${list}<br/><br/>` +
@@ -218,11 +228,11 @@ function render(t: Template): Envelope {
       };
     }
     case "credit_alert": {
-      const co = t.companyName ? ` for <strong>${t.companyName}</strong>` : "";
+      const co = t.companyName ? ` for <strong>${escapeHtml(t.companyName)}</strong>` : "";
       const body =
-        `You've used <strong>${t.consumedPercent}%</strong> of this cycle's credits${co}.<br/><br/>` +
-        `Remaining: <strong>${t.remainingCredits.toLocaleString()}</strong> credits. ` +
-        `Projected need before your cycle ends: <strong>${t.projectedRequiredCredits.toLocaleString()}</strong>.<br/><br/>` +
+        `You've used <strong>${escapeHtml(t.consumedPercent)}%</strong> of this cycle's credits${co}.<br/><br/>` +
+        `Remaining: <strong>${escapeHtml(t.remainingCredits.toLocaleString())}</strong> credits. ` +
+        `Projected need before your cycle ends: <strong>${escapeHtml(t.projectedRequiredCredits.toLocaleString())}</strong>.<br/><br/>` +
         `At the current rate your credits are likely to run out before the period ends — top up or adjust usage to avoid interruption.`;
       return {
         to: t.recipientEmail,
