@@ -228,11 +228,13 @@ export const envSchema = z.object({
     .describe('256-bit hex HMAC key for OAuth state signing. Optional; falls back to ENCRYPTION_KEY when unset.'),
   
   // ── Metrics (internal) ─────────────────────────────────────────────────────
+  // No default: a committed default is a public credential. Every consumer
+  // refuses requests when this is unset.
   INTERNAL_METRICS_SECRET: z
     .string()
     .min(1)
-    .default('omnivyra_internal_metrics_secret_12345')
-    .describe('Secret for internal metrics API'),
+    .optional()
+    .describe('Secret for the internal metrics API and the x-cron-secret cron routes. Optional; those routes fail closed when unset.'),
   
   // ── App configuration ──────────────────────────────────────────────────────
   NEXT_PUBLIC_APP_URL: z
