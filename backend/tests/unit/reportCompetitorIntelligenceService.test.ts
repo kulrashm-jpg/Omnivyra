@@ -17,11 +17,22 @@ jest.mock('../../db/supabaseClient', () => {
   };
 });
 
-jest.mock('axios', () => ({
-  get: jest.fn(() => Promise.resolve({ data: { organic_results: [] } })),
-}));
+// Hermetic network. DG-001 moved the SERP request from axios to the canonical client's `fetch`,
+// so an axios mock no longer intercepts it; and report composition reaches the AI-visibility and
+// Wikidata adapters through `safeFetch` / `fetch`. SerpAPI is answered with the same empty page the
+// axios mock used to return; every other request is refused before it is sent.
+jest.mock('../../../lib/security/safeFetch', () =>
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/hermeticNetwork').hermeticSafeFetchModule());
+jest.mock('axios', () => {
+  const refuse = async () => { throw new Error('axios is not a SERP seam any more (DG-001) — use fetch'); };
+  return { __esModule: true, default: { get: refuse, post: refuse }, get: refuse, post: refuse };
+});
 
 import type { PersistedDecisionObject } from '../../services/decisionObjectService';
+import { installHermeticFetch } from '../helpers/hermeticNetwork';
+import { buildGapDefinitions } from '../../services/reportCompetitorIntelligenceServiceEngine';
+import type { ComparisonMetrics } from '../../services/reportCompetitorIntelligenceServiceModel';
 import type { ResolvedReportInput } from '../../services/reportInputResolver';
 import {
   buildCompetitorIntelligence,
@@ -41,6 +52,10 @@ import {
   assertSortedByTierThenScore,
   assertValidCompetitorList,
 } from '../helpers/assertValidCompetitor';
+
+const network = installHermeticFetch(({ url }) =>
+  url.hostname === 'serpapi.com' ? { body: { organic_results: [] } } : undefined);
+afterAll(() => network.restore());
 
 function makeResolvedInput(overrides?: Partial<ResolvedReportInput['resolved']>): ResolvedReportInput {
   return {
@@ -208,7 +223,20 @@ describe('reportCompetitorIntelligenceService', () => {
     expect(intelligence.competitive_summary.top_threats.length).toBeGreaterThanOrEqual(1);
     expect(intelligence.competitive_summary.key_advantage).toContain('Drishik');
     expect(intelligence.competitive_summary.positioning_statement).toContain('Wysa');
-    expect(intelligence.generated_gaps.length).toBeGreaterThanOrEqual(1);
+    // D8 — this path crawls nothing, so no competitor was observed. The engine-approved
+    // competitors are still listed, but their comparison metrics are honestly absent and no gap
+    // narrative is built from them. (Before D8 this asserted >= 1 gap, which could only be met by
+    // metrics synthesised from the customer's own numbers.)
+    const entries = intelligence.comparison.competitors;
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      expect(entry.metrics).toBeNull();
+      expect(entry.deltas_vs_company).toBeNull();
+      expect(entry.metrics_state).toBe('unavailable');
+    }
+    expect(intelligence.discovery_metadata?.competitors_with_observed_metrics).toBe(0);
+    expect(intelligence.discovery_metadata?.is_fallback_used).toBe(true);
+    expect(intelligence.generated_gaps).toEqual([]);
     const finalKeys = new Set(intelligence.detected_competitors.flatMap((item) => [item.name.toLowerCase(), item.domain?.toLowerCase() ?? '']));
     expect(intelligence.generated_gaps.every((gap) =>
       gap.leading_competitors.every((competitor) => finalKeys.has(competitor.toLowerCase())),
@@ -257,15 +285,58 @@ describe('reportCompetitorIntelligenceService', () => {
       resolvedInput,
     });
 
-    const decisions = competitorGapsToDecisions({
-      companyId: 'company-1',
-      gaps: intelligence.generated_gaps,
-    });
-    const report = await composeSnapshotReportFromDecisions({
+    // D8 — part 1. This path observed no competitor, so there is no gap to convert and nothing
+    // reaches the report as a competitor recommendation. (Before D8 this path produced gaps from
+    // metrics synthesised out of the customer's own numbers, and this test asserted >= 1.)
+    expect(intelligence.generated_gaps).toEqual([]);
+    expect(competitorGapsToDecisions({ companyId: 'company-1', gaps: intelligence.generated_gaps })).toEqual([]);
+    const unobservedReport = await composeSnapshotReportFromDecisions({
       companyId: 'company-1',
       snapshotDecisions: [],
       resolvedInput,
       competitorIntelligenceOverride: intelligence,
+    });
+    expect(unobservedReport.competitor_intelligence.detected_competitors.length).toBeGreaterThanOrEqual(1);
+    assertValidCompetitorList(unobservedReport.competitor_intelligence.detected_competitors as any[]);
+    assertSortedByTierThenScore(unobservedReport.competitor_intelligence.detected_competitors as any[]);
+    expect(unobservedReport.competitor_intelligence.competitive_summary.top_threats.length).toBeGreaterThanOrEqual(1);
+    expect(unobservedReport.pipeline_audit.competitor_gap_decisions_added).toBe(0);
+
+    // D8 — part 2. The conversion itself still works, from evidence: one competitor is OBSERVED
+    // (its own pages put it clearly ahead on content), the others stay unobserved. Its gap becomes
+    // a snapshot decision and reaches the report payload, naming ONLY the observed competitor.
+    const company = intelligence.comparison.company;
+    const [first, ...rest] = intelligence.comparison.competitors;
+    const observedMetrics: ComparisonMetrics = { ...company, content_depth: Math.min(100, company.content_depth + 20) };
+    const observedEntry = {
+      ...first,
+      metrics: observedMetrics,
+      deltas_vs_company: { ...observedMetrics, content_depth: observedMetrics.content_depth - company.content_depth },
+      metrics_state: 'inferred' as const,
+      metrics_basis: 'derived from the competitor’s own observed public pages (test fixture)',
+      crawl_outcome: 'success' as const,
+    };
+    const entries = [observedEntry, ...rest];
+    const observedName = (first.competitor.domain ?? first.competitor.name);
+    const gaps = buildGapDefinitions({
+      domain: 'drishik.com',
+      businessContext: 'AI wellness and decision intelligence',
+      entries,
+      companyMetrics: company,
+    });
+    expect(gaps.map((gap) => gap.gap_type)).toContain('content_gap');
+    expect([...new Set(gaps.flatMap((gap) => gap.leading_competitors))]).toEqual([observedName]);
+
+    const decisions = competitorGapsToDecisions({ companyId: 'company-1', gaps });
+    const report = await composeSnapshotReportFromDecisions({
+      companyId: 'company-1',
+      snapshotDecisions: [],
+      resolvedInput,
+      competitorIntelligenceOverride: {
+        ...intelligence,
+        comparison: { company, competitors: entries },
+        generated_gaps: gaps,
+      },
     });
 
     expect(decisions.length).toBeGreaterThanOrEqual(1);
