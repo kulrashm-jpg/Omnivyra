@@ -17,9 +17,10 @@
 import { createClient } from '@supabase/supabase-js';
 
 const url = process.env.SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// Secret key first; the legacy service_role name is a migration-only fallback.
+const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!url || !key) {
-  console.error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.');
+  console.error('SUPABASE_URL and SUPABASE_SECRET_KEY are required.');
   process.exit(1);
 }
 const apply = process.argv.includes('--apply');

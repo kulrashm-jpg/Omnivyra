@@ -26,11 +26,12 @@ type Target = 'production' | 'preview';
 type EnvPresence = { name: string; lastUpdated: string | null };
 type StaleHit = { variable: string; value: string };
 
+// Publishable (browser) + secret (server) Supabase keys; see validatePlatformParity.ts.
 const REQUIRED = [
   'NEXT_PUBLIC_SUPABASE_URL',
-  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+  'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
   'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_SECRET_KEY',
   'SESSION_COOKIE_SECRET',
   'NEXT_PUBLIC_APP_URL',
 ] as const;

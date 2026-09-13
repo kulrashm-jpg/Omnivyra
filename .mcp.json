@@ -10,7 +10,15 @@
         "--",
         "npx",
         "-y",
+        "-p",
         "@supabase/mcp-server-supabase@latest",
+        "-p",
+        "@modelcontextprotocol/server@^2",
+        "-p",
+        "zod@^4",
+        "--",
+        "mcp-server-supabase",
+        "--read-only",
         "--project-ref=klkiseupptzbecbxwrky"
       ]
     }

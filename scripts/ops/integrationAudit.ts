@@ -236,9 +236,10 @@ function auditRow(row: IntegrationRow, websitesById: Map<string, WebsiteRef>): F
 async function main(): Promise<number> {
   const env = { ...parseEnvFile(join(process.cwd(), '.env.local')), ...process.env };
   const supabaseUrl = env.SUPABASE_URL;
-  const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  // Secret key first; the legacy service_role name is a migration-only fallback.
+  const serviceKey = env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceKey) {
-    console.error('integrationAudit: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required.');
+    console.error('integrationAudit: SUPABASE_URL and SUPABASE_SECRET_KEY required.');
     return 2;
   }
   const headers = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
