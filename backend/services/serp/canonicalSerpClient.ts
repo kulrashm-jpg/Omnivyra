@@ -107,21 +107,88 @@ export interface CanonicalSerpTransport {
   }>;
 }
 
-const defaultTransport: CanonicalSerpTransport = async (url, init) => {
+/** The per-call timeout fired. Its message is what the failed result reports. */
+export class SerpRequestTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`SerpAPI request timed out after ${timeoutMs}ms`);
+    this.name = 'SerpRequestTimeoutError';
+  }
+}
+
+type LinkedSignal = { readonly signal: AbortSignal; dispose(): void };
+
+/**
+ * The manual form of `AbortSignal.any`: aborts when the FIRST source aborts,
+ * carrying that source's reason, and detaches from every source once settled so
+ * a long-lived parent (a report deadline) does not accumulate listeners.
+ */
+function linkAbortSignalsManually(signals: readonly AbortSignal[]): LinkedSignal {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), init.timeoutMs);
+  const attached: Array<[AbortSignal, () => void]> = [];
+  const dispose = () => {
+    for (const [source, listener] of attached) source.removeEventListener('abort', listener);
+    attached.length = 0;
+  };
+  for (const source of signals) {
+    if (source.aborted) {
+      dispose();
+      controller.abort(source.reason);
+      return { signal: controller.signal, dispose };
+    }
+    const listener = () => { dispose(); controller.abort(source.reason); };
+    source.addEventListener('abort', listener, { once: true });
+    attached.push([source, listener]);
+  }
+  return { signal: controller.signal, dispose };
+}
+
+/** Exported for the transport's own tests only: the path taken without `AbortSignal.any`. */
+export const __linkAbortSignalsManuallyForTest = linkAbortSignalsManually;
+
+/** One signal that aborts when ANY of `signals` does. Native where the runtime has it. */
+export function linkAbortSignals(signals: readonly AbortSignal[]): LinkedSignal {
+  const native = (AbortSignal as unknown as { any?: (sources: AbortSignal[]) => AbortSignal }).any;
+  if (typeof native === 'function') {
+    return { signal: native.call(AbortSignal, [...signals]), dispose: () => {} };
+  }
+  return linkAbortSignalsManually(signals);
+}
+
+/**
+ * The production transport.
+ *
+ * BOTH bounds apply, always. The per-call timeout is this client's own and runs
+ * on every request; a caller's deadline (Report 2's 45s boundary, via
+ * `getReportDeadlineSignal`) is ADDED to it, never substituted for it. Before
+ * this, an active deadline REPLACED the timeout, so under Report 2 a single
+ * stalled SERP request could hold the whole remaining report budget.
+ *
+ * The body is read inside the same bound, so a slow body cannot outlive the
+ * timeout either. A non-2xx body is not read — the caller treats it as a failure
+ * from the status alone.
+ */
+export const defaultSerpTransport: CanonicalSerpTransport = async (url, init) => {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(new SerpRequestTimeoutError(init.timeoutMs)), init.timeoutMs);
+  const linked: LinkedSignal = init.signal
+    ? linkAbortSignals([timeout.signal, init.signal])
+    : { signal: timeout.signal, dispose: () => {} };
   try {
     // ssrf-ok: url is the fixed SerpAPI endpoint with encoded query parameters.
-    const response = await fetch(url, { signal: init.signal ?? controller.signal });
+    const response = await fetch(url, { signal: linked.signal });
+    const body: unknown = response.ok ? await response.json() : null;
     return {
       ok: response.ok,
       status: response.status,
-      json: () => response.json() as Promise<unknown>,
+      json: async () => body,
     };
   } finally {
     clearTimeout(timer);
+    linked.dispose();
   }
 };
+
+const defaultTransport = defaultSerpTransport;
 
 /**
  * Issue ONE governed SERP query and return canonical rows.

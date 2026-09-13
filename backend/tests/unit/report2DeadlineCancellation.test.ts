@@ -273,12 +273,20 @@ describe('Report 2 — deadline cancellation', () => {
   // in-flight SERP request, and Report 1 — which has no deadline scope — is
   // untouched. Only the seam the signal travels through is different.
   describe('5. an in-flight SERP attempt receives the parent signal', () => {
-    it('hands the exact parent signal to the SERP request', async () => {
+    it('links the parent signal into the SERP request, alongside the per-call timeout', async () => {
+      // The request's signal is no longer the parent's own object: the client LINKS the parent
+      // with its 8s per-call timeout so both bounds apply (before, the parent replaced the
+      // timeout). The invariant is behavioural — aborting the parent aborts the request.
       const controller = new AbortController();
       await runWithReportDeadline(controller.signal, () => fetchSerpResultsForKeyword('k', null));
       expect(mockSerpTransport).toHaveBeenCalledTimes(1);
       const init = (mockSerpTransport.mock.calls[0] as unknown as Array<{ signal?: AbortSignal; timeoutMs: number }>)[1];
-      expect(init.signal).toBe(controller.signal);
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(init.signal?.aborted).toBe(false);
+      const reason = new Error('report deadline');
+      controller.abort(reason);
+      expect(init.signal?.aborted).toBe(true);
+      expect(init.signal?.reason).toBe(reason);
     });
 
     it('surfaces an aborted request as a failed SERP attempt, not a fabricated result', async () => {
