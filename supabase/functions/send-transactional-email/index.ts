@@ -18,10 +18,17 @@
 //   APP_URL               — public base URL for CTA links (e.g. "https://omnivyra.com")
 //
 // Caller (Next.js API): supabase.functions.invoke('send-transactional-email', { body })
-// The function is invoked with the service-role key, so JWT verification is
-// implicit — we only check that the bearer matches the project's anon/service key.
+// Callers use the server client, which sends a project SECRET key on the
+// `apikey` header. Authorization happens in code (./auth.ts) against the
+// platform-injected SUPABASE_SECRET_KEYS; the publishable key is refused.
+//
+// Deploy with the platform JWT gate off — it only understands legacy JWT keys
+// and is not a security boundary for the new key model (see ./auth.ts):
+//   supabase functions deploy send-transactional-email \
+//     --project-ref klkiseupptzbecbxwrky --no-verify-jwt
 
 import { SESClient, SendEmailCommand } from "npm:@aws-sdk/client-ses@3.658.1";
+import { authorizeServiceCaller } from "./auth.ts";
 
 type Template =
   | { type: "team_invite"; recipientEmail: string; inviteUrl: string }
@@ -292,10 +299,11 @@ Deno.serve(async (req) => {
     });
   }
 
-  const auth = req.headers.get("Authorization") ?? "";
-  if (!auth.startsWith("Bearer ")) {
-    return new Response(JSON.stringify({ error: "Missing bearer token" }), {
-      status: 401,
+  const authResult = await authorizeServiceCaller(req.headers, Deno.env.get("SUPABASE_SECRET_KEYS"));
+  if (!authResult.ok) {
+    if (authResult.status === 500) console.error("AUTH_NOT_CONFIGURED: SUPABASE_SECRET_KEYS missing or unparseable");
+    return new Response(JSON.stringify({ error: authResult.error }), {
+      status: authResult.status,
       headers: { "Content-Type": "application/json" },
     });
   }

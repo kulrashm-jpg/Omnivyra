@@ -19,9 +19,10 @@
  */
 import { spawnSync } from 'node:child_process';
 
+// Server credential is the Supabase secret key; see validatePlatformParity.ts.
 const REQUIRED = [
   'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_SECRET_KEY',
   'SESSION_COOKIE_SECRET',
 ] as const;
 

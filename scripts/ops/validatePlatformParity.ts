@@ -41,11 +41,15 @@ type EnvRow = {
   notes: string[];
 };
 
+// Supabase API-key model: the browser credential is the publishable key and the
+// server credential is the secret key (backend/db/supabaseKeys.ts,
+// lib/supabase/publishableKey.ts). The legacy anon/service_role names are no
+// longer required on any platform.
 const REQUIRED_VARS = [
   'NEXT_PUBLIC_SUPABASE_URL',
-  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+  'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
   'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_SECRET_KEY',
   'SESSION_COOKIE_SECRET',
   'NEXT_PUBLIC_APP_URL',
 ] as const;

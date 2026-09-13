@@ -186,17 +186,26 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Resend invitation email to ${email}?`)) return;
     setIsLoading(true);
     try {
-      const idempotencyKey =
-        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-      const response = await fetchWithAuth(`/api/super-admin/invitations/${encodeURIComponent(invitationId)}/resend`, {
+      // Same step-up flow and fresh-key-per-attempt rule as
+      // handleCreateCompanyAdmin: resend is gated by identity.admin.assign and
+      // is refused before any write until the operator has elevated.
+      const fire = () => fetchWithAuth(`/api/super-admin/invitations/${encodeURIComponent(invitationId)}/resend`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Idempotency-Key': idempotencyKey,
+          'Idempotency-Key': newIdempotencyKey(),
         },
       });
+      const outcome = await runStepUpFlowIfNeeded(await fire(), fire);
+      if (outcome.kind === 'step_up_user_cancelled' || outcome.kind === 'step_up_unavailable') {
+        alert(describeStepUpOutcome(outcome));
+        return;
+      }
+      if (outcome.kind === 'session_lost') {
+        alert(describeAuthFailure(outcome.failure));
+        return;
+      }
+      const response = outcome.response;
       if (!response.ok) {
         const r = await response.json().catch(() => ({}));
         alert(`Resend failed: ${r.details || r.error || response.statusText}`);
@@ -251,28 +260,43 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     setIsLoading(true);
     setCreateUserResult(null);
     try {
-      // Per-request idempotency key — required by withIdempotency wrapper.
-      const idempotencyKey =
-        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-
-      const response = await fetchWithAuth('/api/super-admin/users/create', {
+      const requestBody = JSON.stringify({
+        email: companyAdminForm.email.trim(),
+        fullName: companyAdminForm.fullName.trim() || null,
+        companyId: companyAdminForm.companyId,
+        role: companyAdminForm.role,
+        allowPersonalEmail: companyAdminForm.allowPersonalEmail,
+        inviteMode: companyAdminForm.inviteMode,
+        sendInvite: companyAdminForm.sendInvite,
+      });
+      // identity.admin.assign is step-up gated (phishing-resistant + trusted
+      // device, 10-min freshness). The first call is refused until the operator
+      // has elevated; the helper runs the passkey ceremony and retries once.
+      // This route is wrapped in withIdempotency, which replays the stored
+      // step-up denial for a reused key, so each attempt carries a FRESH key
+      // (stepUpRetryIdempotency.test.ts). The refused attempt wrote nothing —
+      // requireCapability runs before any write — so the action still creates
+      // at most once.
+      const fire = () => fetchWithAuth('/api/super-admin/users/create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Idempotency-Key': idempotencyKey,
+          'Idempotency-Key': newIdempotencyKey(),
         },
-        body: JSON.stringify({
-          email: companyAdminForm.email.trim(),
-          fullName: companyAdminForm.fullName.trim() || null,
-          companyId: companyAdminForm.companyId,
-          role: companyAdminForm.role,
-          allowPersonalEmail: companyAdminForm.allowPersonalEmail,
-          inviteMode: companyAdminForm.inviteMode,
-          sendInvite: companyAdminForm.sendInvite,
-        }),
+        body: requestBody,
       });
+      const outcome = await runStepUpFlowIfNeeded(await fire(), fire);
+      if (outcome.kind === 'step_up_user_cancelled' || outcome.kind === 'step_up_unavailable') {
+        alert(describeStepUpOutcome(outcome));
+        return;
+      }
+      if (outcome.kind === 'session_lost') {
+        alert(describeAuthFailure(outcome.failure));
+        return;
+      }
+      // 'success' and 'auth_banner' both carry the server's response; fall
+      // through so the API's own error detail is surfaced as before.
+      const response = outcome.response;
       const parsed = await parseJsonResponse<{
         user?: { email: string; status: string };
         invitation?: { mode: string; id: string | null };
@@ -350,13 +374,15 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Are you sure you want to mark this user as ${nextStatus}?`)) return;
     setIsLoading(true);
     try {
-      // ONE key for the whole logical action. runStepUpFlowIfNeeded retries the
-      // SAME request after elevation, and reusing the key is precisely what
-      // makes that retry idempotent instead of a second mutation.
-      const idempotencyKey = newIdempotencyKey();
+      // A FRESH key per attempt. This route is wrapped in withIdempotency,
+      // which stores the step-up denial of the first attempt as a completed
+      // response and replays it for the same key, so a retry reusing the key
+      // would never reach the handler (stepUpRetryIdempotency.test.ts). The
+      // refused attempt wrote nothing — requireCapability runs before any
+      // write — so the action still mutates at most once.
       const fire = () => fetchWithAuth('/api/super-admin/users', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({ userId, companyId, status: nextStatus }),
       });
       // identity.admin.assign is step-up gated (phishing-resistant + trusted
@@ -392,10 +418,10 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Change this user's role to ${nextRole}?`)) return;
     setIsLoading(true);
     try {
-      const idempotencyKey = newIdempotencyKey();
+      // A FRESH key per attempt — see handleUserStatusChange.
       const fire = () => fetchWithAuth('/api/super-admin/users', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({ userId, companyId, role: nextRole }),
       });
       const outcome = await runStepUpFlowIfNeeded(await fire(), fire);

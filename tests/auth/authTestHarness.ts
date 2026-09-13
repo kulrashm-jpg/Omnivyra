@@ -26,8 +26,13 @@ const supabaseUrl =
   process.env.E2E_NEXT_PUBLIC_SUPABASE_URL ||
   process.env.SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL;
+// Secret key (sb_secret_...) first; the legacy service_role names remain a
+// migration-only fallback for E2E projects that have not moved to the new model.
 const serviceRoleKey =
-  process.env.E2E_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  process.env.E2E_SUPABASE_SECRET_KEY ||
+  process.env.SUPABASE_SECRET_KEY ||
+  process.env.E2E_SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 // Fail-closed: refuses production, empty, malformed, local and placeholder
 // targets. Runs at module load, i.e. before any admin API call is reachable.

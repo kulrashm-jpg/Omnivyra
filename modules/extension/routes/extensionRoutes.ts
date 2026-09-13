@@ -118,7 +118,7 @@ router.use(requireExtensionUser);
  * ```bash
  * curl -X POST http://localhost:3000/api/extension/events \
  *   -H "Content-Type: application/json" \
- *   -H "Authorization: Bearer 3c5a5c7d9f2e1a8b4c6d9e1f3a5b7c9d1e2f4a5b6c7d8e9f0a1b2c3d4e5f6a" \
+ *   -H "Authorization: Bearer <session_token>" \
  *   -d {
  *     "platform": "linkedin",
  *     "event_type": "comment",
@@ -183,7 +183,7 @@ router.post('/events', (req, res) => controller.handlePostEvent(req, res));
  * Example request:
  * ```bash
  * curl "http://localhost:3000/api/extension/commands?platform=linkedin&limit=5" \
- *   -H "Authorization: Bearer 3c5a5c7d9f2e1a8b4c6d9e1f3a5b7c9d1e2f4a5b6c7d8e9f0a1b2c3d4e5f6a"
+ *   -H "Authorization: Bearer <session_token>"
  * ```
  * 
  * Example response (200 OK):
@@ -276,7 +276,7 @@ router.post('/validate', (req, res) => controller.handleValidateSession(req, res
  * ```bash
  * curl -X POST http://localhost:3000/api/extension/action-result \
  *   -H "Content-Type: application/json" \
- *   -H "Authorization: Bearer 3c5a5c7d9f2e1a8b4c6d9e1f3a5b7c9d1e2f4a5b6c7d8e9f0a1b2c3d4e5f6a" \
+ *   -H "Authorization: Bearer <session_token>" \
  *   -d {
  *     "command_id": "660e8400-f29b-41d4-a716-446655441234",
  *     "status": "success",
@@ -295,7 +295,7 @@ router.post('/validate', (req, res) => controller.handleValidateSession(req, res
  * ```bash
  * curl -X POST http://localhost:3000/api/extension/action-result \
  *   -H "Content-Type: application/json" \
- *   -H "Authorization: Bearer 3c5a5c7d9f2e1a8b4c6d9e1f3a5b7c9d1e2f4a5b6c7d8e9f0a1b2c3d4e5f6a" \
+ *   -H "Authorization: Bearer <session_token>" \
  *   -d {
  *     "command_id": "660e8400-f29b-41d4-a716-446655441234",
  *     "status": "failed",
