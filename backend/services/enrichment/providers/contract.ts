@@ -194,9 +194,18 @@ export const refuse = (
  * `classifyEnrichmentError`, which turns anything unrecognised into
  * `provider_unavailable` rather than a confident verdict.
  *
+ * ─── BOUNDED ──────────────────────────────────────────────────────────────
+ * A horizon further than MAX_RETRY_AFTER_SECONDS past `now` is unusable too and
+ * also returns null. A hostile or buggy `Retry-After` (a huge delta, a date
+ * decades out) would otherwise park the attempt in WAIT indefinitely; as
+ * absent it surfaces for review like any other unusable horizon. The ceiling is
+ * inclusive and applies to both forms.
+ *
  * Returns an ISO-8601 instant, matching every other timestamp in this
  * programme (`startedAt`, `completedAt`, `observedAt`).
  */
+export const MAX_RETRY_AFTER_SECONDS = 7 * 24 * 60 * 60;
+
 export function parseRetryAfter(header: string | null | undefined, now: Date): string | null {
   if (typeof header !== 'string') return null;
   const raw = header.trim();
@@ -207,6 +216,7 @@ export function parseRetryAfter(header: string | null | undefined, now: Date): s
   if (/^\d+$/.test(raw)) {
     const seconds = Number(raw);
     if (!Number.isSafeInteger(seconds)) return null;
+    if (seconds > MAX_RETRY_AFTER_SECONDS) return null;
     return new Date(now.getTime() + seconds * 1000).toISOString();
   }
 
@@ -216,6 +226,7 @@ export function parseRetryAfter(header: string | null | undefined, now: Date): s
   const at = Date.parse(raw);
   if (!Number.isFinite(at)) return null;
   if (at <= now.getTime()) return null;
+  if (at - now.getTime() > MAX_RETRY_AFTER_SECONDS * 1000) return null;
   return new Date(at).toISOString();
 }
 

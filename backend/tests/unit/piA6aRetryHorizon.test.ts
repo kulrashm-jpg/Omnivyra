@@ -23,7 +23,7 @@
  * SECRETS: all synthetic. No credential, no network, no provider call.
  */
 
-import { parseRetryAfter, refuse } from '../../services/enrichment/providers/contract';
+import { MAX_RETRY_AFTER_SECONDS, parseRetryAfter, refuse } from '../../services/enrichment/providers/contract';
 import { executeEnrichmentRecorded } from '../../services/enrichment/recordedExecution';
 import type { ExecuteEnrichmentPorts } from '../../services/enrichment/providers/execute';
 import type {
@@ -137,6 +137,41 @@ describe('A6A — Retry-After is parsed, never invented', () => {
     // The provider may be speaking from a clock we do not share; a stale date
     // authorises nothing.
     expect(parseRetryAfter('Mon, 07 Sep 2026 11:00:00 GMT', NOW_DATE)).toBeNull();
+  });
+
+  it('the ceiling is seven days', () => {
+    expect(MAX_RETRY_AFTER_SECONDS).toBe(604800);
+  });
+
+  it('a delta-seconds horizon exactly at the ceiling is preserved', () => {
+    expect(parseRetryAfter(String(MAX_RETRY_AFTER_SECONDS), NOW_DATE)).toBe('2026-09-14T12:00:00.000Z');
+  });
+
+  it.each([
+    ['one second past the ceiling', String(MAX_RETRY_AFTER_SECONDS + 1)],
+    ['a year', String(365 * 24 * 60 * 60)],
+    ['the largest safe integer', String(Number.MAX_SAFE_INTEGER)],
+    ['beyond safe-integer range', '99999999999999999999'],
+  ])('a delta of %s beyond the ceiling yields null, like any unusable horizon', (_label, header) => {
+    expect(parseRetryAfter(header, NOW_DATE)).toBeNull();
+  });
+
+  it('an HTTP-date exactly at the ceiling is preserved', () => {
+    expect(parseRetryAfter('Mon, 14 Sep 2026 12:00:00 GMT', NOW_DATE)).toBe('2026-09-14T12:00:00.000Z');
+  });
+
+  it.each([
+    ['one second past the ceiling', 'Mon, 14 Sep 2026 12:00:01 GMT'],
+    ['decades out', 'Fri, 31 Dec 9999 23:59:59 GMT'],
+  ])('an HTTP-date %s yields null, like any unusable horizon', (_label, header) => {
+    expect(parseRetryAfter(header, NOW_DATE)).toBeNull();
+  });
+
+  it('an over-ceiling horizon never reaches the row', async () => {
+    const s = store();
+    await run(s, refusingAdapter([], 'rate_limited', parseRetryAfter(String(MAX_RETRY_AFTER_SECONDS + 1), NOW_DATE)));
+
+    expect(s.row.nextRetryAt ?? null).toBeNull();
   });
 
   it('is a pure function of its inputs', () => {
