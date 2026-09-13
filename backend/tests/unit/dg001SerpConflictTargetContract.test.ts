@@ -2,7 +2,7 @@
  * DG-001 — the `analytics_serp_results` writer's ON CONFLICT target must always
  * have an arbiter, across every migration not yet in production.
  *
- * WHY THIS EXISTS. The first draft of 20261023000000_serp_result_feature_types.sql
+ * WHY THIS EXISTS. The first draft of 20261025000000_serp_result_feature_types.sql
  * dropped `analytics_serp_results_unique (snapshot_id, position, domain, url)` and
  * replaced it with a six-column index. The only writer upserts with
  * `onConflict: 'snapshot_id,position,domain,url'`, and PostgreSQL infers an
@@ -124,7 +124,7 @@ describe('DG-001 — analytics_serp_results keeps an arbiter for its writer', ()
         .toEqual({ after: file, arbiters: expect.arrayContaining(['analytics_serp_results_unique']) });
     }
     // Guard against a vacuous pass: the DG-001 migration must actually be replayed.
-    expect(touched).toContain('20261023000000_serp_result_feature_types.sql');
+    expect(touched).toContain('20261025000000_serp_result_feature_types.sql');
   });
 
   it('the DG-001 expansion is present alongside it, not instead of it', () => {

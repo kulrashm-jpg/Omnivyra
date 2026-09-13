@@ -2,7 +2,7 @@
  * W6 — real-schema regression cover for the DG-001 SERP-results migration.
  *
  * The defect this pins: the first draft of
- * supabase/migrations/20261023000000_serp_result_feature_types.sql DROPPED
+ * supabase/migrations/20261025000000_serp_result_feature_types.sql DROPPED
  * `analytics_serp_results_unique (snapshot_id, position, domain, url)` and
  * replaced it with a six-column identity index. The only writer of the table is
  *

@@ -182,7 +182,7 @@ export async function ingestSerpSnapshot(input: SerpSnapshotInput): Promise<{
   // Withholding is what happens here, and it is COUNTED rather than silent: the
   // return value reports exactly how many observations the schema could not
   // hold, so a caller can see the loss instead of inferring it from a total.
-  // Migration `20261023000000_serp_result_feature_types.sql` is written and
+  // Migration `20261025000000_serp_result_feature_types.sql` is written and
   // deliberately NOT applied; until it is, these counts are the evidence for
   // applying it.
   const persistable = input.results.filter((row) =>
