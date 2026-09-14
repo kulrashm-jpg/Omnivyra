@@ -16,7 +16,14 @@
 const fs = require('fs');
 const { execSync } = require('child_process');
 
-const SUITE = 'backend/tests/unit/d8CompetitorEvidenceIntegrity.test.ts';
+// The behavioural suite, plus the type-boundary guard that pins the edges whose
+// return would recreate the seam's dependency cycles (M19–M23).
+const SUITE = [
+  'backend/tests/unit/d8CompetitorEvidenceIntegrity.test.ts',
+  'backend/tests/unit/d8SeamTypeBoundary.test.ts',
+].join(' ');
+const MODEL = 'backend/services/reportCompetitorIntelligenceServiceModel.ts';
+const LEAF = 'backend/services/competitor/competitorMetricsTypes.ts';
 const SEAM = 'backend/services/competitor/competitorMetricsEvidence.ts';
 const ENGINE = 'backend/services/reportCompetitorIntelligenceServiceEngine.ts';
 const HELPERS = 'backend/services/reportCompetitorIntelligenceServiceHelpers.ts';
@@ -157,6 +164,44 @@ const MUTATIONS = [
     file: VIEWUTILS,
     from: "  if (!delta) return 'Not Observed';",
     to: "  if (!delta) return 'At Par';",
+  },
+  // ── Type boundary: each of these restores an edge that put the seam inside the
+  // eight dependency cycles the native architecture gate counted, or lets the
+  // shared-types leaf turn into a place where logic accumulates. ───────────────
+  {
+    id: 'M19',
+    name: 'the seam imports its shared types from its consumers again (the cycle edges)',
+    file: SEAM,
+    from: "import type {\n  ComparisonMetrics,\n  CompetitorCrawlOutcome,\n  DomainCrawlSignals,\n} from './competitorMetricsTypes';",
+    to: "import type { ComparisonMetrics } from '../reportCompetitorIntelligenceServiceModel';\nimport type { DomainCrawlSignals } from '../reportCompetitorIntelligenceServiceHelpers';\nimport type { CompetitorCrawlOutcome } from './competitorMetricsTypes';",
+  },
+  {
+    id: 'M20',
+    name: 'the Model imports CompetitorCrawlOutcome from the seam again',
+    file: MODEL,
+    from: "import type { ComparisonMetrics, CompetitorCrawlOutcome } from './competitor/competitorMetricsTypes';",
+    to: "import type { ComparisonMetrics } from './competitor/competitorMetricsTypes';\nimport type { CompetitorCrawlOutcome } from './competitor/competitorMetricsEvidence';",
+  },
+  {
+    id: 'M21',
+    name: 'the Helpers import CompetitorCrawlOutcome from the seam again',
+    file: HELPERS,
+    from: "import type { CompetitorCrawlOutcome, DomainCrawlSignals } from './competitor/competitorMetricsTypes';",
+    to: "import type { DomainCrawlSignals } from './competitor/competitorMetricsTypes';\nimport type { CompetitorCrawlOutcome } from './competitor/competitorMetricsEvidence';",
+  },
+  {
+    id: 'M22',
+    name: 'the shared-types leaf starts carrying runtime logic',
+    file: LEAF,
+    from: "export type CompetitorCrawlOutcome = ReachabilityOutcome | 'not_attempted';",
+    to: "export type CompetitorCrawlOutcome = ReachabilityOutcome | 'not_attempted';\nexport const isNotAttempted = (o: CompetitorCrawlOutcome): boolean => o === 'not_attempted';",
+  },
+  {
+    id: 'M23',
+    name: 'a second, drifting definition of ComparisonMetrics reappears in the Model',
+    file: MODEL,
+    from: 'export type { ComparisonMetrics };',
+    to: 'export type ComparisonMetrics = { content_depth: number; authority_score: number; publishing_frequency: number; engagement_score: number; seo_coverage: number; geo_presence: number; aeo_readiness: number };',
   },
 ];
 

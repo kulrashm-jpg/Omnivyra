@@ -22,6 +22,8 @@ const SUITES = [
   'backend/tests/unit/dg001SerpFeatureCapture.test.ts',
   'backend/tests/unit/dg001ConsumerContract.test.ts',
   'backend/tests/unit/dg001ReportIntegration.test.ts',
+  // The raw-JSON collector's narrowing (M17–M21).
+  'backend/tests/unit/dg001SiblingFeatureCollector.test.ts',
 ].join(' ');
 
 const TYPES = 'backend/services/serp/serpResultTypes.ts';
@@ -161,6 +163,43 @@ const MUTATIONS = [
     file: REPORT_HELPERS,
     from: '  if (!featureDomain) return null;\n  if (!ownDomain) return null;\n  return featureDomain === ownDomain;',
     to: '  return featureDomain === ownDomain;',
+  },
+  // ── The collector's `unknown` narrowing. Each of these makes the shape check
+  // cosmetic in a different way; the collector suite must notice every one. ────
+  {
+    id: 'M17',
+    name: 'the shape check accepts anything — raw provider JSON is trusted again',
+    file: ACQUISITION,
+    from: "function isProviderEntry(value: unknown): value is ProviderEntry {\n  return typeof value === 'object' && value !== null;\n}",
+    to: 'function isProviderEntry(value: unknown): value is ProviderEntry {\n  return true;\n}',
+  },
+  {
+    id: 'M18',
+    name: 'the body is read before it is proven to be an object',
+    file: ACQUISITION,
+    from: '  if (!isProviderEntry(body)) return items;\n',
+    to: '',
+  },
+  {
+    id: 'M19',
+    name: 'the provider’s own `type` wins over the key’s canonical label',
+    file: ACQUISITION,
+    from: '        if (isProviderEntry(entry)) items.push({ ...entry, type: typeLabel });',
+    to: '        if (isProviderEntry(entry)) items.push({ type: typeLabel, ...entry });',
+  },
+  {
+    id: 'M20',
+    name: 'an organic result is read for sitelinks before it is proven to be an object',
+    file: ACQUISITION,
+    from: '    if (!isProviderEntry(result)) continue;\n',
+    to: '',
+  },
+  {
+    id: 'M21',
+    name: 'primitive entries inside a feature block are collected as if they were objects',
+    file: ACQUISITION,
+    from: '        if (isProviderEntry(entry)) items.push({ ...entry, type: typeLabel });',
+    to: '        if (entry !== null && entry !== undefined) items.push({ ...(entry as object), type: typeLabel });',
   },
 ];
 
