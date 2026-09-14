@@ -41,6 +41,42 @@ import type { SnapshotReport } from '../../services/snapshotReportTypes';
 
 jest.setTimeout(180_000);
 
+/**
+ * GAP-02 Test B runs the REAL `buildPublicDomainAuditDecisions`. Its only I/O on the zero-page
+ * path is one read of `canonical_pages`. A unit test must not depend on whichever database the
+ * machine's environment points at, and the env-isolation guard rightly refuses to open one here.
+ * So that read is supplied by this zero-row fixture: the producer's own code, including the
+ * early return, runs unchanged, and the test records exactly what it asked for. A read of any
+ * other table fails loudly, because nothing else in this file is allowed to reach the database.
+ */
+const mockSupabaseReads: Array<{ table: string; filters: Array<[string, unknown]> }> = [];
+jest.mock('../../db/supabaseClient', () => {
+  const actual = jest.requireActual('../../db/supabaseClient');
+  const zeroRowQuery = (table: string) => {
+    const read = { table, filters: [] as Array<[string, unknown]> };
+    mockSupabaseReads.push(read);
+    const query = {
+      select: () => query,
+      eq: (column: string, value: unknown) => { read.filters.push([column, value]); return query; },
+      order: () => query,
+      limit: () => query,
+      in: () => query,
+      then: <T>(onFulfilled: (r: { data: unknown[]; error: null }) => T, onRejected?: (e: unknown) => T) =>
+        Promise.resolve({ data: [] as unknown[], error: null }).then(onFulfilled, onRejected),
+    };
+    return query;
+  };
+  return {
+    ...actual,
+    supabase: {
+      from: (table: string) => {
+        if (table !== 'canonical_pages') throw new Error(`GAP-02 fixture: unexpected database read of ${table}`);
+        return zeroRowQuery(table);
+      },
+    },
+  };
+});
+
 type PublicAudit = NonNullable<Parameters<typeof composeSnapshotReportFromDecisions>[0]['publicAudit']>;
 
 function resolvedInput(): ResolvedReportInput {
@@ -208,11 +244,17 @@ describe('GAP-02 · Test B — the same holds when no audit ran at all', () => {
   it('matches the real early-return shape the audit service produces for an uncrawled company', async () => {
     // The real producer, against a company id that has no `canonical_pages` rows. This proves the
     // fixture above is not an invented shape: it is what production actually hands the helper.
+    // The zero rows come from the repository-owned fixture at the top of this file, not a live DB.
+    const uncrawledCompanyId = '00000000-0000-4000-8000-000000000000';
+    mockSupabaseReads.length = 0;
     const realZeroPageAudit = await buildPublicDomainAuditDecisions({
-      companyId: '00000000-0000-4000-8000-000000000000',
+      companyId: uncrawledCompanyId,
       reportTier: 'snapshot',
       resolvedInput: resolvedInput(),
     });
+    // Exactly one read, of the company's own pages, and the early return took over: no
+    // page_content or page_links read ever happened.
+    expect(mockSupabaseReads).toEqual([{ table: 'canonical_pages', filters: [['company_id', uncrawledCompanyId]] }]);
     expect(realZeroPageAudit.decisions).toHaveLength(0);
     expect(realZeroPageAudit.site_structure.homepage).toBeNull();
     expect(realZeroPageAudit.geo_aeo_context.answerable_content_pct).toBeNull();
