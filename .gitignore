@@ -146,3 +146,6 @@ supabase/.temp/
 # Claude Code per-machine settings. Local-only by convention and has held
 # production credentials in permission rules - must never be committed.
 .claude/settings.local.json
+
+# Playwright / auth-integrity E2E output (screenshots and page-state JSON per run). Generated, never source.
+test-results/
