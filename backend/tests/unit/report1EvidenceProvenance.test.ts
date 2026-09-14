@@ -193,10 +193,15 @@ describe('GAP-07 · Test C — declared company data stays declared', () => {
 
 describe('GAP-07 · Test D — public crawl evidence stays observed', () => {
   it('classifies crawl and public-audit sources as public-observed', () => {
-    for (const source of ['crawler', 'public_audit', 'schema_org', 'wikidata', 'llm_probe'] as EvidenceSourceKind[]) {
+    for (const source of ['crawler', 'public_audit', 'schema_org', 'wikidata'] as EvidenceSourceKind[]) {
       expect(`${source}:${provenanceForSource(source)}`).toBe(`${source}:PUBLIC_OBSERVED`);
       expect(isReport1Source(source)).toBe(true);
     }
+  });
+
+  it('keeps llm_probe INFERRED — a model recalling a brand has observed nothing (2eb8639b)', () => {
+    expect(provenanceForSource('llm_probe')).toBe('INFERRED');
+    expect(isReport1Source('llm_probe')).toBe(true);
   });
 
   it('retains crawler observations rather than excluding them', () => {
