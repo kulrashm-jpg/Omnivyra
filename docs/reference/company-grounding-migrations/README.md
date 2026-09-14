@@ -29,6 +29,26 @@ Verified in STEP 3AH-73: all six apply cleanly, in order, onto main's replayed s
 (disposable database; nothing was applied to production). None of these tables exist in
 production.
 
+## Determined naming and architecture (STEP 3AH-75)
+
+* **Naming.** Current migrations use `YYYYMMDDHHMMSS_<slug>.sql`, and the production ledger
+  head is `20261026000000` (`close_anon_rls_exposure`). If activated today, the six files would
+  become six consecutive versions after the then-current head, in the same order: first the
+  file that creates the three tables (`20260910`), then the five that alter only those tables
+  (`20260911`–`20260915`; none touches any other table). Keep one version per file, so the
+  ledger records each step.
+* **Access model.** The only runtime path is the server-side
+  `postgresGroundingStore`, reached through `GROUNDING_STORE_DSN`. No browser or PostgREST
+  consumer exists. Since `20261026000000`, new `public` tables no longer grant anything to
+  `anon`, but they still grant `authenticated`. With the preserved tenant policies
+  (`EXISTS … user_company_roles`), any signed-in member of a tenant could read and write
+  these rows through PostgREST. Under the post-3AH-71 posture these tables should be
+  server-only: RLS enabled, no `anon`/`authenticated` grants (`REVOKE ALL … FROM anon,
+  authenticated`), and access through the owner or `service_role` connection.
+* **Gates.** The quality gate will require `ENABLE ROW LEVEL SECURITY` (already present) and
+  forbids unconditional public policies (none present). Add a replay test mirroring
+  `backend/tests/realschema/rls_anon_exposure.test.ts`.
+
 ## Before they can ever become real migrations
 
 1. Re-create them under new 14-digit versions after the current ledger head (the 8-digit
