@@ -19,6 +19,7 @@ import type {
 } from '../pages/company-profile.types';
 import { dedupeSocialProfiles, joinList, normalizeProfileSocialUrl, splitToList } from '../pages/company-profile.types';
 import { isValidCanonicalWebsite } from '../utils/companyProfileValidation';
+import { interpretCompanyFactsLookup, type CompanyFactsLookupPayload } from './companyFactsLookupResult';
 
 import { type ProfileState, type BrandAssetField, type InlineQuestionFieldKey, normalizeQuestionFieldKey, questionMatchesInlineField, questionMatchesAnyInlineField, formatBusinessClassificationLabel, BRAND_ASSET_SPECS, BRAND_ASSET_ACCEPT, SOCIAL_ACCOUNT_FIELDS, formatFileSize, prepareTransparentBrandAsset, StatCard, SectionCard, GuidedChatPanel } from './companyProfileFormSupportA';
 import { StatusChip, SavedHint, IntelligenceContextSections } from './companyProfileFormSupportB';
@@ -246,22 +247,29 @@ export function useCompanyProfileFormController(d: ProfileState) {
         `/api/company-profile/company-facts-lookup?companyId=${encodeURIComponent(companyId)}`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' } },
       );
-      const data = (await response.json().catch(() => null)) as
-        | { facts?: { founded_year?: string | null; team_size?: string | null; revenue_range?: string | null }; matched_label?: string | null }
-        | null;
+      const data = (await response.json().catch(() => null)) as CompanyFactsLookupPayload | null;
       if (!response.ok || !data) throw new Error('Lookup failed');
-      const facts = data.facts || {};
-      const filled: string[] = [];
-      // Only fill blanks — never overwrite what the user already entered.
-      if (!companyFacts.founded_year && facts.founded_year) { handleCompanyFactChange('founded_year', facts.founded_year); filled.push('founded year'); }
-      if (!companyFacts.team_size && facts.team_size) { handleCompanyFactChange('team_size', facts.team_size); filled.push('team size'); }
-      if (!companyFacts.revenue_range && facts.revenue_range) { handleCompanyFactChange('revenue_range', facts.revenue_range); filled.push('revenue range'); }
+      // CPG-012: only facts grounding confirmed for this company are filled, and
+      // only into blanks; the message says what was and was not confirmed.
+      const { fills, message } = interpretCompanyFactsLookup(data, companyFacts);
+      // ONE update carrying every fill. Calling handleCompanyFactChange per fact lost
+      // all but the last (each call spreads the same render's profile), and it
+      // ignores changes outside edit mode — where this button is also shown — so
+      // the message could report facts that were never filled.
+      if (fills.length > 0) {
+        updateActiveProfile({
+          ...activeProfile,
+          report_settings: {
+            ...(activeProfile.report_settings || {}),
+            company_facts: {
+              ...(activeProfile.report_settings?.company_facts || {}),
+              ...Object.fromEntries(fills.map((f) => [f.key, f.value])),
+            },
+          },
+        });
+      }
       setIsEditing(true);
-      setSuccessMessage(
-        filled.length > 0
-          ? `Filled ${filled.join(', ')} from Wikidata${data.matched_label ? ` (${data.matched_label})` : ''}. Review, add anything missing, then Save.`
-          : 'No public firmographics found on Wikidata for this company — please fill these facts in manually, then Save.',
-      );
+      setSuccessMessage(message);
     } catch (e) {
       setErrorMessage((e as Error).message || 'Could not look up company facts.');
     } finally {

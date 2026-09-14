@@ -195,10 +195,13 @@ const EXTERNAL_KNOWLEDGE_FLAG = defineRolloutFlag({
   key: 'external-knowledge-cache',
   description: 'W4-6: deterministic external reference-data caches (audit B-41/B-68)',
 });
+// v2 (CPG-012): entries now carry qid + official_websites, which Company Profile
+// grounding needs to tie the entity to the company. v1 entries lack them and
+// would read as a name-only match, so they are orphaned rather than reused.
 const WIKIDATA_NS = registerCacheNamespace({
   prefix: 'omnivyra:ext:wikidata',
   description: 'W4-6 Wikidata firmographics (global public reference data)',
-  version: 1,
+  version: 2,
   defaultTtlSeconds: Math.max(300, Number(process.env.WIKIDATA_CACHE_TTL_SECONDS) || 24 * 3600),
   requireTenant: false, // global by design — public facts, no tenant dimension
 });
@@ -209,8 +212,16 @@ export async function lookupCompanyFirmographicsFromWikidata(brandName: string):
   team_size: string | null;
   revenue_range: string | null;
   matched_label: string | null;
+  /**
+   * CPG-009 (additive) — the matched entity and its P856 official websites, so
+   * a caller can check WHICH organisation matched: a same-name organisation
+   * with a different website is a different company. Absent on entries cached
+   * before this field existed; callers must treat absence as "not stated".
+   */
+  qid?: string | null;
+  official_websites?: string[];
 }> {
-  const empty = { founded_year: null, team_size: null, revenue_range: null, matched_label: null };
+  const empty = { founded_year: null, team_size: null, revenue_range: null, matched_label: null, qid: null, official_websites: [] };
   if (process.env.WIKIDATA_ENABLED === 'false') return empty;
   const name = String(brandName || '').trim();
   if (!name) return empty;
@@ -225,6 +236,10 @@ export async function lookupCompanyFirmographicsFromWikidata(brandName: string):
         team_size: employeeCount(entity),
         revenue_range: revenueRange(entity),
         matched_label: entity.labels?.['en']?.value ?? hit.label ?? null,
+        qid: hit.id ?? null,
+        official_websites: (entity.claims?.['P856'] ?? [])
+          .map((claim) => claim.mainsnak?.datavalue?.value)
+          .filter((v): v is string => typeof v === 'string'),
       };
     } catch {
       return empty;
