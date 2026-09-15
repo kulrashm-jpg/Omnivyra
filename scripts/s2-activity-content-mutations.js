@@ -21,9 +21,11 @@ const JEST = path.join('node_modules', 'jest', 'bin', 'jest.js');
 const SUITE = [
   'backend/tests/unit/activityContentTenantBinding.test.ts',
   'backend/tests/unit/activityWorkspaceCreditAuthzSec001.test.ts',
+  'backend/tests/unit/aiAssetMutationTenantBinding.test.ts',
 ];
 const HANDLER = 'backend/services/activityWorkspace/contentRouteHandler.ts';
 const ADAPTER = 'backend/services/orchestration/canonicalExecutionAdapter.ts';
+const ASSET_ROUTE = 'pages/api/campaigns/[id]/ai-asset-mutation.ts';
 
 // The request body, spelled indirectly so this tooling file carries no
 // boundary-leak tokens of its own for the architecture audit.
@@ -87,6 +89,10 @@ const MUTATIONS = [
   { id: 'M14', name: 'generate_master grounded in the request companyId', edits: [[HANDLER,
     'generateMasterContentStrict({ ...item, company_id: resolvedOrgId }, {',
     'generateMasterContentStrict(item, {']] },
+  { id: 'M15', name: 'ai-asset-mutation write no longer scoped to the authorized campaign', edits: [[ASSET_ROUTE,
+    '      { campaignId: access.campaignId },\n', '']] },
+  { id: 'M16', name: 'ai-asset-mutation reveals a foreign row (out_of_scope leaked)', edits: [[ASSET_ROUTE,
+    "result.reason === 'out_of_scope' ? 'row_not_found' : result.reason", 'result.reason']] },
 ];
 
 function runSuite() {
