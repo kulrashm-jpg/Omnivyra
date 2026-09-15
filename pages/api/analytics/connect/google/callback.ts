@@ -56,7 +56,9 @@ function buildSuccessParams(returnTo: string | null, flow: 'ga4' | 'gsc'): Recor
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
-  console.log('[GA-OAUTH][callback] hit', { method: req.method, url: req.url });
+  // STEP 3AH-91: log the path only — the query carries the single-use OAuth
+  // authorization `code` (and state), which must never reach logs.
+  console.log('[GA-OAUTH][callback] hit', { method: req.method, path: String(req.url ?? '').split('?')[0] });
 
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
