@@ -4,7 +4,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * GET  /api/admin/autonomous?company_id=   — get autonomous settings
  * POST /api/admin/autonomous               — update autonomous settings
  *
- * Auth: requireAuth + requireCompanyAccess (company membership required)
+ * Auth: requireAuth + requireCompanyAccess (company membership required);
+ *       POST additionally requires COMPANY_ADMIN (or platform super admin).
  *
  * Controls:
  *   autonomous_mode    boolean   — enable/disable self-driving mode
@@ -16,6 +17,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { logDecision } from '@/backend/services/autonomousDecisionLogger';
+import { getUserRole, isPlatformSuperAdmin, Role } from '@/backend/services/rbacService';
 
 const VALID_RISK = new Set(['aggressive', 'balanced', 'conservative']);
 
@@ -59,6 +61,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const allowed = await requireCompanyAccess(auth.user.id, company_id, res);
     if (!allowed) return;
+
+    // SEC-91 W2-A (STEP 3AH-91, W2A-1) — changing autonomous settings is a
+    // company-admin action. Membership alone used to be enough, so a VIEW_ONLY
+    // member could switch on self-driving mode and turn off approvals, after
+    // which the autonomous scheduler generates AND auto-activates campaigns for
+    // the whole company. The policy is the repository's own: the settings UI
+    // (components/admin/AutonomousControlPanel) exists to let COMPANY ADMINS
+    // toggle it, and what it drives — CAMPAIGN_EXECUTE / AUTOMATION_EXECUTE —
+    // are admin-only capabilities (capabilityRegistry). Platform super admins
+    // keep their override. Reading the settings (GET) stays membership-only.
+    const [platformAdmin, companyRole] = await Promise.all([
+      isPlatformSuperAdmin(auth.user.id),
+      getUserRole(auth.user.id, company_id as string),
+    ]);
+    const isCompanyAdmin =
+      companyRole.role === Role.COMPANY_ADMIN || companyRole.role === Role.SUPER_ADMIN;
+    if (!platformAdmin && !isCompanyAdmin) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE', code: 'FORBIDDEN_ROLE' });
+    }
 
     if (risk_tolerance !== undefined && !VALID_RISK.has(risk_tolerance)) {
       return res.status(400).json({ error: `risk_tolerance must be one of: ${[...VALID_RISK].join(', ')}` });
