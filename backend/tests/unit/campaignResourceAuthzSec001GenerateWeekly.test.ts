@@ -82,6 +82,9 @@ function rowsFor(table: string): any[] {
   if (table === 'campaigns') return CAMPAIGN_ROWS;
   if (table === 'campaign_versions') return VERSION_ROWS;
   if (table === 'user_company_roles') return ROLE_ROWS;
+  // SEC-91 W2-A (W2A-5): requireCampaignAccess now checks the owning company's
+  // status (TenantGuard parity), so the world carries its (active) companies.
+  if (table === 'companies') return [{ id: CO_A, status: 'active' }, { id: CO_B, status: 'active' }];
   return [];
 }
 

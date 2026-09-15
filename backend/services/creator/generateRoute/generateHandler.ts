@@ -336,7 +336,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch { /* shadow is fully isolated — never affects the response */ }
   }
 
-  const access = await enforceCompanyAccess({ req, res, companyId });
+  // SEC-91 W2-A (STEP 3AH-91, W2F-1b) — bind body.campaign_id to the company
+  // being authorized. It used to be read later (campaign_versions snapshot →
+  // variant plan → orchestrator → response) with no company check, so a member
+  // of A could generate from company B's campaign snapshot. enforceCompanyAccess
+  // answers 404 for a campaign owned by another company (a campaign id that
+  // does not exist yet stays allowed, as for every creation flow); the snapshot
+  // read below is additionally scoped to companyId.
+  const campaignIdForVariant = typeof body.campaign_id === 'string' && body.campaign_id.trim().length > 0
+    ? body.campaign_id.trim()
+    : null;
+  const access = await enforceCompanyAccess({ req, res, companyId, campaignId: campaignIdForVariant });
   if (!access) return;
 
   // Phase 2 Task 4 (Batch D): single-charge per generate request. The three
@@ -449,9 +459,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // or failed resolution leaves `variantPlan=null` and behavior is
     // unchanged (single-asset path).
     let variantPlan: import('../../../../backend/services/creator/campaignVariantApplier').CampaignVariantPlan | null = null;
-    const campaignIdForVariant = typeof body.campaign_id === 'string' && body.campaign_id.trim().length > 0
-      ? body.campaign_id.trim()
-      : null;
+    // campaignIdForVariant is resolved (and bound to companyId) above.
     if (campaignIdForVariant) {
       try {
         const { supabase } = await import('../../../../backend/db/supabaseClient');
@@ -459,6 +467,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .from('campaign_versions')
           .select('campaign_snapshot')
           .eq('campaign_id', campaignIdForVariant)
+          .eq('company_id', companyId)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();

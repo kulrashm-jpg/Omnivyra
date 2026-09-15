@@ -9,10 +9,9 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import { withRBAC, type RbacContext } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
 import { requireCompanyContext } from '../../../../backend/services/companyContextGuardService';
-import { resolveUserContext } from '../../../../backend/services/userContextService';
 import {
   addReviewComment,
   getReviewRecord,
@@ -45,7 +44,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   try {
-    const ctx = await requireCompanyContext({ req, res });
+    // SEC-91 W2-A (STEP 3AH-91, W2A-5) — bind to the company withRBAC
+    // authorized and use the role it resolved there (same defects as
+    // approvals/decide: requireCompanyContext had no companyId → always 400, and
+    // resolveUserContext().role ('admin' | 'user') never matched the mapping).
+    const rbac = (req as NextApiRequest & { rbac?: RbacContext }).rbac;
+    if (!rbac) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    const ctx = await requireCompanyContext({ req, res, companyId: rbac.companyId });
     if (!ctx) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -62,11 +67,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     if (!existing) return res.status(404).json({ error: 'Review record not found' });
 
-    const user = await resolveUserContext(req);
     const updated = addReviewComment({
       assetId,
-      authorUserId: user.userId ?? 'unknown',
-      authorRole: rbacRoleToReviewRole(user.role ?? null),
+      authorUserId: rbac.userId,
+      authorRole: rbacRoleToReviewRole(rbac.role),
       text,
       pinnedTo,
     });

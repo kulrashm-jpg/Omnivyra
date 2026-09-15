@@ -5,6 +5,7 @@ import { getSupabaseUserFromRequest } from './supabaseAuthService';
 import { getCompanyRoleIncludingInvited, normalizePermissionRole, Role } from './rbacPrimitives';
 import { assertTenantAccess } from '../security/TenantGuard';
 import { checkCampaignOwnership } from './campaignOwnershipService';
+import { attributeAuthenticatedPrincipal } from './requestContextPrincipal';
 import { config } from '@/config';
 
 export type { UserContext, MembershipType };
@@ -60,6 +61,10 @@ export const resolveUserContext = async (req?: NextApiRequest): Promise<UserCont
     if (devIdentityOptIn()) return resolveFromLib();
     return unauthenticatedContext(error ?? 'INVALID_AUTH');
   }
+
+  // SEC-91 W2-A (W2A-4) — the identity is proven: record it in the request
+  // context (observe-only unless the ai-guard-principal flag is in enforce).
+  attributeAuthenticatedPrincipal({ userId: user.id, source: 'resolveUserContext' });
 
   const { data: roleRows, error: roleError } = await supabase
     .from('user_company_roles')
@@ -166,6 +171,18 @@ export const enforceCompanyAccess = async (input: {
 }): Promise<UserContext | null> => {
   const user = await resolveUserContext(input.req);
 
+  // SEC-91 W2-A (W2A-4) — every ALLOW branch records the authorized principal
+  // (user + the company just authorized) in the request context. Observe-only
+  // by default; see requestContextPrincipal.ts.
+  const allow = (): UserContext => {
+    attributeAuthenticatedPrincipal({
+      userId: user.userId,
+      orgId: input.companyId ?? null,
+      source: 'enforceCompanyAccess',
+    });
+    return user;
+  };
+
   const campaignBound = async (): Promise<boolean> => {
     if (!input.campaignId) return true;
     const ownership = await checkCampaignOwnership(String(input.campaignId), String(input.companyId));
@@ -229,7 +246,7 @@ export const enforceCompanyAccess = async (input: {
       return null;
     }
     if (!(await campaignBound())) return null;
-    return user;
+    return allow();
   }
 
   // Transient membership/org read failure (DB/network blip): do NOT report as
@@ -272,7 +289,7 @@ export const enforceCompanyAccess = async (input: {
       return null;
     }
     if (!(await campaignBound())) return null;
-    return user;
+    return allow();
   }
 
   // Legacy fallback (b): invited admin role.
@@ -288,7 +305,7 @@ export const enforceCompanyAccess = async (input: {
       return null;
     }
     if (!(await campaignBound())) return null;
-    return user;
+    return allow();
   }
 
   console.warn('ACCESS_DENIED', {

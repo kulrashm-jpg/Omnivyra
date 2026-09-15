@@ -51,6 +51,10 @@ const SLOT_ROWS = [
 const ROLE_ROWS = [
   { user_id: USER_A, company_id: CO_A, role: 'COMPANY_ADMIN', status: 'active' },
 ];
+const COMPANY_ROWS = [
+  { id: CO_A, status: 'active' },
+  { id: CO_B, status: 'active' },
+];
 
 /* ── observable state ─────────────────────────────────────────────────────── */
 type Call = { table: string; op: string; filters: Record<string, unknown> };
@@ -68,6 +72,9 @@ function rowsFor(table: string): any[] {
   if (table === 'weekly_content_refinements') return REFINEMENT_ROWS;
   if (table === 'daily_content_plans') return SLOT_ROWS;
   if (table === 'user_company_roles') return ROLE_ROWS;
+  // SEC-91 W2-A (W2A-5): requireCampaignAccess now checks the owning company's
+  // status (TenantGuard parity), so the world carries its (active) companies.
+  if (table === 'companies') return COMPANY_ROWS;
   return [];
 }
 
