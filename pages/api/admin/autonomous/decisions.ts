@@ -11,6 +11,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { getDecisionLog } from '@/backend/services/autonomousDecisionLogger';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import type { AutonomousDecisionType } from '@/backend/services/autonomousDecisionLogger';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -25,6 +26,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId   = req.query.campaign_id as string | undefined;
 
   if (!companyId) return res.status(400).json({ error: 'company_id required' });
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): the query company_id went straight to
+  // getDecisionLog — any signed-in user could read any company's AI decision
+  // log. Caller must be a member of company_id (same bar as the sibling
+  // /api/admin/autonomous settings route); an optional campaign_id filter must
+  // belong to that company (404 otherwise).
+  const access = await enforceCompanyAccess({ req, res, companyId, campaignId });
+  if (!access) return;
 
   const decisions = await getDecisionLog(companyId, { limit, decision_type: decisionType, campaign_id: campaignId });
 

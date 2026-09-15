@@ -69,22 +69,25 @@ export async function requireCampaignAccess(
     return null;
   }
 
+  // ROUTE-AUTH-001 (STEP 3AH-85) — authenticate BEFORE touching the campaign.
+  // The owner lookup used to run first, so an anonymous caller got 404 for an
+  // unknown campaign and 401 for a real one: an existence oracle that every
+  // caller had to neutralise by hoisting resolveUserContext itself. Answering
+  // authentication first makes every anonymous request look identical.
+  // resolveUserContext still supports the explicit local dev opt-in.
+  const user = await resolveUserContext(req);
+  const userId = user?.userId ?? null;
+  if (!userId) {
+    res.status(401).json({ error: 'UNAUTHORIZED' });
+    return null;
+  }
+
   // B4.1 — extracted to resolveCampaignCompanyId (same query, same ordering,
   // same "no owner ⇒ 404" semantics) so the canonical content path resolves
   // campaign ownership through exactly this authority rather than a second one.
   const companyId = await resolveCampaignCompanyId(campaignId);
   if (!companyId) {
     res.status(404).json({ error: 'Campaign not found' });
-    return null;
-  }
-
-  // Resolve user context — supports env-based fallback (same as enforceCompanyAccess).
-  // When Supabase JWT is unavailable, resolveUserContext falls back to DEV_COMPANY_IDS
-  // so the request is not blocked with 403 in development.
-  const user = await resolveUserContext(req);
-  const userId = user?.userId ?? null;
-  if (!userId) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
     return null;
   }
 

@@ -1,5 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { refineLanguageOutput } from '@/backend/services/languageRefinementService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -13,6 +14,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!campaignId || !weekNumber || !amendmentRequest) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
+
+    // ROUTE-AUTH-001 (STEP 3AH-85): authenticate and bind the campaign before
+    // any AI call is made on the platform's credentials.
+    const access = await requireCampaignAccess(req, res, String(campaignId));
+    if (!access) return;
 
     // Prepare context for AI
     const context = {

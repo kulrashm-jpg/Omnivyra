@@ -21,6 +21,16 @@ jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () => ({ user: { id: 'u1' }, error: null })),
 }));
 
+// ROUTE-AUTH-001 (STEP 3AH-85): render-inline now binds company_id/campaign_id to the
+// caller before rendering. This suite pins font-before-render ORDER, so the tenant guard
+// is faked as granting exactly c1/k1 (deny paths: routeAuth001TemplatesCreator), and the
+// database client is stubbed so no real client is constructed.
+jest.mock('../../services/userContextService', () => ({
+  enforceCompanyAccess: jest.fn(async (i: { companyId?: string; campaignId?: string }) =>
+    (i.companyId === 'c1' && (!i.campaignId || i.campaignId === 'k1') ? { userId: 'u1' } : null)),
+}));
+jest.mock('../../services/campaignAccessService', () => ({ requireCampaignAccess: jest.fn(async () => null) }));
+jest.mock('../../db/supabaseClient', () => ({ supabase: { from: () => { throw new Error('no DB in this suite'); } } }));
 function mockRes() {
   const res: Record<string, unknown> = {};
   res.status = jest.fn((c: number) => { (res as { statusCode?: number }).statusCode = c; return res; });

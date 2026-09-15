@@ -8,12 +8,19 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getMetrics } from '../../../../backend/services/systemHealthMetricsService';
+import { requireSuperAdminUser } from '../../../../backend/services/requestAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): platform operational metrics — super admin
+  // only (its only caller, pages/system/workers.tsx, is a super-admin page whose
+  // sibling request /api/system/dead-letters is already super-admin gated).
+  const admin = await requireSuperAdminUser(req, res);
+  if (!admin) return;
 
   try {
     const component = (req.query.component as string)?.trim() || undefined;

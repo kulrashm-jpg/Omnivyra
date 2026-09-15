@@ -14,12 +14,17 @@ import {
   getReplyIntelligenceDiagnostics,
   getOpportunityDiagnostics,
 } from '../../../../backend/services/engagementDiagnosticsService';
+import { requireSuperAdminUser } from '../../../../backend/services/requestAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): platform-wide engagement diagnostics — super admin only.
+  const admin = await requireSuperAdminUser(req, res);
+  if (!admin) return;
 
   try {
     const [workers, queues, ingestion, response_learning, reply_intelligence, opportunities] =

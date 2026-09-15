@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 interface AdapterConfig {
   platform: string;
@@ -18,11 +19,16 @@ interface AdapterConfig {
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { user_id } = req.query;
-
-  if (!user_id || typeof user_id !== 'string') {
-    return res.status(400).json({ error: 'user_id is required' });
+  // ROUTE-AUTH-001 (STEP 3AH-85): adapter_configs rows are owned by user_id.
+  // The route used to read AND upsert any user's rows by a client-supplied
+  // ?user_id with no authentication. The owner is now the authenticated
+  // caller; a client-supplied user_id is ignored (the only UI caller,
+  // pages/content-adapter-config.tsx, never sent one).
+  const { user } = await getSupabaseUserFromRequest(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
+  const user_id = user.id;
 
   if (req.method === 'GET') {
     try {

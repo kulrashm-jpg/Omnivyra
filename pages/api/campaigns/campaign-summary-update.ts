@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -20,11 +21,15 @@ async function getCampaignSummary(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign to the caller's tenant.
+    const access = await requireCampaignAccess(req, res, campaignId as string);
+    if (!access) return;
+
     // Get campaign with summary data
     const { data: campaign, error } = await supabase
       .from('campaigns')
       .select('*')
-      .eq('id', campaignId)
+      .eq('id', access.campaignId)
       .single();
 
     if (error) {
@@ -58,6 +63,10 @@ async function updateCampaignSummary(req: NextApiRequest, res: NextApiResponse) 
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign before any write.
+    const access = await requireCampaignAccess(req, res, campaignId as string);
+    if (!access) return;
+
     // Update campaign summary fields
     const updateData: any = {
       updated_at: new Date().toISOString()
@@ -75,7 +84,7 @@ async function updateCampaignSummary(req: NextApiRequest, res: NextApiResponse) 
     const { data, error } = await supabase
       .from('campaigns')
       .update(updateData)
-      .eq('id', campaignId)
+      .eq('id', access.campaignId)
       .select()
       .single();
 

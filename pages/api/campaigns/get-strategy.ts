@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,13 +15,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign to the caller's tenant.
+    const access = await requireCampaignAccess(req, res, campaignId as string);
+    if (!access) return;
+
     // Planning-only: return strategy metadata without execution/automation details.
     // Community-AI playbooks execute separately and are not surfaced here.
     // Get campaign strategy
     const { data: strategy, error: strategyError } = await supabase
       .from('campaign_strategies')
       .select('*')
-      .eq('campaign_id', campaignId)
+      .eq('campaign_id', access.campaignId)
       .single();
 
     if (strategyError && strategyError.code !== 'PGRST116') {
@@ -32,7 +37,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { data: pillars, error: pillarsError } = await supabase
       .from('content_pillars')
       .select('*')
-      .eq('campaign_id', campaignId);
+      .eq('campaign_id', access.campaignId);
 
     if (pillarsError) {
       console.error('Error fetching content pillars:', pillarsError);
@@ -42,7 +47,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { data: platformStrategies, error: platformError } = await supabase
       .from('platform_strategies')
       .select('*')
-      .eq('campaign_id', campaignId);
+      .eq('campaign_id', access.campaignId);
 
     if (platformError) {
       console.error('Error fetching platform strategies:', platformError);

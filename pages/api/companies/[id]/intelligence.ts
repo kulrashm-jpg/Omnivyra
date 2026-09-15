@@ -17,6 +17,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { detectWinningPatterns } from '@/backend/services/patternDetectionService';
 import { evaluateMarketPosition } from '@/backend/services/marketPositioningEngine';
 import { fetchCompetitorSignals } from '@/backend/services/competitorIntelligenceService';
@@ -34,6 +35,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!user) return res.status(401).json({ error: 'Invalid token' });
 
   const companyId = req.query.id as string;
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): identity alone let any signed-in user read
+  // any company's intelligence AND trigger its writes and credit charges
+  // (strategy_evolution_log / portfolio_decision_log inserts, decision log,
+  // deductCredits*) for any path company id. Caller must be a member of it.
+  const access = await enforceCompanyAccess({ req, res, companyId });
+  if (!access) return;
 
   // Determine what sections to include (query params for partial loads)
   const sections = ((req.query.sections as string) ?? 'patterns,market,competitors,evolution,portfolio,decisions,learnings').split(',');

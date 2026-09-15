@@ -10,7 +10,7 @@ import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCred
 import { syncInstagramAndThreadsFromMeta } from '../../../../backend/services/metaDerivedAccountsService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
-import { config } from '@/config';
+import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -74,6 +74,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
       return res.status(401).json({ error: 'invalid_oauth_state' });
     }
+
+    // ROUTE-AUTH-001: the connection is written for the SESSION user only, and
+    // only into a company that user is an active member of. The signed state
+    // proves where the flow started, not who is finishing it — so the state's
+    // userId must match the session, and nothing falls back to it.
+    const { user: sessionUser } = await getSupabaseUserFromRequest(req);
+    if (!sessionUser?.id) {
+      logOAuthEvent({ event: 'oauth_failure', provider: 'facebook', callback_host: callbackHost, company_id: companyId ?? null, state_user_id: stateUserId ?? null, failure_point: 'unauthorized', failure_detail: 'no session' });
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
+    }
+    if (stateUserId && stateUserId !== sessionUser.id) {
+      logOAuthEvent({ event: 'oauth_failure', provider: 'facebook', callback_host: callbackHost, company_id: companyId ?? null, user_id: sessionUser.id, state_user_id: stateUserId, failure_point: 'invalid_oauth_state', failure_detail: 'state user does not match session user' });
+      return res.redirect(`${errDest}?error=${encodeURIComponent('This connection was started by a different user — please try again')}`);
+    }
+    if (companyId) {
+      const tenant = await assertTenantAccess({ userId: sessionUser.id, organizationId: companyId });
+      if (tenant.ok !== true) {
+        logOAuthEvent({ event: 'oauth_failure', provider: 'facebook', callback_host: callbackHost, company_id: companyId, user_id: sessionUser.id, state_user_id: stateUserId ?? null, failure_point: 'unauthorized', failure_detail: `company access denied (${tenant.reason})` });
+        return res.redirect(`${errDest}?error=${encodeURIComponent('You do not have access to this company')}`);
+      }
+    }
+    const userId = sessionUser.id;
 
     const oauthCredentials = await getOAuthCredentialsForPlatform('facebook');
     if (!oauthCredentials?.client_id || !oauthCredentials?.client_secret) {
@@ -144,13 +166,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         failure_detail: 'profile.id missing from /me response',
       });
       throw new Error('Failed to fetch Facebook profile');
-    }
-
-    const { user } = await getSupabaseUserFromRequest(req);
-    const userId = user?.id || stateUserId || config.DEFAULT_USER_ID || '';
-
-    if (!userId) {
-      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
     }
 
     const accountName = profile.name || 'Facebook Account';

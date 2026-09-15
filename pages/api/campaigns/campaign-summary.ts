@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,11 +15,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Campaign ID required' });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign to the caller's tenant.
+    const access = await requireCampaignAccess(req, res, campaignId as string);
+    if (!access) return;
+
     // Get campaign summary data
     const { data: campaign, error: campaignError } = await supabase
       .from('campaigns')
       .select('*')
-      .eq('id', campaignId)
+      .eq('id', access.campaignId)
       .single();
 
     if (campaignError) {
@@ -40,19 +45,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { count: goalsCount } = await supabase
       .from('campaign_goals')
       .select('*', { count: 'exact', head: true })
-      .eq('campaign_id', campaignId);
+      .eq('campaign_id', access.campaignId);
 
     // Count weekly plans
     const { count: weeklyCount } = await supabase
       .from('weekly_content_refinements')
       .select('*', { count: 'exact', head: true })
-      .eq('campaign_id', campaignId);
+      .eq('campaign_id', access.campaignId);
 
     // Count daily plans
     const { count: dailyCount } = await supabase
       .from('daily_content_plans')
       .select('*', { count: 'exact', head: true })
-      .eq('campaign_id', campaignId);
+      .eq('campaign_id', access.campaignId);
 
     return res.status(200).json({
       campaign: {

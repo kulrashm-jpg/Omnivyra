@@ -8,10 +8,17 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { optimizeCreditEfficiency } from '../../../../backend/services/creditEfficiencyEngine';
 import { getCompanyOutcomeStats } from '../../../../backend/services/outcomeTrackingService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = req.query.id as string;
   if (!companyId) return res.status(400).json({ error: 'Company ID required' });
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): the path company id was used with no
+  // authentication for both the read and the optimization run (which writes
+  // the company's efficiency tier). Caller must be a member of that company.
+  const access = await enforceCompanyAccess({ req, res, companyId });
+  if (!access) return;
 
   try {
     if (req.method === 'GET') {

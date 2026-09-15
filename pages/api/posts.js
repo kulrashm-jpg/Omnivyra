@@ -1,8 +1,15 @@
 
 import { supabase } from '../../backend/db/supabaseClient';
+import { requireSuperAdminUser } from '../../backend/services/requestAccessService';
 
 export default async function handler(req, res) {
   if (req.method === 'GET') {
+    // ROUTE-AUTH-001 (STEP 3AH-85): this returns the latest post_events rows of
+    // EVERY tenant (no company filter). It has no known caller; until it is
+    // retired it is platform diagnostics, so super admin only.
+    const admin = await requireSuperAdminUser(req, res);
+    if (!admin) return;
+
     const { data, error } = await supabase
       .from('post_events')
       .select('*')

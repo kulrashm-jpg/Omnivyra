@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingResponse';
 
 /**
@@ -15,11 +16,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { campaignId } = req.query;
+    const { campaignId: requestedCampaignId } = req.query;
 
-    if (!campaignId || typeof campaignId !== 'string') {
+    if (!requestedCampaignId || typeof requestedCampaignId !== 'string') {
       return res.status(400).json({ error: 'campaignId is required' });
     }
+
+    // ROUTE-AUTH-001: authenticate and bind the campaign to the caller's tenant.
+    const access = await requireCampaignAccess(req, res, requestedCampaignId);
+    if (!access) return;
+    const campaignId = access.campaignId;
 
     let savedPlan: { content: string; savedAt: string } | null = null;
     let committedPlan: { weeks: any[] } | null = null;

@@ -6,11 +6,30 @@ import path from 'path';
 import { captureFlatProviderCost } from '../../../backend/services/billing/blackHoleCostCapture';
 import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiRequestGuard';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 // Voice transcription API using Whisper (OpenAI) and AssemblyAI
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): signed-in callers only, before any provider
+  // spend. A company supplied for cost attribution must be one the caller is a
+  // member of — otherwise any caller could book transcription cost to any tenant.
+  const voiceOrgId =
+    typeof (req.body as any)?.companyId === 'string' ? (req.body as any).companyId
+    : typeof (req.body as any)?.organization_id === 'string' ? (req.body as any).organization_id
+    : null;
+  if (voiceOrgId) {
+    const ctx = await enforceCompanyAccess({ req, res, companyId: voiceOrgId });
+    if (!ctx) return;
+  } else {
+    const { user, error: authError } = await getSupabaseUserFromRequest(req);
+    if (authError || !user) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
   }
 
   try {
@@ -52,11 +71,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // callers that don't send it are unaffected and remain (honestly)
     // unattributed rather than fake-attributed. process_type is a generic
     // catalog-known carrier ('ai_reply') because no voice catalog key exists;
-    // the real activity is in metadata.activity.
-    const voiceOrgId =
-      typeof (req.body as any)?.companyId === 'string' ? (req.body as any).companyId
-      : typeof (req.body as any)?.organization_id === 'string' ? (req.body as any).organization_id
-      : null;
+    // the real activity is in metadata.activity. voiceOrgId was bound to the
+    // caller's membership above (ROUTE-AUTH-001).
     if (voiceOrgId) {
       const seconds = Number((transcription as any)?.duration) || 0;
       const ratePerMin = provider === 'assemblyai' ? 0.0062 : 0.006; // Whisper $0.006/min

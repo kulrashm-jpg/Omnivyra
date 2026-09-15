@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -14,10 +15,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
+    // ROUTE-AUTH-001 (STEP 3AH-85): only a caller with access to the campaign
+    // may generate its plan.
+    const access = await requireCampaignAccess(req, res, String(campaignId));
+    if (!access) return;
+
     // Generate comprehensive plan using AI
     // This is a placeholder - you would integrate with your actual AI service here
     const generatedPlan = await generateComprehensivePlan({
-      campaignId,
+      campaignId: access.campaignId,
       campaignSummary,
       weeklyPlans,
       userPrompt,

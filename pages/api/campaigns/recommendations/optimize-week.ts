@@ -6,6 +6,7 @@ import { WeeklyPlan, WeekOptimizationResult } from '../../../../backend/services
 import { fetchTrendsFromApis } from '../../../../backend/services/externalApiService';
 import { saveOptimizationHistory } from '../../../../backend/db/campaignVersionStore';
 import { sendLearningSnapshot } from '../../../../backend/services/omnivyraFeedbackService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -25,6 +26,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId || !weekNumber || !Array.isArray(weeklyPlan)) {
       return res.status(400).json({ error: 'Missing companyId, weekNumber, or weeklyPlan' });
     }
+
+    // ROUTE-AUTH-001: the caller must be a member of companyId before its
+    // profile is read, trends are fetched, or LLM budget is spent.
+    const ctx = await enforceCompanyAccess({ req, res, companyId });
+    if (!ctx) return;
 
     const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
     if (!profile) {

@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { fromStructuredPlan } from '../../../backend/services/campaignBlueprintAdapter';
 import { updateToEditedCommitted } from '../../../backend/db/campaignPlanStore';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 /**
  * POST /api/campaigns/update-edited-committed
@@ -22,12 +23,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign before any write.
+    const access = await requireCampaignAccess(req, res, campaignId);
+    if (!access) return;
+
     const blueprint = fromStructuredPlan({
       weeks: structuredPlan.weeks,
-      campaign_id: campaignId,
+      campaign_id: access.campaignId,
     });
 
-    await updateToEditedCommitted({ campaignId, blueprint });
+    await updateToEditedCommitted({ campaignId: access.campaignId, blueprint });
 
     return res.status(200).json({
       success: true,

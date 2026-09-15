@@ -2,11 +2,19 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 // API Endpoint for Posting Statistics
 import { NextApiRequest, NextApiResponse } from 'next';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET']);
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): no tenant data is read here (static/mock
+  // statistics), but the endpoint serves signed-in dashboards only.
+  const { user } = await getSupabaseUserFromRequest(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {

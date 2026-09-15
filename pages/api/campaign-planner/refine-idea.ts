@@ -7,6 +7,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { refineCampaignIdea } from '../../../backend/services/ideaRefinementService';
 
@@ -39,6 +40,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     let companyProfile: Record<string, unknown> | null = null;
     if (companyId) {
+      // ROUTE-AUTH-001 (STEP 3AH-85): the profile is loaded only for a company
+      // the caller is a member of (was: any companyId from the body).
+      const ctx = await enforceCompanyAccess({ req, res, companyId });
+      if (!ctx) return;
       const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false });
       if (profile) {
         companyProfile = profile as unknown as Record<string, unknown>;

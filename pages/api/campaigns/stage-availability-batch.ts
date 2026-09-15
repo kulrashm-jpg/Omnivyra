@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import { withApiObservability } from '../../../backend/observability';
+import { resolveUserContext } from '../../../backend/services/userContextService';
+import { requireCampaignAccess, resolveCampaignCompanyId } from '../../../backend/services/campaignAccessService';
 
 /**
  * GET /api/campaigns/stage-availability-batch?campaignIds=id1,id2,id3
@@ -81,9 +83,42 @@ async function computeAvailability(campaignId: string): Promise<CampaignAvailabi
   };
 }
 
+/**
+ * ROUTE-AUTH-001 — may the (already authenticated) caller see this campaign?
+ *
+ * The owner comes from the canonical campaign → company seam
+ * (resolveCampaignCompanyId, campaign_versions). The common case — the owner is
+ * one of the caller's active companies — is exactly requireCampaignAccess's
+ * membership fast path, decided here without a per-id auth round-trip. Any
+ * other case (super admin, invited admin, campaign-role grant) is decided by
+ * requireCampaignAccess itself; its per-id denial response is discarded
+ * because a batch answers per campaign, and a denied id is simply omitted.
+ */
+async function callerMayViewCampaign(
+  req: NextApiRequest,
+  campaignId: string,
+  callerCompanyIds: string[],
+): Promise<boolean> {
+  const ownerCompanyId = await resolveCampaignCompanyId(campaignId);
+  if (!ownerCompanyId) return false;
+  if (callerCompanyIds.includes(ownerCompanyId)) return true;
+  const discard = {
+    status() { return this; },
+    json() { return this; },
+    setHeader() { return this; },
+  } as unknown as NextApiResponse;
+  return (await requireCampaignAccess(req, discard, campaignId)) !== null;
+}
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ROUTE-AUTH-001: authenticate before reading anything about any campaign.
+  const user = await resolveUserContext(req);
+  if (!user?.userId || user.authenticated === false) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
   const { campaignIds } = req.query;
@@ -109,6 +144,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const batch = limitedIds.slice(i, i + BATCH);
       const results = await Promise.all(
         batch.map(async (campaignId) => {
+          // ROUTE-AUTH-001: a campaign the caller may not see is never computed
+          // and never appears in the response (no per-id existence signal).
+          let allowed = false;
+          try {
+            allowed = await callerMayViewCampaign(req, campaignId, user.companyIds || []);
+          } catch (e) {
+            console.warn(`stage-availability access check for ${campaignId}:`, e);
+          }
+          if (!allowed) return null;
           try {
             return { campaignId, result: await computeAvailability(campaignId) };
           } catch (e) {
@@ -117,8 +161,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           }
         })
       );
-      for (const { campaignId, result } of results) {
-        availability[campaignId] = result;
+      for (const entry of results) {
+        if (!entry) continue;
+        availability[entry.campaignId] = entry.result;
       }
     }
 

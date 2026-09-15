@@ -6,6 +6,14 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
 }));
+// ROUTE-AUTH-001 (STEP 3AH-85): both routes now authorize the caller against the
+// campaign's owning company (requireCampaignAccess). This suite pins the metric
+// aggregation, so the binder is faked as granting camp-1 to company co-1; the
+// 401/403/404 paths are covered by routeAuth001DataAdmin.
+jest.mock('../../services/campaignAccessService', () => ({
+  requireCampaignAccess: jest.fn(async (_req: unknown, _res: unknown, campaignId: string) =>
+    ({ userId: 'user-1', companyId: 'co-1', campaignId })),
+}));
 
 const createMockRes = () => {
   const res: Partial<NextApiResponse> & { json: jest.Mock } = {
@@ -21,6 +29,7 @@ describe('Performance feedback', () => {
     {
       id: 'rec-1',
       campaign_id: 'camp-1',
+      company_id: 'co-1',
       success_projection: { expected_reach: 1000 },
       confidence: 80,
     },
@@ -39,6 +48,13 @@ describe('Performance feedback', () => {
           feedbackStore.push(payload);
         }
         return { error: null };
+      }),
+      maybeSingle: jest.fn(async () => {
+        if (table === 'recommendation_snapshots') {
+          const row = recommendationStore.find((r) => r.id === state.filters.id);
+          return { data: row ?? null, error: null };
+        }
+        return { data: null, error: null };
       }),
       then: (resolve: any, reject: any) => {
         if (table === 'performance_feedback') {

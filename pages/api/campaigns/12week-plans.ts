@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,11 +15,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Campaign ID required' });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign to the caller's tenant.
+    const access = await requireCampaignAccess(req, res, campaignId as string);
+    if (!access) return;
+
     // Get weekly refinements from existing table structure
     const { data: weeklyRefinements, error } = await supabase
       .from('weekly_content_refinements')
       .select('*, daily_content_plans(count)')
-      .eq('campaign_id', campaignId)
+      .eq('campaign_id', access.campaignId)
       .order('week_number');
 
     if (error) {
@@ -28,7 +33,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { data: campaign } = await supabase
         .from('campaigns')
         .select('weekly_themes, ai_generated_summary')
-        .eq('id', campaignId)
+        .eq('id', access.campaignId)
         .single();
 
       const weeklyThemes = campaign?.weekly_themes || [];

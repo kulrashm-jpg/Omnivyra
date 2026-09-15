@@ -7,6 +7,32 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+
+/** Run a guard against a scratch response so its denial can be re-shaped. */
+function captureResponse(): { res: NextApiResponse; denial: { status: number; body: unknown } } {
+  const denial = { status: 0, body: undefined as unknown };
+  const res = {
+    status(code: number) { denial.status = code; return this; },
+    json(body: unknown) { denial.body = body; return this; },
+  } as unknown as NextApiResponse;
+  return { res, denial };
+}
+
+/**
+ * ROUTE-AUTH-001 (STEP 3AH-85) — the owning company recorded on the job by its
+ * producer: content/creator adapters and the BOLT creator-row bridge write
+ * data.company_id; BOLT topic jobs (bolt-content-jobs) write
+ * data.campaign.company_id.
+ */
+function jobOwnerCompanyId(data: any): string | null {
+  const candidates = [data?.company_id, data?.campaign?.company_id, data?.bolt_payload?.company_id];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim()) return c.trim();
+  }
+  return null;
+}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -17,6 +43,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!jobId) {
     return res.status(400).json({ error: 'jobId required' });
+  }
+
+  // ROUTE-AUTH-001: authenticate BEFORE any queue lookup, so an anonymous
+  // caller cannot probe which job ids exist.
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
   try {
@@ -51,6 +84,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    // ROUTE-AUTH-001: job ids are guessable (content-addressed via
+    // makeStableJobId over company_id + topic, or BullMQ's sequential default
+    // ids), and the result carries the tenant's generated content. Authorize against the company recorded on the
+    // job. A job with no owner, or owned by a company the caller cannot access,
+    // answers exactly like a missing job.
+    const ownerCompanyId = jobOwnerCompanyId(job.data);
+    if (!ownerCompanyId) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+    const probe = captureResponse();
+    const ctx = await enforceCompanyAccess({ req, res: probe.res, companyId: ownerCompanyId });
+    if (!ctx) {
+      if (probe.denial.status === 401 || probe.denial.status >= 500) {
+        return res.status(probe.denial.status).json(probe.denial.body);
+      }
       return res.status(404).json({ error: 'Job not found' });
     }
 

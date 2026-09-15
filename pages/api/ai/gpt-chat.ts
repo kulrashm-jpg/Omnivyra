@@ -3,10 +3,19 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
 import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiRequestGuard';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): signed-in callers only. The provider call
+  // still runs on the caller's own key (BYOK), but the route runs moderation
+  // and the AI guard on platform resources and must not be an open relay.
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
   const { message, context, apiKey, stream = true } = req.body;

@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { encodeOAuthState } from '../../../../backend/auth/oauthState';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,15 +12,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
+    // ROUTE-AUTH-001: the signed state names the user and company the callback
+    // will write the connection for, so only an authenticated session may mint
+    // it — for itself, and only for a company it is an active member of. The
+    // client-supplied ?userId= is ignored.
+    const { user } = await getSupabaseUserFromRequest(req);
+    if (!user?.id) {
+      return res.status(401).json({ error: 'Login session required — please log in and try again' });
+    }
+    const companyId = (req.query.companyId as string) || undefined;
+    if (companyId) {
+      const access = await enforceCompanyAccess({ req, res, companyId });
+      if (!access) return;
+    }
+
     const credentials = await getOAuthCredentialsForPlatform('facebook');
     if (!credentials?.client_id) {
       return res.status(400).json({ error: 'Facebook OAuth not configured — ask your Super Admin to add credentials.' });
     }
 
-    const companyId = (req.query.companyId as string) || undefined;
-    const userId = (req.query.userId as string) || undefined;
     const returnTo = (req.query.returnTo as string) || '';
-    const state = encodeOAuthState({ companyId, userId, returnTo });
+    const state = encodeOAuthState({ companyId, userId: user.id, returnTo });
 
     const params = new URLSearchParams({
       client_id: credentials.client_id,

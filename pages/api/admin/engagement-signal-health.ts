@@ -12,12 +12,18 @@ import {
   getEngagementSignalSchedulerErrors,
 } from '../../../backend/jobs/engagementSignalScheduler';
 import { getEngagementSignalQueueSize } from '../../../backend/queue/engagementSignalQueue';
+import { requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): cross-tenant platform diagnostics (signals of
+  // every company, scheduler errors, queue size) — super admin only.
+  const admin = await requireSuperAdminUser(req, res);
+  if (!admin) return;
 
   try {
     const since24h = new Date();

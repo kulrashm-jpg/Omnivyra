@@ -4,7 +4,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { insertActivity, updateActivity, deleteActivity } from '../../../backend/services/executionPlannerService';
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 import { withApiObservability } from '../../../backend/observability';
@@ -168,33 +168,40 @@ async function handleContentPlan(req: NextApiRequest, res: NextApiResponse): Pro
       ? String(req.body?.id ?? '').trim()
       : String(data.id ?? '').trim();
 
-  // Row-keyed ops (update/delete) may omit campaignId — resolve it from the row.
-  if (!campaignId && existingRowId) {
+  // ROUTE-AUTH-001 (STEP 3AH-85) — row-keyed ops (PUT/DELETE) are authorized
+  // against the campaign that OWNS the row, never a client-supplied campaignId:
+  // pairing one's own campaignId with another tenant's row id used to update or
+  // delete that row. The row is loaded server-side (after authentication, so an
+  // anonymous caller learns nothing about row ids), a supplied campaignId must
+  // match it, and the row's campaign is what gets authorized below.
+  const rowKeyed = (method === 'PUT' || method === 'DELETE') && Boolean(existingRowId);
+  if (rowKeyed) {
+    const { user: caller } = await getSupabaseUserFromRequest(req);
+    if (!caller) {
+      res.status(401).json({ error: 'UNAUTHORIZED' });
+      return;
+    }
     const { data: row } = await supabase
       .from('daily_content_plans')
       .select('campaign_id')
       .eq('id', existingRowId)
       .maybeSingle();
-    campaignId = row?.campaign_id ? String(row.campaign_id) : '';
+    const rowCampaignId = row?.campaign_id ? String(row.campaign_id) : '';
+    if (!rowCampaignId || (campaignId && campaignId !== rowCampaignId)) {
+      res.status(404).json({ error: 'Content plan not found' });
+      return;
+    }
+    campaignId = rowCampaignId;
   }
   if (!campaignId) {
     res.status(400).json({ error: 'campaignId required' });
     return;
   }
 
-  // Resolve the owning company from the campaign and enforce access server-side.
-  const { data: companyRow } = await supabase
-    .from('campaign_versions')
-    .select('company_id')
-    .eq('campaign_id', campaignId)
-    .limit(1)
-    .maybeSingle();
-  const company_id = companyRow?.company_id ? String(companyRow.company_id) : '';
-  if (!company_id) {
-    res.status(404).json({ error: 'Campaign company not found' });
-    return;
-  }
-  const access = await enforceCompanyAccess({ req, res, companyId: company_id });
+  // Resolve the owning company from the campaign (campaign_versions) and
+  // enforce access server-side: 401 before any lookup, foreign/unknown → 404,
+  // non-member → 403.
+  const access = await requireCampaignAccess(req, res, campaignId);
   if (!access) return;
 
   if (method === 'GET') {

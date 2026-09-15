@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getGovernanceSummary } from '../../../backend/services/GovernanceMetricsService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -19,6 +20,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) {
     return res.status(400).json({ error: 'companyId is required' });
   }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): caller must be a member of companyId.
+  const access = await enforceCompanyAccess({ req, res, companyId });
+  if (!access) return;
 
   try {
     const summary = await getGovernanceSummary(companyId);

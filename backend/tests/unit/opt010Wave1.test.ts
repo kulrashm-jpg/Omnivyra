@@ -35,6 +35,16 @@ jest.mock('../../services/creditPriorityService', () => ({
   getWalletSnapshot: jest.fn(),
 }));
 
+// ROUTE-AUTH-001 (STEP 3AH-85): generation-status now authenticates and authorizes the
+// job's owning company before answering. A1 pins queue-lookup PARITY, not authorization
+// (covered by routeAuth001AiContentObjects), so identity and the tenant guard are faked
+// as a signed-in member of the company recorded on the job.
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: async () => ({ user: { id: 'u-opt010' }, error: null }),
+}));
+jest.mock('../../services/userContextService', () => ({
+  enforceCompanyAccess: async (input: { companyId?: string }) => (input.companyId === 'co-opt010' ? { userId: 'u-opt010' } : null),
+}));
 import generationStatusHandler from '../../../pages/api/content/generation-status/[jobId]';
 import { getPlatformRules } from '../../services/platformIntelligenceService';
 import { canStartActivity } from '../../services/billing/admissionControl';
@@ -57,7 +67,7 @@ describe('A1 — generation-status parallel queue lookup', () => {
   test('job living in the LAST queue is found; all queues probed concurrently', async () => {
     mockGetJob.mockImplementation(async (queueName: string) =>
       queueName === 'bolt-content-jobs'
-        ? { id: 'j1', getState: async () => 'active', progress: 40, returnvalue: null, failedReason: null, timestamp: 1735000000000 }
+        ? { id: 'j1', getState: async () => 'active', progress: 40, returnvalue: null, failedReason: null, timestamp: 1735000000000, data: { company_id: 'co-opt010' } }
         : null
     );
     const res = createMockRes();
@@ -71,10 +81,10 @@ describe('A1 — generation-status parallel queue lookup', () => {
   test('priority preserved: duplicate id in two queues → earlier queue wins', async () => {
     mockGetJob.mockImplementation(async (queueName: string) => {
       if (queueName === 'content-post') {
-        return { id: 'dup', getState: async () => 'completed', progress: 100, returnvalue: { from: 'content-post' }, failedReason: null, timestamp: 1735000000000 };
+        return { id: 'dup', getState: async () => 'completed', progress: 100, returnvalue: { from: 'content-post' }, failedReason: null, timestamp: 1735000000000, data: { company_id: 'co-opt010' } };
       }
       if (queueName === 'bolt-content-jobs') {
-        return { id: 'dup', getState: async () => 'failed', progress: 0, returnvalue: null, failedReason: 'late', timestamp: 1735000000000 };
+        return { id: 'dup', getState: async () => 'failed', progress: 0, returnvalue: null, failedReason: 'late', timestamp: 1735000000000, data: { company_id: 'co-opt010' } };
       }
       return null;
     });
