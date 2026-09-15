@@ -54,7 +54,7 @@ jest.mock('../../db/supabaseClient', () => ({
         maybeSingle: jest.fn(async () => {
           if (table === 'daily_content_plans') return { data: planRow, error: null };
           if (table === 'campaigns') return { data: { company_id: 'company-1' }, error: null };
-          if (table === 'scheduled_posts') return { data: { user_id: 'user-1', social_account_id: 'sa-old' }, error: null };
+          if (table === 'scheduled_posts') return { data: { id: 'sp-1', campaign_id: 'campaign-1', user_id: 'user-1', social_account_id: 'sa-old' }, error: null };
           if (table === 'social_accounts') return { data: socialAccountRow, error: null };
           return { data: null, error: null };
         }),
