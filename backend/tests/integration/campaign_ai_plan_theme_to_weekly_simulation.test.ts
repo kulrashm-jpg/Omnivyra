@@ -17,6 +17,9 @@ jest.mock('../../services/supabaseAuthService', () => ({
 jest.mock('../../services/rbacService', () => ({
   getUserCompanyRole: jest.fn().mockResolvedValue({ role: 'COMPANY_ADMIN', userId: 'user-sim-1' }),
   getCompanyRoleIncludingInvited: jest.fn().mockResolvedValue(null),
+  // STEP 3AH-91 (SEC91-W2G-4): requireCampaignAccess's non-fast path now asks
+  // whether the caller is a platform super admin before checking company status.
+  isPlatformSuperAdmin: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../../services/campaignRoleService', () => ({
@@ -77,6 +80,11 @@ function setupSupabase() {
   (supabase.from as jest.Mock).mockImplementation((table: string) => {
     if (table === 'campaign_versions') {
       return chain({ data: { company_id: COMPANY_ID }, error: null });
+    }
+    // STEP 3AH-91 (SEC91-W2A-5a / W2G-4): campaign access now requires the
+    // owning company to be operational, so the simulated world carries it.
+    if (table === 'companies') {
+      return chain({ data: { id: COMPANY_ID, status: 'active' }, error: null });
     }
     if (table === 'campaigns') {
       return chain({
