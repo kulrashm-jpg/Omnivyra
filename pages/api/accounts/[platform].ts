@@ -73,13 +73,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
         break;
 
-      case 'POST':
+      case 'POST': {
+        // SEC-91A (STEP 3AH-91, A1) — the route-auth gate is per FILE: GET and
+        // DELETE authenticate, so the file passed, but this branch answered
+        // anyone (and logged the caller-supplied OAuth `code`). Authenticate
+        // like its siblings; the mock response itself is unchanged.
+        const postUserId = await requireUserId(req, res);
+        if (!postUserId) return;
         // Connect/authenticate account
-        const { code, state } = req.body;
-        
-        // Mock OAuth flow - in production, implement real OAuth
-        console.log(`Connecting ${canonical} account with code:`, code);
-        
+        const { state } = req.body || {};
+        void state;
+
+        // Mock OAuth flow - in production, implement real OAuth. The OAuth
+        // authorization code is a credential and is never logged.
+        console.log(`Connecting ${canonical} account (mock flow)`);
+
         // Simulate account connection
         const mockAccountInfo = {
           id: `${canonical}_account_${Date.now()}`,
@@ -96,6 +104,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           message: `${canonical.charAt(0).toUpperCase() + canonical.slice(1)} account connected successfully`,
         });
         break;
+      }
 
       case 'DELETE': {
         const deleteUserId = await requireUserId(req, res);
