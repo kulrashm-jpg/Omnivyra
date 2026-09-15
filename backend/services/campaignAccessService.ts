@@ -7,7 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
 import { getUserCompanyRole, isPlatformSuperAdmin, Role } from './rbacService';
-import { isDeterministicIdentityError } from '../security/TenantGuard';
+import { companyOperationalState } from './companyOperationalState';
 import {
   resolveEffectiveCampaignRole,
   isCompanyOverrideRole,
@@ -83,25 +83,6 @@ export async function resolveCampaignCompanyId(campaignId: string): Promise<stri
   if (legacy.error || !legacy.data) return null;
   const legacyCompanyId = (legacy.data as { company_id?: string | null }).company_id;
   return legacyCompanyId ? String(legacyCompanyId) : null;
-}
-
-/**
- * SEC-91 W2-A (W2A-5) — is the company operational (companies.status =
- * 'active')? Mirrors the org step of TenantGuard.assertTenantAccess: a missing
- * row or a deterministic identity error (malformed id) is "not operational";
- * a transient read error is reported separately so callers answer 503.
- */
-async function companyOperationalState(
-  companyId: string,
-): Promise<'operational' | 'not_operational' | 'lookup_error'> {
-  const { data, error } = await supabase
-    .from('companies')
-    .select('id, status')
-    .eq('id', companyId)
-    .maybeSingle();
-  if (error) return isDeterministicIdentityError(error) ? 'not_operational' : 'lookup_error';
-  if (!data) return 'not_operational';
-  return (data as { status?: string | null }).status === 'active' ? 'operational' : 'not_operational';
 }
 
 /**
@@ -196,6 +177,30 @@ export async function requireCampaignAccess(
       // but whether a random v4 UUID exists. See docs/security/SEC91_A.md §A6.
       res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       return null;
+    }
+    // SEC-91 W2-G (STEP 3AH-91, W2G-4) — organization state on this path too.
+    // It admits principals the fast path does not: an INVITED
+    // COMPANY_ADMIN/ADMIN/SUPER_ADMIN row (getUserRole's legacy fallback) and an
+    // active member whose context membership read failed. Neither was checked
+    // against companies.status, so an invited admin kept campaign access to a
+    // suspended / inactive / deleted company. Same decision as the fast path and
+    // as enforceCompanyAccess's invited fallback: non-operational ⇒ 403, lookup
+    // failure ⇒ retryable 503. Platform super admins keep TenantGuard's bypass
+    // (checked first, so they never depend on the company read).
+    if (!(await isPlatformSuperAdmin(userId))) {
+      const orgState = await companyOperationalState(companyId);
+      if (orgState === 'lookup_error') {
+        res.status(503).json({
+          error: 'Membership check is temporarily unavailable. Please try again.',
+          code: 'TENANT_LOOKUP_ERROR',
+          retryable: true,
+        });
+        return null;
+      }
+      if (orgState === 'not_operational') {
+        res.status(403).json({ error: 'Access denied to company' });
+        return null;
+      }
     }
   }
 
