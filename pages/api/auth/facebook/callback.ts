@@ -10,6 +10,7 @@ import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCred
 import { syncInstagramAndThreadsFromMeta } from '../../../../backend/services/metaDerivedAccountsService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
+import { describeProviderError } from '../../../../backend/auth/safeErrorLog';
 import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -310,7 +311,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.redirect(`${successDest}${sep}connected=${platform}&threads=${derivedThreadsCount > 0 ? 'enabled' : 'disabled'}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
-    console.error('Facebook OAuth callback error:', error);
+    console.error('Facebook OAuth callback error:', describeProviderError(error));
     logOAuthEvent({
       event: 'oauth_failure',
       provider: 'facebook',

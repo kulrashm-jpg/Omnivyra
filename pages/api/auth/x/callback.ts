@@ -10,6 +10,7 @@ import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCred
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
+import { describeProviderError } from '../../../../backend/auth/safeErrorLog';
 import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 
 function getRequestBaseUrl(req: NextApiRequest): string {
@@ -304,7 +305,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const separator = successDest.includes('?') ? '&' : '?';
     return res.redirect(`${successDest}${separator}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
   } catch (error: any) {
-    console.error('X OAuth callback error:', error);
+    console.error('X OAuth callback error:', describeProviderError(error));
     // X uses axios for token exchange and profile fetch; axios throws on non-2xx.
     // We classify network/axios failures as token_exchange_failed when the URL
     // matches the token endpoint, otherwise as a generic callback_exception.

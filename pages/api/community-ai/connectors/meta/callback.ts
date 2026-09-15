@@ -6,6 +6,7 @@ import { requireManageConnectors, getCommunityAiConnectorCallbackUrl, readConnec
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 import { syncInstagramAndThreadsFromMeta } from '../../../../../backend/services/metaDerivedAccountsService';
 import { logOAuthEvent, safeHost } from '../../../../../backend/auth/oauthTelemetry';
+import { summarizeProviderBody } from '../../../../../backend/auth/safeErrorLog';
 
 /**
  * GET /api/community-ai/connectors/meta/callback
@@ -135,7 +136,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (!tokenResponse.ok) {
       const errText = await tokenResponse.text();
-      console.error('[meta/callback] token exchange failed:', tokenResponse.status, errText);
+      console.error('[meta/callback] token exchange failed:', tokenResponse.status, summarizeProviderBody(errText, { secrets: [credentials.client_secret, code] }));
       logOAuthEvent({
         event: 'oauth_failure',
         provider: 'meta',

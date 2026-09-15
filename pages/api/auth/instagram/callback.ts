@@ -10,6 +10,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { encryptTokenColumns, setToken } from '../../../../backend/auth/tokenStore';
 import { persistGrantedScopesByPlatformUser, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
+import { describeProviderError } from '../../../../backend/auth/safeErrorLog';
 import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 import { config } from '@/config';
 
@@ -440,7 +441,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }).toString()
     );
   } catch (err: any) {
-    console.error('Instagram OAuth callback error:', err);
+    console.error('Instagram OAuth callback error:', describeProviderError(err));
     logOAuthEvent({
       event: 'oauth_failure',
       provider: 'instagram',
