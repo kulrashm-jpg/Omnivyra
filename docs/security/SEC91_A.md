@@ -18,7 +18,7 @@ Method: every registry item was re-verified on this base (file:line below). Two 
 | A1-e (F1-03) | P2 | same route POST: any member of ANY company writes the GLOBAL aggregate (body company_id authorized, never used) | `angle-industry-matrix.ts:93-139` | FIX | same | active platform super admin only (no in-repo caller) | `sec91AMethodGaps` | low |
 | A1-f | — | per-method sweep of all 1,322 routes | 18 residual flags, all reviewed: CORS `OPTIONS` (5), allowlisted public blog GETs (2), signature-verified WhatsApp webhook (2, SEC-B), `weekly-alignments`/`weekly-refinement` (guarded by a method-conditional `requireCampaignAccess` before the switch), `schedule/posts/[id]` (identity-scoped: every helper filters `user_id`, `structuredPlanSchedulerExecDaily.ts:320-411`) | FALSE POSITIVE (reviewed) | — | — | — | — |
 | A1-g | — | 65 binding-claim allowlist entries | 58 OK; weak ones → A1-b, A2-e, A2-a, A6-b, and vertical-RBAC items in §8 | see rows | — | — | — | — |
-| A2-a | P1 | `isSuperAdmin` / `isPlatformSuperAdmin` ignore `user_company_roles.status` | `rbacService.ts:249-266` (no status predicate). Feeds TenantGuard bypass (`TenantGuard.ts:212,308`), enforceRole/withRBAC, requireSuperAdminUser, getUserCompanyRole. User removal keeps role and sets `status='inactive'` (`usersMutations.ts:418`) | FIX | `backend/services/rbacService.ts` | require `status='active'` (the predicate every other super-admin check already uses: `authMiddleware.ts:149-156`, `platformCapabilities.ts:214-217`) | `sec91ASuperAdminStatus`, `sec91ATenantGuardParity` | high fan-out; all callers verified |
+| A2-a | P1 | `isSuperAdmin` / `isPlatformSuperAdmin` ignore `user_company_roles.status` | `rbacService.ts:249-266` (no status predicate). Feeds TenantGuard bypass (`TenantGuard.ts:212,308`), enforceRole/withRBAC, requireSuperAdminUser, getUserCompanyRole. User removal keeps role and sets `status='inactive'` (`usersMutations.ts:418`) | FIX committed — **DECISION REQUIRED** (conflicts with the audited policy SUPERADMIN-MEMBERSHIP-VALIDITY-001, see §2a) | `backend/services/rbacService.ts` | require `status='active'` (the predicate every other super-admin check already uses: `authMiddleware.ts:149-156`, `platformCapabilities.ts:214-217`, `superAdminIdentityCheck.ts:89-92`) | `sec91ASuperAdminStatus`, `sec91ATenantGuardParity`; **breaks** `superadminMembershipValidity001` "CHARACTERIZED: an INACTIVE SUPER_ADMIN still holds platform authority" (left unedited on purpose) | high fan-out; lockout hazard |
 | A2-b | P2 | `requireCampaignAccess` accepts ANY invited role | `campaignAccessService.ts:105-108` (`getCompanyRoleIncludingInvited` any role) vs `enforceCompanyAccess` invited ADMIN only (`userContextService.ts:279-283`) | FIX | `backend/services/campaignAccessService.ts` | fallback removed (getUserCompanyRole already covers the invited-admin case) | `sec91ACampaignAccess` | low |
 | A2-c | P1 | `community-ai/connectors/status` authorizes `tenant_id`, reads `organization_id` | `status.ts:28-32` | FIX | `pages/api/community-ai/connectors/status.ts` | ids must match (Community AI convention, as `requireTenantScope`); read only the authorized id | `sec91AConnectorsStatus` | low |
 | A2-d | P3 | `engagement/reply` draft looked up by id alone | `reply.ts:467-497`: status/thread/platform errors for a foreign draft before the org-scoped actionability check (writes were already blocked by it) | FIX | `pages/api/engagement/reply.ts`, `backend/tests/unit/engagementAiSendBoundaryF5.test.ts` (G2 updated, G3 added) | draft's thread must belong to the org first → foreign ≡ missing (404); approve update pinned to thread | `sec91AEngagementReplyDraft`, F5 | low |
@@ -52,6 +52,18 @@ Method: every registry item was re-verified on this base (file:line below). Two 
 | A6-b anonymous oracle | anonymous: real id 401, unknown id 404 | identical 401, no object read | `sec91AExistenceOracle` (10) | base routes ⇒ 4 fail |
 | A7 parity | nothing proved the two decision copies agree | 244-fixture parity (membership × role × org × super-admin status × options × errors) | `sec91ATenantGuardParity` (7) | injected divergence in batched copy ⇒ parity test fails |
 
+### 2a. A2-a conflicts with a recorded policy decision — owner decision required
+`backend/tests/unit/superadminMembershipValidity001.test.ts` (SUPERADMIN-MEMBERSHIP-VALIDITY-001) records an audited **OPTION A**: platform authority is ROLE-based and status-agnostic *on purpose*. Its evidence, re-verified here:
+- revocation is a role downgrade (`admin/revoke-super-admin.ts:40-57`), never a status flip;
+- SUPER_ADMIN cannot be invited (`VALID_ROLES` in `admin/invite-user.ts` / `team/invite.ts`; `company/users.ts` and the super-admin user APIs exclude it). The only paths that write a SUPER_ADMIN row are super-admin-only (`admin/bootstrap-super-admin.ts` writes `status='active'`; `users/invite` → `userManagementService.inviteUser` is reachable only by a super admin);
+- **lockout hazard**: `disable_company_cascade` sets every row of a company to `inactive`; the audit states production holds exactly ONE SUPER_ADMIN row. With A2-a, disabling the operator's host company also removes the bypass from `requireSuperAdminUser` / TenantGuard / withRBAC (the capability layer already requires `active`), leaving no super-admin path to undo it.
+
+What A2-a closes: a non-active SUPER_ADMIN row (company disable, member deactivation via `company/users` PUT `status`, "remove user" in the super-admin users API) keeping cross-tenant bypass. No state reachable by a non-super-admin that *creates* platform authority was found, so on current evidence the risk is "a person the business stopped trusting through a non-role lever keeps authority", not escalation.
+
+The fix stays committed in `a98b2ba` and the characterization test was **not** edited. (After finding the conflict I tried to revert my change in this session; the harness blocked that as a security-weakening action, so the branch keeps the stricter behaviour pending the owner's decision.) The owner must pick one before merge:
+1. **Keep A2-a** (safer default): first do the MANUAL prerequisite in §7 (an active SUPER_ADMIN row on an internal company that customer-disable flows never touch, ideally ≥2 operators), then update `superadminMembershipValidity001` to the active-required policy.
+2. **Drop A2-a**: revert only the `rbacService.ts` hunk of `a98b2ba` and delete `sec91ASuperAdminStatus.test.ts`; then flip the two super-admin-status assertions in `sec91ATenantGuardParity` and the EXSUPER cases in `sec91AExecutionCaps` / `sec91AMethodGaps` (the parity matrix itself stays valid).
+
 **Existing tests changed (behaviour legitimately changed):**
 - `routeAuth001Campaigns` (3 × "unknown campaign → 404, sink never reached"), `campaignResourceAuthzSec001` / `…GenerateWeekly` (1 each, "nonexistent campaign"): A8's guard now reads `campaigns.company_id` by id when no version row exists. Exactly that one owner-lookup call (`select` on `campaigns`, filter `{id: <unknown id>}`) is excluded; every other sink/sensitive touch still fails the test, and the foreign-campaign tests (version row present, no fallback read) are unchanged.
 - `engagementAiSendBoundaryF5` G2: its draft points at another company's thread → now 404 `AI_DRAFT_NOT_FOUND` (was 400 mismatch). New G3 keeps the same-organization mismatch case (400).
@@ -62,15 +74,26 @@ Method: every registry item was re-verified on this base (file:line below). Two 
 ## 3. Commands run (worktree `C:/tmp/sec91-a`)
 
 - New suites (all pass): `sec91ASuperAdminStatus` 17, `sec91ACampaignAccess` 16, `sec91AWordpressPlugin` 16, `sec91AExecutionCaps` 18, `sec91AConnectorsStatus` 5, `sec91AEngagementReplyDraft` 5, `sec91ACalendarStandalone` 5, `sec91AMethodGaps` 10, `sec91AExistenceOracle` 10, `sec91ATenantGuardParity` 7 — **109 tests**.
-- Regression: see §3a.
-- `node scripts/check-route-auth.js` PASS · `node scripts/check-tenant-authz.js` PASS · `npm run -s check:ssrf` PASS · `node scripts/check-migration-quality.js` OK (64 new, 0 violations) · `node scripts/check-withrbac-binding.js` PASS (81 SAFE) · `node scripts/check-orgaccess-binding.js` PASS (19 SAFE).
-- TypeScript: `tsc -p tsconfig.backend-tests.json --noEmit --incremental false` filtered to changed/new files — no errors.
+- Final targeted run (new + directly affected: `sec91A*`, `routeAuth001*`, `campaignResourceAuthzSec001*`, `engagementAiSendBoundaryF5`, `calendarActivityEventsFeed`, `superadminMembershipValidity001`, `platformWave2`, `tenantGuardIdentity`): **31 suites, 790 tests, 789 pass, 1 fail** — the A2-a characterization conflict (§2a).
+- `node scripts/check-route-auth.js` PASS · `node scripts/check-tenant-authz.js` PASS · `npm run -s check:ssrf` PASS · `node scripts/check-migration-quality.js` OK (64 new, 0 violations) · `node scripts/check-withrbac-binding.js` PASS (81 SAFE) · `node scripts/check-orgaccess-binding.js` PASS (19 SAFE) — all exit 0.
+- TypeScript: `tsc -p tsconfig.backend-tests.json --noEmit --incremental false` → exit 2 with 260 errors, **none** in any changed or new file (all in unrelated files; not compared against base).
 
-### 3a. Regression
-(filled from the final run — see the workstream report)
+### 3a. Broad regression (208 suites that reference rbacService / the guards / changed routes)
+3,790 tests, 57 failed in 17 suites. Every failing suite was re-run with the base (`f44b138`) versions of all changed files: 55 of the 57 failures also fail on base (pre-existing: `recommendation_engine` / `company_context_contract` need a real OpenAI key, `aiRuntimeFinalValidation`, `generateWorkspaceContentCharacterization`, `user_lifecycle_management` IDENTITY_CREATION_FAILED, `external_api_service`, `community_ai_*`, `campaign_finalization_guard`, `governance_performance_guard`, `campaign_ai_history`, `phase1aDataSources`, `campaignChatBlueprint` timeout, `generateWeeklyStructureCharacterization` snapshot, `groupAIdempotencyAdoption` release.ts adopter). New on the branch: (1) the `superadminMembershipValidity001` CHARACTERIZED test (§2a); (2) `renderOpsConsole`, reported as a suite error only inside the 208-suite batch. It passes alone on the branch (6 pass, 1 skipped DB test), so it is batch/environment flakiness, not a regression.
 
 ## 4. Commits (branch `sec/3ah91-a-authz`)
-See the workstream report (§4) for SHAs.
+| SHA | Subject |
+|---|---|
+| a98b2ba | fix(authz): super-admin requires active row; campaign access matches tenant guard; legacy owner fallback |
+| 85a2874 | fix(wordpress-plugin): bind revoke to the authorized company; require plugin token for heartbeat |
+| 4981bed | fix(lead-intelligence): scope execution capabilities to the requested company |
+| e92d3bc | fix(community-ai): connectors/status reads only the tenant it authorized |
+| 4901c8a | fix(engagement): bind AI draft to the authorized organization before revealing it |
+| ccd6cf4 | fix(calendar): keep standalone posts made through another company's account off the calendar |
+| 7700b5d | fix(routes): close per-method auth gaps (accounts/[platform] POST, angle-industry-matrix) |
+| 51783fd | fix(routes): authenticate before object lookup on four id-keyed routes |
+| 455edc1 | docs(tenant-guard): correct soft-delete claim; pin sequential/batched decision parity |
+| 14e2358 + follow-up | docs(security): SEC-91A workstream report |
 
 ## 5. Files changed
 Source: `backend/services/rbacService.ts`, `backend/services/campaignAccessService.ts`, `backend/security/TenantGuard.ts` (comments), `pages/api/wordpress-plugin/{revoke,heartbeat}.ts`, `pages/api/lead-intelligence/execution.ts`, `pages/api/community-ai/connectors/status.ts`, `pages/api/engagement/reply.ts`, `pages/api/calendar/activity-events.ts`, `pages/api/accounts/[platform].ts`, `pages/api/track/angle-industry-matrix.ts`, `pages/api/campaigns/[id].ts`, `pages/api/campaigns/[id]/{performance,continuity}.ts`, `pages/api/recommendations/[id]/share.ts`.
@@ -85,8 +108,8 @@ Tests: new `backend/tests/helpers/sec91AHarness.ts` + 10 `sec91A*.test.ts`; upda
 5. **SEC-C (migration)**: `scheduled_posts` has no `company_id`; A2-e is closed only for posts whose social account carries a company. A `company_id` column (backfilled from `social_accounts`/campaigns) would close the legacy remainder.
 
 ## 7. MANUAL OPERATION REQUIRED
-None for these fixes. Optional read-only verification before deploy (operator, no secrets):
-- A2-a: confirm every intended platform admin has an **active** SUPER_ADMIN row: `select user_id, status from user_company_roles where role='SUPER_ADMIN'`. Any non-active row belongs to someone who loses the platform bypass on deploy (this is the fix). The canonical capability layer already required `active`, so a working super-admin dashboard implies an active row.
+- **A2-a prerequisite (only if the owner keeps A2-a, §2a).** Where: production Supabase, done by the platform owner (read-only check, then an owner-run change). Why: with active-required super-admin, disabling the operator's host company would lock out the only operator. Action: (1) `select user_id, company_id, status from user_company_roles where role='SUPER_ADMIN'`: every intended operator must be `active`. (2) Make sure at least one operator's SUPER_ADMIN row lives on an internal/platform company that customer-disable flows never target, preferably with two operators. Verification: re-run (1), then sign in as the operator and open a `requireSuperAdminUser` route (e.g. super-admin creator-operations) → 200.
+Optional read-only verification before deploy (operator, no secrets):
 - A8: campaigns that start resolving after deploy: `select id, company_id from campaigns c where company_id is not null and not exists (select 1 from campaign_versions v where v.campaign_id = c.id::text)`.
 
 ## 8. Remaining limitations / options (not changed — product RBAC or out of scope)
