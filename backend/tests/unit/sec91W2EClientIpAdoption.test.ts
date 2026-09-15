@@ -356,13 +356,13 @@ describe('backend helpers use the trusted client IP', () => {
   });
 
   it('requireCapability: the unauthenticated-attempt audit row carries the socket peer', async () => {
-    const r = await requireCapability(req(spoofed), res(), { capability: 'super_admin.legacy' as any });
+    const r = await requireCapability(req(spoofed), res(), { capability: 'super_admin.legacy' as any, reason: 'fake-sec91-w2e-test' });
     expect(r.ok).toBe(false);
     expect(mockAudit.map((e) => e.ip)).toEqual([PEER]);
   });
   it('COMPAT Vercel: requireCapability audit carries the edge-set client address', async () => {
     process.env.VERCEL = '1';
-    await requireCapability(req(vercelEdge), res(), { capability: 'super_admin.legacy' as any });
+    await requireCapability(req(vercelEdge), res(), { capability: 'super_admin.legacy' as any, reason: 'fake-sec91-w2e-test' });
     expect(mockAudit.map((e) => e.ip)).toEqual([EDGE]);
   });
 
