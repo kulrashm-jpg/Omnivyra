@@ -40,13 +40,13 @@ jest.mock('../../services/authResolver', () => ({
 jest.mock('../../../lib/auth/rateLimit', () => ({ checkRateLimit: async () => ({ allowed: true }) }));
 
 // ── sinks ─────────────────────────────────────────────────────────────────────
-const mockSchedulerLastRun = jest.fn(() => 0);
+const mockSchedulerLastRun = jest.fn((..._a: any[]) => 0);
 jest.mock('../../jobs/engagementSignalScheduler', () => ({
   getEngagementSignalSchedulerLastRun: () => mockSchedulerLastRun(),
   getEngagementSignalSchedulerErrors: () => [],
 }));
 jest.mock('../../queue/engagementSignalQueue', () => ({ getEngagementSignalQueueSize: async () => 0 }));
-const mockWorkerDiag = jest.fn(async () => ({ ok: true }));
+const mockWorkerDiag = jest.fn(async (..._a: any[]) => ({ ok: true }));
 jest.mock('../../services/engagementDiagnosticsService', () => ({
   getWorkerDiagnostics: () => mockWorkerDiag(),
   getQueueDiagnostics: async () => ({}),
@@ -55,9 +55,9 @@ jest.mock('../../services/engagementDiagnosticsService', () => ({
   getReplyIntelligenceDiagnostics: async () => ({}),
   getOpportunityDiagnostics: async () => ({}),
 }));
-const mockGetMetrics = jest.fn(async () => []);
+const mockGetMetrics = jest.fn(async (..._a: any[]) => []);
 jest.mock('../../services/systemHealthMetricsService', () => ({ getMetrics: (...a: any[]) => mockGetMetrics(...a) }));
-const mockQueueStats = jest.fn(() => ({ processing: 0, failed: 0, total: 0 }));
+const mockQueueStats = jest.fn((..._a: any[]) => ({ processing: 0, failed: 0, total: 0 }));
 jest.mock('../../../lib/services/queue', () => ({
   queue: {
     getStats: () => mockQueueStats(),
@@ -66,7 +66,7 @@ jest.mock('../../../lib/services/queue', () => ({
     getReadyJobs: () => [],
   },
 }));
-const mockCreatorMetrics = jest.fn(async () => ({ rates: {} }));
+const mockCreatorMetrics = jest.fn(async (..._a: any[]) => ({ rates: {} }));
 jest.mock('../../services/creatorObservabilityService', () => ({
   aggregateCreatorMetrics: (...a: any[]) => mockCreatorMetrics(...a),
   classifyWorkflowStatus: () => 'healthy',
@@ -76,7 +76,7 @@ jest.mock('../../services/creatorScalabilityHarnessService', () => ({
   getQueuePressure: async () => ({}),
   withCache: (_k: string, _ttl: number, fn: () => unknown) => fn(),
 }));
-const mockLogDomainEvent = jest.fn(async () => true);
+const mockLogDomainEvent = jest.fn(async (..._a: any[]) => true);
 jest.mock('../../services/domainEventLogger', () => ({ logDomainEvent: (...a: any[]) => mockLogDomainEvent(...a) }));
 
 /* eslint-disable @typescript-eslint/no-var-requires */

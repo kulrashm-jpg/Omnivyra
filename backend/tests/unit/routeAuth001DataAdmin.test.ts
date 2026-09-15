@@ -32,25 +32,25 @@ jest.mock('../../services/supabaseAuthService', () => require('../helpers/routeA
 jest.mock('../../security/IdentityResolver', () => require('../helpers/routeAuthHarness').identityModule());
 
 // ── sinks (paid / heavy / data services the routes call) ──────────────────────
-const mockGetPlatformPerformance = jest.fn(async () => [{ platform: 'linkedin', total_posts: 1 }]);
-const mockGetPostAnalytics = jest.fn(async () => [{ scheduled_post_id: 'x', engagement_rate: 1 }]);
+const mockGetPlatformPerformance = jest.fn(async (..._a: any[]) => [{ platform: 'linkedin', total_posts: 1 }]);
+const mockGetPostAnalytics = jest.fn(async (..._a: any[]) => [{ scheduled_post_id: 'x', engagement_rate: 1 }]);
 jest.mock('../../services/analyticsService', () => ({
   getPlatformPerformance: (...a: any[]) => mockGetPlatformPerformance(...a),
   getPostAnalytics: (...a: any[]) => mockGetPostAnalytics(...a),
 }));
-const mockTrackingAssist = jest.fn(() => ({ status: 'ok', script: '<script/>', placement_instructions: [], validation_steps: [] }));
+const mockTrackingAssist = jest.fn((..._a: any[]) => ({ status: 'ok', script: '<script/>', placement_instructions: [], validation_steps: [] }));
 jest.mock('../../services/googleAnalyticsExperienceService', () => ({
   buildTrackingAssistResponse: (...a: any[]) => mockTrackingAssist(...a),
 }));
-const mockOutcomeStats = jest.fn(async () => ({ avg_credits_per_outcome: 1, total_outcomes: 2 }));
+const mockOutcomeStats = jest.fn(async (..._a: any[]) => ({ avg_credits_per_outcome: 1, total_outcomes: 2 }));
 jest.mock('../../services/outcomeTrackingService', () => ({
   getCompanyOutcomeStats: (...a: any[]) => mockOutcomeStats(...a),
 }));
-const mockOptimize = jest.fn(async () => ({ tier: 'standard', actions_taken: [] }));
+const mockOptimize = jest.fn(async (..._a: any[]) => ({ tier: 'standard', actions_taken: [] }));
 jest.mock('../../services/creditEfficiencyEngine', () => ({
   optimizeCreditEfficiency: (...a: any[]) => mockOptimize(...a),
 }));
-const mockGovSummary = jest.fn(async () => ({ companyId: 'x', totalEvents: 0 }));
+const mockGovSummary = jest.fn(async (..._a: any[]) => ({ companyId: 'x', totalEvents: 0 }));
 jest.mock('../../services/GovernanceMetricsService', () => ({
   getGovernanceSummary: (...a: any[]) => mockGovSummary(...a),
 }));
@@ -58,7 +58,7 @@ const mockCampaignGovAnalytics = jest.fn(async (id: string) => ({ campaignId: id
 jest.mock('../../services/GovernanceAnalyticsService', () => ({
   getCampaignGovernanceAnalytics: (...a: any[]) => mockCampaignGovAnalytics(...(a as [string])),
 }));
-const mockListDecisionObjects = jest.fn(async () => []);
+const mockListDecisionObjects = jest.fn(async (..._a: any[]) => []);
 jest.mock('../../services/decisionObjectService', () => ({
   listDecisionObjects: (...a: any[]) => mockListDecisionObjects(...a),
 }));
@@ -66,21 +66,21 @@ jest.mock('../../services/intelligenceExecutionContext', () => ({
   runInApiReadContext: (_name: string, fn: () => unknown) => fn(),
 }));
 const mockAggregate = jest.fn(async (id: string) => ({ campaign_id: id, impressions: 5 }));
-const mockRecordPerformance = jest.fn(async () => true);
+const mockRecordPerformance = jest.fn(async (..._a: any[]) => true);
 jest.mock('../../services/performanceFeedbackService', () => ({
   aggregateCampaignPerformance: (...a: any[]) => mockAggregate(...(a as [string])),
   recordPerformance: (...a: any[]) => mockRecordPerformance(...a),
 }));
-const mockIngest = jest.fn(async () => undefined);
+const mockIngest = jest.fn(async (..._a: any[]) => undefined);
 jest.mock('../../services/performanceIngestionService', () => ({
   ingestPerformanceData: (...a: any[]) => mockIngest(...a),
 }));
-const mockGetDecisionLog = jest.fn(async () => []);
+const mockGetDecisionLog = jest.fn(async (..._a: any[]) => []);
 jest.mock('../../services/autonomousDecisionLogger', () => ({
   getDecisionLog: (...a: any[]) => mockGetDecisionLog(...a),
 }));
-const mockDetectPatterns = jest.fn(async () => ({ patterns: [] }));
-const mockEvolveStrategy = jest.fn(async () => null);
+const mockDetectPatterns = jest.fn(async (..._a: any[]) => ({ patterns: [] }));
+const mockEvolveStrategy = jest.fn(async (..._a: any[]) => null);
 jest.mock('../../services/patternDetectionService', () => ({ detectWinningPatterns: (...a: any[]) => mockDetectPatterns(...a) }));
 jest.mock('../../services/marketPositioningEngine', () => ({ evaluateMarketPosition: async () => null }));
 jest.mock('../../services/competitorIntelligenceService', () => ({ fetchCompetitorSignals: async () => null }));
@@ -91,7 +91,7 @@ jest.mock('../../services/globalPatternService', () => ({ injectGlobalPatternsIn
 jest.mock('../../services/billing/phase2EnforcementGate', () => ({
   PaymentRequiredError: class PaymentRequiredError extends Error { code = 'PAYMENT_REQUIRED'; },
 }));
-const mockPlanLimits = jest.fn(async () => ({ plan_key: 'pro', limits: { seats: 5 } }));
+const mockPlanLimits = jest.fn(async (..._a: any[]) => ({ plan_key: 'pro', limits: { seats: 5 } }));
 jest.mock('../../services/planResolutionService', () => ({
   resolveOrganizationPlanLimits: (...a: any[]) => mockPlanLimits(...a),
 }));

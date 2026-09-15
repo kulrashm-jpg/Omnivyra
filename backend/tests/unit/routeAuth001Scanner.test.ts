@@ -9,6 +9,8 @@
  * ways a textual scanner can be fooled (a name in a comment, an unused import,
  * a same-named local function, a regex literal that desynchronises parsing).
  */
+export {};
+
 /* eslint-disable @typescript-eslint/no-var-requires */
 const gate = require('../../../scripts/check-route-auth.js');
 
