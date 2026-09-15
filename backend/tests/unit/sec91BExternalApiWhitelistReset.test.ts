@@ -11,6 +11,8 @@
  * cosmetic edits keep the approval; Super Admin edits keep their explicit handling.
  * The real route runs; only auth, RBAC verdicts and the data layer are scripted.
  */
+export {};
+
 type Row = Record<string, unknown>;
 
 const TENANT_ADMIN = 'user-tenant-admin';
