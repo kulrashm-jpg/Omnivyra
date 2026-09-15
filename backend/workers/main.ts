@@ -20,6 +20,7 @@
 import { config } from '@/config';
 import { validateWorkerEnv } from '../utils/validateEnv';
 import { startHealthServer, setCronStatus }  from './healthServer';
+import { assertQueueConsumerRuntimeAllowed } from '../queue/queueNamespace';
 
 // Start health server immediately — before anything else so Railway healthchecks
 // always get a response even if Redis/workers fail to initialise.
@@ -27,6 +28,13 @@ startHealthServer(config.PORT ? parseInt(config.PORT, 10) : undefined);
 
 // Fail fast if any required env var is missing
 validateWorkerEnv();
+
+// SEC-C2 (STEP 3AH-91): refuse to become a consumer of the shared production
+// BullMQ keyspace from a production-mode process that carries no deployment-
+// platform marker and targets a non-local Redis (e.g. the docker-compose
+// worker pointed at the Upstash URL in .env.local). Must run BEFORE the
+// import-time Worker constructions below. No-op on Railway (RAILWAY_* set).
+assertQueueConsumerRuntimeAllowed('worker-main');
 
 import os from 'os';
 import { Worker }                    from 'bullmq';

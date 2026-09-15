@@ -48,6 +48,7 @@ import { startMetricsPersistence } from '../../lib/instrumentation/metricsPersis
 import { getSystemMetrics }        from '../../lib/instrumentation/systemMetrics';
 import { estimateCost }            from '../../lib/instrumentation/costEngine';
 import { config }                  from '@/config';
+import { resolveQueueNamespace, assertQueueConsumerRuntimeAllowed } from './queueNamespace';
 
 const REDIS_URL = config.REDIS_URL;
 
@@ -60,33 +61,14 @@ const REDIS_URL = config.REDIS_URL;
  * `.env.local` resolves to in this project — would otherwise process and
  * emit jobs on the same queues as the Railway production worker.
  *
- * Cloud platforms set their own env signals (VERCEL_ENV, RAILWAY_ENVIRONMENT)
- * that we trust as authoritative. Absent both, we resolve to `local`
- * regardless of OMNIVYRA_ENV — the whole point of this guard is that
- * `.env.local` cannot be trusted to distinguish a laptop from production.
- */
-function getRuntimeEnv(): string {
-  if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV;
-  if (process.env.RAILWAY_ENVIRONMENT) {
-    return process.env.RAILWAY_ENVIRONMENT === 'production'
-      ? 'production'
-      : `railway-${process.env.RAILWAY_ENVIRONMENT}`;
-  }
-  if (process.env.NODE_ENV === 'test') return 'test';
-  return 'local';
-}
-
-let _queuePrefix: string | null = null;
-
-/**
- * Migration safety flag. When DISABLED (default), getQueuePrefix() returns
- * BullMQ's default `'bull'` prefix so a deploy of the prefix-enabled code
- * keeps consuming jobs from the legacy keyspace — no in-flight production
- * work gets orphaned on rollout.
+ * SEC-C2 (STEP 3AH-91): the resolution lives in ./queueNamespace and FAILS
+ * CLOSED — production (NODE_ENV=production) keeps the shared `bull` prefix
+ * byte-for-byte, every other process gets an env-scoped prefix unless
+ * OMNIVYRA_ALLOW_SHARED_QUEUES=1 is set explicitly.
  *
- * Per-environment cutover protocol:
- *   1. Deploy with the flag UNSET — verifies the prefix code path compiles
- *      and ships without any behavior change.
+ * Migration flag (unchanged): OMNIVYRA_QUEUE_PREFIX_ENABLED=true moves a
+ * runtime onto `omnivyra:<env>:`. Per-environment cutover protocol:
+ *   1. Deploy with the flag UNSET — no behaviour change in production.
  *   2. Stop enqueueing (or wait until queue depths reach zero) so the
  *      legacy `bull:*` keyspace is drained.
  *   3. Set OMNIVYRA_QUEUE_PREFIX_ENABLED=true on the producer (Vercel) and
@@ -94,26 +76,31 @@ let _queuePrefix: string | null = null;
  *      `omnivyra:<env>::*` and are isolated from other environments.
  *   4. The legacy `bull:*` keyspace becomes inert and TTL-expires.
  *
- * The flag is read once per process and memoized via `_queuePrefix` so an
- * accidental mid-process toggle cannot split traffic across two keyspaces.
+ * The prefix is resolved once per process and memoized via `_queuePrefix` so
+ * an accidental mid-process toggle cannot split traffic across two keyspaces.
  */
-function isQueuePrefixEnabled(): boolean {
-  return process.env.OMNIVYRA_QUEUE_PREFIX_ENABLED === 'true';
-}
+let _queuePrefix: string | null = null;
 
 /**
  * Returns the BullMQ `prefix` value that every Queue / Worker / QueueEvents /
  * FlowProducer instance in this codebase MUST pass. Memoized so the resolved
  * env is stable for the lifetime of the process.
- *
- * Returns BullMQ's default `'bull'` when the migration flag is OFF, so call
- * sites are identical regardless of rollout phase.
  */
 export function getQueuePrefix(): string {
   if (_queuePrefix === null) {
-    _queuePrefix = isQueuePrefixEnabled()
-      ? `omnivyra:${getRuntimeEnv()}:`
-      : 'bull';
+    const ns = resolveQueueNamespace(process.env);
+    _queuePrefix = ns.prefix;
+    if (ns.reason === 'non-production-isolated') {
+      console.info(
+        `[queue-isolation] non-production process — BullMQ prefix "${ns.prefix}" (isolated from the production "bull" keyspace). ` +
+        `Set OMNIVYRA_ALLOW_SHARED_QUEUES=1 only to deliberately drive production queues.`,
+      );
+    } else if (ns.reason === 'explicit-opt-in') {
+      console.warn(
+        '[queue-isolation] OMNIVYRA_ALLOW_SHARED_QUEUES=1 — this NON-production process is using the shared ' +
+        'production "bull" keyspace: its workers can claim production jobs. Unset it when done.',
+      );
+    }
   }
   return _queuePrefix;
 }
@@ -249,6 +236,10 @@ function rawConnectionOptions(): Record<string, unknown> {
  * dependency: a failed probe throws so production supervisors restart loudly.
  */
 export async function verifyRedisReadyForBackgroundRuntime(context: string): Promise<boolean> {
+  // SEC-C2: consumer bootstraps (dev worker bootstrap, scheduler) refuse to
+  // run on the shared production keyspace from an unmarked production-mode
+  // process pointed at a remote Redis. Throws; never a silent skip.
+  assertQueueConsumerRuntimeAllowed(context);
   const probe = new IORedis({
     // Raw options ALWAYS (never the W2-7 shared instance) — the probe is a
     // deliberately short-lived throwaway connection.
