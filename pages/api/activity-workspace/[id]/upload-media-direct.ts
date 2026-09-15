@@ -63,6 +63,7 @@ import {
   recordUploadFailure,
 } from '@/backend/services/creatorUploadAbuseGuardService';
 import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
+import { unguessableObjectStem } from '@/lib/security/objectNames';
 
 // Disable Next.js body parser so formidable can stream the upload.
 export const config = {
@@ -91,7 +92,8 @@ function fieldAsString(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-function deriveObjectPath(input: { companyId: string; dailyPlanId: string; mime: string }): string {
+// Exported for SEC-E5 tests only (Next.js API routes may carry named exports).
+export function deriveObjectPath(input: { companyId: string; dailyPlanId: string; mime: string }): string {
   const subdir = input.mime.startsWith('video/')
     ? 'video'
     : input.mime.startsWith('audio/')
@@ -99,7 +101,10 @@ function deriveObjectPath(input: { companyId: string; dailyPlanId: string; mime:
       : input.mime.startsWith('image/')
         ? 'image'
         : 'misc';
-  const stem = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  // SEC-E5 (STEP 3AH-91): `media-uploads` is a PUBLIC bucket, so the object
+  // name is the only thing standing between a URL guess and the file. 128-bit
+  // CSPRNG stem, never Math.random().
+  const stem = unguessableObjectStem();
   // Use file extension from the MIME if we can guess one; otherwise just
   // use the MIME subtype as the suffix (e.g. `video/mp4` → `mp4`).
   const ext = input.mime.split('/')[1]?.replace(/[^a-z0-9]+/gi, '') || 'bin';
