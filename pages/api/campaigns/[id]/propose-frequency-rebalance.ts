@@ -80,8 +80,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }, {});
 
   // SEC-E1 (STEP 3AH-91): the advice is computed in-process. This route used
-  // to fetch `${req.headers.origin}/api/campaigns/:id/platform-allocation-advice`
-  // forwarding the caller's Authorization + Cookie — a server-side request to a
+  // to request the advice route on the host named by the caller's Origin
+  // header, forwarding the caller's Authorization + Cookie — a request to a
   // caller-chosen host carrying the caller's credentials. The caller has already
   // been authorised above (COMPANY_ADMIN of the campaign's own company), which is
   // stricter than the advice route's own membership check.
