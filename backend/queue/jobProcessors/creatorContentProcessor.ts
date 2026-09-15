@@ -29,9 +29,43 @@ import { estimateLlmCostUsd } from '../../services/pricingService';
 import type { ContentBlueprint } from '../../services/unifiedContentGenerationEngine';
 import { createCreatorExecutionEngine } from '../../services/executionEngines/creatorExecutionEngine';
 import { runCreatorOrchestration } from '../../services/creator/creatorOrchestrator';
+import { assertJobCampaignBinding, assertDailyPlanRowInCampaign, assertPayloadCompaniesAgree } from './jobTenantBinding';
 
 function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+/**
+ * SEC-C5 (STEP 3AH-91) — payload tenant binding for creator-content jobs.
+ *
+ *   BOLT row jobs: the billed company (`company_id`) must be the row company
+ *   (`bolt_payload.company_id`), that company must own the campaign, and the
+ *   addressed daily_content_plans row must belong to the campaign (the bridge
+ *   enqueues rows it loaded by campaign, so all three always hold for
+ *   legitimate jobs).
+ *   Activity-workspace jobs: a workspace campaign id owned by ANOTHER company
+ *   is refused; an id that is not a campaign keeps working (no tenant owns it).
+ */
+async function assertCreatorJobTenantBinding(job: Job): Promise<void> {
+  const data = safeObject(job?.data);
+  const queue = `creator-content:${String((job as { queueName?: string })?.queueName ?? 'unknown')}`;
+  const bolt = data.bolt_payload && typeof data.bolt_payload === 'object'
+    ? data.bolt_payload as Partial<BoltCreatorRowJobData>
+    : null;
+  if (bolt) {
+    assertPayloadCompaniesAgree({ queue, jobId: job.id, billingCompanyId: data.company_id, rowCompanyId: bolt.company_id });
+    await assertJobCampaignBinding({
+      queue, jobId: job.id, campaignId: bolt.campaign_id, companyId: bolt.company_id, requireExisting: true,
+    });
+    await assertDailyPlanRowInCampaign({ queue, jobId: job.id, rowId: bolt.daily_plan_id, campaignId: String(bolt.campaign_id) });
+    return;
+  }
+  const workspaceCampaignId = safeObject(data.activity_workspace).campaign_id;
+  if (workspaceCampaignId !== undefined && workspaceCampaignId !== null && String(workspaceCampaignId) !== '') {
+    await assertJobCampaignBinding({
+      queue, jobId: job.id, campaignId: String(workspaceCampaignId), companyId: data.company_id, requireExisting: false,
+    });
+  }
 }
 
 export async function processCreatorContentJob(job: Job): Promise<any> {
@@ -46,6 +80,10 @@ export async function processCreatorContentJob(job: Job): Promise<any> {
     activity_workspace,
     user_id,
   } = job.data;
+
+  // SEC-C5 (STEP 3AH-91): re-prove the tenant ids in the payload before
+  // billing or any side effect — the queue is not an authorisation boundary.
+  await assertCreatorJobTenantBinding(job);
 
   // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
   void import('../../services/billing/creditEconomyShadow')
@@ -176,6 +214,8 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
           .from('campaign_versions')
           .select('campaign_snapshot')
           .eq('campaign_id', campaignIdForVariant)
+          // SEC-C5: tenant-scoped — never read another company's snapshot.
+          .eq('company_id', company_id)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -698,7 +738,9 @@ async function processBoltCreatorRowJob(job: Job, payload: BoltCreatorRowJobData
         content_status: readiness.ready ? 'render_ready' : 'render_failed',
         updated_at: new Date().toISOString(),
       })
-      .eq('id', payload.daily_plan_id);
+      .eq('id', payload.daily_plan_id)
+      // SEC-C5: the row must belong to the job's (verified) campaign.
+      .eq('campaign_id', payload.campaign_id);
 
     // Calendar unification: when this autonomous asset finished rendering in a
     // SCHEDULE outcome, auto-create its scheduled_post immediately (reusing the
@@ -743,7 +785,8 @@ async function processBoltCreatorRowJob(job: Job, payload: BoltCreatorRowJobData
           content_status: 'render_failed',
           updated_at: new Date().toISOString(),
         })
-        .eq('id', payload.daily_plan_id);
+        .eq('id', payload.daily_plan_id)
+        .eq('campaign_id', payload.campaign_id);
     }
     // Rethrow so BullMQ records the attempt + applies backoff.
     throw error;

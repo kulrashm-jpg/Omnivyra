@@ -28,6 +28,7 @@ import { generateCampaignStrategy } from '../../services/campaignStrategyEngine'
 import { expandCampaign, assessExpansionConfidence } from '../../services/campaignExpansionEngine';
 import { batchedGenerateBlueprint } from '../../services/batchAiProcessor';
 import { tryTemplateBlueprintFor } from '../../services/aiTemplateLayer';
+import { assertJobCampaignBinding } from './jobTenantBinding';
 
 // Bounded intra-job OpenAI fan-out. ai-heavy queue concurrency (3) ×
 // unbounded slot fan-out (≤10) was up to ~30 parallel OpenAI calls; this
@@ -269,11 +270,22 @@ async function persistPlan(
  * withQueueBilling pattern (queue-native exactly-once HOLD across retries/
  * replays — no new system, no settlement/retry-orchestration change). OFF
  * (default) = byte-identical passthrough. SHADOW = passthrough + telemetry.
- * ENFORCE = withQueueBilling. No org → passthrough (honest).
+ * ENFORCE = withQueueBilling. No org → refused by the SEC-C5 binding check.
  */
 export async function processCampaignPlanningJob(job: Job<CampaignPlanningJobPayload>): Promise<void> {
-  const orgId = job.data?.companyId ? String(job.data.companyId) : null;
-  if (!orgId) return processCampaignPlanningJobInner(job);
+  // SEC-C5 (STEP 3AH-91): the payload's company/campaign pairing is re-proved
+  // before billing or any write — the queue is not an authorisation boundary.
+  // plan-v2 enqueues only after requireCampaignAccess, so the campaign must
+  // exist and belong to companyId (a job without a companyId is refused too;
+  // it used to skip billing and run unattributed).
+  await assertJobCampaignBinding({
+    queue: 'ai-heavy:campaign-planning',
+    jobId: job.id,
+    campaignId: job.data?.campaignId,
+    companyId: job.data?.companyId,
+    requireExisting: true,
+  });
+  const orgId = String(job.data.companyId);
 
   // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
   void import('../../services/billing/creditEconomyShadow')

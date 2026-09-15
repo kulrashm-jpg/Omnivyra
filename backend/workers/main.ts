@@ -75,6 +75,7 @@ const HEAVY_SLOT_SCOPING_FLAG = defineRolloutFlag({
 const AI_HEAVY_POOL = definePool({ name: 'ai-heavy-slot', defaultLimit: 3, maxLimit: 8 });
 import { runRenderParityPreflight, logPreflightReport } from './renderParityPreflight';
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
+import { assertJobCampaignBinding } from '../queue/jobProcessors/jobTenantBinding';
 import { startCron } from '../scheduler/cron';
 
 // ── Worker instances ──────────────────────────────────────────────────────────
@@ -208,6 +209,16 @@ const campaignWorker = new Worker<CampaignPlanningJobPayload>(
       const { pollKey, companyId, actorUserId, args } = job.data as unknown as {
         pollKey: string; companyId: string; actorUserId: string; args: Record<string, unknown>;
       };
+      // SEC-C5 (STEP 3AH-91): plan.ts enqueues only after requireCampaignAccess;
+      // re-prove the company/campaign pairing here before billing runs inside
+      // runCampaignAiPlan — the queue is not an authorisation boundary.
+      await assertJobCampaignBinding({
+        queue: 'ai-heavy:interactive-plan',
+        jobId: job.id,
+        campaignId: args?.campaignId,
+        companyId,
+        requireExisting: true,
+      });
       const { runCampaignAiPlan } = await import('../services/campaignAiOrchestrator');
       // F-14: result persistence via the generalized runway completion.
       const { completeRunwayOperation } = await import('../../lib/platform/runway');
