@@ -49,8 +49,8 @@
     },
     "pages/api/ai/generate-content.ts": {
       "kind": "inline-binding",
-      "reason": "Company is derived from the campaign's campaign_versions row, then enforceCompanyAccess + enforceRole run on THAT company.",
-      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?enforceCompanyAccess\\(\\{ req, res, companyId: company_id \\}\\)"
+      "reason": "Caller is authenticated first (401 before any lookup); company is then derived from the campaign via the canonical resolveCampaignCompanyId seam, and enforceCompanyAccess + enforceRole run on THAT company.",
+      "evidence": "resolveUserContext\\(req\\)[\\s\\S]*?resolveCampaignCompanyId\\(campaignId\\)[\\s\\S]*?enforceCompanyAccess\\(\\{ req, res, companyId: company_id \\}\\)"
     },
     "pages/api/analytics/track.ts": {
       "kind": "public",
