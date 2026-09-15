@@ -175,6 +175,26 @@ describe('enforce — the guard keys per-user limits on the authenticated princi
     expect(limiterKeys()).toEqual(expect.arrayContaining([`ai:burst:user:${USER_A}`, `ai:rl:user:min:${USER_A}`, `ai:rl:co:min:${CO_A}`]));
   });
 
+  it('per-tenant promotion: shadow + _TENANTS=<org> enforces only for that tenant', async () => {
+    process.env[MODE] = 'shadow';
+    const TENANTS = 'ROLLOUT_AI_GUARD_PRINCIPAL_TENANTS';
+    const prev = process.env[TENANTS];
+    process.env[TENANTS] = CO_A;
+    try {
+      await inRequest(async () => {
+        await enforceCompanyAccess({ req: fakeReq('A'), res: fakeRes(), companyId: CO_A });
+        expect(getRequestContext().userId).toBe(USER_A);
+      });
+      await inRequest(async () => {
+        await enforceCompanyAccess({ req: fakeReq('B'), res: fakeRes(), companyId: CO_B });
+        expect(getRequestContext().userId).toBeUndefined();
+        expect(getAuthenticatedPrincipal()).toMatchObject({ userId: USER_B, orgId: CO_B });
+      });
+    } finally {
+      if (prev === undefined) delete process.env[TENANTS]; else process.env[TENANTS] = prev;
+    }
+  });
+
   it('the kill switch returns to no-op', async () => {
     process.env[KILL] = '1';
     await inRequest(async () => {
