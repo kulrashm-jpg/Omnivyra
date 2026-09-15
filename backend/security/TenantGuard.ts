@@ -18,16 +18,33 @@
  * Authority chain (no shortcuts):
  *   1. Authenticated principal — IdentityResolver (token/cookie validated).
  *   2. Active membership — user_company_roles row, status='active'.
- *   3. Organization existence + state — companies row, status='active', not soft-deleted.
- *   4. Platform bypass — ONLY through is_platform_super_admin; bridge
- *      principals NEVER bypass (legacyCookieSuperAdmin is rejected here).
+ *   3. Organization existence + state — companies row, status='active'.
+ *   4. Platform bypass — ONLY through rbacService.isPlatformSuperAdmin (an
+ *      ACTIVE SUPER_ADMIN membership row, SEC-91A); bridge principals NEVER
+ *      bypass (legacyCookieSuperAdmin is rejected in requireTenantAccess).
  *   5. Optional capability gate — when the route requires more than membership.
  *
  * Soft-delete enforcement: a request to a company with `status != 'active'`
- * OR with `deleted_at IS NOT NULL` is rejected as ORG_INACTIVE — even if
- * the membership row still exists. This matches the spec invariant that
- * a removed/suspended company is never accessible to users, including
- * its admins.
+ * is rejected as ORG_INACTIVE — even if the membership row still exists.
+ * SEC-91A (STEP 3AH-91, A7) — this header used to say `deleted_at IS NOT NULL`
+ * is ALSO checked; the code has never read `deleted_at`. Soft delete is still
+ * covered, by a DB invariant rather than by this guard: soft_delete_company()
+ * runs disable_company_cascade(), which sets companies.status='inactive' (and
+ * inactivates every membership) before stamping deleted_at, and the only
+ * re-activation path (PATCH /api/super-admin/companies) refuses a company whose
+ * deleted_at is set. A code path that flips status back to 'active' without
+ * clearing deleted_at would bypass it — keep that invariant, or add deleted_at
+ * to the org read below in both decision copies.
+ *
+ * Two decision copies: assertTenantAccessSequential (authoritative; the only
+ * path while the `tenant-guard-batch` rollout flag is off — the default) and
+ * assertTenantAccessBatched (flag shadow/enforce). They must stay line-for-line
+ * equivalent; sec91ATenantGuardParity.test.ts runs both over the same fixture
+ * matrix and fails on any divergence. There are also two wrappers named
+ * withTenantGuard: the one at the end of this file (requireTenantAccess +
+ * `req.tenantAccess`) and backend/security/withTenantGuard.ts (HARDEN-007,
+ * enforceCompanyAccess semantics incl. the invited-admin / content-architect
+ * fallbacks and campaign binding). They are NOT interchangeable.
  *
  * No fallback resolution: if the caller does not provide organizationId,
  * the guard rejects. There is no "active_company_id" inference. The
@@ -372,9 +389,9 @@ async function assertTenantAccessSequential(input: TenantAccessInput): Promise<T
     if (!allowed) return { ok: false, reason: 'INSUFFICIENT_ROLE', userId };
   }
 
-  // Organization existence + state. We require status='active' AND
-  // deleted_at IS NULL. If the schema doesn't yet have deleted_at, the
-  // status check still rejects suspended orgs.
+  // Organization existence + state: status must be 'active'. deleted_at is
+  // NOT read here — soft delete is enforced through status (see the header:
+  // soft_delete_company sets status='inactive' first).
   const { data: orgRow, error: orgErr } = await readSingleWithRetry<{ id?: string; status?: string | null }>(
     'companies',
     () => supabase
