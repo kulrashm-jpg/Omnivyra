@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { issueExtensionSessionToken } from '@/backend/services/extensionSessionService';
+import { isSigningSecretUnavailable } from '@/backend/auth/signingSecrets';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -44,9 +45,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   } catch (error) {
     console.error('[extension/session]', error);
-    return res.status(500).json({
-      error: (error as Error)?.message ?? 'Failed to create extension session',
-    });
+    // SEC91-W2B-5: a missing signing secret is a service condition (503) with a plain
+    // code; never echo the error text (it names configuration variables).
+    if (isSigningSecretUnavailable(error)) {
+      return res.status(503).json({ error: 'SIGNING_SECRET_UNAVAILABLE' });
+    }
+    return res.status(500).json({ error: 'Failed to create extension session' });
   }
 }
 
