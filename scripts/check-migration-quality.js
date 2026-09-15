@@ -31,7 +31,10 @@
  *           in the same migration (it runs as the owner and bypasses RLS;
  *           authenticated still receives EXECUTE through default privileges).
  *           A function meant for signed-in clients grants it back explicitly
- *           with an annotated GRANT (rule d);
+ *           with an annotated GRANT (rule d). It must also pin its
+ *           search_path (`SET search_path = …` in the definition, or ALTER …
+ *           SET search_path in the same migration; else `-- search-path-ok:
+ *           <reason>`), STEP 3AH-91 SEC91-INT-C7G;
  *        c. a public VIEW must be `WITH (security_invoker = true)` (or revoke
  *           anon/authenticated); a MATERIALIZED VIEW (cannot be
  *           security_invoker, has no RLS) must revoke anon/authenticated;
@@ -223,10 +226,10 @@ function securityViolations(sql) {
     const end = body ? rest.indexOf(';', body.index + body[0].length) : rest.indexOf(';');
     const stmt = stripDollarBodies(rest.slice(0, end < 0 ? undefined : end + 1));
     if (!/\bSECURITY\s+DEFINER\b/i.test(stmt)) continue;
-    definers.push({ idx: m.index, raw: m[1], text: m[0] });
+    definers.push({ idx: m.index, raw: m[1], text: m[0], stmt });
   }
   const alterFnRe = /\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+((?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?)[^;]*?\bSECURITY\s+DEFINER\b[^;]*;/gi;
-  for (const m of clean.matchAll(alterFnRe)) definers.push({ idx: m.index, raw: m[1], text: m[0] });
+  for (const m of clean.matchAll(alterFnRe)) definers.push({ idx: m.index, raw: m[1], text: m[0], stmt: m[0] });
   for (const d of definers) {
     const full = tableName(d.raw);
     if (full.includes('.') && !full.startsWith('public.')) continue;
@@ -236,6 +239,15 @@ function securityViolations(sql) {
     if (missing.length) {
       push(d.idx, `SECURITY DEFINER function public.${name} must REVOKE EXECUTE … FROM PUBLIC, anon, authenticated (missing: ${missing.join(', ')}); `
         + 'grant back only the roles that need it (a grant to a client role needs `-- grant-ok: <reason>`)', d.text);
+    }
+    // (b2) STEP 3AH-91 (SEC91-INT-C7G): a SECURITY DEFINER routine must pin its
+    //      search_path — in its own CREATE/ALTER statement or by an ALTER … SET
+    //      search_path in the same migration. Without it, a later CREATE OR
+    //      REPLACE silently re-opens the mutable-search_path class (SEC91-C7/M7).
+    const pinnedHere = /\bSET\s+search_path\b/i.test(d.stmt || '');
+    const pinnedByAlter = new RegExp(`\\bALTER\\s+(?:FUNCTION|PROCEDURE|ROUTINE)\\s+(?:"?public"?\\.)?"?${esc(name)}"?(?![\\w])[^;]*?\\bSET\\s+search_path\\b`, 'i').test(clean);
+    if (!pinnedHere && !pinnedByAlter && !annotated(lines, lineOf(sql, d.idx), 'search-path-ok')) {
+      push(d.idx, `SECURITY DEFINER function public.${name} must pin its search_path (\`SET search_path = public, extensions, pg_temp\` in the definition, or ALTER FUNCTION … SET search_path in the same migration; else \`-- search-path-ok: <reason>\`)`, d.text);
     }
   }
 

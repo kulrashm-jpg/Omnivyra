@@ -98,13 +98,52 @@ describe('(b) SECURITY DEFINER — PUBLIC, anon and authenticated must all be re
   });
 
   it('ALTER FUNCTION … SECURITY DEFINER is treated like CREATE … SECURITY DEFINER', () => {
-    expect(rules('ALTER FUNCTION public.mint(uuid) SECURITY DEFINER;')).toEqual([expect.stringContaining('SECURITY DEFINER function public.mint')]);
-    expect(rules('ALTER FUNCTION public.mint(uuid) SECURITY DEFINER;\nREVOKE ALL ON FUNCTION public.mint(uuid) FROM PUBLIC, anon, authenticated;')).toEqual([]);
+    // search_path pinned in the same ALTER so this test isolates the REVOKE rule (b2 has its own block).
+    expect(rules('ALTER FUNCTION public.mint(uuid) SECURITY DEFINER SET search_path = public, pg_temp;')).toEqual([expect.stringContaining('SECURITY DEFINER function public.mint must REVOKE')]);
+    expect(rules('ALTER FUNCTION public.mint(uuid) SECURITY DEFINER SET search_path = public, pg_temp;\nREVOKE ALL ON FUNCTION public.mint(uuid) FROM PUBLIC, anon, authenticated;')).toEqual([]);
   });
 
   it('an idempotent ALTER FUNCTION … SET search_path (SEC-C hardening) passes', () => {
     expect(rules(`ALTER FUNCTION public.mint(uuid) SET search_path = public, pg_temp;
       DO $$ BEGIN EXECUTE format('ALTER FUNCTION %s SET search_path = public, pg_temp', 'public.other(uuid)'); END $$;`)).toEqual([]);
+  });
+});
+
+describe('(b2) SECURITY DEFINER must pin its search_path (STEP 3AH-91, SEC91-INT-C7G)', () => {
+  const REVOKE = '\nREVOKE EXECUTE ON FUNCTION public.mint(uuid) FROM PUBLIC, anon, authenticated;';
+  const create = (clauses: string, extra = REVOKE) => `CREATE OR REPLACE FUNCTION public.mint(p uuid) RETURNS void
+    LANGUAGE plpgsql ${clauses} AS $$ BEGIN PERFORM 1; END $$;${extra}`;
+  const pinRule = (r: string[]) => r.filter((x) => x.includes('must pin its search_path'));
+
+  it('CRITICAL: a revoked SECURITY DEFINER function with no search_path is flagged (the C7 class re-opened)', () => {
+    expect(rules(create('SECURITY DEFINER'))).toEqual([expect.stringContaining('public.mint must pin its search_path')]);
+  });
+
+  it('SET search_path in the definition passes', () => {
+    expect(rules(create('SECURITY DEFINER SET search_path = public, extensions, pg_temp'))).toEqual([]);
+    expect(rules(create("SET search_path TO 'public' SECURITY DEFINER"))).toEqual([]);
+  });
+
+  it('ALTER FUNCTION … SET search_path in the same migration passes', () => {
+    expect(rules(create('SECURITY DEFINER', `${REVOKE}\nALTER FUNCTION public.mint(uuid) SET search_path = public, pg_temp;`))).toEqual([]);
+  });
+
+  it('a search_path mentioned only INSIDE the body does not count', () => {
+    const sql = `CREATE FUNCTION public.mint(p uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN PERFORM set_config('search_path', 'public', true); END $$;${REVOKE}`;
+    expect(pinRule(rules(sql))).toHaveLength(1);
+  });
+
+  it('a pin for a DIFFERENT function does not cover this one', () => {
+    expect(pinRule(rules(create('SECURITY DEFINER', `${REVOKE}\nALTER FUNCTION public.mint_other(uuid) SET search_path = public;`)))).toHaveLength(1);
+  });
+
+  it('ALTER … SECURITY DEFINER without a pin is flagged; a reviewed annotation is accepted', () => {
+    expect(pinRule(rules(`ALTER FUNCTION public.mint(uuid) SECURITY DEFINER;${REVOKE}`))).toHaveLength(1);
+    expect(rules(`-- search-path-ok: body uses only schema-qualified names and pg_catalog\nALTER FUNCTION public.mint(uuid) SECURITY DEFINER;${REVOKE}`)).toEqual([]);
+  });
+
+  it('SECURITY INVOKER functions are not subject to the rule', () => {
+    expect(rules('CREATE FUNCTION public.plain(p uuid) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;')).toEqual([]);
   });
 });
 
