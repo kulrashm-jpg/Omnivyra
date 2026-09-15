@@ -99,6 +99,9 @@ jest.mock('../../db/writeOwner', () => ({
 
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'company-1' })),
+  // STEP 3AH-91 SEC-E6: the route now authenticates before loading the row
+  // (existence/content-type oracle); these tests run as an authenticated member.
+  resolveUserContext: jest.fn(async () => ({ userId: 'user-1', role: 'user', companyIds: ['company-1'], defaultCompanyId: 'company-1', authenticated: true })),
 }));
 
 jest.mock('../../services/mediaUploadValidationService', () => ({

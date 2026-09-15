@@ -27,7 +27,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { enforceCompanyAccess, resolveUserContext } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 import formidable from 'formidable';
 import fs from 'fs';
@@ -165,6 +165,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'daily_content_plans id is required in the path' });
 
+  // SEC-E6 (STEP 3AH-91): authenticate BEFORE any lookup. The row used to be
+  // loaded (and its format checked) first, so an anonymous caller could tell
+  // unknown ids (404) from existing ones (409, echoing content_type).
+  const caller = await resolveUserContext(req);
+  if (caller.authenticated === false || !caller.userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
+
   // ── Server-aware cancellation tracking ─────────────────────────────────
   // Flip a flag as soon as the client disconnects mid-flight. Every code
   // path that could write to storage or DB checks it and bails out with
@@ -220,22 +226,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     content_status: string | null;
     platform: string | null;
   };
-  const contentType = normalizeCreatorFormat(row.content_type || '');
-  if (!isAttachmentRequiredFormat(contentType)) {
-    return res.status(409).json({
-      error: `Direct upload is only valid for attachment-required formats (video, reel, short, podcast). Got "${contentType}".`,
-      code: 'UPLOAD_NOT_VALID_FOR_FORMAT',
-    });
-  }
-  const expectedCategory = resolveExpectedCategory(contentType);
-  if (!expectedCategory) {
-    return res.status(409).json({
-      error: `No upload category resolved for content_type "${contentType}".`,
-      code: 'UPLOAD_NOT_VALID_FOR_FORMAT',
-    });
-  }
-
   // ── Resolve company + auth ─────────────────────────────────────────────
+  // (SEC-E6: before the format checks below, which echo the row's
+  // content_type — only a member of the row's company may learn it.)
   let companyId: string | null = null;
   try {
     const { data: campaignRow } = await supabase
@@ -250,6 +243,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+
+  const contentType = normalizeCreatorFormat(row.content_type || '');
+  if (!isAttachmentRequiredFormat(contentType)) {
+    return res.status(409).json({
+      error: `Direct upload is only valid for attachment-required formats (video, reel, short, podcast). Got "${contentType}".`,
+      code: 'UPLOAD_NOT_VALID_FOR_FORMAT',
+    });
+  }
+  const expectedCategory = resolveExpectedCategory(contentType);
+  if (!expectedCategory) {
+    return res.status(409).json({
+      error: `No upload category resolved for content_type "${contentType}".`,
+      code: 'UPLOAD_NOT_VALID_FOR_FORMAT',
+    });
+  }
 
   // ── Abuse + rate-limit gate (FAIL OPEN on infra error) ─────────────────
   const rateDecision = await checkUploadAttemptAllowed({
