@@ -13,7 +13,7 @@
  */
 
 import { supabase } from '../../../db/supabaseClient';
-import { getExecutionItem, getExecutionItems } from '../canonicalExecutionAdapter';
+import { getExecutionItem, getExecutionItems, isSafeActivityKey } from '../canonicalExecutionAdapter';
 import { projectExecutionState } from './orchestrationStateProjector';
 import {
   logReadinessChange,
@@ -101,6 +101,16 @@ export async function synchronizeByActivity(
   source: string,
 ): Promise<ExecutionStateProjection | null> {
   if (!activityId) return null;
+  // SEC-91 W2-G (STEP 3AH-91, W2G-3) — the key is interpolated into a PostgREST
+  // `.or()` filter below. A value such as "<uuid>,campaign_id.eq.<other>" would
+  // widen the match (the W2F-1a shape). Today's callers pass keys the write
+  // adapter already validated, so this is defence in depth: the SAME predicate
+  // as the adapter (isSafeActivityKey), refused before any query, and the raw
+  // key is not echoed into the log.
+  if (!isSafeActivityKey(activityId)) {
+    logStatePropagation(null, '', 'skipped:invalid_activity_id', source);
+    return null;
+  }
   try {
     const { data: row } = await supabase
       .from('daily_content_plans')

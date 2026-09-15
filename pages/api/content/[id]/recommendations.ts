@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '@/lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { enforceContentWriteRole } from '@/backend/services/content/contentWriteAuthz';
 import { getContent } from '@/backend/services/content/contentService';
 import { resolveCompanyId, firstQueryValue, respondServiceError } from '@/lib/content/contentApiHelpers';
 import * as collaborationService from '@/backend/services/content/collaborationService';
@@ -31,6 +32,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
   const scopedCompanyId = companyId as string;
+
+  // SEC-91 W2-G (STEP 3AH-91, W2G-1) — writes require a content authoring role
+  // (PERMISSIONS.CREATE_CAMPAIGN) in the company authorized above; VIEW_ONLY and
+  // its aliases stay read-only. Reads are unchanged. See contentWriteAuthz.ts.
+  if ((req.method === 'POST') && !(await enforceContentWriteRole({ req, res, companyId: scopedCompanyId }))) return;
 
   // Tenant isolation: prove the content belongs to the caller's company.
   const content = await getContent(id, scopedCompanyId);

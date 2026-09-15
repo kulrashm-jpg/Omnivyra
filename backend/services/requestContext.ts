@@ -28,7 +28,11 @@ export type PrincipalAttributionSource =
   | 'resolveUserContext'
   | 'enforceCompanyAccess'
   | 'requireCampaignAccess'
-  | 'requireTenantAccess';
+  | 'requireTenantAccess'
+  // SEC-91 W2-G (W2G-5) — lib/platform/requestContext.setPrincipal and the
+  // route-policy observation gate that calls it.
+  | 'setPrincipal'
+  | 'policyGate';
 
 export type AuthenticatedPrincipal = {
   userId: string;

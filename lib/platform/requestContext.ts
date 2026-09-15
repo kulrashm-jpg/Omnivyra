@@ -25,7 +25,9 @@ import {
   runWithRequestContext,
   seedRequestContextFromRequest,
   type RequestContext,
+  type PrincipalAttributionSource,
 } from '../../backend/services/requestContext';
+import { attributeAuthenticatedPrincipal } from '../../backend/services/requestContextPrincipal';
 import {
   runWithRequestMemo,
   memoRequest,
@@ -110,9 +112,29 @@ export function getPrincipal(): ExecutionPrincipal {
  * Attach the resolved principal to the active context. Guards call this once
  * after authentication so downstream code (metrics labels, memo keys, rollout
  * tenant targeting) can read it without re-resolving. Undefined fields never
- * overwrite previously-set values.
+ * overwrite previously-set values. Call it only after the identity (and, when
+ * `orgId` is given, the principal's access to that org) has been proven.
+ *
+ * SEC-91 W2-G (STEP 3AH-91, W2G-5) — the merge below uses mergeRequestContext
+ * (AsyncLocalStorage.enterWith), which is visible only to the CURRENT frame:
+ * when a guard calls this inside an awaited callee (policyGate does), the store
+ * it enters is gone once the callee returns, so the handler never saw the
+ * principal. The principal is therefore FIRST recorded on the live store via
+ * attributeAuthenticatedPrincipal (W2-A), staged by the same
+ * `ai-guard-principal` rollout flag: shadow (default) records `authPrincipal`
+ * only — context userId/orgId stay as they were, so nothing that reads them
+ * changes; enforce fills context userId (never orgId); off/kill does nothing.
+ * The merge is kept unchanged for same-frame callers (mergeRequestContext
+ * semantics are not altered — changing them would switch on guard enforcement
+ * for every requireTenantAccess route at once).
  */
-export function setPrincipal(principal: ExecutionPrincipal): void {
+export function setPrincipal(
+  principal: ExecutionPrincipal,
+  source: Extract<PrincipalAttributionSource, 'setPrincipal' | 'policyGate'> = 'setPrincipal',
+): void {
+  if (principal.userId !== undefined) {
+    attributeAuthenticatedPrincipal({ userId: principal.userId, orgId: principal.orgId ?? null, source });
+  }
   const patch: Partial<RequestContext> = {};
   if (principal.userId !== undefined) patch.userId = principal.userId;
   if (principal.orgId !== undefined) patch.orgId = principal.orgId;
