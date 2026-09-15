@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual, randomBytes } from 'crypto';
+import { resolveSigningSecret, isSigningSecretUnavailable } from '../../auth/signingSecrets';
 
 /**
  * RPA auth bootstrapping tokens.
@@ -16,20 +17,14 @@ import { createHmac, timingSafeEqual, randomBytes } from 'crypto';
 
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * SEC91-B1: dedicated secret, then AUTH_SECRET — nothing else. The chain used to continue
+ * into NEXTAUTH_SECRET, the Supabase service-role API key and a literal committed to this
+ * repository. Production resolves AUTH_SECRET exactly as before (tokens live 30 min).
+ * Missing both → SigningSecretUnavailableError: issuing throws, verifying rejects.
+ */
 function getSecret(): string {
-  // API-key migration note: the legacy variable below is used here as an HMAC
-  // SIGNING SECRET, not as a Supabase API key, so it is deliberately NOT
-  // migrated to SUPABASE_SECRET_KEY — changing the value would invalidate every
-  // already-issued token. Consequence: SUPABASE_SERVICE_ROLE_KEY must stay set
-  // in production until this chain gets a dedicated secret, otherwise signing
-  // silently falls through to the hardcoded development constant.
-  return (
-    process.env.RPA_AUTH_SECRET ||
-    process.env.AUTH_SECRET ||
-    process.env.NEXTAUTH_SECRET ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    'omnivyra-rpa-auth-secret'
-  );
+  return resolveSigningSecret('RPA auth tokens', ['RPA_AUTH_SECRET', 'AUTH_SECRET']);
 }
 
 function b64url(buf: Buffer): string {
@@ -75,7 +70,13 @@ export function verifyRpaAuthToken(token: string | null | undefined):
   if (!token) return { ok: false, reason: 'MISSING_TOKEN' };
   const [payloadB64, sig] = token.split('.');
   if (!payloadB64 || !sig) return { ok: false, reason: 'BAD_TOKEN_SHAPE' };
-  const expected = createHmac('sha256', getSecret()).update(payloadB64).digest('base64url');
+  let expected: string;
+  try {
+    expected = createHmac('sha256', getSecret()).update(payloadB64).digest('base64url');
+  } catch (err) {
+    if (isSigningSecretUnavailable(err)) return { ok: false, reason: 'SIGNING_SECRET_UNAVAILABLE' };
+    throw err;
+  }
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) {

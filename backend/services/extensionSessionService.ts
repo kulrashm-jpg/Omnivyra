@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual, randomBytes, createHash } from 'crypto';
+import { resolveSigningSecret, isSigningSecretUnavailable } from '../auth/signingSecrets';
 
 type ExtensionSessionPayload = {
   userId: string;
@@ -9,21 +10,18 @@ type ExtensionSessionPayload = {
   hmacNonce?: string;
 };
 
+/**
+ * SEC91-B1: dedicated secret, then AUTH_SECRET — nothing else. The chain used to continue
+ * into NEXTAUTH_SECRET, the Supabase service-role API key, the BROWSER-PUBLIC anon key and
+ * finally a literal committed to this repository, so an unconfigured deployment signed
+ * tokens with a value anyone could read. Production resolves AUTH_SECRET (the dedicated
+ * variable is unset), exactly as before, so already-issued tokens keep verifying.
+ * Missing both → SigningSecretUnavailableError (fail closed).
+ */
+const EXTENSION_SESSION_SECRET_ENV = ['EXTENSION_SESSION_SECRET', 'AUTH_SECRET'] as const;
+
 function getExtensionSessionSecret() {
-  // API-key migration note: the legacy variable below is used here as an HMAC
-  // SIGNING SECRET, not as a Supabase API key, so it is deliberately NOT
-  // migrated to SUPABASE_SECRET_KEY — changing the value would invalidate every
-  // already-issued token. Consequence: SUPABASE_SERVICE_ROLE_KEY must stay set
-  // in production until this chain gets a dedicated secret, otherwise signing
-  // silently falls through to the hardcoded development constant.
-  return (
-    process.env.EXTENSION_SESSION_SECRET ||
-    process.env.AUTH_SECRET ||
-    process.env.NEXTAUTH_SECRET ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    'omnivyra-extension-session-secret'
-  );
+  return resolveSigningSecret('extension session tokens', EXTENSION_SESSION_SECRET_ENV);
 }
 
 function toBase64Url(value: string) {
@@ -50,7 +48,14 @@ export function verifyExtensionSessionToken(token: string | null | undefined): E
   const [payloadBase64, signature] = token.split('.');
   if (!payloadBase64 || !signature) return null;
 
-  const expectedSignature = signPayload(payloadBase64);
+  let expectedSignature: string;
+  try {
+    expectedSignature = signPayload(payloadBase64);
+  } catch (err) {
+    // No signing secret configured: nothing can be verified — reject (fail closed).
+    if (isSigningSecretUnavailable(err)) return null;
+    throw err;
+  }
   const provided = Buffer.from(signature);
   const expected = Buffer.from(expectedSignature);
   if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
@@ -131,12 +136,18 @@ export function verifyExtensionRequestSignature(params: {
   gcRequestNonces();
   if (seenRequestNonces.has(nonce)) return { ok: false, reason: 'NONCE_REPLAYED' };
 
-  const secret = deriveExtensionHmacSecret({
-    userId: params.session.userId,
-    orgId: params.session.orgId,
-    expiresAt: params.session.expiresAt,
-    nonce: params.session.hmacNonce,
-  });
+  let secret: string;
+  try {
+    secret = deriveExtensionHmacSecret({
+      userId: params.session.userId,
+      orgId: params.session.orgId,
+      expiresAt: params.session.expiresAt,
+      nonce: params.session.hmacNonce,
+    });
+  } catch (err) {
+    if (isSigningSecretUnavailable(err)) return { ok: false, reason: 'SIGNING_SECRET_UNAVAILABLE' };
+    throw err;
+  }
 
   const bodyHash = createHash('sha256').update(params.rawBody || '').digest('hex');
   const canonical = [
