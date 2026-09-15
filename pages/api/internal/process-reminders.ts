@@ -6,8 +6,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * Configured to run every 5 minutes via vercel.json.
  *
  * Protection:
- *   - Requires Authorization: Bearer <CRON_SECRET> when CRON_SECRET is set
- *     (matches /api/cron/* convention).
+ *   - Requires Authorization: Bearer <CRON_SECRET> (matches /api/cron/*
+ *     convention). An unset CRON_SECRET refuses every request, in every
+ *     environment.
  *   - Returns 401 otherwise.
  *
  * Algorithm:
@@ -33,6 +34,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { logger } from '../../../backend/services/logger';
 import { sendDomainVerificationReminder } from '../../../backend/services/domainReminderService';
 import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 const BATCH_SIZE = 50;
 const CLEANUP_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -49,20 +51,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'METHOD_NOT_ALLOWED' });
   }
 
-  // CRON_SECRET protection — matches /api/cron/* convention.
+  // CRON_SECRET protection — matches /api/cron/* convention, FAIL CLOSED in
+  // every environment. SEC-C1 (STEP 3AH-91): an unset secret used to leave
+  // this open outside production, but a developer process runs against the
+  // production database (.env.local) and `next dev` listens on every
+  // interface — anyone on the same network could make it email real users
+  // and mark their reminders sent. Set CRON_SECRET locally to exercise it.
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const auth = req.headers['authorization'];
-    if (auth !== bearerAuthorization(cronSecret)) {
-      return res.status(401).json({ error: 'UNAUTHORIZED' });
-    }
-  } else {
-    // Fail closed in production — never run unauthenticated unless explicitly
-    // allowed via env (e.g., local dev).
-    if (process.env.NODE_ENV === 'production') {
-      logger.error('process_reminders_no_secret_in_production');
-      return res.status(401).json({ error: 'CRON_SECRET_NOT_CONFIGURED' });
-    }
+  if (!cronSecret) {
+    logger.error('process_reminders_no_secret_configured');
+    return res.status(401).json({ error: 'CRON_SECRET_NOT_CONFIGURED' });
+  }
+  // SEC-C4: constant-time comparison (no prefix-timing oracle).
+  if (!constantTimeEqual(req.headers['authorization'], bearerAuthorization(cronSecret))) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
   const startedAt = Date.now();

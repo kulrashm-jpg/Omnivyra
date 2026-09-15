@@ -29,10 +29,11 @@ import { reconcile } from '../../../backend/services/billing/commercialReconcili
 import { runJob } from '../../../backend/services/jobRunner';
 import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 import { logger } from '../../../backend/services/logger';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 async function isAuthorized(req: NextApiRequest): Promise<boolean> {
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && req.headers.authorization === `Bearer ${cronSecret}`) return true;
+  if (cronSecret && bearerTokenMatches(req.headers.authorization, cronSecret)) return true;
   if (getLegacySuperAdminSession(req) !== null) return true;
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
@@ -48,8 +49,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const dryRun = req.query.dryRun === '1' || req.query.dryRun === 'true';
 
-  const triggeredByCronSecret = !!process.env.CRON_SECRET
-    && req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`;
+  const triggeredByCronSecret = bearerTokenMatches(req.headers.authorization, process.env.CRON_SECRET);
 
   const outcome = await runJob(
     {

@@ -33,6 +33,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 const DEFAULT_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 const BATCH_SIZE = 100;
@@ -47,7 +48,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[cron/sweep-stuck-publishing] CRON_SECRET not configured; rejecting');
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (req.headers['authorization'] !== `Bearer ${cronSecret}`) {
+  if (!bearerTokenMatches(req.headers['authorization'], cronSecret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

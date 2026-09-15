@@ -40,7 +40,9 @@ describe('/api/cron/email-jobs — safe to run frequently', () => {
   test('fails closed without CRON_SECRET and requires the bearer', () => {
     expect(src).toMatch(/const cronSecret = process\.env\.CRON_SECRET;/);
     expect(src).toMatch(/if \(!cronSecret\)[\s\S]{0,200}status\(401\)/);
-    expect(src).toContain("req.headers['authorization'] !== `Bearer ${cronSecret}`");
+    // SEC-C4 (3AH-91): the bearer is now compared in constant time — same
+    // exact `Bearer <CRON_SECRET>` contract, no prefix-timing oracle.
+    expect(src).toContain("!bearerTokenMatches(req.headers['authorization'], cronSecret)");
   });
 
   test('claims a bounded batch atomically via the claim_email_jobs RPC', () => {

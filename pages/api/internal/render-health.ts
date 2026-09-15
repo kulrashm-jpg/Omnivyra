@@ -13,6 +13,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 import {
   isCreatorRenderingEnabled,
   aggregateRenderAnalytics,
@@ -30,7 +31,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const expected = String(process.env.INTERNAL_WORKER_TOKEN ?? '').trim();
   const provided = String(req.headers['x-internal-worker-token'] ?? '').trim();
   if (!expected) return res.status(503).json({ error: 'Health not configured.', code: 'HEALTH_DISABLED' });
-  if (!provided || provided !== expected) return res.status(401).json({ error: 'Unauthorized.' });
+  // SEC-C4: constant-time comparison (empty/absent token never matches).
+  if (!constantTimeEqual(provided, expected)) return res.status(401).json({ error: 'Unauthorized.' });
   if (!isCreatorRenderingEnabled()) {
     return res.status(200).json({ ok: true, rendering_enabled: false });
   }

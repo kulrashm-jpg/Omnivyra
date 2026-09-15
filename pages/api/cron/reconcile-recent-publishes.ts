@@ -47,6 +47,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { reconcileRow } from '../../../backend/services/providerReconciliation/reconcileRow';
 import type { ReconciliationSnapshot, DriftKind } from '../../../backend/services/providerReconciliation/types';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 const DEFAULT_WINDOW_MS = 60 * 60 * 1000;       // 1 hour
 const DEFAULT_SKIP_COOLDOWN_MS = 15 * 60 * 1000; // 15 min
@@ -62,7 +63,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!cronSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (req.headers['authorization'] !== `Bearer ${cronSecret}`) {
+  if (!bearerTokenMatches(req.headers['authorization'], cronSecret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

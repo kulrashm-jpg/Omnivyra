@@ -27,6 +27,7 @@ import {
   logCronFatal,
   probeAutonomousTables,
 } from '@/backend/services/autonomousFeatureFlag';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 const HANDLER_NAME = 'cron/autonomous-scheduler';
 
@@ -40,7 +41,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[cron/autonomous-scheduler] CRON_SECRET not configured; rejecting request to fail closed');
     return res.status(401).json({ error: 'Unauthorised' });
   }
-  if (req.headers['x-cron-secret'] !== secret) {
+  if (!constantTimeEqual(req.headers['x-cron-secret'], secret)) {
     return res.status(401).json({ error: 'Unauthorised' });
   }
 

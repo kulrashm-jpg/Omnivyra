@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { runReportAutomationCycle } from '@/backend/services/reportAutomationService';
 import { config } from '@/config';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -13,7 +14,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[cron/report-automation] INTERNAL_METRICS_SECRET not configured; rejecting request to fail closed');
     return res.status(401).json({ error: 'Unauthorised' });
   }
-  if (req.headers['x-cron-secret'] !== secret) {
+  if (!constantTimeEqual(req.headers['x-cron-secret'], secret)) {
     return res.status(401).json({ error: 'Unauthorised' });
   }
 

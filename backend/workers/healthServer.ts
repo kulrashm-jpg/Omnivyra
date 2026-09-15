@@ -6,6 +6,7 @@
 
 import http from 'http';
 import { renderPrometheusText, PROMETHEUS_CONTENT_TYPE } from '../observability';
+import { constantTimeEqual } from '../security/constantTimeEqual';
 
 let _startedAt = Date.now();
 
@@ -58,7 +59,8 @@ export function startHealthServer(port = 8080): http.Server {
       if (req.method !== 'GET') { res.writeHead(405, { Allow: 'GET' }); res.end(); return; }
       const expected = process.env.OBSERVABILITY_EXPORT_TOKEN;
       if (!expected) { res.writeHead(404); res.end(); return; }
-      if (presentedMetricsToken(req) !== expected) {
+      // SEC-C4: constant-time comparison (no prefix-timing oracle).
+      if (!constantTimeEqual(presentedMetricsToken(req), expected)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;

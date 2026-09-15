@@ -43,6 +43,7 @@ import {
   type MarketPulseRunInput,
 } from '../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../backend/services/marketPulseJobProcessor';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 const BATCH_SIZE = 50;
 
@@ -91,7 +92,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[cron/market-pulse-automation] CRON_SECRET not configured; rejecting');
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (req.headers['authorization'] !== `Bearer ${cronSecret}`) {
+  if (!bearerTokenMatches(req.headers['authorization'], cronSecret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

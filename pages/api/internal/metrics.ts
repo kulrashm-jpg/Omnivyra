@@ -22,6 +22,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getQueue, getEngagementPollingQueue, getPostingQueue, getAiHeavyQueue } from '../../../backend/queue/bullmqClient';
 import { getMetricsSnapshot, resetMetrics } from '../../../backend/services/metricsCollector';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 const METRICS_SECRET = process.env.INTERNAL_METRICS_SECRET;
 
@@ -30,14 +31,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Auth: require the secret header. An unset secret refuses every request in
-  // production (fail closed); it is left open only for local development.
-  if (METRICS_SECRET) {
-    const provided = req.headers['x-metrics-secret'];
-    if (provided !== METRICS_SECRET) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-  } else if (process.env.NODE_ENV === 'production') {
+  // Auth: require the secret header — FAIL CLOSED in every environment.
+  // SEC-C1 (STEP 3AH-91): an unset secret used to leave this open outside
+  // production. A developer process runs against the production Redis and
+  // database (.env.local), and `next dev` listens on every interface, so
+  // "open in development" published production queue depths to anyone on the
+  // same network. Set INTERNAL_METRICS_SECRET locally to use this endpoint.
+  if (!METRICS_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  // SEC-C4: constant-time comparison (no prefix-timing oracle).
+  if (!constantTimeEqual(req.headers['x-metrics-secret'], METRICS_SECRET)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

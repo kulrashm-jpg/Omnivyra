@@ -27,6 +27,7 @@ import {
   logCronFatal,
   probeAutonomousTables,
 } from '../../../backend/services/autonomousFeatureFlag';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 const HANDLER_NAME = 'cron/leverage-optimizer';
 
@@ -49,7 +50,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[cron/leverage-optimizer] CRON_SECRET not configured; rejecting request to fail closed');
     return res.status(401).json({ error: 'Unauthorised' });
   }
-  if (req.headers['x-cron-secret'] !== secret) {
+  if (!constantTimeEqual(req.headers['x-cron-secret'], secret)) {
     return res.status(401).json({ error: 'Unauthorised' });
   }
 
@@ -92,8 +93,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // string column, not the organization's overall canonical state, and
   // missed orgs whose membership had been revoked.
   const dayBucket = new Date().toISOString().slice(0, 10);
-  const triggeredByCronSecret = !!process.env.CRON_SECRET
-    && req.headers['x-cron-secret'] === process.env.CRON_SECRET;
+  const triggeredByCronSecret = constantTimeEqual(req.headers['x-cron-secret'], process.env.CRON_SECRET);
 
   try {
     // ── 1. Get all active companies ────────────────────────────────────────

@@ -17,10 +17,11 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { markExpiredSubscriptions } from '../../../backend/services/billingSubscriptionService';
 import { runJob } from '../../../backend/services/jobRunner';
 import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 async function isAuthorized(req: NextApiRequest): Promise<boolean> {
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && req.headers.authorization === `Bearer ${cronSecret}`) return true;
+  if (cronSecret && bearerTokenMatches(req.headers.authorization, cronSecret)) return true;
   if (getLegacySuperAdminSession(req) !== null) return true;
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
@@ -34,7 +35,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   if (!(await isAuthorized(req))) return res.status(403).json({ error: 'NOT_AUTHORIZED' });
 
-  const triggeredByCronSecret = !!process.env.CRON_SECRET && req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`;
+  const triggeredByCronSecret = bearerTokenMatches(req.headers.authorization, process.env.CRON_SECRET);
   const dayWindow = Math.floor(Date.now() / (24 * 60 * 60 * 1000));
 
   const outcome = await runJob(

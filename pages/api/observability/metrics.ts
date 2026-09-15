@@ -17,6 +17,7 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createApiRoute } from '../../../lib/platform/routeFactory';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 import {
   renderPrometheusText,
   PROMETHEUS_CONTENT_TYPE,
@@ -43,7 +44,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Dark by default — indistinguishable from a missing route.
     return res.status(404).end();
   }
-  if (presentedToken(req) !== expected) {
+  // SEC-C4: constant-time comparison (no prefix-timing oracle).
+  if (!constantTimeEqual(presentedToken(req), expected)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
