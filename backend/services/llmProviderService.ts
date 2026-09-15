@@ -254,24 +254,39 @@ export async function setCompanyLlmConfig(input: {
  * 1. Company's own BYOK key (decrypted) if set
  * 2. Platform default from env (OPENAI_API_KEY etc.)
  * Returns { key, source }
+ *
+ * SEC91-D4: when the company HAS a stored key that cannot be used (decryption
+ * failure or empty plaintext) the platform key is still returned — failing
+ * the company's AI outright would be an outage — but the result is flagged
+ * `byokUnavailable: true` and logged (never the key material). `source` stays
+ * 'platform', so the gateway applies the platform-key plan/cost gates instead
+ * of honouring the company's premium model on the platform's key.
  */
 export async function resolveCompanyApiKey(
   companyId: string,
   providerName: string,
-): Promise<{ key: string; source: 'company' | 'platform' }> {
+): Promise<{ key: string; source: 'company' | 'platform'; byokUnavailable?: boolean }> {
   const { data } = await ownedDbTable('company_llm_configs')
     .select('api_key_encrypted, is_active, llm_providers!inner(name)')
     .eq('company_id', companyId)
     .eq('is_active', true)
     .maybeSingle();
 
+  let byokUnavailable = false;
   if (data?.api_key_encrypted) {
+    let reason = 'empty_plaintext';
     try {
       const key = decryptCredential(data.api_key_encrypted);
       if (key) return { key, source: 'company' };
     } catch {
-      // Fall through to platform default if decryption fails
+      reason = 'decrypt_failed';
     }
+    byokUnavailable = true;
+    console.warn('[llm-provider] byok_key_unusable — falling back to the platform key under platform plan/cost gates', {
+      companyId,
+      provider: providerName,
+      reason,
+    });
   }
 
   // Platform default — map provider name to env var
@@ -280,7 +295,7 @@ export async function resolveCompanyApiKey(
     anthropic: process.env.ANTHROPIC_API_KEY,
   };
   const key = envMap[providerName] ?? '';
-  return { key, source: 'platform' };
+  return byokUnavailable ? { key, source: 'platform', byokUnavailable: true } : { key, source: 'platform' };
 }
 
 /**

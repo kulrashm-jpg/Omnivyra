@@ -50,7 +50,9 @@ import { ownedDbTable } from '../db/writeOwner';
 import { parseModelOutputOr } from './ai/safety';
 import { recordAi, recordCache } from '../observability/metrics';
 
-import { UNKNOWN_ORG, FEATURE_AREA_MAP, type GatewayMetadata, type GatewayResponse, type GatewayRequest, GatewayAbortError, isAbortError, _inFlight, sleep, resolveProviderTimeoutMs, _pools, acquireSlot, releaseSlot, resolveLlmConfig, type NormalizedCompletion, callOpenAi, callAnthropic, GATEWAY_OVERHEAD_FLAG } from './aiGatewayCore';
+import { UNKNOWN_ORG, FEATURE_AREA_MAP, type GatewayMetadata, type GatewayResponse, type GatewayRequest, GatewayAbortError, isAbortError, _inFlight, sleep, resolveProviderTimeoutMs, _pools, acquireSlot, releaseSlot, resolveLlmConfig, platformDefaultLlmConfig, type NormalizedCompletion, callOpenAi, callAnthropic, GATEWAY_OVERHEAD_FLAG } from './aiGatewayCore';
+import { selectCredentialBoundModel, credentialCacheScope } from './aiGatewayCredentialPolicy';
+import { recordRawCounter } from '../observability';
 import { guardAiRequest, providerFromModel } from './ai/aiRequestGuard';
 // W2-4 (audit B-58): hoisted from per-call dynamic import() sites.
 import { assertModelPricingExists, recordCostAnomaly } from './pricingService';
@@ -122,9 +124,27 @@ const executeGatewayCompletion = async (
 
   // ── Resolve LLM config for this company (provider, model, apiKey) ───────────
   const llmConfig = await resolveLlmConfig(request.companyId);
-  let activeProvider = llmConfig.provider;
-  // BYOK companies use their chosen model; platform key companies respect plan downgrade
-  let activeModel = llmConfig.isCompanyConfig ? llmConfig.model : resolvedModel;
+  // SEC91-D4: the company's chosen model is honoured unconditionally only on
+  // the company's OWN key. On the platform key (a config row with no stored
+  // key, or one that failed to decrypt) the chosen model must pass the same
+  // plan-tier + cost gates as the request model; otherwise the platform
+  // default provider serves the already-gated request model.
+  const credentialSelection = await selectCredentialBoundModel({
+    llmConfig,
+    resolvedModel,
+    platformDefault: platformDefaultLlmConfig,
+    gatePlatformModel: async (candidate) => {
+      const planModel = await resolveEffectiveModel(candidate, request.operation, request.companyId);
+      const decision = await evaluateJobCost(planModel, request.operation, request.companyId, request.messages);
+      if (decision.action === 'block') return null;
+      return decision.action === 'downgrade' ? decision.effectiveModel : planModel;
+    },
+  });
+  let activeProvider = credentialSelection.provider;
+  let activeModel = credentialSelection.model;
+  // SEC91-D6: BYOK responses are cached / coalesced only within the company
+  // whose key produced them. Platform-key calls keep the legacy unscoped key.
+  const cacheCredentialScope = credentialCacheScope(credentialSelection, request.companyId);
 
   // ── AI-ORCH 2A-2.1 / 3C / 3D: resolver observation + synchronous config source ──
   // Legacy config is now fully resolved (provider/model) and execution has NOT begun.
@@ -219,7 +239,7 @@ const executeGatewayCompletion = async (
   // SKIP COALESCING when the caller supplied a signal: a coalesced caller that
   // aborts cannot actually cancel the underlying shared call, defeating the
   // budget mechanism (the orphan would keep the slot and still consume tokens).
-  const coalescingKey = buildNormalizedKey(activeModel, request.messages, effectiveCacheVersion);
+  const coalescingKey = buildNormalizedKey(activeModel, request.messages, effectiveCacheVersion, cacheCredentialScope);
   if (!request.signal) {
     const existing = _inFlight.get(coalescingKey);
     if (existing) {
@@ -277,6 +297,7 @@ const executeGatewayCompletion = async (
     effectiveCacheVersion,
     // W1-1 (B-04): tenant-scope the near-match index. companyId is the tenant.
     request.companyId ?? null,
+    cacheCredentialScope,
   );
   // HARDEN-001: AI response-cache hit/miss ratio (fail-safe, no behavior change).
   try { recordCache({ cache: 'ai_response', hit: cachedContent !== null }); } catch { /* fail-safe */ }
@@ -361,7 +382,7 @@ const executeGatewayCompletion = async (
   let normalized: NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string; retry_attempt: number };
   try {
     normalized = await callProviderWithRetry(activeProvider, {
-      apiKey:          llmConfig.apiKey,
+      apiKey:          credentialSelection.apiKey,
       model:           activeModel,
       temperature:     request.temperature,
       response_format: request.response_format,
@@ -513,7 +534,7 @@ const executeGatewayCompletion = async (
     generateAdditionalStrategicThemes: 'additional_strategic_themes',
   };
   // ── Store result in cache — GAP 1+2+5 (fire-and-forget) ─────────────────────
-  void setCachedCompletion(request.operation, effectiveModel, request.messages, content, effectiveCacheVersion, request.companyId ?? null);
+  void setCachedCompletion(request.operation, effectiveModel, request.messages, content, effectiveCacheVersion, request.companyId ?? null, cacheCredentialScope);
 
   // W2-4 (audit B-57): with the overhead flag on, the audit-log insert no
   // longer blocks the response — it becomes fire-and-forget like its sibling
@@ -533,6 +554,9 @@ const executeGatewayCompletion = async (
         context_type:      contextTypeMap[request.operation] || 'unknown',
         is_byok:           llmConfig.isByok,
         is_company_config: llmConfig.isCompanyConfig,
+        // SEC91-D4: which credential paid and why the model was (not) honoured.
+        credential_selection: credentialSelection.reason,
+        ...(llmConfig.byokUnavailable ? { byok_unavailable: true } : {}),
         // Fallback tracing
         used_fallback:     normalized.usedFallback,
         ...(normalized.usedFallback ? {
@@ -905,6 +929,15 @@ Reply with JSON only: { "allowed": true, "reason": null } or { "allowed": false,
     };
   } catch (err) {
     console.warn('Chat moderation LLM failed, allowing by default:', err);
+    // SEC91-D7: moderation is a content-quality filter, not an authorization
+    // boundary (no tool execution exists), so it stays fail-open — but no longer
+    // silently: every fail-open is counted so an outage or a provider-side
+    // refusal pattern is visible.
+    try {
+      recordRawCounter('ai.moderation.fail_open', 1, {
+        reason: (err as { name?: string })?.name === 'AiGuardError' ? 'guard' : 'error',
+      });
+    } catch { /* fail-safe */ }
     return { allowed: true }; // fail open to avoid blocking legitimate users
   }
 };
