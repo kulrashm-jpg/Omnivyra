@@ -5,6 +5,7 @@ import { encodeOAuthState } from '../../../backend/auth/oauthState';
 import { getOAuthCredentialsForPlatform } from '../../../backend/auth/oauthCredentialResolver';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { getOAuthRedirectBase } from '../../../backend/auth/oauthRedirectBase';
 
 const base64Url = (input: Buffer) =>
   input
@@ -13,10 +14,11 @@ const base64Url = (input: Buffer) =>
     .replace(/\//g, '_')
     .replace(/=+$/, '');
 
+// SEC91-W2B-2: production → the configured canonical app URL only; development → the
+// request origin with localhost spelled 127.0.0.1 (X requires it). Must match the value
+// /api/auth/x/callback uses for the token exchange.
 function getXRedirectBase(req: NextApiRequest) {
-  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
-  const host = (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string) || 'localhost:3000';
-  return `${proto}://${host}`.replace(/\/$/, '').replace('://localhost:', '://127.0.0.1:');
+  return getOAuthRedirectBase(req, { loopback: '127.0.0.1' });
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
