@@ -2,10 +2,20 @@
  * SUPERADMIN-MEMBERSHIP-VALIDITY-001 — is a non-active SUPER_ADMIN row
  * platform authority?
  *
- * VERDICT: OPTION A — platform authority is ROLE-based, and membership status
- * is company-relationship metadata. The status-agnostic primitives are correct.
- * No runtime change was made. This suite characterizes that policy so it is a
- * decision on the record rather than an accident of implementation.
+ * SUPERSEDED (STEP 3AH-91, SEC91-A2-a, owner decision 2026-09-15): OPTION B is
+ * now the policy — platform authority requires an ACTIVE SUPER_ADMIN row
+ * (isSuperAdmin / isPlatformSuperAdmin filter status='active'), aligning the
+ * primitives with superAdminIdentityCheck, platformCapabilities and
+ * AuthorizationService, which already required it. A deactivated row (member
+ * deactivation, "remove user", company disable) no longer keeps access to every
+ * tenant. The lockout hazard recorded below (item 4) is handled OPERATIONALLY,
+ * as a pre-deploy precondition: the operator's SUPER_ADMIN row must be active and
+ * sit on an internal company that customer-disable flows never touch (ideally
+ * two operators). Revocation by role downgrade (item 1) and the uninvitable role
+ * (item 2) remain pinned below.
+ *
+ * ORIGINAL VERDICT (kept for the record): OPTION A — platform authority is
+ * ROLE-based, and membership status is company-relationship metadata.
  *
  * THE EVIDENCE, because the repository does not speak with one voice:
  *
@@ -89,22 +99,21 @@ const { isSuperAdmin, isPlatformSuperAdmin } = require('../../services/rbacServi
 
 beforeEach(() => { queries.length = 0; });
 
-describe('authorization matrix — platform authority is ROLE-based', () => {
+describe('authorization matrix — platform authority requires an ACTIVE SUPER_ADMIN row', () => {
   it('an ACTIVE SUPER_ADMIN holds platform authority', async () => {
     await expect(isPlatformSuperAdmin(SA_ACTIVE)).resolves.toBe(true);
     await expect(isSuperAdmin(SA_ACTIVE)).resolves.toBe(true);
   });
 
-  it('CHARACTERIZED: an INACTIVE SUPER_ADMIN still holds platform authority', async () => {
+  it('CRITICAL (SEC91-A2-a): an INACTIVE SUPER_ADMIN row holds NO platform authority', async () => {
     /*
-     * This is the audited policy, not an oversight. The only way to reach this
-     * state is a company-disable cascade, which flips every row of that company
-     * to inactive. The person still legitimately holds the platform role —
-     * revoking it is a ROLE downgrade, which has not happened here. Requiring
-     * status='active' would mean disabling a CUSTOMER company strips the
-     * operator's platform authority.
+     * Policy changed by owner decision in STEP 3AH-91: a deactivated membership
+     * no longer carries platform-wide access to every tenant. The lockout hazard
+     * of a company-disable cascade is handled by the operational precondition in
+     * the header (active operator row on an internal company).
      */
-    await expect(isPlatformSuperAdmin(SA_INACTIVE)).resolves.toBe(true);
+    await expect(isPlatformSuperAdmin(SA_INACTIVE)).resolves.toBe(false);
+    await expect(isSuperAdmin(SA_INACTIVE)).resolves.toBe(false);
   });
 
   it('CRITICAL revocation works: a downgraded role holds NO platform authority', async () => {
