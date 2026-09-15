@@ -38,11 +38,18 @@ jobs:
       # frozen (scripts/migrations/historical-baseline.txt) — no retroactive
       # failures. Deterministic, read-only, no DB/network. Same script locally
       # (`npm run check:migrations`) and in CI.
+      # STEP 3AH-91 (F2): a new migration must also sort after every migration
+      # in scripts/migrations/ordering-baseline.txt, and its security rules now
+      # cover views/materialized views, grants to client roles, default
+      # privileges, RLS disable, ALTER FUNCTION/POLICY, `TO authenticated USING
+      # (true)`, and tables created inside DO blocks / EXECUTE strings.
       - name: Migration quality gate
         run: node scripts/check-migration-quality.js
 
       # HARDEN-005A: fail the build if new code makes a raw dynamic-URL outbound
       # request that bypasses the centralized SSRF layer (lib/security/safeFetch).
+      # STEP 3AH-91 (F3): also scans lib/** server modules and flags template
+      # literals whose HOST is dynamic (`https://${host}`, `${baseUrl}/x`).
       - name: Outbound-SSRF guard
         run: npm run check:ssrf
 
@@ -57,6 +64,8 @@ jobs:
       # and never gate on a fail-open secret — or be a reviewed entry in
       # scripts/route-auth-allowlist.json whose evidence is re-verified here.
       # No grandfathered baseline: this step is blocking.
+      # STEP 3AH-91 (F1): R1-METHOD — every HTTP-method branch of a handler
+      # must reach a primitive (shared prelude, wrapper, or the branch itself).
       - name: Route authentication gate
         run: npm run check:route-auth
 
@@ -77,6 +86,34 @@ jobs:
       # checkout/{create-order,verify,close} and usage/track.
       - name: withOrgAccess identifier-binding guard
         run: npm run check:orgaccess-binding
+
+      # SECRETS-GATE (STEP 3AH-91, F4): fail the build if a TRACKED file carries
+      # a high-confidence credential (provider API keys, Supabase secret /
+      # service_role JWTs, GitHub/Slack/AWS tokens, PEM private keys, Stripe
+      # live/webhook secrets, postgres URLs with a password on a non-local host,
+      # RAILWAY_TOKEN / *_ENCRYPTION_KEY assignments, long Bearer literals) or a
+      # committed dotenv file. Never prints a matched value (file:line + pattern
+      # only). Reviewed test placeholders live in
+      # scripts/security/secrets-allowlist.json, pinned by value fingerprint.
+      - name: Secret-pattern gate
+        run: npm run check:secrets
+
+      # STEP 3AH-91 (F7): the security gates' own fixture suites. A gate whose
+      # detection silently regresses (e.g. a refactor that stops seeing
+      # per-method branches, template-literal hosts, DO-block tables, or a
+      # pattern) still exits 0 on a clean tree — only its fixtures notice.
+      # Hermetic: the suites import the gate scripts only; the placeholders
+      # below satisfy the shared jest setup and reach nothing.
+      - name: Security gate fixture tests
+        env:
+          SUPABASE_URL: https://placeholder.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
+          REDIS_URL: 'redis://localhost:6379'
+          OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+          ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+        run: npm run test:security-gates
 
       # AUTH-ENFORCEMENT Phase 1 (C-3/C-4): route-policy inventory + validation
       # warnings. Non-blocking by design in Phase 1 (docs/security/
