@@ -23,6 +23,8 @@ import { config } from '@/config';
 import { getOAuthCredentialsForPlatform } from './oauthCredentialResolver';
 import { withRefreshLock } from './refreshLock';
 import { buildXRefreshLockKey } from './refreshAccountResolver';
+// SEC91-B6: never log raw AxiosErrors (request config carries client secrets / tokens).
+import { describeProviderError } from './safeErrorLog';
 
 
 export type TwitterTokenRefreshStatus = 'refreshed' | 'still_valid' | 'requires_reconnect' | 'refresh_failed';
@@ -104,7 +106,7 @@ export async function refreshLinkedInToken(
     console.log('âœ… LinkedIn token refreshed successfully');
     return newToken;
   } catch (error: any) {
-    const errorDetails = error.response?.data || error.message;
+    const errorDetails = describeProviderError(error, { secrets: [clientSecret, currentToken.refresh_token, currentToken.access_token] });
     console.error('âŒ LinkedIn token refresh error:', errorDetails);
     
     // Check if refresh token is invalid
@@ -602,7 +604,7 @@ export async function refreshFacebookToken(
     console.log('âœ… Facebook token refreshed successfully');
     return newToken;
   } catch (error: any) {
-    const errorDetails = error.response?.data || error.message;
+    const errorDetails = describeProviderError(error, { secrets: [appSecret, currentToken.refresh_token, currentToken.access_token] });
     console.error('âŒ Facebook token refresh error:', errorDetails);
 
     // If token exchange fails, try to get new long-lived token from refresh_token if available
@@ -649,7 +651,7 @@ async function refreshFacebookTokenWithRefreshToken(
     console.log('âœ… Facebook token refreshed via refresh_token');
     return refreshedToken;
   } catch (error) {
-    console.error('âŒ Facebook refresh token also failed:', error);
+    console.error('âŒ Facebook refresh token also failed:', describeProviderError(error, { secrets: [appSecret, currentToken.refresh_token, currentToken.access_token] }));
     return null;
   }
 }
@@ -724,7 +726,7 @@ export async function refreshYouTubeToken(
     console.log('âœ… YouTube token refreshed successfully');
     return newToken;
   } catch (error: any) {
-    const errorDetails = error.response?.data || error.message;
+    const errorDetails = describeProviderError(error, { secrets: [clientSecret, currentToken.refresh_token, currentToken.access_token] });
     console.error('âŒ YouTube token refresh error:', errorDetails);
     
     if (error.response?.status === 400) {

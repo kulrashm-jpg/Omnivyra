@@ -9,6 +9,8 @@ import { isRateLimited as redisIsRateLimited } from '../redisExternalApiCache';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { safeFetch } from '../../../lib/security/safeFetch';
 import type { ExternalApiSource } from './types';
+import { isEnvVarName } from '../../security/credentialSafety';
+import { isPlatformInfrastructureSecretName } from './infrastructureSecretNames';
 
 // ── Core defaults ─────────────────────────────────────────────────────────────
 export const DEFAULT_TIMEOUT_MS = 5000;
@@ -181,6 +183,11 @@ export const resolveEnvValue = (envName?: string | null): string | undefined => 
   // precedence over this function at every call site in `execution.ts`.
   //
   // An env-var NAME resolves to its value; anything else resolves to nothing.
+  //
+  // SEC91-B2: and never a platform infrastructure secret (Supabase, DB, Redis, payment,
+  // signing keys), whoever asks. Request building uses the stricter per-source policy in
+  // envResolutionPolicy.ts; this generic helper keeps the same floor.
+  if (!isEnvVarName(envName) || isPlatformInfrastructureSecretName(envName)) return undefined;
   const fromEnv = process.env[envName];
   if (fromEnv) return fromEnv;
   return undefined;

@@ -157,11 +157,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     let existingRecord: any = null;
     let resolvedPlatformType = platform_type;
-    if (!resolvedPlatformType || !auth_type || !api_key_name || !api_key_env_name || !method) {
+    // SEC91-B2: a tenant PUT is always compared with the stored row (see the whitelist
+    // reset below), so the row is loaded whenever the caller lacks platform scope.
+    if (!hasPlatformScope || !resolvedPlatformType || !auth_type || !api_key_name || !api_key_env_name || !method) {
       let existingQuery = supabase.from('external_api_sources').select('*').eq('id', id);
       if (!platformScopeGranted && companyId) existingQuery = existingQuery.eq('company_id', companyId);
       const { data: existing } = await existingQuery.single();
       existingRecord = existing;
+      if (!hasPlatformScope && !existing) {
+        return res.status(404).json({ error: 'External API not found' });
+      }
       resolvedPlatformType = resolvedPlatformType ?? existing?.platform_type ?? 'social';
     }
 
@@ -232,6 +237,37 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const resolvedKeyEnv = resolvedApiKeyEnv || resolvedApiKeyName || null;
 
+    // SEC91-B2: Super Admin approval (is_whitelisted) covers the configuration that was
+    // approved. When a TENANT changes where the request goes (base_url, method) or which
+    // credentials / templates it carries (auth_type, api key env names, headers,
+    // query_params — the {{ENV_NAME}} templates live there), the approval no longer
+    // describes the row: it is revoked here and the row must be re-approved before it
+    // executes again. Super Admin edits keep their explicit is_whitelisted handling.
+    const stable = (v: unknown): string => {
+      const norm = (x: unknown): unknown =>
+        x && typeof x === 'object' && !Array.isArray(x)
+          ? Object.keys(x as Record<string, unknown>).sort().reduce<Record<string, unknown>>((acc, k) => {
+            acc[k] = norm((x as Record<string, unknown>)[k]);
+            return acc;
+          }, {})
+          : x ?? null;
+      return JSON.stringify(norm(v));
+    };
+    const whitelistReset = !hasPlatformScope
+      && existingRecord?.is_whitelisted === true
+      && (
+        stable(base_url) !== stable(existingRecord.base_url)
+        || stable(String(resolvedMethod).toUpperCase()) !== stable(String(existingRecord.method ?? 'GET').toUpperCase())
+        || stable(resolvedAuthType) !== stable(existingRecord.auth_type ?? 'none')
+        || stable(resolvedKeyEnv) !== stable(existingRecord.api_key_env_name || existingRecord.api_key_name || null)
+        || stable(resolvedApiKeyName) !== stable(existingRecord.api_key_name ?? null)
+        || stable(resolvedHeaders) !== stable(existingRecord.headers ?? {})
+        || stable(resolvedQueryParams) !== stable(existingRecord.query_params ?? {})
+      );
+    if (whitelistReset) {
+      console.warn('EXTERNAL_API_WHITELIST_RESET', { apiSourceId: id, companyId, userId: user.id });
+    }
+
     let updateQuery = supabase
       .from('external_api_sources')
       .update({
@@ -241,6 +277,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         category: effectiveCategory,
         is_active,
         ...(hasPlatformScope && is_whitelisted !== undefined ? { is_whitelisted: effectiveIsWhitelisted } : {}),
+        ...(whitelistReset ? { is_whitelisted: false } : {}),
         ...(hasPlatformScope && is_enabled_global !== undefined ? { is_enabled_global: Boolean(is_enabled_global) } : {}),
         method: resolvedMethod,
         auth_type: resolvedAuthType,
@@ -272,7 +309,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
     await invalidateCompanyConfigCacheForApiSource(id);
-    return res.status(200).json({ api: data });
+    return res.status(200).json({ api: data, ...(whitelistReset ? { whitelist_reset: true } : {}) });
   }
 
   if (req.method === 'DELETE') {

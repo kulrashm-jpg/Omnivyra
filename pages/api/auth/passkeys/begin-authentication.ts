@@ -2,16 +2,15 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 /**
  * POST /api/auth/passkeys/begin-authentication
  *
- * Body: { userId?: string }
+ * Body: ignored (a `userId` field is NOT honoured — see SEC91-B11 below)
  *
  * Step 1 of passkey verification. Two modes:
  *   - Userless ceremony (no body / no userId): server emits options with
  *     no allowCredentials list; the user is identified by the credential
  *     id they present at verify time. Used for sign-in flows where the
  *     user has not yet been identified.
- *   - User-scoped ceremony (userId set): server scopes the ceremony via
- *     allowCredentials. Used for step-up flows when the principal is
- *     already authenticated.
+ *   - User-scoped ceremony (authenticated principal only): server scopes the
+ *     ceremony via allowCredentials. Used for step-up flows.
  *
  * The route does NOT require authentication: passkey login starts BEFORE
  * a session exists.
@@ -28,12 +27,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const body = parseBody(req);
-  const explicitUserId = typeof body?.userId === 'string' && body.userId.length > 0 ? body.userId : null;
-
-  // Authenticated step-up scope: principal id wins over body userId for
-  // step-up ceremonies — a logged-in user binds the ceremony to themselves.
-  let scopedUserId: string | null = explicitUserId;
+  // SEC91-B11: a user-scoped ceremony (allowCredentials = that user's credential ids) is
+  // only ever built for the AUTHENTICATED principal. A body `userId` without a session
+  // used to be honoured, letting anyone learn whether an account has passkeys and read
+  // its credential ids. Without a session the ceremony is always userless (the user is
+  // identified by the credential presented at verify time) — which is what every in-repo
+  // caller (pages/auth/mfa.tsx, lib/security/stepUpClient.ts) already requests with an
+  // empty body. A body `userId` is ignored.
+  let scopedUserId: string | null = null;
   const principalResult = await resolvePrincipal(req);
   if (principalResult.ok === true && !principalResult.principal.legacyCookieSuperAdmin) {
     scopedUserId = principalResult.principal.userId;
@@ -61,13 +62,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       detail: err instanceof Error ? err.message : String(err),
     });
   }
-}
-
-function parseBody(req: NextApiRequest): Record<string, unknown> {
-  if (typeof req.body === 'string') {
-    try { return JSON.parse(req.body || '{}') as Record<string, unknown>; } catch { return {}; }
-  }
-  return (req.body ?? {}) as Record<string, unknown>;
 }
 
 function clientIp(req: NextApiRequest): string | null {

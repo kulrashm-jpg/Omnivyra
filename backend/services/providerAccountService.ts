@@ -27,6 +27,7 @@ import { supabase } from '../db/supabaseClient';
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
 // Remediation: one shared definition of secret / env-var-name / ciphertext shapes.
 import { classifyStoredKey, isEncryptedCredential } from '../security/credentialSafety';
+import { isPlatformInfrastructureSecretName } from './externalApi/infrastructureSecretNames';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -197,6 +198,24 @@ export async function listAccountsForApi(
  * Parse stored credentials JSON and resolve to usable fields.
  * Never throws — returns nulls on any parse/decrypt error.
  */
+const reportedLegacyPlaintextAccounts = new Set<string>();
+
+/**
+ * SEC91-B8: one structured warning per account per process for a legacy PLAINTEXT
+ * `api_key_value`. Carries the account id and the remediation only — never the value.
+ * Operators re-enter the key in Super Admin → provider accounts, which stores it
+ * encrypted via buildCredentialEnvelope.
+ */
+function reportLegacyPlaintextKey(accountId: string): void {
+  const key = String(accountId ?? 'unknown');
+  if (reportedLegacyPlaintextAccounts.has(key)) return;
+  reportedLegacyPlaintextAccounts.add(key);
+  console.warn('PROVIDER_ACCOUNT_LEGACY_PLAINTEXT_KEY', {
+    accountId: key,
+    action: 'Re-enter this provider account key in Super Admin so it is stored encrypted.',
+  });
+}
+
 export function resolveAccountCredentials(account: ProviderAccount): ResolvedAccountCredentials {
   const base: ResolvedAccountCredentials = {
     source: 'account',
@@ -223,7 +242,12 @@ export function resolveAccountCredentials(account: ProviderAccount): ResolvedAcc
   // api_key_env_name path
   if (typeof creds.api_key_env_name === 'string' && creds.api_key_env_name.trim()) {
     base.api_key_env_name = creds.api_key_env_name.trim();
-    const val = process.env[base.api_key_env_name];
+    // SEC91-B2: an account env reference can never name a platform infrastructure secret
+    // (Supabase, DB, Redis, payment, signing keys) — the value would be sent to the
+    // provider source's base_url.
+    const val = isPlatformInfrastructureSecretName(base.api_key_env_name)
+      ? undefined
+      : process.env[base.api_key_env_name];
     if (val) base.api_key_value = val;
   }
 
@@ -252,6 +276,10 @@ export function resolveAccountCredentials(account: ProviderAccount): ResolvedAcc
     } else {
       base.api_key_value = stored;
       base.legacy_plaintext_key = true;
+      // SEC91-B8: make remaining plaintext rows VISIBLE (once per account per process) so
+      // they get re-entered — without the value, a fragment or its length. Resolution is
+      // unchanged so the provider keeps working until the key is re-encrypted.
+      reportLegacyPlaintextKey(account.id);
     }
   }
 

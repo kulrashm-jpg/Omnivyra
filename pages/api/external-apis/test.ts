@@ -107,6 +107,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         category: input.category || '',
         geo: input.geo || '',
       },
+      // SEC91-B2: only the credential the allowlist above approved is pre-approved here.
+      // Every other {{ENV_NAME}} template in the caller's headers / query_params goes
+      // through the execution env policy (it used to reach process.env unrestricted).
+      approvedEnvNames: envDecision.envName ? [envDecision.envName] : [],
     });
     if (request.missingEnv.length > 0) {
       console.warn('EXTERNAL_API_TEST_MISSING_ENV', { missing: request.missingEnv });

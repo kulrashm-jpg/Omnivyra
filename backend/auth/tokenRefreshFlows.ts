@@ -23,6 +23,8 @@ import { config } from '@/config';
 import { getOAuthCredentialsForPlatform } from './oauthCredentialResolver';
 import { withRefreshLock } from './refreshLock';
 import { buildXRefreshLockKey } from './refreshAccountResolver';
+// SEC91-B6: never log raw AxiosErrors / provider bodies (they carry client secrets / tokens).
+import { describeProviderError } from './safeErrorLog';
 
 import { refreshLinkedInToken, refreshTwitterTokenIfNeeded, refreshTwitterToken, refreshFacebookToken, refreshInstagramToken, refreshYouTubeToken } from './tokenRefreshCore';
 import { recordRefreshOutcome, redactCredentials, type RefreshOutcomeStatus } from './tokenRefreshCore';
@@ -84,7 +86,7 @@ export async function refreshSpotifyToken(
     console.log('✅ Spotify token refreshed successfully');
     return newToken;
   } catch (error: any) {
-    const errorDetails = error.response?.data || error.message;
+    const errorDetails = describeProviderError(error, { secrets: [currentToken.refresh_token, currentToken.access_token] });
     console.error('❌ Spotify token refresh error:', errorDetails);
     return null;
   }
@@ -152,7 +154,7 @@ export async function refreshTikTokToken(
     console.log('✅ TikTok token refreshed successfully');
     return newToken;
   } catch (error: any) {
-    const errorDetails = error.response?.data || error.message;
+    const errorDetails = describeProviderError(error, { secrets: [currentToken.refresh_token, currentToken.access_token] });
     console.error('❌ TikTok token refresh error:', errorDetails);
     
     if (error.response?.status === 400 || error.response?.status === 401) {
@@ -225,7 +227,7 @@ export async function refreshRedditToken(
     console.log('✅ Reddit token refreshed successfully');
     return newToken;
   } catch (error: any) {
-    const errorDetails = error.response?.data || error.message;
+    const errorDetails = describeProviderError(error, { secrets: [currentToken.refresh_token, currentToken.access_token] });
     console.error('❌ Reddit token refresh error:', errorDetails);
 
     if (error.response?.status === 400 || error.response?.status === 401) {
@@ -297,7 +299,7 @@ export async function refreshPinterestToken(
     console.log('✅ Pinterest token refreshed successfully');
     return newToken;
   } catch (error: any) {
-    const errorDetails = error.response?.data || error.message;
+    const errorDetails = describeProviderError(error, { secrets: [currentToken.refresh_token, currentToken.access_token] });
     console.error('❌ Pinterest token refresh error:', errorDetails);
     
     if (error.response?.status === 400 || error.response?.status === 401) {
