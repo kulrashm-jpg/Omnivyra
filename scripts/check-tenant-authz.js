@@ -37,6 +37,30 @@
  * Scope: pages/api/** (the tenant-facing entrypoints; service-layer files are
  * reached THROUGH routes that enforce). Usage: node scripts/check-tenant-authz.js
  * Env: TENANT_AUTHZ_STRICT=0 warns instead of failing (default: fail).
+ *
+ * RELATIONSHIP TO THE ROUTE-AUTH GATE (STEP 3AH-91, F5)
+ * ------------------------------------------------------
+ * This guard's COVERAGE is superseded by scripts/check-route-auth.js
+ * (ROUTE-AUTH-001, blocking in CI). Its blind spots — it fires only when a
+ * route reads a companyId-style key AND calls supabase.from()/ownedDbTable in
+ * the route file; it credits an approved call written anywhere in the text
+ * (e.g. `// enforceCompanyAccess(` in a comment — pinned by
+ * sec91FGateHardening.test.ts) and enforces import provenance only for some
+ * names; it has a grandfathered baseline and a per-file `// authz-ok`
+ * suppression; it answers for ONE method-agnostic file at a time; and it
+ * cannot see routes keyed by campaignId / [id] / user_id or that delegate to a
+ * service — are all closed by the route-auth gate, which requires a
+ * provenance-checked, INVOKED primitive for every route (and, since 3AH-91,
+ * for every HTTP-method branch — R1-METHOD), binds request identifiers
+ * (R2/R3), and has no baseline.
+ *
+ * It is RETAINED (not deleted) because it is cheap, still blocking in CI, and
+ * pins an independent property the route-auth gate does not express the same
+ * way: a raw service-role query keyed by a request tenant id must sit next to
+ * a tenant-level guard in the SAME file (not merely be reachable through an
+ * approved chain). A route passing check-route-auth but failing here deserves
+ * a look. Do not rely on this guard alone; new tenant-authorization rules
+ * belong in check-route-auth.js. See docs/security/SEC91_F.md.
  */
 'use strict';
 const fs = require('fs');
