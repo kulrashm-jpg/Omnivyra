@@ -35,6 +35,7 @@ import {
   mintSignedBridgeCookieValue,
   buildBridgeSetCookieHeader,
 } from '../../../backend/security/bridgeCookie';
+import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 interface CanonicalUserRow {
   id: string;
@@ -68,10 +69,9 @@ async function lookupCanonicalSuperAdmin(userId: string): Promise<CanonicalUserR
   return u;
 }
 
+// SEC91-W2E: platform-trusted client IP (audit fields / session row; null when nothing parses).
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  return req.socket?.remoteAddress ?? null;
+  return getTrustedClientIpOrNull(req);
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {

@@ -6,6 +6,7 @@ import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { INTELLIGENCE_OVERRIDE_MANAGE } from '../../../shared/contracts/security';
+import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 type PolicyInput = {
   execution_enabled?: boolean;
@@ -160,8 +161,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   await supabase.from('super_admin_audit_logs').insert({
     username: admin.email || admin.userId,
     action: 'update_policy',
-    ip_address:
-      (req.headers['x-forwarded-for'] as string | undefined) || req.socket?.remoteAddress || null,
+    // SEC91-W2E: platform-trusted client IP, or null (was the raw client-written XFF header).
+    ip_address: getTrustedClientIpOrNull(req),
     user_agent: req.headers['user-agent'] || null,
     created_at: new Date().toISOString(),
   });

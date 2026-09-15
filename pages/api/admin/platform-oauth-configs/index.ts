@@ -23,13 +23,13 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { logSecurityEvent } from '../../../../backend/security/audit/SecurityAuditService';
 import { logger } from '../../../../backend/services/logger';
+import { getTrustedClientIpOrNull } from '../../../../lib/security/clientIp';
 
 const CANONICAL_PATH = '/api/super-admin/platform-oauth-configs';
 
+// SEC91-W2E: platform-trusted client IP (audit field only).
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  return req.socket?.remoteAddress ?? null;
+  return getTrustedClientIpOrNull(req);
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {

@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
 import { checkRateLimit, type RateLimitConfig } from '../../lib/auth/rateLimit';
+import { getTrustedClientIp } from '../../lib/security/clientIp';
 import { isPlatformSuperAdmin } from './rbacService';
 import { logger } from './logger';
 import { seedRequestContextFromRequest } from './requestContext';
@@ -17,9 +18,8 @@ export async function requireAdminRateLimit(
   windowSecs = 60,
 ): Promise<boolean> {
   seedRequestContextFromRequest(req);
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown')
-    .split(',')[0]
-    .trim();
+  // SEC91-W2E: platform-trusted client IP ('unknown' when nothing parses), not the client-written XFF hop.
+  const ip = getTrustedClientIp(req);
 
   const config: RateLimitConfig = { keyPrefix, limit, windowSecs };
   const result = await checkRateLimit(ip, config);
