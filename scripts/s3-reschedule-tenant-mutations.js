@@ -22,9 +22,12 @@ const SUITE = [
   'backend/tests/unit/activityRescheduleLinkedPostBinding.test.ts',
   'backend/tests/unit/rescheduleApi.test.ts',
   'backend/tests/unit/rescheduleFullMove.test.ts',
+  'backend/tests/unit/activityUnscheduleLinkedPostBinding.test.ts',
+  'backend/tests/unit/unscheduleApi.test.ts',
 ];
 const ROUTE = 'pages/api/schedule/reschedule.ts';
 const ACTIVITY = 'pages/api/activity-workspace/[id]/reschedule.ts';
+const UNSCHEDULE = 'pages/api/activity-workspace/[id]/unschedule.ts';
 
 const POST_LOADED = "    if (!post) {\n      return res.status(404).json({ error: 'Scheduled post not found' });\n    }\n";
 
@@ -71,6 +74,15 @@ const MUTATIONS = [
     from: "      ? await update.eq('campaign_id', campaignId)", to: '      ? await update' },
   { id: 'M17', name: 'malformed post id accepted', file: ROUTE,
     from: '  if (!UUID_RE.test(postId)) {', to: '  if (false) {' },
+  { id: 'M18', name: 'unschedule: linked post not bound to the row\'s campaign', file: UNSCHEDULE,
+    from: "      if (String((linkedPost as { campaign_id?: string | null }).campaign_id ?? '') !== String(row.campaign_id)) {",
+    to: '      if (false) {' },
+  { id: 'M19', name: 'unschedule: linked-post lookup error fails open', file: UNSCHEDULE,
+    from: '    if (linkedPostError) {', to: '    if (false) {' },
+  { id: 'M20', name: 'unschedule: a missing linked post is still cancelled (pointer trusted)', file: UNSCHEDULE,
+    from: '  let scheduledPostId: string | null = null;\n', to: '  let scheduledPostId: string | null = linkedPostId;\n' },
+  { id: 'M21', name: 'unschedule: post update no longer repeats the campaign predicate', file: UNSCHEDULE,
+    from: "        .eq('id', scheduledPostId)\n        .eq('campaign_id', row.campaign_id);", to: "        .eq('id', scheduledPostId);" },
 ];
 
 function runSuite() {

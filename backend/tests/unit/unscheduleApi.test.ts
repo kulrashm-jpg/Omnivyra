@@ -111,6 +111,8 @@ function setRow(opts: {
       platform: 'instagram',
     },
     'campaigns:single': { company_id: 'company-1' },
+    // The linked post belongs to the row's campaign (3AH-92 binding check).
+    'scheduled_posts:single': { id: 'sp-1', campaign_id: 'campaign-1' },
   };
 }
 
