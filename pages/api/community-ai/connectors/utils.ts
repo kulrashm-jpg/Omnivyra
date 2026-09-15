@@ -1,31 +1,27 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createServerClient } from '@supabase/ssr';
-import { requireSupabasePublishableKey } from '../../../../lib/supabase/publishableKey';
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { hasCommunityAiCapability } from '../../../../backend/services/rbac/communityAiCapabilities';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { supabase } from '../../../../backend/db/supabaseClient';
 import { encodeOAuthState, decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { safeRelativeRedirectPath } from '../../../../backend/auth/safeRedirect';
+import { getOAuthRedirectBase } from '../../../../backend/auth/oauthRedirectBase';
 
 /**
  * Returns the OAuth callback URL for a Community AI connector.
  * Used by auth.ts and callback.ts for all platforms (facebook, twitter, reddit, instagram, linkedin).
  *
- * Priority: request host (actual origin) → NEXT_PUBLIC_APP_URL → NEXT_PUBLIC_BASE_URL → http://localhost:3000
+ * Production (SEC91-W2B-2): always the configured canonical app URL — request
+ * `Host` / `X-Forwarded-Host` never choose the redirect_uri.
  *
- * Deriving from the request host ensures local dev (localhost:3000) and production
- * both get the correct callback URL automatically, even when NEXT_PUBLIC_APP_URL
- * is set to the production domain in .env.local.
+ * Development / test with a request: the request origin (127.0.0.1 spelled
+ * `localhost`), so local dev gets a localhost callback even when
+ * NEXT_PUBLIC_APP_URL is set to the production domain in .env.local.
  */
 export function getCommunityAiConnectorCallbackUrl(platform: string, req?: import('next').NextApiRequest): string {
   let baseUrl: string;
 
   if (req) {
-    const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
-    const rawHost = ((req.headers['x-forwarded-host'] as string | undefined) || req.headers.host || 'localhost:3000').toString();
-    const host = rawHost.replace(/^127\.0\.0\.1(:|$)/, 'localhost$1');
-    baseUrl = `${proto}://${host}`;
+    baseUrl = getOAuthRedirectBase(req, { loopback: 'localhost' });
   } else {
     // No request context (background / service caller). Canonical URL via
     // the validated config — was previously a localhost fallback that could
@@ -43,36 +39,16 @@ export const requireManageConnectors = async (
   res: NextApiResponse,
   companyId: string
 ): Promise<{ userId: string; role: string } | null> => {
+  // SEC91-W2B-1: ONE identity path. The canonical resolver (getSupabaseUserFromRequest →
+  // resolveAuthenticatedUser) reads the Bearer header AND the Supabase auth cookie that a
+  // browser navigation carries (sb-<ref>-auth-token, chunked @supabase/ssr envelopes
+  // included) and applies the account-state checks: soft-deleted, suspended,
+  // session-revoked (users.session_revoked_after) and not-yet-accepted invited accounts
+  // fail closed. Its verdict is final. The previous @supabase/ssr fallback re-resolved the
+  // cookie with auth.getUser() plus a bare users.supabase_uid lookup whenever the resolver
+  // said no, which re-admitted exactly the accounts the resolver had rejected.
   const { user, error } = await getSupabaseUserFromRequest(req);
-  let resolvedUser: { id: string } | null = (!error && user?.id) ? { id: user.id } : null;
-
-  // Fallback: read Supabase session from SSR cookies (browser navigation has no Bearer header)
-  if (!resolvedUser) {
-    try {
-      const ssrClient = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        requireSupabasePublishableKey(),
-        {
-          cookies: {
-            getAll: () =>
-              Object.entries(req.cookies).map(([name, value]) => ({ name, value: value ?? '' })),
-            setAll: () => {},
-          },
-        }
-      );
-      const { data: { user: ssrUser } } = await ssrClient.auth.getUser();
-      if (ssrUser?.id) {
-        const { data: row } = await supabase
-          .from('users')
-          .select('id')
-          .eq('supabase_uid', ssrUser.id)
-          .maybeSingle();
-        if (row?.id) resolvedUser = { id: row.id };
-      }
-    } catch {
-      // SSR cookie path failed — fall through to UNAUTHORIZED
-    }
-  }
+  const resolvedUser: { id: string } | null = (!error && user?.id) ? { id: user.id } : null;
 
   if (!resolvedUser?.id) {
     res.status(401).json({ error: 'UNAUTHORIZED' });

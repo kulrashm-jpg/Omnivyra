@@ -6,9 +6,15 @@ import { handleGoogleOAuthCallback } from '../../../../../backend/services/analy
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
 import { logOAuthEvent, safeHost } from '../../../../../backend/auth/oauthTelemetry';
 import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { safeRelativeRedirectPath } from '../../../../../backend/auth/safeRedirect';
+
+const DEFAULT_RETURN = '/integrations?focus=data';
 
 function buildRedirectUrl(returnTo: string | null, params: Record<string, string>): string {
-  const base = returnTo && returnTo.startsWith('/') ? returnTo : '/integrations?focus=data';
+  // SEC91-W2B-4: the ONE redirect validator (single leading '/', no '\', no control
+  // characters, same origin). returnTo already comes from a validated OAuth state;
+  // this keeps the redirect safe even if a future caller passes something else.
+  const base = safeRelativeRedirectPath(returnTo, DEFAULT_RETURN) as string;
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}${new URLSearchParams(params).toString()}`;
 }

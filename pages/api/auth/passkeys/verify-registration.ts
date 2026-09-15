@@ -10,6 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authRequestIpOrNull } from '../../../../backend/auth/requestClientIp';
 import type { RegistrationResponseJSON } from '@simplewebauthn/types';
 import { resolvePrincipal } from '../../../../backend/security/IdentityResolver';
 import { verifyRegistration } from '../../../../backend/security/webauthn/WebAuthnRegistrationService';
@@ -74,10 +75,10 @@ function parseBody(req: NextApiRequest): Record<string, unknown> {
   return (req.body ?? {}) as Record<string, unknown>;
 }
 
+// SEC91-W2B-3: platform-trusted client IP (lib/security/clientIp), never the
+// client-written first X-Forwarded-For hop.
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  return req.socket?.remoteAddress ?? null;
+  return authRequestIpOrNull(req);
 }
 
 function userAgent(req: NextApiRequest): string | null {

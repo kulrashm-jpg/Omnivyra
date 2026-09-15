@@ -12,11 +12,13 @@ import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
 import { describeProviderError } from '../../../../backend/auth/safeErrorLog';
 import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
+import { getOAuthRedirectBase } from '../../../../backend/auth/oauthRedirectBase';
 
+// SEC91-W2B-2: the same builder as /api/auth/x and the community-AI X connector start —
+// production → the configured canonical app URL only; development → the request origin
+// with localhost spelled 127.0.0.1.
 function getRequestBaseUrl(req: NextApiRequest): string {
-  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
-  const host = (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string) || 'localhost:3000';
-  return `${proto}://${host}`.replace('://localhost:', '://127.0.0.1:');
+  return getOAuthRedirectBase(req, { loopback: '127.0.0.1' });
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
