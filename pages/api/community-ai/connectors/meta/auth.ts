@@ -1,6 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
+import { requireManageConnectors, getCommunityAiConnectorCallbackUrl, mintConnectorOAuthState } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 
 /**
@@ -26,15 +26,6 @@ import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oaut
  * Register callback URL in Meta Developer Console:
  *   {baseUrl}/api/community-ai/connectors/meta/callback
  */
-
-const buildState = (value: Record<string, string>) => {
-  const json = JSON.stringify(value);
-  return Buffer.from(json, 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-};
 
 // Facebook-only scopes. Strictly no instagram_*, no threads_*.
 const FACEBOOK_SCOPES: ReadonlyArray<string> = [
@@ -100,12 +91,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const redirectUri = getCommunityAiConnectorCallbackUrl('meta', req);
-  const redirectTo = typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';
   const provider = resolveProvider(req.query.provider);
-  const state = buildState({
-    tenant_id: tenantId,
-    organization_id: organizationId,
-    redirect: redirectTo,
+  // SEC91-B5: HMAC-signed state (company + tenant + session user + provider, 10-min TTL,
+  // validated same-origin redirect) instead of unsigned base64 JSON.
+  const state = mintConnectorOAuthState({
+    organizationId,
+    userId: access.userId,
+    redirect: req.query.redirect,
     provider,   // propagate so the callback knows which surface initiated
   });
 

@@ -2,20 +2,10 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveToken } from '../../../../../backend/services/platformTokenService';
 import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
-import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
+import { requireManageConnectors, getCommunityAiConnectorCallbackUrl, readConnectorOAuthState, withQuery } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 import { persistGrantedScopesByPlatformUser, normaliseScopes } from '../../../../../backend/auth/oauthScopePersistence';
 import { logOAuthEvent, safeHost } from '../../../../../backend/auth/oauthTelemetry';
-
-const decodeState = (state: string) => {
-  const padded = state.replace(/-/g, '+').replace(/_/g, '/');
-  const buffer = Buffer.from(padded, 'base64');
-  return JSON.parse(buffer.toString('utf8')) as {
-    tenant_id?: string;
-    organization_id?: string;
-    redirect?: string;
-  };
-};
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -76,44 +66,50 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     );
   }
 
-  let statePayload: { tenant_id?: string; organization_id?: string; redirect?: string };
-  try {
-    statePayload = decodeState(state);
-  } catch {
+  // SEC91-B5: the state must be a valid HMAC-signed community-ai connector state
+  // (backend/auth/oauthState: company + tenant + starting user, 10-min TTL). The old
+  // unsigned base64 JSON — which anyone could write, naming any organization and any
+  // redirect — is no longer accepted.
+  const connectorState = readConnectorOAuthState(state);
+  if (!connectorState.ok) {
     logOAuthEvent({
       event: 'oauth_failure',
       provider: 'reddit',
       callback_host: callbackHost,
       state_flow: 'community-ai',
       failure_point: 'invalid_oauth_state',
-      failure_detail: 'JSON.parse of base64 state failed',
+      failure_detail: connectorState.detail,
     });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Invalid OAuth state')}`
     );
   }
 
-  const tenantId = statePayload.tenant_id || '';
-  const organizationId = statePayload.organization_id || '';
-  const redirectTo = statePayload.redirect || '/community-ai/connectors';
+  const tenantId = connectorState.tenantId;
+  const organizationId = connectorState.organizationId;
+  // Validated same-origin path (SEC91-B4) — never an attacker-chosen URL.
+  const redirectTo = connectorState.returnTo;
 
-  if (!tenantId || !organizationId || tenantId !== organizationId) {
+  const access = await requireManageConnectors(req, res, organizationId);
+  if (!access) return;
+
+  // The signed state proves where the flow started, not who is finishing it: the
+  // session user must be the user who started it (login/account-linking CSRF).
+  if (access.userId !== connectorState.stateUserId) {
     logOAuthEvent({
       event: 'oauth_failure',
       provider: 'reddit',
       callback_host: callbackHost,
-      company_id: organizationId || null,
+      company_id: organizationId,
+      user_id: access.userId,
       state_flow: 'community-ai',
       failure_point: 'invalid_oauth_state',
-      failure_detail: 'tenant_id !== organization_id or missing',
+      failure_detail: 'state user does not match session user',
     });
     return res.redirect(
-      `/community-ai/connectors?error=${encodeURIComponent('Invalid tenant scope')}`
+      `/community-ai/connectors?error=${encodeURIComponent('This connection was started by a different user — please try again')}`
     );
   }
-
-  const access = await requireManageConnectors(req, res, organizationId);
-  if (!access) return;
 
   const credentials = await getOAuthCredentialsForPlatform('reddit');
   if (!credentials?.client_id || !credentials?.client_secret) {
@@ -205,7 +201,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       user_id: access!.userId,
       state_flow: 'community-ai',
     });
-    return res.redirect(`${redirectTo}?connected=reddit&status=success`);
+    return res.redirect(withQuery(redirectTo, { connected: 'reddit', status: 'success' }));
   } catch (err: any) {
     logOAuthEvent({
       event: 'oauth_failure',

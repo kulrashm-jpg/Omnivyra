@@ -5,6 +5,8 @@ import { getUserRole } from '../../../../backend/services/rbacService';
 import { hasCommunityAiCapability } from '../../../../backend/services/rbac/communityAiCapabilities';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { encodeOAuthState, decodeOAuthState } from '../../../../backend/auth/oauthState';
+import { safeRelativeRedirectPath } from '../../../../backend/auth/safeRedirect';
 
 /**
  * Returns the OAuth callback URL for a Community AI connector.
@@ -91,3 +93,76 @@ export const requireManageConnectors = async (
   }
   return { userId: resolvedUser.id, role };
 };
+
+// ── SEC91-B5: signed connector OAuth state ────────────────────────────────────
+//
+// The meta/reddit connector flows used to carry tenant, organization and the
+// post-connect redirect in a plain base64-JSON `state` (no HMAC, no user binding,
+// no expiry) that the callbacks trusted. They now use the same HMAC-signed state
+// as every other OAuth flow (backend/auth/oauthState): company + tenant + the
+// SESSION user who started the flow + flow marker + optional provider, a 10-minute
+// TTL, and a returnTo that is validated to a same-origin path at mint AND read time.
+
+export const CONNECTOR_DEFAULT_RETURN = '/community-ai/connectors';
+
+export function mintConnectorOAuthState(input: {
+  organizationId: string;
+  userId: string;
+  redirect?: unknown;
+  provider?: string;
+}): string {
+  return encodeOAuthState({
+    companyId: input.organizationId,
+    tenantId: input.organizationId,
+    userId: input.userId,
+    flow: 'community-ai',
+    provider: input.provider,
+    // Unsafe values are dropped by encodeOAuthState; the default keeps the old behaviour.
+    returnTo: safeRelativeRedirectPath(input.redirect, CONNECTOR_DEFAULT_RETURN),
+  });
+}
+
+/**
+ * A single shape rather than a discriminated union: the repository compiles with
+ * `strict: false`, under which narrowing on a boolean literal does not apply.
+ */
+export type ConnectorOAuthState = {
+  ok: boolean;
+  organizationId: string;
+  tenantId: string;
+  stateUserId: string;
+  /** Always a validated same-origin path. */
+  returnTo: string;
+  provider: string | null;
+  /** Shape-only reason when !ok (safe to log; never contains state content). */
+  detail: string;
+};
+
+export function readConnectorOAuthState(state: unknown): ConnectorOAuthState {
+  const fail = (detail: string): ConnectorOAuthState => ({
+    ok: false, organizationId: '', tenantId: '', stateUserId: '', returnTo: CONNECTOR_DEFAULT_RETURN, provider: null, detail,
+  });
+  if (typeof state !== 'string' || !state) return fail('state query param missing');
+  const decoded = decodeOAuthState(state);
+  if (decoded.valid !== true) return fail(`state rejected (${decoded.reason ?? 'invalid'})`);
+  if (decoded.flow !== 'community-ai') return fail('state is not a community-ai connector state');
+  const organizationId = decoded.companyId || '';
+  const tenantId = decoded.tenantId || '';
+  if (!organizationId || !tenantId || organizationId !== tenantId) return fail('tenant_id !== organization_id or missing');
+  if (!decoded.userId) return fail('state carries no user binding');
+  return {
+    ok: true,
+    organizationId,
+    tenantId,
+    stateUserId: decoded.userId,
+    returnTo: safeRelativeRedirectPath(decoded.returnTo, CONNECTOR_DEFAULT_RETURN) as string,
+    provider: decoded.provider ?? null,
+    detail: '',
+  };
+}
+
+/** Append query parameters to a validated same-origin path. */
+export function withQuery(path: string, params: Record<string, string>): string {
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}${new URLSearchParams(params).toString()}`;
+}
