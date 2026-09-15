@@ -21,6 +21,7 @@ import { supabase } from '../db/supabaseClient';
 import { getActiveTemplate } from './whatsappTemplateService';
 import { checkAndConsume, getBroadcastChunkStrategy } from './whatsappRateLimiter';
 import { getValidAccessToken } from '../auth/metaAuthService';
+import { requireEncryptionKey } from '../auth/credentialEncryption';
 
 const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
@@ -62,8 +63,10 @@ function hashPhone(e164: string): string {
 }
 
 function encryptPhone(e164: string): string {
-  // Reuse AES-256-GCM from tokenStore encryption pattern
-  const key = Buffer.from(process.env.ENCRYPTION_KEY ?? '', 'hex').slice(0, 32);
+  // Reuse AES-256-GCM from tokenStore encryption pattern.
+  // SEC91-B12: the shared strict key parser — a missing/malformed ENCRYPTION_KEY fails with
+  // a clear error instead of `ENCRYPTION_KEY ?? ''` silently producing a short key buffer.
+  const key = requireEncryptionKey();
   const iv   = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   let enc = cipher.update(e164, 'utf8', 'hex') + cipher.final('hex');
@@ -72,7 +75,7 @@ function encryptPhone(e164: string): string {
 }
 
 export function decryptPhone(encrypted: string): string {
-  const key = Buffer.from(process.env.ENCRYPTION_KEY ?? '', 'hex').slice(0, 32);
+  const key = requireEncryptionKey();
   const [ivHex, tagHex, enc] = encrypted.split(':');
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
   decipher.setAuthTag(Buffer.from(tagHex, 'hex'));

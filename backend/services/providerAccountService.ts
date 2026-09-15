@@ -198,6 +198,24 @@ export async function listAccountsForApi(
  * Parse stored credentials JSON and resolve to usable fields.
  * Never throws — returns nulls on any parse/decrypt error.
  */
+const reportedLegacyPlaintextAccounts = new Set<string>();
+
+/**
+ * SEC91-B8: one structured warning per account per process for a legacy PLAINTEXT
+ * `api_key_value`. Carries the account id and the remediation only — never the value.
+ * Operators re-enter the key in Super Admin → provider accounts, which stores it
+ * encrypted via buildCredentialEnvelope.
+ */
+function reportLegacyPlaintextKey(accountId: string): void {
+  const key = String(accountId ?? 'unknown');
+  if (reportedLegacyPlaintextAccounts.has(key)) return;
+  reportedLegacyPlaintextAccounts.add(key);
+  console.warn('PROVIDER_ACCOUNT_LEGACY_PLAINTEXT_KEY', {
+    accountId: key,
+    action: 'Re-enter this provider account key in Super Admin so it is stored encrypted.',
+  });
+}
+
 export function resolveAccountCredentials(account: ProviderAccount): ResolvedAccountCredentials {
   const base: ResolvedAccountCredentials = {
     source: 'account',
@@ -258,6 +276,10 @@ export function resolveAccountCredentials(account: ProviderAccount): ResolvedAcc
     } else {
       base.api_key_value = stored;
       base.legacy_plaintext_key = true;
+      // SEC91-B8: make remaining plaintext rows VISIBLE (once per account per process) so
+      // they get re-entered — without the value, a fragment or its length. Resolution is
+      // unchanged so the provider keeps working until the key is re-encrypted.
+      reportLegacyPlaintextKey(account.id);
     }
   }
 

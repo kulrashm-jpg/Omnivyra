@@ -17,8 +17,20 @@ import crypto from 'crypto';
 import { getContentQueue } from '../../../../backend/queue/contentGenerationQueues';
 import { safeEnqueue } from '../../../../backend/middleware/queueBackpressure';
 
-const VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? '';
 const APP_SECRET   = process.env.WHATSAPP_APP_SECRET ?? '';
+
+// Meta sends a numeric challenge; accept only a plain token so nothing else is reflected.
+const CHALLENGE_RE = /^[A-Za-z0-9._-]{1,256}$/;
+
+/** SEC91-B10: false when the verify token is unset/empty or does not match (constant-time). */
+function verifyToken(provided: unknown): boolean {
+  const expected = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? '';
+  if (!expected.trim()) return false;
+  if (typeof provided !== 'string' || !provided) return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 export const config = {
   api: { bodyParser: false },
@@ -52,8 +64,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── GET: hub.challenge verification ──────────────────────────────────────
   if (req.method === 'GET') {
     const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
-    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-      return res.status(200).send(challenge as string);
+    // SEC91-B10: fail closed. With WHATSAPP_WEBHOOK_VERIFY_TOKEN unset the expected token
+    // was '' and a request carrying an EMPTY hub.verify_token matched, so anyone could
+    // complete the subscription handshake (and have any hub.challenge reflected). An unset
+    // or empty token now verifies nothing; the compare is constant-time; the challenge is
+    // echoed only when it is a plain token, as text/plain.
+    if (mode === 'subscribe' && verifyToken(token) && typeof challenge === 'string' && CHALLENGE_RE.test(challenge)) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.status(200).send(challenge);
     }
     return res.status(403).json({ error: 'Verification failed' });
   }

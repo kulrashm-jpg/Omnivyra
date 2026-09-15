@@ -87,7 +87,7 @@
     },
     "pages/api/auth/passkeys/begin-authentication.ts": {
       "kind": "auth-flow",
-      "reason": "WebAuthn ceremony start; pre-session by design. With a session the principal id wins over body userId; the sessionless user-scoped path (credential-id disclosure) is a known low-severity item."
+      "reason": "WebAuthn ceremony start; pre-session by design. A user-scoped ceremony is built only for the authenticated principal; a body userId is ignored (SEC91-B11 closed the sessionless credential-id disclosure)."
     },
     "pages/api/auth/recovery-login.ts": {
       "kind": "auth-flow",
