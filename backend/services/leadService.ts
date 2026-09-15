@@ -9,6 +9,7 @@ import { mergeConnectionConfig } from './integrationCredentialService';
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 import { trackEvent } from './telemetry/telemetryDispatcher';
 import { getLegacyLeads } from './leadIntelligence/legacyLeadCompat';
+import { constantTimeEqual } from '../security/constantTimeEqual';
 
 export type FieldType = 'text' | 'email' | 'phone';
 
@@ -237,7 +238,8 @@ export async function validateWebhookAuth(
     ((data as any).non_secret_config ?? data.config) as Record<string, string>,
     data.config as Record<string, string>,
   );
-  if (!cfg?.secret || cfg.secret !== webhookSecret) return null;
+  // STEP 3AH-91 W2F-2: constant-time, exact match, fails closed (was !==).
+  if (!cfg?.secret || !constantTimeEqual(webhookSecret, cfg.secret)) return null;
   return {
     company_id: data.company_id as string,
     website_id: (data as any).website_id ?? null,
