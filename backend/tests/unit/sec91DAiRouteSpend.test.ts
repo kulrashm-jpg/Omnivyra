@@ -78,22 +78,22 @@ const providerCalls = () => mockFetch.mock.calls.map((c) => String(c[0]));
 // ── trusted client IP (pure) ────────────────────────────────────────────────
 describe('SEC91-D1 resolveTrustedClientIp', () => {
   it('never returns the client-written first x-forwarded-for hop (off Vercel: TCP peer)', () => {
-    expect(resolveTrustedClientIp({ headers: SPOOFED, socket: { remoteAddress: '198.51.100.2' } }, {})).toBe('198.51.100.2');
+    expect(resolveTrustedClientIp({ headers: SPOOFED, socket: { remoteAddress: '198.51.100.2' } }, {} as unknown as NodeJS.ProcessEnv)).toBe('198.51.100.2');
     // a client-supplied x-real-ip is NOT trusted off Vercel either
-    expect(resolveTrustedClientIp({ headers: VERCEL_EDGE, socket: { remoteAddress: '198.51.100.2' } }, {})).toBe('198.51.100.2');
+    expect(resolveTrustedClientIp({ headers: VERCEL_EDGE, socket: { remoteAddress: '198.51.100.2' } }, {} as unknown as NodeJS.ProcessEnv)).toBe('198.51.100.2');
   });
   it('on Vercel reads the edge-set x-real-ip / x-vercel-forwarded-for, not x-forwarded-for', () => {
-    const env = { VERCEL: '1' } as NodeJS.ProcessEnv;
+    const env = { VERCEL: '1' } as unknown as NodeJS.ProcessEnv;
     expect(resolveTrustedClientIp({ headers: VERCEL_EDGE, socket: { remoteAddress: '10.9.9.9' } }, env)).toBe('203.0.113.7');
     expect(resolveTrustedClientIp({ headers: { ...SPOOFED, 'x-vercel-forwarded-for': '203.0.113.8' } }, env)).toBe('203.0.113.8');
     expect(resolveTrustedClientIp({ headers: SPOOFED, socket: { remoteAddress: '10.9.9.9' } }, env)).toBe('10.9.9.9');
   });
   it('an operator-declared proxy header is honoured; x-forwarded-for cannot be declared', () => {
-    expect(resolveTrustedClientIp({ headers: { 'cf-connecting-ip': '192.0.2.5' } }, { TRUSTED_CLIENT_IP_HEADER: 'CF-Connecting-IP' } as NodeJS.ProcessEnv)).toBe('192.0.2.5');
-    expect(resolveTrustedClientIp({ headers: SPOOFED, socket: { remoteAddress: '10.1.1.1' } }, { TRUSTED_CLIENT_IP_HEADER: 'x-forwarded-for' } as NodeJS.ProcessEnv)).toBe('10.1.1.1');
+    expect(resolveTrustedClientIp({ headers: { 'cf-connecting-ip': '192.0.2.5' } }, { TRUSTED_CLIENT_IP_HEADER: 'CF-Connecting-IP' } as unknown as NodeJS.ProcessEnv)).toBe('192.0.2.5');
+    expect(resolveTrustedClientIp({ headers: SPOOFED, socket: { remoteAddress: '10.1.1.1' } }, { TRUSTED_CLIENT_IP_HEADER: 'x-forwarded-for' } as unknown as NodeJS.ProcessEnv)).toBe('10.1.1.1');
   });
   it('rejects non-IP garbage in a trusted header (falls back to the peer)', () => {
-    expect(resolveTrustedClientIp({ headers: { 'x-real-ip': 'evil<script>' }, socket: { remoteAddress: '10.2.2.2' } }, { VERCEL: '1' } as NodeJS.ProcessEnv)).toBe('10.2.2.2');
+    expect(resolveTrustedClientIp({ headers: { 'x-real-ip': 'evil<script>' }, socket: { remoteAddress: '10.2.2.2' } }, { VERCEL: '1' } as unknown as NodeJS.ProcessEnv)).toBe('10.2.2.2');
   });
 });
 
