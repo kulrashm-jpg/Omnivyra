@@ -475,6 +475,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           code: 'AI_DRAFT_NOT_FOUND',
         });
       }
+      // SEC-91A (STEP 3AH-91, A2) — bind the draft to the authorized
+      // organization BEFORE anything about it is revealed or changed.
+      // ai_message_drafts has no organization column (its tenant is its
+      // thread's), and it was looked up by id alone: the status / thread /
+      // platform checks below answered distinct errors ("terminal status=sent",
+      // "platform mismatch (draft=linkedin…)") for ANOTHER tenant's draft id,
+      // before the org-scoped actionability check ran. A draft whose thread is
+      // not this organization's is now indistinguishable from a missing one.
+      const { data: draftThread, error: draftThreadErr } = await supabase
+        .from('engagement_threads')
+        .select('id')
+        .eq('id', draft.thread_id)
+        .eq('organization_id', organizationId)
+        .maybeSingle();
+      if (draftThreadErr) {
+        return res.status(503).json({
+          error: 'ai_draft ownership check is temporarily unavailable. Please try again.',
+          code: 'AI_DRAFT_LOOKUP_ERROR',
+          retryable: true,
+        });
+      }
+      if (!draftThread) {
+        return res.status(404).json({
+          error: 'ai_draft not found',
+          code: 'AI_DRAFT_NOT_FOUND',
+        });
+      }
       if (draft.status === 'sent' || draft.status === 'rejected') {
         return res.status(400).json({
           error: `ai_draft already in terminal status=${draft.status}`,
@@ -563,6 +590,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             edited_text: replyText,
           })
           .eq('id', body.ai_draft_id)
+          .eq('thread_id', draft.thread_id)
           .eq('status', 'draft');
         if (approveErr) {
           return res.status(500).json({
