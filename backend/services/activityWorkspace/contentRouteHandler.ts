@@ -21,6 +21,9 @@ import { enrichItemWithGovernance } from '@/backend/services/creator/governanceI
 // Phase-2 Step-3: master/variant enrichment persistence routes through the
 // ONE canonical write (reconciled, blank/stale-overwrite-safe, observable).
 import { updateExecutionContentByActivity } from '@/backend/services/orchestration';
+import { isSafeActivityKey } from '@/backend/services/orchestration/canonicalExecutionAdapter';
+import { checkCampaignOwnership } from '@/backend/services/campaignOwnershipService';
+import { isDeterministicIdentityError } from '@/backend/security/TenantGuard';
 import { checkRateLimit } from '@/lib/auth/rateLimit';
 import { resolveMonetizationFeature } from '@/shared/monetization/featureRegistry';
 
@@ -29,6 +32,28 @@ import { type WorkspaceAction, type ImprovementType, MonetizedWorkflowError, run
 export function isFailedVariant(v: unknown): boolean {
   const content = String((v as any)?.generated_content ?? '').trim();
   return FAILED_VARIANT_PREFIXES.some((p) => content.startsWith(p));
+}
+
+/**
+ * SEC-91 W2-A (W2F-1a) — the daily_content_plans rows the canonical writer
+ * (updateExecutionContentByActivity) could resolve for this key, exact row-id
+ * match first. The key MUST already have passed isSafeActivityKey. A
+ * deterministic query error (a non-uuid key compared with the uuid `id`
+ * column) means the writer cannot resolve it either → no candidates.
+ */
+async function loadActivityCandidates(
+  activityId: string,
+): Promise<Array<{ id: string; campaignId: string }> | 'lookup_error'> {
+  const { data, error } = await supabase
+    .from('daily_content_plans')
+    .select('id, campaign_id')
+    .or(`id.eq.${activityId},execution_id.eq.${activityId}`);
+  if (error) return isDeterministicIdentityError(error) ? [] : 'lookup_error';
+  const list = ((data ?? []) as Array<{ id?: unknown; campaign_id?: unknown }>)
+    .filter((r) => r.id && r.campaign_id)
+    .map((r) => ({ id: String(r.id), campaignId: String(r.campaign_id) }));
+  const exact = list.filter((r) => r.id === activityId);
+  return exact.length > 0 ? exact : list;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -112,6 +137,70 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    /*
+     * SEC-91 W2-A (STEP 3AH-91, W2F-1a) — bind the SAVED ACTIVITY to the
+     * authorized company before anything is generated or written.
+     *
+     * The membership check above proves the caller belongs to `companyId`, but
+     * every write below targets daily_content_plans by `activity.id`, which was
+     * never tied to that company: { companyId: A, activity: { id: <B's row> } }
+     * overwrote company B's scheduled content (billed to A). Now:
+     *   - the id must be a plain token (it reaches a PostgREST `.or()` filter);
+     *   - the row is loaded server-side exactly as the canonical writer resolves
+     *     it, and its campaign must belong to the authorized company — foreign
+     *     and unknown campaigns answer the same 404, before any AI or credit
+     *     work;
+     *   - every write goes to that verified row id (`writeActivityId`); an id
+     *     that resolves to no row generates without persisting, as before;
+     *   - generate_master keeps its own, stricter binding (org derived from the
+     *     activity itself, body.companyId ignored) and writes the verified row.
+     */
+    const rawActivityId = String((req.body as any)?.activity?.id || '').trim();
+    let writeActivityId = '';
+    if (rawActivityId && !rawActivityId.startsWith('workspace-')) {
+      if (!isSafeActivityKey(rawActivityId)) {
+        return res.status(400).json({ error: 'Invalid activity id' });
+      }
+      const candidates = await loadActivityCandidates(rawActivityId);
+      if (candidates === 'lookup_error') {
+        return res.status(503).json({ error: 'Activity lookup is temporarily unavailable. Please try again.', retryable: true });
+      }
+      if (candidates.length > 0) {
+        if (action === 'generate_master') {
+          writeActivityId = candidates[0].id;
+        } else {
+          if (!companyId) {
+            return res.status(400).json({ error: 'companyId required to write a saved activity' });
+          }
+          let bound: string | null = null;
+          for (const candidate of candidates) {
+            const ownership = await checkCampaignOwnership(candidate.campaignId, companyId);
+            if (ownership === 'lookup_error') {
+              return res.status(503).json({ error: 'Campaign ownership check is temporarily unavailable. Please try again.', retryable: true });
+            }
+            if (ownership === 'owned') { bound = candidate.id; break; }
+          }
+          if (!bound) {
+            return res.status(404).json({ error: 'Activity not found' });
+          }
+          writeActivityId = bound;
+        }
+      }
+    }
+
+    // body.campaignId must not name another tenant's campaign (same semantics
+    // as enforceCompanyAccess's campaign binding: owned or not-yet-existing).
+    const bodyCampaignId = String((req.body as any)?.campaignId || '').trim();
+    if (bodyCampaignId && companyId && action !== 'generate_master') {
+      const ownership = await checkCampaignOwnership(bodyCampaignId, companyId);
+      if (ownership === 'lookup_error') {
+        return res.status(503).json({ error: 'Campaign ownership check is temporarily unavailable. Please try again.', retryable: true });
+      }
+      if (ownership !== 'owned' && ownership !== 'not_found') {
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+    }
+
     if (action === 'improve_variant') {
       const improvementType = String((req.body as any)?.improvementType || '').trim() as ImprovementType;
       const variantRaw = asObject((req.body as any)?.variant);
@@ -179,7 +268,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             generated_content: revisedContent,
             ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
           };
-          await persistVariantsToDb(activityDbId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
+          await persistVariantsToDb(writeActivityId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
           return nextVariant;
         },
       });
@@ -196,7 +285,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         generated_content: currentContent,
       };
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-      await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
+      await persistVariantsToDb(writeActivityId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
       return res.status(200).json({ success: true, improved_variant });
       }
 
@@ -290,7 +379,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ...variant,
             generated_content: revised,
           };
-          await persistVariantsToDb(activityDbId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
+          await persistVariantsToDb(writeActivityId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
           return nextVariant;
         },
       });
@@ -357,7 +446,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             generated_content: revisedContent,
             ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
           };
-          await persistVariantsToDb(activityDbId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
+          await persistVariantsToDb(writeActivityId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
           return nextVariant;
         },
       });
@@ -449,7 +538,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
       };
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-      await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
+      await persistVariantsToDb(writeActivityId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
       return res.status(200).json({ success: true, improved_variant });
       }
     }
@@ -657,7 +746,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const master = result.result;
-      await persistMasterToDb(activityDbId, master);
+      await persistMasterToDb(writeActivityId, master);
       return res.status(200).json({ success: true, master_content: master });
     }
 
@@ -720,7 +809,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         refined = refinedOutput.content || refined;
 
         const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-        await persistVariantsToDb(activityDbId, [{
+        await persistVariantsToDb(writeActivityId, [{
           platform,
           content_type: contentType,
           generated_content: refined,
@@ -802,7 +891,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       refined = refinedOutput.content || refined;
 
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-      await persistVariantsToDb(activityDbId, [{
+      await persistVariantsToDb(writeActivityId, [{
         platform,
         content_type: contentType,
         generated_content: refined,
@@ -842,7 +931,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let reservedItemWithMaster = governedItem;
         if (!(governedItem as any).master_content && !creatorMasterText) {
           const generatedMaster = await generateMasterContentFromIntent(governedItem as any);
-          await persistMasterToDb(activityDbId, generatedMaster);
+          await persistMasterToDb(writeActivityId, generatedMaster);
           reservedItemWithMaster = { ...governedItem, master_content: generatedMaster };
         } else if (creatorMasterText) {
           reservedItemWithMaster = {
@@ -867,7 +956,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         await persistVariantsToDb(
-          activityDbId,
+          writeActivityId,
           reservedSuccessfulVariants as Array<Record<string, unknown>>,
           ((reservedItemWithMaster as any).master_content ?? null) as Record<string, unknown> | null
         );
@@ -893,7 +982,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let itemWithMaster = itemGoverned;
     if (!(itemGoverned as any).master_content && !creatorMasterText) {
       const generatedMaster = await generateMasterContentFromIntent(itemGoverned as any);
-      await persistMasterToDb(activityDbId, generatedMaster);
+      await persistMasterToDb(writeActivityId, generatedMaster);
       itemWithMaster = { ...itemGoverned, master_content: generatedMaster };
     } else if (creatorMasterText) {
       itemWithMaster = {
@@ -923,7 +1012,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     await persistVariantsToDb(
-      activityDbId,
+      writeActivityId,
       successfulVariants as Array<Record<string, unknown>>,
       ((itemWithMaster as any).master_content ?? null) as Record<string, unknown> | null
     );
