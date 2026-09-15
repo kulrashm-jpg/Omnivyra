@@ -1,6 +1,6 @@
 # Security closure matrix — STEP 3AH-91 (unified)
 
-**Base:** `main @ f44b1387` (PR #245 merged and live). **Integration branch:** `sec/3ah91-integration` → one PR to `main`, **not merged** (merging to `main` auto-deploys the Railway worker).
+**Base:** `main @ f44b1387` (PR #245 merged and live). **Integration branch:** `sec/3ah91-integration` → PR #246 to `main`, **not merged** (merging to `main` auto-deploys the Railway worker).
 **Scope:** every finding from SEC-A … SEC-F (wave 1), W2-A / W2-B / W2-E / W2-F / W2-G (wave 2) and the integration pass. MCP is excluded by instruction.
 
 **Verdicts:** `CLOSED` = fixed in code on the integration branch (or already fixed, or a reviewed false positive), with regression tests and gates; `CLOSED — MANUAL OPERATION REQUIRED` = the code side is closed and a named owner/operator step remains; `ACCEPTED — DOCUMENTED` = a reviewed, justified residual; `OPEN — REMEDIATION REQUIRED` = not closed.
