@@ -63,6 +63,7 @@ import { attributeAuthenticatedPrincipal } from '../services/requestContextPrinc
 import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
 import { runWithRollout } from '../../lib/platform/rolloutAdmin';
 import { memoRequest } from '../services/requestScopedMemo';
+import { getTrustedClientIpOrNull } from '../../lib/security/clientIp';
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -540,10 +541,9 @@ function httpStatusForReason(reason: TenantAccessFailureReason): number {
   }
 }
 
+// SEC91-W2E: platform-trusted client IP (audit field only).
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  return req.socket?.remoteAddress ?? null;
+  return getTrustedClientIpOrNull(req);
 }
 
 function userAgent(req: NextApiRequest): string | null {

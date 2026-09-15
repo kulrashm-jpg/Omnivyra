@@ -34,6 +34,9 @@ const SUITES = [
   'backend/tests/unit/sec91W2FConstantTime.test.ts',
   'backend/tests/unit/sec91W2FSsrfAlias.test.ts',
   'backend/tests/unit/sec91W2FCiWiring.test.ts',
+  // wave 2 (3AH-91 W2E): every server read of the client IP goes through the
+  // platform-trusted resolver (repo-wide source pin + route behaviour)
+  'backend/tests/unit/sec91W2EClientIpAdoption.test.ts',
 ];
 
 const missing = SUITES.filter((s) => !fs.existsSync(path.join(ROOT, s)));

@@ -395,13 +395,10 @@ describe('source pin: no server file reads X-Forwarded-For itself', () => {
     'backend/services/ai/trustedClientIp.ts',
   ]);
   /**
-   * PENDING — owned by a concurrent workstream; the orchestrator applies the
-   * SEC91-W2E patch (docs/security/SEC91_W2E.md) and then REMOVES the entry here.
-   * The last test below fails once the file is clean, as a reminder to do so.
+   * PENDING — files owned by a concurrent workstream awaiting the SEC91-W2E patch.
+   * Empty since STEP 3AH-91 integration applied it to backend/security/TenantGuard.ts.
    */
-  const PENDING = new Set([
-    'backend/security/TenantGuard.ts',
-  ]);
+  const PENDING = new Set<string>([]);
   const READ = /headers\s*\[\s*['"`]x-forwarded-for['"`]\s*\]|headers\s*\.\s*get\s*\(\s*['"`]x-forwarded-for['"`]\s*\)/i;
 
   const files: string[] = [];
