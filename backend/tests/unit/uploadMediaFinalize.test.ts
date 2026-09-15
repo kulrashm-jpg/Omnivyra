@@ -67,6 +67,11 @@ jest.mock('../../db/writeOwner', () => ({
   }),
 }));
 
+// 3AH-91: the route authenticates before anything else.
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn(async () => ({ user: { id: 'user-1', email: 'u@test', emailVerified: true }, error: null })),
+}));
+
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'company-1' })),
 }));
@@ -152,7 +157,7 @@ describe('upload-media-finalize API', () => {
   test('non-attachment-required row → 409 + orphan cleanup', async () => {
     setRow({ contentType: 'infographic', lifecycle: 'render_ready' });
     const res = await callHandler({
-      storage_path: 'x/y.mp4', mime_type: 'video/mp4', size_bytes: 100,
+      storage_path: 'plan-1/video/sess.mp4', mime_type: 'video/mp4', size_bytes: 100,
     });
     expect(res.status).toHaveBeenCalledWith(409);
     expect((res.body as any).code).toBe('UPLOAD_NOT_VALID_FOR_FORMAT');
@@ -162,7 +167,7 @@ describe('upload-media-finalize API', () => {
   test('MIME mismatch with expected category → 415 + orphan cleanup', async () => {
     setRow({ contentType: 'reel' });
     const res = await callHandler({
-      storage_path: 'x/y.mp3', mime_type: 'audio/mpeg', size_bytes: 100,
+      storage_path: 'plan-1/audio/sess.mp3', mime_type: 'audio/mpeg', size_bytes: 100,
     });
     expect(res.status).toHaveBeenCalledWith(415);
     expect((res.body as any).code).toBe('UPLOAD_MIME_MISMATCH');
@@ -172,7 +177,7 @@ describe('upload-media-finalize API', () => {
   test('concurrency conflict → 409 + orphan cleanup', async () => {
     setRow({ revisionLength: 4 });
     const res = await callHandler({
-      storage_path: 'x/y.mp4', mime_type: 'video/mp4', size_bytes: 100,
+      storage_path: 'plan-1/video/sess.mp4', mime_type: 'video/mp4', size_bytes: 100,
       expected_revision: 1,
     });
     expect(res.status).toHaveBeenCalledWith(409);
@@ -184,7 +189,7 @@ describe('upload-media-finalize API', () => {
     setRow();
     mockValidatorReturn = { valid: false, errors: ['simulated'], validated_at: 'now', details: {} };
     const res = await callHandler({
-      storage_path: 'x/y.mp4', mime_type: 'video/mp4', size_bytes: 100,
+      storage_path: 'plan-1/video/sess.mp4', mime_type: 'video/mp4', size_bytes: 100,
     });
     expect(res.status).toHaveBeenCalledWith(200);
     expect((res.body as any).success).toBe(false);
@@ -196,7 +201,7 @@ describe('upload-media-finalize API', () => {
   test('oversize → 413 + orphan cleanup', async () => {
     setRow();
     const res = await callHandler({
-      storage_path: 'x/y.mp4', mime_type: 'video/mp4', size_bytes: 5 * 1024 * 1024 * 1024,
+      storage_path: 'plan-1/video/sess.mp4', mime_type: 'video/mp4', size_bytes: 5 * 1024 * 1024 * 1024,
     });
     expect(res.status).toHaveBeenCalledWith(413);
     expect(storageCalls.remove).toHaveLength(1);

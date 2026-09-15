@@ -97,28 +97,35 @@ export function asObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/**
+ * 3AH-92 (S-2) — a row the handler resolved server-side AND bound to the
+ * authorized tenant. Persistence accepts nothing else: a caller-supplied id can
+ * no longer reach the write, and the write is pinned to the row's campaign.
+ */
+export type ContentWriteTarget = { rowId: string; campaignId: string };
+
 async function persistContentEnvelopeToDb(
-  activityId: string,
+  target: ContentWriteTarget | null,
   transform: (existing: Record<string, unknown>) => Record<string, unknown>
 ): Promise<void> {
-  if (!activityId || activityId.startsWith('workspace-')) return; // transient ID, nothing to persist
+  if (!target) return; // transient / unresolved activity — nothing to persist
   // Canonical write: locates the row, applies the transform, reconciles
   // (enrichment-priority merge, blank/stale-overwrite guards, log-only
   // invariants), preserves legacy row shape, and emits write observability.
-  await updateExecutionContentByActivity(activityId, transform, 'activity-workspace/content');
+  await updateExecutionContentByActivity(target.rowId, transform, 'activity-workspace/content', { campaignId: target.campaignId });
 }
 
 /** Merge master_content into daily_content_plans.content JSON blob for the given activity row. */
-export async function persistMasterToDb(activityId: string, master: MasterContentPayload): Promise<void> {
-  await persistContentEnvelopeToDb(activityId, (existing) => ({ ...existing, master_content: master }));
+export async function persistMasterToDb(target: ContentWriteTarget | null, master: MasterContentPayload): Promise<void> {
+  await persistContentEnvelopeToDb(target, (existing) => ({ ...existing, master_content: master }));
 }
 
 export async function persistVariantsToDb(
-  activityId: string,
+  target: ContentWriteTarget | null,
   variants: Array<Record<string, unknown>>,
   master: Record<string, unknown> | null | undefined
 ): Promise<void> {
-  await persistContentEnvelopeToDb(activityId, (existing) => {
+  await persistContentEnvelopeToDb(target, (existing) => {
     const previous = Array.isArray(existing.platform_variants) ? (existing.platform_variants as Array<Record<string, unknown>>) : [];
     const merged = new Map<string, Record<string, unknown>>();
 
