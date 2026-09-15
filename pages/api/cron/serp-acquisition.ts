@@ -8,6 +8,7 @@ import {
   runQueuedSerpAcquisition,
   seedSerpQueryQueue,
 } from '../../../backend/services/serpAcquisitionService';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -15,7 +16,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || req.headers.authorization !== `Bearer ${cronSecret}`) {
+  if (!cronSecret || !bearerTokenMatches(req.headers.authorization, cronSecret)) {
     return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
   }
 

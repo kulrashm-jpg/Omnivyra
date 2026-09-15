@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { runManualSnapshot } from '../../../../backend/services/platformIntelligence/history/platformSnapshotScheduler';
+import { constantTimeEqual } from '../../../../backend/security/constantTimeEqual';
 
 /**
  * POST /api/platform/history/run — runs the platform snapshot job for one company.
@@ -11,7 +12,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'Method not allowed' }); }
   const secret = process.env.PLATFORM_HISTORY_RUN_SECRET;
   const provided = req.headers['x-platform-run-key'];
-  if (!secret || provided !== secret) return res.status(401).json({ error: 'service-role authorization required' });
+  // SEC-C4: constant-time comparison; an unset secret never matches.
+  if (!secret || !constantTimeEqual(provided, secret)) return res.status(401).json({ error: 'service-role authorization required' });
 
   const companyId = typeof req.body?.company_id === 'string' ? req.body.company_id.trim() : '';
   if (!companyId) return res.status(400).json({ error: 'company_id required' });

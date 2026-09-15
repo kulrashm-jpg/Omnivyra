@@ -6,6 +6,7 @@ import {
   reconcileDurableMonetizationReservations,
 } from '@/backend/services/monetizationReservationReconciliationService';
 import { runJob } from '@/backend/services/jobRunner';
+import { bearerTokenMatches, constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 function numberFromQuery(value: unknown): number | undefined {
   if (typeof value !== 'string') return undefined;
@@ -18,7 +19,10 @@ function isAuthorized(req: NextApiRequest): boolean {
   if (!secret) return false;
   const presented = req.headers['x-cron-secret'];
   const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  return presented === secret || bearer === secret;
+  // SEC-C4: constant-time; both shapes are evaluated so timing does not reveal which matched.
+  const presentedOk = constantTimeEqual(presented, secret);
+  const bearerOk = constantTimeEqual(bearer, secret);
+  return presentedOk || bearerOk;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -33,8 +37,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const orgId = typeof req.query.orgId === 'string' ? req.query.orgId : undefined;
   const includeAudit = String(req.query.audit ?? 'true') !== 'false';
 
-  const triggeredByCronSecret = !!process.env.CRON_SECRET
-    && req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`;
+  const triggeredByCronSecret = bearerTokenMatches(req.headers.authorization, process.env.CRON_SECRET);
 
   const outcome = await runJob(
     {
