@@ -34,6 +34,12 @@ describe('W2F-2 gate — timing-unsafe shapes are flagged', () => {
       .toEqual([`req.headers['x-cron-secret'] !== process.env.CRON_SECRET`]);
   });
 
+  it('loose equality short-circuits too (== / !=)', () => {
+    expect(flagged(`if (req.query.key != process.env.ADMIN_API_KEY) deny();`)).toEqual([`req.query.key != process.env.ADMIN_API_KEY`]);
+    expect(flagged(`if (process.env.CRON_SECRET == hdr) ok();`)).toHaveLength(1);
+    expect(flagged(`if (process.env.CRON_SECRET != null) ok();`)).toEqual([]);
+  });
+
   it('bracket env access and config.X_TOKEN', () => {
     expect(flagged(`if (token === process.env['WORKER_TOKEN']) ok();`)).toHaveLength(1);
     expect(flagged(`if (hdr !== config.INTERNAL_API_KEY) deny();`)).toHaveLength(1);

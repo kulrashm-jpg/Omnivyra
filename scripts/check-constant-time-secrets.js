@@ -13,8 +13,8 @@
  *
  * WHAT IT FLAGS (pages/api/** and backend/**, tests excluded)
  * ---------------------------------------------------------
- * A strict (in)equality `a === b` / `a !== b` where one operand is
- * SECRET-DERIVED and the other is not a literal:
+ * An (in)equality `a === b` / `a !== b` (or the loose `==` / `!=`) where one
+ * operand is SECRET-DERIVED and the other is not a literal:
  *   - `process.env.X` / `process.env['X']` / `config.X` where X names a
  *     credential (SECRET, TOKEN, KEY, PASSWORD, PASSPHRASE, SALT, HMAC,
  *     SIGNATURE; `NEXT_PUBLIC_*` and `*PUBLIC_KEY*` excluded);
@@ -244,12 +244,13 @@ function scanSource(src) {
   const rawLines = src.split(/\r?\n/);
   const tainted = taintedVars(strs);
   const out = [];
-  const re = /[^=!<>]([!=]==)(?!=)/g;
+  // Strict AND loose (in)equality: `==`/`!=` short-circuit the same way.
+  const re = /[^=!<>]([!=]==?)(?!=)/g;
   let m;
   while ((m = re.exec(blank))) {
     const opAt = m.index + 1;
     const lr = leftOperand(blank, opAt);
-    const rr = rightOperand(blank, opAt + 3);
+    const rr = rightOperand(blank, opAt + m[1].length);
     const left = lr.typeof ? 'typeof' : strs.slice(lr.s, lr.e).trim();
     const right = rr.typeof ? 'typeof' : strs.slice(rr.s, rr.e).trim();
     if (isLiteral(left) || isLiteral(right)) continue;
@@ -303,7 +304,7 @@ function scanRepo(root = ROOT, knownOpen = KNOWN_OPEN) {
     if (SKIP_FILES.has(rel)) continue;
     scanned++;
     const src = fs.readFileSync(f, 'utf8');
-    if (!/[!=]==/.test(src) || !PREFILTER.test(src)) continue;
+    if (!/[!=]=/.test(src) || !PREFILTER.test(src)) continue;
     for (const v of scanSource(src)) {
       const k = knownOpen.find((x) => x.file === rel && x.left === v.left && x.right === v.right);
       if (k) { hit.add(k); known.push({ file: rel, ...v, finding: k.finding, owner: k.owner }); continue; }
