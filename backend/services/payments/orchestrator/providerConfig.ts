@@ -42,9 +42,20 @@ export function getProviderCredentials(id: PaymentProviderId, mode: ProviderMode
   return {
     keyId: process.env[env.id],
     keySecret: process.env[env.secret],
-    webhookSecret: process.env[env.webhook] ?? process.env[env.secret],
+    webhookSecret: WEBHOOK_SIGNED_WITH_CLIENT_SECRET.has(id)
+      ? process.env[env.webhook] ?? process.env[env.secret]
+      : process.env[env.webhook],
   };
 }
+
+/**
+ * SEC91-B13: only providers that sign webhooks WITH the API client secret may
+ * fall back to it. Cashfree does (by design). Razorpay signs with the separate
+ * webhook secret set in its dashboard, so falling back to the API key secret
+ * conflated two credentials; an unset Razorpay webhook secret now verifies
+ * nothing (verifyWebhookSignature → false).
+ */
+const WEBHOOK_SIGNED_WITH_CLIENT_SECRET: ReadonlySet<PaymentProviderId> = new Set<PaymentProviderId>(['cashfree']);
 
 export function isProviderConfigured(id: PaymentProviderId, mode: ProviderMode = getActiveMode()): boolean {
   const c = getProviderCredentials(id, mode);

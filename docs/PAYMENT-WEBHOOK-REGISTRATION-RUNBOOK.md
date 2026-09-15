@@ -29,18 +29,22 @@ Three distinct things are tracked separately and must never be conflated:
 `getProviderCredentials()` resolves the webhook secret per mode, with a fallback:
 
 ```
-webhookSecret = process.env[<MODE>_WEBHOOK_SECRET] ?? process.env[<MODE>_KEY_SECRET]
+Razorpay: webhookSecret = process.env[<MODE>_WEBHOOK_SECRET]            (no fallback)
+Cashfree: webhookSecret = process.env[<MODE>_WEBHOOK_SECRET] ?? process.env[<MODE>_SECRET_KEY]
 ```
 
 | Mode | Razorpay webhook secret | Cashfree webhook secret |
 |---|---|---|
-| `test` | `RAZORPAY_WEBHOOK_SECRET` (falls back to `RAZORPAY_TEST_KEY_SECRET`) | `CASHFREE_WEBHOOK_SECRET` (falls back to `CASHFREE_TEST_SECRET_KEY`) |
-| `live` | `RAZORPAY_LIVE_WEBHOOK_SECRET` (falls back to `RAZORPAY_LIVE_KEY_SECRET`) | `CASHFREE_PROD_WEBHOOK_SECRET` (falls back to `CASHFREE_PROD_SECRET_KEY`) |
+| `test` | `RAZORPAY_WEBHOOK_SECRET` (**required** — no fallback) | `CASHFREE_WEBHOOK_SECRET` (falls back to `CASHFREE_TEST_SECRET_KEY`) |
+| `live` | `RAZORPAY_LIVE_WEBHOOK_SECRET` (**required** — no fallback) | `CASHFREE_PROD_WEBHOOK_SECRET` (falls back to `CASHFREE_PROD_SECRET_KEY`) |
 
-> ⚠️ The fallback means a webhook can appear to "work" while validating against the
-> **API secret** instead of a dedicated webhook secret. **Set the explicit
-> `*_WEBHOOK_SECRET` variable** and use that exact value in the dashboard. Never
-> paste a secret into a ticket, a commit, or this file.
+> ⚠️ STEP 3AH-91 (SEC91-B13): Razorpay signs webhooks with the separate secret set in
+> its dashboard, so the former fallback to the **API key secret** conflated two
+> credentials. With the Razorpay webhook variable unset, every Razorpay webhook is
+> now rejected (signature invalid). Set it before enabling a mode, and make sure it
+> differs from the API key secret. Cashfree signs webhooks with the client secret by
+> design, so its fallback is kept. Never paste a secret into a ticket, a commit, or
+> this file.
 
 ---
 
