@@ -37,6 +37,7 @@ import {
   type Capability,
   type StepUpRequirement,
 } from '../../shared/contracts/security';
+import { getTrustedClientIpOrNull } from '../../lib/security/clientIp';
 
 export interface RequireCapabilityOptions {
   capability: Capability;
@@ -245,10 +246,9 @@ export async function requireCapability(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// SEC91-W2E: platform-trusted client IP (audit field only).
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  return req.socket?.remoteAddress ?? null;
+  return getTrustedClientIpOrNull(req);
 }
 
 function userAgent(req: NextApiRequest): string | null {

@@ -79,3 +79,12 @@ export function getTrustedClientIp(req: RequestLike): string {
 
   return normaliseIp(req.socket?.remoteAddress ?? null) ?? 'unknown';
 }
+
+/**
+ * SEC91-W2E — the same trusted client IP, or null when nothing parses as an IP.
+ * For audit fields / nullable columns whose old contract was `string | null`.
+ */
+export function getTrustedClientIpOrNull(req: RequestLike): string | null {
+  const ip = getTrustedClientIp(req);
+  return ip === 'unknown' ? null : ip;
+}
