@@ -54,8 +54,17 @@ async function buildPrincipalView(req: NextApiRequest): Promise<PolicyPrincipalV
   const isPlatformSuperAdmin =
     p.legacyCookieSuperAdmin || Object.values(organizationRoles).includes('SUPER_ADMIN');
   // INV-8: memoise the resolved principal in the request context (fail-safe).
+  // SEC-91 W2-G (W2G-5) — setPrincipal now also records the principal on the
+  // LIVE context (staged by the ai-guard-principal flag), so the handler sees
+  // it; see lib/platform/requestContext.ts. The org is forwarded only when the
+  // principal is an ACTIVE member of it: activeOrgId is a stored preference,
+  // not an authorization, and the first org recorded for a request wins.
+  const activeOrgId =
+    p.activeOrgId && p.organizations.some((m) => m.organizationId === p.activeOrgId && m.status === 'active')
+      ? p.activeOrgId
+      : undefined;
   try {
-    setPrincipal({ userId: p.userId, orgId: p.activeOrgId ?? undefined });
+    setPrincipal({ userId: p.userId, orgId: activeOrgId }, 'policyGate');
   } catch {
     /* observation must not depend on context availability */
   }
