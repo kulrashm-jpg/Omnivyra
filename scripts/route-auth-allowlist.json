@@ -828,8 +828,8 @@
     },
     "pages/api/wordpress-plugin/heartbeat.ts": {
       "kind": "machine-token",
-      "reason": "WordPress plugin heartbeat: authenticated by the plugin bearer token, verified by hash inside the service; 401 otherwise.",
-      "verifier": "recordWordPressPluginHeartbeat"
+      "reason": "WordPress plugin heartbeat: the route requires the plugin bearer token and verifies it (authenticateWordPressPluginToken, hash match, not revoked) before any write; the registration is taken from the token, a mismatching registration_id is refused (SEC-91A).",
+      "verifier": "authenticateWordPressPluginToken"
     },
     "pages/api/wordpress-plugin/setup/connect.ts": {
       "kind": "machine-token",
