@@ -181,7 +181,13 @@ describe.each(campaignRoutes)('$name', (c) => {
   it('unknown campaign → 404, sink never reached', async () => {
     const r = await invoke(c.handler, { ...c.req(UNKNOWN_ID), as: 'A' });
     expect(r.status).toBe(404);
-    expect(sinkCalls(c.sink)).toHaveLength(0);
+    // SEC-91A (STEP 3AH-91, A8): for a campaign with NO campaign_versions row,
+    // resolveCampaignCompanyId now reads the legacy owner (campaigns.company_id,
+    // by id) — a guard-side owner lookup that returns nothing for an unknown id.
+    // Exactly that one read is excluded; any other sink touch still fails.
+    const guardOwnerLookup = (x: { table: string; op: string; filters: Record<string, unknown> }) =>
+      x.table === 'campaigns' && x.op === 'select' && Object.keys(x.filters).join() === 'id' && x.filters.id === UNKNOWN_ID;
+    expect(sinkCalls(c.sink).filter((x) => !guardOwnerLookup(x))).toHaveLength(0);
   });
 
   it('member of A with own campaign → success, only A\'s data', async () => {

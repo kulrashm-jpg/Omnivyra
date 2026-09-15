@@ -70,12 +70,15 @@ describe('W1-1 semantic cache tenant scoping', () => {
     // WAVE3 item 3), which IS `request.cache_version` unless the caller supplies a
     // seed. Anchoring on the local preserves this assertion's meaning; the tenant
     // requirement — `request.companyId ?? null` in BOTH calls — is unchanged.
-    expect(gatewaySrc).toMatch(/getCachedCompletion\([\s\S]{0,220}?effectiveCacheVersion,[\s\S]{0,120}?request\.companyId \?\? null,\s*\)/);
-    expect(gatewaySrc).toMatch(/setCachedCompletion\(request\.operation, effectiveModel, request\.messages, content, effectiveCacheVersion, request\.companyId \?\? null\)/);
+    // SEC91-D6: a trailing credential-scope argument (BYOK isolation) follows
+    // the unchanged tenant argument in both calls.
+    expect(gatewaySrc).toMatch(/getCachedCompletion\([\s\S]{0,220}?effectiveCacheVersion,[\s\S]{0,120}?request\.companyId \?\? null,\s*cacheCredentialScope,\s*\)/);
+    expect(gatewaySrc).toMatch(/setCachedCompletion\(request\.operation, effectiveModel, request\.messages, content, effectiveCacheVersion, request\.companyId \?\? null, cacheCredentialScope\)/);
   });
 
   it('signatures accept the optional tenant parameter (backward compatible)', () => {
-    expect(cacheSrc).toMatch(/export async function getCachedCompletion\([\s\S]{0,300}?tenantId\?: string \| null,\s*\): Promise<string \| null>/);
-    expect(cacheSrc).toMatch(/export async function setCachedCompletion\([\s\S]{0,340}?tenantId\?: string \| null,\s*\): Promise<void>/);
+    // SEC91-D6: followed by the optional credential scope (still backward compatible).
+    expect(cacheSrc).toMatch(/export async function getCachedCompletion\([\s\S]{0,300}?tenantId\?: string \| null,[\s\S]{0,120}?credentialScope\?: string \| null,\s*\): Promise<string \| null>/);
+    expect(cacheSrc).toMatch(/export async function setCachedCompletion\([\s\S]{0,340}?tenantId\?: string \| null,[\s\S]{0,120}?credentialScope\?: string \| null,\s*\): Promise<void>/);
   });
 });

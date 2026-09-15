@@ -12,6 +12,21 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { normalizeRole, Role } from '../../../backend/services/rbacPrimitives';
+
+/**
+ * SEC-91 W2-A — roles that may delete a report: every company role except
+ * VIEW_ONLY (and the aliases normalizeRole folds into it: VIEWER,
+ * CONTENT_ENGAGER), mirroring the reports hub's canDeleteReports. ADMIN,
+ * CONTENT_MANAGER and CONTENT_PLANNER normalize into members of this set.
+ */
+const REPORT_DELETE_ROLES: ReadonlySet<string> = new Set<string>([
+  Role.SUPER_ADMIN,
+  Role.COMPANY_ADMIN,
+  Role.CONTENT_CREATOR,
+  Role.CONTENT_REVIEWER,
+  Role.CONTENT_PUBLISHER,
+]);
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 import {
   renderCanonicalReportHtml,
@@ -72,28 +87,45 @@ async function handler(
     }
     const { data: delMembership } = await supabase
       .from('user_company_roles')
-      .select('company_id')
+      .select('company_id, role')
       .eq('user_id', user.id)
       .eq('status', 'active');
-    const delCompanyIds = (delMembership ?? [])
-      .map((row) => (row as { company_id?: string | null }).company_id)
+    const delRows = (delMembership ?? []) as Array<{ company_id?: string | null; role?: string | null }>;
+    const delCompanyIds = delRows
+      .map((row) => row.company_id)
       .filter((cid): cid is string => Boolean(cid));
     if (delCompanyIds.length === 0) {
       return res.status(404).json({ error: 'Report not found', code: 'NOT_FOUND' });
     }
     const { data: existing } = await supabase
       .from('reports')
-      .select('id')
+      .select('id, company_id')
       .eq('id', delReportId)
       .in('company_id', delCompanyIds)
       .maybeSingle();
     if (!existing) {
       return res.status(404).json({ error: 'Report not found', code: 'NOT_FOUND' });
     }
+    // SEC-91 W2-A (STEP 3AH-91, W2A-1) — "View-only roles may open + export
+    // reports, but never delete them" (pages/reports.tsx) was enforced only by
+    // hiding the button, so any VIEW_ONLY member could delete the company's
+    // reports with a direct request. The role that counts is the caller's role
+    // in the REPORT's company (a multi-company user may be an admin elsewhere).
+    // Allow-list of known deleting roles: an unknown/unmapped role fails closed.
+    const reportCompanyId = String((existing as { company_id?: string | null }).company_id ?? '');
+    const mayDelete = delRows.some(
+      (row) =>
+        row.company_id === reportCompanyId &&
+        REPORT_DELETE_ROLES.has(normalizeRole(row.role ?? null) ?? ''),
+    );
+    if (!mayDelete) {
+      return res.status(403).json({ error: 'Your role cannot delete reports', code: 'FORBIDDEN_ROLE' });
+    }
     const { error: delError } = await supabase
       .from('reports')
       .delete()
       .eq('id', delReportId)
+      .eq('company_id', reportCompanyId)
       .in('company_id', delCompanyIds);
     if (delError) {
       return res.status(500).json({ error: 'Failed to delete report', code: 'DELETE_FAILED' });

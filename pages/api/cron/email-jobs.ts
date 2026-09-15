@@ -43,6 +43,7 @@ import {
   buildSendEnvelopeFromClaim,
   computeNextAttemptAt,
 } from '../../../backend/services/emailJobsService';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 const BATCH_SIZE = 20;
 
@@ -193,7 +194,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     logger.warn('email_jobs_worker_cron_secret_missing');
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (req.headers['authorization'] !== `Bearer ${cronSecret}`) {
+  if (!bearerTokenMatches(req.headers['authorization'], cronSecret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

@@ -66,6 +66,7 @@ export async function safeFetchJson<T = unknown>(
 ): Promise<SafeFetchJsonResult<T>> {
   let res: Response;
   try {
+    // ssrf-ok: browser helper imported only by components/ for same-origin /api/* paths; server code must use lib/security/safeFetch
     res = await fetch(input, init);
   } catch (err) {
     return {

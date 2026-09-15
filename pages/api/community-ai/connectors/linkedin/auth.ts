@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireManageConnectors } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 import { encodeOAuthState } from '../../../../../backend/auth/oauthState';
+import { getCanonicalOAuthRedirectUri } from '../../../../../backend/auth/getCanonicalOAuthRedirectUri';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -25,11 +26,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'LinkedIn OAuth not configured. Super Admin must configure platform_oauth_configs or env vars.' });
   }
 
-  // Derive callback URL from the actual request host so localhost and production
-  // both resolve to a URL that is already registered in the LinkedIn app.
-  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
-  const host = (req.headers['x-forwarded-host'] as string | undefined) || req.headers.host || 'localhost:3000';
-  const redirectUri = `${proto}://${host}/api/auth/linkedin/callback`;
+  // The connector flow finishes on the shared /api/auth/linkedin/callback, which
+  // exchanges the code with getCanonicalOAuthRedirectUri('linkedin', req). Use the
+  // same builder so the two values always match. SEC91-W2B-2: in production that is
+  // the configured canonical app URL; request Host / X-Forwarded-Host are ignored.
+  const redirectUri = getCanonicalOAuthRedirectUri('linkedin', req);
 
   const redirectTo =
     typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';

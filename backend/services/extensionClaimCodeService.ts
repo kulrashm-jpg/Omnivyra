@@ -17,6 +17,7 @@
  */
 
 import { randomBytes, createHmac, timingSafeEqual } from 'crypto';
+import { resolveSigningSecret } from '../auth/signingSecrets';
 
 type ClaimCode = {
   code: string;
@@ -39,13 +40,10 @@ const store: Map<string, ClaimCode> = globalAny[GLOBAL_KEY] ?? new Map<string, C
 globalAny[GLOBAL_KEY] = store;
 const CLAIM_CODE_TTL_MS = 60 * 1000; // 60 seconds
 
+// SEC91-B1: same resolution as the extension session secret — dedicated secret, then
+// AUTH_SECRET, else fail closed. The committed literal fallback is gone.
 function getCodeSecret() {
-  return (
-    process.env.EXTENSION_SESSION_SECRET ||
-    process.env.AUTH_SECRET ||
-    process.env.NEXTAUTH_SECRET ||
-    'omnivyra-extension-claim-code-secret'
-  );
+  return resolveSigningSecret('extension claim codes', ['EXTENSION_SESSION_SECRET', 'AUTH_SECRET']);
 }
 
 function gc() {

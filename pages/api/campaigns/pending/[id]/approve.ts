@@ -8,13 +8,15 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
  * On approval: atomically marks pending as approved then creates the campaign.
  * On rejection: marks the pending record as rejected.
  *
- * Auth: requireAuth + requireCompanyAccess
+ * Auth: requireAuth + requireCompanyAccess + COMPANY_ADMIN (or platform super
+ *       admin) in the pending campaign's company.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { logDecision } from '@/backend/services/autonomousDecisionLogger';
+import { getUserRole, isPlatformSuperAdmin, Role } from '@/backend/services/rbacService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -47,6 +49,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Verify user has access to this company
   const allowed = await requireCompanyAccess(auth.user.id, companyId, res);
   if (!allowed) return;
+
+  // SEC-91 W2-G (STEP 3AH-91, W2G-2) — approving (or rejecting) an autonomous
+  // proposal is a company-admin action. Membership alone used to be enough, so
+  // a VIEW_ONLY member could approve a proposal, which creates and schedules a
+  // campaign for the whole company. Same policy and check as W2A-1d on
+  // POST /api/admin/autonomous: the autonomous control surface
+  // (components/admin/AutonomousControlPanel, this route's only caller) is for
+  // COMPANY ADMINS, and approval performs CAMPAIGN_EXECUTE — admin-only in
+  // capabilityRegistry. The role is read for the pending campaign's own company;
+  // platform super admins keep their override.
+  const [platformAdmin, companyRole] = await Promise.all([
+    isPlatformSuperAdmin(auth.user.id),
+    getUserRole(auth.user.id, companyId),
+  ]);
+  const isCompanyAdmin =
+    companyRole.role === Role.COMPANY_ADMIN || companyRole.role === Role.SUPER_ADMIN;
+  if (!platformAdmin && !isCompanyAdmin) {
+    return res.status(403).json({ error: 'FORBIDDEN_ROLE', code: 'FORBIDDEN_ROLE' });
+  }
 
   const reviewedAt = new Date().toISOString();
   const reviewedBy = auth.user.email ?? auth.user.id;

@@ -30,6 +30,7 @@ import {
   generateHmacNonce,
 } from '@/backend/services/extensionSessionService';
 import { CAPABILITY_MAP_VERSION } from '@/backend/services/engagementCapabilityMap';
+import { isSigningSecretUnavailable } from '@/backend/auth/signingSecrets';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -83,7 +84,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   } catch (error) {
     console.error('[extension/redeem]', error);
-    return res.status(500).json({ success: false, error: (error as Error)?.message || 'redeem failed' });
+    // SEC91-W2B-5: a missing signing secret is a service condition (503) with a plain
+    // code; never echo the error text (it names configuration variables).
+    if (isSigningSecretUnavailable(error)) {
+      return res.status(503).json({ success: false, error: 'SIGNING_SECRET_UNAVAILABLE' });
+    }
+    return res.status(500).json({ success: false, error: 'redeem failed' });
   }
 }
 

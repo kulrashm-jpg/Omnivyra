@@ -8,6 +8,7 @@ import { triggerVisitorSessionIntelligence } from '../../../backend/services/lea
 import { parseUserAgent, extractGeoContext } from '../../../backend/services/leadIntelligenceEngine/visitorContext';
 import { recordVisitorContext, recordEventIngestion, type EventFamily } from '../../../backend/services/leadIntelligenceTelemetry';
 import { defaultEngineConfig } from '../../../backend/services/leadIntelligenceEngine/engineConfig';
+import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 /** INT-002 hardening: max distinct visitor sessions regenerated per request. */
 const MAX_TRIGGERED_SESSIONS_PER_REQUEST = 3;
@@ -56,7 +57,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0]?.trim();
+  // SEC91-W2E: platform-trusted client IP; '' when nothing parses (rate key then falls back to anonymousId, hashIp('') -> null).
+  const ip = getTrustedClientIpOrNull(req) ?? '';
   const body = (req.body || {}) as TrackingPayload;
   const events = Array.isArray(body.events) ? body.events.slice(0, 25) : [body];
   const websiteId = body.website_id || events[0]?.website_id;

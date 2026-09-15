@@ -34,23 +34,18 @@ import { enqueueEmailJob } from '../../../../../backend/services/emailJobsServic
 import { requireAdminRateLimit } from '../../../../../backend/services/requestAccessService';
 import { getCanonicalAppUrl } from '../../../../../backend/config/getCanonicalAppUrl';
 import { createHmac, createHash } from 'crypto';
+import { getInvitationSigningSecret } from '../../../../../backend/services/invitationService';
+import { isSigningSecretUnavailable } from '../../../../../backend/auth/signingSecrets';
 
 function appUrl(): string {
   return getCanonicalAppUrl();
 }
 
+// SEC91-B1: the one shared resolver (INVITATION_TOKEN_SECRET, fail closed). This route
+// used to carry its own copy of the chain, ending in the service-role API key and a
+// committed literal.
 function invitationSecret(): string {
-  // API-key migration note: the legacy variable below is used here as an HMAC
-  // SIGNING SECRET, not as a Supabase API key, so it is deliberately NOT
-  // migrated to SUPABASE_SECRET_KEY — changing the value would invalidate every
-  // already-issued invitation token. Consequence: SUPABASE_SERVICE_ROLE_KEY must
-  // stay set in production until this chain gets a dedicated secret, otherwise
-  // signing silently falls through to the hardcoded development constant.
-  return (
-    process.env.INVITATION_TOKEN_SECRET?.trim()
-    || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
-    || 'local-dev-invite-secret'
-  );
+  return getInvitationSigningSecret();
 }
 
 /**
@@ -94,6 +89,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
   if (guard.ok !== true) return;
   const actorUserId = guard.principal.userId || SYSTEM_USER_ID;
+
+  // Fail closed BEFORE touching any in-flight email job: without the signing secret the
+  // token cannot be rebuilt, so the resend must not start.
+  try {
+    invitationSecret();
+  } catch (err) {
+    if (!isSigningSecretUnavailable(err)) throw err;
+    logger.error('super_admin_invite_resend_signing_secret_unavailable', { invitationId });
+    return res.status(503).json({ error: 'INVITATION_SIGNING_UNAVAILABLE' });
+  }
 
   // Load invitation.
   const { data: invitation, error: invErr } = await supabase

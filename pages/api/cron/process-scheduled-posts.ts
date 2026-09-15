@@ -21,6 +21,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { publishNow } from '../../../backend/services/publishNowService';
 import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
 import { runJob } from '../../../backend/services/jobRunner';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 const BATCH_SIZE = 20; // Max posts to process per invocation
 
@@ -35,7 +36,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[cron/process-scheduled-posts] CRON_SECRET not configured; rejecting request to fail closed');
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  const triggeredByCronSecret = req.headers['authorization'] === `Bearer ${cronSecret}`;
+  const triggeredByCronSecret = bearerTokenMatches(req.headers['authorization'], cronSecret);
   if (!triggeredByCronSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }

@@ -7,6 +7,7 @@
 
 import crypto from 'crypto';
 import { config } from '@/config';
+import { safeRelativeRedirectPath } from './safeRedirect';
 
 export type OAuthStateInvalidReason =
   | 'missing'
@@ -24,6 +25,8 @@ export interface OAuthStateParams {
   flow?: string;
   tenantId?: string;
   codeVerifier?: string;
+  /** Optional provider discriminator (e.g. meta: 'facebook' | 'instagram'). Signed. */
+  provider?: string;
   valid?: boolean;
   reason?: OAuthStateInvalidReason;
 }
@@ -42,26 +45,32 @@ const OAUTH_STATE_MAX_FUTURE_MS = 2 * 60 * 1000;
  * companyId. So we fail closed.
  *
  * Key resolution (in priority order):
- *   1. `OAUTH_STATE_HMAC_KEY` — dedicated key. Recommended in production so a
- *      compromise of the at-rest token encryption key does not also forge
- *      OAuth state (and vice versa). Splits the blast radius.
- *   2. `ENCRYPTION_KEY` — backward-compatible fallback. Used when the
- *      dedicated HMAC key has not been provisioned yet, so existing
- *      deployments continue to validate previously-signed state.
+ *   1. `OAUTH_STATE_HMAC_KEY` — dedicated key, used verbatim (unchanged).
+ *      Recommended in production so a compromise of the at-rest token
+ *      encryption key does not also forge OAuth state (and vice versa).
+ *   2. `ENCRYPTION_KEY` — fallback, but NEVER used directly as the HMAC key
+ *      (SEC91-B7). The key is domain-separated first:
+ *        HMAC-SHA256(ENCRYPTION_KEY, 'omnivyra/oauth-state/v1')
+ *      so the AES token-encryption key is not reused raw for a second purpose.
+ *      Deploy note: states minted with the raw key before this change stop
+ *      verifying; they live at most OAUTH_STATE_MAX_AGE_MS (10 min), so only
+ *      a consent screen open across the deploy has to be restarted.
  *
  * Both are read from `config` first (Zod-validated) and `process.env` only
  * as a defensive fallback for any caller that imports this module before
  * the `config` proxy is initialized.
  */
-function getStateSigningKey(): string | null {
+const OAUTH_STATE_KEY_DERIVATION_LABEL = 'omnivyra/oauth-state/v1';
+
+function getStateSigningKey(): string | Buffer | null {
   const dedicated = config.OAUTH_STATE_HMAC_KEY || process.env.OAUTH_STATE_HMAC_KEY;
   if (dedicated && dedicated.trim()) return dedicated.trim();
   const key = config.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY;
   if (!key || !key.trim()) return null;
-  return key;
+  return crypto.createHmac('sha256', key).update(OAUTH_STATE_KEY_DERIVATION_LABEL).digest();
 }
 
-function requireStateSigningKey(): string {
+function requireStateSigningKey(): string | Buffer {
   const key = getStateSigningKey();
   if (!key) {
     throw new Error(
@@ -97,6 +106,14 @@ function signForDecode(base: string, returnTo?: string): string | null {
     .digest('base64url');
 }
 
+/** Constant-time comparison of two base64url signatures (SEC91-B7). */
+function signaturesMatch(provided: string, expected: string | null): boolean {
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export function encodeOAuthState(params: OAuthStateParams): string {
   const payload: Record<string, string> = {
     cid: params.companyId || '',
@@ -106,10 +123,16 @@ export function encodeOAuthState(params: OAuthStateParams): string {
   if (params.flow) payload.flo = params.flow;
   if (params.tenantId) payload.tid = params.tenantId;
   if (params.codeVerifier) payload.cv = params.codeVerifier;
+  if (params.provider) payload.prv = params.provider;
+
+  // SEC91-B4: only a same-origin relative path is ever signed into the state. A caller-
+  // supplied '//evil.example' (or '/\evil.example', 'https://…') is dropped, so the
+  // callback falls back to its default destination instead of redirecting off-site.
+  const returnTo = safeRelativeRedirectPath(params.returnTo);
 
   const base = Buffer.from(JSON.stringify(payload)).toString('base64');
-  const signature = signForEncode(base, params.returnTo);
-  return params.returnTo ? `${base}.${signature}|${params.returnTo}` : `${base}.${signature}`;
+  const signature = signForEncode(base, returnTo);
+  return returnTo ? `${base}.${signature}|${returnTo}` : `${base}.${signature}`;
 }
 
 export function decodeOAuthState(state: string | undefined): OAuthStateParams {
@@ -118,17 +141,20 @@ export function decodeOAuthState(state: string | undefined): OAuthStateParams {
   const pipeIdx = state.indexOf('|');
   const signedBase = pipeIdx >= 0 ? state.slice(0, pipeIdx) : state;
   const returnToRaw = pipeIdx >= 0 ? state.slice(pipeIdx + 1) : '';
-  const returnTo = returnToRaw.startsWith('/') ? returnToRaw : undefined;
 
   const dotIdx = signedBase.lastIndexOf('.');
   const base = dotIdx >= 0 ? signedBase.slice(0, dotIdx) : signedBase;
   const signature = dotIdx >= 0 ? signedBase.slice(dotIdx + 1) : '';
-  const expected = signForDecode(base, returnTo);
-  const signatureValid = Boolean(signature) && Boolean(expected) && signature === expected;
+  // The signature covers the returnTo exactly as it travelled.
+  const expected = signForDecode(base, returnToRaw || undefined);
+  const signatureValid = signaturesMatch(signature, expected);
 
+  // SEC91-B4: an unsigned / forged state yields NO returnTo at all (the callbacks build
+  // their error redirect from it), and even a correctly signed one is re-validated.
   if (!signatureValid) {
-    return { returnTo, valid: false, reason: 'signature' };
+    return { valid: false, reason: 'signature' };
   }
+  const returnTo = safeRelativeRedirectPath(returnToRaw);
 
   try {
     const parsed = JSON.parse(Buffer.from(base, 'base64').toString('utf8'));
@@ -155,6 +181,7 @@ export function decodeOAuthState(state: string | undefined): OAuthStateParams {
       flow: parsed.flo || undefined,
       tenantId: parsed.tid || undefined,
       codeVerifier: parsed.cv || undefined,
+      provider: parsed.prv || undefined,
       returnTo,
       valid: true,
     };

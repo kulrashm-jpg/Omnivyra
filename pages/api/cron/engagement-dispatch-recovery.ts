@@ -28,6 +28,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import {
   recoverAbandonedBrowserDispatches,
 } from '../../../backend/services/engagementDispatchRecoveryService';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 const BATCH_SIZE = 100;
 
@@ -41,7 +42,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[cron/engagement-dispatch-recovery] CRON_SECRET not configured; rejecting');
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (req.headers['authorization'] !== `Bearer ${cronSecret}`) {
+  if (!bearerTokenMatches(req.headers['authorization'], cronSecret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

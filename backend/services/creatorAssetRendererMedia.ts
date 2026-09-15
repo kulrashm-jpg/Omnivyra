@@ -140,6 +140,13 @@ export async function generateProviderImage(input: {
   }
 
   const { default: OpenAI } = await import('openai');
+  // SEC91-D5 (orphaned paid retries): each provider call below races the SDK
+  // against a wall-clock budget. When the budget won, the SDK call was left
+  // running — and the SDK RETRIES timeouts (maxRetries=2 by default), so one
+  // image the caller had already given up on could be generated and billed up
+  // to three more times in the background. Every call now carries an
+  // AbortSignal that is aborted as soon as the race settles, which also stops
+  // any pending SDK retry. In-budget 429/5xx retries are unaffected.
   const client = new OpenAI({ apiKey });
   // Env-selectable model, gpt-image-1 as the known-good fallback. Set
   // OPENAI_IMAGE_MODEL=gpt-image-2 to prefer the newer model (falls back on error).
@@ -204,6 +211,7 @@ export async function generateProviderImage(input: {
           : (r.mimeType.includes('jpeg') || r.mimeType.includes('jpg')) ? 'jpg' : 'webp';
         return toFile(r.bytes, `reference-${i}.${ext}`, { type: r.mimeType });
       }));
+      const editCall = new AbortController(); // SEC91-D5: cancel the SDK call (and its retries) when the budget wins
       const editResp = await Promise.race([
         client.images.edit(
           {
@@ -216,10 +224,10 @@ export async function generateProviderImage(input: {
             size: AI_IMAGE_SIZE,
             quality: (process.env.CREATOR_IMAGE_REFERENCE_QUALITY || 'low'),
           } as Parameters<typeof client.images.edit>[0],
-          { timeout: AI_IMAGE_TIMEOUT_MS },
+          { timeout: AI_IMAGE_TIMEOUT_MS, signal: editCall.signal },
         ),
         timeoutAfter<Awaited<ReturnType<typeof client.images.edit>>>(AI_IMAGE_TIMEOUT_MS, `Image edit ${editModel}`),
-      ]);
+      ]).finally(() => editCall.abort());
       recordCreatorDuration('provider_image', Date.now() - editStartedAt, {
         model: `${editModel}:edit`,
         platform: input.eventContext?.platform ?? null,
@@ -287,6 +295,7 @@ export async function generateProviderImage(input: {
       const refType = refResp.headers.get('content-type') || 'image/webp';
       const refExt = refType.includes('png') ? 'png' : (refType.includes('jpeg') || refType.includes('jpg')) ? 'jpg' : 'webp';
       const refFile = await toFile(refBuf, `reference.${refExt}`, { type: refType });
+      const refEditCall = new AbortController(); // SEC91-D5: see the note at client construction
       const editResp = await Promise.race([
         client.images.edit(
           {
@@ -297,10 +306,10 @@ export async function generateProviderImage(input: {
             size: AI_IMAGE_SIZE,
             quality: (process.env.CREATOR_IMAGE_REFERENCE_QUALITY || 'low'),
           } as Parameters<typeof client.images.edit>[0],
-          { timeout: AI_IMAGE_TIMEOUT_MS },
+          { timeout: AI_IMAGE_TIMEOUT_MS, signal: refEditCall.signal },
         ),
         timeoutAfter<Awaited<ReturnType<typeof client.images.edit>>>(AI_IMAGE_TIMEOUT_MS, `Image edit ${editModel}`),
-      ]);
+      ]).finally(() => refEditCall.abort());
       recordCreatorDuration('provider_image', Date.now() - editStartedAt, {
         model: `${editModel}:edit`,
         platform: input.eventContext?.platform ?? null,
@@ -365,13 +374,14 @@ export async function generateProviderImage(input: {
             moderation: 'auto',
           };
 
+      const generateCall = new AbortController(); // SEC91-D5: see the note at client construction
       const response = await Promise.race([
         client.images.generate(
           request as Parameters<typeof client.images.generate>[0],
-          { timeout: AI_IMAGE_TIMEOUT_MS },
+          { timeout: AI_IMAGE_TIMEOUT_MS, signal: generateCall.signal },
         ),
         timeoutAfter<Awaited<ReturnType<typeof client.images.generate>>>(AI_IMAGE_TIMEOUT_MS, `Image provider ${model}`),
-      ]);
+      ]).finally(() => generateCall.abort());
       recordCreatorDuration('provider_image', Date.now() - providerStartedAt, {
         model,
         platform: input.eventContext?.platform ?? null,

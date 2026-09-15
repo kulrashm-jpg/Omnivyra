@@ -17,13 +17,19 @@ const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-
 const EMBEDDING_DIM = 1536;
 const PROCESS_TYPE = 'embedding_generation';
 
+// SEC91-D5/D9: embeddings are small, fast calls. The SDK default request
+// timeout is 10 minutes (x3 with its own retries) — a stalled upstream could
+// pin a worker for half an hour. Bounded explicitly; SDK retries unchanged
+// (this path has no outer retry loop).
+export const EMBEDDING_REQUEST_TIMEOUT_MS = 30_000;
+
 // Singleton — reuses HTTP connection pool across embedding calls
 let _embeddingClient: OpenAI | null = null;
 function getClient(): OpenAI {
   if (!_embeddingClient) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('Missing OPENAI_API_KEY for embeddings');
-    _embeddingClient = new OpenAI({ apiKey });
+    _embeddingClient = new OpenAI({ apiKey, timeout: EMBEDDING_REQUEST_TIMEOUT_MS });
   }
   return _embeddingClient;
 }

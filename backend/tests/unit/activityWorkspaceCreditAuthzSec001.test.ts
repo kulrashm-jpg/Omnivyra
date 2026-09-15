@@ -56,7 +56,10 @@ function rowsFor(table: string): any[] {
 function makeBuilder(table: string) {
   const filters: Record<string, unknown> = {};
   const b: any = {};
-  for (const m of ['select', 'order', 'limit', 'in', 'neq', 'is', 'insert', 'update', 'upsert', 'delete']) b[m] = () => b;
+  // SEC-91 W2-A (W2F-1a): the handler now resolves a saved activity with the
+  // canonical writer's `.or(id.eq.X,execution_id.eq.X)` lookup before binding it
+  // to the company, so the fake builder accepts `.or` (unfiltered, like `in`).
+  for (const m of ['select', 'order', 'limit', 'in', 'neq', 'is', 'or', 'insert', 'update', 'upsert', 'delete']) b[m] = () => b;
   b.eq = (c: string, v: unknown) => { filters[c] = v; return b; };
   const resolve = () => {
     calls.push({ table, filters: { ...filters } });

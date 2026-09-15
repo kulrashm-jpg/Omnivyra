@@ -54,7 +54,14 @@ async function fetchThreadsAccount(
   });
   const response = await fetch(`https://graph.facebook.com/v22.0/${encodeURIComponent(instagramUserId)}?${params}`);
   const body = await response.json().catch(() => null);
-  console.log('THREADS_ACCOUNT_RESPONSE', body);
+  // SEC91-B6: shape-only — the raw Graph body (account ids, profile fields, echoed
+  // request details on error) is not logged.
+  console.log('THREADS_ACCOUNT_RESPONSE', {
+    ok: response.ok,
+    status: response.status,
+    has_threads_account: Boolean(body && body.threads_account),
+    error_type: body?.error?.type ?? null,
+  });
 
   if (!response.ok) {
     throw new Error(body?.error?.message ?? 'THREADS_FETCH_FAILED');

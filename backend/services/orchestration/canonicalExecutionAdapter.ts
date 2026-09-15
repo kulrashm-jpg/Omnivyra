@@ -349,6 +349,17 @@ export async function updateExecutionLifecycle(
 }
 
 /**
+ * SEC-91 W2-A (W2F-1a) — an activity key that is safe to interpolate into a
+ * PostgREST filter: letters, digits, '-' and '_' only (uuids, `wk1-exec-2`,
+ * `workspace-…`). No ',', '.', '(', ')', ':', quotes or whitespace — the
+ * characters that carry PostgREST filter grammar.
+ */
+const SAFE_ACTIVITY_KEY = /^[A-Za-z0-9_-]{1,200}$/;
+export function isSafeActivityKey(value: unknown): value is string {
+  return typeof value === 'string' && SAFE_ACTIVITY_KEY.test(value);
+}
+
+/**
  * Content write addressed by activity-id only (no campaign in scope) using a
  * transform over the existing blob. Used by activity-workspace/content.ts
  * (master/variants persistence) so those enrichment writes are reconciled
@@ -361,12 +372,24 @@ export async function updateExecutionContentByActivity(
   sourceWriter = 'updateExecutionContentByActivity',
 ): Promise<CanonicalWriteResult> {
   if (!activityId) return { ok: false, reason: 'missing_activity_id' };
+  // SEC-91 W2-A (STEP 3AH-91, W2F-1a) — the key is interpolated into a
+  // PostgREST `.or()` filter below. A raw value such as
+  // "<uuid>,campaign_id.eq.<other campaign>" used to widen the match to another
+  // tenant's rows (and the first match was written). Only plain tokens (uuid /
+  // execution-id shape) are accepted, before any query.
+  if (!isSafeActivityKey(activityId)) {
+    LOG('ORCHESTRATION_WRITE', { execution_id: null, source_writer: sourceWriter, write_target: 'daily_content_plans', resolution_strategy: 'invalid_activity_id' });
+    return { ok: false, reason: 'invalid_activity_id' };
+  }
   try {
     const { data: rows } = await supabase
       .from('daily_content_plans')
       .select('id, campaign_id, execution_id, content')
       .or(`id.eq.${activityId},execution_id.eq.${activityId}`);
-    const row = (rows ?? [])[0];
+    // An exact row-id match wins over an execution_id match (execution ids are
+    // not unique across campaigns), so a caller that verified row X writes X.
+    const list = (rows ?? []) as Array<Record<string, unknown>>;
+    const row = list.find((r) => String(r.id ?? '') === activityId) ?? list[0];
     if (!row) {
       LOG('ORCHESTRATION_WRITE', { execution_id: activityId, source_writer: sourceWriter, write_target: 'daily_content_plans', resolution_strategy: 'row_not_found' });
       return { ok: false, reason: 'row_not_found' };

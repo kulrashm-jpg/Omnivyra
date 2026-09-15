@@ -12,6 +12,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
@@ -32,7 +33,7 @@ async function handler(
   seedRequestContextFromRequest(req);
 
   // ── 1. Rate limit by IP ───────────────────────────────────────────────────
-  const ip = String(req.headers['x-forwarded-for'] ?? (req.socket as any)?.remoteAddress ?? 'unknown').split(',')[0].trim();
+  const ip = authRequestIp(req);
   const rl = await checkRateLimit(ip, ACCEPT_INVITE_LIMIT);
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 

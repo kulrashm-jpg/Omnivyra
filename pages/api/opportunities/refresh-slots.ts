@@ -4,6 +4,7 @@ import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
 import { runOpportunitySlotsScheduler } from '../../../backend/services/opportunitySlotsScheduler';
 import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 /**
  * POST /api/opportunities/refresh-slots
@@ -28,7 +29,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   const cronSecret = process.env.CRON_SECRET;
   const authHeader = req.headers.authorization;
-  if (cronSecret && authHeader === bearerAuthorization(cronSecret)) {
+  // SEC-C4: constant-time comparison (no prefix-timing oracle).
+  if (cronSecret && constantTimeEqual(authHeader, bearerAuthorization(cronSecret))) {
     return runRefresh(req, res);
   }
   return withRBAC(runRefresh, [Role.SUPER_ADMIN])(req, res);

@@ -103,6 +103,7 @@ export const getUserProfile = async (platform: string, accessToken: string): Pro
   const url = profileUrls[platform];
   if (!url) throw new Error(`Unsupported platform: ${platform}`);
 
+  // ssrf-ok: url comes from the fixed profileUrls map above (literal provider hosts); unknown platforms throw
   const response = await fetch(url, {
     headers: {
       'Authorization': bearerAuthorization(accessToken),

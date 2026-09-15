@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getContentQueue } from '../../../backend/queue/contentGenerationQueues';
 import { safeEnqueue } from '../../../backend/middleware/queueBackpressure';
+import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 /**
  * Vercel Cron entrypoint — runs daily at 02:00 UTC (configured in vercel.json).
@@ -36,7 +37,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[cron/analytics-ingestion] CRON_SECRET not configured; rejecting request to fail closed');
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (req.headers['authorization'] !== `Bearer ${cronSecret}`) {
+  if (!bearerTokenMatches(req.headers['authorization'], cronSecret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

@@ -54,6 +54,7 @@ import { getActiveScanId } from '../intelligence/scanBudgetContext';
 import { logProviderCall } from '../intelligence/productionPrimitives';
 import { getReportDeadlineSignal } from '../intelligence/reportDeadlineContext';
 import type { SerpSnapshotInput } from '../externalCompetitiveIntelligenceService';
+import { redactedErrorMessage } from '../../../lib/security/redactUrl';
 
 /** The provider a report consumer is pinned to. See the note above. */
 export const REPORT_SERP_PROVIDER = 'serpapi' as const;
@@ -276,7 +277,9 @@ export async function fetchCanonicalSerp(
       provider: providerId,
     };
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    // SEC-E3: the request URL carries `api_key` (SerpAPI has no header auth).
+    // An error that echoes the URL must not put the key in the log or reason.
+    const reason = redactedErrorMessage(error, 1000);
     logProviderCall({
       providerId: 'serp', operation: input.operation, status: 'unavailable', reason,
       duration_ms: Date.now() - startedAt,

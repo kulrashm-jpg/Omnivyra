@@ -21,6 +21,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { ownedDbTable } from '@/backend/db/writeOwner';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 import {
   isCreatorRenderingEnabled,
   isCreatorRenderQueueEnabled,
@@ -44,7 +45,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!expected) {
     return res.status(503).json({ error: 'Worker token not configured.', code: 'WORKER_DISABLED' });
   }
-  if (!provided || provided !== expected) {
+  // SEC-C4: constant-time comparison (empty/absent token never matches).
+  if (!constantTimeEqual(provided, expected)) {
     return res.status(401).json({ error: 'Unauthorized worker.', code: 'WORKER_UNAUTHORIZED' });
   }
 

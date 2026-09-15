@@ -6,13 +6,15 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
-import { getUserCompanyRole, getCompanyRoleIncludingInvited, Role } from './rbacService';
+import { getUserCompanyRole, isPlatformSuperAdmin, Role } from './rbacService';
+import { companyOperationalState } from './companyOperationalState';
 import {
   resolveEffectiveCampaignRole,
   isCompanyOverrideRole,
   type CampaignAuthContext,
 } from './campaignRoleService';
 import { resolveUserContext } from './userContextService';
+import { attributeAuthenticatedPrincipal } from './requestContextPrincipal';
 
 export type CampaignAccessResult = {
   userId: string;
@@ -40,6 +42,25 @@ export type CampaignAccessResult = {
  * Returns null when the campaign has no owner record. Callers MUST treat null
  * as "deny", never as "unowned" — this value is only ever compared against an
  * already-authorized companyId; it never grants access on its own.
+ *
+ * SEC-91A (STEP 3AH-91, A8) — legacy fallback to `campaigns.company_id`, ONLY
+ * when the campaign has NO `campaign_versions` row at all. Four creation paths
+ * insert a `campaigns` row with a server-derived `company_id` but never write a
+ * version row (campaigns/pending/[id]/approve, autonomousScheduler,
+ * adsIngestionService; legacy campaigns/save writes neither), so their
+ * campaigns resolved to "no owner" and every requireCampaignAccess route
+ * answered 404 to their own company. This mirrors campaignOwnershipService,
+ * which already accepts `campaigns.company_id` for legacy campaigns.
+ *
+ * Why this cannot open cross-tenant access:
+ *   - when ANY version row exists it stays authoritative — the fallback never
+ *     overrides or competes with a version owner (divergent rows keep the
+ *     version answer, unchanged);
+ *   - the fallback only yields the company recorded on the campaign itself
+ *     (a `campaigns.company_id` that is null still means "no owner" → deny);
+ *   - the value is still only an owner CLAIM: requireCampaignAccess goes on to
+ *     prove the caller's membership in exactly that company;
+ *   - a lookup error on either read answers null (deny), never "unowned".
  */
 export async function resolveCampaignCompanyId(campaignId: string): Promise<string | null> {
   if (!campaignId || typeof campaignId !== 'string') return null;
@@ -50,8 +71,18 @@ export async function resolveCampaignCompanyId(campaignId: string): Promise<stri
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error || !data?.company_id) return null;
-  return String(data.company_id);
+  if (error) return null;
+  if (data) return data.company_id ? String(data.company_id) : null;
+
+  // No version row at all → legacy owner record on the campaign itself.
+  const legacy = await supabase
+    .from('campaigns')
+    .select('company_id')
+    .eq('id', campaignId)
+    .maybeSingle();
+  if (legacy.error || !legacy.data) return null;
+  const legacyCompanyId = (legacy.data as { company_id?: string | null }).company_id;
+  return legacyCompanyId ? String(legacyCompanyId) : null;
 }
 
 /**
@@ -97,18 +128,79 @@ export async function requireCampaignAccess(
 
   let role: (typeof Role)[keyof typeof Role] | null = null;
   if (hasEnvAccess) {
+    // SEC-91 W2-A (STEP 3AH-91, W2A-5) — organization state. The fast path is
+    // "active member of the owning company" (resolveUserContext.companyIds), but
+    // it never checked companies.status, while the canonical tenant guard
+    // (TenantGuard.assertTenantAccess, behind enforceCompanyAccess /
+    // requireTenantAccess) denies an active member of a non-active company
+    // (ORG_INACTIVE / ORG_NOT_FOUND → 403) unless they are a platform super
+    // admin. Same decision here, same responses; a lookup failure is a
+    // retryable 503, never an allow. The content-architect principal keeps its
+    // documented legacy fallback (enforceCompanyAccess fallback (a)).
+    if (!isContentArchitect) {
+      const orgState = await companyOperationalState(companyId);
+      if (orgState === 'lookup_error') {
+        res.status(503).json({
+          error: 'Membership check is temporarily unavailable. Please try again.',
+          code: 'TENANT_LOOKUP_ERROR',
+          retryable: true,
+        });
+        return null;
+      }
+      if (orgState === 'not_operational' && !(await isPlatformSuperAdmin(userId))) {
+        res.status(403).json({ error: 'Access denied to company' });
+        return null;
+      }
+    }
     role = Role.COMPANY_ADMIN;
   } else {
-    // DB role lookup (normal authenticated path).
+    // DB role lookup (normal authenticated path). getUserCompanyRole answers:
+    // platform super admin (ACTIVE SUPER_ADMIN row), an ACTIVE membership role,
+    // or — the same legacy fallback enforceCompanyAccess keeps — an INVITED
+    // COMPANY_ADMIN/ADMIN/SUPER_ADMIN row.
+    //
+    // SEC-91A (STEP 3AH-91, A2) — this used to fall back further to
+    // getCompanyRoleIncludingInvited and accept ANY invited role (e.g. an
+    // invited CONTENT_CREATOR who never accepted, or whose invitation expired),
+    // while enforceCompanyAccess — the guard on the same company's other routes —
+    // accepts invited ADMIN roles only. That extra fallback only ever added
+    // invited non-admin roles, so it is removed: both guards now agree on who is
+    // a member.
     const roleResult = await getUserCompanyRole(req, companyId);
     role = roleResult.role;
     if (!role) {
-      const invitedRole = await getCompanyRoleIncludingInvited(userId, companyId);
-      if (invitedRole) role = invitedRole;
-    }
-    if (!role) {
+      // SEC-91A (A6) — 403 for "exists, not yours" vs 404 for "no owner" is
+      // kept deliberately: it is the platform-wide TenantGuard vocabulary
+      // (requireTenantAccess NOT_A_MEMBER 403 vs ORG_NOT_FOUND 404,
+      // requireCampaignTenantAccess, content/index CROSS_TENANT_CAMPAIGN), it
+      // is reachable only by an AUTHENTICATED caller, and it discloses nothing
+      // but whether a random v4 UUID exists. See docs/security/SEC91_A.md §A6.
       res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       return null;
+    }
+    // SEC-91 W2-G (STEP 3AH-91, W2G-4) — organization state on this path too.
+    // It admits principals the fast path does not: an INVITED
+    // COMPANY_ADMIN/ADMIN/SUPER_ADMIN row (getUserRole's legacy fallback) and an
+    // active member whose context membership read failed. Neither was checked
+    // against companies.status, so an invited admin kept campaign access to a
+    // suspended / inactive / deleted company. Same decision as the fast path and
+    // as enforceCompanyAccess's invited fallback: non-operational ⇒ 403, lookup
+    // failure ⇒ retryable 503. Platform super admins keep TenantGuard's bypass
+    // (checked first, so they never depend on the company read).
+    if (!(await isPlatformSuperAdmin(userId))) {
+      const orgState = await companyOperationalState(companyId);
+      if (orgState === 'lookup_error') {
+        res.status(503).json({
+          error: 'Membership check is temporarily unavailable. Please try again.',
+          code: 'TENANT_LOOKUP_ERROR',
+          retryable: true,
+        });
+        return null;
+      }
+      if (orgState === 'not_operational') {
+        res.status(403).json({ error: 'Access denied to company' });
+        return null;
+      }
     }
   }
 
@@ -130,6 +222,10 @@ export async function requireCampaignAccess(
           source: campaignAuthResult.source,
         };
   }
+
+  // SEC-91 W2-A (W2A-4) — record the authorized principal (observe-only by
+  // default; see requestContextPrincipal.ts).
+  attributeAuthenticatedPrincipal({ userId, orgId: companyId, source: 'requireCampaignAccess' });
 
   return {
     userId,

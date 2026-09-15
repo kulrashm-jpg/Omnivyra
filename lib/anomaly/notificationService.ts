@@ -87,6 +87,7 @@ async function sendSlack(anomaly: AnomalyNotification): Promise<void> {
  */
 async function attemptSlackSend(url: string, text: string, isRetry: boolean): Promise<void> {
   try {
+    // ssrf-ok: url is the operator-configured Slack webhook (SLACK_WEBHOOK_URL / SLACK_INTELLIGENCE_WEBHOOK), never request data
     const res = await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },

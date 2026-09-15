@@ -234,6 +234,22 @@ describe('AI send boundary', () => {
     actionableThreads.add(THREAD);
 
     const res = await send(AI_SEND);
+    // SEC-91A (STEP 3AH-91): a draft whose thread is not this organization's is
+    // now answered exactly like a missing draft (404 AI_DRAFT_NOT_FOUND) instead
+    // of a distinct 400 AI_DRAFT_THREAD_MISMATCH, which confirmed another
+    // tenant's draft id. A same-organization draft on a different thread still
+    // gets AI_DRAFT_THREAD_MISMATCH (G3 below).
+    expect(res.statusCode).toBe(404);
+    expect(res.body.code).toBe('AI_DRAFT_NOT_FOUND');
+    expect(executeActionMock).not.toHaveBeenCalled();
+  });
+
+  it('G3: a same-organization draft on a different thread is refused as a mismatch', async () => {
+    db.engagement_threads.push({ id: 't-other-same-org', organization_id: ORG, platform_thread_id: 'urn:li:share:2', raw_payload: {} });
+    db.ai_message_drafts[0].thread_id = 't-other-same-org';
+    actionableThreads.add(THREAD);
+
+    const res = await send(AI_SEND);
     expect(res.statusCode).toBe(400);
     expect(res.body.code).toBe('AI_DRAFT_THREAD_MISMATCH');
     expect(executeActionMock).not.toHaveBeenCalled();

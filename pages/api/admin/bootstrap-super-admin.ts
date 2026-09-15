@@ -77,6 +77,7 @@ import {
   attachSessionCookie,
 } from '../../../backend/security/SessionAuthorityService';
 import { resetSuperAdminIdentityCache } from '../../../backend/security/startup/superAdminIdentityCheck';
+import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 const SUPER_ADMIN_ROLE = 'SUPER_ADMIN';
 
@@ -555,10 +556,9 @@ function parseBody(req: NextApiRequest): Record<string, unknown> {
   return (req.body ?? {}) as Record<string, unknown>;
 }
 
+// SEC91-W2E: platform-trusted client IP (null when nothing parses; the limiter keys null as '<unknown>').
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  return req.socket?.remoteAddress ?? null;
+  return getTrustedClientIpOrNull(req);
 }
 
 function userAgent(req: NextApiRequest): string | null {

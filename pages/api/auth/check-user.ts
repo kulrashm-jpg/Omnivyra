@@ -30,6 +30,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
@@ -40,10 +41,10 @@ async function handler(
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown')
-    .split(',')[0]
-    .trim();
-  const rl = await checkRateLimit(ip, { keyPrefix: 'rl:auth:check-user', limit: 20, windowSecs: 15 * 60 });
+  const ip = authRequestIp(req);
+  // SEC91-W2B-3: an enumeration surface — sensitive, so a Redis outage gives it its own
+  // strict per-instance budget (lib/auth/rateLimit), never the generous fallback cap.
+  const rl = await checkRateLimit(ip, { keyPrefix: 'rl:auth:check-user', limit: 20, windowSecs: 15 * 60, sensitive: true });
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 
   const { email } = (req.body ?? {}) as { email?: string };

@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireManageConnectors } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 import { encodeOAuthState } from '../../../../../backend/auth/oauthState';
+import { getOAuthRedirectBase } from '../../../../../backend/auth/oauthRedirectBase';
 import crypto from 'crypto';
 
 const base64Url = (input: Buffer) =>
@@ -11,10 +12,6 @@ const base64Url = (input: Buffer) =>
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
-
-function normalizeXLocalHost(url: string) {
-  return url.replace('://localhost:', '://127.0.0.1:');
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -43,9 +40,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // X only allows one callback URL per app, so the connector flow reuses
   // /auth/x/callback (the shared bridge to /api/auth/x/callback) instead of
   // the standard /api/community-ai/connectors/x/callback path.
-  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
-  const host = (req.headers['x-forwarded-host'] as string | undefined) || req.headers.host || 'localhost:3000';
-  const redirectUri = normalizeXLocalHost(`${proto}://${host}/auth/x/callback`);
+  // SEC91-W2B-2: production → the configured canonical app URL only; development →
+  // the request origin with localhost spelled 127.0.0.1 (X requires it). Must match
+  // the value /api/auth/x/callback uses for the token exchange.
+  const redirectUri = `${getOAuthRedirectBase(req, { loopback: '127.0.0.1' })}/auth/x/callback`;
 
   const redirectTo =
     typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';

@@ -199,15 +199,13 @@ describe('legacy runtime references are closed and explained', () => {
       'security guard — asserts the auth-integrity CI workflow still declares a '
       + 'Supabase server key; that workflow is out of scope for this migration '
       + 'and still spells the legacy name, so the guard accepts either',
-    'backend/services/extensionSessionService.ts':
-      'NOT an API-key consumer — legacy value used as an HMAC signing secret; '
-      + 'changing it would invalidate already-issued extension session tokens',
-    'backend/services/rpaWorker/rpaAuthTokens.ts':
-      'NOT an API-key consumer — HMAC signing secret fallback; see above',
-    'backend/services/invitationService.ts':
-      'NOT an API-key consumer — HMAC signing secret fallback; see above',
-    'pages/api/super-admin/invitations/[invitationId]/resend.ts':
-      'NOT an API-key consumer — HMAC signing secret fallback; see above',
+    // SEC91-B1 (STEP 3AH-91): the four HMAC signing-secret fallbacks that used to be
+    // listed here (extensionSessionService, rpaWorker/rpaAuthTokens, invitationService,
+    // super-admin invitations resend) no longer name any Supabase key — they resolve a
+    // dedicated secret / AUTH_SECRET (invitations: INVITATION_TOKEN_SECRET) and fail
+    // closed. Production already resolved AUTH_SECRET / INVITATION_TOKEN_SECRET before
+    // reaching the service-role fallback, so no issued token changed. Their entries were
+    // removed because the "no stale entries" check below would (correctly) flag them.
   };
 
   it('every runtime file naming a legacy Supabase key variable is accounted for', () => {

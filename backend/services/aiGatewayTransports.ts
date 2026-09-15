@@ -222,9 +222,9 @@ async function executeJsonTransport(args: {
   try {
     // `args.url` is not user-controlled. Both call sites build it from the frozen
     // GATEWAY_TRANSPORT_CAPABILITIES endpoints — callPerplexity passes the literal
-    // `perplexity.endpoint`, callGemini interpolates ONLY the model and the API key
-    // (each encodeURIComponent'd, both AFTER the authority, so neither can alter the
-    // host) into `gemini.endpoint`. No env/config override and no request-derived
+    // `perplexity.endpoint`, callGemini interpolates ONLY the model
+    // (encodeURIComponent'd, AFTER the authority, so it cannot alter the host)
+    // into `gemini.endpoint`; its API key is a header (SEC91-D8). No env/config override and no request-derived
     // host exists anywhere in the chain. This suppression covers a SHARED helper, so
     // a future caller passing a variable URL would inherit it — which is exactly why
     // `assertTrustedTransportOrigin` above enforces the registry origin at runtime
@@ -272,14 +272,17 @@ export async function callGemini(params: GatewayTransportParams): Promise<Normal
 
   const systemMsg = params.messages.find((m) => m.role === 'system');
   const turns = params.messages.filter((m) => m.role !== 'system');
+  // SEC91-D8: the API key travels in the `x-goog-api-key` header, never in the
+  // URL — URLs are written to access logs, proxies, tracing spans and error
+  // messages, headers are not.
   const url =
     `${GATEWAY_TRANSPORT_CAPABILITIES.gemini.endpoint}/` +
-    `${encodeURIComponent(params.model)}:generateContent?key=${encodeURIComponent(params.apiKey)}`;
+    `${encodeURIComponent(params.model)}:generateContent`;
 
   const data = await executeJsonTransport({
     provider: 'gemini',
     url,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': params.apiKey },
     operation: params.operation,
     signal: params.signal,
     max_tokens: params.max_tokens,

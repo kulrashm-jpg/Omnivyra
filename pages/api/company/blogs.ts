@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { createBlog, type BlogStatus } from '@/backend/services/blogService';
+import { enforceContentWriteRole } from '@/backend/services/content/contentWriteAuthz';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Get company_id from query or body
@@ -15,6 +16,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Verify user authentication and company access
   const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
+
+  // SEC91-W2G-N2: writes need a content-authoring role in this company (the
+  // W2G-1 policy for pages/api/content/**); VIEW_ONLY stays read-only.
+  if (req.method === 'POST' || req.method === 'DELETE') {
+    if (!(await enforceContentWriteRole({ req, res, companyId: company_id }))) return;
+  }
 
   if (req.method === 'GET') {
     try {

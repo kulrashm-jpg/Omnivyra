@@ -67,6 +67,7 @@ export async function requestDecision(
   );
 
   try {
+    // ssrf-ok: host is operator config (getBaseUrl() → process.env.OMNIVYRE_BASE_URL), fixed path
     const response = await fetch(`${getBaseUrl()}/omnivyre/decide`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

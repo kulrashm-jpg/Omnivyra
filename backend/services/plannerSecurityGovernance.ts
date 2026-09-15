@@ -30,6 +30,7 @@ import { createHash, createHmac, randomBytes } from 'crypto';
 import { logger } from './logger';
 import { getRequestContext } from './requestContext';
 import { counter } from './plannerTelemetry';
+import { constantTimeEqual } from '../security/constantTimeEqual';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -288,9 +289,11 @@ export async function verifyOperatorAuditChain(limit: number = 1000): Promise<Au
       request_id: f.request_id || undefined,
     });
     const expected = createHmac('sha256', key).update((f.prev_hmac ?? '') + payload).digest('hex');
+    // ct-ok: chain-link check between two STORED values (both readable by any stream reader; '' === '' for the first entry), not a credential compare.
     if ((f.prev_hmac ?? '') !== prevHmac) {
       invalid.push({ entry_id: entryId, ts: Number(f.ts), reason: 'chain_break_prev_hmac_mismatch' });
-    } else if (f.hmac !== expected) {
+    } else if (!constantTimeEqual(f.hmac, expected)) {
+      // STEP 3AH-91 W2F-2: the entry HMAC is compared in constant time (was !==).
       invalid.push({ entry_id: entryId, ts: Number(f.ts), reason: 'hmac_mismatch' });
     } else {
       verified += 1;

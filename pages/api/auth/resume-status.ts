@@ -1,5 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
@@ -31,9 +32,7 @@ async function handler(
 
   seedRequestContextFromRequest(req);
 
-  const ip = String(
-    req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown',
-  ).split(',')[0].trim();
+  const ip = authRequestIp(req);
   const rl = await checkRateLimit(ip, { ...LOGIN_LIMIT, keyPrefix: 'rl:auth:resume-status', limit: 10, windowSecs: 15 * 60 });
   if (!rl.allowed) {
     return res.status(429).json({ error: 'Too many requests. Please try again later.' });

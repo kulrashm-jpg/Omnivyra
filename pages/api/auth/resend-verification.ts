@@ -26,6 +26,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
@@ -48,9 +49,7 @@ async function handler(
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
 
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown')
-    .split(',')[0]
-    .trim();
+  const ip = authRequestIp(req);
 
   // Per-IP gate: cap at the same volume as password reset (5/hour).
   const ipRl = await checkRateLimit(ip, {

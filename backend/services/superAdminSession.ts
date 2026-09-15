@@ -24,6 +24,7 @@ import {
   LEGACY_BRIDGE_HARD_EXPIRY_AT,
   evaluateBridgeCookieLifecycle,
 } from '../security/legacyCookieSuperAdminBridge';
+import { getTrustedClientIpOrNull } from '../../lib/security/clientIp';
 
 export const LEGACY_SUPER_ADMIN_USER_ID = 'super_admin_session';
 
@@ -82,11 +83,9 @@ function routeKey(req: NextApiRequest): string {
   return idx === -1 ? url : url.slice(0, idx);
 }
 
+// SEC91-W2E: platform-trusted client IP (audit field only; not a session binding).
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  if (Array.isArray(xff) && xff.length > 0) return xff[0];
-  return req.socket?.remoteAddress ?? null;
+  return getTrustedClientIpOrNull(req);
 }
 
 /**

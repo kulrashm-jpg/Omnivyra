@@ -10,8 +10,11 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * POST /api/track/angle-industry-matrix
  * { industry, angle_type, content_score }
  *
- * Called internally after a blog is generated to update the running
- * aggregate (score_sum, post_count) for that industry × angle combination.
+ * Updates the running GLOBAL aggregate (score_sum, post_count) for that
+ * industry × angle combination. Platform super admin only (SEC-91A): the
+ * aggregate is shared by every tenant, so no tenant may write it.
+ *
+ * Auth: GET — any authenticated user; POST — active platform super admin.
  *
  * Response (GET):
  * {
@@ -30,7 +33,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { resolveUserContext } from '../../../backend/services/userContextService';
+import { requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 
 type AngleType = 'analytical' | 'contrarian' | 'strategic';
 
@@ -51,6 +55,17 @@ function normaliseIndustry(raw: string): string {
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── GET: fetch matrix for an industry ────────────────────────────────────
   if (req.method === 'GET') {
+    // SEC-91A (STEP 3AH-91, A1 / F1-02) — the route-auth gate is per FILE: POST
+    // authenticated, so the file passed, but GET answered anyone with the
+    // platform-wide performance aggregate (post counts and average scores
+    // accumulated from every tenant's generated blogs). The only caller (the
+    // in-app blog generator, BlogGenerateModalMain) is a signed-in page whose
+    // same-origin fetch carries the Supabase session cookie, so requiring an
+    // authenticated caller does not change legitimate behaviour.
+    const viewer = await resolveUserContext(req);
+    if (viewer.authenticated === false || !viewer.userId) {
+      return res.status(401).json({ error: 'Authentication required', code: 'UNAUTHENTICATED' });
+    }
     const rawIndustry = typeof req.query.industry === 'string' ? req.query.industry.trim() : '';
     if (!rawIndustry) return res.status(400).json({ error: 'industry required' });
 
@@ -91,14 +106,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── POST: update running aggregate ────────────────────────────────────────
   if (req.method === 'POST') {
-    const { company_id, industry: rawIndustry, angle_type, content_score } = req.body ?? {};
-
-    if (!company_id || typeof company_id !== 'string') {
-      return res.status(400).json({ error: 'company_id required' });
-    }
-
-    const access = await enforceCompanyAccess({ req, res, companyId: company_id });
-    if (!access) return;
+    // SEC-91A (STEP 3AH-91, A1 / F1-03) — this writes a GLOBAL, cross-tenant
+    // aggregate (one row per industry × angle, no company column) that GET
+    // serves to every tenant's blog generator. It used to accept any member of
+    // ANY company (the body company_id was authorized and then never used), so
+    // a single tenant could poison the ranking everyone sees — e.g. by posting
+    // content_score=100 for one angle in a loop. There is no in-repo caller;
+    // the aggregate is now writable only by an active platform super admin
+    // (operator backfill / curation). A future automatic increment must run
+    // server-side after blog generation, not through a tenant-callable route.
+    const operator = await requireSuperAdminUser(req, res);
+    if (!operator) return;
+    const { industry: rawIndustry, angle_type, content_score } = req.body ?? {};
 
     if (!rawIndustry || typeof rawIndustry !== 'string') {
       return res.status(400).json({ error: 'industry required' });

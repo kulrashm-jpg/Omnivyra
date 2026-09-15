@@ -195,14 +195,24 @@ describe('R4 — fail-open secret checks', () => {
         if (req.headers.authorization !== 'Bearer ' + s) return res.status(401).end();
         res.status(200).end();
       }`;
+    expect(gate.failOpenSecret(gate.executable(closed))).toEqual([]);
+  });
+
+  // STEP 3AH-91 (W2F-3): this shape used to be pinned as fail-closed. It is
+  // closed only in production — every non-production process is open — which
+  // is exactly the C1-b defect SEC-C fixed in internal/metrics and
+  // internal/process-reminders. It is now R4-ENV (not R4: it does reject in
+  // production). See sec91W2FGates.test.ts for the full R4-ENV fixture set.
+  it('an unset-secret branch that rejects only in production is R4-ENV (open outside production)', () => {
     const prodElse = `export default async function handler(req, res) {
         const s = process.env.INTERNAL_METRICS_SECRET;
         if (s) { if (req.headers['x'] !== s) return res.status(401).end(); }
         else if (process.env.NODE_ENV === 'production') { return res.status(401).end(); }
         res.status(200).end();
       }`;
-    expect(gate.failOpenSecret(gate.executable(closed))).toEqual([]);
-    expect(gate.failOpenSecret(gate.executable(prodElse))).toEqual([]);
+    expect(gate.failOpenSecret(gate.executable(prodElse))).toEqual(['INTERNAL_METRICS_SECRET (open outside production)']);
+    expect(rules(prodElse)).toContain('R4-ENV');
+    expect(rules(prodElse)).not.toContain('R4');
   });
 });
 

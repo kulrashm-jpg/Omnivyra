@@ -6,6 +6,7 @@ import { enqueueEmailJob } from './emailJobsService';
 import { logger } from './logger';
 import { config } from '@/config';
 import { getCanonicalAppUrl } from '../config/getCanonicalAppUrl';
+import { SigningSecretUnavailableError } from '../auth/signingSecrets';
 
 const INVITE_EXPIRY_DAYS = 7;
 
@@ -13,14 +14,23 @@ function getAppUrl(): string {
   return getCanonicalAppUrl();
 }
 
+/**
+ * The HMAC secret for invitation tokens — shared by createInvitation and the super-admin
+ * resend route (which rebuilds the same token), so there is exactly one resolver.
+ *
+ * SEC91-B1: INVITATION_TOKEN_SECRET only (trimmed, as before). The chain used to fall back
+ * to the Supabase service-role API key and then to a literal committed to this repository.
+ * Production sets INVITATION_TOKEN_SECRET, so every issued token keeps resolving; an
+ * unconfigured deployment now fails closed instead of signing with a known value.
+ */
+export function getInvitationSigningSecret(): string {
+  const secret = config.INVITATION_TOKEN_SECRET?.trim();
+  if (!secret) throw new SigningSecretUnavailableError('invitation tokens', ['INVITATION_TOKEN_SECRET']);
+  return secret;
+}
+
 function getInvitationSecret(): string {
-  // API-key migration note: the legacy variable below is used here as an HMAC
-  // SIGNING SECRET, not as a Supabase API key, so it is deliberately NOT
-  // migrated to SUPABASE_SECRET_KEY — changing the value would invalidate every
-  // already-issued invitation token. Consequence: SUPABASE_SERVICE_ROLE_KEY must
-  // stay set in production until this chain gets a dedicated secret, otherwise
-  // signing silently falls through to the hardcoded development constant.
-  return config.INVITATION_TOKEN_SECRET?.trim() || config.SUPABASE_SERVICE_ROLE_KEY?.trim() || 'local-dev-invite-secret';
+  return getInvitationSigningSecret();
 }
 
 export function hashInvitationToken(token: string): string {
