@@ -136,7 +136,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!campaignIdFilter && companyUserIds.length > 0) {
       let q = supabase
         .from('scheduled_posts')
-        .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status, media_urls, media_types')
+        .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status, media_urls, media_types, social_account_id')
         .in('user_id', companyUserIds)
         .is('campaign_id', null)
         .in('status', ['scheduled', 'draft', 'publishing', 'published', 'pending'])
@@ -149,6 +149,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'Failed to load standalone scheduled posts' });
       }
       standalonePosts = data || [];
+
+      // SEC-91A (STEP 3AH-91, A2) — standalone posts are selected by AUTHOR
+      // (every active member of this company), because scheduled_posts has no
+      // company column. A user who belongs to several companies therefore had
+      // the standalone posts they scheduled for company B shown — content and
+      // media — on company A's calendar, to every member of A. Posts published
+      // through a social account that is attributed to ANOTHER company are now
+      // dropped. Posts with no account, or whose account carries no company
+      // (legacy rows), are kept exactly as before. A failed account lookup
+      // fails closed like the reads above.
+      const accountIds = Array.from(new Set(
+        standalonePosts
+          .map((p: { social_account_id?: string | null }) => p?.social_account_id)
+          .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0),
+      ));
+      if (accountIds.length > 0) {
+        const { data: accountRows, error: accountError } = await supabase
+          .from('social_accounts')
+          .select('id, company_id')
+          .in('id', accountIds);
+        if (accountError) {
+          return res.status(500).json({ error: 'Failed to load standalone scheduled posts' });
+        }
+        const foreignAccountIds = new Set(
+          (accountRows || [])
+            .filter((a: { company_id?: string | null }) => a.company_id && String(a.company_id) !== companyId)
+            .map((a: { id: string }) => String(a.id)),
+        );
+        standalonePosts = standalonePosts.filter(
+          (p: { social_account_id?: string | null }) => !p?.social_account_id || !foreignAccountIds.has(String(p.social_account_id)),
+        );
+      }
     }
 
     const posts = [...campaignPosts, ...standalonePosts];

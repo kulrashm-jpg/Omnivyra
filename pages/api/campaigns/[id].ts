@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { evaluateCampaignReadiness } from '../../../backend/services/campaignReadinessService';
-import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 
 const resolveCampaignCompanyId = async (campaignId: string) => {
   const { data: campRow } = await supabase
@@ -44,6 +44,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Campaign ID is required' });
+  }
+
+  // SEC-91A (STEP 3AH-91, A6) — authenticate BEFORE touching the campaign. The
+  // owner lookup below used to run first, so an anonymous caller got 404 for an
+  // unknown id and 401 for a real one: an existence oracle on campaign ids
+  // (the same one ROUTE-AUTH-001 removed from requireCampaignAccess).
+  const viewer = await resolveUserContext(req);
+  if (viewer.authenticated === false || !viewer.userId) {
+    return res.status(401).json({
+      error: 'Authentication required. Please sign in again.',
+      code: 'UNAUTHENTICATED',
+    });
   }
 
   // SECURITY: derive the campaign's owning company from the resource itself,

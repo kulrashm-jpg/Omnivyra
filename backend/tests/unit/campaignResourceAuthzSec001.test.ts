@@ -240,7 +240,12 @@ describe('hierarchical-navigation', () => {
     it('a nonexistent campaign is refused', async () => {
       const res = await call({ campaignId: UNKNOWN_CAMPAIGN, action: 'get-overview' });
       expect(res.statusCode).toBe(404);
-      expect(sensitiveCalls()).toEqual([]);
+      // SEC-91A (STEP 3AH-91, A8): a campaign with no campaign_versions row now
+      // falls back to its legacy owner (campaigns.company_id). That guard-side
+      // owner lookup — one select on campaigns by this id, matching nothing — is
+      // the only sensitive-table touch allowed; nothing else may run.
+      expect(sensitiveCalls().filter((c) => !(c.table === 'campaigns' && c.op === 'select'
+        && Object.keys(c.filters).join() === 'id' && c.filters.id === UNKNOWN_CAMPAIGN))).toEqual([]);
     });
 
     it('a malformed campaign id is refused before any query', async () => {
