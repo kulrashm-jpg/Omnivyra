@@ -8,6 +8,13 @@ import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiRequestGuard';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { resolveTrustedClientIp } from '../../../backend/services/ai/trustedClientIp';
+
+// SEC91-D9: every transcription-provider request is time-bounded (they had no
+// timeout, so a stalled upstream held the function until the platform killed it).
+const WHISPER_TIMEOUT_MS = 120_000;
+const ASSEMBLY_UPLOAD_TIMEOUT_MS = 60_000;
+const ASSEMBLY_REQUEST_TIMEOUT_MS = 15_000;
 
 // Voice transcription API using Whisper (OpenAI) and AssemblyAI
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -22,14 +29,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     typeof (req.body as any)?.companyId === 'string' ? (req.body as any).companyId
     : typeof (req.body as any)?.organization_id === 'string' ? (req.body as any).organization_id
     : null;
+  let callerUserId: string;
   if (voiceOrgId) {
     const ctx = await enforceCompanyAccess({ req, res, companyId: voiceOrgId });
     if (!ctx) return;
+    callerUserId = ctx.userId;
   } else {
     const { user, error: authError } = await getSupabaseUserFromRequest(req);
     if (authError || !user) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
+    callerUserId = user.id;
   }
 
   try {
@@ -41,12 +51,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // HARDEN-006: centralized AI protection (rate/burst; audio-size validated via
     // attachmentCount) before the transcription provider is invoked.
+    // SEC91-D1: keyed by the authenticated user (and bound company when one was
+    // supplied) plus the platform-trusted client IP — never the client-written
+    // XFF hop, which let a caller rotate into a fresh bucket per request.
     try {
-      const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? '').split(',')[0].trim() || null;
       await guardAiRequest({
         operation: 'voice.transcribe',
         provider: provider === 'assemblyai' ? 'other' : 'openai',
-        ip,
+        userId: callerUserId,
+        companyId: voiceOrgId,
+        ip: resolveTrustedClientIp(req),
         attachmentCount: 1,
       });
     } catch (err) {
@@ -54,6 +68,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (err.retryAfterSecs) res.setHeader('Retry-After', String(err.retryAfterSecs));
         return res.status(err.status).json({ error: err.message, code: err.code });
       }
+      // Limiter outages are absorbed inside the guard; an escaping error is a
+      // defect and must not become unlimited paid transcription.
+      return res.status(503).json({ error: 'AI request protection unavailable. Please retry.', code: 'AI_GUARD_UNAVAILABLE' });
     }
 
     let transcription;
@@ -146,6 +163,7 @@ async function transcribeWithWhisper(audioFile: any) {
 
   const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
+    signal: AbortSignal.timeout(WHISPER_TIMEOUT_MS),
     headers: {
       Authorization: bearerAuthorization(openaiApiKey),
     },
@@ -186,6 +204,7 @@ async function transcribeWithAssemblyAI(audioFile: any) {
   // Upload audio file to AssemblyAI
   const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
     method: 'POST',
+    signal: AbortSignal.timeout(ASSEMBLY_UPLOAD_TIMEOUT_MS),
     headers: {
       'Authorization': assemblyApiKey,
       'Content-Type': 'application/octet-stream'
@@ -202,6 +221,7 @@ async function transcribeWithAssemblyAI(audioFile: any) {
   // Start transcription
   const transcriptResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
+    signal: AbortSignal.timeout(ASSEMBLY_REQUEST_TIMEOUT_MS),
     headers: {
       'Authorization': assemblyApiKey,
       'Content-Type': 'application/json'
@@ -232,6 +252,7 @@ async function transcribeWithAssemblyAI(audioFile: any) {
     await new Promise(resolve => setTimeout(resolve, 1000));
     
     const statusResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+      signal: AbortSignal.timeout(ASSEMBLY_REQUEST_TIMEOUT_MS),
       headers: { 'Authorization': assemblyApiKey }
     });
 
