@@ -27,6 +27,7 @@ import { supabase } from '../db/supabaseClient';
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
 // Remediation: one shared definition of secret / env-var-name / ciphertext shapes.
 import { classifyStoredKey, isEncryptedCredential } from '../security/credentialSafety';
+import { isPlatformInfrastructureSecretName } from './externalApi/infrastructureSecretNames';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -223,7 +224,12 @@ export function resolveAccountCredentials(account: ProviderAccount): ResolvedAcc
   // api_key_env_name path
   if (typeof creds.api_key_env_name === 'string' && creds.api_key_env_name.trim()) {
     base.api_key_env_name = creds.api_key_env_name.trim();
-    const val = process.env[base.api_key_env_name];
+    // SEC91-B2: an account env reference can never name a platform infrastructure secret
+    // (Supabase, DB, Redis, payment, signing keys) — the value would be sent to the
+    // provider source's base_url.
+    const val = isPlatformInfrastructureSecretName(base.api_key_env_name)
+      ? undefined
+      : process.env[base.api_key_env_name];
     if (val) base.api_key_value = val;
   }
 

@@ -1,5 +1,7 @@
 import type { ExternalApiSource, ExternalApiRequestDetails } from './types';
 import { VALID_API_CATEGORIES } from './types';
+import { isEnvVarName } from '../../security/credentialSafety';
+import { isPlatformInfrastructureSecretName } from './infrastructureSecretNames';
 
 export const AUTH_TYPES_REQUIRING_KEY = new Set(['api_key', 'bearer', 'query', 'header']);
 
@@ -47,7 +49,8 @@ export const resolveEnvValue = (envName?: string | null): string | undefined => 
   // SECURITY: the literal-key fallback was REMOVED — see the identical note in
   // `internalHelpers.resolveEnvValue`. A secret pasted into the NAME field must never
   // function as a credential. An env-var NAME resolves to its value; anything else
-  // resolves to nothing.
+  // resolves to nothing. SEC91-B2: platform infrastructure secrets never resolve.
+  if (!isEnvVarName(envName) || isPlatformInfrastructureSecretName(envName)) return undefined;
   const fromEnv = process.env[envName];
   if (fromEnv) return fromEnv;
   return undefined;
