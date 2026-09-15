@@ -9,7 +9,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * - Config validity
  * - Required env vars status
  * - Redis connection status
- * - Detailed error messages (for debugging)
+ * - Detailed error messages (for debugging) — NON-PRODUCTION ONLY (SEC-E8);
+ *   production answers status + booleans; detail goes to the server log.
  */
 
 export const runtime = 'nodejs';
@@ -18,6 +19,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getConfigError, isConfigValid, getValidatedConfig } from '@/config';
 import { getSharedRedisSyncOrNull } from '@/lib/redis/client';
 import { maskRedisUrl } from '@/lib/redis/sanitizer';
+import { redactSecretsInText } from '@/lib/security/redactUrl';
 
 interface HealthResponse {
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -114,7 +116,33 @@ async function handler(
   }
   
   // ── Build response ─────────────────────────────────────────────────────────
-  
+
+  const statusCode = status === 'healthy' ? 200 : status === 'degraded' ? 503 : 500;
+
+  // SEC-E8 (STEP 3AH-91): this endpoint is public. In production it answers
+  // with status only — config error text names env vars and can echo their
+  // values; details/Redis host+port map internal infrastructure. Status and
+  // status code are unchanged, so monitors keep working; the detail goes to
+  // the server log for operators. Non-production keeps the full body.
+  if (process.env.NODE_ENV === 'production') {
+    if (configError || redisError) {
+      console.error('[health/config] degraded', {
+        status,
+        configError: configError ? redactSecretsInText(configError) : undefined,
+        redisError: redisError ? redactSecretsInText(redisError) : undefined,
+      });
+    }
+    const minimal: HealthResponse = {
+      status,
+      timestamp,
+      config: { valid: configValid },
+      redis: { connected: redisConnected },
+      critical_issues: criticalIssues,
+    };
+    res.status(statusCode).json(minimal);
+    return;
+  }
+
   const response: HealthResponse = {
     status,
     timestamp,
@@ -130,8 +158,7 @@ async function handler(
     },
     critical_issues: criticalIssues,
   };
-  
-  const statusCode = status === 'healthy' ? 200 : status === 'degraded' ? 503 : 500;
+
   res.status(statusCode).json(response);
 }
 

@@ -545,7 +545,7 @@
     },
     "pages/api/health/config.ts": {
       "kind": "health",
-      "reason": "Configuration-validity probe for operators; reports config/Redis health, no tenant data. (Verbosity of config error text is a separate P3 item.)"
+      "reason": "Configuration-validity probe for operators; reports config/Redis health, no tenant data. Production answers status + booleans only (SEC-E8, 3AH-91); detail is non-production or server-log only."
     },
     "pages/api/health/internal.ts": {
       "kind": "health",

@@ -5,8 +5,36 @@
  * per-IP or per-UID) over a rolling time window.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * SECURITY DECISION RECORD — Fail-Open Behaviour
+ * SECURITY DECISION RECORD — Redis-unavailable behaviour (revised 3AH-91 SEC-E2)
  * ─────────────────────────────────────────────────────────────────────────
+ * Behaviour is now EXPLICIT PER LIMIT (see `RedisFailureMode` and
+ * `resolveRedisFailureMode` below):
+ *
+ *   'fallback' — non-sensitive limits (default): per-process in-memory bucket
+ *                with the historical generous cap (50/window). Unchanged.
+ *   'strict'   — SENSITIVE limits (`sensitive: true`: login pre-check, OTP,
+ *                email-link sends — magic link / reset / signup / resend —,
+ *                onboarding credit grant, invites; inherited by every config
+ *                spread from LOGIN_LIMIT / EMAIL_LINK_LIMIT): per-process
+ *                bucket that enforces the limit's OWN budget (3–10/window),
+ *                never the generous cap. Default for sensitive limits.
+ *   'closed'   — refuse (429 at the caller). Sensitive limits switch to it
+ *                when RATE_LIMIT_SENSITIVE_ON_REDIS_FAILURE=closed; any config
+ *                may also pin `onRedisFailure: 'closed'`.
+ *
+ * Why sensitive limits are not fail-closed BY DEFAULT: Redis unavailability
+ * here is not hypothetical — the Upstash plan quota has been exhausted in
+ * production before, and every command then errors for the rest of the
+ * period. Fail-closed by default would turn that into a complete sign-in /
+ * sign-up / password-reset outage for every user. 'strict' closes the
+ * amplification (a 3/hour limit no longer becomes 50/hour per instance)
+ * without that blast radius; 'closed' is the staged escalation for an
+ * operator who has confirmed Redis capacity (MANUAL, see docs/security/SEC91_E.md).
+ * Residual risk of 'strict': the bucket is per instance, so N serverless
+ * instances allow up to N × limit.
+ *
+ * The original (pre-3AH-91) record follows for context.
+ *
  * Decision:  When Redis is unavailable, rate limiting is bypassed (fail-open)
  *            rather than blocking all auth requests (fail-closed).
  *
@@ -62,21 +90,50 @@ function countRateLimitTriggered(prefix: string): void {
 // fail-closed would self-DoS all legitimate users).
 interface FallbackBucket { count: number; resetAt: number }
 const fallbackMap = new Map<string, FallbackBucket>();
+/** Generous per-process cap for NON-sensitive limits — stops flooding, not legitimate bursts. */
+const GENEROUS_FALLBACK_CAP = 50;
+/** Bound the fallback map during a long outage (one bucket per key). */
+const FALLBACK_MAP_MAX = 10_000;
 
-function fallbackRateLimit(key: string, config: RateLimitConfig, resetAt: number): RateLimitResult {
+function pruneFallbackMap(now: number): void {
+  if (fallbackMap.size < FALLBACK_MAP_MAX) return;
+  for (const [k, b] of fallbackMap) {
+    if (now >= b.resetAt) fallbackMap.delete(k);
+  }
+  // Still full of live buckets: drop the oldest insertions (Map preserves order).
+  while (fallbackMap.size >= FALLBACK_MAP_MAX) {
+    const oldest = fallbackMap.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    fallbackMap.delete(oldest);
+  }
+}
+
+function fallbackRateLimit(
+  key: string,
+  config: RateLimitConfig,
+  resetAt: number,
+  mode: Exclude<RedisFailureMode, 'closed'>,
+): RateLimitResult {
   const now = Date.now();
+  pruneFallbackMap(now);
   let bucket = fallbackMap.get(key);
   if (!bucket || now >= bucket.resetAt) {
     bucket = { count: 0, resetAt: now + config.windowSecs * 1_000 };
     fallbackMap.set(key, bucket);
   }
   bucket.count++;
-  const allowed = bucket.count <= 50; // generous cap — stops flooding, not legitimate bursts
+  const cap = mode === 'strict' ? config.limit : GENEROUS_FALLBACK_CAP;
+  const allowed = bucket.count <= cap;
   if (!allowed) {
     recordAnomalyEvent('rate_limit_triggered');
     countRateLimitTriggered(config.keyPrefix);
   }
-  return { allowed, remaining: Math.max(0, 50 - bucket.count), resetAt, bypassed: true };
+  return { allowed, remaining: Math.max(0, cap - bucket.count), resetAt, bypassed: true, degradedMode: mode };
+}
+
+/** Test-only: clear the in-memory fallback buckets. */
+export function __resetRateLimitFallbackForTest(): void {
+  fallbackMap.clear();
 }
 
 // ── Dedicated rate-limit Redis client ─────────────────────────────────────────
@@ -98,6 +155,12 @@ export function shutdownRateLimitRedis(): void {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+/**
+ * What a limit does when Redis cannot answer (outage, quota exhausted, aborted
+ * transaction). See the decision record at the top of this file.
+ */
+export type RedisFailureMode = 'fallback' | 'strict' | 'closed';
+
 export interface RateLimitConfig {
   /** Redis key prefix, e.g. "rl:login" */
   keyPrefix: string;
@@ -105,13 +168,52 @@ export interface RateLimitConfig {
   limit: number;
   /** Window duration in seconds */
   windowSecs: number;
+  /**
+   * SEC-E2: a security-sensitive limit (authentication, email-link sends,
+   * account creation, credit grant, invites). Sensitive limits never get the
+   * generous fallback: 'strict' by default, 'closed' when the operator sets
+   * RATE_LIMIT_SENSITIVE_ON_REDIS_FAILURE=closed. Inherited by `{ ...LIMIT }`.
+   */
+  sensitive?: boolean;
+  /** Explicit per-limit override of the Redis-unavailable behaviour. */
+  onRedisFailure?: RedisFailureMode;
 }
 
 export interface RateLimitResult {
   allowed: boolean;
   remaining: number;
   resetAt: number;   // Unix timestamp (seconds) when the window resets
-  bypassed: boolean; // true when Redis was unavailable (fail-open path)
+  bypassed: boolean; // true when Redis was unavailable (degraded path)
+  /** Which degraded path answered (only when `bypassed`). */
+  degradedMode?: RedisFailureMode;
+}
+
+const SENSITIVE_MODE_ENV = 'RATE_LIMIT_SENSITIVE_ON_REDIS_FAILURE';
+
+/**
+ * Resolve the Redis-unavailable behaviour for a limit. An explicit
+ * `onRedisFailure` wins; otherwise sensitive limits are 'strict' unless the
+ * operator escalates them to 'closed'; everything else keeps 'fallback'.
+ * An unrecognised env value never weakens a sensitive limit.
+ */
+export function resolveRedisFailureMode(config: RateLimitConfig): RedisFailureMode {
+  if (config.onRedisFailure === 'fallback' || config.onRedisFailure === 'strict' || config.onRedisFailure === 'closed') {
+    return config.onRedisFailure;
+  }
+  if (!config.sensitive) return 'fallback';
+  const requested = String(process.env[SENSITIVE_MODE_ENV] ?? '').trim().toLowerCase();
+  return requested === 'closed' ? 'closed' : 'strict';
+}
+
+function degradedResult(key: string, config: RateLimitConfig, resetAt: number): RateLimitResult {
+  const mode = resolveRedisFailureMode(config);
+  if (mode === 'closed') {
+    logger.warn('RATE_LIMIT_FAIL_CLOSED', { prefix: config.keyPrefix });
+    recordAnomalyEvent('rate_limit_triggered');
+    countRateLimitTriggered(config.keyPrefix);
+    return { allowed: false, remaining: 0, resetAt, bypassed: true, degradedMode: 'closed' };
+  }
+  return fallbackRateLimit(key, config, resetAt, mode);
 }
 
 // Exported for W2-3 (Lua AI guard): the batched path must apply the SAME
@@ -181,7 +283,7 @@ export async function checkRateLimit(
       // MULTI/EXEC returned null — Redis transaction aborted (e.g. WATCH conflict).
       // Rare; treat same as Redis unavailable — use in-memory fallback.
       logBypass(identifier, config.keyPrefix, 'transaction_aborted');
-      return fallbackRateLimit(key, config, resetAt);
+      return degradedResult(key, effectiveConfig, resetAt);
     }
 
     // results[1] is [error, countBeforeAdd]
@@ -205,12 +307,12 @@ export async function checkRateLimit(
       bypassed: false,
     };
   } catch (err: any) {
-    // Redis unavailable — fall back to in-memory limiter (see SDR above).
-    // Still enforces a generous per-process cap instead of allowing unlimited requests.
+    // Redis unavailable — the limit's explicit degraded mode decides (see SDR
+    // above): generous fallback, strict own-budget fallback, or fail closed.
     logBypass(identifier, config.keyPrefix, err?.message ?? 'redis_error');
     // Emit a CRITICAL anomaly (persisted to system_anomalies, Slack alert sent)
     emitRedisFallbackAnomaly(config, err?.message ?? 'redis_error');
-    return fallbackRateLimit(key, config, resetAt);
+    return degradedResult(key, effectiveConfig, resetAt);
   }
 }
 
@@ -223,10 +325,13 @@ function logBypass(identifier: string, prefix: string, reason: string) {
 }
 
 // ── Pre-configured limiters for auth endpoints ────────────────────────────────
+// SEC-E2: `sensitive: true` = never the generous Redis-down fallback (see SDR).
+// Configs spread from these (`{ ...LOGIN_LIMIT, keyPrefix: ... }`) inherit it.
 
 /** 10 login attempts per IP per 15 minutes */
 export const LOGIN_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:login',
+  sensitive: true,
   limit: 10,
   windowSecs: 15 * 60,
 };
@@ -234,6 +339,7 @@ export const LOGIN_LIMIT: RateLimitConfig = {
 /** 5 OTP sends per UID per hour (prevents SMS spam) */
 export const OTP_SEND_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:otp_send',
+  sensitive: true,
   limit: 5,
   windowSecs: 60 * 60,
 };
@@ -241,6 +347,7 @@ export const OTP_SEND_LIMIT: RateLimitConfig = {
 /** 10 OTP verification attempts per UID per 15 minutes */
 export const OTP_VERIFY_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:otp_verify',
+  sensitive: true,
   limit: 10,
   windowSecs: 15 * 60,
 };
@@ -248,6 +355,7 @@ export const OTP_VERIFY_LIMIT: RateLimitConfig = {
 /** 3 email link sends per IP per hour */
 export const EMAIL_LINK_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:email_link',
+  sensitive: true,
   limit: 3,
   windowSecs: 60 * 60,
 };
@@ -255,6 +363,7 @@ export const EMAIL_LINK_LIMIT: RateLimitConfig = {
 /** 5 onboarding completions per IP per hour (credit grant guard) */
 export const ONBOARDING_COMPLETE_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:onboarding',
+  sensitive: true,
   limit: 5,
   windowSecs: 60 * 60,
 };
@@ -278,6 +387,7 @@ export const DOMAIN_RESOLUTION_LIMIT: RateLimitConfig = {
 /** 3 onboarding completions per UID per hour — tighter than the IP limit */
 export const ONBOARDING_UID_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:uid:onboarding',
+  sensitive: true,
   limit: 3,
   windowSecs: 60 * 60,
 };
@@ -285,6 +395,7 @@ export const ONBOARDING_UID_LIMIT: RateLimitConfig = {
 /** 10 invite sends per UID per hour */
 export const INVITE_UID_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:uid:invite',
+  sensitive: true,
   limit: 10,
   windowSecs: 60 * 60,
 };

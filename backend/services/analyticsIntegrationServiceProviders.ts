@@ -3,6 +3,45 @@ import { decodeOAuthState, encodeOAuthState } from '../auth/oauthState';
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
 import { getAnalyticsProviderConfig } from './analyticsProviderConfigService';
 import { ownedDbTable } from '../db/writeOwner';
+import { redactSecretsInText, redactUrl } from '../../lib/security/redactUrl';
+
+/**
+ * SEC-E4 (STEP 3AH-91): every Google API call is time-bounded. These run in
+ * OAuth callbacks and property sync; an unbounded fetch could hold a request
+ * (and a serverless instance) until the platform kills it.
+ */
+const GOOGLE_API_TIMEOUT_MS = 15_000;
+
+/**
+ * SEC-E4: Google error bodies are summarised, never logged or rethrown raw.
+ * Token-endpoint errors (`{ error, error_description }`) keep only the OAuth
+ * error code and a redacted description; API errors (`{ error: { status,
+ * message } }`) keep the status and a redacted message. Anything else is not
+ * echoed at all.
+ */
+function summariseGoogleErrorBody(body: string): string {
+  if (!body) return 'unknown error';
+  let parsed: any;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return 'non-JSON error response';
+  }
+  const err = parsed?.error;
+  if (typeof err === 'string') {
+    const code = err.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64) || 'error';
+    const description = typeof parsed.error_description === 'string'
+      ? redactSecretsInText(parsed.error_description).slice(0, 200)
+      : '';
+    return description ? `${code}: ${description}` : code;
+  }
+  if (err && typeof err === 'object') {
+    const status = typeof err.status === 'string' ? err.status.replace(/[^A-Za-z0-9_]/g, '').slice(0, 64) : '';
+    const message = typeof err.message === 'string' ? redactSecretsInText(err.message).slice(0, 200) : '';
+    return [status, message].filter(Boolean).join(': ') || 'unknown error';
+  }
+  return 'unknown error';
+}
 
 
 export type AnalyticsProvider = 'GA4' | 'GSC';
@@ -427,15 +466,17 @@ export async function exchangeAuthorizationCode(
       grant_type: 'authorization_code',
       redirect_uri: redirectUri,
     }),
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
   });
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
+    const summary = summariseGoogleErrorBody(body);
     console.error('[GA-OAUTH][token-exchange] failed', {
       status: response.status,
-      body,
+      error: summary,
     });
-    throw new Error(`GA4 token exchange failed (${response.status}): ${body || 'unknown error'}`);
+    throw new Error(`GA4 token exchange failed (${response.status}): ${summary}`);
   }
 
   const tokenData = await response.json();
@@ -464,16 +505,19 @@ async function fetchGoogleAdminJson(
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
   });
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
+    const summary = summariseGoogleErrorBody(body);
+    const safeUrl = redactUrl(url);
     console.error('[GA-OAUTH][admin-api] request failed', {
-      url,
+      url: safeUrl,
       status: response.status,
-      body,
+      error: summary,
     });
-    throw new Error(`Google Analytics Admin API request failed (${response.status}) for ${url}: ${body || 'unknown error'}`);
+    throw new Error(`Google Analytics Admin API request failed (${response.status}) for ${safeUrl}: ${summary}`);
   }
 
   return response.json();
@@ -595,15 +639,17 @@ export async function fetchSearchConsoleSites(accessToken: string): Promise<Goog
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
   });
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
+    const summary = summariseGoogleErrorBody(body);
     console.error('[GSC-OAUTH][sites-api] request failed', {
       status: response.status,
-      body,
+      error: summary,
     });
-    throw new Error(`Google Search Console sites request failed (${response.status}): ${body || 'unknown error'}`);
+    throw new Error(`Google Search Console sites request failed (${response.status}): ${summary}`);
   }
 
   const payload = await response.json();

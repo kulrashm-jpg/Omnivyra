@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { checkRateLimit, LOGIN_LIMIT, INVITE_UID_LIMIT } from '../../../lib/auth/rateLimit';
+import { getTrustedClientIp } from '../../../lib/security/clientIp';
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
@@ -21,7 +22,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown').split(',')[0].trim();
+  // SEC-E2: platform-trusted client IP, never a client-chosen XFF first hop.
+  const ip = getTrustedClientIp(req);
   const rl = await checkRateLimit(ip, { ...LOGIN_LIMIT, keyPrefix: 'rl:invite', limit: 20, windowSecs: 60 * 60 });
   if (!rl.allowed) {
     return res.status(429).json({ error: 'Too many invite requests. Try again later.' });

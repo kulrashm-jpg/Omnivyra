@@ -35,6 +35,7 @@ import {
   INITIAL_FREE_CREDIT_EXPIRY_DAYS_DEFAULT,
 } from '../../../backend/services/initialFreeCreditService';
 import { checkRateLimit, ONBOARDING_COMPLETE_LIMIT, ONBOARDING_UID_LIMIT } from '../../../lib/auth/rateLimit';
+import { getTrustedClientIp } from '../../../lib/security/clientIp';
 import {
   emitSignupEvent,
   ensureSignupCorrelationId,
@@ -45,9 +46,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   // ── Rate limiting (IP) ────────────────────────────────────────────────────
-  const ip = String(
-    req.headers['x-forwarded-for'] ?? (req.socket as any)?.remoteAddress ?? 'unknown'
-  ).split(',')[0].trim();
+  // SEC-E2: platform-trusted client IP, never a client-chosen XFF first hop.
+  const ip = getTrustedClientIp(req);
   const rl = await checkRateLimit(ip, ONBOARDING_COMPLETE_LIMIT);
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
 
