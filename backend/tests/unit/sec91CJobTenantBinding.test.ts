@@ -182,6 +182,15 @@ describe('source pins', () => {
     expect(bind).toBeLessThan(branch.indexOf('runCampaignAiPlan(args'));
   });
 
+  it('every campaign snapshot read in the creator processor is company-scoped', () => {
+    const proc = src('backend/queue/jobProcessors/creatorContentProcessor.ts');
+    const reads = proc.split(".from('campaign_versions')").slice(1);
+    expect(reads.length).toBeGreaterThanOrEqual(2);
+    for (const r of reads) {
+      expect(r.slice(0, r.indexOf('.maybeSingle()'))).toMatch(/\.eq\('company_id', company_id\)/);
+    }
+  });
+
   it('BOLT row writes to daily_content_plans carry the campaign predicate', () => {
     const proc = src('backend/queue/jobProcessors/creatorContentProcessor.ts');
     const fn = proc.slice(proc.indexOf('async function processBoltCreatorRowJob'));

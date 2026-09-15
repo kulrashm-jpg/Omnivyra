@@ -445,6 +445,8 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
             .from('campaign_versions')
             .select('campaign_snapshot')
             .eq('campaign_id', campaignIdForVariant)
+            // SEC-C5: tenant-scoped — never read another company's snapshot.
+            .eq('company_id', company_id)
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle();
