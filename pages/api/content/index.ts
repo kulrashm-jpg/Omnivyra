@@ -53,15 +53,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         campaignId = rawCampaignId;
       }
       // Strip transport-only control keys; forward the rest as the create input.
+      // SEC-91 W2-A (STEP 3AH-91, W2A-5) — authorship is NOT client input: the
+      // body's createdBy / created_by used to be forwarded, so any member could
+      // create content (and its first revision) attributed to another user.
+      // created_by is the authorized principal (null for the synthetic
+      // content-architect principal, which has no users row).
       const {
         company_id: _c1, companyId: _c2, content_type: _c3, contentType: _c4,
-        campaignId: _c5, campaign_id: _c6, ...rest
+        campaignId: _c5, campaign_id: _c6, createdBy: _c7, created_by: _c8, ...rest
       } = body;
+      const createdBy = access.userId && access.userId !== 'content_architect' ? access.userId : null;
       const content = await createContent({
         ...rest,
         companyId: scopedCompanyId,
         contentType: contentType as CanonicalContentType,
         campaignId,
+        createdBy,
       } as CreateContentInput);
       return res.status(201).json({ content });
     } catch (error) {

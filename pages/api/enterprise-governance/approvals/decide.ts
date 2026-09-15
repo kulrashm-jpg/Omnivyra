@@ -15,10 +15,9 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import { withRBAC, type RbacContext } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
 import { requireCompanyContext } from '../../../../backend/services/companyContextGuardService';
-import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { onApprovalDecision } from '../../../../backend/services/creator/enterpriseGovernanceIntegration';
 import { getReviewRecord } from '../../../../backend/services/creator/creativeReviewStateMachine';
 import type { ReviewState } from '../../../../backend/services/creator/creativeReviewStateMachine';
@@ -43,7 +42,10 @@ function rbacRoleToReviewRole(role: string | null): CreativeReviewRole {
     case Role.COMPANY_ADMIN: return 'campaign_manager';
     case Role.CONTENT_REVIEWER: return 'compliance_reviewer';
     case Role.CONTENT_PUBLISHER: return 'campaign_manager';
-    default: return 'compliance_reviewer';
+    // SEC-91 W2-A: an unmapped role gets the least-privileged review role
+    // (cannot approve, reject or bypass), never a reviewer role. Unreachable
+    // today — withRBAC admits only the four roles above.
+    default: return 'creative_operator';
   }
 }
 
@@ -53,7 +55,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   try {
-    const ctx = await requireCompanyContext({ req, res });
+    // SEC-91 W2-A (STEP 3AH-91, W2A-5) — act as the principal withRBAC just
+    // authorized, in the company it authorized (WITHRBAC-STRUCT-001).
+    //  - requireCompanyContext used to be called WITHOUT a companyId, so it
+    //    answered 400 "companyId required" to every request: the route was dead.
+    //  - the review role was derived from resolveUserContext().role, which is
+    //    only ever 'admin' | 'user', so rbacRoleToReviewRole always fell to its
+    //    default and EVERY caller acted as compliance_reviewer (a
+    //    CONTENT_PUBLISHER could approve_qa / approve_governance; a super admin
+    //    could never bypass_review). The mapping now receives the real role.
+    const rbac = (req as NextApiRequest & { rbac?: RbacContext }).rbac;
+    if (!rbac) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    const ctx = await requireCompanyContext({ req, res, companyId: rbac.companyId });
     if (!ctx) return;
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -74,12 +87,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Asset not found in this company context' });
     }
 
-    const user = await resolveUserContext(req);
     const result = await onApprovalDecision({
       assetId,
       to: targetState,
-      actorUserId: user.userId ?? 'unknown',
-      actorRole: rbacRoleToReviewRole(user.role ?? null),
+      actorUserId: rbac.userId,
+      actorRole: rbacRoleToReviewRole(rbac.role),
       reason,
       bypass,
     });

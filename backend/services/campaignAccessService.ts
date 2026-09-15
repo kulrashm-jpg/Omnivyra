@@ -6,13 +6,15 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
-import { getUserCompanyRole, Role } from './rbacService';
+import { getUserCompanyRole, isPlatformSuperAdmin, Role } from './rbacService';
+import { isDeterministicIdentityError } from '../security/TenantGuard';
 import {
   resolveEffectiveCampaignRole,
   isCompanyOverrideRole,
   type CampaignAuthContext,
 } from './campaignRoleService';
 import { resolveUserContext } from './userContextService';
+import { attributeAuthenticatedPrincipal } from './requestContextPrincipal';
 
 export type CampaignAccessResult = {
   userId: string;
@@ -84,6 +86,25 @@ export async function resolveCampaignCompanyId(campaignId: string): Promise<stri
 }
 
 /**
+ * SEC-91 W2-A (W2A-5) — is the company operational (companies.status =
+ * 'active')? Mirrors the org step of TenantGuard.assertTenantAccess: a missing
+ * row or a deterministic identity error (malformed id) is "not operational";
+ * a transient read error is reported separately so callers answer 503.
+ */
+async function companyOperationalState(
+  companyId: string,
+): Promise<'operational' | 'not_operational' | 'lookup_error'> {
+  const { data, error } = await supabase
+    .from('companies')
+    .select('id, status')
+    .eq('id', companyId)
+    .maybeSingle();
+  if (error) return isDeterministicIdentityError(error) ? 'not_operational' : 'lookup_error';
+  if (!data) return 'not_operational';
+  return (data as { status?: string | null }).status === 'active' ? 'operational' : 'not_operational';
+}
+
+/**
  * Verify authenticated user has access to the campaign.
  * Company is resolved from DB (campaign_versions), not from client.
  * On failure sends 401/404/403 and returns null. On success returns access context.
@@ -126,6 +147,30 @@ export async function requireCampaignAccess(
 
   let role: (typeof Role)[keyof typeof Role] | null = null;
   if (hasEnvAccess) {
+    // SEC-91 W2-A (STEP 3AH-91, W2A-5) — organization state. The fast path is
+    // "active member of the owning company" (resolveUserContext.companyIds), but
+    // it never checked companies.status, while the canonical tenant guard
+    // (TenantGuard.assertTenantAccess, behind enforceCompanyAccess /
+    // requireTenantAccess) denies an active member of a non-active company
+    // (ORG_INACTIVE / ORG_NOT_FOUND → 403) unless they are a platform super
+    // admin. Same decision here, same responses; a lookup failure is a
+    // retryable 503, never an allow. The content-architect principal keeps its
+    // documented legacy fallback (enforceCompanyAccess fallback (a)).
+    if (!isContentArchitect) {
+      const orgState = await companyOperationalState(companyId);
+      if (orgState === 'lookup_error') {
+        res.status(503).json({
+          error: 'Membership check is temporarily unavailable. Please try again.',
+          code: 'TENANT_LOOKUP_ERROR',
+          retryable: true,
+        });
+        return null;
+      }
+      if (orgState === 'not_operational' && !(await isPlatformSuperAdmin(userId))) {
+        res.status(403).json({ error: 'Access denied to company' });
+        return null;
+      }
+    }
     role = Role.COMPANY_ADMIN;
   } else {
     // DB role lookup (normal authenticated path). getUserCompanyRole answers:
@@ -172,6 +217,10 @@ export async function requireCampaignAccess(
           source: campaignAuthResult.source,
         };
   }
+
+  // SEC-91 W2-A (W2A-4) — record the authorized principal (observe-only by
+  // default; see requestContextPrincipal.ts).
+  attributeAuthenticatedPrincipal({ userId, orgId: companyId, source: 'requireCampaignAccess' });
 
   return {
     userId,
