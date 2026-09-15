@@ -37,6 +37,21 @@
  *       authenticates only when the operator remembered to set the secret. It is
  *       a violation wherever it appears in a route.
  *
+ *   R4-ENV (STEP 3AH-91, W2F-3) — the secret-UNSET branch rejects only in
+ *       production (`if (s) {…} else if (NODE_ENV === 'production') reject`,
+ *       `if (!s) { if (isProd) return deny; return allow; }`): every other
+ *       process — `next dev`, scripts, workers on production credentials — is
+ *       open. The unset branch must reject in every environment.
+ *
+ *   RE-EXPORTS (W2F-1) — a file whose default export is re-exported
+ *       (`export { default } from '…'`, `export { h as default } from '…'`) is a
+ *       route; R1–R4 and R1-METHOD are applied to the module that serves it.
+ *
+ *   KNOWN OPEN (W2F-1) — a confirmed R2/R3/R4-ENV finding owned by another
+ *       workstream may be tracked in the allowlist's `knownOpen` section: it is
+ *       printed on every run and turns into a WARN when fixed. R1/R1-METHOD/R4
+ *       can never be tracked.
+ *
  * WHAT DOES NOT COUNT
  * -------------------
  *   - a primitive's NAME in a comment, a string, or an unused import;
@@ -210,9 +225,25 @@ function executable(src, keepStrings = false) {
   return out;
 }
 
-/** Parse `import { a, b as c } from 'x'` and `import d from 'x'` → Map(local → { imported, spec }). */
+/**
+ * Parse `import { a, b as c } from 'x'` and `import d from 'x'` → Map(local → { imported, spec }).
+ * STEP 3AH-91 (W2F-1): also the destructured dynamic import
+ * `const { a, b: c } = await import('x')` — the same provenance (the binding
+ * is resolved to the module that implements it), so a primitive loaded lazily
+ * inside a handler counts exactly like a static import.
+ */
 function parseImports(src) {
   const map = new Map();
+  // Comments blanked (a commented-out lazy import never binds a name).
+  const live = /\bimport\s*\(/.test(src) ? executable(src, true) : '';
+  for (const m of live.matchAll(/(?:const|let|var)\s*\{([^{}]*)\}\s*=\s*await\s+import\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    for (const part of m[1].split(',')) {
+      const p = part.trim();
+      if (!p || p.startsWith('...')) continue;
+      const [imported, local] = p.split(/\s*:\s*/).map((x) => x.trim().split(/\s*=/)[0].trim());
+      if (/^[A-Za-z_$][\w$]*$/.test(imported) && !map.has(local || imported)) map.set(local || imported, { imported, spec: m[2] });
+    }
+  }
   for (const m of src.matchAll(/import\s+(?:type\s+)?([\s\S]*?)\s+from\s*['"]([^'"]+)['"]/g)) {
     const clause = m[1];
     const spec = m[2];
@@ -239,6 +270,18 @@ function resolveSpec(fromRel, spec) {
   else if (spec.startsWith('.')) target = path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), spec));
   else return null;
   return target.replace(/\.(ts|tsx|js)$/, '');
+}
+
+// Fixture modules (tests only): repo-relative path with extension → source.
+// Consulted before the filesystem and never cached.
+let VIRTUAL = null;
+function virtualModule(modId) {
+  if (!VIRTUAL) return null;
+  for (const ext of ['.ts', '.tsx', '.js']) {
+    if (Object.prototype.hasOwnProperty.call(VIRTUAL, modId + ext)) return { rel: modId + ext, raw: VIRTUAL[modId + ext] };
+    if (Object.prototype.hasOwnProperty.call(VIRTUAL, `${modId}/index${ext}`)) return { rel: `${modId}/index${ext}`, raw: VIRTUAL[`${modId}/index${ext}`] };
+  }
+  return null;
 }
 
 function moduleFile(modId) {
@@ -272,6 +315,11 @@ const callRe = (name) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\
 
 const moduleCache = new Map();
 function loadModule(modId) {
+  const v = virtualModule(modId);
+  if (v) {
+    const code = executable(v.raw);
+    return { rel: v.rel, raw: v.raw, code, imports: parseImports(v.raw), fns: topLevelFunctions(code) };
+  }
   if (moduleCache.has(modId)) return moduleCache.get(modId);
   const file = moduleFile(modId);
   let rec = null;
@@ -363,7 +411,8 @@ const NOT_OBJECT_IDS = new Set(['requestId', 'correlationId', 'traceId', 'jobId'
 
 function requestIdentifiers(code, rel) {
   const ids = new Set();
-  const member = /(?:\breq\s*\.\s*(?:query|body)|\bquery|\bbody|\bparams)\s*\??\s*(?:\.\s*([A-Za-z_$][\w$]*)|\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\])/g;
+  // W2F-1: also the type-cast read `(req.body as any)?.companyId` / `(req.query as X).id`.
+  const member = /(?:\breq\s*\.\s*(?:query|body)|\(\s*req\s*\.\s*(?:query|body)\s+as\s+[^()]*?\)|\bquery|\bbody|\bparams)\s*\??\s*(?:\.\s*([A-Za-z_$][\w$]*)|\[\s*['"]([A-Za-z_$][\w$]*)['"]\s*\])/g;
   for (const m of code.matchAll(member)) {
     const k = m[1] || m[2];
     if (ID_KEY.test(k)) ids.add(k);
@@ -425,7 +474,16 @@ function failOpenSecret(code) {
     guards.push({ expr: `process\\.env\\.${m[1]}`, env: m[1] });
   }
   for (const g of guards) {
-    const explicitDeny = new RegExp(`if\\s*\\(\\s*!\\s*${g.expr}\\b`).test(code);
+    // `if (!S …) <reject>` — an explicit deny, unless the deny itself depends on
+    // the environment (W2F-3: `if (!S && isProd) reject`, or an unset-branch
+    // that rejects only in production / returns early outside it).
+    let explicitDeny = false;
+    for (const m of code.matchAll(new RegExp(`\\bif\\s*\\(\\s*!\\s*${g.expr}\\b`, 'g'))) {
+      const st = ifStatementAt(code, m.index);
+      const envCond = ENV_COND.test(st.cond) && /&&/.test(st.cond);
+      if (envCond || (ENV_COND.test(st.then) && envDependentUnset(st.then))) hits.add(`${g.env}${ENV_OPEN_SUFFIX}`);
+      else explicitDeny = true;
+    }
     if (explicitDeny) continue;
     for (const m of code.matchAll(new RegExp(`if\\s*\\(\\s*${g.expr}\\s*\\)\\s*\\{`, 'g'))) {
       const open = m.index + m[0].length - 1;
@@ -433,15 +491,76 @@ function failOpenSecret(code) {
       if (!REJECT.test(code.slice(open, close + 1))) continue;
       const after = code.slice(close + 1).trimStart();
       if (/^else\b/.test(after)) {
-        const elseOpen = after.indexOf('{');
-        const elseBody = elseOpen > -1 && elseOpen < 120 ? after.slice(elseOpen, matchBrace(after, elseOpen) + 1) : after.slice(0, 200);
-        if (REJECT.test(elseBody)) continue;
+        // The secret-UNSET branch must reject in every environment (W2F-3).
+        // `else if (NODE_ENV === 'production') reject` / `else { if (isProd) reject }`
+        // leave every non-production process (which may hold production DB/Redis
+        // credentials) open.
+        const st = ifStatementAt(code, m.index);
+        if (st.elseText !== null && !envDependentUnset(st.elseText)) continue;
+        if (st.elseText !== null && ENV_COND.test(st.elseText)) { hits.add(`${g.env}${ENV_OPEN_SUFFIX}`); continue; }
       }
       hits.add(g.env);
     }
     if (new RegExp(`if\\s*\\(\\s*${g.expr}\\s*&&[^)]*!==?`).test(code)) hits.add(g.env);
   }
   return [...hits];
+}
+
+// W2F-3: conditions that select behaviour by deployment environment.
+const ENV_OPEN_SUFFIX = ' (open outside production)';
+const ENV_COND = /process\.env\.(?:NODE_ENV|VERCEL_ENV|APP_ENV|NEXT_PUBLIC_APP_ENV|RAILWAY_ENVIRONMENT\w*)\b|\b(?:is|IS_)(?:Prod|PROD|Production|PRODUCTION|Dev|DEV|Development|DEVELOPMENT|Local|LOCAL|Test|TEST)\w*/;
+
+/** Parse the `if (…) <stmt|block> [else <stmt|block|if…>]` starting at `at`. */
+function ifStatementAt(code, at) {
+  const open = code.indexOf('(', at);
+  const close = matchClose(code, open);
+  const cond = code.slice(open + 1, close);
+  const stmtEnd = (from) => {
+    let s = from;
+    while (s < code.length && /\s/.test(code[s])) s++;
+    if (code[s] === '{') return [s, matchClose(code, s) + 1];
+    if (/^if\b/.test(code.slice(s, s + 3))) return [s, ifStatementAt(code, s).end];
+    let e = exprEnd(code, s);
+    if (code[e] === ';') e++;
+    return [s, e];
+  };
+  const [ts, te] = stmtEnd(close + 1);
+  let end = te;
+  let elseText = null;
+  let r = te;
+  while (r < code.length && /\s/.test(code[r])) r++;
+  if (/^else\b/.test(code.slice(r, r + 5))) {
+    const [es, ee] = stmtEnd(r + 4);
+    elseText = code.slice(es, ee);
+    end = ee;
+  }
+  return { start: at, end, cond, then: code.slice(ts, te), elseText };
+}
+
+/**
+ * The branch that runs when the secret is NOT set. Fails open when its
+ * rejection depends on the environment: it rejects only inside an
+ * environment-conditional `if`, an environment `if` has an else (the
+ * environment picks the path), or an environment `if` returns / calls
+ * next() without rejecting (a non-production allow). Environment-conditional
+ * logging followed by an unconditional rejection is fine.
+ */
+function envDependentUnset(u) {
+  let stripped = '';
+  let cursor = 0;
+  const re = /\bif\s*\(/g;
+  let m;
+  while ((m = re.exec(u))) {
+    const st = ifStatementAt(u, m.index);
+    if (!ENV_COND.test(st.cond)) continue;
+    if (st.elseText !== null) return true;
+    if (REJECT.test(st.then) || /\breturn\b|\bnext\s*\(/.test(st.then)) return true;
+    stripped += u.slice(cursor, st.start);
+    cursor = st.end;
+    re.lastIndex = st.end;
+  }
+  stripped += u.slice(cursor);
+  return !REJECT.test(stripped);
 }
 
 // ─────────────────────────────────────────────────── per-method coverage ──
@@ -696,12 +815,18 @@ function methodBranches(code, strs, s, e) {
  * R1-METHOD: returns [{ verbs, at }] of method branches that reach no
  * approved primitive, plus a summary for the report.
  */
-function methodCoverage(rel, raw, code, ctx) {
-  const exp = /export\s+default\s+/.exec(code);
-  if (!exp) return { shape: 'none', uncovered: [] };
-  const start = exp.index + exp[0].length;
-  const range = /^(?:async\s+)?function\b/.test(code.slice(start)) ? [start, (functionAt(code, start) || [0, code.length])[1]] : [start, exprEnd(code, start)];
-  const h = resolveHandler(code, ctx, range);
+function methodCoverage(rel, raw, code, ctx, handlerName = null) {
+  let h;
+  if (handlerName) {
+    // `export { handler as default }` (local or re-exported from this module).
+    h = namedHandler(code, ctx, handlerName);
+  } else {
+    const exp = /export\s+default\s+/.exec(code);
+    if (!exp) return { shape: 'none', uncovered: [] };
+    const start = exp.index + exp[0].length;
+    const range = /^(?:async\s+)?function\b/.test(code.slice(start)) ? [start, (functionAt(code, start) || [0, code.length])[1]] : [start, exprEnd(code, start)];
+    h = resolveHandler(code, ctx, range);
+  }
   if (!h) return { shape: 'unresolved', uncovered: [] };
   if (h.wrapper) return { shape: 'wrapper', wrapper: h.wrapper, uncovered: [] };
   const hcode = h.code;
@@ -729,6 +854,93 @@ function methodCoverage(rel, raw, code, ctx) {
     if (!ok && !benign) uncovered.push({ verbs: b.verbs, line: hcode.slice(0, b.start).split('\n').length, file: h.ctx.rel, body, imports: h.ctx.imports, idx: branchReport.length - 1 });
   }
   return { shape: 'dispatch', branches: branchReport, uncovered };
+}
+
+// ───────────────────────────────────────────── default re-exports (W2F-1) ──
+//
+// STEP 3AH-91 (W2F-1). Next.js serves a pages/api file whose default export is
+// RE-EXPORTED from another module (`export { default } from '…'`, `export {
+// handler as default } from '…'`) exactly like one that declares it. Before
+// W2F-1 the gate classified such a file as a "helper module" (no
+// `export default` text) and never analysed it — so a barrel pointing at an
+// unauthenticated handler anywhere in the repo passed. A re-exporting file is
+// now a route: the gate follows the re-export (up to MAX_REEXPORT_HOPS, into
+// any repo module — the target is often under backend/services/) and applies
+// R1–R4 and R1-METHOD to the module that actually serves the route, with the
+// same provenance and delegation rules. The allowlist entry, dynamic-segment
+// identifiers and campaign-keying stay keyed by the ROUTE path. An
+// unresolvable re-export fails closed (R1).
+
+const MAX_REEXPORT_HOPS = 4;
+
+/**
+ * How a module provides its default export:
+ *   { kind: 'local' }                      `export default …`
+ *   { kind: 'local-named', name }          `export { handler as default };`
+ *   { kind: 'reexport', spec, imported }   `export { default } from 'x'`, `export { h as default } from 'x'`
+ *   null                                   none (a helper module)
+ */
+function defaultExportOf(raw) {
+  if (/export\s+default\b/.test(raw)) return { kind: 'local' };
+  const code = executable(raw, true);
+  for (const m of code.matchAll(/\bexport\s*\{([^{}]*)\}(?:\s*from\s*['"]([^'"]+)['"])?/g)) {
+    for (const part of m[1].split(',')) {
+      const p = part.trim();
+      if (!p || /^type\s/.test(p)) continue;
+      const [imported, local] = p.split(/\s+as\s+/).map((x) => x.trim());
+      if ((local || imported) !== 'default') continue;
+      return m[2] ? { kind: 'reexport', spec: m[2], imported } : { kind: 'local-named', name: imported };
+    }
+  }
+  return null;
+}
+
+/**
+ * The module that serves the route: follows default re-exports. Returns
+ * { rel, raw, handlerName, scoped, chain } or { error, chain }.
+ * `handlerName` is set when the default is a NAMED function of that module;
+ * `scoped` when it was re-exported by name from another module — R1 evidence
+ * is then scoped to that handler (a sibling export's primitive does not count).
+ */
+function resolveRouteSource(rel, raw) {
+  let cur = { rel, raw };
+  const chain = [];
+  for (let hop = 0; hop <= MAX_REEXPORT_HOPS; hop++) {
+    const d = defaultExportOf(cur.raw);
+    if (!d || d.kind === 'local') {
+      if (!d && hop > 0) return { error: `${cur.rel} has no default export`, chain };
+      return { rel: cur.rel, raw: cur.raw, handlerName: null, scoped: false, chain };
+    }
+    if (d.kind === 'local-named') return { rel: cur.rel, raw: cur.raw, handlerName: d.name, scoped: false, chain };
+    const target = resolveSpec(cur.rel, d.spec);
+    const mod = target && loadModule(target);
+    if (!mod) return { error: `re-exported default '${d.spec}' (from ${cur.rel}) does not resolve to a repo module`, chain };
+    if (chain.includes(mod.rel) || mod.rel === rel) return { error: `default re-export cycle through ${mod.rel}`, chain };
+    chain.push(mod.rel);
+    if (d.imported !== 'default') return { rel: mod.rel, raw: mod.raw, handlerName: d.imported, scoped: true, chain };
+    cur = { rel: mod.rel, raw: mod.raw };
+  }
+  return { error: `default re-export chain deeper than ${MAX_REEXPORT_HOPS}`, chain };
+}
+
+/** The handler behind a named default (`export { h as default }`): same result shape as resolveHandler. */
+function namedHandler(code, ctx, name) {
+  const d = declarationOf(code, name);
+  if (!d) return null;
+  return d.fn ? { body: d.range, code, ctx } : resolveHandler(code, ctx, d.range);
+}
+
+/** Code R1 evidence is computed from for a handler re-exported by name: its declaration + resolved body. */
+function namedHandlerScope(code, ctx, name) {
+  const d = declarationOf(code, name);
+  if (!d) return '';
+  let text = code.slice(d.range[0], d.range[1]);
+  if (!d.fn) {
+    const h = resolveHandler(code, ctx, d.range);
+    // Only a body in this module (evidence is provenance-checked against this module's imports).
+    if (h && h.body && h.ctx === ctx) text += '\n' + h.code.slice(h.body[0], h.body[1]);
+  }
+  return text;
 }
 
 // ─────────────────────────────────────────────────────────────── allowlist ──
@@ -761,6 +973,34 @@ function verifyMethodExemption(ex, branch) {
   } else {
     errs.push(`unknown method-exemption kind "${ex && ex.kind}" (expected public|stub)`);
   }
+  return errs;
+}
+
+/**
+ * Known-open binding findings (STEP 3AH-91, W2F-1): a route whose R2/R3
+ * violation is a CONFIRMED open finding owned by another workstream. The
+ * violation is not hidden: it is printed as KNOWN OPEN on every run, the entry
+ * must name the finding and owner, only R2/R3 can be tracked (never R1 /
+ * R1-METHOD / R4 — an unauthenticated or fail-open route always fails), and
+ * when the rule stops firing the gate prints a WARN asking for removal.
+ */
+const KNOWN_OPEN_RULES = new Set(['R2', 'R3', 'R4-ENV']);
+function loadKnownOpen(file = ALLOWLIST_PATH) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')).knownOpen || {};
+  } catch {
+    return {};
+  }
+}
+
+function verifyKnownOpen(ko) {
+  const errs = [];
+  if (!ko.finding || !/^[A-Z0-9][\w.-]+$/.test(String(ko.finding))) errs.push('known-open entry must name its finding id');
+  if (!ko.owner) errs.push('known-open entry must name the owning workstream');
+  if (!ko.reason || String(ko.reason).trim().length < 20) errs.push('known-open reason missing or too short');
+  const rules = Array.isArray(ko.rules) ? ko.rules : [];
+  if (rules.length === 0) errs.push('known-open entry must list the rule(s) it tracks');
+  for (const r of rules) if (!KNOWN_OPEN_RULES.has(r)) errs.push(`rule ${r} cannot be tracked as known-open (only ${[...KNOWN_OPEN_RULES].join('/')})`);
   return errs;
 }
 
@@ -831,14 +1071,56 @@ function verifyAllowEntry(entry, raw, code) {
 
 // ──────────────────────────────────────────────────────────────── analysis ──
 
+/** A pages/api file Next.js serves as a route: it declares OR re-exports a default export (W2F-1). */
 function isRouteFile(raw) {
-  return /export\s+default\b/.test(raw);
+  return defaultExportOf(raw) !== null;
 }
 
-function analyzeRoute(rel, raw, allowlist, methodExemptions = {}) {
-  const code = executable(raw);
-  const ctx = { rel, imports: parseImports(raw), fns: topLevelFunctions(code) };
-  const ev = evidenceIn(code, ctx, 0, new Set());
+/**
+ * opts.modules (tests only): { 'repo/rel/path.ts': source } consulted before
+ * the filesystem when following imports and re-exports.
+ */
+function analyzeRoute(rel, raw, allowlist, methodExemptions = {}, opts = {}) {
+  const prev = VIRTUAL;
+  if (opts.modules) VIRTUAL = { ...(prev || {}), ...opts.modules };
+  try {
+    const row = analyzeRouteSource(rel, raw, allowlist, methodExemptions);
+    // Known-open tracking (see loadKnownOpen): move ONLY the listed R2/R3
+    // violations into row.knownOpen; a malformed entry tracks nothing.
+    const ko = (opts.knownOpen || {})[rel];
+    row.knownOpen = [];
+    if (ko) {
+      const errs = verifyKnownOpen(ko);
+      if (errs.length) {
+        for (const e of errs) row.violations.push({ rule: 'ALLOWLIST', msg: e });
+      } else {
+        row.violations = row.violations.filter((v) => {
+          if (!ko.rules.includes(v.rule)) return true;
+          row.knownOpen.push({ ...v, finding: ko.finding, owner: ko.owner });
+          return false;
+        });
+      }
+    }
+    return row;
+  } finally {
+    VIRTUAL = prev;
+  }
+}
+
+function analyzeRouteSource(rel, raw, allowlist, methodExemptions) {
+  const src = resolveRouteSource(rel, raw);
+  if (src.error) {
+    return {
+      route: rel, level: 'none', via: [], primitives: [], ids: [], campaignKeyed: false, campaignBound: false,
+      allow: (allowlist[rel] && allowlist[rel].kind) || null, reExport: src.chain, methodShape: 'unresolved', methodBranches: [],
+      violations: [{ rule: 'R1', msg: `default re-export not analysable (${src.error}) — fails closed` }],
+    };
+  }
+  // The module that actually serves the route (the route file itself unless it re-exports).
+  const srcRaw = src.raw;
+  const code = executable(srcRaw);
+  const ctx = { rel: src.rel, imports: parseImports(srcRaw), fns: topLevelFunctions(code) };
+  const ev = evidenceIn(src.scoped ? namedHandlerScope(code, ctx, src.handlerName) : code, ctx, 0, new Set());
   const level = combine(ev);
   const ids = requestIdentifiers(code, rel);
   const campaignKeyed = isCampaignKeyed(ids, rel);
@@ -847,12 +1129,17 @@ function analyzeRoute(rel, raw, allowlist, methodExemptions = {}) {
   const entry = allowlist[rel] || null;
   const violations = [];
 
-  if (failOpen.length) violations.push({ rule: 'R4', msg: `fail-open secret check (${failOpen.join(',')}): authenticates only when the env var is set` });
+  const envOpen = failOpen.filter((h) => h.endsWith(ENV_OPEN_SUFFIX)).map((h) => h.slice(0, -ENV_OPEN_SUFFIX.length));
+  const everywhereOpen = failOpen.filter((h) => !h.endsWith(ENV_OPEN_SUFFIX));
+  if (everywhereOpen.length) violations.push({ rule: 'R4', msg: `fail-open secret check (${everywhereOpen.join(',')}): authenticates only when the env var is set` });
+  // W2F-3: closed in production, open in every other process (next dev, scripts
+  // and workers run outside production with production credentials).
+  if (envOpen.length) violations.push({ rule: 'R4-ENV', msg: `secret check (${[...new Set(envOpen)].join(',')}) is open outside production: with the env var unset, the rejection depends on NODE_ENV` });
 
   // R1-METHOD (STEP 3AH-91): a file-level primitive does not cover a method
   // branch that never reaches it. Applies to every route that relies on R1
   // (no entry, or a binding claim — which still requires authentication).
-  const methods = methodCoverage(rel, raw, code, ctx);
+  const methods = methodCoverage(rel, srcRaw, code, ctx, src.handlerName);
   const relaxed = entry && !(entry.kind === 'identity-scoped' || entry.kind === 'inline-binding');
   if (!relaxed && level !== 'none') {
     const exemptions = methodExemptions[rel] || {};
@@ -871,7 +1158,8 @@ function analyzeRoute(rel, raw, allowlist, methodExemptions = {}) {
 
   const bindingClaim = entry && (entry.kind === 'identity-scoped' || entry.kind === 'inline-binding');
   if (entry) {
-    for (const e of verifyAllowEntry(entry, raw, executable(raw, true))) violations.push({ rule: 'ALLOWLIST', msg: e });
+    // Evidence is re-verified against the module that serves the route.
+    for (const e of verifyAllowEntry(entry, srcRaw, executable(srcRaw, true))) violations.push({ rule: 'ALLOWLIST', msg: e });
     // A binding claim never replaces authentication: the route must still
     // establish who the caller is through an approved primitive.
     if (bindingClaim && LEVEL_RANK[level] < LEVEL_RANK.identity) {
@@ -900,6 +1188,8 @@ function analyzeRoute(rel, raw, allowlist, methodExemptions = {}) {
     campaignKeyed,
     campaignBound,
     allow: entry ? entry.kind : null,
+    // W2F-1: the module(s) the default export was followed to (empty when declared in the route file).
+    reExport: src.chain,
     methodShape: methods.shape,
     methodBranches: methods.branches || [],
     violations,
@@ -917,6 +1207,7 @@ function walk(dir, out) {
 function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
   const allowlist = loadAllowlist(allowlistPath);
   const methodExemptions = loadMethodExemptions(allowlistPath);
+  const knownOpen = loadKnownOpen(allowlistPath);
   const files = [];
   walk(API_DIR, files);
   const rows = [];
@@ -925,10 +1216,12 @@ function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
     const rel = path.relative(ROOT, f).split(path.sep).join('/');
     const raw = fs.readFileSync(f, 'utf8');
     if (!isRouteFile(raw)) { helpers.push(rel); continue; }
-    rows.push(analyzeRoute(rel, raw, allowlist, methodExemptions));
+    rows.push(analyzeRoute(rel, raw, allowlist, methodExemptions, { knownOpen }));
   }
   const known = new Set(rows.map((r) => r.route));
   const stale = Object.keys(allowlist).filter((k) => !known.has(k));
+  // Known-open entries for a route that no longer exists fail like any stale entry.
+  for (const k of Object.keys(knownOpen)) if (!known.has(k)) stale.push(`${k} (knownOpen)`);
   // Binding claims the route no longer needs (it now passes on primitives alone).
   const redundant = rows
     .filter((r) => r.allow === 'inline-binding' || r.allow === 'identity-scoped')
@@ -943,14 +1236,21 @@ function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
       if (!still) staleMethodExemptions.push(`${route} ${verb}`);
     }
   }
-  return { rows, helpers, stale, redundant, staleMethodExemptions, allowlist, methodExemptions };
+  // Known-open rules that no longer fire (the finding was fixed) — remove the entry.
+  const staleKnownOpen = [];
+  for (const [route, ko] of Object.entries(knownOpen)) {
+    const row = rows.find((r) => r.route === route);
+    if (!row) continue;
+    for (const rule of ko.rules || []) if (!row.knownOpen.some((v) => v.rule === rule)) staleKnownOpen.push(`${route} ${rule}`);
+  }
+  return { rows, helpers, stale, redundant, staleMethodExemptions, staleKnownOpen, allowlist, methodExemptions, knownOpen };
 }
 
 function main() {
-  const { rows, helpers, stale, redundant, staleMethodExemptions } = scanRepo();
+  const { rows, helpers, stale, redundant, staleMethodExemptions, staleKnownOpen } = scanRepo();
   const bad = rows.filter((r) => r.violations.length);
   if (process.argv.includes('--json')) {
-    process.stdout.write(JSON.stringify({ rows, helpers, stale, redundant, staleMethodExemptions }, null, 1));
+    process.stdout.write(JSON.stringify({ rows, helpers, stale, redundant, staleMethodExemptions, staleKnownOpen }, null, 1));
     return;
   }
   const byLevel = rows.reduce((a, r) => ((a[r.allow ? `allow:${r.allow}` : r.level] = (a[r.allow ? `allow:${r.allow}` : r.level] || 0) + 1), a), {});
@@ -969,11 +1269,25 @@ function main() {
     console.log(`\nWARN: method exemptions no longer needed (branch now reaches a primitive, or is gone) — remove them:`);
     for (const s of staleMethodExemptions) console.log(`  - ${s}`);
   }
+  if (staleKnownOpen.length) {
+    console.log(`
+WARN: known-open findings no longer reproduce (fixed?) — remove their knownOpen entries:`);
+    for (const s of staleKnownOpen) console.log(`  - ${s}`);
+  }
+  const tracked = rows.filter((r) => r.knownOpen.length);
+  if (tracked.length) {
+    console.log(`
+KNOWN OPEN (tracked findings, NOT fixed — see scripts/route-auth-allowlist.json knownOpen):`);
+    for (const r of tracked) for (const v of r.knownOpen) console.log(`  - [${v.finding} → ${v.owner}] ${r.route}  — ${v.rule} ${v.msg}`);
+  }
+  const reExported = rows.filter((r) => r.reExport && r.reExport.length);
+  console.log(`default re-exports (W2F-1): ${reExported.length} route(s) analysed through their re-exported handler module`);
   const dispatching = rows.filter((r) => r.methodShape === 'dispatch');
   const exempt = dispatching.reduce((n, r) => n + r.methodBranches.filter((b) => b.via === 'exempt').length, 0);
   console.log(`per-method (R1-METHOD): ${dispatching.length} route(s) dispatch by HTTP method; every branch checked; ${exempt} reviewed method exemption(s)`);
   if (bad.length === 0 && stale.length === 0) {
     console.log('\nRESULT: PASS — every route authenticates, binds its tenant, or is a verified allowlist entry.');
+    if (tracked.length) console.log(`        (${tracked.length} route(s) carry KNOWN OPEN binding findings listed above — tracked, not fixed.)`);
     return;
   }
   const byRule = {};
@@ -986,5 +1300,5 @@ function main() {
   process.exit(1);
 }
 
-module.exports = { analyzeRoute, scanRepo, executable, parseImports, requestIdentifiers, failOpenSecret, verifyAllowEntry, verifyMethodExemption, methodCoverage, PRIMITIVES, loadAllowlist, loadMethodExemptions };
+module.exports = { analyzeRoute, scanRepo, executable, parseImports, isRouteFile, defaultExportOf, requestIdentifiers, failOpenSecret, verifyAllowEntry, verifyMethodExemption, verifyKnownOpen, methodCoverage, PRIMITIVES, loadAllowlist, loadMethodExemptions, loadKnownOpen };
 if (require.main === module) main();

@@ -27,6 +27,13 @@ const SUITES = [
   'backend/tests/unit/sec91FSecretsGate.test.ts',
   // gate relationships + CI wiring (3AH-91)
   'backend/tests/unit/sec91FGateHardening.test.ts',
+  // wave 2 (3AH-91 W2F): default re-exports, R4-ENV, constant-time secret
+  // compares (+ the 3 converted sites), SSRF fetch aliases (+ render provider)
+  'backend/tests/unit/sec91W2FRouteAuthReExport.test.ts',
+  'backend/tests/unit/sec91W2FR4Env.test.ts',
+  'backend/tests/unit/sec91W2FConstantTime.test.ts',
+  'backend/tests/unit/sec91W2FSsrfAlias.test.ts',
+  'backend/tests/unit/sec91W2FCiWiring.test.ts',
 ];
 
 const missing = SUITES.filter((s) => !fs.existsSync(path.join(ROOT, s)));

@@ -116,9 +116,32 @@ export function createOpenAIRenderProvider(
     const referenceUrl = spec.blueprint_projection.reference_image_url;
     if (creatorImageReferenceModeEnabled() && typeof referenceUrl === 'string' && referenceUrl.trim()) {
       try {
-        const refResp = await doFetch(referenceUrl.trim(), { signal: AbortSignal.timeout(REFERENCE_FETCH_TIMEOUT_MS) });
+        // STEP 3AH-91 (W2F-4): the reference URL travels via persisted
+        // production data (reference_image_url), so at runtime it is fetched
+        // through the SSRF layer (scheme/host/private-range validation, DNS
+        // pinning, per-hop redirect re-validation, byte cap) — as
+        // creatorAssetRendererMedia's reference download already is. SEC-D's
+        // bound is kept: the AbortSignal AND the SSRF layer's own timeout are
+        // both REFERENCE_FETCH_TIMEOUT_MS. An injected fetchImpl (composition /
+        // tests) is a trusted seam and is used exactly as before. A blocked URL
+        // throws → caught below → falls through to plain generation.
+        const refSignal = AbortSignal.timeout(REFERENCE_FETCH_TIMEOUT_MS);
+        let refResp: Response;
+        let readRef: () => Promise<ArrayBuffer | Uint8Array<ArrayBuffer>>;
+        if (cfg.fetchImpl) {
+          // ssrf-ok: injected fetchImpl is a composition/test seam (never set at runtime — renderProviderRegistry builds the provider with no config); the runtime path is the safeFetch branch below.
+          const r = await cfg.fetchImpl(referenceUrl.trim(), { signal: refSignal });
+          refResp = r;
+          readRef = () => r.arrayBuffer();
+        } else {
+          const { safeFetch, readCapped } = await import('../../../../../lib/security/safeFetch');
+          const r = await safeFetch(referenceUrl.trim(), { method: 'GET', signal: refSignal }, { timeoutMs: REFERENCE_FETCH_TIMEOUT_MS, metricLabel: 'creator-render-reference' });
+          refResp = r;
+          // Streamed byte cap (SSRF layer default); copied into an ArrayBuffer-backed view for Blob.
+          readRef = async () => new Uint8Array(await readCapped(r));
+        }
         if (refResp.ok) {
-          const refBytes = await refResp.arrayBuffer();
+          const refBytes = await readRef();
           const form = new FormData();
           form.append('model', model);
           form.append('prompt', prompt);

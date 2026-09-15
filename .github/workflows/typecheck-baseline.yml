@@ -50,6 +50,8 @@ jobs:
       # request that bypasses the centralized SSRF layer (lib/security/safeFetch).
       # STEP 3AH-91 (F3): also scans lib/** server modules and flags template
       # literals whose HOST is dynamic (`https://${host}`, `${baseUrl}/x`).
+      # STEP 3AH-91 (W2F-4): also fetch ALIASES (`const doFetch = fetch`,
+      # `cfg.fetchImpl(url)`) and a raw fetch injected as a fetch implementation.
       - name: Outbound-SSRF guard
         run: npm run check:ssrf
 
@@ -66,6 +68,10 @@ jobs:
       # No grandfathered baseline: this step is blocking.
       # STEP 3AH-91 (F1): R1-METHOD — every HTTP-method branch of a handler
       # must reach a primitive (shared prelude, wrapper, or the branch itself).
+      # STEP 3AH-91 (W2F-1/W2F-3): routes that RE-EXPORT their default handler
+      # are analysed through the served module; R4-ENV flags secret checks that
+      # reject only in production. Confirmed open R2/R3/R4-ENV findings owned by
+      # another workstream are printed as KNOWN OPEN (never R1/R1-METHOD/R4).
       - name: Route authentication gate
         run: npm run check:route-auth
 
@@ -97,6 +103,17 @@ jobs:
       # scripts/security/secrets-allowlist.json, pinned by value fingerprint.
       - name: Secret-pattern gate
         run: npm run check:secrets
+
+      # STEP 3AH-91 (W2F-2): constant-time secret comparison gate. Fails the
+      # build when pages/api/** or backend/** compares a value with === / !==
+      # against a secret-derived value (process.env.*SECRET|TOKEN|KEY*, a
+      # variable assigned from one, an HMAC/signature derivation, or a
+      # secret-named operand). Use constantTimeEqual / bearerTokenMatches
+      # (backend/security/constantTimeEqual). Reviewed exceptions carry
+      # `// ct-ok: <reason>`; confirmed open findings owned by another
+      # workstream are printed as KNOWN OPEN on every run.
+      - name: Constant-time secret comparison gate
+        run: npm run check:constant-time
 
       # STEP 3AH-91 (F7): the security gates' own fixture suites. A gate whose
       # detection silently regresses (e.g. a refactor that stops seeing

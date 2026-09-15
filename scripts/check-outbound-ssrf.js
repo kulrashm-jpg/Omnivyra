@@ -10,6 +10,10 @@
  *   - fetch(<identifier>)                    e.g. fetch(url), fetch(input.sourceUrl)
  *   - axios.get|post|put|patch|delete|request|head(<identifier>)
  *   - http(s).request(<identifier>)
+ *   - (STEP 3AH-91, W2F-4) the same through a fetch ALIAS or an injected fetch
+ *     implementation: `const doFetch = fetch; doFetch(url)`,
+ *     `cfg.fetchImpl(url)`, and a raw fetch injected as another module's fetch
+ *     implementation (`{ fetchImpl: fetch }`)
  * where the first argument is a variable (NOT a string/template literal).
  *
  * What it ALLOWS (by design — the rule targets user/DB-controlled URLs):
@@ -81,6 +85,46 @@ const TEMPLATE_PATTERNS = [
   { name: 'axios', re: /\baxios\s*\.\s*(?:get|post|put|patch|delete|request|head)\s*\(\s*`/ },
   { name: 'http.request', re: /\bhttps?\s*\.\s*(?:request|get)\s*\(\s*`/ },
 ];
+
+// STEP 3AH-91 (W2F-4): fetch ALIASES. The same outbound request, under
+// another name:
+//   - a name bound to the RAW fetch (`const doFetch = fetch`,
+//     `const f = cfg.fetchImpl || globalThis.fetch`, `= window.fetch.bind(…)`);
+//   - an injected fetch implementation called directly (`cfg.fetchImpl(url)`,
+//     `customFetch(url)` — the conventional injection names);
+//   - the raw fetch INJECTED as another module's fetch implementation
+//     (`{ fetchImpl: fetch }`, `fetchFn: globalThis.fetch`) — flagged at the
+//     injection site, because the receiving module cannot know it is raw.
+// Values that merely CALL fetch (`const r = await fetch(u)`) are not aliases;
+// an alias of the SSRF layer itself (`= safeFetch`) is safe. Generic
+// `fetcher`/`fetchFn` parameters are NOT treated as raw (in this codebase they
+// are DB page loaders or SSRF-layer fetchers injected by their callers; the
+// injection-site rule covers a raw fetch being passed in).
+const FETCH_REF = /(?:\b(?:globalThis|window|global|self)\s*\.\s*fetch|(?<![\w$.])fetch|\bundici\s*\.\s*fetch|\bnodeFetch|\bcrossFetch)(?![\w$])(?!\s*\()/;
+const INJECTED_FETCH_CALL = '(?:[A-Za-z_$][\\w$]*\\s*\\??\\.\\s*)?(?:fetchImpl|customFetch)';
+const RAW_FETCH_INJECTION = /\b(?:fetchImpl|fetchFn|fetcher|customFetch|fetch)\s*:\s*(?:(?:globalThis|window|global|self)\s*\.\s*)?fetch\b(?!\s*\()(?:\s*\.\s*bind\s*\([^)]*\))?\s*[,}\n]/;
+
+// Reviewed alias call sites (line-scoped; each must keep matching, else WARN).
+// Not open findings: the request is not server-side with a caller-influenced
+// URL. Adding an entry requires security review.
+const REVIEWED_ALIAS_CALLS = [
+  { file: 'lib/instrumentation/fetchInstrumentation.ts', contains: 'originalFetch(input, init)', reason: 'transparent global-fetch instrumentation wrapper: forwards the ORIGINAL call, whose URL is scanned at its own call site' },
+  { file: 'backend/services/threadRuntime/threadRuntimeClientTransport.ts', contains: 'await doFetch(endpoint', reason: 'browser trace transport: doFetch is window.fetch (undefined server-side unless injected) posting to the fixed same-origin /api/threadRuntime/trace endpoint' },
+];
+
+/** Names bound to a raw fetch in this source (`const doFetch = fetch`, …). */
+function fetchAliases(src) {
+  const names = new Set();
+  const re = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*([^;\n]+)/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const value = m[2];
+    if (/^\s*(?:await\s+)?(?:safeFetch|safeFetchBuffer|observedFetch)\b/.test(value)) continue;
+    if (FETCH_REF.test(value)) names.add(m[1]);
+  }
+  names.delete('fetch');
+  return names;
+}
 
 // Identifiers that are NOT URLs even though they syntactically match (reduce
 // false positives): request/response objects, options, etc. are never the URL.
@@ -170,6 +214,13 @@ function scanSource(src) {
     if (isConst(expr) || (tern && isConst(tern[1]) && isConst(tern[2]))) constUrlVars.add(`${fm[1]}()`);
   }
 
+  // STEP 3AH-91 (W2F-4): calls through a fetch alias or an injected fetch
+  // function, with a dynamic first argument (a bare/member identifier,
+  // optionally `.trim()`-ed) or a template literal whose host is dynamic.
+  const aliasAlt = [...fetchAliases(src)].map((a) => a.replace(/\$/g, '\\$')).concat([INJECTED_FETCH_CALL]).join('|');
+  const callPatterns = PATTERNS.concat([{ name: 'fetch-alias', re: new RegExp(`(?<![.\\w$])(?:${aliasAlt})\\s*\\(\\s*(${IDENT})(?:\\s*\\.\\s*(?:trim|toString|valueOf)\\s*\\(\\s*\\))?\\s*[,)]`) }]);
+  const templatePatterns = TEMPLATE_PATTERNS.concat([{ name: 'fetch-alias', re: new RegExp(`(?<![.\\w$])(?:${aliasAlt})\\s*\\(\\s*\``) }]);
+
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -178,7 +229,15 @@ function scanSource(src) {
     if (/\b(safeFetch|safeFetchBuffer|assertUrlSafe|observedFetch)\s*\(/.test(line)) continue;
     if (SUPPRESS_RE.test(line) || (i > 0 && SUPPRESS_RE.test(lines[i - 1]))) continue;
     let flagged = false;
-    for (const { name, re } of PATTERNS) {
+    const inj = RAW_FETCH_INJECTION.exec(line);
+    if (inj) {
+      const before = line.slice(0, inj.index);
+      if ((before.match(/`/g) || []).length % 2 === 0 && !before.includes('//')) {
+        out.push({ line: i + 1, call: 'raw-fetch-injection', arg: inj[0].replace(/[,}\n]\s*$/, '').trim() });
+        continue;
+      }
+    }
+    for (const { name, re } of callPatterns) {
       if (name === 'fetch' && hasLocalFetch) continue;
       const m = re.exec(line);
       if (!m) continue;
@@ -197,7 +256,7 @@ function scanSource(src) {
     if (flagged) continue;
     // STEP 3AH-91 (F3): a template literal whose HOST is dynamic
     // (`https://${host}/x`, `${baseUrl}/x`) is the same dynamic-URL signature.
-    for (const { name, re } of TEMPLATE_PATTERNS) {
+    for (const { name, re } of templatePatterns) {
       if (name === 'fetch' && hasLocalFetch) continue;
       const m = re.exec(line);
       if (!m) continue;
@@ -266,6 +325,8 @@ function main() {
       const text = (lines[v.line - 1] || '').trim();
       const known = KNOWN_OPEN.find((k) => k.file === rel && text.includes(k.contains));
       if (known) { known.hit = true; knownHits.push({ rel, line: v.line, known }); continue; }
+      const reviewed = v.call === 'fetch-alias' && REVIEWED_ALIAS_CALLS.find((k) => k.file === rel && text.includes(k.contains));
+      if (reviewed) { reviewed.hit = true; continue; }
       violations.push({ file: path.relative(ROOT, file), line: v.line, call: v.call, arg: v.arg, text: text.slice(0, 140) });
     }
   }
@@ -275,6 +336,9 @@ function main() {
   console.log(`scanned: ${files.length - browserOnly} server files (backend/**, pages/api/**, lib/**); ${browserOnly} browser-only lib module(s) skipped`);
   for (const h of knownHits) console.log(`KNOWN OPEN (tracked, not a pass): ${h.rel}:${h.line} — ${h.known.finding}`);
   for (const k of KNOWN_OPEN.filter((x) => !x.hit)) console.log(`WARN: known-open entry no longer matches (fixed?) — remove it: ${k.file} (${k.finding})`);
+  const reviewedHits = REVIEWED_ALIAS_CALLS.filter((x) => x.hit).length;
+  for (const k of REVIEWED_ALIAS_CALLS.filter((x) => !x.hit)) console.log(`WARN: reviewed alias call no longer matches — remove it: ${k.file} (${k.contains})`);
+  console.log(`fetch aliases (W2F-4): alias / injected-fetch calls checked; ${reviewedHits} reviewed alias call site(s)`);
   if (violations.length === 0) {
     console.log(`RESULT: PASS — no raw dynamic-URL outbound calls outside the SSRF layer${knownHits.length ? ` (${knownHits.length} known open finding(s) tracked above)` : ''}.`);
     process.exit(0);
@@ -299,5 +363,5 @@ function main() {
 }
 
 // Export the detection core for unit tests; run as CLI when invoked directly.
-module.exports = { scanSource, templateHostIsFixed, isBrowserOnly };
+module.exports = { scanSource, templateHostIsFixed, isBrowserOnly, fetchAliases, REVIEWED_ALIAS_CALLS };
 if (require.main === module) main();
