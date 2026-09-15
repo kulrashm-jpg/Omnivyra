@@ -57,13 +57,10 @@ const ALLOWLIST = [
 // workstream. Listing one keeps it visible on every run without failing
 // unrelated PRs; the line must keep matching `contains`, and an entry that no
 // longer matches prints a WARN asking for its removal (i.e. it was fixed).
-const KNOWN_OPEN = [
-  {
-    file: 'pages/api/campaigns/[id]/propose-frequency-rebalance.ts',
-    contains: '${origin}/api/campaigns/',
-    finding: 'ROUTE_AUTH_001_3AH85 §7.2 / SEC-E: server-side fetch to the caller-supplied Origin forwarding credentials',
-  },
-];
+// (Empty since STEP 3AH-91 integration: the only entry — propose-frequency-rebalance's
+// fetch to the caller-supplied Origin — was fixed by SEC-E, which removed the outbound
+// call entirely.)
+const KNOWN_OPEN = [];
 
 // Suppression comment token (with a required reason after the colon).
 const SUPPRESS_RE = /\/\/\s*ssrf-ok:/;

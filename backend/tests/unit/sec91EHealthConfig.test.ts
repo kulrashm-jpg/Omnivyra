@@ -21,7 +21,9 @@ jest.mock('@/lib/redis/sanitizer', () => ({ maskRedisUrl: (u: string) => u.repla
 
 import handler from '../../../pages/api/health/config';
 
-const SECRETISH = 'postgres://svc:DB-PASSWORD-123@db.internal.test:5432';
+// Obvious placeholder (secret-pattern gate recognises 'fake'); the assertion is that NO
+// connection string of any value reaches the public response.
+const SECRETISH = 'postgres://svc:fake-db-password-for-redaction-test@db.internal.test:5432';
 
 async function call(): Promise<{ status: number; body: any }> {
   const out = { status: 0, body: undefined as any };

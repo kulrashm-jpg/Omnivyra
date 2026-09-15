@@ -93,10 +93,13 @@ describe('lib/** scope: server modules scanned, browser-only modules skipped', (
 });
 
 describe('the repository itself', () => {
-  it('the guard passes across backend/**, pages/api/** and lib/**, with the known open finding tracked', () => {
+  it('the guard passes across backend/**, pages/api/** and lib/** with no open findings left', () => {
+    // STEP 3AH-91 integration: SEC-E removed propose-frequency-rebalance's outbound
+    // fetch to the caller-supplied Origin, so no KNOWN OPEN entry remains, and no
+    // stale-entry warning may appear.
     const out = execFileSync('node', [path.join(REPO, 'scripts/check-outbound-ssrf.js')], { cwd: REPO, encoding: 'utf8' });
     expect(out).toContain('lib/**');
     expect(out).toContain('RESULT: PASS');
-    expect(out).toMatch(/KNOWN OPEN \(tracked, not a pass\): pages\/api\/campaigns\/\[id\]\/propose-frequency-rebalance\.ts/);
+    expect(out).not.toMatch(/KNOWN OPEN|known-open entry no longer matches/);
   });
 });
