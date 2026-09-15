@@ -444,7 +444,325 @@ function failOpenSecret(code) {
   return [...hits];
 }
 
+// ─────────────────────────────────────────────────── per-method coverage ──
+//
+// STEP 3AH-91 (F1). R1 above is decided per FILE: a route whose GET branch
+// authenticates and whose DELETE branch does not passes R1, because SOME code
+// path invokes a primitive. R1-METHOD closes that blind spot for the two
+// dispatch shapes this codebase uses:
+//
+//   if (req.method === 'GET') { ... }   /  if (method === 'POST') return fn(req, res);
+//   switch (req.method) { case 'PUT': ... }
+//
+// For every such branch, an approved primitive must be reachable either from
+// the SHARED code that runs before the branch (the prelude — everything in the
+// handler before it that is not itself another method branch), from a wrapper
+// around the handler (`withRBAC(handler)`), or from the branch body itself
+// (directly, through a same-module function, or through verified delegation —
+// the same evidenceIn() rules as R1, provenance included). A branch whose body
+// only answers a fixed response (`return res.status(405).json(...)`, an OPTIONS
+// preflight) is not a data path and is exempt. So is the fall-through code
+// after the last branch when it is not reached by any uncovered method.
+
+const VERB = '(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)';
+const METHOD_EXPR = '(?:\\breq(?:uest)?\\s*\\.\\s*method|\\bmethod)(?:\\s*\\??\\.\\s*toUpperCase\\s*\\(\\s*\\))?';
+const METHOD_EQ = new RegExp(`${METHOD_EXPR}\\s*===?\\s*['"]${VERB}['"]|['"]${VERB}['"]\\s*===?\\s*${METHOD_EXPR}`, 'g');
+// Calls that only shape a fixed HTTP response — never a data path.
+const BENIGN_CALLS = new Set(['status', 'json', 'end', 'send', 'setHeader', 'getHeader', 'removeHeader', 'writeHead', 'redirect',
+  'stringify', 'String', 'Number', 'Boolean', 'now', 'toISOString', 'join', 'toUpperCase', 'toLowerCase', 'includes']);
+const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'return', 'catch', 'function', 'typeof', 'await', 'new', 'else', 'do', 'case', 'in', 'of', 'void', 'throw', 'async', 'Error']);
+
+function matchClose(code, open) {
+  const o = code[open];
+  const c = o === '(' ? ')' : o === '[' ? ']' : '}';
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === o) depth++;
+    else if (code[i] === c) { depth--; if (depth === 0) return i; }
+  }
+  return code.length - 1;
+}
+
+/** End (exclusive) of the expression starting at `from`: stops at `;`, or `,`/closer at depth 0. */
+function exprEnd(code, from) {
+  let depth = 0;
+  for (let i = from; i < code.length; i++) {
+    const ch = code[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') { if (depth === 0) return i; depth--; }
+    else if (depth === 0 && (ch === ';' || ch === ',')) return i;
+    else if (depth === 0 && ch === '\n') {
+      const rest = code.slice(i + 1).match(/^\s*(\S)/);
+      if (!rest || !/[.?:&|+\-*/=>)\]]/.test(rest[1])) return i;
+    }
+  }
+  return code.length;
+}
+
+/** If a function (declaration, expression or arrow) starts at `at`, return [bodyStart, bodyEnd). */
+function functionAt(code, at) {
+  const head = code.slice(at, at + 400);
+  let m = head.match(/^(?:async\s+)?function\s*\*?\s*[A-Za-z_$]?[\w$]*\s*(?:<[^>(]*>)?\s*\(/);
+  if (m) {
+    const close = matchClose(code, at + m[0].length - 1);
+    const open = code.indexOf('{', close);
+    if (open < 0) return null;
+    return [open, matchClose(code, open) + 1];
+  }
+  m = head.match(/^(?:async\s*)?(?:\(|[A-Za-z_$][\w$]*\s*=>)/);
+  if (!m) return null;
+  let p = at + m[0].length - 1;
+  if (code[p] === '(') p = matchClose(code, p) + 1;
+  const arrow = code.slice(p, p + 200).match(/^\s*(?::[^=]*?)?=>\s*/);
+  if (!arrow) return null;
+  const start = p + arrow[0].length;
+  if (code[start] === '{') return [start, matchClose(code, start) + 1];
+  return [start, exprEnd(code, start)];
+}
+
+/** Top-level-ish declaration of `name` in the module: [valueStart, valueEnd, isFunction]. */
+function declarationOf(code, name) {
+  const esc = name.replace(/\$/g, '\\$');
+  const fn = new RegExp(`(?:^|[;\\n])\\s*(?:export\\s+)?(?:async\\s+)?function\\s*\\*?\\s*${esc}\\s*[(<]`, 'm').exec(code);
+  if (fn) {
+    const at = code.indexOf('function', fn.index);
+    const asyncAt = code.lastIndexOf('async', at);
+    const r = functionAt(code, asyncAt > fn.index ? asyncAt : at);
+    if (r) return { range: r, fn: true };
+  }
+  const v = new RegExp(`(?:^|[;\\n])\\s*(?:export\\s+)?(?:const|let|var)\\s+${esc}\\s*(?::[^=\\n]+)?=\\s*`, 'm').exec(code);
+  if (v) {
+    const start = v.index + v[0].length;
+    const f = functionAt(code, start);
+    if (f) return { range: f, fn: true };
+    return { range: [start, exprEnd(code, start)], fn: false };
+  }
+  return null;
+}
+
+/** Split the top-level arguments of the call whose `(` is at `open`. */
+function callArgs(code, open) {
+  const close = matchClose(code, open);
+  const args = [];
+  let i = open + 1;
+  while (i < close) {
+    while (i < close && /\s/.test(code[i])) i++;
+    if (i >= close) break;
+    const end = Math.min(exprEnd(code, i), close);
+    args.push([i, end]);
+    i = end + 1;
+  }
+  return args;
+}
+
+/** Does this code only produce a fixed response (no data access, no service call)? */
+function isBenign(code) {
+  for (const m of code.matchAll(/(?<![\w$])([A-Za-z_$][\w$]*)\s*(?:<[^>()]*>)?\s*\(/g)) {
+    if (KEYWORDS.has(m[1]) || BENIGN_CALLS.has(m[1])) continue;
+    return false;
+  }
+  return !/\bawait\b/.test(code);
+}
+
+/**
+ * Resolve the default-exported handler to the function body that dispatches.
+ * Returns { wrapper: [primitive names] } when a provenance-checked primitive
+ * wraps the handler (it authenticates every method), { body: [s, e], ctx }
+ * for the handler body, or null when the shape is not recognised (R1 still
+ * applies at file level).
+ */
+function resolveHandler(code, ctx, range, depth = 0) {
+  if (depth > 4 || !range) return null;
+  const [s, e] = range;
+  // A function body: this is the handler.
+  const fn = functionAt(code, s);
+  if (fn && fn[0] >= s && fn[1] <= e + 1) return { body: fn, code, ctx };
+  // An identifier: follow its declaration (same module) or a delegated import.
+  const text = code.slice(s, e).trim();
+  const idm = text.match(/^([A-Za-z_$][\w$]*)$/);
+  if (idm) {
+    const d = declarationOf(code, idm[1]);
+    if (d) return d.fn ? { body: d.range, code, ctx } : resolveHandler(code, ctx, d.range, depth + 1);
+    const imp = ctx.imports.get(idm[1]);
+    const target = imp && resolveSpec(ctx.rel, imp.spec);
+    if (target && DELEGATION_ROOTS.some((r) => r.test(target))) {
+      const mod = loadModule(target);
+      if (mod && imp.imported !== 'default') {
+        const md = declarationOf(mod.code, imp.imported);
+        if (md) return md.fn ? { body: md.range, code: mod.code, ctx: mod } : resolveHandler(mod.code, mod, md.range, depth + 1);
+      }
+    }
+    return null;
+  }
+  // A call `wrapper(handler, opts)`: a primitive wrapper authenticates every
+  // method; any other wrapper (createApiRoute, withIdempotency, …) is
+  // transparent, so follow its function-valued argument.
+  const cm = /^([A-Za-z_$][\w$]*)\s*(?:<[^>()]*>)?\s*\(/.exec(code.slice(s, e));
+  if (!cm) return null;
+  const callee = cm[1];
+  const imp = ctx.imports.get(callee);
+  if (imp) {
+    const prim = PRIMITIVES[imp.imported];
+    const target = resolveSpec(ctx.rel, imp.spec);
+    if (prim && target && prim.from.test(target)) return { wrapper: [imp.imported] };
+  }
+  const open = s + cm[0].length - 1;
+  for (const [as, ae] of callArgs(code, open)) {
+    const a = code.slice(as, ae).trim();
+    if (!/^(?:async\b|function\b|\(|[A-Za-z_$][\w$]*\s*=>|[A-Za-z_$][\w$]*$|[A-Za-z_$][\w$]*\s*\()/.test(a)) continue;
+    const r = resolveHandler(code, ctx, [as, ae], depth + 1);
+    if (r) return r;
+  }
+  return null;
+}
+
+/**
+ * Method branches of a handler body: [{ verbs, start, end, bodyStart }] in
+ * source order. `strs` is the same source with string contents kept (the
+ * verb lives in a string literal); offsets are identical to `code`.
+ */
+function methodBranches(code, strs, s, e) {
+  const branches = [];
+  // if (...method === 'X'...) <stmt | block>
+  const ifRe = /\bif\s*\(/g;
+  ifRe.lastIndex = s;
+  let m;
+  while ((m = ifRe.exec(code)) && m.index < e) {
+    const open = m.index + m[0].length - 1;
+    const close = matchClose(code, open);
+    const cond = strs.slice(open, close + 1);
+    const verbs = [];
+    for (const v of cond.matchAll(METHOD_EQ)) verbs.push(v[1] || v[2]);
+    // Only positive dispatch: `method !== 'X'` guards (405 early returns) are not branches.
+    if (verbs.length === 0) continue;
+    let bs = close + 1;
+    while (bs < e && /\s/.test(code[bs])) bs++;
+    const be = code[bs] === '{' ? matchClose(code, bs) + 1 : Math.min(exprEnd(code, bs) + 1, e);
+    branches.push({ verbs: [...new Set(verbs)], start: m.index, bodyStart: bs, end: be });
+  }
+  // switch (method) { case 'X': ... }
+  const swRe = new RegExp(`\\bswitch\\s*\\(\\s*${METHOD_EXPR}\\s*\\)\\s*\\{`, 'g');
+  swRe.lastIndex = s;
+  while ((m = swRe.exec(code)) && m.index < e) {
+    const open = m.index + m[0].length - 1;
+    const close = matchClose(code, open);
+    const labels = [];
+    const labRe = /\b(?:case\s*['"]([A-Z]+)['"]|default)\s*:/g;
+    labRe.lastIndex = open + 1;
+    let l;
+    while ((l = labRe.exec(strs)) && l.index < close) {
+      // Only labels at the switch's own depth.
+      const seg = code.slice(open + 1, l.index);
+      let depth = 0;
+      for (const ch of seg) { if (ch === '{' || ch === '(' || ch === '[') depth++; else if (ch === '}' || ch === ')' || ch === ']') depth--; }
+      if (depth === 0) labels.push({ verb: l[1] || 'default', at: l.index, bodyAt: l.index + l[0].length });
+    }
+    let pending = [];
+    for (let k = 0; k < labels.length; k++) {
+      const endAt = k + 1 < labels.length ? labels[k + 1].at : close;
+      pending.push(labels[k].verb);
+      if (!code.slice(labels[k].bodyAt, endAt).trim()) continue; // `case 'GET': case 'HEAD':` fall-through
+      branches.push({ verbs: pending, start: labels[k].at, bodyStart: labels[k].bodyAt, end: endAt, switchCase: true });
+      pending = [];
+    }
+  }
+  // req.method === 'X' ? a(req, res) : b(req, res)
+  const ternRe = new RegExp(`(?:${METHOD_EXPR}\\s*===?\\s*['"]${VERB}['"])\\s*\\?`, 'g');
+  ternRe.lastIndex = s;
+  while ((m = ternRe.exec(strs)) && m.index < e) {
+    const qAt = m.index + m[0].length;
+    let depth = 0;
+    let colon = -1;
+    for (let i = qAt; i < e; i++) {
+      const ch = code[i];
+      if (ch === '(' || ch === '[' || ch === '{') depth++;
+      else if (ch === ')' || ch === ']' || ch === '}') { if (depth === 0) break; depth--; }
+      else if (depth === 0 && ch === ':') { colon = i; break; }
+      else if (depth === 0 && ch === ';') break;
+    }
+    if (colon < 0) continue;
+    const altEnd = Math.min(exprEnd(code, colon + 1), e);
+    branches.push({ verbs: [m[1]], start: m.index, bodyStart: qAt, end: colon });
+    branches.push({ verbs: [`not-${m[1]}`], start: colon, bodyStart: colon + 1, end: altEnd });
+  }
+  branches.sort((a, b) => a.start - b.start);
+  // Drop branches nested inside an earlier branch (covered by the outer body's analysis).
+  const top = [];
+  for (const b of branches) if (!top.some((t) => b.start >= t.bodyStart && b.end <= t.end)) top.push(b);
+  return top;
+}
+
+/**
+ * R1-METHOD: returns [{ verbs, at }] of method branches that reach no
+ * approved primitive, plus a summary for the report.
+ */
+function methodCoverage(rel, raw, code, ctx) {
+  const exp = /export\s+default\s+/.exec(code);
+  if (!exp) return { shape: 'none', uncovered: [] };
+  const start = exp.index + exp[0].length;
+  const range = /^(?:async\s+)?function\b/.test(code.slice(start)) ? [start, (functionAt(code, start) || [0, code.length])[1]] : [start, exprEnd(code, start)];
+  const h = resolveHandler(code, ctx, range);
+  if (!h) return { shape: 'unresolved', uncovered: [] };
+  if (h.wrapper) return { shape: 'wrapper', wrapper: h.wrapper, uncovered: [] };
+  const hcode = h.code;
+  const hraw = h.ctx === ctx ? raw : h.ctx.raw;
+  const strs = executable(hraw, true);
+  const [s, e] = h.body;
+  const branches = methodBranches(hcode, strs, s, e);
+  if (branches.length === 0) return { shape: 'no-dispatch', uncovered: [] };
+  const covered = (text) => combine(evidenceIn(text, h.ctx, 0, new Set())) !== 'none';
+  const uncovered = [];
+  const branchReport = [];
+  let cursor = s;
+  let shared = '';
+  let sharedCovered = false;
+  for (const b of branches) {
+    if (b.start > cursor) {
+      shared += hcode.slice(cursor, b.start) + '\n';
+      if (!sharedCovered && covered(shared)) sharedCovered = true;
+    }
+    cursor = Math.max(cursor, b.end);
+    const body = hcode.slice(b.bodyStart, b.end);
+    const ok = sharedCovered || covered(body);
+    const benign = !ok && isBenign(body);
+    branchReport.push({ verbs: b.verbs, covered: ok || benign, via: ok ? (sharedCovered ? 'prelude' : 'branch') : (benign ? 'fixed-response' : 'none') });
+    if (!ok && !benign) uncovered.push({ verbs: b.verbs, line: hcode.slice(0, b.start).split('\n').length, file: h.ctx.rel, body, imports: h.ctx.imports, idx: branchReport.length - 1 });
+  }
+  return { shape: 'dispatch', branches: branchReport, uncovered };
+}
+
 // ─────────────────────────────────────────────────────────────── allowlist ──
+
+/**
+ * Per-method exemptions (STEP 3AH-91, R1-METHOD): a route that authenticates
+ * may still expose a reviewed branch without a primitive. Kinds and the
+ * mechanical evidence each must keep showing on every run:
+ *   public → the branch never writes (insert/update/upsert/delete/rpc);
+ *   stub   → the branch has no data path at all: no await, no DB call, and
+ *            no call into any imported module.
+ */
+function loadMethodExemptions(file = ALLOWLIST_PATH) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')).methodExemptions || {};
+  } catch {
+    return {};
+  }
+}
+
+function verifyMethodExemption(ex, branch) {
+  const errs = [];
+  if (!ex || !ex.reason || String(ex.reason).trim().length < 20) errs.push('reason missing or too short');
+  const body = branch.body;
+  if (ex && ex.kind === 'public') {
+    if (/\.(insert|update|upsert|delete|rpc)\s*\(/.test(body)) errs.push('public branch writes data');
+  } else if (ex && ex.kind === 'stub') {
+    if (/\bawait\b|\.from\s*\(|\.rpc\s*\(/.test(body)) errs.push('stub branch has a data path (await / DB call)');
+    for (const local of branch.imports.keys()) if (callRe(local).test(body)) { errs.push(`stub branch calls imported ${local}`); break; }
+  } else {
+    errs.push(`unknown method-exemption kind "${ex && ex.kind}" (expected public|stub)`);
+  }
+  return errs;
+}
 
 function loadAllowlist(file = ALLOWLIST_PATH) {
   try {
@@ -517,7 +835,7 @@ function isRouteFile(raw) {
   return /export\s+default\b/.test(raw);
 }
 
-function analyzeRoute(rel, raw, allowlist) {
+function analyzeRoute(rel, raw, allowlist, methodExemptions = {}) {
   const code = executable(raw);
   const ctx = { rel, imports: parseImports(raw), fns: topLevelFunctions(code) };
   const ev = evidenceIn(code, ctx, 0, new Set());
@@ -530,6 +848,26 @@ function analyzeRoute(rel, raw, allowlist) {
   const violations = [];
 
   if (failOpen.length) violations.push({ rule: 'R4', msg: `fail-open secret check (${failOpen.join(',')}): authenticates only when the env var is set` });
+
+  // R1-METHOD (STEP 3AH-91): a file-level primitive does not cover a method
+  // branch that never reaches it. Applies to every route that relies on R1
+  // (no entry, or a binding claim — which still requires authentication).
+  const methods = methodCoverage(rel, raw, code, ctx);
+  const relaxed = entry && !(entry.kind === 'identity-scoped' || entry.kind === 'inline-binding');
+  if (!relaxed && level !== 'none') {
+    const exemptions = methodExemptions[rel] || {};
+    for (const u of methods.uncovered) {
+      const ex = u.verbs.map((v) => exemptions[v]).find(Boolean);
+      if (ex) {
+        const errs = verifyMethodExemption(ex, u);
+        for (const err of errs) violations.push({ rule: 'ALLOWLIST', msg: `${u.verbs.join('/')} method exemption: ${err}` });
+        methods.branches[u.idx].via = 'exempt';
+        methods.branches[u.idx].covered = errs.length === 0;
+        continue;
+      }
+      violations.push({ rule: 'R1-METHOD', msg: `${u.verbs.join('/')} branch (${u.file}:${u.line}) reaches no approved primitive — the file authenticates on another path only` });
+    }
+  }
 
   const bindingClaim = entry && (entry.kind === 'identity-scoped' || entry.kind === 'inline-binding');
   if (entry) {
@@ -562,6 +900,8 @@ function analyzeRoute(rel, raw, allowlist) {
     campaignKeyed,
     campaignBound,
     allow: entry ? entry.kind : null,
+    methodShape: methods.shape,
+    methodBranches: methods.branches || [],
     violations,
   };
 }
@@ -576,6 +916,7 @@ function walk(dir, out) {
 
 function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
   const allowlist = loadAllowlist(allowlistPath);
+  const methodExemptions = loadMethodExemptions(allowlistPath);
   const files = [];
   walk(API_DIR, files);
   const rows = [];
@@ -584,7 +925,7 @@ function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
     const rel = path.relative(ROOT, f).split(path.sep).join('/');
     const raw = fs.readFileSync(f, 'utf8');
     if (!isRouteFile(raw)) { helpers.push(rel); continue; }
-    rows.push(analyzeRoute(rel, raw, allowlist));
+    rows.push(analyzeRoute(rel, raw, allowlist, methodExemptions));
   }
   const known = new Set(rows.map((r) => r.route));
   const stale = Object.keys(allowlist).filter((k) => !known.has(k));
@@ -593,14 +934,23 @@ function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
     .filter((r) => r.allow === 'inline-binding' || r.allow === 'identity-scoped')
     .filter((r) => analyzeRoute(r.route, fs.readFileSync(path.join(ROOT, r.route), 'utf8'), {}).violations.length === 0)
     .map((r) => r.route);
-  return { rows, helpers, stale, redundant, allowlist };
+  // Method exemptions whose branch now reaches a primitive (or no longer exists).
+  const staleMethodExemptions = [];
+  for (const [route, verbs] of Object.entries(methodExemptions)) {
+    const row = rows.find((r) => r.route === route);
+    for (const verb of Object.keys(verbs)) {
+      const still = row && row.methodBranches.some((b) => b.verbs.includes(verb) && b.via === 'exempt');
+      if (!still) staleMethodExemptions.push(`${route} ${verb}`);
+    }
+  }
+  return { rows, helpers, stale, redundant, staleMethodExemptions, allowlist, methodExemptions };
 }
 
 function main() {
-  const { rows, helpers, stale, redundant } = scanRepo();
+  const { rows, helpers, stale, redundant, staleMethodExemptions } = scanRepo();
   const bad = rows.filter((r) => r.violations.length);
   if (process.argv.includes('--json')) {
-    process.stdout.write(JSON.stringify({ rows, helpers, stale, redundant }, null, 1));
+    process.stdout.write(JSON.stringify({ rows, helpers, stale, redundant, staleMethodExemptions }, null, 1));
     return;
   }
   const byLevel = rows.reduce((a, r) => ((a[r.allow ? `allow:${r.allow}` : r.level] = (a[r.allow ? `allow:${r.allow}` : r.level] || 0) + 1), a), {});
@@ -615,6 +965,13 @@ function main() {
     console.log(`\nWARN: binding claims no longer needed (route passes on primitives) — remove from the allowlist:`);
     for (const s of redundant) console.log(`  - ${s}`);
   }
+  if (staleMethodExemptions.length) {
+    console.log(`\nWARN: method exemptions no longer needed (branch now reaches a primitive, or is gone) — remove them:`);
+    for (const s of staleMethodExemptions) console.log(`  - ${s}`);
+  }
+  const dispatching = rows.filter((r) => r.methodShape === 'dispatch');
+  const exempt = dispatching.reduce((n, r) => n + r.methodBranches.filter((b) => b.via === 'exempt').length, 0);
+  console.log(`per-method (R1-METHOD): ${dispatching.length} route(s) dispatch by HTTP method; every branch checked; ${exempt} reviewed method exemption(s)`);
   if (bad.length === 0 && stale.length === 0) {
     console.log('\nRESULT: PASS — every route authenticates, binds its tenant, or is a verified allowlist entry.');
     return;
@@ -629,5 +986,5 @@ function main() {
   process.exit(1);
 }
 
-module.exports = { analyzeRoute, scanRepo, executable, parseImports, requestIdentifiers, failOpenSecret, verifyAllowEntry, PRIMITIVES, loadAllowlist };
+module.exports = { analyzeRoute, scanRepo, executable, parseImports, requestIdentifiers, failOpenSecret, verifyAllowEntry, verifyMethodExemption, methodCoverage, PRIMITIVES, loadAllowlist, loadMethodExemptions };
 if (require.main === module) main();
