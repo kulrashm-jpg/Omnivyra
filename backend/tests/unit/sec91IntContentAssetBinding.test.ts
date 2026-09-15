@@ -30,11 +30,13 @@ jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unk
 const mockApprove = jest.fn(async (i: any) => ({ asset_id: i.assetId, status: 'reviewed' }));
 const mockReject = jest.fn(async (i: any) => ({ asset_id: i.assetId, status: 'draft' }));
 jest.mock('../../services/contentAssetService', () => ({
-  approveContentAsset: (...a: any[]) => mockApprove(...a),
-  rejectContentAsset: (...a: any[]) => mockReject(...a),
+  approveContentAsset: (i: any) => mockApprove(i),
+  rejectContentAsset: (i: any) => mockReject(i),
 }));
-const mockCreateBlog = jest.fn(async (i: any) => ({ blog: { id: 'new-blog', ...i }, error: null }));
-jest.mock('../../services/blogService', () => ({ createBlog: (...a: any[]) => mockCreateBlog(...a) }));
+const mockCreateBlog = jest.fn(async (_companyId: string, _userId: string, i: any) => ({ blog: { id: 'new-blog', ...i }, error: null }));
+jest.mock('../../services/blogService', () => ({
+  createBlog: (companyId: string, userId: string, i: any) => mockCreateBlog(companyId, userId, i),
+}));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const approve = require('../../../pages/api/content/approve').default;
