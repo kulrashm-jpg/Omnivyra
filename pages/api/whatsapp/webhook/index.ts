@@ -9,7 +9,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *   3. Return 200 immediately — processing happens in whatsappWebhookProcessor
  *
  * Replay protection: identical payloads produce same jobId — BullMQ ignores duplicates.
- * Security: APP_SECRET required in production; dev-only bypass if unset.
+ * Security: APP_SECRET required in every environment; unset → every POST is 401.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -46,11 +46,10 @@ async function readRawBody(req: NextApiRequest): Promise<Buffer> {
 }
 
 function verifySignature(rawBody: Buffer, signature: string): boolean {
-  if (!APP_SECRET) {
-    // Reject in production-like environments; allow in local dev only
-    if (process.env.NODE_ENV === 'production') return false;
-    return true;
-  }
+  // SEC91-W2F-3a: fail closed in EVERY environment. The former dev bypass let any
+  // non-production process (e.g. `next dev` on production credentials) accept and
+  // enqueue unsigned payloads. Local testing signs with a local WHATSAPP_APP_SECRET.
+  if (!APP_SECRET) return false;
   const expected = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(rawBody).digest('hex');
   try {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));

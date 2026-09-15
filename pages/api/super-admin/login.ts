@@ -30,6 +30,7 @@ import {
 } from '../../../backend/security/SessionAuthorityService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { checkSuperAdminIdentity } from '../../../backend/security/startup/superAdminIdentityCheck';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 import {
   mintSignedBridgeCookieValue,
   buildBridgeSetCookieHeader,
@@ -88,7 +89,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  if (providedUser !== expectedUser || providedPass !== expectedPass) {
+  // SEC91-W2F-2a: constant-time, and both halves are always evaluated, so the
+  // response time reveals neither a matching prefix nor which half was wrong.
+  const userOk = constantTimeEqual(providedUser, expectedUser);
+  const passOk = constantTimeEqual(providedPass, expectedPass);
+  if (!userOk || !passOk) {
     return res.status(403).json({ error: 'INVALID_CREDENTIALS' });
   }
 

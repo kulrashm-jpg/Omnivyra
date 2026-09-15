@@ -286,11 +286,9 @@ const PREFILTER = /process\.env|\bconfig\.[A-Z]|[sS]ecret|SECRET|[hH]mac|HMAC|\b
  * must keep matching (file + the operands), and an entry that no longer
  * matches prints a WARN asking for its removal (it was fixed).
  */
-const KNOWN_OPEN = [
-  { file: 'pages/api/super-admin/login.ts', left: 'providedPass', right: 'expectedPass', finding: 'SEC91-W2F-2a (super-admin password compared with !==)', owner: 'SEC-B' },
-  { file: 'pages/api/super-admin/content-architect-login.ts', left: 'p', right: 'expectedPass', finding: 'SEC91-W2F-2b (content-architect password compared with !==)', owner: 'SEC-B' },
-  { file: 'backend/services/contentArchitectSecurityService.ts', left: 'passwordHash', right: 'expectedHash', finding: 'SEC91-W2F-2c (unsalted SHA-256 password digests compared with !==)', owner: 'SEC-B' },
-];
+// (Empty since STEP 3AH-91 integration: SEC91-W2F-2a/b/c — the super-admin and
+// content-architect password compares — were converted to constantTimeEqual.)
+const KNOWN_OPEN = [];
 
 function scanRepo(root = ROOT, knownOpen = KNOWN_OPEN) {
   const files = [];

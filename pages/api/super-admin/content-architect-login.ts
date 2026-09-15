@@ -9,6 +9,7 @@ import {
 } from '../../../backend/security/SessionAuthorityService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { mintSignedBridgeCookieValue } from '../../../backend/security/bridgeCookie';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 interface CanonicalUserRow {
   id: string;
@@ -61,7 +62,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  if (u !== expectedUser || p !== expectedPass) {
+  // SEC91-W2F-2b: constant-time, both halves always evaluated.
+  const userOk = constantTimeEqual(u, expectedUser);
+  const passOk = constantTimeEqual(p, expectedPass);
+  if (!userOk || !passOk) {
     try {
       await supabase.from('super_admin_audit_logs').insert({
         username: u || 'unknown',

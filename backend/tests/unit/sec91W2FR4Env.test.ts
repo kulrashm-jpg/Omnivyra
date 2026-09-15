@@ -124,9 +124,12 @@ describe('W2F-3 — the repository', () => {
     }
   });
 
-  it('the only R4-ENV on the tree is the tracked whatsapp webhook finding (SEC-B)', () => {
+  it('no R4-ENV remains on the tree, tracked or not (SEC91-W2F-3a fixed at STEP 3AH-91 integration)', () => {
     const tracked = rows.flatMap((r: { route: string; knownOpen: Array<{ rule: string }> }) => r.knownOpen.filter((v) => v.rule === 'R4-ENV').map(() => r.route));
-    expect(tracked).toEqual(['pages/api/whatsapp/webhook/index.ts']);
-    expect((knownOpen as Record<string, { owner: string }>)['pages/api/whatsapp/webhook/index.ts'].owner).toBe('SEC-B');
+    expect(tracked).toEqual([]);
+    expect((knownOpen as Record<string, unknown>)['pages/api/whatsapp/webhook/index.ts']).toBeUndefined();
+    const wa = byRoute.get('pages/api/whatsapp/webhook/index.ts') as { violations: unknown[]; knownOpen: unknown[] };
+    expect(wa.violations).toEqual([]);
+    expect(wa.knownOpen).toEqual([]);
   });
 });

@@ -885,14 +885,6 @@
       "finding": "SEC91-W2F-1b",
       "owner": "SEC-A",
       "reason": "Handler backend/services/creator/generateRoute/generateHandler.ts binds company_id (enforceCompanyAccess) but reads campaign_versions.campaign_snapshot by the request's campaign_id with no company predicate and passes that campaign id to the orchestrator. Open P3 cross-tenant read/association; see docs/security/SEC91_W2F.md."
-    },
-    "pages/api/whatsapp/webhook/index.ts": {
-      "rules": [
-        "R4-ENV"
-      ],
-      "finding": "SEC91-W2F-3a",
-      "owner": "SEC-B",
-      "reason": "verifySignature() returns true when WHATSAPP_APP_SECRET is unset and NODE_ENV !== 'production' (index.ts:48-53), so any non-production process (next dev on production credentials) accepts and enqueues unsigned webhook payloads. Closed in production. Fix: return false whenever the secret is unset; see docs/security/SEC91_W2F.md."
     }
   }
 }
