@@ -10,6 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { validateWorkEmail } from '../../../lib/auth/serverValidation';
 import { extractAccessToken, validateAuthToken } from '../../../backend/services/authResolver';
@@ -93,11 +94,7 @@ async function handler(
   seedRequestContextFromRequest(req, { userId: supabaseUid });
 
   // Extract client IP once — used to rate-limit domain canonical resolution.
-  const clientIp = String(
-    req.headers['x-forwarded-for']
-    ?? (req.socket as any)?.remoteAddress
-    ?? 'unknown',
-  ).split(',')[0].trim();
+  const clientIp = authRequestIp(req);
   const requestUserAgent = (req.headers['user-agent'] as string | undefined) ?? null;
   const requestIp = clientIp && clientIp !== 'unknown' ? clientIp : null;
 

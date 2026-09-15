@@ -24,6 +24,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
@@ -44,9 +45,7 @@ async function handler(
   seedRequestContextFromRequest(req);
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown')
-    .split(',')[0]
-    .trim();
+  const ip = authRequestIp(req);
 
   // Detect mode by which body field is supplied.
   const adminInvitationId = typeof body.invitationId === 'string' ? body.invitationId : null;

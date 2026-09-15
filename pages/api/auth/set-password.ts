@@ -1,5 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authRequestIpOrNull } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
@@ -177,10 +178,10 @@ async function handler(
   return res.status(200).json({ success: true, route });
 }
 
+// SEC91-W2B-3: platform-trusted client IP (lib/security/clientIp), never the
+// client-written first X-Forwarded-For hop.
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  return req.socket?.remoteAddress ?? null;
+  return authRequestIpOrNull(req);
 }
 
 function userAgent(req: NextApiRequest): string | null {
