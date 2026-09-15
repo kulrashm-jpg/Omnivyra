@@ -862,20 +862,5 @@
     "Each is a reviewed CLAIM re-verified on every run: public → the branch never writes; stub → the branch has no await, no DB call and no call into an imported module.",
     "Each entry names the open finding it tracks; when the route is fixed the gate prints a WARN asking for the entry's removal. Adding an entry requires security review."
   ],
-  "methodExemptions": {
-    "pages/api/accounts/[platform].ts": {
-      "POST": {
-        "kind": "stub",
-        "finding": "SEC91-F1-01",
-        "reason": "Mock 'connect account' branch: builds a fake account object from the platform key and echoes it; no DB access, no service call, no await. Unauthenticated today (logs the request body 'code' field) — tracked as SEC91-F1-01 for SEC-A (authenticate or answer 410)."
-      }
-    },
-    "pages/api/track/angle-industry-matrix.ts": {
-      "GET": {
-        "kind": "public",
-        "finding": "SEC91-F1-02",
-        "reason": "Reads the platform-wide angle_industry_matrix (industry x angle editorial priors + aggregate counts; no tenant column, no company data) for the blog generator. Unauthenticated today — tracked as SEC91-F1-02 for SEC-A (require identity); may never write."
-      }
-    }
-  }
+  "methodExemptions": {}
 }

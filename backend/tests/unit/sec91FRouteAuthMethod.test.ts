@@ -275,12 +275,15 @@ describe('the repository itself', () => {
     expect(shapes.dispatch).toBeGreaterThan(200);
   });
 
-  it('the two reviewed method exemptions track open findings (SEC91-F1-01/02) and are still needed', () => {
-    expect(Object.keys(methodExemptions).sort()).toEqual(['pages/api/accounts/[platform].ts', 'pages/api/track/angle-industry-matrix.ts']);
+  it('SEC91-F1-01/02 are fixed: no method exemption remains and both branches now reach a primitive', () => {
+    // STEP 3AH-91 integration: SEC-A authenticated accounts/[platform] POST and
+    // angle-industry-matrix GET, so the temporary exemptions were removed. Any new
+    // exemption must be a reviewed, re-verified claim (see the describe above).
+    expect(Object.keys(methodExemptions)).toEqual([]);
     const byRoute = new Map(rows.map((r: { route: string }) => [r.route, r]));
     const acct = byRoute.get('pages/api/accounts/[platform].ts') as { methodBranches: Array<{ verbs: string[]; via: string }> };
-    expect(acct.methodBranches.find((b) => b.verbs.includes('POST'))!.via).toBe('exempt');
+    expect(acct.methodBranches.find((b) => b.verbs.includes('POST'))!.via).not.toBe('exempt');
     const matrix = byRoute.get('pages/api/track/angle-industry-matrix.ts') as { methodBranches: Array<{ verbs: string[]; via: string }> };
-    expect(matrix.methodBranches.find((b) => b.verbs.includes('GET'))!.via).toBe('exempt');
+    expect(matrix.methodBranches.find((b) => b.verbs.includes('GET'))!.via).not.toBe('exempt');
   });
 });
