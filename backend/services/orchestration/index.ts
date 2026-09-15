@@ -12,10 +12,12 @@ export {
   updateExecutionStatus,
   updateExecutionContent,
   updateExecutionContentByActivity,
+  resolveActivityRow,
   updateExecutionScheduling,
   updateExecutionLifecycle,
   reconcileExecution,
 } from './canonicalExecutionAdapter';
+export type { ActivityRow, ActivityRowResolution } from './canonicalExecutionAdapter';
 export { reconcileContentWrite } from './canonicalWriteReconciliation';
 export {
   synchronizeExecutionState,

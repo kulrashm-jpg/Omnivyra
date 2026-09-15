@@ -20,11 +20,16 @@ import { getContentTypeCategory } from '@/backend/services/contentGeneration/con
 import { enrichItemWithGovernance } from '@/backend/services/creator/governanceItemEnricher';
 // Phase-2 Step-3: master/variant enrichment persistence routes through the
 // ONE canonical write (reconciled, blank/stale-overwrite-safe, observable).
-import { updateExecutionContentByActivity } from '@/backend/services/orchestration';
+import { updateExecutionContentByActivity, resolveActivityRow } from '@/backend/services/orchestration';
+import { checkCampaignOwnership } from '@/backend/services/campaignOwnershipService';
+import { isUuid } from '@/lib/shared/uuid';
 import { checkRateLimit } from '@/lib/auth/rateLimit';
 import { resolveMonetizationFeature } from '@/shared/monetization/featureRegistry';
 
-import { type WorkspaceAction, type ImprovementType, MonetizedWorkflowError, runReservedFixedWorkflow, asObject, persistMasterToDb, persistVariantsToDb, FAILED_VARIANT_PREFIXES } from './contentRouteModel';
+import { type WorkspaceAction, type ImprovementType, type ContentWriteTarget, MonetizedWorkflowError, runReservedFixedWorkflow, asObject, persistMasterToDb, persistVariantsToDb, FAILED_VARIANT_PREFIXES } from './contentRouteModel';
+
+/** An 8-4-4-4-12 hex group inside a longer string — a mangled row id, never a transient key. */
+const EMBEDDED_UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 export function isFailedVariant(v: unknown): boolean {
   const content = String((v as any)?.generated_content ?? '').trim();
@@ -51,26 +56,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const extra_instruction = typeof (req.body as any)?.extra_instruction === 'string' ? String((req.body as any).extra_instruction).trim() || undefined : undefined;
     // Prefer client-supplied companyId; fall back to DB lookup via activity id → campaign → company
     let companyId: string | null = String((req.body as any)?.companyId || '').trim() || null;
-    if (!companyId) {
-      const activityId = String((req.body as any)?.activity?.id || '').trim();
-      const campaignId = String((req.body as any)?.campaignId || '').trim();
-      try {
-        if (activityId && !activityId.startsWith('workspace-')) {
-          const { data: plan } = await supabase.from('daily_content_plans').select('campaign_id').eq('id', activityId).maybeSingle();
-          const cid = plan?.campaign_id || campaignId;
-          if (cid) {
-            const { data: camp } = await supabase.from('campaigns').select('company_id').eq('id', cid).maybeSingle();
-            companyId = camp?.company_id ?? null;
-          }
-        } else if (campaignId) {
-          const { data: camp } = await supabase.from('campaigns').select('company_id').eq('id', campaignId).maybeSingle();
-          companyId = camp?.company_id ?? null;
-        }
-      } catch { /* non-fatal */ }
-    }
 
     if (!action || !['generate_master', 'generate_variants', 'refine_variant', 'improve_variant', 'improve_variant_all'].includes(action)) {
       return res.status(400).json({ error: 'Invalid action' });
+    }
+
+    /*
+     * 3AH-92 (S-2) — the WRITE TARGET is resolved here, once, server-side.
+     *
+     * Every branch below persists AI output into daily_content_plans. It used to
+     * pass the caller's raw `activity.id` straight to the write, which located
+     * the row with no tenant filter, so a member of company A could name company
+     * B's row, authorize against A, and have text written into B's row.
+     *
+     * Now the id is resolved to exactly one row (primary key, else a unique
+     * execution_id; parameterised, UUID-only), and only that resolved row, never
+     * the caller's string, reaches persistence, pinned to the row's campaign.
+     * An id that resolves to no row is transient (workspace drafts, slugs):
+     * nothing is persisted, exactly as before. A mangled row id, an ambiguous
+     * id and a failed lookup are refused before credit or AI work.
+     */
+    const activityId = String((req.body as any)?.activity?.id || '').trim();
+    if (activityId && !isUuid(activityId) && EMBEDDED_UUID.test(activityId)) {
+      return res.status(400).json({ error: 'Malformed activity id', code: 'ACTIVITY_ID_MALFORMED' });
+    }
+    const resolvedRow = await resolveActivityRow(activityId, { strict: true });
+    if (!resolvedRow.ok && resolvedRow.reason === 'lookup_error') {
+      return res.status(503).json({ error: 'Activity lookup is temporarily unavailable. Please try again.', code: 'ACTIVITY_LOOKUP_ERROR', retryable: true });
+    }
+    if (!resolvedRow.ok && resolvedRow.reason === 'ambiguous_activity_id') {
+      return res.status(409).json({ error: 'Activity id matches more than one row', code: 'ACTIVITY_ID_AMBIGUOUS' });
+    }
+    const writeTarget: ContentWriteTarget | null = resolvedRow.ok
+      ? { rowId: String(resolvedRow.row.id), campaignId: String(resolvedRow.row.campaign_id || '') }
+      : null;
+    if (writeTarget && !writeTarget.campaignId) {
+      return res.status(404).json({ error: 'Activity not found or has no campaign' });
+    }
+    if (!companyId) {
+      const campaignId = String((req.body as any)?.campaignId || '').trim();
+      try {
+        const cid = writeTarget ? writeTarget.campaignId : campaignId;
+        if (cid) {
+          const { data: camp } = await supabase.from('campaigns').select('company_id').eq('id', cid).maybeSingle();
+          companyId = camp?.company_id ?? null;
+        }
+      } catch { /* non-fatal */ }
     }
 
     /*
@@ -108,6 +139,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (companyId && action !== 'generate_master') {
       const isMember = await assertOrgMembership(user.id, companyId);
       if (!isMember) {
+        return res.status(403).json({ error: 'ORG_SCOPE_VIOLATION' });
+      }
+    }
+
+    /*
+     * 3AH-92 (S-2) — membership of `companyId` says nothing about the ROW being
+     * written. Bind them with the canonical campaign ownership check: the
+     * resolved row's campaign must belong to the tenant just authorized, which
+     * is also the tenant billed. No company, or a foreign or unowned campaign,
+     * is a 403; an ownership lookup failure is a retryable 503, never an allow.
+     * generate_master derives its tenant FROM this row below, so it is bound
+     * by construction.
+     */
+    if (writeTarget && action !== 'generate_master') {
+      const ownership = companyId ? await checkCampaignOwnership(writeTarget.campaignId, companyId) : 'foreign';
+      if (ownership === 'lookup_error') {
+        return res.status(503).json({ error: 'Campaign ownership check is temporarily unavailable. Please try again.', code: 'CAMPAIGN_LOOKUP_ERROR', retryable: true });
+      }
+      if (ownership !== 'owned') {
         return res.status(403).json({ error: 'ORG_SCOPE_VIOLATION' });
       }
     }
@@ -179,7 +229,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             generated_content: revisedContent,
             ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
           };
-          await persistVariantsToDb(activityDbId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
+          await persistVariantsToDb(writeTarget, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
           return nextVariant;
         },
       });
@@ -196,7 +246,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         generated_content: currentContent,
       };
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-      await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
+      await persistVariantsToDb(writeTarget, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
       return res.status(200).json({ success: true, improved_variant });
       }
 
@@ -290,7 +340,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ...variant,
             generated_content: revised,
           };
-          await persistVariantsToDb(activityDbId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
+          await persistVariantsToDb(writeTarget, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
           return nextVariant;
         },
       });
@@ -357,7 +407,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             generated_content: revisedContent,
             ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
           };
-          await persistVariantsToDb(activityDbId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
+          await persistVariantsToDb(writeTarget, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
           return nextVariant;
         },
       });
@@ -449,7 +499,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
       };
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-      await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
+      await persistVariantsToDb(writeTarget, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
       return res.status(200).json({ success: true, improved_variant });
       }
     }
@@ -521,13 +571,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Persisted activity id required (workspace IDs are not billable)' });
       }
 
-      // Server-side orgId resolution — body.companyId is IGNORED.
-      const { data: plan } = await supabase
-        .from('daily_content_plans')
-        .select('campaign_id')
-        .eq('id', activityDbId)
-        .maybeSingle();
-      const campaignIdResolved = (plan as { campaign_id?: string } | null)?.campaign_id;
+      // Server-side orgId resolution — body.companyId is IGNORED. The campaign
+      // is the one of the row resolved above, i.e. the row that is written.
+      const campaignIdResolved = writeTarget?.campaignId;
       if (!campaignIdResolved) {
         return res.status(404).json({ error: 'Activity not found or has no campaign' });
       }
@@ -600,7 +646,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           maxOutputTokens: MAX_OUTPUT_TOKENS,
         },
         executor: async () => {
-          const strict = await generateMasterContentStrict(item, {
+          // Grounded in the authorized org, never the caller-named companyId.
+          const strict = await generateMasterContentStrict({ ...item, company_id: resolvedOrgId }, {
             provider: PROVIDER,
             model:    MODEL,
           });
@@ -657,7 +704,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const master = result.result;
-      await persistMasterToDb(activityDbId, master);
+      await persistMasterToDb(writeTarget, master);
       return res.status(200).json({ success: true, master_content: master });
     }
 
@@ -720,7 +767,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         refined = refinedOutput.content || refined;
 
         const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-        await persistVariantsToDb(activityDbId, [{
+        await persistVariantsToDb(writeTarget, [{
           platform,
           content_type: contentType,
           generated_content: refined,
@@ -802,7 +849,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       refined = refinedOutput.content || refined;
 
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-      await persistVariantsToDb(activityDbId, [{
+      await persistVariantsToDb(writeTarget, [{
         platform,
         content_type: contentType,
         generated_content: refined,
@@ -842,7 +889,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let reservedItemWithMaster = governedItem;
         if (!(governedItem as any).master_content && !creatorMasterText) {
           const generatedMaster = await generateMasterContentFromIntent(governedItem as any);
-          await persistMasterToDb(activityDbId, generatedMaster);
+          await persistMasterToDb(writeTarget, generatedMaster);
           reservedItemWithMaster = { ...governedItem, master_content: generatedMaster };
         } else if (creatorMasterText) {
           reservedItemWithMaster = {
@@ -867,7 +914,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         await persistVariantsToDb(
-          activityDbId,
+          writeTarget,
           reservedSuccessfulVariants as Array<Record<string, unknown>>,
           ((reservedItemWithMaster as any).master_content ?? null) as Record<string, unknown> | null
         );
@@ -893,7 +940,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let itemWithMaster = itemGoverned;
     if (!(itemGoverned as any).master_content && !creatorMasterText) {
       const generatedMaster = await generateMasterContentFromIntent(itemGoverned as any);
-      await persistMasterToDb(activityDbId, generatedMaster);
+      await persistMasterToDb(writeTarget, generatedMaster);
       itemWithMaster = { ...itemGoverned, master_content: generatedMaster };
     } else if (creatorMasterText) {
       itemWithMaster = {
@@ -923,7 +970,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     await persistVariantsToDb(
-      activityDbId,
+      writeTarget,
       successfulVariants as Array<Record<string, unknown>>,
       ((itemWithMaster as any).master_content ?? null) as Record<string, unknown> | null
     );

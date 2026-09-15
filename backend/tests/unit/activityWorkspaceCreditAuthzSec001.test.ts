@@ -103,6 +103,13 @@ jest.mock('../../services/activityWorkspace/contentRouteModel', () => ({
 }));
 jest.mock('@/backend/services/orchestration', () => ({
   updateExecutionContentByActivity: jest.fn(async () => {}),
+  // 3AH-92 (S-2): the handler now resolves its write target through the
+  // adapter. Mirrored over this suite's fixture: the fixture activity resolves
+  // to its row, anything else is transient (no row), as in production.
+  resolveActivityRow: jest.fn(async (id: string) => {
+    const row = rowsFor('daily_content_plans').find((r) => r.id === id);
+    return row ? { ok: true, row } : { ok: false, reason: 'row_not_found' };
+  }),
 }));
 
 const sinkBilled = jest.fn(async () => ({ ok: true, content: 'refined', charged: true }));
