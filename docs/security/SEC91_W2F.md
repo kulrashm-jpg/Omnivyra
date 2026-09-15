@@ -86,7 +86,7 @@ No production system was contacted.
 ## 3. Commands run and results
 
 - **New suites.** `sec91W2FRouteAuthReExport` 21/21, `sec91W2FR4Env` 14/14, `sec91W2FConstantTime` 27/27, `sec91W2FSsrfAlias` 13/13, `sec91W2FCiWiring` 10/10.
-- **`node scripts/security/run-gate-tests.js`.** 14 suites, 305/305 pass. This used the exact CI env: `CI=true`, the placeholder vars, `env -i`, a cold cache. It includes all 9 SEC-F suites.
+- **`node scripts/security/run-gate-tests.js`.** 14 suites, 306/306 pass. This used the exact CI env: `CI=true`, the placeholder vars, `env -i`, a cold cache. It includes all 9 SEC-F suites.
 - **Affected existing suites.** 25 suites pass (288 passed, 4 skipped as before). They cover SessionAuthorityService, leadService, the planner, the render provider, the render executor, queue and worker, lead capture characterisations, `sec91DProviderHardening`, and `sec91CConstantTimeSecrets` + `sec91CInternalEndpointsFailClosed`.
 - **Gates** (all exit 0 on the branch):
 
