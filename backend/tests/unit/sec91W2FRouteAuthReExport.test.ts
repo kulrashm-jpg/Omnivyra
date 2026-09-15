@@ -187,6 +187,7 @@ describe('W2F-1 — known-open tracking is narrow and never hides R1/R1-METHOD/R
 
 describe('W2F-1 — the repository', () => {
   const { rows, helpers, stale, staleKnownOpen, knownOpen } = gate.scanRepo();
+  const allow = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../scripts/route-auth-allowlist.json'), 'utf8'));
   const byRoute = new Map<string, Row & { route: string }>(rows.map((r: Row & { route: string }) => [r.route, r]));
 
   it('the four re-exporting routes are analysed through their handler module (not counted as helpers)', () => {
@@ -212,16 +213,33 @@ describe('W2F-1 — the repository', () => {
     }
   });
 
-  it('the gate passes; the findings surfaced by re-export analysis are tracked as KNOWN OPEN, and still reproduce', () => {
+  it('the gate passes; the findings surfaced by re-export analysis are FIXED (STEP 3AH-91 integration) — no known-open entry remains', () => {
     expect(rows.filter((r: Row) => r.violations.length).map((r: Row & { route: string }) => r.route)).toEqual([]);
     expect(stale).toEqual([]);
     expect(staleKnownOpen).toEqual([]);
-    const content = byRoute.get('pages/api/activity-workspace/content.ts')!;
-    expect(content.knownOpen.map((v) => v.rule).sort()).toEqual(['R2', 'R3']);
+    expect(knownOpen).toEqual({});
+    // W2F-1b: generate binds its campaign through enforceCompanyAccess — passes R3 on primitives, no entry.
     const generate = byRoute.get('pages/api/command-center/creator-content/generate.ts')!;
-    expect(generate.knownOpen.map((v) => v.rule)).toEqual(['R3']);
-    for (const [, entry] of Object.entries(knownOpen as Record<string, { rules: string[] }>)) {
-      for (const r of entry.rules) expect(['R2', 'R3', 'R4-ENV']).toContain(r);
-    }
+    expect(generate.violations).toEqual([]);
+    expect(generate.knownOpen).toEqual([]);
+    expect(allow.routes['pages/api/command-center/creator-content/generate.ts']).toBeUndefined();
+    // W2F-1a: the handler's campaign-ownership binding is a reviewed inline-binding claim whose evidence is re-verified every run.
+    const content = byRoute.get('pages/api/activity-workspace/content.ts')!;
+    expect(content.violations).toEqual([]);
+    expect(content.knownOpen).toEqual([]);
+    expect(allow.routes['pages/api/activity-workspace/content.ts'].kind).toBe('inline-binding');
+  });
+
+  it('W2F-1a evidence is load-bearing: removing the campaign-ownership binding from the handler fails the gate', () => {
+    const route = 'pages/api/activity-workspace/content.ts';
+    const handlerRel = 'backend/services/activityWorkspace/contentRouteHandler.ts';
+    const real = fs.readFileSync(path.join(__dirname, '../../..', handlerRel), 'utf8');
+    const routeSrc = fs.readFileSync(path.join(__dirname, '../../..', route), 'utf8');
+    const entry = { [route]: allow.routes[route] };
+    const ok = gate.analyzeRoute(route, routeSrc, entry, {}, { modules: { [handlerRel]: real } });
+    expect(ok.violations).toEqual([]);
+    const mutated = real.replace('checkCampaignOwnership(candidate.campaignId, companyId)', "('owned' as const)");
+    const bad = gate.analyzeRoute(route, routeSrc, entry, {}, { modules: { [handlerRel]: mutated } });
+    expect(bad.violations.map((v: { rule: string }) => v.rule)).toContain('ALLOWLIST');
   });
 });
