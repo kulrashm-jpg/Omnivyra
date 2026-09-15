@@ -215,7 +215,7 @@ All runs are hermetic: faked DB and identity provider in unit tests, the local S
 **TypeScript:**
 - `typecheck:ci` 0/0.
 - Worker `tsc`: exit 0.
-- `typecheck-certification`: backend 0/0, backend-tests 260/260 baseline.
+- `typecheck-certification`: backend 0/0, backend-tests 260/260 baseline. The first run found 3 net-new TS2556 errors, all in the integration N1/N2 test's mocks; they were fixed (`f0e21b0`) and it passes.
 
 **PR #245 protections:**
 - The `routeAuth001*` suites pass in the full run.
