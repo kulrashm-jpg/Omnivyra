@@ -475,9 +475,16 @@ function scheduleWorker(
 }
 
 /**
- * Start the cron scheduler
+ * Start the cron scheduler.
+ *
+ * `hostOwnsShutdown` (SEC-C6, STEP 3AH-91): set by a host process that runs
+ * its own bounded SIGTERM drain (backend/workers/main.ts). The scheduler then
+ * stops its timers and clients on SIGTERM/SIGINT but leaves process exit to
+ * the host — previously its synchronous process.exit(0) cut the worker's
+ * drain (worker.close, BOLT claim release) short on every redeploy. Default
+ * (standalone cron.ts, Next.js instrumentation) is unchanged: it exits.
  */
-async function startCron() {
+async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
   console.log('[cron] starting scheduler loop');
   console.log(`[cron] base tick: ${CRON_INTERVAL_MS / 1000}s | publish safety-net cadence: ${BASE_TICK_MS / 1000}s (working-hours gated)`);
 
@@ -515,6 +522,8 @@ async function startCron() {
     lastSocialAccountTokenRefreshRun    = saved.socialAccountTokenRefresh   ?? 0;
     lastGa4IngestionRun                 = saved.ga4Ingestion                ?? 0;
     lastLeadThreadQueueCleanupRun       = saved.leadThreadQueueCleanup      ?? 0;
+    // SEC-C6: was persisted but never restored → re-ran on every deploy.
+    lastConfidenceCalibrationRun        = saved.confidenceCalibration       ?? 0;
     console.info('[cron-guard] last-run timestamps restored — tasks will respect their intervals on startup');
   }
 
@@ -841,7 +850,10 @@ async function startCron() {
     cronInstr.shutdown();
     shutdownAdminRuntimeConfig();
     shutdownIntentExecutionRedis();
-    process.exit(0);
+    // SEC-C6: a host with its own drain (worker main) exits after draining.
+    if (!opts.hostOwnsShutdown) {
+      process.exit(0);
+    }
   };
 
   process.on('SIGINT', () => shutdown('SIGINT'));

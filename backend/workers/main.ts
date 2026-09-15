@@ -461,7 +461,9 @@ async function main(): Promise<void> {
     console.info('[main] CRON_SERVICE_MODE=worker-only — scheduler runs in the dedicated cron service');
     setCronStatus('ok', 'external cron service (CRON_SERVICE_MODE=worker-only)');
   } else
-  startCron()
+  // SEC-C6: the worker owns process exit (bounded drain below); the
+  // scheduler must not process.exit() underneath it on SIGTERM.
+  startCron({ hostOwnsShutdown: true })
     .then(() => {
       // Cron successfully initialized — flip health to ok.
       setCronStatus('ok');
@@ -536,6 +538,14 @@ async function main(): Promise<void> {
       const t = setTimeout(resolve, drainDeadlineMs);
       if (typeof t.unref === 'function') t.unref();
     });
+    // SEC-C6: hard backstop. The co-located scheduler no longer exits the
+    // process underneath this drain, so guarantee an exit even if claim
+    // release or connection close hangs (e.g. Redis unreachable).
+    const hardExit = setTimeout(() => {
+      console.error('[main] shutdown exceeded its budget — forcing exit');
+      process.exit(0);
+    }, drainDeadlineMs + 10_000);
+    if (typeof hardExit.unref === 'function') hardExit.unref();
 
     await Promise.race([drainDeadline, Promise.allSettled([
       publishWorker.close(),
