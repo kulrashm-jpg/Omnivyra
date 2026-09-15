@@ -27,6 +27,24 @@ export type QueueStatus =
   | 'SUPERSEDED'       // replaced by another path; must never gain a consumer
   | 'REMOVED';         // deleted infrastructure (kept for audit trail)
 
+/**
+ * The processor family that owns a shared queue. Every shared queue has exactly
+ * ONE owner, and the shared registrar attaches that owner's consumer and no
+ * other. `generic-content` is processContentGenerationJob: it owns only the
+ * content-* queues, and startContentWorkers attaches it to nothing else.
+ */
+export type QueueConsumerFamily =
+  | 'generic-content'
+  | 'creator-content'
+  | 'whatsapp-broadcast'
+  | 'whatsapp-webhook'
+  | 'analytics-ingestion'
+  | 'planner-refinement'
+  | 'listening-executions'
+  | 'semantic-indexing'
+  | 'replay-partition'
+  | 'automation-tasks';
+
 export interface QueueTopologyEntry {
   queue: string;
   /** Verified producer evidence (file/route), or the absence finding. */
@@ -35,6 +53,8 @@ export interface QueueTopologyEntry {
   devConsumed: boolean;
   consumedVia: 'inline' | 'shared' | 'none';
   status: QueueStatus;
+  /** Owning processor family. Required for every `consumedVia: 'shared'` queue. */
+  consumer?: QueueConsumerFamily;
   note?: string;
 }
 
@@ -51,24 +71,24 @@ export const QUEUE_TOPOLOGY: QueueTopologyEntry[] = [
   { queue: 'conversation-memory-rebuild', enqueuedBy: 'DB-insert trigger + cron safety-net drain', prodConsumed: true, devConsumed: false, consumedVia: 'inline', status: 'OK', note: 'event-driven; prod-only by design' },
 
   // ── Shared consumers — registerSharedConsumers() in BOTH bootstraps (W1-3) ──
-  { queue: 'content-blog', enqueuedBy: 'pages/api/blogs/generate.ts (legacy no-mode path, getContentQueue)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure: was dev-only; prod enqueues sat in waiting forever (B-02)' },
-  { queue: 'content-post', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map (unified generation paths)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure (B-02)' },
-  { queue: 'content-whitepaper', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure (B-02)' },
-  { queue: 'content-story', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure (B-02)' },
-  { queue: 'content-newsletter', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure (B-02)' },
-  { queue: 'content-engagement', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map (time-critical replies)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure (B-02)' },
-  { queue: 'content-refinement', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure (B-02)' },
-  { queue: 'creator-video', enqueuedBy: 'boltCreatorQueueBridge', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK' },
-  { queue: 'creator-carousel', enqueuedBy: 'boltCreatorQueueBridge', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK' },
-  { queue: 'creator-story', enqueuedBy: 'boltCreatorQueueBridge', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK' },
-  { queue: 'whatsapp-broadcast', enqueuedBy: 'whatsappBroadcastService.ts:202,358', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK' },
-  { queue: 'whatsapp-webhook', enqueuedBy: 'pages/api/whatsapp/webhook', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK' },
-  { queue: 'analytics-ingestion', enqueuedBy: 'pages/api/cron/analytics-ingestion (vercel.json daily cron)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK' },
-  { queue: 'planner-refinement', enqueuedBy: 'campaignAiOrchestrator (gated ASYNC_REFINEMENT_ENABLED; plannerRolloutMode can flip live)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure: consumer attaches even while the enqueue flag is off so queued jobs from an enabled period drain (dev-documented semantics)' },
-  { queue: 'listening-executions', enqueuedBy: 'listeningExecutionService enqueue', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure (B-02)' },
-  { queue: 'automation-tasks', enqueuedBy: 'NONE YET — WS-6F wires the orchestrator enqueue (leadIntelligenceOrchestration/orchestrator.ts:378, gated AUTOMATION_RUNTIME_ENABLED)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'WS-6E: consumer registered via registerSharedConsumers, no producer yet. Consumer attaches ahead of the producer on the documented planner-refinement precedent, so enabling the enqueue can never strand queued work. Runtime stays DARK until WS-6F.' },
-  { queue: 'semantic-indexing', enqueuedBy: 'asyncSemanticRuntimeService enqueue', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure (B-02)' },
-  { queue: 'replay-partition', enqueuedBy: 'replayCoordinationService enqueue', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', note: 'W1-3 gap closure (B-02)' },
+  { queue: 'content-blog', enqueuedBy: 'pages/api/blogs/generate.ts (legacy no-mode path, getContentQueue)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'generic-content', note: 'W1-3 gap closure: was dev-only; prod enqueues sat in waiting forever (B-02)' },
+  { queue: 'content-post', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map (unified generation paths)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'generic-content', note: 'W1-3 gap closure (B-02)' },
+  { queue: 'content-whitepaper', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'generic-content', note: 'W1-3 gap closure (B-02)' },
+  { queue: 'content-story', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'generic-content', note: 'W1-3 gap closure (B-02)' },
+  { queue: 'content-newsletter', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'generic-content', note: 'W1-3 gap closure (B-02)' },
+  { queue: 'content-engagement', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map (time-critical replies)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'generic-content', note: 'W1-3 gap closure (B-02)' },
+  { queue: 'content-refinement', enqueuedBy: 'contentGenerationQueues CONTENT_TYPE map', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'generic-content', note: 'W1-3 gap closure (B-02)' },
+  { queue: 'creator-video', enqueuedBy: 'boltCreatorQueueBridge', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'creator-content' },
+  { queue: 'creator-carousel', enqueuedBy: 'boltCreatorQueueBridge', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'creator-content' },
+  { queue: 'creator-story', enqueuedBy: 'boltCreatorQueueBridge', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'creator-content' },
+  { queue: 'whatsapp-broadcast', enqueuedBy: 'whatsappBroadcastService.ts:202,358', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'whatsapp-broadcast' },
+  { queue: 'whatsapp-webhook', enqueuedBy: 'pages/api/whatsapp/webhook', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'whatsapp-webhook' },
+  { queue: 'analytics-ingestion', enqueuedBy: 'pages/api/cron/analytics-ingestion (vercel.json daily cron)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'analytics-ingestion' },
+  { queue: 'planner-refinement', enqueuedBy: 'campaignAiOrchestrator (gated ASYNC_REFINEMENT_ENABLED; plannerRolloutMode can flip live)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'planner-refinement', note: 'W1-3 gap closure: consumer attaches even while the enqueue flag is off so queued jobs from an enabled period drain (dev-documented semantics)' },
+  { queue: 'listening-executions', enqueuedBy: 'listeningExecutionService enqueue', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'listening-executions', note: 'W1-3 gap closure (B-02)' },
+  { queue: 'automation-tasks', enqueuedBy: 'NONE YET — WS-6F wires the orchestrator enqueue (leadIntelligenceOrchestration/orchestrator.ts:378, gated AUTOMATION_RUNTIME_ENABLED)', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'automation-tasks', note: 'WS-6E: consumer registered via registerSharedConsumers, no producer yet. Consumer attaches ahead of the producer on the documented planner-refinement precedent, so enabling the enqueue can never strand queued work. Runtime stays DARK until WS-6F.' },
+  { queue: 'semantic-indexing', enqueuedBy: 'asyncSemanticRuntimeService enqueue', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'semantic-indexing', note: 'W1-3 gap closure (B-02)' },
+  { queue: 'replay-partition', enqueuedBy: 'replayCoordinationService enqueue', prodConsumed: true, devConsumed: true, consumedVia: 'shared', status: 'OK', consumer: 'replay-partition', note: 'W1-3 gap closure (B-02)' },
 
   // ── Deliberate non-consumption ──────────────────────────────────────────────
   { queue: 'posting', enqueuedBy: 'NO PRODUCER — intentExecutionService QUEUE_BY_PRIORITY maps to it but is dead code (defined, never referenced)', prodConsumed: false, devConsumed: false, consumedVia: 'none', status: 'DORMANT', note: 'W1-4 verified: no enqueue anywhere. Queue object kept ONLY because autoScalingSignal + /api/internal/metrics read its depth. Wire a consumer or delete the readers before ever producing to it.' },
@@ -84,4 +104,21 @@ export function sharedConsumedQueues(): QueueTopologyEntry[] {
 /** Queues that must never have a consumer registered anywhere. */
 export function neverConsumedQueues(): QueueTopologyEntry[] {
   return QUEUE_TOPOLOGY.filter((q) => q.consumedVia === 'none');
+}
+
+/** Shared queues owned by one consumer family, in manifest order. */
+export function queuesOwnedBy(family: QueueConsumerFamily): string[] {
+  return QUEUE_TOPOLOGY
+    .filter((q) => q.consumedVia === 'shared' && q.consumer === family)
+    .map((q) => q.queue);
+}
+
+/**
+ * The ONLY queues the generic content processor may consume. startContentWorkers
+ * attaches to exactly these, and processContentGenerationJob refuses a job from
+ * every other queue — a dedicated or superseded queue never gains a second,
+ * generic consumer.
+ */
+export function genericContentQueueNames(): readonly string[] {
+  return queuesOwnedBy('generic-content');
 }

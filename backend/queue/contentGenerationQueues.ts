@@ -17,6 +17,7 @@ import { getConnectionConfig, getQueuePrefix } from './bullmqClient';
 import { observeQueueEvents } from '../observability/queueObservability';
 import { runWithJobTraceContext } from '../observability/traceKit';
 import { deadLetterOnExhaustion } from './deadLetterOnExhaustion';
+import { genericContentQueueNames } from './workerTopologyManifest';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QUEUE CONFIGURATION
@@ -277,12 +278,25 @@ export async function initializeContentQueues(): Promise<void> {
 }
 
 /**
- * Create workers for each queue with proper concurrency
+ * Start the generic content-generation workers.
+ *
+ * Attaches ONLY to the queues the topology manifest assigns to the
+ * `generic-content` family (the content-* queues). CONTENT_QUEUE_CONFIG also
+ * configures queues owned by dedicated consumers (creator-*, whatsapp-*,
+ * analytics-ingestion) and the superseded bolt-content-jobs; attaching the
+ * generic processor to those made it compete with their real consumer for jobs.
  */
 export async function startContentWorkers(processor: (job: any) => Promise<any>): Promise<void> {
   console.info('[contentGenerationQueues][workers] Starting workers');
 
-  for (const [queueName, config] of Object.entries(CONTENT_QUEUE_CONFIG)) {
+  const queueNames = genericContentQueueNames();
+  const unconfigured = queueNames.filter((queueName) => !CONTENT_QUEUE_CONFIG[queueName]);
+  if (unconfigured.length > 0) {
+    throw new Error(`[contentGenerationQueues] generic queues without a CONTENT_QUEUE_CONFIG entry: ${unconfigured.join(', ')}`);
+  }
+
+  for (const queueName of queueNames) {
+    const config = CONTENT_QUEUE_CONFIG[queueName]!;
     const worker = new Worker(queueName, (job) => runWithJobTraceContext(job, () => processor(job)), {
       connection: getConnectionConfig(),
       prefix: getQueuePrefix(),

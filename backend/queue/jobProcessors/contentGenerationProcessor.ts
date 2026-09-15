@@ -37,6 +37,7 @@ import { runUnifiedLongFormGeneration } from '../../../lib/content/unifiedLongFo
 import { buildContentContext } from '../../../lib/content/buildContentContext';
 import { isLongFormContentType } from '../../../lib/content/longFormContentTypeConfig';
 import { renderPlatformVariantsFromBlueprint } from '../../services/contentGeneration/platformVariantGenerator';
+import { assertGenericContentJob } from './genericContentJobGuard';
 
 // Stubs for services not yet implemented
 const feedbackIntelligenceEngine = {
@@ -56,37 +57,11 @@ async function refundCredits(_company_id: string, _key: string): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function processContentGenerationJob(job: Job): Promise<any> {
-  // ── Defensive guard against worker-collision routing ────────────────────
-  // The `longform-unified` queue has a dedicated processor
-  // (`processLongFormUnifiedJob` in startWorkers.ts). If a stale worker
-  // process — started before `QUEUES_WITH_DEDICATED_WORKER` was added
-  // to contentGenerationQueues.ts — registered the generic processor
-  // for `longform-unified`, jobs land here with the long-form payload
-  // shape `{input, meta}` instead of the short-form shape
-  // `{company_id, content_type, ...}`. Without this guard, the routing
-  // falls through to `generateMasterContent` which does
-  // `CONTENT_TYPE_CONFIG[input.content_type].target_words` and crashes
-  // with the unhelpful "Cannot read properties of undefined (reading
-  // 'target_words')". Fail clean here instead, with a diagnostic that
-  // tells the user exactly what to do (restart workers).
-  const queueName = (job as { queueName?: string }).queueName;
-  if (queueName === 'longform-unified') {
-    throw new Error(
-      `[contentGenerationProcessor] Routing error: a generic worker received a job from the 'longform-unified' queue. The QUEUES_WITH_DEDICATED_WORKER fix is in the working tree but this worker process is stale. Restart your dev workers (npm run dev:full) so the new worker registration takes effect. Job id: ${job.id}.`,
-    );
-  }
-  const looksLikeLongFormUnifiedPayload =
-    job.data
-    && typeof job.data === 'object'
-    && (job.data as { input?: unknown; meta?: unknown }).input
-    && (job.data as { input?: unknown; meta?: unknown }).meta
-    && (job.data as { company_id?: unknown; content_type?: unknown }).company_id === undefined
-    && (job.data as { company_id?: unknown; content_type?: unknown }).content_type === undefined;
-  if (looksLikeLongFormUnifiedPayload) {
-    throw new Error(
-      `[contentGenerationProcessor] Payload shape mismatch: this job has the long-form unified shape ({input, meta}) but landed in the generic content-generation processor. The 'longform-unified' queue must be processed by processLongFormUnifiedJob. Restart your dev workers (npm run dev:full). Job id: ${job.id}.`,
-    );
-  }
+  // Topology guard: this processor owns only the content-* queues (the
+  // `generic-content` family in workerTopologyManifest). A job from another
+  // queue, or with a non-generic payload, is refused here — before billing,
+  // admission and every model/provider call.
+  assertGenericContentJob(job);
 
   const { company_id, content_type, bulk_mode, user_id } = job.data;
 
