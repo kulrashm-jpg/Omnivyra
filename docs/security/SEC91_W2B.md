@@ -37,7 +37,7 @@
 
 ## 2. FIX details: before → after, tests, mutation check
 
-"Base" means the branch start `cc39f85`. For each base run, the fixed source files were replaced with their `cc39f85` version, the new suite was run, and the files were restored.
+"Base" means the branch start `cc39f85`. W2B-3 … W2B-6 suites were run before their source files were edited. For W2B-1 and W2B-2 the fixed source files were replaced with their `cc39f85` version, the suites were run, and the files were restored. Targeted mutations were applied the same way and reverted.
 
 - **W2B-1**
   - Before: a soft-deleted, `status=deleted`, suspended, session-revoked (`iat < session_revoked_after`) or invited COMPANY_ADMIN with a browser cookie session got `{ userId, role }` back, i.e. access.
