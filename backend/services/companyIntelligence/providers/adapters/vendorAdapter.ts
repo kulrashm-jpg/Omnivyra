@@ -26,6 +26,7 @@
  */
 
 import { safeFetch } from '../../../../../lib/security/safeFetch';
+import { redactSecretsInText } from '../../../../../lib/security/redactUrl';
 import {
   measured,
   unavailable,
@@ -133,8 +134,12 @@ function credentialOf(spec: VendorSpec): string | null {
   return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null;
 }
 
+// SEC-E3 (STEP 3AH-91): several vendors take their key as a query parameter
+// (Hunter `api_key`, BuiltWith `KEY`), and this text becomes the provider
+// result's persisted/logged `detail` — redact before truncating so a cut can
+// never leave part of a credential behind.
 const truncate = (e: unknown): string =>
-  (e instanceof Error ? e.message : String(e)).slice(0, 200);
+  redactSecretsInText(e instanceof Error ? e.message : String(e)).slice(0, 200);
 
 // ── mapping helpers — shared so "never fabricate" is implemented once ────────
 
