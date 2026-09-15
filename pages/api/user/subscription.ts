@@ -9,6 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveOrganizationPlanLimits } from '../../../backend/services/planResolutionService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -21,6 +22,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const companyId = typeof req.query.company_id === 'string' ? req.query.company_id : null;
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): company_id went unchecked into
+  // resolveOrganizationPlanLimits — any signed-in user could read any
+  // company's plan and limits. When a company is named, the caller must be a
+  // member of it. (No company_id keeps the unchanged free-tier answer.)
+  if (companyId) {
+    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!access) return;
+  }
 
   try {
     // organization_plan_assignments uses company_id directly as the organization_id

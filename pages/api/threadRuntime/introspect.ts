@@ -16,6 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { reconstructReplay } from '@/backend/services/threadRuntime/globalRuntimeReplayReconstructor';
 import { resolveDistributedCorrelation } from '@/backend/services/threadRuntime/distributedRuntimeCorrelationEngine';
 import { analyzeRuntimeForensics } from '@/backend/services/threadRuntime/runtimeForensicAnalyzer';
@@ -33,6 +34,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const companyId = typeof req.query.companyId === 'string' ? req.query.companyId : null;
   if (!companyId) { res.status(400).json({ error: 'BAD_REQUEST', reason: 'companyId required' }); return; }
+  // ROUTE-AUTH-001 (STEP 3AH-85) — companyId selects the trace bucket, so it
+  // must be a company the caller is an active member of.
+  if (!(await enforceCompanyAccess({ req, res, companyId }))) return;
   const threadId = typeof req.query.threadId === 'string' ? req.query.threadId : undefined;
   const runtimeSessionId = typeof req.query.runtimeSessionId === 'string' ? req.query.runtimeSessionId : undefined;
   const correlationId = typeof req.query.correlationId === 'string' ? req.query.correlationId : undefined;

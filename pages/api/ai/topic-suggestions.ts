@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 /**
  * Unified API for AI topic suggestions.
@@ -7,6 +8,16 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * POST with count/category/platforms: generate new topics (parametric)
  */
 async function handler(req, res) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): signed-in callers only.
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+
   if (req.method === 'GET') {
     return handleGetSuggestions(req, res);
   } else if (req.method === 'POST') {

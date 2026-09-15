@@ -17,6 +17,11 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *
  * Auth: requires an authenticated Supabase session. The renderer's own
  * `options` block carries companyId/userId for storage attribution.
+ * ROUTE-AUTH-001 (STEP 3AH-85): a supplied company_id is bound with
+ * enforceCompanyAccess (and a supplied campaign_id must belong to it); a
+ * campaign_id alone is bound with requireCampaignAccess, whose company becomes
+ * the render's company. A USER template named by the payload's template_id is
+ * only loaded when it belongs to that bound company (404 otherwise).
  *
  * FONT PROVISIONING (PHASE 13Z): the Vercel runtime ships no fonts, so the
  * infographic SVG <text> (font-family "Inter, Arial") rendered blank. fontconfig
@@ -37,6 +42,9 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
+import { supabase } from '../../../../backend/db/supabaseClient';
 import { ensureRenderFonts } from '../../../../backend/services/creatorRenderFonts';
 
 export const config = {
@@ -46,6 +54,14 @@ export const config = {
     responseLimit: false,
   },
 };
+
+/** template_id the renderer resolves (same keys as ensureUserTemplateRegisteredForAsset). */
+function userTemplateIdOf(assetPayload: Record<string, unknown>): string {
+  const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? v as Record<string, unknown> : {});
+  const md = obj(obj(assetPayload.media_bundle).metadata);
+  const raw = md.template_id ?? md.infographic_template_id ?? obj(md.creator_card).template_id;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Configure fontconfig BEFORE any sharp/librsvg module loads (they are
@@ -89,15 +105,52 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!assetPayload) {
     return res.status(400).json({ success: false, error: 'asset_payload required' });
   }
-  const companyId = typeof body.company_id === 'string' ? body.company_id.trim() : '';
+  const requestedCompanyId = typeof body.company_id === 'string' ? body.company_id.trim() : '';
   const campaignId = typeof body.campaign_id === 'string' ? body.campaign_id.trim() : '';
+
+  // ROUTE-AUTH-001 (STEP 3AH-85) — bind the tenant BEFORE any template load or
+  // render. company_id + campaign_id: membership in the company AND the
+  // campaign must belong to it. campaign_id alone: the campaign's own company.
+  let companyId = '';
+  if (requestedCompanyId) {
+    const companyAccess = await enforceCompanyAccess({ req, res, companyId: requestedCompanyId, campaignId: campaignId || null });
+    if (!companyAccess) return;
+    companyId = requestedCompanyId;
+  } else if (campaignId) {
+    const campaignAccess = await requireCampaignAccess(req, res, campaignId);
+    if (!campaignAccess) return;
+    companyId = campaignAccess.companyId;
+  }
+
+  // A USER template (creator_user_templates) is a tenant resource: it is only
+  // loaded when it belongs to the bound company. System template ids have no
+  // row and resolve in-code exactly as before.
+  const templateId = userTemplateIdOf(assetPayload);
+  let loadUserTemplate = false;
+  if (templateId) {
+    try {
+      const { data: templateRow, error: templateError } = await supabase
+        .from('creator_user_templates')
+        .select('company_id')
+        .eq('id', templateId)
+        .maybeSingle();
+      if (!templateError && templateRow) {
+        if (!companyId || String((templateRow as { company_id?: unknown }).company_id) !== companyId) {
+          return res.status(404).json({ success: false, error: 'Template not found' });
+        }
+        loadUserTemplate = true;
+      }
+    } catch { /* ownership unprovable → load nothing; system/default resolution is unaffected */ }
+  }
 
   try {
     // PART A — register a user template_id before render (canonical flow).
-    try {
-      const { ensureUserTemplateRegisteredForAsset } = await import('../../../../backend/services/creator/userTemplateService');
-      await ensureUserTemplateRegisteredForAsset(assetPayload);
-    } catch { /* best-effort */ }
+    if (loadUserTemplate) {
+      try {
+        const { ensureUserTemplateRegisteredForAsset } = await import('../../../../backend/services/creator/userTemplateService');
+        await ensureUserTemplateRegisteredForAsset(assetPayload);
+      } catch { /* best-effort */ }
+    }
     // Deferred import: loads sharp AFTER ensureRenderFonts() set FONTCONFIG_FILE.
     const { renderAsset } = await import('../../../../backend/services/creatorAssetRenderer');
     const rendered = await renderAsset(assetPayload, {

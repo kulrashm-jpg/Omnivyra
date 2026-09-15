@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getCampaignMemory } from '../../../backend/services/campaignMemoryService';
 import { detectContentOverlap } from '../../../backend/services/contentOverlapService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -20,6 +21,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId || !proposedPlan) {
       return res.status(400).json({ error: 'companyId and proposedPlan are required' });
     }
+    // ROUTE-AUTH-001 (STEP 3AH-85) — membership in companyId, and a supplied
+    // campaignId must belong to it (404 otherwise), before campaign memory is read.
+    const ctx = await enforceCompanyAccess({ req, res, companyId, campaignId: campaignId || null });
+    if (!ctx) return;
     const memory = await getCampaignMemory({ companyId, campaignId });
     const proposedContent = [
       ...(proposedPlan.themes || []),

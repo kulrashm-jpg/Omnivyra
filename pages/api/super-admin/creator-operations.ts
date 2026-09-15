@@ -20,7 +20,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { extractAccessToken } from '../../../backend/services/authResolver';
+import { requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 import { aggregateCreatorMetrics, classifyWorkflowStatus } from '../../../backend/services/creatorObservabilityService';
 import { listDeadLetterJobs } from '../../../backend/services/creatorQueueReliabilityService';
 import { getQueuePressure } from '../../../backend/services/creatorScalabilityHarnessService';
@@ -29,30 +29,19 @@ import type { ObservabilityWindow } from '../../../backend/services/creatorObser
 
 const VALID_WINDOWS: ObservabilityWindow[] = ['1h', '24h', '7d', '30d'];
 
-async function isSuperAdmin(req: NextApiRequest): Promise<boolean> {
-  // Token source: Bearer header OR Supabase auth cookie (via extractAccessToken).
-  // We still need user_metadata.is_super_admin / role from auth.users, so the
-  // final lookup goes through supabase.auth.getUser(token). The previous
-  // implementation only accepted Bearer.
-  const token = extractAccessToken(req);
-  if (!token) return false;
-  try {
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data?.user) return false;
-    const meta = (data.user.user_metadata ?? {}) as Record<string, unknown>;
-    return meta.is_super_admin === true || meta.role === 'super_admin';
-  } catch {
-    return false;
-  }
-}
-
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
   }
-  const allowed = await isSuperAdmin(req);
-  if (!allowed) return res.status(403).json({ error: 'super_admin_required' });
+  // ROUTE-AUTH-001 (STEP 3AH-85): the previous local isSuperAdmin() trusted
+  // auth.users.user_metadata (is_super_admin / role), which the user can write
+  // with their own session via auth.updateUser — any signed-in user could grant
+  // themselves this cross-tenant view. Super admin is now decided by the
+  // canonical platform role (user_company_roles SUPER_ADMIN): 401 when not
+  // signed in, 403 SUPER_ADMIN_REQUIRED otherwise.
+  const admin = await requireSuperAdminUser(req, res);
+  if (!admin) return;
 
   const window = (Array.isArray(req.query.window) ? req.query.window[0] : req.query.window) as ObservabilityWindow | undefined;
   const resolvedWindow: ObservabilityWindow = VALID_WINDOWS.includes(window as any) ? (window as ObservabilityWindow) : '1h';

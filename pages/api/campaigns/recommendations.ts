@@ -13,6 +13,7 @@ import {
 } from '../../../backend/services/campaignBlueprintAdapter';
 import { validateCapacityAndFrequency } from '../../../backend/services/capacityFrequencyValidationGateway';
 import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -30,6 +31,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       platformRules,
       resourceConstraints,
     } = req.body || {};
+    // ROUTE-AUTH-001: this route spends LLM budget and writes the campaign's
+    // blueprint and versions under companyId. Authorize the company, and bind
+    // the campaign to it when one is sent (404 for a foreign campaign).
+    const ctx = await enforceCompanyAccess({ req, res, companyId, campaignId: campaignId || null });
+    if (!ctx) return;
     const result = await generateCampaignStrategy({
       companyId,
       objective: campaignObjective,

@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { parseAiPlanToWeeks } from '../../../backend/services/campaignPlanParser';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 /**
  * POST /api/campaigns/parse-saved-plan
@@ -10,6 +11,13 @@ import { parseAiPlanToWeeks } from '../../../backend/services/campaignPlanParser
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ROUTE-AUTH-001: LLM-backed parse of caller-supplied text. It reads no
+  // tenant data, so authentication is the required control (no anonymous spend).
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
   try {

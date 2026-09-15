@@ -4,6 +4,7 @@ import { resolveUserContext as resolveFromLib, type UserContext, type Membership
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
 import { getCompanyRoleIncludingInvited, normalizePermissionRole, Role } from './rbacPrimitives';
 import { assertTenantAccess } from '../security/TenantGuard';
+import { checkCampaignOwnership } from './campaignOwnershipService';
 import { config } from '@/config';
 
 export type { UserContext, MembershipType };
@@ -143,6 +144,16 @@ export function isExternalMemberForCompany(
  *   - bridge principals (legacyCookieSuperAdmin) cannot satisfy tenant
  *     access — they have no tenant identity
  *
+ * ROUTE-AUTH-001 (STEP 3AH-85) — when a `campaignId` is supplied it is now
+ * BOUND: every allow branch additionally requires that the campaign belongs to
+ * `companyId` (campaignOwnershipService). Before this, the guard only checked
+ * that a campaignId was present, so a member of company A could pass company
+ * B's campaign id and the route acted on B's campaign. A campaign owned by
+ * another company (or by nobody) answers 404; a campaign that does not exist
+ * yet is allowed, because creation flows authorize the id of the campaign they
+ * are about to create and a non-existent campaign cannot belong to another
+ * tenant; a transient lookup failure answers a retryable 503, never an allow.
+ *
  * New code should call `requireTenantAccess` directly. This helper is
  * retained to avoid churn in 30+ existing callsites.
  */
@@ -154,6 +165,29 @@ export const enforceCompanyAccess = async (input: {
   requireCampaignId?: boolean;
 }): Promise<UserContext | null> => {
   const user = await resolveUserContext(input.req);
+
+  const campaignBound = async (): Promise<boolean> => {
+    if (!input.campaignId) return true;
+    const ownership = await checkCampaignOwnership(String(input.campaignId), String(input.companyId));
+    if (ownership === 'owned' || ownership === 'not_found') return true;
+    if (ownership === 'lookup_error') {
+      input.res.status(503).json({
+        error: 'Campaign ownership check is temporarily unavailable. Please try again.',
+        code: 'CAMPAIGN_LOOKUP_ERROR',
+        retryable: true,
+      });
+      return false;
+    }
+    console.warn('CAMPAIGN_TENANT_MISMATCH', {
+      path: input.req.url,
+      companyId: input.companyId,
+      campaignId: input.campaignId,
+      userId: user.userId,
+      ownership,
+    });
+    input.res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    return false;
+  };
 
   // AUTH-CTX-001 — authentication is answered FIRST, and separately.
   //
@@ -194,6 +228,7 @@ export const enforceCompanyAccess = async (input: {
       input.res.status(400).json({ error: 'campaignId required' });
       return null;
     }
+    if (!(await campaignBound())) return null;
     return user;
   }
 
@@ -236,6 +271,7 @@ export const enforceCompanyAccess = async (input: {
       input.res.status(400).json({ error: 'campaignId required' });
       return null;
     }
+    if (!(await campaignBound())) return null;
     return user;
   }
 
@@ -251,6 +287,7 @@ export const enforceCompanyAccess = async (input: {
       input.res.status(400).json({ error: 'campaignId required' });
       return null;
     }
+    if (!(await campaignBound())) return null;
     return user;
   }
 

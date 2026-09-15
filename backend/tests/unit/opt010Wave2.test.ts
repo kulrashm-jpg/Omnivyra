@@ -52,7 +52,8 @@ jest.mock('../../services/responsePerformanceService', () => ({
   incrementReplyLike: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../../services/leadDetectionService', () => ({ processMessageForLeads: jest.fn() }));
-// weekly-refinement authenticates the user (no tenant binding) at the dispatcher.
+// weekly-refinement authenticates the user at the dispatcher; since ROUTE-AUTH-001 (STEP 3AH-85)
+// it also binds the campaign (requireCampaignAccess), granted explicitly in W2-5 below.
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn().mockResolvedValue({ user: { id: 'u1' }, error: null }),
 }));
@@ -197,6 +198,12 @@ describe('W2-4 save-week-daily-plan — one .in() select + parallel writes', () 
 // ── W2-5 ────────────────────────────────────────────────────────────────────
 
 describe('W2-5 weekly-refinement manualEdit — parallel updates, no fail-fast prefix', () => {
+  // ROUTE-AUTH-001: the route now requires the caller to own camp-1; W2-5 pins batching
+  // parity, so access is granted (deny paths: routeAuth001CampaignBinding2).
+  beforeEach(() => {
+    (requireCampaignAccess as jest.Mock).mockResolvedValue({ userId: 'u1', companyId: 'c1', campaignId: 'camp-1' });
+  });
+
   test('a failing update no longer stops the batch: ALL updates attempted, still 500', async () => {
     mockTableResponses['content_plans'] = { data: null, error: { message: 'boom' } };
     const res = createMockRes();

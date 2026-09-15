@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingResponse';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -12,6 +13,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const { method, query } = req;
   const { campaignId, weekNumber, action } = query;
+
+  // ROUTE-AUTH-001 (STEP 3AH-85) — every action is keyed by a campaign (GET:
+  // query.campaignId; POST: body.campaignId; PUT: body.campaignId or, when
+  // absent, the campaign that owns body.refinementId). Bind it to the caller's
+  // tenant before any read/write (foreign/unknown → 404, non-member → 403);
+  // row-keyed writes below are additionally constrained to that campaign.
+  let boundCampaignId = '';
+  let callerId = user.id;
+  if (method === 'GET' || method === 'POST' || method === 'PUT') {
+    let requested: unknown = method === 'GET' ? campaignId : req.body?.campaignId;
+    if (method === 'PUT' && !requested && req.body?.refinementId) {
+      const { data: refinementRow } = await supabase
+        .from('weekly_content_refinements')
+        .select('campaign_id')
+        .eq('id', String(req.body.refinementId))
+        .maybeSingle();
+      if (!refinementRow?.campaign_id) {
+        return res.status(404).json({ error: 'Refinement not found' });
+      }
+      requested = String(refinementRow.campaign_id);
+    }
+    const access = await requireCampaignAccess(req, res, typeof requested === 'string' ? requested : '');
+    if (!access) return;
+    boundCampaignId = access.campaignId;
+    callerId = access.userId;
+  }
 
   try {
     switch (method) {
@@ -27,9 +54,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       case 'POST':
         if (action === 'manual-edit') {
-          return await manualEdit(req.body, res);
+          return await manualEdit(req.body, callerId, res);
         } else if (action === 'finalize-week') {
-          return await finalizeWeek(req.body, res);
+          return await finalizeWeek(req.body, callerId, res);
         } else if (action === 'populate-daily') {
           return await populateDailyPlans(req.body, res);
         }
@@ -37,7 +64,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       case 'PUT':
         if (action === 'update-refinement') {
-          return await updateRefinement(req.body, res);
+          return await updateRefinement(req.body, boundCampaignId, res);
         }
         break;
 
@@ -157,9 +184,11 @@ async function getDailyPlans(campaignId: string, weekNumber: string, res: NextAp
 }
 
 // Manual edit weekly content
-async function manualEdit(body: any, res: NextApiResponse) {
+async function manualEdit(body: any, userId: string, res: NextApiResponse) {
   try {
-    const { campaignId, weekNumber, editedContent, editNotes, userId } = body;
+    // ROUTE-AUTH-001: campaignId was bound by the dispatcher; the editor is the
+    // authenticated caller (never body.userId).
+    const { campaignId, weekNumber, editedContent, editNotes } = body;
 
     // Update content_plans with manual edits.
     // OPT-010 W2-5: the per-item updates run concurrently — each targets a
@@ -185,6 +214,8 @@ async function manualEdit(body: any, res: NextApiResponse) {
             updated_at: new Date().toISOString()
           })
           .eq('id', item.id as string)
+          // ROUTE-AUTH-001: an item id can only address a row of the bound campaign.
+          .eq('campaign_id', campaignId)
       )
     );
     for (const result of updateResults) {
@@ -221,9 +252,10 @@ async function manualEdit(body: any, res: NextApiResponse) {
 }
 
 // Finalize weekly content
-async function finalizeWeek(body: any, res: NextApiResponse) {
+async function finalizeWeek(body: any, userId: string, res: NextApiResponse) {
   try {
-    const { campaignId, weekNumber, finalizationNotes, userId } = body;
+    // ROUTE-AUTH-001: finalized_by is the authenticated caller (never body.userId).
+    const { campaignId, weekNumber, finalizationNotes } = body;
 
     // Use database function to finalize
     const { data: result, error } = await supabase
@@ -275,17 +307,26 @@ async function populateDailyPlans(body: any, res: NextApiResponse) {
 }
 
 // Update refinement
-async function updateRefinement(body: any, res: NextApiResponse) {
+async function updateRefinement(body: any, campaignId: string, res: NextApiResponse) {
   try {
     const { refinementId, updates } = body;
+    // ROUTE-AUTH-001: the row must belong to the bound campaign, and the
+    // client-supplied field bag may not re-key the row (id / campaign_id) into
+    // another campaign.
+    const {
+      id: _ignoredId,
+      campaign_id: _ignoredCampaignId,
+      ...safeUpdates
+    } = (updates && typeof updates === 'object' ? updates : {}) as Record<string, unknown>;
     console.warn('DEPRECATED: weekly_content_refinements write path triggered (weekly-refinement update)');
     const { error } = await supabase
       .from('weekly_content_refinements')
       .update({
-        ...updates,
+        ...safeUpdates,
         updated_at: new Date().toISOString()
       })
-      .eq('id', refinementId);
+      .eq('id', refinementId)
+      .eq('campaign_id', campaignId);
 
     if (error) throw error;
 

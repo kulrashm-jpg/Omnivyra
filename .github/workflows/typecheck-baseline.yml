@@ -51,6 +51,15 @@ jobs:
       - name: Tenant-authz guard
         run: npm run check:authz
 
+      # ROUTE-AUTH-001 (STEP 3AH-85): default-deny authentication gate. Every
+      # pages/api route must INVOKE an approved authentication primitive
+      # (provenance-checked), bind request-supplied tenant/object/campaign ids,
+      # and never gate on a fail-open secret — or be a reviewed entry in
+      # scripts/route-auth-allowlist.json whose evidence is re-verified here.
+      # No grandfathered baseline: this step is blocking.
+      - name: Route authentication gate
+        run: npm run check:route-auth
+
       # WITHRBAC-STRUCT-001: fail the build if a withRBAC route re-derives a
       # tenant identifier and operates on it without binding to the company the
       # wrapper authorized (req.rbac.companyId) or an approved ownership

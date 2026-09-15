@@ -104,7 +104,11 @@ describe('4 — selecting the tab actually renders it', () => {
 
 describe('5/6 — authorization is unchanged and still server-side', () => {
   it('CRITICAL: the API still refuses non-super-admins', () => {
-    expect(API).toContain("return res.status(403).json({ error: 'super_admin_required' });");
+    // ROUTE-AUTH-001 (STEP 3AH-85): super-admin is decided by the canonical
+    // requireSuperAdminUser (user_company_roles), no longer by user-writable
+    // auth user_metadata, which any signed-in user could set on themselves.
+    expect(API).toContain('requireSuperAdminUser(req, res)');
+    expect(API).not.toMatch(/user_metadata/);
   });
 
   it('CRITICAL: wiring a tab did not introduce a client-side authority', () => {

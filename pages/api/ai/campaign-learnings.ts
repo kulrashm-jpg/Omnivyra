@@ -1,5 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
+import { resolveUserContext } from '../../../backend/services/userContextService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 // In-memory storage for demo purposes
 // In production, this would be a database
@@ -62,30 +64,55 @@ let campaignLearnings: any[] = [
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
-    // Get all campaign learnings
-    res.status(200).json({ learnings: campaignLearnings });
-    
+    // ROUTE-AUTH-001 (STEP 3AH-85): authenticated callers only. The store is
+    // shared process memory, so a caller sees the static demo rows (no owner)
+    // plus rows owned by a company they are an active member of — never
+    // another tenant's learnings.
+    const ctx = await resolveUserContext(req);
+    if (!ctx.userId) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
+    const visible = campaignLearnings.filter(
+      (l) => !l.ownerCompanyId || ctx.companyIds.includes(l.ownerCompanyId)
+    );
+    res.status(200).json({ learnings: visible });
+
   } else if (req.method === 'POST') {
     // Add new campaign learning
     const { learning } = req.body;
-    
+
     if (!learning) {
       return res.status(400).json({ error: 'Learning data is required' });
     }
+    if (typeof learning !== 'object' || typeof learning.campaignId !== 'string' || !learning.campaignId) {
+      return res.status(400).json({ error: 'learning.campaignId is required' });
+    }
 
-    campaignLearnings.push(learning);
-    
+    // ROUTE-AUTH-001: the learning is bound to a campaign the caller may access;
+    // the owner is set server-side and cannot be supplied by the client.
+    const access = await requireCampaignAccess(req, res, learning.campaignId);
+    if (!access) return;
+
+    campaignLearnings.push({ ...learning, campaignId: access.campaignId, ownerCompanyId: access.companyId });
+
     res.status(200).json({ success: true });
-    
+
   } else if (req.method === 'PUT') {
     // Update campaign learning with actual results
     const { campaignId, actualResults } = req.body;
-    
+
     if (!campaignId || !actualResults) {
       return res.status(400).json({ error: 'Campaign ID and actual results are required' });
     }
 
-    const learningIndex = campaignLearnings.findIndex(l => l.campaignId === campaignId);
+    // ROUTE-AUTH-001: bind the campaign, then only ever touch a row owned by the
+    // bound company (the shared demo rows are read-only).
+    const access = await requireCampaignAccess(req, res, campaignId);
+    if (!access) return;
+
+    const learningIndex = campaignLearnings.findIndex(
+      l => l.campaignId === access.campaignId && l.ownerCompanyId === access.companyId
+    );
     
     if (learningIndex === -1) {
       return res.status(404).json({ error: 'Campaign learning not found' });

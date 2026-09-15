@@ -2,6 +2,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { updateActivity } from '../../../backend/services/executionPlannerService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PUT') {
@@ -14,6 +16,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!dayPlanId) {
       return res.status(400).json({ error: 'Day plan ID required' });
     }
+
+    // ROUTE-AUTH-001: authenticate BEFORE the day-plan lookup, then authorize
+    // against the campaign that owns the day plan (loaded server-side).
+    const { user, error: authError } = await getSupabaseUserFromRequest(req);
+    if (authError || !user) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
+    const { data: dayPlan, error: dayPlanError } = await supabase
+      .from('daily_content_plans')
+      .select('id, campaign_id')
+      .eq('id', dayPlanId)
+      .maybeSingle();
+    if (dayPlanError) {
+      console.error('Error loading day plan for platform update:', dayPlanError);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+    if (!dayPlan?.campaign_id) {
+      return res.status(404).json({ error: 'Day plan not found' });
+    }
+    const access = await requireCampaignAccess(req, res, String(dayPlan.campaign_id));
+    if (!access) return;
 
     // Platform mapping for smart suggestions
     const platformMapping: { [key: string]: string[] } = {
@@ -40,6 +63,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .from('daily_content_plans')
       .select('*')
       .eq('id', dayPlanId)
+      .eq('campaign_id', access.campaignId)
       .maybeSingle();
 
     // Return suggested platforms based on content type

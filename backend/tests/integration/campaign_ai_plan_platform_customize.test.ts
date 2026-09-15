@@ -79,6 +79,14 @@ jest.mock('../../db/supabaseClient', () => ({
   },
 }));
 
+// ROUTE-AUTH-001 (STEP 3AH-85): /api/campaigns/ai/plan now binds the campaign to the
+// caller through requireCampaignAccess (and 403s a mismatched client companyId). These
+// suites pin planning behaviour, so the binder grants the fixture campaign to comp123;
+// the deny paths are covered by routeAuth001CampaignBinding2Planner.
+jest.mock('../../services/campaignAccessService', () => ({
+  requireCampaignAccess: jest.fn(async (_req: unknown, _res: unknown, campaignId: string) =>
+    ({ userId: 'user-1', companyId: 'comp123', campaignId })),
+}));
 jest.mock('../../services/rbacService', () => ({
   getUserCompanyRole: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'COMPANY_ADMIN' }),
   getCompanyRoleIncludingInvited: jest.fn().mockResolvedValue(null),

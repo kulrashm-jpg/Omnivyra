@@ -12,6 +12,7 @@ import {
   updateLegacyScheduledPost,
 } from '@/backend/services/structuredPlanScheduler';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 import { resolvePublishMedia } from '@/backend/services/creator/creatorPublishResolution';
 
@@ -71,8 +72,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // fallback transport only; no-op when no creator asset refs are sent.
         let patchMediaUrls = updateData.mediaUrls;
         if (updateData.mediaUrls !== undefined || updateData.assetRefs !== undefined || updateData.creatorAttachments !== undefined) {
+          // ROUTE-AUTH-001 (STEP 3AH-85) — the companyId scopes which creator
+          // assets the refs resolve to (and whose storage URLs get published),
+          // so a client-supplied one must be a company the caller belongs to.
+          const requestedCompanyId = updateData.companyId != null && String(updateData.companyId).trim()
+            ? String(updateData.companyId).trim()
+            : null;
+          if (requestedCompanyId) {
+            const companyAccess = await enforceCompanyAccess({ req, res, companyId: requestedCompanyId });
+            if (!companyAccess) return;
+          }
           const { mediaUrls } = await resolvePublishMedia({
-            companyId: String(updateData.companyId ?? userId),
+            companyId: requestedCompanyId ?? userId,
             userId,
             platform: String(updateData.platform ?? ''),
             assetRefs: updateData.assetRefs,

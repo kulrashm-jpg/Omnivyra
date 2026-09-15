@@ -8,11 +8,19 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { searchImages } from '@/backend/services/imageService';
 import { recordImageSearch } from '@/backend/db/imageMetadataStore';
+import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 
 export type { NormalizedImage as ImageResult } from '@/backend/services/imageService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): signed-in callers only — this route spends
+  // platform AI/API budget.
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
 
   const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
   if (!query) return res.status(400).json({ error: 'Missing query parameter q' });

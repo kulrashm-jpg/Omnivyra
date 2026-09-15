@@ -14,6 +14,7 @@ import {
   youTubeTrendsAcquisition,
 } from '../../../backend/services/trends/youtubeTrendsContract';
 import type { YouTubeTrendingObservation } from '../../../backend/services/trends/youtubeTrendsContract';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 // D6 - the source-boundary contract for the one Reddit listing this route reads.
 import {
   fetchPopularListing,
@@ -285,6 +286,13 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): signed-in callers only — every request fans
+  // out to external providers from the platform's egress.
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
   try {

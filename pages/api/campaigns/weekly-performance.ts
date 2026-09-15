@@ -1,6 +1,8 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -22,10 +24,14 @@ async function getWeeklyPerformance(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign to the caller's tenant.
+    const access = await requireCampaignAccess(req, res, campaignId as string);
+    if (!access) return;
+
     let query = supabase
       .from('campaign_performance')
       .select('*')
-      .eq('campaign_id', campaignId);
+      .eq('campaign_id', access.campaignId);
 
     if (weekNumber) {
       query = query.eq('week_number', weekNumber);
@@ -66,8 +72,12 @@ async function createWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
       return res.status(400).json({ error: 'Campaign ID and week number are required' });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign before any write.
+    const access = await requireCampaignAccess(req, res, campaign_id);
+    if (!access) return;
+
     const performanceData = {
-      campaign_id,
+      campaign_id: access.campaignId,
       week_number,
       week_start_date,
       week_end_date,
@@ -123,6 +133,28 @@ async function updateWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
       return res.status(400).json({ error: 'Performance record ID is required' });
     }
 
+    // ROUTE-AUTH-001: authenticate BEFORE the record lookup (so an anonymous
+    // caller cannot probe which ids exist), then authorize against the
+    // campaign that owns the record — never against anything the client sent.
+    const { user, error: authError } = await getSupabaseUserFromRequest(req);
+    if (authError || !user) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
+    const { data: record, error: recordError } = await supabase
+      .from('campaign_performance')
+      .select('id, campaign_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (recordError) {
+      console.error('Error loading weekly performance record:', recordError);
+      return res.status(500).json({ error: 'Failed to update weekly performance' });
+    }
+    if (!record?.campaign_id) {
+      return res.status(404).json({ error: 'Performance record not found' });
+    }
+    const access = await requireCampaignAccess(req, res, String(record.campaign_id));
+    if (!access) return;
+
     const updateData: any = {
       updated_at: new Date().toISOString()
     };
@@ -139,6 +171,7 @@ async function updateWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
       .from('campaign_performance')
       .update(updateData)
       .eq('id', id)
+      .eq('campaign_id', access.campaignId)
       .select()
       .single();
 

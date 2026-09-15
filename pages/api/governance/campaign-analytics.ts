@@ -10,6 +10,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getCampaignGovernanceAnalytics } from '../../../backend/services/GovernanceAnalyticsService';
 import { listDecisionObjects } from '../../../backend/services/decisionObjectService';
 import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 function deriveRoiFromDecisions(decisions: Array<{ priority_score?: number | null; impact_conversion?: number | null; issue_type?: string | null; recommendation?: string | null }>) {
   if (!Array.isArray(decisions) || decisions.length === 0) {
@@ -100,6 +101,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'campaignId is required' });
   }
 
+  // ROUTE-AUTH-001 (STEP 3AH-85): bind the campaign to the caller before any
+  // read. The owning company (campaign_versions) is the ONLY tenant id used.
+  const access = await requireCampaignAccess(req, res, campaignId);
+  if (!access) return;
+
   const analytics = await getCampaignGovernanceAnalytics(campaignId);
   if (!analytics) {
     return res.status(404).json({ error: 'Campaign not found' });
@@ -109,24 +115,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     await Promise.all([
       supabase
         .from('campaigns')
-        .select('auto_optimize_enabled, company_id, duration_weeks')
+        .select('auto_optimize_enabled, duration_weeks')
         .eq('id', campaignId)
         .maybeSingle()
         .then((r) => (r.error ? null : r.data)),
     ]);
 
-  const decisionRows = campaignRow?.company_id
-    ? await runInApiReadContext('governanceCampaignAnalyticsApi', async () =>
-        listDecisionObjects({
-          viewName: 'deep_view',
-          companyId: campaignRow.company_id,
-          entityType: 'campaign',
-          entityId: campaignId,
-          status: ['open'],
-          limit: 100,
-        })
-      )
-    : [];
+  const decisionRows = await runInApiReadContext('governanceCampaignAnalyticsApi', async () =>
+    listDecisionObjects({
+      viewName: 'deep_view',
+      companyId: access.companyId,
+      entityType: 'campaign',
+      entityId: campaignId,
+      status: ['open'],
+      limit: 100,
+    })
+  );
 
   const roiIntelligence = deriveRoiFromDecisions(decisionRows);
   const optimizationInsights = deriveOptimizationInsights(campaignId, decisionRows);

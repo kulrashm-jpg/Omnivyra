@@ -20,7 +20,7 @@ import { safeEnqueue } from '../../../../backend/middleware/queueBackpressure';
 import { quickEstimateCost } from '../../../../backend/services/jobCostEstimator';
 import { resolveOrganizationPlanLimits } from '../../../../backend/services/planResolutionService';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getUserCompanyRole } from '../../../../backend/services/rbacService';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 import type { CampaignPlanningJobPayload } from '../../../../backend/queue/jobProcessors/campaignPlanningProcessor';
 
 const BLOCKED_PLANS = new Set(['free', 'trial']);
@@ -62,9 +62,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyIdRaw = typeof body.companyId === 'string' ? body.companyId.trim() : '';
   if (!companyIdRaw) return res.status(400).json({ error: 'companyId is required' });
 
-  const access = await getUserCompanyRole(req, companyIdRaw);
+  // ROUTE-AUTH-001 (STEP 3AH-85) — getUserCompanyRole's role was never checked,
+  // so any authenticated user could plan (and write job rows for) any campaign.
+  // Bind the campaign to the caller's tenant (401 / foreign-unknown 404 /
+  // non-member 403); the campaign's company is then the ONLY tenant id, and a
+  // client companyId naming another company is refused.
+  const campaignIdRaw = typeof body.campaignId === 'string' ? body.campaignId.trim() : '';
+  const access = await requireCampaignAccess(req, res, campaignIdRaw);
+  if (!access) return;
+  if (companyIdRaw !== access.companyId) {
+    return res.status(403).json({ error: 'Access denied to company' });
+  }
   const userId = access.userId;
-  if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
 
   // ── Validate input ────────────────────────────────────────────────────────
   if (!validateInput(body)) {
@@ -73,9 +82,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
+  const campaignId = access.campaignId;
+  const companyId = access.companyId;
   const {
-    campaignId,
-    companyId,
     spine,
     strategyContext,
     accountContext,

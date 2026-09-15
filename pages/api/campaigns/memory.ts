@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getCampaignMemory } from '../../../backend/services/campaignMemoryService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -13,6 +14,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
+    // ROUTE-AUTH-001: membership in companyId, and — when a campaignId is sent —
+    // proof that the campaign belongs to that company (404 otherwise).
+    const ctx = await enforceCompanyAccess({ req, res, companyId, campaignId: campaignId || null });
+    if (!ctx) return;
     const memory = await getCampaignMemory({ companyId, campaignId, lookbackPeriod });
     return res.status(200).json(memory);
   } catch (error: any) {

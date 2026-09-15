@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -20,10 +21,14 @@ async function handleGetMetrics(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign to the caller's tenant.
+    const access = await requireCampaignAccess(req, res, campaignId as string);
+    if (!access) return;
+
     let query = supabase
       .from('campaign_performance_metrics')
       .select('*')
-      .eq('campaign_id', campaignId);
+      .eq('campaign_id', access.campaignId);
 
     // Apply filters
     if (weekNumber) {
@@ -78,6 +83,10 @@ async function handleSaveMetrics(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Campaign ID and metrics data are required' });
     }
 
+    // ROUTE-AUTH-001: authenticate and bind the campaign before any write.
+    const access = await requireCampaignAccess(req, res, campaignId);
+    if (!access) return;
+
     // Validate metrics data structure
     const validatedMetrics = validateMetricsData(metricsData);
 
@@ -85,7 +94,7 @@ async function handleSaveMetrics(req: NextApiRequest, res: NextApiResponse) {
     const { data: savedMetrics, error } = await supabase
       .from('campaign_performance_metrics')
       .upsert(validatedMetrics.map(metric => ({
-        campaign_id: campaignId,
+        campaign_id: access.campaignId,
         week_number: metric.weekNumber,
         platform: metric.platform,
         date: metric.date,
@@ -115,7 +124,7 @@ async function handleSaveMetrics(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Update campaign completion percentage based on metrics
-    await updateCampaignCompletion(campaignId);
+    await updateCampaignCompletion(access.campaignId);
 
     res.status(200).json({
       success: true,

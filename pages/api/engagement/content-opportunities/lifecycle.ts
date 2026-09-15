@@ -6,7 +6,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 import {
   assignOpportunity,
   linkOpportunityToCampaign,
@@ -47,22 +48,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'organization_id required' });
     }
 
-    const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
+    // ROUTE-AUTH-001 (STEP 3AH-85) — a campaign being linked is bound to the
+    // organization here: enforceCompanyAccess verifies it belongs to
+    // organizationId (404 otherwise) before anything is stored.
+    const linkCampaignId = action === 'link_campaign' ? body.campaign_id?.trim() || null : null;
+    const access = await enforceCompanyAccess({ req, res, companyId: organizationId, campaignId: linkCampaignId });
     if (!access) return;
 
     let ok = false;
     switch (action) {
       case 'assign': {
-        const ctx = await resolveUserContext(req);
-        const userId = body.user_id?.trim() || ctx?.userId;
+        const userId = body.user_id?.trim() || access.userId;
         if (!userId) {
           return res.status(400).json({ error: 'user_id required for assign action' });
+        }
+        // ROUTE-AUTH-001 — the assignee must be an active member of this
+        // organization (never an arbitrary user id from another tenant).
+        if (userId !== access.userId) {
+          const assignee = await assertTenantAccess({
+            userId,
+            organizationId,
+            options: { noPlatformBypass: true },
+            consultPlatformSuperAdmin: false,
+          });
+          if (assignee.ok !== true) {
+            if (assignee.reason === 'TENANT_LOOKUP_ERROR') {
+              return res.status(503).json({ error: 'Membership check is temporarily unavailable. Please try again.', retryable: true });
+            }
+            return res.status(400).json({ error: 'user_id must be an active member of this organization' });
+          }
         }
         ok = await assignOpportunity(id, userId, organizationId);
         break;
       }
       case 'link_campaign': {
-        const campaignId = body.campaign_id?.trim();
+        const campaignId = linkCampaignId;
         if (!campaignId) {
           return res.status(400).json({ error: 'campaign_id required for link_campaign action' });
         }

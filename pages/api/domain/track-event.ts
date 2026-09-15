@@ -76,7 +76,12 @@ async function handler(
     .eq('supabase_uid', supabaseUid)
     .maybeSingle();
   const userId        = (userRow as any)?.id ?? null;
-  const companyId     = (userRow as any)?.active_company_id ?? body?.company_id ?? null;
+  // ROUTE-AUTH-001 (STEP 3AH-85): the company is the caller's own active
+  // company only. The former fallback to a company id taken from the request body let any signed-in
+  // user write domain_events / domain_reminders rows attributed to any
+  // company, polluting that tenant's funnel data. The only UI caller
+  // (pages/onboarding/domain-verification.tsx) never sends company_id.
+  const companyId     = (userRow as any)?.active_company_id ?? null;
   const final_domain  = body?.final_domain ? String(body.final_domain) : null;
   const metadata      = body?.metadata && typeof body.metadata === 'object' ? body.metadata : null;
 

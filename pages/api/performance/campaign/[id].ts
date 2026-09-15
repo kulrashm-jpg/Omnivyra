@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { aggregateCampaignPerformance } from '../../../../backend/services/performanceFeedbackService';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,6 +11,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Campaign ID is required' });
+  }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): bind the campaign to the caller. The owning
+  // company is resolved server-side; a client-supplied companyId (the campaign
+  // details UI sends one) may never name a different tenant.
+  const access = await requireCampaignAccess(req, res, id);
+  if (!access) return;
+  const clientCompanyId = typeof req.query.companyId === 'string' ? req.query.companyId.trim() : '';
+  if (clientCompanyId && clientCompanyId !== access.companyId) {
+    return res.status(403).json({ error: 'Access denied to company' });
   }
 
   const result = await aggregateCampaignPerformance(id);

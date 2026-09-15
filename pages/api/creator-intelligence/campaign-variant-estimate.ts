@@ -40,7 +40,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!user) {
     return res.status(401).json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' });
   }
-  const access = await enforceCompanyAccess({ req, res, companyId });
+  // ROUTE-AUTH-001 (STEP 3AH-85) — campaignId is passed so the guard verifies
+  // the campaign belongs to companyId (404 otherwise) before its snapshot,
+  // which is read by campaign_id alone below, is loaded.
+  const access = await enforceCompanyAccess({ req, res, companyId, campaignId });
   if (!access) return;
 
   const platform = typeof req.query.platform === 'string' ? req.query.platform : null;

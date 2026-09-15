@@ -36,6 +36,7 @@ import { fromStructuredPlan } from '../../../../backend/services/campaignBluepri
 import { detectCampaignConflicts, suggestAvailableDateRange } from '../../../../backend/services/schedulingService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUserCompanyRole, getCompanyRoleIncludingInvited } from '../../../../backend/services/rbacService';
+import { requireCampaignAccess, type CampaignAccessResult } from '../../../../backend/services/campaignAccessService';
 import { resolveEffectiveCampaignRole, isCompanyOverrideRole } from '../../../../backend/services/campaignRoleService';
 import {
   getLatestCampaignContextForCompany,
@@ -208,6 +209,34 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'message is required' });
     }
 
+    // ROUTE-AUTH-001 (STEP 3AH-85) — authenticate and bind the tenant BEFORE
+    // the moderation call below (an LLM call) and before any campaign read.
+    //  - preview: membership in the body companyId (unchanged check, moved up).
+    //  - campaign: requireCampaignAccess resolves the owning company from
+    //    campaign_versions; that company is the ONLY tenant id used below, and
+    //    a client companyId naming another company is refused (it used to be
+    //    fed, unchecked, to the previous-campaign-context read, the async
+    //    rollout lookup and the enqueued job payload).
+    let campaignAccess: CampaignAccessResult | null = null;
+    if (previewMode) {
+      const previewCompanyId = typeof companyId === 'string' ? companyId.trim() : '';
+      const previewAccess = await getUserCompanyRole(req, previewCompanyId);
+      let previewRole = previewAccess.role;
+      if (previewAccess.userId && !previewRole) {
+        const invited = await getCompanyRoleIncludingInvited(previewAccess.userId, previewCompanyId);
+        if (invited) previewRole = invited;
+      }
+      if (!previewAccess.userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
+      if (!previewRole) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    } else {
+      campaignAccess = await requireCampaignAccess(req, res, campaignId as string);
+      if (!campaignAccess) return;
+      const clientCompanyId = typeof companyId === 'string' ? companyId.trim() : '';
+      if (clientCompanyId && clientCompanyId !== campaignAccess.companyId) {
+        return res.status(403).json({ error: 'Access denied to company' });
+      }
+    }
+
     const policyResult = await validateAndModerateUserMessage(message, {
       chatContext: 'campaign_planning',
     });
@@ -226,15 +255,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const selectedAngle =
         spineObj && typeof spineObj.selected_angle === 'string' ? spineObj.selected_angle : typeof bodyCampaignDirection === 'string' ? bodyCampaignDirection : null;
 
-      const access = await getUserCompanyRole(req, resolvedCompanyId);
-      const userId = access.userId;
-      let role = access.role;
-      if (userId && !role) {
-        const invited = await getCompanyRoleIncludingInvited(userId, resolvedCompanyId);
-        if (invited) role = invited;
-      }
-      if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
-      if (!role) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      // Membership in resolvedCompanyId was verified before moderation (ROUTE-AUTH-001).
 
       if (mode === 'planner_command') {
         let calPlan = bodyCalendarPlan && typeof bodyCalendarPlan === 'object' && !Array.isArray(bodyCalendarPlan)
@@ -328,20 +349,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     }
 
-    const resolvedCampaignId = campaignId as string;
-    const { data: versionForAccess } = await supabase
-      .from('campaign_versions')
-      .select('company_id')
-      .eq('campaign_id', resolvedCampaignId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (!versionForAccess?.company_id) {
-      return res.status(404).json({ error: 'Campaign not found' });
-    }
-
-    const resolvedCompanyId = String(versionForAccess.company_id);
+    // Campaign → owning company was resolved and bound by requireCampaignAccess
+    // before moderation (ROUTE-AUTH-001); the role checks below are unchanged.
+    const resolvedCampaignId = campaignAccess!.campaignId;
+    const resolvedCompanyId = campaignAccess!.companyId;
     const [roleResult, planningInputs] = await Promise.all([
       getUserCompanyRole(req, resolvedCompanyId),
       getCampaignPlanningInputs(resolvedCampaignId),
@@ -682,15 +693,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Result is TTL-cached in the module Map to avoid a DB roundtrip on every
     // generate_plan call during the same planning session (60 s window).
     let previousCampaignContext: PreviousCampaignContext | null = null;
-    if (effectiveMode === 'generate_plan' && companyId && typeof companyId === 'string') {
+    // ROUTE-AUTH-001: keyed by the campaign's bound company, never the client's.
+    if (effectiveMode === 'generate_plan' && resolvedCompanyId) {
       try {
-        const cacheKey = companyId;
+        const cacheKey = resolvedCompanyId;
         const cached = companyCtxCache.get(cacheKey);
         if (cached && cached.expiresAt > Date.now()) {
           previousCampaignContext = cached.data;
         } else {
           previousCampaignContext = await getLatestCampaignContextForCompany(
-            companyId,
+            resolvedCompanyId,
             resolvedCampaignId ?? undefined
           );
           companyCtxCache.set(cacheKey, {
@@ -723,8 +735,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     };
     if (
       effectiveMode === 'generate_plan' &&
-      typeof companyId === 'string' && companyId &&
-      resolveRolloutSync(ASYNC_PLANNER_FLAG, { tenantId: companyId }).mode === 'enforce'
+      resolveRolloutSync(ASYNC_PLANNER_FLAG, { tenantId: resolvedCompanyId }).mode === 'enforce'
     ) {
       // F-14: the enqueue/poll/result lifecycle now runs on the generalized
       // runway (extracted from this very implementation in Batch D).
@@ -762,7 +773,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         jobName: 'interactive-plan',
         pollKey,
         payload: {
-          companyId,
+          companyId: resolvedCompanyId,
           actorUserId: getRequestContext().userId ?? 'system',
           args: {
             ...plannerArgs,

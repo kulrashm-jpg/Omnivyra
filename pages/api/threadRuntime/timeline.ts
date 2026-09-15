@@ -10,6 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { reconstructReplay } from '@/backend/services/threadRuntime/globalRuntimeReplayReconstructor';
 import {
   buildThreadRuntimeTimeline,
@@ -28,6 +29,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const format = req.query.format === 'text' ? 'text' : 'json';
 
   if (!companyId) { res.status(400).json({ error: 'BAD_REQUEST', reason: 'companyId required' }); return; }
+  // ROUTE-AUTH-001 (STEP 3AH-85) — companyId selects the trace bucket, so it
+  // must be a company the caller is an active member of.
+  if (!(await enforceCompanyAccess({ req, res, companyId }))) return;
   if (!threadId && !runtimeSessionId) {
     res.status(400).json({ error: 'BAD_REQUEST', reason: 'threadId or runtimeSessionId required' });
     return;

@@ -6,6 +6,7 @@ import { fetchTrendsFromApis } from '../../../backend/services/externalApiServic
 import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
 import { getLatestAnalyticsReport } from '../../../backend/db/performanceStore';
 import { sendLearningSnapshot } from '../../../backend/services/omnivyraFeedbackService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -18,6 +19,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
+
+    // ROUTE-AUTH-001 (STEP 3AH-85): authenticated member of the company only —
+    // this reads the tenant's profile/analytics, calls external trend APIs and
+    // writes a learning snapshot under the company.
+    const ctx = await enforceCompanyAccess({ req, res, companyId });
+    if (!ctx) return;
 
     const profile = await getProfile(companyId, { autoRefine: false });
     if (!profile) {

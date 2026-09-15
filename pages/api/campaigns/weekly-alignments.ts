@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
@@ -11,6 +12,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const { method, query } = req;
   const { campaignId, weekNumber, action } = query;
+
+  // ROUTE-AUTH-001 (STEP 3AH-85) — every action is keyed by a campaign id (GET:
+  // query; POST/PUT: body). Bind THAT id to the caller's tenant before any
+  // read/write (foreign/unknown → 404, non-member → 403).
+  let callerId = user.id;
+  if (method === 'GET' || method === 'POST' || method === 'PUT') {
+    const boundCampaignId = method === 'GET' ? campaignId : req.body?.campaignId;
+    const access = await requireCampaignAccess(req, res, typeof boundCampaignId === 'string' ? boundCampaignId : '');
+    if (!access) return;
+    callerId = access.userId;
+  }
 
   try {
     switch (method) {
@@ -26,7 +38,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       case 'POST':
         if (action === 'align-week') {
-          return await alignWeek(req.body, res);
+          return await alignWeek(req.body, callerId, res);
         } else if (action === 'populate-from-ai') {
           return await populateFromAIPlan(req.body, res);
         }
@@ -34,7 +46,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       case 'PUT':
         if (action === 'update-alignment') {
-          return await updateAlignmentStatus(req.body, res);
+          return await updateAlignmentStatus(req.body, callerId, res);
         }
         break;
 
@@ -213,9 +225,10 @@ async function getWeekDetails(campaignId: string, weekNumber: string, res: NextA
 }
 
 // Align a week (mark as aligned or needs adjustment)
-async function alignWeek(body: any, res: NextApiResponse) {
+async function alignWeek(body: any, reviewerId: string, res: NextApiResponse) {
   try {
-    const { campaignId, weekNumber, status, notes, reviewerId } = body;
+    // ROUTE-AUTH-001: the reviewer is the authenticated caller, never body.reviewerId.
+    const { campaignId, weekNumber, status, notes } = body;
 
     // Update content plans alignment status
     const { error: updateError } = await supabase
@@ -270,9 +283,10 @@ async function populateFromAIPlan(body: any, res: NextApiResponse) {
 }
 
 // Update alignment status
-async function updateAlignmentStatus(body: any, res: NextApiResponse) {
+async function updateAlignmentStatus(body: any, reviewerId: string, res: NextApiResponse) {
   try {
-    const { campaignId, weekNumber, status, notes, reviewerId } = body;
+    // ROUTE-AUTH-001: the reviewer is the authenticated caller, never body.reviewerId.
+    const { campaignId, weekNumber, status, notes } = body;
 
     // Use the database function
     const { error } = await supabase

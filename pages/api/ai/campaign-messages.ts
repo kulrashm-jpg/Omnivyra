@@ -1,5 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 // In-memory storage for demo purposes
 // In production, this would be a database
@@ -15,7 +16,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
 
-    const messages = campaignMessages[campaignId as string] || [];
+    // ROUTE-AUTH-001 (STEP 3AH-85): only a caller with access to the campaign
+    // may read its messages.
+    const access = await requireCampaignAccess(req, res, String(campaignId));
+    if (!access) return;
+
+    const messages = campaignMessages[access.campaignId] || [];
     res.status(200).json({ messages });
     
   } else if (req.method === 'POST') {
@@ -26,11 +32,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Message and campaign ID are required' });
     }
 
-    if (!campaignMessages[campaignId]) {
-      campaignMessages[campaignId] = [];
+    // ROUTE-AUTH-001: only a caller with access to the campaign may write to it.
+    const access = await requireCampaignAccess(req, res, String(campaignId));
+    if (!access) return;
+
+    if (!campaignMessages[access.campaignId]) {
+      campaignMessages[access.campaignId] = [];
     }
     
-    campaignMessages[campaignId].push(message);
+    campaignMessages[access.campaignId].push(message);
     
     res.status(200).json({ success: true });
     

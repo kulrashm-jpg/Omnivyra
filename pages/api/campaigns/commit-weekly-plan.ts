@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -19,6 +20,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!campaignId || !weekNumber || !weekData) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
+
+    // ROUTE-AUTH-001 (STEP 3AH-85) — bind the campaign to the caller's tenant
+    // before any read/write keyed by it (foreign/unknown → 404, non-member → 403).
+    const access = await requireCampaignAccess(req, res, String(campaignId));
+    if (!access) return;
 
     // Update the weekly refinement status to 'finalized'
     const { data: updatedRefinement, error: updateError } = await supabase

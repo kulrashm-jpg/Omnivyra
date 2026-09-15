@@ -1,11 +1,18 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { buildTrackingAssistResponse } from '../../../backend/services/googleAnalyticsExperienceService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): no tenant id is taken; authenticate only.
+  const { user } = await getSupabaseUserFromRequest(req);
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Unauthorized' });
   }
 
   const websiteUrl = typeof req.body?.website_url === 'string' ? req.body.website_url.trim() : '';

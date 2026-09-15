@@ -53,6 +53,14 @@ jest.mock('../../auth/oauthCredentialResolver', () => ({
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: async () => ({ user: { id: 'user-1' } }),
 }));
+// ROUTE-AUTH-001 (STEP 3AH-85): the callback now requires the session user to be an
+// active member of the state's company before any token exchange. This suite's proxy DB
+// cannot model membership, so the guard is faked to grant exactly user-1 / co-1 (the
+// deny paths are covered by routeAuth001SocialOAuth).
+jest.mock('../../security/TenantGuard', () => ({
+  assertTenantAccess: async (i: { userId?: string; organizationId?: string }) =>
+    (i.userId === 'user-1' && i.organizationId === 'co-1' ? { ok: true, access: {} } : { ok: false, reason: 'NOT_A_MEMBER' }),
+}));
 jest.mock('../../auth/getBaseUrl', () => ({ getBaseUrl: () => 'https://www.omnivyra.com' }));
 jest.mock('../../auth/oauthState', () => ({
   decodeOAuthState: () => ({ companyId: 'co-1', userId: 'user-1', returnTo: '', valid: true }),

@@ -10,7 +10,7 @@ import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCred
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
-import { config } from '@/config';
+import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -73,6 +73,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
       return res.status(401).json({ error: 'invalid_oauth_state' });
     }
+
+    // ROUTE-AUTH-001: the connection is written for the SESSION user only, and
+    // only into companies that user is an active member of (the social account's
+    // company AND, for the community-ai flow, the tenant whose connector token is
+    // saved). The signed state proves where the flow started, not who is
+    // finishing it — so the state's userId must match the session, and nothing
+    // falls back to it.
+    const { user: sessionUser } = await getSupabaseUserFromRequest(req);
+    if (!sessionUser?.id) {
+      logOAuthEvent({ event: 'oauth_failure', provider: 'linkedin', callback_host: callbackHost, company_id: companyId ?? null, state_user_id: stateUserId ?? null, failure_point: 'unauthorized', failure_detail: 'no session' });
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
+    }
+    if (stateUserId && stateUserId !== sessionUser.id) {
+      logOAuthEvent({ event: 'oauth_failure', provider: 'linkedin', callback_host: callbackHost, company_id: companyId ?? null, user_id: sessionUser.id, state_user_id: stateUserId, failure_point: 'invalid_oauth_state', failure_detail: 'state user does not match session user' });
+      return res.redirect(`${errDest}?error=${encodeURIComponent('This connection was started by a different user — please try again')}`);
+    }
+    for (const orgId of new Set([companyId, decoded.tenantId].filter((v): v is string => Boolean(v)))) {
+      const tenant = await assertTenantAccess({ userId: sessionUser.id, organizationId: orgId });
+      if (tenant.ok !== true) {
+        logOAuthEvent({ event: 'oauth_failure', provider: 'linkedin', callback_host: callbackHost, company_id: orgId, user_id: sessionUser.id, state_user_id: stateUserId ?? null, failure_point: 'unauthorized', failure_detail: `company access denied (${tenant.reason})` });
+        return res.redirect(`${errDest}?error=${encodeURIComponent('You do not have access to this company')}`);
+      }
+    }
+    const userId = sessionUser.id;
 
     const credentials = await getOAuthCredentialsForPlatform(platform);
     if (!credentials?.client_id || !credentials?.client_secret) {
@@ -173,14 +197,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     } catch (connErr) {
       console.log('[LinkedIn callback] Could not fetch connection count:', connErr);
-    }
-
-    const { user } = await getSupabaseUserFromRequest(req);
-    const userId = user?.id || stateUserId || config.DEFAULT_USER_ID || '';
-
-    if (!userId) {
-      console.error('No user_id available - cannot save account');
-      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
     }
 
     const accountName = profile.name || `${profile.given_name || 'LinkedIn'} ${profile.family_name || 'User'}`;

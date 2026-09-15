@@ -24,6 +24,12 @@
  */
 
 jest.mock('@/config', () => ({ config: {}, getValidatedConfig: () => ({}) }));
+// ROUTE-AUTH-001 (STEP 3AH-85): /api/trending/current now requires an authenticated caller.
+// This suite pins the route's evidence contract, not authentication, so the identity
+// provider is faked as a signed-in user (the 401 path is covered by routeAuth001AiContent).
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: async () => ({ user: { id: 'route-auth-test-user' }, error: null }),
+}));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 
 // D6 - the listing is read through the canonical outbound seam (HARDEN-005), so

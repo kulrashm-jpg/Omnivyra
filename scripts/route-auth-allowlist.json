@@ -1,0 +1,860 @@
+{
+  "_comment": [
+    "ROUTE-AUTH-001 (STEP 3AH-85) reviewed allowlist for scripts/check-route-auth.js.",
+    "Every pages/api route must invoke an approved authentication primitive OR appear here.",
+    "An entry is a reviewed CLAIM, and the gate re-verifies its mechanical evidence on every run:",
+    "  machine-secret → names env var(s) the file must reference; the fail-open shape is rejected separately (R4)",
+    "  webhook-signature / machine-token → the named verifier must be invoked",
+    "  retired → must answer 410 and must not write; redirect-shim → must redirect and must not touch the database",
+    "  public/health → may not write unless the entry declares \"writes\"",
+    "  identity-scoped → must still authenticate; exempts only R2 (ids are scoped to the caller's own user)",
+    "Adding an entry requires security review. There is no grandfathered baseline."
+  ],
+  "routes": {
+    "pages/api/about-images.ts": {
+      "kind": "public",
+      "reason": "Static marketing-site image list for the public About page."
+    },
+    "pages/api/access-request.ts": {
+      "kind": "auth-flow",
+      "reason": "Public \"request access\" form for prospects without an account; writes only the new request row and returns no stored data."
+    },
+    "pages/api/account-context/analyze.ts": {
+      "kind": "inline-binding",
+      "reason": "Active-membership check on user_company_roles for the requested companyId before any read; queries then filter company_id.",
+      "evidence": "from\\('user_company_roles'\\)[\\s\\S]*?\\.eq\\('user_id', user\\.id\\)[\\s\\S]*?\\.eq\\('company_id', companyId\\)"
+    },
+    "pages/api/accounts/[platform]/test.ts": {
+      "kind": "identity-scoped",
+      "reason": "Denies unless the query user_id equals the authenticated user; the query also filters by user_id.",
+      "evidence": "user_id !== user\\.id"
+    },
+    "pages/api/activity-workspace/generate-marketing-package.ts": {
+      "kind": "retired",
+      "reason": "Retired endpoint: answers 410 Gone for every request and performs no reads or writes."
+    },
+    "pages/api/activity/feed.ts": {
+      "kind": "identity-scoped",
+      "reason": "Feed is always read for the authenticated user (getActivityFeed(user.id)); campaign_id only narrows the caller's own rows.",
+      "evidence": "getActivityFeed\\(user\\.id"
+    },
+    "pages/api/admin/check-super-admin.ts": {
+      "kind": "identity-scoped",
+      "reason": "Answers yes/no about the CALLER's own SUPER_ADMIN role; companyId only narrows the caller's own rows.",
+      "evidence": "\\.eq\\('user_id', userId\\)[\\s\\S]*?\\.eq\\('role', 'SUPER_ADMIN'\\)"
+    },
+    "pages/api/admin/platform-oauth-configs/index.ts": {
+      "kind": "retired",
+      "reason": "Retired endpoint: answers 410 Gone for every request and performs no reads or writes."
+    },
+    "pages/api/ai/generate-content.ts": {
+      "kind": "inline-binding",
+      "reason": "Company is derived from the campaign's campaign_versions row, then enforceCompanyAccess + enforceRole run on THAT company.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?enforceCompanyAccess\\(\\{ req, res, companyId: company_id \\}\\)"
+    },
+    "pages/api/analytics/track.ts": {
+      "kind": "public",
+      "reason": "Fire-and-forget client analytics beacon: logs the event name and returns {ok:true}; no reads, no writes."
+    },
+    "pages/api/auth/accept-invite.ts": {
+      "kind": "auth-flow",
+      "reason": "Invitation acceptance: authorised by the single-use invitation token (SHA-256 lookup, expiry, revocation, atomic consume); the invitee has no session yet."
+    },
+    "pages/api/auth/check-domain.ts": {
+      "kind": "auth-flow",
+      "reason": "Signup pre-check: reports whether an email domain is eligible/claimed before an account exists. No tenant data returned."
+    },
+    "pages/api/auth/check-user.ts": {
+      "kind": "auth-flow",
+      "reason": "Login/signup pre-check run before a session exists; returns account-state flags only, rate-limited. User-enumeration posture is a separate, pre-existing item."
+    },
+    "pages/api/auth/devices/revoke.ts": {
+      "kind": "identity-scoped",
+      "reason": "Device revocation is keyed by id AND the authenticated principal's userId (repository filters user_id).",
+      "evidence": "revoke\\(\\{[\\s\\S]*?userId:\\s*p\\.userId"
+    },
+    "pages/api/auth/login.ts": {
+      "kind": "auth-flow",
+      "reason": "Credential login endpoint: it is the step that CREATES a session, so it cannot require one. Rate-limited."
+    },
+    "pages/api/auth/magic-link.ts": {
+      "kind": "auth-flow",
+      "reason": "Sends a passwordless sign-in link; pre-session by definition. Rate-limited."
+    },
+    "pages/api/auth/mfa-verify.ts": {
+      "kind": "auth-flow",
+      "reason": "Second-factor verification during login; authorised by the MFA intent issued by the first factor (readMfaIntent) plus the MFA attempt limiter, not by a session."
+    },
+    "pages/api/auth/passkeys/begin-authentication.ts": {
+      "kind": "auth-flow",
+      "reason": "WebAuthn ceremony start; pre-session by design. With a session the principal id wins over body userId; the sessionless user-scoped path (credential-id disclosure) is a known low-severity item."
+    },
+    "pages/api/auth/recovery-login.ts": {
+      "kind": "auth-flow",
+      "reason": "Recovery-code login; pre-session by definition, authorised by the recovery code + MFA attempt limiter."
+    },
+    "pages/api/auth/resend-verification.ts": {
+      "kind": "auth-flow",
+      "reason": "Re-sends the email verification message for an unverified signup; pre-session by definition. Rate-limited."
+    },
+    "pages/api/auth/reset.ts": {
+      "kind": "auth-flow",
+      "reason": "Password-reset request gate (rate-limit + captcha); pre-session by definition."
+    },
+    "pages/api/auth/resume-status.ts": {
+      "kind": "auth-flow",
+      "reason": "Signup-resume status for an in-progress, not-yet-verified signup; returns lifecycle state only."
+    },
+    "pages/api/auth/sessions/revoke.ts": {
+      "kind": "identity-scoped",
+      "reason": "Loads the session and denies unless it belongs to the authenticated principal.",
+      "evidence": "user_id !== p\\.userId"
+    },
+    "pages/api/auth/signup.ts": {
+      "kind": "auth-flow",
+      "reason": "Account creation; pre-session by definition. Domain claims and rate limits are enforced inside."
+    },
+    "pages/api/auth/totp/verify-enrollment.ts": {
+      "kind": "identity-scoped",
+      "reason": "Factor is looked up by factorId AND the authenticated principal's userId.",
+      "evidence": "verifyEnrollment\\(\\{[\\s\\S]*?userId:\\s*p\\.userId"
+    },
+    "pages/api/billing/fx.ts": {
+      "kind": "public",
+      "reason": "Public currency conversion rates for the pricing page; no tenant data."
+    },
+    "pages/api/billing/settlement-webhook/[provider].ts": {
+      "kind": "webhook-signature",
+      "reason": "Payment settlement webhook: provider signature verified before any state change.",
+      "verifier": "verifyProviderWebhookSignature"
+    },
+    "pages/api/billing/topup/catalog.ts": {
+      "kind": "public",
+      "reason": "Public top-up pack catalog shown on the pricing page; no tenant data."
+    },
+    "pages/api/billing/topup/create-order.ts": {
+      "kind": "retired",
+      "reason": "Retired endpoint: answers 410 Gone for every request and performs no reads or writes."
+    },
+    "pages/api/billing/topup/verify.ts": {
+      "kind": "retired",
+      "reason": "Retired endpoint: answers 410 Gone for every request and performs no reads or writes."
+    },
+    "pages/api/blog/[slug]/comments.ts": {
+      "kind": "public",
+      "reason": "Public reader comments on the marketing blog (anonymous engagement by design).",
+      "writes": true
+    },
+    "pages/api/blog/[slug]/index.ts": {
+      "kind": "public",
+      "reason": "Public blog post page data (published posts only); increments the view counter.",
+      "writes": true
+    },
+    "pages/api/blog/[slug]/like.ts": {
+      "kind": "public",
+      "reason": "Public anonymous \"like\" counter on marketing blog posts.",
+      "writes": true
+    },
+    "pages/api/blog/[slug]/series.ts": {
+      "kind": "public",
+      "reason": "Public series navigation for a published blog post."
+    },
+    "pages/api/blog/[slug]/track.ts": {
+      "kind": "public",
+      "reason": "Public read-tracking beacon for marketing blog posts.",
+      "writes": true
+    },
+    "pages/api/blog/index.ts": {
+      "kind": "public",
+      "reason": "Public marketing blog listing (published posts only)."
+    },
+    "pages/api/blog/related.ts": {
+      "kind": "public",
+      "reason": "Public related-posts lookup for the marketing blog (published posts only)."
+    },
+    "pages/api/blog/rss.ts": {
+      "kind": "public",
+      "reason": "Public RSS feed of the marketing blog."
+    },
+    "pages/api/blog/sitemap.ts": {
+      "kind": "public",
+      "reason": "Public sitemap for search engines (Search Engine Content contract)."
+    },
+    "pages/api/blogs/[id]/public.ts": {
+      "kind": "public",
+      "reason": "Published Content contract: a single PUBLISHED post for a company's website embed."
+    },
+    "pages/api/blogs/public.ts": {
+      "kind": "public",
+      "reason": "Embeddable Content contract: a company's PUBLISHED blog feed for its own website embed."
+    },
+    "pages/api/bolt/conflicts.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on companyId; campaignId only EXCLUDES one campaign from a query already limited to that company.",
+      "evidence": "enforceCompanyAccess\\(\\{ req, res, companyId \\}\\)[\\s\\S]*?\\.eq\\('company_id', companyId\\)"
+    },
+    "pages/api/calendar/activity-events.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on companyId; the campaignId filter applies only when it is one of that company's campaign ids.",
+      "evidence": "campaignIds\\.includes\\(campaignIdFilter\\)"
+    },
+    "pages/api/campaigns/[id].ts": {
+      "kind": "inline-binding",
+      "reason": "Company resolved from the campaign (resolveCampaignCompanyId), enforceCompanyAccess on it; PUT/DELETE also filter company_id.",
+      "evidence": "resolveCampaignCompanyId\\(id\\)[\\s\\S]*?enforceCompanyAccess\\("
+    },
+    "pages/api/campaigns/[id]/ai-improvements.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from the campaign's campaign_versions row; getUserRole requires membership in THAT company.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/approve-frequency-rebalance.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; COMPANY_ADMIN role in that company required before writes.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/approve-strategy.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaigns.company_id for the path id; COMPANY_ADMIN in that company required.",
+      "evidence": "getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/continuity.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; enforceRole on that company before reads/update.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?enforceRole\\("
+    },
+    "pages/api/campaigns/[id]/forecast-vs-actual.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; getUserRole membership in that company.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/lead-conversion-intelligence.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; getUserRole membership in that company.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/momentum-amplifier.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; getUserRole membership in that company.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/optimization-advice.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; getUserRole membership in that company.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/outcomes.ts": {
+      "kind": "inline-binding",
+      "reason": "Company taken from the campaign row (getCompanyId), then requireCompanyAccess on it.",
+      "evidence": "getCompanyId\\(campaignId\\)[\\s\\S]*?requireCompanyAccess\\(auth\\.user\\.id, companyId"
+    },
+    "pages/api/campaigns/[id]/performance.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaigns/campaign_versions, enforceRole on it, and queries filter company_id.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?enforceRole\\([\\s\\S]*?\\.eq\\('company_id', campaignCompanyId\\)"
+    },
+    "pages/api/campaigns/[id]/platform-allocation-advice.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from the latest campaign_versions row; getUserRole membership in that company.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/prediction.ts": {
+      "kind": "inline-binding",
+      "reason": "Campaign row loaded, then requireCompanyAccess on the campaign's own company_id.",
+      "evidence": "requireCompanyAccess\\(auth\\.user\\.id, campaign\\.company_id"
+    },
+    "pages/api/campaigns/[id]/propose-frequency-rebalance.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; COMPANY_ADMIN in that company required.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/reapproval-status.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; getUserRole membership in that company.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/reject-frequency-rebalance.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; COMPANY_ADMIN in that company required.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/revise-strategy.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; COMPANY_ADMIN in that company required before the update.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/strategy-status.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; getUserRole membership plus campaign-role check.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/[id]/viral-topic-memory.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from campaign_versions; getUserRole membership in that company.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+    },
+    "pages/api/campaigns/approve.ts": {
+      "kind": "inline-binding",
+      "reason": "Role in companyId, then the campaign's campaign_versions row must belong to companyId before the update.",
+      "evidence": "getUserCompanyRole\\(req, companyId\\)[\\s\\S]*?from\\('campaign_versions'\\)"
+    },
+    "pages/api/command-center/company-state.ts": {
+      "kind": "inline-binding",
+      "reason": "Inline active-membership check on user_company_roles; every read filters company_id.",
+      "evidence": "from\\('user_company_roles'\\)[\\s\\S]*?\\.eq\\('user_id', user\\.id\\)[\\s\\S]*?\\.eq\\('company_id', companyId\\)"
+    },
+    "pages/api/community-ai/connectors/facebook/auth.ts": {
+      "kind": "redirect-shim",
+      "reason": "Legacy path: 301 to /api/community-ai/connectors/meta/auth, which requires tenant scope. No data access."
+    },
+    "pages/api/community-ai/connectors/instagram/auth.ts": {
+      "kind": "redirect-shim",
+      "reason": "Legacy path: 301 to /api/community-ai/connectors/meta/auth, which requires tenant scope. No data access."
+    },
+    "pages/api/community-ai/connectors/instagram/callback.ts": {
+      "kind": "redirect-shim",
+      "reason": "Legacy path: 301 to /api/community-ai/connectors/meta/callback, which enforces requireManageConnectors. No data access."
+    },
+    "pages/api/content/creator/generate.ts": {
+      "kind": "retired",
+      "reason": "Retired endpoint: answers 410 Gone for every request and performs no reads or writes."
+    },
+    "pages/api/content/index.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on companyId; POST verifies the campaign's owning company equals the scoped company (403 otherwise); GET lists by company_id.",
+      "evidence": "owningCompanyId !== scopedCompanyId"
+    },
+    "pages/api/content/platform-rules.ts": {
+      "kind": "public",
+      "reason": "Static per-platform formatting rules (reference data); no tenant data."
+    },
+    "pages/api/creator-intelligence/strategy-analytics.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on companyId; aggregators read in-memory buffers keyed by company, campaign_id only narrows inside that company.",
+      "evidence": "enforceCompanyAccess\\(\\{ req, res, companyId \\}\\)"
+    },
+    "pages/api/creator-intelligence/variant-execution-plan.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on companyId; planner state is keyed by company; campaign/strategy ids are labels within it.",
+      "evidence": "enforceCompanyAccess\\(\\{ req, res, companyId \\}\\)"
+    },
+    "pages/api/creator-intelligence/variant-experiment.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on companyId; experiments are looked up only inside the caller company's buffer.",
+      "evidence": "enforceCompanyAccess\\(\\{ req, res, companyId \\}\\)"
+    },
+    "pages/api/creator-templates/[id].ts": {
+      "kind": "public",
+      "reason": "Single SYSTEM creator template; the handler refuses any template whose ownership is not \"system\"."
+    },
+    "pages/api/creator-templates/index.ts": {
+      "kind": "public",
+      "reason": "Catalog of SYSTEM creator templates only (immutable, globally readable); user templates have their own authorised route."
+    },
+    "pages/api/credits/costs.ts": {
+      "kind": "public",
+      "reason": "Public credit price list for activities; no tenant data."
+    },
+    "pages/api/cron/aggregate-blog-analytics.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/analytics-ingestion.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/autonomous-scheduler.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/campaign-health-monitor.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/email-jobs.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/engagement-dispatch-recovery.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/learning-decay.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/leverage-optimizer.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/market-pulse-automation.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/monetization-reservation-reconcile.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/process-scheduled-posts.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/reconcile-recent-publishes.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/recover-stale-reports.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the INTERNAL_METRICS_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "INTERNAL_METRICS_SECRET"
+      ]
+    },
+    "pages/api/cron/report-automation.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the INTERNAL_METRICS_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "INTERNAL_METRICS_SECRET"
+      ]
+    },
+    "pages/api/cron/serp-acquisition.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/sweep-stuck-publishing.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/domain/verification-status.ts": {
+      "kind": "inline-binding",
+      "reason": "Active COMPANY_ADMIN/SUPER_ADMIN membership in the target company required; the domain read filters company_id.",
+      "evidence": "\\.eq\\('company_id', companyId\\)[\\s\\S]*?\\.in\\('role', \\['COMPANY_ADMIN', 'SUPER_ADMIN'\\]\\)"
+    },
+    "pages/api/engagement/capabilities.ts": {
+      "kind": "public",
+      "reason": "Static engagement capability map (reference data); no tenant data."
+    },
+    "pages/api/engagement/leads.ts": {
+      "kind": "retired",
+      "reason": "Retired endpoint: answers 410 Gone for every request and performs no reads or writes."
+    },
+    "pages/api/engagement/opportunity-radar.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on the organization; items are filtered by organization_id, campaignId only narrows within it.",
+      "evidence": "enforceCompanyAccess\\(\\{ req, res, companyId: organizationId \\}\\)"
+    },
+    "pages/api/enterprise-governance/summary.ts": {
+      "kind": "inline-binding",
+      "reason": "requireCompanyContext + withRBAC on companyId; stores are keyed by company, campaignId only filters that company's records.",
+      "evidence": "requireCompanyContext\\("
+    },
+    "pages/api/extension/events.ts": {
+      "kind": "inline-binding",
+      "reason": "Extension session org must equal companyId, plus an active-membership check; thread lookups are scoped by organization_id.",
+      "evidence": "extensionSession\\.orgId !== companyId"
+    },
+    "pages/api/extension/redeem.ts": {
+      "kind": "machine-token",
+      "reason": "Browser-extension pairing: authorised by a single-use, 60-second claim code minted for an authenticated user/org; issues the extension session.",
+      "verifier": "redeemClaimCode"
+    },
+    "pages/api/feature-completion.ts": {
+      "kind": "inline-binding",
+      "reason": "Requested company_id is honoured only if it is among the caller's own active memberships.",
+      "evidence": "allowedCompanyIds\\.includes\\(requestedCompanyId\\)"
+    },
+    "pages/api/forms/[id]/embed.ts": {
+      "kind": "public",
+      "reason": "Embeddable Configuration contract: public lead-form definition for a customer website, origin-gated."
+    },
+    "pages/api/governance/campaign-status.ts": {
+      "kind": "inline-binding",
+      "reason": "Company derived from the campaign (campaign_versions/campaigns), then requireCompanyAccess; no client companyId fallback.",
+      "evidence": "requireCompanyAccess\\(user\\.id, companyId, res\\)"
+    },
+    "pages/api/governance/events.ts": {
+      "kind": "inline-binding",
+      "reason": "requireCompanyAccess on companyId; campaignId only filters a query already limited to that company.",
+      "evidence": "requireCompanyAccess\\(user\\.id, companyId, res\\)[\\s\\S]*?\\.eq\\('company_id', companyId\\)"
+    },
+    "pages/api/governance/rebuild-projection.ts": {
+      "kind": "inline-binding",
+      "reason": "Platform SUPER_ADMIN only (withRBAC([SUPER_ADMIN])); cross-tenant by design.",
+      "evidence": "withRBAC\\(handler, \\[Role\\.SUPER_ADMIN\\]\\)"
+    },
+    "pages/api/governance/simulate-policy.ts": {
+      "kind": "inline-binding",
+      "reason": "withRBAC COMPANY_ADMIN in companyId; the campaign's campaign_versions company must equal companyId before any read.",
+      "evidence": "cv\\.company_id !== companyId"
+    },
+    "pages/api/governance/snapshot.ts": {
+      "kind": "inline-binding",
+      "reason": "Platform SUPER_ADMIN only (withRBAC([SUPER_ADMIN])).",
+      "evidence": "withRBAC\\(handler, \\[Role\\.SUPER_ADMIN\\]\\)"
+    },
+    "pages/api/growth-intelligence/summary.ts": {
+      "kind": "inline-binding",
+      "reason": "requireCompanyContext + withRBAC; campaignId becomes an entity id inside a company_id-filtered query.",
+      "evidence": "requireCompanyContext\\("
+    },
+    "pages/api/health.ts": {
+      "kind": "health",
+      "reason": "Liveness probe for load balancers and uptime monitors; no tenant data."
+    },
+    "pages/api/health/config.ts": {
+      "kind": "health",
+      "reason": "Configuration-validity probe for operators; reports config/Redis health, no tenant data. (Verbosity of config error text is a separate P3 item.)"
+    },
+    "pages/api/health/internal.ts": {
+      "kind": "health",
+      "reason": "SRE probe for Redis/polling health; no tenant data."
+    },
+    "pages/api/health/live.ts": {
+      "kind": "health",
+      "reason": "Liveness probe; no tenant data."
+    },
+    "pages/api/health/metrics.ts": {
+      "kind": "health",
+      "reason": "Auth-subsystem readiness counters for monitoring; aggregate counters only, no tenant data."
+    },
+    "pages/api/health/publish-loop.ts": {
+      "kind": "health",
+      "reason": "Publish-loop liveness probe; aggregate queue health only, no tenant data."
+    },
+    "pages/api/health/readiness.ts": {
+      "kind": "health",
+      "reason": "Readiness probe used by deploy verification; no tenant data."
+    },
+    "pages/api/health/resilience.ts": {
+      "kind": "health",
+      "reason": "Resilience/circuit-breaker state probe; no tenant data."
+    },
+    "pages/api/health/schema.ts": {
+      "kind": "health",
+      "reason": "Schema-health probe used by predeploy checks; returns ok/degraded only."
+    },
+    "pages/api/health/version.ts": {
+      "kind": "health",
+      "reason": "Build/version probe used by deploy parity checks; no tenant data."
+    },
+    "pages/api/internal/metrics.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the INTERNAL_METRICS_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "INTERNAL_METRICS_SECRET"
+      ]
+    },
+    "pages/api/internal/process-reminders.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/internal/render-health.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the INTERNAL_WORKER_TOKEN shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "INTERNAL_WORKER_TOKEN"
+      ]
+    },
+    "pages/api/internal/render-worker.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the INTERNAL_WORKER_TOKEN shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "INTERNAL_WORKER_TOKEN"
+      ]
+    },
+    "pages/api/lead-intelligence/campaigns.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on companyId; every campaign/audience helper filters company_id.",
+      "evidence": "enforceCompanyAccess\\(\\{ req, res, companyId \\}\\)"
+    },
+    "pages/api/lead-intelligence/execution.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on companyId; audit/approval/control rows are keyed and filtered by company_id.",
+      "evidence": "\\.eq\\('company_id', companyId\\)"
+    },
+    "pages/api/media/[id].ts": {
+      "kind": "identity-scoped",
+      "reason": "Row loaded, ownsRow compares user_id to the caller before GET/DELETE.",
+      "evidence": "ownsRow\\(caller,"
+    },
+    "pages/api/media/link.ts": {
+      "kind": "identity-scoped",
+      "reason": "Both the media file and the scheduled post must be owned by the caller (user_id) before the link write.",
+      "evidence": "ownsMediaFile\\(caller, media_file_id\\)[\\s\\S]*?ownsScheduledPost\\(caller, scheduled_post_id\\)"
+    },
+    "pages/api/media/list.ts": {
+      "kind": "identity-scoped",
+      "reason": "List owner is forced to the caller's own user_id for non-admins; campaign_id only narrows further.",
+      "evidence": "resolveListOwnerId\\(caller, user_id\\)"
+    },
+    "pages/api/notifications.ts": {
+      "kind": "identity-scoped",
+      "reason": "Updates by id also filter user_id = the authenticated user.",
+      "evidence": "\\.eq\\('user_id', userId\\);"
+    },
+    "pages/api/observability/client.ts": {
+      "kind": "public",
+      "reason": "Browser telemetry sink (client errors/perf beacons); accepts no tenant identifiers and returns nothing."
+    },
+    "pages/api/observability/metrics.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the OBSERVABILITY_EXPORT_TOKEN shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "OBSERVABILITY_EXPORT_TOKEN"
+      ]
+    },
+    "pages/api/onboarding/request-company-access.ts": {
+      "kind": "identity-scoped",
+      "reason": "companyId is the TARGET of a join request by a non-member (by design); the route writes only the caller's own request row and admin notifications.",
+      "evidence": "\\.eq\\('user_id', user\\.id\\)"
+    },
+    "pages/api/onboarding/validate-company-name.ts": {
+      "kind": "auth-flow",
+      "reason": "Signup-time company-name validation for a user who has no company yet; returns a validity verdict only."
+    },
+    "pages/api/planner/generate-workspace-content.ts": {
+      "kind": "inline-binding",
+      "reason": "enforceCompanyAccess on companyId, then the campaign's owning company (resolveCampaignCompanyId) must equal it before loading planner state.",
+      "evidence": "owningCompanyId !== companyId\\.trim\\(\\)"
+    },
+    "pages/api/platform-intelligence/catalog.ts": {
+      "kind": "public",
+      "reason": "Global platform catalog (reference data shared by all tenants); no tenant data."
+    },
+    "pages/api/platform-intelligence/rules.ts": {
+      "kind": "public",
+      "reason": "Global platform rules (reference data); no tenant data."
+    },
+    "pages/api/platform/history/run.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the PLATFORM_HISTORY_RUN_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "PLATFORM_HISTORY_RUN_SECRET"
+      ]
+    },
+    "pages/api/publishing/reconcile/run.ts": {
+      "kind": "machine-secret",
+      "reason": "Publish reconciliation trigger: x-worker-secret compared with timingSafeEqual; fails closed (503) when PUBLISHING_WORKER_SECRET is unset, 401 on mismatch. Was fail-open before STEP 3AH-85.",
+      "env": [
+        "PUBLISHING_WORKER_SECRET"
+      ]
+    },
+    "pages/api/publishing/worker/run.ts": {
+      "kind": "machine-secret",
+      "reason": "Publishing worker trigger: x-worker-secret compared with timingSafeEqual; fails closed (503) when PUBLISHING_WORKER_SECRET is unset, 401 on mismatch. Was fail-open before STEP 3AH-85.",
+      "env": [
+        "PUBLISHING_WORKER_SECRET"
+      ]
+    },
+    "pages/api/readiness-score.ts": {
+      "kind": "inline-binding",
+      "reason": "Requested company_id is honoured only if it is among the caller's active memberships.",
+      "evidence": "allowedCompanyIds\\.includes\\(requestedCompanyId\\)"
+    },
+    "pages/api/ready.ts": {
+      "kind": "health",
+      "reason": "Readiness probe for the platform; no tenant data."
+    },
+    "pages/api/recommendations/[id]/share.ts": {
+      "kind": "inline-binding",
+      "reason": "Snapshot loaded by id, then enforceCompanyAccess on the SNAPSHOT's own company_id; campaign/target ids only go into caller-company audit metadata.",
+      "evidence": "enforceCompanyAccess\\(\\{"
+    },
+    "pages/api/recommendations/simulate.ts": {
+      "kind": "inline-binding",
+      "reason": "Platform SUPER_ADMIN only (withRBAC([SUPER_ADMIN])).",
+      "evidence": "withRBAC\\(handler, \\[Role\\.SUPER_ADMIN\\]\\)"
+    },
+    "pages/api/reports/[reportId].ts": {
+      "kind": "inline-binding",
+      "reason": "GET/DELETE restrict the report to companies where the caller has an active membership.",
+      "evidence": "\\.in\\('company_id', accessibleCompanyIds\\)"
+    },
+    "pages/api/scheduler/retry.ts": {
+      "kind": "identity-scoped",
+      "reason": "Load and update both filter user_id = the authenticated user.",
+      "evidence": "\\.eq\\('user_id', user\\.id\\)"
+    },
+    "pages/api/settings/intelligence-access.ts": {
+      "kind": "inline-binding",
+      "reason": "Non-admins always get their own COMPANY_ADMIN company (requested companyId ignored); only SUPER_ADMIN may choose one.",
+      "evidence": "from\\('user_company_roles'\\)[\\s\\S]*?\\.eq\\('user_id', userId\\)"
+    },
+    "pages/api/social-platforms/registry.ts": {
+      "kind": "public",
+      "reason": "Static social platform registry (reference data); no tenant data."
+    },
+    "pages/api/social/linkedin/auth.ts": {
+      "kind": "redirect-shim",
+      "reason": "Legacy path: 301 to /api/auth/linkedin, which now requires an authenticated session. No data access."
+    },
+    "pages/api/social/linkedin/callback.ts": {
+      "kind": "redirect-shim",
+      "reason": "Legacy path: 302 to /api/auth/linkedin/callback, which validates the signed state and binds the session. No data access."
+    },
+    "pages/api/social/post.ts": {
+      "kind": "identity-scoped",
+      "reason": "createLegacyScheduledPost verifies the social account with user_id = caller and throws otherwise.",
+      "evidence": "createLegacyScheduledPost\\("
+    },
+    "pages/api/strategy-templates/[id].ts": {
+      "kind": "identity-scoped",
+      "reason": "Template is owned by its user_id: GET only for the owner or a public template; PUT/DELETE owner-only (404 when not visible, 403 when public but not owned); PUT strips id/user_id/company_id.",
+      "evidence": "template!\\.user_id === user\\.id"
+    },
+    "pages/api/stripe/webhook.ts": {
+      "kind": "webhook-signature",
+      "reason": "Stripe webhook: raw-body signature verified with STRIPE_WEBHOOK_SECRET; fails closed when the secret is unset.",
+      "verifier": "verifyStripeWebhookSignature"
+    },
+    "pages/api/super-admin/content-architect-login.ts": {
+      "kind": "auth-flow",
+      "reason": "Legacy content-architect credential login (bridge). It creates the signed session; the bridge is hard-expired (SEC-001C)."
+    },
+    "pages/api/super-admin/login.ts": {
+      "kind": "auth-flow",
+      "reason": "Legacy super-admin credential login (bridge). It creates the session, so it cannot require one; the bridge is hard-expired (SEC-001C)."
+    },
+    "pages/api/team/invite.ts": {
+      "kind": "inline-binding",
+      "reason": "Non-super-admins always invite into their own COMPANY_ADMIN company (body companyId ignored).",
+      "evidence": "from\\('user_company_roles'\\)[\\s\\S]*?\\.eq\\('user_id', callerId\\)"
+    },
+    "pages/api/templates/[id]/index.ts": {
+      "kind": "identity-scoped",
+      "reason": "Template is owned by its user_id: GET only for the owner or a public template; PUT/DELETE owner-only; PUT strips id/user_id/campaign_id (campaign_id is never taken from the request).",
+      "evidence": "template!\\.user_id === user\\.id"
+    },
+    "pages/api/templates/[id]/render.ts": {
+      "kind": "identity-scoped",
+      "reason": "Renders only the caller's own or a public template (404 otherwise); usage count untouched on denial.",
+      "evidence": "template\\.user_id !== user\\.id && template\\.is_public !== true"
+    },
+    "pages/api/track.ts": {
+      "kind": "public",
+      "reason": "Public website tracking pixel for installed customer snippets; writes anonymous events keyed by account id.",
+      "writes": true
+    },
+    "pages/api/track/verify.ts": {
+      "kind": "public",
+      "reason": "Public snippet-installation verification ping for the tracking pixel."
+    },
+    "pages/api/tracking/link-click.ts": {
+      "kind": "public",
+      "reason": "Public click-tracking redirect/beacon embedded in published posts; anonymous by design.",
+      "writes": true
+    },
+    "pages/api/validate/content.ts": {
+      "kind": "public",
+      "reason": "Pure, stateless validation of caller-supplied text against static platform rules; no storage, no paid calls."
+    },
+    "pages/api/validate/strategic-content-transformation.ts": {
+      "kind": "public",
+      "reason": "Pure, stateless validator over the request body; no storage, no paid calls."
+    },
+    "pages/api/webhooks/payments/[provider].ts": {
+      "kind": "webhook-signature",
+      "reason": "Razorpay/Cashfree webhook: handleWebhook verifies the provider signature and the route answers 401 unless verified.",
+      "verifier": "handleWebhook"
+    },
+    "pages/api/webhooks/razorpay-staging.ts": {
+      "kind": "retired",
+      "reason": "Retired endpoint: answers 410 Gone for every request and performs no reads or writes."
+    },
+    "pages/api/website-analytics/aggregate.ts": {
+      "kind": "machine-secret",
+      "reason": "Website analytics aggregation trigger: x-worker-secret compared with timingSafeEqual; fails closed (503) when ANALYTICS_WORKER_SECRET is unset, 401 on mismatch. Was fail-open before STEP 3AH-85.",
+      "env": [
+        "ANALYTICS_WORKER_SECRET"
+      ]
+    },
+    "pages/api/website-events/track.ts": {
+      "kind": "public",
+      "reason": "Public website event ingestion for customer sites; domain-enforced and rate-limited.",
+      "writes": true
+    },
+    "pages/api/website/lead-capture.ts": {
+      "kind": "public",
+      "reason": "Public lead-capture submission from customer websites; tenant resolved from the registered integration, protected by leadCaptureProtection."
+    },
+    "pages/api/whatsapp/webhook/index.ts": {
+      "kind": "webhook-signature",
+      "reason": "WhatsApp webhook: POST requires an HMAC-SHA256 signature over the raw body (WHATSAPP_APP_SECRET, fail-closed in production)."
+    },
+    "pages/api/wordpress-plugin/heartbeat.ts": {
+      "kind": "machine-token",
+      "reason": "WordPress plugin heartbeat: authenticated by the plugin bearer token, verified by hash inside the service; 401 otherwise.",
+      "verifier": "recordWordPressPluginHeartbeat"
+    },
+    "pages/api/wordpress-plugin/setup/connect.ts": {
+      "kind": "machine-token",
+      "reason": "WordPress plugin connect: authorised by a single-use setup token minted by an authenticated company admin (setup-session).",
+      "verifier": "consumeWordPressSetupSession"
+    },
+    "pages/api/wordpress-plugin/sync.ts": {
+      "kind": "machine-token",
+      "reason": "WordPress plugin sync: plugin bearer token verified by hash; the token binds company and website, so none are taken from the request.",
+      "verifier": "syncWordPressPluginEvent"
+    },
+    "pages/api/wordpress-plugin/token-exchange.ts": {
+      "kind": "machine-token",
+      "reason": "WordPress plugin token exchange: requires the registration's single-use nonce; binding is inherited from the (now authenticated) registration.",
+      "verifier": "exchangeWordPressPluginToken"
+    },
+    "pages/api/wordpress-plugin/token-rotate.ts": {
+      "kind": "machine-token",
+      "reason": "WordPress plugin token rotation: requires the current plugin bearer token.",
+      "verifier": "rotateWordPressPluginToken"
+    },
+    "pages/api/wordpress-plugin/verify.ts": {
+      "kind": "machine-token",
+      "reason": "WordPress plugin verification: registration id + single-use nonce issued to that registration.",
+      "verifier": "verifyWordPressPlugin"
+    }
+  }
+}

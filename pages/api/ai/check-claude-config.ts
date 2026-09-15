@@ -1,10 +1,16 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
+import { requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): provider-configuration status is a platform
+  // diagnostic with no product caller — super admins only.
+  const admin = await requireSuperAdminUser(req, res);
+  if (!admin) return;
 
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;

@@ -15,6 +15,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getCampaignById } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { fromStructuredPlan } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveStructuredCampaignPlan, commitDraftBlueprint } from '../../../backend/db/campaignPlanStore';
 import { generateFromManualPlanner } from '../../../backend/services/executionPlannerService';
@@ -318,6 +319,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // with the project's existing vocabulary and audits the denial itself.
     const tenantAccess = await requireTenantAccess(req, res, companyId);
     if (!tenantAccess) return; // guard already responded (403 NOT_A_MEMBER)
+    // ROUTE-AUTH-001 (STEP 3AH-85) — a supplied campaignId selects an EXISTING
+    // campaign that is then read, re-dated, re-snapshotted and has its plan and
+    // slots rewritten. Membership in companyId says nothing about that
+    // campaign, so it must be proven to belong to companyId before anything
+    // touches it: a campaign owned by another company (or by nobody) → 404 here;
+    // an id with no campaign behind it → 404 from the lookup below.
+    if (existingCampaignId && typeof existingCampaignId === 'string') {
+      const campaignBound = await enforceCompanyAccess({ req, res, companyId, campaignId: existingCampaignId });
+      if (!campaignBound) return;
+    }
     if (!strategy_context || typeof strategy_context !== 'object') {
       return res.status(400).json({ error: 'strategy_context is required' });
     }

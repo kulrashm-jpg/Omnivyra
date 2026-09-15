@@ -3,12 +3,18 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 // API Endpoint for Queue Statistics
 import { NextApiRequest, NextApiResponse } from 'next';
 import { queue } from '@/lib/services/queue';
+import { requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET']);
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // ROUTE-AUTH-001 (STEP 3AH-85): returns every queued job (all tenants) —
+  // platform diagnostics, super admin only.
+  const admin = await requireSuperAdminUser(req, res);
+  if (!admin) return;
 
   try {
     const stats = queue.getStats();
