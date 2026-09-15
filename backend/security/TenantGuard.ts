@@ -58,6 +58,7 @@ import { isPlatformSuperAdmin } from '../services/rbacService';
 import { logger } from '../services/logger';
 import { logSecurityEvent } from './audit/SecurityAuditService';
 import { seedRequestContextFromRequest } from '../services/requestContext';
+import { attributeAuthenticatedPrincipal } from '../services/requestContextPrincipal';
 // W2-1 (Foundation primitives): rollout lifecycle + request-scoped memo.
 import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
 import { runWithRollout } from '../../lib/platform/rolloutAdmin';
@@ -484,6 +485,17 @@ export async function requireTenantAccess(
   });
 
   if (result.ok === true) {
+    // SEC-91 W2-A (W2A-4) — the seed below goes through mergeRequestContext()
+    // (AsyncLocalStorage.enterWith inside this awaited function), which is NOT
+    // visible to the caller after it returns, so the handler's later gateway
+    // calls never saw this userId. Record the principal on the LIVE context
+    // object instead — BEFORE the seed swaps the store for this frame.
+    // Observe-only by default; see requestContextPrincipal.ts.
+    attributeAuthenticatedPrincipal({
+      userId: p.userId,
+      orgId: result.access.organizationId,
+      source: 'requireTenantAccess',
+    });
     seedRequestContextFromRequest(req, {
       userId: p.userId,
       orgId:  result.access.organizationId,
