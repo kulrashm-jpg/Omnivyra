@@ -32,7 +32,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (registration_id && String(registration_id) !== plugin.registrationId) {
       return res.status(403).json({ error: 'Plugin token does not match registration_id' });
     }
-    await revokeWordPressPlugin({ registrationId: plugin.registrationId, reason: revokeReason, actorUserId: null });
+    // SEC-91 W2-A (W2A-2): the service now binds the revoke to the token's own
+    // company + website as well.
+    try {
+      await revokeWordPressPlugin({
+        registrationId: plugin.registrationId,
+        companyId: plugin.companyId,
+        websiteId: plugin.websiteId,
+        reason: revokeReason,
+        actorUserId: null,
+      });
+    } catch (err) {
+      if (err instanceof Error && /not found/i.test(err.message)) {
+        return res.status(404).json({ error: 'Registration not found' });
+      }
+      throw err;
+    }
     return res.status(200).json({ ok: true });
   }
 
@@ -45,8 +60,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!role) return;
 
   // SEC-91A (STEP 3AH-91, A4) — the registration must belong to the company
-  // the caller was just authorized for. revokeWordPressPlugin() updates by
-  // registration id alone, so an admin of company A used to be able to revoke
+  // the caller was just authorized for. revokeWordPressPlugin() used to update
+  // by registration id alone, so an admin of company A used to be able to revoke
   // (null the token of, and disconnect) ANY tenant's WordPress plugin by
   // passing their own company_id with another tenant's registration_id. A
   // foreign id and an unknown id get the same 404.
@@ -59,11 +74,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (registrationError) return res.status(503).json({ error: 'Registration lookup failed. Please try again.' });
   if (!registration) return res.status(404).json({ error: 'Registration not found' });
 
-  await revokeWordPressPlugin({
-    registrationId,
-    reason: revokeReason,
-    actorUserId: role.userId,
-  });
+  try {
+    await revokeWordPressPlugin({
+      registrationId,
+      // SEC-91 W2-A (W2A-2): the UPDATE itself is now scoped to this company.
+      companyId,
+      reason: revokeReason,
+      actorUserId: role.userId,
+    });
+  } catch (err) {
+    if (err instanceof Error && /not found/i.test(err.message)) {
+      return res.status(404).json({ error: 'Registration not found' });
+    }
+    throw err;
+  }
   return res.status(200).json({ ok: true });
 }
 
