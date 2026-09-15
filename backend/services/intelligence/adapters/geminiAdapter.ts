@@ -105,13 +105,14 @@ export class GeminiAdapter extends LLMAdapterBase {
   protected buildRequest({ apiKey, query }: { apiKey: string; query: string }): LLMRequest {
     const formatted = formatQueryForProvider(query, 'gemini');
     const model = process.env.GEMINI_PROBE_MODEL ?? DEFAULT_MODEL;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    // SEC91-D8: key in the `x-goog-api-key` header, never in the (logged) URL.
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
     const text = formatted.system ? `${formatted.system}\n\n${formatted.user}` : formatted.user;
     return {
       url,
       init: {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text }] }],
           generationConfig: { temperature: 0, maxOutputTokens: 600 },
