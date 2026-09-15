@@ -154,6 +154,14 @@ describe('authenticated member of the owning company', () => {
     const r = await finalize(PLAN_A, body({ storage_path: `${CO_A}/${PLAN_A}/video/s.mp4` }), 'A');
     expect(r.status).toBe(200);
   });
+  it.each([
+    ['TUS client key', `${PLAN_A}/video/${PLAN_A}-1726400000000-k3j9x2ab.mp4`],
+    ['direct-upload key', `${CO_A}/${PLAN_A}/misc/1726400000000-a1b2c3d4.bin`],
+  ])('the exact %s shape the clients mint passes the segment allowlist', async (_n, path) => {
+    const r = await finalize(PLAN_A, body({ storage_path: path }), 'A');
+    expect(r.status).toBe(200);
+    expect(r.body.storage).toEqual({ bucket: 'media-uploads', object_path: path });
+  });
   it('an authorized early rejection cleans up ONLY its own object, after authorization', async () => {
     const r = await finalize(PLAN_A, body({ size_bytes: 5 * 1024 ** 3 }), 'A');
     expect(r.status).toBe(413);
@@ -202,6 +210,10 @@ describe('a caller-named object outside the authorized activity is never touched
     ['empty segment', `${PLAN_A}//x.mp4`],
     ['backslash', `${PLAN_A}\\..\\${PLAN_B}\\x.mp4`],
     ['control character', `${PLAN_A}/video/x\u0000.mp4`],
+    ['percent-encoded traversal (TUS layout)', `${PLAN_A}/video/%2e%2e/%2e%2e/${PLAN_B}/video/x.mp4`],
+    ['percent-encoded traversal (direct layout)', `${CO_A}/${PLAN_A}/%2E%2E/%2E%2E/${CO_B}/${PLAN_B}/x.mp4`],
+    ['percent-encoded slash', `${PLAN_A}/video%2f..%2f..%2f${PLAN_B}/x.mp4`],
+    ['whitespace in a segment', `${PLAN_A}/video/x .mp4`],
     ['bare activity prefix', `${PLAN_A}/x.mp4`],
     ['activity id as a substring', `${PLAN_A}extra/video/x.mp4`],
   ])('%s → 400 OUT_OF_SCOPE, no storage call — even on the oversize branch', async (_n, path) => {

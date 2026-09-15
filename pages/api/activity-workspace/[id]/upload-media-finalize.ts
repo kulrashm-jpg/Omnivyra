@@ -55,6 +55,7 @@ import {
   compareSniffedToClientMime,
 } from '@/backend/services/mediaUploadValidationService';
 import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
+import { isActivityObjectPath } from '@/backend/services/activityWorkspace/activityObjectPath';
 
 const UPLOAD_BUCKET = 'media-uploads';
 const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -90,26 +91,6 @@ async function deleteStorageObject(objectPath: string): Promise<void> {
   } catch (error) {
     console.warn('[upload-media-finalize] orphan cleanup threw', { objectPath, message: (error as Error)?.message });
   }
-}
-
-/**
- * 3AH-91 (S-1) — the ONLY objects this route may read or delete: those that
- * belong to the authorized activity. Both upload paths name them that way:
- *   TUS client (creatorMediaUploadHandlers / ActivityWorkspacePrimaryBrief):
- *     `<activityId>/<subdir>/<session>.<ext>`
- *   upload-media-direct deriveObjectPath:
- *     `<companyId>/<activityId>/<subdir>/<stem>.<ext>`
- * Anything else — another activity's or another tenant's object, a traversal
- * or control-character key — is refused and never touched.
- */
-function isActivityObjectPath(objectPath: string, activityId: string, companyId: string): boolean {
-  if (!objectPath || objectPath.length > 1024 || objectPath.startsWith('/')) return false;
-  if (/[\\\u0000-\u001f\u007f]/.test(objectPath)) return false;
-  const segments = objectPath.split('/');
-  if (segments.some((s) => s === '' || s === '.' || s === '..')) return false;
-  const tusLayout = segments.length >= 3 && segments[0] === activityId;
-  const directLayout = segments.length >= 4 && segments[0] === companyId && segments[1] === activityId;
-  return tusLayout || directLayout;
 }
 
 function extractStorageObjectPath(publicUrl: string | null | undefined): string | null {

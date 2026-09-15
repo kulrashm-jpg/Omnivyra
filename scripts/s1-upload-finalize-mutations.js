@@ -18,6 +18,7 @@ const { execFileSync } = require('child_process');
 const JEST = path.join('node_modules', 'jest', 'bin', 'jest.js');
 const SUITE = ['backend/tests/unit/uploadMediaFinalizeAuthFirst.test.ts', 'backend/tests/unit/uploadMediaFinalize.test.ts'];
 const ROUTE = 'pages/api/activity-workspace/[id]/upload-media-finalize.ts';
+const SCOPE = 'backend/services/activityWorkspace/activityObjectPath.ts';
 
 const MUTATIONS = [
   { id: 'M1', name: 'storage deletion moved before authentication (the original defect)',
@@ -48,12 +49,17 @@ const MUTATIONS = [
     to: "  if (!rowData) { await deleteStorageObject(storagePath); return res.status(404).json({ error: `Row not found: ${id}` }); }" },
   { id: 'M11', name: 'prior-object cleanup no longer scoped',
     from: ' && isActivityObjectPath(priorObjectPath, id, companyId)) {', to: ') {' },
-  { id: 'M12', name: 'traversal segments accepted',
-    from: "  if (segments.some((s) => s === '' || s === '.' || s === '..')) return false;\n", to: '' },
-  { id: 'M13', name: 'activity prefix matched as a substring',
+  { id: 'M12', file: SCOPE, name: 'traversal segments accepted',
+    from: "  if (segments.some((s) => s === '.' || s === '..')) return false;\n", to: '' },
+  { id: 'M15', file: SCOPE, name: 'segment allowlist removed (percent-encoded / control / backslash keys accepted)',
+    from: '  if (!segments.every((s) => SAFE_OBJECT_SEGMENT.test(s))) return false;\n', to: '' },
+  { id: 'M16', file: SCOPE, name: 'allowlist weakened to a literal-dot denylist (the %2e%2e read bypass)',
+    from: '  if (!segments.every((s) => SAFE_OBJECT_SEGMENT.test(s))) return false;\n',
+    to: "  if (segments.some((s) => s === '' || /[\\\\\\s]/.test(s))) return false;\n" },
+  { id: 'M13', file: SCOPE, name: 'activity prefix matched as a substring',
     from: '  const tusLayout = segments.length >= 3 && segments[0] === activityId;',
     to: '  const tusLayout = objectPath.startsWith(activityId);' },
-  { id: 'M14', name: 'another company\'s direct-layout objects accepted',
+  { id: 'M14', file: SCOPE, name: 'another company\'s direct-layout objects accepted',
     from: '  const directLayout = segments.length >= 4 && segments[0] === companyId && segments[1] === activityId;',
     to: '  const directLayout = segments.length >= 4 && segments[1] === activityId;' },
 ];
@@ -79,15 +85,16 @@ console.log('green baseline: unmutated suite passes');
 
 const results = [];
 for (const m of MUTATIONS) {
-  const original = fs.readFileSync(ROUTE, 'utf8');
+  const target = m.file || ROUTE;
+  const original = fs.readFileSync(target, 'utf8');
   const eol = original.includes('\r\n') ? '\r\n' : '\n';
   const from = m.from.split('\n').join(eol);
   const to = m.to.split('\n').join(eol);
   const hits = original.split(from).length - 1;
   if (hits !== 1) { results.push({ ...m, verdict: `NOT APPLICABLE — anchor found ${hits}x` }); continue; }
-  fs.writeFileSync(ROUTE, original.replace(from, to), 'utf8');
+  fs.writeFileSync(target, original.replace(from, to), 'utf8');
   let run;
-  try { run = runSuite(); } finally { fs.writeFileSync(ROUTE, original, 'utf8'); }
+  try { run = runSuite(); } finally { fs.writeFileSync(target, original, 'utf8'); }
   results.push({ ...m, verdict: run.passed ? `SURVIVED (${run.detail})` : run.behavioural ? `KILLED (${run.detail})` : `NOT BEHAVIOURAL (${run.detail})` });
 }
 
