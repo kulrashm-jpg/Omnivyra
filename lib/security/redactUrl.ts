@@ -78,6 +78,8 @@ function redactTextualUrl(input: string): string {
 const URL_IN_TEXT = /\bhttps?:\/\/[^\s"'<>`)\]}]+/gi;
 const NAME_VALUE_IN_TEXT = new RegExp(`\\b(${SECRET_NAME})("?\\s*[=:]\\s*)("?)[^\\s"&,;}]+\\3`, 'gi');
 const BEARER_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/g;
+/** Userinfo in ANY scheme (postgres://, rediss://, amqp://, …). */
+const USERINFO_IN_TEXT = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi;
 
 /**
  * Redact every URL and every credential-shaped fragment inside free text
@@ -89,6 +91,7 @@ export function redactSecretsInText(raw: unknown): string {
   // `Authorization: Bearer <tok>` cannot leave `<tok>` behind.
   return input
     .replace(URL_IN_TEXT, (u) => redactUrl(u))
+    .replace(USERINFO_IN_TEXT, (_m, scheme: string) => `${scheme}${REDACTED}@`)
     .replace(BEARER_IN_TEXT, (_m, scheme: string) => `${scheme} ${REDACTED}`)
     .replace(NAME_VALUE_IN_TEXT, (_m, name: string, sep: string, quote: string) => `${name}${sep}${quote}${REDACTED}${quote}`);
 }

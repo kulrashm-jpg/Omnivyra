@@ -91,6 +91,11 @@ describe('redactUrl / redactSecretsInText', () => {
     expectNoKey(out);
     expect(out).toContain('https://api.builtwith.com/v21/api.json?KEY=');
   });
+  it('redacts userinfo in non-http connection strings', () => {
+    const out = redactSecretsInText(`DATABASE_URL invalid: postgres://svc:${KEY}@db.internal:5432/app and rediss://default:${KEY}@r:6379`);
+    expectNoKey(out);
+    expect(out).toContain('postgres://[REDACTED]@db.internal:5432/app');
+  });
   it('leaves ordinary text alone', () => {
     expect(redactSecretsInText('HTTP 503 from upstream')).toBe('HTTP 503 from upstream');
   });
