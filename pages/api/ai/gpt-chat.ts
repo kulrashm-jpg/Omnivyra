@@ -4,6 +4,10 @@ import { validateAndModerateUserMessage } from '../../../backend/chatGovernance'
 import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiRequestGuard';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { resolveTrustedClientIp } from '../../../backend/services/ai/trustedClientIp';
+
+// SEC91-D9: bound the provider call (max_tokens is 1000).
+const GPT_CHAT_TIMEOUT_MS = 90_000;
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -24,15 +28,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Message is required' });
   }
 
+  // SEC91-D3: BYOK is checked BEFORE any platform-paid work. Moderation below is
+  // an LLM call on the PLATFORM key; it used to run first, so a caller with no
+  // key of their own could drive platform moderation spend and then get a 400.
+  if (!apiKey) {
+    return res.status(400).json({ error: 'API key is required' });
+  }
+
   // HARDEN-006: centralized AI protection (validation + rate/burst) before the
-  // provider call. This route is identity-light (BYOK), so the operation/
-  // provider/IP layers do the surge protection; oversized prompts are rejected.
+  // provider call. SEC91-D1: keyed by the authenticated user (per-user, burst)
+  // plus the platform-trusted client IP — never the client-written XFF hop.
   try {
-    const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? '').split(',')[0].trim() || null;
     await guardAiRequest({
       operation: 'chat.gpt',
       provider: 'openai',
-      ip,
+      userId: user.id,
+      ip: resolveTrustedClientIp(req),
       messages: [{ role: 'user', content: String(message) }],
     });
   } catch (err) {
@@ -40,7 +51,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (err.retryAfterSecs) res.setHeader('Retry-After', String(err.retryAfterSecs));
       return res.status(err.status).json({ error: err.message, code: err.code });
     }
-    // fail-open on non-guard errors
+    // SEC91-D1: limiter outages are absorbed inside the guard; an error that
+    // escapes it is a defect and must not become unlimited access.
+    return res.status(503).json({ error: 'AI request protection unavailable. Please retry.', code: 'AI_GUARD_UNAVAILABLE' });
   }
 
   const policyResult = await validateAndModerateUserMessage(String(message), {
@@ -50,10 +63,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({
       error: 'Your message couldn\'t be processed. Please rephrase and try again.',
     });
-  }
-
-  if (!apiKey) {
-    return res.status(400).json({ error: 'API key is required' });
   }
 
   try {
@@ -70,6 +79,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
+      signal: AbortSignal.timeout(GPT_CHAT_TIMEOUT_MS),
       headers: {
         'Authorization': bearerAuthorization(String(apiKey)),
         'Content-Type': 'application/json',

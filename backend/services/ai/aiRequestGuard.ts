@@ -61,7 +61,14 @@ export interface AiGuardContext {
   companyId?: string | null;
   /** User id (falls back to the request-context userId). */
   userId?: string | null;
-  /** Client IP when available (per-IP layer is best-effort/future-ready). */
+  /**
+   * Client IP when available (per-IP layer is best-effort/future-ready).
+   * SEC91-D1: callers MUST derive it with `resolveTrustedClientIp(req)`
+   * (./trustedClientIp) — never from the client-written first
+   * `x-forwarded-for` hop. Authenticated callers MUST also pass `userId`, so
+   * their limits are keyed by user and the request is never inferred to be
+   * background work.
+   */
   ip?: string | null;
   /** Messages/prompt for size validation. */
   messages?: Array<{ role: string; content: string }>;
