@@ -71,7 +71,10 @@
 
 import { supabase } from '../../db/supabaseClient';
 
-export const LINKEDIN_API_VERSION = '202507';
+// Bumped 2026-09-16 with backend/adapters/linkedinAdapter.ts and
+// providerReconciliation/providers/linkedinReconciliation.ts — see the note
+// there. A sunset version fails every call ("version ... is not active").
+export const LINKEDIN_API_VERSION = '202608';
 
 export type LinkedInMediaKind = 'image' | 'video';
 

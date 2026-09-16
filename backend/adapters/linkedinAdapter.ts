@@ -48,9 +48,21 @@ interface Token {
   token_type?: string;
 }
 
-// LinkedIn versioned API — update quarterly (YYYYMM format).
-// LinkedIn deprecates versions after ~12 months. Current active window from March 2026: 202504+
-const LINKEDIN_API_VERSION = '202507';
+/*
+ * LinkedIn versioned API (YYYYMM). Each version is supported for a minimum of
+ * one year and is then sunset; a sunset version fails every call with
+ * "Requested version YYYYMM01 is not active", which stops publishing outright.
+ *
+ * Bumped 2026-09-16: 202507 was sunset (the 202508 sunset date was 2026-08-17).
+ * 202608 is the latest published version, so it carries the longest runway —
+ * LinkedIn supports it until at least August 2027.
+ *
+ * The SAME version string is sent by two other callers, and all three must be
+ * bumped together or publishing half-breaks (text posts succeed, media fails):
+ *   - backend/adapters/linkedin/linkedinMediaUpload.ts  (image/video upload)
+ *   - backend/services/providerReconciliation/providers/linkedinReconciliation.ts
+ */
+const LINKEDIN_API_VERSION = '202608';
 
 export async function publishToLinkedIn(
   post: ScheduledPost,

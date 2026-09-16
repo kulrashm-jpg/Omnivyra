@@ -29,7 +29,9 @@ import {
   type ReconciliationLookupResult,
 } from '../types';
 
-const LINKEDIN_API_VERSION = '202507';
+// Bumped 2026-09-16 with backend/adapters/linkedinAdapter.ts and
+// backend/adapters/linkedin/linkedinMediaUpload.ts — see the note there.
+const LINKEDIN_API_VERSION = '202608';
 const LINKEDIN_BASE = 'https://api.linkedin.com/rest';
 
 function unverifiable(diagnostic: string): ReconciliationLookupResult {
