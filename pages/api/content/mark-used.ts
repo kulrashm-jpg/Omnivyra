@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { enforceContentWriteRole } from '@/backend/services/content/contentWriteAuthz';
 
 /**
  * POST /api/content/mark-used
@@ -27,6 +28,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
+
+  // SEC-91 W2-G (STEP 3AH-91, W2G-1) — marking content as used writes the blog
+  // row; it requires a content authoring role (PERMISSIONS.CREATE_CAMPAIGN) in
+  // the company authorized above. VIEW_ONLY and its aliases stay read-only.
+  if (!(await enforceContentWriteRole({ req, res, companyId: String(company_id) }))) return;
 
   try {
     // Update the blogs row with used_at timestamp and platform

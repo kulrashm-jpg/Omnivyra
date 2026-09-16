@@ -26,6 +26,7 @@
 import { PROVIDER_CREDENTIALS } from '../providerCredentialResolver';
 import { ownedDbTable } from '../../db/writeOwner';
 import { isEnvVarName } from '../../security/credentialSafety';
+import { isPlatformInfrastructureSecretName } from './infrastructureSecretNames';
 
 /**
  * A single shape rather than a discriminated union: this repository compiles with
@@ -49,13 +50,19 @@ export function canonicalDescriptorEnvNames(): Set<string> {
   return names;
 }
 
-/** Env names registered on existing external API sources. Failures yield an empty set. */
+/**
+ * Env names registered on existing PLATFORM external API sources. Failures yield an empty set.
+ *
+ * SEC91-B2: tenant-owned rows (company_id set) no longer count — a tenant registering a
+ * source naming some server variable must not thereby make that variable testable.
+ */
 export async function registeredSourceEnvNames(): Promise<Set<string>> {
   const names = new Set<string>();
   try {
-    const { data, error } = await ownedDbTable('external_api_sources').select('api_key_env_name');
+    const { data, error } = await ownedDbTable('external_api_sources').select('api_key_env_name, company_id');
     if (error || !Array.isArray(data)) return names;
-    for (const row of data as Array<{ api_key_env_name?: string | null }>) {
+    for (const row of data as Array<{ api_key_env_name?: string | null; company_id?: string | null }>) {
+      if (typeof row?.company_id === 'string' && row.company_id.trim() !== '') continue;
       const value = row?.api_key_env_name;
       // Only well-formed NAMES count. A legacy row holding a pasted secret must never
       // become an allowlist entry.
@@ -82,6 +89,14 @@ export async function assertTestableEnvVarName(raw: unknown): Promise<EnvNameDec
       allowed: false,
       envName: '',
       reason: 'api_key_env_name must be an environment variable NAME (A-Z, 0-9, underscore).',
+    };
+  }
+  // SEC91-B2: platform infrastructure secrets are never testable, even if registered.
+  if (isPlatformInfrastructureSecretName(raw)) {
+    return {
+      allowed: false,
+      envName: '',
+      reason: `"${raw}" is a platform infrastructure secret and can never be sent to an external API.`,
     };
   }
   if (canonicalDescriptorEnvNames().has(raw)) return { allowed: true, envName: raw, reason: '' };

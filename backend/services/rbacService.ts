@@ -246,25 +246,38 @@ export const getUserCompanyRole = async (
   return { role, userId: user.userId };
 };
 
-export const isSuperAdmin = async (userId: string): Promise<boolean> => {
+/**
+ * SEC-91A (STEP 3AH-91, A2) — platform super-admin requires an ACTIVE
+ * SUPER_ADMIN membership row.
+ *
+ * Both predicates used to match any row with role='SUPER_ADMIN' regardless of
+ * `status`, so an invited-but-never-accepted SUPER_ADMIN row, or one that was
+ * deactivated ('inactive' / 'deactivated' — the user-removal paths keep the role
+ * and flip only the status), still granted the platform bypass that
+ * TenantGuard.assertTenantAccess, enforceRole/withRBAC, requireSuperAdminUser
+ * and getUserCompanyRole all consult: cross-tenant access to every company.
+ *
+ * Every other super-admin decision in the platform already requires
+ * status='active' (authMiddleware.requireSuperAdmin,
+ * platformCapabilities.isPlatformSuperAdminPrincipal, the capability layer), so
+ * this aligns the two outliers with the canonical predicate. Fail-closed: a
+ * lookup error answers false (no bypass), exactly as before.
+ */
+const hasActiveSuperAdminRow = async (userId: string): Promise<boolean> => {
+  if (!userId) return false;
   const { data, error } = await ownedDbTable('user_company_roles')
     .select('id')
     .eq('user_id', userId)
     .eq('role', Role.SUPER_ADMIN)
+    .eq('status', 'active')
     .limit(1);
   if (error) return false;
   return !!data && data.length > 0;
 };
 
-export const isPlatformSuperAdmin = async (userId: string): Promise<boolean> => {
-  const { data, error } = await ownedDbTable('user_company_roles')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('role', Role.SUPER_ADMIN)
-    .limit(1);
-  if (error) return false;
-  return !!data && data.length > 0;
-};
+export const isSuperAdmin = async (userId: string): Promise<boolean> => hasActiveSuperAdminRow(userId);
+
+export const isPlatformSuperAdmin = async (userId: string): Promise<boolean> => hasActiveSuperAdminRow(userId);
 
 export const enforceRole = async (input: {
   req: NextApiRequest;

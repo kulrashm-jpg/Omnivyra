@@ -9,6 +9,13 @@ import type {
 import { getProviderCredentials, isProviderConfigured, getActiveMode } from './providerConfig';
 
 const API_BASE = 'https://api.razorpay.com/v1';
+/**
+ * SEC-E4 (STEP 3AH-91): bound every Razorpay call. A timeout surfaces exactly
+ * like the network error it replaces: createOrder throws; fetchOrderOutcome
+ * resolves `unknown` (never "unpaid"); the payments lookup leaves the
+ * financials undefined so the validator resolves UNKNOWN.
+ */
+const RAZORPAY_TIMEOUT_MS = 15_000;
 
 function toSubunits(amountMajor: number): number {
   return Math.round(amountMajor * 100);
@@ -32,6 +39,7 @@ export class RazorpayAdapter implements PaymentAdapter {
     const res = await fetch(`${API_BASE}/orders`, {
       method: 'POST',
       headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
       body: JSON.stringify({
         amount: amountSubunits,
         currency: req.currency,
@@ -93,6 +101,7 @@ export class RazorpayAdapter implements PaymentAdapter {
       const res = await fetch(`${API_BASE}/orders/${encodeURIComponent(providerOrderId)}`, {
         method: 'GET',
         headers: { Authorization: `Basic ${auth}` },
+        signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
       });
       body = await res.json();
       if (!res.ok) {
@@ -119,6 +128,7 @@ export class RazorpayAdapter implements PaymentAdapter {
       const pres = await fetch(`${API_BASE}/orders/${encodeURIComponent(providerOrderId)}/payments`, {
         method: 'GET',
         headers: { Authorization: `Basic ${auth}` },
+        signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
       });
       if (pres.ok) {
         const plist = (await pres.json()) as any;

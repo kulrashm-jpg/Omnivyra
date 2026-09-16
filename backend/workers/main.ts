@@ -20,6 +20,7 @@
 import { config } from '@/config';
 import { validateWorkerEnv } from '../utils/validateEnv';
 import { startHealthServer, setCronStatus }  from './healthServer';
+import { assertQueueConsumerRuntimeAllowed } from '../queue/queueNamespace';
 
 // Start health server immediately — before anything else so Railway healthchecks
 // always get a response even if Redis/workers fail to initialise.
@@ -27,6 +28,13 @@ startHealthServer(config.PORT ? parseInt(config.PORT, 10) : undefined);
 
 // Fail fast if any required env var is missing
 validateWorkerEnv();
+
+// SEC-C2 (STEP 3AH-91): refuse to become a consumer of the shared production
+// BullMQ keyspace from a production-mode process that carries no deployment-
+// platform marker and targets a non-local Redis (e.g. the docker-compose
+// worker pointed at the Upstash URL in .env.local). Must run BEFORE the
+// import-time Worker constructions below. No-op on Railway (RAILWAY_* set).
+assertQueueConsumerRuntimeAllowed('worker-main');
 
 import os from 'os';
 import { Worker }                    from 'bullmq';
@@ -67,6 +75,7 @@ const HEAVY_SLOT_SCOPING_FLAG = defineRolloutFlag({
 const AI_HEAVY_POOL = definePool({ name: 'ai-heavy-slot', defaultLimit: 3, maxLimit: 8 });
 import { runRenderParityPreflight, logPreflightReport } from './renderParityPreflight';
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
+import { assertJobCampaignBinding } from '../queue/jobProcessors/jobTenantBinding';
 import { startCron } from '../scheduler/cron';
 
 // ── Worker instances ──────────────────────────────────────────────────────────
@@ -200,6 +209,16 @@ const campaignWorker = new Worker<CampaignPlanningJobPayload>(
       const { pollKey, companyId, actorUserId, args } = job.data as unknown as {
         pollKey: string; companyId: string; actorUserId: string; args: Record<string, unknown>;
       };
+      // SEC-C5 (STEP 3AH-91): plan.ts enqueues only after requireCampaignAccess;
+      // re-prove the company/campaign pairing here before billing runs inside
+      // runCampaignAiPlan — the queue is not an authorisation boundary.
+      await assertJobCampaignBinding({
+        queue: 'ai-heavy:interactive-plan',
+        jobId: job.id,
+        campaignId: args?.campaignId,
+        companyId,
+        requireExisting: true,
+      });
       const { runCampaignAiPlan } = await import('../services/campaignAiOrchestrator');
       // F-14: result persistence via the generalized runway completion.
       const { completeRunwayOperation } = await import('../../lib/platform/runway');
@@ -442,7 +461,9 @@ async function main(): Promise<void> {
     console.info('[main] CRON_SERVICE_MODE=worker-only — scheduler runs in the dedicated cron service');
     setCronStatus('ok', 'external cron service (CRON_SERVICE_MODE=worker-only)');
   } else
-  startCron()
+  // SEC-C6: the worker owns process exit (bounded drain below); the
+  // scheduler must not process.exit() underneath it on SIGTERM.
+  startCron({ hostOwnsShutdown: true })
     .then(() => {
       // Cron successfully initialized — flip health to ok.
       setCronStatus('ok');
@@ -517,6 +538,14 @@ async function main(): Promise<void> {
       const t = setTimeout(resolve, drainDeadlineMs);
       if (typeof t.unref === 'function') t.unref();
     });
+    // SEC-C6: hard backstop. The co-located scheduler no longer exits the
+    // process underneath this drain, so guarantee an exit even if claim
+    // release or connection close hangs (e.g. Redis unreachable).
+    const hardExit = setTimeout(() => {
+      console.error('[main] shutdown exceeded its budget — forcing exit');
+      process.exit(0);
+    }, drainDeadlineMs + 10_000);
+    if (typeof hardExit.unref === 'function') hardExit.unref();
 
     await Promise.race([drainDeadline, Promise.allSettled([
       publishWorker.close(),

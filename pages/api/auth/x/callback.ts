@@ -10,12 +10,15 @@ import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCred
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
+import { describeProviderError } from '../../../../backend/auth/safeErrorLog';
 import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
+import { getOAuthRedirectBase } from '../../../../backend/auth/oauthRedirectBase';
 
+// SEC91-W2B-2: the same builder as /api/auth/x and the community-AI X connector start —
+// production → the configured canonical app URL only; development → the request origin
+// with localhost spelled 127.0.0.1.
 function getRequestBaseUrl(req: NextApiRequest): string {
-  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
-  const host = (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string) || 'localhost:3000';
-  return `${proto}://${host}`.replace('://localhost:', '://127.0.0.1:');
+  return getOAuthRedirectBase(req, { loopback: '127.0.0.1' });
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -304,7 +307,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const separator = successDest.includes('?') ? '&' : '?';
     return res.redirect(`${successDest}${separator}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
   } catch (error: any) {
-    console.error('X OAuth callback error:', error);
+    console.error('X OAuth callback error:', describeProviderError(error));
     // X uses axios for token exchange and profile fetch; axios throws on non-2xx.
     // We classify network/axios failures as token_exchange_failed when the URL
     // matches the token endpoint, otherwise as a generic callback_exception.

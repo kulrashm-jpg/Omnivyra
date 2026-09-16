@@ -13,9 +13,47 @@ export type RequestContext = {
   // correlationId); meta is a small request-scoped metadata bag.
   traceId?: string;
   meta?: Record<string, unknown>;
+  /**
+   * SEC-91 W2-A (W2A-4) — the principal the request AUTHENTICATED as, recorded
+   * by the auth seams (resolveUserContext / enforceCompanyAccess /
+   * requireCampaignAccess / requireTenantAccess) via
+   * requestContextPrincipal.attributeAuthenticatedPrincipal. Observe-only: no
+   * existing reader consults it; `userId` is only filled from it when the
+   * `ai-guard-principal` rollout flag is in `enforce`.
+   */
+  authPrincipal?: AuthenticatedPrincipal;
+};
+
+export type PrincipalAttributionSource =
+  | 'resolveUserContext'
+  | 'enforceCompanyAccess'
+  | 'requireCampaignAccess'
+  | 'requireTenantAccess'
+  // SEC-91 W2-G (W2G-5) — lib/platform/requestContext.setPrincipal and the
+  // route-policy observation gate that calls it.
+  | 'setPrincipal'
+  | 'policyGate';
+
+export type AuthenticatedPrincipal = {
+  userId: string;
+  orgId?: string;
+  source: PrincipalAttributionSource;
 };
 
 const requestContextStore = new AsyncLocalStorage<RequestContext>();
+
+/**
+ * SEC-91 W2-A (W2A-4) — the LIVE store object of the active scope (undefined
+ * outside a scope). mergeRequestContext() swaps in a new object with
+ * AsyncLocalStorage.enterWith(), and a store entered inside an awaited callee
+ * is NOT visible to its caller once the callee returns — so a guard that
+ * "seeds" identity that way never reaches the handler's later work. Principal
+ * attribution therefore updates the live object in place (see
+ * requestContextPrincipal.ts). Never creates a scope.
+ */
+export function getMutableRequestContext(): RequestContext | undefined {
+  return requestContextStore.getStore();
+}
 
 function normalizeHeaderValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];

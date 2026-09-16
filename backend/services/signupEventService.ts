@@ -31,6 +31,7 @@ import { logSecurityEvent } from '../security/audit/SecurityAuditService';
 import { logger } from './logger';
 import { getRequestContext } from './requestContext';
 import { recordRawCounter } from '../observability';
+import { getTrustedClientIp } from '../../lib/security/clientIp';
 import {
   EVENT_IMPLIED_LIFECYCLE_STATE,
   type SignupLifecycleState,
@@ -305,11 +306,12 @@ export function parseSignupEventReason(reason: string | null | undefined): Signu
   };
 }
 
-/** Convenience for API routes: extract the client IP the same way the auth endpoints do. */
+/**
+ * Convenience for API routes: extract the client IP the same way the auth endpoints do
+ * (SEC91-W2E: the platform-trusted IP from lib/security/clientIp; 'unknown' when nothing parses).
+ */
 export function requestIp(req: { headers: Record<string, unknown>; socket?: { remoteAddress?: string | null } }): string {
-  return String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown')
-    .split(',')[0]
-    .trim();
+  return getTrustedClientIp(req as Parameters<typeof getTrustedClientIp>[0]);
 }
 
 /** Convenience: extract the user-agent header, or null. */

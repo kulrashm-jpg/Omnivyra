@@ -53,6 +53,7 @@ import { resolveActivityEconomics } from './activityEconomyCatalog';
 import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
 import { evaluateCreditSafetyGate } from './billing/creditSafetyGate';
 import { resolveBillingPolicy } from './billing/billingPolicyResolver';
+import { runWithCreditHandle, type CreditHandle } from './billing/aiGatewayBillingGuard';
 import { assertUuid, canonicalizeReference, type Uuid } from '@/lib/shared/uuid';
 
 /** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
@@ -304,8 +305,21 @@ export async function executeWithCredits<T>(
   let finalProvider: string | null = null;
   let finalModel:    string | null = null;
 
+  // SEC91-D2 (§6.3): the executor runs under this execution's credit handle, so
+  // AI gateway calls it makes are seen by the billing guard as billed (for this
+  // org only) instead of as untracked. A prerequisite for enforcing
+  // BILLING_REQUIRE_AI_HANDLE; shadow-mode behaviour is otherwise unchanged.
+  const creditHandle: CreditHandle = {
+    operationId:    holdId ?? baseKey,
+    idempotencyKey: baseKey,
+    orgId,
+    action,
+    source:         'orchestrator',
+    amountReserved: credits,
+  };
+
   try {
-    const rawResult = await (executor as () => Promise<T | LlmExecutorResult<T>>)();
+    const rawResult = await runWithCreditHandle(creditHandle, () => (executor as () => Promise<T | LlmExecutorResult<T>>)());
 
     if (opts.llmPricing) {
       const wrapped = rawResult as LlmExecutorResult<T>;

@@ -14,39 +14,19 @@ import { setPrivateCache, CACHE_TTL } from '../../lib/platform/httpCache';
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createServerClient } from '@supabase/ssr';
-import { requireSupabasePublishableKey } from '../../lib/supabase/publishableKey';
 import { supabase } from '../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../backend/services/supabaseAuthService';
 
+/**
+ * STEP 3AH-91: the canonical resolver is the ONLY identity path. It already
+ * reads the Supabase session cookie, and it applies the deleted / suspended /
+ * revoked-session / invited checks. The former @supabase/ssr + supabase_uid
+ * fallback ran only when the resolver had refused the caller, so it could only
+ * re-admit sessions that must be refused (same class as SEC91-W2B-1).
+ */
 async function resolveUserId(req: NextApiRequest): Promise<string | null> {
   const { user } = await getSupabaseUserFromRequest(req);
-  if (user?.id) return user.id;
-
-  try {
-    const ssrClient = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      requireSupabasePublishableKey(),
-      {
-        cookies: {
-          getAll: () =>
-            Object.entries(req.cookies).map(([name, value]) => ({ name, value: value ?? '' })),
-          setAll: () => {},
-        },
-      }
-    );
-    const { data: { user: ssrUser } } = await ssrClient.auth.getUser();
-    if (!ssrUser?.id) return null;
-
-    const { data: row } = await supabase
-      .from('users')
-      .select('id')
-      .eq('supabase_uid', ssrUser.id)
-      .maybeSingle();
-    return row?.id ?? null;
-  } catch {
-    return null;
-  }
+  return user?.id ?? null;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {

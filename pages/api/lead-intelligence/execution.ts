@@ -9,6 +9,8 @@ import { recordExecutionAudit } from '../../../backend/services/execution/execut
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
 import { hasExecutionCapability, resolveExecutionCapabilities, type ExecutionCapability } from '../../../lib/execution/executionCapabilities';
+import { assertTenantAccess } from '../../../backend/security/TenantGuard';
+import { normalizePermissionRole, Role } from '../../../backend/services/rbacService';
 
 /**
  * /api/lead-intelligence/execution — guarded execution control plane (W5.1 + ES-001).
@@ -21,6 +23,33 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim
 
 function requireCap(user: any, cap: ExecutionCapability): boolean {
   return hasExecutionCapability(resolveExecutionCapabilities(user), cap);
+}
+
+/**
+ * SEC-91A (STEP 3AH-91) — execution capabilities are derived from the caller's
+ * role IN THE REQUESTED COMPANY.
+ *
+ * resolveUserContext().role is 'admin' when the caller is COMPANY_ADMIN /
+ * SUPER_ADMIN in ANY of their active memberships, and resolveExecutionRoles()
+ * maps 'admin' to the operator + approver capabilities. A user who administers
+ * their own company X but is only VIEW_ONLY in company Y could therefore
+ * approve sends, lift do-not-contact suppressions (`release`), and flip the
+ * execution control / kill switch in Y.
+ *
+ * The role now comes from the canonical tenant decision for THIS company
+ * (TenantGuard.assertTenantAccess: ACTIVE membership in an active org, or the
+ * platform super-admin bypass, which itself requires an ACTIVE SUPER_ADMIN row).
+ * An invited, not-yet-accepted admin — admitted to the company by
+ * enforceCompanyAccess's legacy fallback — gets the read-only baseline here:
+ * these are consent-sensitive, break-glass actions. Any lookup failure also
+ * yields the read-only baseline (default-deny).
+ */
+async function companyScopedRole(userId: string, companyId: string): Promise<{ role: 'admin' | 'user' }> {
+  const decision = await assertTenantAccess({ userId, organizationId: companyId });
+  if (decision.ok !== true) return { role: 'user' };
+  if (decision.access.bypass) return { role: 'admin' };
+  const normalized = normalizePermissionRole(String(decision.access.role ?? '').trim().toUpperCase());
+  return { role: normalized === Role.COMPANY_ADMIN || normalized === Role.SUPER_ADMIN ? 'admin' : 'user' };
 }
 
 /** ES-104 — surface every authorization denial as alertable telemetry (no silent 403s). */
@@ -36,6 +65,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
   const actor = user.userId;
+  // Capabilities are decided against THIS company only (see companyScopedRole).
+  const capUser = await companyScopedRole(actor, companyId);
 
   try {
     if (req.method === 'GET') {
@@ -51,7 +82,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         case 'preview': return res.status(200).json(previewDispatch({ subject: String(b.subject ?? ''), body: String(b.body ?? '') }, String(b.recipient ?? '')));
 
         case 'dispatch_dry_run': {
-          if (!requireCap(user, 'campaign.execute')) { denyCap(companyId, actor, 'campaign.execute', 'dispatch_dry_run'); return res.status(403).json({ error: 'missing_capability:campaign.execute' }); }
+          if (!requireCap(capUser, 'campaign.execute')) { denyCap(companyId, actor, 'campaign.execute', 'dispatch_dry_run'); return res.status(403).json({ error: 'missing_capability:campaign.execute' }); }
           // ES-101: approval is NOT accepted from the client — the bridge reads authoritative server state.
           const result = await dispatchGuarded({ companyId, campaignId: String(b.campaign_id), entityId: String(b.entity_id), channel: 'email', recipient: String(b.recipient), message: { subject: String(b.subject ?? ''), body: String(b.body ?? ''), messageId: str(b.message_id) }, actor, correlationId: str(b.correlation_id) });
           return res.status(200).json(result); // always dispatched:false in W5.1
@@ -59,14 +90,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
         // ES-101 — approve / revoke are the ONLY way approval enters server state; require the approver capability.
         case 'approve': {
-          if (!requireCap(user, 'campaign.approve')) { denyCap(companyId, actor, 'campaign.approve', 'approve'); return res.status(403).json({ error: 'missing_capability:campaign.approve' }); }
+          if (!requireCap(capUser, 'campaign.approve')) { denyCap(companyId, actor, 'campaign.approve', 'approve'); return res.status(403).json({ error: 'missing_capability:campaign.approve' }); }
           const version = str(b.message_id) ?? 'default';
           const { id } = await recordApproval({ companyId, campaignId: String(b.campaign_id), version, approverId: actor, reason: str(b.reason), correlationId: str(b.correlation_id) });
           await recordExecutionAudit({ companyId, campaignId: String(b.campaign_id), stage: 'approval', decision: 'allowed', reason: 'approval_recorded', actor, evidence: { version, approvalId: id }, correlationId: str(b.correlation_id) });
           return res.status(201).json({ ok: true, approvalId: id });
         }
         case 'revoke_approval': {
-          if (!requireCap(user, 'campaign.approve')) { denyCap(companyId, actor, 'campaign.approve', 'revoke_approval'); return res.status(403).json({ error: 'missing_capability:campaign.approve' }); }
+          if (!requireCap(capUser, 'campaign.approve')) { denyCap(companyId, actor, 'campaign.approve', 'revoke_approval'); return res.status(403).json({ error: 'missing_capability:campaign.approve' }); }
           const version = str(b.message_id) ?? 'default';
           await revokeApproval({ companyId, campaignId: String(b.campaign_id), version, actorId: actor, reason: str(b.reason) });
           await recordExecutionAudit({ companyId, campaignId: String(b.campaign_id), stage: 'approval', decision: 'cancelled', reason: 'approval_revoked', actor, evidence: { version }, correlationId: str(b.correlation_id) });
@@ -76,7 +107,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         case 'suppress': { await addSuppression({ companyId, channel: str(b.channel) ?? '*', target: String(b.target), reason: b.reason ?? 'manual', actor }); return res.status(201).json({ ok: true }); }
         // ES-103 — un-suppress (release) is consent-sensitive: capability-gated, tenant-scoped, audited. Fail-closed.
         case 'release': {
-          if (!requireCap(user, 'campaign.override')) { denyCap(companyId, actor, 'campaign.override', 'release'); return res.status(403).json({ error: 'missing_capability:campaign.override' }); }
+          if (!requireCap(capUser, 'campaign.override')) { denyCap(companyId, actor, 'campaign.override', 'release'); return res.status(403).json({ error: 'missing_capability:campaign.override' }); }
           await releaseSuppression(companyId, str(b.channel) ?? '*', String(b.target));
           await recordExecutionAudit({ companyId, channel: str(b.channel) ?? '*', stage: 'suppression', decision: 'cancelled', reason: 'suppression_released', actor, evidence: { target: String(b.target) }, correlationId: str(b.correlation_id) });
           return res.status(200).json({ ok: true });
@@ -84,13 +115,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         case 'check_suppression': return res.status(200).json(await isSuppressed(companyId, str(b.channel) ?? 'email', String(b.target)));
 
         case 'set_control': {
-          if (!requireCap(user, 'campaign.override')) { denyCap(companyId, actor, 'campaign.override', 'set_control'); return res.status(403).json({ error: 'missing_capability:campaign.override' }); }
+          if (!requireCap(capUser, 'campaign.override')) { denyCap(companyId, actor, 'campaign.override', 'set_control'); return res.status(403).json({ error: 'missing_capability:campaign.override' }); }
           await setControl({ companyId, scope: b.scope, scopeId: str(b.scope_id) ?? null, enabled: b.enabled === true, emergencyStop: b.emergency_stop === true, reason: str(b.reason), actor });
           await recordExecutionAudit({ companyId, campaignId: str(b.scope_id) ?? null, stage: 'control', decision: b.enabled === true ? 'allowed' : 'blocked', reason: `set_control:${b.scope}`, actor, evidence: { scope: b.scope, enabled: b.enabled === true, emergency_stop: b.emergency_stop === true }, correlationId: str(b.correlation_id) });
           return res.status(200).json({ ok: true });
         }
         case 'kill_switch': {
-          if (!requireCap(user, 'campaign.override')) { denyCap(companyId, actor, 'campaign.override', 'kill_switch'); return res.status(403).json({ error: 'missing_capability:campaign.override' }); }
+          if (!requireCap(capUser, 'campaign.override')) { denyCap(companyId, actor, 'campaign.override', 'kill_switch'); return res.status(403).json({ error: 'missing_capability:campaign.override' }); }
           await killSwitch(companyId, b.scope ?? 'tenant', str(b.scope_id) ?? null, actor, str(b.reason) ?? 'manual_kill');
           await recordExecutionAudit({ companyId, campaignId: str(b.scope_id) ?? null, stage: 'control', decision: 'killed', reason: `kill_switch:${b.scope ?? 'tenant'}`, actor, evidence: { scope: b.scope ?? 'tenant' }, correlationId: str(b.correlation_id) });
           return res.status(200).json({ ok: true });

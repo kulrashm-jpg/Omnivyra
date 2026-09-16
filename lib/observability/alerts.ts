@@ -111,6 +111,7 @@ export class SlackAlertHandler implements AlertHandler {
     };
 
     try {
+      // ssrf-ok: operator-configured Slack webhook passed to the constructor by whoever registers the handler (no in-repo instantiation)
       const response = await fetch(this.webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -199,6 +200,7 @@ export class WebhookAlertHandler implements AlertHandler {
         ...this.customHeaders,
       };
 
+      // ssrf-ok: operator-configured alert webhook passed to the constructor by whoever registers the handler (no in-repo instantiation)
       const response = await fetch(this.url, {
         method: 'POST',
         headers,

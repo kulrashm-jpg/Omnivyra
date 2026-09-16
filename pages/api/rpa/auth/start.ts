@@ -15,6 +15,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { resolveUserContext, enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { issueRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
+import { isSigningSecretUnavailable } from '../../../../backend/auth/signingSecrets';
 
 const LOGIN_URLS: Record<string, string> = {
   linkedin:  'https://www.linkedin.com/login',
@@ -62,7 +63,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   } catch (err) {
     console.error('[rpa/auth/start]', err);
-    return res.status(500).json({ error: (err as Error)?.message || 'Failed to start RPA auth' });
+    // SEC91-W2B-5: a missing signing secret is a service condition (503) with a plain
+    // code; never echo the error text (it names configuration variables).
+    if (isSigningSecretUnavailable(err)) {
+      return res.status(503).json({ error: 'SIGNING_SECRET_UNAVAILABLE' });
+    }
+    return res.status(500).json({ error: 'Failed to start RPA auth' });
   }
 }
 

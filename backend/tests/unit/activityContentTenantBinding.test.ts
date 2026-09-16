@@ -305,8 +305,23 @@ describe('campaign identity comes from the row, never the body', () => {
     expect(r.status).toBe(403);
     expectNothingHappened();
   });
-  it('9. mismatched body campaignId on an own row is inert: A billed, only A\'s row written', async () => {
+  /*
+   * STEP 3AH-95 reconciliation — a FOREIGN body campaignId on an own row is no
+   * longer merely inert; it is refused (SEC91-W2F-1a, PR #246). The write target
+   * is server-resolved, so the value selects no row either way, but the explicit
+   * refusal keeps a foreign campaign id from being carried into generation
+   * inputs or telemetry under an authorized tenant — the invariant #246 shipped
+   * with tests. Nothing is billed and nothing is written; 9b pins that a caller
+   * naming its OWN campaign is still served.
+   */
+  it('9. foreign body campaignId on an own row is refused: nothing billed, no row written', async () => {
     const r = await post(BODIES.improve_variant(PLAN_A2, { companyId: CO_A, campaignId: CAMPAIGN_B }), 'A');
+    expect(r.status).toBe(404);
+    expectNothingHappened();
+    for (const [id, tag] of [[PLAN_B, 'B'], [PLAN_B2, 'B2'], [PLAN_B3, 'B3']]) expect(content(id)).toBe(ORIGINAL(tag));
+  });
+  it('9b. own body campaignId on an own row still succeeds: A billed, only A\'s row written', async () => {
+    const r = await post(BODIES.improve_variant(PLAN_A2, { companyId: CO_A, campaignId: CAMPAIGN_A }), 'A');
     expect(r.status).toBe(200);
     expect(paid().every((e) => e.endsWith(CO_A))).toBe(true);
     expect(content(PLAN_A2)).toContain('AI REWRITE');

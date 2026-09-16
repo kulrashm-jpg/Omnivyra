@@ -82,6 +82,9 @@ function rowsFor(table: string): any[] {
   if (table === 'campaigns') return CAMPAIGN_ROWS;
   if (table === 'campaign_versions') return VERSION_ROWS;
   if (table === 'user_company_roles') return ROLE_ROWS;
+  // SEC-91 W2-A (W2A-5): requireCampaignAccess now checks the owning company's
+  // status (TenantGuard parity), so the world carries its (active) companies.
+  if (table === 'companies') return [{ id: CO_A, status: 'active' }, { id: CO_B, status: 'active' }];
   return [];
 }
 
@@ -235,7 +238,12 @@ describe('resource ownership', () => {
   it('a nonexistent campaign is refused', async () => {
     const res = await post({ campaignId: UNKNOWN_CAMPAIGN, week: 1 });
     expect(res.statusCode).toBe(404);
-    expect(sensitiveCalls()).toEqual([]);
+    // SEC-91A (STEP 3AH-91, A8): a campaign with no campaign_versions row now
+    // falls back to its legacy owner (campaigns.company_id). That guard-side
+    // owner lookup — one select on campaigns by this id, matching nothing — is
+    // the only sensitive-table touch allowed; nothing else may run.
+    expect(sensitiveCalls().filter((c) => !(c.table === 'campaigns' && c.op === 'select'
+      && Object.keys(c.filters).join() === 'id' && c.filters.id === UNKNOWN_CAMPAIGN))).toEqual([]);
   });
 
   it('a missing campaign id is refused before anything runs', async () => {

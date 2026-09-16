@@ -50,7 +50,7 @@ import { runCompletionWithOperation } from '../aiGateway';
 import { runBilledOperation, type OrchestratorResult } from './enterpriseBillingOrchestrator';
 import type { BillingIdempotencyArgs } from './billingIdempotencyService';
 import type { CreditAction, LlmExecutorResult } from '../creditExecutionService';
-import { checkAiBillingGuard } from './aiGatewayBillingGuard';
+import { checkAiBillingGuard, runWithCreditHandle, type CreditHandle } from './aiGatewayBillingGuard';
 
 export interface RunBilledAiCompletionArgs {
   module:        string;
@@ -123,21 +123,25 @@ export async function runBilledAiCompletion(
     executor: async (): Promise<LlmExecutorResult<string>> => {
       // We have a handle by virtue of being inside the orchestrator. Notify the
       // guard so violations cannot accidentally proliferate at this seam.
+      const creditHandle: CreditHandle = {
+        operationId:    'in-flight',
+        idempotencyKey: 'in-flight',
+        orgId:          args.orgId,
+        action:         args.action,
+        source:         'orchestrator',
+      };
       await checkAiBillingGuard({
         operation: args.completion.operation,
-        creditHandle: {
-          operationId:    'in-flight',
-          idempotencyKey: 'in-flight',
-          orgId:          args.orgId,
-          action:         args.action,
-          source:         'orchestrator',
-        },
+        creditHandle,
         orgId: args.orgId,
       });
 
-      const gatewayResp = await runCompletionWithOperation({
+      // SEC91-D2: the gateway re-checks the billing guard; the handle must be
+      // visible there too, or this billed call is recorded as an untracked
+      // violation (and blocked outright once BILLING_REQUIRE_AI_HANDLE=true).
+      const gatewayResp = await runWithCreditHandle(creditHandle, () => runCompletionWithOperation({
         ...args.completion,
-      });
+      }));
 
       const text = typeof gatewayResp.output === 'string' ? gatewayResp.output : '';
       const usage = gatewayResp.metadata?.token_usage ?? {};

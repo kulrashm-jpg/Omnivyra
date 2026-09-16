@@ -10,6 +10,7 @@ import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCred
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
+import { describeProviderError, summarizeProviderBody } from '../../../../backend/auth/safeErrorLog';
 import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -119,7 +120,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
-      console.error('[LinkedIn callback] Token exchange failed:', tokenResponse.status, errorText);
+      console.error('[LinkedIn callback] Token exchange failed:', tokenResponse.status, summarizeProviderBody(errorText));
       logOAuthEvent({
         event: 'oauth_failure',
         provider: 'linkedin',
@@ -129,7 +130,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         failure_point: 'token_exchange_failed',
         failure_detail: `HTTP ${tokenResponse.status}`,
       });
-      throw new Error(`Token exchange failed (${tokenResponse.status}): ${errorText}`);
+      // The message reaches the user-visible ?error= redirect — never the raw provider body.
+      throw new Error(`Token exchange failed (${tokenResponse.status}): ${summarizeProviderBody(errorText, { max: 160 })}`);
     }
 
     const tokenData = await tokenResponse.json();
@@ -155,7 +157,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
       if (!meRes.ok) {
         const errorText = await meRes.text();
-        console.error('[LinkedIn callback] Profile fetch failed:', meRes.status, errorText);
+        console.error('[LinkedIn callback] Profile fetch failed:', meRes.status, summarizeProviderBody(errorText));
         throw new Error(`Profile fetch failed: ${meRes.statusText}`);
       }
       const me = await meRes.json();
@@ -193,7 +195,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         console.log('[LinkedIn callback] connection count:', linkedinConnectionCount);
       } else {
         const errText = await meProjectionRes.text();
-        console.log('[LinkedIn callback] /v2/me projection returned', meProjectionRes.status, errText);
+        console.log('[LinkedIn callback] /v2/me projection returned', meProjectionRes.status, summarizeProviderBody(errText));
       }
     } catch (connErr) {
       console.log('[LinkedIn callback] Could not fetch connection count:', connErr);
@@ -361,7 +363,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.redirect(`${successDest}${sep}connected=linkedin&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
-    console.error('LinkedIn OAuth callback error:', error);
+    console.error('LinkedIn OAuth callback error:', describeProviderError(error));
     logOAuthEvent({
       event: 'oauth_failure',
       provider: 'linkedin',

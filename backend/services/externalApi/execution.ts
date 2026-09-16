@@ -19,12 +19,14 @@ import {
   DEFAULT_RATE_LIMIT_PER_MIN,
   fetchWithRetry,
   isRateLimited,
-  resolveEnvValue,
   normalizeRecord,
   applyOverrides,
 } from './internalHelpers';
 import { logExternalApiUsage } from './usageLogging';
 import { ownedDbTable } from '../../db/writeOwner';
+// SEC91-B2: execution-path env resolution is restricted to declared provider credentials
+// sent to approved destinations — never process.env[anyName].
+import { createSourceEnvResolver } from './envResolutionPolicy';
 
 const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
@@ -239,6 +241,8 @@ export const buildExternalApiRequest = (
      *  provided, these take precedence over source-level credential fields.
      *  Falls back to existing source fields when null/undefined. */
     accountCredentials?: import('../providerAccountService').ResolvedAccountCredentials | null;
+    /** Env names the caller already approved through its own gate (ad-hoc test route only). */
+    approvedEnvNames?: readonly string[];
   }
 ): { details: ExternalApiRequestDetails; missingEnv: string[] } => {
   const method = String(source.method || 'GET').toUpperCase();
@@ -281,6 +285,13 @@ export const buildExternalApiRequest = (
   const acct = options?.accountCredentials ?? null;
   const apiKeyEnvName: string | null =
     acct?.api_key_env_name ?? source.api_key_env_name ?? source.api_key_name ?? null;
+  // SEC91-B2: one policy-bound resolver for this source — the api key AND every
+  // {{ENV_NAME}} template go through it. A refused name resolves to undefined and is
+  // reported as missing; its template stays literal, so no value is substituted.
+  const resolveEnvValue = createSourceEnvResolver(source, {
+    accountEnvName: acct?.api_key_env_name ?? null,
+    approvedEnvNames: options?.approvedEnvNames ?? null,
+  });
   const apiKeyValue: string | undefined =
     acct?.api_key_value ?? resolveEnvValue(apiKeyEnvName);
   const missingEnv: string[] = [];

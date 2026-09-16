@@ -9,6 +9,7 @@ import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCred
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
+import { describeProviderError } from '../../../../backend/auth/safeErrorLog';
 import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -316,7 +317,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
-    console.error('YouTube OAuth callback error:', error);
+    console.error('YouTube OAuth callback error:', describeProviderError(error));
     logOAuthEvent({
       event: 'oauth_failure',
       provider: 'youtube',

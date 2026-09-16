@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 const hashIp = (ip?: string | null) => {
   if (!ip) return null;
@@ -39,13 +40,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       user_agent,
     } = req.body || {};
 
-    const forwardedFor = req.headers['x-forwarded-for'];
-    const ip =
-      (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor || '')
-        .split(',')[0]
-        .trim() ||
-      req.socket?.remoteAddress ||
-      null;
+    // SEC91-W2E: platform-trusted client IP, or null (hashIp(null) -> null as before).
+    const ip = getTrustedClientIpOrNull(req);
 
     const derivedUtm = extractUtm(tracking_url);
     const metadata = {

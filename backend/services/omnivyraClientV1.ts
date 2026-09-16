@@ -233,6 +233,7 @@ const requestOmnivyra = async <T>(
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const startedAt = Date.now();
+      // ssrf-ok: host is operator config (getBaseUrl() → process.env.OMNIVYRA_BASE_URL); path is an internal API constant
       const response = await fetch(`${baseUrl}${API_PREFIX}${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

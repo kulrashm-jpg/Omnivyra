@@ -5,6 +5,7 @@ import {
   REPORT_GENERATION_TIMEOUT_MINUTES,
 } from '@/backend/services/reportCardService';
 import { config } from '@/config';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 /**
  * Phase 2 — Cron-driven recovery for reports stuck in `status='generating'`.
@@ -36,7 +37,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Vercel's platform cron also injects an Authorization: Bearer <CRON_SECRET>
   // header. Accept either to keep platform + manual triggers working.
   const bearer = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  if (presented !== secret && bearer !== secret) {
+  // SEC-C4: constant-time; both shapes are evaluated so timing does not reveal which matched.
+  const presentedOk = constantTimeEqual(presented, secret);
+  const bearerOk = constantTimeEqual(bearer, secret);
+  if (!presentedOk && !bearerOk) {
     return res.status(401).json({ error: 'Unauthorised' });
   }
 

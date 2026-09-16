@@ -9,6 +9,7 @@ import { resolveProviderCredential } from './providerCredentialResolver';
 import { ownedDbTable } from '../db/writeOwner';
 import { authorizeProviderCall, recordProviderUsage } from './providers/providerCostGovernor';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
+import { redactedErrorMessage } from '../../lib/security/redactUrl';
 import {
   normalizeSerpResultType,
   hasMeaningfulPosition,
@@ -307,7 +308,9 @@ async function withRetry<T>(label: string, run: () => Promise<T>, retries = 2): 
       await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
     }
   }
-  throw new Error(`${label} failed after ${retries + 1} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  // SEC-E3: SerpAPI/ScaleSERP take `api_key` in the URL; a transport error
+  // that echoes the URL must not carry the key into this message.
+  throw new Error(`${label} failed after ${retries + 1} attempts: ${redactedErrorMessage(lastError, 1000)}`);
 }
 
 function configuredProviderHealth(id: SerpProviderId, configured: boolean): SerpProviderHealth {

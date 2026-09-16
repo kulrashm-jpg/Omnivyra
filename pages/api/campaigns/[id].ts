@@ -2,7 +2,19 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { evaluateCampaignReadiness } from '../../../backend/services/campaignReadinessService';
-import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
+import { enforceRole, Role } from '../../../backend/services/rbacService';
+
+/** CAMPAIGN_DELETE holders (backend/security/capabilityRegistry.ts). */
+const CAMPAIGN_DELETE_ROLES: Role[] = [Role.COMPANY_ADMIN, Role.SUPER_ADMIN];
+/** Campaign authoring roles (rbacService PERMISSIONS.CREATE_CAMPAIGN). */
+const CAMPAIGN_EDIT_ROLES: Role[] = [
+  Role.COMPANY_ADMIN,
+  Role.CONTENT_CREATOR,
+  Role.CONTENT_REVIEWER,
+  Role.CONTENT_PUBLISHER,
+  Role.SUPER_ADMIN,
+];
 
 const resolveCampaignCompanyId = async (campaignId: string) => {
   const { data: campRow } = await supabase
@@ -46,6 +58,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Campaign ID is required' });
   }
 
+  // SEC-91A (STEP 3AH-91, A6) — authenticate BEFORE touching the campaign. The
+  // owner lookup below used to run first, so an anonymous caller got 404 for an
+  // unknown id and 401 for a real one: an existence oracle on campaign ids
+  // (the same one ROUTE-AUTH-001 removed from requireCampaignAccess).
+  const viewer = await resolveUserContext(req);
+  if (viewer.authenticated === false || !viewer.userId) {
+    return res.status(401).json({
+      error: 'Authentication required. Please sign in again.',
+      code: 'UNAUTHENTICATED',
+    });
+  }
+
   // SECURITY: derive the campaign's owning company from the resource itself,
   // never trust ?companyId= from query/body. Without this gate, a caller could
   // authenticate against their own company and then operate on another company's
@@ -60,6 +84,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     companyId: campaignCompanyId,
   });
   if (!tenantContext) return;
+
+  // SEC-91 W2-A (STEP 3AH-91, W2A-1) — same-company role gate for the writes.
+  // Membership alone used to be enough, so a VIEW_ONLY member could rename,
+  // pause/cancel/activate or permanently delete any campaign of the company.
+  // Both role sets are the ones the repository already defines for the action:
+  //   DELETE → CAMPAIGN_DELETE holders (capabilityRegistry: SUPER_ADMIN and
+  //            COMPANY_ADMIN only), exactly what /api/admin/delete-campaign —
+  //            the route the campaigns page uses to delete — enforces.
+  //   PUT    → the campaign authoring roles (PERMISSIONS.CREATE_CAMPAIGN, the
+  //            set the sibling POST /api/campaigns checks). VIEW_ONLY holds
+  //            CAMPAIGN_VIEW only and has no access to the campaigns work-area
+  //            (ROLE_ACCESS_MAP), so it stays read-only; every role that sees the
+  //            pause/resume/cancel controls keeps them.
+  // GET is unchanged (CAMPAIGN_VIEW is held by every role).
+  if (req.method === 'DELETE' || req.method === 'PUT') {
+    const roleGate = await enforceRole({
+      req,
+      res,
+      companyId: campaignCompanyId,
+      allowedRoles:
+        req.method === 'DELETE'
+          ? CAMPAIGN_DELETE_ROLES
+          : CAMPAIGN_EDIT_ROLES,
+    });
+    if (!roleGate) return;
+  }
 
   if (req.method === 'GET') {
     try {

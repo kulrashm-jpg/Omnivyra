@@ -30,10 +30,12 @@ import {
 } from '../../../backend/security/SessionAuthorityService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { checkSuperAdminIdentity } from '../../../backend/security/startup/superAdminIdentityCheck';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 import {
   mintSignedBridgeCookieValue,
   buildBridgeSetCookieHeader,
 } from '../../../backend/security/bridgeCookie';
+import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 interface CanonicalUserRow {
   id: string;
@@ -67,10 +69,9 @@ async function lookupCanonicalSuperAdmin(userId: string): Promise<CanonicalUserR
   return u;
 }
 
+// SEC91-W2E: platform-trusted client IP (audit fields / session row; null when nothing parses).
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  return req.socket?.remoteAddress ?? null;
+  return getTrustedClientIpOrNull(req);
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -88,7 +89,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  if (providedUser !== expectedUser || providedPass !== expectedPass) {
+  // SEC91-W2F-2a: constant-time, and both halves are always evaluated, so the
+  // response time reveals neither a matching prefix nor which half was wrong.
+  const userOk = constantTimeEqual(providedUser, expectedUser);
+  const passOk = constantTimeEqual(providedPass, expectedPass);
+  if (!userOk || !passOk) {
     return res.status(403).json({ error: 'INVALID_CREDENTIALS' });
   }
 

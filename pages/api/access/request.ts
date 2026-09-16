@@ -16,6 +16,7 @@ import crypto from 'crypto';
 import { checkDomainEligibility } from '@/backend/services/domainEligibilityService';
 import { reviewableResults } from '@/lib/auth/domainEligibilityModel';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { getTrustedClientIp } from '../../../lib/security/clientIp';
 
 const RATE_LIMIT_MAX = 3;
 const RATE_LIMIT_WINDOW_HOURS = 24;
@@ -32,7 +33,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 
   // ── Rate limit by IP ────────────────────────────────────────────────────────
-  const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket.remoteAddress ?? 'unknown';
+  // SEC91-W2E: platform-trusted client IP ('unknown' when nothing parses), not the client-written XFF hop.
+  const ip = getTrustedClientIp(req);
   const ipHash = hashIp(ip);
   const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_HOURS * 3600 * 1000).toISOString();
 

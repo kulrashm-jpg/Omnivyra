@@ -535,7 +535,7 @@ const getOpenAiClient = (apiKey?: string): OpenAI => {
 
 // ── Dynamic LLM config resolution ────────────────────────────────────────────
 
-type ResolvedLlmConfig = {
+export type ResolvedLlmConfig = {
   provider: 'openai' | 'anthropic';
   model: string;
   apiKey: string;
@@ -543,7 +543,14 @@ type ResolvedLlmConfig = {
   isByok: boolean;
   /** true = company has an explicit config row; false = platform default */
   isCompanyConfig: boolean;
+  /** SEC91-D4: the company stored a key that could not be used (platform key substituted). */
+  byokUnavailable?: boolean;
 };
+
+/** SEC91-D4: the platform's own provider/model/key (read-only accessor for the credential policy). */
+export function platformDefaultLlmConfig(): ResolvedLlmConfig {
+  return platformDefault();
+}
 
 function platformDefault(): ResolvedLlmConfig {
   return {
@@ -595,7 +602,7 @@ async function resolveLlmConfigUncached(companyId: string): Promise<ResolvedLlmC
     const config = await getCompanyLlmConfig(companyId);
     if (!config || !config.is_active) return platformDefault();
 
-    const { key, source } = await resolveCompanyApiKey(companyId, config.provider_name);
+    const { key, source, byokUnavailable } = await resolveCompanyApiKey(companyId, config.provider_name);
     const provider = config.provider_name as 'openai' | 'anthropic';
     return {
       provider,
@@ -603,6 +610,7 @@ async function resolveLlmConfigUncached(companyId: string): Promise<ResolvedLlmC
       apiKey: key,
       isByok: source === 'company',
       isCompanyConfig: true,
+      ...(byokUnavailable ? { byokUnavailable: true } : {}),
     };
   } catch (err) {
     console.warn('[ai-gateway] resolveLlmConfig failed, using platform default:', (err as Error)?.message);
@@ -799,6 +807,29 @@ export function getProviderMetadata<D = Readonly<Record<string, unknown>>>(
     | undefined;
 }
 
+/**
+ * SEC91-D9 — ONE retry loop for OpenAI.
+ *
+ * The OpenAI SDK retries internally (default maxRetries=2) on 408/409/429/5xx,
+ * connection errors AND timeouts. When AI_GATEWAY_RETRY_TRANSIENT is on, the
+ * gateway's own loop (callProviderWithRetry) already retries those classes, so
+ * the SDK's retries NEST under it: one timed-out generation became up to
+ * (1+2) x (1+1) paid attempts — a timed-out non-streaming completion is still
+ * generated (and billed) upstream. With the flag on, the gateway owns retries
+ * and the SDK does none. With the flag off (default) the SDK's retries are the
+ * only transient retries, so they are left exactly as they were.
+ */
+export function resolveOpenAiSdkMaxRetries(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  return /^(1|true|yes|on)$/i.test(String(env.AI_GATEWAY_RETRY_TRANSIENT ?? '')) ? 0 : undefined;
+}
+
+function openAiRequestOptions(timeoutMs: number, signal: AbortSignal | undefined): {
+  timeout: number; signal?: AbortSignal; maxRetries?: number;
+} {
+  const maxRetries = resolveOpenAiSdkMaxRetries();
+  return maxRetries === undefined ? { timeout: timeoutMs, signal } : { timeout: timeoutMs, signal, maxRetries };
+}
+
 export async function callOpenAi(params: {
   apiKey: string;
   model: string;
@@ -838,7 +869,7 @@ export async function callOpenAi(params: {
           ...(params.max_tokens ? { max_tokens: params.max_tokens } : {}),
           ...(params.seed != null ? { seed: params.seed } : {}),
         },
-        { timeout: timeoutMs, signal: params.signal },
+        openAiRequestOptions(timeoutMs, params.signal),
       );
       for await (const part of stream as AsyncIterable<{ choices: Array<{ delta?: { content?: string | null }; finish_reason?: string | null }>; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } }>) {
         // Abort check inside the loop so we tear down promptly.
@@ -900,7 +931,7 @@ export async function callOpenAi(params: {
         ...(params.max_tokens ? { max_tokens: params.max_tokens } : {}),
         ...(params.seed != null ? { seed: params.seed } : {}),
       },
-      { timeout: timeoutMs, signal: params.signal },
+      openAiRequestOptions(timeoutMs, params.signal),
     );
   } catch (err: unknown) {
     // Normalize SDK abort errors so the upstream retry/fallback layer can

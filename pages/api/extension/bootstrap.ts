@@ -14,6 +14,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { createClaimCode } from '@/backend/services/extensionClaimCodeService';
+import { isSigningSecretUnavailable } from '@/backend/auth/signingSecrets';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -42,7 +43,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   } catch (error) {
     console.error('[extension/bootstrap]', error);
-    return res.status(500).json({ success: false, error: (error as Error)?.message || 'bootstrap failed' });
+    // SEC91-W2B-5: a missing signing secret is a service condition (503) with a plain
+    // code; never echo the error text (it names configuration variables).
+    if (isSigningSecretUnavailable(error)) {
+      return res.status(503).json({ success: false, error: 'SIGNING_SECRET_UNAVAILABLE' });
+    }
+    return res.status(500).json({ success: false, error: 'bootstrap failed' });
   }
 }
 

@@ -8,6 +8,7 @@ import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
+import { describeProviderError, summarizeProviderBody } from '../../../../backend/auth/safeErrorLog';
 import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -125,7 +126,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
-      console.error('Token exchange failed:', tokenResponse.status, errorText);
+      console.error('Token exchange failed:', tokenResponse.status, summarizeProviderBody(errorText));
       logOAuthEvent({
         event: 'oauth_failure',
         provider: 'pinterest',
@@ -149,7 +150,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (!userResponse.ok) {
       const errorText = await userResponse.text();
-      console.error('User info fetch failed:', userResponse.status, errorText);
+      console.error('User info fetch failed:', userResponse.status, summarizeProviderBody(errorText));
       logOAuthEvent({
         event: 'oauth_failure',
         provider: 'pinterest',
@@ -275,7 +276,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
-    console.error('Pinterest OAuth callback error:', error);
+    console.error('Pinterest OAuth callback error:', describeProviderError(error));
     logOAuthEvent({
       event: 'oauth_failure',
       provider: 'pinterest',

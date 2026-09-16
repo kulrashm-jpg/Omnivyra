@@ -94,15 +94,25 @@ export async function verifyWordPressPlugin(input: {
 }): Promise<boolean> {
   const hash = hashSecret(input.nonce);
   const { data } = await ownedDbTable('wordpress_plugin_registrations')
-    .select('id, company_id, website_id, auth_nonce_hash')
+    .select('id, company_id, website_id, auth_nonce_hash, revoked_at')
     .eq('id', input.registrationId)
     .maybeSingle();
   if (!data?.auth_nonce_hash) return false;
+  // SEC-91 W2-A (W2A-2) — a revoked registration is never re-verified (its
+  // status used to flip from 'revoked' back to 'verified').
+  if ((data as { revoked_at?: string | null }).revoked_at) return false;
   const ok = safeTimingEqual(hash, String(data.auth_nonce_hash));
   if (ok) {
-    await ownedDbTable('wordpress_plugin_registrations')
+    // Verification does NOT consume the nonce (the token exchange that follows
+    // needs it); the update is conditional on the same nonce and on the row
+    // still being un-revoked, so a concurrent exchange/revoke wins.
+    const { data: verified } = await ownedDbTable('wordpress_plugin_registrations')
       .update({ status: 'verified', verified_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq('id', input.registrationId);
+      .eq('id', input.registrationId)
+      .eq('auth_nonce_hash', hash)
+      .is('revoked_at', null)
+      .select('id');
+    if (!verified || (verified as unknown[]).length === 0) return false;
     await recordAuditEvent({
       companyId: (data as any).company_id,
       websiteId: (data as any).website_id,
@@ -137,8 +147,19 @@ export async function exchangeWordPressPluginToken(input: {
 
   const accessToken = createPluginAccessToken();
   const compatibility = compatibilityStatus(input);
-  const { error: updateError } = await ownedDbTable('wordpress_plugin_registrations')
+  // SEC-91 W2-A (STEP 3AH-91, W2A-2) — the registration nonce is SINGLE-USE.
+  // auth_nonce_hash used to survive the exchange, so whoever held (or later
+  // obtained) the nonce could call this again and mint a fresh token at will —
+  // silently rotating the live plugin's token — and two concurrent exchanges
+  // both succeeded. The nonce is now consumed by the SAME conditional UPDATE
+  // that installs the token: it only matches while auth_nonce_hash still
+  // equals this nonce's hash and the row is un-revoked, and it sets the hash
+  // to NULL. Postgres re-checks the WHERE clause under the row lock, so at most
+  // one exchange per nonce can ever match; every other one sees 0 rows.
+  // (There is no nonce-expiry column on this table; see docs/security/SEC91_W2A.md.)
+  const { data: consumed, error: updateError } = await ownedDbTable('wordpress_plugin_registrations')
     .update({
+      auth_nonce_hash: null,
       access_token_hash: hashSecret(accessToken),
       token_rotated_at: new Date().toISOString(),
       status: 'connected',
@@ -153,8 +174,14 @@ export async function exchangeWordPressPluginToken(input: {
       settings: input.settings ?? {},
       updated_at: new Date().toISOString(),
     })
-    .eq('id', input.registrationId);
+    .eq('id', input.registrationId)
+    .eq('auth_nonce_hash', expected)
+    .is('revoked_at', null)
+    .select('id');
   if (updateError) throw new Error(updateError.message);
+  if (!consumed || (consumed as unknown[]).length === 0) {
+    throw new Error('Invalid plugin nonce');
+  }
 
   await recordAuditEvent({
     companyId: (data as any).company_id,
@@ -192,9 +219,22 @@ export async function authenticateWordPressPluginToken(accessToken: string): Pro
   };
 }
 
+/**
+ * SEC-91 W2-A (STEP 3AH-91, W2A-2) — the heartbeat is TOKEN-BOUND.
+ *
+ * It used to accept a bare `registrationId` and, when given one, never checked
+ * a token (and a token plus a DIFFERENT registrationId updated the other
+ * registration). The route now requires the token too (SEC-A A1), but the
+ * service is what must not be able to repeat the bug: the plugin bearer token
+ * is mandatory, the registration is the one the token belongs to, an explicit
+ * `registrationId` must match it, and the update is additionally scoped to the
+ * token's company + website and to a row that is still un-revoked (a revoke
+ * that lands between authentication and the write wins — the heartbeat can no
+ * longer flip a revoked registration back to 'connected').
+ */
 export async function recordWordPressPluginHeartbeat(input: {
   registrationId?: string;
-  accessToken?: string;
+  accessToken: string;
   metadata?: Record<string, unknown>;
   pluginVersion?: string | null;
   wpVersion?: string | null;
@@ -203,12 +243,11 @@ export async function recordWordPressPluginHeartbeat(input: {
   settings?: Record<string, unknown>;
   capabilities?: Record<string, unknown>;
 }): Promise<void> {
-  let registrationId = input.registrationId;
-  if (!registrationId && input.accessToken) {
-    const auth = await authenticateWordPressPluginToken(input.accessToken);
-    registrationId = auth?.registrationId;
+  const auth = input.accessToken ? await authenticateWordPressPluginToken(input.accessToken) : null;
+  if (!auth) throw new Error('A valid plugin bearer token is required');
+  if (input.registrationId && input.registrationId !== auth.registrationId) {
+    throw new Error('Plugin token does not match registration_id');
   }
-  if (!registrationId) throw new Error('registration_id or plugin bearer token is required');
   const compatibility = compatibilityStatus(input);
   await ownedDbTable('wordpress_plugin_registrations')
     .update({
@@ -228,31 +267,51 @@ export async function recordWordPressPluginHeartbeat(input: {
       capabilities: input.capabilities ?? {},
       updated_at: new Date().toISOString(),
     })
-    .eq('id', registrationId);
+    .eq('id', auth.registrationId)
+    .eq('company_id', auth.companyId)
+    .eq('website_id', auth.websiteId)
+    .is('revoked_at', null);
 }
 
+/**
+ * SEC-91 W2-A (STEP 3AH-91, W2A-2) — revocation is bound to the AUTHORIZED
+ * company (and website, when the caller knows it).
+ *
+ * It used to update by registration id alone, which is how SEC-A's A4 IDOR
+ * worked (an admin of company A revoked any tenant's plugin); the route now
+ * pre-checks ownership, and the service no longer lets any caller skip that:
+ * `companyId` is mandatory and part of the UPDATE's own WHERE clause, so a
+ * foreign or unknown id matches nothing and throws 'Registration not found'.
+ * The pending registration nonce is cleared with the token, so a revoked
+ * registration can neither exchange nor be re-verified.
+ */
 export async function revokeWordPressPlugin(input: {
   registrationId: string;
+  companyId: string;
+  websiteId?: string | null;
   reason?: string | null;
   actorUserId?: string | null;
 }): Promise<void> {
-  const { data } = await ownedDbTable('wordpress_plugin_registrations')
-    .select('company_id, website_id')
-    .eq('id', input.registrationId)
-    .maybeSingle();
-  const { error } = await ownedDbTable('wordpress_plugin_registrations')
+  if (!input.companyId) throw new Error('companyId is required to revoke a plugin registration');
+  let update = ownedDbTable('wordpress_plugin_registrations')
     .update({
       status: 'revoked',
       access_token_hash: null,
+      auth_nonce_hash: null,
       revoked_at: new Date().toISOString(),
       revoked_reason: input.reason ?? null,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', input.registrationId);
+    .eq('id', input.registrationId)
+    .eq('company_id', input.companyId);
+  if (input.websiteId) update = update.eq('website_id', input.websiteId);
+  const { data: revoked, error } = await update.select('id, company_id, website_id');
   if (error) throw new Error(error.message);
+  const row = ((revoked as Array<{ company_id?: string; website_id?: string }> | null) ?? [])[0];
+  if (!row) throw new Error('Registration not found');
   await recordAuditEvent({
-    companyId: (data as any)?.company_id ?? null,
-    websiteId: (data as any)?.website_id ?? null,
+    companyId: row.company_id ?? input.companyId,
+    websiteId: row.website_id ?? null,
     actorUserId: input.actorUserId ?? null,
     actorType: input.actorUserId ? 'user' : 'plugin',
     action: 'wordpress_plugin.revoke',

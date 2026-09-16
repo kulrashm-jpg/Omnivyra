@@ -379,6 +379,17 @@ export async function resolveActivityRow(activityId: string, opts: { strict?: bo
 }
 
 /**
+ * SEC-91 W2-A (W2F-1a) — an activity key that is safe to interpolate into a
+ * PostgREST filter: letters, digits, '-' and '_' only (uuids, `wk1-exec-2`,
+ * `workspace-…`). No ',', '.', '(', ')', ':', quotes or whitespace — the
+ * characters that carry PostgREST filter grammar.
+ */
+const SAFE_ACTIVITY_KEY = /^[A-Za-z0-9_-]{1,200}$/;
+export function isSafeActivityKey(value: unknown): value is string {
+  return typeof value === 'string' && SAFE_ACTIVITY_KEY.test(value);
+}
+
+/**
  * Content write addressed by activity-id only (no campaign in scope) using a
  * transform over the existing blob. Used by activity-workspace/content.ts
  * (master/variants persistence) so those enrichment writes are reconciled
@@ -393,6 +404,21 @@ export async function updateExecutionContentByActivity(
   scope: { campaignId?: string } = {},
 ): Promise<CanonicalWriteResult> {
   if (!activityId) return { ok: false, reason: 'missing_activity_id' };
+  /*
+   * STEP 3AH-95 reconciliation (SEC91-W2F-1a + 3AH-92 S-2).
+   *
+   * Row resolution below is now PARAMETERISED (resolveActivityRow: uuid-only
+   * `.eq` lookups, ambiguity reported), so the raw key no longer reaches
+   * PostgREST filter grammar here — that was the W2F-1a injection surface.
+   * The shape check is KEPT: it refuses junk before any query and is the same
+   * predicate the one remaining `.or()` caller applies
+   * (orchestrationStateSynchronizer, SEC91-W2G-3). It is a pre-filter, never
+   * the boundary: uuid-only resolution and the campaign pin below are.
+   */
+  if (!isSafeActivityKey(activityId)) {
+    LOG('ORCHESTRATION_WRITE', { execution_id: null, source_writer: sourceWriter, write_target: 'daily_content_plans', resolution_strategy: 'invalid_activity_id' });
+    return { ok: false, reason: 'invalid_activity_id' };
+  }
   try {
     const resolved = await resolveActivityRow(activityId);
     const row = resolved.ok ? resolved.row : null;

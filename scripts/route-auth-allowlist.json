@@ -29,6 +29,11 @@
       "reason": "Denies unless the query user_id equals the authenticated user; the query also filters by user_id.",
       "evidence": "user_id !== user\\.id"
     },
+    "pages/api/activity-workspace/content.ts": {
+      "kind": "inline-binding",
+      "reason": "SEC91-W2F-1a + 3AH-92 S-2, reconciled in STEP 3AH-95 (PR #246 × PR #247): the re-exported handler backend/services/activityWorkspace/contentRouteHandler.ts authenticates (getSupabaseUserFromRequest), resolves the WRITE TARGET server-side through the canonical adapter (resolveActivityRow, strict: uuid-only parameterised lookups, ambiguous id 409, malformed id 400, lookup error 503), proves active membership of the body companyId (assertOrgMembership → assertTenantAccess), requires the resolved row's campaign to be owned by that company (checkCampaignOwnership; foreign or no company → 403 ORG_SCOPE_VIOLATION, lookup error → 503, before any AI or credit work), binds a body campaignId the same way (foreign → 404), and persists only the resolved target (writeTarget, campaign-pinned inside updateExecutionContentByActivity). generate_master derives the org from the row itself. Tests: sec91W2AActivityWorkspaceBinding, activityContentTenantBinding.",
+      "evidence": "getSupabaseUserFromRequest\\(req\\)[\\s\\S]*?resolveActivityRow\\(activityId, \\{ strict: true \\}\\)[\\s\\S]*?assertOrgMembership\\(user\\.id, companyId\\)[\\s\\S]*?checkCampaignOwnership\\(writeTarget\\.campaignId, companyId\\)[\\s\\S]*?checkCampaignOwnership\\(bodyCampaignId, companyId\\)[\\s\\S]*?persistVariantsToDb\\(writeTarget"
+    },
     "pages/api/activity-workspace/generate-marketing-package.ts": {
       "kind": "retired",
       "reason": "Retired endpoint: answers 410 Gone for every request and performs no reads or writes."
@@ -49,8 +54,8 @@
     },
     "pages/api/ai/generate-content.ts": {
       "kind": "inline-binding",
-      "reason": "Company is derived from the campaign's campaign_versions row, then enforceCompanyAccess + enforceRole run on THAT company.",
-      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?enforceCompanyAccess\\(\\{ req, res, companyId: company_id \\}\\)"
+      "reason": "Caller is authenticated first (401 before any lookup); company is then derived from the campaign via the canonical resolveCampaignCompanyId seam, and enforceCompanyAccess + enforceRole run on THAT company.",
+      "evidence": "resolveUserContext\\(req\\)[\\s\\S]*?resolveCampaignCompanyId\\(campaignId\\)[\\s\\S]*?enforceCompanyAccess\\(\\{ req, res, companyId: company_id \\}\\)"
     },
     "pages/api/analytics/track.ts": {
       "kind": "public",
@@ -87,7 +92,7 @@
     },
     "pages/api/auth/passkeys/begin-authentication.ts": {
       "kind": "auth-flow",
-      "reason": "WebAuthn ceremony start; pre-session by design. With a session the principal id wins over body userId; the sessionless user-scoped path (credential-id disclosure) is a known low-severity item."
+      "reason": "WebAuthn ceremony start; pre-session by design. A user-scoped ceremony is built only for the authenticated principal; a body userId is ignored (SEC91-B11 closed the sessionless credential-id disclosure)."
     },
     "pages/api/auth/recovery-login.ts": {
       "kind": "auth-flow",
@@ -545,7 +550,7 @@
     },
     "pages/api/health/config.ts": {
       "kind": "health",
-      "reason": "Configuration-validity probe for operators; reports config/Redis health, no tenant data. (Verbosity of config error text is a separate P3 item.)"
+      "reason": "Configuration-validity probe for operators; reports config/Redis health, no tenant data. Production answers status + booleans only (SEC-E8, 3AH-91); detail is non-production or server-log only."
     },
     "pages/api/health/internal.ts": {
       "kind": "health",
@@ -828,8 +833,8 @@
     },
     "pages/api/wordpress-plugin/heartbeat.ts": {
       "kind": "machine-token",
-      "reason": "WordPress plugin heartbeat: authenticated by the plugin bearer token, verified by hash inside the service; 401 otherwise.",
-      "verifier": "recordWordPressPluginHeartbeat"
+      "reason": "WordPress plugin heartbeat: the route requires the plugin bearer token and verifies it (authenticateWordPressPluginToken, hash match, not revoked) before any write; the registration is taken from the token, a mismatching registration_id is refused (SEC-91A).",
+      "verifier": "authenticateWordPressPluginToken"
     },
     "pages/api/wordpress-plugin/setup/connect.ts": {
       "kind": "machine-token",
@@ -856,5 +861,17 @@
       "reason": "WordPress plugin verification: registration id + single-use nonce issued to that registration.",
       "verifier": "verifyWordPressPlugin"
     }
-  }
+  },
+  "_methodExemptionsComment": [
+    "STEP 3AH-91 (F1, R1-METHOD): per-HTTP-method exemptions for routes that authenticate on other methods.",
+    "Each is a reviewed CLAIM re-verified on every run: public → the branch never writes; stub → the branch has no await, no DB call and no call into an imported module.",
+    "Each entry names the open finding it tracks; when the route is fixed the gate prints a WARN asking for the entry's removal. Adding an entry requires security review."
+  ],
+  "methodExemptions": {},
+  "_knownOpenComment": [
+    "STEP 3AH-91 (W2F-1/W2F-3): CONFIRMED open findings, owned by another workstream, surfaced by the strengthened gate (routes that RE-EXPORT their default handler; secret checks that are open outside production).",
+    "A known-open entry does NOT hide the finding: the gate prints every tracked violation as KNOWN OPEN on every run. Only R2/R3 (tenant/campaign binding) and R4-ENV (closed in production, open elsewhere) can be tracked - never R1, R1-METHOD or R4. When the rule stops firing the gate prints a WARN asking for removal.",
+    "Remove the entry in the same change that fixes the route. Adding an entry requires security review."
+  ],
+  "knownOpen": {}
 }

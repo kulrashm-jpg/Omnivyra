@@ -1,6 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -12,6 +12,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const id = req.query.id as string;
   if (!id) {
     return res.status(400).json({ error: 'Recommendation ID is required' });
+  }
+
+  // SEC-91A (STEP 3AH-91, A6) — authenticate BEFORE the snapshot lookup, so an
+  // anonymous caller cannot tell a real recommendation id (401) from an
+  // unknown one (404).
+  const viewer = await resolveUserContext(req);
+  if (viewer.authenticated === false || !viewer.userId) {
+    return res.status(401).json({ error: 'Authentication required. Please sign in again.', code: 'UNAUTHENTICATED' });
   }
 
   const { data: snapshot, error: fetchError } = await supabase

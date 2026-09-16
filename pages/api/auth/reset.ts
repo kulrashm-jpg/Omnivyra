@@ -12,6 +12,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { verifyCaptchaToken, CAPTCHA_FAILED_RESPONSE } from '../../../lib/auth/captcha';
@@ -25,7 +26,7 @@ async function handler(
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown').split(',')[0].trim();
+  const ip = authRequestIp(req);
   const rl = await checkRateLimit(ip, { ...EMAIL_LINK_LIMIT, keyPrefix: 'rl:auth:reset', limit: 5, windowSecs: 3600 });
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 

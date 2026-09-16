@@ -13,6 +13,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
+import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { decideNextAction } from '../../../../backend/lib/campaigns/continuityDecisionEngine';
 import { recognizePatterns, type CampaignRecord } from '../../../../backend/lib/campaigns/patternRecognitionEngine';
 import {
@@ -44,6 +45,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Campaign ID required' });
+  }
+
+  // SEC-91A (STEP 3AH-91, A6) — authenticate BEFORE the campaign lookup, so an
+  // anonymous caller cannot tell a real campaign id (401) from an unknown one
+  // (404).
+  const viewer = await resolveUserContext(req);
+  if (viewer.authenticated === false || !viewer.userId) {
+    return res.status(401).json({ error: 'Authentication required. Please sign in again.', code: 'UNAUTHENTICATED' });
   }
 
   // ── 1. Load campaign + resolve company_id ─────────────────────────────────

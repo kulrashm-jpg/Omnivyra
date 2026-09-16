@@ -218,14 +218,17 @@ export const envSchema = z.object({
     .describe('256-bit hex encryption key for AES-GCM at-rest token storage'),
 
   // Dedicated key for OAuth state HMAC signing. Optional — when unset,
-  // backend/auth/oauthState.ts falls back to ENCRYPTION_KEY for backward
-  // compatibility. Setting both splits the blast radius: a compromise of
-  // either key alone does not reveal stored tokens AND forge OAuth state.
+  // backend/auth/oauthState.ts signs with a domain-separated key DERIVED from
+  // ENCRYPTION_KEY: HMAC-SHA256(ENCRYPTION_KEY, 'omnivyra/oauth-state/v1').
+  // ENCRYPTION_KEY itself is never used as the HMAC key. Setting a dedicated
+  // key splits the blast radius: a compromise of either key alone does not
+  // reveal stored tokens AND forge OAuth state (without it, ENCRYPTION_KEY
+  // still determines the derived key).
   OAUTH_STATE_HMAC_KEY: z
     .string()
     .regex(/^[a-f0-9]{64}$/, 'OAUTH_STATE_HMAC_KEY must be 64 hex characters when set')
     .optional()
-    .describe('256-bit hex HMAC key for OAuth state signing. Optional; falls back to ENCRYPTION_KEY when unset.'),
+    .describe('256-bit hex HMAC key for OAuth state signing. Optional; when unset, a domain-separated key derived from ENCRYPTION_KEY is used (HMAC-SHA256 with label omnivyra/oauth-state/v1).'),
   
   // ── Metrics (internal) ─────────────────────────────────────────────────────
   // No default: a committed default is a public credential. Every consumer

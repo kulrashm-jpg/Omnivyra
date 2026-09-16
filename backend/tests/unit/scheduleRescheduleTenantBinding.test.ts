@@ -261,12 +261,34 @@ describe('missing ownership records fail closed', () => {
   it.each([
     ['campaign_id names no campaign and no version (dangling)', 'B', POST_DANGLING, CO_B],
     ['version row for A but no campaigns row', 'A', POST_GHOST, CO_A],
-    ['campaigns row for A but no version row (requireCampaignAccess: no owner ⇒ 404)', 'A', POST_NOVER_A, CO_A],
-    ['campaigns row for B, no version, A names its own company (the S-3 exploit)', 'A', POST_NOVER_B, CO_A],
   ] as const)('%s → 404, nothing written or enqueued', async (_n, as, id, companyId) => {
     const r = await reschedule({ scheduled_post_id: id, companyId }, as);
     expect(r.status).toBe(404);
     expectUntouched(id);
+  });
+
+  /*
+   * STEP 3AH-95 reconciliation — a campaign with a `campaigns` row but no
+   * `campaign_versions` row now resolves to its owner (SEC91-A8, PR #246):
+   * requireCampaignAccess falls back to campaigns.company_id ONLY when no
+   * version row exists, so a legacy campaign stops 404-ing for the company that
+   * owns it. The tenant boundary is unchanged, and these two cases pin it: the
+   * owner is served, a foreign tenant is refused with nothing written.
+   */
+  it('campaigns row for A but no version row: A (the owner) is served — SEC91-A8 legacy owner fallback', async () => {
+    const r = await reschedule({ scheduled_post_id: POST_NOVER_A, companyId: CO_A }, 'A');
+    expect(r.status).toBe(200);
+    expect(scheduledFor(POST_NOVER_A)).not.toBe(ORIGINAL_AT);
+    // Only the owner's own post moved; every other seeded post is untouched.
+    for (const id of rows('scheduled_posts').map((p) => p.id as string)) {
+      if (id !== POST_NOVER_A) expect(scheduledFor(id)).toBe(ORIGINAL_AT);
+    }
+  });
+
+  it('campaigns row for B, no version, A names its own company (the S-3 exploit) → 403, nothing written or enqueued', async () => {
+    const r = await reschedule({ scheduled_post_id: POST_NOVER_B, companyId: CO_A }, 'A');
+    expect(r.status).toBe(403);
+    expectUntouched(POST_NOVER_B);
   });
   it('unknown post → 404', async () => {
     expect((await reschedule({ scheduled_post_id: UNKNOWN_POST }, 'A')).status).toBe(404);

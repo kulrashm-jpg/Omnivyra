@@ -17,7 +17,7 @@
   ],
   "accepted": [
     {
-      "site": "pages/api/access/request.ts:108",
+      "site": "pages/api/access/request.ts:110",
       "classification": "attribution",
       "reason": "The derived company is written to access_requests.organization_id on the requester's own PENDING row. It is never used as a tenant predicate for a read or a write, and it grants nothing: the row is a REQUEST for access, and approval is a separate super-admin flow that establishes access on its own terms.",
       "caveat": "The field does influence which organisation an approver sees the request under, so a caller holding only a stale membership would have their request attributed to that organisation. That is a routing and disclosure question about a self-submitted request, not an authorization decision, and it does not confer access.",
@@ -25,7 +25,8 @@
       "owner": "platform-security",
       "recorded": "2026-09-01",
       "audit": "AUTHZ-SERVICE-LAYER-DETECTOR-001",
-      "reverified": "2026-09-13 against main 07acd0a7: same line, same shape. Every reader of access_requests.organization_id (admin/access-requests/approve, onboarding/complete, onboarding/setup-company, admin/external-users) filters status='approved', and the only approval path (admin/access-requests/approve) overwrites organization_id with the admin-chosen company, so the requester-derived value is never read back as a tenant."
+      "reverified": "2026-09-13 against main 07acd0a7: same line, same shape. Every reader of access_requests.organization_id (admin/access-requests/approve, onboarding/complete, onboarding/setup-company, admin/external-users) filters status='approved', and the only approval path (admin/access-requests/approve) overwrites organization_id with the admin-chosen company, so the requester-derived value is never read back as a tenant.",
+      "moved": "2026-09-15 STEP 3AH-91 integration: 108 → 110. SEC91-W2E added one import and one comment line above it (trusted client IP); the membership query is byte-identical and none of the readers listed above changed."
     }
   ]
 }

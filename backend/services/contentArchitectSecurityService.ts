@@ -23,6 +23,7 @@ import { supabase } from '../db/supabaseClient';
 import { config } from '@/config';
 import { logAuditEvent } from './auditLoggingService';
 import { createHash, randomBytes } from 'crypto';
+import { constantTimeEqual } from '../security/constantTimeEqual';
 
 export interface ContentArchitectSession {
   id: string;
@@ -75,11 +76,10 @@ export async function grantContentArchitectAccess(
     return null;
   }
 
-  // 1. Verify password
-  const passwordHash = createHash('sha256').update(password).digest('hex');
-  const expectedHash = createHash('sha256').update(expectedPassword).digest('hex');
-
-  if (passwordHash !== expectedHash) {
+  // 1. Verify password. SEC91-W2F-2c: constant-time (constantTimeEqual hashes
+  // both sides to fixed-length digests before timingSafeEqual); the former
+  // `!==` on hex digests returned at the first differing character.
+  if (!constantTimeEqual(password, expectedPassword)) {
     // Log failed attempt
     await logAuditEvent({
       operation: 'SELECT',

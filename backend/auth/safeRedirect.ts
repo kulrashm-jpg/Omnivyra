@@ -1,0 +1,37 @@
+/**
+ * SEC91-B4 — the ONE validator for server-side redirect targets that come from a request
+ * or from OAuth state (`returnTo`, connector `redirect`).
+ *
+ * A target is accepted only when it is a same-origin RELATIVE PATH:
+ *   - a string of at most 2048 characters starting with a single '/';
+ *   - no backslash anywhere (browsers treat '\' as '/', so '/\evil.example' is
+ *     protocol-relative);
+ *   - no ASCII control characters or whitespace-control (browsers strip TAB/CR/LF from
+ *     URLs, so '/\t/evil.example' becomes '//evil.example');
+ *   - resolving it against a fixed origin must stay on that origin (catches '//host',
+ *     scheme-relative and any other off-origin form the rules above did not name).
+ *
+ * The value is returned UNCHANGED when accepted (so query strings and fragments that the
+ * app appends to keep working); otherwise `fallback` (default: undefined) is returned.
+ * Never throws.
+ */
+
+const MAX_REDIRECT_PATH_LENGTH = 2048;
+const PROBE_ORIGIN = 'https://same-origin.invalid';
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
+
+export function safeRelativeRedirectPath(value: unknown, fallback?: string): string | undefined {
+  if (typeof value !== 'string') return fallback;
+  if (value.length === 0 || value.length > MAX_REDIRECT_PATH_LENGTH) return fallback;
+  if (value[0] !== '/' || value[1] === '/') return fallback;
+  if (value.includes('\\')) return fallback;
+  if (CONTROL_CHARS.test(value)) return fallback;
+  try {
+    const resolved = new URL(value, PROBE_ORIGIN);
+    if (resolved.origin !== PROBE_ORIGIN) return fallback;
+  } catch {
+    return fallback;
+  }
+  return value;
+}

@@ -1,16 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
+import { requireManageConnectors, getCommunityAiConnectorCallbackUrl, mintConnectorOAuthState } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
-
-const buildState = (value: Record<string, string>) => {
-  const json = JSON.stringify(value);
-  return Buffer.from(json, 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-};
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -34,12 +25,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const redirectUri = getCommunityAiConnectorCallbackUrl('reddit', req);
-  const redirectTo =
-    typeof req.query.redirect === 'string' ? req.query.redirect : '/community-ai/connectors';
-  const state = buildState({
-    tenant_id: tenantId,
-    organization_id: organizationId,
-    redirect: redirectTo,
+  // SEC91-B5: HMAC-signed state (company + tenant + session user, 10-min TTL, validated
+  // same-origin redirect) instead of unsigned base64 JSON.
+  const state = mintConnectorOAuthState({
+    organizationId,
+    userId: access.userId,
+    redirect: req.query.redirect,
   });
 
   const params = new URLSearchParams({

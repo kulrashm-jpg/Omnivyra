@@ -3,9 +3,13 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiRequestGuard';
+import { resolveTrustedClientIp } from '../../../backend/services/ai/trustedClientIp';
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
 const TRANSIENT_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
+// SEC91-D9: bound every provider attempt (max_tokens is 1000, so a healthy
+// response — streamed or not — completes well inside this).
+const CLAUDE_CHAT_ATTEMPT_TIMEOUT_MS = 90_000;
 const CLAUDE_CHAT_LIMIT = {
   keyPrefix: 'rl:ai:claude-chat',
   limit: 20,
@@ -38,7 +42,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   const credentialMode: CredentialMode = rawCredentialMode;
 
-  const rl = await checkRateLimit(rateLimitIdentifier(req, user), {
+  // SEC91-D3: "platform" mode spent the platform ANTHROPIC_API_KEY for any
+  // signed-in user with no tenant attribution, no credit hold and no usage
+  // ledger row — this route calls the provider directly, outside the AI
+  // gateway's plan/cost/billing controls. Refused (fail-closed) before any
+  // limiter or provider work; BYO-key mode is unchanged. Tenant-attributed,
+  // billed Claude chat belongs on the gateway (runBilledAiCompletion).
+  if (credentialMode === 'platform') {
+    return res.status(403).json({
+      error: 'Platform-key Claude chat is not available. Provide your own Anthropic API key (BYO-key mode).',
+      code: 'PLATFORM_MODE_DISABLED',
+    });
+  }
+
+  // SEC91-D1: keyed by the authenticated user only. Folding the client IP into
+  // the key let a caller mint a fresh bucket per request by varying the IP.
+  const rl = await checkRateLimit(rateLimitIdentifier(user), {
     ...CLAUDE_CHAT_LIMIT,
     keyPrefix: `${CLAUDE_CHAT_LIMIT.keyPrefix}:${credentialMode}`,
   });
@@ -51,12 +70,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // the same framework as the gateway. The route-specific limit above stays as
   // an extra guard.
   try {
-    const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? '').split(',')[0].trim() || null;
     await guardAiRequest({
       operation: 'chat.claude',
       provider: 'anthropic',
       userId: user.id,
-      ip,
+      // SEC91-D1: platform-trusted client IP, never the client-written XFF hop.
+      ip: resolveTrustedClientIp(req),
       messages: [{ role: 'user', content: String(message) }],
     });
   } catch (err) {
@@ -64,22 +83,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (err.retryAfterSecs) res.setHeader('Retry-After', String(err.retryAfterSecs));
       return res.status(err.status).json({ error: err.message, code: err.code });
     }
-    // fail-open on non-guard errors
+    // SEC91-D1: the guard already absorbs limiter/Redis outages internally
+    // (fail-open by design). Anything that still escapes is a guard defect —
+    // do not turn it into unlimited provider access.
+    return res.status(503).json({ error: 'AI request protection unavailable. Please retry.', code: 'AI_GUARD_UNAVAILABLE' });
   }
 
-  let apiKey: string | undefined;
-  if (credentialMode === 'platform') {
-    apiKey = process.env.ANTHROPIC_API_KEY;
-  } else {
-    apiKey = typeof requestApiKey === 'string' ? requestApiKey.trim() : '';
-  }
-
+  const apiKey = typeof requestApiKey === 'string' ? requestApiKey.trim() : '';
   if (!apiKey) {
     return res.status(400).json({
-      error: credentialMode === 'platform'
-        ? 'Platform Anthropic API key is not configured'
-        : 'Anthropic API key is required for BYO-key mode',
-      code: credentialMode === 'platform' ? 'PLATFORM_KEY_MISSING' : 'BYOK_KEY_REQUIRED',
+      error: 'Anthropic API key is required for BYO-key mode',
+      code: 'BYOK_KEY_REQUIRED',
     });
   }
 
@@ -188,11 +202,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-function rateLimitIdentifier(req: NextApiRequest, user: { id?: string; email?: string | null }): string {
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown')
-    .split(',')[0]
-    .trim();
-  return `${user.id ?? user.email ?? 'unknown'}:${ip}`;
+function rateLimitIdentifier(user: { id?: string; email?: string | null }): string {
+  return `user:${user.id ?? user.email ?? 'unknown'}`;
 }
 
 function logClaudeError(label: string, error: unknown): void {
@@ -228,6 +239,8 @@ async function callAnthropicWithRetry(input: {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
+      // SEC91-D9: an attempt can no longer hang the function indefinitely.
+      signal: AbortSignal.timeout(CLAUDE_CHAT_ATTEMPT_TIMEOUT_MS),
       headers: {
         'x-api-key': input.apiKey,
         'Content-Type': 'application/json',

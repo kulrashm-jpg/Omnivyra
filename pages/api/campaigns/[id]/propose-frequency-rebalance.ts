@@ -5,7 +5,7 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { getLatestCampaignVersion } from '../../../../backend/db/campaignVersionStore';
 import { getLatestApprovedCampaignVersion } from '../../../../backend/db/campaignApprovedVersionStore';
-import { getCanonicalAppUrl } from '../../../../backend/config/getCanonicalAppUrl';
+import { computePlatformAllocationAdvice } from '../../../../backend/services/campaignPlatformAllocationAdviceService';
 
 const getFrequencyValue = (value: any) => {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -29,14 +29,6 @@ const applyFrequencyValue = (value: any, next: number) => {
   }
   return next;
 };
-
-// Prefer the browser-supplied `Origin` header (correctly TLS-aware on Vercel
-// preview/prod, and gives a working URL for localhost dev). Fall back to the
-// canonical app URL instead of the previous `http://${req.headers.host}` —
-// that fallback hardcoded http:// regardless of TLS and trusted a raw
-// (header-injectable) host string.
-const buildOrigin = (req: NextApiRequest) =>
-  req.headers.origin || getCanonicalAppUrl();
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -87,18 +79,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return acc;
   }, {});
 
-  const origin = buildOrigin(req);
-  const adviceResponse = await fetch(`${origin}/api/campaigns/${id}/platform-allocation-advice`, {
-    headers: {
-      ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
-      ...(req.headers.cookie ? { Cookie: req.headers.cookie } : {}),
-    },
-  });
-  if (!adviceResponse.ok) {
-    const errorBody = await adviceResponse.json().catch(() => null);
-    return res.status(500).json({ error: errorBody?.error || 'Failed to load platform advice' });
+  // SEC-E1 (STEP 3AH-91): the advice is computed in-process. This route used
+  // to request the advice route on the host named by the caller's Origin
+  // header, forwarding the caller's Authorization + Cookie — a request to a
+  // caller-chosen host carrying the caller's credentials. The caller has already
+  // been authorised above (COMPANY_ADMIN of the campaign's own company), which is
+  // stricter than the advice route's own membership check.
+  let advice: Awaited<ReturnType<typeof computePlatformAllocationAdvice>>;
+  try {
+    advice = await computePlatformAllocationAdvice(id);
+  } catch {
+    return res.status(500).json({ error: 'Failed to load platform advice' });
   }
-  const advice = await adviceResponse.json();
 
   const proposedChanges = (advice.platform_advice || []).map((item: any) => {
     const platformKey = String(item.platform || '').toLowerCase();

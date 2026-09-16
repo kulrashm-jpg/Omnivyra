@@ -31,7 +31,9 @@ const REPORT_A = 'ra000000-0000-0000-0000-00000000000a';
 const REPORT_VICTIM = 'rb000000-0000-0000-0000-00000000000b';
 
 const ROLES = [
-  { user_id: MEMBER_A, company_id: COMPANY_A, status: 'active' },
+  // SEC-91 W2-A: DELETE now also requires a non-VIEW_ONLY role in the report's
+  // company (sec91W2AVerticalRbac), so the member row carries its role.
+  { user_id: MEMBER_A, company_id: COMPANY_A, role: 'COMPANY_ADMIN', status: 'active' },
   // Inactive in the victim tenant — must never authorize.
   { user_id: STALE_B, company_id: VICTIM, status: 'inactive' },
 ];

@@ -25,18 +25,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'tenant_id and organization_id are required' });
   }
 
+  // SEC-91A (STEP 3AH-91, A2) — the route authorized `tenant_id` but read
+  // `organization_id`, so a connector manager of company A could pass
+  // tenant_id=A&organization_id=B and read B's connected platforms and
+  // configured-platform list. Community AI's convention (requireTenantScope in
+  // ../utils) is that the two ids name the same tenant; enforce that, then read
+  // ONLY the id that was authorized. The UI (pages/community-ai/connectors.tsx)
+  // already sends the same value for both.
+  if (tenantId !== organizationId) {
+    return res.status(400).json({ error: 'tenant_id and organization_id must match' });
+  }
+
   const access = await requireManageConnectors(req, res, tenantId);
   if (!access) return;
+  const authorizedCompanyId = tenantId;
 
   try {
-    const socialPlatforms = await getPlatformsWithTokensForOrg(organizationId);
+    const socialPlatforms = await getPlatformsWithTokensForOrg(authorizedCompanyId);
     const list = socialPlatforms.map((platform) => ({
       platform,
       expires_at: null as string | null,
       connected: true,
     }));
 
-    const configured_platforms = await getCompanyConfiguredPlatformsForConnectors(organizationId);
+    const configured_platforms = await getCompanyConfiguredPlatformsForConnectors(authorizedCompanyId);
 
     return res.status(200).json({ connections: list, configured_platforms });
   } catch (err: any) {

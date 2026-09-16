@@ -18,6 +18,7 @@ import {
   checkAiBillingGuard,
   isAiBillingEnforced,
   invalidateAllowlistCache,
+  runWithCreditHandle,
 } from '../../services/billing/aiGatewayBillingGuard';
 import {
   _resetBillingMetricsForTests,
@@ -85,6 +86,62 @@ describe('aiGatewayBillingGuard', () => {
     stubAllowlist([{ action_key: 'refineVariant', expires_at: '2020-01-01T00:00:00Z' }]);
     const r = await checkAiBillingGuard({ operation: 'refineVariant' });
     expect(r.allowed).toBe(false);
+  });
+
+  /*
+   * 3AH-96 (REG-1) — the ambient handle vouches for a call ONLY when both org
+   * ids are present and identical. A billed scope for org A must not silence
+   * the untracked-call detector for a call it cannot attribute (no orgId), nor
+   * for one attributed to another org.
+   */
+  describe('ambient credit handle is bound to its org', () => {
+    const ambientFor = (orgId: string) => ({
+      operationId: 'op-ambient',
+      idempotencyKey: 'k-ambient',
+      orgId,
+      action: 'content_rewrite',
+      source: 'orchestrator' as const,
+    });
+    const inScope = (ambientOrg: string, args: { operation: string; orgId?: string }) =>
+      runWithCreditHandle(ambientFor(ambientOrg), () => checkAiBillingGuard(args));
+
+    it('identical non-empty org ids → vouched (has_handle)', async () => {
+      stubAllowlist([]);
+      const r = await inScope('org-a', { operation: 'refineVariant', orgId: 'org-a' });
+      expect(r).toMatchObject({ allowed: true, reason: 'has_handle' });
+      expect(getCounter('untracked_ai_call_blocked_total')).toBe(0);
+    });
+
+    it('missing args.orgId → NO vouch: the call stays a tracked violation', async () => {
+      process.env.BILLING_REQUIRE_AI_HANDLE = 'true';
+      stubAllowlist([]);
+      const r = await inScope('org-a', { operation: 'refineVariant' });
+      expect(r).toMatchObject({ allowed: false, reason: 'enforced_block' });
+      expect(getCounter('untracked_ai_call_blocked_total')).toBe(1);
+    });
+
+    it('missing ambient.orgId → NO vouch', async () => {
+      process.env.BILLING_REQUIRE_AI_HANDLE = 'true';
+      stubAllowlist([]);
+      const r = await inScope('', { operation: 'refineVariant', orgId: 'org-a' });
+      expect(r).toMatchObject({ allowed: false, reason: 'enforced_block' });
+      expect(getCounter('untracked_ai_call_blocked_total')).toBe(1);
+    });
+
+    it('different ambient org → NO vouch (org A never vouches for org B)', async () => {
+      process.env.BILLING_REQUIRE_AI_HANDLE = 'true';
+      stubAllowlist([]);
+      const r = await inScope('org-a', { operation: 'refineVariant', orgId: 'org-b' });
+      expect(r).toMatchObject({ allowed: false, reason: 'enforced_block' });
+      expect(getCounter('untracked_ai_call_blocked_total')).toBe(1);
+    });
+
+    it('an explicitly passed handle is unaffected by the ambient scope', async () => {
+      stubAllowlist([]);
+      const r = await runWithCreditHandle(ambientFor('org-a'), () =>
+        checkAiBillingGuard({ operation: 'refineVariant', orgId: 'org-b', creditHandle: ambientFor('org-b') }));
+      expect(r).toMatchObject({ allowed: true, reason: 'has_handle' });
+    });
   });
 
   it('isAiBillingEnforced reads the env flag', () => {

@@ -34,6 +34,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
+import { getTrustedClientIp } from '../../../lib/security/clientIp';
 import { normalizeDomain } from '../../../backend/services/domainCanonicalService';
 import { hashVerificationToken } from '../../../backend/services/verificationSecret';
 import { insertAuditLogStrict } from '../../../backend/services/auditActorService';
@@ -55,11 +56,8 @@ async function handler(
     return res.status(405).json({ error: 'METHOD_NOT_ALLOWED' });
   }
 
-  const ip = String(
-    req.headers['x-forwarded-for']
-    ?? (req.socket as any)?.remoteAddress
-    ?? 'unknown',
-  ).split(',')[0].trim();
+  // SEC91-W2E: platform-trusted client IP ('unknown' when nothing parses), not the client-written XFF hop.
+  const ip = getTrustedClientIp(req);
   const rl = await checkRateLimit(ip, REGEN_RATE_LIMIT);
   if (!rl.allowed) return res.status(429).json({ error: 'RATE_LIMITED' });
 

@@ -162,6 +162,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    /*
+     * SEC91-W2F-1a (STEP 3AH-95 reconciliation) — a body `campaignId` may not
+     * name another tenant's campaign either. It no longer selects any row (the
+     * write target is resolved server-side above) and it is read only to DERIVE
+     * the company when the caller sent none — a company that is then
+     * membership-checked. This keeps the explicit refusal PR #246 shipped and
+     * tested, so a foreign campaign id can never be carried into generation
+     * inputs or telemetry under an authorized tenant. Semantics match
+     * enforceCompanyAccess's campaign binding: owned, or not yet existing.
+     */
+    const bodyCampaignId = String((req.body as any)?.campaignId || '').trim();
+    if (bodyCampaignId && companyId && action !== 'generate_master') {
+      const ownership = await checkCampaignOwnership(bodyCampaignId, companyId);
+      if (ownership === 'lookup_error') {
+        return res.status(503).json({ error: 'Campaign ownership check is temporarily unavailable. Please try again.', code: 'CAMPAIGN_LOOKUP_ERROR', retryable: true });
+      }
+      if (ownership !== 'owned' && ownership !== 'not_found') {
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+    }
+
     if (action === 'improve_variant') {
       const improvementType = String((req.body as any)?.improvementType || '').trim() as ImprovementType;
       const variantRaw = asObject((req.body as any)?.variant);

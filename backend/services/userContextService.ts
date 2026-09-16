@@ -5,6 +5,8 @@ import { getSupabaseUserFromRequest } from './supabaseAuthService';
 import { getCompanyRoleIncludingInvited, normalizePermissionRole, Role } from './rbacPrimitives';
 import { assertTenantAccess } from '../security/TenantGuard';
 import { checkCampaignOwnership } from './campaignOwnershipService';
+import { attributeAuthenticatedPrincipal } from './requestContextPrincipal';
+import { companyOperationalState } from './companyOperationalState';
 import { config } from '@/config';
 
 export type { UserContext, MembershipType };
@@ -60,6 +62,10 @@ export const resolveUserContext = async (req?: NextApiRequest): Promise<UserCont
     if (devIdentityOptIn()) return resolveFromLib();
     return unauthenticatedContext(error ?? 'INVALID_AUTH');
   }
+
+  // SEC-91 W2-A (W2A-4) — the identity is proven: record it in the request
+  // context (observe-only unless the ai-guard-principal flag is in enforce).
+  attributeAuthenticatedPrincipal({ userId: user.id, source: 'resolveUserContext' });
 
   const { data: roleRows, error: roleError } = await supabase
     .from('user_company_roles')
@@ -140,7 +146,10 @@ export function isExternalMemberForCompany(
  *
  * Tightenings inherited from the canonical guard:
  *   - soft-deleted / suspended companies are now rejected even for
- *     invited admins (ORG_NOT_FOUND / ORG_INACTIVE override the fallback)
+ *     invited admins (ORG_NOT_FOUND / ORG_INACTIVE override the fallback;
+ *     for the invited fallback itself the company is read explicitly —
+ *     SEC-91 W2G-4 — because the canonical guard stops at STALE_MEMBERSHIP
+ *     before it reads the company)
  *   - bridge principals (legacyCookieSuperAdmin) cannot satisfy tenant
  *     access — they have no tenant identity
  *
@@ -165,6 +174,18 @@ export const enforceCompanyAccess = async (input: {
   requireCampaignId?: boolean;
 }): Promise<UserContext | null> => {
   const user = await resolveUserContext(input.req);
+
+  // SEC-91 W2-A (W2A-4) — every ALLOW branch records the authorized principal
+  // (user + the company just authorized) in the request context. Observe-only
+  // by default; see requestContextPrincipal.ts.
+  const allow = (): UserContext => {
+    attributeAuthenticatedPrincipal({
+      userId: user.userId,
+      orgId: input.companyId ?? null,
+      source: 'enforceCompanyAccess',
+    });
+    return user;
+  };
 
   const campaignBound = async (): Promise<boolean> => {
     if (!input.campaignId) return true;
@@ -229,7 +250,7 @@ export const enforceCompanyAccess = async (input: {
       return null;
     }
     if (!(await campaignBound())) return null;
-    return user;
+    return allow();
   }
 
   // Transient membership/org read failure (DB/network blip): do NOT report as
@@ -272,7 +293,7 @@ export const enforceCompanyAccess = async (input: {
       return null;
     }
     if (!(await campaignBound())) return null;
-    return user;
+    return allow();
   }
 
   // Legacy fallback (b): invited admin role.
@@ -282,13 +303,47 @@ export const enforceCompanyAccess = async (input: {
     fallbackRole === Role.ADMIN ||
     fallbackRole === Role.SUPER_ADMIN;
   if (allowedViaInvited) {
+    // SEC-91 W2-G (STEP 3AH-91, W2G-4) — the invited fallback must honour the
+    // company's state. The header promises "suspended companies are rejected
+    // even for invited admins", but assertTenantAccess answers
+    // STALE_MEMBERSHIP for a non-active row BEFORE it reads the company, so the
+    // ORG_INACTIVE / ORG_NOT_FOUND branch above never fired for this principal
+    // and an invited admin was admitted into a suspended / inactive / deleted
+    // company. Same org decision as TenantGuard: missing or non-active ⇒ 403;
+    // a transient lookup failure ⇒ retryable 503, never an allow. (Platform
+    // super admins never reach this branch — TenantGuard bypasses them first.)
+    const orgState = await companyOperationalState(input.companyId);
+    if (orgState === 'lookup_error') {
+      console.warn('TENANT_LOOKUP_ERROR', {
+        path: input.req.url,
+        companyId: input.companyId,
+        userId: user.userId,
+      });
+      input.res.status(503).json({
+        error: 'Membership check is temporarily unavailable. Please try again.',
+        code: 'TENANT_LOOKUP_ERROR',
+        retryable: true,
+      });
+      return null;
+    }
+    if (orgState === 'not_operational') {
+      console.warn('ACCESS_DENIED', {
+        path: input.req.url,
+        companyId: input.companyId,
+        userId: user.userId,
+        role: user.role,
+        reason: 'ORG_INACTIVE',
+      });
+      input.res.status(403).json({ error: 'Access denied to company' });
+      return null;
+    }
     if (input.requireCampaignId && !input.campaignId) {
       console.warn('MISSING_CAMPAIGN_ID', { path: input.req.url, companyId: input.companyId });
       input.res.status(400).json({ error: 'campaignId required' });
       return null;
     }
     if (!(await campaignBound())) return null;
-    return user;
+    return allow();
   }
 
   console.warn('ACCESS_DENIED', {

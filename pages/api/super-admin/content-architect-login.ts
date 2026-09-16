@@ -9,6 +9,8 @@ import {
 } from '../../../backend/security/SessionAuthorityService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { mintSignedBridgeCookieValue } from '../../../backend/security/bridgeCookie';
+import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
+import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 interface CanonicalUserRow {
   id: string;
@@ -38,10 +40,9 @@ async function lookupCanonicalContentArchitect(userId: string): Promise<Canonica
   return u;
 }
 
+// SEC91-W2E: platform-trusted client IP (audit fields / session row; null when nothing parses).
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  return req.socket?.remoteAddress ?? null;
+  return getTrustedClientIpOrNull(req);
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -61,15 +62,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  if (u !== expectedUser || p !== expectedPass) {
+  // SEC91-W2F-2b: constant-time, both halves always evaluated.
+  const userOk = constantTimeEqual(u, expectedUser);
+  const passOk = constantTimeEqual(p, expectedPass);
+  if (!userOk || !passOk) {
     try {
       await supabase.from('super_admin_audit_logs').insert({
         username: u || 'unknown',
         action: 'content_architect_failed_login',
-        ip_address:
-          (req.headers['x-forwarded-for'] as string) ||
-          req.socket?.remoteAddress ||
-          null,
+        ip_address: clientIp(req),
         user_agent: req.headers['user-agent'] || null,
       });
     } catch {
@@ -82,10 +83,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     await supabase.from('super_admin_audit_logs').insert({
       username: u || expectedUser,
       action: 'content_architect_login',
-      ip_address:
-        (req.headers['x-forwarded-for'] as string) ||
-        req.socket?.remoteAddress ||
-        null,
+      ip_address: clientIp(req),
       user_agent: req.headers['user-agent'] || null,
     });
   } catch {

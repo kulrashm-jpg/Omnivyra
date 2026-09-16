@@ -13,6 +13,15 @@ import { ownedDbTable } from '../../db/writeOwner';
  */
 
 const BUCKET = 'rpa-artifacts';
+/**
+ * SEC-E5 (STEP 3AH-91): the bucket is PRIVATE (screenshots of customer
+ * sessions). The store used to call getPublicUrl — a URL that cannot work for
+ * a private bucket and would expose every screenshot if the bucket were ever
+ * flipped to public. It now returns a short-lived signed URL for the runtime
+ * caller and persists NO URL; `object_path` is the durable reference (sign on
+ * demand with the service role).
+ */
+const SIGNED_URL_TTL_SECS = 60 * 60;
 
 async function ensureBucket(): Promise<boolean> {
   try {
@@ -41,6 +50,10 @@ export type SaveArtifactInput = {
 
 export type SavedArtifact = {
   object_path: string;
+  /**
+   * Historical name kept for callers: since SEC-E5 this is a SHORT-LIVED
+   * SIGNED URL (1 h) for the private object, or null. Never a public URL.
+   */
   public_url?: string | null;
   bytes: number;
   kind: 'screenshot' | 'log';
@@ -55,7 +68,7 @@ export async function saveRpaArtifact(input: SaveArtifactInput): Promise<SavedAr
 
   const bucketReady = await ensureBucket();
 
-  let publicUrl: string | null = null;
+  let signedUrl: string | null = null;
   let durable = false;
 
   if (bucketReady) {
@@ -68,8 +81,14 @@ export async function saveRpaArtifact(input: SaveArtifactInput): Promise<SavedAr
         });
       if (!uploadErr) {
         durable = true;
-        const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(objectPath);
-        publicUrl = pub?.publicUrl ?? null;
+        try {
+          const { data: signed, error: signErr } = await supabase.storage
+            .from(BUCKET)
+            .createSignedUrl(objectPath, SIGNED_URL_TTL_SECS);
+          signedUrl = signErr ? null : signed?.signedUrl ?? null;
+        } catch {
+          signedUrl = null; // the artifact is stored; a URL is a convenience
+        }
       }
     } catch (err: any) {
       console.warn('[rpaArtifactStore] upload failed:', err?.message || err);
@@ -87,14 +106,16 @@ export async function saveRpaArtifact(input: SaveArtifactInput): Promise<SavedAr
       action_type: input.action_type ?? null,
       artifact_kind: kind,
       object_path: objectPath,
-      public_url: publicUrl,
+      // Never persist a URL for a private object (a signed URL is a bearer
+      // credential and expires anyway).
+      public_url: null,
       bytes,
     });
   } catch (err: any) {
     console.warn('[rpaArtifactStore] index row insert failed:', err?.message || err);
   }
 
-  return { object_path: objectPath, public_url: publicUrl, bytes, kind, durable };
+  return { object_path: objectPath, public_url: signedUrl, bytes, kind, durable };
 }
 
 /**

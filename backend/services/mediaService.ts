@@ -22,6 +22,7 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { supabase } from '../db/supabaseClient';
 import { parseMediaStorageLocator } from '../../lib/content/mediaStorageLocator';
+import { unguessableObjectStem } from '../../lib/security/objectNames';
 
 export type MediaType = 'image' | 'video' | 'audio' | 'document';
 
@@ -249,7 +250,9 @@ export async function uploadMedia(options: UploadMediaOptions): Promise<MediaFil
 
   // Generate unique file path
   const fileExtension = fileName.split('.').pop()?.toLowerCase() || '';
-  const uniqueFileName = `${userId}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExtension}`;
+  // SEC-E5 (STEP 3AH-91): served by public URL — the name must be unguessable
+  // (128-bit CSPRNG), not Math.random().
+  const uniqueFileName = `${userId}/${unguessableObjectStem()}.${fileExtension}`;
   const filePath = `${bucketName}/${uniqueFileName}`;
 
   // Convert File to Buffer if needed

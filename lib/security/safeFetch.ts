@@ -26,6 +26,7 @@
 import dns from 'dns';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { validateOutboundUrl, isBlockedIp, type SsrfPolicy } from './ssrfGuard';
+import { redactUrl, redactSecretsInText } from './redactUrl';
 import { recordExternal, recordRawCounter } from '../../backend/observability';
 import { defineRolloutFlag, resolveRolloutSync } from '../platform/rollout';
 import { getOrCreateCircuitBreaker } from '../resilience/circuitBreaker';
@@ -47,16 +48,25 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 export class SsrfBlockedError extends Error {
   readonly reason: string;
+  /**
+   * The blocked target, REDACTED (SEC-E3, STEP 3AH-91): query values, userinfo
+   * and fragment are replaced, because several providers only accept their API
+   * key as a query parameter and this error's message is logged and copied
+   * into provider "unavailable" reasons.
+   */
   readonly target: string;
   constructor(reason: string, target: string) {
-    super(`SSRF blocked (${reason}) for ${target}`);
+    const safeTarget = redactSecretsInText(redactUrl(target));
+    super(`SSRF blocked (${reason}) for ${safeTarget}`);
     this.name = 'SsrfBlockedError';
     this.reason = reason;
-    this.target = target;
+    this.target = safeTarget;
   }
 }
 
-function countBlocked(reason: string, host: string): void {
+function countBlocked(reason: string, hostOrUrl: string): void {
+  // Metric labels are exported/persisted: never let a query string reach one.
+  const host = redactUrl(hostOrUrl).slice(0, 120);
   try { recordRawCounter('ssrf.request.blocked', 1, { reason, host }); } catch { /* fail-safe */ }
 }
 function countAllowed(host: string): void {
@@ -99,7 +109,7 @@ export async function assertUrlSafe(rawUrl: string, options: SafeFetchOptions = 
   };
   const check = validateOutboundUrl(rawUrl, policy);
   if (!check.ok || !check.url) {
-    countBlocked(check.reason ?? 'invalid', String(rawUrl).slice(0, 120));
+    countBlocked(check.reason ?? 'invalid', String(rawUrl));
     throw new SsrfBlockedError(check.reason ?? 'invalid', String(rawUrl));
   }
   await resolveAndValidate(check.url.hostname, policy);
@@ -227,7 +237,7 @@ export async function safeFetch(rawUrl: string, init: RequestInit = {}, options:
   while (true) {
     const check = validateOutboundUrl(currentUrl, policy);
     if (!check.ok || !check.url) {
-      countBlocked(check.reason ?? 'invalid', String(currentUrl).slice(0, 120));
+      countBlocked(check.reason ?? 'invalid', String(currentUrl));
       throw new SsrfBlockedError(check.reason ?? 'invalid', String(currentUrl));
     }
     const url = check.url;

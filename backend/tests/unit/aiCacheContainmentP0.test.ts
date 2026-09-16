@@ -237,8 +237,10 @@ describe('P0 · nothing outside the cache changed', () => {
 
   it('the gateway still threads companyId into both cache calls (tenant scoping intact)', () => {
     const src = read('backend/services/aiGatewayProvidersOps.ts');
-    expect(src).toMatch(/getCachedCompletion\([\s\S]{0,220}?effectiveCacheVersion,[\s\S]{0,120}?request\.companyId \?\? null,\s*\)/);
-    expect(src).toMatch(/setCachedCompletion\(request\.operation, effectiveModel, request\.messages, content, effectiveCacheVersion, request\.companyId \?\? null\)/);
+    // SEC91-D6: both calls now also carry the credential scope (BYOK isolation);
+    // the tenant argument is unchanged.
+    expect(src).toMatch(/getCachedCompletion\([\s\S]{0,220}?effectiveCacheVersion,[\s\S]{0,120}?request\.companyId \?\? null,\s*cacheCredentialScope,\s*\)/);
+    expect(src).toMatch(/setCachedCompletion\(request\.operation, effectiveModel, request\.messages, content, effectiveCacheVersion, request\.companyId \?\? null, cacheCredentialScope\)/);
   });
 
   it('the cache-hit usage_events row is still emitted (billing accounting unchanged)', () => {

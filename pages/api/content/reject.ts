@@ -4,6 +4,7 @@ import { rejectContentAsset } from '../../../backend/services/contentAssetServic
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { checkContentAssetOwnership } from '../../../backend/services/content/contentAssetOwnership';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -18,6 +19,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!assetId || !reason) {
       return res.status(400).json({ error: 'assetId and reason are required' });
     }
+    // SEC91-W2G-N1: the asset must belong to the authorized company.
+    const ownership = await checkContentAssetOwnership(String(assetId), String(companyId));
+    if (ownership === 'not_found') return res.status(404).json({ error: 'Content asset not found' });
+    if (ownership !== 'owned') return res.status(403).json({ error: 'Access denied to asset' });
     const updated = await rejectContentAsset({ assetId, reason });
     return res.status(200).json(updated);
   } catch (error: any) {

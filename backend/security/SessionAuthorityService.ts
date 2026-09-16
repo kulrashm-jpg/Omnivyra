@@ -17,6 +17,7 @@ import { createHmac, randomBytes } from 'crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as db } from '../db/supabaseClient';
 import { logger } from '../services/logger';
+import { constantTimeEqual } from './constantTimeEqual';
 
 // ── Cookie constants ─────────────────────────────────────────────────────────
 
@@ -227,9 +228,10 @@ export async function resolveSessionFromRequest(req: NextApiRequest): Promise<Se
 
   if (!data) return { ok: false, reason: 'NOT_FOUND' };
 
-  // Constant-time signature compare via re-derivation.
+  // Constant-time signature compare via re-derivation (STEP 3AH-91 W2F-2: the
+  // comment said constant-time but the code used !==; exact match, fails closed).
   const expected = signSessionPayload(parsed.sessionId, (data as AuthSessionRow).created_at);
-  if (parsed.signature !== expected || (data as AuthSessionRow).cookie_signature !== expected) {
+  if (!constantTimeEqual(parsed.signature, expected) || !constantTimeEqual((data as AuthSessionRow).cookie_signature, expected)) {
     return { ok: false, reason: 'BAD_SIGNATURE' };
   }
 

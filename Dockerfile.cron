@@ -2,33 +2,57 @@
 # Omnivyra — Cron Scheduler Service
 # Railway deployment: single replica, runs all scheduled tasks
 # IMPORTANT: must be deployed as exactly 1 replica (never scale horizontally)
+#
+# NOT DEPLOYED today: railway.json builds Dockerfile.worker only, and the worker
+# runs the scheduler co-located (CRON_SERVICE_MODE defaults to 'colocated').
+# This image is the W6-2 'worker-only' split's scheduler. SEC-C9 (STEP 3AH-91):
+# base image pinned by digest and installs locked (npm ci), matching
+# Dockerfile.worker exactly, so the image cannot drift from the reviewed
+# lockfile or pull an unreviewed node base when it is first deployed. The
+# path-alias rewrite step the worker needs is included (without it the
+# compiled '@/…' imports do not resolve at runtime).
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Stage 1: build ────────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:22-bookworm-slim@sha256:6ed70fbf60557fb3a2faea5657d4105bace34c93449c2571919a1589fae30153 AS builder
 
 WORKDIR /app
 
-# Install ALL deps (including devDeps: typescript, ts-node) with legacy peer
-# deps to bypass eslint v8/v9 ERESOLVE conflict
+# Native build toolchain for argon2 (node-gyp) — glibc prebuilt is normally
+# used; toolchain retained in the builder as a compile fallback only.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+# The scheduler never launches a browser; skip the playwright postinstall download.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+# Install ALL deps (including devDeps: typescript) from the lockfile, with
+# legacy peer deps to bypass the eslint v8/v9 ERESOLVE conflict.
 COPY package*.json ./
-RUN npm install --legacy-peer-deps
+RUN npm ci --legacy-peer-deps
 
 # Copy source and compile
 COPY . .
-RUN npx tsc -p tsconfig.worker.json
+RUN NODE_OPTIONS=--max-old-space-size=4096 \
+    npx tsc -p tsconfig.worker.json \
+ && node scripts/fix-worker-aliases.js
 
 # ── Stage 2: production ───────────────────────────────────────────────────────
-FROM node:20-alpine AS production
+FROM node:22-bookworm-slim@sha256:6ed70fbf60557fb3a2faea5657d4105bace34c93449c2571919a1589fae30153 AS production
 
 WORKDIR /app
 
-# Install production dependencies only
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+# Install production dependencies only, from the lockfile.
 COPY package*.json ./
-RUN npm install --omit=dev --legacy-peer-deps
+RUN npm ci --omit=dev --legacy-peer-deps
 
 # Copy compiled output from builder
 COPY --from=builder /app/dist ./dist
+
+# Runtime assets shared with the worker (not under dist/)
+COPY templates ./templates
 
 # Remove any accidentally-copied secrets
 RUN rm -f .env .env.local .env.production

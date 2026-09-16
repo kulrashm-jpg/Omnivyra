@@ -25,6 +25,7 @@ import { logCookieSuperAdminUsage } from './audit/SecurityAuditService';
 import { legacyCookieSuperAdminCapabilities } from './capabilityRegistry';
 import { parseSignedBridgeCookie, type BridgeCookieParseFailure } from './bridgeCookie';
 import type { AuthenticatedPrincipal } from '../../shared/contracts/security';
+import { getTrustedClientIpOrNull } from '../../lib/security/clientIp';
 
 // ── Hard-expiry knob ─────────────────────────────────────────────────────────
 /**
@@ -118,11 +119,9 @@ function readCookie(req: NextApiRequest, name: string): string | null {
   return m?.[1] ?? null;
 }
 
+// SEC91-W2E: platform-trusted client IP (audit field only; not a session binding).
 function clientIp(req: NextApiRequest): string | null {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
-  if (Array.isArray(xff) && xff.length > 0) return xff[0];
-  return req.socket?.remoteAddress ?? null;
+  return getTrustedClientIpOrNull(req);
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────

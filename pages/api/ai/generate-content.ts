@@ -2,8 +2,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { refineLanguageOutput } from '@/backend/services/languageRefinementService';
 import { generateDailyPlanDemo } from '@/backend/services/dailyPlanAiGenerator';
-import { supabase } from '@/backend/db/supabaseClient';
-import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { enforceCompanyAccess, resolveUserContext } from '@/backend/services/userContextService';
+import { resolveCampaignCompanyId } from '@/backend/services/campaignAccessService';
 import { enforceRole, Role } from '@/backend/services/rbacService';
 import { runPostGeneration } from '@/lib/post/runPostGeneration';
 
@@ -26,15 +26,24 @@ async function generateCampaignContent(
     return;
   }
 
-  // Resolve the owning company from the campaign (campaign_versions is the
-  // canonical campaign→company mapping) so callers never pass company_id.
-  const { data: companyRow } = await supabase
-    .from('campaign_versions')
-    .select('company_id')
-    .eq('campaign_id', campaignId)
-    .limit(1)
-    .maybeSingle();
-  const company_id = companyRow?.company_id ? String(companyRow.company_id) : '';
+  // SEC-91 W2-A (STEP 3AH-91, W2A-3) — authenticate BEFORE touching the
+  // campaign. The owner lookup below used to run first, so an anonymous caller
+  // got 404 for an unknown id and 401 for a real one: an existence oracle on
+  // campaign ids (the class SEC-A closed as A6-b on four sibling routes).
+  const viewer = await resolveUserContext(req);
+  if (viewer.authenticated === false || !viewer.userId) {
+    res.status(401).json({
+      error: 'Authentication required. Please sign in again.',
+      code: 'UNAUTHENTICATED',
+    });
+    return;
+  }
+
+  // Resolve the owning company from the campaign through the canonical seam
+  // (newest campaign_versions row authoritative; legacy campaigns.company_id
+  // only when no version row exists) so callers never pass company_id. This
+  // replaces an unordered `.limit(1)` read of campaign_versions.
+  const company_id = (await resolveCampaignCompanyId(campaignId)) ?? '';
   if (!company_id) {
     res.status(404).json({ error: 'Campaign company not found' });
     return;

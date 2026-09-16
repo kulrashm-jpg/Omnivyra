@@ -90,6 +90,16 @@ jest.mock('../../db/writeOwner', () => ({
 }));
 
 jest.mock('../../services/userContextService', () => ({
+  // STEP 3AH-95: the route authenticates BEFORE loading the row (SEC91-E6,
+  // PR #246), so the identity seam must exist in this fixture too. An
+  // unauthenticated caller is covered by sec91EUploadExistenceOracle.
+  resolveUserContext: jest.fn(async () => ({
+    userId: 'user-a',
+    role: 'user',
+    companyIds: ['company-a'],
+    defaultCompanyId: 'company-a',
+    authenticated: true,
+  })),
   enforceCompanyAccess: jest.fn(async ({ res }: any) => {
     if (accessGranted) return { userId: 'user-a', companyId: 'company-a' };
     res.status(403).json({ error: 'Access denied to company' });

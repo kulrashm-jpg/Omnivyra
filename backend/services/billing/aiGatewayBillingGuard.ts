@@ -22,12 +22,35 @@
  *     that callers progressively migrate to.
  */
 
+import { AsyncLocalStorage } from 'async_hooks';
 import { supabase } from '../../db/supabaseClient';
 import { logger } from '../logger';
 import { emitAnomaly } from './billingAuditEmitter';
 import { incrCounter } from './billingMetrics';
 
 const ENV_FLAG = 'BILLING_REQUIRE_AI_HANDLE';
+
+/**
+ * SEC91-D2 — the credit handle travels WITH the execution.
+ *
+ * `runBilledAiCompletion` checked the guard with its handle and then called
+ * `runCompletionWithOperation`, which checked the guard AGAIN with no handle.
+ * Every billed call was therefore also recorded as an untracked violation, and
+ * turning enforcement on (BILLING_REQUIRE_AI_HANDLE=true) would have blocked
+ * the billed, paying-customer path itself. The handle is now scoped to the
+ * async execution: any guard check inside `runWithCreditHandle` sees it.
+ */
+const creditHandleScope = new AsyncLocalStorage<CreditHandle>();
+
+/** Run `fn` with `handle` visible to every AI billing-guard check inside it. */
+export function runWithCreditHandle<T>(handle: CreditHandle, fn: () => T): T {
+  return creditHandleScope.run(handle, fn);
+}
+
+/** The credit handle of the enclosing billed execution, if any. */
+export function getActiveCreditHandle(): CreditHandle | undefined {
+  return creditHandleScope.getStore();
+}
 const ALLOWLIST_CACHE_TTL_MS = 60_000;
 let allowlistCache: { set: Set<string>; expiresAt: number } | null = null;
 
@@ -82,8 +105,17 @@ export async function checkAiBillingGuard(args: {
   creditHandle?: CreditHandle;
   orgId?:        string;
 }): Promise<AiBillingGuardResult> {
-  if (args.creditHandle) {
-    return { allowed: true, reason: 'has_handle', metadata: { handleAction: args.creditHandle.action } };
+  // An ambient handle only covers calls for the org it was reserved for — a
+  // billed scope for org A never vouches for a nested call attributed to org B.
+  // BOTH ids must be present AND equal. An unattributed call (no args.orgId)
+  // gets no vouch: the ambient scope cannot say which org that call served, so
+  // treating it as billed would silently mis-attribute it. It stays a tracked
+  // violation, which is what this guard exists to surface.
+  const ambient = getActiveCreditHandle();
+  const ambientValid = ambient && args.orgId && ambient.orgId === args.orgId ? ambient : undefined;
+  const handle = args.creditHandle ?? ambientValid;
+  if (handle) {
+    return { allowed: true, reason: 'has_handle', metadata: { handleAction: handle.action } };
   }
 
   const allowlist = await loadAllowlist();

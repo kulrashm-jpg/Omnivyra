@@ -12,21 +12,30 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 const KEY_LENGTH = 32;
 
-function getEncryptionKey(): Buffer {
+/**
+ * SEC91-B12: strict hex, exactly like tokenStore.getEncryptionKey and the Zod schema
+ * (`/^[a-f0-9]{64}$/`). The old "64 hex chars → hex, otherwise → base64" guess meant the
+ * two modules could derive DIFFERENT key bytes from the same variable. Production already
+ * runs a hex key (tokenStore would refuse anything else), so the derived key is unchanged.
+ * Exported so other AES-GCM users (whatsappBroadcastService) share one key parser.
+ */
+export function requireEncryptionKey(): Buffer {
   const keyEnv = config.ENCRYPTION_KEY;
   if (!keyEnv) {
     throw new Error('ENCRYPTION_KEY environment variable is required');
   }
-  let keyBuffer: Buffer;
-  if (keyEnv.length === 64 && /^[0-9a-fA-F]+$/.test(keyEnv)) {
-    keyBuffer = Buffer.from(keyEnv, 'hex');
-  } else {
-    keyBuffer = Buffer.from(keyEnv, 'base64');
+  if (!/^[0-9a-fA-F]{64}$/.test(keyEnv)) {
+    throw new Error('ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes); base64 keys are not accepted.');
   }
+  const keyBuffer = Buffer.from(keyEnv, 'hex');
   if (keyBuffer.length !== KEY_LENGTH) {
     throw new Error(`ENCRYPTION_KEY must be ${KEY_LENGTH} bytes (got ${keyBuffer.length})`);
   }
   return keyBuffer;
+}
+
+function getEncryptionKey(): Buffer {
+  return requireEncryptionKey();
 }
 
 export function encryptCredential(plaintext: string): string {

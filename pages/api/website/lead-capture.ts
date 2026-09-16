@@ -4,6 +4,7 @@ import { captureWebsiteLead, LeadCaptureError } from '../../../backend/services/
 import { resolveTenantForWebsite } from '../../../backend/services/tenantResolutionService';
 import { evaluateCaptureProtection } from '../../../backend/services/leadCaptureProtection';
 import { LEAD_CAPTURE_INTENTS, isLeadIntent } from '../../../lib/website/leadCaptureConfig';
+import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 /**
  * POST /api/website/lead-capture — the public, MULTI-TENANT lead-capture endpoint.
@@ -32,7 +33,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // G1 (LC-102): abuse protection WRAPS the existing pipeline — runs after the
   // honeypot, before tenant resolution. Fail-open; never blocks legitimate capture.
-  const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0]?.trim() || null;
+  // SEC91-W2E: platform-trusted client IP, or null when nothing parses (same contract as before).
+  const ip = getTrustedClientIpOrNull(req);
   const guard = await evaluateCaptureProtection({
     ip,
     userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
