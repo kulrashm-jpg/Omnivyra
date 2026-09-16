@@ -1,6 +1,6 @@
 # Security closure matrix — STEP 3AH-91 (unified)
 
-**Base:** `main @ f44b1387` (PR #245 merged and live). **Integration branch:** `sec/3ah91-integration` → PR #246 to `main`, **not merged** (merging to `main` auto-deploys the Railway worker).
+**Base:** the work was done on `main @ f44b1387` (PR #245 merged and live); `main @ f01a7eb4` (PR #247) was later merged in — see "STEP 3AH-95 — reconciliation with PR #247" at the end. **Integration branch:** `sec/3ah91-integration` → PR #246 to `main`, **not merged** (merging to `main` auto-deploys the Railway worker).
 **Scope:** every finding from SEC-A … SEC-F (wave 1), W2-A / W2-B / W2-E / W2-F / W2-G (wave 2) and the integration pass. MCP is excluded by instruction.
 
 **Verdicts:** `CLOSED` = fixed in code on the integration branch (or already fixed, or a reviewed false positive), with regression tests and gates; `CLOSED — MANUAL OPERATION REQUIRED` = the code side is closed and a named owner/operator step remains; `ACCEPTED — DOCUMENTED` = a reviewed, justified residual; `OPEN — REMEDIATION REQUIRED` = not closed.
@@ -227,3 +227,24 @@ All runs are hermetic: faked DB and identity provider in unit tests, the local S
 - 0 files changed under `supabase/`.
 - No env/secret change, no deploy, no rotation.
 - Config-type files touched: the CI workflow, `Dockerfile.cron` (not deployed), and `config/env.schema.ts` (description text only).
+
+## STEP 3AH-95 — reconciliation with PR #247 (`sec/3ah92-p1-tenant-binding`)
+
+PR #247 merged to `main` (`f01a7eb4`) while this PR was open and fixed part of the same activity-workspace surface independently. `main` was merged into `sec/3ah91-integration` and three files were reconciled. **No row verdict or count changed** (128 findings; 14 P1 / 40 P2 / 68 P3 / 6 unrated; 94 CLOSED, 18 MANUAL, 16 ACCEPTED, 0 OPEN). What changed is the implementation behind three rows, and two documented error-semantics choices.
+
+| File | Canonical result | Retained from #247 | Retained from #246 |
+|---|---|---|---|
+| `backend/services/activityWorkspace/contentRouteHandler.ts` | #247's server-resolved write target, plus #246's body-campaign binding | `resolveActivityRow(strict)` (uuid-only, parameterised), malformed id 400, ambiguous id 409, lookup error 503, row-without-campaign 404, campaign ownership 403 incl. a null company, `writeTarget` threaded to every write | the explicit refusal of a FOREIGN body `campaignId` (404), so it can never reach generation inputs or telemetry under an authorized tenant |
+| `backend/services/orchestration/canonicalExecutionAdapter.ts` | #247's parameterised resolution and campaign pin, plus #246's shape check | `resolveActivityRow` + `updateExecutionContentByActivity(scope.campaignId)` — the writer refuses a row outside the authorized campaign (`out_of_scope`) | `isSafeActivityKey` (exported; still the predicate the remaining `.or()` caller `orchestrationStateSynchronizer` uses — SEC91-W2G-3) |
+| `pages/api/activity-workspace/[id]/upload-media-direct.ts` | union; both fixes survive | prior-object cleanup scoped with `isActivityObjectPath` (foreign/traversal/collision paths are never deleted) | SEC91-E6 authenticate-before-lookup (401) and SEC91-E5 128-bit `unguessableObjectStem()`, format checks after `enforceCompanyAccess` |
+
+**Error semantics reconciled (refusals unchanged, only their status):**
+- **W2F-1a foreign row:** now `403 ORG_SCOPE_VIOLATION` (was 404 in #246). This matches the same route's membership refusal and the TenantGuard vocabulary (403 cross-tenant, 404 unresolvable owner — the route still answers 404 when the row has no campaign). The authenticated 403-vs-404 oracle is the accepted SEC91-A6-a decision. Pinned by `sec91W2AActivityWorkspaceBinding` (22) and `activityContentTenantBinding` (68).
+- **SEC91-A8 legacy owner (#247 test expectation):** a campaign with a `campaigns` row but no `campaign_versions` row resolves to its owner, so the owner is served (200) instead of 404, while a foreign tenant is refused (403) with nothing written. Pinned by `scheduleRescheduleTenantBinding` (50).
+
+**Rows whose evidence changed (verdict unchanged):**
+- **SEC91-W2F-1a** — implementation is now the composed one above; the route-auth `inline-binding` evidence was re-anchored on the reconciled chain and each of its four links is proven load-bearing (`sec91W2FRouteAuthReExport`).
+- **SEC91-E5 / E6** — unchanged and now additionally covered by `uploadMediaDirectPriorScope` (16).
+- **SEC91-W2G-R2** (campaignId threading, accepted as unreachable) — the residual is now *implemented* upstream by #247's `scope.campaignId` pin, so the accepted rationale is superseded by a stronger guarantee. The row stays ACCEPTED because the finding was never exploitable; no count changes.
+
+PR #247's own findings (S-1 upload finalize, S-2 activity content, S-3 reschedule/unschedule, ai-asset-mutation) are inherited from `main` with their own suites and are outside this matrix's 128.

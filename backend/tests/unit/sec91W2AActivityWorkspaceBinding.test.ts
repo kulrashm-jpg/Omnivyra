@@ -64,10 +64,14 @@ jest.mock('../../services/supabaseAuthService', () => require('../helpers/routeA
 jest.mock('../../security/IdentityResolver', () => require('../helpers/routeAuthHarness').identityModule());
 
 // The orchestration barrel constructs queue clients at import time; route the
-// ONE function the handler uses to the real canonical adapter.
+// functions the handler uses to the real canonical adapter. STEP 3AH-95: the
+// handler now also resolves its write target through the adapter
+// (resolveActivityRow — parameterised, uuid-only), so that seam is real here too.
 jest.mock('../../services/orchestration', () => ({
   updateExecutionContentByActivity: (...a: unknown[]) =>
     require('../../services/orchestration/canonicalExecutionAdapter').updateExecutionContentByActivity(...a),
+  resolveActivityRow: (...a: unknown[]) =>
+    require('../../services/orchestration/canonicalExecutionAdapter').resolveActivityRow(...a),
 }));
 jest.mock('../../services/orchestration/synchronization', () => ({
   synchronizeByActivity: jest.fn(async () => null),
@@ -157,9 +161,18 @@ const BODIES: Record<string, (activityId: string, extra?: Record<string, unknown
 };
 
 describe.each(Object.keys(BODIES))('%s', (action) => {
-  it('THE EXPLOIT: member of A + companyId A + B\'s activity → 404; nothing generated, B\'s content untouched', async () => {
+  /*
+   * STEP 3AH-95 reconciliation: the refusal is unchanged (nothing generated,
+   * nothing written, B's row untouched); only its STATUS is now 403
+   * ORG_SCOPE_VIOLATION instead of 404. That is the code the same route already
+   * returns for a foreign company one check earlier, and the platform
+   * vocabulary (TenantGuard: 403 cross-tenant, 404 unresolvable owner — the
+   * route still answers 404 when the activity has no campaign). The
+   * authenticated 403-vs-404 oracle is the accepted SEC91-A6-a decision.
+   */
+  it('THE EXPLOIT: member of A + companyId A + B\'s activity → 403; nothing generated, B\'s content untouched', async () => {
     const r = await post(BODIES[action](ACT_B));
-    expect(r.statusCode).toBe(404);
+    expect(r.statusCode).toBe(403);
     expect(planWrites()).toEqual([]);
     expect(rowB().content).toBe(B_CONTENT);
     expect(mockCompletion).not.toHaveBeenCalled();

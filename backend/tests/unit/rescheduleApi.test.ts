@@ -58,7 +58,7 @@ jest.mock('../../db/supabaseClient', () => ({
         maybeSingle: jest.fn(async () => {
           // Lookup of scheduled_posts user_id/social_account_id during reschedule
           if (table === 'scheduled_posts') {
-            return { data: { user_id: 'user-1', social_account_id: 'sa-1' }, error: null };
+            return { data: { id: 'sp-1', campaign_id: 'campaign-1', user_id: 'user-1', social_account_id: 'sa-1' }, error: null };
           }
           return { data: supabaseRows[`${table}:single`] ?? null, error: null };
         }),

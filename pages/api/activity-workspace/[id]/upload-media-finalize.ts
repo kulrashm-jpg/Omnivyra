@@ -33,6 +33,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
+import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 import {
@@ -54,6 +55,7 @@ import {
   compareSniffedToClientMime,
 } from '@/backend/services/mediaUploadValidationService';
 import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
+import { isActivityObjectPath } from '@/backend/services/activityWorkspace/activityObjectPath';
 
 const UPLOAD_BUCKET = 'media-uploads';
 const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -178,6 +180,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'daily_content_plans id is required in the path' });
 
+  // 3AH-91 (S-1) — authenticate BEFORE anything else. The storage object is
+  // named by the caller, so no read, delete or download may happen until the
+  // caller is known and authorized for the activity that owns it.
+  const { user } = await getSupabaseUserFromRequest(req);
+  if (!user?.id) return res.status(401).json({ error: 'UNAUTHORIZED' });
+
   const body = (req.body || {}) as FinalizeBody;
   const storagePath = typeof body.storage_path === 'string' ? body.storage_path.trim() : '';
   const mimeRaw = typeof body.mime_type === 'string' ? body.mime_type.trim() : '';
@@ -195,25 +203,49 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!storagePath) return res.status(400).json({ error: 'storage_path is required.' });
   if (!mimeRaw) return res.status(400).json({ error: 'mime_type is required.' });
   if (!sizeBytes || sizeBytes <= 0) return res.status(400).json({ error: 'size_bytes must be > 0.' });
-  if (sizeBytes > MAX_FILE_BYTES) {
-    await deleteStorageObject(storagePath);
-    return res.status(413).json({ error: `Uploaded file exceeds ${MAX_FILE_BYTES} bytes.` });
-  }
   const mimeBase = mimeRaw.split(';')[0].trim().toLowerCase();
 
-  // ── Load row + assert attachment-required ─────────────────────────────
+  // ── Load the activity (trusted server state) ──────────────────────────
+  // Nothing below may touch storage until the activity is proven to belong to
+  // a company the caller is an active member of. An activity that cannot be
+  // loaded or authorized leaves the object alone: the caller has not shown it
+  // is theirs to delete.
   const { data: rowData, error: rowError } = await supabase
     .from('daily_content_plans')
     .select('id, campaign_id, content_type, content, content_status, platform')
     .eq('id', id)
     .maybeSingle();
   if (rowError) return res.status(500).json({ error: 'Failed to load row.' });
-  if (!rowData) {
-    // Object exists in storage but row is gone — clean it up.
-    await deleteStorageObject(storagePath);
-    return res.status(404).json({ error: `Row not found: ${id}` });
-  }
+  if (!rowData) return res.status(404).json({ error: `Row not found: ${id}` });
   const row = rowData as { id: string; campaign_id: string; content_type: string; content: unknown };
+
+  // ── Resolve company + authorize ───────────────────────────────────────
+  let companyId: string | null = null;
+  try {
+    const { data: campaignRow, error: campaignError } = await supabase
+      .from('campaigns')
+      .select('company_id')
+      .eq('id', row.campaign_id)
+      .maybeSingle();
+    if (campaignError) throw campaignError;
+    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
+  } catch {
+    return res.status(503).json({ error: 'Campaign company lookup failed. Please retry.', code: 'COMPANY_LOOKUP_FAILED' });
+  }
+  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+  const access = await enforceCompanyAccess({ req, res, companyId, campaignId: row.campaign_id });
+  if (!access) return;
+
+  // The caller-named object must belong to THIS authorized activity.
+  if (!isActivityObjectPath(storagePath, id, companyId)) {
+    return res.status(400).json({ error: 'storage_path is not an upload of this activity.', code: 'UPLOAD_PATH_OUT_OF_SCOPE' });
+  }
+
+  // ── Authorized: size + attachment-required gates (orphan cleanup allowed) ─
+  if (sizeBytes > MAX_FILE_BYTES) {
+    await deleteStorageObject(storagePath);
+    return res.status(413).json({ error: `Uploaded file exceeds ${MAX_FILE_BYTES} bytes.` });
+  }
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {
     await deleteStorageObject(storagePath);
@@ -226,28 +258,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!expectedCategory) {
     await deleteStorageObject(storagePath);
     return res.status(409).json({ error: `No upload category for content_type "${contentType}".`, code: 'UPLOAD_NOT_VALID_FOR_FORMAT' });
-  }
-
-  // ── Resolve company + auth ────────────────────────────────────────────
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', row.campaign_id)
-      .maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch {
-    /* fall through */
-  }
-  if (!companyId) {
-    await deleteStorageObject(storagePath);
-    return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  }
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) {
-    await deleteStorageObject(storagePath);
-    return;
   }
 
   // ── MIME category check + server-side sniff against first bytes ───────
@@ -411,8 +421,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // Best-effort replacement: drop the prior storage object now that the
   // new URL is recorded.
+  // Only ever an object of this activity (a URL recorded before 3AH-91 could
+  // name an arbitrary object in the bucket).
   const priorObjectPath = extractStorageObjectPath(priorUploadedUrl);
-  if (priorObjectPath && priorObjectPath !== storagePath) {
+  if (priorObjectPath && priorObjectPath !== storagePath && isActivityObjectPath(priorObjectPath, id, companyId)) {
     void deleteStorageObject(priorObjectPath);
   }
 

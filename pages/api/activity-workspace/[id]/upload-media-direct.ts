@@ -64,6 +64,7 @@ import {
 } from '@/backend/services/creatorUploadAbuseGuardService';
 import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
 import { unguessableObjectStem } from '@/lib/security/objectNames';
+import { isActivityObjectPath } from '@/backend/services/activityWorkspace/activityObjectPath';
 
 // Disable Next.js body parser so formidable can stream the upload.
 export const config = {
@@ -598,9 +599,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // Best-effort: now that the new URL is persisted, drop the prior storage
   // object (re-upload replacement). Failures are logged but do not impact
-  // the user-facing success path.
+  // the user-facing success path. Only ever an object of THIS activity: the
+  // recorded URL is caller-writable and could name an arbitrary object in the bucket.
   if (priorObjectPath && priorObjectPath !== objectPath) {
-    void deleteStorageObject(priorObjectPath);
+    if (isActivityObjectPath(priorObjectPath, id, companyId)) {
+      void deleteStorageObject(priorObjectPath);
+    } else {
+      console.warn('[upload-media-direct] prior object outside this activity; not deleted', {
+        daily_plan_id: id,
+        prior_object_path: priorObjectPath.slice(0, 200),
+      });
+    }
   }
 
   // Cleanly remove the close listener so we don't leak listeners on the

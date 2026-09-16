@@ -77,6 +77,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return { ...existing, ai_asset_override: next };
       },
       'aiAssetMutation:step22',
+      // 3AH-92 — the row named by the body must belong to the campaign just
+      // authorized; without this scope the write reached another tenant's row.
+      { campaignId: access.campaignId },
     );
 
     // eslint-disable-next-line no-console
@@ -89,7 +92,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }));
 
     if (!result.ok) {
-      return res.status(409).json({ error: result.reason ?? 'mutation_failed', ok: false });
+      // A row outside this campaign answers exactly like a missing one.
+      const reason = result.reason === 'out_of_scope' ? 'row_not_found' : result.reason;
+      return res.status(409).json({ error: reason ?? 'mutation_failed', ok: false });
     }
 
     // Step-23: push the mutation outcome so every open card for this

@@ -141,9 +141,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
 
-  const scheduledPostId = typeof currentContent.scheduled_post_id === 'string'
+  const linkedPostId = typeof currentContent.scheduled_post_id === 'string'
     ? (currentContent.scheduled_post_id as string)
     : null;
+
+  // 3AH-92 — the post named by the row's content must belong to this row's
+  // (authorized) campaign. The content JSON is tenant-writable (e.g.
+  // commit-daily-plan stores it verbatim), so without this check a member of
+  // one company could point their own row at another tenant's post and have
+  // the steps below cancel its publish job and mark it cancelled. A post that
+  // no longer exists leaves nothing to cancel; the row still unschedules.
+  let scheduledPostId: string | null = null;
+  if (linkedPostId) {
+    const { data: linkedPost, error: linkedPostError } = await supabase
+      .from('scheduled_posts')
+      .select('id, campaign_id')
+      .eq('id', linkedPostId)
+      .maybeSingle();
+    if (linkedPostError) {
+      return res.status(503).json({ error: 'Failed to verify the scheduled post. Please retry.', code: 'SCHEDULED_POST_LOOKUP_FAILED' });
+    }
+    if (linkedPost) {
+      if (String((linkedPost as { campaign_id?: string | null }).campaign_id ?? '') !== String(row.campaign_id)) {
+        return res.status(409).json({
+          error: 'The scheduled post linked to this row does not belong to its campaign.',
+          code: 'SCHEDULED_POST_NOT_IN_CAMPAIGN',
+        });
+      }
+      scheduledPostId = linkedPostId;
+    }
+  }
 
   // ── Cancel queue job (under advisory lock to serialize with concurrent reschedule) ──
   let queueResult: Awaited<ReturnType<typeof cancelScheduledPostQueueEntry>> = { db_cancelled: 0, queue_removed: 0, errors: [] };
@@ -176,7 +203,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           error_message: userReason ? `user_unscheduled:${userReason}` : 'user_unscheduled',
           updated_at: new Date().toISOString(),
         })
-        .eq('id', scheduledPostId);
+        .eq('id', scheduledPostId)
+        .eq('campaign_id', row.campaign_id);
     } catch (postError) {
       console.warn('[unschedule] scheduled_posts mark-cancelled failed (non-fatal)', { scheduledPostId, message: (postError as Error)?.message });
     }

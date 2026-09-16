@@ -298,6 +298,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ? (currentContent.scheduled_post_id as string)
     : null;
 
+  // 3AH-92 (S-3) — the post named by the row's content must belong to this
+  // row's (authorized) campaign. The content JSON is tenant-writable (e.g.
+  // commit-daily-plan stores it verbatim), so without this check a member of
+  // one company could point their own row at another tenant's post and have
+  // the writes below retime it, swap its media and re-enqueue it on that
+  // tenant's social account. Checked before every write and queue mutation.
+  if (priorScheduledPostId) {
+    const { data: linkedPost, error: linkedPostError } = await supabase
+      .from('scheduled_posts')
+      .select('id, campaign_id')
+      .eq('id', priorScheduledPostId)
+      .maybeSingle();
+    if (linkedPostError) {
+      return res.status(503).json({ error: 'Failed to verify the scheduled post. Please retry.', code: 'SCHEDULED_POST_LOOKUP_FAILED' });
+    }
+    if (!linkedPost || String((linkedPost as { campaign_id?: string | null }).campaign_id ?? '') !== String(row.campaign_id)) {
+      return res.status(409).json({
+        error: 'The scheduled post linked to this row does not belong to its campaign.',
+        code: 'SCHEDULED_POST_NOT_IN_CAMPAIGN',
+      });
+    }
+  }
+
   // ── R2-P3: MOVE validation (all checks before any write) ───────────────
   const targetPlatform = movePlatform ?? normalizePlatformKey(row.platform ?? '');
   const platformChanged = movePlatform !== null && movePlatform !== normalizePlatformKey(row.platform ?? '');

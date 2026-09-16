@@ -238,8 +238,18 @@ describe('W2F-1 — the repository', () => {
     const entry = { [route]: allow.routes[route] };
     const ok = gate.analyzeRoute(route, routeSrc, entry, {}, { modules: { [handlerRel]: real } });
     expect(ok.violations).toEqual([]);
-    const mutated = real.replace('checkCampaignOwnership(candidate.campaignId, companyId)', "('owned' as const)");
-    const bad = gate.analyzeRoute(route, routeSrc, entry, {}, { modules: { [handlerRel]: mutated } });
-    expect(bad.violations.map((v: { rule: string }) => v.rule)).toContain('ALLOWLIST');
+    // STEP 3AH-95: each link of the reconciled chain is load-bearing — deleting
+    // any one of them stops the evidence matching, so the gate fails the route.
+    for (const link of [
+      'resolveActivityRow(activityId, { strict: true })',
+      'assertOrgMembership(user.id, companyId)',
+      'checkCampaignOwnership(writeTarget.campaignId, companyId)',
+      'checkCampaignOwnership(bodyCampaignId, companyId)',
+    ]) {
+      const mutated = real.replace(link, "('owned' as const)");
+      expect(mutated).not.toBe(real);
+      const bad = gate.analyzeRoute(route, routeSrc, entry, {}, { modules: { [handlerRel]: mutated } });
+      expect(bad.violations.map((v: { rule: string }) => v.rule)).toContain('ALLOWLIST');
+    }
   });
 });

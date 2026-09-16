@@ -32,6 +32,7 @@ import {
   listBlueprintItems,
 } from './canonicalExecutionResolver';
 import { reconcileContentWrite } from './canonicalWriteReconciliation';
+import { isUuid } from '../../../lib/shared/uuid';
 import type { CanonicalExecutionItem } from '../../types/orchestration/CanonicalExecutionItem';
 import type { CanonicalExecutionCampaign } from '../../types/orchestration/CanonicalExecutionCampaign';
 import type { CanonicalExecutionWeek } from '../../types/orchestration/CanonicalExecutionWeek';
@@ -348,6 +349,35 @@ export async function updateExecutionLifecycle(
   return applyContentWrite(campaignIdOrNull, key, { ...rest, ...(extra ?? {}) }, sourceWriter);
 }
 
+export type ActivityRow = { id: string; campaign_id: string | null; execution_id: string | null; content: string | object | null };
+export type ActivityRowResolution =
+  | { ok: true; row: ActivityRow; reason?: undefined }
+  | { ok: false; row?: undefined; reason: 'invalid_activity_id' | 'row_not_found' | 'ambiguous_activity_id' | 'lookup_error' };
+
+/**
+ * 3AH-92 (S-2) — the ONE daily_content_plans row an activity id names: by
+ * primary key, else by a single execution_id match. Two parameterised lookups
+ * replace `.or(\`id.eq.${id},execution_id.eq.${id}\`)`, which spliced the raw id
+ * into PostgREST filter grammar (`<uuid>,id.not.is.null` widened the match to
+ * every row). Only UUIDs are looked up: `id` is a uuid column, so a non-UUID
+ * already failed that whole query and resolved nothing. A lookup error is
+ * reported, never read as "no row". `strict` (ids a caller supplied) also
+ * refuses an id matching one row by key and a DIFFERENT row by execution_id.
+ */
+export async function resolveActivityRow(activityId: string, opts: { strict?: boolean } = {}): Promise<ActivityRowResolution> {
+  if (!isUuid(activityId)) return { ok: false, reason: 'invalid_activity_id' };
+  const cols = 'id, campaign_id, execution_id, content';
+  const byId = await supabase.from('daily_content_plans').select(cols).eq('id', activityId).limit(1);
+  if (byId.error) return { ok: false, reason: 'lookup_error' };
+  const byExecution = await supabase.from('daily_content_plans').select(cols).eq('execution_id', activityId).limit(2);
+  if (byExecution.error) return { ok: false, reason: 'lookup_error' };
+  const primary = ((byId.data ?? []) as ActivityRow[])[0] ?? null;
+  const others = ((byExecution.data ?? []) as ActivityRow[]).filter((r) => String(r.id) !== String(primary?.id ?? ''));
+  if (primary) return others.length > 0 && opts.strict ? { ok: false, reason: 'ambiguous_activity_id' } : { ok: true, row: primary };
+  if (others.length !== 1) return { ok: false, reason: others.length > 1 ? 'ambiguous_activity_id' : 'row_not_found' };
+  return { ok: true, row: others[0] };
+}
+
 /**
  * SEC-91 W2-A (W2F-1a) — an activity key that is safe to interpolate into a
  * PostgREST filter: letters, digits, '-' and '_' only (uuids, `wk1-exec-2`,
@@ -364,35 +394,39 @@ export function isSafeActivityKey(value: unknown): value is string {
  * transform over the existing blob. Used by activity-workspace/content.ts
  * (master/variants persistence) so those enrichment writes are reconciled
  * (blank/stale-overwrite-safe) and observable. Behaviour-compatible with the
- * prior load→transform→update, plus guards + logging.
+ * prior load→transform→update, plus guards + logging. `scope.campaignId` pins
+ * the write to a campaign the caller already authorized (3AH-92).
  */
 export async function updateExecutionContentByActivity(
   activityId: string,
   transform: (existing: Record<string, unknown>) => Record<string, unknown>,
   sourceWriter = 'updateExecutionContentByActivity',
+  scope: { campaignId?: string } = {},
 ): Promise<CanonicalWriteResult> {
   if (!activityId) return { ok: false, reason: 'missing_activity_id' };
-  // SEC-91 W2-A (STEP 3AH-91, W2F-1a) — the key is interpolated into a
-  // PostgREST `.or()` filter below. A raw value such as
-  // "<uuid>,campaign_id.eq.<other campaign>" used to widen the match to another
-  // tenant's rows (and the first match was written). Only plain tokens (uuid /
-  // execution-id shape) are accepted, before any query.
+  /*
+   * STEP 3AH-95 reconciliation (SEC91-W2F-1a + 3AH-92 S-2).
+   *
+   * Row resolution below is now PARAMETERISED (resolveActivityRow: uuid-only
+   * `.eq` lookups, ambiguity reported), so the raw key no longer reaches
+   * PostgREST filter grammar here — that was the W2F-1a injection surface.
+   * The shape check is KEPT: it refuses junk before any query and is the same
+   * predicate the one remaining `.or()` caller applies
+   * (orchestrationStateSynchronizer, SEC91-W2G-3). It is a pre-filter, never
+   * the boundary: uuid-only resolution and the campaign pin below are.
+   */
   if (!isSafeActivityKey(activityId)) {
     LOG('ORCHESTRATION_WRITE', { execution_id: null, source_writer: sourceWriter, write_target: 'daily_content_plans', resolution_strategy: 'invalid_activity_id' });
     return { ok: false, reason: 'invalid_activity_id' };
   }
   try {
-    const { data: rows } = await supabase
-      .from('daily_content_plans')
-      .select('id, campaign_id, execution_id, content')
-      .or(`id.eq.${activityId},execution_id.eq.${activityId}`);
-    // An exact row-id match wins over an execution_id match (execution ids are
-    // not unique across campaigns), so a caller that verified row X writes X.
-    const list = (rows ?? []) as Array<Record<string, unknown>>;
-    const row = list.find((r) => String(r.id ?? '') === activityId) ?? list[0];
-    if (!row) {
-      LOG('ORCHESTRATION_WRITE', { execution_id: activityId, source_writer: sourceWriter, write_target: 'daily_content_plans', resolution_strategy: 'row_not_found' });
-      return { ok: false, reason: 'row_not_found' };
+    const resolved = await resolveActivityRow(activityId);
+    const row = resolved.ok ? resolved.row : null;
+    const outOfScope = Boolean(row && scope.campaignId && String(row.campaign_id ?? '') !== scope.campaignId);
+    if (!row || outOfScope) {
+      const reason = !resolved.ok ? resolved.reason : 'out_of_scope';
+      LOG('ORCHESTRATION_WRITE', { execution_id: activityId, source_writer: sourceWriter, write_target: 'daily_content_plans', resolution_strategy: reason });
+      return { ok: false, reason };
     }
     const existing = parseContent(row as Record<string, unknown>);
     const desired = transform({ ...existing });
@@ -400,10 +434,11 @@ export async function updateExecutionContentByActivity(
     LOG('WRITE_RECONCILE', { campaign_id: (row as any).campaign_id ?? null, execution_id: activityId, source_writer: sourceWriter, write_target: 'daily_content_plans', reconciliation_strategy: 'enrichment_priority_merge', changed_fields: rec.changed_fields, preserved_fields: rec.preserved_fields });
     if (rec.prevented.length > 0) LOG('STALE_OVERWRITE_PREVENTED', { execution_id: activityId, source_writer: sourceWriter, prevented: rec.prevented });
     if (rec.invariant_violations.length > 0) LOG('WRITE_CONFLICT', { execution_id: activityId, source_writer: sourceWriter, invariant_violations: rec.invariant_violations });
-    const { error } = await supabase
+    const write = supabase
       .from('daily_content_plans')
       .update({ content: JSON.stringify(rec.merged), updated_at: new Date().toISOString() })
       .eq('id', (row as any).id);
+    const { error } = await (scope.campaignId ? write.eq('campaign_id', scope.campaignId) : write);
     LOG('ORCHESTRATION_WRITE', { campaign_id: (row as any).campaign_id ?? null, execution_id: activityId, source_writer: sourceWriter, write_target: 'daily_content_plans', resolution_strategy: error ? 'write_failed' : 'reconciled_merge', changed_fields: rec.changed_fields });
     if (error) { LOG('EXECUTION_WRITE_FAILED', { execution_id: activityId, source_writer: sourceWriter, reason: error.message }); return { ok: false, reason: error.message }; }
     LOG('WRITE_TARGET_SYNC', { execution_id: activityId, source_writer: sourceWriter, write_target: 'daily_content_plans', synced: true });
