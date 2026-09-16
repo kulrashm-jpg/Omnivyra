@@ -50,9 +50,12 @@ const MUTATIONS = [
   { id: 'M6', name: 'campaign ownership bypassed', edits: [[HANDLER,
     "      if (ownership !== 'owned') {",
     '      if (false) {']] },
+  // 3AH-94: anchored on the preceding line — PR #246 added a SECOND
+  // checkCampaignOwnership call (body campaignId) whose lookup_error branch is
+  // spelled identically, so the bare `if` line is no longer unique.
   { id: 'M7a', name: 'fail-open: ownership lookup error allowed', edits: [[HANDLER,
-    "      if (ownership === 'lookup_error') {",
-    '      if (false) {'], [HANDLER,
+    "      const ownership = companyId ? await checkCampaignOwnership(writeTarget.campaignId, companyId) : 'foreign';\n      if (ownership === 'lookup_error') {",
+    "      const ownership = companyId ? await checkCampaignOwnership(writeTarget.campaignId, companyId) : 'foreign';\n      if (false) {"], [HANDLER,
     "      if (ownership !== 'owned') {",
     "      if (ownership !== 'owned' && ownership !== 'lookup_error') {"]] },
   { id: 'M7b', name: 'fail-open: activity lookup error treated as a transient id', edits: [[HANDLER,
