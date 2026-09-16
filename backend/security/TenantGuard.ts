@@ -59,6 +59,7 @@ import { logger } from '../services/logger';
 import { logSecurityEvent } from './audit/SecurityAuditService';
 import { seedRequestContextFromRequest } from '../services/requestContext';
 import { attributeAuthenticatedPrincipal } from '../services/requestContextPrincipal';
+import { shadowCampaignOwnership } from '../services/campaignOwnershipService';
 // W2-1 (Foundation primitives): rollout lifecycle + request-scoped memo.
 import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
 import { runWithRollout } from '../../lib/platform/rolloutAdmin';
@@ -628,6 +629,13 @@ export async function requireCampaignTenantAccess(
     .select('company_id')
     .eq('id', campaignId)
     .maybeSingle();
+  // 3AH-113 (WS-A) — shadow only: the decision below is unchanged.
+  const recordedOwner = (data as { company_id?: string | null } | null)?.company_id;
+  shadowCampaignOwnership('requireCampaignTenantAccess', campaignId, {
+    kind: 'owner',
+    ownerCompanyId: !error && recordedOwner ? String(recordedOwner) : null,
+    lookupError: Boolean(error),
+  });
   if (error || !data || !(data as { company_id?: string | null }).company_id) {
     res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
     return null;

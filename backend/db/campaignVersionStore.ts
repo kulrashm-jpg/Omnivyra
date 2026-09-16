@@ -1,5 +1,69 @@
 import { supabase } from './supabaseClient';
 
+/**
+ * 3AH-113 (WS-A) — deterministic "latest version first" ordering, for CONTENT
+ * selection only (which snapshot to read). It must never decide ownership:
+ * that is campaignOwnershipService.resolveCampaignOwnership, which is
+ * order-free. Apply it inside an already-authorized company scope.
+ *
+ *   created_at DESC NULLS LAST, version DESC NULLS LAST, id DESC
+ *
+ * A row with no timestamp never outranks a dated one, and equal timestamps and
+ * versions are broken by id, so the same rows always yield the same "latest".
+ * The query builder and the in-memory comparator both read this one spec.
+ */
+export type LatestVersionOrderKey = {
+  column: 'created_at' | 'version' | 'id';
+  ascending: boolean;
+  nullsFirst: boolean;
+};
+
+export const LATEST_VERSION_ORDER: readonly LatestVersionOrderKey[] = [
+  { column: 'created_at', ascending: false, nullsFirst: false },
+  { column: 'version', ascending: false, nullsFirst: false },
+  { column: 'id', ascending: false, nullsFirst: false },
+];
+
+type LatestVersionOrderable = {
+  order(column: string, options: { ascending: boolean; nullsFirst: boolean }): LatestVersionOrderable;
+};
+
+export function applyLatestVersionOrder<Q extends LatestVersionOrderable>(query: Q): Q {
+  let ordered: LatestVersionOrderable = query;
+  for (const key of LATEST_VERSION_ORDER) {
+    ordered = ordered.order(key.column, { ascending: key.ascending, nullsFirst: key.nullsFirst });
+  }
+  return ordered as Q;
+}
+
+function latestSortValue(column: LatestVersionOrderKey['column'], value: unknown): number | string | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (column === 'created_at') {
+    const time = Date.parse(String(value));
+    return Number.isNaN(time) ? null : time;
+  }
+  if (column === 'version') {
+    const version = Number(value);
+    return Number.isFinite(version) ? version : null;
+  }
+  return String(value);
+}
+
+/** In-memory twin of applyLatestVersionOrder: negative when `a` is newer. */
+export function compareLatestVersionFirst(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  for (const key of LATEST_VERSION_ORDER) {
+    const av = latestSortValue(key.column, a[key.column]);
+    const bv = latestSortValue(key.column, b[key.column]);
+    if (av === null && bv === null) continue;
+    if (av === null) return key.nullsFirst ? -1 : 1;
+    if (bv === null) return key.nullsFirst ? 1 : -1;
+    if (av === bv) continue;
+    const ascending = av < bv ? -1 : 1;
+    return key.ascending ? ascending : -ascending;
+  }
+  return 0;
+}
+
 export async function saveCampaignVersion(input: {
   companyId: string;
   campaignId?: string;
