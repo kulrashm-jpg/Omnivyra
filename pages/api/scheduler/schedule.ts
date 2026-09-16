@@ -35,6 +35,32 @@ async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise
   return user.id;
 }
 
+type AccountOwner =
+  | { ok: true; found: boolean; companyId: string | null; userId: string | null }
+  | { ok: false };
+
+/**
+ * P1-A — who owns a connected account, from server state: the owning tenant
+ * (`social_accounts.company_id`, the id the publish worker resolves the tenant from)
+ * and the user who connected it (`social_accounts.user_id`, the scope /api/accounts
+ * lists accounts by). Read through the canonical supabase client the publishing
+ * organization resolver uses. That resolver's `companyOfSocialAccount` is file-local
+ * and folds a failed read into "no owner", so it cannot express the 503 below.
+ */
+async function resolveAccountOwner(id: string): Promise<AccountOwner> {
+  try {
+    const { data, error } = await supabase.from('social_accounts').select('company_id, user_id').eq('id', id).maybeSingle();
+    if (error) return { ok: false };
+    const row = data as { company_id?: string | null; user_id?: string | null } | null;
+    return {
+      ok: true,
+      found: Boolean(row),
+      companyId: row?.company_id ? String(row.company_id) : null,
+      userId: row?.user_id ? String(row.user_id) : null,
+    };
+  } catch { return { ok: false }; }
+}
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -46,9 +72,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const { companyId, title, content, hashtags, mediaType, mediaUrls, mediaTypes, assetRefs, creatorAttachments, scheduledFor, platform, accountId, contentType, nodes: rawNodes } = req.body;
 
+    let authorizedCompanyId: string | null = null;
     if (companyId) {
       const access = await enforceCompanyAccess({ req, res, companyId: String(companyId) });
       if (!access) return;
+      authorizedCompanyId = String(companyId);
     }
 
     if (!content || !scheduledFor || !platform) {
@@ -57,6 +85,40 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (new Date(scheduledFor) <= new Date()) {
       return res.status(400).json({ error: 'Scheduled time must be in the future' });
+    }
+
+    // P1-A — publishing derives the tenant FROM the connected account and signs with
+    // that account's token, so a caller-supplied `accountId` must be proven to be one
+    // the caller may publish through; nothing in the request body is proof. The owner
+    // comes from server state, and the check runs before the first side effect (no
+    // insert, enqueue or media resolution first):
+    //   - a company was authorized above → the account must belong to THAT company;
+    //   - no company was named (pages/scheduler.tsx, which offers only the caller's own
+    //     connected accounts) → the account must be the caller's own, and the caller
+    //     must be authorized for the tenant the worker will publish under;
+    //   - a legacy account with no owning company → only the user who connected it.
+    // A foreign account answers exactly like an unknown one.
+    if (accountId) {
+      const owner = await resolveAccountOwner(String(accountId));
+      if (owner.ok === false) {
+        return res.status(503).json({ error: 'Social account ownership check is temporarily unavailable. Please try again.', code: 'SOCIAL_ACCOUNT_LOOKUP_ERROR', retryable: true });
+      }
+      const accountNotFound = () => {
+        console.warn('SOCIAL_ACCOUNT_TENANT_MISMATCH', { path: req.url, userId, authorizedCompanyId });
+        return res.status(404).json({ error: 'Social account not found', code: 'SOCIAL_ACCOUNT_NOT_FOUND' });
+      };
+      if (!owner.found) return accountNotFound();
+      if (owner.companyId) {
+        if (authorizedCompanyId) {
+          if (owner.companyId !== authorizedCompanyId) return accountNotFound();
+        } else {
+          if (owner.userId !== userId) return accountNotFound();
+          const tenantAccess = await enforceCompanyAccess({ req, res, companyId: owner.companyId });
+          if (!tenantAccess) return;
+        }
+      } else if (owner.userId !== userId) {
+        return accountNotFound();
+      }
     }
 
     // ── Phase 1B.1: thread multi-row branch ─────────────────────────────────

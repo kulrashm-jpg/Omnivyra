@@ -75,6 +75,7 @@ import {
   platformSupportsCapability,
 } from '@/lib/shared/social/platformCapabilities';
 import { normalizeContentCapability } from '@/lib/shared/social/contentCapability';
+import { isActivityObjectPath } from '@/backend/services/activityWorkspace/activityObjectPath';
 
 const UPLOAD_BUCKET = 'media-uploads';
 
@@ -112,16 +113,60 @@ function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+/**
+ * P1-B — the origins this deployment's own storage objects can be served
+ * from, derived from the deployment's Supabase configuration (the same two
+ * variables backend/db/supabaseClient reads). Computed per call rather than
+ * at module load so a runtime env change is honoured without a reload.
+ */
+function allowedStorageOrigins(): Set<string> {
+  const origins = new Set<string>();
+  for (const configured of [process.env.SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_URL]) {
+    if (typeof configured !== 'string' || !configured.trim()) continue;
+    try {
+      origins.add(new URL(configured.trim()).origin);
+    } catch {
+      /* an unparseable configured URL contributes no origin */
+    }
+  }
+  return origins;
+}
+
+/**
+ * P1-B — resolve the bucket object key a recorded media URL names, or null.
+ *
+ * THE DEFECT this closes: the recorded URL comes from the row's tenant-
+ * writable `content.uploaded_media_url`, and this function used to accept
+ * every host — it only looked for `/media-uploads/` in the pathname. Paired
+ * with the service-role storage client (storage RLS does not apply), that
+ * let a member of one company name another tenant's object and have the
+ * server delete it.
+ *
+ * Fail-closed decisions, both deliberate:
+ *   • A relative or pathless value (`/media-uploads/x/y.mp4`, `x/y.mp4`, '')
+ *     does not parse as an absolute URL and is NOT resolved against the
+ *     storage origin — with no verifiable host there is nothing to
+ *     authorize, so no object is named and nothing is deleted.
+ *   • A URL whose host is not a configured storage origin — and equally the
+ *     case where no storage origin is configured at all — yields null.
+ *
+ * The returned key is still only a CANDIDATE: the caller must additionally
+ * bind it to the authorized activity/company via isActivityObjectPath. The
+ * URL path alone is never the authorization mechanism.
+ */
 function extractStorageObjectPath(publicUrl: string | null | undefined): string | null {
   if (!publicUrl) return null;
+  let url: URL;
   try {
-    const url = new URL(publicUrl);
-    const idx = url.pathname.indexOf(`/${UPLOAD_BUCKET}/`);
-    if (idx === -1) return null;
-    return url.pathname.slice(idx + UPLOAD_BUCKET.length + 2);
+    url = new URL(publicUrl);
   } catch {
     return null;
   }
+  const allowedOrigins = allowedStorageOrigins();
+  if (allowedOrigins.size === 0 || !allowedOrigins.has(url.origin)) return null;
+  const idx = url.pathname.indexOf(`/${UPLOAD_BUCKET}/`);
+  if (idx === -1) return null;
+  return url.pathname.slice(idx + UPLOAD_BUCKET.length + 2);
 }
 
 async function deleteStorageObject(objectPath: string): Promise<void> {
@@ -501,9 +546,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // about to be persisted. We delete BEFORE the scheduled_posts /
     // daily_content_plans update so a successful delete doesn't strand
     // anything in storage; the row's state still points at the new URL.
+    //
+    // P1-B — the object deleted here must belong to THIS activity. The
+    // recorded URL is tenant-writable, so its path is a claim, not a
+    // permission: `isActivityObjectPath` (the shared predicate the sibling
+    // upload routes use) re-derives the scope from the server-authorized
+    // activity id and company id resolved above. `extractStorageObjectPath`
+    // has already refused every host that is not a configured storage
+    // origin. Reached only after enforceCompanyAccess succeeded.
     const priorObjectPath = extractStorageObjectPath(priorUploadedUrl);
     if (priorObjectPath && priorUploadedUrl !== mediaUrl) {
-      void deleteStorageObject(priorObjectPath);
+      if (isActivityObjectPath(priorObjectPath, id, companyId)) {
+        void deleteStorageObject(priorObjectPath);
+      } else {
+        console.warn('[reschedule] prior object outside this activity; not deleted', {
+          daily_plan_id: id,
+          prior_object_path: priorObjectPath.slice(0, 200),
+        });
+      }
     }
   }
 
