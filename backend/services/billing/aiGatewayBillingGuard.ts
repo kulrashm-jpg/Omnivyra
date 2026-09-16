@@ -107,8 +107,12 @@ export async function checkAiBillingGuard(args: {
 }): Promise<AiBillingGuardResult> {
   // An ambient handle only covers calls for the org it was reserved for — a
   // billed scope for org A never vouches for a nested call attributed to org B.
+  // BOTH ids must be present AND equal. An unattributed call (no args.orgId)
+  // gets no vouch: the ambient scope cannot say which org that call served, so
+  // treating it as billed would silently mis-attribute it. It stays a tracked
+  // violation, which is what this guard exists to surface.
   const ambient = getActiveCreditHandle();
-  const ambientValid = ambient && (!args.orgId || !ambient.orgId || ambient.orgId === args.orgId) ? ambient : undefined;
+  const ambientValid = ambient && args.orgId && ambient.orgId === args.orgId ? ambient : undefined;
   const handle = args.creditHandle ?? ambientValid;
   if (handle) {
     return { allowed: true, reason: 'has_handle', metadata: { handleAction: handle.action } };
