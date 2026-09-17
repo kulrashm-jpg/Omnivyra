@@ -44,10 +44,23 @@ let authUser: string | null = MEMBER_A;
 let superAdmins: string[] = [SUPERADMIN];
 
 /** Every predicate every query carried, per table. */
-type Q = { table: string; filters: Record<string, unknown> };
+type Q = { table: string; filters: Record<string, unknown>; columns?: string };
 const queries: Q[] = [];
 /** Every row written, per table. The analytics_reports insert is the write sink. */
 const writes: Array<{ table: string; payload: unknown }> = [];
+
+/**
+ * 3AH-114 (WS-B) — the campaign tenant guard's canonical ownership read. The
+ * guard now decides ownership over EVERY owner record, so besides
+ * campaigns.company_id it reads campaign_versions.company_id for the campaign.
+ * That read (company_id only, keyed by the campaign alone) is an authorization
+ * read like the campaigns one; ANY other campaign_versions read keyed by a
+ * foreign campaign is still a leak.
+ */
+const isGuardVersionOwnershipRead = (q: Q, campaignId: string) =>
+  q.table === 'campaign_versions'
+  && q.columns === 'company_id'
+  && JSON.stringify(q.filters) === JSON.stringify({ campaign_id: campaignId });
 
 const analyticsQueries = () =>
   queries.filter(q => !['user_company_roles', 'companies', 'campaigns'].includes(q.table));
@@ -78,7 +91,8 @@ jest.mock('../../db/supabaseClient', () => {
   const build = (table: string) => {
     const filters: Record<string, unknown> = {};
     const b: any = {};
-    b.select = () => b;
+    let columns: string | undefined;
+    b.select = (cols?: string) => { columns = cols; return b; };
     b.eq = (c: string, v: unknown) => { filters[c] = v; return b; };
     b.in = (c: string, v: unknown) => { filters[c] = v; return b; };
     b.gte = (c: string, v: unknown) => { filters[`${c}__gte`] = v; return b; };
@@ -91,7 +105,7 @@ jest.mock('../../db/supabaseClient', () => {
       return Promise.resolve({ data: null, error: null });
     };
     const resolve = () => {
-      queries.push({ table, filters: { ...filters } });
+      queries.push({ table, filters: { ...filters }, columns });
       if (table === 'user_company_roles') {
         const role = MEMBERSHIPS[`${filters.user_id}:${filters.company_id}`];
         return { data: role ? { role, status: 'active' } : null, error: null };
@@ -280,8 +294,10 @@ describe('analytics/report', () => {
     const res = await call(reportHandler, MEMBER_A, { body: { companyId: COMPANY_A, campaignId: CAMPAIGN_B } });
     expect(res.statusCode).toBe(403);
     expect(reportWrites()).toEqual([]);
-    const leaked = queries.filter(q => JSON.stringify(q.filters).includes(CAMPAIGN_B) && q.table !== 'campaigns');
+    const leaked = queries.filter(q =>
+      JSON.stringify(q.filters).includes(CAMPAIGN_B) && q.table !== 'campaigns' && !isGuardVersionOwnershipRead(q, CAMPAIGN_B));
     expect(leaked).toEqual([]);
+    expect(queries.filter(q => isGuardVersionOwnershipRead(q, CAMPAIGN_B))).toHaveLength(1);
   });
 
   it('6c. CRITICAL: a super-admin naming a campaign outside the reported company is still refused', async () => {
@@ -293,8 +309,10 @@ describe('analytics/report', () => {
     const res = await call(reportHandler, SUPERADMIN, { body: { companyId: COMPANY_A, campaignId: CAMPAIGN_B } });
     expect(res.statusCode).toBe(404);
     expect(reportWrites()).toEqual([]);
-    const leaked = queries.filter(q => JSON.stringify(q.filters).includes(CAMPAIGN_B) && q.table !== 'campaigns');
+    const leaked = queries.filter(q =>
+      JSON.stringify(q.filters).includes(CAMPAIGN_B) && q.table !== 'campaigns' && !isGuardVersionOwnershipRead(q, CAMPAIGN_B));
     expect(leaked).toEqual([]);
+    expect(queries.filter(q => isGuardVersionOwnershipRead(q, CAMPAIGN_B))).toHaveLength(1);
   });
 
   it('6b. the caller’s OWN campaign is accepted', async () => {

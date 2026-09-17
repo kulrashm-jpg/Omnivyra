@@ -4,7 +4,9 @@
  *
  *   checkCampaignOwnership          (membership: owned / foreign / …)
  *   resolveCampaignCompanyId        (owner: newest campaign_versions row, else campaigns)
- *   requireCampaignTenantAccess     (owner: campaigns.company_id, then membership)
+ *
+ * requireCampaignTenantAccess was shadowed here in WS-A; since WS-B (3AH-114)
+ * it decides with the canonical resolver directly (tenantGuardCanonicalOwnership.test.ts).
  *
  * The shadow must be observation only. For every 3AH-112 fixture A–H these
  * tests run each seam with the shadow OFF and ON and require identical return
@@ -18,7 +20,7 @@
  * real TenantGuard membership chain runs.
  */
 import {
-  seed, invoke, failTable, calls, writeCalls, CO_A, CO_B,
+  seed, failTable, calls, writeCalls, CO_A, CO_B,
 } from '../helpers/routeAuthHarness';
 
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
@@ -33,7 +35,6 @@ import {
   isCampaignOwnershipShadowEnabled,
 } from '../../services/campaignOwnershipService';
 import { resolveCampaignCompanyId } from '../../services/campaignAccessService';
-import { requireCampaignTenantAccess } from '../../security/TenantGuard';
 import { logger } from '../../services/logger';
 
 const X = 'camp-x-00-0000-0000-0000000000xx';
@@ -58,7 +59,6 @@ const FIXTURES: Record<string, Fixture> = {
 const EXPECTED_MISMATCH = {
   checkCampaignOwnership: ['B', 'E', 'F', 'G'],
   resolveCampaignCompanyId: ['B', 'E', 'F', 'G'],
-  requireCampaignTenantAccess: ['B', 'C', 'H'],
 } as const;
 
 const EXPECTED_CANONICAL_STATUS: Record<string, string> = {
@@ -77,10 +77,6 @@ const LEGACY_ANSWER: Record<keyof typeof EXPECTED_MISMATCH, Record<string, reado
     A: [CO_A, CO_A], B: [CO_B, CO_B], C: [CO_A, CO_A], D: [CO_A, CO_A],
     E: [CO_B, CO_B], G: [CO_A, CO_A], H: [CO_A, CO_A],
   },
-  requireCampaignTenantAccess: {
-    A: [200, 403], B: [200, 403], C: [404, 404], D: [200, 403],
-    E: [404, 404], F: [404, 404], G: [404, 404], H: [404, 404],
-  },
 };
 
 const TELEMETRY_KEYS = [
@@ -96,19 +92,13 @@ function world(name: string): void {
   });
 }
 
-const tenantHandler = async (req: unknown, res: { status(n: number): { json(b: unknown): unknown } }) => {
-  const granted = await requireCampaignTenantAccess(req as never, res as never, X);
-  if (granted) res.status(200).json({ granted: true });
-};
-
 type SeamRun = { value: unknown; writes: string[]; reads: string[] };
 
 async function runSeam(seam: keyof typeof EXPECTED_MISMATCH, fixture: string, as: 'A' | 'B' = 'A'): Promise<SeamRun> {
   world(fixture);
   let value: unknown;
   if (seam === 'checkCampaignOwnership') value = await checkCampaignOwnership(X, as === 'A' ? CO_A : CO_B);
-  else if (seam === 'resolveCampaignCompanyId') value = await resolveCampaignCompanyId(X);
-  else value = await invoke(tenantHandler, { as });
+  else value = await resolveCampaignCompanyId(X);
   await flushCampaignOwnershipShadow();
   return {
     value,
@@ -178,8 +168,7 @@ describe.each(CASES)('%s — fixture %s — caller company %s', (seam, fixture, 
     const pinned = LEGACY_ANSWER[seam][fixture];
     if (pinned === undefined) return;
     const expected = pinned[as === 'A' ? 0 : 1];
-    if (seam === 'requireCampaignTenantAccess') expect((value as { status: number }).status).toBe(expected);
-    else expect(value).toBe(expected);
+    expect(value).toBe(expected);
   });
 
   it('emits telemetry only on a disagreement, with safe fields only', async () => {
@@ -204,23 +193,25 @@ describe.each(CASES)('%s — fixture %s — caller company %s', (seam, fixture, 
 });
 
 describe('shadow failures never reach the request', () => {
-  it('a failing canonical version read is reported as lookup_error while the route answer is unchanged', async () => {
+  it('a failing canonical campaigns read is reported as lookup_error while the legacy answer is unchanged', async () => {
+    // Legacy checkCampaignOwnership answers from campaign_versions alone here,
+    // so only the shadow's campaigns read sees the failure.
     process.env.CAMPAIGN_OWNERSHIP_SHADOW = 'off';
     world('A');
-    failTable('campaign_versions');
-    const off = await invoke(tenantHandler, { as: 'A' });
+    failTable('campaigns');
+    const off = await checkCampaignOwnership(X, CO_A);
 
     process.env.CAMPAIGN_OWNERSHIP_SHADOW = 'on';
     world('A');
-    failTable('campaign_versions');
-    const on = await invoke(tenantHandler, { as: 'A' });
+    failTable('campaigns');
+    const on = await checkCampaignOwnership(X, CO_A);
     await flushCampaignOwnershipShadow();
 
-    expect(on).toEqual(off);
-    expect(on.status).toBe(200);
+    expect(on).toBe(off);
+    expect(on).toBe('owned');
     const events = mismatchEvents();
     expect(events).toHaveLength(1);
-    expect(events[0][1]).toMatchObject({ canonical_status: 'LOOKUP_FAILED', lookup_error: true, legacy_outcome: 'owner' });
+    expect(events[0][1]).toMatchObject({ canonical_status: 'LOOKUP_FAILED', lookup_error: true, legacy_outcome: 'owned' });
   });
 
   it('a throwing logger changes nothing and raises nothing', async () => {
@@ -235,13 +226,11 @@ describe('shadow failures never reach the request', () => {
       const off = [
         await runSeam('checkCampaignOwnership', 'B'),
         await runSeam('resolveCampaignCompanyId', 'B'),
-        await runSeam('requireCampaignTenantAccess', 'B'),
       ];
       process.env.CAMPAIGN_OWNERSHIP_SHADOW = 'on';
       const on = [
         await runSeam('checkCampaignOwnership', 'B'),
         await runSeam('resolveCampaignCompanyId', 'B'),
-        await runSeam('requireCampaignTenantAccess', 'B'),
       ];
       await expect(flushCampaignOwnershipShadow()).resolves.toBeUndefined();
       await new Promise((resolve) => setImmediate(resolve));
@@ -256,9 +245,10 @@ describe('shadow failures never reach the request', () => {
 
   it('shadow off performs no ownership read beyond the legacy ones', async () => {
     delete process.env.CAMPAIGN_OWNERSHIP_SHADOW;
-    const run = await runSeam('requireCampaignTenantAccess', 'A');
-    expect(run.reads.filter((r) => r === 'select:campaign_versions')).toHaveLength(0);
-    expect(run.reads.filter((r) => r === 'select:campaigns')).toHaveLength(1);
+    // Legacy checkCampaignOwnership, fixture A, own company: one version read only.
+    const run = await runSeam('checkCampaignOwnership', 'A');
+    expect(run.reads.filter((r) => r === 'select:campaign_versions')).toHaveLength(1);
+    expect(run.reads.filter((r) => r === 'select:campaigns')).toHaveLength(0);
   });
 
   it('the same campaign always gets the same reference, distinct from another campaign', async () => {

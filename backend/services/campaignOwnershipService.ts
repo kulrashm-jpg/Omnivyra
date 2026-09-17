@@ -171,7 +171,7 @@ export async function resolveCampaignOwnership(campaignId: unknown): Promise<Cam
 
 // ── 3AH-113 (WS-A) — shadow comparison (observe-only) ─────────────────────────
 
-export type OwnershipShadowSeam = 'checkCampaignOwnership' | 'resolveCampaignCompanyId' | 'requireCampaignTenantAccess';
+export type OwnershipShadowSeam = 'checkCampaignOwnership' | 'resolveCampaignCompanyId';
 
 /** What a legacy seam decided, as seen by the shadow comparison. */
 export type LegacyOwnershipObservation =

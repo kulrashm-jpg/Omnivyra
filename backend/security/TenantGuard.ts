@@ -59,7 +59,7 @@ import { logger } from '../services/logger';
 import { logSecurityEvent } from './audit/SecurityAuditService';
 import { seedRequestContextFromRequest } from '../services/requestContext';
 import { attributeAuthenticatedPrincipal } from '../services/requestContextPrincipal';
-import { shadowCampaignOwnership } from '../services/campaignOwnershipService';
+import { resolveCampaignOwnership } from '../services/campaignOwnershipService';
 // W2-1 (Foundation primitives): rollout lifecycle + request-scoped memo.
 import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
 import { runWithRollout } from '../../lib/platform/rolloutAdmin';
@@ -611,8 +611,11 @@ function safeParse(s: string): Record<string, unknown> | null {
  * because the campaign id is a guessable UUID and the routes never
  * verified that the campaign belonged to the caller's org.
  *
- * The campaign's company_id IS the canonical owning tenant; we never
- * accept the caller's claim about which tenant they're acting on.
+ * 3AH-114 (WS-B) — the owning tenant is the canonical resolver's answer over
+ * EVERY owner record (campaigns.company_id + all campaign_versions.company_id),
+ * never one row and never the caller's claim. Only OWNED reaches the tenant
+ * guard. CONFLICT and UNOWNED answer exactly like NOT_FOUND (no new existence
+ * oracle); a failed lookup is a retryable 503, never a 404.
  */
 export async function requireCampaignTenantAccess(
   req: NextApiRequest,
@@ -620,28 +623,27 @@ export async function requireCampaignTenantAccess(
   campaignId: string | null | undefined,
   options?: TenantAccessOptions,
 ): Promise<TenantAccessGranted | null> {
-  if (!campaignId) {
+  const ownership = await resolveCampaignOwnership(campaignId);
+  if (ownership.status === 'OWNED') {
+    return requireTenantAccess(req, res, ownership.companyId, options);
+  }
+  if (ownership.status === 'INVALID') {
     res.status(400).json({ error: 'campaignId required', code: 'NO_RESOURCE_ID' });
     return null;
   }
-  const { data, error } = await supabase
-    .from('campaigns')
-    .select('company_id')
-    .eq('id', campaignId)
-    .maybeSingle();
-  // 3AH-113 (WS-A) — shadow only: the decision below is unchanged.
-  const recordedOwner = (data as { company_id?: string | null } | null)?.company_id;
-  shadowCampaignOwnership('requireCampaignTenantAccess', campaignId, {
-    kind: 'owner',
-    ownerCompanyId: !error && recordedOwner ? String(recordedOwner) : null,
-    lookupError: Boolean(error),
-  });
-  if (error || !data || !(data as { company_id?: string | null }).company_id) {
-    res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+  if (ownership.status === 'LOOKUP_FAILED') {
+    res.status(503).json({
+      error: 'Campaign ownership check is temporarily unavailable. Please try again.',
+      code: 'CAMPAIGN_LOOKUP_ERROR',
+      retryable: true,
+    });
     return null;
   }
-  const companyId = (data as { company_id: string }).company_id;
-  return requireTenantAccess(req, res, companyId, options);
+  if (ownership.status === 'CONFLICT') {
+    logger.warn('campaign_ownership_conflict_denied', { distinct_company_count: ownership.companyIds.length });
+  }
+  res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+  return null;
 }
 
 /**
