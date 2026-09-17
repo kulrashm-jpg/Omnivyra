@@ -248,6 +248,78 @@ function buildEditorSafePayload(result: Record<string, unknown>): GeneratedEdito
   };
 }
 
+/**
+ * The brief an accepted intelligence card carries into this page — written to
+ * sessionStorage by ManagedIntelligencePage (CardSelectionBundle) and mirrored
+ * in the `prefill_intent` / `prefill_reason` query params. Every field is
+ * optional here: the bundle is untrusted client storage and may be missing.
+ */
+export type AcceptedCardBrief = {
+  reason?: string;
+  intent?: string;
+  tone?: string;
+  company_context?: string;
+  current_content?: string;
+  writing_style?: string;
+  related_titles?: string[];
+};
+
+const nonEmpty = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+/**
+ * Map an accepted card's brief onto the long-form generate contract, so the
+ * brief reaches the prompt instead of being dropped (only `topic` used to
+ * survive). No generator change is needed — it already renders these fields:
+ *
+ *  - `answers.company_context` and `answers.strategy_perspective` are read by
+ *    BOTH prompt builders (standard and template-aware). Intent, the card's
+ *    reason and the tone are carried in `strategy_perspective`, because the
+ *    template-aware builder — the path used whenever a template is selected —
+ *    reads no top-level `intent`/`tone`.
+ *  - `answers.current_content`, `answers.writing_style` and the top-level
+ *    `intent`, `tone` and `related_blogs` are read by the standard builder.
+ *
+ * Only keys with a value are emitted. It never touches the four answers the
+ * user edits on this page, and the bundle's company id is ignored: the request
+ * is scoped to the selected company exactly as before.
+ */
+export function buildAcceptedBriefFields(brief: AcceptedCardBrief | null): {
+  intent?: string;
+  tone?: string;
+  related_blogs?: string[];
+  answers: Record<string, string>;
+} {
+  if (!brief) return { answers: {} };
+  const intent = nonEmpty(brief.intent);
+  const reason = nonEmpty(brief.reason);
+  const tone = nonEmpty(brief.tone);
+  const relatedBlogs = Array.isArray(brief.related_titles)
+    ? brief.related_titles.map(nonEmpty).filter((title): title is string => Boolean(title))
+    : [];
+
+  const answers: Record<string, string> = {};
+  const companyContext = nonEmpty(brief.company_context);
+  const currentContent = nonEmpty(brief.current_content);
+  const writingStyle = nonEmpty(brief.writing_style);
+  if (companyContext) answers.company_context = companyContext;
+  if (currentContent) answers.current_content = currentContent;
+  if (writingStyle) answers.writing_style = writingStyle;
+  const perspective = [
+    intent ? `Strategic intent: ${intent}.` : undefined,
+    reason ? `Why this topic was recommended: ${reason}` : undefined,
+    tone ? `Tone: ${tone}.` : undefined,
+  ].filter(Boolean).join(' ');
+  if (perspective) answers.strategy_perspective = perspective;
+
+  return {
+    ...(intent ? { intent } : {}),
+    ...(tone ? { tone } : {}),
+    ...(relatedBlogs.length > 0 ? { related_blogs: relatedBlogs } : {}),
+    answers,
+  };
+}
+
 function getSuggestionRangeLabel(words: number): string {
   if (words >= 4000) return '7-8';
   if (words >= 3000) return '6-7';
@@ -297,6 +369,8 @@ export default function ManagedSuggestionsPage({
   const format = typeof router.query.format === 'string' ? router.query.format : '';
   const targetWordsQuery = typeof router.query.target_words === 'string' ? Number.parseInt(router.query.target_words, 10) : NaN;
   const platformQuery = typeof router.query.platform === 'string' ? router.query.platform : '';
+  const intentQuery = typeof router.query.prefill_intent === 'string' ? router.query.prefill_intent : '';
+  const reasonQuery = typeof router.query.prefill_reason === 'string' ? router.query.prefill_reason : '';
   const isShortform = contentType === 'post' || contentType === 'thread';
 
   const [templateBlocks, setTemplateBlocks] = useState<ContentBlock[] | null>(null);
@@ -307,6 +381,7 @@ export default function ManagedSuggestionsPage({
     platformQuery || (contentType === 'thread' ? 'x' : 'linkedin'),
   );
   const [suggestions, setSuggestions] = useState<Suggestions | null>(null);
+  const [bundleBrief, setBundleBrief] = useState<AcceptedCardBrief | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -385,9 +460,21 @@ export default function ManagedSuggestionsPage({
     try {
       const raw = sessionStorage.getItem(bundleToken);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { targetWords?: number; suggestions?: Suggestions };
+      const parsed = JSON.parse(raw) as {
+        targetWords?: number;
+        suggestions?: Suggestions;
+        reason?: string;
+        brief?: Omit<AcceptedCardBrief, 'reason'>;
+      };
       if (typeof parsed.targetWords === 'number' && parsed.targetWords >= 300) {
         setTargetWords(parsed.targetWords);
+      }
+      // The accepted card's brief. It used to be ignored here, so a long-form
+      // generation received only the topic.
+      if (parsed.brief && typeof parsed.brief === 'object') {
+        setBundleBrief({ ...parsed.brief, reason: parsed.reason });
+      } else if (typeof parsed.reason === 'string') {
+        setBundleBrief({ reason: parsed.reason });
       }
       if (parsed.suggestions) {
         setSuggestions(parsed.suggestions);
@@ -462,6 +549,18 @@ export default function ManagedSuggestionsPage({
         .filter(Boolean)
         .join('\n');
 
+      // The accepted card's brief (sessionStorage bundle, with the URL params
+      // as a fallback when storage was unavailable). Long-form only: short-form
+      // cards never route here with a brief.
+      const acceptedBrief: AcceptedCardBrief | null = bundleBrief || intentQuery || reasonQuery
+        ? {
+            ...bundleBrief,
+            intent: bundleBrief?.intent || intentQuery || undefined,
+            reason: bundleBrief?.reason || reasonQuery || undefined,
+          }
+        : null;
+      const briefFields = buildAcceptedBriefFields(acceptedBrief);
+
       const response = await fetch(generationMeta.apiPath, {
         method: 'POST',
         credentials: 'include',
@@ -487,7 +586,13 @@ export default function ManagedSuggestionsPage({
                 template_name: templateName || undefined,
                 template_blocks: templateBlocks || undefined,
                 cache_version: `direct-suggestions-flow:${contentType}:${templateFormatType || format || 'default'}`,
+                ...(briefFields.intent ? { intent: briefFields.intent } : {}),
+                ...(briefFields.tone ? { tone: briefFields.tone } : {}),
+                ...(briefFields.related_blogs ? { related_blogs: briefFields.related_blogs } : {}),
                 answers: {
+                  // Brief keys first; the four fields the user edits on this
+                  // page are distinct keys and are always sent as before.
+                  ...briefFields.answers,
                   uniqueness_directive: resolveField('uniqueness'),
                   must_include_points: resolveField('mustInclude'),
                   campaign_objective: resolveField('objective'),
