@@ -243,12 +243,14 @@ export default async function handler(req, res) {
 
   it('a stub exemption fails as soon as the branch gains a data path', () => {
     const ex = { [REL]: { POST: { kind: 'stub', reason: 'mock connect branch: builds a fake object, no data access' } } };
-    expect(rules(writer, REL, {}, ex)).toEqual(['ALLOWLIST']);
+    // STEP 3AH-118: the unauthenticated insert is also a write before authentication.
+    expect(rules(writer, REL, {}, ex)).toEqual(['ALLOWLIST', 'R5-ORDER']);
   });
 
   it('a public exemption fails when the branch writes', () => {
     const ex = { [REL]: { POST: { kind: 'public', reason: 'read-only public aggregate for the blog generator' } } };
-    expect(rules(writer, REL, {}, ex)).toEqual(['ALLOWLIST']);
+    // STEP 3AH-118: the unauthenticated insert is also a write before authentication.
+    expect(rules(writer, REL, {}, ex)).toEqual(['ALLOWLIST', 'R5-ORDER']);
   });
 
   it('an unknown kind or a missing reason is rejected', () => {

@@ -52,6 +52,23 @@
  *       printed on every run and turns into a WARN when fixed. R1/R1-METHOD/R4
  *       can never be tracked.
  *
+ *   ORDERING (STEP 3AH-118, WS-F) — a primitive that exists but runs too late
+ *       protects nothing. scripts/route-auth-ordering.js interprets the served
+ *       handler on the TypeScript AST with dominance-based control flow:
+ *     R5-ORDER     a protected side effect (DB write / RPC, storage mutation,
+ *                  queue enqueue, outbound message, external HTTP call) on a
+ *                  path where no authentication has run yet;
+ *     R5-READ      a DB read on such a path, in a route whose contract requires
+ *                  authentication;
+ *     R6-ORDER     a protected side effect after authentication but before
+ *                  tenant authorization, in a route that binds a request id;
+ *     R7-PRINCIPAL an authorization primitive/helper evaluated against a
+ *                  caller-controlled principal (request user id / role / admin flag).
+ *     Recognised as safe before authentication, and nothing else: a
+ *     constant-time secret comparison guarding a rejection, a reviewed
+ *     credential verifier (`orderingVerifiers`, re-verified as invoked AND
+ *     followed by a 401/403), and the security-audit seam logSecurityEvent.
+ *
  * WHAT DOES NOT COUNT
  * -------------------
  *   - a primitive's NAME in a comment, a string, or an unused import;
@@ -314,11 +331,20 @@ const callRe = (name) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\
 // ───────────────────────────────────────────────────────── module analysis ──
 
 const moduleCache = new Map();
+
+// STEP 3AH-118 (WS-F): ordering analysis (scripts/route-auth-ordering.js), created on first use.
+let ORDERING = null;
+function ordering() {
+  if (!ORDERING) ORDERING = require('./route-auth-ordering').createOrderingAnalyzer({ PRIMITIVES, AUTHZ_HELPERS, DELEGATION_ROOTS, resolveSpec, loadModule, parseImports });
+  return ORDERING;
+}
+const { applyOrdering, loadOrderingSections } = require('./route-auth-ordering-policy');
+const EMPTY_ORDERING = { orderingVerifiers: {}, orderingPatterns: {}, authFirst: {} };
 function loadModule(modId) {
   const v = virtualModule(modId);
   if (v) {
     const code = executable(v.raw);
-    return { rel: v.rel, raw: v.raw, code, imports: parseImports(v.raw), fns: topLevelFunctions(code) };
+    return { rel: v.rel, raw: v.raw, code, imports: parseImports(v.raw), fns: topLevelFunctions(code), virtual: true };
   }
   if (moduleCache.has(modId)) return moduleCache.get(modId);
   const file = moduleFile(modId);
@@ -984,7 +1010,9 @@ function verifyMethodExemption(ex, branch) {
  * R1-METHOD / R4 — an unauthenticated or fail-open route always fails), and
  * when the rule stops firing the gate prints a WARN asking for removal.
  */
-const KNOWN_OPEN_RULES = new Set(['R2', 'R3', 'R4-ENV']);
+// WS-F: ordering findings are trackable — the route DOES authenticate, the
+// finding is that it does so too late; tracking keeps it printed on every run.
+const KNOWN_OPEN_RULES = new Set(['R2', 'R3', 'R4-ENV', 'R5-ORDER', 'R5-READ', 'R6-ORDER', 'R7-PRINCIPAL']);
 function loadKnownOpen(file = ALLOWLIST_PATH) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')).knownOpen || {};
@@ -1084,7 +1112,7 @@ function analyzeRoute(rel, raw, allowlist, methodExemptions = {}, opts = {}) {
   const prev = VIRTUAL;
   if (opts.modules) VIRTUAL = { ...(prev || {}), ...opts.modules };
   try {
-    const row = analyzeRouteSource(rel, raw, allowlist, methodExemptions);
+    const row = analyzeRouteSource(rel, raw, allowlist, methodExemptions, { ...EMPTY_ORDERING, ...(opts.ordering || {}) });
     // Known-open tracking (see loadKnownOpen): move ONLY the listed R2/R3
     // violations into row.knownOpen; a malformed entry tracks nothing.
     const ko = (opts.knownOpen || {})[rel];
@@ -1107,7 +1135,7 @@ function analyzeRoute(rel, raw, allowlist, methodExemptions = {}, opts = {}) {
   }
 }
 
-function analyzeRouteSource(rel, raw, allowlist, methodExemptions) {
+function analyzeRouteSource(rel, raw, allowlist, methodExemptions, orderingSections = EMPTY_ORDERING) {
   const src = resolveRouteSource(rel, raw);
   if (src.error) {
     return {
@@ -1178,6 +1206,13 @@ function analyzeRouteSource(rel, raw, allowlist, methodExemptions) {
   if (!entry && campaignKeyed && level !== 'none' && !campaignBound) {
     violations.push({ rule: 'R3', msg: 'campaign-keyed route never binds the campaign to the authorized tenant' });
   }
+  // STEP 3AH-118: a primitive that runs after the side effect protects nothing.
+  const ord = applyOrdering({
+    rel, code, evidenceCode: executable(srcRaw, true), entry, level, ids, campaignKeyed, sections: orderingSections, callRe,
+    analyze: (verifiers) => ordering().analyze({ rel: src.rel, raw: srcRaw, imports: ctx.imports }, src.handlerName, verifiers),
+  });
+  violations.push(...ord.violations);
+  const order = ord.order;
 
   return {
     route: rel,
@@ -1192,6 +1227,7 @@ function analyzeRouteSource(rel, raw, allowlist, methodExemptions) {
     reExport: src.chain,
     methodShape: methods.shape,
     methodBranches: methods.branches || [],
+    ordering: { shape: order.shape, events: order.events.length, auth: order.auth.map((a) => a.name), preAuthReads: ord.preAuthReads, patterned: ord.patterned, flagged: ord.flagged, unusedPatternEffects: ord.unusedPatternEffects },
     violations,
   };
 }
@@ -1208,6 +1244,7 @@ function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
   const allowlist = loadAllowlist(allowlistPath);
   const methodExemptions = loadMethodExemptions(allowlistPath);
   const knownOpen = loadKnownOpen(allowlistPath);
+  const orderingSections = loadOrderingSections(fs, allowlistPath);
   const files = [];
   walk(API_DIR, files);
   const rows = [];
@@ -1216,12 +1253,13 @@ function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
     const rel = path.relative(ROOT, f).split(path.sep).join('/');
     const raw = fs.readFileSync(f, 'utf8');
     if (!isRouteFile(raw)) { helpers.push(rel); continue; }
-    rows.push(analyzeRoute(rel, raw, allowlist, methodExemptions, { knownOpen }));
+    rows.push(analyzeRoute(rel, raw, allowlist, methodExemptions, { knownOpen, ordering: orderingSections }));
   }
   const known = new Set(rows.map((r) => r.route));
   const stale = Object.keys(allowlist).filter((k) => !known.has(k));
   // Known-open entries for a route that no longer exists fail like any stale entry.
   for (const k of Object.keys(knownOpen)) if (!known.has(k)) stale.push(`${k} (knownOpen)`);
+  for (const [section, entries] of Object.entries(orderingSections)) for (const k of Object.keys(entries)) if (!known.has(k)) stale.push(`${k} (${section})`);
   // Binding claims the route no longer needs (it now passes on primitives alone).
   const redundant = rows
     .filter((r) => r.allow === 'inline-binding' || r.allow === 'identity-scoped')
@@ -1243,6 +1281,8 @@ function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
     if (!row) continue;
     for (const rule of ko.rules || []) if (!row.knownOpen.some((v) => v.rule === rule)) staleKnownOpen.push(`${route} ${rule}`);
   }
+  // Ordering-pattern effects that no longer occur before tenant authorization — remove them.
+  for (const row of rows) for (const sig of (row.ordering && row.ordering.unusedPatternEffects) || []) staleKnownOpen.push(`${row.route} orderingPatterns: ${sig}`);
   return { rows, helpers, stale, redundant, staleMethodExemptions, staleKnownOpen, allowlist, methodExemptions, knownOpen };
 }
 
@@ -1285,6 +1325,11 @@ KNOWN OPEN (tracked findings, NOT fixed — see scripts/route-auth-allowlist.jso
   const dispatching = rows.filter((r) => r.methodShape === 'dispatch');
   const exempt = dispatching.reduce((n, r) => n + r.methodBranches.filter((b) => b.via === 'exempt').length, 0);
   console.log(`per-method (R1-METHOD): ${dispatching.length} route(s) dispatch by HTTP method; every branch checked; ${exempt} reviewed method exemption(s)`);
+  const orderResolved = rows.filter((r) => r.ordering && r.ordering.shape === 'resolved').length;
+  console.log(`ordering (R5/R6/R7, STEP 3AH-118): ${orderResolved}/${rows.length} handler(s) interpreted for auth-before-side-effect ordering`);
+  const readInv = rows.filter((r) => r.ordering && r.ordering.preAuthReads > 0 && !r.violations.some((v) => v.rule === 'R5-READ'));
+  const patternedRoutes = rows.filter((r) => r.ordering && r.ordering.patterned && r.ordering.patterned.length);
+  console.log(`ordering inventory: ${readInv.length} route(s) read before authentication without an authFirst contract (informational); ${patternedRoutes.length} route(s) narrowed by reviewed orderingPatterns`);
   if (bad.length === 0 && stale.length === 0) {
     console.log('\nRESULT: PASS — every route authenticates, binds its tenant, or is a verified allowlist entry.');
     if (tracked.length) console.log(`        (${tracked.length} route(s) carry KNOWN OPEN binding findings listed above — tracked, not fixed.)`);
@@ -1300,5 +1345,5 @@ KNOWN OPEN (tracked findings, NOT fixed — see scripts/route-auth-allowlist.jso
   process.exit(1);
 }
 
-module.exports = { analyzeRoute, scanRepo, executable, parseImports, isRouteFile, defaultExportOf, requestIdentifiers, failOpenSecret, verifyAllowEntry, verifyMethodExemption, verifyKnownOpen, methodCoverage, PRIMITIVES, loadAllowlist, loadMethodExemptions, loadKnownOpen };
+module.exports = { analyzeRoute, scanRepo, executable, parseImports, isRouteFile, defaultExportOf, requestIdentifiers, failOpenSecret, verifyAllowEntry, verifyMethodExemption, verifyKnownOpen, methodCoverage, PRIMITIVES, loadAllowlist, loadMethodExemptions, loadKnownOpen, loadOrderingSections: (file = ALLOWLIST_PATH) => loadOrderingSections(fs, file) };
 if (require.main === module) main();
