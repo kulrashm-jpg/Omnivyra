@@ -205,8 +205,8 @@
     },
     "pages/api/campaigns/[id].ts": {
       "kind": "inline-binding",
-      "reason": "Company resolved from the campaign (resolveCampaignCompanyId), enforceCompanyAccess on it; PUT/DELETE also filter company_id.",
-      "evidence": "resolveCampaignCompanyId\\(id\\)[\\s\\S]*?enforceCompanyAccess\\("
+      "reason": "3AH-116 (WS-D): company is the canonical owner (resolveCampaignOwnership over every owner record; only OWNED proceeds), enforceCompanyAccess on it; PUT/DELETE also filter company_id.",
+      "evidence": "resolveCampaignOwnership\\(id\\)[\\s\\S]*?const campaignCompanyId = ownership\\.companyId;[\\s\\S]*?enforceCompanyAccess\\("
     },
     "pages/api/campaigns/[id]/ai-improvements.ts": {
       "kind": "inline-binding",
@@ -215,13 +215,13 @@
     },
     "pages/api/campaigns/[id]/approve-frequency-rebalance.ts": {
       "kind": "inline-binding",
-      "reason": "Company derived from campaign_versions; COMPANY_ADMIN role in that company required before writes.",
-      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+      "reason": "3AH-116 (WS-D): company is the canonical owner (resolveCampaignOwnership; only OWNED proceeds); COMPANY_ADMIN role in that company required before writes.",
+      "evidence": "resolveCampaignOwnership\\(id\\)[\\s\\S]*?const companyId = ownership\\.companyId;[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
     },
     "pages/api/campaigns/[id]/approve-strategy.ts": {
       "kind": "inline-binding",
-      "reason": "Company derived from campaigns.company_id for the path id; COMPANY_ADMIN in that company required.",
-      "evidence": "getUserRole\\(user\\.id, companyId\\)"
+      "reason": "3AH-116 (WS-D): company is the canonical owner (resolveCampaignOwnership; only OWNED proceeds); COMPANY_ADMIN in that company required.",
+      "evidence": "resolveCampaignOwnership\\(id\\)[\\s\\S]*?const companyId = ownership\\.companyId;[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
     },
     "pages/api/campaigns/[id]/continuity.ts": {
       "kind": "inline-binding",
@@ -270,8 +270,8 @@
     },
     "pages/api/campaigns/[id]/propose-frequency-rebalance.ts": {
       "kind": "inline-binding",
-      "reason": "Company derived from campaign_versions; COMPANY_ADMIN in that company required.",
-      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+      "reason": "3AH-116 (WS-D): company is the canonical owner (resolveCampaignOwnership; only OWNED proceeds); COMPANY_ADMIN in that company required.",
+      "evidence": "resolveCampaignOwnership\\(id\\)[\\s\\S]*?const companyId = ownership\\.companyId;[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
     },
     "pages/api/campaigns/[id]/reapproval-status.ts": {
       "kind": "inline-binding",
@@ -280,13 +280,13 @@
     },
     "pages/api/campaigns/[id]/reject-frequency-rebalance.ts": {
       "kind": "inline-binding",
-      "reason": "Company derived from campaign_versions; COMPANY_ADMIN in that company required.",
-      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+      "reason": "3AH-116 (WS-D): company is the canonical owner (resolveCampaignOwnership; only OWNED proceeds); COMPANY_ADMIN in that company required.",
+      "evidence": "resolveCampaignOwnership\\(id\\)[\\s\\S]*?const companyId = ownership\\.companyId;[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
     },
     "pages/api/campaigns/[id]/revise-strategy.ts": {
       "kind": "inline-binding",
-      "reason": "Company derived from campaign_versions; COMPANY_ADMIN in that company required before the update.",
-      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
+      "reason": "3AH-116 (WS-D): company is the canonical owner (resolveCampaignOwnership; only OWNED proceeds); COMPANY_ADMIN in that company required before the update.",
+      "evidence": "resolveCampaignOwnership\\(id\\)[\\s\\S]*?const companyId = ownership\\.companyId;[\\s\\S]*?getUserRole\\(user\\.id, companyId\\)"
     },
     "pages/api/campaigns/[id]/strategy-status.ts": {
       "kind": "inline-binding",
