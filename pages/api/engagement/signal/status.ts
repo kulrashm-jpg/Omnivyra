@@ -9,6 +9,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { resolveCampaignOwnership } from '../../../../backend/services/campaignOwnershipService';
 
 const ALLOWED_STATUSES = ['new', 'reviewed', 'actioned', 'ignored'];
 
@@ -50,25 +51,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Signal not found' });
     }
 
-    const { data: cv } = await supabase
-      .from('campaign_versions')
-      .select('campaign_id')
-      .eq('company_id', companyId)
-      .eq('campaign_id', (signal as { campaign_id: string }).campaign_id)
-      .limit(1)
-      .maybeSingle();
-
-    if (!cv && (signal as { campaign_id: string }).campaign_id) {
+    // 3AH-117 (WS-E) — "the company has SOME version row for this campaign" is
+    // not ownership: a conflicting campaign passed it. The owner is the
+    // canonical resolver's answer over EVERY owner record; only a campaign
+    // OWNED by the authorized company may be updated.
+    const campaignId = (signal as { campaign_id: string }).campaign_id;
+    const ownership = await resolveCampaignOwnership(campaignId);
+    if (ownership.status === 'LOOKUP_FAILED') {
+      return res.status(503).json({
+        error: 'Campaign ownership check is temporarily unavailable. Please try again.',
+        code: 'CAMPAIGN_LOOKUP_ERROR',
+        retryable: true,
+      });
+    }
+    if (ownership.status !== 'OWNED' || ownership.companyId !== companyId) {
       return res.status(403).json({ error: 'Campaign not accessible' });
     }
 
     const { error } = await supabase
       .from('campaign_activity_engagement_signals')
       .update({ signal_status: status })
-      .eq('id', signalId);
+      .eq('id', signalId)
+      .eq('campaign_id', campaignId);
 
     if (error) {
-      return res.status(500).json({ error: error.message });
+      console.error('[engagement/signal/status] update failed', error.code);
+      return res.status(500).json({ error: 'Failed to update signal status' });
     }
 
     return res.status(200).json({ success: true, status });

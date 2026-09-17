@@ -14,6 +14,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
+import { resolveCampaignOwnership } from '../../../backend/services/campaignOwnershipService';
 
 type CrmExportBody = {
   organization_id?: string;
@@ -47,8 +48,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!access) return;
 
     // Tenant-scoped existence check: the signal must belong to a campaign
-    // whose company is the caller's. We look up the signal + a campaign
-    // version for the caller's org and require both to resolve.
+    // whose company is the caller's authorized organization.
     const { data: signal } = await supabase
       .from('campaign_activity_engagement_signals')
       .select('id, campaign_id, platform, author, content, conversation_url')
@@ -59,16 +59,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Signal not found' });
     }
 
-    if (signal.campaign_id) {
-      const { data: version } = await supabase
-        .from('campaign_versions')
-        .select('company_id')
-        .eq('campaign_id', signal.campaign_id)
-        .limit(1)
-        .maybeSingle();
-      if (!version || version.company_id !== organizationId) {
-        return res.status(403).json({ error: 'Signal does not belong to caller organization' });
-      }
+    // 3AH-117 (WS-E) — the campaign's owner is the canonical resolver's answer
+    // over EVERY owner record (never one version row). Only a campaign OWNED by
+    // the authorized organization may be exported; a signal without a campaign,
+    // an unowned, conflicting or missing campaign all get the existing 403.
+    const ownership = await resolveCampaignOwnership(signal.campaign_id);
+    if (ownership.status === 'LOOKUP_FAILED') {
+      return res.status(503).json({
+        error: 'Campaign ownership check is temporarily unavailable. Please try again.',
+        code: 'CAMPAIGN_LOOKUP_ERROR',
+        retryable: true,
+      });
+    }
+    if (ownership.status !== 'OWNED' || ownership.companyId !== String(organizationId)) {
+      return res.status(403).json({ error: 'Signal does not belong to caller organization' });
     }
 
     await logAuditEvent({
@@ -95,9 +99,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       signal_id: signalId,
     });
   } catch (err) {
-    const msg = (err as Error)?.message ?? 'Failed to export to CRM';
-    console.error('[engagement/crm-export]', msg);
-    return res.status(500).json({ error: msg });
+    console.error('[engagement/crm-export]', (err as Error)?.name ?? 'error');
+    return res.status(500).json({ error: 'Failed to export to CRM' });
   }
 }
 
