@@ -2,12 +2,15 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 // Handle GET/POST requests to /api/campaigns
 import { NextApiRequest, NextApiResponse } from 'next';
+import { randomUUID } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { ownedDbTable } from '../../../backend/db/writeOwner';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { insertActivity, updateActivity, deleteActivity } from '../../../backend/services/executionPlannerService';
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 import { withApiObservability } from '../../../backend/observability';
+import { resolveCampaignOwnership } from '../../../backend/services/campaignOwnershipService';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
@@ -31,6 +34,42 @@ import {
   isPlatformSuperAdmin,
   isSuperAdmin,
 } from '../../../backend/services/rbacService';
+
+/**
+ * 3AH-115 (WS-C) — create-flow campaign identity. POST /api/campaigns only
+ * CREATES: the id (caller-supplied UUID, or server-generated — campaigns.id has
+ * no database default) must resolve to NOT_FOUND over every owner record, or
+ * the request is refused before the first write. Every existing id — the caller's
+ * own, another tenant's, orphan, unowned or conflicting — gets the same 409,
+ * so the create path can neither adopt nor re-version a campaign and does not
+ * tell one owner from another.
+ */
+const CAMPAIGN_ID_TAKEN = { error: 'Campaign id is not available', code: 'CAMPAIGN_ID_CONFLICT' };
+const CAMPAIGN_LOOKUP_FAILED = {
+  error: 'Campaign ownership check is temporarily unavailable. Please try again.',
+  code: 'CAMPAIGN_LOOKUP_ERROR',
+  retryable: true,
+};
+
+/**
+ * Compensating rollback (NOT a transaction): remove exactly the rows this
+ * request created when the binding cannot be proven. Both deletes are scoped
+ * to the authorized company, so rows a failed rollback leaves behind can only
+ * ever be owned by that company. Supabase reports a failed delete as a
+ * returned error rather than a throw, so both forms are surfaced.
+ */
+async function discardCreatedCampaign(campaignId: string, ownerCompanyId: string): Promise<void> {
+  const failures: string[] = [];
+  for (const [table, key] of [['campaign_versions', 'campaign_id'], ['campaigns', 'id']] as const) {
+    try {
+      const { error } = await ownedDbTable(table).delete().eq(key, campaignId).eq('company_id', ownerCompanyId);
+      if (error) failures.push(`${table}:${error.code ?? 'error'}`);
+    } catch (err) {
+      failures.push(`${table}:${err instanceof Error ? err.name : 'thrown'}`);
+    }
+  }
+  if (failures.length > 0) console.error('[campaigns] create rollback failed', failures.join(','));
+}
 
 const requireCompanyRole = async (
   req: NextApiRequest,
@@ -341,6 +380,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (req.method === 'POST') {
       const campaignData = req.body;
+      // 3AH-115 (WS-C) — authorized above; bind identity before the first write.
+      const ownerCompanyId = UUID_RE.test(companyId) ? companyId.toLowerCase() : companyId;
+      const requestedIdRaw = campaignData?.id;
+      const idSupplied = requestedIdRaw !== undefined && requestedIdRaw !== null;
+      if (idSupplied && (typeof requestedIdRaw !== 'string' || !UUID_RE.test(requestedIdRaw.trim()))) {
+        return res.status(400).json({ error: 'Invalid campaign id', code: 'INVALID_CAMPAIGN_ID' });
+      }
+      const requestedId = idSupplied ? String(requestedIdRaw).trim().toLowerCase() : randomUUID();
+      const existing = await resolveCampaignOwnership(requestedId);
+      if (existing.status === 'LOOKUP_FAILED') return res.status(503).json(CAMPAIGN_LOOKUP_FAILED);
+      if (existing.status !== 'NOT_FOUND') return res.status(409).json(CAMPAIGN_ID_TAKEN);
 
       // Hybrid context mode + campaign types (scratch default: no_context)
       const buildModeRaw =
@@ -404,7 +454,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       // campaigns table: only insert columns that exist (no companyId, build_mode, context_scope, etc.)
       const campaignDataWithUser: Record<string, unknown> = {
-        id: campaignData.id ?? campaignDataWithoutCamelCase.id,
+        id: requestedId,
+        company_id: ownerCompanyId,
         name: campaignData.name ?? campaignDataWithoutCamelCase.name,
         description: campaignData.description ?? campaignDataWithoutCamelCase.description ?? null,
         user_id: requester.id,
@@ -427,8 +478,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .single();
 
       if (error) {
-        console.error('[campaigns] create failed', error.code, error.message);
-        return res.status(500).json({ error: 'Failed to create campaign', details: error.message });
+        console.error('[campaigns] create failed', error.code);
+        // A concurrent create of the same id loses the primary-key race.
+        if (error.code === '23505') return res.status(409).json(CAMPAIGN_ID_TAKEN);
+        return res.status(500).json({ error: 'Failed to create campaign' });
       }
 
       if (!campaign) {
@@ -480,7 +533,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { error: versionError } = await (supabase as any)
         .from('campaign_versions')
         .insert({
-          company_id: companyId,
+          company_id: ownerCompanyId,
           campaign_id: (campaign as { id: string }).id,
           campaign_snapshot: snapshotPayload,
           status: (campaign as { status?: string }).status ?? 'draft',
@@ -496,11 +549,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
 
       if (versionError) {
-        console.error('Error creating campaign version mapping:', versionError);
-        return res.status(500).json({
-          error: 'Failed to create campaign mapping',
-          details: versionError.message,
-        });
+        console.error('Error creating campaign version mapping:', versionError.code);
+        await discardCreatedCampaign((campaign as { id: string }).id, ownerCompanyId);
+        return res.status(500).json({ error: 'Failed to create campaign mapping' });
+      }
+
+      // 3AH-115 (WS-C) — the created campaign must resolve to exactly the
+      // creating company. Anything else (a concurrent foreign owner record, an
+      // unreadable result) undoes this request's rows and fails closed.
+      const bound = await resolveCampaignOwnership((campaign as { id: string }).id);
+      if (bound.status !== 'OWNED' || bound.companyId !== ownerCompanyId) {
+        await discardCreatedCampaign((campaign as { id: string }).id, ownerCompanyId);
+        return bound.status === 'LOOKUP_FAILED'
+          ? res.status(503).json(CAMPAIGN_LOOKUP_FAILED)
+          : res.status(409).json(CAMPAIGN_ID_TAKEN);
       }
 
       const themeTopic =
