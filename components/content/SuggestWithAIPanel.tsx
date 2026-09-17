@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowRight, Loader2, RefreshCw, Sparkles, Wand2 } from 'lucide-react';
+import { ArrowRight, Loader2, MessageSquare, RefreshCw, Sparkles, Wand2 } from 'lucide-react';
 import type { ContentSuggestion } from '../../lib/content/contentSuggestionContract';
 
 /**
@@ -26,6 +26,13 @@ type Props = {
   objective?: string;
   accentClassName?: string;
   onAccept: (suggestion: ContentSuggestion) => void | Promise<void>;
+  /**
+   * Optional "Discuss in Chat". The host opens its existing chat with this
+   * suggestion as context. The panel itself stays a recommendation surface: it
+   * hosts no conversation, calls no endpoint for this, and keeps the suggestion
+   * on screen (discussing is not accepting).
+   */
+  onDiscuss?: (suggestion: ContentSuggestion) => void;
 };
 
 type Phase = 'idle' | 'loading' | 'ready' | 'accepting';
@@ -38,6 +45,7 @@ export default function SuggestWithAIPanel({
   objective,
   accentClassName = 'text-violet-700',
   onAccept,
+  onDiscuss,
 }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [suggestion, setSuggestion] = useState<ContentSuggestion | null>(null);
@@ -264,6 +272,19 @@ export default function SuggestWithAIPanel({
             >
               Revise
             </button>
+
+            {onDiscuss ? (
+              <button
+                type="button"
+                data-testid="suggest-with-ai-discuss"
+                onClick={() => onDiscuss(suggestion)}
+                disabled={busy}
+                className={`inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold ${accentClassName} disabled:opacity-50`}
+              >
+                <MessageSquare className="h-4 w-4" />
+                Discuss in Chat
+              </button>
+            ) : null}
 
             <button
               type="button"
