@@ -83,8 +83,9 @@ export default async function handler(req, res) {
   return res.status(405).end();
 }`;
     const row = analyze(BARREL, { [TARGET]: handler });
-    expect(rules(row)).toEqual(['R1-METHOD']);
-    expect(row.violations[0].msg).toContain(TARGET);
+    // STEP 3AH-118: the DELETE branch's delete also runs before authentication.
+    expect(rules(row)).toEqual(['R1-METHOD', 'R5-ORDER']);
+    expect(row.violations.find((v) => v.rule === 'R1-METHOD')!.msg).toContain(TARGET);
   });
 
   it('R4 (fail-open secret) in the re-exported handler', () => {
@@ -104,7 +105,7 @@ export async function postHandler(req, res) { const { user } = await getSupabase
 
   it('local `export { handler as default }` resolves the handler by name', () => {
     const open = `${DB_T.replace('../../db', '../../../backend/db')}\nasync function handler(req, res) { await supabase.from('t').delete(); res.end(); }\nexport { handler as default };`;
-    expect(rules(analyze(open, {}))).toEqual(['R1']);
+    expect(rules(analyze(open, {}))).toEqual(['R1', 'R5-ORDER']);
   });
 
   it('a chain of re-exports is followed and recorded', () => {
@@ -217,7 +218,9 @@ describe('W2F-1 — the repository', () => {
     expect(rows.filter((r: Row) => r.violations.length).map((r: Row & { route: string }) => r.route)).toEqual([]);
     expect(stale).toEqual([]);
     expect(staleKnownOpen).toEqual([]);
-    expect(knownOpen).toEqual({});
+    // No re-export / binding finding stays open. (STEP 3AH-118 ordering findings are
+    // tracked separately — WSF-ORD-* — and asserted by routeAuthOrdering.test.ts.)
+    expect(Object.entries(knownOpen).filter(([, ko]) => (ko as { rules: string[] }).rules.some((r) => !/^R[567]-/.test(r)))).toEqual([]);
     // W2F-1b: generate binds its campaign through enforceCompanyAccess — passes R3 on primitives, no entry.
     const generate = byRoute.get('pages/api/command-center/creator-content/generate.ts')!;
     expect(generate.violations).toEqual([]);
