@@ -174,3 +174,85 @@ export function buildChatSeedPromptBlock(seed: SuggestionChatSeed): string {
 export function chatSeedModerationText(seed: SuggestionChatSeed): string {
   return describeChatSeed(seed).join('\n');
 }
+
+/**
+ * The card the chat route emits once the conversation converges — the shape
+ * `AIBlogCardModal` reads into `BlogCardPreview` and hands to `onCardCreated`.
+ * Every field is `unknown` because this is parsed model output, not a
+ * validated contract: the model may omit fields or return the wrong type.
+ */
+export type ChatCardDraft = {
+  topic?: unknown;
+  intent?: unknown;
+  audience?: unknown;
+  reason?: unknown;
+  priority?: unknown;
+  tone?: unknown;
+  writingStyle?: unknown;
+  relatedTopics?: unknown;
+};
+
+/**
+ * `reason` is the field that actually carries the rationale into generation:
+ * `ManagedSuggestionsPage.buildAcceptedBriefFields` renders it as
+ * "Why this topic was recommended: …" inside `answers.strategy_perspective`.
+ * So the original brief/angle must survive there, exactly as
+ * `toGenerationInput` already puts them for the direct Accept path.
+ */
+function composeCardReason(cardReason: unknown, seed: SuggestionChatSeed): string {
+  const refined = clean(cardReason, LIMITS.brief);
+  const recommended = [seed.brief, seed.angle].filter(Boolean).join(' ').trim();
+  const parts: string[] = [];
+  if (refined) parts.push(refined);
+  if (recommended && !refined.includes(recommended)) {
+    parts.push(`Original recommendation: ${recommended}`);
+  }
+  if (seed.objective && !parts.some((part) => part.includes(seed.objective as string))) {
+    parts.push(`Recommended objective: ${seed.objective}.`);
+  }
+  if (parts.length === 0 && seed.reason) parts.push(seed.reason);
+  return parts.join(' ');
+}
+
+/**
+ * Refinement must not erase the recommendation it started from.
+ *
+ * A "Discuss in Chat" conversation ends in a card, and that card — not the
+ * seed — is what the accept path carries to the deliverable. Whatever the chat
+ * settled is authoritative; whatever it left empty falls back to the seed, and
+ * the original brief/angle/objective are appended to `reason` so BOTH the
+ * refinement and the recommendation reach generation.
+ *
+ * Pure and total: no seed (or a non-object card) returns the card untouched,
+ * so callers without a seed are byte-identical to before. The seed is
+ * untrusted client input and is already bounded by `sanitizeChatSeed`; nothing
+ * here grants access or asserts company context.
+ */
+export function mergeChatSeedIntoCard<T extends ChatCardDraft>(
+  card: T,
+  seed: SuggestionChatSeed | null | undefined,
+): T {
+  if (!seed || !card || typeof card !== 'object' || Array.isArray(card)) return card;
+
+  const merged: Record<string, unknown> = { ...card };
+
+  const fillFromSeed = (key: 'topic' | 'audience' | 'tone', max: number) => {
+    if (clean(card[key], max)) return;
+    const fallback = seed[key];
+    if (typeof fallback === 'string' && fallback) merged[key] = fallback;
+  };
+  fillFromSeed('topic', LIMITS.topic);
+  fillFromSeed('audience', LIMITS.field);
+  fillFromSeed('tone', LIMITS.field);
+
+  const intent = clean(card.intent, 20).toLowerCase();
+  if (!(INTENTS as string[]).includes(intent) && seed.intent) merged.intent = seed.intent;
+
+  const priority = clean(card.priority, 10).toLowerCase();
+  if (!(PRIORITIES as string[]).includes(priority) && seed.priority) merged.priority = seed.priority;
+
+  const reason = composeCardReason(card.reason, seed);
+  if (reason) merged.reason = reason;
+
+  return merged as T;
+}
