@@ -36,28 +36,52 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (existingErr || versionErr) {
       return res.status(503).json({ error: 'Campaign lookup is temporarily unavailable. Please try again.' });
     }
-    if (existingCampaign || existingVersion) {
+    const existed = Boolean(existingCampaign || existingVersion);
+    if (existed) {
       const access = await requireCampaignAccess(req, res, campaignId);
       if (!access) return;
     }
 
-    // Create or update the campaign in database
-    const { data: campaign, error } = await supabase
-      .from('campaigns')
-      .upsert({
-        id: campaignId,
-        name: name || 'Campaign ' + campaignId,
-        description: description || '',
-        status: 'planning',
-        current_stage: 'planning',
-        timeframe: 'quarter',
-        user_id: user.id,
-        thread_id: 'thread_' + Date.now(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .select()
-      .single();
+    // WSF-ORD-007 — the binding above and the write below used to be an
+    // existence CHECK followed by an unconditional UPSERT: two statements with
+    // a gap between them. A campaign created by another tenant inside that gap
+    // matched no existence read, skipped requireCampaignAccess entirely, and
+    // was then overwritten by the upsert — which also stamps `user_id` with
+    // the caller, so the race was an ownership takeover, not just a lost
+    // update. The window was widened by the two lookups plus, for an existing
+    // id, the whole guard chain (campaign_versions read + membership read).
+    //
+    // The write is now split so the "new campaign" case is INSERT-ONLY. The
+    // database, not our earlier read, decides whether the id was free: if the
+    // row appeared meanwhile the insert fails on the primary key, and we then
+    // authorize the campaign that actually exists before applying the change
+    // as a scoped update. A caller who cannot pass that guard is refused by
+    // it, exactly as if the row had existed all along.
+    const payload = {
+      id: campaignId,
+      name: name || 'Campaign ' + campaignId,
+      description: description || '',
+      status: 'planning',
+      current_stage: 'planning',
+      timeframe: 'quarter',
+      user_id: user.id,
+      thread_id: 'thread_' + Date.now(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    const writeExisting = () =>
+      supabase.from('campaigns').update(payload).eq('id', campaignId).select().single();
+
+    let { data: campaign, error } = existed
+      ? await writeExisting()
+      : await supabase.from('campaigns').insert(payload).select().single();
+
+    // 23505 = unique_violation: we lost the create race for this id.
+    if (!existed && (error as { code?: string } | null)?.code === '23505') {
+      const access = await requireCampaignAccess(req, res, campaignId);
+      if (!access) return;
+      ({ data: campaign, error } = await writeExisting());
+    }
 
     if (error) {
       console.error('Error saving campaign:', error);

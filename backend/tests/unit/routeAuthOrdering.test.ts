@@ -419,11 +419,18 @@ describe('the repository', () => {
     expect(staleKnownOpen).toEqual([]);
     expect(rows.every((r: Row) => r.ordering.shape === 'resolved')).toBe(true);
     const ordering = Object.entries(knownOpen).filter(([, ko]) => (ko as { rules: string[] }).rules.some((r) => /^R[567]-/.test(r)));
-    // WSF-ORD-001, -004, -005 and -006 are FIXED (wsfOrd001ApprovePreemption,
-    // wsfOrd004AiSuggestion, wsfOrd005RecommendationPolicy,
-    // integration/social_publish_ordering); their knownOpen entries were
-    // removed in the same changes, per _knownOpenComment.
-    expect(ordering.map(([, ko]) => (ko as { finding: string }).finding).sort()).toEqual(['WSF-ORD-002', 'WSF-ORD-003', 'WSF-ORD-007']);
+    // FIXED and removed from knownOpen in the same change, per
+    // _knownOpenComment: WSF-ORD-001 (wsfOrd001ApprovePreemption), -004
+    // (wsfOrd004AiSuggestion), -005 (wsfOrd005RecommendationPolicy), -006
+    // (integration/social_publish_ordering) and -007
+    // (wsfOrd007CampaignSaveRace; its write is now the reviewed
+    // existence-conditioned-binding pattern).
+    //
+    // -002 (auth/resend-invitation self-serve) and -003 (leads embedded form)
+    // stay tracked: owner review found them public BY PRODUCT CONTRACT, not
+    // defects, and declaring either route wholly public/auth-flow would also
+    // exempt its authenticated branch from R1/R2. See each knownOpen reason.
+    expect(ordering.map(([, ko]) => (ko as { finding: string }).finding).sort()).toEqual(['WSF-ORD-002', 'WSF-ORD-003']);
   });
 
   it('the cron secret route is authenticated by its const-bound comparator before its writes', () => {

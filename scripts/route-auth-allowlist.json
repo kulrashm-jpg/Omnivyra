@@ -889,14 +889,6 @@
         "R5-ORDER"
       ],
       "reason": "Mode 2 embedded-form submission (body.form_id, origin-checked by checkFormOrigin, no authentication) resolves the visitor session, creates a unified person and lead, and writes attribution/telemetry. Mode 1 is verified (orderingVerifiers); the public form mutation branch has no declared public contract and needs owner review."
-    },
-    "pages/api/campaigns/save.ts": {
-      "finding": "WSF-ORD-007",
-      "owner": "ROUTE-ORDER-REMEDIATION (post-WS-F)",
-      "rules": [
-        "R6-ORDER"
-      ],
-      "reason": "Existence-conditioned binding with a check-then-act race: existence is read, requireCampaignAccess runs only for an existing id, then an UPSERT by id writes user_id = caller. A campaign created by another tenant between the read and the upsert is overwritten (ownership takeover); the write needs insert-only semantics or an ownership predicate."
     }
   },
   "_orderingComment": [
@@ -950,6 +942,18 @@
           "db-write .update() backend/db/campaignPlanStore.ts",
           "db-write .insert() backend/db/campaignPlanStore.ts",
           "db-write .upsert() backend/db/campaignPlanStore.ts"
+        ]
+      }
+    ],
+    "pages/api/campaigns/save.ts": [
+      {
+        "rule": "R6-ORDER",
+        "pattern": "existence-conditioned-binding",
+        "reason": "WSF-ORD-007 remediation: an id that already exists is authorized with requireCampaignAccess (campaign_versions owner) before the write, and a new id is INSERTED, not upserted, under the caller. The database decides whether the id was free: a concurrent create loses on the primary key (23505) and the route then runs requireCampaignAccess on the campaign that actually exists before applying the change as a scoped update, so the create race can no longer take ownership of another tenant's campaign.",
+        "evidence": ": await supabase\\.from\\('campaigns'\\)\\.insert\\(payload\\)[\\s\\S]{0,240}?code === '23505'\\) \\{\\s*const access = await requireCampaignAccess\\(req, res, campaignId\\);",
+        "effects": [
+          "db-write .insert() pages/api/campaigns/save.ts",
+          "db-write .update() pages/api/campaigns/save.ts"
         ]
       }
     ],
