@@ -4,6 +4,12 @@ import { runCompletion } from '../../../backend/services/aiGateway';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
+import {
+  buildChatSeedPromptBlock,
+  chatSeedModerationText,
+  sanitizeChatSeed,
+  type SuggestionChatSeed,
+} from '../../../lib/content/suggestionChatSeed';
 
 type CardContentType =
   | 'blog'
@@ -85,6 +91,7 @@ function getCardSystemPrompt(params: {
   companyContext?: string;
   existingTopics?: string[];
   currentPhase?: string;
+  seedSuggestion?: SuggestionChatSeed | null;
 }): string {
   const contentType = normalizeCardContentType(params.contentType);
   const contentLabel = params.contentLabel?.trim() || contentType;
@@ -102,6 +109,8 @@ function getCardSystemPrompt(params: {
     existingTopics.length > 0 ? `Existing related topics: ${existingTopics.join(' | ')}` : null,
     currentPhase ? `Current conversation phase: ${currentPhase}` : null,
     audienceInstruction,
+    // "Discuss in Chat": absent for every other caller, so their prompt is unchanged.
+    params.seedSuggestion ? buildChatSeedPromptBlock(params.seedSuggestion) : null,
   ].filter(Boolean).join('\n');
 
   if (contentType === 'newsletter') {
@@ -396,12 +405,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId: String(companyId) });
   if (!access) return;
 
-  // Validate and moderate message
-  const policyResult = await validateAndModerateUserMessage(String(message), {
-    chatContext: 'blog-card-creation',
-  });
+  // Untrusted like the message itself: re-sanitized here whatever the client sent.
+  const seedSuggestion = sanitizeChatSeed(metadata?.seedSuggestion);
 
-  if (!policyResult.allowed) {
+  // Validate and moderate message (and the seed, which also reaches the prompt)
+  const [policyResult, seedPolicyResult] = await Promise.all([
+    validateAndModerateUserMessage(String(message), {
+      chatContext: 'blog-card-creation',
+    }),
+    seedSuggestion
+      ? validateAndModerateUserMessage(chatSeedModerationText(seedSuggestion), {
+        chatContext: 'blog-card-creation',
+      })
+      : Promise.resolve({ allowed: true }),
+  ]);
+
+  if (!policyResult.allowed || !seedPolicyResult.allowed) {
     return res.status(400).json({
       error: 'Your message couldn\'t be processed. Please rephrase and try again.',
     });
@@ -416,6 +435,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       companyContext: typeof metadata?.companyContext === 'string' ? metadata.companyContext : undefined,
       existingTopics: Array.isArray(metadata?.existingTopics) ? metadata.existingTopics : undefined,
       currentPhase: typeof metadata?.currentPhase === 'string' ? metadata.currentPhase : undefined,
+      seedSuggestion,
     });
 
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [

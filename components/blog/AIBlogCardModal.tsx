@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import ChatVoiceButton from '../ChatVoiceButton';
+import { describeChatSeed, sanitizeChatSeed, type SuggestionChatSeed } from '../../lib/content/suggestionChatSeed';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -50,6 +51,12 @@ interface Props {
   contentLabel?: string;
   contentType?: string;
   contentModeLabel?: string;
+  /**
+   * Optional "Discuss in Chat" seed: the AI recommendation this conversation
+   * starts from. Sent to the chat route on every turn so the model has it from
+   * the first message. Omitted by every other caller — behaviour unchanged.
+   */
+  seedSuggestion?: SuggestionChatSeed | null;
 }
 
 const INTENT_OPTIONS = [
@@ -80,11 +87,17 @@ export default function AIBlogCardModal({
   contentLabel = 'blog',
   contentType = 'blog',
   contentModeLabel,
+  seedSuggestion,
 }: Props) {
   const normalizedCompanyName = companyName?.trim() || 'your company';
   const normalizedContentType = contentType.trim().toLowerCase();
   const isStory = normalizedContentType === 'story';
+  const seed = seedSuggestion ? sanitizeChatSeed(seedSuggestion) : null;
   const openingMessage = (() => {
+    if (seed) {
+      return `Let's work on this recommendation together. ${describeChatSeed(seed).join(' · ')}. What would you like to question, sharpen, or change?`;
+    }
+
     if (normalizedContentType === 'post') {
       return `Tell me the post angle, launch, or insight you want to share. I'll use ${normalizedCompanyName} context and keep this quick.`;
     }
@@ -194,6 +207,7 @@ export default function AIBlogCardModal({
             contentModeLabel,
             useCompanyContextDefaults: true,
             avoidRedundantQuestions: true,
+            ...(seed ? { seedSuggestion: seed } : {}),
           },
         }),
       });

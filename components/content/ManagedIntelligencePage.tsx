@@ -14,6 +14,7 @@ import { buildOutlineContentBlocks } from '../../lib/blog/blogOutlineSkeleton';
 import { buildShortformManualStub } from '../../lib/content/shortformManualStub';
 import SuggestWithAIPanel from './SuggestWithAIPanel';
 import { toGenerationInput, type ContentSuggestion } from '../../lib/content/contentSuggestionContract';
+import { toChatSeed, type SuggestionChatSeed } from '../../lib/content/suggestionChatSeed';
 
 type CreationModeKind = 'ai' | 'outline' | 'manual' | 'starter';
 
@@ -227,6 +228,32 @@ export default function ManagedIntelligencePage({
    */
   const acceptSuggestion = async (suggestion: ContentSuggestion) => {
     await acceptAiCard(toGenerationInput(suggestion));
+  };
+
+  /**
+   * Discuss in Chat — opens the EXISTING AI chat modal with the suggestion as
+   * its seed. Discussing is not accepting: nothing is added to Recommended
+   * Cards until the chat's own card is confirmed (onCardCreated={acceptAiCard}).
+   * The seed is bound to the company it was suggested for and dropped if the
+   * active company changes; the chat route still authorizes companyId itself.
+   */
+  const [chatSeed, setChatSeed] = useState<{ companyId: string; seed: SuggestionChatSeed } | null>(null);
+  const activeChatSeed = chatSeed && chatSeed.companyId === selectedCompanyId ? chatSeed.seed : null;
+
+  const discussSuggestion = (suggestion: ContentSuggestion) => {
+    if (!selectedCompanyId) return;
+    setChatSeed({ companyId: selectedCompanyId, seed: toChatSeed(suggestion) });
+    setIsAIModalOpen(true);
+  };
+
+  const openBlankChat = () => {
+    setChatSeed(null);
+    setIsAIModalOpen(true);
+  };
+
+  const closeChat = () => {
+    setIsAIModalOpen(false);
+    setChatSeed(null);
   };
 
   // G18: navigate to editor with an outline prefill stub (no API call).
@@ -461,7 +488,7 @@ export default function ManagedIntelligencePage({
           <div className="grid gap-4 md:grid-cols-2">
             <button
               type="button"
-              onClick={() => setIsAIModalOpen(true)}
+              onClick={openBlankChat}
               className="rounded-2xl border border-fuchsia-200 bg-white/90 p-5 text-left shadow-sm transition hover:border-fuchsia-300 hover:shadow-md"
             >
               <div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-fuchsia-500 to-purple-500 text-white">
@@ -498,6 +525,7 @@ export default function ManagedIntelligencePage({
               formatLabel={formatLabel}
               accentClassName={accentClassName}
               onAccept={acceptSuggestion}
+              onDiscuss={discussSuggestion}
             />
           ) : null}
 
@@ -710,7 +738,7 @@ export default function ManagedIntelligencePage({
       {selectedCompanyId ? (
         <AIBlogCardModal
           isOpen={isAIModalOpen}
-          onClose={() => setIsAIModalOpen(false)}
+          onClose={closeChat}
           companyId={selectedCompanyId}
           companyName={companyName}
           companyContext={companyContext}
@@ -719,6 +747,7 @@ export default function ManagedIntelligencePage({
           contentType={contentType}
           contentModeLabel={formatLabel}
           onCardCreated={acceptAiCard}
+          seedSuggestion={activeChatSeed}
         />
       ) : null}
     </>
