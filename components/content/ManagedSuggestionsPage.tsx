@@ -258,11 +258,53 @@ export type AcceptedCardBrief = {
   reason?: string;
   intent?: string;
   tone?: string;
+  /** Audience the card was written for. `answers.audience` is read by both builders. */
+  audience?: string;
   company_context?: string;
   current_content?: string;
   writing_style?: string;
   related_titles?: string[];
 };
+
+/**
+ * The card `ManagedIntelligencePage.acceptAiCard` writes to sessionStorage
+ * under the `prefill_card` token. Accepting a panel suggestion carries topic /
+ * reason / intent / tone / priority; the AI chat card (AIBlogCardModal's
+ * BlogCardPreview, handed over by `onCardCreated`) carries audience,
+ * writingStyle and relatedTopics as well. Untrusted client storage: every field
+ * is optional and re-validated here.
+ */
+export type AcceptedCardPayload = {
+  reason?: unknown;
+  intent?: unknown;
+  tone?: unknown;
+  audience?: unknown;
+  writingStyle?: unknown;
+  relatedTopics?: unknown;
+};
+
+/**
+ * Card payload → the SAME `AcceptedCardBrief` shape the bundle produces, so
+ * there is one brief-building path (`buildAcceptedBriefFields`) rather than a
+ * second parallel implementation. Nothing here is an authority for company or
+ * tenant: the card carries no company id and the request stays scoped to the
+ * selected company.
+ */
+export function briefFromAcceptedCard(card: AcceptedCardPayload | null | undefined): AcceptedCardBrief | null {
+  if (!card || typeof card !== 'object' || Array.isArray(card)) return null;
+  const relatedTopics = Array.isArray(card.relatedTopics)
+    ? card.relatedTopics.map(nonEmpty).filter((topic): topic is string => Boolean(topic))
+    : [];
+  const brief: AcceptedCardBrief = {
+    ...(nonEmpty(card.reason) ? { reason: nonEmpty(card.reason) } : {}),
+    ...(nonEmpty(card.intent) ? { intent: nonEmpty(card.intent) } : {}),
+    ...(nonEmpty(card.tone) ? { tone: nonEmpty(card.tone) } : {}),
+    ...(nonEmpty(card.audience) ? { audience: nonEmpty(card.audience) } : {}),
+    ...(nonEmpty(card.writingStyle) ? { writing_style: nonEmpty(card.writingStyle) } : {}),
+    ...(relatedTopics.length > 0 ? { related_titles: relatedTopics } : {}),
+  };
+  return Object.keys(brief).length > 0 ? brief : null;
+}
 
 const nonEmpty = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -302,9 +344,13 @@ export function buildAcceptedBriefFields(brief: AcceptedCardBrief | null): {
   const companyContext = nonEmpty(brief.company_context);
   const currentContent = nonEmpty(brief.current_content);
   const writingStyle = nonEmpty(brief.writing_style);
+  const audience = nonEmpty(brief.audience);
   if (companyContext) answers.company_context = companyContext;
   if (currentContent) answers.current_content = currentContent;
   if (writingStyle) answers.writing_style = writingStyle;
+  // `audience` is an existing answer key: the standard builder labels it
+  // "Target audience" and the template-aware builder reads it directly.
+  if (audience) answers.audience = audience;
   const perspective = [
     intent ? `Strategic intent: ${intent}.` : undefined,
     reason ? `Why this topic was recommended: ${reason}` : undefined,
@@ -371,6 +417,8 @@ export default function ManagedSuggestionsPage({
   const platformQuery = typeof router.query.platform === 'string' ? router.query.platform : '';
   const intentQuery = typeof router.query.prefill_intent === 'string' ? router.query.prefill_intent : '';
   const reasonQuery = typeof router.query.prefill_reason === 'string' ? router.query.prefill_reason : '';
+  const toneQuery = typeof router.query.prefill_tone === 'string' ? router.query.prefill_tone : '';
+  const cardToken = typeof router.query.prefill_card === 'string' ? router.query.prefill_card : '';
   const isShortform = contentType === 'post' || contentType === 'thread';
 
   const [templateBlocks, setTemplateBlocks] = useState<ContentBlock[] | null>(null);
@@ -382,6 +430,7 @@ export default function ManagedSuggestionsPage({
   );
   const [suggestions, setSuggestions] = useState<Suggestions | null>(null);
   const [bundleBrief, setBundleBrief] = useState<AcceptedCardBrief | null>(null);
+  const [cardBrief, setCardBrief] = useState<AcceptedCardBrief | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -490,6 +539,21 @@ export default function ManagedSuggestionsPage({
     }
   }, [bundleToken]);
 
+  // The accepted card itself (`prefill_card`). Written by acceptAiCard on BOTH
+  // acceptance paths — "Accept & Continue" and the chat's "Confirm & Add" —
+  // neither of which writes a bundle, so without this the card's tone,
+  // audience, writing style and related topics never reached generation.
+  useEffect(() => {
+    if (!cardToken || typeof window === 'undefined') return;
+    try {
+      const raw = sessionStorage.getItem(cardToken);
+      if (!raw) return;
+      setCardBrief(briefFromAcceptedCard(JSON.parse(raw) as AcceptedCardPayload));
+    } catch {
+      // ignore malformed card — the bundle and URL fallbacks still apply
+    }
+  }, [cardToken]);
+
   const fetchSuggestions = useCallback(async () => {
     if (!companyId || !topic) return;
     setLoading(true);
@@ -552,13 +616,30 @@ export default function ManagedSuggestionsPage({
       // The accepted card's brief (sessionStorage bundle, with the URL params
       // as a fallback when storage was unavailable). Long-form only: short-form
       // cards never route here with a brief.
-      const acceptedBrief: AcceptedCardBrief | null = bundleBrief || intentQuery || reasonQuery
-        ? {
-            ...bundleBrief,
-            intent: bundleBrief?.intent || intentQuery || undefined,
-            reason: bundleBrief?.reason || reasonQuery || undefined,
-          }
-        : null;
+      // Priority is deterministic: the bundle wins, the accepted card fills
+      // only what the bundle did not carry, and the URL params are last.
+      const urlBrief: AcceptedCardBrief = {
+        ...(intentQuery ? { intent: intentQuery } : {}),
+        ...(reasonQuery ? { reason: reasonQuery } : {}),
+        ...(toneQuery ? { tone: toneQuery } : {}),
+      };
+      const merged: AcceptedCardBrief = { ...urlBrief, ...cardBrief, ...bundleBrief };
+      // `undefined`/blank entries in a higher-priority source must not mask a
+      // lower-priority value, so fill field by field.
+      const pick = (...values: Array<string | undefined>) => values.find((value) => nonEmpty(value));
+      merged.intent = pick(bundleBrief?.intent, cardBrief?.intent, urlBrief.intent);
+      merged.reason = pick(bundleBrief?.reason, cardBrief?.reason, urlBrief.reason);
+      merged.tone = pick(bundleBrief?.tone, cardBrief?.tone, urlBrief.tone);
+      merged.audience = pick(bundleBrief?.audience, cardBrief?.audience);
+      merged.writing_style = pick(bundleBrief?.writing_style, cardBrief?.writing_style);
+      const relatedTitles = bundleBrief?.related_titles?.length
+        ? bundleBrief.related_titles
+        : cardBrief?.related_titles;
+      if (relatedTitles?.length) merged.related_titles = relatedTitles;
+      const acceptedBrief: AcceptedCardBrief | null =
+        Object.values(merged).some((value) => (Array.isArray(value) ? value.length > 0 : nonEmpty(value)))
+          ? merged
+          : null;
       const briefFields = buildAcceptedBriefFields(acceptedBrief);
 
       const response = await fetch(generationMeta.apiPath, {
