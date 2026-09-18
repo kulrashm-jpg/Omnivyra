@@ -18,6 +18,7 @@ import { withContract } from '@/lib/api/withContract';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { resolveCampaignOwnership } from '../../../backend/services/campaignOwnershipService';
 import { enforceRole } from '../../../backend/services/rbacService';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/communityAiCapabilities';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -215,24 +216,22 @@ async function resolveSignal(
     .maybeSingle();
 
   if (error) {
-    return { ok: false, code: 'SIGNAL_LOOKUP_FAILED', message: error.message };
+    return { ok: false, code: 'SIGNAL_LOOKUP_FAILED', message: 'signal lookup is temporarily unavailable' };
   }
   if (!signal) {
     return { ok: false, code: 'SIGNAL_NOT_FOUND', message: `campaign signal ${signalId} not found` };
   }
 
-  // Tenant scope: the signal must belong to a campaign whose company is
-  // the caller's. campaign_versions → company_id is the existing join.
-  if (signal.campaign_id) {
-    const { data: version } = await supabase
-      .from('campaign_versions')
-      .select('company_id')
-      .eq('campaign_id', signal.campaign_id)
-      .limit(1)
-      .maybeSingle();
-    if (!version || version.company_id !== organizationId) {
-      return { ok: false, code: 'SIGNAL_TENANT_SCOPE', message: 'signal does not belong to caller organization' };
-    }
+  // Tenant scope: the signal must belong to a campaign OWNED by the caller's
+  // authorized organization. 3AH-117 (WS-E) — the owner is the canonical
+  // resolver's answer over EVERY owner record (never one version row); an
+  // unowned, conflicting or missing campaign is refused like a foreign one.
+  const ownership = await resolveCampaignOwnership(signal.campaign_id);
+  if (ownership.status === 'LOOKUP_FAILED') {
+    return { ok: false, code: 'CAMPAIGN_LOOKUP_ERROR', message: 'campaign ownership check is temporarily unavailable' };
+  }
+  if (ownership.status !== 'OWNED' || ownership.companyId !== organizationId) {
+    return { ok: false, code: 'SIGNAL_TENANT_SCOPE', message: 'signal does not belong to caller organization' };
   }
 
   // Walk: signal.source_id → engagement_messages.thread_id →
@@ -336,7 +335,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (signalId && !messageId) {
       const resolved = await resolveSignal(signalId, organizationId);
       if (resolved.ok === false) {
-        return res.status(404).json({ error: resolved.message, code: resolved.code });
+        // A failed lookup is retryable, never "not found" (3AH-117 WS-E).
+        const retryable = resolved.code === 'CAMPAIGN_LOOKUP_ERROR' || resolved.code === 'SIGNAL_LOOKUP_FAILED';
+        return retryable
+          ? res.status(503).json({ error: resolved.message, code: resolved.code, retryable: true })
+          : res.status(404).json({ error: resolved.message, code: resolved.code });
       }
       if (!platform) platform = resolved.platform;
       resolvedTargetId = resolved.targetId;

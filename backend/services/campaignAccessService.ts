@@ -15,6 +15,7 @@ import {
 } from './campaignRoleService';
 import { resolveUserContext } from './userContextService';
 import { attributeAuthenticatedPrincipal } from './requestContextPrincipal';
+import { shadowCampaignOwnership } from './campaignOwnershipService';
 
 export type CampaignAccessResult = {
   userId: string;
@@ -62,8 +63,10 @@ export type CampaignAccessResult = {
  *     prove the caller's membership in exactly that company;
  *   - a lookup error on either read answers null (deny), never "unowned".
  */
-export async function resolveCampaignCompanyId(campaignId: string): Promise<string | null> {
-  if (!campaignId || typeof campaignId !== 'string') return null;
+async function resolveCampaignCompanyIdLegacy(
+  campaignId: string,
+): Promise<{ owner: string | null; lookupError: boolean }> {
+  if (!campaignId || typeof campaignId !== 'string') return { owner: null, lookupError: false };
   const { data, error } = await supabase
     .from('campaign_versions')
     .select('company_id')
@@ -71,8 +74,8 @@ export async function resolveCampaignCompanyId(campaignId: string): Promise<stri
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) return null;
-  if (data) return data.company_id ? String(data.company_id) : null;
+  if (error) return { owner: null, lookupError: true };
+  if (data) return { owner: data.company_id ? String(data.company_id) : null, lookupError: false };
 
   // No version row at all → legacy owner record on the campaign itself.
   const legacy = await supabase
@@ -80,9 +83,17 @@ export async function resolveCampaignCompanyId(campaignId: string): Promise<stri
     .select('company_id')
     .eq('id', campaignId)
     .maybeSingle();
-  if (legacy.error || !legacy.data) return null;
+  if (legacy.error) return { owner: null, lookupError: true };
+  if (!legacy.data) return { owner: null, lookupError: false };
   const legacyCompanyId = (legacy.data as { company_id?: string | null }).company_id;
-  return legacyCompanyId ? String(legacyCompanyId) : null;
+  return { owner: legacyCompanyId ? String(legacyCompanyId) : null, lookupError: false };
+}
+
+export async function resolveCampaignCompanyId(campaignId: string): Promise<string | null> {
+  const { owner, lookupError } = await resolveCampaignCompanyIdLegacy(campaignId);
+  // 3AH-113 (WS-A) — shadow only: the returned owner is the legacy one.
+  shadowCampaignOwnership('resolveCampaignCompanyId', campaignId, { kind: 'owner', ownerCompanyId: owner, lookupError });
+  return owner;
 }
 
 /**
