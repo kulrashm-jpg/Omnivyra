@@ -38,7 +38,9 @@ describe('platformCapabilities — registry', () => {
     expect(cfg!.requiresMediaForPublish).toBe(true);
     expect(cfg!.supportedContent).not.toContain('text');
     expect(cfg!.supportedContent).not.toContain('writer');
-    expect(cfg!.supportedContent).toEqual(expect.arrayContaining(['image', 'video', 'carousel', 'creator']));
+    // 'carousel' dropped from this list by owner decision 2026-09-18 — see
+    // instagramCarouselNotAdvertised.test.ts for the invariant and why.
+    expect(cfg!.supportedContent).toEqual(expect.arrayContaining(['image', 'video', 'creator']));
   });
 
   test('LinkedIn supports text and writer (longform)', () => {

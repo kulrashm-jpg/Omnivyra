@@ -12,9 +12,13 @@ import {
 const ALL = ['linkedin', 'x', 'facebook', 'instagram', 'pinterest', 'reddit', 'youtube', 'tiktok', 'threads', 'whatsapp'];
 
 describe('format × platform eligibility (capability ∩ exclusive ∩ blocklist)', () => {
-  it('carousel is visual-only — excludes text/video-only platforms', () => {
+  it('carousel is visual-only — excludes text/video-only platforms AND Instagram', () => {
+    // Instagram dropped 'carousel' by owner decision 2026-09-18: its adapter
+    // has no carousel container flow, so the pair could only fail at publish.
+    // See instagramCarouselNotAdvertised.test.ts.
     const p = filterPlatformsForFormat(ALL, 'carousel');
-    expect(p.sort()).toEqual(['facebook', 'instagram', 'linkedin', 'pinterest']);
+    expect(p.sort()).toEqual(['facebook', 'linkedin', 'pinterest']);
+    expect(p).not.toContain('instagram');
     expect(p).not.toContain('youtube');
     expect(p).not.toContain('whatsapp');
     expect(p).not.toContain('reddit');

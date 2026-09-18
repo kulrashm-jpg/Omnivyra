@@ -123,11 +123,34 @@ export const PLATFORM_CAPABILITY_REGISTRY: Record<string, PlatformCapabilityConf
     supportedContent: ['text', 'writer', 'image', 'video', 'carousel'],
     requiresMediaForPublish: false,
   },
+  // 'carousel' REMOVED — owner decision, 2026-09-18.
+  //
+  // instagramAdapter has no carousel container flow (a real one needs per-child
+  // containers collected into a CAROUSEL parent), so every multi-media
+  // Instagram row was refused at publish with MEDIA_WOULD_BE_STRIPPED. While
+  // this registry advertised 'carousel', the planner and the BOLT picker went
+  // on offering Instagram for carousel / pdf / slider, scheduling work that
+  // could only ever fail. The owner chose to stop advertising a capability
+  // that cannot publish rather than leave that loop in place; implementing the
+  // container flow stays out of scope (no precedent for the request shape
+  // exists in this repo).
+  //
+  // The adapter's publish-time refusal is deliberately KEPT as the last line
+  // of defence for any row that reaches it anyway — see instagramAdapter.ts.
+  // Restore this entry only together with that flow.
   instagram: {
     platform: 'instagram',
-    supportedContent: ['image', 'video', 'carousel', 'creator'],
+    supportedContent: ['image', 'video', 'creator'],
     requiresMediaForPublish: true,
-    notes: 'Instagram requires media (image or video) for publishing.',
+    // `notes` is the user-facing string for BOTH the MEDIA_REQUIRED rejection
+    // and the "why is this platform hidden" reason in the BOLT picker
+    // (platformContentFilter.reasonFor → cfg.notes). With carousel removed, a
+    // carousel row began being hidden under the OLD text — "Instagram requires
+    // media (image or video)" — which is flatly wrong: the post has media, the
+    // carousel shape is what is unsupported. Worded to be true of both.
+    notes:
+      'Instagram publishes a single image or video and requires media; ' +
+      'multi-image carousel publishing is not implemented.',
   },
   pinterest: {
     platform: 'pinterest',

@@ -18,11 +18,12 @@
  *   Post + image               ─▶ +instagram, +pinterest, +blog
  *   Post + banner              ─▶ same as +image
  *   Post + infographic         ─▶ same as +image
- *   Post + carousel            ─▶ +linkedin/x/facebook/instagram/pinterest (carousel-supporting)
+ *   Post + carousel            ─▶ +linkedin/x/facebook/pinterest (carousel-supporting;
+ *                                  Instagram dropped 'carousel' on 2026-09-18)
  *   Post + pdf                 ─▶ +blog (pdf → 'writer' adds blog)
  *   Thread text-only           ─▶ {linkedin, x, facebook, threads, reddit, blog}
  *   Thread + image             ─▶ +instagram, +pinterest
- *   Thread + slider            ─▶ +instagram, +pinterest (slider → 'carousel')
+ *   Thread + slider            ─▶ +pinterest (slider → 'carousel'; not Instagram)
  *   YouTube/TikTok connections ─▶ never appear in supported NOR hidden
  *
  * No mocks needed — the resolver is pure.
@@ -144,12 +145,22 @@ describe('filterConnectedPlatformsForContent — Post matrix', () => {
     expect(active.has('linkedin')).toBe(true);
   });
 
-  it('Post + carousel: Instagram + Pinterest + carousel-supporting platforms', () => {
+  it('Post + carousel: Pinterest + carousel-supporting platforms, NOT Instagram', () => {
+    // Instagram dropped 'carousel' by owner decision 2026-09-18 — its adapter
+    // has no carousel container flow, so advertising it scheduled work that
+    // could only fail. See instagramCarouselNotAdvertised.test.ts.
     const active = activeOn({ contentType: 'post', attachedAssetTypes: ['carousel'] });
-    expect(active.has('instagram')).toBe(true);
+    expect(active.has('instagram')).toBe(false);
     expect(active.has('pinterest')).toBe(true);
     expect(active.has('linkedin')).toBe(true);
     expect(active.has('facebook')).toBe(true);
+  });
+
+  it('Post + image: Instagram is still activated by a single-image asset', () => {
+    // Guards the scope of the carousel removal — only the carousel class lost
+    // Instagram, not the image class.
+    const active = activeOn({ contentType: 'post', attachedAssetTypes: ['image'] });
+    expect(active.has('instagram')).toBe(true);
   });
 
   it('Post + pdf: Blog activates (writer capability)', () => {
@@ -184,9 +195,11 @@ describe('filterConnectedPlatformsForContent — Thread matrix', () => {
     expect(active.has('linkedin')).toBe(true);
   });
 
-  it('Thread + slider: carousel-class unlocks Instagram + Pinterest', () => {
+  it('Thread + slider: carousel-class unlocks Pinterest, but no longer Instagram', () => {
+    // Same owner decision: slider resolves to the 'carousel' capability, which
+    // Instagram no longer advertises.
     const active = activeOn({ contentType: 'thread', attachedAssetTypes: ['slider'] });
-    expect(active.has('instagram')).toBe(true);
+    expect(active.has('instagram')).toBe(false);
     expect(active.has('pinterest')).toBe(true);
     expect(active.has('linkedin')).toBe(true);
   });
