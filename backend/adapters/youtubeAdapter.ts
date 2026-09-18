@@ -103,6 +103,52 @@ function isYouTubeQuotaError(error: any): boolean {
   return reasons.some((entry: any) => /quota/i.test(String(entry?.reason ?? '')));
 }
 
+/**
+ * YouTube watch hosts. Deliberately an explicit allow list with no
+ * bare-domain/subdomain matching, mirroring PLATFORM_VIDEO_HOSTS and
+ * hostMatchesPlatform() in backend/services/mediaUploadValidationService.ts —
+ * the service that already recognises a platform link in media_urls, and that
+ * documents the same "only trust an explicit allow list to avoid false
+ * positives" rule.
+ *
+ * youtu.be is intentionally NOT here: it carries the id in the path, not in a
+ * `v` parameter, so it needs a different extraction than this branch performs.
+ * A youtu.be link therefore still takes the upload path (and fails there),
+ * exactly as it did before — no behaviour is changed for it either way.
+ */
+const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com']);
+
+/**
+ * Is media_urls[0] a link to a video that is ALREADY on YouTube (so the publish
+ * is a metadata update), or a video file to upload?
+ *
+ * This was `videoUrl.match(/[?&]v=([^&]+)/)` — the presence of a `v=` query
+ * parameter ANYWHERE in the URL, with no check that the URL is a YouTube URL at
+ * all. Its own comment said "Extract video ID from YouTube URL" while doing no
+ * such thing. A perfectly ordinary cache-busted or versioned media file
+ * (`https://cdn.example.com/clip.mp4?v=3`) therefore matched, and instead of
+ * being uploaded it was treated as YouTube video id "3": the adapter PUT the
+ * post's title, description and privacyStatus at a video the channel does not
+ * own. The real video was never uploaded, and the row died with
+ * YOUTUBE_PERMISSION_DENIED ("Check that you have youtube.upload scope"),
+ * naming a scope that was never the problem.
+ *
+ * That query strings on media URLs are ordinary here is not hypothetical: the
+ * Instagram adapter carries an incident note about `…/clip.mp4?token=…`, and
+ * xMedia's type regexes are all terminated `(?|#|$)` for the same reason.
+ */
+export function extractExistingYouTubeVideoId(mediaUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(String(mediaUrl ?? ''));
+  } catch {
+    return null;
+  }
+  if (!YOUTUBE_WATCH_HOSTS.has(parsed.hostname.toLowerCase())) return null;
+  const id = (parsed.searchParams.get('v') ?? '').trim();
+  return id.length > 0 ? id : null;
+}
+
 async function downloadRemoteVideo(videoUrl: string): Promise<{
   buffer: Buffer;
   contentType: string;
@@ -391,11 +437,12 @@ export async function publishToYouTube(
 
     // Simplified approach: If video is already on YouTube (by URL/id), just update metadata
     const videoUrl = post.media_urls[0];
-    const youtubeVideoIdMatch = videoUrl.match(/[?&]v=([^&]+)/); // Extract video ID from YouTube URL
-    
-    if (youtubeVideoIdMatch) {
+    // Only a genuine YouTube watch URL means "already on YouTube" — see
+    // extractExistingYouTubeVideoId for what a bare `v=` match cost.
+    const existingVideoId = extractExistingYouTubeVideoId(videoUrl);
+
+    if (existingVideoId) {
       // Video already exists on YouTube, just update metadata
-      const existingVideoId = youtubeVideoIdMatch[1];
       
       const updateUrl = 'https://www.googleapis.com/youtube/v3/videos';
       await axios.put(updateUrl, {
