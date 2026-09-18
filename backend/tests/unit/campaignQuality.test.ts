@@ -78,7 +78,42 @@ describe('individual dimensions', () => {
   });
 
   it('platform fit: all-eligible pairs score 100', () => {
-    const a = assessCampaignQuality([asset({ content_type: 'post', platform: 'linkedin' }), asset({ content_type: 'carousel', platform: 'instagram' })]);
+    // Fixture changed from carousel→instagram to image→instagram. Instagram
+    // dropped the 'carousel' capability by OWNER DECISION, 2026-09-18 (its
+    // adapter has no carousel container flow, so the pair could only fail at
+    // publish) — see lib/shared/social/platformCapabilities.ts and
+    // instagramCarouselNotAdvertised.test.ts. carousel→instagram is therefore
+    // no longer an all-eligible pair and cannot demonstrate this property.
+    //
+    // image→instagram is verified eligible against the current registry, and
+    // keeping Instagram in the fixture makes this a scope guard too: the
+    // removal must not have cost Instagram the formats it CAN publish.
+    const a = assessCampaignQuality([
+      asset({ content_type: 'post', platform: 'linkedin' }),
+      asset({ content_type: 'image', platform: 'instagram' }),
+    ]);
+    expect(dim(a, 'platform_fit').score).toBe(100);
+  });
+
+  it('platform fit: carousel→instagram is now a misfit and drags the score down', () => {
+    // Pins the 2026-09-18 removal at the scoring layer rather than merely
+    // accommodating it: one of two pairs is ineligible, so the dimension is 50
+    // and the planner is told which pairing to reassign.
+    const a = assessCampaignQuality([
+      asset({ content_type: 'post', platform: 'linkedin' }),
+      asset({ content_type: 'carousel', platform: 'instagram' }),
+    ]);
+    expect(dim(a, 'platform_fit').score).toBe(50);
+    const rec = a.recommendations.find((r) => r.dimension === 'platform_fit');
+    expect(rec).toBeDefined();
+    expect(rec!.message).toContain('carousel→instagram');
+  });
+
+  it('platform fit: carousel still scores 100 on platforms that can publish it', () => {
+    const a = assessCampaignQuality([
+      asset({ content_type: 'carousel', platform: 'linkedin' }),
+      asset({ content_type: 'carousel', platform: 'facebook' }),
+    ]);
     expect(dim(a, 'platform_fit').score).toBe(100);
   });
 
@@ -129,7 +164,12 @@ describe('overall + recommendations', () => {
   it('a well-balanced campaign grades good/excellent with few recommendations', () => {
     const good = assessCampaignQuality([
       asset({ week: 1, content_type: 'article', platform: 'linkedin', funnel_stage: 'awareness', cta: 'Read more', theme: 'Problem', master_idea_id: 'm1', idea_fingerprint: 'i1', topic_title: 'A', hook: 'hA', cta_fingerprint: 'x1' }),
-      asset({ week: 2, content_type: 'carousel', platform: 'instagram', funnel_stage: 'consideration', cta: 'Compare', theme: 'Solution', master_idea_id: 'm2', idea_fingerprint: 'i2', topic_title: 'B', hook: 'hB', cta_fingerprint: 'x2' }),
+      // carousel→instagram swapped for image→instagram (owner decision
+      // 2026-09-18). This fixture is meant to BE a well-balanced campaign; an
+      // ineligible pairing inside it silently cost 1.5-weighted platform_fit
+      // points the test never intended to spend. Still 4 distinct formats
+      // across 3 platforms, so nothing else about the fixture changes.
+      asset({ week: 2, content_type: 'image', platform: 'instagram', funnel_stage: 'consideration', cta: 'Compare', theme: 'Solution', master_idea_id: 'm2', idea_fingerprint: 'i2', topic_title: 'B', hook: 'hB', cta_fingerprint: 'x2' }),
       asset({ week: 3, content_type: 'post', platform: 'facebook', funnel_stage: 'decision', cta: 'Book a demo', theme: 'Proof', master_idea_id: 'm3', idea_fingerprint: 'i3', topic_title: 'C', hook: 'hC', cta_fingerprint: 'x3' }),
       asset({ week: 4, content_type: 'newsletter', platform: 'linkedin', funnel_stage: 'retention', cta: 'Subscribe', theme: 'Adoption', master_idea_id: 'm4', idea_fingerprint: 'i4', topic_title: 'D', hook: 'hD', cta_fingerprint: 'x4' }),
     ]);
@@ -138,8 +178,14 @@ describe('overall + recommendations', () => {
   });
 
   it('a monotonous campaign grades lower and yields multiple recommendations', () => {
+    // Platform moved instagram → linkedin (owner decision 2026-09-18) so this
+    // fixture measures MONOTONY alone. carousel→instagram is now a misfit, and
+    // leaving it here would have let a platform_fit penalty prop up the
+    // overall<60 and >=3-recommendations assertions. Verified both ways: the
+    // test passes with either platform, so isolating the cause does not weaken
+    // it. The misfit itself is pinned by its own test above.
     const bad = assessCampaignQuality(Array.from({ length: 6 }, (_, i) => asset({
-      week: (i % 3) + 1, content_type: 'carousel', platform: 'instagram', funnel_stage: 'awareness',
+      week: (i % 3) + 1, content_type: 'carousel', platform: 'linkedin', funnel_stage: 'awareness',
       cta: 'Book a demo', theme: 'Onboarding', master_idea_id: `m${i}`, idea_fingerprint: 'same',
       topic_title: 'Same', hook: 'Same', cta_fingerprint: 'same',
     })));
