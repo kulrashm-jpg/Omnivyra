@@ -30,9 +30,23 @@
 
 import axios from 'axios';
 import type { PublishResult } from './platformAdapterTypes';
+// Reuse the EXISTING pipeline error vocabulary (P3-A); no new media codes.
+import { PipelineErrorCode } from '../../lib/shared/pipelineErrorCodes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
 import { generateHostedBrandedCover, resolveCoverBrand } from './mediaCover';
+
+/**
+ * Is this URL a video?
+ *
+ * Terminated with `(\?|#|$)` rather than `$`, matching backend/adapters/xMedia.ts.
+ * With the `$`-anchored form a signed or cache-busted Reel URL
+ * (`…/clip.mp4?token=…`) was not recognised as video, so it was sent to the
+ * image container as `image_url: <an mp4>`. Graph rejects that with a 400,
+ * which this adapter reports as INSTAGRAM_VALIDATION_ERROR, retryable: false —
+ * a perfectly valid Reel died permanently under "Invalid post content or media".
+ */
+const VIDEO_URL = /\.(mp4|mov|avi|webm)(\?|#|$)/i;
 
 interface ScheduledPost {
   id: string;
@@ -162,7 +176,16 @@ async function uploadVideoToInstagram(
   }
 
   if (status !== 'FINISHED') {
-    throw new Error('Video processing timeout - Instagram took too long to process');
+    // Only an exhausted poll budget is a timeout. Graph's status_code is also
+    // EXPIRED / PUBLISHED / an unexpected value, and every one of those used to
+    // be reported as "Instagram took too long to process" — which sent whoever
+    // read the failure looking for a slow transcode that never happened. Name
+    // what Instagram actually said.
+    throw new Error(
+      attempts >= maxAttempts && status === 'IN_PROGRESS'
+        ? `Video processing timeout - Instagram was still processing after ${maxAttempts} status checks`
+        : `Instagram stopped processing the video with status_code=${String(status ?? 'missing')}`,
+    );
   }
 
   return {
@@ -243,9 +266,39 @@ export async function publishToInstagram(
     const instagramAccountId = account.platform_user_id;
     let containerId: string;
 
+    const requestedMedia = Array.isArray(post.media_urls)
+      ? post.media_urls.filter((u) => typeof u === 'string' && u.trim().length > 0)
+      : [];
+
+    // P3-A invariant, applied to the carousel case. The capability registry
+    // lists 'carousel' for Instagram, so a multi-image post reaches this
+    // adapter — and this adapter builds ONE container from media_urls[0] and
+    // publishes it, reporting success. A three-image carousel therefore
+    // shipped as a single image and nothing downstream could tell.
+    //
+    // A real carousel needs a different container flow (per-child containers
+    // collected into a CAROUSEL parent), which is not implemented here, so the
+    // honest outcome is a refusal that says so — the same
+    // MEDIA_WOULD_BE_STRIPPED code LinkedIn, X and Facebook already return.
+    // Not retryable: retrying cannot add a flow that does not exist.
+    if (requestedMedia.length > 1) {
+      return {
+        success: false,
+        error: {
+          code: PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED,
+          message:
+            `This post has ${requestedMedia.length} attached media items, but Instagram carousel publishing is ` +
+            `not implemented in this adapter — publishing would have posted only the first and dropped ` +
+            `${requestedMedia.length - 1}. Nothing was published. Split it into separate posts, or reduce it ` +
+            `to a single image or video.`,
+          retryable: false,
+        },
+      };
+    }
+
     // Determine media type (assume first media URL determines type)
-    const firstMediaUrl = post.media_urls[0];
-    const isVideo = firstMediaUrl.match(/\.(mp4|mov|avi|webm)$/i);
+    const firstMediaUrl = requestedMedia[0] ?? post.media_urls[0];
+    const isVideo = VIDEO_URL.test(String(firstMediaUrl));
 
     // Upload media and get container ID
     if (isVideo) {
