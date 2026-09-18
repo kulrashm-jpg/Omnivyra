@@ -24,6 +24,7 @@ import {
   inferLinkedInMediaKind,
   type LinkedInMediaKind,
 } from './linkedin/linkedinMediaUpload';
+import { isLinkedInVersionSunsetSignal } from './linkedin/linkedinVersionSignal';
 
 interface ScheduledPost {
   id: string;
@@ -242,6 +243,28 @@ export async function publishToLinkedIn(
       const status = response.status;
       const message = errorBody?.message || errorBody?.error || responseText || `HTTP ${status}`;
 
+      // A sunset LinkedIn-Version is checked FIRST, before the credential
+      // branches. It stops every LinkedIn call at once and has exactly one
+      // fix (bump the pin), so it must not be misreported as an auth or a
+      // generic API problem.
+      //
+      // It does not always arrive as HTTP 426: the 2026-09-16 outage
+      // presented as the body message "Requested version 20250701 is not
+      // active", which the status-only check missed — the row then failed as
+      // LINKEDIN_API_ERROR and the one actionable diagnosis was lost. Match
+      // the status OR the message. The message predicate is narrow enough
+      // that it cannot capture unrelated 4xx responses.
+      if (status === 426 || isLinkedInVersionSunsetSignal(message) || isLinkedInVersionSunsetSignal(responseText)) {
+        return {
+          success: false,
+          error: {
+            code: 'LINKEDIN_VERSION_EXPIRED',
+            message: `LinkedIn API version ${LINKEDIN_API_VERSION} is no longer active (HTTP ${status}). Update LINKEDIN_API_VERSION in linkedinAdapter.ts, linkedin/linkedinMediaUpload.ts and providerReconciliation/providers/linkedinReconciliation.ts to a version released within the last 12 months. Detail: ${message}`,
+            retryable: false,
+          },
+        };
+      }
+
       if (status === 401) {
         return {
           success: false,
@@ -259,17 +282,6 @@ export async function publishToLinkedIn(
           error: {
             code: 'LINKEDIN_FORBIDDEN',
             message: `Permission denied (403). Ensure "Share on LinkedIn" product is added to your LinkedIn App and w_member_social scope is approved. Detail: ${message}`,
-            retryable: false,
-          },
-        };
-      }
-
-      if (status === 426) {
-        return {
-          success: false,
-          error: {
-            code: 'LINKEDIN_VERSION_EXPIRED',
-            message: `LinkedIn API version ${LINKEDIN_API_VERSION} is no longer active. Update LINKEDIN_API_VERSION in linkedinAdapter.ts to a version released within the last 12 months. Detail: ${message}`,
             retryable: false,
           },
         };
