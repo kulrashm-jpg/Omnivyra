@@ -1,3 +1,15 @@
+/**
+ * socialPlatformPublisher — the DEPRECATED external_api_sources publish path.
+ *
+ * It has zero production importers (asserted by
+ * platformCapability.centralization.test.ts) but is still exercised here, so
+ * this suite is what would catch a fabricated publication if the module were
+ * ever re-wired. Two branches used to fabricate one: X, and any platform with
+ * no branch at all. Both now fail truthfully, and this suite asserts that.
+ *
+ * All HTTP is mocked via global.fetch (safeFetch is delegated to it below).
+ * Nothing here contacts a provider and no real credential is used.
+ */
 import { publishScheduledPost } from '../../services/socialPlatformPublisher';
 import {
   getApiConfigByPlatform,
@@ -171,13 +183,68 @@ describe('SocialPlatformPublisher', () => {
     expect(result.external_post_id).toBe('yt-1');
   });
 
-  it('uses twitter stub', async () => {
+  it('CRITICAL: X is reported FAILED, not as a fabricated publication', async () => {
+    // Was: `expect(result.status).toBe('PUBLISHED')` and
+    // `expect(result.external_post_id).toContain('stub_twitter_')`. That test
+    // encoded the defect as the contract: the module returned PUBLISHED with an
+    // invented `stub_twitter_<ts>` id WITHOUT calling anything, and
+    // publishScheduledPost fed that id to recordPerformance() as genuine
+    // platform_api data.
+    (global as any).fetch = jest.fn();
+
     const result = await publishScheduledPost(
       { ...basePost, platform: 'x' as any },
       { dry_run: false, admin_override: true }
     );
+
+    expect(result.status).toBe('FAILED');
+    expect(result.external_post_id).toBeUndefined();
+    expect(String(result.message)).toMatch(/not implemented/i);
+    // And it said so without pretending to contact X.
+    expect((global as any).fetch).not.toHaveBeenCalled();
+  });
+
+  it('CRITICAL: a platform with no implementation is FAILED, not a stub_<platform>_<hash> id', async () => {
+    // 'reddit' is the one member of PublishPlatform with no branch, so it fell
+    // through to the payload-hash stub and was reported as published.
+    (getApiConfigByPlatform as jest.Mock).mockResolvedValue({
+      id: 'api-6',
+      name: 'Reddit API',
+      base_url: 'https://example.com',
+      purpose: 'posting',
+      category: 'reddit',
+      is_active: true,
+      auth_type: 'none',
+      api_key_name: 'LINKEDIN_TOKEN',
+      created_at: '2026-01-01T00:00:00Z',
+    });
+    (global as any).fetch = jest.fn();
+
+    const result = await publishScheduledPost(
+      { ...basePost, platform: 'reddit' as any },
+      { dry_run: false, admin_override: true }
+    );
+
+    expect(result.status).toBe('FAILED');
+    expect(result.external_post_id).toBeUndefined();
+    expect(String(result.message)).toContain('Unsupported platform: reddit');
+    expect(String(result.message)).not.toContain('stub_');
+    expect((global as any).fetch).not.toHaveBeenCalled();
+  });
+
+  it('a real provider id is still reported as PUBLISHED (honest path preserved)', async () => {
+    // The three implemented platforms still publish; only the two fabricating
+    // branches changed. This keeps the module's real behaviour under test.
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 'ln-real' }),
+    });
+
+    const result = await publishScheduledPost(basePost, { dry_run: false, admin_override: true });
+
     expect(result.status).toBe('PUBLISHED');
-    expect(result.external_post_id).toContain('stub_twitter_');
+    expect(result.external_post_id).toBe('ln-real');
+    expect((global as any).fetch).toHaveBeenCalled();
   });
 
   it('returns FAILED on API error', async () => {
