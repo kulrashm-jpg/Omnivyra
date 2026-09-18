@@ -23,6 +23,7 @@ import {
   recordSuggestionShown,
   recordSuggestionAccepted,
   recordSuggestionRejected,
+  getSuggestionOrganizationId,
 } from '../../../backend/services/aiSuggestionTrackingService';
 
 // NOTE: ai_message_drafts row creation moved to /api/engagement/generate-response
@@ -101,20 +102,50 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!body.suggestion_id && !body.correlation_id) {
         return res.status(400).json({ error: 'suggestion_id or correlation_id required' });
       }
-      // No separate enforceCompanyAccess here: we resolve by suggestion id
-      // and the DB RLS policy restricts to service_role. The service
-      // helpers never return the row itself, just a boolean — keeping
-      // this endpoint a pure write with no tenant leak.
+      // WSF-ORD-004 — this branch used to run with NO authorization at all.
+      // The old comment reasoned that because the helpers return a boolean and
+      // never the row, there was "no tenant leak" — but the risk here was
+      // never disclosure, it was INTEGRITY: the UPDATE was keyed purely by a
+      // caller-supplied suggestion_id / correlation_id, and resolveUserContext
+      // above does not reject an anonymous caller (it returns an
+      // unauthenticated context). So anyone at all could resolve any tenant's
+      // suggestion as accepted or rejected, corrupting the accept/reject
+      // signal the intelligence layer learns from.
+      //
+      // Now: authenticate, resolve the suggestion's OWNING tenant (organization
+      // id only — still no row content), authorize the caller against it, and
+      // carry that tenant into the UPDATE's own predicate so the write cannot
+      // land anywhere else.
+      if (user.authenticated === false) {
+        return res.status(401).json({
+          error: 'Authentication required. Please sign in again.',
+          code: 'UNAUTHENTICATED',
+        });
+      }
+
+      const owningOrganizationId = await getSuggestionOrganizationId({
+        suggestion_id: body.suggestion_id,
+        correlation_id: body.correlation_id,
+      });
+      if (!owningOrganizationId) {
+        return res.status(404).json({ error: 'suggestion not found' });
+      }
+
+      const access = await enforceCompanyAccess({ req, res, companyId: owningOrganizationId });
+      if (!access) return;
+
       const ok = body.event === 'accepted'
         ? await recordSuggestionAccepted({
             suggestion_id: body.suggestion_id,
             correlation_id: body.correlation_id,
             action_id: body.action_id ?? null,
+            organization_id: owningOrganizationId,
           })
         : await recordSuggestionRejected({
             suggestion_id: body.suggestion_id,
             correlation_id: body.correlation_id,
             reason: body.reason,
+            organization_id: owningOrganizationId,
           });
       return res.status(200).json({ success: ok });
     }

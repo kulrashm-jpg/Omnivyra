@@ -18,11 +18,27 @@
  *
  * SIGNAL HONESTY
  * --------------
- * `context_used` records exactly which signals fed the suggestion. Signals that
- * do not exist yet in production (content history — `content_memory` is empty;
- * generation-time knowledge-graph reads; coverage/gap analysis) are reported as
- * `false` and are NOT claimed in the rationale. They are already named in the
- * contract so they can be switched on later WITHOUT changing the UI contract.
+ * `context_used` records exactly which signals fed the suggestion, and every
+ * flag is COMPUTED from what was actually read — never declared.
+ *
+ *   knowledge_graph    TRUE only when `readCompanyTopicCoverage` returned at
+ *                      least one labelled topic for THIS company AND that list
+ *                      was placed in the prompt. A disabled flag, a failed
+ *                      read, an empty table and an unlabelled topic all yield
+ *                      an empty list and therefore `false`. "We could not tell"
+ *                      is never reported as a positive signal.
+ *   content_history    still false: `content_memory` has no reader and is empty
+ *                      in production. Coverage rows are NOT history — they
+ *                      record that a topic was touched, not what was said.
+ *   coverage_analysis  still false: analysis means GAP analysis (what the
+ *                      company has NOT covered), which requires a target topic
+ *                      corpus nothing on this platform produces. Reading the
+ *                      covered set is not analysing coverage, and claiming
+ *                      otherwise would be exactly the dishonesty this field
+ *                      exists to prevent.
+ *
+ * The UI contract does not move: `ContentSuggestionContextUsed` is unchanged —
+ * which is precisely what the contract file reserved these fields for.
  *
  * BILLING
  * -------
@@ -38,6 +54,10 @@ import { runCompletionWithOperation } from '../aiGateway';
 import { resolveCompanyGroundingGuard } from '../context/canonicalContentContextResolver';
 import { getCanonicalProfile } from '../context/canonicalProfileAdapter';
 import { generateContentOpportunities, type ContentOpportunity } from '../contentOpportunityService';
+import {
+  readCompanyTopicCoverage,
+  type CompanyTopicCoverageEntry,
+} from './knowledgeGraph/coverageReadService';
 import {
   isActionableSuggestion,
   SUGGESTION_INTENTS,
@@ -72,6 +92,12 @@ export type ContentSuggestionInput = {
 
 const OPPORTUNITY_WINDOW_HOURS = 72;
 const MAX_OPPORTUNITIES_IN_PROMPT = 3;
+/**
+ * Bounded so the graph cannot crowd out the profile and engagement signals in
+ * the prompt. Recency-ordered by the reader, so this keeps the most recently
+ * covered topics.
+ */
+const MAX_COVERAGE_TOPICS_IN_PROMPT = 6;
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -116,6 +142,30 @@ async function readOpportunities(companyId: string): Promise<ContentOpportunity[
 }
 
 /**
+ * B7 knowledge-graph coverage for THIS company.
+ *
+ * `readCompanyTopicCoverage` is documented never-throws and already emits a
+ * distinct counter for every degrade path (flag off, missing tenant, read
+ * failure, empty table, unlabelled topic). This wrapper is belt-and-braces —
+ * an unexpected throw here must not be able to fail a suggestion, which is the
+ * user's actual request. It adds no second counter, because doing so would
+ * double-count the failures the reader already reports.
+ *
+ * Tenant scope: the only argument is `companyId`, and the reader filters on it.
+ * There is no cross-company read path from here.
+ */
+async function readCoverageTopics(companyId: string): Promise<CompanyTopicCoverageEntry[]> {
+  try {
+    const entries = await readCompanyTopicCoverage(companyId, {
+      limit: MAX_COVERAGE_TOPICS_IN_PROMPT,
+    });
+    return Array.isArray(entries) ? entries.slice(0, MAX_COVERAGE_TOPICS_IN_PROMPT) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Deterministic suggestion built ONLY from signals we actually hold.
  *
  * Used when the model is unavailable or returns something non-actionable. It
@@ -124,9 +174,16 @@ async function readOpportunities(companyId: string): Promise<ContentOpportunity[
  */
 export function buildDeterministicSuggestion(
   input: ContentSuggestionInput,
-  signals: { profileLines: string[]; opportunities: ContentOpportunity[]; brand: string },
+  signals: {
+    profileLines: string[];
+    opportunities: ContentOpportunity[];
+    brand: string;
+    /** Optional so existing callers of this exported helper still compile. */
+    coverage?: CompanyTopicCoverageEntry[];
+  },
 ): ContentSuggestion {
   const { profileLines, opportunities, brand } = signals;
+  const coverage = signals.coverage ?? [];
   const contentLabel = input.contentType.replace(/[-_]/g, ' ');
   const topOpportunity = opportunities[0] ?? null;
   const audience = text(input.audience) || 'the decision-makers you sell to';
@@ -138,11 +195,19 @@ export function buildDeterministicSuggestion(
       ? `${text(input.userInput)} — a clear point of view`
       : `The one thing ${owner} should be saying about ${contentLabel === 'post' ? 'its market' : contentLabel} right now`;
 
-  const reason = topOpportunity
+  const baseReason = topOpportunity
     ? `Your engagement signals show recurring interest in "${topOpportunity.topic}" (confidence ${topOpportunity.confidence_score}). Publishing on it answers a question your audience is already asking.`
     : profileLines.length > 0
       ? 'Built from your company positioning and audience. No engagement signals were available for this window, so this leads with your stated point of view.'
       : `No company profile or engagement signals were available, so this is a starting direction for a ${contentLabel} only. Add your angle below to sharpen it.`;
+
+  // Coverage is USED here, not merely counted — otherwise reporting
+  // `knowledge_graph: true` on this path would be a claim without a signal.
+  // It is stated as "already covered", which is exactly what the rows record;
+  // no gap, trend, or performance meaning is read into them.
+  const reason = coverage.length > 0
+    ? `${baseReason} Your knowledge graph already records coverage of ${formatCoverageForProse(coverage)}, so this is framed to add to that rather than repeat it.`
+    : baseReason;
 
   return {
     topic,
@@ -163,36 +228,65 @@ export function buildDeterministicSuggestion(
     tone: 'Specific, modern, and high-signal',
     format_guidance: input.formatLabel ? `Shape it for the ${input.formatLabel} format.` : '',
     platform_guidance: '',
-    context_used: buildContextUsed(input, profileLines.length > 0, opportunities.length),
+    context_used: buildContextUsed(input, profileLines.length > 0, opportunities.length, coverage.length),
     ...(input.revisionInstruction
       ? { revision: { instruction: input.revisionInstruction, revision_index: input.revisionIndex ?? 1 } }
       : {}),
   };
 }
 
+/** `"a (x3)", "b" and "c"` — prose, for the deterministic rationale. */
+function formatCoverageForProse(coverage: CompanyTopicCoverageEntry[]): string {
+  const labels = coverage.map((entry) =>
+    entry.coverageCount > 1 ? `"${entry.label}" (${entry.coverageCount}x)` : `"${entry.label}"`,
+  );
+  if (labels.length === 1) return labels[0];
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
 function buildContextUsed(
   input: ContentSuggestionInput,
   profilePresent: boolean,
   opportunityCount: number,
+  coverageTopicCount: number,
 ): ContentSuggestionContextUsed {
   return {
     company_profile: profilePresent,
     engagement_signals: opportunityCount,
     user_input: Boolean(text(input.userInput)),
     campaign_context: Boolean(text(input.campaignContext)),
-    // Declared but not yet readable in production. Reported honestly as false
-    // so neither the UI nor the rationale can claim them.
+    // Still false — `content_memory` has no reader and is empty in production.
+    // Topic-coverage rows are NOT content history: they record that a topic was
+    // touched, never what was said about it.
     content_history: false,
-    knowledge_graph: false,
+    // COMPUTED, never declared. True only when labelled coverage rows for THIS
+    // company were actually read AND placed in the prompt. Every degrade path
+    // in readCompanyTopicCoverage yields an empty list, so "we could not tell"
+    // lands on false, never on true.
+    knowledge_graph: coverageTopicCount > 0,
+    // Still false. Analysis here means GAP analysis — what the company has NOT
+    // covered — which requires a target topic corpus that nothing on this
+    // platform produces. Reading the covered set is not analysing coverage.
     coverage_analysis: false,
   };
 }
 
 function buildPrompt(
   input: ContentSuggestionInput,
-  signals: { profileLines: string[]; opportunities: ContentOpportunity[] },
+  signals: {
+    profileLines: string[];
+    opportunities: ContentOpportunity[];
+    coverage?: CompanyTopicCoverageEntry[];
+  },
 ): string {
   const contentLabel = input.contentType.replace(/[-_]/g, ' ');
+  // Only this company's rows reach here: the reader is filtered on company_id
+  // and the caller passes a single companyId.
+  const coverageLines = (signals.coverage ?? []).map((entry) => {
+    const covered = entry.lastCoveredAt ? `, last covered ${entry.lastCoveredAt}` : '';
+    const angle = entry.angleLabel ? `, angle "${entry.angleLabel}"` : '';
+    return `- "${entry.label}" (covered ${entry.coverageCount}x${covered}${angle})`;
+  });
   const opportunityLines = signals.opportunities.map(
     (opportunity) =>
       `- "${opportunity.topic}" (${opportunity.opportunity_type}, confidence ${opportunity.confidence_score}) — signals: ` +
@@ -214,6 +308,17 @@ function buildPrompt(
     opportunityLines.length > 0
       ? `Engagement/opportunity signals (real, from this company's own threads):\n${opportunityLines.join('\n')}`
       : 'No engagement signals are available for this window.',
+    // What the company has ALREADY published on, from its own knowledge-graph
+    // coverage rows. Stated as coverage and nothing more: the rows carry no
+    // performance, no gap and no recommendation, so the instruction below must
+    // not invite the model to read any of those into them.
+    coverageLines.length > 0
+      ? 'Topics this company has already covered (its own knowledge-graph coverage — '
+        + 'these are records that a topic was published on, NOT performance data and NOT a gap analysis):\n'
+        + `${coverageLines.join('\n')}\n`
+        + 'Use this to avoid repeating a topic verbatim, or to go deeper on one where a genuinely new angle exists. '
+        + 'Do not claim results, reach, or reception for any of them.'
+      : 'No knowledge-graph coverage is available for this company.',
     input.previousSuggestion
       ? `Previous suggestion to revise:\n${JSON.stringify({
           topic: input.previousSuggestion.topic,
@@ -253,16 +358,19 @@ export async function generateContentSuggestion(
 
   // Every signal read below is tenant-scoped by companyId. A tenant with no
   // profile and no engagement data still gets a suggestion — just a weaker one.
-  const [profile, opportunities, grounding] = await Promise.all([
+  const [profile, opportunities, grounding, coverage] = await Promise.all([
     getCanonicalProfile(companyId, { autoRefine: false, languageRefine: false }).catch(() => null),
     readOpportunities(companyId),
     resolveCompanyGroundingGuard(companyId).catch(() => null),
+    // B7 knowledge-graph coverage. Tenant-scoped at the source and never-throws
+    // — a graph outage degrades the suggestion, it does not fail it.
+    readCoverageTopics(companyId),
   ]);
 
   const { lines: profileLines, present: profilePresent } = readProfileContext(profile);
   const brand = text(grounding?.brand);
   const deterministic = () =>
-    buildDeterministicSuggestion(input, { profileLines, opportunities, brand });
+    buildDeterministicSuggestion(input, { profileLines, opportunities, brand, coverage });
 
   try {
     const response = await runCompletionWithOperation({
@@ -289,7 +397,7 @@ export async function generateContentSuggestion(
         },
         {
           role: 'user',
-          content: `${buildPrompt(input, { profileLines, opportunities })}\n\nReturn JSON with exactly this shape:\n${RESPONSE_SHAPE}`,
+          content: `${buildPrompt(input, { profileLines, opportunities, coverage })}\n\nReturn JSON with exactly this shape:\n${RESPONSE_SHAPE}`,
         },
       ],
     });
@@ -325,7 +433,10 @@ export async function generateContentSuggestion(
       tone: text(parsed.tone) || fallback.tone,
       format_guidance: text(parsed.format_guidance) || fallback.format_guidance,
       platform_guidance: text(parsed.platform_guidance),
-      context_used: buildContextUsed(input, profilePresent, opportunities.length),
+      // `coverage.length` — the graph is reported as used on the model path
+      // only because the coverage block above is in the prompt that produced
+      // this reply. If the read returned nothing, this is false.
+      context_used: buildContextUsed(input, profilePresent, opportunities.length, coverage.length),
       ...(input.revisionInstruction
         ? { revision: { instruction: input.revisionInstruction, revision_index: input.revisionIndex ?? 1 } }
         : {}),

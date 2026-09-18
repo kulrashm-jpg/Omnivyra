@@ -7,11 +7,44 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
-import { syncInstagramAndThreadsFromMeta } from '../../../../backend/services/metaDerivedAccountsService';
+import {
+  syncInstagramAndThreadsFromMeta,
+  resolveFacebookPageTarget,
+  type FacebookPageTargetResolution,
+} from '../../../../backend/services/metaDerivedAccountsService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
 import { describeProviderError } from '../../../../backend/auth/safeErrorLog';
 import { assertTenantAccess } from '../../../../backend/security/TenantGuard';
+
+/**
+ * Why this Facebook connection cannot publish — in words the operator can act
+ * on. Stored on `social_accounts.last_provider_error` (the column platform
+ * health and the connection-state helpers already read) and echoed to the
+ * browser, so "connected but nothing publishes" is never a silent state.
+ */
+function describeMissingPageTarget(resolution: FacebookPageTargetResolution): string {
+  if (resolution.status === 'no_pages') {
+    return 'This Facebook login does not administer any Facebook Page that granted a Page access token. ' +
+      'Facebook only allows publishing to a Page, using that Page\'s own token — a personal profile cannot be ' +
+      'published to. Give this login an admin role on a Page, then reconnect and approve pages_show_list and ' +
+      'pages_manage_posts.';
+  }
+  if (resolution.status === 'selection_required') {
+    const names = resolution.candidates
+      .map((page) => `${page.name ?? 'unnamed'} (${page.id})`)
+      .join(', ');
+    return `This Facebook login administers ${resolution.candidates.length} Pages — ${names} — and none of them is ` +
+      'bound to this connection. A Page is NOT chosen automatically, because that would publish to a destination ' +
+      'nobody selected. No Page target was stored and this connection cannot publish until one is selected.';
+  }
+  if (resolution.status === 'lookup_failed') {
+    return `Facebook did not return the list of Pages this login administers (${resolution.reason}), so no Page ` +
+      'target could be stored. Reconnect the Facebook account; if it keeps failing, the app may be missing the ' +
+      'pages_show_list grant.';
+  }
+  return 'No Facebook Page target could be resolved for this connection.';
+}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -171,19 +204,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const accountName = profile.name || 'Facebook Account';
 
-    const tokenObj: TokenObject = {
-      access_token: accessToken,
-      expires_at: expiresAt,
-      token_type: 'Bearer',
-    };
-    const encryptedCols = encryptTokenColumns(tokenObj);
-
     const companyIdUuid = companyId && /^[0-9a-f-]{36}$/i.test(companyId) ? companyId : null;
-    let existingAccount: { id: string } | null = null;
+    let existingAccount: { id: string; linked_page_id?: string | null } | null = null;
     if (companyIdUuid) {
       const { data: tenantRow } = await supabase
         .from('social_accounts')
-        .select('id')
+        .select('id, linked_page_id')
         .eq('user_id', userId)
         .eq('company_id', companyIdUuid)
         .eq('platform', 'facebook')
@@ -191,6 +217,81 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .maybeSingle();
       if (tenantRow) existingAccount = tenantRow;
     }
+
+    // ── Page target ──────────────────────────────────────────────────────────
+    //
+    // `profile.id` is the Facebook USER id, and the token exchanged above is a
+    // USER token. Graph accepts feed publishing ONLY at a Page node, with that
+    // Page's own token, so a connection that stores nothing else can never
+    // publish. The Page and its token are read from the same
+    // `GET /v22.0/me/accounts?fields=id,name,access_token` call this repo
+    // already makes for the Instagram/Threads derivation, and are persisted on
+    // the columns the schema already reserves for exactly this:
+    // `linked_page_id` (the Page) and `page_access_token` (its credential).
+    //
+    // The Page token — not the user token — becomes the row's stored
+    // credential, which is what `getToken()` hands the publish path and what
+    // the live CHECK constraint `social_accounts_facebook_token_chk`
+    // (`facebook AND is_active ⇒ page_access_token IS NOT NULL`) requires. It
+    // is also what metaDerivedAccountsService already stores for the
+    // Instagram/Threads rows derived from the very same Pages.
+    //
+    // Page discovery is never allowed to abort the connect. Losing an
+    // authenticated connection because one Graph read failed would turn a
+    // recoverable "no target yet" into "reconnect from scratch"; the
+    // unresolved branch below already refuses to publish, which is the part
+    // that has to be safe.
+    let pageTarget: FacebookPageTargetResolution;
+    try {
+      pageTarget = await resolveFacebookPageTarget({
+        accessToken,
+        facebookUserId: String(profile.id),
+        currentPageId: existingAccount?.linked_page_id ?? null,
+      });
+    } catch (pageLookupError: any) {
+      pageTarget = {
+        status: 'lookup_failed',
+        reason: String(pageLookupError?.message ?? pageLookupError).slice(0, 200),
+        candidates: [],
+      };
+    }
+    const resolvedPage = pageTarget.status === 'resolved' ? pageTarget.page : null;
+    const pageTargetProblem = resolvedPage
+      ? null
+      : describeMissingPageTarget(pageTarget);
+
+    if (!resolvedPage) {
+      // No silent auto-pick, and no connection that looks publishable but is
+      // not: the row is parked inactive with the reason, so platform health and
+      // the publish path both see the truth instead of a user node dressed up
+      // as a Page.
+      console.warn('[facebook/callback] no publishable Page target:', pageTarget.status);
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'facebook',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        user_id: userId,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'property_fetch_failed',
+        failure_detail: `facebook page target ${pageTarget.status}`,
+      });
+    }
+
+    const tokenObj: TokenObject = {
+      access_token: resolvedPage ? resolvedPage.accessToken : accessToken,
+      expires_at: expiresAt,
+      token_type: 'Bearer',
+    };
+    const encryptedCols = encryptTokenColumns(tokenObj);
+
+    // Written only when a Page is actually resolved. On an unresolved
+    // reconnect the previously bound target is left alone rather than nulled —
+    // `is_active: false` already stops it being used, and destroying a good
+    // target because one lookup came back empty would be its own defect.
+    const pageColumns = resolvedPage
+      ? { linked_page_id: resolvedPage.id, page_access_token: encryptedCols.access_token }
+      : {};
 
     let accountId: string;
 
@@ -200,10 +301,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .from('social_accounts')
         .update({
           account_name: accountName,
-          is_active: true,
+          is_active: Boolean(resolvedPage),
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
+          last_provider_error: pageTargetProblem,
+          ...pageColumns,
           ...(companyIdUuid ? { company_id: companyIdUuid } : {}),
         })
         .eq('id', accountId);
@@ -216,11 +319,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           platform: 'facebook',
           platform_user_id: profile.id,
           account_name: accountName,
-          is_active: true,
+          is_active: Boolean(resolvedPage),
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           access_token: encryptedCols.access_token,
           refresh_token: encryptedCols.refresh_token,
+          last_provider_error: pageTargetProblem,
+          ...pageColumns,
         })
         .select('id')
         .single();
@@ -291,7 +396,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       console.warn('[facebook/callback] Instagram/Threads derivation skipped:', syncError?.message);
     }
 
-    console.log('✅ Facebook account saved successfully:', { accountId, accountName });
+    console.log('✅ Facebook account saved:', {
+      accountId,
+      accountName,
+      pageTarget: resolvedPage ? resolvedPage.id : 'none',
+      publishable: Boolean(resolvedPage),
+    });
 
     if (companyId && userId) {
       checkAndGrantSetupCredits(companyId, userId)
@@ -308,7 +418,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
-    return res.redirect(`${successDest}${sep}connected=${platform}&threads=${derivedThreadsCount > 0 ? 'enabled' : 'disabled'}&account=${encodeURIComponent(accountName)}&success=true`);
+    // The OAuth handshake succeeded either way — that is what `success=true`
+    // has always meant here. Whether the connection can PUBLISH is a separate
+    // fact, and it is now reported rather than assumed: `pageTarget` names the
+    // bound Page, or is `none` with the reason attached. The row itself is
+    // inactive in the `none` case, so nothing can publish on a guess.
+    const pageTargetParam = resolvedPage
+      ? `&pageTarget=${encodeURIComponent(resolvedPage.id)}`
+      : `&pageTarget=none&pageTargetReason=${encodeURIComponent(pageTargetProblem ?? 'unknown')}`;
+    return res.redirect(`${successDest}${sep}connected=${platform}&threads=${derivedThreadsCount > 0 ? 'enabled' : 'disabled'}&account=${encodeURIComponent(accountName)}&success=true${pageTargetParam}`);
 
   } catch (error: any) {
     console.error('Facebook OAuth callback error:', describeProviderError(error));

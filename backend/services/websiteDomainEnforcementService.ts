@@ -10,6 +10,19 @@ export type DomainEnforcementDecision = {
   mode: 'verified' | 'allow_unverified' | 'no_origin' | 'mismatch';
   message: string;
   originHost?: string | null;
+  /**
+   * WSF-ORD-003 — whether the subject actually HAS an origin allowlist to
+   * enforce. `checkFormOrigin` populates it: false means the form configured no
+   * allowed_domains, so `allowed: true` is a FAIL-OPEN answer ("nothing to
+   * check") rather than a verified match. Callers need to tell those two apart
+   * — to count the fail-open state, or to refuse it under an explicit strict
+   * mode — without string-matching `message`.
+   *
+   * Additive and descriptive only: no decision in this module changed, and it
+   * is optional because `checkWebsiteOrigin` has a different notion of an
+   * allowlist (canonical host + tracking domains) and does not set it.
+   */
+  allowlistConfigured?: boolean;
 };
 
 export function hashIp(value: string | undefined): string | null {
@@ -69,9 +82,14 @@ export async function checkFormOrigin(form: CaptureForm, origin: string | undefi
   const host = originHost(origin);
   const allowed = Array.isArray(form.allowed_domains) ? form.allowed_domains.map(normalizeDomain).filter(Boolean) : [];
   if (allowed.length === 0) {
-    return { allowed: true, verified: false, mode: 'allow_unverified', originHost: host, message: 'No form allowlist configured.' };
+    // FAIL-OPEN, deliberately: forms in the field were created without an
+    // allowlist and refusing them would silently stop real lead capture.
+    // `allowlistConfigured: false` makes the state explicit so the caller can
+    // count it (and, under an opt-in strict mode, refuse it) — see
+    // pages/api/leads/index.ts Mode 2.
+    return { allowed: true, verified: false, mode: 'allow_unverified', originHost: host, message: 'No form allowlist configured.', allowlistConfigured: false };
   }
-  if (!host) return { allowed: false, verified: false, mode: 'no_origin', message: 'Origin is required for this form.' };
+  if (!host) return { allowed: false, verified: false, mode: 'no_origin', message: 'Origin is required for this form.', allowlistConfigured: true };
   const matches = allowed.some((entry) => host === entry || host.endsWith(`.${entry}`));
   return {
     allowed: matches,
@@ -79,5 +97,6 @@ export async function checkFormOrigin(form: CaptureForm, origin: string | undefi
     mode: matches ? 'verified' : 'mismatch',
     originHost: host,
     message: matches ? 'Form origin allowed.' : 'Origin is not allowed for this form.',
+    allowlistConfigured: true,
   };
 }

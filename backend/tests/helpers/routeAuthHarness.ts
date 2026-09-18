@@ -45,10 +45,17 @@ const USERS_BY_TOKEN: Record<string, { id: string; email: string }> = {
 type Row = Record<string, any>;
 export type Call = { table: string; op: string; filters: Record<string, unknown>; payload?: unknown };
 
-const state: { tables: Record<string, Row[]>; calls: Call[]; failTables: Set<string> } = {
+const state: {
+  tables: Record<string, Row[]>;
+  calls: Call[];
+  failTables: Set<string>;
+  /** table → columns that INSERT must find unoccupied (see uniqueKey). */
+  unique: Record<string, string[]>;
+} = {
   tables: {},
   calls: [],
   failTables: new Set(),
+  unique: {},
 };
 
 function baseTables(): Record<string, Row[]> {
@@ -78,6 +85,7 @@ export function seed(extra: Record<string, Row[]> = {}): void {
   state.tables = baseTables();
   state.calls = [];
   state.failTables = new Set();
+  state.unique = {};
   for (const [t, rows] of Object.entries(extra)) state.tables[t] = [...(state.tables[t] || []), ...rows.map((r) => ({ ...r }))];
 }
 seed();
@@ -85,6 +93,19 @@ seed();
 /** Make every query against `table` return a database error (lookup-failure paths). */
 export function failTable(table: string): void {
   state.failTables.add(table);
+}
+
+/**
+ * Declare a uniqueness constraint (e.g. a primary key) on `table.column`, so
+ * an INSERT whose value is already present fails with Postgres 23505 instead of
+ * silently appending. Opt-in and cleared by seed(): with no declaration the
+ * builder behaves exactly as before, so no existing suite changes.
+ *
+ * This is what lets a suite exercise insert-then-conflict code paths — the
+ * shape a route uses when it must not lose a create race (WSF-ORD-007).
+ */
+export function uniqueKey(table: string, column: string): void {
+  state.unique[table] = [...(state.unique[table] || []), column];
 }
 
 export function calls(): Call[] {
@@ -143,6 +164,19 @@ function makeBuilder(table: string): any {
     const all = state.tables[table] || (state.tables[table] = []);
     if (op === 'insert' || op === 'upsert') {
       const list = (Array.isArray(payload) ? payload : [payload]).map((r: Row) => ({ id: r?.id ?? `gen-${all.length + 1}`, ...r }));
+      // A plain INSERT must respect declared uniqueness; an UPSERT is allowed
+      // to land on an occupied key by definition.
+      if (op === 'insert') {
+        for (const col of state.unique[table] || []) {
+          if (list.some((r: Row) => all.some((x) => x[col] != null && String(x[col]) === String(r[col])))) {
+            return {
+              data: null,
+              error: { message: `duplicate key value violates unique constraint on ${table}.${col}`, code: '23505' },
+              count: 0,
+            };
+          }
+        }
+      }
       all.push(...list);
       return { data: list, error: null, count: list.length };
     }

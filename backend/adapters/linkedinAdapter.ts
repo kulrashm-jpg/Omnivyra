@@ -24,6 +24,7 @@ import {
   inferLinkedInMediaKind,
   type LinkedInMediaKind,
 } from './linkedin/linkedinMediaUpload';
+import { isLinkedInVersionSunsetSignal } from './linkedin/linkedinVersionSignal';
 
 interface ScheduledPost {
   id: string;
@@ -123,10 +124,17 @@ export async function publishToLinkedIn(
   //   3. If ANY upload fails: return a structured failure WITHOUT publishing
   //      (so the post isn't sent as text-only with media silently dropped).
   //
-  // Default off. The corresponding ADAPTER_CAN_PUBLISH_MEDIA[linkedin] flag in
-  // publishReadinessValidator.ts MUST stay `false` until you have validated
-  // the upload pipeline against a real LinkedIn account in non-prod. Once
-  // validated, flip both flags together.
+  // Default off, and there is exactly ONE switch. An earlier revision of this
+  // note said to "flip both flags together" with a static
+  // ADAPTER_CAN_PUBLISH_MEDIA[linkedin] entry in publishReadinessValidator.ts.
+  // That static entry no longer exists: adapterCanPublishMedia() special-cases
+  // linkedin and reads LINKEDIN_MEDIA_UPLOAD_ENABLED directly, so this env var
+  // opens the readiness guard AND this branch at once. An operator following
+  // the old note would go looking for a second flag that is not there.
+  //
+  // It stays off until the upload pipeline has been validated against a real
+  // LinkedIn account in non-prod. That validation has not happened; nothing in
+  // this file can substitute for it.
   //
   // Per-node thread media: each thread child row publishes through its own
   // publishToLinkedIn call (the orchestrator passes per-row id; the adapter
@@ -242,6 +250,28 @@ export async function publishToLinkedIn(
       const status = response.status;
       const message = errorBody?.message || errorBody?.error || responseText || `HTTP ${status}`;
 
+      // A sunset LinkedIn-Version is checked FIRST, before the credential
+      // branches. It stops every LinkedIn call at once and has exactly one
+      // fix (bump the pin), so it must not be misreported as an auth or a
+      // generic API problem.
+      //
+      // It does not always arrive as HTTP 426: the 2026-09-16 outage
+      // presented as the body message "Requested version 20250701 is not
+      // active", which the status-only check missed — the row then failed as
+      // LINKEDIN_API_ERROR and the one actionable diagnosis was lost. Match
+      // the status OR the message. The message predicate is narrow enough
+      // that it cannot capture unrelated 4xx responses.
+      if (status === 426 || isLinkedInVersionSunsetSignal(message) || isLinkedInVersionSunsetSignal(responseText)) {
+        return {
+          success: false,
+          error: {
+            code: 'LINKEDIN_VERSION_EXPIRED',
+            message: `LinkedIn API version ${LINKEDIN_API_VERSION} is no longer active (HTTP ${status}). Update LINKEDIN_API_VERSION in linkedinAdapter.ts, linkedin/linkedinMediaUpload.ts and providerReconciliation/providers/linkedinReconciliation.ts to a version released within the last 12 months. Detail: ${message}`,
+            retryable: false,
+          },
+        };
+      }
+
       if (status === 401) {
         return {
           success: false,
@@ -259,17 +289,6 @@ export async function publishToLinkedIn(
           error: {
             code: 'LINKEDIN_FORBIDDEN',
             message: `Permission denied (403). Ensure "Share on LinkedIn" product is added to your LinkedIn App and w_member_social scope is approved. Detail: ${message}`,
-            retryable: false,
-          },
-        };
-      }
-
-      if (status === 426) {
-        return {
-          success: false,
-          error: {
-            code: 'LINKEDIN_VERSION_EXPIRED',
-            message: `LinkedIn API version ${LINKEDIN_API_VERSION} is no longer active. Update LINKEDIN_API_VERSION in linkedinAdapter.ts to a version released within the last 12 months. Detail: ${message}`,
             retryable: false,
           },
         };
@@ -326,6 +345,14 @@ export async function publishToLinkedIn(
 
     return {
       success: true,
+      // Synthetic fallback: LinkedIn answered 2xx (the post IS live) but
+      // returned neither an x-restli-id header nor an id in the body, so the
+      // real URN was never captured. A non-empty id is still stored because
+      // publishNowService uses platform_post_id as the re-publish guard —
+      // storing '' here would let the row publish a SECOND time. It is
+      // deliberately not URN-shaped, and linkedinReconciliation now refuses to
+      // look up a non-URN id rather than reporting the resulting 404 as
+      // 'no_match' (i.e. "deleted or never existed") about a live post.
       platform_post_id: platformPostId || `linkedin_${Date.now()}`,
       post_url: postUrl,
       published_at: new Date(),

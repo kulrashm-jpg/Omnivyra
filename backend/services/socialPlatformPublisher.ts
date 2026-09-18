@@ -6,9 +6,14 @@
  * with backend/adapters/platformAdapter.publishToPlatform() for all publish flows.
  * This module is kept for non-publish use (types, recordPerformance) only.
  * Do not call publishScheduledPost() or the internal publishToPlatform() for new code.
+ *
+ * INVARIANT: nothing in this module may report a publication it did not make.
+ * Every platform without a real HTTP call returns FAILED. A 'PUBLISHED' status
+ * from here is always backed by a provider response carrying the id, because
+ * publishScheduledPost() forwards that id to recordPerformance() as genuine
+ * platform_api performance data.
  */
 
-import { createHash } from 'crypto';
 import {
   getApiConfigByPlatform,
   getApiHealthByPlatform,
@@ -47,6 +52,21 @@ export type PublishResult = {
   message?: string;
 };
 
+/**
+ * What a per-platform publish helper returns. Declared explicitly because the
+ * helpers are a union of object literals: before the fabricating branches were
+ * replaced, every literal happened to carry either `external_post_id` or
+ * `error_message` plus the other as `?: undefined`, so TS could narrow the
+ * union. Adding an honest FAILED literal broke that inference and made
+ * `publishResult.external_post_id` a TS2339. An explicit type is the fix —
+ * not a cast at the read site, which would have hidden the same thing.
+ */
+type PlatformPublishOutcome = {
+  status: 'PUBLISHED' | 'FAILED';
+  external_post_id?: string;
+  error_message?: string;
+};
+
 const fetchJson = async (url: string, init: RequestInit) => {
   // HARDEN-005A: url is built from a DB-configured platform base_url — route
   // through the SSRF-safe fetcher. allowHttp for legacy endpoints; private-IP
@@ -62,7 +82,7 @@ const getAccessToken = (apiConfig: any) => {
   return process.env[apiConfig.api_key_name] || null;
 };
 
-const publishToFacebook = async (payload: any, apiConfig: any) => {
+const publishToFacebook = async (payload: any, apiConfig: any): Promise<PlatformPublishOutcome> => {
   const accessToken = getAccessToken(apiConfig);
   if (!accessToken) return { status: 'FAILED', error_message: 'Missing access token' };
   const base = apiConfig.base_url || '';
@@ -89,7 +109,7 @@ const publishToFacebook = async (payload: any, apiConfig: any) => {
   return { status: 'PUBLISHED', external_post_id: body?.id };
 };
 
-const publishToLinkedIn = async (payload: any, apiConfig: any) => {
+const publishToLinkedIn = async (payload: any, apiConfig: any): Promise<PlatformPublishOutcome> => {
   const accessToken = getAccessToken(apiConfig);
   if (!accessToken) return { status: 'FAILED', error_message: 'Missing access token' };
 
@@ -126,7 +146,7 @@ const publishToLinkedIn = async (payload: any, apiConfig: any) => {
   return { status: 'PUBLISHED', external_post_id: body?.id };
 };
 
-const publishToYouTube = async (payload: any, apiConfig: any) => {
+const publishToYouTube = async (payload: any, apiConfig: any): Promise<PlatformPublishOutcome> => {
   const accessToken = getAccessToken(apiConfig);
   if (!accessToken) return { status: 'FAILED', error_message: 'Missing access token' };
 
@@ -156,24 +176,57 @@ const publishToYouTube = async (payload: any, apiConfig: any) => {
   return { status: 'PUBLISHED', external_post_id: body?.id };
 };
 
-const publishToTwitter = async (payload: any, _apiConfig?: any) => {
+/**
+ * X/Twitter has NO implementation in this module.
+ *
+ * This used to return `status: 'PUBLISHED'` with `stub_twitter_<timestamp>`
+ * WITHOUT calling anything. publishScheduledPost treats any 'PUBLISHED' as a
+ * real publication: it reports PUBLISHED to its caller and feeds the invented
+ * id straight into recordPerformance(), which writes it as a platform_api
+ * performance row. Nothing was ever posted to X, and the fabricated id can
+ * never be reconciled against a real tweet.
+ *
+ * The module has zero production importers today (asserted by
+ * platformCapability.centralization.test.ts), so this was a latent hazard
+ * rather than an active one — but "dormant" is not a reason to keep a code
+ * path whose only behaviour is to lie about a publication. The canonical
+ * pipeline is the one that can publish to X: backend/adapters/xAdapter.ts via
+ * platformAdapter.publishToPlatform().
+ */
+const publishToTwitter = async (_payload: any, _apiConfig?: any): Promise<PlatformPublishOutcome> => {
   return {
-    status: 'PUBLISHED',
-    external_post_id: `stub_twitter_${Date.now()}`,
+    status: 'FAILED',
+    error_message:
+      'X/Twitter publishing is not implemented in this deprecated module. ' +
+      'Use publishNowService.publishNow() or the publish queue, which routes through ' +
+      'backend/adapters/xAdapter.ts.',
   };
 };
 
 /** @deprecated Use backend/adapters/platformAdapter.publishToPlatform() for publishing. */
-const publishToPlatform = async (platform: PublishPlatform, payload: any, apiConfig: any) => {
+const publishToPlatform = async (
+  platform: PublishPlatform,
+  payload: any,
+  apiConfig: any,
+): Promise<PlatformPublishOutcome> => {
   try {
     if (platform === 'facebook') return await publishToFacebook(payload, apiConfig);
     if (platform === 'linkedin') return await publishToLinkedIn(payload, apiConfig);
     if (platform === 'youtube') return await publishToYouTube(payload, apiConfig);
     if (platform === 'x') return await publishToTwitter(payload, apiConfig);
 
-    const raw = JSON.stringify({ platform, payload });
-    const external_post_id = `stub_${platform}_${createHash('sha256').update(raw).digest('hex').slice(0, 12)}`;
-    return { status: 'PUBLISHED', external_post_id };
+    // Any platform without a branch above is UNIMPLEMENTED here. This used to
+    // hash the payload into `stub_<platform>_<hash>` and return it as
+    // 'PUBLISHED' — so 'reddit' (the one member of PublishPlatform with no
+    // branch) and anything passed through a cast were reported as published,
+    // and the invented id was recorded as performance data, without a single
+    // network call. The canonical pipeline's equivalent branch throws
+    // `Unsupported platform: ${platform}` (backend/adapters/platformAdapter.ts);
+    // match that honesty here.
+    return {
+      status: 'FAILED',
+      error_message: `Unsupported platform: ${platform}. This deprecated module implements facebook, linkedin and youtube only.`,
+    };
   } catch (error: any) {
     return { status: 'FAILED', error_message: error?.message || 'Publish failed' };
   }

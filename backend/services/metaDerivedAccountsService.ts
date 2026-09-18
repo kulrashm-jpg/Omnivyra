@@ -378,3 +378,131 @@ export async function syncInstagramAndThreadsFromMeta(input: UpsertDerivedAccoun
     threadsAccounts,
   };
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Facebook Page target resolution
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * A Page this login can actually publish to: an id AND that Page's own token.
+ * Both are required — a Page id without its Page token is not a publishable
+ * target, it is just a number.
+ */
+export type FacebookPageCandidate = {
+  id: string;
+  name: string | null;
+  accessToken: string;
+};
+
+export type FacebookPageTargetResolution =
+  | { status: 'resolved'; page: FacebookPageCandidate; candidates: FacebookPageCandidate[] }
+  | { status: 'no_pages'; candidates: FacebookPageCandidate[] }
+  | { status: 'selection_required'; candidates: FacebookPageCandidate[] }
+  | { status: 'lookup_failed'; reason: string; candidates: FacebookPageCandidate[] };
+
+/**
+ * Resolve the Facebook Page a connection should publish to.
+ *
+ * WHY
+ * ---
+ * The Facebook OAuth callback stores `profile.id` from `GET /me` — the Facebook
+ * USER id — as `social_accounts.platform_user_id`, together with the USER
+ * token. Graph only accepts feed publishing at a PAGE node using that Page's
+ * own access token, so a connection that knows nothing but the user has no
+ * publishable target at all.
+ *
+ * The Pages, and their per-Page tokens, come from the SAME call this module
+ * already issues for the Instagram/Threads derivation —
+ * `GET /v22.0/me/accounts?fields=id,name,access_token` (see
+ * syncInstagramAndThreadsFromMeta above, and the identical shape in
+ * backend/adapters/facebookAdapter.ts). No new endpoint, parameter or field is
+ * introduced here.
+ *
+ * NEVER CONFLATE USER AND PAGE IDENTITY
+ * -------------------------------------
+ * `facebookUserId` is required and every candidate whose id equals it is
+ * discarded. A user id can therefore never leave this function as a Page id,
+ * whatever Graph returns.
+ *
+ * NO SILENT AUTO-PICK
+ * -------------------
+ * With more than one manageable Page and no Page already bound to the
+ * connection, this returns `selection_required` and NOTHING is chosen.
+ * Publishing to a destination nobody selected is the failure mode this exists
+ * to prevent. `currentPageId` is honoured when it is still in the list — that
+ * is re-binding a target the connection already had, not choosing a new one.
+ */
+export async function resolveFacebookPageTarget(input: {
+  accessToken: string;
+  facebookUserId: string;
+  currentPageId?: string | null;
+}): Promise<FacebookPageTargetResolution> {
+  const facebookUserId = String(input.facebookUserId ?? '').trim();
+  if (!facebookUserId) {
+    // Without the user id the conflation guard below cannot run, and a guard
+    // that silently does nothing is worse than no guard.
+    return { status: 'lookup_failed', reason: 'facebook user id missing', candidates: [] };
+  }
+
+  const params = new URLSearchParams({
+    fields: 'id,name,access_token',
+    access_token: input.accessToken,
+  });
+
+  let body: unknown;
+  try {
+    const response = await fetch(`https://graph.facebook.com/v22.0/me/accounts?${params}`);
+    const parsed = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message = (parsed as { error?: { message?: string } } | null)?.error?.message;
+      return {
+        status: 'lookup_failed',
+        reason: message ? String(message).slice(0, 200) : `me/accounts returned HTTP ${response.status}`,
+        candidates: [],
+      };
+    }
+    body = parsed;
+  } catch (error) {
+    return {
+      status: 'lookup_failed',
+      reason: String((error as { message?: string })?.message ?? error).slice(0, 200),
+      candidates: [],
+    };
+  }
+
+  const raw = Array.isArray((body as { data?: unknown } | null)?.data)
+    ? ((body as { data: MetaPage[] }).data)
+    : [];
+
+  const seen = new Set<string>();
+  const candidates: FacebookPageCandidate[] = [];
+  for (const page of raw) {
+    const id = String((page as MetaPage)?.id ?? '').trim();
+    const token = typeof (page as MetaPage)?.access_token === 'string'
+      ? String((page as MetaPage).access_token).trim()
+      : '';
+    // A Page with no Page token cannot be published to, and the Facebook USER
+    // node is not a Page however Graph lists it.
+    if (!id || !token || id === facebookUserId || seen.has(id)) continue;
+    seen.add(id);
+    candidates.push({
+      id,
+      name: typeof (page as MetaPage)?.name === 'string' ? String((page as MetaPage).name) : null,
+      accessToken: token,
+    });
+  }
+
+  if (candidates.length === 0) return { status: 'no_pages', candidates };
+
+  const currentPageId = String(input.currentPageId ?? '').trim();
+  if (currentPageId && currentPageId !== facebookUserId) {
+    const bound = candidates.find((page) => page.id === currentPageId);
+    // Re-bind the Page this connection is already pointed at, refreshing its
+    // token. This is not a choice — the choice was made previously.
+    if (bound) return { status: 'resolved', page: bound, candidates };
+  }
+
+  if (candidates.length === 1) return { status: 'resolved', page: candidates[0], candidates };
+
+  return { status: 'selection_required', candidates };
+}

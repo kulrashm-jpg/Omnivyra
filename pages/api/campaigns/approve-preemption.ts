@@ -50,6 +50,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
+    // WSF-ORD-001 — authenticate and bind the caller to `companyId` BEFORE the
+    // preemption request and the initiator campaign are looked up. Previously
+    // the first guard call sat AFTER the finalization check, so an anonymous
+    // caller holding a request id could (a) probe which request / campaign ids
+    // exist through the two 404s and (b) drive recordGovernanceEvent into
+    // inserting a governance event and upserting the governance projection
+    // under a `companyId` of its own choosing.
+    const companyAccess = await enforceCompanyAccess({ req, res, companyId });
+    if (!companyAccess) return;
+
     const { data: request, error: fetchError } = await supabase
       .from('campaign_preemption_requests')
       .select('id, initiator_campaign_id, status')
@@ -70,6 +80,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Initiator campaign not found' });
     }
 
+    // The campaign binding (initiator campaign ⇢ companyId) also moves ABOVE
+    // the finalization check: that check's BLOCKED branch is itself a
+    // governance write, so it must not run for a caller who has not been
+    // bound to the campaign. It stays below the request lookup because the
+    // request row is what names the campaign to bind.
+    const access = await enforceCompanyAccess({
+      req,
+      res,
+      companyId,
+      campaignId: request.initiator_campaign_id,
+      requireCampaignId: true,
+    });
+    if (!access) return;
+
     const initiatorExecutionStatus = normalizeExecutionState((initiatorCampaign as any).execution_status);
     try {
       assertCampaignNotFinalized(initiatorExecutionStatus);
@@ -89,15 +113,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       throw err;
     }
-
-    const access = await enforceCompanyAccess({
-      req,
-      res,
-      companyId,
-      campaignId: request.initiator_campaign_id,
-      requireCampaignId: true,
-    });
-    if (!access) return;
 
     const result = await executePreemptionFromRequest(requestId, justificationTrimmed, companyId);
 

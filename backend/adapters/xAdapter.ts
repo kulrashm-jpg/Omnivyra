@@ -28,7 +28,7 @@ import type { PublishResult } from './platformAdapterTypes';
 import { PipelineErrorCode } from '../../lib/shared/pipelineErrorCodes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
-import { uploadXMedia } from './xMedia';
+import { planXMediaComposition, uploadXMedia } from './xMedia';
 
 interface ScheduledPost {
   id: string;
@@ -115,10 +115,30 @@ export async function publishToX(
     }
 
     // Upload media first — v2 tweet-create only accepts already-uploaded
-    // media_ids. Best-effort: if the upload yields no ids (e.g. missing
-    // media.write scope, or a transient failure), fall back to a text-only
-    // tweet rather than failing the whole post.
+    // media_ids.
     if (post.media_urls && post.media_urls.length > 0) {
+      // P3-A composition pre-check. X publishes up to 4 images, OR one video,
+      // OR one GIF. xMedia used to satisfy those rules by discarding the
+      // surplus (mixed image+video dropped the video; a 6-image post dropped
+      // two) and still returned ids, so the honesty check below passed and a
+      // materially different post was published as a success. A combination X
+      // cannot accept is a refusal, and NOT retryable — a retry cannot change
+      // what X supports. Same code and shape as the Instagram carousel refusal.
+      const plan = planXMediaComposition(post.media_urls);
+      if (plan.ok === false) {
+        console.warn('⚠️ X media composition unsupported — refusing to publish:', plan.reason);
+        return {
+          success: false,
+          error: {
+            code: PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED,
+            message:
+              `${plan.reason} Publishing would have dropped media, so nothing was published. ` +
+              `Split it into separate posts, or reduce the media to what X accepts.`,
+            retryable: false,
+          },
+        };
+      }
+
       // P3-A — a post that ASKED for media must never be reported as a
       // successful text-only publication. Previously both the empty-ids case
       // and the thrown-error case fell through to a text-only tweet and
@@ -129,6 +149,10 @@ export async function publishToX(
       // typically transient (scope, rate limit, network), so the EXISTING
       // BullMQ retry/DLQ semantics should get another attempt. No new retry
       // mechanism is introduced.
+      //
+      // uploadXMedia is now all-or-nothing, so a PARTIAL upload (2 of 3 images
+      // succeeded) also arrives here as a throw rather than as a short id list
+      // that this function would have published as a complete success.
       let mediaIds: string[] = [];
       try {
         mediaIds = await uploadXMedia(post.media_urls, token);

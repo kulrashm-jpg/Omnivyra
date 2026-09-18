@@ -2,7 +2,7 @@
  * Instagram reconciliation lookup — REAL implementation.
  *
  * Calls Instagram Graph API:
- *   GET https://graph.facebook.com/v18.0/<ig-media-id>
+ *   GET https://graph.facebook.com/v22.0/<ig-media-id>
  *       ?fields=id,permalink,timestamp,owner,media_type
  *       &access_token=<token>
  *
@@ -17,6 +17,20 @@
  * typically the long-lived Page-scoped access token (since IG Business is
  * connected through a Facebook Page).
  *
+ * Graph API version: pinned to v22.0, the version every other Graph caller in
+ * this repo uses — including the Instagram publishing adapter itself, which
+ * creates and polls its media containers on v22.0. This module was left on
+ * v18.0 when the rest of the repo moved, so reconciliation was reading back on
+ * a different API version from the one that wrote the media id.
+ * backend/tests/unit/metaGraphApiVersionConsistency.test.ts now fails if any
+ * Graph caller drifts again.
+ *
+ * Endpoint compatibility was checked before the string was changed: this is a
+ * plain node read with a `fields` projection, the same call shape
+ * instagramAdapter already issues against v22.0
+ * (GET /v22.0/<container-id>?fields=status_code). The version alone implies no
+ * parameter, field or response-shape change, and none was made.
+ *
  * UNTESTED against real Instagram Graph API at code-ship time.
  */
 
@@ -27,7 +41,7 @@ import {
   type ReconciliationLookupResult,
 } from '../types';
 
-const GRAPH_BASE = 'https://graph.facebook.com/v18.0';
+const GRAPH_BASE = 'https://graph.facebook.com/v22.0';
 
 function unverifiable(diagnostic: string): ReconciliationLookupResult {
   return { confidence: 'unverifiable', diagnostic };

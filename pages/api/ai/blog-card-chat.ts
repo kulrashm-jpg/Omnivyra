@@ -7,6 +7,7 @@ import { validateAndModerateUserMessage } from '../../../backend/chatGovernance'
 import {
   buildChatSeedPromptBlock,
   chatSeedModerationText,
+  mergeChatSeedIntoCard,
   sanitizeChatSeed,
   type SuggestionChatSeed,
 } from '../../../lib/content/suggestionChatSeed';
@@ -492,9 +493,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (parsed.done && parsed.card) {
+      // The conversation REFINES the recommendation; it must not erase it.
+      // Whatever the chat settled wins; whatever it left empty falls back to
+      // the (already sanitized, already moderated) seed, and the original
+      // brief/angle survive in `reason` — the field the accepted-card brief
+      // carries into generation. No seed = the card the model returned.
       return res.status(200).json({
         done: true,
-        card: parsed.card,
+        card: mergeChatSeedIntoCard(parsed.card, seedSuggestion),
       });
     }
 

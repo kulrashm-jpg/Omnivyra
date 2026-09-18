@@ -2,7 +2,7 @@
  * Facebook reconciliation lookup — REAL implementation.
  *
  * Calls Facebook Graph API:
- *   GET https://graph.facebook.com/v18.0/<post-id>
+ *   GET https://graph.facebook.com/v22.0/<post-id>
  *       ?fields=id,permalink_url,created_time,from
  *       &access_token=<token>
  *
@@ -14,6 +14,26 @@
  *   5xx                  → unverifiable (transient)
  *
  * Token: page-scoped access token (since FB posts are owned by a Page).
+ *   `getToken(socialAccountId)` now delivers exactly that for Facebook rows:
+ *   the OAuth callback stores the resolved Page's own token as the row's
+ *   credential, alongside `linked_page_id` / `page_access_token`, instead of
+ *   the USER token it used to store. This line previously described an intent
+ *   the surrounding code could not satisfy; it now describes the contract.
+ *
+ * Graph API version: pinned to v22.0, the version every other Graph caller in
+ * this repo uses (adapters, connectors, OAuth callbacks, analytics and
+ * engagement ingestion). This module was left on v18.0 when the rest of the
+ * repo moved — the same silent-drift failure the LinkedIn version pin hit.
+ * backend/tests/unit/metaGraphApiVersionConsistency.test.ts now fails if any
+ * Graph caller drifts again.
+ *
+ * Endpoint compatibility was checked before the string was changed: this is a
+ * plain node read with a `fields` projection, the same call shape already
+ * issued against v22.0 elsewhere in the repo — GET /v22.0/<post-id>/comments
+ * (engagementIngestionService), GET /v22.0/<post-id>/insights
+ * (platformAnalyticsIngester) and GET /v22.0/<container-id>?fields=status_code
+ * (instagramAdapter). The version alone implies no parameter, field or
+ * response-shape change, and none was made.
  *
  * UNTESTED against real Facebook Graph API at code-ship time.
  */
@@ -25,7 +45,7 @@ import {
   type ReconciliationLookupResult,
 } from '../types';
 
-const GRAPH_BASE = 'https://graph.facebook.com/v18.0';
+const GRAPH_BASE = 'https://graph.facebook.com/v22.0';
 
 function unverifiable(diagnostic: string): ReconciliationLookupResult {
   return { confidence: 'unverifiable', diagnostic };

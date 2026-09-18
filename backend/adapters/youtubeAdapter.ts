@@ -64,6 +64,91 @@ interface Token {
   token_type?: string;
 }
 
+/**
+ * Turn a YouTube response that axios did NOT throw on into an error that still
+ * carries the provider status.
+ *
+ * The resumable-upload calls pass `validateStatus: () => true`, so axios never
+ * throws and a failure was re-raised as a bare `new Error(message)`. That error
+ * has no `.response`, and publishToYouTube classifies purely on
+ * `error.response?.status` — so EVERY upload-path failure, including 401 auth,
+ * 403 quota and 400 validation, collapsed into YOUTUBE_API_ERROR with
+ * retryable: true. A revoked token was retried forever, and a quota exhaustion
+ * could never reach its own branch.
+ */
+function youTubeResponseError(
+  response: { status: number; data?: any },
+  fallback: string,
+): Error {
+  const error = new Error(response.data?.error?.message || fallback) as Error & {
+    response?: { status: number; data?: any };
+  };
+  error.response = { status: response.status, data: response.data };
+  return error;
+}
+
+/**
+ * Is this a YouTube Data API quota rejection?
+ *
+ * YouTube reports quota exhaustion as HTTP 403 carrying
+ * `error.errors[].reason = 'quotaExceeded'` — the literal this adapter already
+ * checked for. Matching /quota/i over the reported reasons is a superset of
+ * that same literal; no reason string this repo has no evidence for is guessed
+ * at here.
+ */
+function isYouTubeQuotaError(error: any): boolean {
+  if (error?.response?.status !== 403) return false;
+  const reasons = error?.response?.data?.error?.errors;
+  if (!Array.isArray(reasons)) return false;
+  return reasons.some((entry: any) => /quota/i.test(String(entry?.reason ?? '')));
+}
+
+/**
+ * YouTube watch hosts. Deliberately an explicit allow list with no
+ * bare-domain/subdomain matching, mirroring PLATFORM_VIDEO_HOSTS and
+ * hostMatchesPlatform() in backend/services/mediaUploadValidationService.ts —
+ * the service that already recognises a platform link in media_urls, and that
+ * documents the same "only trust an explicit allow list to avoid false
+ * positives" rule.
+ *
+ * youtu.be is intentionally NOT here: it carries the id in the path, not in a
+ * `v` parameter, so it needs a different extraction than this branch performs.
+ * A youtu.be link therefore still takes the upload path (and fails there),
+ * exactly as it did before — no behaviour is changed for it either way.
+ */
+const YOUTUBE_WATCH_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com']);
+
+/**
+ * Is media_urls[0] a link to a video that is ALREADY on YouTube (so the publish
+ * is a metadata update), or a video file to upload?
+ *
+ * This was `videoUrl.match(/[?&]v=([^&]+)/)` — the presence of a `v=` query
+ * parameter ANYWHERE in the URL, with no check that the URL is a YouTube URL at
+ * all. Its own comment said "Extract video ID from YouTube URL" while doing no
+ * such thing. A perfectly ordinary cache-busted or versioned media file
+ * (`https://cdn.example.com/clip.mp4?v=3`) therefore matched, and instead of
+ * being uploaded it was treated as YouTube video id "3": the adapter PUT the
+ * post's title, description and privacyStatus at a video the channel does not
+ * own. The real video was never uploaded, and the row died with
+ * YOUTUBE_PERMISSION_DENIED ("Check that you have youtube.upload scope"),
+ * naming a scope that was never the problem.
+ *
+ * That query strings on media URLs are ordinary here is not hypothetical: the
+ * Instagram adapter carries an incident note about `…/clip.mp4?token=…`, and
+ * xMedia's type regexes are all terminated `(?|#|$)` for the same reason.
+ */
+export function extractExistingYouTubeVideoId(mediaUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(String(mediaUrl ?? ''));
+  } catch {
+    return null;
+  }
+  if (!YOUTUBE_WATCH_HOSTS.has(parsed.hostname.toLowerCase())) return null;
+  const id = (parsed.searchParams.get('v') ?? '').trim();
+  return id.length > 0 ? id : null;
+}
+
 async function downloadRemoteVideo(videoUrl: string): Promise<{
   buffer: Buffer;
   contentType: string;
@@ -181,7 +266,7 @@ async function uploadVideoToYouTube(
 
   const uploadUrl = initiateResponse.headers.location as string | undefined;
   if (!uploadUrl) {
-    throw new Error(initiateResponse.data?.error?.message || 'Failed to initialize YouTube upload session');
+    throw youTubeResponseError(initiateResponse, 'Failed to initialize YouTube upload session');
   }
 
   // ssrf-ok: uploadUrl returned by the YouTube resumable-upload API (trusted platform response)
@@ -197,7 +282,7 @@ async function uploadVideoToYouTube(
   });
 
   if (uploadResponse.status < 200 || uploadResponse.status >= 300 || !uploadResponse.data?.id) {
-    throw new Error(uploadResponse.data?.error?.message || 'YouTube upload failed');
+    throw youTubeResponseError(uploadResponse, 'YouTube upload failed');
   }
 
   return String(uploadResponse.data.id);
@@ -352,11 +437,12 @@ export async function publishToYouTube(
 
     // Simplified approach: If video is already on YouTube (by URL/id), just update metadata
     const videoUrl = post.media_urls[0];
-    const youtubeVideoIdMatch = videoUrl.match(/[?&]v=([^&]+)/); // Extract video ID from YouTube URL
-    
-    if (youtubeVideoIdMatch) {
+    // Only a genuine YouTube watch URL means "already on YouTube" — see
+    // extractExistingYouTubeVideoId for what a bare `v=` match cost.
+    const existingVideoId = extractExistingYouTubeVideoId(videoUrl);
+
+    if (existingVideoId) {
       // Video already exists on YouTube, just update metadata
-      const existingVideoId = youtubeVideoIdMatch[1];
       
       const updateUrl = 'https://www.googleapis.com/youtube/v3/videos';
       await axios.put(updateUrl, {
@@ -425,6 +511,24 @@ export async function publishToYouTube(
       };
     }
 
+    // Quota is checked BEFORE the generic 403. YouTube reports quota
+    // exhaustion as a 403, so the generic branch below used to return first and
+    // the quota branch that came after it was unreachable dead code. The
+    // consequences were both wrong: a temporary, self-healing condition was
+    // reported as a permanent permission failure with retryable: false, and the
+    // message sent the operator to check the youtube.upload scope when no scope
+    // was missing.
+    if (isYouTubeQuotaError(error)) {
+      return {
+        success: false,
+        error: {
+          code: 'YOUTUBE_QUOTA_EXCEEDED',
+          message: 'YouTube API quota exceeded. The daily quota resets at midnight Pacific Time; retry after that, or request a quota increase.',
+          retryable: true,
+        },
+      };
+    }
+
     if (error.response?.status === 403) {
       const errorData = error.response?.data?.error || {};
       return {
@@ -443,18 +547,6 @@ export async function publishToYouTube(
         error: {
           code: 'YOUTUBE_RATE_LIMIT',
           message: 'Rate limit exceeded. Please try again later.',
-          retryable: true,
-        },
-      };
-    }
-
-    // Handle quota errors
-    if (error.response?.status === 403 && error.response?.data?.error?.errors?.[0]?.reason === 'quotaExceeded') {
-      return {
-        success: false,
-        error: {
-          code: 'YOUTUBE_QUOTA_EXCEEDED',
-          message: 'YouTube API quota exceeded. Please try again tomorrow or upgrade your quota.',
           retryable: true,
         },
       };

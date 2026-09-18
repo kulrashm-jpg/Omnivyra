@@ -36,255 +36,290 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Scheduled post not found' });
     }
 
-    // NB: creator asset re-resolution + media-snapshot refresh now happens inside
-    // publishNow() (the shared async-worker path), so it covers this sync publish-now
-    // call AND the cron/queue workers from one place — no duplication here.
-
-    const capability = resolveEngagementCapability(post.platform, 'post_create');
-    if (capability.status !== 'api_verified') {
-      void logAuditEvent({
-        operation: 'INSERT',
-        table: 'social_publish_rejected',
-        companyId: post.user_id ?? 'unknown',
-        userId: user.id,
-        success: false,
-        errorMessage: capability.reason ?? 'Unsupported action',
-        metadata: {
-          platform: post.platform,
-          action: 'post_create',
-          code: 'ACTION_NOT_SUPPORTED',
-          post_id,
-        },
-      }).catch(() => {});
-      return res.status(400).json({
-        error: capability.reason ?? `Publishing is not supported on ${post.platform}.`,
-        code: 'ACTION_NOT_SUPPORTED',
-        platform: post.platform,
-        action: 'post_create',
-      });
-    }
-
-    // Hard validation: platform × content-capability compatibility. Runs
-    // before account resolution so we never trigger a refresh / DB write on
-    // a publish that will be rejected (e.g. Instagram + text-only post).
-    // Centralized publish-readiness gate (Round-3 item 1+7). Composes the
-    // registry validator + adapter-reality enforcement (LinkedIn/X media
-    // strip, Threads no-path, TikTok finalize guard) + canonical state —
-    // no duplicate validation logic. Mode-gated via PUBLISH_GUARD_MODE.
-    // skipSchedulingReadiness: this is a manual publish-now, so we gate on
-    // capability/adapter-reality/media, not on canonical scheduling state.
-    const readiness = validatePublishReadiness({
-      platform: post.platform,
-      contentSignals: { contentType: post.content_type },
-      hasText: !!(post.content && post.content.trim().length > 0),
-      mediaUrls: post.media_urls ?? [],
-      skipSchedulingReadiness: true,
-    });
-    if (readiness.ok === false) {
-      void logAuditEvent({
-        operation: 'INSERT',
-        table: 'social_publish_rejected',
-        companyId: post.user_id ?? 'unknown',
-        userId: user.id,
-        success: false,
-        errorMessage: readiness.message,
-        metadata: {
-          platform: (readiness.context?.platform as string) ?? post.platform,
-          code: readiness.code,
-          post_id,
-        },
-      }).catch(() => {});
-      // Preserve the existing 400 response shape (error/code/platform);
-      // `capability` retained for back-compat when present in context.
-      return res.status(400).json({
-        error: readiness.message,
-        code: readiness.code,
-        platform: (readiness.context?.platform as string) ?? post.platform,
-        capability: (readiness.context?.capability as string) ?? null,
-      });
-    }
-    // Non-fatal warnings (e.g. TIKTOK_FINALIZE_UNCONFIRMED) surfaced
-    // separately — already throttle-logged inside the validator.
-    const publishWarnings = readiness.warnings.map((w) => ({ code: w.code, message: w.message }));
-
-    // Asset accessibility — catch expired signed URLs before the adapter
-    // (flag-gated; default on). Best-effort; only a confirmed dead asset blocks.
-    if (
-      String(process.env.PUBLISH_MEDIA_ACCESSIBILITY_CHECK ?? '1') !== '0' &&
-      Array.isArray(post.media_urls) && post.media_urls.length > 0
-    ) {
-      const dead = await assertMediaAccessible(post.media_urls);
-      if (dead) {
-        void logAuditEvent({
-          operation: 'INSERT', table: 'social_publish_rejected',
-          companyId: post.user_id ?? 'unknown', userId: user.id, success: false,
-          errorMessage: dead.message,
-          metadata: { code: dead.code, post_id, platform: post.platform },
-        }).catch(() => {});
-        return res.status(400).json({ error: dead.message, code: dead.code, platform: post.platform });
-      }
-    }
-
-    // Allow: post owner OR super-admin
+    // ── WSF-ORD-006 — ownership FIRST, before any side effect ───────────────
+    //
+    // This check (post owner OR super-admin) used to sit below the capability,
+    // readiness and media-accessibility gates. Everything above it was
+    // therefore reachable by ANY authenticated user for ANY post id:
+    //
+    //   - three rejection paths called logAuditEvent, inserting audit rows
+    //     stamped companyId: post.user_id — i.e. a non-owner could write audit
+    //     rows attributed to the post's owner (auditLoggingService.ts:117);
+    //   - assertMediaAccessible issued outbound safeFetch probes against
+    //     another tenant's media URLs (publishReadinessValidator.ts:311),
+    //     turning the route into a request-forwarding primitive driven by data
+    //     the caller does not own;
+    //   - the 400 bodies disclosed the post's platform and rejection reason.
+    //
+    // Nothing above needs the ownership answer, so the check simply moves up.
+    // The R6-B authorization below still runs AFTER ownership, exactly as its
+    // own comment requires.
     const superAdmin = await isSuperAdmin(user.id);
     if (!superAdmin && post.user_id !== user.id) {
       return res.status(403).json({ error: 'Forbidden: you do not own this post' });
     }
+    // WSF-ORD-006 — the publish attempt, and ONLY the publish attempt, is
+    // what may mark this post FAILED. Its failure handler used to be the
+    // handler-wide catch{}, which also covered the scheduled-post lookup and
+    // the ownership check above it — so an exception raised before ownership
+    // was settled could stamp status=FAILED onto a post the caller does not
+    // own, keyed by nothing but the request body. Scoping the handler to the
+    // region below the ownership check makes that structurally impossible
+    // while preserving the behaviour for every error that can occur inside
+    // it (the 500 body is unchanged).
+    try {
+      // NB: creator asset re-resolution + media-snapshot refresh now happens inside
+      // publishNow() (the shared async-worker path), so it covers this sync publish-now
+      // call AND the cron/queue workers from one place — no duplication here.
 
-    // ── R6-B — publish authorization, converged with the scheduled path ─────
-    //
-    // Ownership (above) answers "is this your post". This answers "may this
-    // post be published at all" — the question the canonical queue path has
-    // always asked and this route never did. Before R6-B it validated
-    // capability and media but read neither `status` nor `campaign_id`, so a
-    // campaign post could be published straight past the release decision the
-    // CMO made in the planner (P1/B1).
-    //
-    // The predicate is REUSED, not reproduced: authorizePostPublish already
-    // encodes the campaign-linked vs standalone split — a post with no
-    // campaign_id skips the campaign gate by design, so standalone publishing
-    // keeps working (PromotionWorkspace and the multi-platform scheduler both
-    // stage `status='scheduled'`, `campaign_id=null` rows, which stay
-    // authorized). `failed` remains releasable so manual retry still works.
-    //
-    // ORDER: after ownership, so a non-owner still gets the plain 403 and
-    // learns nothing about campaign or release state; and before the
-    // social-account patch below, so a denied request performs no write.
-    //
-    // Idempotency precedes authorization, exactly as it does in
-    // publishProcessor (its Step-2 platform_post_id short-circuit runs before
-    // Step-3 authorization): an already-published single-row post keeps its
-    // existing idempotent 200 rather than being re-judged by a release gate it
-    // has legitimately moved past. Thread roots are excluded from that skip —
-    // publishNow's own short-circuit exempts them too, because a published
-    // root may still have unpublished children.
-    const alreadyPublishedSingleRow =
-      typeof post.platform_post_id === 'string' &&
-      post.platform_post_id.trim().length > 0 &&
-      post.is_thread_start !== true;
-
-    if (!alreadyPublishedSingleRow) {
-      // Same lookup semantics as publishProcessor.ts: a missing or unreadable
-      // campaign leaves the status null ⇒ not active ⇒ denied. Fail closed.
-      let campaignStatus: string | null = null;
-      if (post.campaign_id) {
-        const { data: campaignRow, error: campaignError } = await supabase
-          .from('campaigns')
-          .select('status')
-          .eq('id', post.campaign_id)
-          .single();
-        campaignStatus =
-          campaignError || !campaignRow ? null : ((campaignRow as { status?: string }).status ?? null);
-      }
-
-      const authorization = authorizePostPublish({
-        campaign_id: post.campaign_id,
-        campaign_status: campaignStatus,
-        post_status: (post as { status?: string | null }).status ?? null,
-        // Handled by the short-circuit above; passing it here would
-        // double-report the same condition (mirrors publishProcessor).
-        platform_post_id: null,
-        is_thread_start: post.is_thread_start === true,
-        has_content: Boolean(post.content && String(post.content).trim().length > 0),
-      });
-
-      if (!authorization.authorized) {
+      const capability = resolveEngagementCapability(post.platform, 'post_create');
+      if (capability.status !== 'api_verified') {
         void logAuditEvent({
           operation: 'INSERT',
           table: 'social_publish_rejected',
           companyId: post.user_id ?? 'unknown',
           userId: user.id,
           success: false,
-          errorMessage: authorization.reason,
+          errorMessage: capability.reason ?? 'Unsupported action',
           metadata: {
             platform: post.platform,
-            code: authorization.code,
+            action: 'post_create',
+            code: 'ACTION_NOT_SUPPORTED',
             post_id,
-            campaign_id: post.campaign_id ?? null,
           },
         }).catch(() => {});
-        return res.status(409).json({
-          error: authorization.reason,
-          code: authorization.code,
+        return res.status(400).json({
+          error: capability.reason ?? `Publishing is not supported on ${post.platform}.`,
+          code: 'ACTION_NOT_SUPPORTED',
+          platform: post.platform,
+          action: 'post_create',
         });
       }
-    }
 
-    // Resolve social_account_id — fall back to user's connected account for this platform
-    let socialAccountId: string | null = post.social_account_id || null;
-    if (!socialAccountId) {
-      const platformNorm = post.platform === 'x' ? 'twitter' : post.platform;
-      const { data: acct } = await supabase
-        .from('social_accounts')
-        .select('id')
-        .eq('user_id', post.user_id)
-        .eq('is_active', true)
-        .in('platform', [post.platform, platformNorm])
-        .limit(1)
-        .maybeSingle();
-      socialAccountId = acct?.id ?? null;
-    }
-
-    if (!socialAccountId) {
-      return res.status(422).json({
-        error: `No connected ${post.platform} account found. Please connect your account in Settings → Social Accounts.`,
-      });
-    }
-
-    // Patch the post row with the resolved account so publishNow and future jobs use it
-    if (!post.social_account_id) {
-      await supabase
-        .from('scheduled_posts')
-        .update({ social_account_id: socialAccountId })
-        .eq('id', post.id);
-    }
-
-    if (dry_run) {
-      return res.status(200).json({
-        status: 'DRY_RUN',
+      // Hard validation: platform × content-capability compatibility. Runs
+      // before account resolution so we never trigger a refresh / DB write on
+      // a publish that will be rejected (e.g. Instagram + text-only post).
+      // Centralized publish-readiness gate (Round-3 item 1+7). Composes the
+      // registry validator + adapter-reality enforcement (LinkedIn/X media
+      // strip, Threads no-path, TikTok finalize guard) + canonical state —
+      // no duplicate validation logic. Mode-gated via PUBLISH_GUARD_MODE.
+      // skipSchedulingReadiness: this is a manual publish-now, so we gate on
+      // capability/adapter-reality/media, not on canonical scheduling state.
+      const readiness = validatePublishReadiness({
         platform: post.platform,
-        social_account_id: socialAccountId,
-        payload_preview: {
+        contentSignals: { contentType: post.content_type },
+        hasText: !!(post.content && post.content.trim().length > 0),
+        mediaUrls: post.media_urls ?? [],
+        skipSchedulingReadiness: true,
+      });
+      if (readiness.ok === false) {
+        void logAuditEvent({
+          operation: 'INSERT',
+          table: 'social_publish_rejected',
+          companyId: post.user_id ?? 'unknown',
+          userId: user.id,
+          success: false,
+          errorMessage: readiness.message,
+          metadata: {
+            platform: (readiness.context?.platform as string) ?? post.platform,
+            code: readiness.code,
+            post_id,
+          },
+        }).catch(() => {});
+        // Preserve the existing 400 response shape (error/code/platform);
+        // `capability` retained for back-compat when present in context.
+        return res.status(400).json({
+          error: readiness.message,
+          code: readiness.code,
+          platform: (readiness.context?.platform as string) ?? post.platform,
+          capability: (readiness.context?.capability as string) ?? null,
+        });
+      }
+      // Non-fatal warnings (e.g. TIKTOK_FINALIZE_UNCONFIRMED) surfaced
+      // separately — already throttle-logged inside the validator.
+      const publishWarnings = readiness.warnings.map((w) => ({ code: w.code, message: w.message }));
+
+      // Asset accessibility — catch expired signed URLs before the adapter
+      // (flag-gated; default on). Best-effort; only a confirmed dead asset blocks.
+      if (
+        String(process.env.PUBLISH_MEDIA_ACCESSIBILITY_CHECK ?? '1') !== '0' &&
+        Array.isArray(post.media_urls) && post.media_urls.length > 0
+      ) {
+        const dead = await assertMediaAccessible(post.media_urls);
+        if (dead) {
+          void logAuditEvent({
+            operation: 'INSERT', table: 'social_publish_rejected',
+            companyId: post.user_id ?? 'unknown', userId: user.id, success: false,
+            errorMessage: dead.message,
+            metadata: { code: dead.code, post_id, platform: post.platform },
+          }).catch(() => {});
+          return res.status(400).json({ error: dead.message, code: dead.code, platform: post.platform });
+        }
+      }
+
+      // ── R6-B — publish authorization, converged with the scheduled path ─────
+      //
+      // Ownership (above) answers "is this your post". This answers "may this
+      // post be published at all" — the question the canonical queue path has
+      // always asked and this route never did. Before R6-B it validated
+      // capability and media but read neither `status` nor `campaign_id`, so a
+      // campaign post could be published straight past the release decision the
+      // CMO made in the planner (P1/B1).
+      //
+      // The predicate is REUSED, not reproduced: authorizePostPublish already
+      // encodes the campaign-linked vs standalone split — a post with no
+      // campaign_id skips the campaign gate by design, so standalone publishing
+      // keeps working (PromotionWorkspace and the multi-platform scheduler both
+      // stage `status='scheduled'`, `campaign_id=null` rows, which stay
+      // authorized). `failed` remains releasable so manual retry still works.
+      //
+      // ORDER: after ownership, so a non-owner still gets the plain 403 and
+      // learns nothing about campaign or release state; and before the
+      // social-account patch below, so a denied request performs no write.
+      //
+      // Idempotency precedes authorization, exactly as it does in
+      // publishProcessor (its Step-2 platform_post_id short-circuit runs before
+      // Step-3 authorization): an already-published single-row post keeps its
+      // existing idempotent 200 rather than being re-judged by a release gate it
+      // has legitimately moved past. Thread roots are excluded from that skip —
+      // publishNow's own short-circuit exempts them too, because a published
+      // root may still have unpublished children.
+      const alreadyPublishedSingleRow =
+        typeof post.platform_post_id === 'string' &&
+        post.platform_post_id.trim().length > 0 &&
+        post.is_thread_start !== true;
+
+      if (!alreadyPublishedSingleRow) {
+        // Same lookup semantics as publishProcessor.ts: a missing or unreadable
+        // campaign leaves the status null ⇒ not active ⇒ denied. Fail closed.
+        let campaignStatus: string | null = null;
+        if (post.campaign_id) {
+          const { data: campaignRow, error: campaignError } = await supabase
+            .from('campaigns')
+            .select('status')
+            .eq('id', post.campaign_id)
+            .single();
+          campaignStatus =
+            campaignError || !campaignRow ? null : ((campaignRow as { status?: string }).status ?? null);
+        }
+
+        const authorization = authorizePostPublish({
+          campaign_id: post.campaign_id,
+          campaign_status: campaignStatus,
+          post_status: (post as { status?: string | null }).status ?? null,
+          // Handled by the short-circuit above; passing it here would
+          // double-report the same condition (mirrors publishProcessor).
+          platform_post_id: null,
+          is_thread_start: post.is_thread_start === true,
+          has_content: Boolean(post.content && String(post.content).trim().length > 0),
+        });
+
+        if (!authorization.authorized) {
+          void logAuditEvent({
+            operation: 'INSERT',
+            table: 'social_publish_rejected',
+            companyId: post.user_id ?? 'unknown',
+            userId: user.id,
+            success: false,
+            errorMessage: authorization.reason,
+            metadata: {
+              platform: post.platform,
+              code: authorization.code,
+              post_id,
+              campaign_id: post.campaign_id ?? null,
+            },
+          }).catch(() => {});
+          return res.status(409).json({
+            error: authorization.reason,
+            code: authorization.code,
+          });
+        }
+      }
+
+      // Resolve social_account_id — fall back to user's connected account for this platform
+      let socialAccountId: string | null = post.social_account_id || null;
+      if (!socialAccountId) {
+        const platformNorm = post.platform === 'x' ? 'twitter' : post.platform;
+        const { data: acct } = await supabase
+          .from('social_accounts')
+          .select('id')
+          .eq('user_id', post.user_id)
+          .eq('is_active', true)
+          .in('platform', [post.platform, platformNorm])
+          .limit(1)
+          .maybeSingle();
+        socialAccountId = acct?.id ?? null;
+      }
+
+      if (!socialAccountId) {
+        return res.status(422).json({
+          error: `No connected ${post.platform} account found. Please connect your account in Settings → Social Accounts.`,
+        });
+      }
+
+      // Patch the post row with the resolved account so publishNow and future jobs use it
+      if (!post.social_account_id) {
+        await supabase
+          .from('scheduled_posts')
+          .update({ social_account_id: socialAccountId })
+          .eq('id', post.id);
+      }
+
+      if (dry_run) {
+        return res.status(200).json({
+          status: 'DRY_RUN',
           platform: post.platform,
-          content: post.content?.slice(0, 200),
-          scheduled_time: post.scheduled_for,
-        },
-        timestamp: new Date().toISOString(),
+          social_account_id: socialAccountId,
+          payload_preview: {
+            platform: post.platform,
+            content: post.content?.slice(0, 200),
+            scheduled_time: post.scheduled_for,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const result = await publishNow({
+        scheduled_post_id: post.id,
+        social_account_id: socialAccountId,
+        user_id: post.user_id,
+      });
+
+      await updatePostPublishStatus({
+        post_id: post.id,
+        status: result.status,
+        external_post_id: result.external_post_id,
+        last_error: result.status === 'PUBLISHED' ? undefined : result.message,
+      });
+
+      return res.status(200).json({
+        status: result.status,
+        platform: post.platform,
+        external_post_id: result.external_post_id,
+        post_url: result.post_url,
+        message: result.message,
+        timestamp: result.timestamp,
+        // additive — non-fatal publish-readiness warnings (back-compat safe)
+        ...(publishWarnings.length > 0 ? { warnings: publishWarnings } : {}),
+      });
+    } catch (error: any) {
+      console.error('[publish] error:', error);
+      try {
+        await updatePostPublishStatus({
+          post_id,
+          status: 'FAILED',
+          last_error: error?.message || 'Publish failed',
+        });
+      } catch (_) {}
+      return res.status(500).json({
+        error: error?.message || 'Failed to publish scheduled post',
       });
     }
-
-    const result = await publishNow({
-      scheduled_post_id: post.id,
-      social_account_id: socialAccountId,
-      user_id: post.user_id,
-    });
-
-    await updatePostPublishStatus({
-      post_id: post.id,
-      status: result.status,
-      external_post_id: result.external_post_id,
-      last_error: result.status === 'PUBLISHED' ? undefined : result.message,
-    });
-
-    return res.status(200).json({
-      status: result.status,
-      platform: post.platform,
-      external_post_id: result.external_post_id,
-      post_url: result.post_url,
-      message: result.message,
-      timestamp: result.timestamp,
-      // additive — non-fatal publish-readiness warnings (back-compat safe)
-      ...(publishWarnings.length > 0 ? { warnings: publishWarnings } : {}),
-    });
   } catch (error: any) {
+    // Only the scheduled-post lookup and the ownership check can reach here,
+    // and at that point the caller is not yet known to own `post_id` — so this
+    // handler reports the failure and writes nothing.
     console.error('[publish] error:', error);
-    try {
-      await updatePostPublishStatus({
-        post_id,
-        status: 'FAILED',
-        last_error: error?.message || 'Publish failed',
-      });
-    } catch (_) {}
     return res.status(500).json({ error: error?.message || 'Failed to publish scheduled post' });
   }
 }

@@ -63,6 +63,42 @@ export async function recordSuggestionShown(input: AiSuggestionInput): Promise<A
 }
 
 /**
+ * WSF-ORD-004 — resolve the OWNING TENANT of a suggestion so a caller can be
+ * authorized against it before recordSuggestionAccepted/Rejected mutate it.
+ *
+ * Returns the organization_id, or null when no suggestion matches. Nothing
+ * else about the row is returned, so this stays a tenant-resolution read and
+ * leaks no suggestion content across tenants. Unlike the record* helpers this
+ * one distinguishes "not found" from "lookup failed": a transient failure must
+ * never be read as "no owner, therefore allow", so it also returns null and
+ * the caller denies.
+ */
+export async function getSuggestionOrganizationId(input: {
+  suggestion_id?: string;
+  correlation_id?: string;
+}): Promise<string | null> {
+  try {
+    let q = ownedDbTable('ai_suggestions').select('organization_id');
+    if (input.suggestion_id) {
+      q = q.eq('id', input.suggestion_id);
+    } else if (input.correlation_id) {
+      q = q.eq('execution_correlation_id', input.correlation_id);
+    } else {
+      return null;
+    }
+    const { data, error } = await q.limit(1).maybeSingle();
+    if (error || !data) {
+      if (error) console.warn('[aiSuggestionTracking] owner lookup failed:', error.message);
+      return null;
+    }
+    return (data as { organization_id?: string | null }).organization_id ?? null;
+  } catch (err: any) {
+    console.warn('[aiSuggestionTracking] owner lookup exception:', err?.message || err);
+    return null;
+  }
+}
+
+/**
  * Mark a suggestion accepted. Idempotent: the unique (accepted_at XOR
  * rejected_at) CHECK allows at most one outcome per row; the UPDATE only
  * sets accepted_at when no outcome is already recorded.
@@ -75,6 +111,11 @@ export async function recordSuggestionAccepted(input: {
   suggestion_id?: string;
   correlation_id?: string;
   action_id?: string | null;
+  /** WSF-ORD-004 — the tenant the caller was authorized against. When given it
+   *  is carried into the UPDATE's predicate, so the write can only ever land on
+   *  a row of that tenant: the authorization and the mutation are one
+   *  statement, not a check followed by an unscoped act. */
+  organization_id?: string | null;
 }): Promise<boolean> {
   const now = new Date().toISOString();
   try {
@@ -86,6 +127,7 @@ export async function recordSuggestionAccepted(input: {
       })
       .is('accepted_at', null)
       .is('rejected_at', null);
+    if (input.organization_id) q = q.eq('organization_id', input.organization_id);
     if (input.suggestion_id) {
       q = q.eq('id', input.suggestion_id);
     } else if (input.correlation_id) {
@@ -109,6 +151,9 @@ export async function recordSuggestionRejected(input: {
   suggestion_id?: string;
   correlation_id?: string;
   reason?: string;
+  /** WSF-ORD-004 — see recordSuggestionAccepted: the authorized tenant is part
+   *  of the UPDATE's predicate, not a separate earlier check. */
+  organization_id?: string | null;
 }): Promise<boolean> {
   const now = new Date().toISOString();
   try {
@@ -120,6 +165,7 @@ export async function recordSuggestionRejected(input: {
       })
       .is('accepted_at', null)
       .is('rejected_at', null);
+    if (input.organization_id) q = q.eq('organization_id', input.organization_id);
     if (input.suggestion_id) {
       q = q.eq('id', input.suggestion_id);
     } else if (input.correlation_id) {

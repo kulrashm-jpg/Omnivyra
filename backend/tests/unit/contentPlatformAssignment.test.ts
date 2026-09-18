@@ -45,9 +45,13 @@ describe('6G-1 — getSupportedPlatformsForFormat (derived)', () => {
   test('tweet → x only (FORMAT_EXCLUSIVE intersected with capability)', () => {
     expect(getSupportedPlatformsForFormat('tweet')).toEqual(['x']);
   });
-  test('carousel → linkedin/facebook/instagram/pinterest, NOT youtube', () => {
+  test('carousel → linkedin/facebook/pinterest, NOT youtube, x or instagram', () => {
+    // Instagram dropped 'carousel' by owner decision 2026-09-18 — no carousel
+    // container flow exists in instagramAdapter, so planning the pair only
+    // produced rows that failed at publish.
     const p = getSupportedPlatformsForFormat('carousel');
-    expect(p).toEqual(expect.arrayContaining(['linkedin', 'facebook', 'instagram', 'pinterest']));
+    expect(p).toEqual(expect.arrayContaining(['linkedin', 'facebook', 'pinterest']));
+    expect(p).not.toContain('instagram');
     expect(p).not.toContain('youtube');
     expect(p).not.toContain('x');
   });
@@ -83,6 +87,16 @@ describe('6G-1 — filterPlatformsForFormat: never expands eligibility, preserve
     expect(filterPlatformsForFormat(['linkedin', 'youtube'], 'podcast')).toEqual([]);
   });
   test('valid-only input is returned unchanged (in order)', () => {
-    expect(filterPlatformsForFormat(['linkedin', 'instagram'], 'carousel')).toEqual(['linkedin', 'instagram']);
+    // Instagram is no longer carousel-valid, so the "all valid" pair for this
+    // ordering check is linkedin + facebook. Order preservation is what is
+    // under test here, not the membership itself.
+    expect(filterPlatformsForFormat(['linkedin', 'facebook'], 'carousel')).toEqual(['linkedin', 'facebook']);
+  });
+
+  test('an invalid entry is dropped and the rest keep their order', () => {
+    expect(filterPlatformsForFormat(['linkedin', 'instagram', 'facebook'], 'carousel')).toEqual([
+      'linkedin',
+      'facebook',
+    ]);
   });
 });
