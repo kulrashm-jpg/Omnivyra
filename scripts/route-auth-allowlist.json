@@ -874,14 +874,6 @@
     "Remove the entry in the same change that fixes the route. Adding an entry requires security review."
   ],
   "knownOpen": {
-    "pages/api/campaigns/approve-preemption.ts": {
-      "finding": "WSF-ORD-001",
-      "owner": "ROUTE-ORDER-REMEDIATION (post-WS-F)",
-      "rules": [
-        "R5-ORDER"
-      ],
-      "reason": "No authentication before the preemption request and initiator campaign are read by body id; when the initiator campaign is finalized, recordGovernanceEvent inserts a governance event and upserts the governance projection BEFORE enforceCompanyAccess runs. An anonymous caller holding a request id can write governance events for another tenant, and the 404/409 answers are an existence oracle."
-    },
     "pages/api/auth/resend-invitation.ts": {
       "finding": "WSF-ORD-002",
       "owner": "ROUTE-ORDER-REMEDIATION (post-WS-F)",

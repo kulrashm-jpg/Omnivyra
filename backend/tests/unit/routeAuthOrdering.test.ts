@@ -419,7 +419,9 @@ describe('the repository', () => {
     expect(staleKnownOpen).toEqual([]);
     expect(rows.every((r: Row) => r.ordering.shape === 'resolved')).toBe(true);
     const ordering = Object.entries(knownOpen).filter(([, ko]) => (ko as { rules: string[] }).rules.some((r) => /^R[567]-/.test(r)));
-    expect(ordering.map(([, ko]) => (ko as { finding: string }).finding).sort()).toEqual(['WSF-ORD-001', 'WSF-ORD-002', 'WSF-ORD-003', 'WSF-ORD-004', 'WSF-ORD-005', 'WSF-ORD-006', 'WSF-ORD-007']);
+    // WSF-ORD-001 is FIXED (backend/tests/unit/wsfOrd001ApprovePreemption.test.ts);
+    // its knownOpen entry was removed in the same change, per _knownOpenComment.
+    expect(ordering.map(([, ko]) => (ko as { finding: string }).finding).sort()).toEqual(['WSF-ORD-002', 'WSF-ORD-003', 'WSF-ORD-004', 'WSF-ORD-005', 'WSF-ORD-006', 'WSF-ORD-007']);
   });
 
   it('the cron secret route is authenticated by its const-bound comparator before its writes', () => {
