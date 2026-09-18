@@ -31,19 +31,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       let policy = await getActivePolicy();
       if (!policy) {
-        const { data, error } = await supabase
-          .from('recommendation_policies')
-          .insert({
-            name: 'Default Policy',
-            is_active: true,
-            weights: defaultWeights,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .select('*')
-          .single();
-        if (!error && data) {
-          policy = data;
+        // WSF-ORD-005 — seeding the default policy row creates PLATFORM-GLOBAL
+        // configuration: recommendation_policies is not tenant-scoped, and the
+        // row it writes is the active policy every tenant's recommendations
+        // are then ranked by. Previously any authenticated user could cause
+        // that insert simply by issuing a GET, while POST — which only EDITS
+        // the same row — was gated behind isSuperAdmin. Creating the row is at
+        // least as privileged as editing it, so it is gated the same way.
+        //
+        // A non-admin GET stays a pure read and answers { policy: null }, the
+        // same answer it gave before any policy existed.
+        const maySeed = await isSuperAdmin(user.id);
+        if (maySeed) {
+          const { data, error } = await supabase
+            .from('recommendation_policies')
+            .insert({
+              name: 'Default Policy',
+              is_active: true,
+              weights: defaultWeights,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .select('*')
+            .single();
+          if (!error && data) {
+            policy = data;
+          }
         }
       }
       return res.status(200).json({ policy: policy || null });

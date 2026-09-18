@@ -890,14 +890,6 @@
       ],
       "reason": "Mode 2 embedded-form submission (body.form_id, origin-checked by checkFormOrigin, no authentication) resolves the visitor session, creates a unified person and lead, and writes attribution/telemetry. Mode 1 is verified (orderingVerifiers); the public form mutation branch has no declared public contract and needs owner review."
     },
-    "pages/api/recommendation-policy.ts": {
-      "finding": "WSF-ORD-005",
-      "owner": "ROUTE-ORDER-REMEDIATION (post-WS-F)",
-      "rules": [
-        "R6-ORDER"
-      ],
-      "reason": "GET inserts a global default recommendation_policies row for any authenticated user when no active policy exists; POST is super-admin gated (isSuperAdmin) but GET mutates platform-global configuration without platform authorization."
-    },
     "pages/api/social/publish.ts": {
       "finding": "WSF-ORD-006",
       "owner": "ROUTE-ORDER-REMEDIATION (post-WS-F)",
