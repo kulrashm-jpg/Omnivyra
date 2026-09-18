@@ -22,6 +22,7 @@ import {
   mergeChatSeedIntoCard,
   sanitizeChatSeed,
   toChatSeed,
+  type ChatCardDraft,
 } from '../../../lib/content/suggestionChatSeed';
 import { briefFromAcceptedCard, buildAcceptedBriefFields } from '../../../components/content/ManagedSuggestionsPage';
 import type { ContentSuggestion } from '../../../lib/content/contentSuggestionContract';
@@ -139,7 +140,10 @@ describe('mergeChatSeedIntoCard', () => {
   });
 
   it('does not invent fields the seed has no value for', () => {
-    const merged = mergeChatSeedIntoCard({ topic: '' }, sanitizeChatSeed({ topic: 'Only a topic here' })!);
+    // Annotated: inferring T from the literal would narrow the RESULT to
+    // `{ topic: string }`, hiding the very fields this test is about.
+    const emptyCard: ChatCardDraft = { topic: '' };
+    const merged = mergeChatSeedIntoCard(emptyCard, sanitizeChatSeed({ topic: 'Only a topic here' })!);
     expect(merged.topic).toBe('Only a topic here');
     expect(merged.audience).toBeUndefined();
     expect(merged.tone).toBeUndefined();
