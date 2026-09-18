@@ -333,7 +333,12 @@ describe('B7.2 · only the knowledgeGraph services touch the tables', () => {
   it('the knowledgeGraph directory contains exactly the certified services', () => {
     const dir = path.join(REPO, 'backend/services/content/knowledgeGraph');
     expect(fs.existsSync(dir)).toBe(true);
-    // B7.2 shipped two; B7.5 adds the deterministic curation writer.
-    expect(fs.readdirSync(dir).sort()).toEqual(['coverageService.ts', 'topicCurationService.ts', 'topicResolutionService.ts', 'topicReviewService.ts'].concat(['topicCandidateService.ts', 'topicEmbeddingTrigger.ts']).sort());
+    // B7.2 shipped two; B7.5 adds the deterministic curation writer;
+    // coverageReadService is the first READER of company_topic_coverage, which
+    // until now was write-only. It is listed here, in the same directory as the
+    // writers, precisely so the assertions above keep holding: every module
+    // touching these two tables stays inside `knowledgeGraph/`, and no API
+    // route may reach them.
+    expect(fs.readdirSync(dir).sort()).toEqual(['coverageReadService.ts', 'coverageService.ts', 'topicCurationService.ts', 'topicResolutionService.ts', 'topicReviewService.ts'].concat(['topicCandidateService.ts', 'topicEmbeddingTrigger.ts']).sort());
   });
 });
