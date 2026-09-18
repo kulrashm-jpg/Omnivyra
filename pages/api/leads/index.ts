@@ -14,6 +14,55 @@ import {
 import { resolveVisitorSession, stitchSessionToLead, persistCampaignTouchpoint } from '../../../backend/services/attributionResolverService';
 import { checkFormOrigin } from '../../../backend/services/websiteDomainEnforcementService';
 import { triggerLeadIntelligence } from '../../../backend/services/leadIntelligenceActivation';
+import { checkRateLimit } from '../../../lib/auth/rateLimit';
+import { getTrustedClientIp } from '../../../lib/security/clientIp';
+import { recordRawCounter } from '../../../backend/observability';
+
+/**
+ * WSF-ORD-003 abuse controls for the ANONYMOUS embedded-form branch (Mode 2).
+ *
+ * Both limits use the repo's canonical limiter (lib/auth/rateLimit) and are
+ * NOT marked `sensitive`, matching every other public non-auth limit here
+ * (rl:domain_track, rl:domain_verification_status, DOMAIN_RESOLUTION_LIMIT).
+ * That matters: `sensitive` limits go 'strict' when Redis is down, while these
+ * take the generous in-memory fallback — during a Redis outage a public
+ * capture form must keep accepting real leads rather than start dropping them.
+ */
+
+/**
+ * Per client IP: 20 per minute. Deliberately the same budget the repo already
+ * chose for anonymous lead capture (LEAD_CAPTURE_RATE_LIMIT, 20/60s in
+ * backend/services/leadCaptureProtection.ts), and inside the 30/60s band the
+ * other public endpoints use — a little tighter because this one WRITES a lead
+ * rather than reading or recording telemetry.
+ */
+const LEAD_FORM_IP_LIMIT = { keyPrefix: 'rl:leads:form:ip', limit: 20, windowSecs: 60 };
+
+/**
+ * Per form_id: 60 per minute. This is the dimension the per-IP limit cannot
+ * cover — a leaked form_id flooded from many addresses. 60/min is ~3x the
+ * per-IP budget, so it only binds once traffic is spread over 3+ IPs, i.e.
+ * exactly the distributed case; and it is far above any real single-form rate
+ * (60/min sustained would be ~86k submissions a day on one form).
+ */
+const LEAD_FORM_ID_LIMIT = { keyPrefix: 'rl:leads:form:id', limit: 60, windowSecs: 60 };
+
+/** Fail-safe metric emit — observability must never break lead capture. */
+function countLeadFormEvent(metric: string, labels: Record<string, string>): void {
+  try { recordRawCounter(metric, 1, labels); } catch { /* fail-safe */ }
+}
+
+/**
+ * OFF by default and deliberately NOT enabled. When an operator sets it, a form
+ * with no allowed_domains is refused instead of being accepted fail-open. It
+ * exists so the fail-open state is controllable once the
+ * `leads.form_submission_unverified_origin` counter shows which tenants would
+ * be affected; turning it on before then would silently stop real capture.
+ */
+const strictOriginMode = (): boolean => {
+  const v = String(process.env.LEAD_FORM_REQUIRE_ALLOWED_DOMAINS ?? '').trim().toLowerCase();
+  return v === '1' || v === 'true';
+};
 
 function setCors(req: NextApiRequest, res: NextApiResponse) {
   const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '*';
@@ -107,10 +156,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // ── Mode 2: Embedded form submission — form_id in body (no auth required) ──
     //
-    // WSF-ORD-002/003 review: this branch is KEPT unauthenticated on purpose.
-    // The route-auth gate flags it (R5-ORDER: an anonymous caller reaches a
-    // write) and keeps printing it as a tracked finding — correct, because it
-    // IS a deliberate anonymous mutation and should stay visible.
+    // WSF-ORD-003 — OWNER REVIEW 2026-09-18 (repo owner, via release gate)
+    // confirmed this branch PUBLIC BY PRODUCT CONTRACT, so it is KEPT
+    // unauthenticated on purpose. The route-auth gate flags it (R5-ORDER: an
+    // anonymous caller reaches a write) and keeps printing it as a tracked
+    // finding — correct, because it IS a deliberate anonymous mutation and
+    // should stay visible.
     //
     // It is not an authorization defect: an embedded capture form is submitted
     // by anonymous visitors on the customer's own site (hence setCors and the
@@ -123,16 +174,52 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // order-exempt for the WHOLE route and would also exempt the authenticated
     // GET (enforceCompanyAccess) and Mode 3 below.
     //
-    // KNOWN RESIDUAL, not fixed here (an abuse control, not an authorization
-    // boundary, and a product decision): checkFormOrigin FAILS OPEN when a form
-    // has no allowed_domains configured, and this branch has no rate limit or
-    // captcha — so a leaked form_id can be used to flood that tenant's own lead
-    // list. Closing it means a captcha, a per-form rate limit, or making
-    // allowed_domains mandatory.
+    // ABUSE CONTROLS (WSF-ORD-003, owner pulled into scope 2026-09-18). Being
+    // public is the contract; being UNMETERED was the gap — a leaked form_id
+    // could be used to flood its tenant's lead list. Two limits now bound it,
+    // both before any write. They are abuse controls, not authorization: the
+    // tenant still comes only from form.company_id, unchanged.
     if (body.form_id) {
+      // Per-IP first: it is the cheapest check, and it caps form_id PROBING as
+      // well as submission, so an unknown id never reaches the database read.
+      const clientIp = getTrustedClientIp(req);
+      const ipRl = await checkRateLimit(clientIp, LEAD_FORM_IP_LIMIT);
+      if (!ipRl.allowed) {
+        countLeadFormEvent('leads.form_submission_rate_limited', { scope: 'ip' });
+        res.setHeader('Retry-After', '60');
+        return res.status(429).json({ error: 'Too many submissions. Please try again shortly.' });
+      }
+
       const form = await getForm(String(body.form_id));
       if (!form) return res.status(404).json({ error: 'Form not found' });
+
+      // Per-form second, keyed by the RESOLVED form id so the Redis key space
+      // is bounded by real forms rather than by whatever a caller posts. This
+      // is the dimension the per-IP limit cannot see: one form flooded from
+      // many addresses.
+      const formRl = await checkRateLimit(form.id, LEAD_FORM_ID_LIMIT);
+      if (!formRl.allowed) {
+        countLeadFormEvent('leads.form_submission_rate_limited', { scope: 'form' });
+        res.setHeader('Retry-After', '60');
+        return res.status(429).json({ error: 'Too many submissions. Please try again shortly.' });
+      }
+
       const originDecision = await checkFormOrigin(form, typeof req.headers.origin === 'string' ? req.headers.origin : undefined);
+
+      // The fail-open origin state is now EXPLICIT and MEASURED. A form with no
+      // allowed_domains is still accepted — refusing it would silently stop
+      // real capture for tenants whose forms were created without one — but
+      // every such submission is counted, so the size of that population is
+      // visible before anyone tightens it.
+      if (originDecision.allowlistConfigured === false) {
+        countLeadFormEvent('leads.form_submission_unverified_origin', { form_id: String(form.id) });
+        // Opt-in strict mode, default OFF and NOT enabled here. See
+        // LEAD_FORM_REQUIRE_ALLOWED_DOMAINS above.
+        if (strictOriginMode()) {
+          return res.status(403).json({ error: 'This form requires a configured domain allowlist.' });
+        }
+      }
+
       if (!originDecision.allowed) return res.status(403).json({ error: originDecision.message });
 
       // Validate required fields per form schema

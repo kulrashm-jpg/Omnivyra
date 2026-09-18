@@ -22,11 +22,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  * Both modes record an audit row with actor + invite id + outcome.
  *
- * WSF-ORD-002 — reviewed; mode 1 is KEPT unauthenticated on purpose. The
- * route-auth gate flags it (R5-ORDER: an unauthenticated caller reaches a
- * write) and goes on printing it as a tracked finding, which is the right
- * outcome — the branch IS a deliberate anonymous mutation and should stay
- * visible.
+ * WSF-ORD-002 — OWNER REVIEW 2026-09-18 (repo owner, via release gate)
+ * confirmed this route PUBLIC BY PRODUCT CONTRACT: mode 1 is KEPT
+ * unauthenticated on purpose. The route-auth gate flags it (R5-ORDER: an
+ * unauthenticated caller reaches a write) and goes on printing it as a tracked
+ * finding, which is the right outcome — the branch IS a deliberate anonymous
+ * mutation and should stay visible.
  *
  * Why it is not a defect:
  *   - it is the documented recovery for an invite link that expired or was
