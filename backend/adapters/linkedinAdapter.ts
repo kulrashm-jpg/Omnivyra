@@ -124,10 +124,17 @@ export async function publishToLinkedIn(
   //   3. If ANY upload fails: return a structured failure WITHOUT publishing
   //      (so the post isn't sent as text-only with media silently dropped).
   //
-  // Default off. The corresponding ADAPTER_CAN_PUBLISH_MEDIA[linkedin] flag in
-  // publishReadinessValidator.ts MUST stay `false` until you have validated
-  // the upload pipeline against a real LinkedIn account in non-prod. Once
-  // validated, flip both flags together.
+  // Default off, and there is exactly ONE switch. An earlier revision of this
+  // note said to "flip both flags together" with a static
+  // ADAPTER_CAN_PUBLISH_MEDIA[linkedin] entry in publishReadinessValidator.ts.
+  // That static entry no longer exists: adapterCanPublishMedia() special-cases
+  // linkedin and reads LINKEDIN_MEDIA_UPLOAD_ENABLED directly, so this env var
+  // opens the readiness guard AND this branch at once. An operator following
+  // the old note would go looking for a second flag that is not there.
+  //
+  // It stays off until the upload pipeline has been validated against a real
+  // LinkedIn account in non-prod. That validation has not happened; nothing in
+  // this file can substitute for it.
   //
   // Per-node thread media: each thread child row publishes through its own
   // publishToLinkedIn call (the orchestrator passes per-row id; the adapter
@@ -338,6 +345,14 @@ export async function publishToLinkedIn(
 
     return {
       success: true,
+      // Synthetic fallback: LinkedIn answered 2xx (the post IS live) but
+      // returned neither an x-restli-id header nor an id in the body, so the
+      // real URN was never captured. A non-empty id is still stored because
+      // publishNowService uses platform_post_id as the re-publish guard —
+      // storing '' here would let the row publish a SECOND time. It is
+      // deliberately not URN-shaped, and linkedinReconciliation now refuses to
+      // look up a non-URN id rather than reporting the resulting 404 as
+      // 'no_match' (i.e. "deleted or never existed") about a live post.
       platform_post_id: platformPostId || `linkedin_${Date.now()}`,
       post_url: postUrl,
       published_at: new Date(),
