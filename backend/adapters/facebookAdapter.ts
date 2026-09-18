@@ -384,14 +384,16 @@ export async function publishToFacebook(
     //       invented endpoint shipped unverified, so the divergence is recorded
     //       instead of guessed at. The post is published and the image is
     //       referenced; the ARTIFACT TYPE is not what a "photo post" implies.
-    //   single video (source) -> REQUIRES PRODUCT DECISION, and the weaker of the
-    //       two: `source` is not a parameter of the /feed edge (video publishing
-    //       is POST /{page-id}/videos), so Graph may accept the write and drop
-    //       the video — a text-only publish reported as success, which is exactly
-    //       the P3-A failure. It is left as-is for the same reason: no /videos
-    //       precedent exists in this repo, and NOTHING here was verified against
-    //       live Graph. Fixing it needs either a live-Graph experiment or a
-    //       product decision to refuse video until then.
+    //   single video         -> CORRECTLY UNSUPPORTED (owner decision, 2026-09-18).
+    //       Refused explicitly. This branch used to set `source` on the /feed
+    //       write; `source` is not a parameter of that edge (video publishing is
+    //       POST /{page-id}/videos), so Graph could accept the write, ignore the
+    //       unknown parameter and publish the message alone — a text-only
+    //       publish reported as success, the exact P3-A failure, and the one
+    //       shape of it no test could catch because the call "worked". The owner
+    //       chose explicit refusal over leaving it documented or awaiting a
+    //       live-Graph experiment. /{page-id}/videos is still NOT implemented:
+    //       it has no precedent anywhere in this repo. See the video branch.
     //
     // P3-A invariant: a post that asked for media must never be reported as a
     // successful text-only publication. Two ways that used to happen here, both
@@ -435,12 +437,40 @@ export async function publishToFacebook(
         // Alternatively, use attached_media for uploaded photos:
         // payload.attached_media = [{ media_fbid: photoId }];
       } else if (isVideo) {
-        // For videos, use 'source' parameter for video URL
-        // Or use 'description' for video description
-        payload.source = firstMedia;
-        if (post.title || post.content) {
-          payload.description = post.title || formatted.text;
-        }
+        // OWNER DECISION, 2026-09-18: refuse video rather than attempt it.
+        //
+        // This used to set `payload.source` on the /feed write. `source` is not
+        // a parameter of the feed edge — Facebook video publishing is
+        // POST /{page-id}/videos — so Graph could accept the write, ignore the
+        // unknown parameter and publish the MESSAGE ALONE, returning a post id.
+        // That is a text-only publication reported as success with the video
+        // gone: the exact P3-A failure this adapter must not produce, and the
+        // one shape of it that no test could catch, because the call "worked".
+        //
+        // The owner chose an explicit refusal over both leaving it documented
+        // and waiting for a live-Graph experiment. /{page-id}/videos is NOT
+        // implemented here: it has no call site, fixture or response shape
+        // anywhere in this repo, and shipping an invented endpoint unverified
+        // would be a worse defect than the missing feature.
+        //
+        // The video is still RECOGNISED as a video (that is why this branch
+        // exists rather than falling through to the unrecognised-media case):
+        // the operator is told the feature is missing, not that their file is
+        // unreadable or their Page is wrong.
+        return {
+          success: false,
+          error: {
+            code: PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED,
+            message:
+              `This post attaches a video, but Facebook video publishing is not implemented here. A video cannot ` +
+              `be attached to a Page feed post — Facebook requires POST /{page-id}/videos, a separate upload ` +
+              `endpoint this adapter does not call — so publishing would have sent the TEXT ONLY and dropped the ` +
+              `video while reporting success. Nothing was published. Your Facebook connection, Page and token are ` +
+              `fine; the video upload path is the missing piece. Publish this as an image or text post, or post ` +
+              `the video natively on Facebook.`,
+            retryable: false,
+          },
+        };
       } else {
         return {
           success: false,

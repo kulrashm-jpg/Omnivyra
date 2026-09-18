@@ -180,13 +180,20 @@ describe('media is attached, or the publish fails', () => {
     expect(mockPost.mock.calls[0][2].params.link).toBe(url);
   });
 
-  it('CRITICAL: a signed video URL is recognised and attached', async () => {
+  // A signed video URL is still RECOGNISED as a video — that recognition is
+  // what earns the video-specific refusal below instead of the generic
+  // "unrecognised media" one. What changed (owner decision, 2026-09-18) is that
+  // recognising it no longer means attaching it to a /feed write. See §5.
+  it('CRITICAL: a signed video URL is recognised as a video, and refused as one', async () => {
     const url = 'https://cdn.example.com/media/a.mp4?sig=xyz';
 
     const r = await (await load())(basePost({ media_urls: [url] }) as any, ACCOUNT as any, TOKEN as any);
 
-    expect(r.success).toBe(true);
-    expect(mockPost.mock.calls[0][2].params.source).toBe(url);
+    expect(r.success).toBe(false);
+    expect(r.error?.code).toBe(PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED);
+    expect(r.error?.message).toMatch(/video/i);
+    expect(r.error?.message).not.toMatch(/does not recognise/);
+    expect(mockPost).not.toHaveBeenCalled();
   });
 
   it('CRITICAL: an unrecognisable media URL fails instead of publishing text-only', async () => {
@@ -399,7 +406,123 @@ describe('persisted Page target', () => {
 });
 
 /* ──────────────────────────────────────────────────────────────────────────
- * 4. Mock mode short-circuit is untouched
+ * 4. Video is refused, not silently degraded to a text post
+ *
+ * OWNER DECISION, 2026-09-18. The adapter used to put the video URL in
+ * `payload.source` on the `/{page-id}/feed` write. `source` is not a parameter
+ * of the feed edge — Facebook video publishing is POST /{page-id}/videos — so
+ * Graph could accept the write, ignore the unknown parameter and publish the
+ * MESSAGE ALONE, returning a post id. The adapter would then report success
+ * with the video gone: a text-only publication of a post that asked for media,
+ * which is the P3-A failure, and the only shape of it that no assertion could
+ * catch, because from the caller's side the call succeeded.
+ *
+ * The owner chose explicit refusal over leaving the divergence documented or
+ * waiting for a live-Graph experiment. POST /{page-id}/videos remains
+ * UNIMPLEMENTED — it has no call site, fixture or response shape anywhere in
+ * this repo, and inventing one to ship unverified would be the worse defect.
+ * ────────────────────────────────────────────────────────────────────────── */
+describe('video publishing is refused explicitly', () => {
+  beforeEach(() => {
+    stubPages([{ id: PAGE_ID, name: 'Acme Page', access_token: 'page-token' }]);
+    stubFeedOk();
+  });
+
+  const VIDEO_URLS = [
+    'https://cdn.example.com/media/clip.mp4',
+    'https://cdn.example.com/media/clip.mov?sig=xyz',
+    'https://cdn.example.com/media/clip.avi#t=1',
+    'https://cdn.example.com/media/clip.webm?token=abc&exp=1',
+  ];
+
+  it.each(VIDEO_URLS)('CRITICAL: %s fails explicitly — nothing is published', async (url) => {
+    const r = await (await load())(basePost({ media_urls: [url] }) as any, ACCOUNT as any, TOKEN as any);
+
+    expect(r.success).toBe(false);
+    expect(r.error?.code).toBe(PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED);
+    expect(r.error?.retryable).toBe(false);
+    expect(r.platform_post_id).toBeUndefined();
+  });
+
+  it('CRITICAL: ZERO writes reach the feed edge', async () => {
+    await (await load())(
+      basePost({ media_urls: ['https://cdn.example.com/media/clip.mp4'] }) as any,
+      ACCOUNT as any,
+      TOKEN as any,
+    );
+
+    expect(mockPost).not.toHaveBeenCalled();
+    const feedWrites = mockPost.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/feed'));
+    expect(feedWrites).toHaveLength(0);
+  });
+
+  it('CRITICAL: `source` is never sent — the parameter that caused the silent drop is gone', async () => {
+    await (await load())(
+      basePost({ media_urls: ['https://cdn.example.com/media/clip.mp4'] }) as any,
+      ACCOUNT as any,
+      TOKEN as any,
+    );
+
+    const everySentParam = JSON.stringify(mockPost.mock.calls);
+    expect(everySentParam).not.toContain('source');
+    expect(everySentParam).not.toContain('clip.mp4');
+  });
+
+  it('the reason names the missing upload endpoint, not a broken credential', async () => {
+    const r = await (await load())(
+      basePost({ media_urls: ['https://cdn.example.com/media/clip.mp4'] }) as any,
+      ACCOUNT as any,
+      TOKEN as any,
+    );
+
+    // An operator must not go hunting through tokens, scopes or Page settings
+    // for a feature that was simply never built.
+    expect(r.error?.message).toContain('/{page-id}/videos');
+    expect(r.error?.message).toMatch(/not implemented/i);
+    expect(r.error?.message).toMatch(/Nothing was published/);
+    expect(r.error?.message).toMatch(/connection, Page and token are\s+fine|Page and token are fine/);
+  });
+
+  it('a video is refused on the PERSISTED Page path too, not just the live-lookup one', async () => {
+    const r = await (await load())(
+      basePost({ media_urls: ['https://cdn.example.com/media/clip.mp4'] }) as any,
+      PAGE_BOUND_ACCOUNT as any,
+      PAGE_TOKEN as any,
+    );
+
+    expect(r.success).toBe(false);
+    expect(r.error?.code).toBe(PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED);
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('video refusal is distinct from the unrecognised-media refusal', async () => {
+    const video = await (await load())(
+      basePost({ media_urls: ['https://cdn.example.com/media/clip.mp4'] }) as any, ACCOUNT as any, TOKEN as any);
+    jest.clearAllMocks();
+    stubPages([{ id: PAGE_ID, name: 'Acme Page', access_token: 'page-token' }]);
+    stubFeedOk();
+    const unknown = await (await load())(
+      basePost({ media_urls: ['https://cdn.example.com/media/asset'] }) as any, ACCOUNT as any, TOKEN as any);
+
+    // Same code (the shared vocabulary), different diagnosis.
+    expect(video.error?.code).toBe(unknown.error?.code);
+    expect(video.error?.message).not.toBe(unknown.error?.message);
+    expect(unknown.error?.message).toMatch(/does not recognise/);
+    expect(video.error?.message).not.toMatch(/does not recognise/);
+  });
+
+  it('images are untouched by this decision — still published', async () => {
+    const url = 'https://cdn.example.com/media/a.jpg?token=abc';
+
+    const r = await (await load())(basePost({ media_urls: [url] }) as any, ACCOUNT as any, TOKEN as any);
+
+    expect(r.success).toBe(true);
+    expect(mockPost.mock.calls[0][2].params.link).toBe(url);
+  });
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * 5. Mock mode short-circuit is untouched
  * ────────────────────────────────────────────────────────────────────────── */
 describe('mock mode', () => {
   it('still returns before any Graph call', async () => {
