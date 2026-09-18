@@ -243,7 +243,163 @@ describe('media is attached, or the publish fails', () => {
 });
 
 /* ──────────────────────────────────────────────────────────────────────────
- * 3. Mock mode short-circuit is untouched
+ * 3. The PERSISTED Page target
+ *
+ * The Page and its token are resolved once, during OAuth, and stored on the
+ * connection (`social_accounts.linked_page_id` + `page_access_token`; see
+ * pages/api/auth/facebook/callback.ts). Publishing reads that target rather
+ * than re-deriving it, so the destination cannot change between the moment an
+ * operator connected a Page and the moment a post goes out.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const OTHER_TENANT_PAGE_ID = '555000111';
+
+/** A connection as the OAuth callback now writes it. */
+const PAGE_BOUND_ACCOUNT = {
+  id: 'a1',
+  platform: 'facebook',
+  platform_user_id: USER_ID,          // the Facebook USER — identity only
+  linked_page_id: PAGE_ID,            // the Page — the publish target
+  page_access_token: 'enc:page-token' // proof the Page token was stored here
+};
+
+/** getToken() hands the adapter the decrypted PAGE token for such a row. */
+const PAGE_TOKEN = { access_token: 'page-token' };
+
+describe('persisted Page target', () => {
+  it('CRITICAL: publishes to the PERSISTED Page, with the PAGE token', async () => {
+    stubFeedOk();
+
+    const r = await (await load())(basePost() as any, PAGE_BOUND_ACCOUNT as any, PAGE_TOKEN as any);
+
+    expect(r.success).toBe(true);
+    expect(mockPost.mock.calls[0][0]).toBe(`https://graph.facebook.com/v22.0/${PAGE_ID}/feed`);
+    expect(mockPost.mock.calls[0][2].params.access_token).toBe('page-token');
+  });
+
+  it('CRITICAL: the stored USER id is never the target', async () => {
+    stubFeedOk();
+
+    await (await load())(basePost() as any, PAGE_BOUND_ACCOUNT as any, PAGE_TOKEN as any);
+
+    expect(String(mockPost.mock.calls[0][0])).not.toContain(USER_ID);
+    expect(JSON.stringify(mockPost.mock.calls[0][2].params)).not.toContain(USER_ID);
+  });
+
+  it('a persisted target needs no live Page lookup at publish time', async () => {
+    stubFeedOk();
+
+    await (await load())(basePost() as any, PAGE_BOUND_ACCOUNT as any, PAGE_TOKEN as any);
+
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  /* ── Negative: identity is not a destination ─────────────────────────── */
+
+  it('CRITICAL (negative): a USER id stored as the Page id is refused, not published to', async () => {
+    const conflated = { ...PAGE_BOUND_ACCOUNT, linked_page_id: USER_ID };
+
+    const r = await (await load())(basePost() as any, conflated as any, PAGE_TOKEN as any);
+
+    expect(r.success).toBe(false);
+    expect(r.error?.code).toBe('FACEBOOK_NO_PAGE_TARGET');
+    expect(r.error?.retryable).toBe(false);
+    expect(r.error?.message).toMatch(/not a Page/);
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  /* ── Negative: another tenant's Page id is not authorisation ─────────── */
+
+  it('CRITICAL (negative): a Page id from another connection, with no Page token stored here, is refused', async () => {
+    // The Page genuinely exists — for somebody else. This connection never
+    // obtained its token, so the id alone must not make it publishable.
+    const foreign = {
+      id: 'a1',
+      platform: 'facebook',
+      platform_user_id: USER_ID,
+      linked_page_id: OTHER_TENANT_PAGE_ID,
+      page_access_token: null,
+    };
+
+    const r = await (await load())(basePost() as any, foreign as any, PAGE_TOKEN as any);
+
+    expect(r.success).toBe(false);
+    expect(r.error?.code).toBe('FACEBOOK_NO_PAGE_TOKEN');
+    expect(r.error?.message).toMatch(/not authorisation/);
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('CRITICAL (negative): the live path will not reach another connection\'s Page either', async () => {
+    // This login's own /me/accounts does not contain it, which is the whole
+    // tenant boundary: the Page list is derived from THIS connection's token.
+    stubPages([{ id: PAGE_ID, name: 'Acme Page', access_token: 'page-token' }]);
+
+    const r = await (await load())(
+      basePost() as any,
+      { id: 'a1', platform: 'facebook', platform_user_id: OTHER_TENANT_PAGE_ID } as any,
+      TOKEN as any,
+    );
+
+    expect(r.success).toBe(false);
+    expect(r.error?.code).toBe('FACEBOOK_NO_PAGE_TARGET');
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  /* ── Malformed / missing target: explicit, never fatal ───────────────── */
+
+  it('a persisted Page with no decryptable token → explicit failure, nothing published', async () => {
+    const r = await (await load())(basePost() as any, PAGE_BOUND_ACCOUNT as any, { access_token: '' } as any);
+
+    expect(r.success).toBe(false);
+    expect(r.error?.code).toBe('FACEBOOK_NO_PAGE_TOKEN');
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('a blank linked_page_id is treated as no target, not as an empty Page id', async () => {
+    stubPages([{ id: PAGE_ID, name: 'Acme Page', access_token: 'page-token' }]);
+
+    const r = await (await load())(
+      basePost() as any,
+      { ...PAGE_BOUND_ACCOUNT, linked_page_id: '   ' } as any,
+      TOKEN as any,
+    );
+
+    // Falls through to the live lookup, which cannot match a USER id.
+    expect(r.error?.code).toBe('FACEBOOK_NO_PAGE_TARGET');
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('several manageable Pages and none bound → selection is REQUIRED, never guessed', async () => {
+    stubPages([
+      { id: PAGE_ID, name: 'Acme Page', access_token: 'page-token' },
+      { id: OTHER_TENANT_PAGE_ID, name: 'Second Page', access_token: 'page-token-2' },
+    ]);
+
+    const r = await (await load())(basePost() as any, USER_BOUND_ACCOUNT as any, TOKEN as any);
+
+    expect(r.success).toBe(false);
+    expect(r.error?.code).toBe('FACEBOOK_PAGE_SELECTION_REQUIRED');
+    expect(r.error?.retryable).toBe(false);
+    expect(r.error?.message).toMatch(/NOT chosen automatically/);
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('media honesty still applies on the persisted path', async () => {
+    const r = await (await load())(
+      basePost({ media_urls: ['https://cdn.example.com/a.jpg', 'https://cdn.example.com/b.jpg'] }) as any,
+      PAGE_BOUND_ACCOUNT as any,
+      PAGE_TOKEN as any,
+    );
+
+    expect(r.success).toBe(false);
+    expect(r.error?.code).toBe(PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED);
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * 4. Mock mode short-circuit is untouched
  * ────────────────────────────────────────────────────────────────────────── */
 describe('mock mode', () => {
   it('still returns before any Graph call', async () => {

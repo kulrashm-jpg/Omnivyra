@@ -14,6 +14,11 @@
  *   5xx                  → unverifiable (transient)
  *
  * Token: page-scoped access token (since FB posts are owned by a Page).
+ *   `getToken(socialAccountId)` now delivers exactly that for Facebook rows:
+ *   the OAuth callback stores the resolved Page's own token as the row's
+ *   credential, alongside `linked_page_id` / `page_access_token`, instead of
+ *   the USER token it used to store. This line previously described an intent
+ *   the surrounding code could not satisfy; it now describes the contract.
  *
  * Graph API version: pinned to v22.0, the version every other Graph caller in
  * this repo uses (adapters, connectors, OAuth callbacks, analytics and

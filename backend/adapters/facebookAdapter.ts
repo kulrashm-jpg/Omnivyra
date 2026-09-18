@@ -45,8 +45,26 @@ interface ScheduledPost {
 interface SocialAccount {
   id: string;
   platform: string;
-  platform_user_id: string; // Facebook Page ID
+  /**
+   * The Facebook USER id for every row the OAuth callback writes
+   * (`profile.id` from `GET /me`). It is NOT a Page id and must never be used
+   * as one. Rows written by the `meta_oauth_apply` database function carry a
+   * Page id here instead, which is why the live-lookup fallback below still
+   * exists — but it is never assumed.
+   */
+  platform_user_id: string;
   username?: string;
+  /** Persisted Page target — `social_accounts.linked_page_id`. */
+  linked_page_id?: string | null;
+  /**
+   * `social_accounts.page_access_token`: the encrypted Page token, stored by
+   * the OAuth callback in the same write as `linked_page_id`. This adapter
+   * never decrypts it — its presence is the proof that the Page token for
+   * THIS connection was obtained and stored, and the decrypted value reaches
+   * the adapter as `token.access_token` via `getToken()`. A `linked_page_id`
+   * without it is an unverified Page id and is refused.
+   */
+  page_access_token?: string | null;
 }
 
 interface Token {
@@ -91,11 +109,78 @@ type PageTarget =
  * HTTP failures are deliberately allowed to throw: the caller's existing error
  * ladder already classifies 401 / 403 / 429 / 400 from Graph, and duplicating
  * that here would let the two drift apart.
+ *
+ * TWO SOURCES, IN ORDER, AND ONLY ONE OF THEM DECIDES
+ * ---------------------------------------------------
+ * 1. THE PERSISTED TARGET (`linked_page_id` + `page_access_token`). This is the
+ *    source of truth for every connection made since the OAuth callback started
+ *    resolving Pages. It is tenant-safe by construction: both values were
+ *    written onto THIS row, in one write, from the `/me/accounts` response of
+ *    THIS connection's own user token. A Page id that merely exists somewhere
+ *    else — another company, another connection — can never satisfy it, because
+ *    the Page token that must accompany it was never stored here.
+ *
+ * 2. THE LIVE LOOKUP, only when no Page is persisted. It covers rows written by
+ *    the `meta_oauth_apply` database function, whose facebook rows carry the
+ *    PAGE id in `platform_user_id` and no `linked_page_id`. It is equally
+ *    tenant-safe: the Page list is whatever THIS connection's own token
+ *    returns, so another tenant's Page is simply not in it.
+ *
+ * In neither path can a USER id become a Page id: the persisted path refuses a
+ * `linked_page_id` equal to the row's own `platform_user_id`, and the live path
+ * requires an exact match inside a Pages list, which a user node is not a
+ * member of.
  */
 async function resolvePageTarget(
   account: SocialAccount,
   token: Token,
 ): Promise<PageTarget> {
+  const storedUserId = String(account.platform_user_id ?? '').trim();
+  const persistedPageId = String(account.linked_page_id ?? '').trim();
+
+  if (persistedPageId) {
+    // NEVER CONFLATE. If the stored "Page" is the same node as the stored
+    // account identity, something wrote a user id into the Page column and the
+    // only safe answer is to refuse — publishing at a user node is exactly the
+    // defect this adapter exists to stop.
+    if (persistedPageId === storedUserId) {
+      return {
+        ok: false,
+        error: {
+          code: 'FACEBOOK_NO_PAGE_TARGET',
+          message:
+            `This Facebook connection has "${persistedPageId}" stored as its Page, but that is the same id as the ` +
+            `connection's own Facebook account — a Facebook user is not a Page and cannot be published to. ` +
+            `Reconnect the Facebook account so a real Page target is stored. Nothing was published.`,
+          retryable: false,
+        },
+      };
+    }
+
+    const hasStoredPageCredential = String(account.page_access_token ?? '').trim().length > 0;
+    const pageAccessToken = String(token.access_token ?? '').trim();
+    if (!hasStoredPageCredential || !pageAccessToken) {
+      return {
+        ok: false,
+        error: {
+          code: 'FACEBOOK_NO_PAGE_TOKEN',
+          message:
+            `This Facebook connection names Page "${persistedPageId}" but has no Page access token stored for it, ` +
+            `so the Page cannot be published to. A Page id on its own is not authorisation. Reconnect the Facebook ` +
+            `account, approving pages_show_list and pages_manage_posts. Nothing was published.`,
+          retryable: false,
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      pageId: persistedPageId,
+      pageAccessToken,
+      pageName: null,
+    };
+  }
+
   const response = await axios.get(`${GRAPH_BASE}/me/accounts`, {
     params: {
       fields: 'id,name,access_token',
@@ -104,13 +189,31 @@ async function resolvePageTarget(
   });
 
   const pages: FacebookPage[] = Array.isArray(response.data?.data) ? response.data.data : [];
-  const storedId = String(account.platform_user_id ?? '');
+  const storedId = storedUserId;
   const match = pages.find((page) => String(page.id ?? '') === storedId && storedId.length > 0);
 
   const describePages = () =>
     pages.length === 0
       ? 'this login administers no Facebook Pages'
       : `available Pages: ${pages.map((p) => `${String(p.name ?? 'unnamed')} (${String(p.id ?? '?')})`).join(', ')}`;
+
+  if (!match && pages.length > 1) {
+    // Several Pages, none of them bound to this connection. Picking one would
+    // publish to a destination nobody selected, so the publish stops here and
+    // says what has to happen instead.
+    return {
+      ok: false,
+      error: {
+        code: 'FACEBOOK_PAGE_SELECTION_REQUIRED',
+        message:
+          `This Facebook connection has no Page target stored, and the login administers ${pages.length} Pages — ` +
+          `${describePages()}. A Page is NOT chosen automatically, because that would publish to a destination ` +
+          `nobody selected. Reconnect the Facebook account and bind the Page you want to publish to. ` +
+          `Nothing was published.`,
+        retryable: false,
+      },
+    };
+  }
 
   if (!match) {
     return {
@@ -216,7 +319,9 @@ export async function publishToFacebook(
     return {
       success: true,
       platform_post_id: `mock_facebook_${Date.now()}`,
-      post_url: `https://www.facebook.com/${account.platform_user_id}/posts/${Date.now()}`,
+      // Even the mock URL names the PAGE when one is bound — a mock that prints
+      // a user node teaches the wrong model of where posts go.
+      post_url: `https://www.facebook.com/${account.linked_page_id || account.platform_user_id}/posts/${Date.now()}`,
       published_at: new Date(),
     };
   }
@@ -261,6 +366,32 @@ export async function publishToFacebook(
     };
 
     // Handle media.
+    //
+    // MEDIA PATH CLASSIFICATION (round-2 review). Each path below is labelled
+    // with what it actually does, because "it published" and "it published what
+    // was asked for" are different claims:
+    //
+    //   several media items  -> CORRECTLY UNSUPPORTED. Fails explicitly; a feed
+    //       write can carry one attachment here, and dropping the rest silently
+    //       is the defect this replaced.
+    //   unrecognised media   -> CORRECTLY UNSUPPORTED. Fails explicitly rather
+    //       than publishing text only.
+    //   single image (link)  -> REQUIRES PRODUCT DECISION. Graph renders a feed
+    //       post with `link` as a LINK SHARE, not a photo post. The photo form
+    //       is POST /{page-id}/photos (plus `attached_media` for several), which
+    //       has NO precedent anywhere in this repo — no call site, no fixture,
+    //       no response shape to pattern-match. Writing one here would be an
+    //       invented endpoint shipped unverified, so the divergence is recorded
+    //       instead of guessed at. The post is published and the image is
+    //       referenced; the ARTIFACT TYPE is not what a "photo post" implies.
+    //   single video (source) -> REQUIRES PRODUCT DECISION, and the weaker of the
+    //       two: `source` is not a parameter of the /feed edge (video publishing
+    //       is POST /{page-id}/videos), so Graph may accept the write and drop
+    //       the video — a text-only publish reported as success, which is exactly
+    //       the P3-A failure. It is left as-is for the same reason: no /videos
+    //       precedent exists in this repo, and NOTHING here was verified against
+    //       live Graph. Fixing it needs either a live-Graph experiment or a
+    //       product decision to refuse video until then.
     //
     // P3-A invariant: a post that asked for media must never be reported as a
     // successful text-only publication. Two ways that used to happen here, both
