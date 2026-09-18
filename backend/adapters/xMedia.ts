@@ -11,8 +11,12 @@
  *  - video / animated GIF → chunked INIT → APPEND(chunks) → FINALIZE → poll STATUS
  *
  * Everything is sent as application/x-www-form-urlencoded with base64 payloads,
- * so there is no multipart/form-data dependency. Best-effort by contract: the
- * caller falls back to a text-only tweet if this yields no media_ids.
+ * so there is no multipart/form-data dependency.
+ *
+ * CALLER CONTRACT (P3-A): this is NOT best-effort any more. Returning zero
+ * media_ids, or throwing, both make xAdapter REFUSE to publish — a post that
+ * asked for media is never shipped as text. Nothing here may therefore invent
+ * or pass through a media_id it did not actually receive from X.
  *
  * X composition rules enforced here: up to 4 images, OR exactly 1 video, OR 1
  * GIF per tweet (images and video cannot be mixed).
@@ -88,12 +92,42 @@ async function postForm(token: XToken, params: Record<string, string>): Promise<
   return res.data;
 }
 
+/**
+ * Read X's `media_id_string` out of an upload response, or throw.
+ *
+ * `String(data.media_id_string)` was used directly at both call sites. When X
+ * answers 200 with a body that has no `media_id_string` — a throttled or
+ * partially-degraded upload response — that produces the literal string
+ * "undefined", which is truthy and non-empty. The consequences were real:
+ *
+ *   - single-shot: "undefined" was returned as a media_id, so the caller's
+ *     `mediaIds.length > 0` honesty check passed and the tweet-create call was
+ *     made with media_ids: ["undefined"]. X rejects that with a 400, which the
+ *     adapter classifies as TWITTER_VALIDATION_ERROR, retryable: false — so a
+ *     transient upload glitch permanently killed the post, and the reported
+ *     cause was "invalid tweet content" rather than a media upload failure.
+ *   - chunked: "undefined" was then sent as the media_id for every APPEND and
+ *     FINALIZE, uploading the whole file against a nonexistent id.
+ *
+ * Failing here instead routes both cases into the caller's existing retryable
+ * MEDIA_WOULD_BE_STRIPPED failure, which is the truthful classification.
+ */
+function requireMediaId(data: any, step: string): string {
+  const id = data?.media_id_string;
+  if (typeof id !== 'string' || id.trim().length === 0) {
+    // `media_id` (the numeric form) is lossy in JS and X documents the string
+    // form as the one to use, so an absent string id is a hard failure.
+    throw new Error(`X media upload (${step}) returned no media_id_string`);
+  }
+  return id;
+}
+
 async function uploadSimple(buffer: Buffer, meta: MediaMeta, token: XToken): Promise<string> {
   const data = await postForm(token, {
     media_data: buffer.toString('base64'),
     media_category: meta.category,
   });
-  return String(data.media_id_string);
+  return requireMediaId(data, 'single-shot');
 }
 
 async function uploadChunked(buffer: Buffer, meta: MediaMeta, token: XToken): Promise<string> {
@@ -104,7 +138,7 @@ async function uploadChunked(buffer: Buffer, meta: MediaMeta, token: XToken): Pr
     media_type: meta.mimeType,
     media_category: meta.category,
   });
-  const mediaId = String(init.media_id_string);
+  const mediaId = requireMediaId(init, 'INIT');
 
   // APPEND — one base64 segment per chunk.
   let segment = 0;
@@ -159,6 +193,8 @@ async function uploadOne(url: string, token: XToken): Promise<string> {
  * Enforces X's composition rules (≤4 images, OR 1 video, OR 1 GIF). Image
  * uploads are individually best-effort (a single failure is skipped, not fatal);
  * a video/GIF failure rejects so the caller can decide. Returns [] for no media.
+ *
+ * Every id in the returned array is one X actually issued — see requireMediaId.
  */
 export async function uploadXMedia(mediaUrls: string[] | undefined, token: XToken): Promise<string[]> {
   const urls = (mediaUrls || []).filter((u) => typeof u === 'string' && u.trim());
