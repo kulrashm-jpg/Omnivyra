@@ -20,7 +20,13 @@
  *     so the whole video was uploaded against a nonexistent id.
  *
  * All HTTP is mocked (`axios`) — nothing here contacts X, and no credential is
- * used. The first four tests fail on the unmodified base.
+ * used.
+ *
+ * UPDATED with the all-or-nothing change (P3-A partial-media closeout):
+ * uploadXMedia no longer swallows a per-image failure, so the unusable-response
+ * cases below now REJECT rather than returning a short list. The guarantee
+ * under test is the same one — an id X did not issue never reaches the caller —
+ * and the caller-visible outcome is the same MEDIA_WOULD_BE_STRIPPED refusal.
  */
 
 export {};
@@ -66,14 +72,22 @@ beforeEach(() => {
  * ────────────────────────────────────────────────────────────────────────── */
 describe('single-shot image upload', () => {
   it('CRITICAL: a 200 with no media_id_string yields NO id — never the string "undefined"', async () => {
+    // These three used to assert `toEqual([])`, because the per-image
+    // try/catch swallowed requireMediaId's throw. uploadXMedia is all-or-
+    // nothing now, so the same unusable response surfaces as a rejection
+    // instead of an empty list. Either way xAdapter returns the SAME truthful
+    // MEDIA_WOULD_BE_STRIPPED failure — what is asserted here is unchanged:
+    // the literal "undefined" never becomes a media_id.
     stubDownload('image/jpeg');
     mockPost.mockResolvedValue({ data: {} }); // 200, but no media_id_string
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
-    const ids = await uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN);
-
-    expect(ids).toEqual([]);
-    expect(ids).not.toContain('undefined');
+    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(
+      /media_id_string/i,
+    );
+    // Nothing was handed back at all, so no "undefined" could be.
+    const tweetCreate = mockPost.mock.calls.filter(([url]) => !String(url).includes('upload.json'));
+    expect(tweetCreate).toHaveLength(0);
   });
 
   it('CRITICAL: an empty-string media_id_string is rejected too', async () => {
@@ -81,7 +95,9 @@ describe('single-shot image upload', () => {
     mockPost.mockResolvedValue({ data: { media_id_string: '   ' } });
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
-    expect(await uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).toEqual([]);
+    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(
+      /media_id_string/i,
+    );
   });
 
   it('CRITICAL: a numeric-only media_id (no string form) is not accepted', async () => {
@@ -91,7 +107,9 @@ describe('single-shot image upload', () => {
     mockPost.mockResolvedValue({ data: { media_id: 1234567890123456789 } });
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
-    expect(await uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).toEqual([]);
+    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(
+      /media_id_string/i,
+    );
   });
 
   it('a real media_id_string is still returned unchanged (happy path preserved)', async () => {
@@ -102,7 +120,13 @@ describe('single-shot image upload', () => {
     expect(await uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).toEqual(['99887766554433221']);
   });
 
-  it('a partial batch still returns only the ids that were genuinely issued', async () => {
+  it('a batch with one unusable response rejects — it never returns the partial set', async () => {
+    // Was: `expect(ids).toEqual(['id-1', 'id-3'])`. Handing back the survivors
+    // WAS the silent PARTIAL strip: xAdapter saw two ids, published a
+    // two-image tweet for a three-image post and reported success.
+    // uploadXMedia is all-or-nothing now — see xPartialMediaIntegrity.test.ts
+    // for the adapter-level consequence. The invariant this test exists for is
+    // unchanged and still asserted: no id X did not issue is ever handed back.
     stubDownload('image/jpeg');
     let call = 0;
     mockPost.mockImplementation(async () => {
@@ -111,12 +135,12 @@ describe('single-shot image upload', () => {
     });
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
-    const ids = await uploadXMedia(
-      ['https://cdn.example.com/a.jpg', 'https://cdn.example.com/b.jpg', 'https://cdn.example.com/c.jpg'],
-      TOKEN,
-    );
-
-    expect(ids).toEqual(['id-1', 'id-3']);
+    await expect(
+      uploadXMedia(
+        ['https://cdn.example.com/a.jpg', 'https://cdn.example.com/b.jpg', 'https://cdn.example.com/c.jpg'],
+        TOKEN,
+      ),
+    ).rejects.toThrow(/media_id_string/i);
   });
 });
 
