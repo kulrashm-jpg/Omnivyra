@@ -880,7 +880,7 @@
       "rules": [
         "R5-ORDER"
       ],
-      "reason": "Self-serve branch (body.email, no authentication, rate-limited, constant response) revokes the pending invitation (update revoked_at), creates a fresh invitation and enqueues the invitation email. The route has no public/auth-flow contract declaring an unauthenticated mutation; owner review must either declare it or require the invite token."
+      "reason": "Self-serve branch (body.email, no authentication, rate-limited, constant response) revokes the pending invitation (update revoked_at), creates a fresh invitation and enqueues the invitation email. OWNER REVIEW DONE (WSF-ORD remediation): PUBLIC BY PRODUCT CONTRACT, not a defect - the branch is the documented recovery for a lost/expired invite link, so it cannot require the token it exists to replace; it is 5/hr per IP + 3/hr per email limited, answers a constant 200, and takes company + role from the EXISTING invitation row, never from the request, so it can only re-issue an invitation a tenant admin already created, to the same address. auth/resend-verification.ts is declared allow:auth-flow for the identical shape. DELIBERATELY NOT declared auth-flow here: that kind is order-exempt for the WHOLE route and would also exempt the authenticated admin branch (resolvePrincipal + requireTenantAccess role gate) from R1/R2. Kept tracked so the gate keeps printing it. Residual, accepted: someone who knows a pending invitee's address can churn that invite's token within the rate limit."
     },
     "pages/api/leads/index.ts": {
       "finding": "WSF-ORD-003",
@@ -888,7 +888,7 @@
       "rules": [
         "R5-ORDER"
       ],
-      "reason": "Mode 2 embedded-form submission (body.form_id, origin-checked by checkFormOrigin, no authentication) resolves the visitor session, creates a unified person and lead, and writes attribution/telemetry. Mode 1 is verified (orderingVerifiers); the public form mutation branch has no declared public contract and needs owner review."
+      "reason": "Mode 2 embedded-form submission (body.form_id, origin-checked by checkFormOrigin, no authentication) resolves the visitor session, creates a unified person and lead, and writes attribution/telemetry. Mode 1 is verified (orderingVerifiers). OWNER REVIEW DONE (WSF-ORD remediation): PUBLIC BY PRODUCT CONTRACT, not a defect - an embedded capture form is submitted by anonymous visitors on the customer's own site (hence the CORS headers and the OPTIONS branch), and the tenant is derived SERVER-SIDE from the form row (form.company_id), never from the request, so no cross-tenant write is reachable: a submission can only create a lead for the company that owns that form_id. DELIBERATELY NOT declared public: that kind is order-exempt for the WHOLE route and would also exempt the authenticated GET (enforceCompanyAccess) and Mode 3. Kept tracked so the gate keeps printing it. Residual, NOT fixed and outside an ordering remediation: checkFormOrigin fails OPEN when a form has no allowed_domains, and the branch has no rate limit or captcha, so a known form_id can be used to flood that tenant's own lead list - an abuse/quality control (captcha, per-form limit, required allowed_domains), not an authorization boundary."
     }
   },
   "_orderingComment": [

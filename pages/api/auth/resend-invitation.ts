@@ -21,6 +21,30 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *      old invitation is revoked + a fresh one is sent.
  *
  * Both modes record an audit row with actor + invite id + outcome.
+ *
+ * WSF-ORD-002 — reviewed; mode 1 is KEPT unauthenticated on purpose. The
+ * route-auth gate flags it (R5-ORDER: an unauthenticated caller reaches a
+ * write) and goes on printing it as a tracked finding, which is the right
+ * outcome — the branch IS a deliberate anonymous mutation and should stay
+ * visible.
+ *
+ * Why it is not a defect:
+ *   - it is the documented recovery for an invite link that expired or was
+ *     lost, so it cannot be gated on the token it exists to replace;
+ *   - it is limited to 5/hr per IP and 3/hr per email and answers a constant
+ *     200, so it is neither an amplifier nor an enumeration oracle;
+ *   - the company and the role come from the EXISTING invitation row, never
+ *     from the request, so it can only re-issue an invitation a tenant admin
+ *     already created, to the same address. No cross-tenant write exists.
+ *
+ * Accepted residual: someone who knows a pending invitee's address can churn
+ * that invitation's token within the rate limit.
+ *
+ * Why the route is NOT declared kind:"auth-flow" (as auth/resend-verification
+ * is, for the identical shape): that kind is order-exempt for the WHOLE route
+ * and would also exempt the admin branch below — resolvePrincipal plus
+ * requireTenantAccess with a role gate — from R1/R2 and from ordering. Losing
+ * coverage on the branch that touches tenant data is the worse trade.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

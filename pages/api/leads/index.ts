@@ -106,6 +106,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // ── Mode 2: Embedded form submission — form_id in body (no auth required) ──
+    //
+    // WSF-ORD-002/003 review: this branch is KEPT unauthenticated on purpose.
+    // The route-auth gate flags it (R5-ORDER: an anonymous caller reaches a
+    // write) and keeps printing it as a tracked finding — correct, because it
+    // IS a deliberate anonymous mutation and should stay visible.
+    //
+    // It is not an authorization defect: an embedded capture form is submitted
+    // by anonymous visitors on the customer's own site (hence setCors and the
+    // OPTIONS branch above), and the TENANT IS DERIVED SERVER-SIDE from the
+    // form row — every write below passes form.company_id, never a company
+    // taken from the request — so a submission can only ever create a lead for
+    // the company that owns this form_id. No cross-tenant write is reachable.
+    //
+    // The route is deliberately NOT declared kind:"public": that kind is
+    // order-exempt for the WHOLE route and would also exempt the authenticated
+    // GET (enforceCompanyAccess) and Mode 3 below.
+    //
+    // KNOWN RESIDUAL, not fixed here (an abuse control, not an authorization
+    // boundary, and a product decision): checkFormOrigin FAILS OPEN when a form
+    // has no allowed_domains configured, and this branch has no rate limit or
+    // captcha — so a leaked form_id can be used to flood that tenant's own lead
+    // list. Closing it means a captcha, a per-form rate limit, or making
+    // allowed_domains mandatory.
     if (body.form_id) {
       const form = await getForm(String(body.form_id));
       if (!form) return res.status(404).json({ error: 'Form not found' });
