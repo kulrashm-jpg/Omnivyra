@@ -198,6 +198,20 @@ module.exports = [
     },
   },
 
+  // ── ESM modules (.mjs) ───────────────────────────────────────────────────
+  // A `.mjs` file is always an ES module, and top-level `await` is ES2022.
+  // The base block above pins ecmaVersion 2021 for JavaScript, which predates
+  // top-level await, so espree rejected .mjs tooling that legitimately awaits
+  // at module scope. This sets the LANGUAGE LEVEL for .mjs only — every rule
+  // configured above still applies to these files unchanged.
+  {
+    files: ["**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+    },
+  },
+
   // Ignore patterns
   {
     ignores: [
