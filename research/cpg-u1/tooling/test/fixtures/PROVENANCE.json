@@ -1,0 +1,28 @@
+{
+  "purpose": "Known-answer test vectors for CPG U1 tooling v3. Historical public data only; no study commitment, seed, key or transaction of this study.",
+  "fetched": "2026-09-16 (CPG-041)",
+  "bitcoin": {
+    "network": "bitcoin-mainnet",
+    "source": "https://blockstream.info/api (block headers, block hashes, block txids, raw transactions, Merkle proof, decoded transaction)",
+    "self_verifying": "Header hashes are recomputed (SHA-256d) and checked against proof of work and linkage by the self-test; the 3050 txids reproduce the block 840000 Merkle root; transaction ids are recomputed from the raw bytes.",
+    "files": {
+      "header_<h>.hex / hash_<h>.txt": "heights 836640, 838655, 838656 (retarget boundary KAT) and 839989-840012 (contiguous range)",
+      "block_840000_txids.json": "all 3050 txids of block 840000 (hash 0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5)",
+      "tx_840000_coinbase.hex": "raw coinbase transaction (index 0)",
+      "tx_840000_index5.hex": "raw SegWit transaction at index 5",
+      "tx_840000_index5_decoded.json": "source decoding of index 5 (prevout, size, weight) used as an independent comparison",
+      "merkleproof_840000_index5.json": "Merkle branch and position for index 5"
+    }
+  },
+  "drand": {
+    "chain": "quicknet 52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
+    "source": "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971 (/info, /public/<round>)",
+    "self_verifying": "Each round's BLS signature is verified offline against the pinned group public key; randomness = sha256(signature).",
+    "files": {
+      "quicknet_chain_info.json": "chain info (public key, period 3, genesis 1692803367, scheme bls-unchained-g1-rfc9380)",
+      "quicknet_round_1.json": "round 1",
+      "quicknet_round_1000000.json": "round 1000000",
+      "quicknet_round_12345678.json": "round 12345678"
+    }
+  }
+}

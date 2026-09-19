@@ -1,0 +1,131 @@
+{
+  "governed_by": "CPG_U1_PREREGISTRATION_CANDIDATE_002.md",
+  "unknown_token": "UNKNOWN",
+  "attestations": [
+    "yes",
+    "no",
+    "unknown"
+  ],
+  "contamination_attestations": [
+    "c1_2_used_in_cpg_work",
+    "c1_3_values_derived_from_cpg",
+    "c1_4_prior_cpg_execution",
+    "c1_5_internal_or_owned"
+  ],
+  "jurisdiction_families": {
+    "US-SEC": [
+      "CIK",
+      "LEI"
+    ],
+    "FR-SIRENE": [
+      "SIREN",
+      "LEI"
+    ],
+    "BR-CNPJ": [
+      "CNPJ",
+      "LEI"
+    ],
+    "LEI-ONLY": [
+      "LEI"
+    ]
+  },
+  "family_order": [
+    "US-SEC",
+    "FR-SIRENE",
+    "BR-CNPJ",
+    "LEI-ONLY"
+  ],
+  "outcome_classes": [
+    "fill-expected",
+    "abstention-expected",
+    "identity-hazard"
+  ],
+  "development_quota": {
+    "fill-expected": 6,
+    "abstention-expected": 2,
+    "identity-hazard": 2
+  },
+  "held_out_base": {
+    "fill-expected": 12,
+    "abstention-expected": 5,
+    "identity-hazard": 3
+  },
+  "pool_multiplier": 2,
+  "sizing": {
+    "MIN_FILLS": 20,
+    "SAFETY": 1.5,
+    "CAP_FILL_EXPECTED": 60
+  },
+  "exclusion_reasons": [
+    "A1_NOT_OPERATING_ENTITY",
+    "A1_NOT_ESTABLISHED",
+    "A2_NO_CONTROLLED_DOMAIN",
+    "A2_NOT_ESTABLISHED",
+    "A3_INVALID_IDENTIFIER",
+    "A3_NOT_ESTABLISHED",
+    "A4_NO_INDEPENDENT_TIE",
+    "A4_NOT_ESTABLISHED",
+    "A5_INACCESSIBLE_JURISDICTION",
+    "A5_NOT_ESTABLISHED",
+    "A6_REFERENCE_NOT_OBTAINABLE",
+    "A6_NOT_ESTABLISHED",
+    "OUTCOME_CLASS_NOT_ESTABLISHED",
+    "MALFORMED_ROW",
+    "NOT_DRAWN",
+    "DEVELOPMENT_SURPLUS"
+  ],
+  "fields": [
+    "founded_year",
+    "employee_count",
+    "revenue_range"
+  ],
+  "value_formats": {
+    "founded_year": "a four-digit year, e.g. 1999",
+    "employee_count": "a positive integer without separators, e.g. 3682",
+    "revenue_range": "an ISO 4217 code, one space, and a positive integer in whole units, e.g. USD 1300000000"
+  },
+  "source_classes": [
+    "REGISTRY_RECORD",
+    "REGULATORY_FILING",
+    "AUDITED_FINANCIAL_FILING",
+    "ENTITY_OWN_PAGE",
+    "ENTITY_OWN_FINANCIAL_STATEMENT",
+    "PRESS",
+    "ENCYCLOPAEDIA",
+    "AGGREGATOR",
+    "JOB_BOARD"
+  ],
+  "authority_by_field": {
+    "founded_year": {
+      "REGISTRY_RECORD": "TIER_1",
+      "ENTITY_OWN_PAGE": "TIER_2"
+    },
+    "employee_count": {
+      "REGULATORY_FILING": "TIER_1",
+      "ENTITY_OWN_PAGE": "TIER_2"
+    },
+    "revenue_range": {
+      "AUDITED_FINANCIAL_FILING": "TIER_1",
+      "REGULATORY_FILING": "TIER_1",
+      "ENTITY_OWN_FINANCIAL_STATEMENT": "TIER_2"
+    }
+  },
+  "forbidden_value_kinds": [
+    "TARGET",
+    "PROJECTION",
+    "RUN_RATE",
+    "ORDER_BOOK",
+    "ESTIMATE"
+  ],
+  "adjudication_decisions": [
+    "AUTHOR",
+    "CONFIRMER",
+    "REFERENCE-CONFLICT"
+  ],
+  "reference_resolutions": [
+    "AGREED",
+    "ADJUDICATED_AUTHOR",
+    "ADJUDICATED_CONFIRMER",
+    "REFERENCE_CONFLICT"
+  ]
+}
