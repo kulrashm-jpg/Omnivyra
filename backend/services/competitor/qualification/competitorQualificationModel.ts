@@ -79,10 +79,16 @@ export const MULTISIGNAL_WEIGHT_PROFILE_V1: QualificationWeightProfile = {
  * Versus V1 the audit found: `marketOverlap` under-weighted (highest discriminative efficiency,
  * lowest strong-signal weight), `semanticSimilarity` over-weighted for its separation power, and
  * `serpEvidence` non-discriminative when provenance is held constant (floored, not deleted, so it
- * still carries production provenance variation). V2 reallocates accordingly and is validated to
- * preserve precision/recall/F1 = 1.0 (0 FP, 0 FN) while WIDENING the qualified↔unqualified
+ * still carries production provenance variation). V2 reallocates accordingly and preserves
+ * precision/recall/F1 = 1.0 (0 FP, 0 FN) while WIDENING the qualified↔unqualified
  * separation gap 32 → 36 and both decision margins by +2. All seven weights are stable (0 decision
  * flips under ±10%/±20% perturbation). Regression-locked in competitorCalibrationAnalysis.test.ts.
+ *
+ * IN-SAMPLE, NOT VALIDATED: those figures are measured on the same 44-case set the weights were
+ * derived from (`deriveOptimizedProfile(ALL)`, then `evaluateProfile(ALL, …)`), so F1 = 1.0 holds
+ * by construction and carries NO generalisation information. Treat them as a regression lock on a
+ * deterministic derivation, never as evidence that the profile generalises. Out-of-sample
+ * performance on independently labelled unseen-industry cases is UNMEASURED.
  *
  * NOTE: this is a shadow-model calibration only — the shadow is NOT promoted and NOT deployed.
  */
