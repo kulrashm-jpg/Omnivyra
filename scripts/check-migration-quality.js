@@ -325,7 +325,7 @@ function securityViolations(sql) {
 }
 
 function main() {
-  if (!fs.existsSync(MIG_DIR)) { console.log('[migration-quality] no supabase/migrations — skip'); process.exit(0); }
+  if (!fs.existsSync(MIG_DIR)) { console.log('[migration-quality] no supabase/migrations — skip'); process.exitCode = 0; return; }
   const baseline = readList(BASELINE);
   const ordering = readList(ORDERING_BASELINE);
   const frozen = new Set([...baseline, ...ordering]);
@@ -401,10 +401,13 @@ function main() {
       'existing migration, guard additive DDL with IF NOT EXISTS, and keep new objects closed to\n' +
       'anon/authenticated (RLS, REVOKE, security_invoker). See docs/migration-discipline.md.\n',
     );
-    process.exit(1);
+    // process.exit() here would discard stderr still queued on a pipe (CI captures the gate through one),
+    // truncating the violation list mid-stream. Set the status and let Node flush before it exits.
+    process.exitCode = 1;
+    return;
   }
   console.log(`[migration-quality] OK — ${newFiles.length} new migration(s) valid; ${baseline.size} historical frozen; ordering floor ${order.floor || 'n/a'}.`);
-  process.exit(0);
+  process.exitCode = 0;
 }
 
 if (require.main === module) main();
