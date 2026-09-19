@@ -149,3 +149,10 @@ supabase/.temp/
 
 # Playwright / auth-integrity E2E output (screenshots and page-state JSON per run). Generated, never source.
 test-results/
+
+# CPG-046: the U1 tooling's VENDORED dependency is part of its certified tree.
+# The tooling aggregate (a registered, hash-pinned value) is computed over every file of
+# research/cpg-u1/tooling, including these two vendored packages, so they must be tracked.
+# Renaming the directory would change that aggregate, so the directory is un-ignored instead.
+!research/cpg-u1/tooling/node_modules/
+!research/cpg-u1/tooling/node_modules/**
