@@ -78,7 +78,6 @@ jest.mock('../../services/billing/creditEconomyShadow', () => ({ emitCreditEcono
 import { processCampaignPlanningJob } from '../../queue/jobProcessors/campaignPlanningProcessor';
 // eslint-disable-next-line import/first
 import { processCreatorContentJob } from '../../queue/jobProcessors/creatorContentProcessor';
-// eslint-disable-next-line import/first
 import { processContentGenerationJob } from '../../queue/jobProcessors/contentGenerationProcessor';
 
 beforeEach(() => {
