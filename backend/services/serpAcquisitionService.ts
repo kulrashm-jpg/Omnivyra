@@ -14,6 +14,8 @@ import {
   normalizeSerpResultType,
   hasMeaningfulPosition,
   requiresUrl,
+  isFeatureBlockEntry,
+  markFeatureBlockEntry,
   type SerpResultType,
 } from './serp/serpResultTypes';
 
@@ -155,12 +157,26 @@ function parseProviderResults(rawResults: any[]): SerpSnapshotInput['results'] {
       return;
     }
 
-    // Rank only where a rank means something.
-    const rawPosition = Number(row.position ?? row.rank ?? row.rank_absolute ?? row.rank_group ?? index + 1);
+    // Rank only where a rank means something — and only where one was OBSERVED.
+    //
+    // The 1-based `index` is a rank proxy for exactly one input shape: an
+    // ORDERED provider array, where the array order IS the ranking. Both
+    // acquisition paths append the sibling feature blocks onto that array, so
+    // for a feature entry the index is an offset into a concatenation and is
+    // not a rank. See the RANK PROVENANCE note in serp/serpResultTypes.ts.
+    const declaredRank = row.position ?? row.rank ?? row.rank_absolute ?? row.rank_group;
+    const candidateRank = declaredRank ?? (isFeatureBlockEntry(row) ? undefined : index + 1);
+    const rawPosition = Number(candidateRank);
     const position = hasMeaningfulPosition(resultType) && Number.isFinite(rawPosition) && rawPosition > 0
       ? rawPosition
       : null;
-    if (hasMeaningfulPosition(resultType) && position === null) return;
+    // A rank the provider DECLARED but that is not a usable number is a
+    // malformed observation, and a malformed observation is no observation —
+    // unchanged. A rank that was never declared at all on a feature block is
+    // honest ABSENCE: the observation stands, ranked `null`, exactly as the
+    // unranked feature types already do. Dropping it instead would discard the
+    // very blocks DG-001 exists to stop discarding.
+    if (hasMeaningfulPosition(resultType) && position === null && candidateRank !== undefined) return;
 
     // De-duplicate within one response. Type participates: the same URL as an
     // organic result and inside a sitelink block are two distinct observations.
@@ -247,12 +263,14 @@ function collectSiblingFeatureItems(body: unknown): ProviderEntry[] {
     if (Array.isArray(block)) {
       for (const entry of block) {
         // `type` is written LAST, so the key's canonical label always wins over
-        // any `type` the provider put on the entry itself.
-        if (isProviderEntry(entry)) items.push({ ...entry, type: typeLabel });
+        // any `type` the provider put on the entry itself. The provenance mark
+        // says "this came out of a feature block, not out of the ordered result
+        // array", so the parser does not use its index as a rank.
+        if (isProviderEntry(entry)) items.push(markFeatureBlockEntry({ ...entry, type: typeLabel }));
       }
     } else if (isProviderEntry(block)) {
       // A knowledge graph arrives as a single object, not an array.
-      items.push({ ...block, type: typeLabel });
+      items.push(markFeatureBlockEntry({ ...block, type: typeLabel }));
     }
   }
   // Sitelinks are nested INSIDE organic results rather than beside them.
@@ -265,7 +283,7 @@ function collectSiblingFeatureItems(body: unknown): ProviderEntry[] {
       : isProviderEntry(nested) && Array.isArray(nested.inline) ? nested.inline
         : isProviderEntry(nested) && Array.isArray(nested.expanded) ? nested.expanded : [];
     for (const link of list) {
-      if (isProviderEntry(link)) items.push({ ...link, type: 'sitelink' });
+      if (isProviderEntry(link)) items.push(markFeatureBlockEntry({ ...link, type: 'sitelink' }));
     }
   }
   return items;

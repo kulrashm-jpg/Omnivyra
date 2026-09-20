@@ -55,6 +55,7 @@ import { logProviderCall } from '../intelligence/productionPrimitives';
 import { getReportDeadlineSignal } from '../intelligence/reportDeadlineContext';
 import type { SerpSnapshotInput } from '../externalCompetitiveIntelligenceService';
 import { redactedErrorMessage } from '../../../lib/security/redactUrl';
+import { markFeatureBlockEntry } from './serpResultTypes';
 
 /** The provider a report consumer is pinned to. See the note above. */
 export const REPORT_SERP_PROVIDER = 'serpapi' as const;
@@ -310,10 +311,12 @@ function collectSiblingFeatureBlocks(body: Record<string, unknown>): unknown[] {
     const block = (body as Record<string, unknown>)[key];
     if (Array.isArray(block)) {
       for (const entry of block) {
-        if (entry && typeof entry === 'object') items.push({ ...(entry as object), type: key });
+        // Marked with feature-block provenance so the parser does not read
+        // this entry's index in the concatenated array as a rank.
+        if (entry && typeof entry === 'object') items.push(markFeatureBlockEntry({ ...(entry as object), type: key }));
       }
     } else if (block && typeof block === 'object') {
-      items.push({ ...(block as object), type: key });
+      items.push(markFeatureBlockEntry({ ...(block as object), type: key }));
     }
   }
   // Sitelinks are nested inside organic results rather than beside them.
@@ -326,7 +329,7 @@ function collectSiblingFeatureBlocks(body: Record<string, unknown>): unknown[] {
       : Array.isArray(nested?.inline) ? nested!.inline
         : Array.isArray(nested?.expanded) ? nested!.expanded : [];
     for (const link of list) {
-      if (link && typeof link === 'object') items.push({ ...(link as object), type: 'sitelink' });
+      if (link && typeof link === 'object') items.push(markFeatureBlockEntry({ ...(link as object), type: 'sitelink' }));
     }
   }
   return items;
