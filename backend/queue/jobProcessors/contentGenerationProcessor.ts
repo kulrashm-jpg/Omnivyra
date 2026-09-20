@@ -38,6 +38,7 @@ import { buildContentContext } from '../../../lib/content/buildContentContext';
 import { isLongFormContentType } from '../../../lib/content/longFormContentTypeConfig';
 import { renderPlatformVariantsFromBlueprint } from '../../services/contentGeneration/platformVariantGenerator';
 import { assertGenericContentJob } from './genericContentJobGuard';
+import { assertJobCampaignBinding } from './jobTenantBinding';
 
 // Stubs for services not yet implemented
 const feedbackIntelligenceEngine = {
@@ -56,12 +57,49 @@ async function refundCredits(_company_id: string, _key: string): Promise<void> {
 // MAIN JOB PROCESSOR
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * SEC-C5 (STEP 3AH-91) — re-prove the payload's tenant ids before billing.
+ *
+ * assertGenericContentJob establishes SHAPE (a generic queue, a generic
+ * payload, a non-empty `company_id`); it does not establish OWNERSHIP. The
+ * queue is not an authorisation boundary: anything able to write the Redis
+ * keyspace can enqueue a content job naming company A's billing and company
+ * B's campaign, and this processor then bills A (admission, credit-economy
+ * ENTRY consumption with `validateMembership: false`, queue billing) and
+ * generates against that pairing.
+ *
+ * Generic content payloads carry `campaign_id` only when a campaign produced
+ * them (adapters/campaign/masterContentAdapter); the blog, post and engagement
+ * producers carry none. The campaign binding is therefore asserted only when
+ * the payload has one, exactly as the creator processor treats an
+ * activity-workspace campaign id — `requireExisting: false`, because a
+ * campaign that does not exist cannot belong to another tenant, while a
+ * campaign owned by ANOTHER company is refused before any billing or model
+ * call.
+ */
+async function assertGenericContentJobTenantBinding(job: Job): Promise<void> {
+  const data = (job?.data && typeof job.data === 'object' ? job.data : {}) as Record<string, unknown>;
+  const campaignId = data.campaign_id;
+  if (campaignId === undefined || campaignId === null || String(campaignId) === '') return;
+  await assertJobCampaignBinding({
+    queue: `generic-content:${String((job as { queueName?: string }).queueName ?? 'unknown')}`,
+    jobId: job.id,
+    campaignId: String(campaignId),
+    // assertGenericContentJob already proved this is a non-empty string.
+    companyId: data.company_id,
+    requireExisting: false,
+  });
+}
+
 export async function processContentGenerationJob(job: Job): Promise<any> {
   // Topology guard: this processor owns only the content-* queues (the
   // `generic-content` family in workerTopologyManifest). A job from another
   // queue, or with a non-generic payload, is refused here — before billing,
   // admission and every model/provider call.
   assertGenericContentJob(job);
+  // SEC-C5: shape is not ownership — bind the payload's campaign to its company
+  // before admission, credit-economy consumption and every model call.
+  await assertGenericContentJobTenantBinding(job);
 
   const { company_id, content_type, bulk_mode, user_id } = job.data;
 
