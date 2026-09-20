@@ -61,6 +61,16 @@ jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => from(t) }
 
 const admission = jest.fn(async () => { throw new Error('PAST_BINDING'); });
 const shadow = jest.fn();
+const model = jest.fn(async () => ({ output: '{}' }));
+jest.mock('../../services/aiGateway', () => ({
+  runCompletionWithOperation: (...a: unknown[]) => model(...(a as [])),
+  generateCampaignPlan: (...a: unknown[]) => model(...(a as [])),
+}));
+jest.mock('../../../lib/content/unifiedLongFormEngine', () => ({
+  runUnifiedLongFormGeneration: (...a: unknown[]) => model(...(a as [])),
+}));
+jest.mock('../../../lib/content/buildContentContext', () => ({ buildContentContext: jest.fn(async () => null) }));
+
 jest.mock('../../services/billing/admissionControl', () => ({ evaluateActivityAdmission: (...a: unknown[]) => admission(...(a as [])) }));
 jest.mock('../../services/billing/creditEconomyShadow', () => ({ emitCreditEconomyShadowEvaluation: (...a: unknown[]) => shadow(...(a as [])) }));
 
@@ -68,11 +78,13 @@ jest.mock('../../services/billing/creditEconomyShadow', () => ({ emitCreditEcono
 import { processCampaignPlanningJob } from '../../queue/jobProcessors/campaignPlanningProcessor';
 // eslint-disable-next-line import/first
 import { processCreatorContentJob } from '../../queue/jobProcessors/creatorContentProcessor';
+import { processContentGenerationJob } from '../../queue/jobProcessors/contentGenerationProcessor';
 
 beforeEach(() => {
   resetDb();
   admission.mockClear();
   shadow.mockClear();
+  model.mockClear();
 });
 
 const planningJob = (data: Record<string, unknown>) =>
@@ -170,6 +182,63 @@ describe('creator-content processor — activity-workspace jobs', () => {
   });
 });
 
+const contentJob = (data: Record<string, unknown>, queueName = 'content-post') =>
+  ({ id: 'gjob-1', queueName, data, attemptsMade: 0, opts: {}, updateProgress: jest.fn() }) as never;
+const genericPayload = (over: Record<string, unknown>) =>
+  ({ company_id: 'comp-a', content_type: 'post', topic: 'Pricing', ...over });
+
+describe('generic-content processor — campaign payloads', () => {
+  it("refuses company A's billing with company B's campaign — before admission and any model call", async () => {
+    await expect(processContentGenerationJob(contentJob(genericPayload({ campaign_id: 'camp-b' }))))
+      .rejects.toMatchObject({ name: 'JobTenantBindingError', ownership: 'foreign' });
+    expect(admission).not.toHaveBeenCalled();
+    expect(shadow).not.toHaveBeenCalled();
+    expect(model).not.toHaveBeenCalled();
+    expect(writes).toEqual([]);
+  });
+
+  it('refuses a campaign-scoped job on every generic queue, not just one', async () => {
+    for (const queue of ['content-blog', 'content-whitepaper', 'content-newsletter', 'content-refinement']) {
+      admission.mockClear();
+      await expect(processContentGenerationJob(contentJob(genericPayload({ campaign_id: 'camp-b', content_type: 'thread' }), queue)))
+        .rejects.toMatchObject({ name: 'JobTenantBindingError', ownership: 'foreign' });
+      expect(admission).not.toHaveBeenCalled();
+    }
+  });
+
+  it('lets the legitimate pairing through to billing admission', async () => {
+    await expect(processContentGenerationJob(contentJob(genericPayload({ campaign_id: 'camp-a' }))))
+      .rejects.toThrow('PAST_BINDING');
+    expect(admission).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves campaign-less payloads (blog/post/engagement producers) exactly as they were', async () => {
+    await expect(processContentGenerationJob(contentJob(genericPayload({}))))
+      .rejects.toThrow('PAST_BINDING');
+    expect(admission).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows an id that is not a campaign (nothing owns it), like the creator workspace case', async () => {
+    await expect(processContentGenerationJob(contentJob(genericPayload({ campaign_id: 'not-a-campaign' }))))
+      .rejects.toThrow('PAST_BINDING');
+    expect(admission).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries (plain error) on a lookup failure instead of failing open', async () => {
+    failTable = 'campaign_versions';
+    const err = await processContentGenerationJob(contentJob(genericPayload({ campaign_id: 'camp-a' }))).catch((e) => e);
+    expect(String(err?.message)).toMatch(/will retry/);
+    expect(err?.name).not.toBe('JobTenantBindingError');
+    expect(admission).not.toHaveBeenCalled();
+  });
+
+  it('keeps the topology guard first: a misrouted job is still refused without a database read', async () => {
+    await expect(processContentGenerationJob(contentJob(genericPayload({ campaign_id: 'camp-b' }), 'analytics-ingestion')))
+      .rejects.toMatchObject({ name: 'GenericContentJobRejectedError' });
+    expect(admission).not.toHaveBeenCalled();
+  });
+});
+
 describe('source pins', () => {
   const REPO = path.resolve(__dirname, '../../..');
   const src = (rel: string) => fs.readFileSync(path.join(REPO, rel), 'utf8');
@@ -180,6 +249,18 @@ describe('source pins', () => {
     const bind = branch.indexOf('assertJobCampaignBinding(');
     expect(bind).toBeGreaterThan(-1);
     expect(bind).toBeLessThan(branch.indexOf('runCampaignAiPlan(args'));
+  });
+
+  it('the generic content processor binds the campaign before admission or billing', () => {
+    const proc = src('backend/queue/jobProcessors/contentGenerationProcessor.ts');
+    const fn = proc.slice(proc.indexOf('export async function processContentGenerationJob'));
+    const bind = fn.indexOf('assertGenericContentJobTenantBinding(job)');
+    expect(bind).toBeGreaterThan(-1);
+    expect(bind).toBeLessThan(fn.indexOf('evaluateActivityAdmission'));
+    expect(bind).toBeLessThan(fn.indexOf('creditEconomyShadow'));
+    expect(bind).toBeLessThan(fn.indexOf('executeWithEntryConsumption'));
+    // The cheap shape/topology guard still runs first, so a misrouted job costs no read.
+    expect(fn.indexOf('assertGenericContentJob(job)')).toBeLessThan(bind);
   });
 
   it('every campaign snapshot read in the creator processor is company-scoped', () => {
