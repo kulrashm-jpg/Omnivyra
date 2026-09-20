@@ -77,6 +77,14 @@ import { runRenderParityPreflight, logPreflightReport } from './renderParityPref
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
 import { assertJobCampaignBinding } from '../queue/jobProcessors/jobTenantBinding';
 import { startCron } from '../scheduler/cron';
+import {
+  drainConsumers,
+  closeWithin,
+  once,
+  resolveDrainDeadlineMs,
+  POST_DRAIN_STEP_TIMEOUT_MS,
+  type ShutdownConsumer,
+} from './workerShutdown';
 
 // ── Worker instances ──────────────────────────────────────────────────────────
 
@@ -519,6 +527,48 @@ async function main(): Promise<void> {
 
   // ── Graceful shutdown ───────────────────────────────────────────────────────
 
+  // Hand back every BOLT claim this process still holds. Graceful shutdown
+  // CANNOT guarantee a multi-minute run completes, so the honest goal is to
+  // make the interruption immediately visible instead of leaving the next
+  // attempt to wait out the lock TTL. Status is deliberately untouched: the
+  // job may still be retried, and declaring it failed here would make
+  // executeBoltPipelineRuntime refuse to re-enter.
+  const releaseHeldBoltClaims = async (): Promise<void> => {
+    const held = getHeldRunLocks();
+    if (held.length === 0) return;
+    console.warn('[main] releasing in-flight BOLT claims', { count: held.length });
+    await Promise.allSettled(held.map(async ({ runId, token }) => {
+      const result = await releaseBoltRunClaimOnShutdown(runId, token);
+      // `strict: false` — narrow by member presence, not by the `ok` flag.
+      if ('error' in result) {
+        console.error('[main] BOLT claim release failed', { run_id: runId, error: result.error });
+      }
+    }));
+  };
+
+  // WS-1 (STEP 3AH-132): the drained set is DERIVED, never hand-listed. The
+  // nine inline workers this file constructs, plus EVERY handle
+  // registerSharedConsumers hands back — with the corrected topology, exactly
+  // one per `consumedVia: 'shared'` queue in workerTopologyManifest.ts.
+  // Six families used to register consumers whose handles were discarded
+  // (the content-*, creator-*, whatsapp-broadcast, whatsapp-webhook and
+  // analytics-ingestion families, plus the producer Queues opened by
+  // content-queues-init), so 13 consumers and their producer connections
+  // survived every SIGTERM. A shared queue added to the manifest is now
+  // drained here automatically: nothing here can drift from registration.
+  const shutdownConsumers = (): ShutdownConsumer[] => [
+    { name: 'publish', close: () => publishWorker.close() },
+    { name: 'bolt-execution', close: () => boltWorker.close() },
+    { name: 'engagement-polling', close: () => engagementWorker.close() },
+    { name: 'intelligence-polling', close: () => intelligenceWorker.close() },
+    { name: 'engine-jobs', close: () => engineWorker.close() },
+    { name: 'ai-heavy', close: () => campaignWorker.close() },
+    { name: 'creator-render', close: () => creatorRenderWorker.close() },
+    { name: 'lead-thread-recompute', close: () => leadThreadRecomputeWorker.close() },
+    { name: 'conversation-memory-rebuild', close: () => conversationMemoryRebuildWorker.close() },
+    ...sharedConsumers.workers.map((w) => ({ name: w.name, close: () => w.close() })),
+  ];
+
   const shutdown = async (signal: string) => {
     console.info(`[main] ${signal} received — shutting down gracefully`);
     stopMonitor();
@@ -530,14 +580,7 @@ async function main(): Promise<void> {
     // long, so an unbounded wait guarantees we are SIGKILLed mid-await and the
     // reconciliation below never runs. Capping the wait trades "finish the job"
     // (unachievable) for "record that the job was interrupted" (achievable).
-    const drainDeadlineMs = (() => {
-      const o = Number(process.env.WORKER_DRAIN_TIMEOUT_MS);
-      return Number.isFinite(o) && o >= 1000 && o <= 120_000 ? o : 15_000;
-    })();
-    const drainDeadline = new Promise<void>((resolve) => {
-      const t = setTimeout(resolve, drainDeadlineMs);
-      if (typeof t.unref === 'function') t.unref();
-    });
+    const drainDeadlineMs = resolveDrainDeadlineMs(process.env.WORKER_DRAIN_TIMEOUT_MS);
     // SEC-C6: hard backstop. The co-located scheduler no longer exits the
     // process underneath this drain, so guarantee an exit even if claim
     // release or connection close hangs (e.g. Redis unreachable).
@@ -547,47 +590,43 @@ async function main(): Promise<void> {
     }, drainDeadlineMs + 10_000);
     if (typeof hardExit.unref === 'function') hardExit.unref();
 
-    await Promise.race([drainDeadline, Promise.allSettled([
-      publishWorker.close(),
-      boltWorker.close(),
-      engagementWorker.close(),
-      intelligenceWorker.close(),
-      engineWorker.close(),
-      campaignWorker.close(),
-      creatorRenderWorker.close(),
-      leadThreadRecomputeWorker.close(),
-      conversationMemoryRebuildWorker.close(),
-      // F-07: getWorker-based shared consumers (planner-refinement, listening,
-      // semantic, replay). Content/creator/whatsapp/analytics workers manage
-      // their own lifecycle inside contentGenerationQueues (unchanged).
-      ...sharedConsumers.workers.map((w) => w.close()),
-    ])]);
+    const consumers = shutdownConsumers();
+    const outcome = await drainConsumers(consumers, drainDeadlineMs);
 
-    // Hand back every BOLT claim this process still holds. Graceful shutdown
-    // CANNOT guarantee a multi-minute run completes, so the honest goal is to
-    // make the interruption immediately visible instead of leaving the next
-    // attempt to wait out the lock TTL. Status is deliberately untouched: the
-    // job may still be retried, and declaring it failed here would make
-    // executeBoltPipelineRuntime refuse to re-enter.
-    const held = getHeldRunLocks();
-    if (held.length > 0) {
-      console.warn('[main] releasing in-flight BOLT claims', { count: held.length });
-      await Promise.allSettled(held.map(async ({ runId, token }) => {
-        const result = await releaseBoltRunClaimOnShutdown(runId, token);
-        // `strict: false` — narrow by member presence, not by the `ok` flag.
-        if ('error' in result) {
-          console.error('[main] BOLT claim release failed', { run_id: runId, error: result.error });
-        }
-      }));
+    // Each post-drain step gets its own cap: all three talk to Redis/Postgres
+    // and can hang when the backend is already gone. 3 × 3 s = 9 s fits inside
+    // the 10 s hard-exit grace, so a normal shutdown finishes BEFORE the
+    // backstop rather than relying on it.
+    await closeWithin('BOLT claim release', POST_DRAIN_STEP_TIMEOUT_MS, releaseHeldBoltClaims);
+    // WS-1: the producer Queues opened by content-queues-init had no close
+    // path at all — their Redis connections outlived every shutdown.
+    await closeWithin('producer queue close', POST_DRAIN_STEP_TIMEOUT_MS, sharedConsumers.closeQueues);
+    await closeWithin('connection close', POST_DRAIN_STEP_TIMEOUT_MS, async () => {
+      await closeConnections();
+    });
+    // Honest reporting: a deadline that elapsed, or a consumer whose close()
+    // rejected, is never logged as a clean shutdown.
+    if (outcome.drained) {
+      console.info(`[main] shutdown complete — all ${consumers.length} consumers drained`);
+    } else {
+      console.warn('[main] shutdown finished WITHOUT a clean drain', {
+        consumers: consumers.length,
+        closed: outcome.closed.length,
+        pending: outcome.pending,
+        failed: outcome.failed,
+      });
     }
-
-    await closeConnections();
-    console.info('[main] shutdown complete');
+    clearTimeout(hardExit);
     process.exit(0);
   };
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT',  () => shutdown('SIGINT'));
+  // `once`: a second SIGTERM joins the in-flight shutdown instead of starting a
+  // competing one that would close already-closing handles and race it to exit.
+  // Railway sends SIGTERM on every redeploy and can follow with more.
+  const onSignal = once(shutdown);
+
+  process.on('SIGTERM', () => { void onSignal('SIGTERM'); });
+  process.on('SIGINT',  () => { void onSignal('SIGINT'); });
 
   // Unhandled rejections — log and keep running (workers are resilient)
   process.on('unhandledRejection', (reason) => {

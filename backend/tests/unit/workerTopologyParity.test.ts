@@ -12,12 +12,17 @@
  * registered by ONE module (workerTopology.ts) called from BOTH bootstraps.
  * This gate asserts:
  *   1. both bootstraps invoke registerSharedConsumers(),
- *   2. every `consumedVia:'shared'` queue is registered by the shared module
- *      (via mapped evidence tokens — same string-literal technique as before),
- *   3. every `consumedVia:'inline'` queue appears in the bootstrap(s) that
+ *   2. every `consumedVia:'inline'` queue appears in the bootstrap(s) that
  *      the manifest declares consume it,
- *   4. `consumedVia:'none'` queues are never registered anywhere,
- *   5. REMOVED infrastructure stays removed (orphan files do not return).
+ *   3. `consumedVia:'none'` queues are never registered anywhere,
+ *   4. REMOVED infrastructure stays removed (orphan files do not return).
+ *
+ * What the SHARED registrar actually consumes — one consumer per shared queue,
+ * of the owning family, and nothing on dedicated or never-consumed queues — is
+ * asserted BEHAVIOURALLY in workerTopologyConsumers.test.ts. The string-literal
+ * evidence that used to live here could not see startContentWorkers looping
+ * over every CONTENT_QUEUE_CONFIG entry, which is how a generic consumer ended
+ * up on the dedicated creator/whatsapp/analytics queues.
  *
  * Wiring or unwiring ANY consumer requires updating the manifest in the same
  * change — that is the contract.
@@ -26,7 +31,6 @@ import fs from 'fs';
 import path from 'path';
 import {
   QUEUE_TOPOLOGY,
-  sharedConsumedQueues,
   neverConsumedQueues,
 } from '../../queue/workerTopologyManifest';
 
@@ -37,7 +41,6 @@ const exists = (rel: string) => fs.existsSync(path.join(ROOT, rel));
 const mainTs = read('workers/main.ts');
 const startWorkersTs = read('queue/startWorkers.ts');
 const topologyTs = read('queue/workerTopology.ts');
-const contentQueuesTs = read('queue/contentGenerationQueues.ts');
 
 const hasLiteral = (src: string, queue: string): boolean =>
   src.includes(`'${queue}'`) || src.includes(`"${queue}"`);
@@ -61,44 +64,6 @@ function bootstrapConsumes(src: string, queue: string): boolean {
   return false;
 }
 
-/**
- * Evidence that the SHARED registrar actually covers a queue. Registration
- * goes through helper authorities, so per-queue evidence is either a queue
- * literal or the authority call in workerTopology.ts plus the queue literal
- * in the authority's module (contentGenerationQueues.ts).
- */
-function sharedRegistrarCovers(queue: string): boolean {
-  if (hasLiteral(topologyTs, queue)) return true; // e.g. 'planner-refinement'
-  if (queue.startsWith('content-')) {
-    return topologyTs.includes('startContentWorkers(') && hasLiteral(contentQueuesTs, queue);
-  }
-  if (queue.startsWith('creator-')) {
-    return topologyTs.includes('startCreatorContentWorkers(') && hasLiteral(contentQueuesTs, queue);
-  }
-  if (queue === 'whatsapp-broadcast') {
-    return topologyTs.includes('startWhatsAppBroadcastWorker(') && hasLiteral(contentQueuesTs, queue);
-  }
-  if (queue === 'whatsapp-webhook') {
-    return topologyTs.includes('startWhatsAppWebhookWorker(') && hasLiteral(contentQueuesTs, queue);
-  }
-  if (queue === 'analytics-ingestion') {
-    return topologyTs.includes('startAnalyticsIngestionWorker(') && hasLiteral(contentQueuesTs, queue);
-  }
-  if (queue === 'listening-executions') {
-    return topologyTs.includes('LISTENING_EXECUTION_QUEUE_NAME')
-      && hasLiteral(read('queue/listeningExecutionQueue.ts'), queue);
-  }
-  if (queue === 'semantic-indexing') {
-    return topologyTs.includes('SEMANTIC_PARTITION_QUEUE_NAME')
-      && hasLiteral(read('types/semanticIndexingPartition.ts'), queue);
-  }
-  if (queue === 'replay-partition') {
-    return topologyTs.includes('REPLAY_PARTITION_QUEUE_NAME')
-      && hasLiteral(read('types/replayPartition.ts'), queue);
-  }
-  return false;
-}
-
 describe('worker topology parity (manifest ↔ bootstraps)', () => {
   it('manifest queue names are unique and fully classified', () => {
     const names = QUEUE_TOPOLOGY.map((q) => q.queue);
@@ -113,13 +78,6 @@ describe('worker topology parity (manifest ↔ bootstraps)', () => {
     expect(mainTs).toContain("registerSharedConsumers({ bootstrap: 'prod'");
     expect(startWorkersTs).toContain("registerSharedConsumers({ bootstrap: 'dev'");
   });
-
-  it.each(sharedConsumedQueues())(
-    'shared registrar covers "$queue" (consumedVia:shared)',
-    ({ queue }) => {
-      expect(sharedRegistrarCovers(queue)).toBe(true);
-    },
-  );
 
   it.each(QUEUE_TOPOLOGY.filter((q) => q.consumedVia === 'inline' && q.prodConsumed))(
     'prod bootstrap consumes inline queue "$queue"',
@@ -138,8 +96,10 @@ describe('worker topology parity (manifest ↔ bootstraps)', () => {
   it.each(neverConsumedQueues())(
     '"$queue" is consumed by NEITHER bootstrap (status: $status)',
     ({ queue }) => {
-      // Registration evidence would be the literal in a bootstrap or the
-      // shared registrar. (Manifest/doc references live elsewhere.)
+      // Registration evidence would be the literal in a bootstrap or the shared
+      // registrar. (Manifest/doc references live elsewhere.) That no shared
+      // consumer is CONSTRUCTED for these queues is asserted behaviourally in
+      // workerTopologyConsumers.test.ts.
       expect(hasLiteral(topologyTs, queue)).toBe(false);
       expect(hasLiteral(mainTs, queue)).toBe(false);
       expect(hasLiteral(startWorkersTs, queue)).toBe(false);

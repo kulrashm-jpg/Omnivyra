@@ -358,6 +358,11 @@ const CONTENT_TYPE_CONFIG: Record<ContentType, {
   },
 };
 
+/** True when `value` names a content type this engine generates (a CONTENT_TYPE_CONFIG key). */
+export function isSupportedContentType(value: unknown): value is ContentType {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(CONTENT_TYPE_CONFIG, value);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ANGLE GENERATION
 // ─────────────────────────────────────────────────────────────────────────────
