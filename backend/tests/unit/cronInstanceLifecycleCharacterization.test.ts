@@ -17,9 +17,15 @@
  *   3. Detection fires only from the per-cycle persist path; the 5-minute
  *      heartbeat refreshes and prunes the set silently.
  *
- * If a future change adds deregistration or a startup grace window, these
- * assertions are expected to be UPDATED deliberately — they are a baseline
- * record, not a design constraint.
+ * STEP 3AH-142 UPDATE. Point 2 was the defect and is now fixed: the outgoing
+ * instance removes itself via the new `deregister()`. That commit's own note
+ * said these assertions were "a baseline record, not a design constraint" and
+ * were expected to be updated deliberately — so exactly one test below has
+ * been rewritten, and it now pins the remaining truth: `shutdown()` ALONE
+ * still issues no ZREM, because deregistration is a separate, awaited,
+ * bounded step that must run before it. Points 1 and 3 are unchanged: the set
+ * is still a TTL-based liveness proxy for an instance that dies abnormally,
+ * and only the per-cycle path warns.
  */
 
 /** 15 minutes — INSTANCE_TTL_MS in cronInstrumentation.ts (line 45). */
@@ -135,7 +141,10 @@ describe('3AH-137 Lane A — cron instance registry lifecycle (characterization)
     expect(warnings[0]).toContain(instance.instanceId);
   });
 
-  it('shutdown() leaves this instance registered — there is NO deregistration path', async () => {
+  // 3AH-142: rewritten. Was "there is NO deregistration path"; there now is one,
+  // but it is deregister(), NOT shutdown(). shutdown() on its own must still
+  // issue no ZREM — that is what makes the call order in cron.ts load-bearing.
+  it('shutdown() alone still issues no ZREM — deregistration is a separate, explicit step', async () => {
     const instance = newInstance();
     await cycleAt(instance, T0);
     expect(mockRedis.zset.has(instance.instanceId)).toBe(true);
@@ -144,8 +153,9 @@ describe('3AH-137 Lane A — cron instance registry lifecycle (characterization)
 
     expect(mockRedis.zremCalls).toEqual([]);
     expect(mockRedis.zset.get(instance.instanceId)).toBe(T0);
+    // The path exists now, and it is its own method.
     expect(typeof (instance as unknown as { deregister?: unknown }).deregister)
-      .not.toBe('function');
+      .toBe('function');
   });
 
   it('a stale entry is only dropped once it is strictly older than INSTANCE_TTL_MS', async () => {
