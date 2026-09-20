@@ -183,15 +183,18 @@ const MUTATIONS = [
     id: 'M21',
     name: 'the analytics consumer is registered twice',
     file: TOPOLOGY,
-    from: '    await startAnalyticsIngestionWorker(processAnalyticsIngestionJob);\n',
-    to: '    await startAnalyticsIngestionWorker(processAnalyticsIngestionJob);\n    await startAnalyticsIngestionWorker(processAnalyticsIngestionJob);\n',
+    // WS-1 (3AH-132): the registration hands its handle back to family(), so
+    // the anchor is `return …`. The mutation still registers the consumer twice.
+    from: '    return startAnalyticsIngestionWorker(processAnalyticsIngestionJob);\n',
+    to: '    await startAnalyticsIngestionWorker(processAnalyticsIngestionJob);\n    return startAnalyticsIngestionWorker(processAnalyticsIngestionJob);\n',
   },
   {
     id: 'M22',
     name: 'the whatsapp-webhook queue is wired to the broadcast processor',
     file: TOPOLOGY,
-    from: '    await startWhatsAppWebhookWorker(processWhatsAppWebhookJob);',
-    to: "    const { processWhatsAppBroadcastJob: processWhatsAppBroadcastJob2 } = await import('./jobProcessors/whatsappBroadcastProcessor');\n    await startWhatsAppWebhookWorker(processWhatsAppBroadcastJob2);",
+    // WS-1 (3AH-132): anchor follows the `return …` registration shape.
+    from: '    return startWhatsAppWebhookWorker(processWhatsAppWebhookJob);',
+    to: "    const { processWhatsAppBroadcastJob: processWhatsAppBroadcastJob2 } = await import('./jobProcessors/whatsappBroadcastProcessor');\n    return startWhatsAppWebhookWorker(processWhatsAppBroadcastJob2);",
   },
   {
     id: 'M23',

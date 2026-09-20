@@ -35,6 +35,7 @@ import {
 } from '../services/boltExecutionRecovery';
 import { getIntelligencePollingWorker } from '../workers/intelligencePollingWorker';
 import { registerSharedConsumers, type SharedConsumerHandles } from './workerTopology';
+import { closeWithin, POST_DRAIN_STEP_TIMEOUT_MS } from '../workers/workerShutdown';
 
 let publishWorker: ReturnType<typeof getWorker>;
 let boltWorker: ReturnType<typeof getWorker>;
@@ -44,8 +45,10 @@ let intelligencePollingWorker: ReturnType<typeof getIntelligencePollingWorker>;
 let creatorRenderWorker: ReturnType<typeof createCreatorRenderWorker> | null = null;
 // F-07 / W1-3: shared consumers (content-*, creator-*, whatsapp-*, analytics,
 // planner-refinement, listening/semantic/replay) are registered via the ONE
-// topology module both bootstraps use. getWorker-based handles come back for
-// graceful shutdown (incl. planner-refinement drain semantics).
+// topology module both bootstraps use. WS-1 (3AH-132): EVERY registered
+// consumer handle now comes back — previously only the getWorker-based five
+// did, so the thirteen contentGenerationQueues-backed consumers were never
+// closed here either.
 let sharedConsumers: SharedConsumerHandles | null = null;
 
 const shutdown = async () => {
@@ -66,6 +69,14 @@ const shutdown = async () => {
     } catch (err) {
       console.warn('[workers] shared consumer close failed:', (err as Error)?.message);
     }
+  }
+  // WS-1: the producer Queues opened by content-queues-init had no close path
+  // at all. Bounded, because a dev Redis that has already gone away would
+  // otherwise hang the exit. The sequential close order above is the
+  // pre-existing dev/prod divergence (prod closes concurrently under one
+  // deadline) and is deliberately left alone.
+  if (sharedConsumers) {
+    await closeWithin('producer queue close', POST_DRAIN_STEP_TIMEOUT_MS, sharedConsumers.closeQueues);
   }
   process.exit(0);
 };

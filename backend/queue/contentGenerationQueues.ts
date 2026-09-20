@@ -278,6 +278,18 @@ export async function initializeContentQueues(): Promise<void> {
 }
 
 /**
+ * WS-1 (STEP 3AH-132): close every producer Queue this module opened —
+ * initializeContentQueues plus any lazy getContentQueue caller. Graceful
+ * shutdown only. Entries are dropped BEFORE closing so a late caller gets a
+ * fresh handle instead of a closed one.
+ */
+export async function closeContentQueues(): Promise<void> {
+  const open = [...queues.values()];
+  queues.clear();
+  await Promise.allSettled(open.map((queue) => queue.close()));
+}
+
+/**
  * Start the generic content-generation workers.
  *
  * Attaches ONLY to the queues the topology manifest assigns to the
@@ -286,8 +298,10 @@ export async function initializeContentQueues(): Promise<void> {
  * analytics-ingestion) and the superseded bolt-content-jobs; attaching the
  * generic processor to those made it compete with their real consumer for jobs.
  */
-export async function startContentWorkers(processor: (job: any) => Promise<any>): Promise<void> {
+export async function startContentWorkers(processor: (job: any) => Promise<any>): Promise<Worker[]> {
   console.info('[contentGenerationQueues][workers] Starting workers');
+  // WS-1: handed back so the host can close() every one of them on shutdown.
+  const started: Worker[] = [];
 
   const queueNames = genericContentQueueNames();
   const unconfigured = queueNames.filter((queueName) => !CONTENT_QUEUE_CONFIG[queueName]);
@@ -327,19 +341,24 @@ export async function startContentWorkers(processor: (job: any) => Promise<any>)
       deadLetterOnExhaustion(queueName, job, error);
     });
 
+    started.push(worker);
     console.info('[contentGenerationQueues][worker-started]', {
       queueName,
       concurrency: config.concurrency,
     });
   }
+
+  return started;
 }
 
 /**
  * Start creator content workers
  * Processes video scripts, carousels, and visual stories with separate processor
  */
-export async function startCreatorContentWorkers(processor: (job: any) => Promise<any>): Promise<void> {
+export async function startCreatorContentWorkers(processor: (job: any) => Promise<any>): Promise<Worker[]> {
   console.info('[contentGenerationQueues][creator-workers] Starting creator content workers');
+  // WS-1: handed back so the host can close() every one of them on shutdown.
+  const started: Worker[] = [];
 
   const creatorQueueNames = ['creator-video', 'creator-carousel', 'creator-story'];
 
@@ -380,11 +399,14 @@ export async function startCreatorContentWorkers(processor: (job: any) => Promis
       deadLetterOnExhaustion(queueName, job, error);
     });
 
+    started.push(worker);
     console.info('[contentGenerationQueues][creator-worker-started]', {
       queueName,
       concurrency: config.concurrency,
     });
   }
+
+  return started;
 }
 
 /**
@@ -426,7 +448,7 @@ export async function startBoltContentWorkers(processor: (job: any) => Promise<a
  * Start the WhatsApp broadcast worker.
  * Processes wa-broadcast-batch jobs — calls processBatch() from whatsappBroadcastService.
  */
-export async function startWhatsAppBroadcastWorker(processor: (job: any) => Promise<any>): Promise<void> {
+export async function startWhatsAppBroadcastWorker(processor: (job: any) => Promise<any>): Promise<Worker> {
   const config = CONTENT_QUEUE_CONFIG['whatsapp-broadcast']!;
   const worker = new Worker('whatsapp-broadcast', (job) => runWithJobTraceContext(job, () => processor(job)), {
     connection: getConnectionConfig(),
@@ -454,9 +476,10 @@ export async function startWhatsAppBroadcastWorker(processor: (job: any) => Prom
   });
 
   console.info('[wa-broadcast-worker] started, concurrency=', config.concurrency);
+  return worker; // WS-1: closable handle
 }
 
-export async function startWhatsAppWebhookWorker(processor: (job: any) => Promise<any>): Promise<void> {
+export async function startWhatsAppWebhookWorker(processor: (job: any) => Promise<any>): Promise<Worker> {
   const config = CONTENT_QUEUE_CONFIG['whatsapp-webhook']!;
   const worker = new Worker('whatsapp-webhook', (job) => runWithJobTraceContext(job, () => processor(job)), {
     connection: getConnectionConfig(),
@@ -477,9 +500,10 @@ export async function startWhatsAppWebhookWorker(processor: (job: any) => Promis
     deadLetterOnExhaustion('whatsapp-webhook', job, error);
   });
   console.info('[wa-webhook-worker] started, concurrency=', config.concurrency);
+  return worker; // WS-1: closable handle
 }
 
-export async function startAnalyticsIngestionWorker(processor: (job: any) => Promise<any>): Promise<void> {
+export async function startAnalyticsIngestionWorker(processor: (job: any) => Promise<any>): Promise<Worker> {
   // TEMP diagnostic — sentinel file
   const _diagFs = await import('fs');
   const _diagPath = await import('path');
@@ -527,6 +551,7 @@ export async function startAnalyticsIngestionWorker(processor: (job: any) => Pro
   });
   console.info('[analytics-ingestion-worker] started, concurrency=', config.concurrency);
   _diag('startAnalyticsIngestionWorker:event-handlers-registered');
+  return worker; // WS-1: closable handle
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
