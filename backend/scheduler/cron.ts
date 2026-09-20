@@ -847,6 +847,14 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
     workerTimers.length = 0;
     // Close Redis clients
     cronGuard.shutdown();
+    // 3AH-142: self-deregister from omnivyra:cron:instances BEFORE
+    // cronInstr.shutdown(), which nulls the Redis handle this needs. Bounded at
+    // 2 s and never throws. Standalone cron owns its own exit, so this always
+    // completes there; when the worker hosts the scheduler this handler is
+    // registered first and now yields on this await, after which main's own
+    // handler runs concurrently — best-effort by design (a missed ZREM only
+    // restores the pre-fix behaviour: the entry ages out via INSTANCE_TTL_MS).
+    await cronInstr.deregister();
     cronInstr.shutdown();
     shutdownAdminRuntimeConfig();
     shutdownIntentExecutionRedis();

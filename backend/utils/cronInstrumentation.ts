@@ -45,6 +45,14 @@ const REPORT_TTL_S    = 12 * 60 * 60;    // 12 hours (3× the 4h base-tick caden
 const INSTANCE_TTL_MS = 15 * 60 * 1_000; // 15 minutes — 3× heartbeat window
 const HEARTBEAT_MS    = 5 * 60_000;      // write heartbeat every 5 min (was 60s — saves 5,760 ops/day)
 const CYCLE_LOG_MAX   = 20;              // keep last 20 cycle records
+// 3AH-142: a gracefully-stopped instance ZREMs itself from INSTANCE_KEY so the
+// next container does not read a departed predecessor as a live duplicate.
+// Bounded well inside the worker's drain budget (drain ≤15 s + three 3 s
+// post-drain steps inside a 10 s grace, with a 25 s hard-exit backstop) so it
+// can never be the reason a shutdown rides the backstop. Abnormal termination
+// never runs it — the entry then ages out via INSTANCE_TTL_MS, so a crash is
+// never recorded as a clean exit.
+const DEREGISTER_TIMEOUT_MS = 2_000;     // bounded: never eats the worker drain budget
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -84,7 +92,7 @@ export interface CronReport {
 // ── CronInstrumentation ───────────────────────────────────────────────────────
 
 export class CronInstrumentation {
-  readonly instanceId = INSTANCE_ID;
+  readonly instanceId: string;
 
   // ── In-process state ───────────────────────────────────────────────────────
 
@@ -104,8 +112,17 @@ export class CronInstrumentation {
 
   private redis: IORedis | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  /** Set by deregister(): no later heartbeat or in-flight cycle may re-add us. */
+  private deregistered = false;
 
-  constructor() {
+  /**
+   * `instanceId` defaults to the process identity. It is injectable only so a
+   * test can simulate two schedulers inside one process — every instance
+   * otherwise shares `hostname:pid`, which makes duplicate detection (and the
+   * regression guard for this fix) impossible to exercise.
+   */
+  constructor(instanceId: string = INSTANCE_ID) {
+    this.instanceId = instanceId;
     try {
       this.redis = getInstrumentedStandaloneRedisClient('cron');
     } catch {
@@ -253,7 +270,10 @@ export class CronInstrumentation {
    * Write own heartbeat to sorted set; prune stale entries; return other active instances.
    */
   private async updateInstanceSet(now: number): Promise<string[]> {
-    if (!this.redis) return [];
+    // The `deregistered` latch is checked HERE rather than only in the
+    // heartbeat, so neither the heartbeat nor a cycle still in flight can
+    // re-ZADD this instance after deregister() has removed it.
+    if (!this.redis || this.deregistered) return [];
     const staleTs = now - INSTANCE_TTL_MS;
 
     // Batch the three write commands into one round-trip, then read separately
@@ -276,6 +296,55 @@ export class CronInstrumentation {
       } catch { /* ignore */ }
     }, HEARTBEAT_MS);
     if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
+  }
+
+  /**
+   * GRACEFUL shutdown only: remove this instance from the duplicate-detection
+   * set (`omnivyra:cron:instances`) so the next container does not read a
+   * predecessor that has already exited as a live duplicate.
+   *
+   * MUST be awaited BEFORE shutdown() — shutdown() nulls the Redis handle.
+   *
+   * Bounded by DEREGISTER_TIMEOUT_MS on an unref'd timer, so it can neither
+   * hold the process open past the drain nor extend it. It never throws: on any
+   * failure it logs honestly and returns false, and the entry then ages out via
+   * INSTANCE_TTL_MS exactly as it did before this method existed.
+   *
+   * Returns true only when Redis confirmed the command — i.e. this instance is
+   * no longer in the set. It never claims success for a timeout, an error, or a
+   * missing Redis handle.
+   */
+  async deregister(): Promise<boolean> {
+    this.deregistered = true;
+    if (!this.redis) {
+      console.warn(
+        `[cron] instance ${this.instanceId} not deregistered — no Redis client; entry expires via TTL`,
+      );
+      return false;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`timed out after ${DEREGISTER_TIMEOUT_MS}ms`)),
+          DEREGISTER_TIMEOUT_MS,
+        );
+        if (timer.unref) timer.unref();
+      });
+      const removed = await Promise.race([this.redis.zrem(INSTANCE_KEY, this.instanceId), timeout]);
+      console.info(
+        `[cron] instance ${this.instanceId} deregistered (graceful shutdown, removed=${removed})`,
+      );
+      return true;
+    } catch (err) {
+      console.warn(
+        `[cron] instance ${this.instanceId} deregistration failed — entry expires via TTL:`,
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /** Disconnect the Redis client and stop timers (for graceful shutdown). */
