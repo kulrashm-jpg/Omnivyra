@@ -196,6 +196,52 @@ describe('DG-001 — features are observed without touching organic ranking', ()
     }
   });
 
+  /**
+   * REGRESSION — the fabricated feature rank.
+   *
+   * The test above checked only the two UNRANKED feature types, so it passed
+   * while the five RANKED ones (local, video, news, shopping, paid) were each
+   * being stamped with an organic-scale position. The cause: this client calls
+   * `parse([...organic, ...siblings])`, and the parser fell back to the 1-based
+   * ARRAY INDEX whenever an entry declared no rank. For an appended feature
+   * entry that index is an offset into a concatenation — with these ten organic
+   * results the local pack became "position 14" and the ad "position 18" — and
+   * nothing on the page held those ranks. Those numbers are persisted, take
+   * part in the persistence conflict key, and drive the top-ten counts and
+   * threat scores in externalCompetitiveIntelligenceService.
+   *
+   * No feature block in this fixture declares a rank, which is the shape the
+   * defect needs: absence must read as absence.
+   */
+  it('gives a RANKED feature no rank either, when the provider declared none', async () => {
+    const out = await run();
+    const ranked = out.rows.filter((r) =>
+      ['local', 'video', 'news', 'shopping', 'paid'].includes(String(r.result_type)));
+
+    // Still observed — withholding a rank must not withhold the observation.
+    expect(ranked.map((r) => String(r.result_type)).sort())
+      .toEqual(['local', 'news', 'paid', 'shopping', 'video']);
+
+    for (const row of ranked) {
+      expect(row.position).toBeNull();
+      expect(row.title).toBeTruthy();
+    }
+    // Nothing outside the ten organic results holds an organic-scale rank.
+    const featurePositions = out.rows
+      .filter((r) => (r.result_type ?? 'organic') !== 'organic')
+      .map((r) => r.position);
+    expect(featurePositions).toEqual(featurePositions.map(() => null));
+  });
+
+  it('a feature that DOES declare a rank keeps the one it declared', async () => {
+    // The fix removes a fabricated rank; it must not discard a real one.
+    const out = await run({
+      organic_results: SERPAPI_RESPONSE.organic_results,
+      top_stories: [{ title: 'Series B', link: 'https://news.test/northwind', position: 3 }],
+    });
+    expect(out.rows.find((r) => r.result_type === 'news')?.position).toBe(3);
+  });
+
   it('the organic rows are byte-identical whether or not features are present', async () => {
     // THE regression that matters: adding feature capture must not perturb a
     // single organic row, because those rows are what search visibility and

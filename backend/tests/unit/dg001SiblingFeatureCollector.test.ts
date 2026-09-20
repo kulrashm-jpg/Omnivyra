@@ -131,3 +131,106 @@ describe('DG-001 — nothing the collector passes on can bypass the parser', () 
     }
   });
 });
+
+/**
+ * REGRESSION — a feature entry's place in the concatenated array is not a rank.
+ *
+ * Both acquisition paths call the parser as `parse([...organic, ...siblings])`.
+ * The parser falls back to the 1-based array INDEX when an entry declares no
+ * rank, which is sound for an ordered organic array and meaningless for an
+ * appended feature entry. Applying it there fabricated an organic-scale
+ * position for every RANKED feature type (local, news, video, shopping, paid)
+ * that arrived without one — and, because the fallback always yields a finite
+ * positive number, it also made the parser's own `position === null` drop rule
+ * unreachable for those entries.
+ *
+ * Provenance is carried ON the entry (a module-private Symbol set by the
+ * collector), not beside it: the distinction was lost by concatenating two
+ * positional streams into one, and an argument would be lost the same way.
+ */
+describe('DG-001 — a feature block carries no rank unless the provider declared one', () => {
+  const ORGANIC = Array.from({ length: 4 }, (_, i) => ({
+    position: i + 1, url: `https://site${i + 1}.test/`, title: `R${i + 1}`,
+  }));
+
+  const rowsFor = (body: Record<string, unknown>) =>
+    parse([...((body.organic_results as unknown[]) ?? []), ...collect(body)]);
+
+  it.each([
+    ['local_results', 'local'],
+    ['top_stories', 'news'],
+    ['inline_videos', 'video'],
+    ['shopping_results', 'shopping'],
+    ['ads', 'paid'],
+  ])('%s → a %s observation with position null, not the index it landed on', (key, type) => {
+    const rows = rowsFor({
+      organic_results: ORGANIC,
+      [key]: [{ title: 'Feature', link: 'https://feature.test/x' }],
+    });
+    const feature = rows.find((r) => r.result_type === type);
+    // The observation survives — a missing rank must not cost us the block.
+    expect(feature).toBeDefined();
+    expect(feature!.url).toBe('https://feature.test/x');
+    // …and specifically NOT 5, the 1-based index after four organic results.
+    expect(feature!.position).toBeNull();
+  });
+
+  it('the organic ranks are untouched, and the feature never displaces one', () => {
+    const rows = rowsFor({
+      organic_results: ORGANIC,
+      local_results: [{ title: 'Office', link: 'https://northwind.test/contact' }],
+      ads: [{ title: 'Ad', link: 'https://rival.test/ad' }],
+    });
+    expect(rows.filter((r) => r.result_type === 'organic').map((r) => r.position)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('an organic entry with no declared rank still takes its 1-based index', () => {
+    // The historical organic behaviour is deliberately unchanged: an ordered
+    // result array IS the ranking.
+    const rows = parse([
+      { url: 'https://a.test/1', title: 'A' },
+      { url: 'https://a.test/2', title: 'B' },
+    ]);
+    expect(rows.map((r) => r.position)).toEqual([1, 2]);
+  });
+
+  it('a feature that declares a rank keeps it', () => {
+    const rows = rowsFor({
+      organic_results: ORGANIC,
+      top_stories: [{ title: 'Story', link: 'https://news.test/s', position: 2 }],
+    });
+    expect(rows.find((r) => r.result_type === 'news')!.position).toBe(2);
+  });
+
+  it.each([0, -3, Number.NaN, 'third'])(
+    'a feature that declares an UNUSABLE rank (%p) is still refused outright', (position) => {
+      const rows = rowsFor({
+        organic_results: ORGANIC,
+        top_stories: [{ title: 'Story', link: 'https://news.test/s', position }],
+      });
+      expect(rows.find((r) => r.result_type === 'news')).toBeUndefined();
+    });
+
+  it('a provider cannot suppress the index fallback from its own JSON', () => {
+    // The provenance mark is a module-private Symbol, and JSON.parse produces
+    // string keys only — so an organic row that spells the marker out in every
+    // plausible form is still an ordinary ordered-array entry.
+    const rows = parse([{
+      url: 'https://a.test/1', title: 'A',
+      feature_block_entry: true,
+      'omnivyra.serp.feature_block_entry': true,
+      __feature_block_entry__: true,
+    }]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].position).toBe(1);
+  });
+
+  it('the mark is invisible to the collector’s own callers', () => {
+    // Non-enumerable: it must not show up in a spread, in JSON, or in the deep
+    // equality the collector suite above relies on.
+    const [entry] = collect({ top_stories: [{ title: 'Story' }] });
+    expect(entry).toEqual({ title: 'Story', type: 'top_stories' });
+    expect(Object.keys(entry)).toEqual(['title', 'type']);
+    expect(JSON.parse(JSON.stringify(entry))).toEqual({ title: 'Story', type: 'top_stories' });
+  });
+});

@@ -70,7 +70,18 @@ export function createSerpBridgeProvider(): DiscoveryProvider {
       const res = await provider.fetch(query);
       if (!res) return null;
       return res.results.slice(0, limit).map((r, i) => ({
-        url: r.url, title: r.title ?? null, snippet: null, rank: r.position || i + 1,
+        url: r.url,
+        title: r.title ?? null,
+        snippet: null,
+        // Discovery ORDER within this response — always derived here.
+        rank: i + 1,
+        // The SERP rank is carried separately and ONLY when the provider
+        // declared one. A rankless feature block stays rankless; an index
+        // is discovery order, not a rank.
+        serpPosition:
+          typeof r.position === 'number' && Number.isFinite(r.position) && r.position > 0
+            ? r.position
+            : null,
       }));
     },
   };
@@ -89,7 +100,9 @@ export function parseKeylessResults(html: string, limit: number): RawSearchResul
     if (!/^https?:\/\//i.test(url)) continue;
     if (seen.has(url)) continue;
     seen.add(url);
-    out.push({ url, title: null, snippet: null, rank: out.length + 1 });
+    // Keyless HTML scrape: parse order is the discovery order, and the page
+    // declares no SERP rank of its own.
+    out.push({ url, title: null, snippet: null, rank: out.length + 1, serpPosition: null });
   }
   return out;
 }

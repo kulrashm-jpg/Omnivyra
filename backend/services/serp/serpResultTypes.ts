@@ -201,3 +201,56 @@ export function normalizeSerpResultType(raw: unknown): SerpResultType | null {
   if (key === '') return null;
   return PROVIDER_TYPE_ALIASES[key] ?? null;
 }
+
+/**
+ * ─── RANK PROVENANCE ───────────────────────────────────────────────────────
+ *
+ * The single parser derives a rank from the 1-based ARRAY INDEX when a
+ * provider entry declares none. That proxy is sound for exactly one input
+ * shape: a provider's ORDERED result array (`organic_results`, DataForSEO's
+ * `items`), where the array order IS the ranking.
+ *
+ * DG-001 began appending the sibling feature blocks onto that array — BOTH
+ * acquisition paths call the parser as `parse([...organic, ...siblings])`
+ * (serpAcquisitionService's SerpAPI/ScaleSERP adapters and
+ * serp/canonicalSerpClient, the Report 1 path). For an appended feature entry
+ * the index is an offset into a CONCATENATION and carries no rank at all, so
+ * the proxy stopped being a proxy and became fabrication: a local pack, a top
+ * story, an inline video, a shopping result or an ad — all ranked types — was
+ * stamped with an organic-scale position nothing on the page had. Those
+ * positions are persisted (`analytics_serp_results`), participate in the
+ * persistence conflict key, and feed the top-ten counts and threat scores in
+ * externalCompetitiveIntelligenceService — which is precisely how, in this
+ * module's own words, "a visibility average silently becomes wrong".
+ *
+ * The provenance is therefore marked ON THE ENTRY rather than passed beside it:
+ * the distinction was lost by concatenating two positional streams into one,
+ * and a positional argument would be lost the same way again. A module-private
+ * Symbol cannot appear in provider JSON (`JSON.parse` produces string keys
+ * only), so an entry can neither forge nor suppress it, and it is defined
+ * non-enumerably so it is invisible to spreads, `JSON.stringify` and deep
+ * equality.
+ */
+const FEATURE_BLOCK_ENTRY = Symbol('omnivyra.serp.feature_block_entry');
+
+/** Mark an entry lifted out of a sibling feature block. Returns the same object. */
+export function markFeatureBlockEntry<T extends object>(entry: T): T {
+  Object.defineProperty(entry, FEATURE_BLOCK_ENTRY, {
+    value: true,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return entry;
+}
+
+/**
+ * True only for an entry this module marked. Anything else — including a
+ * provider row that literally spells the description out — is false, so the
+ * positional fallback is never suppressed by untrusted input either.
+ */
+export function isFeatureBlockEntry(value: unknown): boolean {
+  return typeof value === 'object'
+    && value !== null
+    && (value as Record<symbol, unknown>)[FEATURE_BLOCK_ENTRY] === true;
+}

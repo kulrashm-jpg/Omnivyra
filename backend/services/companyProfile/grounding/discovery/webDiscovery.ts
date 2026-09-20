@@ -37,7 +37,10 @@ export interface DiscoveryCandidate {
   /** Verbatim query that produced this candidate — part of provenance. */
   query: string;
   provider: DiscoveryProviderId;
+  /** Discovery ORDER. Recorded for audit; never evidence strength, never a SERP rank. */
   rank: number;
+  /** Provider-declared SERP position, or null when none was declared. Never index-derived. */
+  serpPosition: number | null;
   url: string;
   /** Normalised form used for dedup; the original is preserved above. */
   canonicalUrl: string;
@@ -67,7 +70,14 @@ export interface RawSearchResult {
   url: string;
   title?: string | null;
   snippet?: string | null;
+  /** Discovery ORDER within this provider response. Never a SERP rank. */
   rank: number;
+  /**
+   * The provider-declared SERP position, when the provider actually declared
+   * one. null means no authoritative rank: it is NEVER back-filled from the
+   * array index, because an index is discovery order, not a rank.
+   */
+  serpPosition?: number | null;
 }
 
 export interface DiscoveryProvider {
@@ -178,12 +188,16 @@ export function filterCandidates(
       : false;
     candidates.push({
       query: ctx.query, provider: ctx.provider, rank: r.rank,
+      serpPosition: r.serpPosition ?? null,
       url: c.url, canonicalUrl: c.canonical, host: c.host,
       title: r.title ?? null, snippet: r.snippet ?? null,
       retrievedAt: ctx.retrievedAt,
       discoveryReason: isFirstParty
         ? 'first-party domain surfaced by search'
-        : `independent host at search rank ${r.rank}`,
+        : r.serpPosition == null
+          // No authoritative rank: state where it was discovered, never claim a rank.
+          ? `independent host, discovery position ${r.rank}`
+          : `independent host at search rank ${r.serpPosition}`,
     });
   }
   return { candidates, rejected };
@@ -231,7 +245,9 @@ export async function discover(input: DiscoverInput): Promise<DiscoveryResult> {
   for (const q of queries) {
     try {
       const rows = await provider.search(q, DISCOVERY_LIMITS.maxResultsPerQuery);
-      if (rows) allRaw.push(...rows.map((r, i) => ({ ...r, rank: r.rank || i + 1 })));
+      // Discovery order is the position in THIS response. Nullish, not truthy:
+      // a provider-supplied 0 must not be silently replaced by an index.
+      if (rows) allRaw.push(...rows.map((r, i) => ({ ...r, rank: r.rank ?? i + 1, serpPosition: r.serpPosition ?? null })));
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
     }
