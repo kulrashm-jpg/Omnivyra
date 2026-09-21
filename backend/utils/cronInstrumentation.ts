@@ -116,6 +116,29 @@ export class CronInstrumentation {
   private deregistered = false;
 
   /**
+   * Serializes EVERY mutation of INSTANCE_KEY.
+   *
+   * The latch alone was not enough. `updateInstanceSet` checked it once,
+   * synchronously, and then yielded at `await pipe.exec()` — so a ZADD that had
+   * already passed the check could land AFTER deregister()'s ZREM and silently
+   * re-register a stopped instance (observed in production: removed=1, then the
+   * next worker still saw the entry).
+   *
+   * Queueing the ZREM behind the same chain gives a real happens-before: work
+   * already running finishes first, and the re-checked latch refuses anything
+   * queued afterwards. Mirrors the tail-chain in
+   * leadIntelligenceOrchestration/orchestrator.ts.
+   */
+  private registryTail: Promise<unknown> = Promise.resolve();
+
+  /** Run `op` after every registry operation already queued. Never poisons the chain. */
+  private queueRegistryOp<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.registryTail.then(op, op);
+    this.registryTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /**
    * `instanceId` defaults to the process identity. It is injectable only so a
    * test can simulate two schedulers inside one process — every instance
    * otherwise shares `hostname:pid`, which makes duplicate detection (and the
@@ -270,9 +293,11 @@ export class CronInstrumentation {
    * Write own heartbeat to sorted set; prune stale entries; return other active instances.
    */
   private async updateInstanceSet(now: number): Promise<string[]> {
-    // The `deregistered` latch is checked HERE rather than only in the
-    // heartbeat, so neither the heartbeat nor a cycle still in flight can
-    // re-ZADD this instance after deregister() has removed it.
+    if (!this.redis) return [];
+    return this.queueRegistryOp(async () => {
+    // Re-evaluated when this op actually RUNS — after everything queued before
+    // it — so a deregistration that got in first refuses this write outright
+    // instead of letting a stale ZADD land behind the ZREM.
     if (!this.redis || this.deregistered) return [];
     const staleTs = now - INSTANCE_TTL_MS;
 
@@ -285,6 +310,7 @@ export class CronInstrumentation {
 
     const all = await this.redis.zrangebyscore(INSTANCE_KEY, staleTs, '+inf');
     return all.filter(id => id !== this.instanceId);
+    });
   }
 
   private startHeartbeat(): void {
@@ -331,7 +357,12 @@ export class CronInstrumentation {
         );
         if (timer.unref) timer.unref();
       });
-      const removed = await Promise.race([this.redis.zrem(INSTANCE_KEY, this.instanceId), timeout]);
+      // Queued behind the chain: any ZADD already running completes FIRST, so it
+      // cannot land after this removal. Still bounded by DEREGISTER_TIMEOUT_MS.
+      const removed = await Promise.race([
+        this.queueRegistryOp(() => this.redis!.zrem(INSTANCE_KEY, this.instanceId)),
+        timeout,
+      ]);
       console.info(
         `[cron] instance ${this.instanceId} deregistered (graceful shutdown, removed=${removed})`,
       );
