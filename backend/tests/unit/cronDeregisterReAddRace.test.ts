@@ -22,8 +22,9 @@
  *   Once deregistration has begun, no in-flight or subsequently resumed
  *   persistence operation may re-register this instance.
  *
- * This test is expected to FAIL against the current implementation. That
- * failure IS the reproduction. No production code is modified here.
+ * 3AH-157 closed this by serializing every INSTANCE_KEY mutation through one
+ * tail-chain, so deregister()'s ZREM is queued BEHIND any running ZADD and the
+ * re-checked latch refuses anything queued afterwards.
  */
 
 const INSTANCE_KEY = 'omnivyra:cron:instances';
@@ -95,7 +96,7 @@ describe('3AH-156 — deregistration must not be undone by in-flight persistence
   beforeEach(() => { mockRedis = new GatedRedis(); });
   afterEach(() => { mockRedis = null; });
 
-  it('REPRODUCTION: an in-flight updateInstanceSet re-adds the instance after ZREM', async () => {
+  it('an in-flight updateInstanceSet CANNOT re-add the instance after ZREM', async () => {
     const instr = new CronInstrumentation(ID);
 
     // A cycle is in flight and has already passed the latch check.
@@ -104,15 +105,17 @@ describe('3AH-156 — deregistration must not be undone by in-flight persistence
     const inFlight = (instr as any).persistAsync({ ts: Date.now(), jobs: [], durationMs: 1 });
     await Promise.resolve(); // let it reach `await pipe.exec()` and park on the gate
 
-    // SIGTERM arrives: deregistration runs to completion.
-    const removed = await instr.deregister();
-    expect(removed).toBe(true);
-    expect(mockRedis!.zremCalls).toContain(ID);
-    expect(mockRedis!.zset.has(ID)).toBe(false); // gone at this instant
+    // SIGTERM arrives while the cycle is still in flight. deregister() queues
+    // its ZREM behind that work rather than racing it.
+    const deregistering = instr.deregister();
 
-    // The parked pipeline now lands.
+    // The parked pipeline lands FIRST (this is the ZADD that used to win).
     mockRedis!.releaseGate();
     await inFlight;
+
+    const removed = await deregistering;
+    expect(removed).toBe(true);
+    expect(mockRedis!.zremCalls).toContain(ID);
 
     // THE INVARIANT: the instance must NOT be registered again.
     expect(mockRedis!.zset.has(ID)).toBe(false);
@@ -129,6 +132,42 @@ describe('3AH-156 — deregistration must not be undone by in-flight persistence
 
     // A LATER call is correctly refused by the latch.
     await (instr as any).updateInstanceSet(Date.now());
+    expect(mockRedis!.zset.has(ID)).toBe(false);
+  });
+
+  it('HEARTBEAT PATH: an in-flight heartbeat update cannot re-add either', async () => {
+    const instr = new CronInstrumentation(ID);
+
+    // Drive the heartbeat's own code path (updateInstanceSet) while gated.
+    mockRedis!.armGate();
+    const inFlight = (instr as any).updateInstanceSet(Date.now());
+    await Promise.resolve();
+
+    const deregistering = instr.deregister();
+    mockRedis!.releaseGate();
+    await inFlight;
+    const removed = await deregistering;
+    expect(removed).toBe(true);
+
+    expect(mockRedis!.zset.has(ID)).toBe(false);
+  });
+
+  it('ORDERING: the ZREM runs after the queued ZADD, not before it', async () => {
+    const instr = new CronInstrumentation(ID);
+    mockRedis!.armGate();
+    const inFlight = (instr as any).updateInstanceSet(Date.now());
+    await Promise.resolve();
+
+    // ZREM is queued but must not have executed while the ZADD is parked.
+    const deregistering = instr.deregister();
+    await Promise.resolve();
+    expect(mockRedis!.zremCalls).toHaveLength(0);
+
+    mockRedis!.releaseGate();
+    await inFlight;
+    await deregistering;
+
+    expect(mockRedis!.zremCalls).toContain(ID);
     expect(mockRedis!.zset.has(ID)).toBe(false);
   });
 
