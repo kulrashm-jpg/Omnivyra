@@ -373,7 +373,13 @@ describe('3AH-142 — shutdown wiring and SEC-C6 ownership (source contract)', (
       instr.indexOf('  async deregister(): Promise<boolean> {'),
       instr.indexOf('  shutdown(): void {'),
     );
-    expect(deregisterMethod).toContain('this.redis.zrem(INSTANCE_KEY, this.instanceId)');
+    // The ZREM now sits inside a queueRegistryOp closure, across which TS cannot
+    // narrow the mutable `this.redis`, so the call site carries a non-null
+    // assertion. Dropping `!` before matching keeps this pinned to the exact
+    // self-ZREM without asserting anything about the narrowing syntax.
+    expect(deregisterMethod.split('!').join('')).toContain(
+      'this.redis.zrem(INSTANCE_KEY, this.instanceId)',
+    );
   });
 
   it('the ZREM is bounded and its timer is unref\'d so it cannot hold the process open', () => {
