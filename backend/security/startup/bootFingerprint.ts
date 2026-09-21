@@ -25,6 +25,7 @@
  */
 
 import { createHash } from 'crypto';
+import { firstNonEmptyEnv } from '../../../config/provenanceEnv';
 import { logger } from '../../services/logger';
 import fs from 'fs';
 import path from 'path';
@@ -94,11 +95,12 @@ export function emitBootFingerprint(hint?: { schemaManifestHash?: string }): Boo
   const nodeEnv = process.env.NODE_ENV ?? 'unknown';
   const vercelEnv = process.env.VERCEL_ENV ?? null;
   const railwayEnv = process.env.RAILWAY_ENVIRONMENT ?? null;
-  const deploymentId =
-    process.env.VERCEL_GIT_COMMIT_SHA
-    ?? process.env.RAILWAY_DEPLOYMENT_ID
-    ?? process.env.GIT_COMMIT_SHA
-    ?? null;
+  // An empty VERCEL_GIT_COMMIT_SHA must not win the chain (see provenanceEnv).
+  const deploymentId = firstNonEmptyEnv(
+    'VERCEL_GIT_COMMIT_SHA',
+    'RAILWAY_DEPLOYMENT_ID',
+    'GIT_COMMIT_SHA',
+  );
 
   const fingerprint = digestFingerprint([
     AUTH_CONTRACT_VERSION,

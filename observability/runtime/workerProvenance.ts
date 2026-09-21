@@ -1,3 +1,5 @@
+import { firstNonEmptyEnv } from '../../config/provenanceEnv';
+
 /**
  * Worker / runtime provenance — module-level cache.
  *
@@ -37,23 +39,15 @@ export interface WorkerProvenance {
  * same snapshot (no allocation, no env lookup).
  */
 export const WORKER_PROVENANCE: Readonly<WorkerProvenance> = Object.freeze({
+  // firstNonEmptyEnv, not ??: a platform may DEFINE these as an empty string
+  // rather than leave them unset, and an empty value must not win the chain.
   deploymentId:
-    process.env.RAILWAY_DEPLOYMENT_ID ??
-    process.env.VERCEL_DEPLOYMENT_ID ??
-    'unknown',
+    firstNonEmptyEnv('RAILWAY_DEPLOYMENT_ID', 'VERCEL_DEPLOYMENT_ID') ?? 'unknown',
   gitSha:
-    process.env.RAILWAY_GIT_COMMIT_SHA ??
-    process.env.VERCEL_GIT_COMMIT_SHA ??
-    process.env.GIT_COMMIT_SHA ??
-    'unknown',
+    firstNonEmptyEnv('RAILWAY_GIT_COMMIT_SHA', 'VERCEL_GIT_COMMIT_SHA', 'GIT_COMMIT_SHA') ?? 'unknown',
   gitBranch:
-    process.env.RAILWAY_GIT_BRANCH ??
-    process.env.VERCEL_GIT_COMMIT_REF ??
-    'unknown',
+    firstNonEmptyEnv('RAILWAY_GIT_BRANCH', 'VERCEL_GIT_COMMIT_REF') ?? 'unknown',
   runtimeEnv:
-    process.env.RAILWAY_ENVIRONMENT_NAME ??
-    process.env.VERCEL_ENV ??
-    process.env.NODE_ENV ??
-    'unknown',
+    firstNonEmptyEnv('RAILWAY_ENVIRONMENT_NAME', 'VERCEL_ENV', 'NODE_ENV') ?? 'unknown',
   workerPid: process.pid,
 });

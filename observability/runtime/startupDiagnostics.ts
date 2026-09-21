@@ -1,4 +1,5 @@
 import { collectRuntimeIntegrityFindings } from '../../config/integrity/runtimeIntegrity';
+import { firstNonEmptyEnv } from '../../config/provenanceEnv';
 import {
   buildReport,
   envPresence,
@@ -35,7 +36,7 @@ export function collectStartupDiagnostics(): DiagnosticCheck[] {
         `node_env=${process.env.NODE_ENV ?? 'unset'}`,
         `vercel_env=${process.env.VERCEL_ENV ?? 'unset'}`,
         `app_version=${pkg.version ?? 'unknown'}`,
-        `build_hash=${shortHash(process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT) ?? 'unavailable'}`,
+        `build_hash=${shortHash(firstNonEmptyEnv('VERCEL_GIT_COMMIT_SHA', 'GIT_COMMIT') ?? undefined) ?? 'unavailable'}`,
       ],
     },
     {
