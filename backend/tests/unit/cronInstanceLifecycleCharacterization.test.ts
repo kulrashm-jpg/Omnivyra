@@ -26,6 +26,11 @@
  * bounded step that must run before it. Points 1 and 3 are unchanged: the set
  * is still a TTL-based liveness proxy for an instance that dies abnormally,
  * and only the per-cycle path warns.
+ *
+ * STEP 3AH-169 UPDATE. Point 3 changed on purpose. The heartbeat now reports
+ * the duplicates it already computed, as the same line tagged
+ * `[source=heartbeat]` (observability only — the registry writes are
+ * unchanged). Exactly one test below was rewritten to pin that.
  */
 
 /** 15 minutes — INSTANCE_TTL_MS in cronInstrumentation.ts (line 45). */
@@ -178,7 +183,7 @@ describe('3AH-137 Lane A — cron instance registry lifecycle (characterization)
     expect(mockRedis.zset.has(PEER)).toBe(false);
   });
 
-  it('the 5-minute heartbeat refreshes/prunes the set but never emits the warning', async () => {
+  it('the 5-minute heartbeat refreshes/prunes the set and reports the peer, tagged [source=heartbeat]', async () => {
     jest.useFakeTimers({ now: T0 });
     mockRedis.zset.set(PEER, T0 - 60_000);
 
@@ -192,7 +197,10 @@ describe('3AH-137 Lane A — cron instance registry lifecycle (characterization)
     expect(mockRedis.zset.has(instance.instanceId)).toBe(true);
     // ... saw the peer (still inside the 15-minute window) ...
     expect(mockRedis.zset.has(PEER)).toBe(true);
-    // ... and said nothing. Only the per-cycle persist path warns.
-    expect(duplicateWarnings(warn)).toHaveLength(0);
+    // ... and (3AH-169) reported it, distinguishable from the per-cycle line.
+    const lines = duplicateWarnings(warn);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(PEER);
+    expect(lines[0]).toContain('[source=heartbeat]');
   });
 });
