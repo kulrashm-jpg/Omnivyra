@@ -45,6 +45,12 @@ const REPORT_TTL_S    = 12 * 60 * 60;    // 12 hours (3× the 4h base-tick caden
 const INSTANCE_TTL_MS = 15 * 60 * 1_000; // 15 minutes — 3× heartbeat window
 const HEARTBEAT_MS    = 5 * 60_000;      // write heartbeat every 5 min (was 60s — saves 5,760 ops/day)
 const CYCLE_LOG_MAX   = 20;              // keep last 20 cycle records
+// 3AH-173: a clean heartbeat read is logged only for the first few per process.
+// A read cannot come back clean while a live predecessor is still registered
+// (it heartbeats every 5 min), so the first clean read follows the
+// predecessor's removal by at most one heartbeat — well inside the 15-min
+// registry window. 3 leaves slack for a lost log line without steady noise.
+const CLEAN_READ_LOG_LIMIT = 3;
 // 3AH-142: a gracefully-stopped instance ZREMs itself from INSTANCE_KEY so the
 // next container does not read a departed predecessor as a live duplicate.
 // Bounded well inside the worker's drain budget (drain ≤15 s + three 3 s
@@ -114,6 +120,8 @@ export class CronInstrumentation {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   /** Set by deregister(): no later heartbeat or in-flight cycle may re-add us. */
   private deregistered = false;
+  /** Clean heartbeat reads logged so far; capped at CLEAN_READ_LOG_LIMIT. */
+  private cleanReadsLogged = 0;
 
   /**
    * Serializes EVERY mutation of INSTANCE_KEY.
@@ -326,6 +334,12 @@ export class CronInstrumentation {
             `[cron] ⚠️  DUPLICATE INSTANCES DETECTED: ${dupeIds.join(', ')} ` +
             `(this instance: ${this.instanceId}) [source=heartbeat]`,
           );
+        } else if (this.redis && !this.deregistered && this.cleanReadsLogged < CLEAN_READ_LOG_LIMIT) {
+          // `[]` also means the read was SKIPPED (no Redis / deregistered). Both
+          // flags only ever move one way, so if they are still good here they
+          // were good when the queued read ran — the registry really was read.
+          this.cleanReadsLogged++;
+          console.info(`[cron] HEARTBEAT REGISTRY READ: clean (this instance: ${this.instanceId}) [source=heartbeat]`);
         }
       } catch { /* ignore */ }
     }, HEARTBEAT_MS);
