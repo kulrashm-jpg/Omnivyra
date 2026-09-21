@@ -70,7 +70,6 @@ describe('3AH-165 — default runner cannot select manual/live suites', () => {
   });
 
   it('the `test` script uses the default config — no --config override can bypass the boundary', () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { scripts } = require(path.join(ROOT, 'package.json'));
     expect(scripts.test).toMatch(/^jest backend\/tests\b/);
     expect(scripts.test).not.toMatch(/--config/);
@@ -79,7 +78,6 @@ describe('3AH-165 — default runner cannot select manual/live suites', () => {
 
 describe('3AH-165 — the explicit manual path still works', () => {
   it('`test:manual` is wired to the dedicated project', () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { scripts } = require(path.join(ROOT, 'package.json'));
     expect(scripts['test:manual']).toMatch(/--config jest\.manual\.config\.js/);
   });
@@ -98,9 +96,7 @@ describe('3AH-165 — the explicit manual path still works', () => {
   });
 
   it('the manual project differs from the default ONLY by the manual ignore entry', () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const base = require(path.join(ROOT, 'jest.config.js'));
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const manual = require(path.join(ROOT, 'jest.manual.config.js'));
     expect(base.testPathIgnorePatterns).toContain('/backend/tests/manual/');
     expect(manual.testPathIgnorePatterns).toEqual(
