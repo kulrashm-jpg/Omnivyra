@@ -116,6 +116,18 @@ describe('3AH-170 — cron rollout rider', () => {
     expect(classify(outgoing(), incoming([{ timestamp: at(edge, 1), message: dupLine('other:1', INC_ID, true) }], 30 * MIN)).verdict).toBe(VERDICT.INCONCLUSIVE);
   });
 
+  it('6b. removed=1 logged BEFORE Stopping Container (flushed app lines, as in 3AH-162): a sighting between them is not a failure', () => {
+    // App timestamps are upper bounds, so a sighting logged between the two
+    // cannot be ordered against the true ZREM — removal counts from the later of both.
+    const deregFirst: Line[] = [
+      { timestamp: at(T_START, 8_000), message: ' Received SIGTERM. Shutting down cron...' },
+      { timestamp: at(T_START, 8_100), message: `[cron] instance ${OUT_ID} deregistered (graceful shutdown, removed=1)` },
+      { timestamp: at(T_START, 8_400), message: 'Stopping Container' },
+    ];
+    const r = classify(deregFirst, incoming([{ timestamp: at(T_START, 8_250), message: dupLine(OUT_ID, INC_ID, true) }]));
+    expect(r.verdict).toBe(VERDICT.OVERLAP);
+  });
+
   it('7. duplicate lines emitted by a DIFFERENT worker are not attributed to the incoming one', () => {
     const r = classify(outgoing(), incoming([
       { timestamp: at(T_START, 5 * MIN), message: dupLine(OUT_ID, 'third-host:1', true) },
