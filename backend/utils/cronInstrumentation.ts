@@ -318,7 +318,15 @@ export class CronInstrumentation {
     this.heartbeatTimer = setInterval(async () => {
       if (!this.redis) return;
       try {
-        await this.updateInstanceSet(Date.now());
+        const dupeIds = await this.updateInstanceSet(Date.now());
+        // Observational only. The cycle path reports duplicates once per cron
+        // tick (30 min in production); this surfaces the same read every 5 min.
+        if (dupeIds.length > 0) {
+          console.warn(
+            `[cron] ⚠️  DUPLICATE INSTANCES DETECTED: ${dupeIds.join(', ')} ` +
+            `(this instance: ${this.instanceId}) [source=heartbeat]`,
+          );
+        }
       } catch { /* ignore */ }
     }, HEARTBEAT_MS);
     if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
