@@ -211,3 +211,151 @@ describe('3AH-170 — real rollouts keep their established classification', () =
     expect(r.why.join(' ')).toContain('2026-09-21T07:56:47.074353673Z');
   });
 });
+
+// ── 3AH-174: the clean heartbeat read (3AH-173) as positive evidence ────────────
+
+const cleanLine = (self = INC_ID) =>
+  `[cron] HEARTBEAT REGISTRY READ: clean (this instance: ${self}) [source=heartbeat]`;
+/** Removal anchor for outgoing(): max(Stopping Container +6 s, removed=1 +9 s). */
+const REMOVAL = at(T_START, 9_000);
+
+describe('3AH-174 — clean heartbeat read as an attributable registry read', () => {
+  it('1. a clean heartbeat read after removal → DECISIVE PASS', () => {
+    const r = classify(outgoing(), incoming([{ timestamp: at(REMOVAL, 5 * MIN), message: cleanLine() }]));
+    expect(r.verdict).toBe(VERDICT.PASS);
+    expect(r.why.join(' ')).toContain('clean/heartbeat');
+  });
+
+  it('2. a clean read BEFORE removal (before the stop, or between stop and removed=1) is never a PASS', () => {
+    for (const ts of [at(T_START, 3_000), at(T_START, 7_000)]) {
+      expect(classify(outgoing(), incoming([{ timestamp: ts, message: cleanLine() }])).verdict).toBe(VERDICT.INCONCLUSIVE);
+    }
+  });
+
+  it('3. a clean read exactly AT the removal anchor is not "after" it', () => {
+    expect(classify(outgoing(), incoming([{ timestamp: REMOVAL, message: cleanLine() }])).verdict).toBe(VERDICT.INCONCLUSIVE);
+  });
+
+  it('4. a clean read 1 ms after the removal anchor is eligible', () => {
+    expect(classify(outgoing(), incoming([{ timestamp: at(REMOVAL, 1), message: cleanLine() }])).verdict).toBe(VERDICT.PASS);
+  });
+
+  it('5. the window edge (removal + 15 min − 1 min margin) is inclusive; 1 ms later is not', () => {
+    const edge = at(REMOVAL, 15 * MIN - 60_000);
+    expect(classify(outgoing(), incoming([{ timestamp: edge, message: cleanLine() }], 30 * MIN)).verdict).toBe(VERDICT.PASS);
+    expect(classify(outgoing(), incoming([{ timestamp: at(edge, 1), message: cleanLine() }], 30 * MIN)).verdict).toBe(VERDICT.INCONCLUSIVE);
+  });
+
+  it('6. a clean read well outside the window → INCONCLUSIVE', () => {
+    expect(classify(outgoing(), incoming([{ timestamp: at(REMOVAL, 20 * MIN), message: cleanLine() }], 30 * MIN)).verdict).toBe(VERDICT.INCONCLUSIVE);
+  });
+
+  it('7. a clean read emitted by a DIFFERENT worker is not attributable', () => {
+    expect(classify(outgoing(), incoming([{ timestamp: at(REMOVAL, 5 * MIN), message: cleanLine('third-host:1') }])).verdict).toBe(VERDICT.INCONCLUSIVE);
+  });
+
+  it('8. a startup duplicate before the stop, with no later read → NON-DECISIVE', () => {
+    expect(classify(outgoing(), incoming([{ timestamp: at(T_START, 2_000), message: dupLine(OUT_ID) }])).verdict).toBe(VERDICT.OVERLAP);
+  });
+
+  it('9. a duplicate between the stop and removed=1 → NON-DECISIVE', () => {
+    expect(classify(outgoing(), incoming([{ timestamp: at(T_START, 7_000), message: dupLine(OUT_ID, INC_ID, true) }])).verdict).toBe(VERDICT.OVERLAP);
+  });
+
+  it('10. the predecessor reported after removal → FAILURE', () => {
+    expect(classify(outgoing(), incoming([{ timestamp: at(REMOVAL, 5 * MIN), message: dupLine(OUT_ID, INC_ID, true) }])).verdict).toBe(VERDICT.FAIL);
+  });
+
+  it('11. a clean read followed by a post-removal predecessor sighting → FAILURE takes precedence', () => {
+    const r = classify(outgoing(), incoming([
+      { timestamp: at(REMOVAL, 5 * MIN), message: cleanLine() },
+      { timestamp: at(REMOVAL, 10 * MIN), message: dupLine(OUT_ID, INC_ID, true) },
+    ]));
+    expect(r.verdict).toBe(VERDICT.FAIL);
+  });
+
+  it('12. overlap sighting before removal, then a clean read after it → DECISIVE PASS', () => {
+    const r = classify(outgoing(), incoming([
+      { timestamp: at(T_START, 2_000), message: dupLine(OUT_ID) },
+      { timestamp: at(REMOVAL, 5 * MIN), message: cleanLine() },
+    ]));
+    expect(r.verdict).toBe(VERDICT.PASS);
+  });
+
+  it('13. no duplicate and no clean read → INCONCLUSIVE', () => {
+    expect(classify(outgoing(), incoming([], 20 * MIN)).verdict).toBe(VERDICT.INCONCLUSIVE);
+  });
+
+  it('14. malformed clean-read lines are not evidence', () => {
+    const malformed = [
+      `[cron] HEARTBEAT REGISTRY READ: clean (this instance: ${INC_ID})`,
+      `[cron] HEARTBEAT REGISTRY READ: clean (this instance: ${INC_ID}) [source=cycle]`,
+      `[cron] HEARTBEAT REGISTRY READ: dirty (this instance: ${INC_ID}) [source=heartbeat]`,
+      `[cron] HEARTBEAT REGISTRY READ: clean (this instance: ${INC_ID}) [source=heartbeat] extra`,
+      `prefix [cron] HEARTBEAT REGISTRY READ: clean (this instance: ${INC_ID}) [source=heartbeat]`,
+      '[cron] HEARTBEAT REGISTRY READ: clean (this instance: ) [source=heartbeat]',
+    ];
+    for (const message of malformed) {
+      expect(classify(outgoing(), incoming([{ timestamp: at(REMOVAL, 5 * MIN), message }])).verdict).toBe(VERDICT.INCONCLUSIVE);
+    }
+  });
+
+  it('15. an incoming worker whose own identity is unknown (no cycle line) → INCONCLUSIVE', () => {
+    const noIdentity: Line[] = [
+      { timestamp: T_START, message: 'Starting Container' },
+      { timestamp: at(REMOVAL, 5 * MIN), message: cleanLine() },
+      { timestamp: at(T_START, 20 * MIN), message: 'redis_metrics_flush' },
+    ];
+    expect(classify(outgoing(), noIdentity).verdict).toBe(VERDICT.INCONCLUSIVE);
+  });
+
+  it('19. the fixture line is byte-identical to the production template in cronInstrumentation.ts', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../utils/cronInstrumentation.ts'), 'utf8');
+    const template = src.match(/console\.info\(`(\[cron\] HEARTBEAT REGISTRY READ: [^`]+)`\)/);
+    expect(template).not.toBeNull();
+    const rendered = template![1].replace('${this.instanceId}', INC_ID);
+    expect(rendered).toBe(cleanLine());
+    const r = classify(outgoing(), incoming([{ timestamp: at(REMOVAL, 5 * MIN), message: rendered }]));
+    expect(r.verdict).toBe(VERDICT.PASS);
+  });
+});
+
+/**
+ * 3AH-172: outgoing 1a5a7040 @ 326c5c0b (FIXED) → incoming 58619d9e @ c23920d5.
+ * The first rollout carrying the heartbeat duplicate signal. Rebuilt from that
+ * run's recorded rider evidence (exact timestamps, identities, removed=1) in
+ * the verbatim message formats above. The window was silent: no clean-read
+ * line existed yet, so it must stay NON-DECISIVE.
+ */
+const R172_OUT: Line[] = [
+  { timestamp: '2026-09-21T10:09:45.066Z', message: 'Stopping Container' },
+  { timestamp: '2026-09-21T10:09:48.898Z', message: ' Received SIGTERM. Shutting down cron...' },
+  { timestamp: '2026-09-21T10:09:48.898Z', message: '[cron] instance 9b41a3f91501:1 deregistered (graceful shutdown, removed=1)' },
+];
+const R172_INC: Line[] = [
+  { timestamp: '2026-09-21T10:09:39.696Z', message: 'Starting Container' },
+  { timestamp: '2026-09-21T10:09:42.481167917Z', message: '[cron] instance=1a070652dabe:1 cycle=r172 jobs=0 useful=false duration=500ms' },
+  { timestamp: '2026-09-21T10:09:42.662624198Z', message: '[cron] ⚠️  DUPLICATE INSTANCES DETECTED: 9b41a3f91501:1 (this instance: 1a070652dabe:1)' },
+  { timestamp: '2026-09-21T10:24:47.908Z', message: '(last fetched line)' },
+];
+
+describe('3AH-174 — real rollouts keep their classification', () => {
+  it('16. 3AH-162 stays NON-DECISIVE', () => {
+    expect(classify(R162_OUT, R162_INC, false).verdict).toBe(VERDICT.NOT_FIXED);
+  });
+
+  it('17. 3AH-168 stays NON-DECISIVE', () => {
+    expect(classify(R168_OUT, R168_INC, true).verdict).toBe(VERDICT.OVERLAP);
+  });
+
+  it('18. 3AH-172 stays NON-DECISIVE (silent window)', () => {
+    const r = classify(R172_OUT, R172_INC, true);
+    expect(r.verdict).toBe(VERDICT.OVERLAP);
+    expect(r.why.join(' ')).toContain('2026-09-21T10:09:42.662624198Z');
+  });
+
+  it('   the same 3AH-172 rollout WITH a clean heartbeat read in its window would have been a PASS', () => {
+    const withClean = [...R172_INC.slice(0, 3), { timestamp: '2026-09-21T10:14:40.000Z', message: cleanLine('1a070652dabe:1') }, R172_INC[3]];
+    expect(classify(R172_OUT, withClean, true).verdict).toBe(VERDICT.PASS);
+  });
+});

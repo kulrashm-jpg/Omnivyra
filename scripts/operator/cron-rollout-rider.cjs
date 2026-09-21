@@ -16,10 +16,11 @@
  *            A `[source=heartbeat]` line (3AH-169) makes this observable.
  *   PASS     the incoming worker made an ATTRIBUTABLE registry read after the
  *            removal, inside the registry window, and that read did not
- *            contain the outgoing identity. Attributable = a cycle line (its
- *            duplicate line would follow) or a duplicate line naming only
- *            OTHER identities. A silent heartbeat is NOT a read we can see —
- *            absence of a line proves nothing, so it never yields PASS.
+ *            contain the outgoing identity. Attributable = a heartbeat
+ *            `HEARTBEAT REGISTRY READ: clean` line (3AH-173), a cycle line
+ *            (its duplicate line would follow), or a duplicate line naming
+ *            only OTHER identities. Absence of a line proves nothing, so
+ *            silence never yields PASS.
  *   NON-DECISIVE  duplicates seen while the predecessor was still alive /
  *            before its logged removal (normal Railway overlap), or the
  *            outgoing worker does not carry the fix.
@@ -52,6 +53,8 @@ const RE = {
   deregistered: /\[cron\] instance (\S+) deregistered \(graceful shutdown, removed=(\w+)\)/,
   cycle: /\[cron\] instance=(\S+) cycle=/,
   duplicate: /\[cron\] \S*\s*DUPLICATE INSTANCES DETECTED: (.+?) \(this instance: ([^)\s]+)\)( \[source=heartbeat\])?/,
+  // Exact 3AH-173 line: only ever emitted after a heartbeat read that really ran.
+  cleanRead: /^\[cron\] HEARTBEAT REGISTRY READ: clean \(this instance: ([^)\s]+)\) \[source=heartbeat\]$/,
 };
 
 /** Railway `--json` output → [{ ts, ms, message }]; unparseable lines are dropped. */
@@ -83,6 +86,8 @@ function extractEvidence(outLines, incLines, { outgoingFixed }) {
   for (const x of incLines) {
     const c = x.message.match(RE.cycle);
     if (c) { events.push({ ms: x.ms, ts: x.ts, kind: 'cycle', thisInstance: c[1] }); continue; }
+    const k = x.message.match(RE.cleanRead);
+    if (k) { events.push({ ms: x.ms, ts: x.ts, kind: 'clean', source: 'heartbeat', thisInstance: k[1] }); continue; }
     const d = x.message.match(RE.duplicate);
     if (d) {
       events.push({
@@ -148,6 +153,7 @@ function classifyRollout(ev) {
   }
 
   const cleanReads = mine.filter((e) => e.ms > removedAt && e.ms <= windowEnd && (
+    (e.kind === 'clean' && e.source === 'heartbeat') ||
     (e.kind === 'duplicate' && !e.ids.includes(out.instanceId)) ||
     (e.kind === 'cycle' && num(inc.logEndMs) && inc.logEndMs >= e.ms + LOG_TAIL_MS)
   ));
