@@ -11,7 +11,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
-import { BILLING_PURCHASE } from '@/shared/contracts/security';
+import { BILLING_PLATFORM_MANAGE } from '@/shared/contracts/security';
 import { runMonthlyAllocationSweep } from '@/backend/services/subscriptionAllocationService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -22,7 +22,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const dryRun = body.dry_run !== false; // default true — must explicitly opt in to grant
 
   const guard = await requireCapability(req, res, {
-    capability: BILLING_PURCHASE,
+    capability: BILLING_PLATFORM_MANAGE,
     reason: dryRun ? 'preview monthly credit allocation' : 'run monthly credit allocation',
   });
   if (guard.ok !== true) return;

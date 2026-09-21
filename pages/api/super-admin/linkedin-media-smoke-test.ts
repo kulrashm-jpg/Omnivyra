@@ -33,7 +33,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *   - No row mutation other than the URN cache write that getOrUploadLinkedInAsset
  *     already performs (additive JSONB sub-key).
  *
- * Auth: requireCapability(CONTENT_PUBLISH).
+ * Auth: requireCapability(INTEGRATION_PLATFORM_OAUTH_MANAGE).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -42,7 +42,7 @@ import { getSocialAccount } from '../../../backend/db/queries';
 import { getToken } from '../../../backend/auth/tokenStore';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
-import { CONTENT_PUBLISH } from '../../../shared/contracts/security/SecurityCapabilities';
+import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security/SecurityCapabilities';
 import {
   getOrUploadLinkedInAsset,
   inferLinkedInMediaKind,
@@ -66,7 +66,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:linkedin-smoke', 10, 60))) return;
 
   const guard = await requireCapability(req, res, {
-    capability: CONTENT_PUBLISH,
+    capability: INTEGRATION_PLATFORM_OAUTH_MANAGE,
     reason: 'operator smoke-tests LinkedIn media upload pipeline',
   });
   if (guard.ok !== true) return;
@@ -131,7 +131,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     targetUserId: null,
     companyId: null,
     metadata: {
-      capability: CONTENT_PUBLISH,
+      capability: INTEGRATION_PLATFORM_OAUTH_MANAGE,
       scheduled_post_id: scheduledPostId,
       social_account_id: socialAccountId,
       source_url_host: extractHost(sourceUrl),

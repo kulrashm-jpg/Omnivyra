@@ -19,14 +19,14 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * dedicated observability backend (DataDog / Grafana / etc.) and build
  * dashboards there — this endpoint is the in-app safety net.
  *
- * Auth: requireCapability(CONTENT_PUBLISH).
+ * Auth: requireCapability(SUPER_ADMIN_DASHBOARD_VIEW).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
-import { CONTENT_PUBLISH } from '../../../shared/contracts/security/SecurityCapabilities';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security/SecurityCapabilities';
 import type { ReconciliationSnapshot, DriftKind } from '../../../backend/services/providerReconciliation/types';
 
 const DEFAULT_WINDOW_HOURS = 24;
@@ -40,7 +40,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:reconciliation-summary', 30, 60))) return;
 
   const guard = await requireCapability(req, res, {
-    capability: CONTENT_PUBLISH,
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'operator reads reconciliation summary',
   });
   if (guard.ok !== true) return;

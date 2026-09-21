@@ -21,14 +21,14 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *   - linkedin_media: rows targeting linkedin that carry media + how many
  *     have a cached LinkedIn URN (provider asset cache coverage)
  *
- * Read-only. No row mutation. Auth: requireCapability(CONTENT_PUBLISH).
+ * Read-only. No row mutation. Auth: requireCapability(SUPER_ADMIN_DASHBOARD_VIEW).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
-import { CONTENT_PUBLISH } from '../../../shared/contracts/security/SecurityCapabilities';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security/SecurityCapabilities';
 
 const DEFAULT_WINDOW_HOURS = 24;
 const MAX_WINDOW_HOURS = 720;
@@ -41,7 +41,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:system-health-summary', 30, 60))) return;
 
   const guard = await requireCapability(req, res, {
-    capability: CONTENT_PUBLISH,
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'operator reads system-health summary',
   });
   if (guard.ok !== true) return;

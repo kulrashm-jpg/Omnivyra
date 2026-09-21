@@ -4,11 +4,11 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *   GET  → { fx, planPricing }   (current config)
  *   POST → { action: 'fx'|'override'|'plan', ... }  (update)
  *
- * Capability-gated (BILLING_PURCHASE). Writes config only — no charging.
+ * Capability-gated (BILLING_PLAN_MANAGE). Writes config only — no charging.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
-import { BILLING_PURCHASE } from '@/shared/contracts/security';
+import { BILLING_PLAN_MANAGE } from '@/shared/contracts/security';
 import {
   getFxConfig, getPlanPricing, setFxRate, setPriceOverride, setPlanPricing,
 } from '@/backend/services/pricingConfigService';
@@ -16,7 +16,7 @@ import type { Currency } from '@/lib/billing/currency';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
-    capability: BILLING_PURCHASE,
+    capability: BILLING_PLAN_MANAGE,
     reason: 'manage pricing configuration',
   });
   if (guard.ok !== true) return;
