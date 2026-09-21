@@ -31,6 +31,7 @@
     "intelligence:enqueue": "npx ts-node backend/scripts/triggerIntelligenceEnqueue.ts",
     "start:cron": "node -r ts-node/register backend/scheduler/cron.ts",
     "test": "jest backend/tests --runInBand --forceExit",
+    "test:manual": "jest --config jest.manual.config.js --runInBand --forceExit",
     "reconcile:openai": "npx ts-node scripts/run-reconciliation.ts --manifest=scripts/reconciliation-fixtures/openai/happy.json",
     "reconcile:anthropic": "npx ts-node scripts/run-reconciliation.ts --manifest=scripts/reconciliation-fixtures/anthropic/happy.json",
     "reconcile:gemini": "npx ts-node scripts/run-reconciliation.ts --manifest=scripts/reconciliation-fixtures/gemini/happy.json",

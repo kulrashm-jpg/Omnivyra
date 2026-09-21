@@ -72,6 +72,11 @@ module.exports = {
     // is meaningless without one. It has its own project — jest.realschema.config.js
     // — driven by scripts/ci/real-schema-ci.sh, which provisions the database first.
     '/backend/tests/realschema/',
+    // Manual suites call paid providers (SerpAPI) and INSERT rows into `reports`.
+    // Ignore patterns also apply to explicit paths, so neither `npm test` nor
+    // `npx jest <path>` can select them. Run them only through their own
+    // project: `npm run test:manual -- <path>` (jest.manual.config.js).
+    '/backend/tests/manual/',
   ],
 };
 
