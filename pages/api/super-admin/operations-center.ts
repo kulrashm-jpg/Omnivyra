@@ -10,7 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
-import { CONTENT_PUBLISH } from '../../../shared/contracts/security/SecurityCapabilities';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security/SecurityCapabilities';
 import { getOperationsCenterSnapshot, summarizeAiRuntime, getEmailRuntimeView, getStorageRuntimeView, getWebsiteIntelligenceRuntimeView, getMarketIntelligenceRuntimeView, getDeploymentRuntimeView, buildOperationsSummary } from '../../../backend/services/operationsCenterService';
 import { getObservabilitySnapshot } from '../../../backend/observability';
 import { getLlmPoolPressure } from '../../../backend/services/aiGatewayCore';
@@ -25,7 +25,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:operations-center', 60, 60))) return;
 
   const guard = await requireCapability(req, res, {
-    capability: CONTENT_PUBLISH,
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'operator reads operations center snapshot',
   });
   if (guard.ok !== true) return;

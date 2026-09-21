@@ -3,22 +3,28 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 /**
  * POST /api/super-admin/purchases/complete
  *
- * Called by the payment gateway webhook (or manually by super admin) to
- * mark a credit purchase as completed and credit the organization.
+ * Platform operator tool: manually marks a credit purchase as completed and
+ * credits the organization that owns it. There is NO payment verification on
+ * this path (manual / offline purchases) — gateway settlement goes through the
+ * provider-verified services instead — so platform authorization is the only
+ * boundary.
  *
  * Body: { purchase_id: string, reference_id?: string }
  *
  * Also handles:
  *   action = 'fail' — marks the purchase as failed without crediting.
  *   action = 'create' — creates a new pending purchase record (for testing
- *                        or manual offline purchases).
+ *                        or manual offline purchases); requires organization_id.
+ *
+ * For complete / fail the purchase row's own organization_id is authoritative;
+ * any organization_id in the body is ignored for those actions.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { completePurchase, failPurchase, recordPaymentProviderEvent } from '../../../../backend/services/purchaseService';
 import { requireCapability } from '../../../../backend/security/requireCapability';
-import { BILLING_PURCHASE } from '../../../../shared/contracts/security';
+import { BILLING_PLATFORM_MANAGE } from '../../../../shared/contracts/security';
 import {
   assertMonetizationExposureModeConfigured,
   assertMonetizationOperationAllowed,
@@ -45,13 +51,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     currency?: string;
   };
 
-  // Wave 2C-A: capability + step-up gate. billing.purchase is policy-marked
-  // as phishing-resistant step-up (10-min window). Bridge principals fail.
+  // Platform-only operation: authorize on the platform-tier capability alone
+  // (phishing-resistant + trusted-device step-up; bridge principals fail).
+  // `organization_id` is NOT an authorization scope — it only binds a created
+  // purchase to its organisation, so the gate is the same for every target.
   const guard = await requireCapability(req, res, {
-    capability: BILLING_PURCHASE,
+    capability: BILLING_PLATFORM_MANAGE,
     reason: `super-admin ${action}s a credit purchase`,
     resourceId: purchase_id ?? body?.organization_id ?? null,
-    organizationId: body?.organization_id,
   });
   if (guard.ok !== true) return;
 

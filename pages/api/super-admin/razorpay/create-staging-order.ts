@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
-import { BILLING_PURCHASE } from '@/shared/contracts/security';
+import { BILLING_PLATFORM_MANAGE } from '@/shared/contracts/security';
 import { createRazorpayStagingCreditOrder } from '@/backend/services/payments/razorpayStagingService';
 import { getMonetizationControlMode } from '@/backend/services/monetizationOpsService';
 
@@ -14,11 +14,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!organizationId) return res.status(400).json({ error: 'organization_id is required' });
   if (!packageId) return res.status(400).json({ error: 'package_id is required' });
 
+  // Platform-only operation: authorize on the platform-tier capability alone.
+  // `organization_id` is NOT an authorization scope here — it only binds the
+  // purchase to its organisation, so the gate is the same for every target.
   const guard = await requireCapability(req, res, {
-    capability: BILLING_PURCHASE,
-    reason: 'create staging Razorpay credit order',
+    capability: BILLING_PLATFORM_MANAGE,
+    reason: `create staging Razorpay credit order (org ${organizationId})`,
     resourceId: organizationId,
-    organizationId,
   });
   if (guard.ok !== true) return;
 

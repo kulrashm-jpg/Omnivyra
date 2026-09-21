@@ -8,7 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
-import { BILLING_PURCHASE } from '@/shared/contracts/security';
+import { BILLING_PLATFORM_MANAGE } from '@/shared/contracts/security';
 import { reconcile, type ReconScopeKind } from '@/backend/services/billing/commercialReconciliationService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -18,7 +18,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const dryRun = body.dry_run !== false; // default true
 
   const guard = await requireCapability(req, res, {
-    capability: BILLING_PURCHASE,
+    capability: BILLING_PLATFORM_MANAGE,
     reason: dryRun ? 'preview commercial reconciliation' : 'run commercial reconciliation',
   });
   if (guard.ok !== true) return;

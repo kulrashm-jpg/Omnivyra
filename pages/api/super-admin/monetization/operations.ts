@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
-import { BILLING_MANAGE } from '@/shared/contracts/security';
+import { BILLING_PLATFORM_MANAGE } from '@/shared/contracts/security';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 import {
   assertMonetizationOperationAllowed,
@@ -89,7 +89,7 @@ async function loadOperationalSnapshot(limit: number) {
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
-    capability: BILLING_MANAGE,
+    capability: BILLING_PLATFORM_MANAGE,
     reason: `super-admin monetization operations ${req.method}`,
     resourceId: typeof req.query.purchaseId === 'string' ? req.query.purchaseId : null,
   });

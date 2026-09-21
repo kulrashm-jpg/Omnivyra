@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
-import { BILLING_PURCHASE } from '@/shared/contracts/security';
+import { BILLING_PLATFORM_MANAGE } from '@/shared/contracts/security';
 import { verifyAndFulfillRazorpayStagingPayment } from '@/backend/services/payments/razorpayStagingService';
 import { getMonetizationControlMode } from '@/backend/services/monetizationOpsService';
 
@@ -17,11 +17,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!paymentId) return res.status(400).json({ error: 'razorpay_payment_id is required' });
   if (!signature) return res.status(400).json({ error: 'razorpay_signature is required' });
 
+  // Platform-only operation: authorize on the platform-tier capability alone.
+  // `organization_id` is NOT an authorization scope here — it only binds the
+  // purchase (expectedOrganizationId below), so the gate is identical with or
+  // without it.
   const guard = await requireCapability(req, res, {
-    capability: BILLING_PURCHASE,
-    reason: 'verify staging Razorpay payment',
+    capability: BILLING_PLATFORM_MANAGE,
+    reason: `verify staging Razorpay payment${organizationId ? ` (org ${organizationId})` : ''}`,
     resourceId: orderId,
-    organizationId,
   });
   if (guard.ok !== true) return;
 

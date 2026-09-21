@@ -13,7 +13,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createApiRoute } from '../../../lib/platform/routeFactory';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
-import { CONTENT_PUBLISH } from '../../../shared/contracts/security/SecurityCapabilities';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security/SecurityCapabilities';
 import {
   captureBaseline,
   listBaselines,
@@ -28,7 +28,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:observability-baseline', 30, 60))) return;
   const guard = await requireCapability(req, res, {
-    capability: CONTENT_PUBLISH,
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'operator manages performance baselines',
   });
   if (guard.ok !== true) return;
