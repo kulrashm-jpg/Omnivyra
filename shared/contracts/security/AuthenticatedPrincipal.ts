@@ -87,6 +87,20 @@ export interface AuthenticatedPrincipal {
    *  org-scoped capability checks must use the AuthorizationService helpers
    *  which scope per-org, not the raw aggregate. */
   capabilities: ReadonlyArray<Capability>;
+  /**
+   * CPG-060 — the per-organisation breakdown of `capabilities`, so an
+   * org-scoped check can require the capability IN the target organisation.
+   *   byOrganization[orgId] — from the ACTIVE role held in that org plus
+   *                           capability_assignments scoped to it;
+   *   global                — capability_assignments made with no organisation.
+   * Optional: a principal not produced by IdentityResolver omits it, and the
+   * check then falls back to the role the principal holds in the target org.
+   * A plain record (not a Map) so the principal stays serialisable.
+   */
+  capabilityScope?: {
+    byOrganization: Readonly<Record<string, ReadonlyArray<Capability>>>;
+    global: ReadonlyArray<Capability>;
+  };
 
   // ── MFA / device / step-up ────────────────────────────────────────────────
   mfa: PrincipalMfaState;

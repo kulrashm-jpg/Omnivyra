@@ -13,7 +13,12 @@
 import type { NextApiResponse } from 'next';
 import { logSecurityEvent, snapshotFromPrincipal } from './audit/SecurityAuditService';
 import { evaluateStepUp } from './StepUpAuthorizationService';
-import { allowsCrossOrganizationIdentityAdministration } from './platformCapabilities';
+import {
+  allowsCrossOrganizationIdentityAdministration,
+  isPlatformSuperAdminPrincipal,
+  PLATFORM_TIER_CAPABILITIES,
+} from './platformCapabilities';
+import { capabilitiesForRole } from './capabilityRegistry';
 import type {
   AuthenticatedPrincipal,
   AuthorizationDecision,
@@ -23,6 +28,47 @@ import type {
 } from '../../shared/contracts/security';
 
 // ── Pure decision helpers (no DB I/O, audit-free) ────────────────────────────
+
+const PLATFORM_TIER = new Set<Capability>(PLATFORM_TIER_CAPABILITIES);
+
+/**
+ * CPG-060 — does the principal hold `capability` IN `organizationId`?
+ *
+ * `principal.capabilities` is the UNION across every organisation the user
+ * belongs to. Accepting it for an org-scoped check let an administrator of
+ * company A exercise admin-only capabilities in company B, where they held only
+ * a lesser role. The union therefore stays only an upper bound here: this
+ * never grants anything the union does not.
+ *
+ * Unchanged, deliberately:
+ *   • PLATFORM-TIER capabilities. No tenant role can hold one (boot-time
+ *     invariant, platformCapabilities.ts), so their authority is not
+ *     tenant-derived and scoping them to a tenant would be wrong.
+ *   • A platform SUPER_ADMIN principal (`isPlatformSuperAdminPrincipal`). Its
+ *     authority is platform authority, a superset of COMPANY_ADMIN wherever it
+ *     is a member — exactly as before.
+ * Everything else must come from the target organisation itself — the ACTIVE
+ * role held there, or an assignment scoped to it — or from an assignment made
+ * deliberately with no organisation. Membership is checked separately and
+ * first by the callers; this answers only "held in this org?".
+ */
+export function holdsCapabilityInOrganization(
+  principal: AuthenticatedPrincipal,
+  capability: Capability,
+  organizationId: string,
+): boolean {
+  if (!principal.capabilities.includes(capability)) return false;
+  if (PLATFORM_TIER.has(capability)) return true;
+  if (isPlatformSuperAdminPrincipal(principal)) return true;
+  const scope = principal.capabilityScope;
+  if (scope) {
+    return (scope.byOrganization[organizationId] ?? []).includes(capability) || scope.global.includes(capability);
+  }
+  // A principal built without a scope: only the ACTIVE role held in the target org counts.
+  return principal.organizations.some(
+    (m) => m.organizationId === organizationId && m.status === 'active' && capabilitiesForRole(m.role).includes(capability),
+  );
+}
 
 /**
  * Pure capability check. No I/O, no audit. Useful for UI capability lookups
@@ -38,6 +84,7 @@ export function hasCapability(
   if (options.organizationId) {
     const org = principal.organizations.find((m) => m.organizationId === options.organizationId);
     if (!org || org.status !== 'active') return false;
+    if (!holdsCapabilityInOrganization(principal, capability, options.organizationId)) return false;
   }
   return true;
 }
@@ -141,6 +188,32 @@ export async function decideCapability(
       ...snapshot,
     });
     return { allowed: false, reason: 'NOT_ORG_MEMBER', capability: requirement.capability };
+  }
+
+  // CPG-060 — the capability must be held IN the target organisation. Being a
+  // member there and holding the capability somewhere else is not enough: the
+  // cross-organisation union must never satisfy an org-scoped check.
+  if (
+    requirement.organizationId
+    && !orgMembershipWaived
+    && !holdsCapabilityInOrganization(principal, requirement.capability, requirement.organizationId)
+  ) {
+    await logSecurityEvent({
+      capability: requirement.capability,
+      decision: 'denied',
+      reason: `${requirement.reason ?? ''} [capability not held in the target organisation]`.trim(),
+      actorUserId: principal.userId,
+      actorSessionId: principal.sessionId,
+      principalUserId: principal.userId,
+      principalSupabaseUid: principal.supabaseUid,
+      organizationId: requirement.organizationId,
+      resourceId: requirement.resourceId ?? null,
+      ip: context.ip,
+      userAgent: context.userAgent,
+      viaLegacyBridge: principal.legacyCookieSuperAdmin,
+      ...snapshot,
+    });
+    return { allowed: false, reason: 'CAPABILITY_NOT_HELD', capability: requirement.capability };
   }
 
   // Allowed.
