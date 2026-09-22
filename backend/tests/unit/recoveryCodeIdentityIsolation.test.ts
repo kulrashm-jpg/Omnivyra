@@ -270,11 +270,15 @@ describe('Test 4 — multi-tenant user', () => {
   });
 
   it('access in each tenant is governed by that tenant membership, not the code', async () => {
-    for (const org of [TENANT_A, TENANT_B]) {
-      await expect(decideCapability(c(), {
-        capability: BILLING_MANAGE, organizationId: org, reason: 'multi-tenant',
-      })).resolves.toEqual({ allowed: true });
-    }
+    // TENANT_A: C is COMPANY_ADMIN there, so billing.manage is held there.
+    await expect(decideCapability(c(), {
+      capability: BILLING_MANAGE, organizationId: TENANT_A, reason: 'multi-tenant',
+    })).resolves.toEqual({ allowed: true });
+    // TENANT_B: C is only VIEW_ONLY there. An admin role in TENANT_A must not
+    // carry billing.manage into TENANT_B (CPG-060, approved in CPG-061).
+    await expect(decideCapability(c(), {
+      capability: BILLING_MANAGE, organizationId: TENANT_B, reason: 'multi-tenant',
+    })).resolves.toMatchObject({ allowed: false, reason: 'CAPABILITY_NOT_HELD' });
   });
 
   it('C is still denied a tenant they hold no membership in', async () => {

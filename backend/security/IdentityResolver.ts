@@ -495,6 +495,12 @@ async function buildPrincipalFromAuth(
     organizations: memberships,
     activeOrgId,
     capabilities: capabilities.aggregate,
+    // CPG-060 — carry the per-organisation breakdown so org-scoped checks can
+    // require the capability IN the target org, not merely somewhere.
+    capabilityScope: {
+      byOrganization: Object.fromEntries(capabilities.byOrganization ?? []),
+      global: capabilities.global ?? [],
+    },
     mfa,
     device,
     stepUp,

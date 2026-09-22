@@ -38,6 +38,13 @@ export interface UserCapabilityResolution {
   /** Capabilities by org id (where org-scoped). Includes both role-derived
    *  and assignment-derived capabilities. */
   byOrganization: ReadonlyMap<string, ReadonlyArray<Capability>>;
+  /**
+   * CPG-060 — capabilities from assignments deliberately made with NO
+   * organisation (`capability_assignments.organization_id IS NULL`). These are
+   * explicit grants, not role leakage, so an org-scoped check still honours
+   * them. Role rows never land here: a role is always held IN a company.
+   */
+  global: ReadonlyArray<Capability>;
 }
 
 /**
@@ -63,6 +70,7 @@ export async function resolveUserCapabilities(userId: string): Promise<UserCapab
 
   const aggregate = new Set<Capability>();
   const byOrg = new Map<string, Set<Capability>>();
+  const global = new Set<Capability>();
 
   // Role-derived capabilities.
   for (const row of (roleRows ?? []) as RoleRow[]) {
@@ -86,6 +94,8 @@ export async function resolveUserCapabilities(userId: string): Promise<UserCapab
       const set = byOrg.get(row.organization_id) ?? new Set<Capability>();
       for (const cap of expanded) set.add(cap);
       byOrg.set(row.organization_id, set);
+    } else {
+      for (const cap of expanded) global.add(cap);
     }
   }
 
@@ -96,6 +106,7 @@ export async function resolveUserCapabilities(userId: string): Promise<UserCapab
   return {
     aggregate: Array.from(aggregate),
     byOrganization,
+    global: Array.from(global),
   };
 }
 
