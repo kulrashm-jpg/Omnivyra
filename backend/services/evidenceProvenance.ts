@@ -261,6 +261,29 @@ export function provenanceForDecisionService(
   return CONNECTED_SOURCE_DECISION_SERVICES.has(service) ? 'CONNECTED_SOURCE' : 'PUBLIC_OBSERVED';
 }
 
+/**
+ * R1-OPEN-01 — services whose persisted decisions are derived from ONE crawled website.
+ *
+ * Their conclusions belong to the domain they were computed from, and a company can have
+ * crawled more than one site. They stamp `evidence.domain_id` (the `canonical_domains` row the
+ * producer read) so Report 1 can keep only the current domain's conclusions. Rows computed
+ * before the stamp existed carry none and are withheld, never assumed current.
+ */
+export const DOMAIN_SCOPED_DECISION_SERVICES: ReadonlySet<string> = new Set(['contentAuthorityService']);
+
+/**
+ * True unless the decision is domain-scoped and was NOT computed from `domainId`. Decisions from
+ * any other source pass unchanged; a domain-scoped one needs a matching stamp and a resolved domain.
+ */
+export function isDecisionForReportDomain(
+  decision: { source_service?: string | null; evidence?: unknown },
+  domainId: string | null,
+): boolean {
+  if (!DOMAIN_SCOPED_DECISION_SERVICES.has((decision.source_service ?? '').trim())) return true;
+  const stamped = (decision.evidence as { domain_id?: unknown } | null | undefined)?.domain_id;
+  return domainId !== null && typeof stamped === 'string' && stamped === domainId;
+}
+
 /** True when a decision's evidence may appear on a Report 1 public surface. */
 export function isReport1Decision(decision: { source_service?: string | null }): boolean {
   return isReport1Provenance(provenanceForDecisionService(decision.source_service));

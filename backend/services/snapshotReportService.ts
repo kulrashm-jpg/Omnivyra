@@ -112,7 +112,7 @@ import { buildUnifiedIntelligenceSummary } from './snapshotReport/unifiedSummary
 import { buildSnapshotVisualIntelligence } from './snapshotReport/visualIntelligenceHelpers';
 // D3 — the canonical provenance boundary, in its decision-shaped form. Same
 // module and same vocabulary as `enforceTraceProvenance`; no second engine.
-import { partitionDecisionsForReport1 } from './evidenceProvenance';
+import { isDecisionForReportDomain, partitionDecisionsForReport1 } from './evidenceProvenance';
 // BETA-EXEC-001: reuse the existing Website Intelligence engines (Technical/Content) as
 // measured evidence for the Authority radar — fully implemented but previously wired only
 // into the separate Website Health report. Consumed directly (no recomputation).
@@ -863,6 +863,13 @@ export async function composeSnapshotReport(
   const domainScope = options?.domainScope
     ?? await resolveReportDomainScope(companyId, options?.resolvedInput?.resolved.websiteDomain ?? null)
       .catch((): ReportDomainScope => ({ domainId: null }));
+  // R1-OPEN-01 — persisted decisions computed from a website must come from THIS report's domain.
+  // Content-authority conclusions are derived from one site's pages; any computed from a previous
+  // site, or before they carried a domain stamp, are withheld. Other sources pass unchanged.
+  const currentSnapshotDecisions = snapshotComposition.decisions
+    .filter((decision) => isDecisionForReportDomain(decision, domainScope.domainId));
+  const currentGrowthSupplement = growthSupplement
+    .filter((decision) => isDecisionForReportDomain(decision, domainScope.domainId));
   const publicAudit = await buildPublicDomainAuditDecisions({
     companyId,
     reportTier: 'snapshot',
@@ -907,15 +914,15 @@ export async function composeSnapshotReport(
 
       const activeCompetitorIntelligence = await buildCompetitorIntelligenceActive({
         companyId,
-        decisions: uniqueById([...snapshotComposition.decisions, ...growthSupplement, ...publicAudit.decisions]),
+        decisions: uniqueById([...currentSnapshotDecisions, ...currentGrowthSupplement, ...publicAudit.decisions]),
         resolvedInput: options?.resolvedInput ?? null,
         domainScope,
       });
 
       return composeSnapshotReportFromDecisions({
         companyId,
-        snapshotDecisions: [...snapshotComposition.decisions, ...publicAudit.decisions],
-        supplementalGrowthDecisions: growthSupplement,
+        snapshotDecisions: [...currentSnapshotDecisions, ...publicAudit.decisions],
+        supplementalGrowthDecisions: currentGrowthSupplement,
         resolvedInput: options?.resolvedInput ?? null,
         readiness: options?.readiness ?? null,
         publicAudit: auditWithSocial,

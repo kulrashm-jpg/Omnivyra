@@ -6,6 +6,13 @@ import {
   type PersistedDecisionObject,
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
+import { resolveCompanyWebsite } from './ingestionUtils';
+import {
+  resolveReportDomainScope,
+  scopeExcludesAllPages,
+  withDomainScope,
+  type ReportDomainScope,
+} from './crawl/reportDomainScope';
 import { clamp, normalizeText, roundNumber, safeAverage, stableUuid } from './intelligenceEngineUtils';
 // BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
 import { deriveDecisionConfidence } from './evidencePlatform';
@@ -62,15 +69,20 @@ function deriveClusterTopic(page: PageRow): string {
   return normalizeText(page.page_type) || 'site';
 }
 
-async function loadContentAuthorityContext(companyId: string): Promise<{
+async function loadContentAuthorityContext(companyId: string, domainScope: ReportDomainScope): Promise<{
   pages: PageRow[];
   pageContent: PageContentRow[];
   pageLinks: PageLinkRow[];
 }> {
-  const { data: pages, error: pagesError } = await supabase
-    .from('canonical_pages')
-    .select('id, url, page_type, title, headings, ctas, internal_link_count')
-    .eq('company_id', companyId)
+  // R1-OPEN-01 — only the company's CURRENT site. Content and links below follow by page id.
+  if (scopeExcludesAllPages(domainScope)) return { pages: [], pageContent: [], pageLinks: [] };
+  const { data: pages, error: pagesError } = await withDomainScope(
+    supabase
+      .from('canonical_pages')
+      .select('id, url, page_type, title, headings, ctas, internal_link_count')
+      .eq('company_id', companyId),
+    domainScope,
+  )
     .order('last_crawled_at', { ascending: false })
     .limit(500);
 
@@ -113,7 +125,12 @@ async function loadContentAuthorityContext(companyId: string): Promise<{
 export async function generateContentAuthorityDecisions(companyId: string): Promise<PersistedDecisionObject[]> {
   assertBackgroundJobContext('contentAuthorityService');
 
-  const { pages, pageContent, pageLinks } = await loadContentAuthorityContext(companyId);
+  // R1-OPEN-01 — derive conclusions from the company's CURRENT website only, keyed exactly as its
+  // crawl is (`canonical_domains`). A lookup ERROR throws here, before the archive below, so nothing
+  // is regenerated blindly. An unresolved domain loads no pages: the archive still retires the
+  // previous set and nothing new is written — never a fallback to every site the company had.
+  const domainScope = await resolveReportDomainScope(companyId, await resolveCompanyWebsite(companyId));
+  const { pages, pageContent, pageLinks } = await loadContentAuthorityContext(companyId, domainScope);
   await archiveDecisionSourceEntityType({
     company_id: companyId,
     report_tier: 'growth',
@@ -434,5 +451,12 @@ export async function generateContentAuthorityDecisions(companyId: string): Prom
   }
 
   if (decisions.length === 0) return [];
-  return createDecisionObjects(decisions);
+  // Every conclusion records the domain it was computed from, so Report 1 can keep only the
+  // current domain's (`isDecisionForReportDomain`). Pages were only loaded for a resolved domain.
+  return createDecisionObjects(
+    decisions.map((decision) => ({
+      ...decision,
+      evidence: { ...decision.evidence, domain_id: domainScope.domainId },
+    })),
+  );
 }
