@@ -628,6 +628,12 @@ export type SnapshotReportOptions = {
    * verbatim. Optional — a growth/performance run does not crawl, and a legacy caller omits it.
    */
   crawlEvidence?: SnapshotCrawlEvidence | null;
+  /**
+   * R1-OPEN-01 — the current-domain scope the report-triggered crawl used. When absent,
+   * `composeSnapshotReport` resolves it from `resolvedInput`; with no resolvable domain it reads
+   * no stored pages rather than whichever site the company's pages come from.
+   */
+  domainScope?: import('./crawl/reportDomainScope').ReportDomainScope;
 };
 
 /**

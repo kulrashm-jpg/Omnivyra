@@ -15,6 +15,7 @@ import {
   type CompetitorIntelligenceResult,
 } from './reportCompetitorIntelligenceService';
 import { buildPublicDomainAuditDecisions, type PublicAuditResult } from './publicDomainAuditService';
+import { resolveReportDomainScope, type ReportDomainScope } from './crawl/reportDomainScope';
 import {
   synthesizePrimaryNarrative,
   type PrimaryNarrative,
@@ -176,6 +177,8 @@ export async function composeSnapshotReportFromDecisions(params: {
   competitorIntelligenceOverride?: CompetitorIntelligenceResult | null;
   /** GAP-09 — the report-triggered crawl's own result, handed down by the caller that ran it. */
   crawlEvidence?: SnapshotCrawlEvidence | null;
+  /** R1-OPEN-01 — website evidence is read from the report's current domain only. */
+  domainScope?: ReportDomainScope;
 }): Promise<SnapshotReport> {
   const supplementalGrowthDecisions = params.supplementalGrowthDecisions ?? [];
   const submittedDecisions = uniqueById([...params.snapshotDecisions, ...supplementalGrowthDecisions]);
@@ -262,10 +265,10 @@ export async function composeSnapshotReportFromDecisions(params: {
   // converted to a rejection and swallowed by .catch — honouring the "never blocks the report"
   // contract above. A bare `.catch()` on a sync-throwing call would not catch it.
   const [wiTechnical, wiContent, wiAccessibility, wiBrand] = await Promise.all([
-    Promise.resolve().then(() => getWebsiteTechnicalIntelligence(params.companyId)).catch(() => null),
-    Promise.resolve().then(() => getWebsiteContentIntelligence(params.companyId)).catch(() => null),
-    Promise.resolve().then(() => getWebsiteAccessibilityIntelligence(params.companyId)).catch(() => null),
-    Promise.resolve().then(() => getWebsiteBrandIntelligence(params.companyId)).catch(() => null),
+    Promise.resolve().then(() => getWebsiteTechnicalIntelligence(params.companyId, params.domainScope)).catch(() => null),
+    Promise.resolve().then(() => getWebsiteContentIntelligence(params.companyId, params.domainScope)).catch(() => null),
+    Promise.resolve().then(() => getWebsiteAccessibilityIntelligence(params.companyId, params.domainScope)).catch(() => null),
+    Promise.resolve().then(() => getWebsiteBrandIntelligence(params.companyId, params.domainScope)).catch(() => null),
   ]);
   // BETA-EXEC-004: single deterministic engine-evidence digest, reused by insights, the executive
   // summary, and the canonical dimension rationales (read-only — no scoring/recalculation).
@@ -273,7 +276,7 @@ export async function composeSnapshotReportFromDecisions(params: {
 
   // Phase 4 — performance + digital experience. Both fail soft: a provider outage or an
   // unreadable table degrades the report to honest abstention, never to a fabricated verdict.
-  const experiencePages = await loadExperiencePages(params.companyId).catch(() => []);
+  const experiencePages = await loadExperiencePages(params.companyId, params.domainScope).catch(() => []);
   const performanceEvidence = await collectPerformanceEvidence({ pages: experiencePages }).catch(() => null);
   const digitalExperience = assessDigitalExperience({
     pages: experiencePages,
@@ -853,10 +856,18 @@ export async function composeSnapshotReport(
     const category = classifyDecisionType(decision.issue_type);
     return category === 'authority' || category === 'trust' || category === 'geo' || isContentDecision(decision) || isCompetitorDecision(decision);
   });
+  // R1-OPEN-01 — every website-evidence read below is confined to the report's CURRENT domain.
+  // The caller that ran the crawl passes the exact scope it crawled; any other caller resolves it
+  // from the report input, and a report with no resolvable domain reads no stored pages at all
+  // rather than falling back to whatever site the company's pages happen to come from.
+  const domainScope = options?.domainScope
+    ?? await resolveReportDomainScope(companyId, options?.resolvedInput?.resolved.websiteDomain ?? null)
+      .catch((): ReportDomainScope => ({ domainId: null }));
   const publicAudit = await buildPublicDomainAuditDecisions({
     companyId,
     reportTier: 'snapshot',
     resolvedInput: options?.resolvedInput ?? null,
+    domainScope,
   });
   // BETA-PHASE1-AUDIT-005: this is the SINGLE owner of the report scan-budget
   // lifecycle. One ALS scope + one ledger enclose EVERY paid provider — SERP
@@ -898,6 +909,7 @@ export async function composeSnapshotReport(
         companyId,
         decisions: uniqueById([...snapshotComposition.decisions, ...growthSupplement, ...publicAudit.decisions]),
         resolvedInput: options?.resolvedInput ?? null,
+        domainScope,
       });
 
       return composeSnapshotReportFromDecisions({
@@ -909,6 +921,7 @@ export async function composeSnapshotReport(
         publicAudit: auditWithSocial,
         competitorIntelligenceOverride: activeCompetitorIntelligence,
         crawlEvidence: options?.crawlEvidence ?? null,
+        domainScope,
       });
     });
   } finally {

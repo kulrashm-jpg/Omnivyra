@@ -4,6 +4,7 @@
  * Never crawls. No LLM. Checks with no stored signal are marked not_evaluable.
  */
 import { supabase } from '../../db/supabaseClient';
+import { scopeExcludesAllPages, withDomainScope, type ReportDomainScope } from '../crawl/reportDomainScope';
 import { CheckResult, Freshness, Provenance, IntelHealth, Readiness, aggregate, clamp, fleschReadingEase, freshnessFrom, healthFromScore, matchesPage, norm, readinessFromScore, wordCount } from './engineCommon';
 // BETA-ARCH-001: optional canonical-evidence metadata (read-only mapping of existing output).
 import { buildWebsiteEngineEvidence, type Evidence } from '../evidencePlatform';
@@ -237,11 +238,12 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
   };
 }
 
-export async function evaluateContentIntelligence(companyId: string, nowMs = Date.now()): Promise<ContentIntelligence> {
+export async function evaluateContentIntelligence(companyId: string, nowMs = Date.now(), domainScope?: ReportDomainScope): Promise<ContentIntelligence> {
   try {
-    const { data: pages } = await supabase.from('canonical_pages')
+    // R1-OPEN-01: current-domain pages only; content blocks follow by page id.
+    const { data: pages } = scopeExcludesAllPages(domainScope) ? { data: [] } : await withDomainScope(supabase.from('canonical_pages')
       .select('id, url, title, meta_title, meta_description, page_type, headings, ctas, internal_link_count, http_status, last_crawled_at, crawl_metadata')
-      .eq('company_id', companyId).order('last_crawled_at', { ascending: false }).limit(500);
+      .eq('company_id', companyId), domainScope).order('last_crawled_at', { ascending: false }).limit(500);
     const list = (pages || []) as PageRow[];
     const ids = list.map((p) => p.id);
     let blocks: ContentBlock[] = [];

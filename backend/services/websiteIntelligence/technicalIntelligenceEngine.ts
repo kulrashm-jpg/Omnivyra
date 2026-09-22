@@ -5,6 +5,7 @@
  * headers, or assets not captured by the crawler are marked not_evaluable (honest).
  */
 import { supabase } from '../../db/supabaseClient';
+import { scopeExcludesAllPages, withDomainScope, type ReportDomainScope } from '../crawl/reportDomainScope';
 import { CheckResult, Freshness, Provenance, IntelHealth, aggregate, clamp, freshnessFrom, healthFromScore, norm } from './engineCommon';
 // BETA-ARCH-001: optional canonical-evidence metadata (read-only mapping of existing output).
 import { buildWebsiteEngineEvidence, type Evidence } from '../evidencePlatform';
@@ -230,11 +231,12 @@ export function scoreTechnicalIntelligence(pages: PageRow[], nowMs: number): Tec
   };
 }
 
-export async function evaluateTechnicalIntelligence(companyId: string, nowMs = Date.now()): Promise<TechnicalIntelligence> {
+export async function evaluateTechnicalIntelligence(companyId: string, nowMs = Date.now(), domainScope?: ReportDomainScope): Promise<TechnicalIntelligence> {
   try {
-    const { data } = await supabase.from('canonical_pages')
+    // R1-OPEN-01: a Report 1 evaluation reads only the current domain's pages.
+    const { data } = scopeExcludesAllPages(domainScope) ? { data: [] } : await withDomainScope(supabase.from('canonical_pages')
       .select('id, url, title, meta_description, headings, internal_link_count, http_status, crawl_depth, last_crawled_at, crawl_metadata')
-      .eq('company_id', companyId).order('last_crawled_at', { ascending: false }).limit(500);
+      .eq('company_id', companyId), domainScope).order('last_crawled_at', { ascending: false }).limit(500);
     return scoreTechnicalIntelligence((data || []) as PageRow[], nowMs);
   } catch {
     return scoreTechnicalIntelligence([], nowMs);

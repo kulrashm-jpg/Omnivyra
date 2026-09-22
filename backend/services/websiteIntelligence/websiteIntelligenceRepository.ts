@@ -22,6 +22,7 @@
  * brand) are reported honestly as unavailable.
  */
 import { computeWebsiteHealthScore } from '../websiteHealthScoreService';
+import type { ReportDomainScope } from '../crawl/reportDomainScope';
 // W4-2 (Batch D cache stack)
 import { registerCacheNamespace } from '../../../lib/platform/cacheCore';
 import { createCache } from '../../../lib/platform/cacheClient';
@@ -496,10 +497,10 @@ export async function getWebsiteIntelligence(companyId: string, websiteId?: stri
 export async function getWebsiteRecommendations(companyId: string, websiteId?: string | null) { return buildRecommendations(await loadSources(companyId, websiteId)); }
 export async function getWebsiteValidation(companyId: string, websiteId?: string | null) { const s = await loadSources(companyId, websiteId); return buildValidation(s, buildModules(s)); }
 export async function getWebsiteSummary(companyId: string, websiteId?: string | null) { const s = await loadSources(companyId, websiteId); const m = buildModules(s); return buildSummary(s, m, buildRecommendations(s)); }
-export async function getWebsiteContentIntelligence(companyId: string) { return evaluateContentIntelligence(companyId); }
-export async function getWebsiteTechnicalIntelligence(companyId: string) { return evaluateTechnicalIntelligence(companyId); }
-export async function getWebsiteAccessibilityIntelligence(companyId: string) { return evaluateAccessibilityIntelligence(companyId); }
-export async function getWebsiteBrandIntelligence(companyId: string) { return evaluateBrandIntelligence(companyId); }
+export async function getWebsiteContentIntelligence(companyId: string, domainScope?: ReportDomainScope) { return evaluateContentIntelligence(companyId, undefined, domainScope); }
+export async function getWebsiteTechnicalIntelligence(companyId: string, domainScope?: ReportDomainScope) { return evaluateTechnicalIntelligence(companyId, undefined, domainScope); }
+export async function getWebsiteAccessibilityIntelligence(companyId: string, domainScope?: ReportDomainScope) { return evaluateAccessibilityIntelligence(companyId, undefined, domainScope); }
+export async function getWebsiteBrandIntelligence(companyId: string, domainScope?: ReportDomainScope) { return evaluateBrandIntelligence(companyId, undefined, domainScope); }
 export async function getWebsiteReport(companyId: string, websiteId?: string | null): Promise<WebsiteReport> {
   const s = await loadSources(companyId, websiteId);
   const m = buildModules(s); const recs = buildRecommendations(s); const h = buildHealth(s);

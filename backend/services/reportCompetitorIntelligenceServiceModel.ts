@@ -6,6 +6,7 @@ import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
 import { impactScore } from './reportDecisionUtils';
 import { supabase } from '../db/supabaseClient';
+import { scopeExcludesAllPages, withDomainScope, type ReportDomainScope } from './crawl/reportDomainScope';
 import axios from 'axios';
 import { config } from '@/config';
 import {
@@ -590,12 +591,76 @@ export function expandDiscoveryKeywords(
   }, []).slice(0, 10);
 }
 
+type RowsResult = { data: unknown[] | null };
+
+/**
+ * R1-OPEN-01 — the page-derived keyword sources (titles/headings, internal anchors, body text).
+ * Unscoped callers keep the original three company-wide reads. A Report 1 scope reads the current
+ * domain's pages first and restricts links and content to those page ids, because neither table
+ * carries a domain of its own — so another site's anchors and copy can no longer seed SERP queries.
+ */
+async function loadKeywordPageSources(
+  companyId: string,
+  domainScope: ReportDomainScope | undefined,
+): Promise<{ pageRowsRes: RowsResult; linkRowsRes: RowsResult; contentRowsRes: RowsResult }> {
+  if (!domainScope) {
+    const [pageRowsRes, linkRowsRes, contentRowsRes] = await Promise.all([
+      supabase
+        .from('canonical_pages')
+        .select('title, headings, crawl_depth')
+        .eq('company_id', companyId)
+        .order('last_crawled_at', { ascending: false })
+        .limit(300),
+      supabase
+        .from('page_links')
+        .select('anchor_text')
+        .eq('company_id', companyId)
+        .eq('is_internal', true)
+        .limit(1200),
+      supabase
+        .from('page_content')
+        .select('content_text')
+        .eq('company_id', companyId)
+        .limit(1200),
+    ]);
+    return { pageRowsRes, linkRowsRes, contentRowsRes };
+  }
+  const none = { data: [] };
+  if (scopeExcludesAllPages(domainScope)) return { pageRowsRes: none, linkRowsRes: none, contentRowsRes: none };
+  const pageRowsRes = await withDomainScope(
+    supabase.from('canonical_pages').select('id, title, headings, crawl_depth').eq('company_id', companyId),
+    domainScope,
+  )
+    .order('last_crawled_at', { ascending: false })
+    .limit(300);
+  const ids = ((pageRowsRes.data ?? []) as Array<{ id?: string | null }>).map((row) => String(row.id ?? '')).filter(Boolean);
+  if (ids.length === 0) return { pageRowsRes, linkRowsRes: none, contentRowsRes: none };
+  const [linkRowsRes, contentRowsRes] = await Promise.all([
+    supabase
+      .from('page_links')
+      .select('anchor_text')
+      .eq('company_id', companyId)
+      .eq('is_internal', true)
+      .in('from_page_id', ids)
+      .limit(1200),
+    supabase
+      .from('page_content')
+      .select('content_text')
+      .eq('company_id', companyId)
+      .in('page_id', ids)
+      .limit(1200),
+  ]);
+  return { pageRowsRes, linkRowsRes, contentRowsRes };
+}
+
 export async function extractTopKeywords(params: {
   companyId: string;
   domain: string;
   businessType: string | null;
+  /** R1-OPEN-01: restrict page-derived keyword sources to the report's current domain. */
+  domainScope?: ReportDomainScope;
 }): Promise<string[]> {
-  const [keywordRowsRes, keywordMetricRowsRes, pageRowsRes, linkRowsRes, contentRowsRes] = await Promise.all([
+  const [keywordRowsRes, keywordMetricRowsRes, { pageRowsRes, linkRowsRes, contentRowsRes }] = await Promise.all([
     supabase
       .from('canonical_keywords')
       .select('id, keyword')
@@ -607,23 +672,7 @@ export async function extractTopKeywords(params: {
       .eq('company_id', params.companyId)
       .order('impressions', { ascending: false })
       .limit(300),
-    supabase
-      .from('canonical_pages')
-      .select('title, headings, crawl_depth')
-      .eq('company_id', params.companyId)
-      .order('last_crawled_at', { ascending: false })
-      .limit(300),
-    supabase
-      .from('page_links')
-      .select('anchor_text')
-      .eq('company_id', params.companyId)
-      .eq('is_internal', true)
-      .limit(1200),
-    supabase
-      .from('page_content')
-      .select('content_text')
-      .eq('company_id', params.companyId)
-      .limit(1200),
+    loadKeywordPageSources(params.companyId, params.domainScope),
   ]);
 
   const metricByKeywordId = new Map<string, number>();

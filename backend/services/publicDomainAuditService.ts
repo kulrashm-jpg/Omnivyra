@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { scopeExcludesAllPages, type ReportDomainScope } from './crawl/reportDomainScope';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { clamp } from './intelligenceEngineUtils';
@@ -188,11 +189,16 @@ function titleWords(value: string): string[] {
     .filter((item) => item.length >= 4 && !['with', 'that', 'from', 'this', 'your', 'what', 'when', 'where', 'which'].includes(item));
 }
 
-async function loadAuditContext(companyId: string): Promise<PublicAuditContext> {
-  const { data: pages, error: pagesError } = await supabase
+async function loadAuditContext(companyId: string, domainScope?: ReportDomainScope): Promise<PublicAuditContext> {
+  // R1-OPEN-01: a Report 1 audit reads only the current domain's pages; content and links below
+  // follow automatically because they are keyed by these page ids.
+  if (scopeExcludesAllPages(domainScope)) return { pages: [], content: [], links: [] };
+  let pagesQuery = supabase
     .from('canonical_pages')
     .select('id, url, page_type, title, meta_title, meta_description, headings, ctas, internal_link_count, http_status, crawl_depth, crawl_metadata')
-    .eq('company_id', companyId)
+    .eq('company_id', companyId);
+  if (domainScope) pagesQuery = pagesQuery.eq('domain_id', domainScope.domainId as string);
+  const { data: pages, error: pagesError } = await pagesQuery
     .order('last_crawled_at', { ascending: false })
     .limit(300);
 
@@ -297,9 +303,11 @@ export async function buildPublicDomainAuditDecisions(params: {
   companyId: string;
   reportTier?: AuditReportTier;
   resolvedInput?: ResolvedReportInput | null;
+  /** R1-OPEN-01: restrict page evidence to the report's current domain. */
+  domainScope?: ReportDomainScope;
 }): Promise<PublicAuditResult> {
   const reportTier = params.reportTier ?? 'snapshot';
-  const context = await loadAuditContext(params.companyId);
+  const context = await loadAuditContext(params.companyId, params.domainScope);
   const { pages, content, links } = context;
 
   const structure = {

@@ -25,6 +25,7 @@
 import { supabase } from '../../db/supabaseClient';
 import { crawlCompanyWebsite } from '../crawlerService';
 import { cooldownForTier, getRefreshPolicyConfig } from './refreshPolicyConfig';
+import { resolveReportDomainScope } from './reportDomainScope';
 
 export type ReportCrawlAction =
   /** Stored evidence was present and fresh enough — nothing was fetched. */
@@ -53,6 +54,11 @@ export interface ReportCrawlEvidenceResult {
   /** Human-readable decision reason — surfaced in logs, never in customer copy. */
   reason: string;
   error?: string;
+  /**
+   * R1-OPEN-01: the website whose pages this result counts — and the one the report's evidence
+   * must be scoped to. Absent only when no website could be resolved (`skipped_no_domain`).
+   */
+  targetUrl?: string;
 }
 
 /**
@@ -71,16 +77,26 @@ const MAX_PAGES = Math.max(1, Number(process.env.REPORT_CRAWL_MAX_PAGES) || 15);
 const PER_PAGE_TIMEOUT_MS = Math.max(2000, Number(process.env.REPORT_CRAWL_PAGE_TIMEOUT_MS) || 8000);
 const SOFT_BUDGET_MS = Math.max(5000, Number(process.env.REPORT_CRAWL_SOFT_BUDGET_MS) || 20000);
 
-async function countPages(companyId: string): Promise<{ count: number; lastCrawledAt: string | null }> {
+/**
+ * Pages of the crawl TARGET's domain only (R1-OPEN-01). Counting the whole company let an old
+ * site's pages satisfy the "usable and fresh" test, so the current site was never crawled and
+ * the report was composed from the old one. The domain row is re-resolved per call because the
+ * crawl itself creates it for a first-time domain.
+ */
+async function countPages(companyId: string, targetUrl: string): Promise<{ count: number; lastCrawledAt: string | null }> {
+  const scope = await resolveReportDomainScope(companyId, targetUrl);
+  if (scope.domainId === null) return { count: 0, lastCrawledAt: null };
   const [{ count }, { data }] = await Promise.all([
     supabase
       .from('canonical_pages')
       .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId),
+      .eq('company_id', companyId)
+      .eq('domain_id', scope.domainId),
     supabase
       .from('canonical_pages')
       .select('last_crawled_at')
       .eq('company_id', companyId)
+      .eq('domain_id', scope.domainId)
       .not('last_crawled_at', 'is', null)
       .order('last_crawled_at', { ascending: false })
       .limit(1),
@@ -116,38 +132,6 @@ export async function ensureReportCrawlEvidence(params: {
     durationMs: 0,
   };
 
-  let before: { count: number; lastCrawledAt: string | null };
-  try {
-    before = await countPages(params.companyId);
-  } catch (error) {
-    // Cannot read the evidence table — do NOT crawl blindly, and do not fail the
-    // report. Compose against whatever the engines can read themselves.
-    return {
-      ...base,
-      action: 'failed',
-      durationMs: Date.now() - startedAt,
-      reason: 'could not read canonical_pages to evaluate crawl freshness',
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-
-  const ageMs = before.lastCrawledAt ? Date.now() - Date.parse(before.lastCrawledAt) : null;
-  const usable = before.count >= MIN_USABLE_PAGES;
-  const fresh = ageMs !== null && Number.isFinite(ageMs) && ageMs < cooldownMs;
-
-  if (usable && fresh) {
-    return {
-      ...base,
-      action: 'reused',
-      pagesBefore: before.count,
-      pagesAfter: before.count,
-      lastCrawledAt: before.lastCrawledAt,
-      ageMs,
-      durationMs: Date.now() - startedAt,
-      reason: `${before.count} stored pages, last crawled ${Math.round((ageMs ?? 0) / 3_600_000)}h ago (within ${Math.round(cooldownMs / 3_600_000)}h cooldown)`,
-    };
-  }
-
   // `crawlCompanyWebsite` resolves the company's website itself when no rootUrl is
   // given; pass the resolver's domain when we have it so the report and the crawl
   // agree on the target. A company with no website at all is skipped honestly.
@@ -171,11 +155,15 @@ export async function ensureReportCrawlEvidence(params: {
   // relaxing `normalizeUrl`, because the crawler's contract genuinely is a URL — every other
   // caller honours it — and loosening the shared parser would let malformed input through for
   // callers that currently fail fast on it.
+  //
+  // R1-OPEN-01 — the target is resolved BEFORE counting, because only the target domain's pages
+  // may count as this report's evidence.
   const websiteDomain = params.websiteDomain?.trim() || '';
   const rootUrl = websiteDomain
     ? (/^https?:\/\//i.test(websiteDomain) ? websiteDomain : `https://${websiteDomain}`)
     : undefined;
-  if (!rootUrl) {
+  let targetUrl = rootUrl;
+  if (!targetUrl) {
     const { data: company } = await supabase
       .from('companies')
       .select('website')
@@ -186,14 +174,45 @@ export async function ensureReportCrawlEvidence(params: {
       return {
         ...base,
         action: 'skipped_no_domain',
-        pagesBefore: before.count,
-        pagesAfter: before.count,
-        lastCrawledAt: before.lastCrawledAt,
-        ageMs,
         durationMs: Date.now() - startedAt,
         reason: 'no website domain resolved for this company',
       };
     }
+    targetUrl = String(company.website);
+  }
+
+  const scoped = { ...base, targetUrl };
+
+  let before: { count: number; lastCrawledAt: string | null };
+  try {
+    before = await countPages(params.companyId, targetUrl);
+  } catch (error) {
+    // Cannot read the evidence table — do NOT crawl blindly, and do not fail the
+    // report. Compose against whatever the engines can read themselves.
+    return {
+      ...scoped,
+      action: 'failed',
+      durationMs: Date.now() - startedAt,
+      reason: 'could not read canonical_pages to evaluate crawl freshness',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const ageMs = before.lastCrawledAt ? Date.now() - Date.parse(before.lastCrawledAt) : null;
+  const usable = before.count >= MIN_USABLE_PAGES;
+  const fresh = ageMs !== null && Number.isFinite(ageMs) && ageMs < cooldownMs;
+
+  if (usable && fresh) {
+    return {
+      ...scoped,
+      action: 'reused',
+      pagesBefore: before.count,
+      pagesAfter: before.count,
+      lastCrawledAt: before.lastCrawledAt,
+      ageMs,
+      durationMs: Date.now() - startedAt,
+      reason: `${before.count} stored pages, last crawled ${Math.round((ageMs ?? 0) / 3_600_000)}h ago (within ${Math.round(cooldownMs / 3_600_000)}h cooldown)`,
+    };
   }
 
   const intendedAction: ReportCrawlAction = before.count > 0 ? 'refreshed' : 'crawled';
@@ -227,9 +246,9 @@ export async function ensureReportCrawlEvidence(params: {
       // are persisted incrementally, so they remain usable for this composition and
       // for the next report.
       crawlPromise.catch(() => {});
-      const after = await countPages(params.companyId).catch(() => before);
+      const after = await countPages(params.companyId, targetUrl).catch(() => before);
       return {
-        ...base,
+        ...scoped,
         action: 'partial',
         pagesBefore: before.count,
         pagesAfter: after.count,
@@ -240,12 +259,12 @@ export async function ensureReportCrawlEvidence(params: {
       };
     }
 
-    const after = await countPages(params.companyId).catch(() => ({
+    const after = await countPages(params.companyId, targetUrl).catch(() => ({
       count: before.count + outcome.result.pagesInserted,
       lastCrawledAt: before.lastCrawledAt,
     }));
     return {
-      ...base,
+      ...scoped,
       action: intendedAction,
       pagesBefore: before.count,
       pagesAfter: after.count,
@@ -256,9 +275,9 @@ export async function ensureReportCrawlEvidence(params: {
     };
   } catch (error) {
     if (timer) clearTimeout(timer);
-    const after = await countPages(params.companyId).catch(() => before);
+    const after = await countPages(params.companyId, targetUrl).catch(() => before);
     return {
-      ...base,
+      ...scoped,
       action: 'failed',
       pagesBefore: before.count,
       pagesAfter: after.count,

@@ -6,6 +6,7 @@
  * with no stored source (NPS, reviews, competitor sentiment) are not_evaluable.
  */
 import { supabase } from '../../db/supabaseClient';
+import { scopeExcludesAllPages, withDomainScope, type ReportDomainScope } from '../crawl/reportDomainScope';
 import { CheckResult, Freshness, Provenance, aggregate, clamp, freshnessFrom, healthFromScore, norm } from './engineCommon';
 import type { IntelHealth } from './engineCommon';
 // BETA-ARCH-001: optional canonical-evidence metadata (read-only mapping of existing output).
@@ -132,14 +133,15 @@ export function scoreBrandIntelligence(identity: BrandIdentity | null, profile: 
   };
 }
 
-export async function evaluateBrandIntelligence(companyId: string, nowMs = Date.now()): Promise<BrandIntelligence> {
+export async function evaluateBrandIntelligence(companyId: string, nowMs = Date.now(), domainScope?: ReportDomainScope): Promise<BrandIntelligence> {
   try {
     const since = new Date(nowMs - 30 * 24 * 3_600_000).toISOString();
     const [idRes, profRes, commRes, pageRes] = await Promise.all([
       supabase.from('company_brand_identity').select('colors, typography, logo_assets, voice, vocabulary, compliance, design_language, tagline, completeness, status, version, published_at, updated_at').eq('company_id', companyId).order('version', { ascending: false }).limit(5),
       supabase.from('company_profiles').select('logo_url, favicon_url').eq('company_id', companyId).maybeSingle(),
       supabase.from('community_ai_actions').select('sentiment, platform, message_count, created_at').eq('company_id', companyId).gte('created_at', since).limit(2000),
-      supabase.from('canonical_pages').select('title, headings, ctas').eq('company_id', companyId).order('last_crawled_at', { ascending: false }).limit(500),
+      // R1-OPEN-01: only the page input is domain-scoped; identity/profile/community are company facts.
+      scopeExcludesAllPages(domainScope) ? Promise.resolve({ data: [] }) : withDomainScope(supabase.from('canonical_pages').select('title, headings, ctas').eq('company_id', companyId), domainScope).order('last_crawled_at', { ascending: false }).limit(500),
     ]);
     const rows = (idRes.data || []) as BrandIdentity[];
     const identity = rows.find((r) => norm(r.status) === 'published') ?? rows[0] ?? null;
