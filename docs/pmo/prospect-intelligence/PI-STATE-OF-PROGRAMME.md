@@ -141,7 +141,7 @@ It cannot be reached in production — see `DEFECT-001`. Also: no proactive sche
 
 ### 3.4 Offering & understanding — **the orphan**
 
-`backend/services/offeringIntelligence/**` is a complete 24-facet offering ontology — `customerProblems`, `valueProposition`, `outcomes`, `differentiators`, `capabilities`, `personas`, `industries`, `icpAlignment` — with ten engines and tests. It has **zero consumers, no database table, and no writer** (`persistence.ts:1-5`: "NO writer wired in Phase B").
+`backend/services/offeringIntelligence/**` is a complete 24-facet offering ontology — `customerProblems`, `valueProposition`, `outcomes`, `differentiators`, `capabilities`, `personas`, `industries`, `icpAlignment` — with twelve engine functions and tests. It has **zero consumers, no database table, and no writer** (`persistence.ts:1-5`: "NO writer wired in Phase B").
 
 Every prior document called the offering model "its own programme with its own discovery." That is wrong. The **sell side is built and orphaned**. What is genuinely missing is the **buy side**: nothing in intake, enrichment or engagement captures a prospect's problem. Timeline entries carry no text; `lead_signals.content_text` exists and is never projected into the scoring context.
 
@@ -198,6 +198,24 @@ Identity and outreach telemetry are rich and correctly bounded (no tenant labels
 ~132 PI test files; 25 real-schema tests that verify DDL invariants against a live Postgres container. **No end-to-end PI lifecycle test exists.** The nearest thing is a script, not a suite.
 
 Per an existing programme note, the real-schema harness is raw `pg` while ingestion writes via PostgREST — so **the application write path has never executed against real constraints**.
+
+---
+
+## 3.13 WS-D — offering activation, DONE (read-time, no schema)
+
+`offeringIntelligence/**` is **sound, tested and not duplicative** — 1,081 lines, 23 files, one owner (`assembleOfferingUnderstanding`), every engine abstaining without input. Its only gap versus `leadUnderstanding` was the half that programme has and this one did not: an **async context builder** and a **read composer**.
+
+**Activated with no migration**, because `leadUnderstanding` has no table either — `lead_understanding_shadow` exists and nothing writes it; the understanding is computed per request. A third store was avoided: `company_intelligence_products` and `report_settings.market_pulse.core_offerings` are already two partial copies of the same fact.
+
+Built: `tenantOfferingContext.ts` (the missing builder — one tenant-scoped `company_profiles` read, a pure row→seed mapper, typed gaps) and `problemFit.ts` (the seam — `readTenantOfferingUnderstanding` plus `assessProblemFitReadiness`, which returns a literal `scorable: false`). `SCORE_DIMENSIONS` untouched; no write verb in either file, asserted structurally.
+
+**The judgement worth recording:** only `ctx.seed` is populated and the engine inputs are left deliberately empty, so **every offering score dimension abstains**. The twelve engines score adoption, market fit, differentiation and maturity from *observed market* evidence; a tenant's own self-description is not that, and feeding it in would manufacture four scores out of one paragraph. The facets Problem Fit needs come from the seed and are fully populated.
+
+**Three structural losses, now recorded rather than hidden:** `company_profiles` is one row per tenant, so three offerings share one problem statement; `offeringType` is unknowable from an undifferentiated `products_services`; and 10 of 24 facets have no column at all.
+
+**What Problem Fit still needs, and this workstream cannot supply:** a prospect-stated problem (nothing captures one); `lead_signals.content_text` exists and is never projected into the scoring context; `problem_relevance` and `product_service_alignment` are `UNREPRESENTABLE_CONCEPTS` on the ratified ICP surface; a defined representation and weight for the dimension; and per-offering semantics the schema structurally cannot hold.
+
+**Deliberately not done:** the seam is **not wired into `prospectIntelligenceRead.ts`**. Doing so would change `PROSPECT_API_VERSION` and add a `company_profiles` read to every prospect-detail request. It is a small, separable change and is left as an explicit decision rather than slipped in.
 
 ---
 
@@ -283,6 +301,7 @@ Per the "do not build for the sake of completion" rule.
 | T1 | PASS for WS-A1 (54/54) and WS-B (179/179), each re-run by the orchestrator in its own worktree |
 | T2-001 | **PASS** — 115 PI suites / 3299 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions`, `check:route-policy` all exit 0 |
 | T2-002 | **PASS** (scoped to the schema gate and the enrichment/identity subsystems it touches) — 39 suites / 1098 tests, 0 failures; three static guards exit 0 |
+| T2-003 | **PASS** (scoped to offering, understanding, identity and governance) — 20 suites / 421 tests, 0 failures; `check:authz` and `check:db-conventions` exit 0 |
 | T3 | not run — not a release candidate |
 | Production deploy | **not authorized, not attempted** |
 | Pushed | **no** — all four branches are local |
