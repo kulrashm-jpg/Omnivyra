@@ -227,11 +227,20 @@ describe('PI WS-C — DECISION B: same_state resolved caller-side', () => {
   it('no prior state is `initial` — the engine already allows any known first state', () => {
     expect(classifyProspectTransition(null, 'identified')).toEqual({ kind: 'initial' });
     expect(classifyProspectTransition(undefined, 'qualified')).toEqual({ kind: 'initial' });
-    expect(classifyProspectTransition('', 'nurture')).toEqual({ kind: 'initial' });
   });
 
   it('a corrupt stored state is reported, not silently treated as absent', () => {
     expect(classifyProspectTransition('working' as unknown as ProspectState, 'qualified'))
+      .toMatchObject({ kind: 'illegal', reason: 'unknown_from' });
+    // A BLANK is corrupt, not absent. It was previously classified `initial` by
+    // an unreachable `(from as string) === ''` branch that contradicted this very
+    // rule. The reader turns a blank into null before anything sees it
+    // (`lifecycleReader.ts` `str()`), the DB CHECK forbids it, and the only
+    // production caller passes `current?.state ?? null` — so it can arrive only
+    // from a corrupt source, and a corrupt source must be loud. The cast is
+    // deliberate: the whole point of the case is that the value is NOT a
+    // ProspectState, which is why the signature must keep refusing it.
+    expect(classifyProspectTransition('' as unknown as ProspectState, 'nurture'))
       .toMatchObject({ kind: 'illegal', reason: 'unknown_from' });
   });
 

@@ -234,7 +234,20 @@ export function classifyProspectTransition(
   if (!isProspectState(to)) {
     return { kind: 'illegal', from: from ?? null, to, reason: 'unknown_to' };
   }
-  if (from == null || (from as string) === '') {
+  // ABSENT means absent — `null`/`undefined` only.
+  //
+  // This used to also treat `''` as absent, via `(from as string) === ''`. That
+  // branch was unreachable and self-contradictory, and its cast was the only
+  // reason the type error below it stayed hidden:
+  //   * the reader normalises a blank to null before anything sees it —
+  //     `lifecycleReader.ts` `str()` returns null unless `v.length > 0`;
+  //   * `prospect_lifecycle_previous_state_valid` admits NULL or the vocabulary,
+  //     never '';
+  //   * the sole production caller passes `current?.state ?? null`.
+  // And it disagreed with the rule immediately below: a value that is not a
+  // known state is CORRUPT and must be reported, not silently read as "no state
+  // yet". A blank is corrupt. It now falls through to `unknown_from`.
+  if (from == null) {
     return { kind: 'initial' };
   }
   if (!isProspectState(from)) {
