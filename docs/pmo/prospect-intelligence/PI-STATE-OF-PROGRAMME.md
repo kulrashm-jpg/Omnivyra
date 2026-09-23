@@ -326,6 +326,41 @@ Two consequences. **Revoking is not a remedy** — a revoked person-only row sti
 
 ---
 
+## 3.15 WS-C — the prospect lifecycle ledger, DELIVERED
+
+**8 new files, 0 existing files modified.** The shared engine in `lib/operations/operationalStateModel.ts` is handed a `PROSPECT_STATE_MODEL` config — not forked, not copied, not edited; its test file is untouched and still passes.
+
+**Six resting states + initial**, 24 edges. Four are judgements rather than readings:
+- `identified → engaged` — `engagement_threads` exist independently of anything PI initiated, so an inbound reply can reach an unjudged prospect. Refusing it would force the writer to fabricate a `qualified` transition it has no evidence for.
+- `not_interested → engaged` — `rejected` means "not interested in THIS" and is distinct from `unsubscribed`. A later `replied` is real and observable. So `not_interested` is **not** terminal.
+- **`closed_disqualified` has no exits**, unlike `DEFAULT_STATE_MODEL`'s re-openable terminals. A close can be caused by `unsubscribed`; a re-openable close would let the ledger say "pursue" about someone who asked never to be contacted — the same compliance failure class as a stale stored `suppressed`.
+- `meeting_scheduled` is **contract-only and unreachable today** — its only cause is `meeting_booked`, which is unobservable. It is in `PROSPECT_STATES_UNREACHABLE_TODAY`, so the gap is *reported* rather than silently never-populated.
+
+**`outreach-active` is a PROJECTION, not a state** — so six states, not seven. PI DECIDES, OUTREACH EXECUTES: a persisted copy would be a mirror PI cannot keep current, and stale `outreach-active` after every task was cancelled is the same lie-shape as a stored `suppressed`. The projection joins on the **person** edge, because `outreach_tasks.lead_id` is `text` and A3 records it is *not proven* to be a lead id; a test asserts `lead_id` is never a filter. Consequence recorded: the resting position while outreach runs is `qualified`, and reactivation is `nurture → qualified` — a deviation from ADR-004 §4.1's wording, not its intent.
+
+**Re-ingestion stability is structural, not conventional.** `prospect_id` is `uuid` with a composite tenant FK, so a `::`-delimited leadKey is **unrepresentable**, not merely discouraged. `source_event_key` is colon-free by CHECK — with a separately-named `prospect_lifecycle_event_key_no_leadkey` constraint so the refusal is visible in the name a reviewer reads. A test asserts the migration's regex and the TS pattern are the same string. LI-2 re-ingestion bumps `observation_count` on the same row, so an unchanged observation yields the same key and no new transition, while a changed payload yields a new hash, row and key — the required behaviour for free.
+
+**Debounce resolved caller-side**, three layers: `same_state` is intercepted *before* the shared engine is called, so its test-locked meaning for four other entity types is untouched; a 6h window returns `unchanged, wrote:false` rather than a 409; and a partial unique index on `source_event_key` gives duplicate-event idempotency by `23505`, never `ON CONFLICT` (`42P10`).
+
+**Status:** `IMPLEMENTED` · `T1 VERIFIED` (102/102 after renumber, re-run by the orchestrator) · `T2 VERIFIED` (T2-005: 23 suites / 593 tests, four static guards exit 0). Migration `20261028000000` **AUTHORED, NOT APPLIED**. Real-schema suite (27 tests) **NOT RUN**.
+
+### 3.15.1 A collision caught at integration
+
+WS-F and WS-C ran in parallel and **both authored `20261027000000`**. Each passed `check:migrations` in its own worktree because each saw only its own file. A duplicate version prefix is the exact failure this repo's ledger is already full of — the CLI orders by numeric version, records the version complete after one arbitrary file runs, and silently skips the rest. WS-F keeps `20261027000000` (merged first); the lifecycle ledger moved to `20261028000000` with its three in-repo references updated. **Post-merge there are no duplicate full-version prefixes among post-floor migrations.**
+
+### 3.15.2 Judgements flagged for reversal
+
+1. **A tenant hard-delete is now blocked** — `organization_id` cascades `companies → canonical_leads →` this table and the append-only trigger refuses DELETE. Identical to what `opportunity_lifecycle_states` has done since `20260520`, so precedent rather than new hazard, but real. Pointed at `PI-CONTRACT-002` rather than inventing a purge path.
+2. **An index was added to another domain's table** — `uq_outreach_outcomes_id_company`, additive and idempotent against a verified-empty family, needed because no tenant-safe composite FK to the evidence was otherwise possible. If cross-domain additions need Outreach sign-off, this is the line.
+3. **The chain trigger + advisory lock exceeds the brief** — judged necessary because without it "current state = latest row" is not coherent under concurrency. Easy to drop.
+4. **`origin='human'` requires `actor_user_id` by CHECK** — makes the flag meaningful, but rejects a human transition arriving through a service path with no user id.
+
+### 3.15.3 Open question
+
+Whether ADR-004's `closed/disqualified` was **one state or two**. Read as one and named `closed_disqualified`. If two, the vocabulary is seven resting states and the migration CHECK changes.
+
+---
+
 ## 4. Defect register
 
 | ID | Severity | Statement | Verification |
@@ -409,6 +444,7 @@ Per the "do not build for the sake of completion" rule.
 | T1 | PASS for WS-A1 (54/54) and WS-B (179/179), each re-run by the orchestrator in its own worktree |
 | T2-001 | **PASS** — 115 PI suites / 3299 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions`, `check:route-policy` all exit 0 |
 | T2-002 | **PASS** (scoped to the schema gate and the enrichment/identity subsystems it touches) — 39 suites / 1098 tests, 0 failures; three static guards exit 0 |
+| T2-005 | **PASS** (WS-C lifecycle, converged with WS-F) — 23 suites / 593 tests, 0 failures; four static guards exit 0 |
 | T2-004 | **PASS** (WS-F governance/erasure) — 16 suites / 444 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions` exit 0 |
 | T2-003 | **PASS** (scoped to offering, understanding, identity and governance) — 20 suites / 421 tests, 0 failures; `check:authz` and `check:db-conventions` exit 0 |
 | T3 | not run — not a release candidate |
