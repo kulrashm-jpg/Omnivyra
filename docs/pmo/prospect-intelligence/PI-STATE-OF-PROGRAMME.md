@@ -279,12 +279,17 @@ Per the "do not build for the sake of completion" rule.
 | Gate | State |
 |---|---|
 | T1 | PASS for WS-A1 (54/54) and WS-B (179/179), each re-run by the orchestrator in its own worktree |
-| T2 | **PASS** on `integrate/pi-t2-001` — 115 PI suites / 3299 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions`, `check:route-policy` all exit 0 |
+| T2-001 | **PASS** — 115 PI suites / 3299 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions`, `check:route-policy` all exit 0 |
+| T2-002 | **PASS** (scoped to the schema gate and the enrichment/identity subsystems it touches) — 39 suites / 1098 tests, 0 failures; three static guards exit 0 |
 | T3 | not run — not a release candidate |
 | Production deploy | **not authorized, not attempted** |
 | Pushed | **no** — all four branches are local |
 
 **PI baseline at `origin/main` for comparison:** 114 suites / 3239 tests with **2 failures**, both stale assertions that Apollo has no adapter. The integrated tree is +1 suite, +60 tests, 0 failures.
+
+**⚠ NOT RUN — the structural checks have never executed against a live Postgres.** GAP-B/C added an index-introspection query over `pg_index`/`pg_class` and a declared-type comparison. Local Supabase is not running, and starting Docker is avoided here because this repo's compose brings up a worker pointed at production. So both queries are **syntax-checked and unit-guarded, not runtime-proven**. They are hand-reviewed — `i.relname = ANY($1)` mirrors the `table_name = ANY($1)` pattern already working in production — but that is reasoning, not evidence. **PROD-1's read-only verification is the natural place to prove them**, because running the verifier against production exercises exactly these queries *and* yields the ground truth. Until then this is `NOT RUN`, not `PASS`.
+
+**What the structural checks provably do NOT guarantee** (recorded so nobody over-claims): the type check proves the *declared* type only, not that every stored row is convertible; the index check matches key names as a substring of `pg_get_indexdef`, so an index over the right columns in the **wrong order** passes; `indisvalid` is not read, so an index left by a failed `CREATE INDEX CONCURRENTLY` reports as present; and an index existing today says the constraint is enforced from now on, not that past ingestion was idempotent.
 
 **One caveat carried forward from WS-A1:** the extended schema gate has never been run against a real database. Once PROD-1 lands it may turn a currently-green predeploy **red** — that is the intent of the change, not a regression, but it must be run and triaged before it is treated as shippable.
 
