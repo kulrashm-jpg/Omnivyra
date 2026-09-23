@@ -361,6 +361,14 @@ Whether ADR-004's `closed/disqualified` was **one state or two**. Read as one an
 
 ---
 
+## 3.16 Parked — verified dead code, deliberately not removed
+
+`backend/services/strategicIntelligenceService.ts` has **zero importers**, verified independently by the orchestrator across `backend`, `pages`, `lib`, `components` and `scripts`, including a dynamic-import sweep. The only nearby hits are differently-named files (`strategicIntelligenceMetrics`, `strategicIntelligenceOrchestrationService`). A doc in `docs/` claims it is "imported elsewhere"; that claim is **false**.
+
+**Parked rather than removed.** It delivers no immediate programme value, and removing it would widen the blast radius of a cycle whose objective is real-schema verification. The verification above is recorded so the deletion is a five-minute job whenever someone wants it. Status: `DEFERRED`, not `BLOCKED`.
+
+---
+
 ## 4. Defect register
 
 | ID | Severity | Statement | Verification |
