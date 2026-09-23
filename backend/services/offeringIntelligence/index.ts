@@ -15,4 +15,7 @@ export * from './graph';
 export * from './persistence';
 export * from './shadowRuntime';
 export * from './metrics';
+// PI WS-D — read-time activation: the tenant's own offering context, and the Problem Fit seam.
+export * from './tenantOfferingContext';
+export * from './problemFit';
 export { isOfferingUnderstandingEnabled, isOfferingProjectionAuthoritative } from './flags';
