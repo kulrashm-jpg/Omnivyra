@@ -470,6 +470,47 @@ const REQUIRED_COLUMNS = [
   { severity: 'WARN', table: 'outreach_decisions', column: 'identity_anchor',   motivation: 'A3 (20261011000000): which anchor kind produced the verdict.' },
   { severity: 'WARN', table: 'outreach_decisions', column: 'identity_degraded', motivation: 'A3 (20261011000000): records that the verdict was reached without a resolved person — the flag that distinguishes a clean allow from a best-effort one.' },
 
+  // ── the WS-5 engagement seam (GAP-A) — four NON-PI-owned tables ─────────────
+  // Listed on the same basis as integration_credentials below: PI is a CONSUMER
+  // whose read throws. Ownership is not the test this manifest applies; impact
+  // is ("a severity reflecting real operational impact").
+  //
+  // What makes these BLOCKING rather than WARN is a single structural fact:
+  // `readProspectEngagementIntelligence` is the ONE seam in the prospect read
+  // deliberately NOT wrapped. prospectIntelligenceRead.ts:279-280 awaits it with
+  // no try/catch and no attempt(), because its null IS the 404 that answers
+  // "does this prospect exist in this tenant". Every other seam is wrapped and
+  // degrades to a `failed` section; this one does not. So a throw here becomes
+  // HTTP 503 `prospect_intelligence_unavailable` for the ENTIRE prospect detail
+  // response (pages/api/prospects/[id].ts:73), not a degraded panel.
+  //
+  // That seam reads five tables with explicit column lists and `if (error) throw`.
+  // canonical_leads is already covered above; these are the other four. Covering
+  // only some of them would make the gate's view of one code path arbitrary.
+  //
+  // Precedent, not innovation: engagement_threads has ALREADY 42703'd production
+  // once — migration 20260917000000 records it, caused by an ungoverned
+  // `database/` file being only partially applied, which is the exact failure
+  // class this gate exists for. These tables are MORE exposed than the PI tables
+  // above, because much of their schema comes from files CI never applies.
+  //
+  // Scope is deliberately narrow: only columns PI actually selects or filters on.
+  // The engagement domain's own surface (window_open, raw_payload, assigned_to…)
+  // is not imported here — PI has no dependency on it and this manifest is a
+  // record of consumer contracts, not a second schema authority.
+  { severity: 'BLOCKING', table: 'engagement_threads',  column: 'organization_id',   motivation: 'GAP-A: tenant predicate on BOTH PI engagement reads (prospectEngagementIntelligence.loadThreads, accountIntelligence.loadEngagement). Absent, the filter itself is 42703 and GET /api/prospects/[id] returns 503. Also the anchor detecting the whole table being absent.' },
+  { severity: 'BLOCKING', table: 'engagement_threads',  column: 'unified_person_id', motivation: 'GAP-A: added LATER by 20260621_unified_person_identity_spine.sql, so individually missable under a partial ledger. It is the ONLY key PI has to reach engagement at all.' },
+  { severity: 'BLOCKING', table: 'engagement_threads',  column: 'contact_id',        motivation: 'GAP-A: added LATER by 20260419_contacts_spine.sql, so individually missable. In loadThreads\' literal select list on the unguarded seam. canonicalLeadSignalService.ts:326 already codes defensively around this exact column being absent; PI does not — it throws.' },
+  { severity: 'BLOCKING', table: 'engagement_threads',  column: 'platform',          motivation: 'GAP-A: in loadThreads\' literal select list; the channel every timeline entry is built from.' },
+  { severity: 'BLOCKING', table: 'engagement_messages', column: 'thread_id',         motivation: 'GAP-A: the join key loadMessages selects and filters on, on the unguarded seam → 503. NOTE: engagement_messages has no tenant column of its own; it is reached only via thread ids already scoped by organization_id.' },
+  { severity: 'BLOCKING', table: 'engagement_messages', column: 'direction',         motivation: 'GAP-A: in loadMessages\' literal select list; distinguishes inbound from outbound in the timeline, which is what makes engagement evidence directional.' },
+  { severity: 'BLOCKING', table: 'contacts',            column: 'organization_id',   motivation: 'GAP-A: tenant predicate on loadContactIds, on the unguarded seam. Also the anchor for the table.' },
+  { severity: 'BLOCKING', table: 'contacts',            column: 'unified_person_id', motivation: 'GAP-A: added LATER by 20260621_unified_person_identity_spine.sql, so individually missable. The predicate linking a contact to the person whose timeline is being read.' },
+  { severity: 'BLOCKING', table: 'lead_signals',        column: 'organization_id',   motivation: 'GAP-A: tenant predicate on both of loadSignals\' reads, on the unguarded seam. Also the anchor for the table.' },
+  { severity: 'BLOCKING', table: 'lead_signals',        column: 'source_type',       motivation: 'GAP-A: in loadSignals\' 13-column literal select list. The engagement/listening discriminator — the contract frozen by manifest C-5.' },
+  { severity: 'BLOCKING', table: 'lead_signals',        column: 'thread_id',         motivation: 'GAP-A: one of the two link keys loadSignals reads and filters on.' },
+  { severity: 'BLOCKING', table: 'lead_signals',        column: 'contact_id',        motivation: 'GAP-A: the second link key loadSignals reads and filters on.' },
+
   // ── integration_credentials — A3M tenant credential ownership (20261014000000) ──
   // Not a PI-owned table, but 20261014000000 is part of the same uncovered
   // series and the columns it adds are what make a provider credential belong
