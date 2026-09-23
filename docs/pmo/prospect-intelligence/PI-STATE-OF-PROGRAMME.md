@@ -552,3 +552,71 @@ Per the "do not build for the sake of completion" rule.
 5. **WS-C, WS-D** begin after contract freeze.
 6. **WS-E** begins after ARCH-1.
 7. First real-data exercise only after WS-A closes and PROD-1 is resolved.
+
+---
+
+# PRE-APPLY GATE — 2026-09-23 · RESULT: **PASS**
+
+Run after owner ratification of J-1…J-6. **Nothing was applied. No production mutation of any kind.**
+
+## Repository
+
+| | |
+|---|---|
+| Integration SHA | `e81816b92d229a8ecb5db5e22e2408ad1e3bd9ef` |
+| Branch | `integrate/pi-t2-001` |
+| Working tree | **clean** (0 changes) |
+| Changed since real-schema verification | **documentation only** — zero implementation or schema files |
+| Duplicate migration versions above the floor | **none** |
+
+## Migrations — exact bytes proposed
+
+| File | sha256 |
+|---|---|
+| `20261027000000_pi_wsf_governance_anchor_after_erasure.sql` | `c91a65719d85427e3c559068ca2324e6248f40806ec09c7ea97902ffc2f71b97` |
+| `20261028000000_pi_prospect_lifecycle_state.sql` | `368e6f6125597cae1621de0116686bbde5e2e943b259b7faa37921ba613f35ab` |
+
+**Verification linkage — PROVEN.** Both files are **byte-identical** to their content at `33fd761d`, the commit whose tree produced 27 suites / 505 tests / 505 passed with 41 migrations replayed. The real-schema evidence therefore corresponds to exactly these bytes.
+
+## Intended schema changes
+
+**`20261027000000`** — two `ALTER TABLE` statements on `contact_governance_records`: drop and re-add `contact_governance_has_anchor`, widening it to admit a row whose anchors are gone **only when revoked**. Guarded by a fail-closed preflight that refuses if the table is missing, the constraint is absent, or the person FK is no longer `ON DELETE SET NULL (person_id)`.
+
+**`20261028000000`** — creates `prospect_lifecycle_transitions` (1 table, 3 unique indexes, 2 indexes, 3 triggers, 1 function, RLS enabled + 1 policy), plus `uq_outreach_outcomes_id_company` on `outreach_outcomes`.
+
+## Safety scan — clean
+
+Neither migration contains `DROP TABLE`, `TRUNCATE`, `DELETE FROM`, `UPDATE … SET`, `DROP COLUMN`, `RENAME`, `DROP DATABASE` or `DROP SCHEMA`. The only `DROP CONSTRAINT` is the ratified J-3 CHECK swap, re-added in the same transaction. No unrelated schema change; every object is additive or the ratified constraint.
+
+## Production preconditions — verified read-only
+
+| Precondition | Observed |
+|---|---|
+| `contact_governance_records` exists | ✔ |
+| `contact_governance_has_anchor` present | ✔ |
+| person FK `confdeltype` | **`n`** (SET NULL) — the migration's premise holds |
+| Rows affected by the CHECK swap | **0** |
+| `canonical_leads`, `outreach_outcomes`, `source_records`, `companies`, `users` | all present |
+| `prospect_lifecycle_transitions` | **absent** — as expected |
+| `uq_outreach_outcomes_id_company` | absent — the migration creates it |
+| `outreach_outcomes` rows (index build cost) | **0** |
+| Either migration already recorded in the ledger | **0** — neither applied |
+
+## Warnings — two, neither blocking
+
+1. **`20261028000000` has no rollback file** (`20261027000000` does). Not a convention breach — 29 of 417 migrations have one. It is also defensible: a rollback would be `DROP TABLE` on an append-only audit ledger, which destroys the evidence the table exists to hold. **Recorded so the absence is a decision, not an oversight.**
+2. **The repository's documented process specifies no backup/recovery step** — `docs/migration-discipline.md` mentions none. Both migrations are additive against zero affected rows, so the practical exposure is low, but the absence is stated rather than assumed away.
+
+## Post-apply verification — defined, not run
+
+1. Both versions recorded in `supabase_migrations.schema_migrations`
+2. `contact_governance_has_anchor` matches the new three-clause definition; the live-row requirement is **not** lost
+3. `prospect_lifecycle_transitions` exists with 3 unique indexes, 2 indexes, 3 triggers, RLS enabled, 1 policy
+4. `uq_outreach_outcomes_id_company` present, unique, valid
+5. No unexpected schema delta — re-run the 187-check gate
+6. PI read paths still answer — `GET /api/prospects`, `GET /api/prospects/:id`
+7. Tenant isolation intact — RLS and composite FKs unchanged
+
+## Result
+
+**PRE-APPLY GATE: PASS.** Stopped here. **Production migration application is NOT AUTHORIZED and has NOT been attempted.**
