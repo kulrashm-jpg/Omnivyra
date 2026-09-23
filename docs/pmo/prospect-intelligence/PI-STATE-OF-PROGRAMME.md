@@ -302,6 +302,30 @@ Built: `tenantOfferingContext.ts` (the missing builder — one tenant-scoped `co
 
 ---
 
+## 3.14 WS-F — person erasure defined; DEFECT-008 and DEFECT-010 resolved in code
+
+**The orchestrator's hypothesis was largely right and wrong in one load-bearing way.** Right: the database is not broken, the FK and CHECK are coherent for both-anchored and target-only rows, and the real defect is an undefined erasure path. Wrong: *"the fix may need no migration at all"* is **false**, because —
+
+> `contact_governance_has_anchor` is **not predicated on `revoked_at`** — confirmed against production: `CHECK ((person_id IS NOT NULL) OR ((target_normalized IS NOT NULL) AND (length(btrim(target_normalized)) > 0)))`.
+
+Two consequences. **Revoking is not a remedy** — a revoked person-only row still has its `person_id` nulled and still raises `23514`. And **revoked history cannot be repaired by any procedure**, because ADR §16 forbids touching any field but `revoked_at`/`revoked_reason`; writing today's address onto a record in force two years ago would fabricate history. Append-only governance therefore forces **exactly one CHECK change** — not the FK, not the index, not the vocabulary.
+
+**DEFECT-010 confirmed**, plus a second reachable path the orchestrator did not identify: two *different* people sharing a target, deleted in one statement (a tenant cascade), collide with each other — no pre-existing target row needed.
+
+**Selected model — re-anchor, revoke, delete** (`prospectIdentity/personErasure.ts`): read contact points from `identity_claims` **before** the delete (that edge CASCADEs); read **every** governance record naming the person **including revoked ones**; carry enforceable instructions forward as target-anchored records preserving the original `effective_from`; revoke the originals with a reason, which removes them from the partial index and makes DEFECT-010 unreachable; delete tenant-scoped; return `suppressionsLostToErasure`.
+
+**Writer/reader changes: none.** The three governance modules are unmodified; the only change outside new files is an export block. Channel binding is explicit — `email` records carry only onto email claims, `*` onto both; `domain`/`external_profile`/`external_id` are excluded because `normalizeGovernanceTarget` has no normaliser for them and carrying onto them would produce governance that *looks* enforced and is not.
+
+**Honest narrowing, stated not hidden:** after erasure the instruction blocks every address the platform knew, on the channels it governs — it cannot block an address never recorded. The re-import hole stays closed (a new person resolved from a carried address is still blocked by target match). Where a person had a person-only suppression and no contact point, the instruction genuinely ends; it is revoked with a reason and **reported**.
+
+**Production confirms the migration is safe:** `contact_governance_records` holds **0 rows — 0 person-only, 0 revoked**. The live CHECK matches the migration's preflight assumption exactly, and the person FK is `confdeltype='n'` (SET NULL) as it expects.
+
+**Open decision for the ADR owner:** `ON DELETE NO ACTION` on the person FK would make both defects structurally impossible with no CHECK change, and is LI-4C.1's own remedy for the identical failure — but it reverses D-3 and falsifies `li3_contact_governance.test.ts:311`. WS-F declined to reverse a ratified decision. The erasure procedure is needed and correct either way; only the migration would change.
+
+**Status:** `IMPLEMENTED` · `T1 VERIFIED` (161/161, re-run by the orchestrator) · `T2 VERIFIED` (T2-004: 16 suites / 444 tests, three static guards exit 0). Migration `20261027000000` is **AUTHORED, NOT APPLIED** anywhere. The real-schema suite (27 tests) is **NOT RUN** — no Postgres, no Docker; both defects are proven against a strict model of PostgreSQL derived from the DDL, which is evidence, not proof.
+
+---
+
 ## 4. Defect register
 
 | ID | Severity | Statement | Verification |
@@ -385,6 +409,7 @@ Per the "do not build for the sake of completion" rule.
 | T1 | PASS for WS-A1 (54/54) and WS-B (179/179), each re-run by the orchestrator in its own worktree |
 | T2-001 | **PASS** — 115 PI suites / 3299 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions`, `check:route-policy` all exit 0 |
 | T2-002 | **PASS** (scoped to the schema gate and the enrichment/identity subsystems it touches) — 39 suites / 1098 tests, 0 failures; three static guards exit 0 |
+| T2-004 | **PASS** (WS-F governance/erasure) — 16 suites / 444 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions` exit 0 |
 | T2-003 | **PASS** (scoped to offering, understanding, identity and governance) — 20 suites / 421 tests, 0 failures; `check:authz` and `check:db-conventions` exit 0 |
 | T3 | not run — not a release candidate |
 | Production deploy | **not authorized, not attempted** |
