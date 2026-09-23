@@ -46,6 +46,8 @@ There is also **no soft-delete path**: `unified_persons` has the lifecycle vocab
 
 **So a person-anchored-only governance record makes the person undeletable (`23514`) — and the design intent that governance should outlive the person is defeated in exactly the case it was written for.** Structurally identical to DEFECT-003, one constraint class over.
 
+**Evidence status — stated precisely.** The FK (`ON DELETE SET NULL (person_id)`), the CHECK (`contact_governance_has_anchor`) and their collision are **observed** in `20261003000000_li3_contact_governance.sql`. The resulting `23514` is **reasoned** from PostgreSQL's CHECK-on-UPDATE semantics and has **not been executed**. Proving it needs a `backend/tests/realschema/` case against the disposable container — deferred, and recorded as work item **DL-7**. Do not cite this defect as proven until that runs.
+
 **Latent, not live:** `contact_governance_records` is believed empty (UNVERIFIED, pending PROD-1) and no deletion path exists. It becomes real the moment either changes.
 
 **⚠ This makes `POLICY-1`'s anchor decision load-bearing here.** If unsubscribes are anchored to the person only, every unsubscribed person becomes permanently undeletable. **Target-anchored, or both, keeps erasure possible.** The two contracts must be decided together.
@@ -131,6 +133,7 @@ Engineering states the structure; these are business, legal and compliance calls
 | **DL-4** | Subject-access export | Blocked on POLICY-4 #4 |
 | **DL-5** | Staleness as stored evidence | Blocked on POLICY-4 #6; needs a migration |
 | **DL-6** | Write `source_assertions.superseded_at`, closing DEFECT-006 | REQUIRED LATER — independent of policy |
+| **DL-7** | Real-schema test proving (or disproving) DEFECT-008's `23514` against the disposable container | REQUIRED NOW — the defect is reasoned, not executed |
 
 ---
 
