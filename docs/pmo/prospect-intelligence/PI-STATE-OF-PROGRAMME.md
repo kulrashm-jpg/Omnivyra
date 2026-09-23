@@ -10,6 +10,39 @@ Every other document in this directory is a frozen point-in-time artifact and is
 | **Method** | Six parallel read-only structural surveys over a clean worktree at the base SHA, plus orchestrator verification of every load-bearing claim |
 | **Implementation status** | **IN PROGRESS.** WS-A1 and WS-B integrated and T2-passed on `integrate/pi-t2-001`. Nothing pushed, nothing deployed, no migration authored or applied, no flag or provider changed |
 
+## 0.1 Status register — never collapsed to green/red
+
+| Status | Meaning |
+|---|---|
+| `IMPLEMENTED` | code exists and is merged to the integration branch |
+| `T1 VERIFIED` | targeted tests run by the author **and re-run by the orchestrator** |
+| `T2 VERIFIED` | affected-subsystem convergence run, with static guards |
+| `NOT RUN` | authored but never executed. **Never reported as PASS** |
+| `UNVERIFIED` | asserted somewhere but not observed in this session |
+| `DEFERRED` | deliberately postponed, with the reason recorded |
+| `BLOCKED` | cannot proceed; the unblocking event is named |
+| `HUMAN DECISION REQUIRED` | reduced to the smallest question; engineering continues around it |
+| `EXTERNAL DEPENDENCY` | needs something outside this repository |
+
+| Item | Status | What would change it |
+|---|---|---|
+| WS-A1, WS-B, GAP-A/B/C, WS-D | `T2 VERIFIED` | — |
+| Contracts, ADRs 002/003/004 | `IMPLEMENTED` (documentation) | — |
+| GAP-A/B/C **production** evaluation | `NOT RUN` | PROD-1 credential |
+| GAP-B/C index + type queries, executed | `NOT RUN` | a live Postgres — production or a disposable container |
+| Production schema / migration state | `UNVERIFIED` | PROD-1 credential |
+| Per-tenant `lead_ingestion` DB flag | `UNVERIFIED` | PROD-1 credential |
+| PROD-1 | `BLOCKED` · `EXTERNAL DEPENDENCY` | a working `SUPABASE_POOLER_DB_URL`, or another legitimate read path |
+| DEFECT-008 `23514` | `UNVERIFIED` (reasoned, not executed) | DL-7 against a real schema |
+| DL-7 | `NOT RUN` | Docker daemon, or any reachable Postgres |
+| DL-1 | `DEFERRED` | PROD-1 — its premise is a production-only constraint |
+| POLICY-1 | **RESOLVED 2026-09-23 — preservation path.** Person-scoped suppression is intentional; the four tests are architectural evidence | — |
+| POLICY-4 erasure semantics | `HUMAN DECISION REQUIRED` for retention periods only; the FK lifecycle is engineering and is being designed | — |
+| T3 | `NOT RUN` | a genuinely ready integrated release candidate |
+| Deployment | not authorized | explicit authorization |
+
+---
+
 **Verification legend.** `VERIFIED` = observed directly at this SHA or against a live platform API in this session. `UNVERIFIED` = not observed; may be true. A prior report is not verification.
 
 ---
