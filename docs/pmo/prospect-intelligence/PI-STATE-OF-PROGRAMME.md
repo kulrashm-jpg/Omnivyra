@@ -8,7 +8,7 @@ Every other document in this directory is a frozen point-in-time artifact and is
 | **Base SHA** | `a07477e4` (`origin/main`, merge of PR #269) |
 | **Established** | 2026-09-23 |
 | **Method** | Six parallel read-only structural surveys over a clean worktree at the base SHA, plus orchestrator verification of every load-bearing claim |
-| **Implementation status** | **NOT STARTED.** Ground truth only. No PI code, schema, migration, flag or provider was changed to produce this document |
+| **Implementation status** | **IN PROGRESS.** WS-A1 and WS-B integrated and T2-passed on `integrate/pi-t2-001`. Nothing pushed, nothing deployed, no migration authored or applied, no flag or provider changed |
 
 **Verification legend.** `VERIFIED` = observed directly at this SHA or against a live platform API in this session. `UNVERIFIED` = not observed; may be true. A prior report is not verification.
 
@@ -271,12 +271,15 @@ Per the "do not build for the sake of completion" rule.
 
 | Gate | State |
 |---|---|
-| T1 | harness verified working in the orchestration worktree |
-| T2 | not run — no workstream has produced changes |
+| T1 | PASS for WS-A1 (54/54) and WS-B (179/179), each re-run by the orchestrator in its own worktree |
+| T2 | **PASS** on `integrate/pi-t2-001` — 115 PI suites / 3299 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions`, `check:route-policy` all exit 0 |
 | T3 | not run — not a release candidate |
 | Production deploy | **not authorized, not attempted** |
+| Pushed | **no** — all four branches are local |
 
-Nothing in this document has been validated beyond structural inspection, because nothing has been changed.
+**PI baseline at `origin/main` for comparison:** 114 suites / 3239 tests with **2 failures**, both stale assertions that Apollo has no adapter. The integrated tree is +1 suite, +60 tests, 0 failures.
+
+**One caveat carried forward from WS-A1:** the extended schema gate has never been run against a real database. Once PROD-1 lands it may turn a currently-green predeploy **red** — that is the intent of the change, not a regression, but it must be run and triaged before it is treated as shippable.
 
 ---
 
