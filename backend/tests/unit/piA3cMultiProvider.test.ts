@@ -11,7 +11,7 @@
 
 import {
   ACQUISITION_SOURCES, SOURCE_TYPES, CONNECTION_STATES, USABLE_STATES,
-  getSource, listSourceStatus, resolveConnectionState, supportsRequest,
+  getSource, getProvider, listSourceStatus, resolveConnectionState, supportsRequest,
   selectAcquisitionSource, evaluateSource, AUTO_SELECTION,
   type AcquisitionSourceDescriptor, type SelectionOutcome, type SourceStatus, type SelectionRequest,
 } from '../../services/enrichment/providers';
@@ -79,10 +79,31 @@ describe('A3C — the source model describes unlike mechanisms uniformly', () =>
   });
 
   it('claims NO attribute for a source with no observed API contract', () => {
-    for (const id of ['apollo', 'zoominfo', 'crunchbase', 'rapidapi']) {
+    // Apollo sat in this list until A7P-C4 gave it an adapter written against a
+    // real response. The invariant defended here was never "Apollo claims
+    // nothing" — it is "no source claims an attribute nobody has observed it
+    // return". Apollo earned an observed contract, so it moved to the case
+    // below rather than this one being weakened to accommodate it.
+    for (const id of ['zoominfo', 'crunchbase', 'rapidapi']) {
       const s = getSource(id)!;
       expect(s.capabilities.attributes).toEqual([]);
       expect(s.capabilities.entities).toEqual([]);
+    }
+  });
+
+  it('claims EXACTLY what its adapter was proven against, for a source that has one', () => {
+    // The other half of the same invariant, and the reason removing Apollo above
+    // does not lose coverage: a source WITH an adapter may claim only what that
+    // adapter actually maps. Asserted against the adapter's own `supports`
+    // declaration rather than a literal, so widening one without the other
+    // fails here instead of becoming a fabricated capability.
+    for (const id of ['apollo', 'clearbit']) {
+      const s = getSource(id)!;
+      const adapter = getProvider(id);
+      expect(adapter).not.toBeNull();
+      expect(s.capabilities.entities.length).toBeGreaterThan(0);
+      expect([...s.capabilities.attributes].sort())
+        .toEqual([...adapter!.supports].sort());
     }
   });
 
