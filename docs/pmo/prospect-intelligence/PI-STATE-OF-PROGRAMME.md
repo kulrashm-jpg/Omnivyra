@@ -29,15 +29,15 @@ Every other document in this directory is a frozen point-in-time artifact and is
 | WS-A1, WS-B, GAP-A/B/C, WS-D | `T2 VERIFIED` | — |
 | Contracts, ADRs 002/003/004 | `IMPLEMENTED` (documentation) | — |
 | GAP-A/B/C **production** evaluation | `NOT RUN` | PROD-1 credential |
-| GAP-B/C index + type queries, executed | `NOT RUN` | a live Postgres — production or a disposable container |
+| GAP-B/C index + type queries, executed | **`T2 VERIFIED`** — evaluated against production 2026-09-23 | — |
 | Production schema / migration state | `UNVERIFIED` | PROD-1 credential |
 | Per-tenant `lead_ingestion` DB flag | `UNVERIFIED` | PROD-1 credential |
 | PROD-1 | `BLOCKED` · `EXTERNAL DEPENDENCY` | a working `SUPABASE_POOLER_DB_URL`, or another legitimate read path |
-| DEFECT-008 `23514` | `UNVERIFIED` (reasoned, not executed) | DL-7 against a real schema |
-| DL-7 | `NOT RUN` | Docker daemon, or any reachable Postgres |
+| DEFECT-008 `23514` | **`PROVEN`** — reproduced on real PostgreSQL 17 | — |
+| DL-7 / real-schema execution | **`T2 VERIFIED`** — 27 suites / 505 tests, 41 migrations replayed on a disposable container | — |
 | DL-1 | `DEFERRED` | PROD-1 — its premise is a production-only constraint |
 | POLICY-1 | **RESOLVED 2026-09-23 — preservation path.** Person-scoped suppression is intentional; the four tests are architectural evidence | — |
-| POLICY-4 erasure semantics | `HUMAN DECISION REQUIRED` for retention periods only; the FK lifecycle is engineering and is being designed | — |
+| POLICY-4 retention **periods** | `HUMAN DECISION REQUIRED` — one question per record class; off the critical path because retention cannot be expressed for any PI table until DL-3 | legal/compliance input |
 | T3 | `NOT RUN` | a genuinely ready integrated release candidate |
 | Deployment | not authorized | explicit authorization |
 
@@ -369,6 +369,43 @@ Whether ADR-004's `closed/disqualified` was **one state or two**. Read as one an
 
 ---
 
+## 3.17 Real-schema execution — DONE. Both defects PROVEN, both migrations EXECUTED.
+
+**Environment.** Docker Desktop was installed but dormant; starting it gave the repository's own supported path. `scripts/ci/real-schema-ci.sh` manages a disposable `pgvector/pgvector:pg17` container (`w6-real-schema`, port 5433) and drives it via `docker exec psql`, so no host Postgres is needed — which is why the absence of `psql`, `initdb` and any local install did not matter. There is genuinely no Postgres on this machine outside Docker.
+
+**Isolation, audited before anything ran.** The daemon auto-started a local Supabase **`cert`** stack on restart policies — studio, kong, gotrue, postgrest, a local Postgres — all local images on localhost ports. **Nothing points at production; there is no worker container.** The standing note about Docker starting a production worker concerns compose, not this. The stack was left untouched. The disposable container carries `POSTGRES_PASSWORD=w6`, no production credential and no production hostname, and is destroyed on exit.
+
+**Result — clean full run:** `ready after 6s` · `restored in 33s (errors: 1, unexpected: 0)` · **`replayed 41 migration(s) in 96s`** · **27 suites / 505 tests / 505 passed.**
+
+Both new migrations — `20261027000000` (governance anchor) and `20261028000000` (lifecycle ledger) — **executed against real PostgreSQL 17 among those 41**, with zero errors, and the 25 pre-existing real-schema suites still pass.
+
+### 3.17.1 What execution proved
+
+| Claim | Status |
+|---|---|
+| DEFECT-008 — person-only row aborts the delete with `23514` | **PROVEN** |
+| DEFECT-010 — both-anchored row collides with `23505` on the way out | **PROVEN** |
+| DEFECT-010's second path — two people sharing a target collide inside one cascade | **PROVEN** |
+| Revoking does **not** make a person-only row deletable pre-migration | **PROVEN** — this is exactly where the orchestrator's "no migration needed" hypothesis failed |
+| `20261027000000` admits a revoked row and still requires an anchor on a live one | **PROVEN** |
+| Capability B — person-only, both-anchored, both-anchored-with-clash, several records all erasable | **PROVEN** |
+| Capability A — a carried-forward target still blocks a **re-imported** person at that address | **PROVEN** |
+| Tenant isolation; tenant delete still works; merge survivor still refused | **PROVEN** |
+
+### 3.17.2 Five wrong predictions — all in the tests, none in the product
+
+Both suites were authored without a database, so every assertion was a *prediction about* the migration. Five predictions were wrong.
+
+**Three shared one root cause.** `deletePerson` used `attempt()`, which is a `SAVEPOINT` that **rolls back on success** — it captures a SQLSTATE, it does not mutate. Every assertion about post-delete state therefore measured nothing: the person was still present, `person_id` was never nulled, `identity_claims` never CASCADEd. Added `erasePerson`, which deletes and keeps it, still inside the caller's `inRollback`. The SQLSTATE-asserting tests keep `attempt()`, which is what it is for.
+
+**Fourth:** the `outreach_tasks` fixture supplied two of the **eight** columns that are `NOT NULL` with no default. Now supplies all eight — including the four WS-3 provenance stamps — taken from the catalog rather than discovered one error at a time.
+
+**Fifth:** `pg_get_indexdef` normalises a boolean predicate, so `WHERE is_initial` prints as `WHERE (is_initial = true)`. The assertion matched the source spelling: reads correctly, fails against the catalog.
+
+**No product code changed.** The five fixes are entirely in the two test files.
+
+---
+
 ## 4. Defect register
 
 | ID | Severity | Statement | Verification |
@@ -452,6 +489,7 @@ Per the "do not build for the sake of completion" rule.
 | T1 | PASS for WS-A1 (54/54) and WS-B (179/179), each re-run by the orchestrator in its own worktree |
 | T2-001 | **PASS** — 115 PI suites / 3299 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions`, `check:route-policy` all exit 0 |
 | T2-002 | **PASS** (scoped to the schema gate and the enrichment/identity subsystems it touches) — 39 suites / 1098 tests, 0 failures; three static guards exit 0 |
+| **REAL-SCHEMA** | **PASS** — 27 suites / 505 tests / 0 failures on a disposable PostgreSQL 17; 41 migrations replayed including both new ones |
 | T2-005 | **PASS** (WS-C lifecycle, converged with WS-F) — 23 suites / 593 tests, 0 failures; four static guards exit 0 |
 | T2-004 | **PASS** (WS-F governance/erasure) — 16 suites / 444 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions` exit 0 |
 | T2-003 | **PASS** (scoped to offering, understanding, identity and governance) — 20 suites / 421 tests, 0 failures; `check:authz` and `check:db-conventions` exit 0 |
