@@ -129,3 +129,62 @@ Two are foreclosed and need no decision: an unsubscribe cannot be time-limited, 
 ## 6. No-code confirmation
 
 No application code, schema, migration, flag, provider or production data was changed. This document prepares an implementation; it implements nothing, and the seam must not be built until §5 is answered.
+
+---
+
+# ADDENDUM — 2026-09-23: what the repository determines, and the one decision left
+
+## A1. The canonical anchor, as the system actually behaves, is TARGET
+
+Verified directly, not inferred:
+
+- `execution/suppressionService.addSuppression` — the **only** non-test caller of `recordContactGovernance` (`:264`) — passes `target` and **no `personId`**. There is no person-resolution step in the function.
+- `suppressionService.unsubscribe(companyId, target, channel, actor)` is target-keyed by signature.
+- `pages/api/lead-intelligence/execution.ts:107` accepts a `target` and has **no person parameter**.
+- `canonicalVerdict` documents it: *"No person anchor is supplied: this seam is reached with a raw recipient and no identity."*
+
+**Every governance record this system can currently create is target-anchored.** POLICY-1, as a question about what the platform does, is already settled by implementation — it had simply never been written down, which is why it resurfaced as an open question.
+
+## A2. But person-only is a designed, tested capability — and that is the whole problem
+
+`backend/tests/unit/li3eGovernanceChain.test.ts:175` writes a person-only record and asserts the evaluator blocks contact at **`anything@example.com`**:
+
+```ts
+await recordContactGovernance({ organizationId: ORG_A, governanceType: 'dnc_permanent',
+                                channel: '*', personId: PERSON_A, source: 'manual' });
+const g = await decide({ org: ORG_A, channel: 'email', target: 'anything@example.com', personId: PERSON_A });
+expect(g.decision).toBe('blocked');
+```
+
+That **is** "suppress this human across every address". It is built, wired end to end, and covered by four tests across two suites.
+
+**And it is exactly the shape that makes a person undeletable** (DEFECT-008): `person_id` is nulled on delete, a row left with no anchor violates `contact_governance_has_anchor`, and the delete aborts.
+
+So the tension is **real and not dissolvable by forbidding the shape**.
+
+## A3. A remediation was attempted and withdrawn — recorded because the failure is the evidence
+
+The proposed fix was to refuse person-only writes at the writer, on the reasoning that it "forbids nothing the system can currently express". That is true of the production *writers* and **false of the designed contract**: implementing it broke 4 tests across `li3eGovernanceChain` and `li3dGovernanceWriter`, including the person-anchored end-to-end chain and the `coalesce(person_id, target)` idempotency resolution.
+
+The change was **reverted**; the suite is green again at 43/43. It would have deleted a capability, not tightened an invariant. Recorded so the same fix is not re-proposed from the same reasoning.
+
+## A4. The decision matrix
+
+| Question | Existing evidence | Engineering consequence | Human decision required? |
+|---|---|---|---|
+| Is an unsubscribe time-limited? | `contact_governance_until_only_deferred` permits `effective_until` only on `deferred` | Not representable | **No — foreclosed by schema** |
+| Are duplicate unsubscribes safe? | `uq_contact_governance_identity`, partial | No-op; INSERT and catch `23505`, never `ON CONFLICT` (`42P10`) | **No — already solved** |
+| What anchor do writers use today? | Every writer is target-keyed (A1) | Target is the de-facto canonical anchor | **No — determined by the repository** |
+| Does the platform keep person-scoped suppression? | Built and tested (A2); **zero production writers produce it** | If kept: DEFECT-008 is live the moment erasure exists, and erasure needs a mechanism other than forbidding the shape. If dropped: deprecate the LI-3E capability and its tests | **YES — this is the decision** |
+| Can a target be recovered from an outreach outcome? | **No.** Zero recipient/address columns in `outreach_tasks`, `outreach_delivery_evidence`, `outreach_outcomes` — verified against both the migration and the baseline. The recipient exists only as an ephemeral runtime argument | A person-attributable unsubscribe from an outcome would carry a person and **no** target — precisely the DEFECT-008 shape | Contingent on the row above |
+| Erasure semantics per table | No PI table is in any retention policy; no person-deletion path exists | DL-2 blocked | **YES — POLICY-4** |
+| Does erasure leave a suppression tombstone? | Nothing implements it | Without it, erasure is temporary: identity resolution is deterministic on email/phone, so the next import recreates the person | **YES — POLICY-4** |
+
+## A5. The one decision, stated as narrowly as it can be
+
+> **Does the platform keep person-scoped suppression — "never contact this human at any address" — as a capability?**
+
+- **If NO:** target anchoring is already complete and correct. Deprecate the person-only write path and its four tests, ratify target as canonical, and DEFECT-008 becomes unreachable by construction. Cheapest, and matches every production writer today.
+- **If YES:** the capability stays, and **erasure must be solved without forbidding the shape** — the options are a durable person-independent anchor retained at delete time, or an erasure path that explicitly handles governance before deleting. It also makes persisting a recipient on the outreach family a prerequisite, since an unsubscribe from an outcome otherwise has no target to pair with the person.
+
+Everything else in this contract is determined. **This is the only genuine human call**, and it is a compliance-posture judgement — the narrow reading follows the address, as email unsubscribe law generally does; the broad reading honours the wish as stated.
