@@ -415,11 +415,17 @@ describe('A3Z — no new capability, cost or I/O', () => {
     }
   });
 
-  it('no fake adapter was added — Clearbit remains the only registered one', () => {
-    for (const id of ['apollo', 'zoominfo', 'crunchbase', 'rapidapi', 'linkedin', 'hunter', 'builtwith', 'pdl']) {
+  it('no fake adapter was added — only Clearbit and Apollo are registered', () => {
+    // Apollo moved out of the null list when A7P-C4 landed its adapter, written
+    // against a real Apollo response. The guard is unchanged in intent: an
+    // adapter exists only when someone ran it against the real provider, so
+    // every remaining name must still resolve to null. Adding a third
+    // registration without an observed contract fails here.
+    for (const id of ['zoominfo', 'crunchbase', 'rapidapi', 'linkedin', 'hunter', 'builtwith', 'pdl']) {
       expect(getProvider(id)).toBeNull();
     }
     expect(getProvider('clearbit')).not.toBeNull();
+    expect(getProvider('apollo')).not.toBeNull();
   });
 
   it('the declared-only catalogue derivation is unchanged', () => {
