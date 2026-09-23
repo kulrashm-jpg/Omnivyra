@@ -169,7 +169,29 @@ The architectural lifecycle is now **defined** by `prospectIdentity/personErasur
 
 ## B. Two engineering items this surfaced, neither a policy question
 
-**B-1 — `prospect_enrichment_attempts` CASCADEs on person deletion.** That table is the **spend audit**: which provider was called, whether it was billed, under whose lease. Erasing a person therefore erases the record that money was spent on them. That may be correct (the row is *about* the erased person) or it may be a gap in cost auditability. Its unique indexes are partial on `person_id IS NOT NULL`, so either direction is structurally safe. **Recorded as a question for the enrichment owner, not resolved here.**
+**B-1 — RESOLVED 2026-09-23: CASCADE IS ACCEPTABLE. No schema change.**
+
+Investigated and closed. The decisive fact is that **enrichment is tenant-funded**, so there is no Omnivyra financial event to preserve. Verified directly:
+
+- `providers/index.ts:133` — `export { tenantFundedExecutionPort as defaultCostPort }`, with the comment recording that it *used to be* `creditCostPort`. The tenant-funded port returns `{ authorized: true, holdId: null, cost: { kind: 'unknown' } }` — nothing of Omnivyra's is reserved.
+- **No `prospect_enrichment` credit action is registered** anywhere in `shared/` or `backend/services/billing/`. No credit ledger is debited.
+- **Enrichment emits no usage event** — zero `usage_event` references in `backend/services/enrichment/`.
+
+The authoritative financial record is **the vendor's own invoice to the tenant**, which Omnivyra neither writes nor could reconcile against: no provider-issued request id is captured anywhere in the enrichment path. So cascading removes no reconciliation capability the system has.
+
+`spendCeiling.ts` reads this table and calls itself a ledger, but it is a **capacity control**: it reads a single UTC day, is off by default behind `ENABLE_ENRICHMENT_SPEND_CEILING` *and* a per-tenant flag, aggregates by `(organization_id, provider_key)` without touching `person_id`, and already documents itself as non-atomic and over-runnable. The only observable effect of a cascade is that erasing a person within the same UTC day restores that many units of a self-imposed, default-off rate limit.
+
+**The one genuine loss:** a *billable call that produced no evidence* — `no_match`, `provider_declined`, `timeout` and similar, plus any row stuck at `provider_call_state = 'unknown'` — writes no `source_records` row and so vanishes entirely. Apollo's adapter explicitly notes a `no_match` must be assumed billable. It does not justify a change: the charge sits on the tenant's vendor invoice, it could not be reconciled anyway, Omnivyra bills nobody for it, and the row is *about* the erased person — retaining "we asked Clearbit about this human and it had nothing" is in tension with the erasure being performed.
+
+For every **successful** enrichment the evidence survives de-linked on `source_records`/`source_assertions` (`ON DELETE SET NULL (person_id)`): provider, the provider's own record key, full payload, hash, timestamps and the immutable assertion history.
+
+**If the residual is ever worth closing, the fix is not this FK** — it is capturing a provider-issued request id at the adapter boundary into `source_records`, which would make invoice reconciliation possible for the first time and would survive erasure automatically.
+
+*One inference, flagged:* this rests partly on no future billing consumer being planned for the table. Nothing in the repository suggests one, but if programme intent ever becomes "invoice tenants for enrichment" — which would contradict the A3X tenant-funded policy — this reopens.
+
+---
+
+**B-1 (original statement) — `prospect_enrichment_attempts` CASCADEs on person deletion.** That table is the **spend audit**: which provider was called, whether it was billed, under whose lease. Erasing a person therefore erases the record that money was spent on them. That may be correct (the row is *about* the erased person) or it may be a gap in cost auditability. Its unique indexes are partial on `person_id IS NOT NULL`, so either direction is structurally safe. **Recorded as a question for the enrichment owner, not resolved here.**
 
 **B-2 — retention cannot currently be expressed for any PI table.** `RETENTION_TARGETS` is a closed 10-member list containing none of them, and `retentionService` filters on `organization_id` while `unified_persons`, `canonical_leads` and `leads` use `company_id`. So even once a period is decided, **enforcing it needs a tenant-column indirection first** (work item DL-3). No period can be operationalised before that, which means deciding the durations is not on the critical path.
 
