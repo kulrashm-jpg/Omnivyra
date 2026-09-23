@@ -316,7 +316,37 @@ export async function getProspectDetail(
       prospectId: input.prospectId,
       // WS-4's derived coverage, reused. WS-10 declares no coverage of its own —
       // that would be a provider claim the catalogue does not support.
-      coverage: ingestionEnrichmentCoverage(),
+      //
+      // ─── AND THIS TENANT'S OWN SOURCE STATUSES ─────────────────────────
+      // Supplied here too, deliberately, so the READ and the WRITE path plan
+      // the same prospect the same way. `executeProspectEnrichment` below
+      // plans against `tenantSourceStatuses(...)`; if this one kept planning
+      // against none, one prospect would have two plans, and the page would
+      // report `no_available_source` for exactly the field the enrich route
+      // would go on to enrich. A read surface that contradicts the write path
+      // is worse than an empty one — it tells a tenant that a provider they
+      // have connected and are paying for does not exist. The asymmetry is
+      // therefore closed rather than left to be discovered from a support
+      // ticket.
+      //
+      // THE COST IS ACCEPTED WITH EYES OPEN. This runs on every prospect
+      // detail view and adds credential-store reads to it. It is bounded:
+      // `tenantSourceStatuses` looks up only descriptors that have BOTH a
+      // credential env var and a registered adapter — a handful, not the whole
+      // catalogue — and the lookups run concurrently. It sits beside the six seam
+      // reads this composer already performs, inside this same `attempt`, so
+      // an unreadable credential store degrades this section to `failed`
+      // rather than the page — and `resolveCredential` already answers null
+      // rather than throwing on a store failure, which coverage then reads as
+      // "not connected", the safe direction.
+      //
+      // IT GRANTS NOTHING. Nothing on this path can spend: `persist` throws
+      // by design, no executor is reachable from a GET, and the route has
+      // already run `requireTenantAccess` for this organization. Statuses
+      // make the DISPLAYED plan true; they do not make anything executable.
+      coverage: ingestionEnrichmentCoverage({
+        statuses: await tenantSourceStatuses(input.organizationId),
+      }),
       stalenessDays: input.stalenessDays,
       now: input.now,
     }, defaultEnrichmentPorts());
@@ -607,10 +637,46 @@ export type ExecuteProspectEnrichmentResult =
 export async function executeProspectEnrichment(
   input: ExecuteProspectEnrichmentInput,
 ): Promise<ExecuteProspectEnrichmentResult> {
+  // ─── PI-DEFECT-001 — THE PLANNER IS TOLD WHAT THIS TENANT CAN CALL ────────
+  // This line used to read `coverage: ingestionEnrichmentCoverage()`, and the
+  // statuses it needed were resolved twenty lines below — for the executor,
+  // never for the planner. `statuses` is optional and ABSENT MEANS NONE; that
+  // default is a safety property and is deliberately NOT changed here, because
+  // a caller that has not resolved this tenant's provider credentials must not
+  // be able to publish a global capability as a tenant one. But this caller had
+  // resolved them. It simply asked the question too late to matter.
+  //
+  // The consequence was total and silent. With no statuses the coverage is
+  // `{ marketPulse: [], external: {}, verifiedExternal: [] }` — every
+  // catalogued enrichment source is `available: false`, and MarketPulse
+  // covers no attribute of an external company — so `selectSource` found no
+  // candidate, EVERY field's action became `no_available_source`, and the
+  // `action !== 'enrich'` guard below returned `not_planned` before
+  // `executePlannedField` could ever be reached. A tenant holding a working,
+  // credentialled provider could not enrich one field, and the refusal read as
+  // an honest planner verdict rather than as a missing argument. The whole
+  // enrichment subsystem was unreachable behind it.
+  //
+  // RESOLVED ONCE, AND FED TO BOTH. The planner decides WHETHER a source may
+  // be called and the executor then calls it, so the two must be answering
+  // from the same facts. A second lookup for the executor would put two
+  // credential reads on a paid path and could return two different answers
+  // inside one execution — the plan authorising a source the executor then
+  // refuses, or worse, the reverse.
+  //
+  // The tenant boundary is untouched. This asks only about
+  // `input.organizationId`, which the route has already put through
+  // `requireTenantAccess`, and it is resolved through `tenantCredentialPort`
+  // — this tenant's own key, never `process.env`. Ordering is safe: a blank
+  // tenant is refused by `resolveCredential` before it reaches the store, so
+  // no query widens, and `planProspectEnrichment` still raises its own
+  // `organizationId is required` a moment later.
+  const statuses = await tenantSourceStatuses(input.organizationId);
+
   const { plan, snapshot } = await planProspectEnrichment({
     organizationId: input.organizationId,
     prospectId: input.prospectId,
-    coverage: ingestionEnrichmentCoverage(),
+    coverage: ingestionEnrichmentCoverage({ statuses }),
     stalenessDays: input.stalenessDays,
     now: input.now,
   }, defaultEnrichmentPorts());
@@ -629,7 +695,10 @@ export async function executeProspectEnrichment(
     plan,
     field,
     snapshot,
-    statuses: await tenantSourceStatuses(input.organizationId),
+    // The SAME resolution the plan above was built from. Re-reading here would
+    // let the plan and the call it authorises disagree about what this tenant
+    // has connected.
+    statuses,
     // ─── A4J (B1) — the mandatory safety configuration ────────────────────
     // Automated production execution must not proceed to provider egress when
     // the attempt record cannot be established. The default is fail-OPEN, which
