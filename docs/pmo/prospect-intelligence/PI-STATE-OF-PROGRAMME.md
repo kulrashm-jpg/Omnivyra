@@ -68,12 +68,14 @@ The Do-Not-Build register stands. No second lead/person/account model, no second
 
 The inner gate — a per-tenant `lead_ingestion` row in `feature_flags` — is **UNVERIFIED** (requires a DB read).
 
-### 2.3 Production database — UNVERIFIED, and currently unverifiable
+### 2.3 Production database — `PROD-1 BLOCKED — CREDENTIAL/ENVIRONMENT`
 
-Two independent obstacles, both needing the operator:
+**Status at 2026-09-23, re-checked without a blind retry:** `.env.local` is unchanged since `2026-09-13 11:56` — same host, same user, same 16-character secret that previously failed with `password authentication failed for user "postgres"`. Both fallbacks the verifier accepts, `SUPABASE_DB_URL` and `DATABASE_URL`, are **absent**. There is no alternative mechanism in the environment, so the verification was **not attempted again**.
+
+Two independent obstacles remain, both needing the operator:
 
 1. **The permission classifier denies production reads.** A read-only row-count probe was refused.
-2. **The pooler credential in `.env.local` is rejected:** `password authentication failed for user "postgres"` for `postgres.klkiseupptzbecbxwrky@aws-1-ap-southeast-1.pooler.supabase.com`. Almost certainly stale since the 2026-09-12 credential rotation.
+2. **The pooler credential is rejected.** Almost certainly stale since the 2026-09-12 credential rotation.
 
 Consequently **UNVERIFIED**: which of the 13 PI migrations are applied; every PI table row count; whether any tenant holds the `lead_ingestion` flag; whether any tenant holds an `outreach_governance_config` row; whether any provider credential is stored.
 
@@ -286,6 +288,8 @@ Per the "do not build for the sake of completion" rule.
 | Pushed | **no** — all four branches are local |
 
 **PI baseline at `origin/main` for comparison:** 114 suites / 3239 tests with **2 failures**, both stale assertions that Apollo has no adapter. The integrated tree is +1 suite, +60 tests, 0 failures.
+
+**⚠ GAP-A / GAP-B / GAP-C production verification: `NOT RUN`.** 187 checks across 40 tables — 68 BLOCKING, 100 WARN, 19 INFO — have been authored and unit-guarded. **None has ever been evaluated against production.** This is not a PASS and must not be reported as one. It is gated entirely on PROD-1.
 
 **⚠ NOT RUN — the structural checks have never executed against a live Postgres.** GAP-B/C added an index-introspection query over `pg_index`/`pg_class` and a declared-type comparison. Local Supabase is not running, and starting Docker is avoided here because this repo's compose brings up a worker pointed at production. So both queries are **syntax-checked and unit-guarded, not runtime-proven**. They are hand-reviewed — `i.relname = ANY($1)` mirrors the `table_name = ANY($1)` pattern already working in production — but that is reasoning, not evidence. **PROD-1's read-only verification is the natural place to prove them**, because running the verifier against production exercises exactly these queries *and* yields the ground truth. Until then this is `NOT RUN`, not `PASS`.
 
