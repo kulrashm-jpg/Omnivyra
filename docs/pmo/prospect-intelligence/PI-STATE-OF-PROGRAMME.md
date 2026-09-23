@@ -10,6 +10,40 @@ Every other document in this directory is a frozen point-in-time artifact and is
 | **Method** | Six parallel read-only structural surveys over a clean worktree at the base SHA, plus orchestrator verification of every load-bearing claim |
 | **Implementation status** | **IN PROGRESS.** WS-A1 and WS-B integrated and T2-passed on `integrate/pi-t2-001`. Nothing pushed, nothing deployed, no migration authored or applied, no flag or provider changed |
 
+## 0.0 FINAL T2 STATE — 2026-09-23
+
+**Decision surface: CLOSED.** Six judgements ratified by the owner (`PI-ADR-005`). Not to be reopened without new **executable** evidence.
+
+### VERIFIED
+| | Evidence |
+|---|---|
+| **PROD-1** | Executed read-only over the Management API. All 187 column checks, **0 BLOCKING missing**; 3 index invariants; 1 type invariant. Ledger 74 rows through `20261026000000` |
+| **DEFECT-008** | **PROVEN** — `23514` reproduced on real PostgreSQL 17, and resolved by the ratified model |
+| **DEFECT-010** | **PROVEN** — `23505` reproduced, both paths, and resolved |
+| **WS-C** | Real-schema verified: append-only trigger, chain, partial indexes, closed vocabularies, `::`-key refusal, cross-tenant `23503`, `seq GENERATED ALWAYS` |
+| **Migration replay** | 41 migrations replayed on a disposable PostgreSQL 17, including both new ones, zero errors |
+| **Real-schema tests** | **27 suites / 505 tests / 505 passed** |
+| **Decision ratifications** | `PI-ADR-005` — J-1 … J-6 |
+
+### NON-BLOCKING
+- **POLICY-4 retention durations** — one legal question per record class
+- **DL-3 retention integration** — PI tables absent from `RETENTION_TARGETS`; `organization_id` vs `company_id` mismatch
+- **Enrichment no-evidence / billable-call observability gap** — recorded, deliberately not implemented
+
+### NOT APPLIED
+- `20261027000000_pi_wsf_governance_anchor_after_erasure.sql`
+- `20261028000000_pi_prospect_lifecycle_state.sql`
+
+### NOT RUN
+- **T3**
+- **Post-production-migration verification** — cannot exist until the migrations are applied
+
+### NOT AUTHORIZED
+- **Production migration application**
+- **Deployment**
+
+---
+
 ## 0.1 Status register — never collapsed to green/red
 
 | Status | Meaning |
