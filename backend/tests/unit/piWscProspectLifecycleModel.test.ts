@@ -43,7 +43,7 @@ const MIGRATION = join(
   process.cwd(),
   'supabase',
   'migrations',
-  '20261027000000_pi_prospect_lifecycle_state.sql',
+  '20261028000000_pi_prospect_lifecycle_state.sql',
 );
 const sql = readFileSync(MIGRATION, 'utf8');
 

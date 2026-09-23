@@ -65,7 +65,7 @@ import {
 
 export const PROSPECT_LIFECYCLE_VERSION = 'pi.lifecycle.1';
 
-// ── Vocabulary (mirrors the DB CHECK in 20261027000000) ─────────────────────
+// ── Vocabulary (mirrors the DB CHECK in 20261028000000) ─────────────────────
 
 export type ProspectState =
   | 'identified'

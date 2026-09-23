@@ -6,7 +6,7 @@
  * ║                                                                        ║
  * ║ This suite has NEVER been executed. The WS-C worktree has no local     ║
  * ║ PostgreSQL and no Docker, and the migration it asserts against         ║
- * ║ (20261027000000_pi_prospect_lifecycle_state.sql) has been AUTHORED AND ║
+ * ║ (20261028000000_pi_prospect_lifecycle_state.sql) has been AUTHORED AND ║
  * ║ NEVER APPLIED — not locally, not in staging, not in production. No     ║
  * ║ expectation below has been observed to pass or to fail.                ║
  * ║                                                                        ║
