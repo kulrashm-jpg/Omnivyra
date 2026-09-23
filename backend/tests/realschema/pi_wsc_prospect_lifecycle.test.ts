@@ -288,7 +288,11 @@ describe('PI WS-C — the partial unique indexes', () => {
       expect(r.indexdef).toMatch(/CREATE UNIQUE INDEX/);
       expect(r.indexdef).toMatch(/ WHERE /);
     }
-    expect((rows[0] as any).indexdef).toMatch(/\(organization_id, prospect_id\)[\s\S]*WHERE is_initial/);
+    // pg_get_indexdef NORMALISES a boolean predicate: `WHERE is_initial` is
+    // stored and printed as `WHERE (is_initial = true)`. Matching the source
+    // spelling passes review and fails against the real catalog.
+    expect((rows[0] as any).indexdef)
+      .toMatch(/\(organization_id, prospect_id\)[\s\S]*WHERE \(is_initial = true\)/);
     expect((rows[1] as any).indexdef).toMatch(/\(organization_id, prospect_id, source_event_key\)/);
   });
 

@@ -52,6 +52,21 @@ async function claim(org: string, person: string, claimType: 'email' | 'phone', 
 
 const deletePerson = (id: string) => attempt('DELETE FROM public.unified_persons WHERE id=$1', [id]);
 
+/**
+ * Delete a person and KEEP the deletion, so its effects can be asserted.
+ *
+ * `attempt()` is a SAVEPOINT that ROLLS BACK ON SUCCESS — it exists to capture
+ * a SQLSTATE, not to mutate. Asserting post-delete state after `deletePerson`
+ * therefore measures nothing: the row is still present, `person_id` was never
+ * nulled and `identity_claims` never CASCADEd. Three tests here did exactly
+ * that and passed vacuously until the suite was first executed for real.
+ *
+ * This stays inside the caller's `inRollback`, so nothing leaks between tests.
+ */
+const erasePerson = async (id: string): Promise<void> => {
+  await db.query('DELETE FROM public.unified_persons WHERE id=$1', [id]);
+};
+
 const liveRows = async (org: string) => {
   const { rows } = await db.query(
     `SELECT id, person_id, target_normalized, channel, governance_type, revoked_at, revoked_reason
@@ -82,7 +97,7 @@ describe('PI/WS-F — DEFECT-008: a LIVE person-only record makes the person und
       await seedTenants();
       const p = await newPerson(ORG_A);
       const id = await insert(ORG_A, p, 'survivor@x.test', 'email', 'unsubscribe');
-      expect(await deletePerson(p)).toBe('ok');
+      await erasePerson(p);
 
       const { rows } = await db.query(
         'SELECT person_id, target_normalized, organization_id FROM public.contact_governance_records WHERE id=$1', [id]);
@@ -225,7 +240,7 @@ describe('PI/WS-F — 20261027000000 scopes the anchor CHECK to live rows', () =
       await db.query(
         `UPDATE public.contact_governance_records SET revoked_at=now(), revoked_reason='resubscribed' WHERE id=$1`, [id]);
 
-      expect(await deletePerson(p)).toBe('ok');
+      await erasePerson(p);
 
       const { rows } = await db.query(
         'SELECT person_id, target_normalized, revoked_reason FROM public.contact_governance_records WHERE id=$1', [id]);
@@ -290,7 +305,7 @@ describe('PI/WS-F — CAPABILITY A survives erasure', () => {
             SET revoked_at=now(), revoked_reason='person erased: dsar — re-anchored onto 3 target(s)'
           WHERE id=$1`, [original]);
       // 3. erase
-      expect(await deletePerson(p)).toBe('ok');
+      await erasePerson(p);
 
       const rows = await liveRows(ORG_A);
       expect(rows).toHaveLength(4);
@@ -416,9 +431,21 @@ describe('PI/WS-F — CAPABILITY B: every shape is erasable after the procedure'
       await seedTenants();
       const p = await newPerson(ORG_A);
       const { rows: t } = await db.query(
-        `INSERT INTO public.outreach_tasks (company_id, person_id) VALUES ($1,$2) RETURNING id`, [ORG_A, p]);
+        // Eight columns on this table are NOT NULL with no default, and the
+        // four *_version ones are the WS-3 provenance stamps that make a task
+        // auditable. Supplying them all is the fixture being honest about the
+        // table's real contract rather than discovering it one error at a time.
+        // `lead_id` is `text` and NOT NULL: A3 records it is NOT proven to be a
+        // lead id, which is why it is neither typed nor foreign-keyed, so a
+        // synthetic value is correct here rather than a shortcut.
+        `INSERT INTO public.outreach_tasks
+           (company_id, lead_id, plan_task_id, planner_version,
+            translation_version, governance_version, execution_runtime_version,
+            materialized_at, person_id)
+         VALUES ($1,$2,$3,'test','test','test','test',now(),$4) RETURNING id`,
+        [ORG_A, 'wsf-erasure-fixture', 'wsf-plan-task-1', p]);
 
-      expect(await deletePerson(p)).toBe('ok');
+      await erasePerson(p);
 
       const { rows } = await db.query(
         'SELECT company_id, person_id FROM public.outreach_tasks WHERE id=$1', [t[0].id]);
