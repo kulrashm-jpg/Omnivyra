@@ -140,3 +140,47 @@ Engineering states the structure; these are business, legal and compliance calls
 ## 7. No-code confirmation
 
 No application code, schema, migration, flag, provider or production data was changed. This document states a contract and identifies decisions; it implements nothing.
+
+---
+
+# ADDENDUM — 2026-09-23: the retention decision matrix
+
+The architectural lifecycle is now **defined** by `prospectIdentity/personErasure.ts` (WS-F). What remains is duration. This matrix separates what engineering has settled from the single class of question that genuinely needs a human.
+
+**Rule applied throughout: no legal retention period is invented.** Where a duration is a legal/compliance call it is marked and left open; engineering does not pick a number.
+
+## A. What erasure does, per record class
+
+| Record class | Purpose | Operationally required *after* erasure? | Retained or erased | Retention period | Policy kind | Action at expiry |
+|---|---|---|---|---|---|---|
+| `contact_governance_records` — **carried-forward, target-anchored** | prevent contact at a known address | **YES — this is the entire point** | **RETAINED** | **indefinite** | engineering-determined: a suppression that expires is worse than none, and the re-import hole reopens the moment it lapses | none — never expires |
+| `contact_governance_records` — **revoked originals** | audit: what was instructed, by whom, why it stopped | no (excluded by `isInForce` and all four partial indexes) | **RETAINED** | **OPEN** | **legal/compliance** | **OPEN** |
+| `contact_governance_records` — **unenforceable** (person-only, no contact point) | audit only; nothing left to match on | no — the instruction genuinely ends | **RETAINED**, revoked with reason, and **reported** via `suppressionsLostToErasure` | **OPEN** | **legal/compliance** | **OPEN** |
+| `unified_persons` | the subject | — | **ERASED** | n/a | — | — |
+| `identity_claims` | the person's contact points | no — read *before* the delete, then gone | **ERASED** (FK `CASCADE`) | n/a | engineering-determined by W4 | — |
+| `person_duplicate_candidates` | identity review queue | no | **ERASED** (`CASCADE` on `person_id`) | n/a | engineering-determined | — |
+| `prospect_enrichment_attempts` | spend audit / lease recovery | no | **ERASED** (`CASCADE`) | n/a | ⚠ see §B-1 | — |
+| `source_records` / `source_assertions` | provenance: what a source asserted, when | no for matching; yes for audit | **RETAINED, de-linked** (`person_id` → NULL) | **OPEN** | **legal/compliance** | **OPEN** |
+| `outreach_tasks` | what was sent, on what channel | no | **RETAINED, de-linked** (`person_id` → NULL; `company_id`, `lead_id`, decision history intact) | **OPEN** | **legal/compliance** | **OPEN** |
+| `outreach_attempts` / `approvals` / `decisions` / `delivery_evidence` / `outcomes` | append-only execution + governance audit | no | **RETAINED, untouched** — no referential action; `ws3_reject_mutation` forbids mutation | **OPEN** | **legal/compliance** | **OPEN** |
+| `prospect_lifecycle_states` | why the prospect moved, citing evidence | no | **RETAINED** — append-only trigger refuses DELETE | **OPEN** | **legal/compliance** | **OPEN** |
+| `canonical_leads` | the pursuit record | no | **RETAINED, de-linked** (`unified_person_id` → NULL) | **OPEN** | product | **OPEN** |
+| `leads`, `contacts`, `engagement_threads`, `visitor_sessions`, `unified_touchpoints`, `expected_event_instances` | source populations | no | **RETAINED, de-linked** (W5 `SET NULL`) | **OPEN** | product | **OPEN** |
+
+## B. Two engineering items this surfaced, neither a policy question
+
+**B-1 — `prospect_enrichment_attempts` CASCADEs on person deletion.** That table is the **spend audit**: which provider was called, whether it was billed, under whose lease. Erasing a person therefore erases the record that money was spent on them. That may be correct (the row is *about* the erased person) or it may be a gap in cost auditability. Its unique indexes are partial on `person_id IS NOT NULL`, so either direction is structurally safe. **Recorded as a question for the enrichment owner, not resolved here.**
+
+**B-2 — retention cannot currently be expressed for any PI table.** `RETENTION_TARGETS` is a closed 10-member list containing none of them, and `retentionService` filters on `organization_id` while `unified_persons`, `canonical_leads` and `leads` use `company_id`. So even once a period is decided, **enforcing it needs a tenant-column indirection first** (work item DL-3). No period can be operationalised before that, which means deciding the durations is not on the critical path.
+
+## C. The human decision, isolated
+
+Everything above is determined **except one question, asked once per class**:
+
+> **For records that are retained after erasure but are no longer operationally required — revoked governance, provenance, outreach history, lifecycle transitions — how long are they kept, and what happens at expiry?**
+
+That is a legal/compliance judgement about the tenant's obligations and the lawful basis for holding third-party personal data. Engineering has no standing to pick a number, and picking one would be inventing policy.
+
+**It does not block anything.** The FK lifecycle is defined, erasure is implemented, and B-2 means no period could be enforced yet regardless. The correct sequencing is: land the erasure path → build DL-3's retention plumbing → apply the durations when they arrive.
+
+**Deliberately still not decided:** the lawful basis for holding third-party contact data per jurisdiction (`POLICY-4 #8`). That gates whether any of this is a compliance fix or a product change, and it is squarely legal.
