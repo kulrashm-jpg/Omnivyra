@@ -22,7 +22,7 @@ A contract listed `FROZEN` may not be re-stated, re-spelled or paralleled. Exten
 | 8 | **Next Best Action** | `nextAction ∈ {personalized_outreach, nurture_sequence, monitor}`; NBA record fields per `prospectOutreach/readiness.ts:82-112` | manifest C-7 — `engines/recommendation.ts` canonical, `leadActions.ts` retained legacy read-side | **FROZEN — thin, §2.3** |
 | 9 | **Outreach Outcome** | 8 values `opened, clicked, replied, meeting_booked, rejected, no_response, unsubscribed, converted`; `UNOBSERVABLE_BUSINESS_OUTCOMES`; `DERIVED_BUSINESS_OUTCOMES`; dual idempotency | `leadOutreachExecution/types.ts:80-107`; DB CHECK at `baseline.sql:19980` | **FROZEN** |
 | 10 | **Prospect State / Lifecycle Event** | — | authorised by `PI-ADR-002`; owner WS-E | **PENDING — contract-first, not yet written** |
-| 11 | **Candidate** | — | product direction 2026-09-23; siting under analysis | **PENDING — must not be sited before §3 is answered** |
+| 11 | **Candidate** | New tenant-scoped pre-prospect review queue; anchored to an **identity claim**, not a person; person-optional; policy-gated promotion; audited transitions | **`PI-ADR-003`** | **SITED — shape fixed; state vocabulary and criteria still to be written by WS-C** |
 | 12 | **Learning Proposal** | unratified `prospect_icp_versions` draft; cites the outcome rows that suggested it; stated data floor; human ratifies | `PI-ACTIVATION-PLAN-001.md` §4 records the minimum acceptable mechanism | **DEFERRED until outcome data exists** — contract stated, not built |
 
 ### Cross-cutting vocabularies, also frozen
@@ -49,25 +49,21 @@ These are recorded so no workstream "fixes" them locally.
 
 ---
 
-## 3. Contract #11 (Candidate) — the question that must be answered first
+## 3. Contract #11 (Candidate) — SITED by `PI-ADR-003`
 
-The product direction is settled: engagement evidence creates a **candidate/evidence state first**, and generic engagement must not pollute `canonical_leads`.
+**A new entity, justified under `PI-ADR-001` §3.7.** Every existing home was examined and each fails for a different *structural* reason — wrong grain, run-scoped cascade, no tenant column, per-signal keying, `NOT NULL` person, or being the very entity under protection. The full table is in the ADR.
 
-What is **not** settled is where that state lives — and getting it wrong means a fourth lead-shaped entity, which the Do-Not-Build register forbids and `PI-ADR-001` §3.7 permits only when *no existing table can carry the concept without corrupting its meaning*.
+**This is not a second Prospect.** The distinguishing test: `canonical_leads` holds decisions **made**; this holds decisions **pending** — the same category as `person_duplicate_candidates` and `prospect_icp_versions`, both accepted under the same ADR.
 
-The candidates for siting, all of which already exist:
-- `lead_intelligence` — already the store every discovery path writes to via `adoptLead(...)`
-- `active_leads` — already has `bucket ∈ {suspect, prospect, qualified, needs_review}`, but is a derived snapshot and explicitly not canonical storage
-- `engagement_identity_candidates` — suggestively named, no tenant column, no TypeScript reader or writer
-- `canonical_leads` itself, in a distinct status — noting `lead_status` is free text with no CHECK and PI writes `null` to it
+Fixed by the ADR, and binding on WS-C:
+- anchored to the **identity-claim tuple** `(organization_id, claim_type, platform, normalized_value)`, **not** a person — so B1's refusal to mint a person from a bare handle stands
+- `unified_person_id` nullable with `ON DELETE SET NULL`, deliberately not `RESTRICT`
+- idempotency by a **partial** unique index → `ON CONFLICT` cannot infer it (`42P10`); INSERT and catch `23505`
+- promotion gated by a **ratified, versioned policy row** evaluated by the existing `prospectIcp/evaluate.ts`, so every transition carries `policy_id` + `policy_version`
+- the gate **reads** WS-6's and the ICP evaluator's verdicts and never forms its own score
+- transitions audited with a stated reason, enforced by a CHECK rather than by convention
 
-**An analysis is in flight.** Until it reports, contract #11 stays PENDING and no workstream may assume a shape for it. In particular WS-C may not begin implementation, because its entire output is writes into this contract.
-
-Two constraints hold regardless of the answer:
-1. A candidate may exist **with no canonical person**. `socialContactResolution.ts:22-29` refuses to mint a person from a bare social handle, and that refusal stands — so the candidate contract must not require a `unified_persons` row.
-2. The promotion threshold must be **documented in this register**, not buried in code. "Sufficient evidence" is a product rule, and an implicit one becomes unexplainable the first time someone asks why a prospect appeared.
-
----
+Still to be written by WS-C: the state vocabulary, the criteria, and the debounce.
 
 ## 4. Contract #10 (Prospect State) — constraints already fixed
 
