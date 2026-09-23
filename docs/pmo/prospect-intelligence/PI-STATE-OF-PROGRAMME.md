@@ -34,7 +34,7 @@ Canonical entities, unchanged: `companies` = tenant · `unified_persons` = canon
 
 The Do-Not-Build register stands. No second lead/person/account model, no second ICP engine, no second suppression engine, no PI message-sending infrastructure.
 
-**One frozen decision must change**, and it is recorded as an ADR requirement rather than assumed — see §5, `ARCH-1`.
+**One frozen decision has changed**, by owner decision on 2026-09-23: see `PI-ADR-002-reassessment-seam.md`. Outcomes become evidence into the intelligence context and its fingerprint; they do not become decisions. PI still never sends, learning still proposes only, ratification stays human, suppression still overrides everything.
 
 ---
 
