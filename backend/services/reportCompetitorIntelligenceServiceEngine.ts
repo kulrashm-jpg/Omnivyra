@@ -4,6 +4,7 @@ import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
 import { impactScore } from './reportDecisionUtils';
 import { supabase } from '../db/supabaseClient';
+import { scopeExcludesAllPages, withDomainScope, type ReportDomainScope } from './crawl/reportDomainScope';
 import axios from 'axios';
 import { config } from '@/config';
 import type { CompetitorEnrichmentProfile } from './competitorEnrichmentKnowledge';
@@ -497,6 +498,8 @@ export async function buildCompetitorIntelligenceActive(params: {
   companyId: string;
   decisions: PersistedDecisionObject[];
   resolvedInput?: ResolvedReportInput | null;
+  /** R1-OPEN-01: only the report's current domain may seed discovery or answer topics. */
+  domainScope?: ReportDomainScope;
 }): Promise<CompetitorIntelligenceResult> {
   const domain = normalizeDomain(params.resolvedInput?.resolved.websiteDomain) ?? 'your-site.com';
   const businessType = params.resolvedInput?.resolved.businessType ?? null;
@@ -509,6 +512,7 @@ export async function buildCompetitorIntelligenceActive(params: {
     companyId: params.companyId,
     domain,
     businessType,
+    domainScope: params.domainScope,
   }).catch((error) => {
     console.warn('[competitor-discovery][keyword-extraction-failed]', {
       company_id: params.companyId,
@@ -642,11 +646,15 @@ export async function buildCompetitorIntelligenceActive(params: {
 
   const companyKeywordSet = new Set(keywords.map((item) => item.toLowerCase()));
   const companyAnswerSet = new Set<string>();
-  const userPagesRes = await supabase
-    .from('canonical_pages')
-    .select('title, headings')
-    .eq('company_id', params.companyId)
-    .limit(120);
+  const userPagesRes = scopeExcludesAllPages(params.domainScope)
+    ? { data: [] }
+    : await withDomainScope(
+      supabase
+        .from('canonical_pages')
+        .select('title, headings')
+        .eq('company_id', params.companyId),
+      params.domainScope,
+    ).limit(120);
   ((userPagesRes.data ?? []) as Array<{ title?: string | null; headings?: unknown }>).forEach((row) => {
     const texts = [
       String(row.title ?? ''),

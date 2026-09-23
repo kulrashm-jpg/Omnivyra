@@ -355,6 +355,8 @@ export async function generateReportPayload(
   // Snapshot only — growth/performance reports read connected analytics sources, not
   // the crawl. Never throws: a crawl failure leaves the report to abstain honestly.
   let crawlEvidence: SnapshotCrawlEvidence | null = null;
+  // R1-OPEN-01 — the composition reads website evidence only from the domain this crawl targeted.
+  let domainScope: import('./crawl/reportDomainScope').ReportDomainScope | undefined;
   if (requestedCategory === 'snapshot') {
     const { ensureReportCrawlEvidence } = await import('./crawl/reportCrawlEvidenceService');
     const crawlResult = await ensureReportCrawlEvidence({
@@ -381,6 +383,9 @@ export async function generateReportPayload(
       reason: crawlResult.reason,
       ...(crawlResult.error ? { error: crawlResult.error } : {}),
     };
+    const { resolveReportDomainScope } = await import('./crawl/reportDomainScope');
+    domainScope = await resolveReportDomainScope(report.company_id, crawlResult.targetUrl ?? null)
+      .catch(() => ({ domainId: null }));
   }
 
   const intelligence = await runCompanyBlogIntelligence(report.company_id);
@@ -402,6 +407,7 @@ export async function generateReportPayload(
         resolvedInput,
         readiness,
         crawlEvidence,
+        domainScope,
       }) as unknown as Record<string, unknown>;
     }
   } catch (composeError) {

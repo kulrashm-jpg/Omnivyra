@@ -6,6 +6,7 @@
  * no crawling of its own.
  */
 import { supabase } from '../db/supabaseClient';
+import { scopeExcludesAllPages, type ReportDomainScope } from './crawl/reportDomainScope';
 import type { ExperiencePage } from './digitalExperience';
 // D7 — the same canonical reachability contract the assessment reader uses, so
 // probe eligibility and finding eligibility cannot disagree about a page.
@@ -30,12 +31,16 @@ const MAX_PAGES = 500;
 const MAX_PSI_URLS = Math.max(1, Number(process.env.PAGESPEED_MAX_URLS) || 2);
 
 /** Load crawl evidence shaped for the experience assessment, including per-page word counts. */
-export async function loadExperiencePages(companyId: string): Promise<ExperiencePage[]> {
+export async function loadExperiencePages(companyId: string, domainScope?: ReportDomainScope): Promise<ExperiencePage[]> {
+  // R1-OPEN-01: Report 1 reads only the current domain's pages.
+  if (scopeExcludesAllPages(domainScope)) return [];
   try {
-    const { data: pages } = await supabase
+    let pagesQuery = supabase
       .from('canonical_pages')
       .select('id, url, page_type, title, meta_description, headings, ctas, internal_link_count, http_status, crawl_depth, crawl_metadata')
-      .eq('company_id', companyId)
+      .eq('company_id', companyId);
+    if (domainScope) pagesQuery = pagesQuery.eq('domain_id', domainScope.domainId as string);
+    const { data: pages } = await pagesQuery
       .order('last_crawled_at', { ascending: false })
       .limit(MAX_PAGES);
     const rows = pages ?? [];
@@ -43,11 +48,13 @@ export async function loadExperiencePages(companyId: string): Promise<Experience
 
     // Word counts come from the existing page_content blocks — the same source the content
     // engine uses, so "thin page" means the same thing in both places.
-    const { data: blocks } = await supabase
+    let blocksQuery = supabase
       .from('page_content')
       .select('page_id, content_text')
-      .eq('company_id', companyId)
-      .limit(5000);
+      .eq('company_id', companyId);
+    // Scoped runs read only these pages' blocks, so another domain's blocks cannot use up the cap.
+    if (domainScope) blocksQuery = blocksQuery.in('page_id', rows.map((row) => String((row as { id?: string }).id ?? '')));
+    const { data: blocks } = await blocksQuery.limit(5000);
     const wordsByPage = new Map<string, number>();
     for (const block of blocks ?? []) {
       const id = String((block as { page_id?: string }).page_id ?? '');

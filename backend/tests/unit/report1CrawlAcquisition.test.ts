@@ -29,7 +29,7 @@
  * untouched and therefore also unexercised here — that is a deliberate limit of this suite.
  */
 
-const recorded: Array<{ table: string; op: string; rows: unknown }> = [];
+const recorded: Array<{ table: string; op: string; rows: unknown; id?: string }> = [];
 const canonicalPagesFor = (companyId: string) =>
   recorded.filter((r) => r.table === 'canonical_pages' && r.op === 'upsert')
     .flatMap((r) => (Array.isArray(r.rows) ? r.rows : [r.rows]))
@@ -57,6 +57,8 @@ jest.mock('../../db/writeOwner', () => {
       recorded.push({ table, op: 'upsert', rows });
       const one = Array.isArray(rows) ? rows[0] : rows;
       const id = `row-${(one as { url?: string })?.url ?? recorded.length}`;
+      // Keep the id handed back, so a later READ of canonical_domains finds the row the crawl created.
+      recorded[recorded.length - 1].id = id;
       const chain: any = new Proxy(function () {} as any, {
         get(_t, prop) {
           if (prop === 'then') return (resolve: (v: unknown) => unknown) => resolve({ data: [{ id }], error: null });
@@ -114,26 +116,33 @@ jest.mock('../../../lib/security/safeFetch', () => ({
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: (table: string) => {
-      const chain: Record<string, unknown> = {};
-      let companyId = '';
-      chain.select = (_cols: string, opts?: { head?: boolean }) => {
-        if (opts?.head) {
-          const counter: Record<string, unknown> = {};
-          counter.eq = (_c: string, v: string) => { companyId = v; return counter; };
-          counter.then = (resolve: (v: unknown) => unknown) =>
-            resolve({ count: canonicalPagesFor(companyId).filter((p) => p.http_status === 200).length, error: null });
-          return counter;
+      // Every `.eq` is applied, as the real database applies it. R1-OPEN-01 scopes the count to the
+      // crawl target's canonical_domains row, which the crawl itself created through the write owner.
+      const filters: Record<string, string> = {};
+      let head = false;
+      const rows = (): Array<Record<string, unknown>> => {
+        if (table === 'canonical_domains') {
+          return recorded
+            .filter((r) => r.table === 'canonical_domains' && r.op === 'upsert')
+            .map((r): Record<string, unknown> => ({ ...(r.rows as Record<string, unknown>), id: r.id }))
+            .filter((d) => d.company_id === filters.company_id && d.primary_domain === filters.primary_domain);
         }
-        return chain;
+        if (table !== 'canonical_pages') return [];
+        return canonicalPagesFor(filters.company_id)
+          .filter((p) => p.http_status === 200)
+          .filter((p) => filters.domain_id === undefined || p.domain_id === filters.domain_id);
       };
-      chain.eq = (_c: string, v: string) => { companyId = v; return chain; };
+      const chain: Record<string, unknown> = {};
+      chain.select = (_cols: string, opts?: { head?: boolean }) => { head = Boolean(opts?.head); return chain; };
+      chain.eq = (c: string, v: string) => { filters[c] = v; return chain; };
       chain.not = () => chain;
       chain.order = () => chain;
       chain.limit = () => chain;
-      chain.maybeSingle = async () => ({ data: null, error: null });
+      chain.maybeSingle = async () => ({ data: rows()[0] ?? null, error: null });
       chain.then = (resolve: (v: unknown) => unknown) => {
+        if (head) return resolve({ count: rows().length, error: null });
         if (table !== 'canonical_pages') return resolve({ data: null, error: null });
-        const pages = canonicalPagesFor(companyId).filter((p) => p.http_status === 200);
+        const pages = rows();
         return resolve({ data: pages.length > 0 ? [{ last_crawled_at: pages[0].last_crawled_at }] : [], error: null });
       };
       return chain;
