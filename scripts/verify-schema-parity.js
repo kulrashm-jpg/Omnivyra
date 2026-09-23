@@ -20,6 +20,13 @@
  *   user errors). It does NOT attempt full migration reconciliation —
  *   that's a separate project. It does NOT mutate schema.
  *
+ *   It ALSO verifies two structural dependencies that column existence cannot
+ *   express (GAP-B / GAP-C, see the REQUIRED_INDEXES and REQUIRED_COLUMN_TYPES
+ *   manifests): the unique indexes whose 23505 IS the ingestion idempotency
+ *   mechanism, and the declared type of a column a migration converted. Both
+ *   are cases where every required column is present, this gate was green, and
+ *   the runtime was still broken.
+ *
  * Targets:
  *   - bolt_execution_runs: lock/heartbeat/abandonment forensics
  *   - queue_jobs: result_data, error_code (legacy-only columns now migrated)
@@ -50,9 +57,16 @@
  *   process.env doesn't already have them).
  *
  * Exit codes:
- *   0 — all required columns present
- *   1 — at least one required column missing (structured stdout below)
+ *   0 — all required columns present, all required indexes structurally sound,
+ *       all declared column types as expected, and no ledger desync
+ *   1 — at least one BLOCKING finding (structured stdout below)
  *   2 — environmental failure (missing creds, network error)
+ *   3 — WARN/INFO findings only
+ *
+ *   A BLOCKING index finding and a BLOCKING type finding are the SAME class of
+ *   outcome as a BLOCKING missing column: they join the one findings list and
+ *   exit 1. Exit 0 remains reachable on exactly one condition — an empty
+ *   findings list and no ledger desync.
  */
 
 const fs = require('fs');
@@ -469,6 +483,140 @@ const REQUIRED_COLUMNS = [
   { severity: 'WARN', table: 'integration_credentials', column: 'provider_key', motivation: 'A3M (20261014000000): which provider the credential is for. Second half of the (company_id, provider_key, credential_key) tenant credential identity.' },
 ];
 
+// ══ GAP-B — the indexes that ARE the idempotency mechanism ════════════════
+//
+// Everything above asks exactly one question: does this column exist? That
+// question cannot see the dependency this block covers, and the failure it
+// misses is SILENT.
+//
+// `backend/services/prospectIdentity/ingestionBoundary.ts` says it in its own
+// words: "Idempotency is by DATABASE CONSTRAINT, never SELECT-then-INSERT: the
+// insert is attempted, and a 23505 means another worker won the race, at which
+// point the existing row is updated." Three writers are built that way:
+//
+//   upsertSourceRecord       INSERT → `code !== '23505'` rethrows; on 23505 it
+//                            re-reads by (organization_id, provider,
+//                            source_entity_type, source_record_id) and bumps
+//                            observation_count / re-hashes the payload.
+//   recordAssertions         INSERT per attribute → 23505 is counted as
+//                            `alreadyPresent`, anything else throws.
+//   contactGovernanceWriter  INSERT → 23505 → resolveByCanonicalKey, returning
+//   .recordContactGovernance `outcome: 'already_present'`.
+//
+// Every one of those branches is reached ONLY because a unique index raises
+// 23505. Drop the index and nothing raises: the INSERT succeeds, the code takes
+// the `created` path, no error is logged, and this gate — which finds every
+// column present — exits 0. Re-ingesting the same provider record then appends
+// a SECOND observation instead of being a no-op, `observation_count` stays 1
+// forever, the payload-hash change detection never runs because it lives on the
+// conflict branch, and `assertionsAlreadyPresent` is permanently 0. The
+// corruption lands in the evidence layer, whose entire purpose is to be
+// trustworthy after the fact.
+//
+// THREE PROPERTIES, NOT ONE. Existence alone is not the requirement:
+//   - a NON-UNIQUE index of the same name raises nothing at all;
+//   - a PARTIAL index only covers rows its predicate matches, so rows outside
+//     it collide with nothing.
+// `uq_contact_governance_identity` is partial BY DESIGN (`WHERE revoked_at IS
+// NULL`, so a revocation frees the key and re-recording stays expressible) —
+// which is precisely why its writer must INSERT-and-catch: PostgREST cannot
+// infer a partial index and `ON CONFLICT` answers 42P10, the trap W0.1, W0.2
+// and W3 each hit. Partiality is therefore stated per index and a divergence in
+// EITHER direction is a finding.
+//
+// WHAT THIS DOES NOT PROVE. It proves an index of this name exists on this
+// table, with this uniqueness and this partiality, and that
+// `pg_get_indexdef()` mentions each expected key. The key check is a SUBSTRING
+// test on the definition, not a parsed key-list comparison: an index over the
+// right columns in the wrong ORDER, or carrying an extra trailing key, passes
+// here. It does not read `indisvalid`/`indisready`, so an index left behind by
+// a failed CREATE INDEX CONCURRENTLY is reported as present (Postgres does
+// still enforce uniqueness through an invalid unique index, so this is a
+// reporting gap rather than a correctness one). And it proves nothing at all
+// about the rows already in the table: an index that exists today says the
+// constraint is enforced from now on, not that yesterday's ingestion was
+// idempotent.
+//
+// SEVERITY RULE FOR AN INDEX (distinct from the column rule above). BLOCKING
+// when the index's absence makes a write path silently persist WRONG STATE —
+// no error, no degrade, just incorrect data that looks correct. WARN when the
+// absence only slows a query or loses an operator convenience, since the
+// runtime behaviour is unchanged. All three below are the first kind; there is
+// no performance-only index in this manifest, deliberately, because a gate that
+// blocks on query plans is a gate somebody disables.
+const REQUIRED_INDEXES = [
+  {
+    severity: 'BLOCKING',
+    table: 'source_records',
+    index: 'uq_source_records_tenant_identity',
+    unique: true,
+    partial: false,
+    keys: ['organization_id', 'provider', 'source_entity_type', 'source_record_id'],
+    motivation:
+      'LI-2 (20261002000000) SOURCE IDENTITY — one row per provider record per tenant. upsertSourceRecord INSERTs and branches on 23505; without this index the insert always succeeds, so re-ingesting the same provider record creates a DUPLICATE observation instead of bumping observation_count, and the payload-hash change detection on the conflict branch never executes. Nothing errors and this gate finds every column present. Must be NON-PARTIAL: the ops DDL script refuses a partial one because it would leave rows outside the predicate colliding with nothing.',
+  },
+  {
+    severity: 'BLOCKING',
+    table: 'source_assertions',
+    index: 'uq_source_assertions_dedupe',
+    unique: true,
+    partial: false,
+    keys: ['organization_id', 'source_record_id', 'attribute', 'value_hash'],
+    motivation:
+      'LI-2 (20261002000000) assertion dedupe. recordAssertions counts 23505 as alreadyPresent; without the index every re-ingestion APPENDS a duplicate row to an append-only evidence table and reports it as newly recorded. decideCanonicalUpdates de-duplicates by distinct VALUE, so the canonical verdict itself does not flip — the damage is that the evidence corpus LI-6 will arbitrate on, and the recorded/alreadyPresent counts callers trust, both become fiction.',
+  },
+  {
+    severity: 'BLOCKING',
+    table: 'contact_governance_records',
+    index: 'uq_contact_governance_identity',
+    unique: true,
+    partial: true,
+    keys: ['organization_id', 'channel', 'governance_type', 'person_id', 'target_normalized'],
+    motivation:
+      'LI-3B (20261003000000) canonical governance key, PARTIAL on `revoked_at IS NULL` (ADR §13) — which is why recordContactGovernance INSERTs and catches 23505 rather than using ON CONFLICT, since PostgREST cannot infer a partial index and gets 42P10. Without it a repeated unsubscribe webhook writes a second live row; resolveByCanonicalKey then `.limit(1)`s an arbitrary one, and revokeContactGovernance — which revokes by id — reports `revoked: true` while a duplicate live row keeps the person suppressed. A consent restoration that silently does not take effect is a compliance record that lies.',
+  },
+];
+
+// ══ GAP-C — a TYPE CONVERSION the column probe is structurally blind to ═══
+//
+// 20261022000000 (A7P-C9) converts `source_records.ingestion_run_id` from uuid
+// to text, because every live writer already supplies a non-UUID correlation
+// value: a LinkedIn URN from extensionBridge, `a7e-<entityId>-<timestamp>` from
+// consumeEnrichmentWork, the CRM pipeline's own run id, or whatever string an
+// operator typed. The column existed BEFORE that migration and exists after it,
+// so a column-existence probe reports "present" in both worlds and this gate
+// goes green on a database where ingestion cannot write a single row.
+//
+// The failure is also in the wrong place to catch cheaply. A missing column is
+// 42703 and shows up on a SELECT; an unconverted column is 22P02 ("invalid
+// input syntax for type uuid") raised at INSERT — on the unguarded
+// persistObservation port, which recordedExecution documents as throwing AFTER
+// the provider call has already been billed. That is exactly how the first
+// pilot ingestion failed, having already created a person, an identity claim,
+// an account and a canonical lead.
+//
+// BLOCKING, on the same footing as a missing BLOCKING column: the write path is
+// not fail-open, it is reachable from POST /api/prospects/[id]/enrich, and the
+// money is already spent when it throws.
+//
+// WHAT THIS DOES NOT PROVE. It compares the column's DECLARED type
+// (information_schema's udt_name) against the expected one. It does NOT prove
+// that every stored row is convertible, that the conversion preserved values,
+// that the migration's other effects landed (the DROP NOT NULL, the COMMENT),
+// or that no later migration narrows the column again after this gate runs.
+// A declared type is the precondition for the insert to parse — not a
+// guarantee about data.
+const REQUIRED_COLUMN_TYPES = [
+  {
+    severity: 'BLOCKING',
+    table: 'source_records',
+    column: 'ingestion_run_id',
+    udtName: 'text',
+    motivation:
+      'A7P-C9 (20261022000000) converts this column uuid→text. Production writers already supply values no uuid can express (a LinkedIn URN, an operator batch label). If the conversion is unapplied the column is still PRESENT, so the column probe passes, and ingestionBoundary.upsertSourceRecord fails at INSERT with 22P02 — after a billed provider call — instead of 42703 at SELECT. The migration is guarded on the current type, so replaying it onto a converted schema is a no-op: there is no reason not to apply it.',
+  },
+];
+
 async function main() {
   loadEnvLocal();
 
@@ -530,16 +678,28 @@ async function main() {
   // One query for every table at once. A THROWN query is an environmental
   // failure and exits 2; it must never be caught and read as "this table has
   // no columns", which would turn an outage into a fabricated parity failure.
+  //
+  // The projection now also carries the declared type, so GAP-C costs no extra
+  // round trip and no second pass: `data_type` for the human-readable form and
+  // `udt_name` for the comparison (they agree for text/uuid, and udt_name is
+  // the one that stays precise for varchar/array types).
   const observed = new Map();
   try {
     const res = await db.query(
-      `SELECT table_name, column_name
+      `SELECT table_name, column_name, data_type, udt_name
          FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = ANY($1)`,
       [tables],
     );
-    for (const t of tables) observed.set(t, new Set());
-    for (const row of res.rows) observed.get(row.table_name).add(row.column_name);
+    // Map rather than Set: `.has(column)` still answers existence exactly as
+    // before, and `.get(column)` now also answers "declared as what".
+    for (const t of tables) observed.set(t, new Map());
+    for (const row of res.rows) {
+      observed.get(row.table_name).set(row.column_name, {
+        dataType: row.data_type,
+        udtName: row.udt_name,
+      });
+    }
   } catch (e) {
     await db.end().catch(() => {});
     process.stderr.write(JSON.stringify({
@@ -550,18 +710,156 @@ async function main() {
     process.exit(2);
   }
 
+  // GAP-B. `information_schema` has no index view, so this reads the catalog
+  // directly — same connection, one more statement, no second pass. It carries
+  // uniqueness and partiality because index EXISTENCE alone does not imply the
+  // 23505 the writers depend on. Failure semantics match the column query
+  // exactly: a thrown query is environmental and exits 2, and is never read as
+  // "no indexes exist", which would fabricate three BLOCKING findings during an
+  // outage.
+  const observedIndexes = new Map();
+  try {
+    const res = await db.query(
+      `SELECT c.relname AS table_name,
+              i.relname AS index_name,
+              x.indisunique AS is_unique,
+              (x.indpred IS NOT NULL) AS is_partial,
+              pg_get_indexdef(x.indexrelid) AS definition
+         FROM pg_index x
+         JOIN pg_class c     ON c.oid = x.indrelid
+         JOIN pg_class i     ON i.oid = x.indexrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND i.relname = ANY($1)`,
+      [REQUIRED_INDEXES.map((r) => r.index)],
+    );
+    for (const row of res.rows) {
+      observedIndexes.set(row.index_name, {
+        table: row.table_name,
+        isUnique: row.is_unique === true,
+        isPartial: row.is_partial === true,
+        definition: row.definition || '',
+      });
+    }
+  } catch (e) {
+    await db.end().catch(() => {});
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.error',
+      reason: 'index_introspection_query_failed',
+      message: (e && e.message) || String(e),
+    }) + '\n');
+    process.exit(2);
+  }
+
+  // ONE findings list, still called `missing`, deliberately. The exit-0
+  // condition below is `missing.length === 0 && !ledgerDesyncDetected` and it
+  // must remain the single place that decides success — a structural finding
+  // that lived in its own array would need its own reachable exit, and the one
+  // guarantee this gate sells is that exit 0 has exactly one cause. `kind`
+  // distinguishes the finding types in the output and in the operator summary.
   const missing = [];
+
   for (const req of REQUIRED_COLUMNS) {
     const cols = observed.get(req.table);
     if (!cols || !cols.has(req.column)) {
-      missing.push(req);
+      missing.push({
+        kind: 'column',
+        severity: req.severity,
+        table: req.table,
+        column: req.column,
+        reason: 'absent',
+        motivation: req.motivation,
+      });
     }
   }
 
-  // Severity-bucketed status. Verifier exit code:
+  for (const req of REQUIRED_INDEXES) {
+    const found = observedIndexes.get(req.index);
+    let reason = null;
+    if (!found) {
+      reason = 'absent — the INSERT never conflicts, so the 23505 idempotency branch is unreachable';
+    } else if (found.table !== req.table) {
+      reason = `attached to ${found.table}, expected ${req.table}`;
+    } else if (req.unique && !found.isUnique) {
+      reason = 'exists but is NOT UNIQUE — it can never raise 23505';
+    } else if (found.isPartial !== req.partial) {
+      reason = found.isPartial
+        ? 'exists but is PARTIAL — rows outside its predicate collide with nothing'
+        : 'exists but is NOT PARTIAL — the predicate this key depends on is absent';
+    } else {
+      // Substring presence in pg_get_indexdef(), not a parsed key-list
+      // comparison. It catches a same-named index built over different columns;
+      // it does not catch a different column ORDER.
+      const unmentioned = req.keys.filter((k) => !found.definition.includes(k));
+      if (unmentioned.length > 0) {
+        reason = `definition does not mention ${unmentioned.join(', ')} — same name, different key`;
+      }
+    }
+    if (reason) {
+      missing.push({
+        kind: 'index',
+        severity: req.severity,
+        table: req.table,
+        index: req.index,
+        reason,
+        motivation: req.motivation,
+      });
+    }
+  }
+
+  // A (table, column) already required above. Used so an absent column is
+  // reported ONCE, by the column check, rather than counted twice.
+  const columnRequirementKeys = new Set(REQUIRED_COLUMNS.map((r) => `${r.table}.${r.column}`));
+
+  for (const req of REQUIRED_COLUMN_TYPES) {
+    const cols = observed.get(req.table);
+    const meta = cols ? cols.get(req.column) : undefined;
+    if (!meta) {
+      if (!columnRequirementKeys.has(`${req.table}.${req.column}`)) {
+        missing.push({
+          kind: 'column_type',
+          severity: req.severity,
+          table: req.table,
+          column: req.column,
+          reason: `absent — expected type ${req.udtName}`,
+          expected: req.udtName,
+          observed: null,
+          motivation: req.motivation,
+        });
+      }
+      continue;
+    }
+    if (meta.udtName !== req.udtName) {
+      missing.push({
+        kind: 'column_type',
+        severity: req.severity,
+        table: req.table,
+        column: req.column,
+        reason: `declared ${meta.dataType} (${meta.udtName}), expected ${req.udtName}`,
+        expected: req.udtName,
+        observed: meta.udtName,
+        motivation: req.motivation,
+      });
+    }
+  }
+
+  /** What a clean run reports — every dimension this gate actually checked. */
+  const okSummary = `SCHEMA PARITY OK — ${REQUIRED_COLUMNS.length} required columns present, `
+    + `${REQUIRED_INDEXES.length} structural indexes intact, `
+    + `${REQUIRED_COLUMN_TYPES.length} declared column types as expected.`;
+
+  /** One line naming a finding, whatever kind it is. */
+  const describeFinding = (m) => (
+    m.kind === 'index' ? `index ${m.index} on ${m.table} — ${m.reason}`
+    : m.kind === 'column_type' ? `${m.table}.${m.column} — ${m.reason}`
+    : `${m.table}.${m.column}`
+  );
+
+  // Severity-bucketed status over the ONE findings list — a missing column, a
+  // broken index and a wrong declared type bucket identically, by severity.
+  // Verifier exit code:
   //   0 — INFO (all clean)
-  //   1 — BLOCKING (one or more BLOCKING-severity columns missing)
-  //   3 — WARN    (only WARN/INFO columns missing — operator should
+  //   1 — BLOCKING (one or more BLOCKING-severity findings)
+  //   3 — WARN    (only WARN/INFO findings — operator should
   //               apply soon but deploy can proceed; non-zero so CI
   //               can flag but distinct from BLOCKING)
   const missingBlocking = missing.filter((m) => m.severity === 'BLOCKING');
@@ -618,6 +916,10 @@ async function main() {
     event: 'schema_parity.check',
     ran_at: new Date().toISOString(),
     checked_columns: REQUIRED_COLUMNS.length,
+    checked_indexes: REQUIRED_INDEXES.length,
+    checked_column_types: REQUIRED_COLUMN_TYPES.length,
+    // TOTAL findings, not only absent columns — a structural finding counts
+    // here too. `missing_columns` below keeps its original meaning and shape.
     missing_count: missing.length,
     status: overall === 'INFO' && !ledgerDesyncDetected ? 'ok' : (overall === 'BLOCKING' ? 'BLOCKING' : 'WARN'),
     severity: {
@@ -627,10 +929,21 @@ async function main() {
     },
     ledger_desync_detected: ledgerDesyncDetected,
     ledger_probe: ledgerProbeNote,
-    missing_columns: missing.map((m) => ({
+    missing_columns: missing.filter((m) => m.kind === 'column').map((m) => ({
       severity: m.severity,
       table: m.table,
       column: m.column,
+      motivation: m.motivation,
+    })),
+    // GAP-B / GAP-C. Emitted separately so an existing log parser keyed on
+    // `missing_columns` keeps reading exactly what it always read.
+    structural_findings: missing.filter((m) => m.kind !== 'column').map((m) => ({
+      kind: m.kind,
+      severity: m.severity,
+      table: m.table,
+      index: m.index ?? null,
+      column: m.column ?? null,
+      reason: m.reason,
       motivation: m.motivation,
     })),
   };
@@ -664,28 +977,35 @@ async function main() {
     timestamp: new Date().toISOString(),
     schema_parity: out.status,
     ledger_desync_detected: ledgerDesyncDetected,
+    // Field names kept for the dashboards already reading them. They now count
+    // every finding at that severity, structural ones included; the split is in
+    // `structural_findings` beside them.
     blocking_missing_columns: missingBlocking.length,
     warn_missing_columns: missingWarn.length,
+    structural_findings_count: out.structural_findings.length,
     runtime_env: process.env.RAILWAY_ENVIRONMENT_NAME ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? null,
   };
   process.stdout.write(JSON.stringify(integritySnapshot) + '\n');
 
   // stderr: human-readable summary + operator guidance.
+  // The success banner is built above, not inline: the ONE reachable exit 0
+  // must stay a short, readable two lines so that what makes this gate pass is
+  // impossible to misread (and so the contract test can pin it).
   if (missing.length === 0 && !ledgerDesyncDetected) {
-    process.stdout.write(`\nSCHEMA PARITY OK — all ${REQUIRED_COLUMNS.length} required columns present.\n`);
+    process.stdout.write(`\n${okSummary}\n`);
     process.exit(0);
   }
 
   if (missingBlocking.length > 0) {
-    process.stderr.write('\n[BLOCKING] SCHEMA PARITY FAILURE — runtime writes will fail:\n');
+    process.stderr.write('\n[BLOCKING] SCHEMA PARITY FAILURE — runtime writes will fail or silently persist wrong state:\n');
     for (const m of missingBlocking) {
-      process.stderr.write(`  - ${m.table}.${m.column}\n    ${m.motivation}\n`);
+      process.stderr.write(`  - ${describeFinding(m)}\n    ${m.motivation}\n`);
     }
   }
   if (missingWarn.length > 0) {
-    process.stderr.write('\n[WARN] Missing non-critical columns — apply soon:\n');
+    process.stderr.write('\n[WARN] Non-critical schema gaps — apply soon:\n');
     for (const m of missingWarn) {
-      process.stderr.write(`  - ${m.table}.${m.column}\n    ${m.motivation}\n`);
+      process.stderr.write(`  - ${describeFinding(m)}\n    ${m.motivation}\n`);
     }
   }
   if (ledgerDesyncDetected) {
@@ -701,6 +1021,9 @@ async function main() {
 
   process.stderr.write(
     '\nRemediation:\n' +
+    '  0. An index or type finding is NOT fixed by adding a column: re-apply the\n' +
+    '     migration that creates it (LI-2 20261002000000, LI-3B 20261003000000,\n' +
+    '     A7P-C9 20261022000000). All three are idempotent and safe to replay.\n' +
     '  1. Apply the missing migrations via Supabase SQL editor (NOT `db push`).\n' +
     '  2. See docs/migration-discipline.md for the protocol.\n' +
     '  3. Re-run this verifier to confirm.\n'
