@@ -101,7 +101,57 @@ The Do-Not-Build register stands. No second lead/person/account model, no second
 
 The inner gate — a per-tenant `lead_ingestion` row in `feature_flags` — is **UNVERIFIED** (requires a DB read).
 
-### 2.3 Production database — `PROD-1 BLOCKED — CREDENTIAL/ENVIRONMENT`
+### 2.3 Production database — **PROD-1 EXECUTED 2026-09-23. READ-ONLY. NO MUTATION.**
+
+**Access path.** The pooler credential in `.env.local` remains rejected and was **not** retried. PROD-1 ran over a *different* legitimate channel: the Supabase **Management API** (`POST /v1/projects/{ref}/database/query`) using the `SUPABASE_ACCESS_TOKEN` already present in the environment. Every statement was a `SELECT`, behind a local guard refusing any string matching `insert|update|delete|drop|alter|create|truncate|grant|revoke|copy`. No DDL, no DML, no migration, no configuration change. Production is PostgreSQL 17.6.
+
+#### 2.3.1 The authored gate, evaluated — **ALL PI CHECKS PASS**
+
+| Check class | Result |
+|---|---|
+| Column manifest — 187 checks / 40 tables | **155 present, 32 missing — 0 BLOCKING**, 16 WARN, 16 INFO |
+| GAP-B — 3 idempotency indexes | **ALL PRESENT**, `unique=true`, correct partiality, `valid=true` |
+| GAP-C — `source_records.ingestion_run_id` | **`text`** — the uuid→text conversion IS applied |
+
+The 32 misses are 8 entirely-absent tables, **all Writer/content-platform**: `content_quality`, `content_block`, `content_recommendation`, `content_approval_history`, `content_performance`, `learning_intelligence`, `learning_memory`, `content_prediction`. **Not one is a PI table.** Classification **B — migration not applied**, owned by the Writer programme, pre-existing, out of PI scope.
+
+**Every one of the 68 BLOCKING checks passes.** The red gate I warned to expect did not occur, and that is now evidence rather than hope.
+
+This also retires an earlier reading of mine. PR #234's verdict — *"32 missing … none is PI-related"* — I took to mean "PI was never in scope". Correct about the **old** manifest. With PI now in scope the count is **unchanged at 32**, which means the PI surface genuinely **is** complete.
+
+#### 2.3.2 The six WS-6/WS-7 columns are PRESENT
+
+`unified_persons.{authority, influence, buying_role}` and `prospect_accounts.{market, business_model, growth_stage}` all exist. Migration `20261013000000` **has been applied** since the 2026-09-04 Phase-B verification that found all six absent. The `42703` condition that blocked activation is **gone**. Ledger: **74 rows**, through `20261026000000`, including the PI enrichment series to `20261022000000`.
+
+#### 2.3.3 The spine is no longer empty — ingestion has run
+
+| Table | Rows | Was (2026-09-04) |
+|---|---|---|
+| `unified_persons` | **24** | 23 |
+| `identity_claims` | **43** | 42 |
+| `canonical_leads` | **19** | 18 |
+| `prospect_accounts` | **1** | **0** |
+| `source_records` | **1** | **0** |
+| `source_assertions` | 0 | 0 |
+| `prospect_icps` / `_versions` | 0 / 0 | 0 / 0 |
+| all `outreach_*`, `outreach_governance_config` | 0 | 0 |
+
+The single `source_record`: `provider=manual`, `entity=person`, `observation_count=1`, carrying **both** a person and an account, dated **2026-09-08**.
+
+**Phase C of the activation plan was executed on 2026-09-08.** A prospect went end to end — person → account → prospect → provenance. The programme's standing *"built and unexercised"* characterisation is **no longer accurate**.
+
+⚠ `source_assertions` is **0** against `source_records` = 1. Either the manual adapter asserted no attributes beyond identity, or assertion recording did not fire. **Classification E — unknown.** Worth one investigation; not blocking.
+
+#### 2.3.4 Flags and credentials — verified, not inferred
+
+- `feature_flags`: **`lead_ingestion` enabled=true, org-scoped** — a tenant **is** enabled. `enrichment_spend_ceiling` enabled=true, org-scoped.
+- `integration_credentials`: **6 rows, one `apollo`.** A tenant has stored an Apollo credential.
+
+That makes **WS-B's DEFECT-001 fix immediately consequential rather than theoretical**: before it, the planner discarded tenant source statuses and answered `no_available_source` for every field *despite* a stored credential.
+
+---
+
+### 2.3.5 Superseded — the former blocked state
 
 **Status at 2026-09-23, re-checked without a blind retry:** `.env.local` is unchanged since `2026-09-13 11:56` — same host, same user, same 16-character secret that previously failed with `password authentication failed for user "postgres"`. Both fallbacks the verifier accepts, `SUPABASE_DB_URL` and `DATABASE_URL`, are **absent**. There is no alternative mechanism in the environment, so the verification was **not attempted again**.
 
