@@ -251,6 +251,159 @@ describe('verify-schema-parity — Prospect Intelligence coverage (GAP-007)', ()
   });
 });
 
+/**
+ * GAP-B / GAP-C — the two structural dependencies column existence cannot see.
+ *
+ * GAP-B. `ingestionBoundary.ts` is explicit that "Idempotency is by DATABASE
+ * CONSTRAINT, never SELECT-then-INSERT": `upsertSourceRecord`,
+ * `recordAssertions` and `contactGovernanceWriter.recordContactGovernance` each
+ * INSERT and branch on 23505. That branch is reached ONLY because a unique
+ * index raises it. Drop the index and the INSERT just succeeds — every column
+ * is still present, this gate still exits 0, and re-ingesting the same provider
+ * record appends a DUPLICATE observation instead of being a no-op.
+ *
+ * GAP-C. `20261022000000` converts `source_records.ingestion_run_id` from uuid
+ * to text. The column exists before and after, so a column-existence probe
+ * cannot tell the two worlds apart — and the unconverted world fails at INSERT
+ * with 22P02, on the unguarded persistObservation port, after the provider call
+ * has already been billed. Not 42703 at SELECT, where the rest of this manifest
+ * looks.
+ *
+ * These are source-level for the same reason every guard above is: the
+ * regression being pinned is a manifest that quietly stops listing something,
+ * and a runtime assertion would need a database.
+ */
+describe('verify-schema-parity — structural dependencies (GAP-B / GAP-C)', () => {
+  /** Matches an index manifest entry, capturing its severity. */
+  const indexEntry = (index: string) =>
+    new RegExp(`severity:\\s*'(BLOCKING|WARN|INFO)',[\\s\\S]{0,200}?index:\\s*'${index}'`);
+
+  it('introspects indexes over the pg catalog on the SAME connection', () => {
+    // information_schema has no index view; pg_index/pg_class is the only
+    // source. A second connection or a second script would be a second gate.
+    expect(code).toContain('pg_index');
+    expect(code).toContain('pg_get_indexdef');
+    // Exactly one Client is constructed — no second connection crept in.
+    expect(code.match(/new Client\(/g) ?? []).toHaveLength(1);
+  });
+
+  it('selects the declared type alongside the column name', () => {
+    // GAP-C rides the existing column query rather than adding a second pass.
+    expect(code).toMatch(/SELECT table_name, column_name, data_type, udt_name/);
+  });
+
+  /**
+   * The three indexes whose absence silently corrupts persisted state. If a
+   * future change demotes one of them, that is an argument to have here.
+   */
+  const MUST_BLOCK_INDEXES: Array<[string, string]> = [
+    // upsertSourceRecord INSERT → 23505 → re-read + observation_count bump
+    ['uq_source_records_tenant_identity', 'source_records'],
+    // recordAssertions INSERT → 23505 counted as alreadyPresent
+    ['uq_source_assertions_dedupe', 'source_assertions'],
+    // recordContactGovernance INSERT → 23505 → resolveByCanonicalKey
+    ['uq_contact_governance_identity', 'contact_governance_records'],
+  ];
+
+  it.each(MUST_BLOCK_INDEXES)('requires %s on %s at BLOCKING', (index, table) => {
+    const m = source.match(indexEntry(index));
+    expect(m).not.toBeNull();
+    expect((m as RegExpMatchArray)[1]).toBe('BLOCKING');
+    expect(source).toMatch(new RegExp(`table:\\s*'${table}',[\\s\\S]{0,120}index:\\s*'${index}'`));
+  });
+
+  it('demands UNIQUE, not merely present — a non-unique index raises no 23505', () => {
+    for (const [index] of MUST_BLOCK_INDEXES) {
+      expect(source).toMatch(new RegExp(`index:\\s*'${index}',[\\s\\S]{0,60}unique:\\s*true`));
+    }
+    expect(code).toContain('indisunique');
+    expect(code).toMatch(/req\.unique && !found\.isUnique/);
+  });
+
+  it('states partiality per index, and treats a divergence either way as a finding', () => {
+    // LI-2's two are NON-partial: a partial one would leave every row outside
+    // the predicate colliding with nothing. LI-3B's is partial BY DESIGN, on
+    // `revoked_at IS NULL` — which is exactly why its writer cannot use ON
+    // CONFLICT (PostgREST cannot infer a partial index; it answers 42P10).
+    expect(source).toMatch(/index: 'uq_source_records_tenant_identity',[\s\S]{0,120}partial: false/);
+    expect(source).toMatch(/index: 'uq_source_assertions_dedupe',[\s\S]{0,120}partial: false/);
+    expect(source).toMatch(/index: 'uq_contact_governance_identity',[\s\S]{0,120}partial: true/);
+    expect(code).toContain('indpred');
+    expect(code).toMatch(/found\.isPartial !== req\.partial/);
+  });
+
+  it('checks the index is built over the expected keys, not just named right', () => {
+    expect(source).toContain(
+      "keys: ['organization_id', 'provider', 'source_entity_type', 'source_record_id']");
+    expect(source).toContain(
+      "keys: ['organization_id', 'source_record_id', 'attribute', 'value_hash']");
+    expect(code).toMatch(/req\.keys\.filter/);
+  });
+
+  it('verifies source_records.ingestion_run_id is declared text, not uuid', () => {
+    expect(source).toMatch(
+      /table: 'source_records',\s*\n\s*column: 'ingestion_run_id',\s*\n\s*udtName: 'text'/,
+    );
+    const m = source.match(
+      /severity: '(BLOCKING|WARN|INFO)',[\s\S]{0,160}?column: 'ingestion_run_id',\s*\n\s*udtName:/,
+    );
+    expect(m).not.toBeNull();
+    // The same class of outcome as a missing BLOCKING column: the path is not
+    // fail-open, it is reachable from POST /api/prospects/[id]/enrich, and the
+    // provider has already been paid by the time it throws.
+    expect((m as RegExpMatchArray)[1]).toBe('BLOCKING');
+    expect(code).toMatch(/meta\.udtName !== req\.udtName/);
+  });
+
+  it('names the real SQLSTATEs so the failure mode stays legible', () => {
+    // 22P02 at INSERT, not 42703 at SELECT — the whole point of GAP-C.
+    expect(source).toContain('22P02');
+    expect(source).toContain('42703');
+    // 23505 is the mechanism GAP-B protects; 42P10 is why it has to be caught
+    // rather than expressed as ON CONFLICT.
+    expect(source).toContain('23505');
+    expect(source).toContain('42P10');
+  });
+
+  it('folds structural findings into the ONE exit-0 condition', () => {
+    // A separate findings array would need its own reachable exit, and exit 0
+    // having exactly one cause is the single guarantee this gate sells.
+    expect(code).toMatch(/missing\.push\(\{\s*\n\s*kind: 'index'/);
+    expect(code).toMatch(/missing\.push\(\{\s*\n\s*kind: 'column_type'/);
+    const zeroExits = code.match(/process\.exit\(0\)/g) ?? [];
+    expect(zeroExits).toHaveLength(1);
+    expect(code).toMatch(/missing\.length === 0 && !ledgerDesyncDetected[\s\S]{0,200}process\.exit\(0\)/);
+  });
+
+  it('treats a failed index introspection as environmental, never as "no indexes"', () => {
+    // Symmetry with the column query: an outage must not fabricate three
+    // BLOCKING findings and block a deploy that was in fact fine.
+    expect(source).toMatch(/index_introspection_query_failed[\s\S]{0,200}process\.exit\(2\)/);
+  });
+
+  it('keeps missing_columns meaning what it always meant', () => {
+    // Existing log parsers key on this field. Structural findings get their own
+    // list rather than being smuggled into it.
+    expect(code).toMatch(/missing_columns: missing\.filter\(\(m\) => m\.kind === 'column'\)/);
+    expect(code).toContain('structural_findings');
+  });
+
+  it('is honest about what the structural checks do NOT prove', () => {
+    // A type check proves a declared type, not that every stored row is
+    // convertible; an index key check is a substring test on pg_get_indexdef,
+    // not a parsed key-list comparison, so column ORDER is not verified.
+    expect(source).toContain('WHAT THIS DOES NOT PROVE');
+    expect(source).toContain('not a parsed key-list comparison');
+    expect(source).toContain('DECLARED type');
+  });
+
+  it('still keeps a real WARN tier once the structural entries are added', () => {
+    const blocking = source.match(/severity:\s*'BLOCKING'/g) ?? [];
+    const warn = source.match(/severity:\s*'WARN'/g) ?? [];
+    expect(warn.length).toBeGreaterThan(blocking.length);
+  });
+});
+
 describe('verify-schema-parity — runtime exit-code contract', () => {
   it('exits 2, never 0, when no connection string is available', () => {
     const r = run({ ...NO_DB, SCHEMA_PARITY_SKIP_ENV_FILE: '1' });
