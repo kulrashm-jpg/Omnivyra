@@ -27,11 +27,16 @@ import {
   type TenantOfferingContextInput,
   type TenantOfferingContextPorts,
   type TenantOfferingGap,
+  type TenantProblemProvenance,
 } from './tenantOfferingContext';
 import type { OfferingFacetName } from './types';
 
-/** Bumped when this seam's shape changes, so a consumer can pin what it parsed. */
-export const OFFERING_SELL_SIDE_VERSION = 'wsd.1';
+/**
+ * Bumped when this seam's shape changes, so a consumer can pin what it parsed.
+ * wsd.2 — `problemProvenance` added. Additive: every field wsd.1 published is unchanged in
+ * shape, order and value; the new field states which profile column each problem was read from.
+ */
+export const OFFERING_SELL_SIDE_VERSION = 'wsd.2';
 
 /** One offering, as the canonical assembly decided it. Every field abstains rather than defaulting. */
 export interface SellSideOffering {
@@ -63,6 +68,16 @@ export interface TenantSellSide {
    * practice the tenant's problem statement rather than any one offering's.
    */
   readonly portfolioProblems: readonly string[];
+  /**
+   * The same problems, each with the profile column it was read from — a stated
+   * `core_problem_statement` or one of the `pain_symptoms`.
+   *
+   * `portfolioProblems` is the half Problem Fit needs; this is how a caller tells a problem from a
+   * symptom without re-reading the profile. It is a LOOKUP, not a parallel array: `portfolioProblems`
+   * is deduplicated case-insensitively across offerings, so match on the value rather than by index.
+   * Additive — `portfolioProblems` and every offering's `customerProblems` are unchanged.
+   */
+  readonly problemProvenance: readonly TenantProblemProvenance[];
   readonly sources: { readonly profile: boolean; readonly curatedOfferingList: boolean };
   readonly gaps: readonly TenantOfferingGap[];
 }
@@ -118,6 +133,7 @@ export async function readTenantOfferingUnderstanding(
     asOf: input.asOf,
     offerings,
     portfolioProblems,
+    problemProvenance: built.problemProvenance,
     sources: built.sources,
     gaps: built.gaps,
   };

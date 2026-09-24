@@ -131,7 +131,8 @@ describe('Lane B · the seven unsourced dimensions have nowhere to appear', () =
   it('pins the sell-side read surface exactly: a consumer is offered none of them', async () => {
     const sell = (await readTenantOfferingUnderstanding({ organizationId: TENANT, asOf: ASOF }, portsFor(fullProfile())))!;
     expect(Object.keys(sell)).toEqual([
-      'version', 'organizationId', 'asOf', 'offerings', 'portfolioProblems', 'sources', 'gaps',
+      'version', 'organizationId', 'asOf', 'offerings', 'portfolioProblems', 'problemProvenance',
+      'sources', 'gaps',
     ]);
     expect(Object.keys(sell.offerings[0])).toEqual([
       'offeringId', 'name', 'offeringType', 'category', 'positioning', 'valueProposition',
