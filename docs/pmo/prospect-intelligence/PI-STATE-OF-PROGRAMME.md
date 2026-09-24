@@ -5,12 +5,72 @@ Every other document in this directory is a frozen point-in-time artifact and is
 
 | | |
 |---|---|
-| **Base SHA** | `a07477e4` (`origin/main`, merge of PR #269) |
+| **Base SHA** | `af2fb6e9` (`origin/main`, merge of PR #270 — "PI · T2 Integration / T3 Certified", 2026-09-24) |
 | **Established** | 2026-09-23 |
+| **Last reconciled against reality** | **2026-09-24** — see `§0.B` |
 | **Method** | Six parallel read-only structural surveys over a clean worktree at the base SHA, plus orchestrator verification of every load-bearing claim |
-| **Implementation status** | **IN PROGRESS.** WS-A1 and WS-B integrated and T2-passed on `integrate/pi-t2-001`. Nothing pushed, nothing deployed, no migration authored or applied, no flag or provider changed |
+| **Implementation status** | **MERGED, APPLIED, DEPLOYED.** WS-A1, WS-B and the WS-C / WS-D / WS-F deliverables of §3.13–§3.17 integrated on `integrate/pi-t2-001`, T3-certified at `1c0fef0c`, merged as PR #270; `origin/main` is `af2fb6e9`. Both new PI migrations are **APPLIED to production**. Railway auto-deployed `af2fb6e9` to the production worker. No flag or provider changed |
 
-## 0.0 FINAL T2 STATE — 2026-09-23
+## 0.A How to read this document — evidence classes, and the cheap re-verification
+
+This section exists because of a real failure. Three agents read the 2026-09-23
+edition, saw `NOT APPLIED` against both migrations, and concluded the PI schema
+did not exist — one of them wrote up "three premises the repository contradicts"
+and reported that the migrations were never applied. Every one of those readings
+was faithful to the document and wrong about the world. The document had drifted
+and carried nothing saying how old any reading was.
+
+So: every load-bearing claim below names its evidence class, and this is what
+each class does and does not license.
+
+| Evidence class | What it means | Cheapest read-only re-verification |
+|---|---|---|
+| **VERIFIED against production** | observed in the live production database, `SELECT` only | one `SELECT` over `information_schema` / `pg_catalog` for the object named |
+| **PROVEN on real PostgreSQL** | executed on a disposable PostgreSQL 17 with the migrations replayed. Proves the **behaviour of the DDL**, not the state of production | `bash scripts/ci/real-schema-ci.sh` — disposable container, destroyed on exit (§3.17) |
+| **CI-VERIFIED** | executed by GitHub Actions on GitHub's own PostgreSQL service container, independent of any local machine | the `Real-Schema CI` run on the SHA in question |
+| `T1` / `T2` / `T3` | jest suites at a named SHA | re-run the named suite at that SHA |
+| **Reasoned** | derived from the DDL or the code and never executed | nothing to re-run — treat as a hypothesis, never as a pass |
+| `UNVERIFIED` | asserted somewhere, not observed | as above |
+
+**The two classes most often conflated, and the distinction this document lives on.**
+"PROVEN on real PostgreSQL" says the DDL does what it claims when it runs.
+"VERIFIED against production" says it has run *there*. The first says nothing
+about production; the second says nothing about untested edge behaviour. A claim
+holding both is stronger than either. They are never merged here.
+
+**⚠ Never infer applied-migration state from the migration ledger.** Both new PI
+migrations were applied through the Supabase Studio SQL editor, which does not
+write `supabase_migrations.schema_migrations`. The ledger therefore does not
+record them while the schema carries them — see `§0.C`. Establish whether a
+migration is applied by looking for its **objects**.
+
+## 0.B Reconciliation provenance
+
+| Reconciled | By what evidence |
+|---|---|
+| **2026-09-24** | Lane F — truth reconciliation. Worktree `C:/tmp/pi-lane-f-truth`, branch `pi/lane-f-truth`, base `af2fb6e9`. Evidence taken as authoritative: the operator's record of applying both migrations through the Supabase Studio SQL editor, each returning "Success. No rows returned"; the **16/16** post-apply structural verification, executed read-only by a SELECT-only verifier against production, no row drift; the real-schema execution already recorded in §3.17; and the Railway deployment record `eec3a2ab`. Re-derived independently in this worktree at `af2fb6e9`: the git history (`1c0fef0c` → PR #270 → `af2fb6e9`), the sha256 of both migration files, the presence of `.github/workflows/real-schema-ci.yml`, and an import sweep for callers of `backend/services/prospectLifecycle/**` |
+| 2026-09-23 | Original establishment — six parallel read-only structural surveys at `a07477e4`; PROD-1 executed read-only over the Supabase Management API |
+
+**Nothing in the repository was changed to make this document true.** No migration
+file, no ledger row, no production object, no production code. This reconciliation
+is a documentation change. Both migration files at `af2fb6e9` were re-hashed here
+and still match the bytes that were applied (see `§PRE-APPLY GATE → Migrations`).
+
+## 0.C ACCEPTED DIVERGENCE — the production ledger does not record the two PI migrations
+
+**Do not "fix" this. Do not hand-write `supabase_migrations.schema_migrations` rows.**
+
+| | |
+|---|---|
+| **Condition** | `20261027000000` and `20261028000000` are applied to the production **schema** and absent from the production **ledger** |
+| **Cause** | they were applied through the Supabase Studio SQL editor. Studio executes the SQL; it does **not** write `supabase_migrations.schema_migrations`. The CLI writes that table, and the CLI was not the channel |
+| **Status** | **ACCEPTED** — explicitly acknowledged by the programme owner. Not an open defect, not drift, not an incident, and not on anyone's fix list |
+| **Consequence** | a ledger-row probe reports these two migrations as unapplied. That reading is **wrong**, and it is the exact mistake this document exists to prevent |
+| **Correct test of applied state** | look for the objects, read-only: `SELECT to_regclass('public.prospect_lifecycle_transitions');` and `SELECT indisunique, indisvalid FROM pg_index WHERE indexrelid = 'public.uq_outreach_outcomes_id_company'::regclass;` — both were confirmed present by the 16/16 post-apply verification |
+| **Why it is not repaired** | hand-writing ledger rows asserts a provenance the CLI never created, and is forbidden by standing programme rule. It would also change nothing a reader relies on: the production ledger holds **74** recorded versions against **417** local migration files, a desync of two orders of magnitude that long predates PI |
+| **Effect on the deploy gate** | none that is new. `scripts/verify-schema-parity.js`'s ledger probe trips whenever the ledger holds under half the local file count, so it already reports `UNSAFE_MIGRATION_LEDGER_STATE` on every production run; `predeploy-check.js` maps that to WARN and continues unless `PREDEPLOY_STRICT_SCHEMA=1`. Two further absent rows add no signal and remove none. *Evidence: source read at `af2fb6e9`* |
+
+## 0.0 CURRENT STATE — T2 → T3 → MERGED → APPLIED · 2026-09-23 → 2026-09-24
 
 **Decision surface: CLOSED.** Six judgements ratified by the owner (`PI-ADR-005`). Not to be reopened without new **executable** evidence.
 
@@ -24,23 +84,59 @@ Every other document in this directory is a frozen point-in-time artifact and is
 | **Migration replay** | 41 migrations replayed on a disposable PostgreSQL 17, including both new ones, zero errors |
 | **Real-schema tests** | **27 suites / 505 tests / 505 passed** |
 | **Decision ratifications** | `PI-ADR-005` — J-1 … J-6 |
+| **T3** | **CERTIFIED at `1c0fef0c`** — the tip of `integrate/pi-t2-001`, whose last commit fixes a regression the certification run found (`fix(pi-wsc): a blank prior state is corrupt, not absent`) |
+| **Production apply** | Both migrations **APPLIED** 2026-09-24 through the Supabase Studio SQL editor, and **16/16 post-apply structural checks PASSED** read-only against production, **no row drift**. Evidence class: **VERIFIED against production** |
+| **GitHub CI at `af2fb6e9`** | **GREEN**, including an independent `Real-Schema CI` run (`.github/workflows/real-schema-ci.yml` — migration replay + canonical invariants on GitHub's own PostgreSQL service container). A second execution of the invariants §3.17 proved locally, on hardware nobody here controls. Evidence class: **CI-VERIFIED** |
+| **Production deploy** | Railway auto-deployed `af2fb6e9` to the production worker — deployment `eec3a2ab`, **SUCCESS** |
 
 ### NON-BLOCKING
 - **POLICY-4 retention durations** — one legal question per record class
 - **DL-3 retention integration** — PI tables absent from `RETENTION_TARGETS`; `organization_id` vs `company_id` mismatch
 - **Enrichment no-evidence / billable-call observability gap** — recorded, deliberately not implemented
 
-### NOT APPLIED
-- `20261027000000_pi_wsf_governance_anchor_after_erasure.sql`
-- `20261028000000_pi_prospect_lifecycle_state.sql`
+### APPLIED TO PRODUCTION — 2026-09-24
 
-### NOT RUN
-- **T3**
-- **Post-production-migration verification** — cannot exist until the migrations are applied
+Applied by the human operator through the Supabase Studio SQL editor; each
+returned "Success. No rows returned". **Ledger rows absent by accepted
+divergence — `§0.C`.**
 
-### NOT AUTHORIZED
-- **Production migration application**
-- **Deployment**
+| File | sha256 | State |
+|---|---|---|
+| `20261027000000_pi_wsf_governance_anchor_after_erasure.sql` | `c91a65719d85427e3c559068ca2324e6248f40806ec09c7ea97902ffc2f71b97` | **APPLIED** — schema carries it; ledger does not record it |
+| `20261028000000_pi_prospect_lifecycle_state.sql` | `368e6f6125597cae1621de0116686bbde5e2e943b259b7faa37921ba613f35ab` | **APPLIED** — as above |
+
+Both files at `af2fb6e9` hash to exactly the bytes the pre-apply gate proposed
+and the real-schema run replayed, re-confirmed in this worktree on 2026-09-24.
+
+### AUTHORIZED AND DONE
+
+- **Production migration application** — authorized by the programme owner; executed by the human operator on 2026-09-24
+- **Post-production-migration verification** — **EXECUTED**, read-only, 16/16 structural checks passed, no row drift. Detail at the foot of this document
+- **Deployment** — PR #270 merged; Railway auto-deployed `af2fb6e9` to the production worker (`eec3a2ab`, SUCCESS)
+
+### NOT RUN — what genuinely remains
+
+- **PI read paths against production, post-apply** — `GET /api/prospects`, `GET /api/prospects/:id`; item 6 of the post-apply list. Not a structural check and not recorded as exercised. `UNVERIFIED`
+- **`scripts/verify-schema-parity.js` over its own `pg` connection** — the 187-check manifest has been evaluated against production over the Management API (§2.3.1), never through the direct `pg` path `predeploy-check.js` uses. The pooler credential is still rejected, so the gate has never run in the form a deploy runs it
+- **Any production exercise of `prospect_lifecycle_transitions`** — the table exists in production, and `backend/services/prospectLifecycle/**` still has **no runtime caller** at `af2fb6e9` (import sweep over `backend`, `pages`, `lib`, `components`: only the module's own files and its two test files). No request path writes or reads it; its production row count is `UNVERIFIED`
+- **End-to-end PI lifecycle test** — none exists (§3.12)
+- **Deploy-gate coverage for the two objects `20261028000000` created** — `prospect_lifecycle_transitions` and `uq_outreach_outcomes_id_company` are live in production and **absent from the `scripts/verify-schema-parity.js` manifest** (40 tables / 187 column entries, 3 index invariants, 1 declared-type invariant). The gate therefore cannot see either object disappear. `DEFERRED`, with the reason below
+
+**Why the coverage gap is `DEFERRED` and not patched (2026-09-24).** The gate's
+own severity rules cannot express these objects honestly yet. A column is
+`BLOCKING` only when its absence makes a tenant-reachable read path throw, and
+`WARN` when the path is fail-open or degrade-only; `backend/services/prospectLifecycle/**`
+has **no runtime caller**, so neither rule fits — `BLOCKING` would overstate a
+path no request reaches, and `WARN` would assert a fail-open behaviour that is
+false the moment the module is wired (`lifecycleReader.ts` is `if (error) throw`).
+An index is `BLOCKING` only when its absence makes a write path silently persist
+wrong state, and the manifest deliberately holds no performance-only index;
+`uq_prospect_lifecycle_source_event` will qualify once something writes through
+it, while `uq_outreach_outcomes_id_company` exists only to make a composite
+tenant-safe FK possible and never qualifies. **The right time to add all three is
+the change that gives the lifecycle ledger a runtime caller**, in the same commit,
+so the severity is chosen against a real path rather than an anticipated one.
+*Evidence: `scripts/verify-schema-parity.js` and the import sweep, both at `af2fb6e9`.*
 
 ---
 
@@ -57,23 +153,28 @@ Every other document in this directory is a frozen point-in-time artifact and is
 | `BLOCKED` | cannot proceed; the unblocking event is named |
 | `HUMAN DECISION REQUIRED` | reduced to the smallest question; engineering continues around it |
 | `EXTERNAL DEPENDENCY` | needs something outside this repository |
+| `PROVEN` | executed on real PostgreSQL, so the DDL's behaviour is observed. **Says nothing about production state** |
+| `VERIFIED against production` | observed in the live production database, read-only. **Says nothing about untested edge behaviour** |
+| `APPLIED` | the production schema carries the migration's objects, confirmed read-only. Distinct from "recorded in the ledger" — `§0.C` |
+| `ACCEPTED` | a known divergence the owner has explicitly accepted. Not a defect, and not to be "fixed" |
 
 | Item | Status | What would change it |
 |---|---|---|
 | WS-A1, WS-B, GAP-A/B/C, WS-D | `T2 VERIFIED` | — |
 | Contracts, ADRs 002/003/004 | `IMPLEMENTED` (documentation) | — |
-| GAP-A/B/C **production** evaluation | `NOT RUN` | PROD-1 credential |
+| GAP-A/B/C **production** evaluation | **`VERIFIED against production`** — all 187 checks evaluated read-only over the Management API 2026-09-23; **0 BLOCKING missing** (§2.3.1) | — |
 | GAP-B/C index + type queries, executed | **`T2 VERIFIED`** — evaluated against production 2026-09-23 | — |
-| Production schema / migration state | `UNVERIFIED` | PROD-1 credential |
-| Per-tenant `lead_ingestion` DB flag | `UNVERIFIED` | PROD-1 credential |
-| PROD-1 | `BLOCKED` · `EXTERNAL DEPENDENCY` | a working `SUPABASE_POOLER_DB_URL`, or another legitimate read path |
+| Production schema / migration state | **`VERIFIED against production`** — 187-check gate evaluated 2026-09-23; both new migrations `APPLIED` and 16/16 post-apply structural checks passed 2026-09-24. Ledger rows absent by `ACCEPTED` divergence (`§0.C`) | — |
+| Per-tenant `lead_ingestion` DB flag | **`VERIFIED against production`** 2026-09-23 — `lead_ingestion` enabled=true, org-scoped (§2.3.4) | — |
+| PROD-1 | **read need SATISFIED** over the Supabase Management API (§2.3). The pooler credential itself is still rejected, so `predeploy-check.js`'s direct `pg` path remains unavailable — that residue is `BLOCKED` · `EXTERNAL DEPENDENCY` | a reissued `SUPABASE_POOLER_DB_URL` |
 | DEFECT-008 `23514` | **`PROVEN`** — reproduced on real PostgreSQL 17 | — |
 | DL-7 / real-schema execution | **`T2 VERIFIED`** — 27 suites / 505 tests, 41 migrations replayed on a disposable container | — |
 | DL-1 | `DEFERRED` | PROD-1 — its premise is a production-only constraint |
 | POLICY-1 | **RESOLVED 2026-09-23 — preservation path.** Person-scoped suppression is intentional; the four tests are architectural evidence | — |
 | POLICY-4 retention **periods** | `HUMAN DECISION REQUIRED` — one question per record class; off the critical path because retention cannot be expressed for any PI table until DL-3 | legal/compliance input |
-| T3 | `NOT RUN` | a genuinely ready integrated release candidate |
-| Deployment | not authorized | explicit authorization |
+| T3 | **`CERTIFIED`** at `1c0fef0c`, merged as PR #270 | — |
+| Deployment | **DONE** — `af2fb6e9` auto-deployed to the Railway production worker (`eec3a2ab`, SUCCESS) | — |
+| Production migration apply | **`APPLIED`** 2026-09-24, Studio SQL editor; post-apply verification **EXECUTED**, 16/16 structural, no row drift | — |
 
 ---
 
@@ -84,6 +185,8 @@ Every other document in this directory is a frozen point-in-time artifact and is
 ## 0. The one-paragraph summary
 
 Prospect Intelligence can **record** a prospect end to end — identity, provenance, governance, ICP, scoring, recommendation, readiness — and can **execute one outreach task** through a human approval gate and faithfully write down what happened to it. It cannot **discover** a prospect, and it cannot **decide what to do second**. Those two absences, plus the absence of any prospect lifecycle state, are the programme. Almost everything else is either already built, or small.
+
+**Refined 2026-09-24.** The third absence has moved but not closed. A prospect lifecycle state machine and its append-only ledger now exist and are **`APPLIED` to production** (§3.15), so the gap is no longer "there is no such thing" but "nothing calls it" — the module has no runtime caller, and the decision that would let outcomes drive it, ARCH-1, is still open. The other two absences are unchanged.
 
 ---
 
@@ -111,14 +214,14 @@ The Do-Not-Build register stands. No second lead/person/account model, no second
 
 | Fact | Value |
 |---|---|
-| `origin/main` | `a07477e4`, 2026-09-23 |
-| Local `main` | `fef34178` — **229 commits behind**; do not analyse against it |
+| `origin/main` | **`af2fb6e9`**, 2026-09-24 — merge of PR #270; T3-certified tip `1c0fef0c` |
+| Local `main` | `fef34178` — **229 commits behind** as read on 2026-09-23, further behind since PR #270; do not analyse against it |
 | Orchestration worktree | `C:/tmp/pi-base` @ `a07477e4`, `node_modules` junctioned, `.env.test` present |
 | User working tree `C:/virality` | branch `preserve/creator-canonical-template-pool`, 29 modified + 62 untracked — **untouched, and to remain so** |
 | T1 harness in worktree | working — `npx jest piIcpProposalTargets` → 38/38 pass |
 | Test env safety | `backend/tests/setupEnv.ts:39` refuses to run without a non-production env file; `.env.local` is never loaded by tests |
-| PI migrations authored | 13, `20261011000000` → `20261022000000` |
-| Last PI-touching merge | PR #248, 2026-09-16 |
+| PI migrations authored | 13 at the prior base; **+2 since** — the series now runs `20261011000000` → `20261028000000`, and the last two are **APPLIED to production** |
+| Last PI-touching merge | **PR #270, 2026-09-24** (`af2fb6e9`); previously PR #248, 2026-09-16 |
 
 ### 2.2 Production flags — VERIFIED via platform CLIs
 
@@ -187,6 +290,12 @@ That makes **WS-B's DEFECT-001 fix immediately consequential rather than theoret
 
 ### 2.3.5 Superseded — the former blocked state
 
+> **Read this subsection as history only.** Every `UNVERIFIED` it lists was
+> resolved by §2.3.1–§2.3.4 on 2026-09-23 and by the post-apply verification on
+> 2026-09-24. It is kept because the *access* obstacle it describes is still
+> partly real — the pooler credential remains rejected — while the *knowledge*
+> obstacle is gone.
+
 **Status at 2026-09-23, re-checked without a blind retry:** `.env.local` is unchanged since `2026-09-13 11:56` — same host, same user, same 16-character secret that previously failed with `password authentication failed for user "postgres"`. Both fallbacks the verifier accepts, `SUPABASE_DB_URL` and `DATABASE_URL`, are **absent**. There is no alternative mechanism in the environment, so the verification was **not attempted again**.
 
 Two independent obstacles remain, both needing the operator:
@@ -196,7 +305,7 @@ Two independent obstacles remain, both needing the operator:
 
 Consequently **UNVERIFIED**: which of the 13 PI migrations are applied; every PI table row count; whether any tenant holds the `lead_ingestion` flag; whether any tenant holds an `outreach_governance_config` row; whether any provider credential is stored.
 
-### 2.4 The schema-parity gate does not cover PI — VERIFIED, and this corrects the record
+### 2.4 The schema-parity gate did not cover PI — VERIFIED as at 2026-09-13, CLOSED by WS-A1
 
 PR #234 (`d98b3b7f`, 2026-09-13) genuinely fixed `scripts/verify-schema-parity.js`: it previously read `information_schema` through PostgREST, exited 2 on every run in every environment, and `predeploy-check.js` mapped that to "SKIPPED (env unavailable)" — so the gate **reported an environmental excuse forever and never compared a single column**. It is now a direct `pg` connection, is test-guarded against exiting 0 on failure, and I confirmed it exits 2 rather than 0.
 
@@ -214,7 +323,9 @@ learning_intelligence, learning_memory, content_prediction
 
 `generated/schema-column-manifest.json` is narrower still — `watched_tables` is `["companies","users"]`.
 
-**So the PI schema has zero deploy-gate coverage.** Not one of `unified_persons`, `prospect_accounts`, `source_records`, `source_assertions`, `prospect_enrichment_attempts`, `prospect_icps`, `prospect_icp_versions`, `canonical_leads`, `outreach_tasks`, `outreach_outcomes`, `contact_governance_records`, `identity_claims` is checked before a deploy. Fixing the credential alone would still verify nothing about PI.
+**So the PI schema had zero deploy-gate coverage.** Not one of `unified_persons`, `prospect_accounts`, `source_records`, `source_assertions`, `prospect_enrichment_attempts`, `prospect_icps`, `prospect_icp_versions`, `canonical_leads`, `outreach_tasks`, `outreach_outcomes`, `contact_governance_records`, `identity_claims` was checked before a deploy. Fixing the credential alone would have verified nothing about PI.
+
+**Corrected 2026-09-24 — this subsection is now a diagnosis, not a current state.** It was written in the present tense and reads as one; three readers took it that way. GAP-007 is **CLOSED** by WS-A1: `REQUIRED_COLUMNS` now spans **40 tables / 187 entries** covering all 13 PI tables, plus 3 index invariants and 1 declared-type invariant, and the manifest was evaluated against production with **0 BLOCKING missing** (§2.3.1, §8). *Evidence: `scripts/verify-schema-parity.js` read at `af2fb6e9`.* What remains uncovered is named in §0.0 under `NOT RUN`: `prospect_lifecycle_transitions` and `uq_outreach_outcomes_id_company`, introduced by `20261028000000`, are **not** in the manifest.
 
 ---
 
@@ -282,9 +393,11 @@ Readiness is genuinely good: four states, fails closed at four distinct points, 
 
 The canonical NBA vocabulary is **three actions**: `personalized_outreach | nurture_sequence | monitor`. It is computed at read time, **never persisted** (`lead_understanding_shadow` has a migration and no writer), and there is a third, undocumented producer (`leadIntelligenceEngine/recommendationEngine.ts`) which is the only thing in the repo that reasons about dormancy — driven entirely by website-visit recency, never by outreach.
 
-### 3.8 Lifecycle — **ABSENT**
+### 3.8 Lifecycle — **BUILT and APPLIED, ABSENT at runtime**
 
-There is no prospect lifecycle state machine. Seven status vocabularies exist; none is authoritative for a PI prospect:
+**Corrected 2026-09-24 — read the verdict as ABSENT *at runtime*, not absent from the repository.** The sentence that opened this section, *"There is no prospect lifecycle state machine"*, was true at `a07477e4` and is now false. WS-C delivered one (§3.15): `PROSPECT_STATE_MODEL` over the shared engine, six resting states plus initial, 24 edges, and an append-only ledger `prospect_lifecycle_transitions` which is **`APPLIED` to production** and `VERIFIED against production`. What is still absent is its **activation**: `backend/services/prospectLifecycle/**` has no runtime caller at `af2fb6e9`, so no request path writes or reads a transition, and everything the rest of this section says about the consequences — a replied prospect being indistinguishable from an uncontacted one — still holds in production today. The wall described at the foot of this section is also untouched: ARCH-1 is still undecided.
+
+The seven pre-existing status vocabularies below remain as they were, and none of them is authoritative for a PI prospect:
 
 - `canonical_leads.lead_status` — free text, **no CHECK, no vocabulary**; PI's own resolver writes `null` to it and PI never reads it
 - `journeyState` — website telemetry, emitted only as a metric
@@ -312,7 +425,7 @@ Identity and outreach telemetry are rich and correctly bounded (no tenant labels
 
 ### 3.12 Tests — **BUILT (unit), PARTIAL (real-schema), ABSENT (e2e)**
 
-~132 PI test files; 25 real-schema tests that verify DDL invariants against a live Postgres container. **No end-to-end PI lifecycle test exists.** The nearest thing is a script, not a suite.
+~132 PI test files; **27 real-schema suites** that verify DDL invariants against a live Postgres container — the 25 pre-existing ones plus the two authored by WS-F and WS-C. They are no longer unexecuted: **505 tests / 505 passed** on a disposable PostgreSQL 17 with 41 migrations replayed (§3.17), and the same invariants ran independently under `Real-Schema CI` at `af2fb6e9`. **No end-to-end PI lifecycle test exists.** The nearest thing is a script, not a suite.
 
 Per an existing programme note, the real-schema harness is raw `pg` while ingestion writes via PostgREST — so **the application write path has never executed against real constraints**.
 
@@ -356,7 +469,11 @@ Two consequences. **Revoking is not a remedy** — a revoked person-only row sti
 
 **Open decision for the ADR owner:** `ON DELETE NO ACTION` on the person FK would make both defects structurally impossible with no CHECK change, and is LI-4C.1's own remedy for the identical failure — but it reverses D-3 and falsifies `li3_contact_governance.test.ts:311`. WS-F declined to reverse a ratified decision. The erasure procedure is needed and correct either way; only the migration would change.
 
-**Status:** `IMPLEMENTED` · `T1 VERIFIED` (161/161, re-run by the orchestrator) · `T2 VERIFIED` (T2-004: 16 suites / 444 tests, three static guards exit 0). Migration `20261027000000` is **AUTHORED, NOT APPLIED** anywhere. The real-schema suite (27 tests) is **NOT RUN** — no Postgres, no Docker; both defects are proven against a strict model of PostgreSQL derived from the DDL, which is evidence, not proof.
+**Status:** `IMPLEMENTED` · `T1 VERIFIED` (161/161, re-run by the orchestrator) · `T2 VERIFIED` (T2-004: 16 suites / 444 tests, three static guards exit 0) · **`T3 CERTIFIED`** at `1c0fef0c`, merged as PR #270.
+
+Migration `20261027000000` is **`APPLIED` to production** — 2026-09-24, Studio SQL editor, ledger row absent by `ACCEPTED` divergence (`§0.C`) — and the post-apply CHECK definition, including the retained live-row requirement, was **`VERIFIED against production`** read-only.
+
+**Corrected 2026-09-24.** The sentence that stood here — *"The real-schema suite (27 tests) is NOT RUN — no Postgres, no Docker; both defects are proven against a strict model of PostgreSQL derived from the DDL, which is evidence, not proof"* — was already stale when §3.17 was written and is retracted. Docker became available, the suite **RAN** (27 suites / 505 tests / 505 passed, 41 migrations replayed on a disposable PostgreSQL 17), and DEFECT-008 and DEFECT-010 are therefore **`PROVEN` on real PostgreSQL**, not reasoned from a model of it. The same invariants were then executed independently by `Real-Schema CI` on GitHub's own PostgreSQL at `af2fb6e9`.
 
 ---
 
@@ -376,7 +493,13 @@ Two consequences. **Revoking is not a remedy** — a revoked person-only row sti
 
 **Debounce resolved caller-side**, three layers: `same_state` is intercepted *before* the shared engine is called, so its test-locked meaning for four other entity types is untouched; a 6h window returns `unchanged, wrote:false` rather than a 409; and a partial unique index on `source_event_key` gives duplicate-event idempotency by `23505`, never `ON CONFLICT` (`42P10`).
 
-**Status:** `IMPLEMENTED` · `T1 VERIFIED` (102/102 after renumber, re-run by the orchestrator) · `T2 VERIFIED` (T2-005: 23 suites / 593 tests, four static guards exit 0). Migration `20261028000000` **AUTHORED, NOT APPLIED**. Real-schema suite (27 tests) **NOT RUN**.
+**Status:** `IMPLEMENTED` · `T1 VERIFIED` (102/102 after renumber, re-run by the orchestrator) · `T2 VERIFIED` (T2-005: 23 suites / 593 tests, four static guards exit 0) · **`T3 CERTIFIED`** at `1c0fef0c`, merged as PR #270 — the certification run found and fixed a regression in this workstream (`a blank prior state is corrupt, not absent`).
+
+Migration `20261028000000` is **`APPLIED` to production** — 2026-09-24, Studio SQL editor, ledger row absent by `ACCEPTED` divergence (`§0.C`). `prospect_lifecycle_transitions` and `uq_outreach_outcomes_id_company` were **`VERIFIED against production`** read-only, the table with its 3 unique indexes, 2 indexes, 3 triggers, RLS enabled and 1 policy, the index present, unique and valid.
+
+**Corrected 2026-09-24.** The claim *"Real-schema suite (27 tests) NOT RUN"* is retracted: the suite **RAN**, and this table and both partial unique indexes were created and exercised among the 41 migrations replayed on real PostgreSQL 17 (§3.17).
+
+**Still `NOT RUN` in production, and worth saying plainly:** nothing writes the ledger yet. `backend/services/prospectLifecycle/**` has **no runtime caller** at `af2fb6e9` — an import sweep over `backend`, `pages`, `lib` and `components` finds only the module's own two files and its two test files. The table exists in production; its row count is `UNVERIFIED`; no request path reaches it.
 
 ### 3.15.1 A collision caught at integration
 
@@ -451,9 +574,9 @@ Both suites were authored without a database, so every assertion was a *predicti
 | **DEFECT-005** | **High (integrity)** | **All six** `postDiscoveryConnectors` (instagram, facebook, twitter, reddit, hackernews, linkedin) return hard-coded fabricated posts with fake `source_url`s (`https://linkedin.com/feed/update/mock-…`). They are registered in `CONNECTORS` and reachable via `getConnector(platform)` from `leadJobProcessor`, which is wired to the `engine-jobs` worker on `type === 'LEAD'` and iterates tenant-configured `platforms` with **no allow-list check**. A separate, genuinely real listening registry (`connectors/listeningConnectorRegistry.ts` — reddit, HN, github) exists alongside it. Production reachability is **UNVERIFIED** (depends on DB rows). | Code path VERIFIED |
 | **DEFECT-006** | **Medium** | `source_assertions.superseded_at` is read but never written. No arbitration exists. Combined with RULE C, the first canonical value for an attribute is permanent and a disagreement withholds forever. | VERIFIED |
 | **DEFECT-009** | Medium | `leadIntelligenceReadService.ts:85` reads `active_leads` filtering on `organization_id`, but the **live** table's tenant column is `company_id` — the reader follows migration `20260817_active_leads_object_model.sql` while production carries a different, run-scoped design. It is inside a `try/catch → []`, so it silently returns nothing rather than erroring. Two conflicting `active_leads` designs are committed. | VERIFIED (against the committed dump) |
-| **DEFECT-010** | **High (latent)** | A **second** trap on the same delete path. `uq_contact_governance_identity` keys on `coalesce(person_id::text, target_normalized)` — person_id wins while non-null. So a **both-anchored** row's idempotency key is its person id, and when the person is deleted the key **changes** to the target. If a target-anchored row already exists for that `(organization_id, channel, governance_type, target)`, the `SET NULL` update collides and raises `23505`, aborting the delete. Distinct from DEFECT-008: it traps the *both-anchored* shape, which is otherwise the erasure-safe one. Any erasure procedure must reconcile duplicate anchors before deleting. | VERIFIED (index definition observed); the `23505` is **reasoned, not executed** |
-| **GAP-007** | **High** | The deploy-time schema gate covered 21 tables, **none of them PI**. See §2.4. **CLOSED** by WS-A1 — now 36 tables / 174 entries, all 13 PI tables covered. | VERIFIED · CLOSED |
-| **DEFECT-008** | **High (latent)** | `contact_governance_records.person_id` carries `ON DELETE SET NULL (person_id)` — deliberately, "so governance outlives the person" — against CHECK `contact_governance_has_anchor` (`person_id IS NOT NULL OR target_normalized IS NOT NULL`). Postgres validates CHECKs on the UPDATE that `SET NULL` performs, so a **person-anchored-only** governance record makes that person undeletable with `23514`, defeating the very design intent. Structurally identical to DEFECT-003, one constraint class over. Latent: governance is believed empty (UNVERIFIED) and no deletion path exists. **Makes POLICY-1's anchor decision load-bearing for POLICY-4.** | **PARTLY VERIFIED** — the FK's `SET NULL (person_id)`, the CHECK, and their collision are observed in the migration. The resulting `23514` is **reasoned from PostgreSQL's CHECK-on-UPDATE semantics, not executed**: proving it needs a real-schema run, which is deferred. |
+| **DEFECT-010** | **High** · **CLOSED** by WS-F | A **second** trap on the same delete path. `uq_contact_governance_identity` keys on `coalesce(person_id::text, target_normalized)` — person_id wins while non-null. So a **both-anchored** row's idempotency key is its person id, and when the person is deleted the key **changes** to the target. If a target-anchored row already exists for that `(organization_id, channel, governance_type, target)`, the `SET NULL` update collides and raises `23505`, aborting the delete. Distinct from DEFECT-008: it traps the *both-anchored* shape, which is otherwise the erasure-safe one. Any erasure procedure must reconcile duplicate anchors before deleting. **`PROVEN` on real PostgreSQL 17** — the index definition was observed, and the `23505` was then **reproduced**, on both paths, including two different people sharing a target colliding inside one tenant cascade (§3.17.1). Resolved by `20261027000000`, which is **`APPLIED` to production**. *Corrected 2026-09-24: this cell previously read "the `23505` is reasoned, not executed".* |
+| **GAP-007** | **High** · **CLOSED** by WS-A1 | The deploy-time schema gate covered 21 tables, **none of them PI**. See §2.4. Now **40 tables / 187 entries** — 68 BLOCKING, 100 WARN, 19 INFO — all 13 PI tables covered, plus 3 index invariants and 1 declared-type invariant. *Corrected 2026-09-24: this cell read "36 tables / 174 entries", which was the count at WS-A1 and is no longer the count in the script.* ⚠ **Residual, and it is new:** `prospect_lifecycle_transitions` and `uq_outreach_outcomes_id_company`, both created by `20261028000000` and both live in production, are **not covered by the manifest** — see §0.0 `NOT RUN`. | VERIFIED · CLOSED, with the `20261028000000` objects uncovered (*counts re-derived from `scripts/verify-schema-parity.js` at `af2fb6e9`*) |
+| **DEFECT-008** | **High** · **CLOSED** by WS-F | `contact_governance_records.person_id` carries `ON DELETE SET NULL (person_id)` — deliberately, "so governance outlives the person" — against CHECK `contact_governance_has_anchor` (`person_id IS NOT NULL OR target_normalized IS NOT NULL`). Postgres validates CHECKs on the UPDATE that `SET NULL` performs, so a **person-anchored-only** governance record makes that person undeletable with `23514`, defeating the very design intent. Structurally identical to DEFECT-003, one constraint class over. No longer latent and no longer open: `contact_governance_records` holds **0 rows in production** (`VERIFIED against production`, §3.14 — previously recorded here as "believed empty (UNVERIFIED)"), an erasure path now exists (`prospectIdentity/personErasure.ts`), and `20261027000000` — **`APPLIED`** — widens the CHECK so the trap is unreachable. **Still makes POLICY-1's anchor decision load-bearing for POLICY-4.** | **`PROVEN` on real PostgreSQL 17** — the FK's `SET NULL (person_id)`, the CHECK and their collision were observed in the migration and against production; the `23514` was then **reproduced** on a disposable PostgreSQL 17, as was the fact that revoking does **not** make a person-only row deletable pre-migration (§3.17.1). Resolved by `20261027000000`, **`APPLIED` to production**. *Corrected 2026-09-24: this cell previously read "PARTLY VERIFIED … reasoned … not executed: proving it needs a real-schema run, which is deferred".* |
 
 ---
 
@@ -474,7 +597,11 @@ Both suites were authored without a database, so every assertion was a *predicti
 
 ## 6. Workstream plan
 
-Contract-first per the execution protocol. **No implementation has started.**
+Contract-first per the execution protocol.
+
+**Corrected 2026-09-24 — implementation has started and shipped.** The sentence that stood here, *"No implementation has started"*, is false: WS-A1, WS-B and the deliverables recorded in §3.13–§3.17 are `IMPLEMENTED`, `T3 CERTIFIED` at `1c0fef0c` and merged as PR #270, with both migrations `APPLIED`.
+
+⚠ **The letters in the table below are the *plan's* letters and do not map one-to-one onto the delivered workstream names.** §6's WS-C is the discovery fabric; the delivered WS-C (§3.15) is the lifecycle ledger. Read §3.13–§3.17 for what actually shipped, and treat this table as the original plan rather than a progress board.
 
 | WS | Scope | Owns | Depends on | Parallel class |
 |---|---|---|---|---|
@@ -527,25 +654,35 @@ Per the "do not build for the sake of completion" rule.
 | T2-005 | **PASS** (WS-C lifecycle, converged with WS-F) — 23 suites / 593 tests, 0 failures; four static guards exit 0 |
 | T2-004 | **PASS** (WS-F governance/erasure) — 16 suites / 444 tests, 0 failures; `check:authz`, `check:migrations`, `check:db-conventions` exit 0 |
 | T2-003 | **PASS** (scoped to offering, understanding, identity and governance) — 20 suites / 421 tests, 0 failures; `check:authz` and `check:db-conventions` exit 0 |
-| T3 | not run — not a release candidate |
-| Production deploy | **not authorized, not attempted** |
-| Pushed | **no** — all four branches are local |
+| **T3** | **CERTIFIED** at `1c0fef0c` — regressions found and fixed, then merged. *Previously "not run — not a release candidate".* |
+| **GitHub CI at `af2fb6e9`** | **GREEN**, including an independent `Real-Schema CI` run (`.github/workflows/real-schema-ci.yml` — migration replay + canonical invariants on GitHub's own PostgreSQL service container). Evidence class: **CI-VERIFIED** |
+| **Production migration apply** | **`APPLIED`** 2026-09-24 via the Studio SQL editor; **16/16 post-apply structural checks PASSED** read-only, no row drift. Ledger rows absent by `ACCEPTED` divergence (`§0.C`) |
+| Production deploy | **DONE** — `af2fb6e9` auto-deployed to the Railway production worker, deployment `eec3a2ab`, SUCCESS. *Previously "not authorized, not attempted".* |
+| Pushed | **yes** — `integrate/pi-t2-001` pushed and merged as PR #270; `origin/main` is `af2fb6e9`. *Previously "no — all four branches are local".* |
 
 **PI baseline at `origin/main` for comparison:** 114 suites / 3239 tests with **2 failures**, both stale assertions that Apollo has no adapter. The integrated tree is +1 suite, +60 tests, 0 failures.
 
-**⚠ GAP-A / GAP-B / GAP-C production verification: `NOT RUN`.** 187 checks across 40 tables — 68 BLOCKING, 100 WARN, 19 INFO — have been authored and unit-guarded. **None has ever been evaluated against production.** This is not a PASS and must not be reported as one. It is gated entirely on PROD-1.
+**GAP-A / GAP-B / GAP-C production verification: `VERIFIED against production`, 2026-09-23.** 187 checks across 40 tables — 68 BLOCKING, 100 WARN, 19 INFO — were evaluated read-only over the Supabase Management API: **155 present, 32 missing, 0 BLOCKING missing**, and not one of the 32 is a PI table (§2.3.1).
 
-**⚠ NOT RUN — the structural checks have never executed against a live Postgres.** GAP-B/C added an index-introspection query over `pg_index`/`pg_class` and a declared-type comparison. Local Supabase is not running, and starting Docker is avoided here because this repo's compose brings up a worker pointed at production. So both queries are **syntax-checked and unit-guarded, not runtime-proven**. They are hand-reviewed — `i.relname = ANY($1)` mirrors the `table_name = ANY($1)` pattern already working in production — but that is reasoning, not evidence. **PROD-1's read-only verification is the natural place to prove them**, because running the verifier against production exercises exactly these queries *and* yields the ground truth. Until then this is `NOT RUN`, not `PASS`.
+*Corrected 2026-09-24.* The sentence that stood here — *"None has ever been evaluated against production. This is not a PASS and must not be reported as one. It is gated entirely on PROD-1"* — was stale and is retracted. **What remains `NOT RUN` is narrower and still real:** the same manifest has never run over `predeploy-check.js`'s own direct `pg` connection, because the pooler credential is still rejected. So the gate has been *evaluated*, but never *exercised in the form a deploy exercises it*.
+
+**The structural checks have now executed — `VERIFIED against production` and `PROVEN` on real PostgreSQL.** GAP-B/C added an index-introspection query over `pg_index`/`pg_class` and a declared-type comparison. Both were evaluated against production on 2026-09-23: all three index invariants present, `unique=true`, correct partiality, and `source_records.ingestion_run_id` declared `text` (§2.3.1). The DDL they check was separately replayed on a disposable PostgreSQL 17 (§3.17).
+
+*Corrected 2026-09-24.* Two claims in the paragraph that stood here are retracted. First, *"the structural checks have never executed against a live Postgres … syntax-checked and unit-guarded, not runtime-proven"* — they have. Second, the justification: *"starting Docker is avoided here because this repo's compose brings up a worker pointed at production"*. §3.17 audited that and found it does not apply — the standing concern is about compose, while `scripts/ci/real-schema-ci.sh` manages a disposable `pgvector/pgvector:pg17` container on port 5433 with `POSTGRES_PASSWORD=w6`, no production credential, no production hostname, no worker container, destroyed on exit. Docker was subsequently available and the suite ran.
 
 **What the structural checks provably do NOT guarantee** (recorded so nobody over-claims): the type check proves the *declared* type only, not that every stored row is convertible; the index check matches key names as a substring of `pg_get_indexdef`, so an index over the right columns in the **wrong order** passes; `indisvalid` is not read, so an index left by a failed `CREATE INDEX CONCURRENTLY` reports as present; and an index existing today says the constraint is enforced from now on, not that past ingestion was idempotent.
 
-**One caveat carried forward from WS-A1:** the extended schema gate has never been run against a real database. Once PROD-1 lands it may turn a currently-green predeploy **red** — that is the intent of the change, not a regression, but it must be run and triaged before it is treated as shippable.
+**The WS-A1 caveat, resolved and narrowed 2026-09-24.** It read: *"the extended schema gate has never been run against a real database. Once PROD-1 lands it may turn a currently-green predeploy red."* The manifest **was** evaluated against production, and the feared red did not occur — 0 BLOCKING missing (§2.3.1). The residual caveat is only that the evaluation went over the Management API, not over the `pg` connection `predeploy-check.js` uses, so the script's own connection path is still unproven in production. Nothing about the manifest's verdict is in doubt; the transport is.
 
 ---
 
 ## 9. Next actions, in dependency order
 
-1. **Operator: PROD-1.** Restore production read access. Everything about applied-migration state is blocked on it.
+⚠ **Reconciled 2026-09-24.** Items 3, 4 and 5 are overtaken by PR #270 — the
+contracts were frozen and those workstreams shipped (§3.13–§3.17). Items 2, 6
+and 7 stand. Item 1 is narrowed below.
+
+1. **Operator: PROD-1, residual only.** Production **reads** are available over the Supabase Management API and applied-migration state is no longer blocked on anything (§0.0, §2.3). What remains is a reissued `SUPABASE_POOLER_DB_URL`, so `predeploy-check.js` can run the 187-check gate over its own `pg` connection — the way a deploy runs it. *Previously: "Restore production read access. Everything about applied-migration state is blocked on it."*
 2. **Operator: ARCH-1.** Decide whether the outcome ledger may inform intelligence. WS-E cannot start without it; WS-A, WS-B, WS-D, WS-F can.
 3. **Orchestrator: freeze the contracts** in §6.
 4. **WS-A, WS-B, WS-F** may begin immediately in parallel — none depends on a pending decision.
@@ -557,7 +694,13 @@ Per the "do not build for the sake of completion" rule.
 
 # PRE-APPLY GATE — 2026-09-23 · RESULT: **PASS**
 
-Run after owner ratification of J-1…J-6. **Nothing was applied. No production mutation of any kind.**
+> **Historical, and superseded.** This section records the state *before* the
+> apply, and every reading in it is dated 2026-09-23. Both migrations were
+> applied on **2026-09-24**; see `§0.0`, `§0.C` and the post-apply verification
+> at the foot of this section. It is retained rather than rewritten so the
+> sequence — gate, authorization, apply, verify — stays legible.
+
+Run after owner ratification of J-1…J-6. **Nothing was applied at this gate. No production mutation of any kind occurred during it.**
 
 ## Repository
 
@@ -577,6 +720,8 @@ Run after owner ratification of J-1…J-6. **Nothing was applied. No production 
 | `20261028000000_pi_prospect_lifecycle_state.sql` | `368e6f6125597cae1621de0116686bbde5e2e943b259b7faa37921ba613f35ab` |
 
 **Verification linkage — PROVEN.** Both files are **byte-identical** to their content at `33fd761d`, the commit whose tree produced 27 suites / 505 tests / 505 passed with 41 migrations replayed. The real-schema evidence therefore corresponds to exactly these bytes.
+
+**Re-hashed 2026-09-24 at `af2fb6e9`:** both files still produce the two sha256 values above. The bytes proposed at this gate, the bytes replayed on real PostgreSQL 17, the bytes applied to production, and the bytes on `main` are one and the same. Neither file has been touched since, and neither may be.
 
 ## Intended schema changes
 
@@ -600,23 +745,43 @@ Neither migration contains `DROP TABLE`, `TRUNCATE`, `DELETE FROM`, `UPDATE … 
 | `prospect_lifecycle_transitions` | **absent** — as expected |
 | `uq_outreach_outcomes_id_company` | absent — the migration creates it |
 | `outreach_outcomes` rows (index build cost) | **0** |
-| Either migration already recorded in the ledger | **0** — neither applied |
+| Either migration already recorded in the ledger | **0** — neither applied *as at this gate, 2026-09-23*. Both were applied on 2026-09-24 and the ledger still records neither, by `ACCEPTED` divergence — `§0.C`. **Do not read this row as current state** |
 
 ## Warnings — two, neither blocking
 
 1. **`20261028000000` has no rollback file** (`20261027000000` does). Not a convention breach — 29 of 417 migrations have one. It is also defensible: a rollback would be `DROP TABLE` on an append-only audit ledger, which destroys the evidence the table exists to hold. **Recorded so the absence is a decision, not an oversight.**
 2. **The repository's documented process specifies no backup/recovery step** — `docs/migration-discipline.md` mentions none. Both migrations are additive against zero affected rows, so the practical exposure is low, but the absence is stated rather than assumed away.
 
-## Post-apply verification — defined, not run
+## Post-apply verification — **EXECUTED 2026-09-24, read-only**
 
-1. Both versions recorded in `supabase_migrations.schema_migrations`
-2. `contact_governance_has_anchor` matches the new three-clause definition; the live-row requirement is **not** lost
-3. `prospect_lifecycle_transitions` exists with 3 unique indexes, 2 indexes, 3 triggers, RLS enabled, 1 policy
-4. `uq_outreach_outcomes_id_company` present, unique, valid
-5. No unexpected schema delta — re-run the 187-check gate
-6. PI read paths still answer — `GET /api/prospects`, `GET /api/prospects/:id`
-7. Tenant isolation intact — RLS and composite FKs unchanged
+**16/16 structural checks PASSED. No row drift.** Executed against production by
+a SELECT-only verifier. Evidence class: **`VERIFIED against production`**. The
+16 are the structural items below; item 1 is the `ACCEPTED` ledger divergence and
+was not among them, and item 6 is not a structural check.
+
+| # | Check as defined pre-apply | Outcome |
+|---|---|---|
+| 1 | Both versions recorded in `supabase_migrations.schema_migrations` | **NOT MET — and `ACCEPTED`, not a failure.** Studio does not write that table. This is the known divergence of `§0.C`, not drift, and **must not be repaired by hand** |
+| 2 | `contact_governance_has_anchor` matches the new three-clause definition; the live-row requirement is **not** lost | **`VERIFIED against production`** |
+| 3 | `prospect_lifecycle_transitions` exists with 3 unique indexes, 2 indexes, 3 triggers, RLS enabled, 1 policy | **`VERIFIED against production`** |
+| 4 | `uq_outreach_outcomes_id_company` present, unique, valid | **`VERIFIED against production`** |
+| 5 | No unexpected schema delta — re-run the 187-check gate | **`VERIFIED against production`** — no unexpected delta, no row drift |
+| 6 | PI read paths still answer — `GET /api/prospects`, `GET /api/prospects/:id` | **`UNVERIFIED`** — not a structural check, and not recorded as exercised against production. Both migrations are additive against zero affected rows, so the expectation is that they answer unchanged; that expectation is **reasoned, not executed** |
+| 7 | Tenant isolation intact — RLS and composite FKs unchanged | **`VERIFIED against production`** |
 
 ## Result
 
-**PRE-APPLY GATE: PASS.** Stopped here. **Production migration application is NOT AUTHORIZED and has NOT been attempted.**
+**PRE-APPLY GATE: PASS.** Stopped here on 2026-09-23, pending authorization.
+
+**Superseded 2026-09-24.** The owner authorized the apply; the human operator
+executed both migrations through the Supabase Studio SQL editor, each returning
+"Success. No rows returned"; the post-apply verification above was then executed
+read-only, 16/16 structural checks passing with no row drift. The work was
+T3-certified at `1c0fef0c`, merged as PR #270, and `af2fb6e9` was auto-deployed
+to the Railway production worker (`eec3a2ab`, SUCCESS).
+
+The sentence that stood here — *"Stopped here. Production migration application
+is NOT AUTHORIZED and has NOT been attempted"* — was true when written and is
+now false. It is **retracted, not deleted**, because three separate readers took
+this document's dated statements for current ones, and a deletion would leave no
+trace of why.
