@@ -70,6 +70,7 @@ import {
   type TransitionOrigin,
 } from './stateModel';
 import type { BusinessOutcomeType } from '../leadOutreachExecution/types';
+import type { OutcomeProvenance } from './outcomeProvenance';
 
 /** Bumped when the mapping changes, so a stored transition traces its reading. */
 export const OUTCOME_INTERPRETER_VERSION = 'pi.outcome-interpreter.1';
@@ -91,6 +92,24 @@ export interface InterpretableOutcome {
   /** `outreach_outcomes.id`. The citation, and the anchor of the event key. */
   readonly id: string;
   readonly type: BusinessOutcomeType | string | null;
+  /**
+   * WHERE THE OUTCOME CAME FROM, and whether anyone is accountable for it.
+   *
+   * Added by PI-LIFECYCLE-003B Stage 1. Until now this contract was `{ id, type
+   * }`, which is enough to read what an outcome SAYS and not enough to know
+   * whether it may be believed: an operator's assertion, a vendor webhook, a
+   * CSV import and a row whose `source` is NULL arrived identically.
+   *
+   * OPTIONAL, and absence is refused rather than assumed — `classifyOutcomeProvenance`
+   * answers `unauthorized / source_absent`. Optionality is what keeps this
+   * additive: every existing caller and test compiles and behaves exactly as
+   * before, because no mapping in this module consults provenance yet.
+   *
+   * It is NOT consulted by `interpretOutcome` at this stage. Stage 1 makes
+   * trusted provenance DISTINGUISHABLE; whether an authorized human assertion
+   * may advance the lifecycle is Stage 2's decision and is not taken here.
+   */
+  readonly provenance?: OutcomeProvenance | null;
 }
 
 export interface OutcomeInterpretationInput {
