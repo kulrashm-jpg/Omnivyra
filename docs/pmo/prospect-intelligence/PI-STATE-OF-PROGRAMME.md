@@ -220,7 +220,7 @@ The Do-Not-Build register stands. No second lead/person/account model, no second
 | User working tree `C:/virality` | branch `preserve/creator-canonical-template-pool`, 29 modified + 62 untracked — **untouched, and to remain so** |
 | T1 harness in worktree | working — `npx jest piIcpProposalTargets` → 38/38 pass |
 | Test env safety | `backend/tests/setupEnv.ts:39` refuses to run without a non-production env file; `.env.local` is never loaded by tests |
-| PI migrations authored | 13 at the prior base; **+2 since** — the series now runs `20261011000000` → `20261028000000`, and the last two are **APPLIED to production** |
+| PI migrations authored | **14** — 12 in `20261011000000` → `20261022000000` (counted from the directory at this SHA, correcting a prior figure of 13) plus `20261027000000` and `20261028000000`, both **APPLIED to production** |
 | Last PI-touching merge | **PR #270, 2026-09-24** (`af2fb6e9`); previously PR #248, 2026-09-16 |
 
 ### 2.2 Production flags — VERIFIED via platform CLIs
@@ -247,7 +247,7 @@ The inner gate — a per-tenant `lead_ingestion` row in `feature_flags` — is *
 | Check class | Result |
 |---|---|
 | Column manifest — 187 checks / 40 tables | **155 present, 32 missing — 0 BLOCKING**, 16 WARN, 16 INFO |
-| GAP-B — 3 idempotency indexes | **ALL PRESENT**, `unique=true`, correct partiality, `valid=true` |
+| GAP-B — 3 idempotency indexes | **ALL PRESENT**, `unique=true`, correct partiality, `valid=true` — `indisvalid` here comes from the ad-hoc read-only `pg_index` query used for PROD-1 and the post-apply verification, **not** from `verify-schema-parity.js`, which does not read it (§8) |
 | GAP-C — `source_records.ingestion_run_id` | **`text`** — the uuid→text conversion IS applied |
 
 The 32 misses are 8 entirely-absent tables, **all Writer/content-platform**: `content_quality`, `content_block`, `content_recommendation`, `content_approval_history`, `content_performance`, `learning_intelligence`, `learning_memory`, `content_prediction`. **Not one is a PI table.** Classification **B — migration not applied**, owned by the Writer programme, pre-existing, out of PI scope.
