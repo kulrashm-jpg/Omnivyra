@@ -38,11 +38,17 @@ export function resolveOfferingId(name: string): string {
   return String(name ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'offering';
 }
 
-/** DISCOVER offering seeds from a company's products/services evidence (Company upstream, no ownership). */
-export function discoverOfferingSeeds(input: { companyId: string; asOf: string; source?: string; products?: string[]; services?: string[] }): OfferingSeedInput[] {
+/**
+ * DISCOVER offering seeds from a company's products/services evidence (Company upstream, no ownership).
+ * `offerings` is the UNDIFFERENTIATED arm: a source that names what a company sells without saying
+ * whether each entry is a product or a service — `company_profiles.products_services` is exactly
+ * that — seeds with NO `offeringType`, so the facet abstains instead of asserting a guess.
+ */
+export function discoverOfferingSeeds(input: { companyId: string; asOf: string; source?: string; products?: string[]; services?: string[]; offerings?: string[] }): OfferingSeedInput[] {
   const seeds: OfferingSeedInput[] = [];
   for (const p of input.products ?? []) seeds.push({ companyId: input.companyId, asOf: input.asOf, source: input.source ?? 'company_profile', name: p, offeringType: 'product' });
   for (const s of input.services ?? []) seeds.push({ companyId: input.companyId, asOf: input.asOf, source: input.source ?? 'company_profile', name: s, offeringType: 'service' });
+  for (const o of input.offerings ?? []) seeds.push({ companyId: input.companyId, asOf: input.asOf, source: input.source ?? 'company_profile', name: o });
   // Deterministic dedup by canonical id (first wins), then sort by id.
   const seen = new Set<string>();
   return seeds.filter((s) => { const id = resolveOfferingId(s.name); if (seen.has(id)) return false; seen.add(id); return true; })

@@ -115,6 +115,34 @@ export {
 } from './contactGovernanceWriter';
 
 /**
+ * PI/WS-F — the canonical ERASURE path for a person.
+ *
+ * Person-anchored governance and `ON DELETE SET NULL (person_id)` cannot both
+ * be satisfied by a bare DELETE: a person-only record ends up anchored to
+ * nothing (23514, DEFECT-008) and a both-anchored record's idempotency key
+ * changes to its target and can collide (23505, DEFECT-010). This module
+ * carries every enforceable instruction forward onto the person's contact
+ * points, revokes the person-anchored originals, then deletes the person — and
+ * reports the instructions it could not carry forward.
+ */
+export {
+  erasePerson,
+  planPersonErasure,
+  contactClaimTypesForChannel,
+  PersonErasureError,
+  CONTACT_CLAIM_TYPES,
+  ERASURE_SOURCE,
+  type PersonContactPoint,
+  type ContactClaimType,
+  type ErasureDisposition,
+  type GovernanceErasureAction,
+  type PersonErasurePlan,
+  type PlanPersonErasureInput,
+  type ErasePersonInput,
+  type ErasePersonResult,
+} from './personErasure';
+
+/**
  * LI-4C — person lifecycle and duplicate parking. Deterministic detection only
  * (exact email / phone / provider-identifier equality), and NO merge executor:
  * ADR D-4 requires governance to survive a merge, so merging stays disabled
