@@ -248,6 +248,29 @@ export function classifyProspectTransition(
   // known state is CORRUPT and must be reported, not silently read as "no state
   // yet". A blank is corrupt. It now falls through to `unknown_from`.
   if (from == null) {
+    // ── THE INITIAL STATE IS PART OF THE MODEL, NOT THE CALLER'S CHOICE ──────
+    // This used to return `initial` for ANY word that survived the vocabulary
+    // check above, and that was the bypass: with no `from` there is no graph to
+    // consult, the writer wrote `input.to` straight through, and the DB trigger
+    // short-circuits on `is_initial` before its chain check. So all seven states
+    // were writable as a first row — demonstrated against real PostgreSQL,
+    // including a born-terminal `closed_disqualified` ledger that has no exits
+    // and, the table being append-only, no repair.
+    //
+    // `PROSPECT_STATE_MODEL.initial` already said what a ledger opens at; it was
+    // simply read by nothing. Making it the authority here puts the rule with
+    // the graph rather than in a caller that could forget it, so a second writer
+    // inherits it for free.
+    //
+    // `not_allowed` is deliberate. `TransitionCheck['reason']` is a closed union
+    // shared with canonical_lead, opportunity, gtm_campaign and audience;
+    // widening a cross-entity contract to describe a prospect-only rule would
+    // cost more than it explains. `from === null` with a KNOWN `to` is already
+    // unambiguous, and the writer distinguishes it from `unknown_to` on exactly
+    // that.
+    if (to !== PROSPECT_STATE_MODEL.initial) {
+      return { kind: 'illegal', from: null, to, reason: 'not_allowed' };
+    }
     return { kind: 'initial' };
   }
   if (!isProspectState(from)) {
@@ -270,6 +293,15 @@ export const prospectTransitionsFrom = (from: ProspectState): readonly string[] 
 export const isTerminalProspectState = (s: string): boolean => isTerminalState(s, PROSPECT_STATE_MODEL);
 
 export const isKnownProspectState = (s: string): boolean => isKnownState(s, PROSPECT_STATE_MODEL);
+
+/**
+ * May a ledger OPEN in this state?
+ *
+ * Derived from `PROSPECT_STATE_MODEL.initial` rather than restating it, so
+ * there is one answer to "what does a ledger open at" and the DB CHECK added by
+ * `20261029000000` is a mirror of it, not a rival. A test asserts the two agree.
+ */
+export const isPermittedInitialState = (s: string): boolean => s === PROSPECT_STATE_MODEL.initial;
 
 /** Human-readable refusal, for audit and for an API error body. */
 export function explainProspectTransition(from: ProspectState, to: string): string {
