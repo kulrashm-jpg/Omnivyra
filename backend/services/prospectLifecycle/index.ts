@@ -6,7 +6,11 @@
  * `lifecycleWriter` is the only writer. `lifecycleReader` answers the current
  * state, the history, a deterministic replay, and the `outreach-active`
  * projection that this contract deliberately does not store.
+ * `outcomeInterpreter` is the PI-ADR-002 §3.1(5) mapping from the eight-value
+ * outcome vocabulary onto those transitions — a pure decider that proposes and
+ * never writes, and that nothing is wired to yet.
  */
 export * from './stateModel';
 export * from './lifecycleWriter';
 export * from './lifecycleReader';
+export * from './outcomeInterpreter';
