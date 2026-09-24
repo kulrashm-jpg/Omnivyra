@@ -7,8 +7,15 @@
  *
  * REGISTERING AN ADAPTER IS NOT ACTIVATING A PROVIDER. It changes exactly one
  * thing: `executeEnrichment` stops answering `not_implemented` and starts
- * asking the next question instead — does this TENANT have a credential, and is
- * the operation priced. Both still refuse today, so no call can occur.
+ * asking the next question instead — does this TENANT have a credential?
+ *
+ * That is now the ONLY question left. This header used to name a second gate,
+ * "is the operation priced", and conclude that both refused so no call could
+ * occur. A3X removed the pricing gate: the production composition
+ * (`makeProductionEnrichmentPorts`) uses `tenantFundedExecutionPort`, which
+ * authorises because the tenant holds the vendor subscription and is invoiced
+ * directly — the credit port that still refuses is not on that path. A tenant
+ * who has stored a key for Clearbit or Apollo therefore reaches the provider.
  */
 
 import { registerProvider } from '../registry';

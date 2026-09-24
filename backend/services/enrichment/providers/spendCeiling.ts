@@ -186,13 +186,31 @@ export interface DailyCallCeilingOptions {
  * counted row, so a ceiling can be exceeded by at most the number of
  * executions in flight between `authorizeCost` and the pre-transport marker.
  *
- * Today that window is narrow and the exposure small: the only production
- * caller is the request-scoped route, and the Railway worker runs
- * `numReplicas: 1` with no cron and does not call enrichment at all. Before a
- * multi-replica scheduler drives this, the count and the take must become one
- * statement — an advisory lock keyed on (org, provider, day), or a conditional
- * UPDATE against a counter row, which is the mechanism A4N already uses to
- * arbitrate the attempt claim. Deliberately not built here.
+ * This paragraph used to justify that by asserting the request-scoped route was
+ * the only production caller and that the Railway worker "has no cron and does
+ * not call enrichment at all". Both halves are now false, and since the
+ * argument is load-bearing they are corrected rather than left: the worker
+ * starts `scheduler/cron.ts`, which runs `runProspectRetryJob` every 5 minutes
+ * and reaches this gate through `consumeEnrichmentWork`.
+ *
+ * The exposure is still small, but for different and weaker reasons, all of
+ * which must hold for that to stay true:
+ *
+ *   • the retry job is flag-dark — inert unless `PI_RETRY_SCHEDULER_ENABLED` is
+ *     `'true'` AND a tenant allow-list names the tenant;
+ *   • `railway.json` sets `numReplicas: 1`, so there is one cron process;
+ *   • `RETRY_CONCURRENCY = 1` and one bounded batch per tenant per tick, so a
+ *     cycle's calls are sequential — each counts the previous one's row;
+ *   • A4N's claim admits one worker per work item, so a duplicate work item
+ *     cannot become a second concurrent count.
+ *
+ * What remains genuinely concurrent is a cycle running alongside a user request
+ * for the same tenant and provider, bounded as stated above. Before a
+ * multi-replica scheduler drives this — or before the concurrency constant
+ * rises — the count and the take must become one statement: an advisory lock
+ * keyed on (org, provider, day), or a conditional UPDATE against a counter row,
+ * which is the mechanism A4N already uses to arbitrate the attempt claim.
+ * Deliberately not built here.
  */
 export const boundedOvershoot = {
   atomic: false,

@@ -14,11 +14,17 @@
  * testable without a database. Wrapping keeps that property and leaves the
  * frozen contract byte-identical.
  *
- * ─── THIS CREATES NO AUTOMATIC EXECUTION ──────────────────────────────────
- * Nothing calls this module. It is the seam A4B will call once a trigger and a
- * retry policy exist; until then it is reachable only from a test or an
- * explicit caller. A4A deliberately does not connect planner → executor, does
- * not add a job, and does not schedule anything.
+ * ─── WHO CALLS THIS, AND WHAT STILL ISN'T HERE ────────────────────────────
+ * Two callers, both of which arrived after A4A: `executePlannedField`
+ * (`execution.ts`, the planner → executor seam A4B built) and
+ * `consumeEnrichmentWork` (A7E), which the retry cron reaches through
+ * `runRetryCycle`. So the trigger this header once said did not exist now
+ * does — `scheduler/cron.ts` sweeps every 5 minutes, inert unless
+ * `PI_RETRY_SCHEDULER_ENABLED` is `'true'` AND a tenant allow-list is set.
+ *
+ * What remains true is the narrower claim: THIS module adds no job, holds no
+ * timer and schedules nothing. It executes when it is called, once, and the
+ * cadence belongs entirely to its callers.
  *
  * ─── AN OPEN ROW IS EVIDENCE ──────────────────────────────────────────────
  * The attempt is recorded BEFORE the executor runs and closed after. If the

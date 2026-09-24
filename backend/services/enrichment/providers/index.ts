@@ -2,9 +2,14 @@
  * A3 — enrichment provider boundary. Public surface.
  *
  * Provider-specific shapes terminate at an adapter and never appear above it.
- * No provider is currently operational: no adapter is registered and no
- * credential is configured. `listProviderStatus()` is the authoritative answer
- * to "what can we actually call?" — never assume from a file's existence.
+ *
+ * Two adapters ARE registered — importing this barrel is what registers them,
+ * at the bottom of this file: Clearbit (A3U) and Apollo (A7P-C4). What remains
+ * between a registered adapter and an external call is the TENANT's own stored
+ * credential, which is a question about a tenant and not about this process, so
+ * no statement in this file can answer it. `listProviderStatus()` remains the
+ * authoritative answer to "what can we actually call?" — never assume from a
+ * file's existence, and no longer assume from this header either.
  */
 
 export {

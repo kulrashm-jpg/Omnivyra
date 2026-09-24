@@ -77,11 +77,14 @@ export const DECLARED_PROVIDERS: readonly DeclaredProvider[] = [
 /**
  * Registered adapters.
  *
- * A3U registered the first one — Clearbit — through `./adapters`, so this map
- * is no longer empty. That does NOT make any provider operational: an adapter
- * only moves the refusal one step later, from `not_implemented` to whichever
- * of "this tenant has no credential" or "this operation is unpriced" applies.
- * Both still refuse, so no external call can occur.
+ * Two adapters are registered through `./adapters` — Clearbit (A3U) and Apollo
+ * (A7P-C4) — so this map is not empty. An adapter moves the refusal one step
+ * later, from `not_implemented` to "this tenant has no credential", and that is
+ * now the LAST step: the second gate this comment used to name, "this operation
+ * is unpriced", is not on the production path since A3X made the economics
+ * tenant-funded. So a tenant who has stored a credential for one of the two
+ * DOES reach the provider, and an external call can occur. `listProviderStatus`
+ * is the authority on which.
  *
  * Tests continue to inject their own adapters rather than relying on this list.
  */
