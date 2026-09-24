@@ -100,6 +100,42 @@ describe('LI-C209 assembly is the sole owner', () => {
   });
 });
 
+// Absence is never a score — `prospectContext.ts` states the rule in the code itself: "`value:
+// null`, not `0`. There is no inactivity penalty here and none is added". These pin the four places
+// that used to turn a missing driver into a measured zero.
+describe('abstention: a missing driver is never a zero', () => {
+  const identityOnly = (): LeadIntelligenceContext => ({
+    key: KEY, asOf: ASOF,
+    identity: { title: 'VP of Marketing', email: 'v@co.com', organization: 'Co', source: 'enrichment', observedAt: FRESH },
+  });
+  const engaged = (): LeadIntelligenceContext => ({ ...identityOnly(), behaviour: rich().behaviour });
+  const driverDims = ['intent', 'opportunity', 'urgency'];
+
+  it('recommendation ABSTAINS when every driver dimension abstains', () => {
+    // Identity evidence exists, so the engine is reached — but nothing scores intent, opportunity
+    // or urgency. This is the NORMAL path for a real prospect: `prospectContext` populates neither
+    // `signals` nor `qualification`, so two of the three drivers can never score.
+    const primaries = [runPersonaIcp(identityOnly())];
+    expect(primaries[0].evidence.length).toBeGreaterThan(0);
+    expect(primaries.flatMap((p) => p.contributions).some((c) => driverDims.includes(c.dimension))).toBe(false);
+
+    const o = runRecommendation(primaries, identityOnly());
+    expect(o.abstained).toBe(true);
+    expect(o.facets.recommendations).toBeUndefined();
+    expect(o.reasoning).toEqual([]);
+  });
+
+  it('recommendation still fires on ONE real driver, and the absent ones cannot escalate it', () => {
+    const ctx = engaged();
+    const o = runRecommendation([runPersonaIcp(ctx), runIntent(ctx)], ctx);
+    expect(o.abstained).toBe(false);
+    expect(o.facets.recommendations?.value?.nextAction).toBe('personalized_outreach');            // real intent decides
+    expect(o.facets.recommendations?.value?.nextTiming).toBe('this_week');                        // absent urgency never buys within_24h
+    expect(o.facets.recommendations?.value?.nextMessage).toBe('lead_with_observed_interest');     // absent opportunity never leads with a trigger
+  });
+
+});
+
 describe('LI-C210..211 shadow + quality', () => {
   it('quality scorecard measures completeness/calibration/integrity', () => {
     const q = assessQuality(assembleLeadUnderstanding(rich()).understanding);

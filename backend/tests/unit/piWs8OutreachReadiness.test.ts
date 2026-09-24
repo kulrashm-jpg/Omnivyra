@@ -217,17 +217,22 @@ describe('WS-8 — abstention is preserved, and nothing is invented', () => {
     expect(out.requiredMissingFields).toEqual(['recommended_action']);
   });
 
-  it('identity evidence alone proposes MONITOR — never outreach', async () => {
-    // The engine's own rule: with intent and opportunity at zero it proposes
-    // . That is an evidence-backed answer, not an abstention, and
-    // WS-8 preserves it verbatim rather than upgrading or discarding it.
+  it('identity evidence alone proposes NOTHING — every driver abstains', async () => {
+    // Identity and account facts are evidence, but none of them scores intent,
+    // opportunity or urgency. The engine used to read those three abstentions as
+    // zeros and propose a real action off them; it now abstains, because a
+    // prospect nobody has engaged with is unmeasured, not cold. WS-8 preserves
+    // that verbatim rather than upgrading it.
     seedProspect(ORG_A, LEAD, PERSON);
     seedPerson(ORG_A, PERSON, ACCOUNT);
     seedAccount(ORG_A, ACCOUNT);
     const out = await assess();
 
-    expect(out.nextBestAction.action).toBe('monitor');
-    expect(out.nextBestAction.unknowns).toContain('no engagement or trigger evidence');
+    expect(out.nextBestAction.abstained).toBe(true);
+    expect(out.nextBestAction.action).toBeNull();
+    expect(out.nextBestAction.timing).toBeNull();
+    expect(out.readiness).toBe('not_ready');
+    expect(out.requiredMissingFields).toContain('recommended_action');
   });
 
   it('objective and expiry stay NULL — neither exists in the repository', async () => {
