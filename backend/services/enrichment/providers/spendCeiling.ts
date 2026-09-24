@@ -160,7 +160,15 @@ export const defaultCountCallsToday: CountCallsToday = async (
     .gte('started_at', startIso)
     .lt('started_at', endIso);
   if (error) throw new Error(`enrichment spend ledger read failed: ${error.message}`);
-  return typeof count === 'number' ? count : 0;
+  // A missing `count` is NOT zero usage. `head: true` asks for the count and
+  // nothing else, so a response that carries neither an error nor a number is a
+  // read that did not answer — and reading it as 0 would make `0 >= ceiling`
+  // false and permit the billable call. Same fact as the error above, so it
+  // fails the same way rather than through a second mechanism.
+  if (typeof count !== 'number' || !Number.isFinite(count)) {
+    throw new Error('enrichment spend ledger read returned no count');
+  }
+  return count;
 };
 
 export interface DailyCallCeilingOptions {
@@ -216,6 +224,24 @@ export function makeDailyCallCeilingAllow(
 
     const { startIso, endIso } = utcDayBounds(now());
     const used = await countCallsToday({ organizationId, providerId, startIso, endIso });
+
+    // FAIL CLOSED, as the header states: a ceiling is in force here, and a
+    // count we do not hold is not a count of zero. Every comparison against a
+    // non-number is false, so letting one through would silently permit the
+    // billable call for the tenants who asked hardest not to be billed.
+    //
+    // Guarded here as well as in `defaultCountCallsToday` because `used` is
+    // whatever the injected port returned: the root tsconfig sets
+    // `strict: false`, so a null crosses `Promise<number>` unchallenged, and
+    // this is the money path.
+    //
+    // A refusal and not a throw: the seam's contract is reason-or-null, and a
+    // reason produces `cost_denied` with zero transport through the branch
+    // `executeEnrichment` already has.
+    if (typeof used !== 'number' || !Number.isFinite(used)) {
+      return `daily provider call ceiling of ${ceiling} for '${providerId}' cannot be verified: `
+        + `usage since ${startIso} could not be counted`;
+    }
 
     // `>=`: a ceiling of N permits the Nth call and refuses the N+1th.
     if (used >= ceiling) {
