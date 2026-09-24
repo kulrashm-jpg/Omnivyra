@@ -34,12 +34,16 @@ export function runPrioritization(primaries: EngineOutput[], ctx: LeadIntelligen
     num += w * b.value; wSum += w; conf += b.confidence; nDrivers++;
     for (const e of b.evidence) if (!evidence.find((x) => x.id === e.id)) evidence.push(e);
   }
-  // Relationship strength nudges priority (more covered committee ⇒ higher).
+  // Relationship strength nudges priority UP (more covered committee ⇒ higher), and its ABSENCE is
+  // neutral: the multiplier starts at 1, so a prospect with no relationship evidence carries the
+  // drivers' blend unaltered. It used to start at 0.85 — a 15% penalty for evidence we never looked
+  // for, which is the inactivity penalty `prospectContext` refuses ("absence is never a score": an
+  // unmeasured committee is not an uncovered one). The 15% span is unchanged; only its anchor moves.
   const relEdges = primaries.find((p) => p.engine === 'relationship')?.edges.length ?? 0;
-  const relBoost = clamp01(Math.min(relEdges, 4) / 8); // up to +0.5 scaled below
+  const relBoost = clamp01(Math.min(relEdges, 4) / 8); // 0 with no edges, +0.5 at full coverage
 
   if (wSum === 0) return emptyOutput(ENGINE); // nothing to prioritize on ⇒ abstain
-  const priority = clamp01((num / wSum) * (0.85 + 0.15 * relBoost * 2));
+  const priority = clamp01((num / wSum) * (1 + 0.15 * relBoost * 2));
   const confidence = clamp01(conf / Math.max(1, nDrivers));
   out.abstained = false;
   out.contributions.push({ dimension: 'priority', contributor: ENGINE, method: 'deterministic', value: priority, confidence, evidence, asOf: ctx.asOf });

@@ -53,6 +53,7 @@ import {
 } from './recordedExecution';
 import type { ExecuteEnrichmentPorts } from './providers/execute';
 import { makeProductionEnrichmentPorts } from './productionPorts';
+import { recordPlanRefusal } from './telemetry';
 import type {
   EnrichmentOutcome, EnrichmentProviderAdapter, EnrichmentRequest, EnrichmentSubject,
 } from './providers/contract';
@@ -230,26 +231,33 @@ const refusal = (
   input: ExecutePlannedFieldInput, entityId: string | null, providerId: string | null,
   kind: PlanRefusal, reason: string, correlationId: string,
   ineligibility: IneligibilityReason | null = null,
-): PlanFieldExecution => ({
-  executed: false,
-  attribute: input.field.attribute,
-  subject: input.field.subject,
-  organizationId: input.plan.organizationId,
-  prospectId: input.plan.prospectId,
-  entityId,
-  providerId,
-  outcome: null,
-  refusal: kind,
-  ineligibility,
-  providerCalled: false,
-  attemptId: null,
-  attemptNumber: null,
-  sourceRecordId: null,
-  canonicalWithheld: [],
-  reason,
-  correlationId,
-  version: PLAN_EXECUTION_VERSION,
-});
+): PlanFieldExecution => {
+  // Counted here rather than at the seven call sites: every one of them is a
+  // `return no(...)`, so constructing a refusal IS refusing — there is no
+  // speculative or discarded construction to over-count. Fail-safe and label-
+  // bounded; `reason` is never recorded, because it is free text.
+  recordPlanRefusal(kind);
+  return {
+    executed: false,
+    attribute: input.field.attribute,
+    subject: input.field.subject,
+    organizationId: input.plan.organizationId,
+    prospectId: input.plan.prospectId,
+    entityId,
+    providerId,
+    outcome: null,
+    refusal: kind,
+    ineligibility,
+    providerCalled: false,
+    attemptId: null,
+    attemptNumber: null,
+    sourceRecordId: null,
+    canonicalWithheld: [],
+    reason,
+    correlationId,
+    version: PLAN_EXECUTION_VERSION,
+  };
+};
 
 /**
  * Execute exactly one planned field.

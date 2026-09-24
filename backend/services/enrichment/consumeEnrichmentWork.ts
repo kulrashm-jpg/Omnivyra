@@ -27,9 +27,12 @@
  * The consequence is structural: there is no write here at all. Every path
  * either returns inert or goes through the recorded execution seam.
  *
- * It is deliberately NOT a scheduler. It selects nothing, loops over nothing,
- * runs on no timer and is called by nobody. Selection, cadence and triggering
- * remain outside; this is the callable unit they would eventually call.
+ * It is deliberately NOT a scheduler. It selects nothing, loops over nothing
+ * and runs on no timer — all three still hold. It is no longer uncalled:
+ * `backend/jobs/prospectRetryJob.ts` supplies it as the retry cycle's `consume`
+ * port, so selection and cadence live where this header said they would, and
+ * this is the callable unit they now call. That path is inert unless
+ * `PI_RETRY_SCHEDULER_ENABLED` is `'true'` and a tenant allow-list is set.
  *
  * ─── THE EXECUTION PATH IS STRUCTURALLY GATED ─────────────────────────────
  * `ports` is REQUIRED, with no default. This module cannot assemble a
@@ -38,9 +41,10 @@
  * implementation the audits forbid. A caller must therefore supply a real
  * composition to execute anything, which means:
  *
- *   - until A7A is merged, no caller CAN execute through this seam;
- *   - when it is, suppression arrives with the ports rather than being
- *     reimplemented here.
+ *   - a caller with no real composition CANNOT execute through this seam;
+ *   - A7A is now merged (`makeProductionEnrichmentPorts`) and the retry job
+ *     forwards it whole, so on that path suppression arrives with the ports
+ *     rather than being reimplemented here.
  *
  * That is the gate rather than a weakness. A7D's `freshEvidenceCoversRequest`
  * is a CLASSIFICATION input; A7A's `findRecentObservation` remains the

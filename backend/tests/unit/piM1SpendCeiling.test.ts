@@ -225,6 +225,63 @@ describe('M1 — what consumes capacity, and what does not', () => {
   });
 });
 
+// ── an uncountable usage ────────────────────────────────────────────────────
+
+describe('M1 — usage that cannot be counted is refused, not read as zero', () => {
+  /**
+   * The ledger read can come back with neither an error nor a number — a
+   * `head: true` count query that answered nothing. `0 >= ceiling` is false, so
+   * reading that as zero usage PERMITS the billable call, for exactly the
+   * tenants who configured a ceiling. These cover the null and undefined counts
+   * the ledger double above cannot produce, because it always returns a number.
+   */
+  const allowWithCount = (count: unknown) => makeDailyCallCeilingAllow({
+    enabled: () => true,
+    now: () => NOW,
+    resolveCeiling: async () => 5,
+    // Deliberately past the port's `Promise<number>`: the root tsconfig sets
+    // `strict: false`, so this is reachable in production, not only in a test.
+    countCallsToday: async () => count as number,
+  });
+
+  it.each([['null', null], ['undefined', undefined]])(
+    'a %s count refuses — and the provider is NOT called', async (_label, count) => {
+      const calls: unknown[] = [];
+      const out = await run(portsWith(allowWithCount(count)), calls);
+
+      expect(out.outcome).toBe('cost_denied');
+      expect(calls).toHaveLength(0);               // nothing was billed
+      expect(out.providerCalled).toBe(false);
+      expect(out.reason).toMatch(/cannot be verified/);
+    },
+  );
+
+  it('names the day whose usage is unknown, so the refusal is diagnosable', async () => {
+    expect(await allowWithCount(null)({
+      organizationId: ORG_A, providerId: 'clearbit',
+      attributes: ['employee_count'], correlationId: 'c',
+    })).toMatch(/could not be counted/);
+  });
+
+  it('a NaN count is refused too — every comparison against it is false', async () => {
+    const calls: unknown[] = [];
+    expect((await run(portsWith(allowWithCount(Number.NaN)), calls)).outcome).toBe('cost_denied');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('a tenant with NO ceiling is unaffected — the count is never reached', async () => {
+    const allow = makeDailyCallCeilingAllow({
+      enabled: () => true,
+      now: () => NOW,
+      resolveCeiling: async () => null,
+      countCallsToday: async () => null as unknown as number,
+    });
+    const calls: unknown[] = [];
+    expect((await run(portsWith(allow), calls)).outcome).toBe('enriched');
+    expect(calls).toHaveLength(1);
+  });
+});
+
 // ── isolation ───────────────────────────────────────────────────────────────
 
 describe('M1 — a ceiling is one tenant\'s and one provider\'s', () => {

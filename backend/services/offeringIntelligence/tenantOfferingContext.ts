@@ -91,17 +91,68 @@ export interface TenantOfferingContextPorts {
   loadProfile(organizationId: string): Promise<TenantOfferingProfileRow | null>;
 }
 
+/**
+ * ─── READ-ONLY AS A TYPE, NOT AS A CONVENTION ─────────────────────────────
+ * The two interfaces below are the read verbs of one table and nothing else.
+ *
+ * `ownedDbTable` hands back the raw Supabase builder, on which insert, upsert, update and delete are
+ * all in scope; this file stays read-only because it does not call them, and a test greps this source
+ * to confirm it. That grep is a real guard but a textual one — it cannot see a write reached through
+ * a local alias, a helper, a callback, or a builder handed in by a caller, and it says nothing about
+ * any future file that reads the same table. Expressed as a type instead, the same property holds
+ * structurally: the only surface a reader is ever given exposes select, eq and maybeSingle, so a
+ * write is a compile error rather than a grep that failed to match. Both guards stay. Neither covers
+ * what the other covers: the type cannot see a raw builder imported around it, and the grep cannot
+ * see through an indirection.
+ */
+export interface ReadOnlyRowQuery<Row> {
+  /** Narrow the read. The tenant filter lives here — and nothing on this type can alter a row. */
+  eq(column: string, value: unknown): ReadOnlyRowQuery<Row>;
+  /** Resolve at most one row. `data: null` means "no such row", which is not an error. */
+  maybeSingle(): PromiseLike<{ data: Row | null; error: { message: string } | null }>;
+}
+
+/** One table, readable and nothing more. */
+export interface ReadOnlyTable<Row> {
+  select(columns: string): ReadOnlyRowQuery<Row>;
+}
+
+/** How a port reaches a table. Nothing write-capable can be obtained through this type. */
+export type ReadOnlyTableSource = <Row>(table: string) => ReadOnlyTable<Row>;
+
+/**
+ * The ONE narrowing point in this module: the single place where the builder's write surface is
+ * discarded. The cast is unavoidable and deliberately confined here — the Supabase builder's
+ * generics are not structurally assignable to a hand-written surface — and it only ever drops
+ * capability, never adds it. Everything downstream is typed read-only.
+ */
+export const readOnlyTableSource: ReadOnlyTableSource = <Row>(table: string): ReadOnlyTable<Row> =>
+  ownedDbTable(table) as unknown as ReadOnlyTable<Row>;
+
+/**
+ * Build the one read port from a read-only table source.
+ *
+ * The parameter type is the guarantee: whatever source this factory is handed — the real one, or a
+ * fake in a test — it has no write verb available to call. The port it returns is the same
+ * one-method `TenantOfferingContextPorts` as before; this only fixes how that one method may reach
+ * the table.
+ */
+export function tenantOfferingContextPortsFrom(source: ReadOnlyTableSource): TenantOfferingContextPorts {
+  return {
+    async loadProfile(organizationId: string): Promise<TenantOfferingProfileRow | null> {
+      const { data, error } = await source<TenantOfferingProfileRow>('company_profiles')
+        .select(TENANT_OFFERING_PROFILE_COLUMNS.join(', '))
+        .eq('company_id', organizationId)          // tenant boundary — never optional
+        .maybeSingle();
+      if (error) throw new Error(`company_profiles read failed: ${error.message}`);
+      return data ?? null;
+    },
+  };
+}
+
 /** The default port. The ONLY place here that reaches a table. */
-export const defaultTenantOfferingContextPorts: TenantOfferingContextPorts = {
-  async loadProfile(organizationId: string): Promise<TenantOfferingProfileRow | null> {
-    const { data, error } = await ownedDbTable('company_profiles')
-      .select(TENANT_OFFERING_PROFILE_COLUMNS.join(', '))
-      .eq('company_id', organizationId)          // tenant boundary — never optional
-      .maybeSingle();
-    if (error) throw new Error(`company_profiles read failed: ${error.message}`);
-    return (data as unknown as TenantOfferingProfileRow) ?? null;
-  },
-};
+export const defaultTenantOfferingContextPorts: TenantOfferingContextPorts =
+  tenantOfferingContextPortsFrom(readOnlyTableSource);
 
 export interface TenantOfferingContextInput {
   /** TENANT. Explicit, never ambient — a context pointer is not a credential. */
@@ -119,6 +170,12 @@ export interface TenantOfferingContextResult {
   readonly sources: { readonly profile: boolean; readonly curatedOfferingList: boolean };
   /** What was missing, unmappable or attributed more broadly than it reads. Never silently dropped. */
   readonly gaps: readonly TenantOfferingGap[];
+  /**
+   * Each customer problem with the column it was read from, so a stated problem stays distinguishable
+   * from a symptom after `customerProblems` has flattened them. Additive: the seeds' flat array is
+   * unchanged in shape and order.
+   */
+  readonly problemProvenance: readonly TenantProblemProvenance[];
   /** The row the seeds were derived from, so a caller can explain a facet without re-reading. */
   readonly profile: TenantOfferingProfileRow | null;
 }
@@ -145,6 +202,30 @@ export const FACETS_WITHOUT_A_PROFILE_COLUMN: readonly string[] = [
   'compliance', 'lifecycle', 'roadmap', 'adoption', 'ecosystem',
 ];
 
+/** Which `company_profiles` column a customer problem was read from. */
+export type TenantProblemOrigin = 'core_problem_statement' | 'pain_symptoms';
+
+/**
+ * One customer problem, with the column it came from.
+ *
+ * ─── A PROBLEM AND A SYMPTOM ARE MERGED, BUT NO LONGER INDISTINGUISHABLE ──
+ * `customerProblems` flattens `core_problem_statement` and `pain_symptoms` into one array, because
+ * that is what the canonical `CustomerProblemsValue` facet accepts and what the seed contract
+ * carries. The flattening is not the problem; losing WHICH column each element came from is. "Teams
+ * act on numbers nobody can trace" is a stated problem; "dashboards disagree" is a symptom OF a
+ * problem, and a caller that cannot tell them apart will eventually quote a symptom back to a
+ * prospect as the problem it solves.
+ *
+ * So the distinction is recorded alongside the flat array rather than inside it: the value shape of
+ * `customerProblems` is untouched, its order is untouched, and the provenance is additive — a caller
+ * that does not care is unaffected, and one that does no longer has to re-read the profile row and
+ * re-derive the split.
+ */
+export interface TenantProblemProvenance {
+  readonly problem: string;
+  readonly origin: TenantProblemOrigin;
+}
+
 /**
  * Project one tenant profile row into offering seeds. Pure and deterministic — it maps, it never
  * fetches and never fabricates: an empty column produces no seed field, and a seed's absent fields
@@ -153,14 +234,27 @@ export const FACETS_WITHOUT_A_PROFILE_COLUMN: readonly string[] = [
 export function offeringSeedsFromProfile(
   row: TenantOfferingProfileRow | null,
   input: TenantOfferingContextInput,
-): { seeds: OfferingSeedInput[]; gaps: TenantOfferingGap[]; curated: boolean } {
+): {
+  seeds: OfferingSeedInput[];
+  gaps: TenantOfferingGap[];
+  curated: boolean;
+  problemProvenance: TenantProblemProvenance[];
+} {
   const gaps: TenantOfferingGap[] = [];
   if (!row) {
     return {
-      seeds: [], curated: false,
+      seeds: [], curated: false, problemProvenance: [],
       gaps: [{ kind: 'no_company_profile', detail: `no company_profiles row for tenant ${input.organizationId}` }],
     };
   }
+
+  // Read from the row, so a tenant that states a problem but names no offering still reports where
+  // that problem came from. `problems` below is exactly this list, flattened in the same order.
+  const statedProblem = text(row.core_problem_statement);
+  const problemProvenance: TenantProblemProvenance[] = [
+    ...(statedProblem ? [{ problem: statedProblem, origin: 'core_problem_statement' as const }] : []),
+    ...list(row.pain_symptoms).map((s) => ({ problem: s, origin: 'pain_symptoms' as const })),
+  ];
 
   const curatedNames = list(row.products_services_list);
   const curated = curatedNames.length > 0;
@@ -174,11 +268,13 @@ export function offeringSeedsFromProfile(
   }
   if (names.length === 0) {
     gaps.push({ kind: 'no_offering_named', detail: 'neither products_services_list nor products_services names an offering' });
-    return { seeds: [], gaps, curated };
+    return { seeds: [], gaps, curated, problemProvenance };
   }
 
   // The tenant-level semantics. Read once, attributed to every offering, and declared as such below.
-  const problems = [text(row.core_problem_statement), ...list(row.pain_symptoms)].filter((s): s is string => !!s);
+  // The flat array the facet contract expects, derived from the classified list above — ONE reading
+  // of "what problem does this tenant solve", not two that could drift apart.
+  const problems = problemProvenance.map((p) => p.problem);
   const outcomes = [text(row.desired_transformation), text(row.life_after_solution)].filter((s): s is string => !!s);
   const differentiators = list(row.competitive_advantages);
   const industries = list(row.industry_list).length ? list(row.industry_list) : list(row.industry);
@@ -226,7 +322,7 @@ export function offeringSeedsFromProfile(
     count: FACETS_WITHOUT_A_PROFILE_COLUMN.length,
   });
 
-  return { seeds, gaps, curated };
+  return { seeds, gaps, curated, problemProvenance };
 }
 
 /**
@@ -252,7 +348,7 @@ export async function buildTenantOfferingContext(
   const row = await ports.loadProfile(input.organizationId);
   if (!row) return null;
 
-  const { seeds, gaps, curated } = offeringSeedsFromProfile(row, input);
+  const { seeds, gaps, curated, problemProvenance } = offeringSeedsFromProfile(row, input);
   const contexts: OfferingIntelligenceContext[] = seeds.map((seed) => ({
     key: { companyId: input.organizationId, offeringId: resolveOfferingId(seed.name) },
     asOf: input.asOf,
@@ -266,6 +362,7 @@ export async function buildTenantOfferingContext(
     contexts,
     sources: { profile: true, curatedOfferingList: curated },
     gaps,
+    problemProvenance,
     profile: row,
   };
 }

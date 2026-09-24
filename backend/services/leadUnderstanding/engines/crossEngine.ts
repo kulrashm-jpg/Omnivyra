@@ -45,8 +45,10 @@ export function runCrossEngine(primaries: EngineOutput[], ctx: LeadIntelligenceC
   add('expansion_opportunity', true, null, signalEvidence(primaries, ['funding', 'exec_change', 'hiring', 'expansion']), 0.55, ['expansion inferred from growth signals']);
   // competitive displacement = tech_migration + competitor + relationship
   add('competitive_displacement', !!ctx.competitorId, null, signalEvidence(primaries, ['tech_migration', 'tech_adoption']), 0.5, [`competitor=${ctx.competitorId ?? 'none'}`, 'displacement needs migration + relationship']);
-  // immediate sales = intent + qualification + relationship
-  add('immediate_sales_opportunity', intent != null && qualEv.length > 0 && relEdges.length > 0, clamp01(0.5 * (intent ?? 0) + 0.5 * (urgency ?? 0)),
+  // immediate sales = intent + qualification + relationship. Both halves of the conclusion's value
+  // must exist before it is stated: an abstaining urgency was contributing a silent 0 to a numeric
+  // claim, which reads as "no urgency" rather than "urgency unknown".
+  add('immediate_sales_opportunity', intent != null && urgency != null && qualEv.length > 0 && relEdges.length > 0, clamp01(0.5 * (intent ?? 0) + 0.5 * (urgency ?? 0)),
     [...primaries.find((p) => p.engine === 'intent')?.evidence ?? [], ...qualEv], 0.6, ['intent + known qualification + engaged committee']);
   // outreach strategy = relationship + content affinity + buying stage
   add('recommended_outreach', allEv.length > 0, null, allEv.slice(0, 8), 0.5, ['synthesis of persona + intent + relationship']);
