@@ -61,7 +61,12 @@ import {
   projectOutreachActivity,
   readProspectLifecycleHistory,
 } from '../../services/prospectLifecycle/lifecycleReader';
-import { sourceEventKey } from '../../services/prospectLifecycle/stateModel';
+import {
+  PROSPECT_STATES,
+  PROSPECT_STATES_UNREACHABLE_TODAY,
+  prospectTransitionsFrom,
+  sourceEventKey,
+} from '../../services/prospectLifecycle/stateModel';
 
 const ORG = '00000000-0000-4000-8000-0000000000aa';
 const ORG_B = '00000000-0000-4000-8000-0000000000bb';
@@ -167,6 +172,34 @@ describe('PI WS-C writer — the illegal transition', () => {
       });
     }
     expect(calls.some((c) => c.verb === 'insert')).toBe(false);
+  });
+
+  it('refuses a state that is UNREACHABLE TODAY, including as an initial row', async () => {
+    // `PROSPECT_STATES_UNREACHABLE_TODAY` used to be declarative only: nothing
+    // checked it, so an initial row in `meeting_scheduled` was writable — the
+    // initial path writes `input.to` without consulting the graph at all — and
+    // `qualified -> meeting_scheduled` is a legal edge, so the classifier let
+    // that one through too. Its only cause is `meeting_booked`, which no
+    // transport can observe, so nothing can witness the state it would claim.
+    //
+    // Both of those paths are now closed BEFORE the database is touched, which
+    // is why neither queued current-state answer below is ever read — the
+    // refusal is `validate`'s, in the same idiom as every other refusal here.
+    for (const state of PROSPECT_STATES_UNREACHABLE_TODAY) {
+      currentIs(null);                                  // would have been an initial row
+      await expect(recordProspectTransition(derived(state))).rejects.toMatchObject({
+        code: 'state_unreachable_today',
+      });
+      currentIs('qualified');                           // would have been a legal edge
+      await expect(recordProspectTransition(derived(state))).rejects.toMatchObject({
+        code: 'state_unreachable_today',
+      });
+    }
+    expect(calls).toHaveLength(0);                      // not even a read happened
+    // THE VOCABULARY AND THE GRAPH ARE UNCHANGED — the guard is the writer's, so
+    // nothing has to move when a booking integration arrives.
+    expect(PROSPECT_STATES).toContain('meeting_scheduled');
+    expect(prospectTransitionsFrom('qualified')).toContain('meeting_scheduled');
   });
 
   it('refuses a derived transition that names an actor, and a human one that does not', async () => {

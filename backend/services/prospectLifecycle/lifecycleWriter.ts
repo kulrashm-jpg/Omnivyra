@@ -15,6 +15,10 @@
  * the DB CHECK would also refuse it — a caller gets a named error instead of a
  * raw 23514.
  *
+ * It also refuses every state in `PROSPECT_STATES_UNREACHABLE_TODAY`. Those ARE
+ * in the vocabulary, and the DB CHECK admits them; nothing but this guard stops
+ * a caller storing a state the platform has no way to witness.
+ *
  * ─── IDEMPOTENCY IS BY DATABASE CONSTRAINT ─────────────────────────────────
  * Both uniqueness guarantees are PARTIAL unique indexes, which PostgREST cannot
  * infer for `ON CONFLICT` (42P10 — the trap W0.1/W0.2/W3 hit). So: INSERT,
@@ -32,6 +36,7 @@ import { ownedDbTable } from '../../db/writeOwner';
 import {
   PROSPECT_LIFECYCLE_VERSION,
   PROSPECT_STATES_NOT_MODELLED,
+  PROSPECT_STATES_UNREACHABLE_TODAY,
   classifyProspectTransition,
   explainProspectTransition,
   isEvidenceKind,
@@ -158,6 +163,32 @@ function validate(input: RecordTransitionInput): void {
       + 'verdicts and outreach-active is a projection over outreach_tasks; storing one stores a stale '
       + 'governance check by proxy (PI-ADR-004 §4.1)',
       'verdict_is_not_a_state',
+    );
+  }
+  // `PROSPECT_STATES_UNREACHABLE_TODAY` was declarative only. The check above
+  // catches a word that is NOT in the vocabulary; this one catches a word that
+  // IS — `meeting_scheduled` is a real state with real edges, so
+  // `classifyProspectTransition` accepts `qualified -> meeting_scheduled`, and
+  // nothing at all stood between a caller and an INITIAL row in it (the initial
+  // path writes `input.to` with no graph check whatsoever).
+  //
+  // It is refused because its only named cause, `meeting_booked`, is in
+  // `UNOBSERVABLE_BUSINESS_OUTCOMES` — no booking integration exists, so no
+  // path can WITNESS the state it would claim (stateModel.ts:47-51; PI-ADR-004
+  // §5 lists the whole meeting cluster as blocked rather than decided). A state
+  // nothing can observe, written anyway, is a fabricated resting position in an
+  // append-only ledger.
+  //
+  // NOTHING IN THE CONTRACT CHANGES. The vocabulary, the graph and the DB CHECK
+  // are untouched; `meeting_scheduled` stays in all three so nothing has to move
+  // when booking arrives. Lifting the guard is then removing the state from that
+  // list — which is what the list is for.
+  if ((PROSPECT_STATES_UNREACHABLE_TODAY as readonly string[]).includes(String(input.to))) {
+    throw new ProspectLifecycleWriteError(
+      `'${input.to}' is in the vocabulary but unreachable today — its only cause, meeting_booked, is in `
+      + 'UNOBSERVABLE_BUSINESS_OUTCOMES and no booking integration exists, so nothing can witness it '
+      + '(PI-ADR-004 §5)',
+      'state_unreachable_today',
     );
   }
   if (input.origin !== 'human' && input.origin !== 'derived') {
