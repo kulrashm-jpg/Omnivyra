@@ -63,6 +63,7 @@ import {
 } from '../../services/prospectLifecycle/lifecycleReader';
 import {
   PROSPECT_STATES,
+  PROSPECT_STATE_MODEL,
   PROSPECT_STATES_UNREACHABLE_TODAY,
   prospectTransitionsFrom,
   sourceEventKey,
@@ -139,6 +140,40 @@ describe('PI WS-C writer — the legal transition', () => {
     }));
     expect(r).toMatchObject({ outcome: 'initialised', state: 'identified', previousState: null, wrote: true });
     expect(lastInsert()).toMatchObject({ is_initial: true, previous_state: null });
+  });
+
+  it('PI-LIFECYCLE-002 — refuses to OPEN a ledger in any state but the model initial one', async () => {
+    // The bypass: with no prior state there is no edge to check, so the writer
+    // used to persist whatever the caller named. Every non-initial state is now
+    // refused, and the refusal is the graph's, not a special case for one word.
+    for (const bad of PROSPECT_STATES.filter((s) => s !== PROSPECT_STATE_MODEL.initial)) {
+      calls.length = 0;
+      currentIs(null);
+      // TWO guards refuse an initial row, and the ORDER matters. A state in
+      // PROSPECT_STATES_UNREACHABLE_TODAY is stopped by `validate()` before any
+      // read; the rest are stopped by the graph verdict after it. Deriving the
+      // expected code keeps this honest if either list changes.
+      const expected = (PROSPECT_STATES_UNREACHABLE_TODAY as readonly string[]).includes(bad)
+        ? 'state_unreachable_today'
+        : 'illegal_transition:not_allowed';
+      await expect(recordProspectTransition(derived(bad, {
+        evidence: { kind: 'icp_evaluation' }, sourceEventKey: null,
+      }))).rejects.toMatchObject({ code: expected });
+      // Whichever guard fired, nothing was persisted.
+      expect(calls.some((c) => c.verb === 'insert')).toBe(false);
+    }
+  });
+
+  it('PI-LIFECYCLE-002 — the refusal names it as a KNOWN state, not an unknown word', async () => {
+    currentIs(null);
+    await expect(recordProspectTransition(derived('closed_disqualified', {
+      evidence: { kind: 'icp_evaluation' }, sourceEventKey: null,
+    }))).rejects.toThrow(/not a permitted INITIAL one/);
+    // The other from=null shape still reads correctly.
+    currentIs(null);
+    await expect(recordProspectTransition(derived('won', {
+      evidence: { kind: 'icp_evaluation' }, sourceEventKey: null,
+    }))).rejects.toThrow(/not a prospect lifecycle state/);
   });
 
   it('records a human transition with its actor, and a derived one without', async () => {

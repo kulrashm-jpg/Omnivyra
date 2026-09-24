@@ -37,6 +37,7 @@ import {
   PROSPECT_LIFECYCLE_VERSION,
   PROSPECT_STATES_NOT_MODELLED,
   PROSPECT_STATES_UNREACHABLE_TODAY,
+  PROSPECT_STATE_MODEL,
   classifyProspectTransition,
   explainProspectTransition,
   isEvidenceKind,
@@ -309,9 +310,15 @@ async function attemptTransition(input: RecordTransitionInput, mayRetry: boolean
   const verdict = classifyProspectTransition(current?.state ?? null, input.to);
 
   if (verdict.kind === 'illegal') {
+    // Three shapes reach here, and saying the wrong one is worse than saying
+    // nothing: a caller debugging a refused INITIAL state must not be told the
+    // state does not exist when it plainly does.
     const detail = verdict.from
       ? explainProspectTransition(verdict.from, verdict.to)
-      : `'${verdict.to}' is not a prospect lifecycle state`;
+      : isProspectState(verdict.to)
+        ? `'${verdict.to}' is a lifecycle state but not a permitted INITIAL one — a ledger opens at `
+          + `'${PROSPECT_STATE_MODEL.initial}' and moves by its graph from there`
+        : `'${verdict.to}' is not a prospect lifecycle state`;
     throw new ProspectLifecycleWriteError(detail, `illegal_transition:${verdict.reason}`);
   }
 
@@ -332,7 +339,12 @@ async function attemptTransition(input: RecordTransitionInput, mayRetry: boolean
   }
 
   if (verdict.kind === 'initial') {
-    const initialTo = isProspectState(input.to) ? input.to : 'identified';
+    // `classifyProspectTransition` now returns `initial` only when `to` IS the
+    // model's initial state, so this is that state — asserted, not defaulted.
+    // The previous `isProspectState(input.to) ? input.to : 'identified'` read as
+    // a safety net and was none: it let any known state through, which is the
+    // bypass this workstream closes.
+    const initialTo: ProspectState = PROSPECT_STATE_MODEL.initial as ProspectState;
     const res = await append(buildRow(input, initialTo, null, true));
     if ('id' in res) {
       return { outcome: 'initialised', state: initialTo, previousState: null, id: res.id, wrote: true };

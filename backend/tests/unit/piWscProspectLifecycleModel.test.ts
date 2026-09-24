@@ -21,6 +21,7 @@ import {
   PROSPECT_STATES_NOT_MODELLED,
   PROSPECT_STATES_UNREACHABLE_TODAY,
   PROSPECT_STATE_MODEL,
+  isPermittedInitialState,
   SOURCE_EVENT_KEY_PATTERN,
   classifyProspectTransition,
   explainProspectTransition,
@@ -224,9 +225,22 @@ describe('PI WS-C — DECISION B: same_state resolved caller-side', () => {
     expect(validateTransition('working', 'working').ok).toBe(false);
   });
 
-  it('no prior state is `initial` — the engine already allows any known first state', () => {
+  it('no prior state is `initial` — but ONLY for the state the model opens at', () => {
+    // `null` and `undefined` both mean ABSENT. That half is unchanged.
     expect(classifyProspectTransition(null, 'identified')).toEqual({ kind: 'initial' });
-    expect(classifyProspectTransition(undefined, 'qualified')).toEqual({ kind: 'initial' });
+    expect(classifyProspectTransition(undefined, 'identified')).toEqual({ kind: 'initial' });
+
+    // What changed (PI-LIFECYCLE-002). This case previously asserted
+    // `classifyProspectTransition(undefined, 'qualified') === { kind: 'initial' }`,
+    // on the ground that "the engine already allows any known first state" —
+    // true of the SHARED engine (`operationalStateModel.ts:99` returns ok for a
+    // null `from`) and inherited here. For prospects that inheritance WAS the
+    // bypass: with no `from` there is no edge to check, the writer wrote the
+    // caller's state straight through, and the DB trigger short-circuits on
+    // `is_initial`. A ledger could open in any of the seven states, including a
+    // terminal one it could never leave. The assertion encoded the defect.
+    expect(classifyProspectTransition(undefined, 'qualified'))
+      .toEqual({ kind: 'illegal', from: null, to: 'qualified', reason: 'not_allowed' });
   });
 
   it('a corrupt stored state is reported, not silently treated as absent', () => {
@@ -375,5 +389,61 @@ describe('PI WS-C — deterministic state reconstruction', () => {
   it('reports a second initial row', () => {
     const doubled = [history[0], row({ seq: 2, state: 'identified', previousState: null, isInitial: true })];
     expect(reconstructProspectState(doubled)).toMatchObject({ brokenAt: 2 });
+  });
+});
+
+describe('PI-LIFECYCLE-002 — a ledger opens only where the model says', () => {
+  const NEW_MIGRATION = join(
+    process.cwd(), 'supabase', 'migrations',
+    '20261029000000_pi_lifecycle_initial_state_valid.sql',
+  );
+  const initialSql = readFileSync(NEW_MIGRATION, 'utf8');
+
+  it('R4 — of the seven states, exactly the model initial one opens a ledger', () => {
+    const verdicts: Record<string, string> = {};
+    for (const s of PROSPECT_STATES) verdicts[s] = classifyProspectTransition(null, s).kind;
+    const expected: Record<string, string> = {};
+    for (const s of PROSPECT_STATES) {
+      expected[s] = s === PROSPECT_STATE_MODEL.initial ? 'initial' : 'illegal';
+    }
+    expect(verdicts).toEqual(expected);
+    // Non-vacuity: the split is real, not "everything illegal".
+    expect(Object.values(verdicts).filter((v) => v === 'initial')).toHaveLength(1);
+  });
+
+  it('R2 — an initial meeting_scheduled is illegal, and says so as a state it KNOWS', () => {
+    const v = classifyProspectTransition(null, 'meeting_scheduled');
+    expect(v).toEqual({ kind: 'illegal', from: null, to: 'meeting_scheduled', reason: 'not_allowed' });
+    // Distinguishable from an unknown word, which is the other from=null shape.
+    expect(classifyProspectTransition(null, 'won'))
+      .toEqual({ kind: 'illegal', from: null, to: 'won', reason: 'unknown_to' });
+  });
+
+  it('R3 — an initial closed_disqualified is illegal: the model does not open there', () => {
+    expect(PROSPECT_STATE_MODEL.initial).not.toBe('closed_disqualified');
+    expect(classifyProspectTransition(null, 'closed_disqualified').kind).toBe('illegal');
+  });
+
+  it('R1 — the model initial state still opens a ledger', () => {
+    expect(classifyProspectTransition(null, PROSPECT_STATE_MODEL.initial)).toEqual({ kind: 'initial' });
+  });
+
+  it('isPermittedInitialState is derived from the model, not a second list', () => {
+    for (const s of PROSPECT_STATES) {
+      expect(isPermittedInitialState(s)).toBe(s === PROSPECT_STATE_MODEL.initial);
+    }
+  });
+
+  it('the DB CHECK mirrors PROSPECT_STATE_MODEL.initial, so the two cannot drift', () => {
+    const m = initialSql.match(/CHECK\s*\(\s*NOT\s+is_initial\s+OR\s+state\s*=\s*'([a-z_]+)'\s*\)/i);
+    expect(m).not.toBeNull();
+    expect(m![1]).toBe(PROSPECT_STATE_MODEL.initial);
+  });
+
+  it('the migration leaves the existing initial-SHAPE constraint alone', () => {
+    // Shape (previous_state IS NULL) and state-identity are different rules;
+    // this workstream adds the second without touching the first.
+    expect(initialSql).toMatch(/prospect_lifecycle_initial_shape/);
+    expect(initialSql).not.toMatch(/DROP\s+CONSTRAINT/i);
   });
 });

@@ -411,3 +411,101 @@ describe('PI WS-C — deterministic state reconstruction, in the database', () =
     });
   });
 });
+
+describe('PI-LIFECYCLE-002 — the database refuses an invalid INITIAL state', () => {
+  // R11. The application guard lives in TypeScript; this asserts the DB is not
+  // itself a bypass. Before 20261029000000 every one of these INSERTs was
+  // ACCEPTED — demonstrated on this same harness — because the state CHECK
+  // constrains WHICH WORDS may appear, `prospect_lifecycle_initial_shape`
+  // constrains only that previous_state IS NULL, and the chain trigger
+  // short-circuits on `is_initial` before its comparison.
+
+  it('R1 — the model initial state still opens a ledger', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newProspect(ORG_A);
+      expect(await tryInsert(ORG_A, p, 'identified', { initial: true, previous: null })).toBe('ok');
+    });
+  });
+
+  it('R2 — an initial meeting_scheduled row is REFUSED by the database', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newProspect(ORG_A);
+      expect(await tryInsert(ORG_A, p, 'meeting_scheduled', { initial: true, previous: null })).toBe('23514');
+    });
+  });
+
+  it('R3 — an initial closed_disqualified row is REFUSED: no born-terminal ledger', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newProspect(ORG_A);
+      expect(await tryInsert(ORG_A, p, 'closed_disqualified', { initial: true, previous: null })).toBe('23514');
+    });
+  });
+
+  it('R4 — of the seven states, exactly one opens a ledger at the DB level', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const states = ['identified', 'qualified', 'engaged', 'nurture',
+        'meeting_scheduled', 'not_interested', 'closed_disqualified'];
+      const got: Record<string, string> = {};
+      for (const st of states) {
+        const p = await newProspect(ORG_A);
+        got[st] = await tryInsert(ORG_A, p, st, { initial: true, previous: null });
+      }
+      expect(got).toEqual({
+        identified: 'ok',
+        qualified: '23514',
+        engaged: '23514',
+        nurture: '23514',
+        meeting_scheduled: '23514',
+        not_interested: '23514',
+        closed_disqualified: '23514',
+      });
+      // Non-vacuity: one really is accepted, so this is not a blanket refusal.
+      expect(Object.values(got).filter((v) => v === 'ok')).toHaveLength(1);
+    });
+  });
+
+  it('R5/R6 — a NON-initial row is untouched by the new constraint', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newProspect(ORG_A);
+      await insert(ORG_A, p, 'identified', { initial: true, previous: null });
+      // A legal edge still moves.
+      expect(await tryInsert(ORG_A, p, 'qualified', { previous: 'identified' })).toBe('ok');
+      // The DB still does not police graph legality on non-initial rows — that
+      // remains TypeScript's job, and is stated here rather than implied.
+      expect(await tryInsert(ORG_A, p, 'meeting_scheduled', { previous: 'identified' })).toBe('ok');
+    });
+  });
+
+  it('R7 — a chain-breaking transition is still refused', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newProspect(ORG_A);
+      await insert(ORG_A, p, 'identified', { initial: true, previous: null });
+      expect(await tryInsert(ORG_A, p, 'engaged', { previous: 'qualified' })).toBe('23514');
+    });
+  });
+
+  it('R8/R10 — duplicate initial row and append-only are still enforced', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newProspect(ORG_A);
+      const id = await insert(ORG_A, p, 'identified', { initial: true, previous: null });
+      expect(await tryInsert(ORG_A, p, 'identified', { initial: true, previous: null })).toBe('23505');
+      expect(await attempt(`UPDATE public.${TABLE} SET state='nurture' WHERE id=$1`, [id])).toBe('42501');
+      expect(await attempt(`DELETE FROM public.${TABLE} WHERE id=$1`, [id])).toBe('42501');
+    });
+  });
+
+  it('R9 — tenant isolation is still fail-closed', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const pA = await newProspect(ORG_A);
+      expect(await tryInsert(ORG_B, pA, 'identified', { initial: true, previous: null })).toBe('23503');
+    });
+  });
+});
