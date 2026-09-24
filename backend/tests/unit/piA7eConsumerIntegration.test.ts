@@ -386,28 +386,86 @@ describe('A7E — no second state machine, no provider bypass, no suppression co
     // caller's OWN reachability is pinned in `piA4aEnrichmentAttempts` — cron →
     // job → cycle → hand-off — so admitting it here does not admit a path that
     // can fire by itself.
-    // This is a REFERENCE check, not a call check: `git grep` sees any mention,
-    // so the two files below are the complete set of production modules that
-    // name the seam at all. Exactly one of them invokes it —
+    // This is a CODE-REFERENCE check, not a call check: the two files below are
+    // the complete set of production modules that name the seam in code that the
+    // compiler sees. Exactly one of them invokes it —
     //
-    //   prospectRetryJob.ts   binds it as a port: the real caller
-    //   retryConsumer.ts      `import type { ConsumeEnrichmentWorkResult }`,
-    //                         plus prose; it receives the seam as a port and
-    //                         holds no live reference to the module
+    //   prospectRetryJob.ts   imports the symbol and binds it as a port: the
+    //                         real caller
+    //   retryConsumer.ts      `import type { ConsumeEnrichmentWorkResult }`; the
+    //                         module specifier names the seam, and an import IS
+    //                         a code reference — but it receives the seam as a
+    //                         port and holds no live reference to the module
     //
     // — and which is which is proven by the call-aware detector in
     // `piA4aEnrichmentAttempts`, rather than by a second detector here.
+    //
+    // ─── WHY COMMENTS ARE STRIPPED FIRST ──────────────────────────────────────
+    // This asked `git grep` for the bare name, which sees PROSE. Two accurate
+    // header corrections elsewhere in the subsystem — `spendCeiling.ts` and
+    // `recordedExecution.ts` each explaining, correctly, that the retry cron
+    // reaches them THROUGH this seam — were thereby reported as new consumers of
+    // a module neither one imports. A guard that turns truthful documentation
+    // into an architecture violation teaches the opposite of what it is for: the
+    // cheapest way to keep it green is to stop describing the topology.
+    //
+    // So the mention/use distinction that `piA4aEnrichmentAttempts` already owns
+    // is borrowed here, at its comment-stripping half. Strings are deliberately
+    // KEPT: a module specifier is a string, and `import type { … } from
+    // './consumeEnrichmentWork'` is a real code reference — the only lower-case
+    // occurrence in `retryConsumer.ts`, and one this invariant must keep seeing.
+    // Stripping strings too would drop a legitimate referrer and silently narrow
+    // the assertion, which is the failure mode this comment exists to prevent.
     const { execSync } = require('child_process');
+    const fs = require('fs');
+    /** Same two comment rules as `piA4aEnrichmentAttempts`'s `executableSource`. */
+    const withoutComments = (code: string): string => code
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')            // block comments, JSDoc included
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');          // line comments, but not `://`
     // The module's own file is excluded so this holds whether or not it is
     // committed yet; what matters is what ELSE reaches it.
     const referrers = execSync('git grep -l "consumeEnrichmentWork" -- "backend" "pages" || true',
       { encoding: 'utf8' }).split('\n').filter(Boolean)
       .filter((f: string) => !f.includes('/tests/'))
       .filter((f: string) => !f.endsWith('consumeEnrichmentWork.ts'))
+      .filter((f: string) => /\bconsumeEnrichmentWork\b/
+        .test(withoutComments(fs.readFileSync(f, 'utf8'))))
       .sort();
     expect(referrers).toEqual([
       'backend/jobs/prospectRetryJob.ts',
       'backend/services/enrichment/retryConsumer.ts',
     ]);
+  });
+
+  it('a prose mention is not a code reference — the detector above proves the topology, not the vocabulary', () => {
+    // Held separately, on the precedent of `piA4aEnrichmentAttempts`'s own
+    // precision test: if this passes and the assertion above fails, the caller
+    // graph really did change. If this fails, the detector did. Without it the
+    // two are indistinguishable, which is how the prose regression reached T3.
+    const withoutComments = (code: string): string => code
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    const names = (code: string): boolean =>
+      /\bconsumeEnrichmentWork\b/.test(withoutComments(code));
+
+    // Ways the seam can be NAMED without the compiler seeing it — each of these
+    // is a real shape taken from this subsystem's own headers. Note that a
+    // continuation line is only ever asserted WITH its delimiters: ` * prose` on
+    // its own is not a shape TypeScript can hold, and testing it in isolation
+    // would assert a property the detector neither has nor needs.
+    expect(names('/**\n * and reaches this gate through `consumeEnrichmentWork`.\n */')).toBe(false);
+    expect(names('// consumeEnrichmentWork is called by nobody')).toBe(false);
+    expect(names('/** `consumeEnrichmentWork` (A7E), which the retry cron reaches through */')).toBe(false);
+    expect(names('/*\n * multi-line prose about consumeEnrichmentWork\n */')).toBe(false);
+
+    // Ways it is genuinely referenced in code — all must still count.
+    expect(names("import { consumeEnrichmentWork } from '../services/enrichment/consumeEnrichmentWork';")).toBe(true);
+    expect(names("import type { ConsumeEnrichmentWorkResult } from './consumeEnrichmentWork';")).toBe(true);
+    expect(names('consume: (input) => consumeEnrichmentWork(input),')).toBe(true);
+    expect(names("const seam = require('./consumeEnrichmentWork');")).toBe(true);
+
+    // A URL in a comment must not defeat the line-comment rule (the `://` case
+    // the shared regex is written around).
+    expect(names('// see https://example.test/consumeEnrichmentWork for context')).toBe(false);
   });
 });
