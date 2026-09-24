@@ -152,9 +152,13 @@ export interface GatewaySubProvider {
 /**
  * The sources PI knows about.
  *
- * Every external one is `unsupported` — declared, no adapter, no credential.
- * The extension is `available` rather than `connected`: it exists and works,
- * but its observations do not yet reach the PI evidence spine (see its note).
+ * Apollo and Clearbit have adapters (A7P-C4, A3U) and have dropped `adapter`
+ * from their authorization requirements, so `resolveConnectionState` answers
+ * `credential_missing` for them until the TENANT stores a key and `connected`
+ * once one does. Crunchbase and the RapidAPI gateway remain `unsupported` —
+ * declared, no adapter. The extension is `available` rather than `connected`:
+ * it exists and works, but its observations do not yet reach the PI evidence
+ * spine (see its note).
  */
 export const ACQUISITION_SOURCES: readonly AcquisitionSourceDescriptor[] = [
   {

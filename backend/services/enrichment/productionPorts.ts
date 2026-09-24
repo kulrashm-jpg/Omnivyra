@@ -56,9 +56,17 @@
  * here would bill for a call Omnivyra never pays for.
  *
  * ─── NOT A SCHEDULER ───────────────────────────────────────────────────────
- * Assembling ports does not start anything. There is still no retry consumer,
- * no reclaimer and no scheduler, and nothing here reads `execution_status`,
- * `provider_call_state` or `next_retry_at`.
+ * Assembling ports does not start anything, and nothing in this module reads
+ * `execution_status`, `provider_call_state` or `next_retry_at` — both still
+ * exactly true, and they are the properties this section exists to assert.
+ *
+ * What is no longer true is the surrounding claim that none of that machinery
+ * exists. A retry consumer does (`retryConsumer.ts`, A7) and so does a
+ * scheduler: `scheduler/cron.ts` runs `runProspectRetryJob` every 5 minutes,
+ * inert unless `PI_RETRY_SCHEDULER_ENABLED` is `'true'` AND a tenant allow-list
+ * is set, and that job forwards THIS composition. There is still no separate
+ * reclaimer, by A7I's decision rather than by omission: `claimEnrichmentWork`
+ * adopts an abandoned attempt inside the claim, so recovery is not a component.
  */
 
 // A7K — the SINGLETONS, not the factories. Every one of these is the exact

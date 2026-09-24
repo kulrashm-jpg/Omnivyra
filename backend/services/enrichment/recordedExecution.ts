@@ -14,11 +14,17 @@
  * testable without a database. Wrapping keeps that property and leaves the
  * frozen contract byte-identical.
  *
- * ─── THIS CREATES NO AUTOMATIC EXECUTION ──────────────────────────────────
- * Nothing calls this module. It is the seam A4B will call once a trigger and a
- * retry policy exist; until then it is reachable only from a test or an
- * explicit caller. A4A deliberately does not connect planner → executor, does
- * not add a job, and does not schedule anything.
+ * ─── WHO CALLS THIS, AND WHAT STILL ISN'T HERE ────────────────────────────
+ * Two callers, both of which arrived after A4A: `executePlannedField`
+ * (`execution.ts`, the planner → executor seam A4B built) and
+ * `consumeEnrichmentWork` (A7E), which the retry cron reaches through
+ * `runRetryCycle`. So the trigger this header once said did not exist now
+ * does — `scheduler/cron.ts` sweeps every 5 minutes, inert unless
+ * `PI_RETRY_SCHEDULER_ENABLED` is `'true'` AND a tenant allow-list is set.
+ *
+ * What remains true is the narrower claim: THIS module adds no job, holds no
+ * timer and schedules nothing. It executes when it is called, once, and the
+ * cadence belongs entirely to its callers.
  *
  * ─── AN OPEN ROW IS EVIDENCE ──────────────────────────────────────────────
  * The attempt is recorded BEFORE the executor runs and closed after. If the
@@ -51,6 +57,7 @@ import {
   NON_CALLING_ATTEMPT_OUTCOMES,
 } from './attempts';
 import type { ExecutionStatus, ProviderCallState } from './attempts';
+import { recordExecutionClose } from './telemetry';
 
 /**
  * A4N — raised when the work item is already claimed by another worker.
@@ -370,6 +377,25 @@ export async function executeEnrichmentRecorded(
     attributesReturned?: readonly string[];
     detail: string | null;
   }): Promise<void> => {
+    // Every exit passes through here exactly once, which makes this the only
+    // place the four attempt dimensions are known together — so it is the only
+    // place a counter over them cannot double-count or miss a path.
+    //
+    // BEFORE the `attemptId` guard and before the write, deliberately. A
+    // counter that fired only when the row was written would go dark in the one
+    // case where the row is missing, which is the case worth seeing. It also
+    // means the aggregate outlives the row's `ON DELETE CASCADE`.
+    //
+    // Fail-safe by construction: `recordExecutionClose` swallows its own
+    // failure and returns void, so this line cannot turn a completed
+    // enrichment into a failure — the property `close` itself is built for.
+    recordExecutionClose({
+      outcome: fields.outcome,
+      providerCalled: fields.providerCalled,
+      providerCallState: fields.providerCallState,
+      executionStatus: fields.executionStatus,
+      sourceRecordId: fields.sourceRecordId ?? null,
+    });
     if (!attemptId) return;
     try {
       await complete({
