@@ -51,6 +51,7 @@ import {
   NON_CALLING_ATTEMPT_OUTCOMES,
 } from './attempts';
 import type { ExecutionStatus, ProviderCallState } from './attempts';
+import { recordExecutionClose } from './telemetry';
 
 /**
  * A4N — raised when the work item is already claimed by another worker.
@@ -370,6 +371,25 @@ export async function executeEnrichmentRecorded(
     attributesReturned?: readonly string[];
     detail: string | null;
   }): Promise<void> => {
+    // Every exit passes through here exactly once, which makes this the only
+    // place the four attempt dimensions are known together — so it is the only
+    // place a counter over them cannot double-count or miss a path.
+    //
+    // BEFORE the `attemptId` guard and before the write, deliberately. A
+    // counter that fired only when the row was written would go dark in the one
+    // case where the row is missing, which is the case worth seeing. It also
+    // means the aggregate outlives the row's `ON DELETE CASCADE`.
+    //
+    // Fail-safe by construction: `recordExecutionClose` swallows its own
+    // failure and returns void, so this line cannot turn a completed
+    // enrichment into a failure — the property `close` itself is built for.
+    recordExecutionClose({
+      outcome: fields.outcome,
+      providerCalled: fields.providerCalled,
+      providerCallState: fields.providerCallState,
+      executionStatus: fields.executionStatus,
+      sourceRecordId: fields.sourceRecordId ?? null,
+    });
     if (!attemptId) return;
     try {
       await complete({
