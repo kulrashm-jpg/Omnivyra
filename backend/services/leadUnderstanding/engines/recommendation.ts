@@ -3,7 +3,8 @@
  * Produces evidence-backed next-best action / message / channel / timing from evidence ALREADY
  * produced by the primaries (intent / buying / qualification / persona). Emits a recommendations
  * facet + a reasoning trace carrying evidence, confidence, assumptions, alternatives, unknowns,
- * freshness, provenance. Abstains when there is nothing to reason over.
+ * freshness, provenance. Abstains when there is nothing to reason over — no evidence at all, or
+ * every driver dimension abstaining.
  */
 
 import type { EngineOutput, LeadIntelligenceContext } from './engineTypes';
@@ -25,9 +26,26 @@ export function runRecommendation(primaries: EngineOutput[], ctx: LeadIntelligen
   const evidence: EvidenceRef[] = primaries.flatMap((p) => p.evidence);
   if (!evidence.length) return emptyOutput(ENGINE);
 
-  const intent = dimValue(primaries, 'intent') ?? 0;
-  const opportunity = dimValue(primaries, 'opportunity') ?? 0;
-  const urgency = dimValue(primaries, 'urgency') ?? 0;
+  const intentValue = dimValue(primaries, 'intent');
+  const opportunityValue = dimValue(primaries, 'opportunity');
+  const urgencyValue = dimValue(primaries, 'urgency');
+  // Absence is never a score. `dimValue` abstains (null) when no contribution carried a value, and
+  // with EVERY driver abstaining there is nothing to reason over — the same situation as no evidence
+  // reaching us at all, so the engine abstains in the same shape. Reading those nulls as zeros
+  // scored a prospect out of nothing: the thresholds below took them for measured lows and the
+  // confidence floor asserted 0.4 on no evidence whatsoever.
+  if (intentValue === null && opportunityValue === null && urgencyValue === null) return emptyOutput(ENGINE);
+
+  // At least one driver is real. A remaining null is read as 0 only inside the `>` comparisons
+  // below, where absence can lower this recommendation's aggressiveness but never raise it: an
+  // abstaining urgency cannot make a prospect `within_24h` and an abstaining opportunity cannot make
+  // the message lead with a trigger event. Abstaining on ANY null driver was rejected deliberately —
+  // `prospectContext` populates neither `ctx.signals` nor `ctx.qualification`, so `opportunity` and
+  // `urgency` abstain on every real prospect and the engine would then never fire at all. The
+  // abstentions still travel: `unknowns` below names them whenever neither engagement driver scores.
+  const intent = intentValue ?? 0;
+  const opportunity = opportunityValue ?? 0;
+  const urgency = urgencyValue ?? 0;
   const persona = primaries.find((p) => p.engine === 'persona_icp');
   const seniority = persona?.facets.identity?.value?.seniority;
 
