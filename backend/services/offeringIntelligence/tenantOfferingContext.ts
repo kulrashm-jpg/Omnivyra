@@ -91,17 +91,68 @@ export interface TenantOfferingContextPorts {
   loadProfile(organizationId: string): Promise<TenantOfferingProfileRow | null>;
 }
 
+/**
+ * ─── READ-ONLY AS A TYPE, NOT AS A CONVENTION ─────────────────────────────
+ * The two interfaces below are the read verbs of one table and nothing else.
+ *
+ * `ownedDbTable` hands back the raw Supabase builder, on which insert, upsert, update and delete are
+ * all in scope; this file stays read-only because it does not call them, and a test greps this source
+ * to confirm it. That grep is a real guard but a textual one — it cannot see a write reached through
+ * a local alias, a helper, a callback, or a builder handed in by a caller, and it says nothing about
+ * any future file that reads the same table. Expressed as a type instead, the same property holds
+ * structurally: the only surface a reader is ever given exposes select, eq and maybeSingle, so a
+ * write is a compile error rather than a grep that failed to match. Both guards stay. Neither covers
+ * what the other covers: the type cannot see a raw builder imported around it, and the grep cannot
+ * see through an indirection.
+ */
+export interface ReadOnlyRowQuery<Row> {
+  /** Narrow the read. The tenant filter lives here — and nothing on this type can alter a row. */
+  eq(column: string, value: unknown): ReadOnlyRowQuery<Row>;
+  /** Resolve at most one row. `data: null` means "no such row", which is not an error. */
+  maybeSingle(): PromiseLike<{ data: Row | null; error: { message: string } | null }>;
+}
+
+/** One table, readable and nothing more. */
+export interface ReadOnlyTable<Row> {
+  select(columns: string): ReadOnlyRowQuery<Row>;
+}
+
+/** How a port reaches a table. Nothing write-capable can be obtained through this type. */
+export type ReadOnlyTableSource = <Row>(table: string) => ReadOnlyTable<Row>;
+
+/**
+ * The ONE narrowing point in this module: the single place where the builder's write surface is
+ * discarded. The cast is unavoidable and deliberately confined here — the Supabase builder's
+ * generics are not structurally assignable to a hand-written surface — and it only ever drops
+ * capability, never adds it. Everything downstream is typed read-only.
+ */
+export const readOnlyTableSource: ReadOnlyTableSource = <Row>(table: string): ReadOnlyTable<Row> =>
+  ownedDbTable(table) as unknown as ReadOnlyTable<Row>;
+
+/**
+ * Build the one read port from a read-only table source.
+ *
+ * The parameter type is the guarantee: whatever source this factory is handed — the real one, or a
+ * fake in a test — it has no write verb available to call. The port it returns is the same
+ * one-method `TenantOfferingContextPorts` as before; this only fixes how that one method may reach
+ * the table.
+ */
+export function tenantOfferingContextPortsFrom(source: ReadOnlyTableSource): TenantOfferingContextPorts {
+  return {
+    async loadProfile(organizationId: string): Promise<TenantOfferingProfileRow | null> {
+      const { data, error } = await source<TenantOfferingProfileRow>('company_profiles')
+        .select(TENANT_OFFERING_PROFILE_COLUMNS.join(', '))
+        .eq('company_id', organizationId)          // tenant boundary — never optional
+        .maybeSingle();
+      if (error) throw new Error(`company_profiles read failed: ${error.message}`);
+      return data ?? null;
+    },
+  };
+}
+
 /** The default port. The ONLY place here that reaches a table. */
-export const defaultTenantOfferingContextPorts: TenantOfferingContextPorts = {
-  async loadProfile(organizationId: string): Promise<TenantOfferingProfileRow | null> {
-    const { data, error } = await ownedDbTable('company_profiles')
-      .select(TENANT_OFFERING_PROFILE_COLUMNS.join(', '))
-      .eq('company_id', organizationId)          // tenant boundary — never optional
-      .maybeSingle();
-    if (error) throw new Error(`company_profiles read failed: ${error.message}`);
-    return (data as unknown as TenantOfferingProfileRow) ?? null;
-  },
-};
+export const defaultTenantOfferingContextPorts: TenantOfferingContextPorts =
+  tenantOfferingContextPortsFrom(readOnlyTableSource);
 
 export interface TenantOfferingContextInput {
   /** TENANT. Explicit, never ambient — a context pointer is not a credential. */
