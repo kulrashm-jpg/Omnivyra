@@ -217,8 +217,8 @@ describe('W09D — the server owns attribution', () => {
 
 // ════════════════════════════════════════════════════════════════════════════
 describe('W09D — the pilot signal vocabulary', () => {
-  it('is exactly the four a human can honestly observe', () => {
-    expect([...MANUAL_OUTCOME_SIGNALS]).toEqual(['replied', 'meeting_booked', 'converted', 'no_response']);
+  it('is exactly the three a human can honestly observe', () => {
+    expect([...MANUAL_OUTCOME_SIGNALS]).toEqual(['replied', 'converted', 'no_response']);
   });
 
   it('is a SUBSET of the ingestion contract — it invents nothing', () => {
@@ -233,7 +233,13 @@ describe('W09D — the pilot signal vocabulary', () => {
     expect(ingestFeedback).toHaveBeenCalledWith(expect.objectContaining({ signal }));
   });
 
-  it.each(['unsubscribed', 'rejected', 'delivered', 'bounced', 'opened', 'clicked'])(
+  // `meeting_booked` leads this list deliberately. It is the one member that was
+  // once accepted here and is now refused by DECISION (PI-LIFECYCLE-003B, A1)
+  // rather than by observability. The accept-side `it.each` above is derived from
+  // `MANUAL_OUTCOME_SIGNALS`, so it silently stopped covering `meeting_booked`
+  // when the constant shrank; naming it here is what keeps the refusal asserted
+  // instead of merely unexercised.
+  it.each(['meeting_booked', 'unsubscribed', 'rejected', 'delivered', 'bounced', 'opened', 'clicked'])(
     'refuses %s — out of pilot scope, and never reaches ingestion',
     async (signal) => {
       const res = await call({ signal });

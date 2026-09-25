@@ -337,45 +337,63 @@ export const OUTCOME_TRANSITION_MAP: Readonly<Record<BusinessOutcomeType, Outcom
 
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// THE `meeting_booked` CONTRADICTION — verified, and decided against proposing.
+// THE `meeting_booked` CONTRADICTION — RESOLVED. Decision recorded, not open.
 //
-// The two halves of the repository genuinely disagree, and both are current:
+// WHAT THE CONTRADICTION WAS. Two halves of the repository disagreed, and both
+// were current:
 //
 //   • `meeting_booked` is in `UNOBSERVABLE_BUSINESS_OUTCOMES`
 //     (leadOutreachExecution/types.ts) because no transport reports it and no
 //     booking integration exists. `stateModel.ts:47-51` builds on that to call
 //     `meeting_scheduled` "CONTRACT-ONLY and unreachable today", and
 //     `PROSPECT_STATES_UNREACHABLE_TODAY` names it.
-//   • `pages/api/outreach/outcomes.ts` nevertheless admits `meeting_booked` in
-//     `MANUAL_OUTCOME_SIGNALS` — deliberately, as one of "the four signals a
-//     human can honestly observe" — and `feedbackIngestion` accepts it as a
-//     business signal. CONFIRMED: a `meeting_booked` row can exist in
-//     production today, with `source: 'manual'` and an operator attached.
+//   • `pages/api/outreach/outcomes.ts` nevertheless ADMITTED `meeting_booked`
+//     in `MANUAL_OUTCOME_SIGNALS`, and `feedbackIngestion` accepts it as a
+//     business signal — so a `meeting_booked` row could be created in
+//     production with `source: 'manual'` and an operator attached.
 //
-// So "unobservable" is precise but narrower than it reads: no MACHINE observes
-// a booking; an operator can assert one. The contradiction is real and is
-// reported, not papered over.
+// "Unobservable" was precise but narrower than it read: no MACHINE observes a
+// booking; an operator could assert one. That gap was the contradiction.
 //
-// THE DECISION TAKEN HERE: the interpreter DESCRIBES the edge and PROPOSES
-// NOTHING. Reasons, in order of weight:
+// THE RESOLUTION — PI-LIFECYCLE-003B, option (a), decided by the programme
+// owner. `meeting_booked` remains EVIDENCE ONLY and manual admission is
+// REMOVED. Concretely:
 //
-//   1. Coherence with the writer. `lifecycleWriter.validate()` now refuses any
+//   • It stays in `BusinessOutcomeType`, in `FEEDBACK_SIGNALS` /
+//     `BUSINESS_SIGNALS`, in `UNOBSERVABLE_BUSINESS_OUTCOMES` and in the DB
+//     CHECK — deliberately, so a booking integration can ingest it the day one
+//     exists. The vocabulary did not shrink; the manual surface did.
+//   • It is no longer in `MANUAL_OUTCOME_SIGNALS`, so no production path can
+//     create such a row. `observable: false` in the outcome corpus is now
+//     consistently true rather than contradicted by a live write path.
+//   • `meeting_scheduled` stays contract-only. PI-ADR-004 §5 is AFFIRMED as
+//     written — CONDITIONAL on a booking integration, not permanent. Lifting it
+//     remains "removing the state from that list", which is what the list is
+//     for.
+//   • Under PI-ADR-002 outcomes are a first-class EVIDENCE input and explicitly
+//     "do not become decisions". Granting an operator's assertion authority to
+//     DECIDE a lifecycle advance would have extended that ADR; option (b) was
+//     therefore not taken here and is not taken anywhere.
+//
+// THE INTERPRETER'S BEHAVIOUR IS UNCHANGED BY THIS RECORD: it DESCRIBES the
+// edge and PROPOSES NOTHING. The reasons still hold, and are now reasons the
+// decision endorsed rather than reasons to defer:
+//
+//   1. Coherence with the writer. `lifecycleWriter.validate()` refuses any
 //      state in `PROSPECT_STATES_UNREACHABLE_TODAY`. An interpreter that
 //      proposed `meeting_scheduled` would emit proposals that the only writer
 //      is guaranteed to reject — a worse failure than abstaining, because it
 //      looks like it worked.
 //   2. Whether one operator's assertion makes a contract-only state reachable
-//      is a PROGRAMME decision, not an implementation detail. PI-ADR-004 §5
-//      lists the whole meeting cluster as "blocked, not decided here".
+//      was a PROGRAMME decision, not an implementation detail. It has now been
+//      taken, at the programme level, and the answer is no.
 //   3. Abstaining is reversible in one line; a wrong row in an append-only
 //      ledger is not.
 //
-// Reported as DECISION REQUIRED: either (a) keep `meeting_scheduled`
-// contract-only and stop admitting `meeting_booked` on the manual route, or
-// (b) accept a manual assertion as sufficient, drop `meeting_scheduled` from
-// `PROSPECT_STATES_UNREACHABLE_TODAY`, and let this mapping propose it with
-// `origin: 'human'` and the operator attached. Both are coherent. Doing neither
-// is the only incoherent option, and it is the current state.
+// Stage 1 provenance (`outcomeProvenance.ts`) is RETAINED as an
+// audit/attribution capability. It remains carried and not consulted here: it
+// answers who asserted an outcome, never whether that assertion may move the
+// lifecycle.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 

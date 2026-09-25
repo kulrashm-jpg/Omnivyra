@@ -151,8 +151,12 @@ describe('PI WS-E — each of the eight, read against a qualified prospect', () 
   });
 });
 
-describe('PI WS-E — the meeting_booked contradiction, verified against both sources', () => {
-  it('is genuinely contradictory: unobservable by contract, yet admitted by the manual route', () => {
+describe('PI WS-E — the meeting_booked contradiction, resolved against both sources', () => {
+  it('is resolved: still unobservable by contract, and no longer admitted by the manual route', () => {
+    // The contract half is UNCHANGED, and that is the point of A1 rather than a
+    // side effect of it: `meeting_booked` stays in the vocabulary so a booking
+    // integration can ingest it the day one exists, and `meeting_scheduled`
+    // stays contract-only until then (PI-ADR-004 §5, AFFIRMED).
     expect(UNOBSERVABLE_BUSINESS_OUTCOMES).toContain('meeting_booked');
     expect(PROSPECT_STATES_UNREACHABLE_TODAY).toContain('meeting_scheduled');
 
@@ -161,7 +165,16 @@ describe('PI WS-E — the meeting_booked contradiction, verified against both so
     // TenantGuard dependencies, and the fact under test is a source fact.
     const route = readFileSync(join(process.cwd(), 'pages', 'api', 'outreach', 'outcomes.ts'), 'utf8');
     const list = route.slice(route.indexOf('MANUAL_OUTCOME_SIGNALS = ['));
-    expect(list.slice(0, list.indexOf(']'))).toContain("'meeting_booked'");
+    const members = list.slice(0, list.indexOf(']'));
+
+    // The three that remain are asserted PRESENT before the absence is asserted.
+    // Without this, a failed slice (a renamed constant, a reformatted literal)
+    // would leave `members` empty and make the `.not` below pass vacuously —
+    // the test would report the contradiction resolved by reading nothing at all.
+    expect(members).toContain("'replied'");
+    expect(members).toContain("'converted'");
+    expect(members).toContain("'no_response'");
+    expect(members).not.toContain("'meeting_booked'");
   });
 
   it('resolves it by abstaining, so no proposal is made that the writer would reject', () => {

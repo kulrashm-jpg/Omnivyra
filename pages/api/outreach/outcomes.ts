@@ -45,7 +45,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * does this task belong to it) without the rule being written twice.
  *
  * ─── PILOT VOCABULARY IS NARROWER THAN THE CONTRACT ───────────────────────
- * Only the four signals a human can honestly observe are accepted here. The
+ * Only the three signals a human can honestly observe are accepted here. The
  * ingestion taxonomy is NOT changed; this is a subset, and a test asserts every
  * member of it is a real `FeedbackSignal` so the two cannot drift.
  *
@@ -76,10 +76,20 @@ import {
  *   • `rejected` is not an ingestible signal at all — WS-3 M7 excluded it
  *     because it is a human judgement, and admitting it here would change the
  *     taxonomy rather than use it.
+ *   • `meeting_booked` is excluded by DECISION, not by observability. Unlike
+ *     `opened`/`clicked`, an operator genuinely could observe a booking — which
+ *     is exactly why admitting it here, while `meeting_scheduled` stayed
+ *     contract-only, left the two halves of the contract disagreeing.
+ *     PI-LIFECYCLE-003B closed that: `meeting_booked` remains a first-class
+ *     EVIDENCE member of the vocabulary (it stays in `BusinessOutcomeType`, in
+ *     `FEEDBACK_SIGNALS` and in the DB CHECK, so a booking integration can
+ *     ingest it the day one exists) but it is no longer manually assertable,
+ *     and `meeting_scheduled` stays contract-only until that integration
+ *     arrives (PI-ADR-004 §5, AFFIRMED). See the decision record in
+ *     `backend/services/prospectLifecycle/outcomeInterpreter.ts`.
  */
 export const MANUAL_OUTCOME_SIGNALS = [
   'replied',
-  'meeting_booked',
   'converted',
   'no_response',
 ] as const;

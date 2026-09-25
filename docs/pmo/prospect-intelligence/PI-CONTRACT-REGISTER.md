@@ -2,7 +2,8 @@
 
 **One authoritative contract per concern.** This is the register every workstream reuses from, and the answer to "is there already a contract for this?"
 
-**Base SHA:** `a07477e4` · **Established:** 2026-09-23 · **Status:** FROZEN for the nine existing contracts; two are PENDING and one is DEFERRED.
+**Base SHA:** `a07477e4` · **Established:** 2026-09-23 · **Status:** FROZEN for eleven contracts; one is SITED and one is DEFERRED.
+**Amended:** 2026-09-25 at `6db34fa0` — contract #13 (Outcome Provenance) added; contract #10 moved SITED → FROZEN, per `PI-ADR-006`.
 
 A contract listed `FROZEN` may not be re-stated, re-spelled or paralleled. Extending one is a change to this register, not a local decision. The Do-Not-Build register in `IMPLEMENTATION-MANIFEST-001.md` §11 remains in force.
 
@@ -21,9 +22,10 @@ A contract listed `FROZEN` may not be re-stated, re-spelled or paralleled. Exten
 | 7 | **Decision (governance)** | `GateDecision` `['allowed','blocked','deferred']`; frozen gate order `kill_switch → suppression → region → approval → rate_limit`; `GOVERNANCE_TYPES` (9, closed) | `leadOutreachExecution/governance.ts:17-46`; `prospectIdentity/contactGovernance.ts:50-61` | **FROZEN** |
 | 8 | **Next Best Action** | `nextAction ∈ {personalized_outreach, nurture_sequence, monitor}`; NBA record fields per `prospectOutreach/readiness.ts:82-112` | manifest C-7 — `engines/recommendation.ts` canonical, `leadActions.ts` retained legacy read-side | **FROZEN — thin, §2.3** |
 | 9 | **Outreach Outcome** | 8 values `opened, clicked, replied, meeting_booked, rejected, no_response, unsubscribed, converted`; `UNOBSERVABLE_BUSINESS_OUTCOMES`; `DERIVED_BUSINESS_OUTCOMES`; dual idempotency | `leadOutreachExecution/types.ts:80-107`; DB CHECK at `baseline.sql:19980` | **FROZEN** |
-| 10 | **Prospect State / Lifecycle Event** | New append-only transition ledger keyed to the prospect; **7 states**, not 17; vocabulary in a DB CHECK; typed evidence citation; explicit `human \| derived` origin; idempotent re-derivation legal | **`PI-ADR-004`** | **SITED — shape fixed; edges, debounce and the `outreach-active` question left to WS-E** |
+| 10 | **Prospect State / Lifecycle Event** | Append-only transition ledger keyed to the prospect; **7 states**, not 17; vocabulary in a DB CHECK; typed evidence citation; explicit `human \| derived` origin; idempotent re-derivation legal | **`PI-ADR-004`**, implemented by `prospectLifecycle/stateModel.ts:79-122` (vocabulary + edges), `lifecycleWriter.ts:70` (debounce), `lifecycleReader.ts:231` (the `outreach-active` projection); DB CHECK at `20261028000000_pi_prospect_lifecycle_state.sql:175-184` | **FROZEN — WS-C decided all three items ADR-004 §5 left open: the edges (DECISION A), the six-hour debounce (DECISION B), and `outreach-active` as a projection rather than a state (Decision C). `meeting_scheduled` remains contract-only, §4** |
 | 11 | **Candidate** | New tenant-scoped pre-prospect review queue; anchored to an **identity claim**, not a person; person-optional; policy-gated promotion; audited transitions | **`PI-ADR-003`** | **SITED — shape fixed; state vocabulary and criteria still to be written by WS-C** |
 | 12 | **Learning Proposal** | unratified `prospect_icp_versions` draft; cites the outcome rows that suggested it; stated data floor; human ratifies | `PI-ACTIVATION-PLAN-001.md` §4 records the minimum acceptable mechanism | **DEFERRED until outcome data exists** — contract stated, not built |
+| 13 | **Outcome Provenance** | `AssertionAuthority` `['authorized_human','provider','webhook','import','system','unauthorized']`, classified over the six `FeedbackSource` values `provider_webhook, provider_poll, manual, import, derived, internal`; pure — no clock, no I/O, no database; **fails closed** — absent, unrecognised or internally inconsistent provenance yields `unauthorized` with a stated reason; **audit/attribution metadata only**: carried through interpretation and never consulted as lifecycle authorization | `prospectLifecycle/outcomeProvenance.ts`; source axis `leadOutreachExecution/types.ts:293`; DB CHECK at `20260915000000_ws3_feedback_ingestion.sql:46-50`; **`PI-ADR-006`** | **FROZEN** |
 
 ### Cross-cutting vocabularies, also frozen
 
@@ -65,9 +67,13 @@ Fixed by the ADR, and binding on WS-C:
 
 Still to be written by WS-C: the state vocabulary, the criteria, and the debounce.
 
-## 4. Contract #10 (Prospect State) — constraints already fixed
+## 4. Contract #10 (Prospect State) — constraints, and what WS-C decided
 
-WS-E writes this, but four constraints are already determined and are recorded here so the contract is not drafted against a blank page:
+**WS-C wrote this contract; it is no longer pending with WS-E.** The four constraints below were fixed in advance and all four are honoured by the implementation. What `PI-ADR-004` §5 left open, WS-C then decided: the transition edges (DECISION A, `prospectLifecycle/stateModel.ts:13-25`), the reassessment debounce at six hours and overridable per call (DECISION B, `lifecycleWriter.ts:54-70`), and `outreach-active` as a read-time projection over `outreach_tasks` rather than a stored state (Decision C, `stateModel.ts:89-100`, implemented as `projectOutreachActivity` in `lifecycleReader.ts:231`) — which is why there are six resting states plus the initial one, and why reactivation is `nurture → qualified`.
+
+One item in the cluster remains deliberately unbuilt: `meeting_scheduled` is in the vocabulary, the graph and the DB CHECK but stays in `PROSPECT_STATES_UNREACHABLE_TODAY`. `PI-ADR-004` §5 is affirmed conditionally on a future booking integration, and `PI-ADR-006` records that manual admission of its only cause, `meeting_booked`, has been removed.
+
+The four pre-fixed constraints, recorded so the contract was not drafted against a blank page:
 
 1. It is a **prospect** concept. It must not be conflated with, or stored in, any of: `outreach_tasks.status` (17 states, per-task), `operational_states` (manual, PI-disconnected), `journeyState` (website telemetry), `FunnelStage` (a recomputed label), `active_leads.bucket`, or `prospect_accounts.status` (identity, not sales).
 2. It may not silently adopt `canonical_leads.lead_status`, which `crmIngestionService` mirrors from arbitrary customer CRM values (`:133, :210, :451`).
