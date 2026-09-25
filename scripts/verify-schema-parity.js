@@ -470,6 +470,53 @@ const REQUIRED_COLUMNS = [
   { severity: 'WARN', table: 'outreach_decisions', column: 'identity_anchor',   motivation: 'A3 (20261011000000): which anchor kind produced the verdict.' },
   { severity: 'WARN', table: 'outreach_decisions', column: 'identity_degraded', motivation: 'A3 (20261011000000): records that the verdict was reached without a resolved person — the flag that distinguishes a clean allow from a best-effort one.' },
 
+  // ── prospect_lifecycle_transitions — PI-LIFECYCLE (20261028000000) ──────
+  // PI-VERIFY-001 (NF-08): this table was absent from the manifest entirely,
+  // although its CHECK constraints ARE the lifecycle authorization model. Both
+  // readers (readCurrentProspectState / readProspectLifecycleHistory) use a
+  // LITERAL select list and throw on error, so an unapplied column is a 42703
+  // that propagates — and readCurrentProspectState is what the writer's own
+  // append-only chain check consults, so a gap there stops every transition.
+  // BLOCKING = the current-state read or the append; WARN = history detail only.
+  { severity: 'BLOCKING', table: 'prospect_lifecycle_transitions', column: 'organization_id', motivation: 'Tenant predicate (.eq) on both reads and the only tenant key on the row; also the organization half of all three composite FKs.' },
+  { severity: 'BLOCKING', table: 'prospect_lifecycle_transitions', column: 'prospect_id', motivation: 'The other .eq predicate on both reads — which prospect the ledger is about.' },
+  { severity: 'BLOCKING', table: 'prospect_lifecycle_transitions', column: 'seq', motivation: 'The .order key. "Latest" is defined by it, so the writer cannot verify previous_state without it.' },
+  { severity: 'BLOCKING', table: 'prospect_lifecycle_transitions', column: 'state', motivation: 'In the literal select list and checked against the 7-word TS vocabulary; a divergence throws by design.' },
+  { severity: 'BLOCKING', table: 'prospect_lifecycle_transitions', column: 'previous_state', motivation: 'In the literal select list; the append-only chain trigger compares NEW.previous_state to the actual latest state.' },
+  { severity: 'BLOCKING', table: 'prospect_lifecycle_transitions', column: 'is_initial', motivation: 'In the literal select list and the partial unique index that permits exactly one initial row per prospect.' },
+  { severity: 'BLOCKING', table: 'prospect_lifecycle_transitions', column: 'transitioned_at', motivation: 'In the literal select list of the current-state read.' },
+  { severity: 'BLOCKING', table: 'prospect_lifecycle_transitions', column: 'origin', motivation: 'Written on every append and constrained with actor_user_id by prospect_lifecycle_origin_actor; absent, no transition can be recorded.' },
+  { severity: 'BLOCKING', table: 'prospect_lifecycle_transitions', column: 'evidence_kind', motivation: 'Written on every append and constrained against the evidence FKs by prospect_lifecycle_evidence_typed.' },
+  { severity: 'WARN', table: 'prospect_lifecycle_transitions', column: 'evidence_outcome_id', motivation: 'History detail; the outcome half of the composite evidence FK (ON DELETE RESTRICT).' },
+  { severity: 'WARN', table: 'prospect_lifecycle_transitions', column: 'evidence_source_record_id', motivation: 'History detail; the source-record half of the composite evidence FK (ON DELETE RESTRICT).' },
+  { severity: 'WARN', table: 'prospect_lifecycle_transitions', column: 'evidence_detail', motivation: 'History detail; jsonb, defaulted, in the history select list only.' },
+  { severity: 'WARN', table: 'prospect_lifecycle_transitions', column: 'source_event_key', motivation: 'History detail; shape-constrained so a leadKey is structurally inexpressible.' },
+  { severity: 'WARN', table: 'prospect_lifecycle_transitions', column: 'actor_user_id', motivation: 'History detail; required for origin=human and forbidden for origin=derived by the origin/actor CHECK.' },
+  { severity: 'WARN', table: 'prospect_lifecycle_transitions', column: 'reasoning', motivation: 'History detail; length-constrained.' },
+  { severity: 'WARN', table: 'prospect_lifecycle_transitions', column: 'model_version', motivation: 'History detail; which rule version produced a derived transition.' },
+
+  // ── outreach_approvals / _attempts / _delivery_evidence — WS-3 (20260910000000)
+  // PI-VERIFY-001 (NF-08): also absent from the manifest. NOTE THE FAILURE MODE
+  // — unlike every table above, these three are read through storage.listFor,
+  // which wraps the query in safeDb and returns [] on error. A missing column
+  // therefore does NOT throw: it yields an EMPTY LIST that is indistinguishable
+  // from "this task has no approvals / no attempts / no delivery evidence".
+  // That is a fail-OPEN read, which is why manifest coverage matters here even
+  // though nothing raises. Tenant/anchor predicates are BLOCKING on the same
+  // basis as every other table; ordering and payload columns are WARN.
+  { severity: 'BLOCKING', table: 'outreach_approvals', column: 'company_id', motivation: 'Tenant predicate (.eq) on storage.listApprovals. Absent, the read silently returns [] and an approval history reads as empty.' },
+  { severity: 'BLOCKING', table: 'outreach_approvals', column: 'task_id', motivation: 'The task anchor predicate (.eq) on storage.listApprovals; same silent-empty consequence.' },
+  { severity: 'WARN', table: 'outreach_approvals', column: 'decided_at', motivation: 'The .order key for listApprovals; absent, the read returns [] rather than mis-ordering.' },
+  { severity: 'WARN', table: 'outreach_approvals', column: 'decision', motivation: 'approved/rejected; selected via a star projection, so covered by the anchors — listed to document the surface.' },
+  { severity: 'BLOCKING', table: 'outreach_attempts', column: 'company_id', motivation: 'Tenant predicate (.eq) on storage.listAttempts AND on the quota/governance attempt reads that gate sending.' },
+  { severity: 'BLOCKING', table: 'outreach_attempts', column: 'task_id', motivation: 'Task anchor (.eq) on listAttempts and in the literal select of the quota/governance reads.' },
+  { severity: 'BLOCKING', table: 'outreach_attempts', column: 'started_at', motivation: 'The .gte window predicate in quota.ts and governanceService.ts — the rate-limit horizon. Absent, the window read fails and the quota view of recent attempts is empty.' },
+  { severity: 'WARN', table: 'outreach_attempts', column: 'attempt_number', motivation: 'The .order key for listAttempts; also the third column of the (company_id, task_id, attempt_number) uniqueness that makes a retry idempotent.' },
+  { severity: 'BLOCKING', table: 'outreach_delivery_evidence', column: 'company_id', motivation: 'Tenant predicate (.eq) on storage.listDeliveryEvidence; silent-empty on absence.' },
+  { severity: 'BLOCKING', table: 'outreach_delivery_evidence', column: 'task_id', motivation: 'Task anchor predicate (.eq) on storage.listDeliveryEvidence.' },
+  { severity: 'WARN', table: 'outreach_delivery_evidence', column: 'observed_at', motivation: 'The .order key for listDeliveryEvidence.' },
+  { severity: 'WARN', table: 'outreach_delivery_evidence', column: 'delivery_status', motivation: 'The 9-value delivery vocabulary; selected via a star projection, listed to document the surface.' },
+
   // ── the WS-5 engagement seam (GAP-A) — four NON-PI-owned tables ─────────────
   // Listed on the same basis as integration_credentials below: PI is a CONSUMER
   // whose read throws. Ownership is not the test this manifest applies; impact

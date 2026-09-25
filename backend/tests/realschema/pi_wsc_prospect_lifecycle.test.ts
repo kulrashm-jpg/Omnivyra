@@ -1,20 +1,25 @@
 /**
  * PI WS-C — `prospect_lifecycle_transitions` against real PostgreSQL.
  *
- * ╔════════════════════════════════════════════════════════════════════════╗
- * ║ NOT RUN. AUTHORED ONLY.                                                ║
- * ║                                                                        ║
- * ║ This suite has NEVER been executed. The WS-C worktree has no local     ║
- * ║ PostgreSQL and no Docker, and the migration it asserts against         ║
- * ║ (20261028000000_pi_prospect_lifecycle_state.sql) has been AUTHORED AND ║
- * ║ NEVER APPLIED — not locally, not in staging, not in production. No     ║
- * ║ expectation below has been observed to pass or to fail.                ║
- * ║                                                                        ║
- * ║ To run it: scripts/ci/real-schema-ci.sh, which provisions a disposable ║
- * ║ database from the baseline plus the replayed migrations and sets       ║
- * ║ W6_DB_URL. Until someone does that, treat every assertion here as a    ║
- * ║ CLAIM about the migration, not as evidence about it.                   ║
- * ╚════════════════════════════════════════════════════════════════════════╝
+ * EXECUTED. This suite runs, and passes, against real PostgreSQL.
+ *
+ * An earlier header here read "NOT RUN. AUTHORED ONLY." That was true when the
+ * file was written and is now false. The suite has been executed: the clean
+ * full run was 27 suites / 505 tests / 505 passed, with 41 migrations replayed
+ * onto a disposable PostgreSQL 17, and that first execution corrected five
+ * predictions this file had got wrong. `Real-Schema CI` has since run the same
+ * invariants green on GitHub's own PostgreSQL.
+ *
+ * Run it with scripts/ci/real-schema-ci.sh, which provisions the database from
+ * supabase/_schema/baseline.sql plus every migration above the baseline's
+ * ledger position, and sets W6_DB_URL.
+ *
+ * WHAT THIS SUITE DOES NOT TELL YOU: it proves the migration invariants hold
+ * on real PostgreSQL. It says NOTHING about the production database. The
+ * harness replays migrations onto a throwaway server, so a green run here is
+ * not evidence that any migration is applied in production and must never be
+ * reported as such. Production apply state is tracked separately and is not
+ * asserted by this file.
  *
  * Why it must exist anyway: the properties this contract actually rests on are
  * the ones that cannot be mocked — that the append-only trigger refuses an
