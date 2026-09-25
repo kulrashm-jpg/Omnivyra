@@ -9,8 +9,11 @@
  * `outcomeInterpreter` is the PI-ADR-002 §3.1(5) mapping from the eight-value
  * outcome vocabulary onto those transitions — a pure decider that proposes and
  * never writes, and that nothing is wired to yet.
+ * `outcomeProvenance` answers who asserted an outcome and whether they may —
+ * authorization only, consulted by nothing yet (PI-LIFECYCLE-003B Stage 1).
  */
 export * from './stateModel';
 export * from './lifecycleWriter';
 export * from './lifecycleReader';
 export * from './outcomeInterpreter';
+export * from './outcomeProvenance';
