@@ -1,0 +1,117 @@
+name: PI Verification
+
+# PI-VERIFY-001 — bring Prospect Intelligence verification under CI enforcement.
+#
+# THE GAP THIS CLOSES
+# -------------------
+# Before this workflow, NO PI test suite ran in CI at all. `npm test`
+# (`jest backend/tests`) is invoked by no workflow; CI ran `backend/tests/orchestration`
+# plus a short list of named campaign/strategic suites. The ~120 PI suites — the
+# lifecycle ledger, the outcome interpreter, outcome provenance, contact
+# governance, enrichment economics, the ICP model — were executed only by a
+# human on a laptop. A PI regression could therefore merge past six green
+# required checks.
+#
+# Separately, `typecheck:backend-tests` was the ONLY thing type-checking
+# `backend/tests/**` (root tsconfig sets `isolatedModules: true`, so ts-jest is
+# transpile-only and jest never type-checks) and it too was wired to no workflow.
+#
+# WHY THERE IS NO PATH FILTER
+# ---------------------------
+# This workflow is intended to become a REQUIRED context. GitHub treats a
+# required check that never runs as pending, not as passed, so a path-filtered
+# required check deadlocks every PR that does not touch those paths. Real-Schema
+# CI can afford path filters precisely because it is advisory. This one runs on
+# every pull request by design.
+#
+# NOTHING HERE REACHES PRODUCTION: no repository secrets are referenced, the
+# Supabase/Redis/provider values below are hermetic placeholders that resolve to
+# nothing, and no step performs a network call to a provider or a database.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pi-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pi-unit-suites:
+    name: PI unit suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The suite set is DERIVED, not listed. A hand-written list cannot notice
+      # a PI suite added next week, so it decays into a silent exclusion — the
+      # one failure mode this job exists to prevent. See the script header for
+      # the measured reason both selectors (name AND import) are needed.
+      - name: Derive the PI suite set
+        id: derive
+        run: |
+          node scripts/ci/pi-test-suites.js > pi-suites.txt
+          COUNT=$(wc -l < pi-suites.txt)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Derived $COUNT PI suites"
+          node scripts/ci/pi-test-suites.js --explain
+
+      # Hermetic placeholders, copied from the `Security gate fixture tests`
+      # step in typecheck-baseline.yml. They satisfy the shared jest setup
+      # (backend/tests/setupEnv.ts) and reach nothing. ENCRYPTION_KEY is
+      # included because its absence is a known environmental suite failure.
+      - name: Run the PI suites
+        env:
+          SUPABASE_URL: https://placeholder.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
+          REDIS_URL: 'redis://localhost:6379'
+          OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+          ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+        run: |
+          # `npx jest` is avoided deliberately: on at least one developer
+          # machine npx-cli hangs before spawning the binary. Call jest directly.
+          node ./node_modules/jest/bin/jest.js \
+            --runTestsByPath $(tr '\n' ' ' < pi-suites.txt) \
+            --runInBand --forceExit
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### PI verification" >> "$GITHUB_STEP_SUMMARY"
+          echo "PI suites derived and executed: ${{ steps.derive.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
+
+  backend-tests-typecheck:
+    name: Backend test typecheck baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Non-regression, not zero-error: the surface carries 260 pre-existing
+      # diagnostics, so a raw `tsc` exits 2 on a clean tree. The gate compares
+      # the diagnostic SET against scripts/backend-tests-typecheck-baseline.json
+      # and fails only on NET-NEW diagnostics. A count comparison would let a
+      # new error in while an old one was fixed; this does not.
+      - name: Backend test typecheck non-regression
+        run: node scripts/backend-tests-typecheck-baseline.js

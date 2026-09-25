@@ -1,22 +1,22 @@
 /**
  * PI/WS-F — person erasure and contact governance, against real PostgreSQL.
  *
- * ############################################################################
- * #  NOT RUN.                                                                #
- * #                                                                          #
- * #  This file was AUTHORED but never EXECUTED. The environment WS-F worked   #
- * #  in has no local PostgreSQL and no Docker daemon, so                      #
- * #  scripts/ci/real-schema-ci.sh could not provision a database and          #
- * #  W6_DB_URL was never set. Every assertion below is a PREDICTION derived   #
- * #  from the migration DDL, not an observation.                             #
- * #                                                                          #
- * #  The equivalent cases DID run, and pass, against a strict in-memory model #
- * #  of the same CHECK, the same partial unique index and the same            #
- * #  ON DELETE SET NULL (person_id) update:                                   #
- * #      backend/tests/unit/piWsfPersonErasure.test.ts  — 38/38.             #
- * #  That is a model of PostgreSQL, not PostgreSQL. Run this suite before     #
- * #  treating DEFECT-008 or DEFECT-010 as proven or closed.                   #
- * ############################################################################
+ * EXECUTED. This suite runs, and passes, against real PostgreSQL.
+ *
+ * An earlier header here read "NOT RUN" and described every assertion below
+ * as a PREDICTION derived from the DDL. That was true when the file was
+ * written and is now false. The suite has been executed on real PostgreSQL 17
+ * (clean full run: 27 suites / 505 tests / 505 passed, 41 migrations
+ * replayed), and `Real-Schema CI` has since run the same invariants green.
+ * DEFECT-008 and DEFECT-010 are therefore proven on PostgreSQL itself rather
+ * than on a model of it. The equivalent in-memory suite
+ * (backend/tests/unit/piWsfPersonErasure.test.ts) remains a model of
+ * PostgreSQL, and this file is the observation.
+ *
+ * WHAT THIS SUITE DOES NOT TELL YOU: a green run here concerns a disposable
+ * database built from the committed baseline plus replayed migrations. It is
+ * not evidence about the production database and must not be reported as
+ * production verification.
  *
  * The properties here cannot be mocked honestly:
  *   - that a referential action's UPDATE is evaluated against the table CHECKs;

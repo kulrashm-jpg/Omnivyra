@@ -112,7 +112,22 @@ describe('A3X — 1. a tenant-funded call creates no Omnivyra charge', () => {
     // credit-holding customer action. The port must not ask at all.
     const src = require('fs').readFileSync(
       require('path').join(process.cwd(), 'backend/services/enrichment/providers/cost.ts'), 'utf8');
-    const port = src.slice(src.indexOf('export function makeTenantFundedExecutionPort'));
+
+    // The anchor is asserted BEFORE it is used. A single-argument
+    // `slice(indexOf(...))` returns the file's LAST CHARACTER when the anchor is
+    // absent, and both `.not.toContain` assertions below would then pass against
+    // that one character - reporting that the port never consults the registry
+    // having read essentially nothing. Same guard the WS-E interpreter suite
+    // applies to its own source slice.
+    const at = src.indexOf('export function makeTenantFundedExecutionPort');
+    expect(at).toBeGreaterThanOrEqual(0);
+
+    const port = src.slice(at);
+    // Positive companion: prove the slice really is the port before asserting
+    // what it does not contain.
+    expect(port).toContain('authorizeCost');
+    expect(port).toContain('holdId: null');
+
     expect(port).not.toContain('resolveFeature');
     expect(port).not.toContain('resolveMonetizationFeature');
   });
