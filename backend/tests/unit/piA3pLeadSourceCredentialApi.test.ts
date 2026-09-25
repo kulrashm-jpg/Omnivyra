@@ -56,6 +56,47 @@ jest.mock('../../apiHandlers/externalApis/indexShared', () => ({
   }),
 }));
 
+// ── tenant-boundary fake (NF-06) ───────────────────────────────────────────
+// A SECOND fake, not a replacement: the two guards answer different questions
+// and the route calls both, so a test that could not fail one independently of
+// the other could not prove the ordering NF-06 is about. TenantGuard's own
+// bridge behaviour is proven by its own suites; what is asserted HERE is only
+// that this route delegates to it, and delegates FIRST.
+let tenantOutcome: 'ok' | 'bridge' | 'not-member' | 'no-auth' = 'ok';
+const tenantCalls: { companyId?: string | null }[] = [];
+
+jest.mock('../../security/TenantGuard', () => ({
+  requireTenantAccess: jest.fn(async (
+    _req: unknown,
+    res: { status: (c: number) => { json: (b: unknown) => unknown } },
+    companyId?: string | null,
+  ) => {
+    tenantCalls.push({ companyId });
+    // Statuses mirror TenantGuard's own reason -> status mapping so this fake
+    // cannot quietly disagree with the guard it stands in for.
+    if (!companyId) {
+      res.status(400).json({ error: 'Tenant id required', code: 'NO_ORG_ID' });
+      return null;
+    }
+    if (tenantOutcome === 'no-auth') {
+      res.status(401).json({ error: 'Not authenticated', code: 'NO_AUTH' });
+      return null;
+    }
+    if (tenantOutcome === 'bridge') {
+      res.status(403).json({
+        error: 'Tenant operations require a real user session',
+        code: 'BRIDGE_NOT_TENANT',
+      });
+      return null;
+    }
+    if (tenantOutcome === 'not-member') {
+      res.status(403).json({ error: 'Forbidden', code: 'NOT_A_MEMBER' });
+      return null;
+    }
+    return { userId: 'user-1', organizationId: companyId };
+  }),
+}));
+
 // The route uses the REAL handler module, which uses the REAL credential
 // service — so the service is faked at its own boundary, one level down.
 jest.mock('../../services/integrationCredentialService', () => {
@@ -115,6 +156,8 @@ beforeEach(() => {
   store.clear();
   authCalls.length = 0;
   authOutcome = 'ok';
+  tenantCalls.length = 0;
+  tenantOutcome = 'ok';
   logSpy = jest.spyOn(console, 'error').mockImplementation(() => { /* captured */ });
 });
 afterEach(() => { logSpy.mockRestore(); });
@@ -168,6 +211,76 @@ describe('A3P — authorization', () => {
     });
     expect(store.has(key(ORG_A, 'apollo'))).toBe(true);
     expect(store.has(key(ORG_B, 'apollo'))).toBe(false);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('A3P / NF-06 — the tenant boundary precedes the permission check', () => {
+  // WHAT WAS WRONG: `requireExternalApiAccess` returns { role: 'SUPER_ADMIN' }
+  // from its legacy bridge branch BEFORE `companyId` is read for anything and
+  // before `requireManage` is evaluated. An HMAC-valid bridge cookie therefore
+  // satisfied this route for ANY tenant — on the route that stores provider
+  // secrets. TenantGuard already refused exactly that shape of principal
+  // (BRIDGE_NOT_TENANT); this route was simply not asking it.
+
+  it('an authorized tenant-bound caller still completes the operation', async () => {
+    const res = await call('PUT', { companyId: ORG_A }, { provider: 'apollo', credentials: { api_key: SECRET_A } });
+    expect(res.statusCode).toBe(200);
+    // Positive companions: BOTH guards ran, both were asked about ORG_A, and
+    // the permission question is still being asked with requireManage.
+    expect(tenantCalls).toEqual([{ companyId: ORG_A }]);
+    expect(authCalls).toEqual([{ companyId: ORG_A, requireManage: true }]);
+    expect(store.has(key(ORG_A, 'apollo'))).toBe(true);
+  });
+
+  it('a legacy bridge principal cannot act on another tenant, and never reaches the legacy authorizer', async () => {
+    tenantOutcome = 'bridge';
+    const res = await call('PUT', { companyId: ORG_B }, { provider: 'apollo', credentials: { api_key: SECRET_B } });
+    expect(res.statusCode).toBe(403);
+    expect((res.body as { code?: string }).code).toBe('BRIDGE_NOT_TENANT');
+    // The regression this closes is about REACHABILITY, not ordering of checks:
+    // the vulnerable branch returns elevated authorization before companyId is
+    // validated, so the only safe property is that it is never entered at all.
+    expect(authCalls).toHaveLength(0);
+    expect(store.size).toBe(0);
+  });
+
+  it('a bridge principal is refused for every tenant it might name, in every verb', async () => {
+    tenantOutcome = 'bridge';
+    for (const org of [ORG_A, ORG_B]) {
+      expect((await call('GET', { companyId: org })).statusCode).toBe(403);
+      expect((await call('PUT', { companyId: org }, { provider: 'apollo', credentials: { api_key: SECRET_A } })).statusCode).toBe(403);
+      expect((await call('DELETE', { companyId: org, provider: 'apollo' })).statusCode).toBe(403);
+    }
+    expect(tenantCalls).toHaveLength(6);
+    expect(authCalls).toHaveLength(0);
+    expect(store.size).toBe(0);
+  });
+
+  it('a caller who is not a member is refused before the permission check', async () => {
+    tenantOutcome = 'not-member';
+    const res = await call('DELETE', { companyId: ORG_B, provider: 'apollo' });
+    expect(res.statusCode).toBe(403);
+    expect(authCalls).toHaveLength(0);
+  });
+
+  it('the tenant guard is asked about the VERIFIED query id, never a body id', async () => {
+    await call('PUT', { companyId: ORG_A }, {
+      provider: 'apollo', companyId: ORG_B, company_id: ORG_B, credentials: { api_key: SECRET_A },
+    });
+    expect(tenantCalls).toEqual([{ companyId: ORG_A }]);
+    expect(store.has(key(ORG_A, 'apollo'))).toBe(true);
+    expect(store.has(key(ORG_B, 'apollo'))).toBe(false);
+  });
+
+  it('the permission check is still authoritative once the tenant boundary is satisfied', async () => {
+    // NF-06 added a precondition; it did not widen or narrow who may manage.
+    authOutcome = 'forbidden';
+    const res = await call('PUT', { companyId: ORG_A }, { provider: 'apollo', credentials: { api_key: SECRET_A } });
+    expect(res.statusCode).toBe(403);
+    expect(tenantCalls).toHaveLength(1);
+    expect(authCalls).toEqual([{ companyId: ORG_A, requireManage: true }]);
+    expect(store.size).toBe(0);
   });
 });
 
