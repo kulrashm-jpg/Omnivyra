@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireExternalApiAccess } from '../../../backend/apiHandlers/externalApis/indexShared';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import {
   configureProviderCredential,
   readProviderCredentialStatus,
@@ -28,13 +29,36 @@ import {
  * is the conservative direction: it can be widened by a later contract change,
  * whereas a permission invented here could not be narrowed safely.
  *
- * ─── HOW THE TENANT IS ESTABLISHED ────────────────────────────────────────
+ * ─── HOW THE TENANT IS ESTABLISHED (NF-06) ────────────────────────────────
  * `companyId` arrives in the query string, exactly as on the ICP routes, and
- * is NOT trusted. It is an ASSERTION which `requireExternalApiAccess` verifies
- * against the authenticated principal's roles before this handler proceeds; an
- * unverifiable one yields 403 and never reaches the credential store. The
- * verified id is then the only tenant value passed downward — no company id is
- * ever read from the body, where it would sit beside the secret it governs.
+ * is NOT trusted. It is an ASSERTION, and TWO questions have to be answered
+ * about it — they are different questions, so there are two guards, in a fixed
+ * order:
+ *
+ *   1. `requireTenantAccess` — IS THE CALLER IN THIS TENANT AT ALL?
+ *      TenantGuard is the repository's canonical tenant boundary. It requires
+ *      the caller to name the tenant, verifies live membership, and REFUSES a
+ *      legacy cookie bridge principal outright with `BRIDGE_NOT_TENANT`,
+ *      because a bridge principal is platform-tier and has no tenant identity.
+ *
+ *   2. `requireExternalApiAccess(…, requireManage: true)` — MAY THEY MANAGE
+ *      EXTERNAL APIS? Unchanged, and still the answer to "who is allowed":
+ *      this IS external-API management, and reusing that permission keeps this
+ *      route's answer identical to `/api/social-platforms/*`.
+ *
+ * NF-06 added step 1 and changed nothing about step 2. The reason it is needed:
+ * `requireExternalApiAccess` returns `{ role: 'SUPER_ADMIN' }` from its legacy
+ * bridge branch BEFORE `companyId` is used for anything and before the
+ * `requireManage` check runs, so an HMAC-valid bridge cookie satisfied this
+ * route FOR ANY TENANT — on the most secret-bearing surface in the programme.
+ * TenantGuard already refused exactly that; this route simply was not asking
+ * it. No new role hierarchy is introduced here, and no product-policy question
+ * about who may manage credentials is reopened: that is still `requireManage`.
+ *
+ * Both guards read the SAME query id, so they cannot disagree about which
+ * tenant is meant. The verified id is then the only tenant value passed
+ * downward — no company id is ever read from the body, where it would sit
+ * beside the secret it governs.
  *
  * ─── SECRETS TRAVEL ONE WAY ───────────────────────────────────────────────
  * A credential enters through PUT and never comes back. Responses carry masked
@@ -55,6 +79,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // Authorization first, and before the body is looked at: a caller who may not
   // manage this tenant's APIs must not reach a code path that handles a secret.
+  //
+  // NF-06 — tenant binding precedes the permission check. Order matters: the
+  // legacy bridge branch inside `requireExternalApiAccess` short-circuits to
+  // SUPER_ADMIN without consulting `companyId`, so it has to be unreachable
+  // for a bridge principal rather than merely follow a check. TenantGuard
+  // writes its own 401/400/403 (NO_AUTH / NO_ORG_ID / BRIDGE_NOT_TENANT,
+  // NOT_A_MEMBER) and returns null, so the statuses this route already
+  // documented are preserved.
+  const tenant = await requireTenantAccess(req, res, companyId);
+  if (!tenant) return;
+
   const access = await requireExternalApiAccess(req, res, companyId, true);
   if (!access) return;
 
