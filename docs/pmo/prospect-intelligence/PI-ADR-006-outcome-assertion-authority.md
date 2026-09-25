@@ -35,7 +35,7 @@ Option (b) is coherent and was mechanically feasible — both graph edges alread
 |---|---|
 | It extends a ratified ADR | `PI-ADR-002` §3 makes outcomes *"a first-class EVIDENCE input … They do not become decisions."* Granting an assertion authority to **decide** a lifecycle advance extends that clause, which is an owner act, not an implementation detail. |
 | "Authorized" is undefined at the needed level | `requireTenantAccess` is called with no options, so any active member of the named tenant qualifies at any role; `user_company_roles.role` carries no CHECK. No capability in `ALL_CAPABILITIES` has lifecycle, outcome or feedback as its subject. |
-| The state would have no exit semantics | No outcome expresses cancellation, reschedule or no-show. Of the four outbound edges, two have no production write path and `no_response` from `meeting_scheduled` abstains by design (`SILENCE_NEEDS_POLICY_FROM`). The ledger is append-only, so a wrong row is unrepairable. |
+| No outcome can retract or correct the state | No outcome expresses cancellation, reschedule or no-show. Of the four outbound edges, two have no production write path and `no_response` from `meeting_scheduled` abstains by design (`SILENCE_NEEDS_POLICY_FROM`); the one live exit, `replied → engaged`, records a reply rather than retracting a booking. The ledger is append-only, so a wrong row is unrepairable. |
 | Aboutness is not enforced at the write seam | The evidence citation proves tenancy, never which prospect the outcome concerns. |
 
 ## 4. Relationship to `PI-ADR-004` §5
@@ -54,16 +54,31 @@ Its purpose under this ADR is **audit and attribution**: it answers *who asserte
 
 ## 6. Namespace clarification — "A1" and "ARCH-1"
 
-Four existing identifiers share the token, and none is renamed by this ADR. It records only the namespaces, so that this decision's "option (a)" is not read as any of them:
+Six existing identifiers share the token, and none is renamed by this ADR. It records only the namespaces, so that this decision's "option (a)" is not read as any of them:
 
 1. **WS-A1** — the PI schema-and-safety-baseline workstream increment that closed GAP-007 (`PI-STATE-OF-PROGRAMME.md` §2.4).
 2. **A1 — the AI ICP Generator** — a code lane in `backend/services/prospectIcp/generator/**`, also baked into the runtime constants `pi.a1.icp_generator` and `a1.1`.
-3. **A1 — Generation Spine** — an ownership zone in the *content* programme (`OMNIVYRA-PMO-001.md`), a different programme entirely.
+3. **A1 — Generation Spine** — an ownership zone in the *content* programme (`docs/pmo/OMNIVYRA-PMO-001.md`), a different programme entirely.
 4. **A1** — an appendix-section label inside `PI-CONTRACT-001`.
+5. **`A1 §8`** — an audit-document reference in the *company-intelligence* programme, cited beside `AUDIT-002` for the silent column-drop finding (`docs/company-intelligence/appendices/invariants.md`, `docs/company-intelligence/adr/ADR-001-one-write-authority.md`). No document in that programme defines `A1`; only the citation is verifiable.
+6. **A1** — an *Adjustment* id in the GTM/release programme, where findings are "recorded as Adjustments A1–A2"; A1 there is the CI env/secrets item (`docs/pmo/GTM-PROGRAM-001-R1-ci-recovery-release-certification.md`).
 
-**This decision is `PI-LIFECYCLE-003B` option (a).** It is not an "A1" in any of the four senses above, and it should be cited as PI-LIFECYCLE-003B or as this ADR.
+Deliberately excluded as local labels rather than named identifiers: `P2-A1`, `sec91A`, `OPT-010 A1`, and a research-tooling enum member.
+
+**This decision is `PI-LIFECYCLE-003B` option (a).** It is not an "A1" in any of the six senses above, and it should be cited as PI-LIFECYCLE-003B or as this ADR.
 
 Separately, **`ARCH-1`** is an operator-decision id in `PI-STATE-OF-PROGRAMME.md` §5 — *"May the outcome ledger inform the intelligence layer?"* It is not a lane, not a workstream, and not this decision.
+
+### 6.1 `Contract 13` also collides — and the two senses are already spelled differently
+
+This ADR authorises **row #13 of `PI-CONTRACT-REGISTER.md`, Outcome Provenance**. A different, older numbering already uses "Contract 13" for something unrelated: **`A3 / Contract 13`, the frozen person-anchor resolution order** in `backend/services/leadOutreachExecution/**` (explicit `personId` → `outreach_tasks.person_id` → `leads.unified_person_id` → unresolved), whose sibling **`Contract 12`** is the stored anchor itself. That scheme also holds 14–18 and so already overlaps the PI register's #12 and would overlap any future #14.
+
+Neither identifier is renamed here. The two are distinguishable by a convention the codebase already follows:
+
+- PI-register rows are cited **prefixed and hashed** — e.g. `stateModel.ts:2` and the lifecycle migration both read `PI contract #10 (PI-ADR-004)`.
+- The `A3`/`D1` scheme is cited **unqualified** — `Contract 12`, `Contract 13`.
+
+So *`PI contract #13`* is Outcome Provenance; *`Contract 13`* unqualified is the person-anchor order. Note the asymmetry: the A3 sense is resident only in code, tests and migrations and is defined in **no** document, so a reader cannot resolve it from the governance tree. Recording that gap is the limit of what this ADR does about it; consolidating the two numbering schemes is not decided here.
 
 ## 7. What this does not decide
 
@@ -78,7 +93,9 @@ Separately, **`ARCH-1`** is an operator-decision id in `PI-STATE-OF-PROGRAMME.md
 
 Unlike `PI-ADR-002`, `PI-ADR-003` and `PI-ADR-004`, this ADR is **not** contract-first: it records a decision that lands with its implementation. Stated precisely:
 
-**Changed:** `pages/api/outreach/outcomes.ts` (one member removed from `MANUAL_OUTCOME_SIGNALS`, plus documentation); `backend/services/prospectLifecycle/outcomeInterpreter.ts` (**comment only** — the non-comment projection is byte-identical and `OUTCOME_TRANSITION_MAP` is unchanged); two test suites, updated to assert the resolved state rather than the contradiction.
+**Changed by this decision:** `pages/api/outreach/outcomes.ts` (one member removed from `MANUAL_OUTCOME_SIGNALS`, plus documentation); `backend/services/prospectLifecycle/outcomeInterpreter.ts` — **the Stage-2 change to this file is comment-only**: its non-comment projection is byte-identical and `OUTCOME_TRANSITION_MAP` is unchanged; two test suites, updated to assert the resolved state rather than the contradiction.
+
+**Scope note, so the claim above is not misread.** "Comment-only" describes the Stage-2 landing commit's change to `outcomeInterpreter.ts`, measured against its parent. It is **not** a claim about the whole of PR #273, which additionally carries the previously authorized **Stage-1 Outcome Provenance implementation** (`outcomeProvenance.ts`, the barrel re-export in `prospectLifecycle/index.ts`, and `piL003bOutcomeProvenance.test.ts`) — Stage 1 was committed under its own gate and had not yet been pushed. Stage 1 contributes the two executable lines in `outcomeInterpreter.ts` that a diff against `main` will show: the `OutcomeProvenance` type import and the optional `provenance` field. That is authorized, verified content, not incidental scope.
 
 **Not changed:** no schema, no SQL, no migration — the `supabase/migrations` tree hash is unchanged. No state vocabulary, no transition graph, no lifecycle authorization, no provenance implementation, no provider integration, no authentication or authorization architecture, no flag, and no production data. No provider call was made.
 

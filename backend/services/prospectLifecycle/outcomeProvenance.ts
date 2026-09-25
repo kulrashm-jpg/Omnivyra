@@ -12,7 +12,9 @@
  * This module answers the authorization question and nothing else. It proposes
  * no transition, reads no database, and does not make `meeting_scheduled`
  * reachable. Whether an authorized human assertion SHOULD advance the lifecycle
- * is Stage 2's decision and is deliberately not taken here.
+ * has since been DECIDED — PI-LIFECYCLE-003B, option (a), by the programme
+ * owner: it may not. This module is retained as an audit/attribution
+ * capability, never as lifecycle authority (`PI-ADR-006`).
  *
  * ─── IT REUSES THE EXISTING VOCABULARY ────────────────────────────────────
  * `FeedbackSource` (leadOutreachExecution/types.ts) is the canonical
@@ -231,8 +233,9 @@ export function classifyOutcomeProvenance(
  * ever support it. This predicate is the single place that question is asked.
  *
  * It answers authorization ONLY. It does not decide whether an authorized
- * assertion advances the lifecycle — that is Stage 2, and nothing in this
- * module or this stage makes `meeting_scheduled` reachable.
+ * assertion advances the lifecycle: PI-LIFECYCLE-003B decided that it does not
+ * (option (a), recorded in `PI-ADR-006`), and nothing in this module makes
+ * `meeting_scheduled` reachable.
  */
 export const establishesHumanWitnessedClaim = (
   provenance: OutcomeProvenance | null | undefined,

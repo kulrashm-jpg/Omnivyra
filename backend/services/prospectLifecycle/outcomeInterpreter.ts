@@ -105,9 +105,11 @@ export interface InterpretableOutcome {
    * additive: every existing caller and test compiles and behaves exactly as
    * before, because no mapping in this module consults provenance yet.
    *
-   * It is NOT consulted by `interpretOutcome` at this stage. Stage 1 makes
-   * trusted provenance DISTINGUISHABLE; whether an authorized human assertion
-   * may advance the lifecycle is Stage 2's decision and is not taken here.
+   * It is NOT consulted by `interpretOutcome` — and that is now SETTLED, not
+   * provisional. PI-LIFECYCLE-003B took the decision (option (a), by the
+   * programme owner): `meeting_booked` stays evidence-only, manual admission is
+   * removed, and provenance is retained for audit and attribution. It is not
+   * lifecycle authority. See `PI-ADR-006` and the decision record below.
    */
   readonly provenance?: OutcomeProvenance | null;
 }
