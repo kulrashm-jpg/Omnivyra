@@ -23,8 +23,10 @@
  * ─── CONFLICT IS THE INTERESTING CASE ─────────────────────────────────────
  * The three simulators deliberately DISAGREE about `job_title`. Sales Navigator
  * says `VP Marketing`; Apollo says `Marketing Manager`; ZoomInfo says
- * `Head of Marketing`. Nothing here resolves that disagreement, because no
- * precedence contract exists yet — see `PRECEDENCE_DECISION_REQUIRED`.
+ * `Head of Marketing`. Nothing HERE resolves that disagreement, and that is
+ * still correct: resolution is not a provider's job. `PI-ADR-009` settled the
+ * rule and `prospectIdentity/sourcePrecedence.ts` applies it at read time, over
+ * observations these simulators merely report.
  */
 
 import {
@@ -34,16 +36,17 @@ import {
 import { SIM_TIME } from './fixtures';
 
 /**
- * The precedence question this simulation surfaces and deliberately does NOT
- * answer. Exported so a test can assert the decision point is explicit rather
- * than buried, and so a future ADR can cite the exact thing it settles.
+ * The precedence question this simulation surfaced, and the decision that
+ * settled it. Retained (rather than deleted) so the conflict these simulators
+ * manufacture stays traceable to the ADR that resolved it — a test asserts the
+ * recorded rule matches what `sourcePrecedence.ts` actually implements.
  */
-export const PRECEDENCE_DECISION_REQUIRED = {
-  decision: 'OD-PRECEDENCE',
+export const PRECEDENCE_DECISION = {
+  decision: 'OD-PRECEDENCE — settled by PI-ADR-009',
   question:
     'When Sales Navigator and a vendor disagree about an identity/person field '
     + '(job_title, company, seniority), which observation becomes the canonical value?',
-  status: 'UNDECIDED',
+  status: 'DECIDED',
   simulatedConflict: {
     attribute: 'job_title',
     salesNavigator: 'VP Marketing',
@@ -51,9 +54,9 @@ export const PRECEDENCE_DECISION_REQUIRED = {
     zoominfo: 'Head of Marketing',
   },
   note:
-    'No precedence contract exists in the repository. The simulation retains every '
-    + 'observation with its provenance and resolves nothing. Converting this into '
-    + 'production semantics requires an owner decision.',
+    'SETTLED by PI-ADR-009: Sales Navigator is authoritative for job_title and '
+    + 'company ONLY; every other field resolves by recency then confidence. Every '
+    + 'observation is retained either way. Selection lives in sourcePrecedence.ts.',
 } as const;
 
 /** Deterministic failure modes a scenario can demand of any simulator. */

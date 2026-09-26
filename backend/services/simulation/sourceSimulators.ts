@@ -19,12 +19,19 @@
  * a simulated observation is permanently distinguishable from a real one in the
  * evidence store — a row can never be mistaken for something a vendor said.
  *
- * ─── MARKETPULSE, STATED PLAINLY ──────────────────────────────────────────
- * `marketpulse-person-sim` represents the PROPOSED future behaviour of
- * MarketPulse as a person source. The production contract today defines
- * MarketPulse as TENANT-LEVEL market intelligence, not a person source
- * (`accountIntelligence.ts`: "MARKETPULSE STAYS TENANT-LEVEL"). This simulator
- * does not change that contract and must not be read as establishing it.
+ * ─── MARKETPULSE — AUTHORISED BY PI-ADR-008 ────────────────────────────────
+ * `marketpulse-person-sim` is now an AUTHORISED capability: the owner selected
+ * option A2, and `PI-ADR-008` records MarketPulse as a person/lead source.
+ *
+ * Read the scope precisely, because the ADR is narrower than it first looks. What
+ * changed is that MarketPulse may supply PERSON OBSERVATIONS into canonical
+ * intake. What did NOT change is the account-attribute wall: MarketPulse still
+ * may not source a canonical account attribute, `marketPulseAttributeCoverage()`
+ * still returns nothing, and the test pinning that is untouched.
+ *
+ * Nor does the ADR claim production MarketPulse emits person observations today —
+ * no runtime path produces one. Until a producer exists this capability is
+ * exercised by this simulator only. It holds NO precedence under `PI-ADR-009`.
  *
  * ─── SALES NAVIGATOR, STATED PLAINLY ──────────────────────────────────────
  * `salesnav-sim` simulates RETRIEVAL ONLY. There is no scraping, no browser
@@ -146,11 +153,11 @@ export const simulatedActiveLeadRecords = (keys: readonly SimPerson['key'][]) =>
     personKey: k, captured_at: SIM_TIME.activeLead, channel: 'website_form',
   }));
 
-// ── 2. MarketPulse (EXPERIMENTAL person-source simulation) ──────────────────
+// ── 2. MarketPulse person source (authorised by PI-ADR-008) ─────────────────
 
 export const marketPulsePersonSimAdapter: LeadSourceAdapter = {
   source: SIM_SOURCES.marketPulse,
-  label: 'MarketPulse person observations (SIMULATED — proposed behaviour)',
+  label: 'MarketPulse person observations (simulated — authorised by PI-ADR-008)',
   capabilities: ['person_discovery'],
   translate(raw: Record<string, unknown>, organizationId: string): AdapterResult {
     const key = String(raw.personKey ?? '') as SimPerson['key'];

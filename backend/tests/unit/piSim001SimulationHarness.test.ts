@@ -37,7 +37,7 @@ import {
 import {
   SIMULATION_PROVIDER_ADAPTERS, apolloSimAdapter, rapidApiSimAdapter, zoomInfoSimAdapter,
   setSimProviderMode, resetSimProviderModes, collectConflictingObservations,
-  PRECEDENCE_DECISION_REQUIRED,
+  PRECEDENCE_DECISION,
 } from '../../services/simulation/providerSimulators';
 import { csvAdapter } from '../../services/leadIngestion/adapters/csvAdapter';
 import type { EnrichmentRequest } from '../../services/enrichment/providers/contract';
@@ -338,7 +338,7 @@ describe('PI-SIM-001 — conflict is RETAINED, and resolution is a decision not 
     }
   });
 
-  it('the Sales Navigator observation is a THIRD opinion, and nothing resolves them', () => {
+  it('the Sales Navigator observation is a THIRD opinion, and the PROVIDERS resolve nothing', () => {
     const salesNav = salesNavSimAdapter.translate(
       retrieveSimulatedSalesNavList({ listUrl: SIM_SALES_NAV_LIST_URL }).members[0], SIM_ORG_A);
     expect(salesNav.normalized.person?.jobTitle).toBe('VP Marketing');
@@ -346,9 +346,11 @@ describe('PI-SIM-001 — conflict is RETAINED, and resolution is a decision not 
     const vendor = collectConflictingObservations(req(), 'job_title').map((o) => o.value);
     expect(vendor).not.toContain('VP Marketing');   // genuinely in conflict
 
-    // And the decision is surfaced explicitly rather than silently taken.
-    expect(PRECEDENCE_DECISION_REQUIRED.status).toBe('UNDECIDED');
-    expect(PRECEDENCE_DECISION_REQUIRED.simulatedConflict.salesNavigator).toBe('VP Marketing');
+    // Resolution is not something a provider does: the rule lives in
+    // sourcePrecedence.ts, settled by PI-ADR-009. What is asserted here is only
+    // that the providers themselves select nothing.
+    expect(PRECEDENCE_DECISION.status).toBe('DECIDED');
+    expect(PRECEDENCE_DECISION.simulatedConflict.salesNavigator).toBe('VP Marketing');
   });
 });
 
