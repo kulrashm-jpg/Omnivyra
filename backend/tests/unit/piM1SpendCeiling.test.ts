@@ -21,7 +21,6 @@ import {
   utcDayBounds,
   boundedOvershoot,
   SPEND_CEILING_FLAG_KEY,
-  isSpendCeilingEnabled,
 } from '../../services/enrichment/providers/spendCeiling';
 import {
   makeTenantFundedExecutionPort,
@@ -84,14 +83,12 @@ const allowWith = (opts: {
   ceiling?: number | null;
   perProvider?: Record<string, number>;
   rows?: Parameters<typeof ledger>[0];
-  enabled?: boolean;
   now?: string;
 }) => {
   const l = ledger(opts.rows ?? []);
   return {
     ledger: l,
     allow: makeDailyCallCeilingAllow({
-      enabled: () => opts.enabled ?? true,
       now: () => opts.now ?? NOW,
       resolveCeiling: async ({ providerId }) =>
         opts.perProvider?.[providerId] ?? opts.ceiling ?? null,
@@ -209,7 +206,6 @@ describe('M1 — what consumes capacity, and what does not', () => {
   it('SUPPRESSION is evaluated BEFORE spend — a suppressed call consumes no budget', async () => {
     let ceilingConsulted = 0;
     const allow = makeDailyCallCeilingAllow({
-      enabled: () => true,
       now: () => NOW,
       resolveCeiling: async () => { ceilingConsulted += 1; return 0; },   // would refuse
       countCallsToday: async () => 0,
@@ -236,7 +232,6 @@ describe('M1 — usage that cannot be counted is refused, not read as zero', () 
    * the ledger double above cannot produce, because it always returns a number.
    */
   const allowWithCount = (count: unknown) => makeDailyCallCeilingAllow({
-    enabled: () => true,
     now: () => NOW,
     resolveCeiling: async () => 5,
     // Deliberately past the port's `Promise<number>`: the root tsconfig sets
@@ -269,16 +264,18 @@ describe('M1 — usage that cannot be counted is refused, not read as zero', () 
     expect(calls).toHaveLength(0);
   });
 
-  it('a tenant with NO ceiling is unaffected — the count is never reached', async () => {
+  it('a tenant with NO ceiling is now REFUSED before the count is even reached', async () => {
+    // SUPERSEDED by OD-A / PI-ADR-007. This asserted the opposite - that an
+    // unconfigured tenant was unaffected and still enriched. Absent is no longer
+    // unlimited, so the refusal lands before the unreadable count can matter.
     const allow = makeDailyCallCeilingAllow({
-      enabled: () => true,
       now: () => NOW,
       resolveCeiling: async () => null,
       countCallsToday: async () => null as unknown as number,
     });
     const calls: unknown[] = [];
-    expect((await run(portsWith(allow), calls)).outcome).toBe('enriched');
-    expect(calls).toHaveLength(1);
+    expect((await run(portsWith(allow), calls)).outcome).toBe('cost_denied');
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -340,43 +337,74 @@ describe('M1 — usage is bucketed by UTC calendar day', () => {
 
 // ── compatibility: absent policy changes nothing ────────────────────────────
 
-describe('M1 — with no ceiling configured, behaviour is unchanged', () => {
-  it('the global switch off permits WITHOUT any I/O', async () => {
-    let touched = 0;
+// ── SUPERSEDED BY OD-A / PI-ADR-007 ────────────────────────────────────────
+// This block was `M1 — with no ceiling configured, behaviour is unchanged`, and
+// it pinned the OPPOSITE contract: that the global switch off permitted without
+// I/O, that an unconfigured tenant permitted without counting, and that the
+// environment default was OFF so nothing was enforced until an operator opted
+// in. Those assertions were correct for the contract that existed and are now
+// wrong. They are replaced BY THEIR INVERSES, in place, so the change of
+// contract is visible in the diff rather than disappearing with a deletion.
+describe('M1 / OD-A — the ceiling is REQUIRED: no ceiling, no call', () => {
+  it('an unconfigured tenant is REFUSED, and the refusal names the requirement', async () => {
     const allow = makeDailyCallCeilingAllow({
-      enabled: () => false,
-      resolveCeiling: async () => { touched += 1; return 0; },
-      countCallsToday: async () => { touched += 1; return 999; },
+      now: () => NOW,
+      resolveCeiling: async () => null,
+      countCallsToday: async () => 0,
     });
-    expect(await allow({
+    const reason = await allow({
       organizationId: ORG_A, providerId: 'clearbit',
       attributes: ['employee_count'], correlationId: 'c',
-    })).toBeNull();
-    expect(touched).toBe(0);          // not merely permitted — never consulted
+    });
+    // Positive assertion first: a refusal is a string, and it has to say why.
+    expect(typeof reason).toBe('string');
+    expect(reason).toMatch(/no daily provider call ceiling is configured/);
+    expect(reason).toMatch(/clearbit/);
   });
 
-  it('enabled but unconfigured for this tenant permits, and never counts', async () => {
+  it('the refusal does not count usage — there is nothing to be under', async () => {
     let counted = 0;
     const allow = makeDailyCallCeilingAllow({
-      enabled: () => true,
+      now: () => NOW,
       resolveCeiling: async () => null,
-      countCallsToday: async () => { counted += 1; return 999; },
+      countCallsToday: async () => { counted += 1; return 0; },
     });
     expect(await allow({
       organizationId: ORG_A, providerId: 'clearbit',
       attributes: ['employee_count'], correlationId: 'c',
-    })).toBeNull();
+    })).not.toBeNull();
     expect(counted).toBe(0);
   });
 
-  it('the environment default is OFF, so nothing is enforced until an operator opts in', () => {
+  it('no environment variable can switch the ceiling off any more', async () => {
+    // The bypass this replaces was `ENABLE_ENRICHMENT_SPEND_CEILING`. Setting it,
+    // to anything, must not restore permissive behaviour.
     const prior = process.env.ENABLE_ENRICHMENT_SPEND_CEILING;
-    delete process.env.ENABLE_ENRICHMENT_SPEND_CEILING;
-    expect(isSpendCeilingEnabled()).toBe(false);
-    process.env.ENABLE_ENRICHMENT_SPEND_CEILING = 'true';
-    expect(isSpendCeilingEnabled()).toBe(true);
-    if (prior === undefined) delete process.env.ENABLE_ENRICHMENT_SPEND_CEILING;
-    else process.env.ENABLE_ENRICHMENT_SPEND_CEILING = prior;
+    try {
+      for (const v of ['', '0', 'false', 'true', '1']) {
+        process.env.ENABLE_ENRICHMENT_SPEND_CEILING = v;
+        const allow = makeDailyCallCeilingAllow({
+          now: () => NOW,
+          resolveCeiling: async () => null,
+          countCallsToday: async () => 0,
+        });
+        expect(await allow({
+          organizationId: ORG_A, providerId: 'clearbit',
+          attributes: ['employee_count'], correlationId: 'c',
+        })).not.toBeNull();
+      }
+    } finally {
+      if (prior === undefined) delete process.env.ENABLE_ENRICHMENT_SPEND_CEILING;
+      else process.env.ENABLE_ENRICHMENT_SPEND_CEILING = prior;
+    }
+  });
+
+  it('a CONFIGURED tenant under its ceiling still proceeds — the gate is not a block', async () => {
+    const { allow } = allowWith({ ceiling: 5, rows: [] });
+    const calls: unknown[] = [];
+    const out = await run(portsWith(allow), calls);
+    expect(out.outcome).toBe('enriched');
+    expect(calls).toHaveLength(1);
   });
 
   it('a port built by the FACTORY still has no ceiling — existing callers are untouched', async () => {
@@ -391,10 +419,9 @@ describe('M1 — with no ceiling configured, behaviour is unchanged', () => {
     expect(typeof tenantFundedExecutionPort.releaseCost).toBe('function');
   });
 
-  it('a fail-CLOSED read: a tenant who opted in is refused rather than overspending', async () => {
+  it('a fail-CLOSED read: an unreadable ledger refuses rather than overspending', async () => {
     const boom = new Error('ledger unreadable');
     const allow = makeDailyCallCeilingAllow({
-      enabled: () => true,
       now: () => NOW,
       resolveCeiling: async () => 5,
       countCallsToday: async () => { throw boom; },
