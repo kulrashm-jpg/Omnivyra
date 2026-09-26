@@ -230,6 +230,8 @@ const COMMUNITY_AI_METRICS_ROLLUP_INTERVAL_MS   = 60 * 60 * 1000;         // hou
 const RECENT_POSTS_COMMENT_INGEST_INTERVAL_MS   = 10 * 60 * 1000;         // every 10 minutes
 const RPA_ARTIFACT_PRUNE_INTERVAL_MS            = 6 * 60 * 60 * 1000;     // every 6 hours
 const RPA_BACKPRESSURE_OBSERVE_INTERVAL_MS      = 60 * 1000;              // every 60 seconds
+/** PO-3 — public advertising acquisition cadence. Daily; see the registration comment. */
+const ADS_ACQUISITION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const RPA_RETRY_FLUSH_INTERVAL_MS               = 90 * 1000;              // every 90 seconds
 const INTELLIGENCE_PATTERN_LEARN_INTERVAL_MS    = 12 * 60 * 1000;         // every 12 minutes
 
@@ -728,6 +730,63 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
     },
     RPA_BACKPRESSURE_OBSERVE_INTERVAL_MS, 'rpaBackpressureObserver',
     ['orgs_observed', 'orgs_blocked', 'orgs_degraded', 'orgs_ready', 'errors']
+  );
+
+  // ── Public advertising acquisition (daily) ────────────────────────
+  // PO-3. Observes the public Google Ads Transparency Center for companies whose
+  // advertising evidence is stale, and persists what it saw. Composition reads
+  // that evidence later on the web plane, which has no browser that can navigate.
+  //
+  // OFF BY DEFAULT. `runAdsAcquisitionCycle` returns `{ enabled: 0 }` unless
+  // ADS_TRANSPARENCY_ACQUISITION_ENABLED is set, so registering it here starts
+  // nothing: the tick wakes, finds the flag unset, and does no provider work.
+  //
+  // DAILY, and deliberately not more often. One subject costs ~25 provider page
+  // loads and ~4.4 minutes of browser time; at 5 subjects a cycle that is ~125
+  // page loads a day. Hourly would be ~3,000 against a third-party surface for a
+  // record of ACTIVE ads that does not move at that speed.
+  //
+  // Sequential by construction: `scheduleWorker` runs one tick at a time and the
+  // cycle iterates subjects in series, so there is no parallel browser fan-out.
+  scheduleWorker(
+    async () => {
+      const { runAdsAcquisitionCycle } = await import('../services/ads/adsAcquisitionScheduler');
+      try {
+        const { listDueAdsSubjects } = await import('../services/ads/adsDueSubjects');
+        const { createAdsEvidenceSink } = await import('../services/ads/adsEvidenceStore');
+        const { chromium } = await import('playwright');
+        return await runAdsAcquisitionCycle({
+          listDueSubjects: listDueAdsSubjects,
+          openSession: async () => {
+            const browser = await chromium.launch({ headless: true });
+            return {
+              // PUBLIC ONLY: a fresh context per page, never a stored session.
+              // There is no code path here through which `storageState` could be
+              // supplied, which is what keeps this evidence public-domain.
+              session: {
+                async withPage(fn) {
+                  const ctx = await browser.newContext();
+                  const page = await ctx.newPage();
+                  try {
+                    return await fn(page as unknown as Parameters<typeof fn>[0]);
+                  } finally {
+                    await ctx.close().catch(() => undefined);
+                  }
+                },
+              },
+              close: async () => { await browser.close().catch(() => undefined); },
+            };
+          },
+          sink: createAdsEvidenceSink(),
+          vantage: process.env.RAILWAY_REGION ? `railway:${process.env.RAILWAY_REGION}` : 'railway',
+        });
+      } catch (err: unknown) {
+        console.warn('[adsTransparencyAcquisition] exception:', formatCaughtError(err));
+        return { errors: 1 };
+      }
+    },
+    ADS_ACQUISITION_INTERVAL_MS, 'adsTransparencyAcquisition',
+    ['enabled', 'subjects', 'observed', 'persisted', 'errors']
   );
 
   // ── RPA retry queue flush (every 90s) ────────────────────────────────────

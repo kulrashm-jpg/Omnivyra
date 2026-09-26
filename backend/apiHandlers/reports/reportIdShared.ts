@@ -92,6 +92,7 @@ export function buildGeneratingPayload(
     searchVisibility: null,
     companyIdentity: null,
     websiteChecks: null,
+    advertising: null,
     confidenceSource: '',
     insights: [],
     metrics: [],

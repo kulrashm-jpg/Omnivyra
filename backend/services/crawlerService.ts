@@ -57,6 +57,31 @@ export interface PageSignals {
    */
   same_as?: string[];
   declared_credentials?: string[];
+  /**
+   * PO-3 — the legal entity name the site DECLARES for itself, read from a JSON-LD
+   * `Organization.legalName` and from nowhere else.
+   *
+   * ─── WHY THIS IS PARSED, NOT REGEXED ──────────────────────────────────────
+   * Every other field above is recovered with a document-wide regex, which is fine for a
+   * publication date or a `sameAs` URL: a stray match is a weak signal among many. An identity
+   * claim is different. A document-wide `"legalName"` match would happily read the legal name of
+   * a partner, a parent company, a review author or an embedded widget's vendor, and Report 1
+   * would then compare a Google-verified advertiser against a name belonging to somebody else.
+   * So the JSON-LD blocks are PARSED and the field is read only from a node whose `@type` is
+   * Organization-like. A block that does not parse yields nothing — there is no fallback regex.
+   *
+   * ─── WHAT IT IS, AND IS NOT ───────────────────────────────────────────────
+   * `PUBLIC_OBSERVED` evidence that the site DECLARES this legal name. It is NOT an externally
+   * verified legal-entity record and must never be labelled as one. Its evidentiary strength comes
+   * from being a first-party declaration by whoever controls the domain, corroborated
+   * independently on the advertiser side.
+   *
+   * Optional so every existing constructor and already-stored `crawl_metadata` row stays valid.
+   * Absence means the site declared nothing — `unavailable`, never a guess.
+   */
+  legal_name?: string | null;
+  /** PO-3 — declared `Organization.address.addressCountry`, same parse. Jurisdiction CORROBORATION only. */
+  address_country?: string | null;
   response: {
     content_encoding: string | null;
     cache_control: string | null;
@@ -215,6 +240,56 @@ function inferPageType(url: string): string {
   return 'other';
 }
 
+/** A JSON-LD `@type` that denotes an organisation. Sub-types of Organization are accepted. */
+function isOrganizationType(type: unknown): boolean {
+  const one = (t: unknown) => typeof t === 'string'
+    && /^(?:https?:\/\/schema\.org\/)?(?:Organization|Corporation|LocalBusiness|OnlineBusiness|NGO|GovernmentOrganization|EducationalOrganization)$/i.test(t.trim());
+  return Array.isArray(type) ? type.some(one) : one(type);
+}
+
+/**
+ * PO-3 — the site's DECLARED organisation identity, from parsed JSON-LD only.
+ *
+ * Walks each block's nodes (including `@graph`) and reads `legalName` / `address.addressCountry`
+ * ONLY from a node that is itself an Organization. A block that fails to parse contributes
+ * nothing. Exported for the identity tests, which pin the scoping rule directly rather than
+ * inferring it from crawl output.
+ */
+export function extractOrganizationIdentity(
+  jsonLdBlocks: readonly string[],
+): { legal_name: string | null; address_country: string | null } {
+  let legalName: string | null = null;
+  let addressCountry: string | null = null;
+
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { for (const n of node) visit(n); return; }
+    const obj = node as Record<string, unknown>;
+    if (Array.isArray(obj['@graph'])) for (const n of obj['@graph'] as unknown[]) visit(n);
+    if (!isOrganizationType(obj['@type'])) return;
+    // FIRST declaration wins. A later Organization node is typically a partner, parent or
+    // publisher — overwriting with it would silently swap the subject's identity.
+    if (legalName === null) legalName = str(obj.legalName);
+    if (addressCountry === null) {
+      const addr = obj.address;
+      if (addr && typeof addr === 'object' && !Array.isArray(addr)) {
+        addressCountry = str((addr as Record<string, unknown>).addressCountry);
+      } else {
+        addressCountry = str(addr) ? null : null;
+      }
+    }
+  };
+
+  for (const block of jsonLdBlocks) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(String(block).trim()); } catch { continue; }
+    visit(parsed);
+  }
+  return { legal_name: legalName, address_country: addressCountry };
+}
+
 /**
  * BETA-ROADMAP-EXEC-002 — recover static signals from the RAW html (JSON-LD lives in <script> which
  * cleanHtml strips, so this reads the raw markup) + HTTP response headers. No headless, no new requests.
@@ -227,8 +302,10 @@ function extractPageSignals(rawHtml: string, metaTags: Record<string, string>, h
   const ldRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let ld: RegExpExecArray | null;
   let jsonldCount = 0;
+  const ldBlocks: string[] = [];
   while ((ld = ldRegex.exec(rawHtml)) != null) {
     jsonldCount += 1;
+    ldBlocks.push(ld[1]);
     for (const t of ld[1].matchAll(/"@type"\s*:\s*"([^"]+)"/g)) if (!jsonldTypes.includes(t[1])) jsonldTypes.push(t[1]);
   }
   const ldDatePublished = /"datePublished"\s*:\s*"([^"]+)"/i.exec(rawHtml)?.[1] ?? null;
@@ -290,6 +367,8 @@ function extractPageSignals(rawHtml: string, metaTags: Record<string, string>, h
     author: metaTags['author'] ?? ldAuthor ?? null,
     same_as: [...new Set(sameAs)].slice(0, 25),
     declared_credentials: [...new Set(declaredCredentials)].slice(0, 25),
+    // PO-3 — Organization-scoped identity. Parsed, never regexed; see the field docs.
+    ...extractOrganizationIdentity(ldBlocks),
     response,
   };
 }

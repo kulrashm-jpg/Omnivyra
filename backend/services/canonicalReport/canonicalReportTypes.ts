@@ -107,6 +107,14 @@ export type EvidenceSourceKind =
    * so a chat completion can never inherit an observation's provenance.
    */
   | 'answer_engine'
+  /**
+   * PO-3 — the public Google Ads Transparency Center. Public-domain: anyone can open the same
+   * advertiser page and see the same legal name, jurisdiction and verification badge.
+   *
+   * Scope note: this covers the OBSERVATION only. Whether a given advertiser IS the subject is a
+   * resolution conclusion and is carried as a resolution state, never as a source kind.
+   */
+  | 'ads_transparency'
   | 'backlink_api'
   | 'review_aggregator'
   | 'expertise_extractor'
@@ -500,6 +508,22 @@ export type CanonicalSocialPresenceEntry = {
 export type CanonicalDeclaredEvidence = {
   /** G-1 — optional/additive. Absent when no social candidate existed. */
   social_presence?: CanonicalSocialPresenceEntry[];
+  /**
+   * PO-3 Phase 1b — the identity the SITE DECLARES about itself, from Organization-scoped JSON-LD.
+   *
+   * It belongs in declared evidence because that is precisely what it is: a first-party
+   * declaration, the same evidence class as `same_as`. It is NOT an externally verified
+   * legal-entity record, and nothing downstream may relabel it as one. Its weight in advertiser
+   * resolution comes from being corroborated by an INDEPENDENT provider-verified legal name, not
+   * from any authority of its own.
+   *
+   * Optional/additive: absent when no crawled page declared an Organization.
+   */
+  declared_identity?: {
+    legal_name: string | null;
+    address_country: string | null;
+    source: EvidenceSourceKind;
+  };
   same_as: {
     count: number;
     domains: string[];

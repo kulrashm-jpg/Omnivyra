@@ -86,6 +86,7 @@ import { assembleDigitalSnapshot } from './digitalSnapshotAssembly';
 // Phase 4: performance + digital-experience intelligence over the existing crawl corpus.
 import { assessDigitalExperience } from './digitalExperience';
 import { buildSearchFeatures } from './snapshotReport/searchFeatureHelpers';
+import { buildAdvertisingSurface } from './ads/advertisingSurface';
 import { collectPerformanceEvidence, loadExperiencePages } from './digitalExperienceRepository';
 // Phase 3: the two competition views, built from the canonical relation model.
 import { buildCompetitiveTables, buildCompetitorTableRows } from './competitiveTables';
@@ -177,6 +178,8 @@ export async function composeSnapshotReportFromDecisions(params: {
   competitorIntelligenceOverride?: CompetitorIntelligenceResult | null;
   /** GAP-09 — the report-triggered crawl's own result, handed down by the caller that ran it. */
   crawlEvidence?: SnapshotCrawlEvidence | null;
+  /** PO-3 — the public advertising observation, handed down by the caller that ran it. */
+  advertisingObservation?: import('./ads/adsTransparencyObservation').AdsObservationResult | null;
   /** R1-OPEN-01 — website evidence is read from the report's current domain only. */
   domainScope?: ReportDomainScope;
 }): Promise<SnapshotReport> {
@@ -787,6 +790,24 @@ export async function composeSnapshotReportFromDecisions(params: {
     observedAt: nowIso(),
   };
 
+  // PO-3 — public advertising, attributed only where advertiser identity resolved.
+  //
+  // The observation arrives from the caller (the Railway-plane acquisition), exactly as the crawl
+  // outcome does. The subject legal name comes from the site's OWN declared JSON-LD Organization,
+  // reached through the public audit's declared evidence — never from the declared company profile,
+  // which is the customer's assertion and cannot corroborate a provider-verified name.
+  //
+  // With no declared legal name, `subjectLegalNameUsed` is null and the resolver cannot reach
+  // MATCHED for any advertiser. That is the intended ceiling, not a failure: the section then says
+  // ownership was not established rather than implying the company does not advertise.
+  const declaredIdentity = params.publicAudit?.declared_evidence?.declared_identity ?? null;
+  canonicalSnapshotShape.advertising = params.advertisingObservation
+    ? buildAdvertisingSurface({
+      observation: params.advertisingObservation,
+      subjectLegalNameUsed: declaredIdentity?.legal_name ?? null,
+    })
+    : null;
+
   // Report 1 assembly — cross-source opportunities, top priorities and the 30/60/90 plan.
   // An ASSEMBLER over already-produced outputs: it recomputes no dimension, no pillar and no
   // score, and `canonicalReportBuilder` remains the canonical owner. Runs last so it can read
@@ -928,6 +949,7 @@ export async function composeSnapshotReport(
         publicAudit: auditWithSocial,
         competitorIntelligenceOverride: activeCompetitorIntelligence,
         crawlEvidence: options?.crawlEvidence ?? null,
+        advertisingObservation: options?.advertisingObservation ?? null,
         domainScope,
       });
     });

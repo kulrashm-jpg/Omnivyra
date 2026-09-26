@@ -27,6 +27,7 @@ import {
   renderDigitalSnapshotPriorities,
   renderNinetyDayPlan,
   renderSearchVisibility,
+  renderPublicAdvertising,
   renderWebsiteChecks,
   renderWebsiteExperienceEvidence,
 } from './exportRendererReport1';
@@ -603,6 +604,7 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
                 §07 ranks competitive pressure, this states who solves the same problem and who
                 chases the same buyer, and refuses to merge the two. */ ''}
           ${renderSearchVisibility(payload, EYEBROW_EVIDENCE)}
+          ${renderPublicAdvertising(payload, EYEBROW_EVIDENCE)}
           ${renderCompetitiveTables(payload, EYEBROW_EVIDENCE)}
           ${renderMomentumMaturity(sections.momentum_maturity, surfaces, '08')}
           ${renderDataConfidenceCoverageSection(surfaces, '09')}

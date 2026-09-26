@@ -617,4 +617,6 @@ export type ComposedReportData = {
   company_identity?: SnapshotReport['company_identity'];
   /** GAP-10 — the per-check website evidence the deterministic engines already produced. */
   website_checks?: SnapshotReport['website_checks'];
+  /** PO-3 — publicly observed advertising, partitioned by resolved advertiser identity. */
+  advertising?: SnapshotReport['advertising'];
 };
