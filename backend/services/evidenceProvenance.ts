@@ -97,6 +97,13 @@ const PROVENANCE_BY_SOURCE: Record<EvidenceSourceKind, EvidenceProvenanceClass> 
   // keep unverifiable evidence out — wave it through. A model's recall is an
   // inference about the world, never an observation of it.
   llm_probe: 'INFERRED',
+  // PO-3 — the public Ads Transparency advertiser page. Anyone can open the same `AR…` URL and
+  // read the same legal name, jurisdiction and verification badge, so the OBSERVATION is public.
+  //
+  // What this classification deliberately does NOT cover: whether that advertiser is the subject
+  // company. That is a conclusion, it travels as a resolution state beside the observation, and it
+  // must never inherit this class — the mistake `llm_probe` above was demoted for.
+  ads_transparency: 'PUBLIC_OBSERVED',
   backlink_api: 'PUBLIC_OBSERVED',
   review_aggregator: 'PUBLIC_OBSERVED',
   expertise_extractor: 'INFERRED',

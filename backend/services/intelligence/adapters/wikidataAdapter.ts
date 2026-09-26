@@ -68,7 +68,7 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   }
 }
 
-async function searchEntity(brandName: string): Promise<WikidataSearchHit | null> {
+async function searchEntities(brandName: string): Promise<WikidataSearchHit[]> {
   const params = new URLSearchParams({
     action: 'wbsearchentities',
     search: brandName,
@@ -81,9 +81,85 @@ async function searchEntity(brandName: string): Promise<WikidataSearchHit | null
   const response = await fetchWithTimeout(`${WIKIDATA_SEARCH_URL}?${params.toString()}`, {
     headers: { Accept: 'application/json', 'User-Agent': 'OmnivyraReports/1.0 (canonical-intelligence)' },
   });
-  if (!response.ok) return null;
+  if (!response.ok) return [];
   const json = (await response.json()) as { search?: WikidataSearchHit[] };
-  return json.search?.[0] ?? null;
+  return Array.isArray(json.search) ? json.search : [];
+}
+
+/**
+ * PO-3b — registrable-host normalisation for `P856` verification. Pure.
+ *
+ * Deliberately conservative: lowercase, strip scheme, strip a single leading `www.`, compare the
+ * host and nothing else. No fuzzy matching, no suffix stripping, no subdomain collapsing — a
+ * subdomain is a DIFFERENT host, and treating `editor.wix.com` as `wix.com` would be exactly the
+ * kind of quiet widening that turns a verification into a guess.
+ */
+export function normalizeIdentityHost(value: string | null | undefined): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return url.hostname.toLowerCase().replace(/^www\./, '') || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * PO-3b — pick the candidate entity whose declared official website (`P856`) IS the subject's
+ * canonical domain.
+ *
+ * ─── WHY THIS EXISTS ──────────────────────────────────────────────────────
+ * `wbsearchentities` ranks by name, so the first hit for `Wix` is `Q1839789` — a village and civil
+ * parish in Essex. The company, `Q420506`, is second. Taking hit[0] put an English village's
+ * knowledge-graph entity into a Wix customer's report, silently and subject-dependently.
+ *
+ * `P856` is multi-valued, so ANY value may carry the match — never just the first.
+ * Returns null when no candidate matches: "we could not verify which organisation this is" is a
+ * real state, and it is not the same as "the first search hit".
+ */
+export function selectDomainVerifiedCandidate(
+  candidates: ReadonlyArray<{ id: string; officialWebsites: readonly string[] }>,
+  domain: string | null | undefined,
+): { id: string } | null {
+  const target = normalizeIdentityHost(domain);
+  if (!target) return null;
+  for (const candidate of candidates) {
+    if (candidate.officialWebsites.some((site) => normalizeIdentityHost(site) === target)) {
+      return { id: candidate.id };
+    }
+  }
+  return null;
+}
+
+/**
+ * PO-3b — the `P856` values of several candidates in ONE request.
+ *
+ * `wbgetentities` accepts up to 50 ids, so verifying five candidates costs a single extra call per
+ * report — not one per candidate. Returns [] on any failure, which the caller treats as
+ * "unverified", never as "no match".
+ */
+async function fetchOfficialWebsites(qids: readonly string[]): Promise<Array<{ id: string; officialWebsites: string[] }>> {
+  if (qids.length === 0) return [];
+  const params = new URLSearchParams({
+    action: 'wbgetentities',
+    ids: qids.join('|'),
+    props: 'claims',
+    format: 'json',
+    origin: '*',
+  });
+  const response = await fetchWithTimeout(`${WIKIDATA_SEARCH_URL}?${params.toString()}`, {
+    headers: { Accept: 'application/json', 'User-Agent': 'OmnivyraReports/1.0 (canonical-intelligence)' },
+  });
+  if (!response.ok) return [];
+  const json = (await response.json()) as { entities?: Record<string, WikidataEntity> };
+  return qids.map((id) => {
+    const claims = json.entities?.[id]?.claims?.['P856'] ?? [];
+    const officialWebsites = claims
+      .map((claim) => claim.mainsnak?.datavalue?.value)
+      .filter((value): value is string => typeof value === 'string');
+    return { id, officialWebsites };
+  });
 }
 
 async function fetchEntity(qid: string): Promise<WikidataEntity | null> {
@@ -227,7 +303,10 @@ export async function lookupCompanyFirmographicsFromWikidata(brandName: string):
   if (!name) return empty;
   const load = async () => {
     try {
-      const hit = await searchEntity(name);
+      // CPG-012 firmographics path: no canonical domain is passed here, so there is nothing to
+      // verify against and behaviour is deliberately unchanged — first hit, exactly as before.
+      // The PO-3b domain verification applies to the Report 1 path, which does have a domain.
+      const hit = (await searchEntities(name))[0] ?? null;
       if (!hit) return empty;
       const entity = await fetchEntity(hit.id);
       if (!entity || !entityIsOrganization(entity)) return empty;
@@ -292,8 +371,48 @@ export class WikidataAdapter implements KnowledgeGraphProvider {
     }
 
     let hit: WikidataSearchHit | null;
+    let candidates: WikidataSearchHit[] = [];
     try {
-      hit = await searchEntity(params.brandName);
+      candidates = await searchEntities(params.brandName);
+      hit = candidates[0] ?? null;
+      // PO-3b — when a canonical domain is known, the entity is chosen by DOMAIN, not by name rank.
+      // `wbsearchentities` ranks on the name alone, so hit[0] for `Wix` is an English village.
+      if (hit && params.domain) {
+        const verified = selectDomainVerifiedCandidate(
+          await fetchOfficialWebsites(candidates.map((c) => c.id)),
+          params.domain,
+        );
+        // No candidate declares this domain ⇒ we have NOT identified the subject's entity.
+        // Falling back to hit[0] here is the defect this fix exists to remove.
+        hit = verified ? (candidates.find((c) => c.id === verified.id) ?? null) : null;
+        if (!hit) {
+          const result: EntityIntelligenceResult = {
+            state: 'measured',
+            entity: {
+              wikidata_qid: null,
+              google_kg_mid: null,
+              schema_completeness: 0,
+              sameAs_count: 0,
+              sameAs_targets: [],
+              canonical_description: null,
+            },
+            score: 0,
+            evidence: {
+              count: 1,
+              sources: ['heuristic'],
+              freshness: { last_observed_at: new Date().toISOString(), age_hours: 0 },
+              observations: [
+                // Distinct from `wikidata_no_entity`: candidates DID exist, none of them declared
+                // this domain. "We could not tell which organisation this is" is its own finding.
+                { signal: 'wikidata_entity_unverified', source: 'wikidata', observed_at: new Date().toISOString() },
+              ],
+            },
+            reason_unavailable: null,
+          };
+          this.cache.set(cacheKey, result);
+          return result;
+        }
+      }
     } catch (error) {
       const reason = `Wikidata search request failed: ${error instanceof Error ? error.message : 'unknown error'}.`;
       const result: EntityIntelligenceResult = {

@@ -876,3 +876,104 @@ export function renderWebsiteChecks(
     </section>
   `;
 }
+
+type Advertising = NonNullable<Report1['advertising']>;
+
+/**
+ * PO-3 — public advertising, rendered strictly by resolution state.
+ *
+ * ─── WHAT MAKES THIS SAFE ─────────────────────────────────────────────────
+ * The composer has already partitioned advertisers into `companyAdvertisers` (resolver said
+ * MATCHED) and `otherAdvertisers` (everything else). This function reads those arrays and never
+ * re-derives ownership, so the strongest sentence it can produce about the company is bounded by
+ * a decision made upstream against the evidence.
+ *
+ * `counts.domainAdCountLabel` is rendered ONLY inside the third-party paragraph, and only as ads
+ * pointing AT the domain. It is never summed, never relabelled, and never placed next to the
+ * company's name — `~4K ads` at `hubspot.com` covered an Indonesian education company and a
+ * private individual as well as HubSpot.
+ */
+export function renderPublicAdvertising(
+  payload: CanonicalExportPayload,
+  eyebrow: string,
+): string {
+  const ads = payload.report1?.advertising as Advertising | null | undefined;
+  if (!ads) return '';
+
+  const header = renderSectionHeader(
+    'Public Advertising',
+    'What does the public ad record show, and whose advertising is it?',
+    eyebrow,
+  );
+
+  // Could not look. This is emphatically not "no advertising" — §16.
+  if (ads.accessState !== 'observed') {
+    return `
+      <section class="ds-section">
+        ${header}
+        <p class="ds-framing">${escape(ads.reason ?? 'Public advertising evidence could not be established for this report.')} This is not a finding that the company does not advertise.</p>
+      </section>
+    `;
+  }
+
+  const advertiserBlock = (record: Advertising['companyAdvertisers'][number], owned: boolean): string => `
+    <div style="margin:0 0 3.5mm;">
+      <p style="font-size:11pt; font-weight:600; margin:0 0 1mm; color:#0f172a;">
+        ${escape(record.legalName ?? 'Unnamed advertiser')}
+        ${record.verified ? '<span class="ds-pill">Verified</span>' : ''}
+        ${record.basedIn ? `<span style="color:#64748b; font-weight:400;"> · ${escape(record.basedIn)}</span>` : ''}
+      </p>
+      ${owned && record.adCountLabel
+        ? `<p style="font-size:10.5pt; margin:0 0 1mm; color:#1a2332;">${escape(record.adCountLabel)} observed for this advertiser.</p>`
+        : ''}
+      <p style="font-size:10pt; line-height:1.55; margin:0 0 1mm; color:#334155;">${escape(record.resolutionBasis)}</p>
+      <p style="font-size:9pt; margin:0; color:#64748b;">${escape(record.advertiserId)}${record.creativeIds.length > 0 ? ` · ${record.creativeIds.length} creatives observed on the first page` : ''}</p>
+    </div>
+  `;
+
+  const companySection = ads.companyAdvertisers.length > 0
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Your advertising</p>
+          <p class="ds-playbook-group-desc">Advertiser identity matched your publicly declared legal name against the provider's verified identity.</p>
+        </div>
+        ${ads.companyAdvertisers.map((r) => advertiserBlock(r, true)).join('')}
+      </div>
+    `
+    : '';
+
+  // The honest-absence branch. `mayStateNoVerifiedCompanyAdvertising`'s condition is reproduced
+  // here as a rendering decision: without a declared legal name the search COULD NOT have
+  // confirmed ownership, so "none found" would overstate what the run established.
+  const noneFound = ads.companyAdvertisers.length === 0
+    ? ads.subjectLegalNameUsed !== null
+      ? `<p style="font-size:10.5pt; line-height:1.6; margin:0 0 3mm; color:#1a2332;">No advertiser matching <strong>${escape(ads.subjectLegalNameUsed)}</strong> was found in the public ad record, searched from ${escape(ads.vantage)} on ${escape(ads.observedAt.slice(0, 10))} in a signed-out view. Some ad types are withheld from signed-out viewers, so this is what the public record shows rather than a complete account of your advertising.</p>`
+      : `<p style="font-size:10.5pt; line-height:1.6; margin:0 0 3mm; color:#1a2332;">Ownership could not be established: your website does not publish a legal name (<code>Organization.legalName</code>), so an advertiser could not be confirmed as yours even where one exists. Publishing it would let this check resolve.</p>`
+    : '';
+
+  const othersSection = ads.otherAdvertisers.length > 0
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Other advertisers pointing at your domain</p>
+          <p class="ds-playbook-group-desc">Separate verified entities, or advertisers whose relationship to you could not be established${ads.counts.domainAdCountLabel ? ` — the public record shows ${escape(ads.counts.domainAdCountLabel)} pointing at this domain in total, across all advertisers` : ''}. This is typically affiliate, reseller or partner activity, and it is not your advertising.</p>
+        </div>
+        ${ads.otherAdvertisers.map((r) => advertiserBlock(r, false)).join('')}
+      </div>
+    `
+    : '';
+
+  return `
+    <section class="ds-section">
+      ${header}
+      <p class="ds-framing">Observed by searching the public Google Ads Transparency Center by advertiser name. An advertiser is reported as yours only where its provider-verified legal name matches the legal name your own website declares — ads merely pointing at your domain are not evidence that you placed them.</p>
+      ${noneFound}
+      ${companySection}
+      ${othersSection}
+      <p style="font-size:9pt; margin:3mm 0 0; color:#64748b; font-family:'Inter',system-ui,sans-serif;">
+        Source: public Ads Transparency Center · observed ${escape(ads.observedAt.slice(0, 10))} from ${escape(ads.vantage)} · signed-out public view · ${ads.counts.advertiserAccountsDiscovered} advertiser account${ads.counts.advertiserAccountsDiscovered === 1 ? '' : 's'} examined
+      </p>
+    </section>
+  `;
+}

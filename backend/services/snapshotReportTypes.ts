@@ -239,6 +239,11 @@ export interface SnapshotReport {
    */
   search_visibility?: SnapshotSearchVisibility | null;
   /**
+   * PO-3 — publicly observable Google advertising, attributed ONLY where advertiser identity
+   * resolved. Null when no observation ran. See {@link SnapshotAdvertising}.
+   */
+  advertising?: SnapshotAdvertising | null;
+  /**
    * GAP-08 — the customer-facing identity fields with their provenance made explicit, so declared
    * information can never be read as public observation.
    */
@@ -629,6 +634,15 @@ export type SnapshotReportOptions = {
    */
   crawlEvidence?: SnapshotCrawlEvidence | null;
   /**
+   * PO-3 — the public advertising observation for this run.
+   *
+   * Handed DOWN by the caller, exactly as `crawlEvidence` is, and for the same architectural
+   * reason: the browser acquisition runs on the Railway plane while composition runs on Vercel,
+   * so the composer receives a finished observation rather than performing one. Absent on every
+   * existing path, which leaves `advertising` null and the section unrendered.
+   */
+  advertisingObservation?: import('./ads/adsTransparencyObservation').AdsObservationResult | null;
+  /**
    * R1-OPEN-01 — the current-domain scope the report-triggered crawl used. When absent,
    * `composeSnapshotReport` resolves it from `resolvedInput`; with no resolvable domain it reads
    * no stored pages rather than whichever site the company's pages come from.
@@ -1014,4 +1028,59 @@ export type SnapshotPlanItem = {
   title: string; action: string; why: string;
   measurement: string; measurementAvailable: boolean;
   effort: string; confidence: string; sources: string[];
+};
+
+/**
+ * PO-3 — publicly observable advertising, separated by whether advertiser identity was resolved.
+ *
+ * ─── THE SHAPE IS THE GUARD ───────────────────────────────────────────────
+ * `companyAdvertisers` and `otherAdvertisers` are different arrays because they are different
+ * claims, and `domainAdCountLabel` sits deliberately OUTSIDE both. Ads pointing AT a domain are
+ * not ads run BY the company: `?domain=hubspot.com` returned `~4K ads` across the genuine
+ * advertiser plus an Indonesian education company and a private individual, and the same query
+ * for `calendly.com` returned eight distinct advertisers across two vantages, none of them the
+ * subject. A renderer that wanted to state a company ad count must read it from a
+ * `companyAdvertisers` entry; there is no aggregate field for it to reach for instead.
+ *
+ * All counts are carried as the provider's own rounded LABELS (`~4K ads`), never as integers.
+ */
+export type SnapshotAdvertising = {
+  /** How the attempt to reach the public surface ended — distinct from what it showed. */
+  accessState: 'observed' | 'blocked' | 'restricted' | 'requires_auth' | 'unreachable' | 'unavailable';
+  /** Why, when not `observed`. Never phrased as an absence of advertising. */
+  reason: string | null;
+  source: 'ads_transparency';
+  provenance: 'PUBLIC_OBSERVED';
+  /** Results are vantage- and time-dependent; both are first-class, not metadata. */
+  vantage: string;
+  observedAt: string;
+  /** The subject legal name the resolution was performed against. Null ⇒ MATCHED was unreachable. */
+  subjectLegalNameUsed: string | null;
+  /** Advertisers whose identity resolved to the subject. ONLY these may be called the company's. */
+  companyAdvertisers: SnapshotAdvertiserRecord[];
+  /** Verified advertisers that are NOT the subject, or could not be resolved. A real finding. */
+  otherAdvertisers: SnapshotAdvertiserRecord[];
+  counts: {
+    /** Ads pointing AT the domain. NEVER the company's ad count. */
+    domainAdCountLabel: string | null;
+    advertiserAccountsDiscovered: number;
+    matchedAdvertiserAccounts: number;
+  };
+};
+
+export type SnapshotAdvertiserRecord = {
+  advertiserId: string;
+  legalName: string | null;
+  basedIn: string | null;
+  verified: boolean;
+  ambiguityFlagged: boolean;
+  /** Provider-stated approximation for THIS advertiser, e.g. `~300 ads`. */
+  adCountLabel: string | null;
+  creativeIds: string[];
+  profileUrl: string;
+  /** `MATCHED` | `PROBABLE_MATCH` | `NOT_MATCHED` | `UNRESOLVED` | `INSUFFICIENT_EVIDENCE`. */
+  resolutionState: string;
+  /** Why that state was reached, in checkable terms. */
+  resolutionBasis: string;
+  discoveredVia: 'advertiser_name' | 'destination_domain';
 };

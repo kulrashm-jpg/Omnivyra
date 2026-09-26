@@ -81,6 +81,8 @@ export type CanonicalExportPayload = {
     company_identity: SnapshotReport['company_identity'] | null;
     /** GAP-10 — per-check website evidence. Null when nothing was evaluable. */
     website_checks: SnapshotReport['website_checks'] | null;
+    /** PO-3 — publicly observed advertising, partitioned by resolved advertiser identity. */
+    advertising: SnapshotReport['advertising'] | null;
   };
 
   // ── Analyst-only: evidence appendix + per-axis explanations ──────────────

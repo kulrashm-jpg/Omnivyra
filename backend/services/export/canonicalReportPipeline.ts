@@ -108,6 +108,7 @@ export function renderCanonicalReportHtml(payload: ReportViewPayload): string {
       search_visibility: payload.searchVisibility ?? null,
       company_identity: payload.companyIdentity ?? null,
       website_checks: payload.websiteChecks ?? null,
+      advertising: payload.advertising ?? null,
     },
   });
   // Brand presence: thread companyName, domain, logoUrl, and faviconUrl

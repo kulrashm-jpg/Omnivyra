@@ -38,10 +38,28 @@ function classifySameAs(urls: string[]): Record<string, number> {
 function buildDeclaredEvidence(pages: CanonicalPageRow[], legalPages: string[]): CanonicalDeclaredEvidence {
   const sameAsSet = new Set<string>();
   const credSet = new Set<string>();
+  // PO-3 Phase 1b — the site's declared Organization identity. FIRST declaration across the crawl
+  // wins, matching the per-page rule in `extractOrganizationIdentity`: a later Organization is
+  // typically a partner or publisher, and overwriting would silently swap the subject's identity.
+  let declaredLegalName: string | null = null;
+  let declaredAddressCountry: string | null = null;
   for (const p of pages) {
-    const signals = (p.crawl_metadata as { signals?: { same_as?: string[]; declared_credentials?: string[] } } | null)?.signals;
+    const signals = (p.crawl_metadata as {
+      signals?: {
+        same_as?: string[];
+        declared_credentials?: string[];
+        legal_name?: string | null;
+        address_country?: string | null;
+      };
+    } | null)?.signals;
     for (const u of signals?.same_as ?? []) sameAsSet.add(u);
     for (const c of signals?.declared_credentials ?? []) credSet.add(c);
+    if (declaredLegalName === null && typeof signals?.legal_name === 'string' && signals.legal_name.trim()) {
+      declaredLegalName = signals.legal_name.trim();
+    }
+    if (declaredAddressCountry === null && typeof signals?.address_country === 'string' && signals.address_country.trim()) {
+      declaredAddressCountry = signals.address_country.trim();
+    }
   }
   const sameAs = [...sameAsSet];
   const domains = [...new Set(sameAs.map(declaredHost).filter(Boolean))];
@@ -51,6 +69,17 @@ function buildDeclaredEvidence(pages: CanonicalPageRow[], legalPages: string[]):
     present: legalPages.some((u) => d.re.test(u)),
   }));
   return {
+    // Emitted only when the site actually declared something — an absent block means "the site
+    // declared no organisation identity", which is not the same as a null legal name.
+    ...(declaredLegalName !== null || declaredAddressCountry !== null
+      ? {
+        declared_identity: {
+          legal_name: declaredLegalName,
+          address_country: declaredAddressCountry,
+          source: 'schema_org' as const,
+        },
+      }
+      : {}),
     same_as: { count: sameAs.length, domains, destination_types: classifySameAs(sameAs), source: 'schema_org' },
     declared_certifications: { count: credSet.size, items: [...credSet].slice(0, 25), source: 'schema_org' },
     legal_transparency: { items: legalItems, present_count: legalItems.filter((i) => i.present).length, source: 'crawler' },
