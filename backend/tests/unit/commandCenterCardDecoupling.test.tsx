@@ -183,7 +183,8 @@ describe('Phase 22 — source invariants (mutation guards)', () => {
   });
 
   it('the feature branch is awaited on its own promise', () => {
-    expect(SRC).toContain('const featurePromise = fetchReadinessData(selectedCompanyId);');
+    // Stored (sync:false) read first; the recompute runs after the wave commits.
+    expect(SRC).toContain('const featurePromise = fetchReadinessData(companyId, { sync: false })');
     expect(SRC).toContain('const data = await featurePromise;');
   });
 

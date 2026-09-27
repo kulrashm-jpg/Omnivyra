@@ -250,6 +250,39 @@ function upsertFeatureScore(
   return next;
 }
 
+function profileSignalsFromProfile(profile: any | null): CompanyProfileSignal {
+  const teamSize =
+    profile?.team_size ??
+    profile?.company_size ??
+    profile?.size ??
+    profile?.report_settings?.company_facts?.team_size ??
+    null;
+  const profileFields = [
+    Boolean(profile?.name?.trim?.()),
+    Boolean(profile?.industry?.trim?.()),
+    Boolean(String(teamSize ?? '').trim()),
+  ];
+  const socialCount = [
+    profile?.linkedin_url,
+    profile?.facebook_url,
+    profile?.instagram_url,
+    profile?.x_url,
+    profile?.youtube_url,
+    profile?.tiktok_url,
+    profile?.reddit_url,
+    profile?.pinterest_url,
+    profile?.whatsapp_url,
+  ]
+    .filter((value) => typeof value === 'string' && value.trim().length > 0)
+    .length;
+
+  return {
+    hasWebsite: Boolean(profile?.website_url?.trim()),
+    profileScore: profileFields.filter(Boolean).length / profileFields.length,
+    socialScore: socialCount === 0 ? 0 : socialCount === 1 ? 0.4 : socialCount === 2 ? 0.7 : 1,
+  };
+}
+
 async function fetchCompanyProfileSignals(companyId: string): Promise<CompanyProfileSignal> {
   try {
     const response = await fetch(
@@ -265,40 +298,20 @@ async function fetchCompanyProfileSignals(companyId: string): Promise<CompanyPro
     }
 
     const data = await response.json() as any;
-    const profile = data?.profile || null;
-    const teamSize =
-      profile?.team_size ??
-      profile?.company_size ??
-      profile?.size ??
-      profile?.report_settings?.company_facts?.team_size ??
-      null;
-    const profileFields = [
-      Boolean(profile?.name?.trim?.()),
-      Boolean(profile?.industry?.trim?.()),
-      Boolean(String(teamSize ?? '').trim()),
-    ];
-    const socialCount = [
-      profile?.linkedin_url,
-      profile?.facebook_url,
-      profile?.instagram_url,
-      profile?.x_url,
-      profile?.youtube_url,
-      profile?.tiktok_url,
-      profile?.reddit_url,
-      profile?.pinterest_url,
-      profile?.whatsapp_url,
-    ]
-      .filter((value) => typeof value === 'string' && value.trim().length > 0)
-      .length;
-
-    return {
-      hasWebsite: Boolean(profile?.website_url?.trim()),
-      profileScore: profileFields.filter(Boolean).length / profileFields.length,
-      socialScore: socialCount === 0 ? 0 : socialCount === 1 ? 0.4 : socialCount === 2 ? 0.7 : 1,
-    };
+    return profileSignalsFromProfile(data?.profile || null);
   } catch {
     return { hasWebsite: false, profileScore: 0, socialScore: 0 };
   }
+}
+
+export interface FetchReadinessOptions {
+  /**
+   * Recompute feature completion before returning (default true). false reads the
+   * STORED state — fast — so a caller can render it and run the recompute afterwards.
+   */
+  sync?: boolean;
+  /** Profile the caller has already loaded — skips this call's own profile request. */
+  profile?: any | null;
 }
 
 /**
@@ -306,14 +319,19 @@ async function fetchCompanyProfileSignals(companyId: string): Promise<CompanyPro
  */
 export async function fetchReadinessData(
   companyId: string,
+  options: FetchReadinessOptions = {},
 ): Promise<ReadinessFetchResult | null> {
+  const { sync = true, profile } = options;
   let featuresDegraded = false;
   try {
-    const profileSignalsPromise = fetchCompanyProfileSignals(companyId);
+    const profileSignalsPromise =
+      profile !== undefined
+        ? Promise.resolve(profileSignalsFromProfile(profile))
+        : fetchCompanyProfileSignals(companyId);
 
-    // Fetch features — sync=true recomputes from live DB data on every visit
+    // Fetch features — sync=true recomputes from live DB data; sync=false reads stored state
     const featuresPromise = fetch(
-      `/api/feature-completion?sync=true&company_id=${encodeURIComponent(companyId)}`,
+      `/api/feature-completion?${sync ? 'sync=true&' : ''}company_id=${encodeURIComponent(companyId)}`,
       {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
