@@ -7,6 +7,7 @@ import { ApiFetchError } from '../lib/swr/swrClient';
 import { getVisibleCards, CommandCenterCard, Requirement, CardState } from '../config/commandCenterCards';
 import { useCompanyContext } from '../components/CompanyContext';
 import { apiFetch } from '../lib/apiFetch';
+import { getAuthToken } from '../utils/getAuthToken';
 import {
   fetchReadinessData,
   getCardStateFromFeatures,
@@ -32,7 +33,7 @@ import { buildReadinessSignals } from '../lib/readiness/buildReadinessSignals';
 import { READINESS_REGISTRY, type ReadinessSignals } from '../config/readinessRegistry';
 import { buildMasterySignals } from '../lib/mastery/buildMasterySignals';
 import { MASTERY_REGISTRY, type MasterySignals } from '../config/masteryRegistry';
-import { evaluateCapabilityRegistry, type CapabilityEvaluation } from '../lib/shared/capabilityRegistry';
+import { evaluateCapabilityRegistry, type CapabilityEvaluation, type EvaluatedCategory } from '../lib/shared/capabilityRegistry';
 
 /**
  * Upper bound for every request in the readiness signal batch.
@@ -178,6 +179,97 @@ function writeRatchet(companyId: string, key: string, maxes: Record<string, numb
     /* non-fatal */
   }
 }
+// ── Last-good evaluation ───────────────────────────────────────────────────────
+//
+// The rings render the last evaluation for the company until fresh signals arrive,
+// so a page load (or a failed profile read) shows the known score, not 0/0. A
+// cached evaluation is marked incomplete (K4): it is not this run's result.
+function readLastEvaluation(companyId: string, key: string): CapabilityEvaluation | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const raw = window.localStorage.getItem(`cc-last-eval:${key}:${companyId}`);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || !Array.isArray(parsed.categories) || !parsed.summary || !parsed.availability) return null;
+    const cached = parsed as CapabilityEvaluation;
+    return { ...cached, availability: { ...cached.availability, complete: false } };
+  } catch {
+    return null;
+  }
+}
+function writeLastEvaluation(companyId: string, key: string, evaluation: CapabilityEvaluation): void {
+  try {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(`cc-last-eval:${key}:${companyId}`, JSON.stringify(evaluation));
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/**
+ * K4 keeps an unreadable factor out of the denominator rather than scoring it zero —
+ * but that still moves the percentage whenever a read fails (a completed category
+ * dropping out lowers it). If the last evaluation scored that category/factor, carry
+ * its last-known result forward so the percentage stays put. Availability stays
+ * truthful: a carried-forward factor is still counted as unavailable for this run.
+ */
+function holdTransientUnavailable(
+  evaluation: CapabilityEvaluation,
+  last: CapabilityEvaluation | null,
+): CapabilityEvaluation {
+  if (!last) return evaluation;
+  const lastCategories = new Map(last.categories.map((c) => [c.id, c]));
+  let heldCount = 0;
+  const categories = evaluation.categories.map((cat): EvaluatedCategory => {
+    const prev = lastCategories.get(cat.id);
+    if (!prev || !prev.scored) return cat;
+    if (!cat.scored) {
+      heldCount += prev.factors.filter((f) => f.available && f.weight > 0).length;
+      return prev;
+    }
+    const prevFactors = new Map(prev.factors.map((f) => [f.id, f]));
+    let factorHeld = false;
+    const factors = cat.factors.map((f) => {
+      const p = prevFactors.get(f.id);
+      if (!f.available && p?.available) {
+        factorHeld = true;
+        if (p.weight > 0) heldCount += 1;
+        return p;
+      }
+      return f;
+    });
+    if (!factorHeld) return cat;
+    const scoredFactors = factors.filter((f) => f.available && f.weight > 0);
+    const totalWeight = scoredFactors.reduce((sum, f) => sum + f.weight, 0);
+    const score = totalWeight ? scoredFactors.reduce((sum, f) => sum + f.score * f.weight, 0) / totalWeight : 0;
+    return {
+      ...cat,
+      factors,
+      score,
+      percent: Math.round(score * 100),
+      status: score >= 1 ? 'done' : score > 0 ? 'in_progress' : 'missing',
+      completedCount: scoredFactors.filter((f) => f.status === 'done').length,
+      totalCount: scoredFactors.length,
+    };
+  });
+  if (heldCount === 0) return evaluation;
+
+  const scoredCategories = categories.filter((c) => c.scored);
+  const totalWeight = scoredCategories.reduce((sum, c) => sum + c.weight, 0);
+  const overall = totalWeight ? scoredCategories.reduce((sum, c) => sum + c.score * c.weight, 0) / totalWeight : 0;
+  const allScored = scoredCategories.flatMap((c) => c.factors.filter((f) => f.available && f.weight > 0));
+  return {
+    categories,
+    overallPercent: Math.round(overall * 100),
+    summary: {
+      completedCount: allScored.filter((f) => f.status === 'done').length,
+      inProgressCount: allScored.filter((f) => f.status === 'in_progress').length,
+      totalCount: allScored.length,
+    },
+    // Held factors were not evaluated this run — the score is still provisional.
+    availability: { ...evaluation.availability, complete: false },
+  };
+}
+
 function evaluateWithRatchet<S>(
   registry: Parameters<typeof evaluateCapabilityRegistry<S>>[0],
   signals: S,
@@ -185,7 +277,10 @@ function evaluateWithRatchet<S>(
   key: string,
 ): CapabilityEvaluation {
   const prior = readRatchet(companyId, key);
-  const evaluation = evaluateCapabilityRegistry(registry, signals, prior);
+  const evaluation = holdTransientUnavailable(
+    evaluateCapabilityRegistry(registry, signals, prior),
+    readLastEvaluation(companyId, key),
+  );
   // Persist the new per-factor maxima (available factors only — a transient
   // unavailable never lowers a stored max).
   const next: Record<string, number> = { ...prior };
@@ -195,6 +290,7 @@ function evaluateWithRatchet<S>(
     }
   }
   writeRatchet(companyId, key, next);
+  writeLastEvaluation(companyId, key, evaluation);
   return evaluation;
 }
 
@@ -239,7 +335,7 @@ export function useCommandCenter() {
     () =>
       setupSignals && selectedCompanyId
         ? evaluateWithRatchet(SETUP_REGISTRY, setupSignals, selectedCompanyId, 'setup')
-        : EMPTY_CAPABILITY_EVALUATION,
+        : (selectedCompanyId && readLastEvaluation(selectedCompanyId, 'setup')) || EMPTY_CAPABILITY_EVALUATION,
     [setupSignals, selectedCompanyId],
   );
   const [readinessSignals, setReadinessSignals] = useState<ReadinessSignals | null>(null);
@@ -247,7 +343,7 @@ export function useCommandCenter() {
     () =>
       readinessSignals && selectedCompanyId
         ? evaluateWithRatchet(READINESS_REGISTRY, readinessSignals, selectedCompanyId, 'readiness')
-        : EMPTY_CAPABILITY_EVALUATION,
+        : (selectedCompanyId && readLastEvaluation(selectedCompanyId, 'readiness')) || EMPTY_CAPABILITY_EVALUATION,
     [readinessSignals, selectedCompanyId],
   );
   const [masterySignals, setMasterySignals] = useState<MasterySignals | null>(null);
@@ -255,7 +351,7 @@ export function useCommandCenter() {
     () =>
       masterySignals && selectedCompanyId
         ? evaluateWithRatchet(MASTERY_REGISTRY, masterySignals, selectedCompanyId, 'mastery')
-        : EMPTY_CAPABILITY_EVALUATION,
+        : (selectedCompanyId && readLastEvaluation(selectedCompanyId, 'mastery')) || EMPTY_CAPABILITY_EVALUATION,
     [masterySignals, selectedCompanyId],
   );
   const setupPct = setupEvaluation.overallPercent;
@@ -304,12 +400,20 @@ export function useCommandCenter() {
       // to 21,722ms (/api/feature-completion), so a 15s cap would classify real
       // successes as failures and degrade scores that were merely slow. 30s
       // sits above the observed legitimate maximum while still bounding a hang.
+      // Bearer token read ONCE for the wave. Without it these reads depend on the
+      // auth cookie alone; a missing/stale cookie 401s the profile read and no ring
+      // is ever evaluated. Cookie-only principals have no token and are unchanged.
+      const authToken = await getAuthToken().catch(() => null);
+      if (isStale()) return;
       const getJson = (path: string) => {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), READINESS_SIGNAL_TIMEOUT_MS);
         return fetch(path, {
           method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          },
           signal: ctrl.signal,
         })
           .catch(() => null) // abort included — preserves the existing null fallback
@@ -341,7 +445,18 @@ export function useCommandCenter() {
       // The feature branch is now awaited on its own and committed immediately;
       // the signal batch is awaited afterwards for the score pipeline, whose
       // inputs genuinely do require all of them together.
-      const featurePromise = fetchReadinessData(selectedCompanyId);
+      //
+      // The feature branch reads STORED completion (no sync). The recompute —
+      // measured at up to ~21.7s — runs after this wave commits (see below),
+      // so neither the cards nor the rings wait on it.
+      const companyId = selectedCompanyId;
+      // A failed stored read falls back to the recompute, as before this split.
+      let alreadySynced = false;
+      const featurePromise = fetchReadinessData(companyId, { sync: false }).then((stored) => {
+        if (stored) return stored;
+        alreadySynced = true;
+        return fetchReadinessData(companyId);
+      });
       const signalBatch = Promise.all([
         getJson(`/api/company-profile?companyId=${cid}&includeCompleteness=1`),
         getJson(`/api/external-apis/company-config?companyId=${cid}`),
@@ -406,8 +521,11 @@ export function useCommandCenter() {
         telemetryProvidersResponse,
       ] = await signalBatch;
       if (isStale()) return;
+      let applySignals: ((features: FeatureStatus[]) => void) | null = null;
+      let loadedProfile: any | undefined;
       if (profileResponse?.ok) {
         const profileData = await profileResponse.json();
+        loadedProfile = profileData?.profile ?? null;
         const [companyApiConfigData, externalApisData, socialStatusData, teamSummaryData, websiteSnapshotData, blogsData, creatorAssetsData, templateCollectionsData, userTemplatesData, blockTemplatesData, automationConfigData, campaignsData, reportsData, telemetryProvidersData] = await Promise.all([
           companyApiConfigResponse?.ok ? companyApiConfigResponse.json() : Promise.resolve(null),
           externalApisResponse?.ok ? externalApisResponse.json() : Promise.resolve(null),
@@ -424,19 +542,34 @@ export function useCommandCenter() {
           reportsResponse?.ok ? reportsResponse.json() : Promise.resolve(null),
           telemetryProvidersResponse?.ok ? telemetryProvidersResponse.json() : Promise.resolve(null),
         ]);
-        const apiCatalog = (externalApisData?.apis || [])
-          .filter((api: any) => api?.id)
-          .map((api: any) => ({
-            id: api.id as string,
-            name: (api.name || api.display_name || api.source_name || api.platform_name || api.id) as string,
-          }));
+        // Retain-last-good for the integration catalog, the configured APIs and the
+        // plan tier as well: a failed read of any of them made its Setup category
+        // "unavailable", dropping it out of the percentage.
+        const subscriptionResult = await subscriptionPromise;
+        if (isStale()) return;
+        const subscriptionData: any =
+          subscriptionResult.outcome === 'ok' ? (subscriptionResult.json as any) : null;
+        const catalogStable = stabiliseInputs(`${companyId}:apis`, {
+          apiCatalog: externalApisResponse?.ok
+            ? (externalApisData?.apis || [])
+                .filter((api: any) => api?.id)
+                .map((api: any) => ({
+                  id: api.id as string,
+                  name: (api.name || api.display_name || api.source_name || api.platform_name || api.id) as string,
+                }))
+            : null,
+          configuredApiIds: Array.isArray(companyApiConfigData?.configs)
+            ? companyApiConfigData.configs
+                .filter((row: any) => row?.enabled !== false)
+                .map((row: any) => row.api_source_id)
+                .filter(Boolean)
+            : null,
+          subscriptionTier: subscriptionData?.data?.tier ?? subscriptionData?.data?.plan_key ?? null,
+        });
+        const apiCatalog = (catalogStable.apiCatalog as Array<{ id: string; name: string }> | null) ?? [];
+        const apiCatalogAvailable = catalogStable.apiCatalog != null;
         const apiNameById = new Map<string, string>(apiCatalog.map((a: { id: string; name: string }) => [a.id, a.name]));
-        const configuredApiIds = new Set<string>(
-          (companyApiConfigData?.configs || [])
-            .filter((row: any) => row?.enabled !== false)
-            .map((row: any) => row.api_source_id)
-            .filter(Boolean),
-        );
+        const configuredApiIds = new Set<string>((catalogStable.configuredApiIds as string[] | null) ?? []);
         const configuredApis = [...configuredApiIds].map((id) => apiNameById.get(id) || id);
         // NOTE: profile-URL connected list is retained ONLY for profileStatus,
         // which feeds Readiness/Mastery + preflight (unchanged). Setup channels
@@ -498,62 +631,75 @@ export function useCommandCenter() {
         const sTeam = (stable.teamSummary as { ownerExists: boolean; memberCount: number } | null) ?? null;
         const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
-        // Assemble canonical, capability-aware Setup signals (no scoring here —
-        // that lives in the engine). Channels come from social_accounts; Team
-        // from the membership-summary endpoint readable by every member.
-        const subscriptionResult = await subscriptionPromise;
-        const subscriptionData: any =
-          subscriptionResult.outcome === 'ok' ? (subscriptionResult.json as any) : null;
-        setSetupSignals(
-          buildSetupSignals({
-            profile: profileData?.profile ?? null,
-            features: data.features,
-            socialAccounts: sSocialAccounts,
-            teamSummary: sTeam,
-            apiCatalog,
-            configuredApiIds,
-            apiCatalogAvailable: Boolean(externalApisResponse?.ok),
-            subscriptionTier:
-              subscriptionData?.data?.tier ?? subscriptionData?.data?.plan_key ?? null,
-          }),
-        );
-        // Canonical, capability-aware Readiness signals (client-side engine,
-        // Setup architecture). Channels from social_accounts; profile audience.
-        setReadinessSignals(
-          buildReadinessSignals({
-            profile: profileData?.profile ?? null,
-            features: data.features,
-            socialAccounts: sSocialAccounts,
-            websiteSnapshot: sWebsiteSnapshot,
-            blogsCount: num(stable.blogsCount),
-            mediaCount: num(stable.mediaCount),
-            templatesCount: num(stable.templatesCount),
-            automation: sAutomation,
-          }),
-        );
-        // Canonical, adoption-based Mastery signals (client-side shared engine).
-        // Real artifacts only (published content, campaigns, reports, assets,
-        // templates, team, automation) — no feature-usage.
-        setMasterySignals(
-          buildMasterySignals({
-            profile: profileData?.profile ?? null,
-            // Latched feature-completion flags — mastery credits ever-used
-            // capabilities forever, independent of current artifact counts.
-            features: data.features,
-            blogsCount: num(stable.blogsCount),
-            campaignsCount: num(stable.campaignsCount),
-            reportsCount: num(stable.reportsCount),
-            mediaCount: num(stable.mediaCount),
-            templatesCount: num(stable.templatesCount),
-            teamSummary: sTeam ? { memberCount: sTeam.memberCount } : null,
-            automation: sAutomation,
-            websiteSnapshot: sWebsiteSnapshot,
-            telemetry: telemetryProvidersData?.signals ?? null,
-          }),
-        );
+        applySignals = (features: FeatureStatus[]) => {
+          // Assemble canonical, capability-aware Setup signals (no scoring here —
+          // that lives in the engine). Channels come from social_accounts; Team
+          // from the membership-summary endpoint readable by every member.
+          setSetupSignals(
+            buildSetupSignals({
+              profile: profileData?.profile ?? null,
+              features,
+              socialAccounts: sSocialAccounts,
+              teamSummary: sTeam,
+              apiCatalog,
+              configuredApiIds,
+              apiCatalogAvailable,
+              subscriptionTier: (catalogStable.subscriptionTier as string | null) ?? null,
+            }),
+          );
+          // Canonical, capability-aware Readiness signals (client-side engine,
+          // Setup architecture). Channels from social_accounts; profile audience.
+          setReadinessSignals(
+            buildReadinessSignals({
+              profile: profileData?.profile ?? null,
+              features,
+              socialAccounts: sSocialAccounts,
+              websiteSnapshot: sWebsiteSnapshot,
+              blogsCount: num(stable.blogsCount),
+              mediaCount: num(stable.mediaCount),
+              templatesCount: num(stable.templatesCount),
+              automation: sAutomation,
+            }),
+          );
+          // Canonical, adoption-based Mastery signals (client-side shared engine).
+          // Real artifacts only (published content, campaigns, reports, assets,
+          // templates, team, automation) — no feature-usage.
+          setMasterySignals(
+            buildMasterySignals({
+              profile: profileData?.profile ?? null,
+              // Latched feature-completion flags — mastery credits ever-used
+              // capabilities forever, independent of current artifact counts.
+              features,
+              blogsCount: num(stable.blogsCount),
+              campaignsCount: num(stable.campaignsCount),
+              reportsCount: num(stable.reportsCount),
+              mediaCount: num(stable.mediaCount),
+              templatesCount: num(stable.templatesCount),
+              teamSummary: sTeam ? { memberCount: sTeam.memberCount } : null,
+              automation: sAutomation,
+              websiteSnapshot: sWebsiteSnapshot,
+              // The stabilised value — it was cached above but the raw read was used.
+              telemetry: (stable.telemetry as any) ?? null,
+            }),
+          );
+        };
+        applySignals(data.features);
       } else {
         setProfileStatus(null);
       }
+
+      // ── Background recompute: sync=true, off the render path ──
+      // Refreshes the cards and rings once feature completion is recomputed from
+      // live data. The ratchet means the rings can only rise here. A newer wave
+      // supersedes this one (isStale), exactly like the fast path.
+      // Reuses the profile this wave already loaded — no third profile request.
+      if (alreadySynced) return;
+      const synced = await fetchReadinessData(companyId, { profile: loadedProfile });
+      if (isStale() || !synced) return;
+      setFeatures(synced.features);
+      setReadinessData(synced.readiness);
+      setReadinessScore(synced.readiness.score);
+      applySignals?.(synced.features);
     } catch (err) {
       console.warn('[command-center] Could not load readiness data:', err);
     }
