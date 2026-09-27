@@ -66,6 +66,8 @@ import type {
   EnrichmentProviderAdapter,
 } from '../../services/enrichment/providers';
 import { SCORE_DIMENSIONS } from '../../services/leadUnderstanding/types';
+import { latestScoreEvaluation } from '../../services/leadUnderstanding/scoreEvaluationStore';
+import { SCORING_RULES_VERSION } from '../../services/intelligence/canonical/scoring';
 import type { TenantIntegrationRow } from '../../services/integrations/dataSourceCatalogue';
 
 /** Bumped when the API shape changes, so a client can pin what it parsed. */
@@ -217,6 +219,24 @@ export interface DimensionView {
  * report them as absent WITH A REASON; they are not added to `SCORE_DIMENSIONS`
  * and no value is ever produced for them.
  */
+/**
+ * PI-SCORE-PROVENANCE-001 — the PERSISTED evaluation as the API reports it.
+ * Named so both the found and not-found branches share ONE type; two inferred
+ * shapes would differ only in their nulls and stop assigning.
+ */
+export interface EvaluationView {
+  readonly state: 'current' | 'stale' | 'none';
+  readonly evaluationId: string | null;
+  readonly scoredAt: string | null;
+  readonly icpId: string | null;
+  readonly icpVersion: number | null;
+  readonly rulesVersion: string | null;
+  readonly currentRulesVersion: string;
+  readonly dimensions: Record<string, number | null> | null;
+  readonly overall: number | null;
+  readonly confidence: number | null;
+}
+
 export const UNIMPLEMENTED_DIMENSIONS: readonly string[] = [
   'problem_fit', 'account_potential', 'buying_role', 'relationship_strength',
 ];
@@ -240,6 +260,17 @@ export interface ProspectDetail {
     readonly contextGaps: unknown;
     readonly builtAt: string;
   }>;
+  /**
+   * PI-SCORE-PROVENANCE-001 — the PERSISTED evaluation, kept deliberately
+   * separate from `scoring` above.
+   *
+   * `scoring` is computed live on this request. This is what was recorded by
+   * the background evaluator, with the version it was recorded under. They are
+   * two different claims and merging them would let a freshly recomputed number
+   * be presented as history — the precise misrepresentation this workstream
+   * exists to end. GET writes nothing to produce this.
+   */
+  readonly evaluation: Section<EvaluationView>;
   readonly recommendation: Section<unknown>;
   readonly readiness: Section<unknown>;
   readonly outcomes: Section<unknown>;
@@ -421,6 +452,43 @@ export async function getProspectDetail(
     })()
     : section(readinessSection.state, readinessSection.reason);
 
+  // PI-SCORE-PROVENANCE-001 — READ the recorded evaluation. No write, no
+  // recompute, no enqueue. If none exists this reports `none` with a reason
+  // rather than quietly scoring on the caller's behalf and presenting the
+  // result as history.
+  //
+  // `stale` is not a judgement about age. It means the recorded evaluation was
+  // produced under a DIFFERENT scoring-rules version than the one now in force,
+  // so it remains a true record of what was decided then and is no longer what
+  // the platform would decide today. Elapsed time alone never makes a record
+  // stale — the inputs do.
+  const evaluationSection = await attempt<EvaluationView>('score evaluation', async (): Promise<Section<EvaluationView>> => {
+    const stored = await latestScoreEvaluation(input.organizationId, engagement.prospectId);
+    if (!stored) {
+      return section<EvaluationView>('empty', 'no evaluation has been recorded for this prospect yet', {
+        state: 'none' as const,
+        evaluationId: null, scoredAt: null, icpId: null, icpVersion: null,
+        rulesVersion: null, currentRulesVersion: SCORING_RULES_VERSION,
+        dimensions: null, overall: null, confidence: null,
+      });
+    }
+    const rulesMoved = stored.rulesVersion !== SCORING_RULES_VERSION;
+    return section<EvaluationView>('available', rulesMoved
+      ? `recorded under scoring rules ${stored.rulesVersion}; current rules are ${SCORING_RULES_VERSION}`
+      : `recorded under scoring rules ${stored.rulesVersion}`, {
+      state: (rulesMoved ? 'stale' : 'current') as 'current' | 'stale' | 'none',
+      evaluationId: stored.id,
+      scoredAt: stored.scoredAt,
+      icpId: stored.icpId,
+      icpVersion: stored.icpVersion,
+      rulesVersion: stored.rulesVersion,
+      currentRulesVersion: SCORING_RULES_VERSION,
+      dimensions: stored.dimensions,
+      overall: stored.overall,
+      confidence: stored.confidence,
+    });
+  });
+
   const outcomesSection = await attempt('outcome corpus', async () => {
     const corpus = await readProspectOutcomeCorpus(common);
     if (!corpus) return section('empty', 'prospect not readable');
@@ -441,6 +509,7 @@ export async function getProspectDetail(
     account: accountSection,
     enrichment: enrichmentSection,
     scoring: scoringSection,
+    evaluation: evaluationSection,
     recommendation: recommendationSection,
     readiness: readinessSection,
     outcomes: outcomesSection,
