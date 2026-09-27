@@ -119,13 +119,21 @@ function executable(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
+/**
+ * PO-3 F1 moved the production COMPOSITION (session factory, sink, vantage) out of cron.ts into
+ * adsAcquisitionRunner.ts, so the authenticated operational trigger and the daily tick cannot
+ * drift apart. These guards moved with it: the subject changed, the strictness did not.
+ */
 describe('cron registration', () => {
-  const cron = executable(fs.readFileSync(path.join(process.cwd(), 'backend/scheduler/cron.ts'), 'utf8'));
+  const src = (rel: string) => executable(fs.readFileSync(path.join(process.cwd(), rel), 'utf8'));
+  const cron = src('backend/scheduler/cron.ts');
+  const runner = src('backend/services/ads/adsAcquisitionRunner.ts');
+  const health = src('backend/workers/healthServer.ts');
 
   it('registers the acquisition cycle exactly once', () => {
     expect(cron.match(/'adsTransparencyAcquisition'/g) ?? []).toHaveLength(1);
     // Once to import, once to call — and no second registration anywhere.
-    expect(cron.match(/runAdsAcquisitionCycle/g) ?? []).toHaveLength(2);
+    expect(cron.match(/runProductionAdsAcquisitionCycle/g) ?? []).toHaveLength(2);
     expect(cron.match(/ADS_ACQUISITION_INTERVAL_MS/g) ?? []).toHaveLength(2);
   });
 
@@ -134,20 +142,42 @@ describe('cron registration', () => {
   });
 
   it('reuses the existing scheduleWorker lifecycle rather than a second scheduler', () => {
-    expect(cron).toMatch(/scheduleWorker\(\s*async \(\) => \{\s*const \{ runAdsAcquisitionCycle \}/);
+    expect(cron).toMatch(/scheduleWorker\(\s*async \(\) => \{/);
     expect(cron).not.toMatch(/setInterval\([^)]*ads/i);
   });
 
+  it('keeps exactly ONE production composition of the cycle', () => {
+    // cron.ts must no longer build its own deps — otherwise the manual trigger and the tick
+    // could be given different sinks, sessions or bounds.
+    expect(cron).not.toContain('openSession');
+    expect(cron).not.toContain('createAdsEvidenceSink');
+    expect(cron).not.toContain("import('playwright')");
+    // …and the runner is the only place that does.
+    expect(runner).toContain('openSession');
+    expect(runner).toContain('createAdsEvidenceSink');
+    expect(runner.match(/runAdsAcquisitionCycle\(/g) ?? []).toHaveLength(1);
+  });
+
   it('never supplies an authenticated browser session', () => {
-    const block = cron.slice(cron.indexOf('runAdsAcquisitionCycle'), cron.indexOf("'adsTransparencyAcquisition'"));
-    expect(block).toContain('browser.newContext()');
+    expect(runner).toContain('browser.newContext()');
     // In executable code: no stored session, no RPA session loader, no authenticated runner.
-    expect(block).not.toMatch(/storageState|loadRpaSession|rpaPlaywrightRunner/);
+    expect(runner).not.toMatch(/storageState|loadRpaSession|rpaPlaywrightRunner/);
   });
 
   it('does not enable the flag anywhere in code', () => {
-    // The registration must start nothing. Only a separately authorized release may flip it.
-    expect(cron.match(/ADS_TRANSPARENCY_ACQUISITION_ENABLED\s*=/g) ?? []).toHaveLength(0);
+    // Registration, the runner and the trigger must all start nothing. Only a separately
+    // authorized release may flip it.
+    for (const s of [cron, runner, health]) {
+      expect(s.match(/ADS_TRANSPARENCY_ACQUISITION_ENABLED\s*=/g) ?? []).toHaveLength(0);
+    }
+  });
+
+  it('does not read the acquisition flag outside runAdsAcquisitionCycle', () => {
+    // A second read is a second thing that can disagree with the first. The trigger must not
+    // gate on its own copy of the flag.
+    for (const s of [cron, runner, health]) {
+      expect(s).not.toContain('ADS_TRANSPARENCY_ACQUISITION_ENABLED');
+    }
   });
 });
 

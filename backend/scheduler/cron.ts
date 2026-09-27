@@ -750,40 +750,12 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
   // cycle iterates subjects in series, so there is no parallel browser fan-out.
   scheduleWorker(
     async () => {
-      const { runAdsAcquisitionCycle } = await import('../services/ads/adsAcquisitionScheduler');
-      try {
-        const { listDueAdsSubjects } = await import('../services/ads/adsDueSubjects');
-        const { createAdsEvidenceSink } = await import('../services/ads/adsEvidenceStore');
-        const { chromium } = await import('playwright');
-        return await runAdsAcquisitionCycle({
-          listDueSubjects: listDueAdsSubjects,
-          openSession: async () => {
-            const browser = await chromium.launch({ headless: true });
-            return {
-              // PUBLIC ONLY: a fresh context per page, never a stored session.
-              // There is no code path here through which `storageState` could be
-              // supplied, which is what keeps this evidence public-domain.
-              session: {
-                async withPage(fn) {
-                  const ctx = await browser.newContext();
-                  const page = await ctx.newPage();
-                  try {
-                    return await fn(page as unknown as Parameters<typeof fn>[0]);
-                  } finally {
-                    await ctx.close().catch(() => undefined);
-                  }
-                },
-              },
-              close: async () => { await browser.close().catch(() => undefined); },
-            };
-          },
-          sink: createAdsEvidenceSink(),
-          vantage: process.env.RAILWAY_REGION ? `railway:${process.env.RAILWAY_REGION}` : 'railway',
-        });
-      } catch (err: unknown) {
-        console.warn('[adsTransparencyAcquisition] exception:', formatCaughtError(err));
-        return { errors: 1 };
-      }
+      // ONE composition, shared with the authenticated operational trigger on the worker health
+      // server (PO-3 F1). The session factory, sink and bounds live in the runner so the manual
+      // path cannot drift from this one.
+      const { runProductionAdsAcquisitionCycle } =
+        await import('../services/ads/adsAcquisitionRunner');
+      return runProductionAdsAcquisitionCycle();
     },
     ADS_ACQUISITION_INTERVAL_MS, 'adsTransparencyAcquisition',
     ['enabled', 'subjects', 'observed', 'persisted', 'errors']
