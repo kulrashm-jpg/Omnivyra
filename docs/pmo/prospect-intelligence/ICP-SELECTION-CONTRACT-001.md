@@ -49,7 +49,7 @@ All inputs are stored tenant intelligence. Nothing is invented.
 
 | Signal | Source |
 |---|---|
-| S1 Nature of business | `industry`, `category`, `products_services_list` |
+| S1 Nature of business | `industry_list` (falling back to the legacy `industry` mirror), `category_list` (falling back to `category`), `products_services_list` |
 | S2 Problem solved | `core_problem_statement`, `pain_symptoms`, `problem_impact` |
 | S3 Target company stage | `target_customer_segment`, `ideal_customer_profile` |
 | S4 Named audience roles | `target_audience_list` |
@@ -57,6 +57,16 @@ All inputs are stored tenant intelligence. Nothing is invented.
 | S6 Geography | `geography_list`; `company_geographic_exposures` is **advisory only** |
 | S7 Corroborating intelligence | `brand_memory`, `market_pulse_findings` |
 | S8 Confidence / trust | `field_confidence`, `overall_confidence`, `user_locked_fields` |
+
+**Editorial correction, 2026-09-28 (Gate 0.7).** S1 previously named `industry` and `category`. Those
+are comma-joined text mirrors that enrichment re-derives from `industry_list` / `category_list` and that a
+human profile edit does NOT re-derive, so they drift: a tenant carrying three industries in the structured
+list held only two in the mirror, and an ICP generated from the mirror silently omitted one. S1 now names
+the structured lists, with the mirrors retained as fallback where a list is absent or empty. **This is an
+editorial correction, not a `-002`:** the frozen rule of this section — *all inputs are stored tenant
+intelligence, nothing is invented* — is unchanged, and the structured list is strictly less derived than
+the mirror it replaces. Implemented in `prospectIcp/generator/evidence.ts` (`PROFILE_EVIDENCE_FIELDS` and
+`SUPERSEDED_BY`).
 
 **S6 constraint.** `company_geographic_exposures` describes the *tenant's own* revenue exposure. It may
 corroborate but may never become prospect geography. This mirrors the standing WS-7 rule that a tenant's
