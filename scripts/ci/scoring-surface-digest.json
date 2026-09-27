@@ -1,0 +1,19 @@
+{
+  "version": "pi-score.1",
+  "files": {
+    "backend/services/leadUnderstanding/engines/intent.ts": "6196cbaedce41c7b23b7ca692a59c63b1438bbf56e3f5cfb89978bccc9836c59",
+    "backend/services/leadUnderstanding/engines/behavioral.ts": "bb3bef0393aa09155582abdab0d38f4e167f7bffd9316553ebf8ad78b6f06f6d",
+    "backend/services/leadUnderstanding/engines/buyingSignal.ts": "4c6a290b32599f612cd73d906a302a019c0eea5a70f5f43ae56bf067de14b993",
+    "backend/services/leadUnderstanding/engines/personaIcp.ts": "5172180454b7bdfffdc913ac36565cd40c39c9ee85c3478418696a5e74e7a5cc",
+    "backend/services/leadUnderstanding/engines/prospectIcpFit.ts": "4eb0f8cfc8dcf937a10ec759d56ded72da8e8abe6420b4829b8e663e2b236430",
+    "backend/services/leadUnderstanding/engines/qualification.ts": "9510fda3af843713628f334b96f7a1ac0ca47cc2e56e6eabaf00eeecb8c8aa2c",
+    "backend/services/leadUnderstanding/engines/relationship.ts": "416521108e45fd027cb5870819f2e42c269128dc98aa98192054dd0870c49887",
+    "backend/services/leadUnderstanding/engines/enrichment.ts": "79fef2a7784c2f1867ad4f1dbf9d60b1312245b6cbd0e628689cf8d99c8cb173",
+    "backend/services/leadUnderstanding/engines/prioritization.ts": "9b07b0bc53a7d902fdce1ce12c60b497205d2ccf5319ed9a01b504ef1ccb4c5e",
+    "backend/services/leadUnderstanding/scoring.ts": "03d775c3403b47f7ca9c570756bf46d51976d4e8fe457b7ec276916faa26f231",
+    "backend/services/leadUnderstanding/projection.ts": "2bc5f714c006747da3e2b455520f0072986b1fd3a8f02cfb115c81439e0328fb",
+    "backend/services/intelligence/canonical/scoring.ts": "9121e4bce583041cce66c8199fbb8c3ec4bdd06c3d4e0c33087c115d73eec3da",
+    "backend/services/prospectIcp/evaluate.ts": "50b8b039d627fe2f80afa81a20d035c67bc0403ed1a19743b33ab177e58322f5",
+    "backend/services/prospectIcp/criteria.ts": "c5752aca75938fc1e2310bb358be4fb1e520967c516f7d4bcc613c1bfb80931d"
+  }
+}
