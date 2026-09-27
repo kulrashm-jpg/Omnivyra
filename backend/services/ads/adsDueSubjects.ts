@@ -20,6 +20,7 @@
  * retry table, backoff column or scheduler state is introduced.
  */
 import { supabase } from '../../db/supabaseClient';
+import { classifyTenant, type TenantClass } from '../customerPopulationIntegrityService';
 import type { AdsAcquisitionSubject } from './adsAcquisitionScheduler';
 
 const SUCCESS_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -33,6 +34,76 @@ const SUCCESS_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const RETRY_GAP_MS = 6 * 60 * 60 * 1000;
 /** Eligible domains scanned per cycle. Bounds the query, not the fan-out — the cycle caps that. */
 const SCAN_LIMIT = 200;
+
+/**
+ * PO-3 F2 — which companies may be acquired for at all.
+ *
+ * ─── WHY THIS EXISTS ──────────────────────────────────────────────────────
+ * A `canonical_domains` row was previously sufficient. Measured against production that admitted
+ * 43 rows of which 5 were real customers: 33 belonged to SOFT-DELETED companies, and the rest
+ * were QA/TEST tenants. The first cycle would have spent its whole 5-subject budget asking a
+ * third-party provider about `wrong-*.example.com` and `python.org`.
+ *
+ * ─── NO SECOND CLASSIFIER ─────────────────────────────────────────────────
+ * Tenant class comes from `classifyTenant`, which already exists, is pure and deterministic, and
+ * already knows `python.org`/`example.com` as placeholder domains and `omnivyra.com` as the
+ * vendor domain. Writing a second set of rules here would be a second thing to drift.
+ *
+ * ─── INTERNAL IS EXCLUDED, BY DECISION ────────────────────────────────────
+ * Only `CUSTOMER` is acquirable. INTERNAL (the vendor's own domain) is excluded along with
+ * TEST/QA/DEMO/UNKNOWN, matching the population-integrity gate already enforced for customer
+ * interventions ("only tenant_class CUSTOMER is eligible"). This was a recorded product
+ * decision, not an inference — the repository also contains a counter-precedent in
+ * `/api/cron/serp-acquisition`, which acquires FOR the vendor company. Revisit by decision.
+ *
+ * ─── `verified` IS DELIBERATELY NOT A GATE ────────────────────────────────
+ * `canonical_domains.verified` is NOT NULL and `false` on every production row, with no writer
+ * populating it. Gating on it would exclude every real customer. It is passed to the classifier
+ * as supporting evidence only (it raises confidence; it never grants eligibility).
+ */
+const ACQUIRABLE_TENANT_CLASSES: ReadonlySet<TenantClass> = new Set<TenantClass>(['CUSTOMER']);
+
+export type AcquirabilityDecision = {
+  acquirable: boolean;
+  tenantClass: TenantClass | null;
+  reason: string;
+};
+
+/**
+ * Pure. Exported so eligibility is tested directly rather than through a database fake.
+ *
+ * Order matters: liveness is checked before classification, so a deleted TEST tenant is reported
+ * as deleted rather than as a classification outcome.
+ */
+export function decideAcquirability(company: {
+  companyId: string;
+  name: string | null;
+  status: string | null;
+  deletedAt: string | null;
+  domain: string | null;
+  domainVerified?: boolean;
+}): AcquirabilityDecision {
+  if (!company.companyId) {
+    return { acquirable: false, tenantClass: null, reason: 'no company record' };
+  }
+  if (company.deletedAt) {
+    return { acquirable: false, tenantClass: null, reason: 'company is soft-deleted' };
+  }
+  if (company.status !== 'active') {
+    return { acquirable: false, tenantClass: null, reason: `company status is ${company.status ?? 'null'}` };
+  }
+  const { tenant_class } = classifyTenant({
+    company_id: company.companyId,
+    company_name: company.name ?? '',
+    website_domain: company.domain,
+    admin_email_domain: null,
+    domain_verified: company.domainVerified ?? false,
+  });
+  if (!ACQUIRABLE_TENANT_CLASSES.has(tenant_class)) {
+    return { acquirable: false, tenantClass: tenant_class, reason: `tenant class ${tenant_class} is not acquirable` };
+  }
+  return { acquirable: true, tenantClass: tenant_class, reason: 'acquirable customer tenant' };
+}
 
 type EvidenceRow = {
   observed_at: string;
@@ -72,17 +143,26 @@ export async function listDueAdsSubjects(limit: number): Promise<AdsAcquisitionS
   try {
     const { data: domains, error } = await supabase
       .from('canonical_domains')
-      .select('id, company_id, primary_domain')
+      .select('id, company_id, primary_domain, verified')
+      // `updated_at` alone is not a total order: the production customer rows share a
+      // byte-identical timestamp, so the scan order — and therefore which subjects a capped
+      // cycle takes — was not reproducible. `id` is the tiebreaker that makes it so.
+      // NOTE: this makes the EXISTING order deterministic. Whether "stalest first" is the
+      // intended acquisition priority is still an open product question; nothing here decides it.
       .order('updated_at', { ascending: true })
+      .order('id', { ascending: true })
       .limit(SCAN_LIMIT);
     if (error || !Array.isArray(domains)) return [];
+
+    const rows = domains as Array<{ id?: string; company_id?: string; primary_domain?: string; verified?: boolean }>;
+    const companies = await loadCompanies(rows.map((r) => String(r.company_id ?? '').trim()).filter(Boolean));
 
     const out: AdsAcquisitionSubject[] = [];
     // De-duplication key is company + domain, so the same pair cannot be enqueued twice even if
     // the table somehow holds two rows for it.
     const seen = new Set<string>();
 
-    for (const row of domains as Array<{ id?: string; company_id?: string; primary_domain?: string }>) {
+    for (const row of rows) {
       if (out.length >= limit) break;
       const companyId = String(row.company_id ?? '').trim();
       const domainId = String(row.id ?? '').trim();
@@ -90,6 +170,19 @@ export async function listDueAdsSubjects(limit: number): Promise<AdsAcquisitionS
       // A subject with no usable public domain is not acquired for at all: there would be nothing
       // to scope the evidence to, and nothing to run a secondary domain query against.
       if (!companyId || !domainId || !domain) continue;
+
+      // PO-3 F2 — the company record decides acquirability. A `canonical_domains` row on its own
+      // says nothing about whether the company still exists or is a real customer.
+      const company = companies.get(companyId);
+      if (!decideAcquirability({
+        companyId,
+        name: company?.name ?? null,
+        status: company?.status ?? null,
+        deletedAt: company?.deleted_at ?? null,
+        domain,
+        domainVerified: row.verified === true,
+      }).acquirable) continue;
+
       const key = `${companyId}|${domainId}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -109,6 +202,32 @@ export async function listDueAdsSubjects(limit: number): Promise<AdsAcquisitionS
   } catch {
     return [];
   }
+}
+
+type CompanyRow = { id: string; name: string | null; status: string | null; deleted_at: string | null };
+
+/**
+ * The company records for the scanned domains, in one round trip.
+ *
+ * A company that does not resolve is simply absent from the map, and `decideAcquirability` then
+ * sees `status: null` and refuses it. An orphan domain row is therefore excluded by the same
+ * rule as an inactive one, rather than by a separate special case.
+ */
+async function loadCompanies(companyIds: string[]): Promise<Map<string, CompanyRow>> {
+  const out = new Map<string, CompanyRow>();
+  const unique = [...new Set(companyIds)];
+  if (unique.length === 0) return out;
+  try {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('id, name, status, deleted_at')
+      .in('id', unique);
+    if (error || !Array.isArray(data)) return out;
+    for (const row of data as CompanyRow[]) {
+      if (row?.id) out.set(String(row.id), row);
+    }
+  } catch { /* an unreadable companies table means nothing is acquirable, which is the safe side */ }
+  return out;
 }
 
 /** Recent `ads_transparency` rows for THIS company and THIS domain. */
