@@ -2,6 +2,7 @@
 
 exports[`cron.ts scheduling contract (source characterization) locks every timing-constant definition: timing-constants 1`] = `
 {
+  "ADS_ACQUISITION_INTERVAL_MS": "24 * 60 * 60 * 1000",
   "AUTO_OPTIMIZATION_INTERVAL_MS": "24 * 60 * 60 * 1000",
   "BASE_TICK_MS": "4 * 60 * 60 * 1000",
   "BUYER_INTENT_INTERVAL_MS": "30 * 60 * 1000",
@@ -45,6 +46,7 @@ exports[`cron.ts scheduling contract (source characterization) locks every timin
   "OPPORTUNITY_SLOTS_INTERVAL_MS": "24 * 60 * 60 * 1000",
   "PERFORMANCE_AGGREGATION_INTERVAL_MS": "24 * 60 * 60 * 1000",
   "PERFORMANCE_INGESTION_INTERVAL_MS": "6 * 60 * 60 * 1000",
+  "PROSPECT_RETRY_INTERVAL_MS": "5 * 60 * 1000",
   "READINESS_SNAPSHOT_INTERVAL_MS": "24 * 60 * 60 * 1000",
   "RECENT_POSTS_COMMENT_INGEST_INTERVAL_MS": "10 * 60 * 1000",
   "RECONCILIATION_INTERVAL_MS": "30 * 60 * 1000",
@@ -166,6 +168,10 @@ exports[`cron.ts scheduling contract (source characterization) locks the recurri
   {
     "interval": "RPA_BACKPRESSURE_OBSERVE_INTERVAL_MS",
     "label": "rpaBackpressureObserver",
+  },
+  {
+    "interval": "ADS_ACQUISITION_INTERVAL_MS",
+    "label": "adsTransparencyAcquisition",
   },
   {
     "interval": "RPA_RETRY_FLUSH_INTERVAL_MS",
