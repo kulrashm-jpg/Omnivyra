@@ -10,6 +10,39 @@
 
 import type { EvidenceRef, ISOTimestamp } from './contracts';
 
+/**
+ * PI-SCORE-PROVENANCE-001 — the scoring-rules version.
+ *
+ * A persisted score that cannot name the rules that produced it is not
+ * provenance; it is a number with a timestamp. This constant is that name.
+ *
+ * ─── WHAT IT COVERS ───────────────────────────────────────────────────────
+ * The COMPLETE customer-visible scoring contract: every rule capable of
+ * changing a LeadScore. That is the 14-file surface pinned by
+ * `scripts/ci/scoring-surface-digest.json` — the nine contributing engines,
+ * `leadUnderstanding/scoring.ts`, `projection.ts`, this combiner, and the ICP
+ * evaluator plus its criteria vocabulary. Prioritization WEIGHTS live inside
+ * that surface, which is the point: a weight edit is a scoring-rule change even
+ * though it touches no formula in this file.
+ *
+ * ─── WHAT IT IS NOT ───────────────────────────────────────────────────────
+ * Not `PROSPECT_API_VERSION` ('ws10.1'), which versions the RESPONSE SHAPE and
+ * moves when a field is added to a payload that scores nothing. Not a migration
+ * version, a database version, a deploy SHA, a git SHA or an app version: those
+ * move for reasons unrelated to scoring, and a version that moves for unrelated
+ * reasons cannot answer "which rules produced this score".
+ *
+ * ─── WHY THIS WORKSTREAM DID NOT BUMP IT ──────────────────────────────────
+ * PI-SCORE-PROVENANCE-001 adds persistence and changes no scoring semantic, so
+ * the initial value names the semantics already in force. Recording unchanged
+ * rules under a NEW version would assert a change that did not happen.
+ *
+ * Format follows the repository's established rule-version convention —
+ * `PROSPECT_RESOLUTION_VERSION = 'ws1.1'`, `ACCOUNT_RESOLUTION_VERSION = 'w4.1'`,
+ * `SOCIAL_CONTACT_RESOLUTION_VERSION = 'b1.1'` — workstream, then revision.
+ */
+export const SCORING_RULES_VERSION = 'pi-score.1';
+
 export type ScoringMethod = 'deterministic' | 'probabilistic' | 'ai_reasoned';
 const METHOD_WEIGHT: Record<ScoringMethod, number> = { deterministic: 1.0, probabilistic: 0.8, ai_reasoned: 0.7 };
 

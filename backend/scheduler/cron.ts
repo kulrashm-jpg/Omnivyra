@@ -124,6 +124,7 @@ import { runReconciliationPass } from '../services/operationalReconciler';
 import { runIntelligenceEventCleanup } from '../jobs/intelligenceEventCleanup';
 import { runSettlementExpirySweepJob } from '../jobs/settlementExpirySweepJob';
 import { runProspectRetryJob } from '../jobs/prospectRetryJob';
+import { runProspectScoreEvaluationJob } from '../jobs/prospectScoreEvaluationJob';
 import { runSettlementMetricsRetention, pruneRolledSettlementMetrics } from '../services/billing/payments/settlementMetricsRetention';
 import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
 import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefreshJob';
@@ -211,6 +212,12 @@ const SETTLEMENT_EXPIRY_SWEEP_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
 // returns. The interval is the discovery cadence, not a retry policy — the
 // horizon each candidate waits for is the provider's own `Retry-After`.
 const PROSPECT_RETRY_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
+// PI-SCORE-PROVENANCE-001 — score evaluation is a background record, never a
+// side-effect of a page view. Hourly: the inputs (ICP ratification, enrichment,
+// prospect edits) move on human timescales, and the digest makes an unchanged
+// re-run write nothing, so a tighter interval would buy churn rather than
+// freshness.
+const PROSPECT_SCORE_EVALUATION_INTERVAL_MS = 60 * 60 * 1000; // hourly
 // Settlement metrics rollup — compact closed time buckets of the append-only
 // operational metrics ledger. Deterministic + idempotent.
 const SETTLEMENT_METRICS_RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
@@ -342,6 +349,7 @@ let lastDailyIntelligenceRun = 0;
 let lastIntelligenceEventCleanupRun = 0;
 let lastSettlementExpirySweepRun = 0;
 let lastProspectRetryRun = 0;
+let lastProspectScoreEvaluationRun = 0;
 let lastSettlementMetricsRetentionRun = 0;
 let lastWeeklyPricingAnalysisRun = 0;
 let lastEngagementDigestRun = 0;
@@ -1434,6 +1442,26 @@ async function runSchedulerCycle(opts: { includePublishSafetyNet?: boolean } = {
       }
     } catch (error: unknown) {
       console.error('❌ Prospect enrichment retry error:', formatCaughtError(error));
+    }
+  }
+
+  // PI-SCORE-PROVENANCE-001 — record what the scoring engine produced.
+  // Opt-in and tenant-allow-listed inside the job; absent both switches this
+  // returns having read nothing. It computes no score of its own: it calls the
+  // same `assembleLeadUnderstanding` the API calls, so the persisted score is
+  // the same score by construction rather than by agreement.
+  if (shouldRunCronJob("prospectScoreEvaluation", PROSPECT_SCORE_EVALUATION_INTERVAL_MS, lastProspectScoreEvaluationRun)) {
+    lastProspectScoreEvaluationRun = Date.now();
+    try {
+      const result = await runProspectScoreEvaluationJob();
+      if (result.ran && (result.written > 0 || result.failures > 0)) {
+        console.log(
+          `✅ Prospect score evaluation: ${result.written} recorded of ${result.evaluated} evaluated `
+          + `across ${result.tenants} tenant(s), ${result.duplicates} unchanged, ${result.failures} failure(s)`
+        );
+      }
+    } catch (error: unknown) {
+      console.error('❌ Prospect score evaluation error:', formatCaughtError(error));
     }
   }
 
