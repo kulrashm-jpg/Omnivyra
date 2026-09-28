@@ -29,7 +29,9 @@
 /** The buyer-relevant Company Profile surface. Nothing outside this is read. */
 export const PROFILE_EVIDENCE_FIELDS = [
   'industry',
+  'industry_list',
   'category',
+  'category_list',
   'unique_value',
   'products_services_list',
   'target_audience_list',
@@ -78,6 +80,30 @@ export interface ProfileEvidence {
   readonly presentCount: number;
 }
 
+/**
+ * Legacy free-text mirrors, and the structured list each is a lossy copy of.
+ *
+ * `industry` is a comma-joined rendering of `industry_list`, and production has
+ * already been observed to drift: a tenant carrying
+ * ["Marketing Technology", "Data & Analytics", "Communication"] in the list held
+ * only "Data & Analytics, Communication" in the text column, so an ICP generated
+ * from the mirror silently omitted a stated industry. The list is what the
+ * profile UI writes and what a tenant edits; the mirror is a derived copy that
+ * nothing re-derives.
+ *
+ * Where the structured form carries a value it SUPERSEDES the mirror entirely:
+ * the mirror leaves the evidence surface rather than sitting beside it, because
+ * two spellings of one fact invite a criterion that cites the poorer one — and
+ * `evidenceFields` is only verifiable if each fact has one name.
+ *
+ * A superseded mirror is NOT reported as absent. Absent means "nobody stated
+ * this", and the tenant plainly did state it — in the structured field.
+ */
+const SUPERSEDED_BY: Readonly<Partial<Record<ProfileEvidenceField, ProfileEvidenceField>>> = {
+  industry: 'industry_list',
+  category: 'category_list',
+};
+
 /** A value rendered for the prompt. Arrays become bullet text; objects JSON. */
 function render(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -123,6 +149,14 @@ export function extractProfileEvidence(row: Record<string, unknown> | null | und
     const rendered = render(row?.[field]);
     if (rendered === null) absent.push(field);
     else present[field] = rendered;
+  }
+
+  // The structured list wins over its legacy text mirror. See SUPERSEDED_BY.
+  for (const [mirror, structured] of Object.entries(SUPERSEDED_BY)) {
+    if (!structured || !(structured in present)) continue;
+    delete present[mirror];
+    const at = absent.indexOf(mirror);
+    if (at !== -1) absent.splice(at, 1);
   }
 
   const rawLocked = row?.user_locked_fields;

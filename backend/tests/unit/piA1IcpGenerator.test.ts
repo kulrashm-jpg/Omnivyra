@@ -528,6 +528,47 @@ describe('A1 — evidence extraction', () => {
     }))).toBe(true);
   });
 
+  it('reads the STRUCTURED industry list, not only the legacy text mirror', () => {
+    const e = extractProfileEvidence({
+      industry: 'Data & Analytics, Communication',
+      industry_list: ['Marketing Technology', 'Data & Analytics', 'Communication'],
+    });
+    expect(e.present).toHaveProperty('industry_list');
+    expect(e.present.industry_list).toContain('Marketing Technology');
+  });
+
+  it('lets the structured list SUPERSEDE its lossy mirror rather than sit beside it', () => {
+    // The production drift this guards: the mirror named two industries while
+    // the list named three, and an ICP built from the mirror lost one.
+    const e = extractProfileEvidence({
+      industry: 'Data & Analytics, Communication',
+      industry_list: ['Marketing Technology', 'Data & Analytics', 'Communication'],
+      category: 'Analytics software',
+      category_list: ['Analytics software for clearer performance insights'],
+    });
+    expect(Object.keys(e.present)).not.toContain('industry');
+    expect(Object.keys(e.present)).not.toContain('category');
+    // Superseded is not the same as never stated.
+    expect(e.absent).not.toContain('industry');
+    expect(e.absent).not.toContain('category');
+  });
+
+  it('keeps the mirror when the structured list is empty or absent', () => {
+    const noList = extractProfileEvidence({ industry: 'Data & Analytics' });
+    expect(noList.present).toHaveProperty('industry');
+
+    const emptyList = extractProfileEvidence({ industry: 'Data & Analytics', industry_list: [] });
+    expect(emptyList.present).toHaveProperty('industry');
+    expect(emptyList.absent).toContain('industry_list');
+  });
+
+  it('does not let the list change the buyer-signal sufficiency threshold', () => {
+    // industry is not a buyer signal, and neither is its structured form.
+    expect(hasSufficientEvidence(extractProfileEvidence({
+      industry_list: ['A', 'B', 'C'], category_list: ['D'],
+    }))).toBe(false);
+  });
+
   it('never exposes publishing configuration to the model', () => {
     const e = extractProfileEvidence({
       ...PROFILE, report_settings: { secret: true }, platform_content_type_prefs: { x: 1 },
