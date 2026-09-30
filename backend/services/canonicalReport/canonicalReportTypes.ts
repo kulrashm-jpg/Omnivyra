@@ -120,6 +120,18 @@ export type EvidenceSourceKind =
   | 'expertise_extractor'
   | 'benchmark_dataset'
   | 'trajectory_history'
+  /**
+   * REMEDIATION-002 — the tenant told us. Company Profile answers, `company_brand_identity`,
+   * declared social handles. Legitimate CONTEXT, never a public observation: the company
+   * asserting a fact is not the public domain exhibiting it.
+   */
+  | 'company_declared'
+  /**
+   * REMEDIATION-002 — Omnivyra's OWN platform activity for this tenant (`community_ai_actions`
+   * and similar). Real, and ours: it describes what this platform did, not what the public web
+   * shows. Distinct from `trajectory_history`, which is our record of previous SCANS.
+   */
+  | 'platform_activity'
   | 'unspecified';
 
 export type EvidenceObservation = {

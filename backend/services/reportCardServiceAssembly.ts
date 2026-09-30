@@ -402,12 +402,39 @@ export async function generateReportPayload(
       const { composePerformanceIntelligenceReport } = await import('./performanceReportService');
       composed_report = await composePerformanceIntelligenceReport(report.company_id, { resolvedInput }) as unknown as Record<string, unknown>;
     } else {
+      // ─── REMEDIATION-006 — THE ADS READ SEAM ────────────────────────────────
+      //
+      // PO-3 built the acquisition plane (Railway/Playwright → advertiser identity resolution →
+      // `report_evidence_history`) and the composition plane (`buildAdvertisingSurface` →
+      // `SnapshotAdvertising` → `renderPublicAdvertising`). Both ends were complete and verified.
+      // Nothing joined them: `loadLatestAdsObservation` had exactly one occurrence in the
+      // repository — its own definition — so every acquired observation was write-only and the
+      // Public Advertising section was absent from every Report 1 ever produced. Turning the
+      // acquisition flag on populated the database and changed nothing a customer could read.
+      //
+      // This is the read side of the EXISTING boundary, not a second acquisition path: Report 1
+      // never calls Ads Transparency, it reads what Railway already persisted. The loader is
+      // strictly scoped by company AND domain, so a previous domain's advertising cannot describe
+      // the current one, and it fails closed to `null`.
+      //
+      // Snapshot only: growth and performance runs do not crawl, so they have no domain scope to
+      // read against and must not carry an advertising surface.
+      //
+      // `null` here is NOT "no advertising" — the composer leaves `advertising` absent, and the
+      // renderer says nothing rather than asserting the company does not advertise.
+      const { loadLatestAdsObservation } = await import('./ads/adsEvidenceStore');
+      const advertisingObservation = await loadLatestAdsObservation({
+        companyId: report.company_id,
+        domainId: domainScope?.domainId ?? null,
+      }).catch(() => null);
+
       const { composeSnapshotReport } = await import('./snapshotReportService');
       composed_report = await composeSnapshotReport(report.company_id, {
         resolvedInput,
         readiness,
         crawlEvidence,
         domainScope,
+        advertisingObservation,
       }) as unknown as Record<string, unknown>;
     }
   } catch (composeError) {

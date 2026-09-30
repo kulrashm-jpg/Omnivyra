@@ -1028,6 +1028,14 @@ export type SnapshotPlanItem = {
   title: string; action: string; why: string;
   measurement: string; measurementAvailable: boolean;
   effort: string; confidence: string; sources: string[];
+  /**
+   * REMEDIATION-005 — the persisted twin of `PlanItem.dependsOn`.
+   *
+   * This is the SECOND place the dependency was lost: the assembly's `PlanItem` and this
+   * persisted shape are separate types, so widening one did not widen the other. Optional,
+   * so every existing persisted plan stays valid and no other consumer changes.
+   */
+  dependsOn?: string;
 };
 
 /**

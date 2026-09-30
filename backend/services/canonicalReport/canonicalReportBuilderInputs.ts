@@ -128,7 +128,17 @@ export function resolveAuthorityInflowState(rawState: ScoreState, sourceTags: re
  */
 function evidenceSourceFromTag(tag: string): EvidenceSourceKind {
   const normalized = tag.trim().toLowerCase();
-  if (normalized === 'crawler' || normalized.startsWith('website_intelligence:')) return 'crawler';
+  // REMEDIATION-002 — the `website_intelligence:` prefix NO LONGER confers `crawler`.
+  //
+  // It named the CHANNEL a signal arrived through, and four website-intelligence engines share
+  // that channel while reading very different things: technical/content/accessibility read
+  // `canonical_pages` (a real crawl), brand reads `company_brand_identity` + `community_ai_actions`.
+  // Mapping the prefix to `crawler` made the pipe decide the provenance — the precise error this
+  // file's own comment above warns about for `GSC`. Only the two engines whose evidence IS the
+  // crawl are named; anything else falls through to `heuristic` (INFERRED), which is the safe
+  // direction: a signal is never promoted to an observation by the route it travelled.
+  if (normalized === 'crawler') return 'crawler';
+  if (normalized === 'website_intelligence:technical' || normalized === 'website_intelligence:content') return 'crawler';
   if (normalized === 'gsc') return 'gsc';
   if (normalized === 'backlink_signals' || normalized === 'backlink_api') return 'backlink_api';
   if (normalized === 'competitor_intelligence') return 'competitor_intelligence';
@@ -314,15 +324,30 @@ function scoreFromAxis(params: {
   state: ScoreState;
   evidence: EvidenceTrace;
 }): CanonicalScore {
-  const value = isMeasured(params.value, params.state) ? params.value : null;
+  // ─── REMEDIATION-002 — THE SHARED PROVENANCE CHOKE POINT ──────────────────
+  //
+  // `state` arrives as a separate argument from `evidence`, so before this guard a dimension
+  // could be `measured` while its evidence trace retained NOTHING — every observation having
+  // been excluded as non-Report-1. That is the structural hole the four symptom defects shared:
+  // correcting a producer's source tag alone would have turned a falsely-public number into a
+  // measured number with no evidence behind it, which is worse, not better.
+  //
+  // The rule is narrow on purpose: it fires ONLY when evidence existed and ALL of it was
+  // excluded. A dimension that legitimately carries no observations at all is untouched, so
+  // this cannot mass-abstain the report. When it does fire, the value is dropped with the state
+  // — a score whose only support was evidence Report 1 may not assert on is not a measurement.
+  const everyObservationExcluded =
+    params.evidence.observations.length === 0 && params.evidence.provenance.excluded.length > 0;
+  const state: ScoreState = everyObservationExcluded ? 'unavailable' : params.state;
+  const value = isMeasured(params.value, state) ? params.value : null;
   return {
     value,
-    state: params.state,
+    state,
     confidence: bandFromCount(params.evidence.count, params.evidence.sources.includes('crawler') || params.evidence.sources.includes('decisions') || params.evidence.sources.includes('gsc')),
     // Derived from the value actually stored, not the raw input. `canonicalBandFromValue` already
     // returns 'insufficient' for a denying state, so this is behaviour-identical today — it simply
     // removes the possibility of the band and the value disagreeing if that function ever changes.
-    band: canonicalBandFromValue(value, params.state),
+    band: canonicalBandFromValue(value, state),
     evidence: params.evidence,
     benchmark: { value: null, label: null },
   };
@@ -565,7 +590,25 @@ function dimTrustCoherence(ctx: DimensionContext): CanonicalDimension {
       : null;
   const observations: EvidenceObservation[] = [];
   if (typeof trustValue === 'number') {
-    observations.push({ signal: usesBrandTrust ? 'brand_trust' : 'brand_health', source: 'crawler', observed_at: brand?.evaluatedAt ?? null });
+    // REMEDIATION-002 — stamp the ORIGIN, not the channel.
+    //
+    // The engine already declares it truthfully: `sources: ['company_brand_identity',
+    // 'company_profiles', 'community_ai_actions', 'canonical_pages']`, `origin:
+    // 'company_brand_identity'`. This dimension used to discard that and write `crawler`, which
+    // `PROVENANCE_BY_SOURCE` then read as PUBLIC_OBSERVED — internal and tenant-declared data
+    // presented to a customer as public observation.
+    //
+    // `brandTrust` is community sentiment from `community_ai_actions` — Omnivyra's own platform
+    // activity. The `brand.score` fallback is dominated by declared brand identity (colours,
+    // typography, logo, tone, assets) from `company_brand_identity`; it mixes in some crawl, and
+    // a mixed trace whose authoritative part is declared must take the private class, never the
+    // public one. Both are excluded by the boundary, so the choke point above renders this
+    // dimension `unavailable` — an honest gap, which is what it always was.
+    observations.push({
+      signal: usesBrandTrust ? 'brand_trust' : 'brand_health',
+      source: usesBrandTrust ? 'platform_activity' : 'company_declared',
+      observed_at: brand?.evaluatedAt ?? null,
+    });
   }
   const state: ScoreState = typeof trustValue === 'number' ? 'measured' : 'unavailable';
   return {
@@ -577,7 +620,11 @@ function dimTrustCoherence(ctx: DimensionContext): CanonicalDimension {
       state,
       evidence: buildEvidence({ observations }),
     }),
-    rationale: enrichRationale('Consistency of brand description, proof, and reputation signals. On-site brand-health proxy (Brand Intelligence engine) until review/reputation sources are connected, at which point it becomes review-based trust.', readBrand(ctx.engineEvidence?.brand)),
+    // REMEDIATION-002 — the rationale now states WHY this is unavailable rather than describing a
+    // proxy the report is no longer permitted to assert. The dimension is KEPT, not deleted: it has
+    // a legitimate Report 1 purpose the moment a public review/reputation source resolves, at which
+    // point `review_aggregator` (PUBLIC_OBSERVED) supplies it and the state follows the evidence.
+    rationale: enrichRationale('Consistency of brand description, proof, and reputation signals. Not established from public evidence: the available brand-trust signals come from platform activity recorded by Omnivyra and from brand details the company provided, neither of which is a public observation. Becomes measurable when a public review or reputation source is connected.', readBrand(ctx.engineEvidence?.brand)),
   };
 }
 

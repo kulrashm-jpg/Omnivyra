@@ -1027,37 +1027,41 @@ export function countCategory(decisions: PersistedDecisionObject[], category: st
 }
 
 
-export function computeCompanyMetrics(params: {
+/**
+ * REMEDIATION-003 — THE COMPANY BASELINE IS NOT OBSERVED, SO IT IS NOT PUBLISHED.
+ *
+ * Every one of the seven dimensions this used to return was `constant ± penalty ± bonus`:
+ * an invented centre (64, 59, 48, 53, 61, 47, 57) moved by counts of our OWN decisions and
+ * by booleans for whether the tenant had filled in a business type, a geography, a domain or
+ * a social link. Not one was an observation of the company. The constants have no benchmark
+ * and no derivation — the same objection the presence-scoring rewrite raised about partial-
+ * credit floors, one subsystem over.
+ *
+ * The harm was not the arithmetic, it was the SUBTRACTION. Five gap narratives computed
+ * `observed competitor average − invented company baseline` and published the difference as
+ * a competitive finding, so a customer could be told a named competitor was ahead by a margin
+ * that was a function of how many decisions our own audit happened to emit.
+ *
+ * The provenance boundary could not catch it: these values never enter the evidence system,
+ * carry no `EvidenceObservation`, and so are never classified at all. Relabelling was not
+ * available either — per the remediation brief, a fabricated metric is not PUBLIC_OBSERVED,
+ * COMPANY_CONFIRMED, INFERRED or ESTIMATED. There is no evidence to classify. The only honest
+ * output is no output.
+ *
+ * Returning `null` is the same `unavailable` convention D8 already established for a competitor
+ * nobody observed (`metrics: ComparisonMetrics | null`). This function is KEPT, not deleted: it
+ * is the seam where a genuinely observed company baseline belongs once public evidence supports
+ * one, and the four crawl-derived dimensions are already computed for competitors from their own
+ * pages by `resolveCompetitorMetrics` — the same treatment applied to the subject's own domain
+ * would be a real baseline.
+ */
+export function computeCompanyMetrics(_params: {
   decisions: PersistedDecisionObject[];
   resolvedInput?: ResolvedReportInput | null;
-}): ComparisonMetrics {
-  const { decisions, resolvedInput } = params;
-  const contentCount = decisions.filter((decision) => ['content_strategy', 'market'].includes(classifyDecisionType(decision.issue_type))).length;
-  const authorityCount = decisions.filter((decision) => ['authority', 'trust'].includes(classifyDecisionType(decision.issue_type))).length;
-  const seoCount = decisions.filter((decision) => ['performance', 'distribution'].includes(classifyDecisionType(decision.issue_type))).length;
-  const geoCount = countCategory(decisions, 'geo');
-  const competitorCount = countCategory(decisions, 'market');
-  const socialPresent = (resolvedInput?.resolved.socialLinks.length ?? 0) > 0;
-  const geographyPresent = Boolean(resolvedInput?.resolved.geography);
-  const businessTypePresent = Boolean(resolvedInput?.resolved.businessType);
-  const domainPresent = Boolean(resolvedInput?.resolved.websiteDomain);
-
-  const contentPenalty = Math.min(contentCount * 7, 24);
-  const authorityPenalty = Math.min(authorityCount * 8, 26);
-  const seoPenalty = Math.min(seoCount * 6, 24);
-  const geoPenalty = Math.min(geoCount * 7, 18);
-  const competitorPenalty = Math.min(competitorCount * 4, 16);
-
-  return {
-    content_depth: clamp(64 - contentPenalty + (businessTypePresent ? 6 : 0), 24, 88),
-    authority_score: clamp(59 - authorityPenalty + (socialPresent ? 8 : 0), 22, 90),
-    publishing_frequency: clamp(48 + (socialPresent ? 14 : -6) - Math.round(authorityPenalty / 5), 18, 86),
-    engagement_score: clamp(53 - Math.round((contentPenalty + authorityPenalty) / 3) + (socialPresent ? 7 : 0), 20, 84),
-    seo_coverage: clamp(61 - seoPenalty + (domainPresent ? 7 : 0), 22, 88),
-    geo_presence: clamp(47 - geoPenalty + (geographyPresent ? 15 : 0), 18, 86),
-    aeo_readiness: clamp(57 - Math.round((contentPenalty + seoPenalty + competitorPenalty) / 3) + (businessTypePresent ? 5 : 0), 20, 88),
-  };
+}): ComparisonMetrics | null {
+  return null;
 }
+
 
 
 /**
@@ -1078,15 +1082,23 @@ export function computeCompanyMetrics(params: {
  */
 
 
+/**
+ * REMEDIATION-003 — a delta needs BOTH sides. `strict` is false in this project, so
+ * `null - 5` would silently evaluate to -5 and publish a confident-looking delta built
+ * on nothing. `delta()` refuses that explicitly: either side missing yields `null`.
+ */
+const delta = (left: number | null, right: number | null): number | null =>
+  typeof left === 'number' && typeof right === 'number' ? left - right : null;
+
 export function subtractMetrics(left: ComparisonMetrics, right: ComparisonMetrics): ComparisonMetrics {
   return {
-    content_depth: left.content_depth - right.content_depth,
-    authority_score: left.authority_score - right.authority_score,
-    publishing_frequency: left.publishing_frequency - right.publishing_frequency,
-    engagement_score: left.engagement_score - right.engagement_score,
-    seo_coverage: left.seo_coverage - right.seo_coverage,
-    geo_presence: left.geo_presence - right.geo_presence,
-    aeo_readiness: left.aeo_readiness - right.aeo_readiness,
+    content_depth: delta(left.content_depth, right.content_depth) as number,
+    authority_score: delta(left.authority_score, right.authority_score) as number,
+    publishing_frequency: delta(left.publishing_frequency, right.publishing_frequency),
+    engagement_score: delta(left.engagement_score, right.engagement_score),
+    seo_coverage: delta(left.seo_coverage, right.seo_coverage) as number,
+    geo_presence: delta(left.geo_presence, right.geo_presence),
+    aeo_readiness: delta(left.aeo_readiness, right.aeo_readiness) as number,
   };
 }
 
@@ -1096,6 +1108,12 @@ export function subtractMetrics(left: ComparisonMetrics, right: ComparisonMetric
  * observation. Returns null when none were, so a caller cannot average an empty set into
  * a confident-looking zero and compare the customer against it.
  */
+/** Mean of the values that exist; `null` when none does. Never averages a null as zero. */
+const averagePresent = (values: Array<number | null>): number | null => {
+  const present = values.filter((v): v is number => typeof v === 'number');
+  return present.length > 0 ? average(present) : null;
+};
+
 export function averageCompetitorMetrics(entries: CompetitorComparisonEntry[]): ComparisonMetrics | null {
   const observed = entries
     .map((entry) => entry.metrics)
@@ -1104,10 +1122,12 @@ export function averageCompetitorMetrics(entries: CompetitorComparisonEntry[]): 
   return {
     content_depth: average(observed.map((metrics) => metrics.content_depth)),
     authority_score: average(observed.map((metrics) => metrics.authority_score)),
-    publishing_frequency: average(observed.map((metrics) => metrics.publishing_frequency)),
-    engagement_score: average(observed.map((metrics) => metrics.engagement_score)),
+    // REMEDIATION-003 — average across the competitors that HAVE the dimension. When none
+    // does (the normal case for the three uncrawlable ones) the average is `null`, not 0.
+    publishing_frequency: averagePresent(observed.map((metrics) => metrics.publishing_frequency)),
+    engagement_score: averagePresent(observed.map((metrics) => metrics.engagement_score)),
     seo_coverage: average(observed.map((metrics) => metrics.seo_coverage)),
-    geo_presence: average(observed.map((metrics) => metrics.geo_presence)),
+    geo_presence: averagePresent(observed.map((metrics) => metrics.geo_presence)),
     aeo_readiness: average(observed.map((metrics) => metrics.aeo_readiness)),
   };
 }

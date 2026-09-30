@@ -104,18 +104,52 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
     C('conversion_copy', 'Conversion copy', ctaTexts.length ? 'pass' : 'not_evaluable', ctaTexts.length ? pct(actiony, ctaTexts.length) : null, `${actiony}/${ctaTexts.length} CTAs use action language`);
     const avgLinks = pages.reduce((a, p) => a + (p.internal_link_count || 0), 0) / pages.length;
     C('internal_linking', 'Internal linking', 'pass', clamp((avgLinks / 8) * 100), `${avgLinks.toFixed(1)} avg internal links/page`);
-    // Presence / trust pages (absence is a finding, still evaluable)
-    const presencePages: Array<[string, string, string[]]> = [
-      ['contact_info', 'Contact information', ['contact']],
-      ['pricing_visibility', 'Pricing visibility', ['pricing', 'plans', 'price']],
-      ['company_information', 'Company information', ['about', 'company', 'who we are']],
-      ['legal_pages', 'Legal pages', ['privacy', 'terms', 'legal', 'cookie']],
-      ['testimonials', 'Testimonials', ['testimonial', 'review', 'customer story']],
-      ['social_proof', 'Social proof', ['customers', 'trusted by', 'logos', 'press']],
-      ['case_studies', 'Case studies', ['case study', 'case-stud', 'success story']],
+    // Presence / trust pages (absence is a finding, still evaluable).
+    //
+    // ─── WHY THE STATUS IS COMPUTED AND NOT CONSTANT ──────────────────────────
+    // These checks previously passed the LITERAL status 'pass' whatever was found, and a
+    // detail that asserted presence (`<label> page detected on the site`) in both cases.
+    // Absence survived only in the numeric score — and `websiteCheckGrouping.adopt()`
+    // deliberately drops the score, so by the time the renderer mapped `pass -> 'Observed'`
+    // the one carrier of absence was gone. A site with no testimonials, no case studies, no
+    // pricing page and no legal pages rendered four rows reading
+    // "Testimonials · Observed · Testimonials page detected on the site".
+    //
+    // That is a FABRICATED PUBLIC OBSERVATION: the report told a customer a trust asset had
+    // been observed when nothing observed it. The status is therefore derived from the same
+    // boolean as the score, and the detail states which way the observation actually went.
+    //
+    // Absence is 'warn', not 'fail': not finding a case-study page is a real, evidenced
+    // finding, but calling it a "Problem found" would assert a severity this check has not
+    // established. It is deliberately NOT 'not_evaluable' — pages WERE read and none matched,
+    // which is an observation, unlike a check with nothing to read. The detail carries the
+    // denominator so the reader can weigh a negative drawn from a shallow crawl.
+    //
+    // Nothing else moves: `presence()` is unchanged, so `contentScore` is unchanged
+    // (`aggregate()` excludes only `not_evaluable`, never 'warn'), and no consumer branches
+    // on 'pass' vs 'warn' — the correction is to what is CLAIMED, not to what is scored.
+    const pageCount = pages.length;
+    const readDenominator = `${pageCount} page${pageCount === 1 ? '' : 's'} read`;
+    const presencePages: Array<[string, string, string[], string]> = [
+      ['contact_info', 'Contact information', ['contact'], 'contact page'],
+      ['pricing_visibility', 'Pricing visibility', ['pricing', 'plans', 'price'], 'pricing page'],
+      ['company_information', 'Company information', ['about', 'company', 'who we are'], 'about or company page'],
+      ['legal_pages', 'Legal pages', ['privacy', 'terms', 'legal', 'cookie'], 'privacy, terms or legal page'],
+      ['testimonials', 'Testimonials', ['testimonial', 'review', 'customer story'], 'testimonials page'],
+      ['social_proof', 'Social proof', ['customers', 'trusted by', 'logos', 'press'], 'customers, press or trusted-by page'],
+      ['case_studies', 'Case studies', ['case study', 'case-stud', 'success story'], 'case study page'],
     ];
-    for (const [key, label, kws] of presencePages) {
-      C(key, label, 'pass', presence(pages.some((p) => matchesPage(p, kws))), `${label} page detected on the site`);
+    for (const [key, label, kws, noun] of presencePages) {
+      const found = pages.some((p) => matchesPage(p, kws));
+      C(
+        key,
+        label,
+        found ? 'pass' : 'warn',
+        presence(found),
+        found
+          ? `${noun.charAt(0).toUpperCase()}${noun.slice(1)} found among the ${readDenominator}`
+          : `No ${noun} found among the ${readDenominator}`,
+      );
     }
     // ICP / messaging consistency — title coherence across the site
     // Real ratio, not a two-value floor. Score = the share of page titles carrying the

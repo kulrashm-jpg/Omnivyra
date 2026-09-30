@@ -306,12 +306,31 @@ export function renderNinetyDayPlan(
   `;
 }
 
+/**
+ * REMEDIATION-005 — human-readable names for the work an item can be sequenced behind.
+ *
+ * Same shape as `STATUS_LABEL` / `PILLAR_LABEL` in this file: a small closed map, not a
+ * dependency framework. An id with no entry falls back to nothing rather than printing a
+ * raw identifier at a customer.
+ */
+const DEPENDENCY_LABEL: Record<string, string> = {
+  conversion_readiness: 'conversion-path remediation',
+};
+
 function renderPlanItem(item: PlanItem): string {
+  // A DECISION RELATIONSHIP — this work is ordered after that work. Deliberately says nothing
+  // about conversion rate, lost leads or revenue: none of that is observable from public
+  // evidence, and the sequencing does not depend on it.
+  const dependencyLabel = item.dependsOn ? DEPENDENCY_LABEL[item.dependsOn] : null;
+  const dependency = dependencyLabel
+    ? `<p style="font-size:9.5pt; line-height:1.55; margin:0 0 1.5mm; color:#475569;"><strong style="color:#0f172a;">Sequenced after</strong> ${escape(dependencyLabel)} — this work is ordered behind it, not blocked by it.</p>`
+    : '';
   return `
     <div style="margin:0 0 4mm;">
       <p style="font-size:11pt; font-weight:600; margin:0 0 1.5mm; color:#0f172a;">${escape(item.title)}</p>
       <p style="font-size:10.5pt; line-height:1.6; margin:0 0 1.5mm; color:#1a2332;">${escape(item.action)}</p>
       <p style="font-size:10pt; line-height:1.55; margin:0 0 1.5mm; color:#334155;">${escape(item.why)}</p>
+      ${dependency}
       ${renderMeasurement(item.measurement, item.measurementAvailable)}
       <div style="display:flex; gap:5mm; flex-wrap:wrap; font-family:'Inter',system-ui,sans-serif; font-size:9pt; color:#334155;">
         <span><strong style="color:#0f172a;">Effort</strong> ${escape(titleCase(item.effort))}</span>
