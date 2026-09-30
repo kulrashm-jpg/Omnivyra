@@ -25,14 +25,30 @@
  */
 import type { ReachabilityOutcome } from '../crawl/reachabilityOutcome';
 
-/** The seven comparison dimensions scored for the company and each competitor. */
+/**
+ * The seven comparison dimensions scored for the company and each competitor.
+ *
+ * ─── REMEDIATION-003: THREE OF THESE CANNOT BE CRAWLED ────────────────────
+ * `null` means UNAVAILABLE — the same meaning `metrics: ComparisonMetrics | null`
+ * already carries one level up for a competitor nobody observed. It is not zero and
+ * not a floor; arithmetic over it yields `null`, never a number.
+ *
+ * Only the three dimensions no page crawl can establish are nullable. The other four
+ * are derived from the subject's own crawled pages, so a resolution that exists always
+ * has them. The contract is deliberately NOT widened past that: a narrower type is a
+ * stronger guarantee, and these three are exactly the ones that used to be filled by
+ * mirroring the customer's synthesized baseline.
+ */
 export type ComparisonMetrics = {
   content_depth: number;
   authority_score: number;
-  publishing_frequency: number;
-  engagement_score: number;
+  /** Unobservable from a page crawl — nobody publishes their cadence. */
+  publishing_frequency: number | null;
+  /** Unobservable from a page crawl — engagement is not on the page. */
+  engagement_score: number | null;
   seo_coverage: number;
-  geo_presence: number;
+  /** Unobservable from a page crawl. */
+  geo_presence: number | null;
   aeo_readiness: number;
 };
 

@@ -128,7 +128,13 @@ export function buildCompetitorVisuals(params: {
         keyword_coverage_score: clamp(Math.round(metrics.seo_coverage), 0, 100),
         authority_score: clamp(Math.round(metrics.authority_score), 0, 100),
         technical_score: clamp(
-          Math.round((metrics.seo_coverage * 0.7) + (metrics.publishing_frequency * 0.3)),
+          // REMEDIATION-003 — `publishing_frequency` is null when no crawl could observe it
+          // (which is now every competitor). Weighting a null at 0.3 would silently drag this
+          // axis down by 30% of nothing. With the cadence term unavailable the axis reports the
+          // dimension it DID observe rather than a blend of one real and one missing number.
+          Math.round(typeof metrics.publishing_frequency === 'number'
+            ? (metrics.seo_coverage * 0.7) + (metrics.publishing_frequency * 0.3)
+            : metrics.seo_coverage),
           0,
           100,
         ),

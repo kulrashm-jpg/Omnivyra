@@ -203,12 +203,38 @@ export async function crawlDomainSignals(domain: string, referenceKeywords: stri
  * Exported for the D8 evidence-integrity suite: the rule that a gap narrative may only
  * name competitors whose metrics were actually observed is asserted directly here.
  */
+/**
+ * REMEDIATION-003 — a numeric gap only when BOTH sides are numbers. Never `?? 0`.
+ * Returns `null` for "cannot be established", which every caller below must test for
+ * explicitly, because a `null >= 8` comparison is false but `null - x` is not an error
+ * under this project's non-strict compiler settings.
+ */
+function gapBetween(competitor: number | null, company: number | null): number | null {
+  return typeof competitor === 'number' && typeof company === 'number' ? competitor - company : null;
+}
+
+/** Mean of the values that exist; `null` when none does. */
+function meanPresent(values: Array<number | null>): number | null {
+  const present = values.filter((v): v is number => typeof v === 'number');
+  return present.length > 0 ? present.reduce((a, b) => a + b, 0) / present.length : null;
+}
+
 export function buildGapDefinitions(params: {
   domain: string;
   businessContext: string;
   entries: CompetitorComparisonEntry[];
-  companyMetrics: ComparisonMetrics;
+  companyMetrics: ComparisonMetrics | null;
 }): CompetitorGap[] {
+  // ─── REMEDIATION-003 — A GAP NEEDS TWO OBSERVED SIDES ─────────────────────
+  //
+  // Every gap below is `observed competitor average − company baseline`. With no baseline
+  // there is no subtraction to perform, so there is no gap to narrate. Returning an empty
+  // list is the honest outcome: `competitor − 0`, `competitor − constant`, or treating the
+  // competitor's own number as the gap would each state that named companies are ahead by a
+  // margin nothing established. `strict` is false in this project, so `null` would otherwise
+  // coerce to 0 silently and produce exactly that claim.
+  if (params.companyMetrics == null) return [];
+  const companyMetrics = params.companyMetrics;
   // D8 — a gap narrative is a claim that named competitors are ahead of the customer.
   // It may only be made from competitors whose metrics were actually derived from their
   // own observed pages. Unobserved competitors are excluded from the average AND from
@@ -221,8 +247,8 @@ export function buildGapDefinitions(params: {
   const leadingCompetitors = observedEntries.slice(0, 3).map((entry) => entry.competitor.domain ?? entry.competitor.name);
   const gaps: CompetitorGap[] = [];
 
-  const contentGap = averageMetrics.content_depth - params.companyMetrics.content_depth;
-  if (contentGap >= 8) {
+  const contentGap = gapBetween(averageMetrics.content_depth, companyMetrics.content_depth);
+  if (contentGap !== null && contentGap >= 8) {
     gaps.push({
       gap_type: 'content_gap',
       issue_type: 'competitor_content_gap',
@@ -239,8 +265,8 @@ export function buildGapDefinitions(params: {
     });
   }
 
-  const authorityGap = averageMetrics.authority_score - params.companyMetrics.authority_score;
-  if (authorityGap >= 10) {
+  const authorityGap = gapBetween(averageMetrics.authority_score, companyMetrics.authority_score);
+  if (authorityGap !== null && authorityGap >= 10) {
     gaps.push({
       gap_type: 'authority_gap',
       issue_type: 'competitor_backlink_advantage',
@@ -257,8 +283,8 @@ export function buildGapDefinitions(params: {
     });
   }
 
-  const visibilityGap = averageMetrics.seo_coverage - params.companyMetrics.seo_coverage;
-  if (visibilityGap >= 10) {
+  const visibilityGap = gapBetween(averageMetrics.seo_coverage, companyMetrics.seo_coverage);
+  if (visibilityGap !== null && visibilityGap >= 10) {
     gaps.push({
       gap_type: 'visibility_gap',
       issue_type: 'competitor_gap',
@@ -275,8 +301,8 @@ export function buildGapDefinitions(params: {
     });
   }
 
-  const trustGap = average([averageMetrics.authority_score, averageMetrics.engagement_score]) - average([params.companyMetrics.authority_score, params.companyMetrics.engagement_score]);
-  if (trustGap >= 9) {
+  const trustGap = gapBetween(meanPresent([averageMetrics.authority_score, averageMetrics.engagement_score]), meanPresent([companyMetrics.authority_score, companyMetrics.engagement_score]));
+  if (trustGap !== null && trustGap >= 9) {
     gaps.push({
       gap_type: 'trust_gap',
       issue_type: 'trust_gap',
@@ -293,8 +319,8 @@ export function buildGapDefinitions(params: {
     });
   }
 
-  const aeoGap = averageMetrics.aeo_readiness - params.companyMetrics.aeo_readiness;
-  if (aeoGap >= 8) {
+  const aeoGap = gapBetween(averageMetrics.aeo_readiness, companyMetrics.aeo_readiness);
+  if (aeoGap !== null && aeoGap >= 8) {
     gaps.push({
       gap_type: 'aeo_gap',
       issue_type: 'content_gap',

@@ -305,7 +305,21 @@ describe('reportCompetitorIntelligenceService', () => {
     // D8 — part 2. The conversion itself still works, from evidence: one competitor is OBSERVED
     // (its own pages put it clearly ahead on content), the others stay unobserved. Its gap becomes
     // a snapshot decision and reaches the report payload, naming ONLY the observed competitor.
-    const company = intelligence.comparison.company;
+    // REMEDIATION-003 — the pipeline no longer synthesizes a company baseline
+    // (`computeCompanyMetrics` returns null, because none of it was ever observed), so this
+    // test supplies one EXPLICITLY. The behaviour under test is unchanged and undiluted: given
+    // two genuinely supported sides, a gap still becomes a decision naming only the observed
+    // competitor. What is removed is the test's dependency on the fabrication.
+    const company: ComparisonMetrics = {
+      content_depth: 60,
+      authority_score: 55,
+      publishing_frequency: null,
+      engagement_score: null,
+      seo_coverage: 58,
+      geo_presence: null,
+      aeo_readiness: 54,
+    };
+    expect(intelligence.comparison.company).toBeNull();
     const [first, ...rest] = intelligence.comparison.competitors;
     const observedMetrics: ComparisonMetrics = { ...company, content_depth: Math.min(100, company.content_depth + 20) };
     const observedEntry = {

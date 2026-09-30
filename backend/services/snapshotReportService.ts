@@ -851,6 +851,18 @@ export async function composeSnapshotReportFromDecisions(params: {
       hasCategory: Boolean(params.resolvedInput?.resolved.businessType),
       hasOffering: (companyContext.productServices ?? []).length > 0,
     },
+    // REMEDIATION-007 — the advertising surface reaches the DECISION layer, not just the section.
+    // Reduced to what a rule may rest on: access state, whether a subject legal name existed to
+    // search with, the attributable-advertiser count, and when it was observed. Null when no
+    // observation was loaded, which the rule treats as "nothing to say" — never as "no advertising".
+    advertising: canonicalSnapshotShape.advertising
+      ? {
+        accessState: canonicalSnapshotShape.advertising.accessState,
+        subjectLegalNameUsed: canonicalSnapshotShape.advertising.subjectLegalNameUsed,
+        matchedAdvertiserCount: canonicalSnapshotShape.advertising.companyAdvertisers.length,
+        observedAt: canonicalSnapshotShape.advertising.observedAt ?? null,
+      }
+      : null,
   });
 
   return canonicalSnapshotShape;

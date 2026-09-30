@@ -177,7 +177,7 @@ export type CompetitorIntelligenceResult = {
     tier_3: DetectedCompetitor[];
   };
   comparison: {
-    company: ComparisonMetrics;
+    company: ComparisonMetrics | null;
     competitors: CompetitorComparisonEntry[];
   };
   generated_gaps: CompetitorGap[];

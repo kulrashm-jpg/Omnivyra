@@ -81,7 +81,16 @@ const PROVENANCE_BY_SOURCE: Record<EvidenceSourceKind, EvidenceProvenanceClass> 
   // deliberately distinct from `gsc`, which describes the same search engine but through the
   // customer's authenticated, private property.
   serp: 'PUBLIC_OBSERVED',
-  social_links: 'PUBLIC_OBSERVED',
+  // REMEDIATION-002 — DEMOTED, for the same reason `llm_probe` below was.
+  //
+  // `resolved.socialLinks` is a BLEND of URLs crawled from the site and URLs typed into the
+  // report form, and `reportInputResolver` records that the per-entry origin is not recoverable
+  // from the merged set. A set that MIGHT be declared cannot assert that the public domain was
+  // observed. The genuinely public social signal has its own honest path — `socialPresenceObservation`
+  // confirms a profile against a SERP result and reports `observed` / `declared` / `unreachable`
+  // separately — so nothing publicly observable is lost by refusing to let the raw link list
+  // stand in for it.
+  social_links: 'COMPANY_CONFIRMED',
   wikidata: 'PUBLIC_OBSERVED',
   google_kg: 'PUBLIC_OBSERVED',
   schema_org: 'PUBLIC_OBSERVED',
@@ -111,6 +120,11 @@ const PROVENANCE_BY_SOURCE: Record<EvidenceSourceKind, EvidenceProvenanceClass> 
   heuristic: 'INFERRED',
   benchmark_dataset: 'ESTIMATED',
   trajectory_history: 'OMNIVYRA_OBSERVED',
+  // REMEDIATION-002 — the two classes that had no source kind, so no producer could tell the
+  // truth about a private origin even when it wanted to. Their absence is why a dimension fed by
+  // `company_brand_identity` had to borrow `crawler` to be expressible at all.
+  company_declared: 'COMPANY_CONFIRMED',
+  platform_activity: 'OMNIVYRA_OBSERVED',
   gsc: 'CONNECTED_SOURCE',
   unspecified: 'UNAVAILABLE',
 };

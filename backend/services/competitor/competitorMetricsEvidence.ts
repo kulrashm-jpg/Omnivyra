@@ -145,7 +145,7 @@ export const CRAWL_UNOBSERVED_DIMENSIONS: readonly (keyof ComparisonMetrics)[] =
 export function resolveCompetitorMetrics(params: {
   readonly signals: DomainCrawlSignals | null;
   readonly crawlOutcome: CompetitorCrawlOutcome;
-  readonly companyMetrics: ComparisonMetrics;
+  readonly companyMetrics: ComparisonMetrics | null;
 }): CompetitorMetricsResolution {
   const { signals, crawlOutcome, companyMetrics } = params;
 
@@ -173,10 +173,15 @@ export function resolveCompetitorMetrics(params: {
       seo_coverage: clampMetric(signals.keywordCoverageScore),
       // Observed: presence of extractable answer structures (FAQ, summaries, schema).
       aeo_readiness: clampMetric(signals.aiAnswerPresenceScore),
-      // Unobserved by any page crawl — mirrored so they contribute a zero delta.
-      publishing_frequency: companyMetrics.publishing_frequency,
-      engagement_score: companyMetrics.engagement_score,
-      geo_presence: companyMetrics.geo_presence,
+      // REMEDIATION-003 — NO LONGER MIRRORED. Mirroring existed for one reason: to make the
+      // delta against the customer's baseline exactly zero, which a fixed constant could not
+      // do. With no baseline (`computeCompanyMetrics` now returns null, because none of it was
+      // observed) there is no delta to neutralise, so the mirror has nothing left to achieve —
+      // and mirroring a synthesized number would have republished it as a COMPETITOR's figure.
+      // These three are simply what they always were: not observable from a page crawl.
+      publishing_frequency: companyMetrics?.publishing_frequency ?? null,
+      engagement_score: companyMetrics?.engagement_score ?? null,
+      geo_presence: companyMetrics?.geo_presence ?? null,
     },
     basis: OUTCOME_BASIS[crawlOutcome],
   };
