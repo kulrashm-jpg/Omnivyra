@@ -4,7 +4,11 @@
  *   node node_modules/tsx/dist/cli.mjs scripts/jev-flow/cli.ts <verb> [flags]
  *
  *   start        --story OMNI-n --slug <slug> --repo <git repo> [--base <ref>] [--worktree-root <dir>]
- *   attach       --story OMNI-n --session <uuid> --worktree <path> [--base <ref>] [--fork]
+ *   attach       --story OMNI-n --session <uuid> [--worktree <path>] [--base <ref>] [--fork]
+ *                (--worktree defaults to the current directory; without --base and
+ *                without an earlier binding, a clean HEAD carrying exactly
+ *                `Governed-By: <STORY>` and no Gov-Packet is adopted as the
+ *                PRE_GOVERNANCE_ADOPTION_BASELINE)
  *   packet       --story OMNI-n --worktree <path> [--regenerate]
  *   verify       --story OMNI-n --worktree <path>
  *   judge        --story OMNI-n --worktree <path> --evidence <sha256:...> --invoked-by <human|claude-code>:<id> [--write-back] [--model <id>]
@@ -42,6 +46,7 @@ import { createGitProbe } from './scope';
 import { buildResumeInstructions, buildStartCommand, findSessionFile, fingerprintSession, newSessionId } from './session';
 import { defaultRunner, normalizeWorktree, runVerification, type CommandRunner } from './verify';
 import {
+  ADOPTION_CLASSIFICATION,
   COMMIT_RE,
   SESSION_ID_RE,
   SHA256_REF_RE,
@@ -49,6 +54,7 @@ import {
   TRAILER_GOVERNED_BY,
   TRAILER_GOV_PACKET,
   govLayout,
+  type AdoptionBaseline,
   type GitProbe,
   type GovLayout,
   type GovStatus,
@@ -108,7 +114,7 @@ const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/~^@-]*$/;
 const USAGE = [
   'usage: cli.ts <verb> [flags]',
   '  start       --story OMNI-<n> --slug <slug> --repo <git repo> [--base <ref>] [--worktree-root <dir>]',
-  '  attach      --story OMNI-<n> --session <uuid> --worktree <path> [--base <ref>] [--fork]',
+  '  attach      --story OMNI-<n> --session <uuid> [--worktree <path>] [--base <ref>] [--fork]',
   '  packet      --story OMNI-<n> --worktree <path> [--regenerate]',
   '  verify      --story OMNI-<n> --worktree <path>',
   '  judge       --story OMNI-<n> --worktree <path> --evidence <sha256:...> --invoked-by <human|claude-code>:<id> [--write-back] [--model <id>]',
@@ -284,6 +290,31 @@ function storyArg(argv: string[]): string | null {
   return s !== null && STORY_KEY_RE.test(s) ? s : null;
 }
 
+/** One or more `Governed-By` values, every one exactly the Story. */
+function governedByExactly(t: Record<string, string[]>, story: string): boolean {
+  const v = t[TRAILER_GOVERNED_BY] ?? [];
+  return v.length > 0 && v.every((x) => x === story);
+}
+
+/**
+ * Null when `commit` is a valid adoption baseline for `story` (carries
+ * exactly `Governed-By: <story>` and no `Gov-Packet` trailer); otherwise the
+ * reason. A git error is a reason (fail closed).
+ */
+async function adoptionBaselineProblem(git: GitProbe, worktree: string, story: string, commit: string): Promise<string | null> {
+  let t: Record<string, string[]>;
+  try {
+    t = await git.commitTrailers(worktree, commit);
+  } catch (err) {
+    return `cannot read the trailers of ${commit}: ${(err as Error).message}`;
+  }
+  const governedBy = t[TRAILER_GOVERNED_BY] ?? [];
+  if (governedBy.length === 0) return `commit ${commit} carries no "${TRAILER_GOVERNED_BY}" trailer, so it is not an adoption baseline for ${story}`;
+  if (!governedByExactly(t, story)) return `commit ${commit} carries "${TRAILER_GOVERNED_BY}: ${governedBy.join(', ')}", not exactly "${TRAILER_GOVERNED_BY}: ${story}"`;
+  if ((t[TRAILER_GOV_PACKET] ?? []).length > 0) return `commit ${commit} carries a "${TRAILER_GOV_PACKET}" trailer; an adoption baseline must not (its packet does not exist yet)`;
+  return null;
+}
+
 // ---------------------------------------------------------------- verbs
 
 async function cmdStart(run: Run, argv: string[]): Promise<number> {
@@ -344,8 +375,9 @@ async function cmdAttach(run: Run, argv: string[]): Promise<number> {
   const story = storyArg(argv);
   const sessionId = flag(argv, '--session');
   const wtArg = flag(argv, '--worktree');
-  if (!story || !sessionId || !SESSION_ID_RE.test(sessionId) || !wtArg) return usage(run, 'attach needs --story OMNI-<n>, --session <lowercase uuid> and --worktree');
-  const worktree = path.resolve(wtArg);
+  if (!story || !sessionId || !SESSION_ID_RE.test(sessionId)) return usage(run, 'attach needs --story OMNI-<n> and --session <lowercase uuid> (--worktree defaults to the current directory)');
+  if (has(argv, '--worktree') && wtArg === null) return usage(run, '--worktree needs a path');
+  const worktree = path.resolve(wtArg ?? process.cwd());
   const baseRef = flag(argv, '--base');
   if (has(argv, '--base') && baseRef === null) return usage(run, '--base needs a ref');
   run.result.story = story;
@@ -379,12 +411,28 @@ async function cmdAttach(run: Run, argv: string[]): Promise<number> {
   if (clean !== true) throw new Outcome('REFUSED', 'worktree is dirty (staged, unstaged or untracked changes); attach needs a clean tree');
 
   let baseCommit: string;
+  let adoption: AdoptionBaseline | null = null;
   if (baseRef !== null) {
     baseCommit = await resolveBase(run, worktree, baseRef);
   } else {
     const prior = latestBinding(layout, story, worktree);
-    if (!prior) throw new Outcome('REFUSED', 'base is never inferred: pass --base <ref> (no earlier binding for this Story and worktree)');
-    baseCommit = prior.base_commit;
+    if (prior) {
+      baseCommit = prior.base_commit;
+      adoption = prior.adoption ?? null;
+    } else {
+      // Existing-work adoption: the clean HEAD must be the human's adoption-baseline commit.
+      const why = await adoptionBaselineProblem(git, worktree, story, head);
+      if (why !== null) {
+        throw new Outcome(
+          'REFUSED',
+          `base is never inferred: ${why}. Pass --base <ref>, or adopt the existing work: commit it yourself as an adoption-baseline commit ` +
+            `carrying the trailer "${TRAILER_GOVERNED_BY}: ${story}" and NO "${TRAILER_GOV_PACKET}" trailer, keep the tree clean, then re-run gov attach ` +
+            `(that commit and everything before it are recorded as ${ADOPTION_CLASSIFICATION}, never as governed)`,
+        );
+      }
+      baseCommit = head;
+      adoption = { baseline_commit: head, classification: ADOPTION_CLASSIFICATION };
+    }
   }
   let descends: boolean;
   try {
@@ -399,10 +447,11 @@ async function cmdAttach(run: Run, argv: string[]): Promise<number> {
   const md = layout.packetFile(story, stored.packet_hash, 'md');
   const bound = bindSession(
     layout,
-    { story_key: story, packet_hash: stored.packet_hash, session_id: sessionId, mode: 'attach', worktree: posix(worktree), branch, base_commit: baseCommit, session_file: fingerprint },
+    { story_key: story, packet_hash: stored.packet_hash, session_id: sessionId, mode: 'attach', worktree: posix(worktree), branch, base_commit: baseCommit, session_file: fingerprint, adoption },
     run.deps.now,
   );
   Object.assign(run.result, { base_commit: baseCommit, branch, worktree: posix(worktree), packet_hash: stored.packet_hash, packet_md: md, transcript_sha256: fingerprint.sha256 });
+  if (adoption !== null) run.result.adoption_baseline = adoption.baseline_commit;
   if (bound.status === 'REFUSED') throw new Outcome('REFUSED', bound.message);
   run.result.binding = bound.status;
 
@@ -412,6 +461,12 @@ async function cmdAttach(run: Run, argv: string[]): Promise<number> {
   run.io.out(`Packet: ${md}`);
   run.io.out(`Binding: ${bound.status} (${bound.message})`);
   run.io.out(`Transcript (read-only): ${fingerprint.path} ${fingerprint.sha256}`);
+  if (adoption !== null) {
+    run.io.out(`Adoption baseline: ${adoption.baseline_commit} (${ADOPTION_CLASSIFICATION})`);
+    run.io.out('The baseline and everything before it are pre-governance. Every subsequent commit must carry both trailers:');
+    run.io.out(`  ${TRAILER_GOVERNED_BY}: ${story}`);
+    run.io.out(`  ${TRAILER_GOV_PACKET}: ${stored.packet_hash}`);
+  }
   if (fingerprint.cwd === null) {
     run.io.out("The transcript records no cwd: cd to the conversation's original directory, then run:");
     run.io.out(`  claude --resume ${sessionId}${has(argv, '--fork') ? ' --fork-session' : ''}`);
@@ -466,6 +521,7 @@ async function cmdPacket(run: Run, argv: string[]): Promise<number> {
       branch: binding.branch,
       base_commit: binding.base_commit,
       session_file: binding.session_file,
+      adoption: binding.adoption ?? null,
     },
     run.deps.now,
   );
@@ -683,6 +739,9 @@ async function cmdCheckMerge(run: Run, argv: string[]): Promise<number> {
   print({ name: 'scope', ok: !!b.scope && b.scope.ok === true, detail: b.scope && b.scope.ok === true ? 'scope ok' : 'scope violation recorded', fail: 'SCOPE_VIOLATION' });
 
   // (f, g) every commit in base..HEAD carries both trailers; at least one commit
+  // (an adopted Story may have zero governed commits after its baseline).
+  const adoption = binding.adoption ?? null;
+  if (adoption !== null) return checkAdoptedCommits(run, git, worktree, story, binding, stored, head, adoption, print, conclude);
   let commits: string[] = [];
   try {
     commits = await git.commitsBetween(worktree, base.commit, head);
@@ -702,6 +761,79 @@ async function cmdCheckMerge(run: Run, argv: string[]): Promise<number> {
     name: 'trailers',
     ok: bad.length === 0,
     detail: bad.length === 0 ? `every commit carries ${TRAILER_GOVERNED_BY} and ${TRAILER_GOV_PACKET}` : bad.join('; '),
+    fail: 'INTEGRITY_FAILED',
+  });
+  return conclude();
+}
+
+/**
+ * check-merge (f, g) for an adopted Story. The baseline must equal the packet
+ * and binding base, be an ancestor of (or equal to) HEAD, and be a valid
+ * adoption-baseline commit; the commits after it are the governed commits and
+ * each must carry exactly `Governed-By: <story>` and `Gov-Packet: <packet
+ * hash>`. Commits before the baseline are pre-governance and not inspected.
+ * Any git error or mismatch is INTEGRITY_FAILED (fail closed).
+ */
+async function checkAdoptedCommits(
+  run: Run,
+  git: GitProbe,
+  worktree: string,
+  story: string,
+  binding: SessionBinding,
+  stored: StoredPacket,
+  head: string,
+  adoption: AdoptionBaseline,
+  print: (c: MergeCheck) => void,
+  conclude: () => number,
+): Promise<number> {
+  const baseline = adoption && typeof adoption === 'object' ? adoption.baseline_commit : null;
+  run.result.adoption_baseline = typeof baseline === 'string' ? baseline : null;
+  const fail = (detail: string): number => {
+    print({ name: 'adoption-baseline', ok: false, detail, fail: 'INTEGRITY_FAILED' });
+    return conclude();
+  };
+  if (typeof baseline !== 'string' || !COMMIT_RE.test(baseline)) return fail('adoption baseline is not a full commit id');
+  if (adoption.classification !== ADOPTION_CLASSIFICATION) return fail(`adoption classification is not ${ADOPTION_CLASSIFICATION}`);
+  if (binding.mode !== 'attach') return fail('adoption is only valid on an attach binding');
+  if (baseline !== stored.packet.base.commit || baseline !== binding.base_commit) return fail('adoption baseline does not equal the packet and binding base commit');
+  let descends: boolean;
+  try {
+    descends = await git.isAncestor(worktree, baseline, head);
+  } catch (err) {
+    return fail(`ancestry check failed: ${(err as Error).message}`);
+  }
+  if (descends !== true) return fail(`baseline ${baseline} is not an ancestor of HEAD ${head}`);
+  const why = await adoptionBaselineProblem(git, worktree, story, baseline);
+  if (why !== null) return fail(why);
+  print({ name: 'adoption-baseline', ok: true, detail: `baseline ${baseline.slice(0, 12)} ${ADOPTION_CLASSIFICATION}`, fail: 'INTEGRITY_FAILED' });
+
+  let commits: string[];
+  try {
+    commits = await git.commitsBetween(worktree, baseline, head);
+  } catch (err) {
+    print({ name: 'trailers', ok: false, detail: `cannot list ${baseline}..HEAD: ${(err as Error).message}`, fail: 'INTEGRITY_FAILED' });
+    return conclude();
+  }
+  run.result.governed_commits = commits.length;
+  print({ name: 'commits', ok: true, detail: `baseline ${baseline.slice(0, 12)} ${ADOPTION_CLASSIFICATION}; ${commits.length} governed commit(s)`, fail: 'REFUSED' });
+  const bad: string[] = [];
+  for (const c of commits) {
+    let t: Record<string, string[]>;
+    try {
+      t = await git.commitTrailers(worktree, c);
+    } catch (err) {
+      bad.push(`${c.slice(0, 12)} trailers unreadable: ${(err as Error).message}`);
+      continue;
+    }
+    const governed = governedByExactly(t, story);
+    const packets = t[TRAILER_GOV_PACKET] ?? [];
+    const packetOk = packets.length > 0 && packets.every((p) => p === stored.packet_hash);
+    if (!governed || !packetOk) bad.push(`${c.slice(0, 12)}${governed ? '' : ` missing ${TRAILER_GOVERNED_BY}: ${story}`}${packetOk ? '' : ` missing ${TRAILER_GOV_PACKET}: ${stored.packet_hash}`}`);
+  }
+  print({
+    name: 'trailers',
+    ok: bad.length === 0,
+    detail: bad.length === 0 ? `every governed commit carries ${TRAILER_GOVERNED_BY} and ${TRAILER_GOV_PACKET}` : bad.join('; '),
     fail: 'INTEGRITY_FAILED',
   });
   return conclude();
