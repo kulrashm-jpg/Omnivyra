@@ -9,12 +9,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  ADOPTION_CLASSIFICATION,
   BINDING_SCHEMA,
   COMMIT_RE,
   GOVERNANCE_VERSION,
   SESSION_ID_RE,
   SHA256_REF_RE,
   STORY_KEY_RE,
+  type AdoptionBaseline,
   type GovLayout,
   type SessionBinding,
 } from './types';
@@ -44,7 +46,30 @@ function validationError(input: BindInput): string | null {
   } else if (input.session_file !== null) {
     return 'mode=new requires session_file null';
   }
+  return adoptionError(input);
+}
+
+/** Absent/null adoption = ordinary binding; otherwise an exact, attach-only baseline. */
+function adoptionError(input: BindInput): string | null {
+  const a: unknown = input.adoption;
+  if (a === undefined || a === null) return null;
+  if (input.mode !== 'attach') return 'adoption baseline is allowed only for mode=attach';
+  if (typeof a !== 'object' || Array.isArray(a)) return 'invalid adoption baseline';
+  const keys = Object.keys(a).sort();
+  if (keys.length !== 2 || keys[0] !== 'baseline_commit' || keys[1] !== 'classification') {
+    return 'invalid adoption baseline shape';
+  }
+  const rec = a as AdoptionBaseline;
+  if (typeof rec.baseline_commit !== 'string' || !COMMIT_RE.test(rec.baseline_commit)) return 'invalid adoption baseline commit';
+  if (rec.classification !== ADOPTION_CLASSIFICATION) return 'invalid adoption classification';
+  if (rec.baseline_commit !== input.base_commit) return 'adoption baseline commit must equal base_commit';
   return null;
+}
+
+/** The adoption baseline of a binding, or null for an ordinary binding. Pure. */
+export function adoptionOf(binding: SessionBinding | null): AdoptionBaseline | null {
+  const a = binding ? binding.adoption : null;
+  return a === undefined || a === null ? null : a;
 }
 
 /** All ledger records in append order. A corrupt line throws (never skipped). */
@@ -94,7 +119,7 @@ export function latestForStory(layout: GovLayout, storyKey: string): SessionBind
 
 /**
  * Binds a session to a Story packet. Idempotent on (session, story, packet,
- * worktree, branch); refuses a session already bound to a different Story.
+ * worktree, branch, adoption baseline); refuses a session already bound to a different Story.
  */
 export function bindSession(layout: GovLayout, input: BindInput, now: () => Date = () => new Date()): BindResult {
   const invalid = validationError(input);
@@ -109,8 +134,14 @@ export function bindSession(layout: GovLayout, input: BindInput, now: () => Date
       message: `session ${input.session_id} is already bound to ${otherStory.story_key}; one session governs one Story`,
     };
   }
+  const adoption = adoptionOf(input as SessionBinding);
+  const baselineOf = (a: AdoptionBaseline | null) => (a ? a.baseline_commit : null);
   const same = existing.find(
-    (b) => b.packet_hash === input.packet_hash && b.worktree === input.worktree && b.branch === input.branch,
+    (b) =>
+      b.packet_hash === input.packet_hash &&
+      b.worktree === input.worktree &&
+      b.branch === input.branch &&
+      baselineOf(adoptionOf(b)) === baselineOf(adoption),
   );
   if (same) return { status: 'ALREADY_BOUND', binding: same, message: `session ${input.session_id} already bound to ${input.story_key}` };
 
@@ -127,6 +158,8 @@ export function bindSession(layout: GovLayout, input: BindInput, now: () => Date
     bound_at: now().toISOString(),
     session_file: input.session_file,
   };
+  // Only adoption records carry the key, so ordinary records stay byte-identical.
+  if (adoption) binding.adoption = { baseline_commit: adoption.baseline_commit, classification: adoption.classification };
   fs.mkdirSync(path.dirname(layout.bindingsFile), { recursive: true });
   fs.appendFileSync(layout.bindingsFile, `${JSON.stringify(binding)}\n`, { encoding: 'utf8', flag: 'a' });
   const message = existing.length > 0
