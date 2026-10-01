@@ -256,6 +256,28 @@ export interface SessionBinding {
   bound_at: string;
   /** Present for mode=attach (existing transcript); null for a new session not yet started. */
   session_file: SessionFileFingerprint | null;
+  /**
+   * Existing-work adoption (mode=attach only). Absent/null for ordinary
+   * bindings, so pre-existing ledger records stay valid. When present,
+   * baseline_commit === base_commit === the packet base commit.
+   */
+  adoption?: AdoptionBaseline | null;
+}
+
+/**
+ * Existing-work adoption baseline. A human commits the existing work with a
+ * `Governed-By: <STORY>` trailer and NO `Gov-Packet` trailer (the packet does
+ * not exist yet); `gov attach` then records that clean HEAD as the baseline.
+ * The baseline and everything before it are PRE-GOVERNANCE — never claimed to
+ * have been governed. Governance (packet, scope, verification, trailers)
+ * applies only to commits after the baseline.
+ */
+export const ADOPTION_CLASSIFICATION = 'PRE_GOVERNANCE_ADOPTION_BASELINE' as const;
+
+export interface AdoptionBaseline {
+  /** Full commit id of the human's adoption-baseline commit. */
+  baseline_commit: string;
+  classification: typeof ADOPTION_CLASSIFICATION;
 }
 
 // ---------------------------------------------------------------- evidence
