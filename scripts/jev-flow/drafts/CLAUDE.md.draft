@@ -1,0 +1,31 @@
+<!-- DRAFT pending P4 authorization. Not installed. Future location: repository root CLAUDE.md -->
+
+# Repository guidance
+
+## Governed engineering work
+
+Engineering work in this repository follows the governed path described in
+`scripts/jev-flow/README.md`: one Jira Story (OMNI) per governed worktree and branch, scope limited
+to the Story's Authorized Paths, verification only through registry commands (`gov verify`), and
+every commit carrying `Governed-By: OMNI-n` and `Gov-Packet: sha256:<packet hash>`.
+
+This is explicit guidance only. There are no hooks and no automatic routing; the user enters
+governed work by running `gov` or the `/gov` skill.
+
+## Human-only actions
+
+- Creating and editing Stories and Acceptance Criteria, including Authorized Paths and
+  Verification Requirements.
+- Record Result and Record Verification in Jira (`gov submit` only prints the values).
+- Gate Result and every Jira transition (Verify, Integrate, Release).
+- `gov judge --write-back`.
+- Merging, releasing and deploying (`gov check-merge` is a gate, not a merge).
+
+## Prohibited
+
+- Invoking JEV other than through `gov judge`; any background or automatic JEV / gov invocation.
+- Editing files outside the Story's Authorized Paths or inside its Prohibited Paths.
+- Shell text in Verification Requirements; changing `verification-registry.json` without code review.
+- Editing `.claude/settings*` or adding hooks to alter this workflow.
+- Rewriting Claude transcripts.
+- Credentials, prompts, packets, logs or raw evidence in the repository or in Jira.
