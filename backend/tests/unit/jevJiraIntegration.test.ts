@@ -249,7 +249,7 @@ describe('2. required-field extraction', () => {
   ])('%o is rejected as %s, with no JEV call and no write', async (over, code) => {
     const { result, transport, jira } = await runWith({ ac: over });
     expect(result).toMatchObject({ status: 'REJECTED', ok: false, error: { code } });
-    expect((transport as { calls: number }).calls).toBe(0);
+    expect((transport as unknown as { calls: number }).calls).toBe(0);
     expect(jira.updates).toHaveLength(0);
   });
 
@@ -313,14 +313,14 @@ describe('4. evidence bounding (reject, never truncate)', () => {
   ])('%o → %s, nothing sent to JEV, nothing written', async (opts, code) => {
     const { result, transport, jira } = await runWith(opts as never);
     expect(result).toMatchObject({ status: 'REJECTED', error: { code } });
-    expect((transport as { calls: number }).calls).toBe(0);
+    expect((transport as unknown as { calls: number }).calls).toBe(0);
     expect(jira.updates).toHaveLength(0);
   });
 
   it('a credential-shaped value in a Jira field is blocked by the BJC redaction gate: nothing sent, nothing written', async () => {
     const { result, transport, jira } = await runWith({ ac: { [AC_FIELDS.evidenceReferences]: `see token=${FAKE_JEV_KEY}` } });
     expect(result).toMatchObject({ status: 'JUDGMENT_UNAVAILABLE', error: { code: 'REDACTION_BLOCK' } });
-    expect((transport as { calls: number }).calls).toBe(0);
+    expect((transport as unknown as { calls: number }).calls).toBe(0);
     expect(jira.updates).toHaveLength(0);
   });
 });
