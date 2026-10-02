@@ -5,7 +5,7 @@ import type { CompetitorIntelligenceResult } from '../reportCompetitorIntelligen
 import { classifyDecisionType } from '../decisionTypeRegistry';
 import { impactScore } from '../reportDecisionUtils';
 import { buildDecisionBusinessImpact } from '../businessImpactFormatter';
-import { average, clamp } from '../snapshotReportNarrativeHelpers';
+import { average, averageNumber, clamp } from '../snapshotReportNarrativeHelpers';
 // BETA-EXEC-004: deterministic measured-evidence tail for why-it-matters (Phase 2/6).
 import { type EngineEvidenceInput, evidenceTailForDecision } from './engineEvidenceNarrative';
 import type {
@@ -147,11 +147,44 @@ export function assessPositioningAndMarket(params: {
   const competitorDeltas = (params.competitorIntelligence.comparison?.competitors ?? [])
     .map((item) => item.deltas_vs_company)
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
-    .map((delta) => average([
-      Number(delta.authority_score ?? 0),
-      Number(delta.seo_coverage ?? 0),
-      Number(delta.content_depth ?? 0),
-    ]));
+    // WP-17 — UNAVAILABLE IS NOT A MEASURED ZERO.
+    //
+    // THE DEFECT. These three dimensions were read as `Number(delta.<dim> ?? 0)`. `?? 0`
+    // turns an UNAVAILABLE dimension into the number 0 — a confident reading of "exactly at
+    // parity on this axis" manufactured from nothing — and the denominator stayed pinned at 3
+    // however little had actually been observed. Under this repository's `"strict": false`
+    // compiler nothing flags it, and the declared type is not a runtime guarantee either:
+    // `subtractMetrics` produces these deltas through `delta(...) as number`, and `delta()`
+    // returns `null` whenever either operand is non-numeric.
+    //
+    // WHY IT IS WRITTEN THIS WAY NOW. `authority_score`, `seo_coverage` and `content_depth`
+    // are exactly the non-nullable members of the canonical `ComparisonMetrics`, so the
+    // dilution is inert *today*. It goes live the instant any one of them is widened to
+    // `number | null` — which is the same step that made the identical construct in
+    // `visualIntelligenceHelpers.ts` (WP-15) and `buildCompetitorStanding` (WP-12) publish
+    // fabricated parity. Averaging only what was genuinely observed removes the trap before
+    // the widening can spring it, and costs nothing while the contract stays narrow.
+    //
+    // THE CONTRACT. Take only dimensions carrying genuine numeric evidence, over a
+    // denominator equal to that observed count. A genuinely MEASURED 0 is data and still
+    // counts as 0. When a competitor has no observed dimension at all, `averageNumber`
+    // returns null for the empty set and that entry drops out entirely — it becomes
+    // indistinguishable from a competitor that was never compared, which routes the
+    // decision down the abstention path this function ALREADY has on the line below
+    // (`competitorPressure - 50`) instead of injecting a fabricated 0 into the mean.
+    //
+    // `marketPosition` is a closed three-value union with no representation for "unknown"
+    // (see `StrategicContext` in ./types.ts), and widening it would cascade through the
+    // PDF, export-renderer and canonical-report payloads owned by other workstreams. So
+    // the conservative option the EXISTING contract allows is the one taken here: abstain
+    // from the competitor-delta evidence, do not invent a state. No new vocabulary, no new
+    // threshold, and the dimension order is preserved so a fully observed delta yields a
+    // bit-identical mean to the pre-fix code.
+    .map((delta) => averageNumber(
+      [delta.authority_score, delta.seo_coverage, delta.content_depth]
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value)),
+    ))
+    .filter((value): value is number => value != null);
   const avgDelta = competitorDeltas.length > 0 ? average(competitorDeltas) : competitorPressure - 50;
   const marketPosition: 'below market' | 'at parity' | 'ahead' =
     avgDelta >= 6 ? 'below market' : avgDelta <= -4 ? 'ahead' : 'at parity';
