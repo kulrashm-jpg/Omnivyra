@@ -249,13 +249,37 @@ export function buildSnapshotVisualIntelligence(params: {
   const competitorStandingValues = (params.competitorIntelligence.comparison?.competitors ?? []).map((entry) => {
     const deltas = entry.deltas_vs_company;
     if (!deltas) return null;
-    const avgDelta = averageNumber([
-      Number(deltas.content_depth ?? 0),
-      Number(deltas.authority_score ?? 0),
-      Number(deltas.seo_coverage ?? 0),
-      Number(deltas.geo_presence ?? 0),
-      Number(deltas.aeo_readiness ?? 0),
-    ].filter((value) => Number.isFinite(value)));
+    // WP-15 — UNAVAILABLE IS NOT MEASURED ZERO.
+    //
+    // THE DEFECT. These five dimensions were read as `Number(deltas.<dim> ?? 0)`, and the
+    // `Number.isFinite` filter that followed looked like it protected the average. It did not:
+    // `?? 0` runs FIRST, so a null dimension became the number 0, and 0 IS finite. The filter
+    // could only ever drop a NaN that `Number()` produced from a non-numeric value — never a
+    // missing dimension. The average therefore gained a fabricated parity reading in its
+    // numerator while its denominator stayed 5 no matter how little had actually been observed.
+    //
+    // WHY IT BITES HERE SPECIFICALLY. `geo_presence` is `number | null` in the canonical
+    // `ComparisonMetrics` precisely because no page crawl can establish it, and `subtractMetrics`
+    // nulls any delta whose two operands are not both numeric — so on a real competitive
+    // baseline this dimension is null on EVERY competitor. Four genuine deltas were summed and
+    // divided by five, pulling every standing 1/5 of the way toward parity before
+    // `clamp(parity − avgDelta × slope)` ever saw it: a competitor genuinely 10 points ahead
+    // across the four observed axes was published as 8 ahead.
+    //
+    // THE CONTRACT. Average only the dimensions carrying genuine numeric evidence, over a
+    // denominator equal to that observed count. When none of them does, `averageNumber` returns
+    // null for the empty set and this entry drops out — the repository's existing abstention
+    // route, which leaves `competitor_intelligence_score` null at `insufficient_signal` instead
+    // of publishing a fabricated parity 60. The scoring anchors are untouched, and an entry with
+    // all five dimensions observed yields exactly the value it yielded before.
+    const observedDeltas = [
+      deltas.content_depth,
+      deltas.authority_score,
+      deltas.seo_coverage,
+      deltas.geo_presence,
+      deltas.aeo_readiness,
+    ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const avgDelta = averageNumber(observedDeltas);
     if (avgDelta == null) return null;
     // BETA-EXEC-001 (audit E): delta-derived CONTINUOUS standing, replacing the former fixed
     // 35/80/60 buckets. avgDelta = the competitor's average lead over us across the 5 measured
