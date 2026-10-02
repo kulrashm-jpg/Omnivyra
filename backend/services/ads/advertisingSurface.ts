@@ -19,6 +19,11 @@ export function buildAdvertisingSurface(params: {
   const toRecord = (
     entry: AdsObservationResult['advertisers'][number],
   ): SnapshotAdvertiserRecord => ({
+    // WP-1 — carried per record as well as on the surface. A surface describes ONE observation, so
+    // today both always agree; the record-level field is what lets a later renderer group or label
+    // advertisers once observations from more than one platform can be presented together, without
+    // the surface contract having to change again at that point.
+    platform: observation.platform,
     advertiserId: entry.observation.advertiserId,
     legalName: entry.observation.legalName,
     basedIn: entry.observation.basedIn,
@@ -41,6 +46,11 @@ export function buildAdvertisingSurface(params: {
     .map(toRecord);
 
   return {
+    // WP-1 — the platform this surface is about, taken from the observation rather than assumed by
+    // the renderer. `source` stays `ads_transparency`: that is the evidence SURFACE key the
+    // provenance map and the canonical report type already use, and it is a different dimension
+    // from which platform was advertised on.
+    platform: observation.platform,
     accessState: observation.accessState,
     reason: observation.reason,
     source: 'ads_transparency',
