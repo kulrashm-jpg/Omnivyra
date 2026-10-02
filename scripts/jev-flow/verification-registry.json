@@ -1,0 +1,40 @@
+{
+  "schema": "gov-registry/1",
+  "entries": [
+    {
+      "id": "jev.unit",
+      "description": "JEV/BJC/Jira/gov unit tests (backend/tests/unit/jev*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/jev"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 600000
+    },
+    {
+      "id": "scripts.typecheck",
+      "description": "TypeScript typecheck of scripts/, backend/ and lib/ (tsconfig.scripts.json, non-incremental)",
+      "argv": ["node", "node_modules/typescript/bin/tsc", "-p", "tsconfig.scripts.json", "--noEmit", "--incremental", "false"],
+      "evidence_kind": "typecheck",
+      "timeout_ms": 900000
+    },
+    {
+      "id": "pi-score.unit",
+      "description": "Prospect Intelligence scoring provenance unit tests (backend/tests/unit/piScore*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/piScore"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 600000
+    },
+    {
+      "id": "pi-score.digest",
+      "description": "PI governed scoring-surface digest gate (scripts/ci/scoring-surface-digest.js)",
+      "argv": ["node", "scripts/ci/scoring-surface-digest.js"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 120000
+    },
+    {
+      "id": "report1.unit",
+      "description": "Report 1 unit tests (backend/tests/unit/report1*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/report1"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 900000
+    }
+  ]
+}
