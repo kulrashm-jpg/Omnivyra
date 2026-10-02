@@ -801,6 +801,16 @@ export type CanonicalReport = {
    *  signals; distinct from the Authority Index. Optional for backward compatibility. */
   evidence_readiness?: import('./reportEvidenceReadiness').EvidenceReadiness;
 
+  /**
+   * B7 (WP-10) — market / ICP RECOMMENDATION, on public evidence only.
+   *
+   * A proposal a human reads and may choose to act on: never a ratified ICP, never a Company
+   * Profile change, never a prospect list. `kind` is the literal `'proposal'` so no consumer can
+   * read it as a decision. Each attribute states observed vs inferred and abstains where public
+   * evidence does not support it. Optional for backward compatibility.
+   */
+  market_icp_recommendation?: import('./reportMarketRecommendation').MarketIcpRecommendation;
+
   explanations: {
     authority_overall: import('../intelligence/explainabilityEngine').Explanation;
     pillars: Array<{ pillar: PillarKey; explanation: import('../intelligence/explainabilityEngine').Explanation }>;

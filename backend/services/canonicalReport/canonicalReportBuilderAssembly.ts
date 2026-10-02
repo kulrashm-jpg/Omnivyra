@@ -34,6 +34,9 @@ import { resolveReportRoiDeterminability } from './reportRoiDeterminability';
 import { resolveTrajectoryProvenance, resolveCompetitorProvenance } from './reportProvenance';
 import { resolveOverrideTransparency } from './reportOverrideTransparency';
 import { resolveEvidenceReadiness } from './reportEvidenceReadiness';
+// B7 (WP-10): public-evidence market / ICP PROPOSAL. Pure functions over values already held —
+// no provider call, no query, no write. See `reportMarketRecommendation.ts`.
+import { collectMarketIcpEvidence, resolveMarketIcpRecommendation } from './reportMarketRecommendation';
 // BETA-EXEC-004: deterministic engine-evidence contract for evidence-driven dimension rationales.
 import {
   type EngineEvidenceInput,
@@ -962,6 +965,26 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   // BETA-EVIDENCE-EXEC-002: compose the evidence-readiness governance summary from already-computed signals
   // (dimension states, AI coverage, scan metadata, maturity). Reads only — no scoring/evidence change.
   reportShape.evidence_readiness = resolveEvidenceReadiness(reportShape);
+
+  // B7 (WP-10): the market / ICP PROPOSAL. Composed from evidence this run already holds — the
+  // Organization country the site itself publishes, and the publicly observed competitor set.
+  //
+  // What is deliberately NOT fed in:
+  //   • `options.category` / the benchmark vertical — that value originates in the tenant's Company
+  //     Profile. A company-declared industry entering a public report as an observation is exactly
+  //     the leak the provenance boundary exists to stop, so the industry attribute abstains instead.
+  //   • locale codes — the crawl records `hreflang_count` but not the region subtags, so there is
+  //     nothing to read. The resolver's locale path stays available for a producer that emits them.
+  //
+  // This is a read and a pure computation. It writes nothing: no Company Profile mutation, no ICP
+  // ratification, no `prospect_icp_versions` row, no prospect.
+  reportShape.market_icp_recommendation = resolveMarketIcpRecommendation(
+    collectMarketIcpEvidence({
+      declaredEvidence: reportShape.declared_evidence ?? null,
+      competitiveTables: snapshot.competitive_tables ?? null,
+      observedAt: tenantContext.request_at ?? null,
+    }),
+  );
 
   return reportShape;
 }
