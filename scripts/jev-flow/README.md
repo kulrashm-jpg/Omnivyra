@@ -8,6 +8,22 @@ Builds on Phase 2: BJC bounded judgment (`scripts/jev-bjc/`) and the Jira orches
 node node_modules/tsx/dist/cli.mjs scripts/jev-flow/cli.ts <verb> ...   # referred to below as `gov`
 ```
 
+**Where to run it from.** The relative form above works only inside a checkout that contains
+`scripts/jev-flow/` (the tooling branch, or `main` once the tooling is merged). A governed product
+worktree created from a base that predates the tooling (for example today's `origin/main`) does
+not contain it, so there invoke the tooling checkout by absolute path — every path gov needs is
+passed explicitly (`--worktree`, `--repo`), and `attach --worktree` defaults to the current
+directory:
+
+```sh
+node <TOOLING>/node_modules/tsx/dist/cli.mjs <TOOLING>/scripts/jev-flow/cli.ts <verb> ...
+```
+
+`<TOOLING>` is the absolute path of a checkout of the tooling branch. The verification registry
+is read from that checkout; registry commands run inside the governed worktree, which therefore
+needs its own `node_modules` (e.g. a junction `cmd /c mklink /J <worktree>\node_modules <repo>\node_modules`
+— gov prints it but never creates it).
+
 **Jira is the work authority. Deterministic evidence is authoritative. JEV is advisory.**
 gov runs only when a person (or Claude Code acting on a person's request) invokes it. There are
 no hooks, no `claude-jev` routing, no automatic JEV invocation and no background orchestration.
@@ -26,12 +42,12 @@ gate, merge, release, deploy) to a human.
 
 | Verb | Purpose | Writes |
 |---|---|---|
-| `gov start --story OMNI-n --slug <slug> [--base <ref>] [--worktree-root <dir>]` | Readiness gate; creates a governed worktree and branch `omni-n/<slug>` from the recorded base commit; stores the packet; binds a **new** session id; prints the exact `claude --session-id <uuid> --add-dir <packetdir> "@<packet.md> …"` command. Launches nothing. | worktree, `GOV_HOME` |
-| `gov attach --story OMNI-n --session <uuid> [--worktree <path>] [--fork]` | Readiness; fingerprints the existing transcript (read-only, never rewritten); requires a clean governed worktree whose HEAD descends from the base; binds; prints the resume commands. | `GOV_HOME` |
-| `gov packet --story OMNI-n --worktree <path>` | (Re)generates and displays the deterministic packet; reports `STALE` when Jira changed. | `GOV_HOME` |
+| `gov start --story OMNI-n --slug <slug> --repo <git repo> [--base <ref>] [--worktree-root <dir>]` | Readiness gate; resolves `--base` (default `origin/main`) in `--repo` to a full commit; creates the governed worktree `<root>/omni-n-<slug>` (default root `C:/tmp`) on branch `omni-n/<slug>`; stores the packet; binds a **new** session id; prints the exact `claude --session-id <uuid> --add-dir <packetdir> "@<packet.md> …"` command. Launches nothing. | worktree, `GOV_HOME` |
+| `gov attach --story OMNI-n --session <uuid> [--worktree <path>] [--base <ref>] [--fork]` | Readiness; fingerprints the existing transcript (read-only, never rewritten); requires a clean worktree on a named branch; base = `--base`, else the earlier binding's base, else **existing-work adoption** (see below); binds; prints the resume commands. `--worktree` defaults to the current directory. | `GOV_HOME` |
+| `gov packet --story OMNI-n --worktree <path> [--regenerate]` | Displays the bound packet; reports `STALE` (exit 12) when Jira or the registry changed. `--regenerate` stores a fresh packet for the same base and re-binds the same session. | `GOV_HOME` with `--regenerate` |
 | `gov verify --story OMNI-n --worktree <path>` | Runs the Story's registry commands and the scope check on a clean, committed HEAD; stores the evidence bundle; prints its hash. | `GOV_HOME` |
-| `gov judge --story OMNI-n --worktree <path> --evidence <sha256:…> --invoked-by <human\|claude-code>:<id> [--write-back]` | BJC + bounded JEV advisory per AC. `--write-back` writes only the four advisory fields (human-run). Never transitions Jira. | `GOV_HOME`; Jira advisory fields with `--write-back` |
-| `gov submit --story OMNI-n --evidence <sha256:…>` | Prints the values a **human** records in Jira. | nothing |
+| `gov judge --story OMNI-n --worktree <path> --evidence <sha256:…> --invoked-by <human\|claude-code>:<id> [--write-back] [--model <id>]` | BJC + bounded JEV advisory per AC. `--write-back` writes only the four advisory fields (human-run). Never transitions Jira. | `GOV_HOME`; Jira advisory fields with `--write-back` |
+| `gov submit --story OMNI-n --evidence <sha256:…> [--worktree <path>]` | Prints the values a **human** records in Jira. | nothing |
 | `gov check-merge --story OMNI-n --worktree <path> --evidence <sha256:…>` | Deterministic merge gate for a human or CI. Fails closed. Never merges. | nothing |
 
 Exit codes: `0` OK · `10` NOT_READY · `11` REFUSED · `12` STALE · `13` INTEGRITY_FAILED ·
@@ -50,22 +66,25 @@ Exit codes: `0` OK · `10` NOT_READY · `11` REFUSED · `12` STALE · `13` INTEG
 ## Normal workflow
 
 1. A human creates the Story and its Acceptance Criteria in Jira (see *What makes a Story READY*).
-2. `gov start` (new work) or `gov attach` (an existing Claude conversation).
+2. `gov start` (new work) or `gov attach` (an existing Claude conversation; existing *uncommitted*
+   work is first committed by a human as an adoption baseline — see *Adopting existing work*).
 3. The human launches Claude with the printed command. Claude reads the packet.
 4. Claude changes only Authorized Paths and commits with both trailers:
    ```
    Governed-By: OMNI-n
    Gov-Packet: sha256:<packet hash>
    ```
-5. `gov verify` → evidence bundle hash.
+5. `gov verify` → evidence bundle hash (zero commits after the base is allowed: the base itself is verified).
 6. Optional: `gov judge` for JEV advisory per AC (`--write-back` only when a human runs it).
 7. `gov submit` prints values; a human runs Record Result and Record Verification in Jira.
 8. `gov check-merge` (human or CI) → the human merges. Integration, release and deployment stay human.
+   An evidence-only Story whose work is already on `main` (a back-fill) has nothing to merge:
+   it ends at step 7, and `check-merge` correctly refuses a new-task binding with no governed commit.
 
 ### New task
 
 ```sh
-gov start --story OMNI-42 --slug report-export-fix [--base origin/main]
+gov start --story OMNI-42 --slug report-export-fix --repo <path to a checkout of the repo> [--base origin/main]
 ```
 
 Readiness runs first; on any finding nothing is created (`NOT_READY`). Otherwise gov records the
@@ -95,6 +114,44 @@ claude --resume <uuid> [--fork-session]
 ```
 
 then, inside the resumed conversation, type `@<packet.md>`.
+
+The base of an attach is chosen deterministically, never inferred from history:
+
+1. `--base <ref>` given → that commit (ordinary attach; every commit base..HEAD is governed).
+2. otherwise, an earlier binding for this Story and worktree → its base (and its adoption, if any).
+3. otherwise → **existing-work adoption**, below. If HEAD is not an adoption baseline, attach
+   refuses (exit 11) and says how to create one.
+
+### Adopting existing work (PRE_GOVERNANCE_ADOPTION_BASELINE)
+
+Work that was started before governance — often uncommitted in an existing worktree — enters
+governance in two explicit steps. gov never weakens the clean-tree rule and never adopts dirty work.
+
+1. **A human commits the existing work** on the worktree's branch, leaving a clean tree, with exactly
+   this trailer and **no** `Gov-Packet` trailer (the packet does not exist yet):
+   ```sh
+   git commit -m "<summary> (adoption baseline)" -m "Governed-By: OMNI-n"
+   ```
+2. **Attach with no `--base`** from that clean worktree:
+   ```sh
+   gov attach --story OMNI-n --session <uuid> [--worktree <path>]
+   ```
+   Requirements (any failure → exit 10/11, nothing written): Story READY, transcript found, named
+   branch, clean tree, HEAD carries `Governed-By: OMNI-n` (every value exactly the Story) and no
+   `Gov-Packet`. gov records HEAD as the packet base and in the binding as
+   `adoption: { baseline_commit, classification: PRE_GOVERNANCE_ADOPTION_BASELINE }`, and prints the
+   packet hash.
+
+Semantics:
+
+- The baseline and everything before it are **pre-governance**: recorded and classified, never
+  claimed to have been governed, and not inspected by `check-merge`.
+- Every commit **after** the baseline is governed and must carry both trailers:
+  `Governed-By: OMNI-n` and `Gov-Packet: sha256:<exact packet hash>`.
+- `gov verify` scopes and verifies only baseline..HEAD; with zero governed commits it verifies the
+  baseline itself.
+- Adoption **does not** create commits, write Jira, invoke JEV or modify Claude transcripts.
+- Re-running `attach` reuses the recorded baseline; `gov packet --regenerate` keeps it.
 
 - **Why `@packet.md` and not `--append-system-prompt`:** the packet becomes a visible, ordinary
   message in the transcript — auditable and identical to the new-task path. A system-prompt
@@ -196,8 +253,16 @@ reaches JEV.
 | Deployment | Human, per deploy discipline |
 
 `gov check-merge` passes only when: the binding exists; the packet hash matches; the evidence
-bundle hash matches; every commit base..HEAD carries `Governed-By: OMNI-n` and
-`Gov-Packet: sha256:…`; HEAD equals the bundle's HEAD; the deterministic result is PASS; scope is ok.
+bundle hash matches; HEAD equals the bundle's HEAD and the tree is clean; the deterministic result
+is PASS; scope is ok; and the commit rule holds:
+
+- **new task / `--base` attach:** at least one commit base..HEAD, every one carrying
+  `Governed-By: OMNI-n` and `Gov-Packet: sha256:…`;
+- **adopted Story:** the baseline equals the packet and binding base, is an ancestor of HEAD, and
+  carries exactly `Governed-By: OMNI-n` with no `Gov-Packet`; every commit after it carries exactly
+  `Governed-By: OMNI-n` and the exact `Gov-Packet` (zero governed commits is allowed).
+
+Any mismatch, ambiguity or git error fails closed (exit 13). check-merge never merges.
 
 ## Prohibited
 
@@ -216,7 +281,7 @@ bundle hash matches; every commit base..HEAD carries `Governed-By: OMNI-n` and
 | Status | Meaning | Recovery |
 |---|---|---|
 | `NOT_READY` (10) | Readiness findings | A human fixes the Story / ACs in Jira per each finding, then re-run. |
-| `REFUSED` (11) | Precondition failed (dirty tree, wrong base, unknown registry id, …) | Commit or clean the tree yourself — never via gov. Fix the named precondition. |
+| `REFUSED` (11) | Precondition failed (dirty tree, wrong base, unknown registry id, HEAD not an adoption baseline, …) | Commit or clean the tree yourself — never via gov. For existing work, create the human adoption-baseline commit (`Governed-By` only). Fix the named precondition. |
 | `STALE` (12) | Jira or registry changed after the packet | `gov packet`; hand the new packet to the session; use the new hash in trailers. |
 | `INTEGRITY_FAILED` (13) | Packet / evidence / HEAD hash mismatch (e.g. commits after verify) | Re-run `gov verify` on the current HEAD and use the new bundle hash. |
 | `VERIFICATION_FAILED` (14) | A registry command failed | Fix the code, commit, re-run `gov verify`. |

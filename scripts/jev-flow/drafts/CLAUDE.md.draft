@@ -10,7 +10,11 @@ to the Story's Authorized Paths, verification only through registry commands (`g
 every commit carrying `Governed-By: OMNI-n` and `Gov-Packet: sha256:<packet hash>`.
 
 This is explicit guidance only. There are no hooks and no automatic routing; the user enters
-governed work by running `gov` or the `/gov` skill.
+governed work by running `gov` or the `/gov` skill. Governance applies to a conversation only after
+`gov start` (new work) or `gov attach` (existing conversation) — an arbitrary older chat is not
+governed. Existing uncommitted work is adopted only after a human commits it as an adoption
+baseline (`Governed-By: OMNI-n`, no `Gov-Packet`); that baseline is classified
+PRE_GOVERNANCE_ADOPTION_BASELINE and only later commits are governed.
 
 ## Human-only actions
 
@@ -19,6 +23,7 @@ governed work by running `gov` or the `/gov` skill.
 - Record Result and Record Verification in Jira (`gov submit` only prints the values).
 - Gate Result and every Jira transition (Verify, Integrate, Release).
 - `gov judge --write-back`.
+- The adoption-baseline commit for existing work.
 - Merging, releasing and deploying (`gov check-merge` is a gate, not a merge).
 
 ## Prohibited
