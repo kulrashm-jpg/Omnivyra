@@ -22,7 +22,11 @@ node <TOOLING>/node_modules/tsx/dist/cli.mjs <TOOLING>/scripts/jev-flow/cli.ts <
 `<TOOLING>` is the absolute path of a checkout of the tooling branch. The verification registry
 is read from that checkout; registry commands run inside the governed worktree, which therefore
 needs its own `node_modules` (e.g. a junction `cmd /c mklink /J <worktree>\node_modules <repo>\node_modules`
-— gov prints it but never creates it).
+— gov prints it but never creates it). Registry entries that run jest also need this repository's
+non-production test-env placeholder: `backend/tests/setupEnv.ts` refuses to run without `.env.test`
+(or `.env.cert` / `.env`) in the worktree and never loads `.env.local` (production). A gitignored
+`.env.test` containing only a comment is sufficient. Without it every suite fails to start and
+`gov verify` correctly records `VERIFICATION_FAILED`.
 
 **Jira is the work authority. Deterministic evidence is authoritative. JEV is advisory.**
 gov runs only when a person (or Claude Code acting on a person's request) invokes it. There are
