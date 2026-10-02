@@ -28,7 +28,8 @@ import { validateRegistry } from '../../../scripts/jev-flow/registry';
 import { GOV_EXIT, runGov, type GovDeps } from '../../../scripts/jev-flow/cli';
 import { buildPacket } from '../../../scripts/jev-flow/packet';
 import { checkReadiness } from '../../../scripts/jev-flow/readiness';
-import { ADOPTION_CLASSIFICATION, govLayout, packetHash, type VerificationRegistry } from '../../../scripts/jev-flow/types';
+import { ADOPTION_CLASSIFICATION, govLayout, packetHash, type Sha256Ref, type VerificationRegistry } from '../../../scripts/jev-flow/types';
+import { loadBundle, storeBundle } from '../../../scripts/jev-flow/evidence';
 
 jest.setTimeout(180000);
 
@@ -579,5 +580,35 @@ describe('[Track A] ledger persistence of SessionBinding.adoption', () => {
     const v = await gov(ctx, ['verify', '--story', STORY, '--worktree', a.repo]);
     expect(v.code).toBe(0);
     expect((await checkMerge(ctx, a.repo, v.result.bundle_hash as string)).code).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------- adoption boundary (integration: pins AD5 / AD6 controls)
+
+describe('gov check-merge — adoption boundary controls', () => {
+  it('baseline no longer an ancestor of HEAD (history rewritten) → 13 on adoption-baseline, even with well-trailered commits', async () => {
+    const ctx = makeCtx();
+    const f = await adoptedFlow(ctx);
+    // Rewrite history: a governed-looking commit on top of the pre-governance commit, NOT containing the baseline.
+    sh(f.repo, 'checkout', '-q', f.preGov);
+    const rogue = commit(f.repo, { 'src/rogue.ts': 'export const rogue = 1;\n' }, ...good(f.packet));
+    sh(f.repo, 'branch', '-f', 'feature/adopt', rogue);
+    sh(f.repo, 'checkout', '-q', 'feature/adopt');
+    // gov verify would refuse (HEAD does not descend from the base); present a re-stored PASS bundle for the new HEAD.
+    const layout = govLayout(ctx.env);
+    const original = loadBundle(layout, STORY, f.bundle as Sha256Ref).bundle;
+    const forged = storeBundle(layout, { ...original, head_commit: rogue, scope: { ...original.scope, head_commit: rogue } });
+    const r = await checkMerge(ctx, f.repo, forged.bundle_hash);
+    expect(r.code).toBe(GOV_EXIT.INTEGRITY_FAILED);
+    expect(r.out.join('\n')).toMatch(/\[FAIL\] adoption-baseline: baseline [0-9a-f]{40} is not an ancestor of HEAD/);
+  });
+
+  it('ledger baseline tampered to another real ancestor commit → 13 on the baseline-equals-packet-base control', async () => {
+    const ctx = makeCtx();
+    const f = await adoptedFlow(ctx);
+    rewriteAdoption(ctx, { baseline_commit: f.preGov, classification: ADOPTION_CLASSIFICATION });
+    const r = await checkMerge(ctx, f.repo, f.bundle);
+    expect(r.code).toBe(GOV_EXIT.INTEGRITY_FAILED);
+    expect(r.out.join('\n')).toMatch(/\[FAIL\] adoption-baseline: adoption baseline does not equal the packet and binding base commit/);
   });
 });
