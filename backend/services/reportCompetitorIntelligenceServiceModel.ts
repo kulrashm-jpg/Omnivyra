@@ -177,7 +177,16 @@ export type CompetitorIntelligenceResult = {
     tier_3: DetectedCompetitor[];
   };
   comparison: {
+    /**
+     * WP-12 — the subject company's OWN observed baseline, derived from its own crawled public
+     * pages by the same seam that derives every competitor's metrics, or `null` when its site
+     * was not observed. `null` is "we did not observe this", never a score of zero.
+     */
     company: ComparisonMetrics | null;
+    /** WP-12 — `inferred` when the baseline came from the company's own crawl; `unavailable` otherwise. */
+    company_metrics_state?: ScoreState;
+    /** WP-12 — why the baseline is present or absent, in the producer's own words. */
+    company_metrics_basis?: string;
     competitors: CompetitorComparisonEntry[];
   };
   generated_gaps: CompetitorGap[];
@@ -300,15 +309,16 @@ const METRIC_KEYS: Array<keyof ComparisonMetrics> = [
   'aeo_readiness',
 ];
 
-const EMPTY_COMPARISON_METRICS: ComparisonMetrics = {
-  content_depth: 0,
-  authority_score: 0,
-  publishing_frequency: 0,
-  engagement_score: 0,
-  seo_coverage: 0,
-  geo_presence: 0,
-  aeo_readiness: 0,
-};
+/**
+ * WP-12 — `EMPTY_COMPARISON_METRICS` (all seven dimensions = 0) was REMOVED, not left unused.
+ *
+ * `enforceFinalCompetitorIntelligenceSync` used it as `comparison.company ?? EMPTY_COMPARISON_METRICS`,
+ * which turned "the subject's site was not observed" into a published baseline of zero on every
+ * dimension — a measurement claim that the company has no content, no authority, no SEO coverage
+ * and no answer readiness, against which every observed competitor is maximally ahead. That is
+ * exactly the null-coerced-to-zero the nullable contract exists to prevent, and `"strict": false`
+ * could not catch it because a `??` default is perfectly well typed. Absence now stays absent.
+ */
 
 export function toDetectedCompetitor(competitor: RankedCompetitor): DetectedCompetitor {
   return {
@@ -409,7 +419,10 @@ export function enforceFinalCompetitorIntelligenceSync(params: {
     market_alternatives: marketAlternatives,
     competitors_by_tier: groupCompetitorsByTier(finalCompetitors),
     comparison: {
-      company: params.result.comparison?.company ?? EMPTY_COMPARISON_METRICS,
+      // WP-12 — absence propagates as absence. Never a zeroed baseline.
+      company: params.result.comparison?.company ?? null,
+      company_metrics_state: params.result.comparison?.company_metrics_state,
+      company_metrics_basis: params.result.comparison?.company_metrics_basis,
       competitors: comparisonEntries,
     },
     generated_gaps: generatedGaps,

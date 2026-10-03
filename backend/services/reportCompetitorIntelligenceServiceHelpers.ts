@@ -1,5 +1,5 @@
 import type { ScoreState } from './snapshotReport/canonicalScoreState';
-import type { CompetitorCrawlOutcome, DomainCrawlSignals } from './competitor/competitorMetricsTypes';
+import type { ComparisonMetrics, CompetitorCrawlOutcome, DomainCrawlSignals } from './competitor/competitorMetricsTypes';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
@@ -32,15 +32,15 @@ import type { CompetitorDimensionScores, CompetitorDiscoverySource } from '../..
 type CompetitorClassification = 'direct_competitor' | 'seo_competitor' | 'authority_leader';
 type CompetitorSource = EngineCompetitorSource;
 
-type ComparisonMetrics = {
-  content_depth: number;
-  authority_score: number;
-  publishing_frequency: number;
-  engagement_score: number;
-  seo_coverage: number;
-  geo_presence: number;
-  aeo_readiness: number;
-};
+/**
+ * WP-12 — this module carried its OWN `ComparisonMetrics` declaration in which all seven
+ * dimensions were plain `number`. That duplicate silently contradicted the canonical leaf type,
+ * where `publishing_frequency`, `engagement_score` and `geo_presence` are `number | null`, and
+ * it is the type `subtractMetrics` and `averageCompetitorMetrics` below are written against —
+ * the two functions whose whole job is to keep a missing dimension missing. With
+ * `"strict": false` the contradiction produced no diagnostic at all. The duplicate is gone; the
+ * canonical type is imported from the leaf module.
+ */
 
 export type DetectedCompetitor = {
   name: string;
@@ -140,7 +140,10 @@ export type CompetitorIntelligenceResult = {
     tier_3: DetectedCompetitor[];
   };
   comparison: {
-    company: ComparisonMetrics;
+    /** WP-12 — NULL when the subject's own site was not observed. Never a zeroed baseline. */
+    company: ComparisonMetrics | null;
+    company_metrics_state?: ScoreState;
+    company_metrics_basis?: string;
     competitors: CompetitorComparisonEntry[];
   };
   generated_gaps: CompetitorGap[];
@@ -1049,11 +1052,20 @@ export function countCategory(decisions: PersistedDecisionObject[], category: st
  * output is no output.
  *
  * Returning `null` is the same `unavailable` convention D8 already established for a competitor
- * nobody observed (`metrics: ComparisonMetrics | null`). This function is KEPT, not deleted: it
- * is the seam where a genuinely observed company baseline belongs once public evidence supports
- * one, and the four crawl-derived dimensions are already computed for competitors from their own
- * pages by `resolveCompetitorMetrics` — the same treatment applied to the subject's own domain
- * would be a real baseline.
+ * nobody observed (`metrics: ComparisonMetrics | null`).
+ *
+ * ─── WP-12 — THE REAL BASELINE NOW EXISTS ELSEWHERE ───────────────────────────────────────
+ * The successor this comment anticipated has been built: `resolveCompanyComparisonBaseline` in
+ * the engine crawls the subject's OWN domain with the same crawler and the same reference
+ * keywords used for competitors, and `resolveCompanyMetrics` in the D8 seam maps those signals
+ * with the same derivation. The asynchronous report path uses that and does not call this
+ * function at all.
+ *
+ * This function survives ONLY for the synchronous path, which performs no crawl and therefore
+ * observes nothing — not the competitors, and not the company. `null` is the correct answer
+ * there and remains the only answer this function can give: no input it receives (decision
+ * counts, profile presence booleans) is an observation of the company, which is precisely why
+ * REMEDIATION-003 emptied it. It must never be refilled.
  */
 export function computeCompanyMetrics(_params: {
   decisions: PersistedDecisionObject[];

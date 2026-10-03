@@ -12,14 +12,20 @@ type ReportSectionsShape = {
   }>;
 };
 
+/**
+ * WP-12 — a delta dimension is `number | null`. `null` means the comparison could not be made
+ * on that dimension (one or both sides unobserved), which is what `subtractMetrics` emits for
+ * publishing cadence, engagement and geographic footprint on EVERY report: no page crawl
+ * observes them on either side.
+ */
 type ComposedDelta = {
-  content_depth?: number;
-  authority_score?: number;
-  publishing_frequency?: number;
-  engagement_score?: number;
-  seo_coverage?: number;
-  geo_presence?: number;
-  aeo_readiness?: number;
+  content_depth?: number | null;
+  authority_score?: number | null;
+  publishing_frequency?: number | null;
+  engagement_score?: number | null;
+  seo_coverage?: number | null;
+  geo_presence?: number | null;
+  aeo_readiness?: number | null;
 };
 
 type ComposedSection = {
@@ -80,18 +86,31 @@ export function sortReportActions<T extends { priorityType: PriorityType; impact
  * states parity — a positive finding — on no evidence at all. When the competitor was
  * never observed the table now says so instead.
  */
+/**
+ * WP-12 — the standing verdict averages ONLY the dimensions that were actually compared.
+ *
+ * It previously read every dimension as `Number(delta.x ?? 0)` and divided by a fixed 7. Three
+ * of those seven — publishing cadence, engagement, geographic footprint — are null on every
+ * real report, because no page crawl observes them on either side. Counting them as zeroes
+ * pulled every verdict 3/7 of the way toward "At Par": a competitor genuinely 14 points ahead
+ * on all four observed dimensions scored 8, landing a hair from being called parity, and one 12
+ * points ahead was reported as "At Par" outright. Absence was being published as evidence of
+ * equality. Only compared dimensions count now, and when none was compared there is no verdict.
+ */
 export function buildCompetitorStanding(delta?: ComposedDelta): 'Behind' | 'At Par' | 'Ahead' | 'Not Observed' {
   if (!delta) return 'Not Observed';
-  const values = [
-    Number(delta.content_depth ?? 0),
-    Number(delta.authority_score ?? 0),
-    Number(delta.publishing_frequency ?? 0),
-    Number(delta.engagement_score ?? 0),
-    Number(delta.seo_coverage ?? 0),
-    Number(delta.geo_presence ?? 0),
-    Number(delta.aeo_readiness ?? 0),
-  ];
-  const averageDelta = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const compared = [
+    delta.content_depth,
+    delta.authority_score,
+    delta.publishing_frequency,
+    delta.engagement_score,
+    delta.seo_coverage,
+    delta.geo_presence,
+    delta.aeo_readiness,
+  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  // Every dimension unavailable: nothing was compared, so no verdict may be stated.
+  if (compared.length === 0) return 'Not Observed';
+  const averageDelta = compared.reduce((sum, value) => sum + value, 0) / compared.length;
   if (averageDelta >= 8) return 'Behind';
   if (averageDelta <= -6) return 'Ahead';
   return 'At Par';
