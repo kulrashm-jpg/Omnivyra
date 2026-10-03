@@ -107,6 +107,7 @@ import { buildSeoExecutiveSummary } from './snapshotReport/seoExecutiveSummaryHe
 import {
   buildCompetitorIntelligenceSummary,
   buildCompetitorVisuals,
+  deriveUserRadarAxisValues,
 } from './snapshotReport/competitorSummaryHelpers';
 import { buildCompetitiveSnapshotReport } from './reportCompetitorStrategyService';
 import { buildUnifiedIntelligenceSummary } from './snapshotReport/unifiedSummaryHelpers';
@@ -452,6 +453,10 @@ export async function composeSnapshotReportFromDecisions(params: {
   const competitorIntelligenceSummary = buildCompetitorIntelligenceSummary({
     competitorIntelligence,
     competitorVisuals,
+    // WP-13 — the honest company baseline, not the flattened radar wire shape. Derived by the
+    // same exported function `buildCompetitorVisuals` uses, so the drawn shape and the stated
+    // gaps cannot describe different baselines.
+    userAxisValues: deriveUserRadarAxisValues({ visualIntelligence, geoAeoVisuals }),
     narrativeContext,
   });
   const competitiveSnapshot = buildCompetitiveSnapshotReport(competitorIntelligence);
