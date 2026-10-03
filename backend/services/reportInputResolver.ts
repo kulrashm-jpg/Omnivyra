@@ -661,9 +661,20 @@ export async function persistReportInputsWithoutProfileMutation(input: ResolvedR
 }
 
 /**
- * LEGACY, MUTATING persist — retained for the analytics report categories (performance / growth),
- * which are outside WP-11's scope. Report 1 (snapshot) no longer reaches it: see
- * `persistReportInputsWithoutProfileMutation` above and `snapshotInputResolver.ts`.
+ * LEGACY, MUTATING persist — NO PRODUCTION CALLER REMAINS.
+ *
+ * WP-11 removed Report 1 (snapshot) from this path; WP-C (pre-T3) removed Reports 2/3
+ * (performance / growth) — see `analyticsInputResolver.persistAnalyticsReportInputs`. All three
+ * report categories now persist through `persistReportInputsWithoutProfileMutation` above.
+ *
+ * It is retained, byte-unchanged, ONLY as the pinned NEGATIVE CONTROL for the mutation guards:
+ * `backend/tests/unit/wp11ReportProfileMutationGuard.test.ts` (case G) and
+ * `backend/tests/unit/wpcReports23ProfileMutationGuard.test.ts` (case G) replay every guard
+ * assertion against this function and prove it FAILS them — which is what makes those guards
+ * tripwires rather than restatements of today's behaviour. Deleting it makes both suites vacuous.
+ *
+ * Do NOT wire it back into a report path. `wpcReports23ProfileMutationGuard.test.ts` case H scans
+ * the three resolver source files and fails if any of them calls it again.
  */
 export async function persistResolvedReportInputs(input: ResolvedReportInput): Promise<void> {
   const socialProfiles = buildPersistedSocialProfiles(input);
