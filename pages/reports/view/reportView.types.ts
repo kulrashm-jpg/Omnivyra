@@ -109,6 +109,15 @@ export interface ReportData {
   systemMaturity: SystemMaturityClass;
   // Canonical Architecture Consolidation (Phase 2): single source of truth.
   canonical: import('../../../backend/services/canonicalReport/canonicalReportTypes').CanonicalReport | null;
+  /**
+   * WP-9 / PO-3 — publicly observed advertising, partitioned by resolved advertiser identity.
+   *
+   * `/api/reports/[reportId]` has been sending this since PO-3 (`ReportViewPayload.advertising`),
+   * but the client-side `ReportData` did not declare it, so no React surface could reach it
+   * without an `any`. Optional and nullable because a report that carries no observation must be
+   * able to render nothing rather than assert an absence.
+   */
+  advertising?: import('../../api/reports/reportViewPayloadTypes').ReportViewAdvertising | null;
   scoreExplanation?: {
     dimensions: {
       key: string;
