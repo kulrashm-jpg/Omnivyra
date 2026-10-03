@@ -30,6 +30,8 @@ import {
   type ObservedAdvertiser,
   type SubjectIdentity,
 } from '../../services/ads/advertiserIdentityResolver';
+// WP-2 — the ISO/name canonicalisation this suite's jurisdiction assertion now depends on.
+import { countriesEquivalent } from '../../utils/countryNormalization';
 
 /**
  * The whole mapping, in one place. Five Microsoft fields -> five `ObservedAdvertiser` fields.
@@ -124,12 +126,27 @@ describe('WP-16 — Microsoft Ad Library evidence against the unchanged resolver
     });
   });
 
-  it('an ISO-3166 addressCountry silently caps a correct match at PROBABLE_MATCH (CONSTRUCTED subject jurisdiction)', () => {
+  it('an ISO-3166 addressCountry no longer caps a correct match — WP-2 closed it (CONSTRUCTED subject jurisdiction)', () => {
     // CONSTRUCTED: `jurisdiction: 'IL'` is not what wix.com declares — it is the shape a JSON-LD
     // `addressCountry` normally takes (hubspot.com's measured value is the ISO code "US"). The
-    // advertiser row is measured. `jurisdictionsAgree` deliberately does not expand ISO codes, so
-    // 'IL' !== 'israel' and a correct, verified, exactly-matching identity is DOWNGRADED. This is
-    // a pre-existing resolver property, not a Microsoft one, and it is the practical ceiling.
+    // advertiser row is measured.
+    //
+    // WHAT THIS TEST USED TO PIN, AND WHY IT CHANGED.
+    // WP-16 originally characterised a DEFECT here: `jurisdictionsAgree` compared raw strings, so
+    // 'IL' !== 'Israel' and a correct, verified, exactly-matching identity was DOWNGRADED to
+    // PROBABLE_MATCH — losing `eligibleForCompanyClaim` and landing in `otherAdvertisers`, i.e.
+    // the company's own advertising reported as somebody else's. WP-16 recorded it as a
+    // pre-existing RESOLVER property, affecting Google identically, and explicitly refused to
+    // patch it inside a provider spike.
+    //
+    // WP-2 then fixed exactly that, by canonicalising both sides through ICU region data
+    // (`backend/utils/countryNormalization.ts`) before comparison. This assertion therefore now
+    // pins the CORRECTED behaviour. It is deliberately NOT deleted: the ISO-vs-name shape is the
+    // single most likely way this regression returns, and the Microsoft surface is where it was
+    // found — `AdvertiserCountry` is always a full English name while JSON-LD gives a code.
+    //
+    // THIS TEST DEPENDS ON WP-2. Without `countriesEquivalent` it fails, which is correct: the
+    // guarantee it states does not exist without that fix.
     const subject: SubjectIdentity = {
       declaredLegalName: 'Wix.com Ltd',
       brandName: 'Wix',
@@ -137,8 +154,13 @@ describe('WP-16 — Microsoft Ad Library evidence against the unchanged resolver
       wikidataDomainVerified: false,
     };
     const resolution = resolveAdvertiserIdentity(subject, fromMicrosoft(MS_WIX));
-    expect(resolution.state).toBe('PROBABLE_MATCH');
-    expect(resolution.eligibleForCompanyClaim).toBe(false);
+    expect(resolution.state).toBe('MATCHED');
+    expect(resolution.eligibleForCompanyClaim).toBe(true);
+    // The corroboration must come from the jurisdiction actually agreeing, not from the gate
+    // being skipped: a resolution that simply ignored an unparseable country would also reach
+    // MATCHED here, and that would be a different, weaker guarantee.
+    expect(countriesEquivalent('IL', 'Israel')).toBe(true);
+    expect(countriesEquivalent('IL', 'United States')).toBe(false);
   });
 
   it('one legal entity holding several verified accounts yields several MATCHED records (CONSTRUCTED subject)', () => {
