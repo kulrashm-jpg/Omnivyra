@@ -22,6 +22,60 @@ import {
   type SubjectIdentity,
 } from './advertiserIdentityResolver';
 
+/**
+ * ─── THE PLATFORM DIMENSION (WP-1) ────────────────────────────────────────
+ * Which advertising platform an observation was made on. Before this existed, every observation
+ * was Google by assumption: there was no field for it anywhere in the model, and the only reason a
+ * reader knew the evidence was Google was that the only client ever written happened to be.
+ *
+ * The union has exactly ONE member on purpose. Adding a platform is not a typing change: it
+ * requires a client that can observe that platform, so a second member here without one would be
+ * a promise the acquisition cannot keep — and an exhaustiveness check that silently stopped
+ * meaning anything. Nothing infers a platform from data; a platform is DECLARED by the client
+ * that made the observation.
+ */
+export type AdsPlatform = 'google';
+
+/** Google, observed through the public Ads Transparency Center. The only platform implemented. */
+export const ADS_PLATFORM_GOOGLE: AdsPlatform = 'google';
+
+/** Every platform this build can observe or interpret. */
+export const KNOWN_ADS_PLATFORMS: readonly AdsPlatform[] = [ADS_PLATFORM_GOOGLE];
+
+/**
+ * How an observation that carries NO platform is interpreted.
+ *
+ * ─── WHY THIS IS HONEST RATHER THAN ASSUMED ───────────────────────────────
+ * Every advertising observation ever persisted predates this field, and every one of them was
+ * made by `createAdsTransparencyBrowserClient` against `adstransparency.google.com` — the single
+ * client in the repository, driven by the single acquisition cycle, which is the only writer of
+ * `scope.kind = 'ads_transparency'`. A platform-less row therefore IS a Google observation as a
+ * matter of record, not of convenience. The rule is stated once, here, applied through
+ * {@link resolveObservedPlatform}, and tested — rather than being re-assumed at each read site.
+ */
+export const LEGACY_ADS_PLATFORM: AdsPlatform = ADS_PLATFORM_GOOGLE;
+
+/** Whether a value is a platform THIS build understands. */
+export function isAdsPlatform(value: unknown): value is AdsPlatform {
+  return typeof value === 'string' && (KNOWN_ADS_PLATFORMS as readonly string[]).includes(value);
+}
+
+/**
+ * Interpret a platform read back from storage.
+ *
+ *   • absent  → {@link LEGACY_ADS_PLATFORM} (the explicit legacy rule above)
+ *   • known   → itself
+ *   • unknown → `null`
+ *
+ * An unrecognised platform is deliberately NOT coerced to Google. A row written by a future build
+ * that observes another platform must not be served as Google evidence: that would be a
+ * fabricated attribution, which is exactly what the legacy rule is careful not to be.
+ */
+export function resolveObservedPlatform(value: unknown): AdsPlatform | null {
+  if (value === undefined || value === null || value === '') return LEGACY_ADS_PLATFORM;
+  return isAdsPlatform(value) ? value : null;
+}
+
 /** How the attempt to reach a public surface ended. Distinct from what the surface said. */
 export type AdsAccessState =
   | 'observed'
@@ -69,6 +123,12 @@ export interface DomainCandidateObservation {
  * and never to an absence of advertising.
  */
 export interface AdsTransparencyClient {
+  /**
+   * Which platform this client observes. REQUIRED, so the Google client declares itself Google
+   * instead of the model inferring it — the observation is stamped with what the client says,
+   * never with a default chosen by the orchestrator.
+   */
+  readonly platform: AdsPlatform;
   searchAdvertisers(name: string): Promise<AdvertiserSuggestion[]>;
   openAdvertiser(advertiserId: string): Promise<AdvertiserProfileObservation | null>;
   searchByDomain?(domain: string): Promise<DomainCandidateObservation>;
@@ -96,6 +156,8 @@ export interface AdsAdvertiserRecord {
 }
 
 export interface AdsObservationResult {
+  /** The platform this observation was made on, as declared by the client that made it. */
+  platform: AdsPlatform;
   accessState: AdsAccessState;
   /** Why, when the state is not `observed`. Never phrased as an absence of advertising. */
   reason: string | null;
@@ -135,7 +197,8 @@ export function accessStateFromError(error: unknown): { state: AdsAccessState; r
 }
 
 /**
- * Observe the company's publicly visible Google advertising.
+ * Observe the company's publicly visible advertising on the platform the injected client declares
+ * (today: Google, through the Ads Transparency Center — the only client that exists).
  *
  * Returns the resolver's verdict per advertiser. It deliberately does NOT return a company ad
  * count: that number exists only on an advertiser whose identity resolved to `MATCHED`, and the
@@ -148,7 +211,14 @@ export async function observePublicAdvertising(
   const observedAt = now().toISOString();
   const maxProfiles = Math.max(1, params.maxProfiles ?? DEFAULT_MAX_PROFILES);
 
+  // Declared by the client, on EVERY return path including the early failures: an observation that
+  // could not look is still an observation about a specific platform, and a reader must be able to
+  // tell which one could not be reached. The runtime fallback covers only an untyped (JavaScript)
+  // client predating this field, and applies the same stated legacy rule as the read side.
+  const platform = isAdsPlatform(params.client?.platform) ? params.client.platform : LEGACY_ADS_PLATFORM;
+
   const base = (over: Partial<AdsObservationResult>): AdsObservationResult => ({
+    platform,
     accessState: 'unavailable',
     reason: null,
     vantage: params.vantage,

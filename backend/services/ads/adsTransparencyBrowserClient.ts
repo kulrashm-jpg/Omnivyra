@@ -18,11 +18,12 @@
  * `adstransparency.google.com` served no robots.txt (HTTP 404) when checked on 2026-09-26, so no
  * crawl directive applies; the surface is used anonymously and at report cadence, not at scale.
  */
-import type {
-  AdsTransparencyClient,
-  AdvertiserProfileObservation,
-  AdvertiserSuggestion,
-  DomainCandidateObservation,
+import {
+  ADS_PLATFORM_GOOGLE,
+  type AdsTransparencyClient,
+  type AdvertiserProfileObservation,
+  type AdvertiserSuggestion,
+  type DomainCandidateObservation,
 } from './adsTransparencyObservation';
 
 /** The minimum Playwright surface this client uses. Typed structurally so no import is needed. */
@@ -99,6 +100,12 @@ export function parseSuggestionRow(raw: string): Omit<AdvertiserSuggestion, 'adv
 
 export function createAdsTransparencyBrowserClient(session: AdsBrowserSession): AdsTransparencyClient {
   return {
+    /**
+     * WP-1 — this client declares the platform it observes rather than being Google by assumption.
+     * It drives `adstransparency.google.com` and nothing else, so it says so, and every observation
+     * it produces is stamped `google` at the point the evidence is made.
+     */
+    platform: ADS_PLATFORM_GOOGLE,
     /**
      * Advertiser-name discovery, including the AR id.
      *

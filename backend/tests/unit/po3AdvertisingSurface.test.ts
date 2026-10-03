@@ -50,6 +50,8 @@ const profile = (over: Partial<AdvertiserProfileObservation> & { advertiserId: s
 /** A fake provider. Production supplies a browser-backed client on the Railway plane. */
 function fakeClient(over: Partial<AdsTransparencyClient> = {}): AdsTransparencyClient {
   return {
+    // WP-1 — a client declares the platform it observes. This fake stands in for the Google one.
+    platform: 'google',
     searchAdvertisers: async () => [],
     openAdvertiser: async () => null,
     ...over,

@@ -21,6 +21,8 @@
  */
 import { supabase } from '../../db/supabaseClient';
 import { classifyTenant, type TenantClass } from '../customerPopulationIntegrityService';
+import { adsRowPlatform } from './adsEvidenceStore';
+import { ADS_PLATFORM_GOOGLE, type AdsPlatform } from './adsTransparencyObservation';
 import type { AdsAcquisitionSubject } from './adsAcquisitionScheduler';
 
 const SUCCESS_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -107,9 +109,31 @@ export function decideAcquirability(company: {
 
 type EvidenceRow = {
   observed_at: string;
-  scope?: { kind?: string; domain_id?: string | null } | null;
+  scope?: { kind?: string; platform?: unknown; domain_id?: string | null } | null;
   signal_summary?: { accessState?: string } | null;
 };
+
+/**
+ * WP-1 — the history that bears on ONE platform's due decision. PURE.
+ *
+ * Due-ness is now per platform, because it always was in substance: a Google observation says
+ * nothing about whether another platform has been looked at. While Google is the only platform
+ * acquired for this is a no-op — legacy rows carry no `scope.platform` and `adsRowPlatform` reads
+ * them as Google, so the existing cadence is preserved exactly — but without it the first row from
+ * a second platform would silently suppress Google acquisition for a day.
+ */
+export function adsHistoryForPlatform(
+  rows: ReadonlyArray<EvidenceRow>,
+  params: { domainId: string; platform?: AdsPlatform },
+): Array<{ observedAt: string; accessState: string | null }> {
+  const platform = params.platform ?? ADS_PLATFORM_GOOGLE;
+  const domainId = params.domainId;
+  return rows
+    // Domain scoping is UNCHANGED and still strict: company-only filtering would let a previous
+    // domain's observation suppress the current one (R1-OPEN-01). Platform is an ADDITIONAL filter.
+    .filter((r) => adsRowPlatform(r.scope) === platform && (r.scope?.domain_id ?? null) === domainId)
+    .map((r) => ({ observedAt: r.observed_at, accessState: r.signal_summary?.accessState ?? null }));
+}
 
 /** Pure. Exported so the due rule is tested directly rather than through two database fakes. */
 export function isDue(params: {
@@ -230,10 +254,11 @@ async function loadCompanies(companyIds: string[]): Promise<Map<string, CompanyR
   return out;
 }
 
-/** Recent `ads_transparency` rows for THIS company and THIS domain. */
+/** Recent `ads_transparency` rows for THIS company, THIS domain and THIS platform. */
 async function loadHistory(
   companyId: string,
   domainId: string,
+  platform: AdsPlatform = ADS_PLATFORM_GOOGLE,
 ): Promise<Array<{ observedAt: string; accessState: string | null }>> {
   try {
     const { data, error } = await supabase
@@ -243,9 +268,7 @@ async function loadHistory(
       .order('observed_at', { ascending: false })
       .limit(25);
     if (error || !Array.isArray(data)) return [];
-    return (data as EvidenceRow[])
-      .filter((r) => r.scope?.kind === 'ads_transparency' && (r.scope?.domain_id ?? null) === domainId)
-      .map((r) => ({ observedAt: r.observed_at, accessState: r.signal_summary?.accessState ?? null }));
+    return adsHistoryForPlatform(data as EvidenceRow[], { domainId, platform });
   } catch {
     return [];
   }
