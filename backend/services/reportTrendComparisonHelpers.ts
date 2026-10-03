@@ -107,23 +107,6 @@ function normalizeCompetitorDomain(value: string | undefined | null): string {
   return value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
 }
 
-function averageRadarScore(item: {
-  content_score: number;
-  keyword_coverage_score: number;
-  authority_score: number;
-  technical_score: number;
-  ai_answer_presence_score: number;
-}): number {
-  const values = [
-    Number(item.content_score ?? 0),
-    Number(item.keyword_coverage_score ?? 0),
-    Number(item.authority_score ?? 0),
-    Number(item.technical_score ?? 0),
-    Number(item.ai_answer_presence_score ?? 0),
-  ];
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
 function movementFromDeltas(values: Array<number | null>): 'improving' | 'declining' | 'stable' {
   const averageDelta = averageNullable(values);
   if (averageDelta == null) return 'stable';
@@ -244,9 +227,32 @@ function findClosestCompetitor(payload: ReportViewPayloadLike): { domain: string
   return closest ? { domain: closest.domain, score: closest.score } : null;
 }
 
+/**
+ * WP-13 DEFECT #10 — the axes on which the COMPANY may be compared across two instants.
+ *
+ * #9 compared two sides at ONE instant, so "observed" could be read off one snapshot. #10
+ * compares ONE side at TWO instants, and an axis is only a temporal basis when it was usable at
+ * BOTH of them: the intersection, not the union, and not either snapshot's own set.
+ *
+ * Taking each snapshot's own observed set instead would reintroduce the defect in a subtler
+ * form — the two gaps would be means over DIFFERENT axis sets, so their difference would still
+ * mix a change of basis into what is published as a change of performance.
+ *
+ * Over one shared set S the published number is algebraically
+ *   mean_{a in S}( (competitor_now[a] - competitor_then[a]) - (company_now[a] - company_then[a]) )
+ * — a difference of real per-axis measurements on both sides, with no availability term in it.
+ */
+function comparableUserRadarAxes(
+  current: ReportViewPayloadLike,
+  previous: ReportViewPayloadLike,
+): UserRadarAxis[] {
+  const previousObserved = new Set(observedUserRadarAxes(previous));
+  return observedUserRadarAxes(current).filter((axis) => previousObserved.has(axis));
+}
+
 export function buildCompetitorMovementComparison(params: {
-  current: { reportId: string; competitorVisuals?: { competitorPositioningRadar?: any } };
-  previous: { reportId: string; competitorVisuals?: { competitorPositioningRadar?: any } };
+  current: ReportViewPayloadLike;
+  previous: ReportViewPayloadLike;
 }): any {
   const currentRadar = params.current.competitorVisuals?.competitorPositioningRadar;
   const previousRadar = params.previous.competitorVisuals?.competitorPositioningRadar;
@@ -271,6 +277,9 @@ export function buildCompetitorMovementComparison(params: {
 
   const previousCompetitors = previousRadar.competitors as any[];
   const currentCompetitors = currentRadar.competitors as any[];
+
+  // WP-13 DEFECT #10 — the single temporal basis for every competitor's gap change.
+  const comparableAxes = comparableUserRadarAxes(params.current, params.previous);
 
   const previousByDomain = new Map(
     previousCompetitors.map((competitor) => [normalizeCompetitorDomain(competitor.domain || competitor.name), competitor]),
@@ -298,9 +307,25 @@ export function buildCompetitorMovementComparison(params: {
         delta.ai_answer_delta,
       ]);
 
-      const currentGap = averageRadarScore(competitor) - averageRadarScore(currentRadar.user as any);
-      const previousGap = averageRadarScore(previousCompetitor as any) - averageRadarScore(previousRadar.user as any);
-      const gapChange = safeDelta(currentGap, previousGap);
+      // WP-13 DEFECT #10 — a gap change needs BOTH sides at BOTH instants. The company side is
+      // fenced by `comparableAxes`; the competitor side is fenced here, on the RAW value, for the
+      // same reason `safeDelta` already nulls a per-axis competitor delta when either end is
+      // absent. (`Number(x ?? 0)` would turn an absent competitor axis into a measured 0 on the
+      // very side the claim is made against.) Today every plotted competitor carries five finite
+      // numbers — `competitorEntriesEligibleForRadar` excludes an unobserved competitor wholesale
+      // — so this arm is a guard, not a behaviour change.
+      const gapAxes = comparableAxes.filter(
+        (axis) => isFiniteNumber(competitor?.[axis]) && isFiniteNumber(previousCompetitor?.[axis]),
+      );
+      // No axis is usable on both sides at both instants, so there is nothing to compare. This is
+      // the function's existing abstention: `gap_change: null` already drives `direction:
+      // 'unchanged'` and the "Insufficient matched history" narrative below.
+      const gapChange = gapAxes.length === 0
+        ? null
+        : safeDelta(
+            averageOverAxes(competitor, gapAxes) - averageOverAxes(currentRadar.user, gapAxes),
+            averageOverAxes(previousCompetitor, gapAxes) - averageOverAxes(previousRadar.user, gapAxes),
+          );
 
       return {
         domain,
@@ -351,8 +376,14 @@ export function buildCompetitorMovementComparison(params: {
         : direction === 'widening_gap'
           ? `${closest.domain} is pulling ahead (${Number(Math.abs(closest._gapChange).toFixed(1))} point wider gap).`
           : `Gap to ${closest.domain} is stable (${Number(closest._gapChange.toFixed(1)) >= 0 ? '+' : ''}${Number(closest._gapChange.toFixed(1))}).`;
+  // WP-13 DEFECT #10 — `partial` is the existing word for "comparable, but not on everything".
+  // A company axis usable in only one of the two snapshots narrows the temporal basis exactly as
+  // a missing competitor delta does, so it is reported the same way rather than passed off as a
+  // `complete` comparison. No new state: the three values and their renderers are unchanged.
+  const basisIsPartial = comparableAxes.length < USER_RADAR_AXES.length;
   const dataStatus: 'complete' | 'partial' | 'insufficient' =
-    matchedCompetitors.some((item: any) => Object.values(item.delta).some((value) => value == null))
+    basisIsPartial
+    || matchedCompetitors.some((item: any) => Object.values(item.delta).some((value) => value == null))
       ? 'partial'
       : 'complete';
 
