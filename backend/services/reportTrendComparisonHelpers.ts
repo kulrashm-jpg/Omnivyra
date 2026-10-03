@@ -10,6 +10,22 @@ type ReportViewPayloadLike = {
   } | null;
   unifiedIntelligenceSummary?: { unifiedScore?: number | null } | null;
   overallScore?: number;
+  // WP-13 DEFECT #9 — the UNFLATTENED sources of the company's five radar axes, already present on
+  // the view payload this module is handed. Read-only, and structural only: the published wire
+  // shape of `competitor_positioning_radar.user` is unchanged.
+  seoVisuals?: {
+    seoCapabilityRadar?: {
+      technical_seo_score?: number | null;
+      keyword_research_score?: number | null;
+      backlinks_score?: number | null;
+      content_quality_score?: number | null;
+    } | null;
+  } | null;
+  geoAeoVisuals?: {
+    aiAnswerPresenceRadar?: {
+      answer_coverage_score?: number | null;
+    } | null;
+  } | null;
 };
 
 type ReportViewCompetitorMovementComparison = {
@@ -133,6 +149,59 @@ function averageCompetitorScore(item: {
   return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
 }
 
+/**
+ * The five axes of the competitor positioning radar, in publication order.
+ *
+ * Mirrors `COMPETITOR_RADAR_AXES` in `snapshotReport/competitorSummaryHelpers.ts`, which is the
+ * canonical list; restated here so this read-path module does not pull the whole snapshot
+ * composition graph in for five strings.
+ */
+const USER_RADAR_AXES = [
+  'content_score',
+  'keyword_coverage_score',
+  'authority_score',
+  'technical_score',
+  'ai_answer_presence_score',
+] as const;
+
+type UserRadarAxis = (typeof USER_RADAR_AXES)[number];
+
+/**
+ * WP-13 DEFECT #9 — which radar axes the COMPANY was actually observed on.
+ *
+ * `competitor_positioning_radar.user` is the flattened wire shape: `buildCompetitorVisuals` writes
+ * `userAxisValues.<axis> ?? 0` for all five axes, deliberately, because widening the persisted
+ * shape is a wire change held out of scope (WP13_NULL_CONTRACT_DECISION §3.7/D8). A persisted 0 is
+ * therefore indistinguishable, ON ITS OWN, from "that axis was never observed".
+ *
+ * The distinguishing evidence is the UNFLATTENED source of each axis, carried in the same payload.
+ * These are exactly the five values `deriveUserRadarAxisValues` reads before flattening, and each
+ * is `number | null`, where `null` is the producers' `'unavailable'` / `'insufficient_signal'`
+ * state (`visualIntelligenceHelpers` leaves `backlinks_score` null unless an authority decision
+ * was actually measured, which is its documented steady state).
+ *
+ * The guard is on the RAW source value: `Number(null)` is `0` and `0` is finite, so coercing first
+ * and filtering after would re-create the collapse this exists to remove. A genuinely measured 0
+ * is a real score and stays in.
+ */
+function observedUserRadarAxes(payload: ReportViewPayloadLike): UserRadarAxis[] {
+  const seoRadar = payload.seoVisuals?.seoCapabilityRadar;
+  const aiRadar = payload.geoAeoVisuals?.aiAnswerPresenceRadar;
+  const sources: Record<UserRadarAxis, unknown> = {
+    content_score: seoRadar?.content_quality_score,
+    keyword_coverage_score: seoRadar?.keyword_research_score,
+    authority_score: seoRadar?.backlinks_score,
+    technical_score: seoRadar?.technical_seo_score,
+    ai_answer_presence_score: aiRadar?.answer_coverage_score,
+  };
+  return USER_RADAR_AXES.filter((axis) => isFiniteNumber(sources[axis]));
+}
+
+/** Mean of one radar shape over EXACTLY the given axes — one denominator, both sides. */
+function averageOverAxes(item: any, axes: readonly UserRadarAxis[]): number {
+  return axes.reduce((sum, axis) => sum + Number(item?.[axis] ?? 0), 0) / axes.length;
+}
+
 function findClosestCompetitor(payload: ReportViewPayloadLike): { domain: string; score: number } | null {
   const radar = payload.competitorVisuals?.competitorPositioningRadar;
   if (!radar || radar.competitors.length === 0) return null;
@@ -151,12 +220,24 @@ function findClosestCompetitor(payload: ReportViewPayloadLike): { domain: string
     }
   }
 
-  const userScore = averageCompetitorScore(radar.user);
+  // WP-13 DEFECT #9 — naming the closest competitor is a comparative claim, so the comparison runs
+  // over EXACTLY the axes the company was observed on, on both sides. Averaging the flattened
+  // `radar.user` over all five pulled the company's baseline toward 0 for every unobserved axis
+  // and systematically named a weaker competitor than the evidence supports. With no axis observed
+  // there is no baseline to compare against, so this abstains rather than guess — `competitor:
+  // null` is a state the timeline shape already carries and the renderers already handle.
+  //
+  // The competitor-side ranking policy, the published competitor `score` (its own full five-axis
+  // mean) and the movement-derived branch above are all unchanged.
+  const comparisonAxes = observedUserRadarAxes(payload);
+  if (comparisonAxes.length === 0) return null;
+
+  const userScore = averageOverAxes(radar.user, comparisonAxes);
   const closest = [...radar.competitors]
     .map((competitor: any) => ({
       domain: normalizeCompetitorDomain(competitor.domain || competitor.name) || competitor.name,
       score: averageCompetitorScore(competitor),
-      gapAbs: Math.abs(averageCompetitorScore(competitor) - userScore),
+      gapAbs: Math.abs(averageOverAxes(competitor, comparisonAxes) - userScore),
     }))
     .sort((left: any, right: any) => left.gapAbs - right.gapAbs)[0];
 
