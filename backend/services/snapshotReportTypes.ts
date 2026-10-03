@@ -1065,6 +1065,17 @@ export type SnapshotPlanItem = {
  * All counts are carried as the provider's own rounded LABELS (`~4K ads`), never as integers.
  */
 export type SnapshotAdvertising = {
+  /**
+   * WP-1 — WHICH advertising platform this surface describes.
+   *
+   * The model was structurally single-provider: no field named the platform anywhere, so every
+   * observation was Google because the only client was. This field makes that explicit. It is
+   * ADDITIVE: a renderer that ignores it behaves exactly as before, and one that adopts it can
+   * label or group by platform without any other part of the contract changing.
+   *
+   * Distinct from `source`, which names the evidence surface the observation came from.
+   */
+  platform: import('./ads/adsTransparencyObservation').AdsPlatform;
   /** How the attempt to reach the public surface ended — distinct from what it showed. */
   accessState: 'observed' | 'blocked' | 'restricted' | 'requires_auth' | 'unreachable' | 'unavailable';
   /** Why, when not `observed`. Never phrased as an absence of advertising. */
@@ -1089,6 +1100,13 @@ export type SnapshotAdvertising = {
 };
 
 export type SnapshotAdvertiserRecord = {
+  /**
+   * WP-1 — the platform this advertiser was observed on. Always equal to the containing surface's
+   * `platform` today, because one surface carries one observation. Present per record so that a
+   * future renderer can present advertisers from more than one platform in one list without a
+   * contract break.
+   */
+  platform: import('./ads/adsTransparencyObservation').AdsPlatform;
   advertiserId: string;
   legalName: string | null;
   basedIn: string | null;
