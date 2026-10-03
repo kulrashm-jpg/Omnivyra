@@ -184,8 +184,36 @@ export function renderSection7BacklinkAuthority(payload: PdfReportPayload, vars:
   }).slice(0, 3);
   const competitorVisuals = payload.competitorVisuals;
   const competitorRadar = competitorVisuals?.competitorPositioningRadar;
-  const authorityGap = competitorRadar?.competitors?.length
-    ? Math.round((competitorRadar.competitors.reduce((sum, item) => sum + Number(item.authority_score ?? 0), 0) / competitorRadar.competitors.length) - Number(competitorRadar.user.authority_score ?? 0))
+  // WP-13 DEFECT #6 - "Authority Gap Vs Competitors" is a comparative claim, and a comparison
+  // needs BOTH sides observed.
+  //
+  // `competitor_positioning_radar.user.authority_score` is the FLATTENED wire shape: its producer
+  // (`buildCompetitorVisuals`) writes `userAxisValues.authority_score ?? 0`, deliberately, because
+  // widening the persisted shape is a wire change held out of scope (WP13_NULL_CONTRACT_DECISION
+  // 3.7/D8), and the view mapper reads it back with `Number(... ?? 0)`. A persisted 0 is therefore
+  // indistinguishable, on its own, from "the company's authority was never observed" - so
+  // `competitorAverage - 0` published the competitors' entire average as a measured gap.
+  //
+  // Zero is NOT the test. A genuinely measured authority of 0 is a real score and must still
+  // produce a gap. The evidence state is a separate signal, already in this payload and already
+  // read by this function: `seo_capability_radar.backlinks_score` is null exactly when no authority
+  // decision was measured (`visualIntelligenceHelpers` requires `authorityState === 'measured'`),
+  // and its sibling `data_source_strength.backlinks_score` tag says 'missing' in the same breath.
+  //
+  // The STRONG/INFERRED vs WEAK/MISSING split is the one this section ALREADY draws - it renders
+  // the authority profile and an "inferred" disclaimer for the first pair and falls through to the
+  // pending note for the second - so it is preserved here rather than a new one invented. Report 1
+  // admits INFERRED as a displayable provenance class, disclosed rather than withheld.
+  const companyBacklinksScore = visuals?.seoCapabilityRadar.backlinks_score;
+  const persistedUserAuthority = competitorRadar?.user?.authority_score;
+  const observedCompanyAuthority: number | null =
+    (backlinkStrength === 'STRONG' || backlinkStrength === 'INFERRED')
+      && typeof companyBacklinksScore === 'number' && Number.isFinite(companyBacklinksScore)
+      && typeof persistedUserAuthority === 'number' && Number.isFinite(persistedUserAuthority)
+      ? persistedUserAuthority
+      : null;
+  const authorityGap = observedCompanyAuthority != null && competitorRadar?.competitors?.length
+    ? Math.round((competitorRadar.competitors.reduce((sum, item) => sum + Number(item.authority_score ?? 0), 0) / competitorRadar.competitors.length) - observedCompanyAuthority)
     : null;
   const inferredNote = backlinkStrength === 'INFERRED'
     ? '<div class="pending-note">Backlink data is inferred from available signals. Connect a backlink data source for full accuracy.</div>'
