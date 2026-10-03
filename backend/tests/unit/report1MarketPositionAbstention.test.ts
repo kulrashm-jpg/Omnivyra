@@ -35,7 +35,6 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import { assessPositioningAndMarket, resolveMarketPosition } from '../../services/snapshotReport/actionHelpers';
-import { getStrategicStrengthCards } from '../../services/export/reportHtmlSectionsCore';
 import { mapComposedReport } from '../../../pages/api/reports/reportComposedMapper';
 
 const ACTION_HELPERS_PATH = join(__dirname, '../../services/snapshotReport/actionHelpers.ts');
@@ -525,34 +524,16 @@ describe('WP-18 · G — the abstention survives every mapping it has to cross',
     expect(payload!.companyContext!.marketPositionState).toBe('measured');
   });
 
-  it('PDF/HTML strategic strength card: an abstention is toned "unknown", not "strong"', () => {
-    const abstained = getStrategicStrengthCards({
-      companyContext: {
-        marketPosition: undefined,
-        marketPositionState: 'insufficient_signal',
-        marketPositionStatement:
-          "Clearwater Strong's position relative to competitors could not be established: no competitive evidence was observed for this report.",
-      },
-    } as never);
-    const position = abstained.find((card) => card.label === 'Position');
-    expect(position).toBeDefined();
-    // The company name in that sentence contains both 'clear' and 'strong', which is exactly
-    // what the keyword toner would have matched. The state is read instead of the prose.
-    expect(position!.tone).toBe('unknown');
-  });
-
-  it('PDF/HTML strategic strength card: a measured position still tones from the value', () => {
-    const measured = getStrategicStrengthCards({
-      companyContext: { marketPosition: 'ahead', marketPositionState: 'measured' },
-    } as never);
-    expect(measured.find((card) => card.label === 'Position')!.tone).toBe('strong');
-
-    const behind = getStrategicStrengthCards({
-      companyContext: { marketPosition: 'below market', marketPositionState: 'measured' },
-    } as never);
-    expect(behind.find((card) => card.label === 'Position')!.tone).toBe('constraint');
-  });
-
+  // The two "PDF/HTML strategic strength card" pins that used to sit here asserted the tone of
+  // the `Position` card produced by `getStrategicStrengthCards` in the legacy snapshot renderer
+  // (backend/services/export/reportHtmlSectionsCore.ts). That renderer family had zero production
+  // entry points -- the live export path is renderCanonicalReportHtml/renderCanonicalReportPdf --
+  // and was removed. The canonical renderer publishes Market Position as narrative prose built
+  // from the canonical payload (exportRendererOutput.renderMarketPosition); it carries no
+  // tone-bearing strength card, so there is no canonical surface those two pins could move onto.
+  // The contract they guarded -- absence is never read as a measured claim -- stays pinned above
+  // at the chokepoint (`resolveMarketPosition`) and across the composed-report -> view-payload
+  // mapping.
   it('the StrategicContext the assembler reads carries both halves of the pairing', () => {
     const context = strategicContextFor({});
     expect(Object.prototype.hasOwnProperty.call(context, 'marketPosition')).toBe(true);

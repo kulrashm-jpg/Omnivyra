@@ -12,10 +12,6 @@
  * throws on an abstaining snapshot, these must fail.
  */
 import { buildGeoAeoExecutiveSummary as buildGeoAeoExecutiveSummaryView } from '../../../pages/api/reports/reportViewSectionBuilders';
-import { buildTemplateVariables } from '../../services/export/reportHtmlTemplateVariables';
-import { renderSection6AiVisibility } from '../../services/export/reportHtmlSectionsExtended';
-import { renderGeoAeoFlow } from '../../services/export/reportHtmlNarrativeFlows';
-import type { PdfReportPayload } from '../../services/export/pdf/pdfTypes';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -40,32 +36,6 @@ const MEASURED_GAP = {
   reasoning: 'Answer coverage measured at 31/100 across sampled queries.',
   if_not_addressed: 'Measured consequence text.',
 };
-
-const BASE_PAYLOAD: PdfReportPayload = {
-  domain: 'example.com',
-  title: 'SEO Snapshot Report',
-  reportType: 'snapshot',
-  generatedDate: 'Apr 2, 2026',
-  diagnosis: 'Clear diagnosis text.',
-  summary: 'Compact summary text.',
-  topPriorities: [],
-  insights: [],
-  nextSteps: [],
-};
-
-/** Export payload whose GEO/AEO section exists but abstains from naming a gap. */
-function payloadWithAbstainingGeo(): PdfReportPayload {
-  return {
-    ...BASE_PAYLOAD,
-    geoAeoExecutiveSummary: {
-      overallAiVisibilityScore: null,
-      primaryGap: null,
-      top3Actions: [],
-      visibilityOpportunity: null,
-      confidence: 'low',
-    },
-  } as PdfReportPayload;
-}
 
 /**
  * Copy that must never appear while the section is abstaining. These are the exact
@@ -110,82 +80,13 @@ describe('Report 1 primary gap — view builder', () => {
   });
 });
 
-// ── P4–P7: every export path survives the abstention and states it honestly ───
-
-describe('Report 1 primary gap — export propagation', () => {
-  it('P4: HTML template variables do not throw and assert no gap', () => {
-    const vars = buildTemplateVariables(payloadWithAbstainingGeo());
-
-    const serialized = JSON.stringify(vars).toLowerCase();
-    for (const claim of FABRICATED_GAP_COPY) {
-      expect(serialized).not.toContain(claim);
-    }
-  });
-
-  it('P5: the AI visibility section renders without a fabricated gap narrative', () => {
-    const payload = payloadWithAbstainingGeo();
-    const html = renderSection6AiVisibility(payload, buildTemplateVariables(payload), true);
-
-    expect(typeof html).toBe('string');
-    const lowered = html.toLowerCase();
-    for (const claim of FABRICATED_GAP_COPY) {
-      expect(lowered).not.toContain(claim);
-    }
-  });
-
-  it('P6: the GEO/AEO narrative flow states the abstention instead of a gap', () => {
-    const html = renderGeoAeoFlow(payloadWithAbstainingGeo());
-
-    expect(html).toContain('Primary gap not determined');
-    // No fabricated severity or gap-type badge may be emitted for an unnamed gap.
-    expect(html).not.toContain('CRITICAL');
-    expect(html).not.toContain('ANSWER GAP');
-  });
-
-  it('P7: a measured gap still renders its measured title, severity and type', () => {
-    const html = renderGeoAeoFlow({
-      ...BASE_PAYLOAD,
-      geoAeoExecutiveSummary: {
-        overallAiVisibilityScore: 44,
-        primaryGap: {
-          title: MEASURED_GAP.title,
-          type: 'answer_gap',
-          severity: 'moderate',
-          reasoning: MEASURED_GAP.reasoning,
-        },
-        top3Actions: [],
-        visibilityOpportunity: null,
-        confidence: 'low',
-      },
-    } as PdfReportPayload);
-
-    expect(html).toContain('Answer coverage measured at 31/100');
-    expect(html).toContain('MODERATE');
-    expect(html).not.toContain('Primary gap not determined');
-  });
-});
-
-// ── P8: the competitor contract stays independent ─────────────────────────────
-
-describe('Report 1 primary gap — competitor independence', () => {
-  it('P8: the competitor summary keeps its non-null gap and is unaffected by geo abstention', () => {
-    const payload = {
-      ...payloadWithAbstainingGeo(),
-      competitorIntelligenceSummary: {
-        topCompetitor: 'competitor.com',
-        competitorExplanation: 'Explanation text.',
-        primaryGap: {
-          title: 'Competitor gap title',
-          type: 'keyword_gap',
-          severity: 'moderate',
-          reasoning: 'Competitor gap reasoning.',
-        },
-        top3Actions: [],
-        confidence: 'medium',
-      },
-    } as unknown as PdfReportPayload;
-
-    const vars = buildTemplateVariables(payload);
-    expect(JSON.stringify(vars)).toContain('Competitor gap');
-  });
-});
+// ── The removed export-propagation pins (P4–P8) ─────────────────────────────
+//
+// P4–P8 asserted the same abstention against the legacy snapshot renderer
+// (reportHtmlTemplateVariables / reportHtmlSectionsExtended / reportHtmlNarrativeFlows). That
+// family had zero production entry points -- the live export path is renderCanonicalReportHtml /
+// renderCanonicalReportPdf (backend/services/export/canonicalReportPipeline.ts) -- and was
+// removed. The canonical export payload and renderer carry no `primary_gap` concept at all, so
+// the canonical path cannot fabricate a GEO/AEO gap and there is no canonical surface those pins
+// could be migrated onto. The propagation layer that IS live -- the view builder in
+// reportViewSectionBuilders -- stays pinned by P1–P3 above.
