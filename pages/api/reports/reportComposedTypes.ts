@@ -109,7 +109,10 @@ export type ComposedReportData = {
     market_type?: 'competitive' | 'saturated' | 'emerging' | 'niche';
     market_narrative?: string;
     strategy_alignment?: string;
-    market_position?: 'below market' | 'at parity' | 'ahead';
+    // WP-18 — `null` is "no competitive evidence was observed", never a position claim;
+    // `market_position_state` says which of the two it is.
+    market_position?: 'below market' | 'at parity' | 'ahead' | null;
+    market_position_state?: ScoreState;
     market_position_statement?: string;
     position_implication?: string;
     execution_risk?: string;

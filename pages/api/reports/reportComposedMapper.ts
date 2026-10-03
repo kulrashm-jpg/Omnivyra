@@ -319,6 +319,10 @@ export function mapComposedReport(
         marketNarrative: report.company_context?.market_narrative || undefined,
         strategyAlignment: report.company_context?.strategy_alignment || undefined,
         marketPosition: report.company_context?.market_position || undefined,
+        // WP-18 — carry the abstention across the boundary. Without this the `|| undefined`
+        // above would be the only trace left of it, and "absent field" is not the same claim
+        // as "we looked and found no competitive evidence".
+        marketPositionState: report.company_context?.market_position_state || undefined,
         marketPositionStatement: report.company_context?.market_position_statement || undefined,
         positionImplication: report.company_context?.position_implication || undefined,
         executionRisk: report.company_context?.execution_risk || undefined,

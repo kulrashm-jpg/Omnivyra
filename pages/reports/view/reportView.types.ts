@@ -92,6 +92,8 @@ export interface ReportData {
     marketNarrative?: string;
     strategyAlignment?: string;
     marketPosition?: 'below market' | 'at parity' | 'ahead';
+    /** WP-18 — `insufficient_signal` when no competitive evidence was observed. */
+    marketPositionState?: ScoreState;
     marketPositionStatement?: string;
     positionImplication?: string;
     executionRisk?: string;

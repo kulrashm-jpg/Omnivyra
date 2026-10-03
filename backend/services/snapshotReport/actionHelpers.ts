@@ -8,8 +8,10 @@ import { buildDecisionBusinessImpact } from '../businessImpactFormatter';
 import { average, averageNumber, clamp } from '../snapshotReportNarrativeHelpers';
 // BETA-EXEC-004: deterministic measured-evidence tail for why-it-matters (Phase 2/6).
 import { type EngineEvidenceInput, evidenceTailForDecision } from './engineEvidenceNarrative';
+import type { ScoreState } from './canonicalScoreState';
 import type {
   CompanyNarrativeContext,
+  MarketPositionClaim,
   SnapshotInsight,
   SnapshotOpportunity,
   StrategicContext,
@@ -81,6 +83,40 @@ export function toOpportunity(decision: PersistedDecisionObject): SnapshotOpport
   };
 }
 
+/**
+ * WP-18 — THE ONLY PLACE A MARKET-POSITION CLAIM IS PRODUCED.
+ *
+ * NO EVIDENCE ≠ MEASURED ZERO ≠ behind / at parity / ahead.
+ *
+ * This function takes `number | null`, and `null` has no path to a claim: it returns
+ * `{ marketPosition: null, marketPositionState: 'insufficient_signal' }`. Because every
+ * claim in the report is produced here, "no evidence → 'ahead'" is now structurally
+ * impossible rather than merely currently-avoided — a caller cannot reach `'ahead'` without
+ * first producing a finite number out of genuinely observed evidence.
+ *
+ * A MEASURED ZERO IS NOT ABSENCE. `avgDelta === 0` is finite, so it is a real reading and
+ * resolves through the unchanged thresholds to `'at parity'`.
+ *
+ * Thresholds (`>= 6`, `<= -4`), their order and their meanings are the pre-existing ones and
+ * are deliberately untouched: a fully observed input yields exactly the pre-fix answer.
+ *
+ * `insufficient_signal` is the repository's existing abstention state (`ScoreState` in
+ * ./canonicalScoreState.ts) — the same value WP-15 reached for an unobservable competitor
+ * axis and the default of `emptyCanonicalScore`. No new vocabulary is introduced.
+ */
+export function resolveMarketPosition(avgDelta: number | null | undefined): {
+  marketPosition: MarketPositionClaim | null;
+  marketPositionState: ScoreState;
+} {
+  if (avgDelta == null || !Number.isFinite(avgDelta)) {
+    return { marketPosition: null, marketPositionState: 'insufficient_signal' };
+  }
+  return {
+    marketPosition: avgDelta >= 6 ? 'below market' : avgDelta <= -4 ? 'ahead' : 'at parity',
+    marketPositionState: 'measured',
+  };
+}
+
 export function assessPositioningAndMarket(params: {
   companyContext: CompanyNarrativeContext;
   competitorIntelligence: CompetitorIntelligenceResult;
@@ -98,13 +134,56 @@ export function assessPositioningAndMarket(params: {
   const consistencyPenalties = params.decisions.filter((decision) =>
     /(content_gap|weak_content_depth|missing_supporting_content|trust_gap|weak_brand_presence|competitor_dominance)/.test(decision.issue_type),
   ).length;
-  const competitorPressure = average(
-    (params.competitorIntelligence.generated_gaps ?? []).slice(0, 3).map((gap) => Number(gap.impact_score ?? 0)),
-  );
+  // WP-18 — AN EMPTY GAP SET IS NOT A PRESSURE READING OF ZERO.
+  //
+  // `average([])` returns 0 (snapshotReportNarrativeHelpers.ts:7-10), and `generated_gaps` is
+  // empty exactly when there was nothing to compare: `buildCompetitorGaps` returns `[]` when
+  // the company baseline is null and again when no competitor was observed. The old
+  // expression converted that absence into the number 0 and handed it to three consumers as a
+  // measured "no competitive pressure at all" reading — most damagingly to the
+  // `competitorPressure - 50` fallback below, which then read it as 50 points ahead of the
+  // market. That is the live defect this workstream closes.
+  //
+  // THE SIBLING `?? 0`, AND WHY IT WAS NOT ITSELF THE COLLAPSE. `CompetitorGap.impact_score`
+  // is declared `number`, and every one of the five producers in
+  // reportCompetitorIntelligenceServiceEngine.ts (lines 308, 326, 344, 362, 380) writes it as
+  // `clamp(<constant> + <gap>, 0, <max>)` behind a `<gap> !== null` guard, so it is always a
+  // finite number; the only other handler, the normalizer in ...ServiceModel.ts:400, spreads
+  // gaps through without touching it, and `assessPositioningAndMarket` has exactly one caller
+  // (snapshotReportService.ts:242) which passes a freshly built result, never a rehydrated
+  // one. The per-element `?? 0` was therefore a dead branch rather than a collapse of
+  // unavailable evidence into a measured zero. It is replaced by the same type guard WP-17
+  // used rather than simply deleted, so that the dead branch cannot come back to life: a
+  // non-numeric impact can now only drop OUT of the mean, never enter it as a fabricated 0,
+  // and the denominator follows the observed count instead of staying pinned at the slice
+  // width — the same dilution WP-15 and WP-17 removed from their own averagers.
+  //
+  // THE GUARD IS ON THE RAW VALUE, NOT ON `Number(...)`. `Number(null)` is 0, and 0 is
+  // finite, so coercing first and filtering after would re-create the exact collapse this
+  // workstream exists to remove. `typeof value === 'number'` is checked before anything else.
+  //
+  // A GENUINELY MEASURED 0 STILL COUNTS. `0` is a number and is finite, so it survives the
+  // guard and averages as zero. Only absence abstains.
+  const observedGapImpacts = (params.competitorIntelligence.generated_gaps ?? [])
+    .slice(0, 3)
+    .map((gap) => gap.impact_score)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const competitorPressure: number | null = averageNumber(observedGapImpacts);
   const fallbackUsed =
     params.competitorIntelligence.discovery_metadata?.is_fallback_used === true ||
     params.competitorIntelligence.discovery_metadata?.serp_status === 'fallback';
-  const differentiationPenalty = fallbackUsed ? 8 : competitorPressure >= 70 ? 22 : competitorPressure >= 50 ? 14 : 6;
+  // WP-18 — business interpretation unchanged. With no observed pressure the penalty is 6,
+  // which is exactly what the pre-fix `average([]) === 0` produced through the final `: 6`
+  // arm. The arm is now reached because nothing was observed, not because a 0 was invented.
+  const differentiationPenalty = fallbackUsed
+    ? 8
+    : competitorPressure == null
+      ? 6
+      : competitorPressure >= 70
+        ? 22
+        : competitorPressure >= 50
+          ? 14
+          : 6;
   const rawStrengthScore = clamp((claritySignals * 22) + (40 - Math.min(consistencyPenalties * 5, 25)) - differentiationPenalty, 0, 100);
   const positioningStrength: import('./types').PositioningStrength =
     rawStrengthScore >= 70 ? 'strong' : rawStrengthScore >= 45 ? 'moderate' : 'weak';
@@ -119,7 +198,11 @@ export function assessPositioningAndMarket(params: {
 
   const competitorCount = params.competitorIntelligence.detected_competitors.length;
   const marketType: import('./types').MarketType =
-    competitorCount >= 3 && competitorPressure >= 68
+    // WP-18 — `competitorPressure == null` means no gap impact was observed, and an
+    // unobserved pressure can no longer argue either for or against saturation. The
+    // threshold (68) and every arm below are unchanged; with no evidence this evaluates
+    // false, exactly as the pre-fix `0 >= 68` did.
+    competitorCount >= 3 && competitorPressure != null && competitorPressure >= 68
       ? 'saturated'
       : competitorCount >= 2
         ? 'competitive'
@@ -185,16 +268,33 @@ export function assessPositioningAndMarket(params: {
         .filter((value): value is number => typeof value === 'number' && Number.isFinite(value)),
     ))
     .filter((value): value is number => value != null);
-  const avgDelta = competitorDeltas.length > 0 ? average(competitorDeltas) : competitorPressure - 50;
-  const marketPosition: 'below market' | 'at parity' | 'ahead' =
-    avgDelta >= 6 ? 'below market' : avgDelta <= -4 ? 'ahead' : 'at parity';
-  const marketPositionStatement = `${companyName} is currently ${marketPosition} relative to competitors in this market.`;
+  // WP-18 — THE EVIDENCE LADDER, WITH A BOTTOM RUNG THAT ABSTAINS.
+  //
+  // Rung 1: at least one competitor carried an observed delta (WP-17 already guarantees each
+  //         entry's own mean is observed-only). Unchanged.
+  // Rung 2: no deltas, but at least one observed gap impact. Unchanged anchor and arithmetic
+  //         (`competitorPressure - 50`).
+  // Rung 3 (NEW): neither. `average([])` used to make this rung indistinguishable from rung 2
+  //         with a pressure of exactly 0, producing `-50`, which cleared the `<= -4` arm and
+  //         published 'ahead'. The report told a customer it was ahead of the market on zero
+  //         competitive evidence. There is now no number here at all.
+  const avgDelta: number | null = competitorDeltas.length > 0
+    ? average(competitorDeltas)
+    : competitorPressure != null
+      ? competitorPressure - 50
+      : null;
+  const { marketPosition, marketPositionState } = resolveMarketPosition(avgDelta);
+  const marketPositionStatement = marketPosition == null
+    ? `${companyName}'s position relative to competitors could not be established: no competitive evidence was observed for this report.`
+    : `${companyName} is currently ${marketPosition} relative to competitors in this market.`;
   const positionImplication =
-    marketPosition === 'below market'
-      ? 'If unchanged, this position will limit ability to compete for high-intent queries and reduce qualified demand capture.'
-      : marketPosition === 'at parity'
-        ? 'If unchanged, this position will maintain baseline visibility but make it hard to outpace stronger competitors in decision-stage queries.'
-        : 'If unchanged, this position can hold near-term advantage, but weak reinforcement could erode lead as competitors increase depth.';
+    marketPosition == null
+      ? 'No claim is made about relative market position until competitive evidence is observed. Connecting competitor comparison evidence will establish where this business actually stands.'
+      : marketPosition === 'below market'
+        ? 'If unchanged, this position will limit ability to compete for high-intent queries and reduce qualified demand capture.'
+        : marketPosition === 'at parity'
+          ? 'If unchanged, this position will maintain baseline visibility but make it hard to outpace stronger competitors in decision-stage queries.'
+          : 'If unchanged, this position can hold near-term advantage, but weak reinforcement could erode lead as competitors increase depth.';
   const executionRisk =
     positioningStrength === 'weak'
       ? 'If content depth is not expanded alongside authority work, improvements may remain limited.'
@@ -213,6 +313,7 @@ export function assessPositioningAndMarket(params: {
     keySuccessFactor,
     strategyAlignment,
     marketPosition,
+    marketPositionState,
     marketPositionStatement,
     positionImplication,
     executionRisk,

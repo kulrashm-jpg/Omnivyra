@@ -64,6 +64,12 @@ export type PdfReportPayload = {
     marketNarrative?: string;
     strategyAlignment?: string;
     marketPosition?: 'below market' | 'at parity' | 'ahead';
+    /**
+     * WP-18 — `insufficient_signal` when no competitive evidence was observed. Owner of the
+     * vocabulary: backend/services/snapshotReport/canonicalScoreState.ts (`ScoreState`);
+     * restated inline because this payload module deliberately imports no service types.
+     */
+    marketPositionState?: 'measured' | 'inferred' | 'insufficient_signal' | 'unavailable';
     marketPositionStatement?: string;
     positionImplication?: string;
     executionRisk?: string;

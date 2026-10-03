@@ -400,6 +400,14 @@ export function renderGrowthTrajectoryBlock(payload: PdfReportPayload, actions: 
 
 export function getStrategicStrengthCards(payload: PdfReportPayload): Array<{ label: string; value: string; tone: 'strong' | 'developing' | 'constraint' | 'unknown' }> {
   const positionValue = safeText(payload.companyContext?.marketPosition || payload.companyContext?.marketPositionStatement, 1);
+  // WP-18 — when the report abstained there is no position to tone. `inferTone` keyword-matches
+  // whatever string it is handed, and with `marketPosition` null that string is the abstention
+  // sentence, which carries the company's own name: a customer called "Clearwater" or
+  // "Strongbox" would have been toned 'strong' off a sentence that says the position could not
+  // be established. The state is read instead of the prose, and 'unknown' is the tone this
+  // union already has for exactly this case.
+  const positionAbstained = payload.companyContext?.marketPositionState === 'insufficient_signal'
+    || payload.companyContext?.marketPositionState === 'unavailable';
   const growthValue = safeText(payload.unifiedIntelligenceSummary?.growthDirection.shortTermFocus, 1);
   const riskValue = safeText(payload.companyContext?.executionRisk, 1);
   const positioningValue = safeText(payload.companyContext?.positioningStrength || payload.companyContext?.positioningGap, 1);
@@ -420,7 +428,7 @@ export function getStrategicStrengthCards(payload: PdfReportPayload): Array<{ la
   };
 
   return [
-    { label: 'Position', value: positionValue, tone: inferTone(positionValue) },
+    { label: 'Position', value: positionValue, tone: positionAbstained ? 'unknown' : inferTone(positionValue) },
     { label: 'Growth', value: growthValue, tone: inferTone(growthValue) },
     { label: 'Risk', value: riskValue, tone: inferTone(riskValue, { inverse: true }) },
     { label: 'Positioning', value: positioningValue, tone: inferTone(positioningValue) },

@@ -47,6 +47,8 @@ import { join } from 'path';
 import { assessPositioningAndMarket } from '../../services/snapshotReport/actionHelpers';
 
 type MarketPosition = 'below market' | 'at parity' | 'ahead';
+// WP-18 widened the shipped contract: the helper now returns `null` when nothing was observed.
+type MarketPositionOrAbstention = MarketPosition | null;
 
 /** A `deltas_vs_company` record as it can actually arrive at runtime. `null` = UNAVAILABLE. */
 type Deltas = {
@@ -64,7 +66,7 @@ const ACTION_HELPERS_PATH = join(__dirname, '../../services/snapshotReport/actio
 const marketPositionFor = (
   deltasList: Array<Deltas | null>,
   gapImpactScores: Array<number | null> = [],
-): MarketPosition =>
+): MarketPositionOrAbstention =>
   assessPositioningAndMarket({
     companyContext: {
       companyName: 'Acme Synthetic',
@@ -193,9 +195,11 @@ describe('WP-17 · non-vacuity — the fixtures really drive the market-position
 
 describe('WP-17 · a genuinely measured 0 counts as 0 and does not abstain', () => {
   it('an all-zero observed delta yields parity, not the abstention route', () => {
-    // With no gaps the abstention route gives competitorPressure(0) - 50 = -50 => 'ahead'.
-    // A measured zero must NOT land there: it is real evidence of parity.
-    expect(marketPositionFor([], [])).toBe('ahead');
+    // WP-18 — with NO evidence at all there is no position to report: the helper abstains.
+    // (Before WP-18 this route read competitorPressure(0) - 50 = -50 and published 'ahead'.)
+    // A measured zero must NOT land on the abstention route either: it is real evidence of
+    // parity, and that is the distinction this pair pins from both sides.
+    expect(marketPositionFor([], [])).toBeNull();
     expect(marketPositionFor([{ authority_score: 0, seo_coverage: 0, content_depth: 0 }], [])).toBe('at parity');
   });
 
@@ -301,7 +305,9 @@ describe('WP-17 · a competitor with no observed dimension abstains', () => {
     expect(legacyMarketPosition([allNull], [80, 80, 80])).toBe('at parity');
     expect(marketPositionFor([allNull], [80, 80, 80])).toBe('below market'); // 80 - 50 = 30
     expect(legacyMarketPosition([allNull], [])).toBe('at parity');
-    expect(marketPositionFor([allNull], [])).toBe('ahead'); // 0 - 50 = -50, the existing route
+    // WP-18 — with the competitor dropped AND no gap evidence, nothing at all was observed,
+    // so the helper abstains instead of taking the old `0 - 50 = -50` route to 'ahead'.
+    expect(marketPositionFor([allNull], [])).toBeNull();
   });
 
   it('every competitor unavailable abstains as a group', () => {
@@ -321,7 +327,7 @@ describe('WP-17 · a competitor with no observed dimension abstains', () => {
 // ── E. NO REGRESSION ON FULLY OBSERVED INPUT ─────────────────────────────────────────────
 
 describe('WP-17 · fully observed input behaves exactly as it did before the fix', () => {
-  const FULLY_OBSERVED: Array<{ label: string; deltas: Array<Deltas>; gaps: number[] }> = [
+  const FULLY_OBSERVED: Array<{ label: string; deltas: Array<Deltas>; gaps: number[]; abstains?: true }> = [
     { label: 'well behind on every axis', deltas: [{ authority_score: 24, seo_coverage: 18, content_depth: 30 }], gaps: [70] },
     { label: 'just over the below-market threshold', deltas: [{ authority_score: 6, seo_coverage: 6, content_depth: 6 }], gaps: [] },
     { label: 'just under the below-market threshold', deltas: [{ authority_score: 5, seo_coverage: 6, content_depth: 6 }], gaps: [] },
@@ -335,16 +341,24 @@ describe('WP-17 · fully observed input behaves exactly as it did before the fix
       { authority_score: 22, seo_coverage: 17, content_depth: -5 },
     ], gaps: [66, 41, 78] },
     { label: 'no competitor entries at all (the live production shape)', deltas: [], gaps: [72, 55, 48] },
-    { label: 'no competitor entries and no gaps', deltas: [], gaps: [] },
+    { label: 'no competitor entries and no gaps', deltas: [], gaps: [], abstains: true },
   ];
 
   it('the no-regression table is non-empty and every row is checked', () => {
     expect(FULLY_OBSERVED.length).toBeGreaterThanOrEqual(10);
   });
 
-  FULLY_OBSERVED.forEach(({ label, deltas, gaps }) => {
-    it(`${label}: identical to the pre-fix formula`, () => {
+  FULLY_OBSERVED.forEach(({ label, deltas, gaps, abstains }) => {
+    it(`${label}: ${abstains ? 'abstains under WP-18 instead of claiming a position' : 'identical to the pre-fix formula'}`, () => {
       const legacy = legacyMarketPosition(deltas, gaps);
+      if (abstains) {
+        // WP-18 — this row carries NO evidence at all, so the no-regression pin cannot apply
+        // to it: the pre-fix formula's answer here IS the defect. Pinned explicitly to both
+        // sides so the change is deliberate and visible rather than quietly dropped.
+        expect(legacy).toBe('ahead');
+        expect(marketPositionFor(deltas, gaps)).toBeNull();
+        return;
+      }
       expect(marketPositionFor(deltas, gaps)).toBe(legacy);
       expect(expectedMarketPosition(deltas.map((d) => [d.authority_score, d.seo_coverage, d.content_depth] as number[]), gaps)).toBe(legacy);
     });

@@ -507,6 +507,9 @@ export async function composeSnapshotReportFromDecisions(params: {
       market_narrative: strategicContext.marketNarrative,
       strategy_alignment: strategicContext.strategyAlignment,
       market_position: strategicContext.marketPosition,
+      // WP-18 — the abstention travels with the value, so a consumer can tell "no competitive
+      // evidence" from a measured position without re-deriving it from a null.
+      market_position_state: strategicContext.marketPositionState,
       market_position_statement: strategicContext.marketPositionStatement,
       position_implication: strategicContext.positionImplication,
       execution_risk: strategicContext.executionRisk,
