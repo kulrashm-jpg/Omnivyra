@@ -416,8 +416,28 @@ export function buildChannelLeverage(report: CanonicalReport): ChannelLeverage {
       read: 'Channel leverage requires the AI citation matrix to resolve. The dossier holds this open until provider × query-class measurement accumulates.',
     };
   }
-  const cells = matrix.cells.filter((c) => c.state !== 'unavailable');
-  if (cells.length === 0) {
+  // DEFECT #11 — "low rate but measurable" is the partition this surface always meant
+  // to make; the filter did not say so. `insufficient_signal` is not `unavailable`, so
+  // a cell the provider could not measure survived it, and `citation_rate` is null for
+  // every cell whose state is not `measured` (`llmAdapterBase` / `openaiAdapter`:
+  // `citation_rate: measured ? ... : null`). `(null ?? 0) < 0.3` then filed it as a gap,
+  // and the dossier published "Citation rate 0% — the brand is largely absent" about a
+  // provider x query-class nobody observed. Four of the five adapters are
+  // `retrieval_grounded === false`, so this was the steady state, not an edge case.
+  //
+  // Same exclusion the two sibling surfaces built from this matrix already apply:
+  // `buildAIRetrievalReliability` below, and `buildAIAbsenceRisk` in
+  // `intelligenceSurfacesCompetitive.ts`.
+  const cells = matrix.cells.filter((c) => c.state !== 'unavailable' && c.state !== 'insufficient_signal');
+  // Zero is NOT the absence test. A measured 0 is a real observation — the engine
+  // retrieved, cited sources, and did not name the brand — and must still be published
+  // as a gap. The guard reads the RAW value before any coercion, because `Number(null)`
+  // is 0 and 0 is finite.
+  const measurable = cells.filter(
+    (c): c is typeof c & { citation_rate: number } =>
+      typeof c.citation_rate === 'number' && Number.isFinite(c.citation_rate),
+  );
+  if (measurable.length === 0) {
     return {
       state: 'unavailable',
       top_leverage_cells: [],
@@ -425,8 +445,8 @@ export function buildChannelLeverage(report: CanonicalReport): ChannelLeverage {
     };
   }
   // Leverage cells: high prominence already. Gap cells: low rate but measurable.
-  const highRate = cells.filter((c) => (c.citation_rate ?? 0) >= 0.6);
-  const gaps = cells.filter((c) => (c.citation_rate ?? 0) < 0.3);
+  const highRate = measurable.filter((c) => c.citation_rate >= 0.6);
+  const gaps = measurable.filter((c) => c.citation_rate < 0.3);
   const top_leverage_cells: ChannelLeverageEntry[] = [];
   for (const c of highRate.slice(0, 2)) {
     top_leverage_cells.push({
@@ -434,7 +454,7 @@ export function buildChannelLeverage(report: CanonicalReport): ChannelLeverage {
       query_class: c.query_class,
       citation_rate: c.citation_rate,
       status: 'leverage',
-      why: `Citation rate ${Math.round((c.citation_rate ?? 0) * 100)}% — the brand is reliably retrieved here. Defend this surface deliberately.`,
+      why: `Citation rate ${Math.round(c.citation_rate * 100)}% — the brand is reliably retrieved here. Defend this surface deliberately.`,
     });
   }
   for (const c of gaps.slice(0, 2)) {
@@ -443,7 +463,7 @@ export function buildChannelLeverage(report: CanonicalReport): ChannelLeverage {
       query_class: c.query_class,
       citation_rate: c.citation_rate,
       status: 'gap',
-      why: `Citation rate ${Math.round((c.citation_rate ?? 0) * 100)}% — the brand is largely absent. Closing this cell extends retrieval where it currently does not reach.`,
+      why: `Citation rate ${Math.round(c.citation_rate * 100)}% — the brand is largely absent. Closing this cell extends retrieval where it currently does not reach.`,
     });
   }
   const read =

@@ -199,12 +199,22 @@ export function classifyAuthorityShape(report: CanonicalReport): AuthorityShape 
   }
 
   // Emerging authority with strong foundations — foundation operational, others still forming.
-  if ((m.foundation ?? 0) >= 50 && (m.authority ?? 0) < 50 && overall < 50) {
+  //
+  // DEFECT #12 — `?? 0` on a `<` test lets ABSENCE satisfy it. `pillarMap` omits any
+  // pillar that is `insufficient_signal` or `unavailable`, so `m.authority === undefined`
+  // means "never observed", and this branch read that as "observed, and under 50". The
+  // shape it names is printed on the dossier cover and its whole claim is the contrast
+  // between a measured foundation and a weak authority signal — a comparison that cannot
+  // be made when one side was not measured. Every sibling `<` predicate in this function
+  // already uses `?? 100` for exactly this reason; this one is brought into line.
+  //
+  // Zero is NOT the test: a pillar genuinely measured at 0..49 still selects this shape.
+  if ((m.foundation ?? 0) >= 50 && (m.authority ?? 100) < 50 && overall < 50) {
     return {
       kind: 'emerging_authority_with_strong_foundations',
       name: 'Emerging Authority with Strong Foundations',
       descriptor: 'emerging',
-      why_this_shape: `Foundation reads ${m.foundation}/100 while authority reads ${m.authority ?? '—'}/100 and the overall index reads ${overall}/100 — the substrate is in place, the corroborating signals are still building.`,
+      why_this_shape: `Foundation reads ${m.foundation}/100 while authority reads ${m.authority}/100 and the overall index reads ${overall}/100 — the substrate is in place, the corroborating signals are still building.`,
       what_it_means: 'The brand has done the unglamorous work; the next move is signal generation. Foundations of this quality predictably translate into authority once external reinforcement begins.',
     };
   }
