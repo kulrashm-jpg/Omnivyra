@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-08-19",
+  "generated": "2026-10-04",
   "typescript": "6.0.3",
   "note": [
     "PB-011 per-error identity baseline for the backend certification surface.",
@@ -21,7 +21,7 @@
       "files": {}
     },
     "tsconfig.backend-tests.json": {
-      "total": 260,
+      "total": 259,
       "files": {
         "backend/tests/integration/campaign_preemption_execution.test.ts": [
           {
@@ -744,13 +744,6 @@
             "code": "TS2339",
             "message": "Property 'error' does not exist on type 'DispatchOutcome'.",
             "count": 2
-          }
-        ],
-        "backend/tests/unit/reportHtmlTemplateRenderer.test.ts": [
-          {
-            "code": "TS2322",
-            "message": "Type '\"authority\"' is not assignable to type '\"content\" | \"keywords\" | \"backlinks\" | \"visibility\" | \"technical_seo\"'.",
-            "count": 1
           }
         ],
         "backend/tests/unit/reportScoreModelService.test.ts": [
