@@ -86,6 +86,27 @@ export type CanonicalExportPayload = {
     website_checks: SnapshotReport['website_checks'] | null;
     /** PO-3 — publicly observed advertising, partitioned by resolved advertiser identity. */
     advertising: SnapshotReport['advertising'] | null;
+    /**
+     * PHASE 2B — the GEO evidence boundary and applicability decision produced by Phase 2.
+     * Strict pass-through; `null` where the producer abstained, so the renderer omits.
+     * Declared structurally rather than importing the view type, to keep the pages/ ->
+     * backend/ boundary one-way.
+     */
+    geo_evidence_decision: {
+      aiRetrieval: {
+        state: string;
+        basis: string;
+        notMeasurable: string;
+        unlock: string;
+      } | null;
+      decision: {
+        relevance: 'relevant' | 'conditional';
+        why: string;
+        doNow: string[];
+        defer: string[];
+        measurement: string;
+      } | null;
+    } | null;
   };
 
   // ── Analyst-only: evidence appendix + per-axis explanations ──────────────

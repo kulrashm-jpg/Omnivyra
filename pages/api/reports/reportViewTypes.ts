@@ -274,6 +274,21 @@ export type ReportViewGeoAeoExecutiveSummary = {
     basedOn: string;
   } | null;
   confidence: 'high' | 'medium' | 'low';
+  /** PHASE 2B — the evidence boundary Phase 2 established, carried to the customer surface. */
+  aiRetrieval?: {
+    state: ScoreState;
+    basis: string;
+    notMeasurable: string;
+    unlock: string;
+  } | null;
+  /** PHASE 2B — GEO applicability. "Not measured" must never be the customer's last word. */
+  geoDecision?: {
+    relevance: 'relevant' | 'conditional';
+    why: string;
+    doNow: string[];
+    defer: string[];
+    measurement: string;
+  } | null;
 };
 
 export type ReportViewUnifiedIntelligenceSummary = {

@@ -996,3 +996,84 @@ export function renderPublicAdvertising(
     </section>
   `;
 }
+
+/**
+ * PHASE 2B — GEO / AI discoverability: evidence boundary and decision.
+ *
+ * Phase 2 established that the GEO axes rate the WEBSITE via the public crawl and that no
+ * answer-engine retrieval is performed, then produced `ai_retrieval` and `geo_decision` to
+ * say so. The export had no slot for either, so the customer saw the corrected axis wording
+ * but never the boundary or the decision. This renders both.
+ *
+ * It introduces no observation of its own. Every sentence below is pass-through of a field
+ * the composer already produced, and the section is omitted entirely when both are absent.
+ */
+export function renderGeoEvidenceDecision(
+  payload: CanonicalExportPayload,
+  eyebrow: string,
+): string {
+  const block = payload.report1?.geo_evidence_decision;
+  const retrieval = block?.aiRetrieval ?? null;
+  const decision = block?.decision ?? null;
+  if (!retrieval && !decision) return '';
+
+  const header = renderSectionHeader(
+    'AI Discoverability — Evidence and Decision',
+    'Was AI answer visibility actually measured, and what should be done about it?',
+    eyebrow,
+  );
+
+  // `insufficient_signal` is rendered as words, never as a number. A zero here would be the
+  // precise defect Phase 2 removed.
+  const stateLabel = retrieval
+    ? retrieval.state === 'measured'
+      ? 'Measured'
+      : retrieval.state === 'inferred'
+        ? 'Inferred from public evidence'
+        : 'Not measured — insufficient evidence'
+    : null;
+
+  const evidenceBlock = retrieval
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Answer-engine retrieval: ${escape(stateLabel ?? '')}</p>
+          <p class="ds-playbook-group-desc">${escape(retrieval.notMeasurable)}</p>
+        </div>
+        <p style="font-size:10.5pt; line-height:1.6; margin:0 0 2mm; color:#1a2332;"><strong>What this section could assess.</strong> ${escape(retrieval.basis)}</p>
+        <p style="font-size:10.5pt; line-height:1.6; margin:0; color:#1a2332;"><strong>What would unlock a real measurement.</strong> ${escape(retrieval.unlock)}</p>
+      </div>
+    `
+    : '';
+
+  const list = (items: string[]): string => items
+    .map((item) => `<li style="font-size:10.5pt; line-height:1.6; margin:0 0 1.5mm; color:#1a2332;">${escape(item)}</li>`)
+    .join('');
+
+  const decisionBlock = decision
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Decision: GEO is ${escape(decision.relevance)}</p>
+          <p class="ds-playbook-group-desc">${escape(decision.why)}</p>
+        </div>
+        ${decision.doNow.length > 0
+          ? `<p style="font-size:11pt; font-weight:600; margin:0 0 1mm; color:#0f172a;">Do now</p><ul style="margin:0 0 3mm; padding-left:5mm;">${list(decision.doNow)}</ul>`
+          : ''}
+        ${decision.defer.length > 0
+          ? `<p style="font-size:11pt; font-weight:600; margin:0 0 1mm; color:#0f172a;">Defer</p><ul style="margin:0 0 3mm; padding-left:5mm;">${list(decision.defer)}</ul>`
+          : ''}
+        <p style="font-size:10.5pt; line-height:1.6; margin:0; color:#1a2332;"><strong>How success will be measured.</strong> ${escape(decision.measurement)}</p>
+      </div>
+    `
+    : '';
+
+  return `
+    <section class="ds-section">
+      ${header}
+      <p class="ds-framing">The readiness scores in the preceding section rate this website's own content as read by the public crawl. They are not observations of any AI answer engine, and nothing in this report measured whether AI systems retrieve or cite this brand.</p>
+      ${evidenceBlock}
+      ${decisionBlock}
+    </section>
+  `;
+}

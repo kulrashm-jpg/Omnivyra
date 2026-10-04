@@ -27,6 +27,7 @@ import {
   renderDigitalSnapshotPriorities,
   renderNinetyDayPlan,
   renderSearchVisibility,
+  renderGeoEvidenceDecision,
   renderPublicAdvertising,
   renderWebsiteChecks,
   renderWebsiteExperienceEvidence,
@@ -595,6 +596,11 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
                 reading them established, check by check, including what could not be read. */ ''}
           ${renderWebsiteChecks(payload, EYEBROW_EVIDENCE)}
           ${renderAiDiscoverability(sections.ai_discoverability, surfaces, '03')}
+          ${/* PHASE 2B — sits immediately after §03 for the same reason website checks follow
+                website evidence: the reader has just seen AI readiness scores, and this states
+                what those scores are evidence OF, what was never measured, what would unlock a
+                real measurement, and what to do meanwhile. */ ''}
+          ${renderGeoEvidenceDecision(payload, EYEBROW_EVIDENCE)}
           ${renderTrustConsistency(sections.trust_consistency, '04')}
           ${renderStrategicConstraints(sections.strategic_constraints, payload, surfaces, '05')}
           ${renderMarketPosition(sections.market_position, surfaces, '06')}
