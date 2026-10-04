@@ -4,6 +4,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { config } from '@/config';
+import { ensureRenderFonts } from '../creatorRenderFonts';
 
 const execFileAsync = promisify(execFile);
 
@@ -133,10 +134,38 @@ async function renderPdfWithServerlessChromium(html: string): Promise<Buffer> {
   // cause of Chromium failing to launch under Vercel's default function memory.
   chromium.setGraphicsMode = false;
 
+  // FONTS. The Vercel Node Lambda ships no system fonts. @sparticuz/chromium
+  // provides Open Sans only, while the canonical export asks for Inter,
+  // Source Serif 4, Segoe UI and Times New Roman -- so Chromium painted the
+  // backgrounds and none of the glyphs (19 pages, zero extractable text).
+  // ensureRenderFonts() writes the fontconfig that makes the vendored
+  // assets/fonts/ discoverable; it is the same mechanism already proven for
+  // the creator render path, and assets/fonts is traced into this function by
+  // next.config.js.
+  //
+  // The config is handed to the Chromium CHILD explicitly instead of being left
+  // to mutate process.env. process.env is global, now genuinely writable (the
+  // enforcer set-trap fix), and shared across warm invocations -- so a creator
+  // render and a PDF export landing on the same container would otherwise make
+  // font resolution order-dependent between two routes. An explicit child env
+  // makes this render deterministic regardless of what else ran first.
+  //
+  // FONTCONFIG_FILE names the config outright and takes precedence over
+  // FONTCONFIG_PATH, so this wins over whatever @sparticuz set at import time.
+  // If the vendored dir is absent (local dev, or an untraced function) nothing
+  // is overridden and the previous behaviour stands.
+  const fonts = ensureRenderFonts();
+  const childEnv: Record<string, string | undefined> = { ...process.env };
+  if (fonts.resolvedFontDir) {
+    childEnv.FONTCONFIG_FILE = fonts.configPath;
+    childEnv.FONTCONFIG_PATH = path.dirname(fonts.configPath);
+  }
+
   const browser = await puppeteer.launch({
     args: [...chromium.args, '--no-sandbox', '--disable-dev-shm-usage'],
     executablePath: await chromium.executablePath(),
     headless: true,
+    env: childEnv,
   });
 
   try {
