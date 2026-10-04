@@ -109,7 +109,10 @@ export type ComposedReportData = {
     market_type?: 'competitive' | 'saturated' | 'emerging' | 'niche';
     market_narrative?: string;
     strategy_alignment?: string;
-    market_position?: 'below market' | 'at parity' | 'ahead';
+    // WP-18 — `null` is "no competitive evidence was observed", never a position claim;
+    // `market_position_state` says which of the two it is.
+    market_position?: 'below market' | 'at parity' | 'ahead' | null;
+    market_position_state?: ScoreState;
     market_position_statement?: string;
     position_implication?: string;
     execution_risk?: string;
@@ -230,14 +233,25 @@ export type ComposedReportData = {
           name?: string;
           domain?: string | null;
         };
+        /**
+         * WP-12 — every dimension is `number | null`. `null` means the comparison could not be
+         * made on that dimension because one or both sides were unobserved; it is NOT a delta of
+         * zero. `subtractMetrics` emits null for publishing cadence, engagement and geographic
+         * footprint on every report, since no page crawl observes them on either side.
+         *
+         * This declaration previously said `number`, contradicting the canonical leaf type and
+         * the parallel `ComposedDelta` in `reportViewUtils.ts`. Under this project's
+         * `"strict": false` compiler that contradiction produced no diagnostic at all — the same
+         * duplicate-declaration defect WP-12 removed from the competitor helpers module.
+         */
         deltas_vs_company?: {
-          content_depth?: number;
-          authority_score?: number;
-          publishing_frequency?: number;
-          engagement_score?: number;
-          seo_coverage?: number;
-          geo_presence?: number;
-          aeo_readiness?: number;
+          content_depth?: number | null;
+          authority_score?: number | null;
+          publishing_frequency?: number | null;
+          engagement_score?: number | null;
+          seo_coverage?: number | null;
+          geo_presence?: number | null;
+          aeo_readiness?: number | null;
         };
       }>;
     };

@@ -7,6 +7,7 @@ import {
   getFilenameFromContentDisposition,
 } from './reportView.types';
 import ReportPageContent from '@/components/reports/view/ReportPageContent';
+import PublicAdvertisingSection from '@/components/reports/advertising/PublicAdvertisingSection';
 import { sanitizeHtml } from '@/lib/security/htmlSanitizer';
 
 export default function ReportViewPage() {
@@ -359,14 +360,26 @@ export default function ReportViewPage() {
                 <div dangerouslySetInnerHTML={{ __html: `<div class="report-page">${sanitizeHtml(snapshotHtmlMarkup, 'document')}</div>` }} />
               </div>
             ) : (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800 shadow-sm">
-                <div className="font-semibold text-amber-900">Snapshot HTML unavailable</div>
-                <p className="mt-1">
-                  The new snapshot report could not be rendered right now, so the page is not
-                  falling back to the old template. Please regenerate the report or refresh after a
-                  moment.
-                </p>
-              </div>
+              <>
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800 shadow-sm">
+                  <div className="font-semibold text-amber-900">Snapshot HTML unavailable</div>
+                  <p className="mt-1">
+                    The new snapshot report could not be rendered right now, so the page is not
+                    falling back to the old template. Please regenerate the report or refresh after a
+                    moment.
+                  </p>
+                </div>
+                {/* WP-9 — the Report 1 snapshot is normally shown as the server-rendered export
+                    embedded above, which already carries the public-advertising section. It is
+                    deliberately NOT repeated beside that embed: one report, one statement of the
+                    evidence. This React rendering stands in only when the embed could not be
+                    fetched, so the advertising evidence the JSON payload already carries does not
+                    vanish with it. It renders nothing at all when there is no observation. */}
+                <PublicAdvertisingSection
+                  advertising={reportData.advertising}
+                  className="print-section mt-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+                />
+              </>
             )}
           </div>
         </div>

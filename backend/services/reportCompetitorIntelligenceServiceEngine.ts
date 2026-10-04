@@ -1,4 +1,5 @@
 /** Competitor intelligence — analysis engine + report entrypoints — split from reportCompetitorIntelligenceService.ts (barrel preserved; importers unchanged). */
+import type { ScoreState } from './snapshotReport/canonicalScoreState';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
@@ -77,6 +78,9 @@ import { classifyHttpStatus, classifyFetchError } from './crawl/reachabilityOutc
 // D8 — the single seam deciding whether a competitor's metrics are evidence-supported.
 import {
   resolveCompetitorMetrics,
+  // WP-12 — the subject company's own baseline, derived from its own crawl by the same seam.
+  resolveCompanyMetrics,
+  type CompanyMetricsResolution,
   type CompetitorCrawlOutcome,
 } from './competitor/competitorMetricsEvidence';
 
@@ -197,6 +201,48 @@ export async function crawlDomainSignals(domain: string, referenceKeywords: stri
     answerTopics,
     },
   };
+}
+
+/**
+ * WP-12 — the synchronous path performs NO crawl at all (it cannot await one), so it observes
+ * neither the competitors nor the subject company. It therefore has no baseline and states no
+ * gap. This is the abstention REMEDIATION-003 established, kept deliberately: the honest answer
+ * to "what is this company's content depth?" with nothing crawled is "we did not look".
+ */
+export const SYNC_BASELINE_BASIS =
+  'This report path performs no crawl, so the company’s own site was not observed and no comparison baseline was derived.';
+
+/**
+ * WP-12 — resolve the subject company's comparison baseline from ITS OWN public site.
+ *
+ * REMEDIATION-003 left the company side `null`, which made the competitive comparison
+ * dormant: no baseline, therefore no gap, ever. The baseline is restored here from the only
+ * source that carries evidence — the subject's own crawled public pages — through exactly the
+ * machinery already trusted for competitors:
+ *
+ *   crawlDomainSignals(subject domain, SAME reference keywords)  →  resolveCompanyMetrics
+ *   crawlDomainSignals(competitor domain, SAME reference keywords) →  resolveCompetitorMetrics
+ *
+ * Passing the same `referenceKeywords` matters: `keywordCoverageScore` is measured as overlap
+ * with that set, so using a different set for the two sides would make `seo_coverage` a
+ * comparison of two different questions. Both sides answer the same question here.
+ *
+ * ABSTENTION IS A VALID OUTCOME. Without a real website domain on the report there is nothing
+ * to crawl, and the resolution is `unavailable` with a null baseline — the capability stays
+ * dormant rather than inventing a number. The placeholder `your-site.com` that the rest of the
+ * engine uses for prose is NEVER crawled: it is not the customer's site.
+ */
+export async function resolveCompanyComparisonBaseline(params: {
+  readonly resolvedInput?: ResolvedReportInput | null;
+  readonly referenceKeywords: string[];
+}): Promise<CompanyMetricsResolution> {
+  const ownDomain = normalizeDomain(params.resolvedInput?.resolved.websiteDomain);
+  if (!ownDomain) {
+    // No domain was resolved for the subject, so nothing was ever looked at.
+    return resolveCompanyMetrics({ signals: null, crawlOutcome: 'not_attempted' });
+  }
+  const crawl = await crawlDomainSignals(ownDomain, params.referenceKeywords);
+  return resolveCompanyMetrics({ signals: crawl.signals, crawlOutcome: crawl.outcome });
 }
 
 /**
@@ -348,7 +394,14 @@ export function buildGapDefinitions(params: {
 function emptyCompetitorIntelligenceResult(input: {
   domain: string;
   companyContext: CompanyCompetitiveContext;
-  companyMetrics: ComparisonMetrics;
+  /**
+   * WP-12 — NULLABLE. `null` is "the subject's own site was not observed", which is a
+   * different fact from a baseline of zeroes and must never be rendered as one.
+   */
+  companyMetrics: ComparisonMetrics | null;
+  /** WP-12 — why the baseline is present or absent, published so the surface can say so. */
+  companyMetricsState?: ScoreState;
+  companyMetricsBasis?: string;
   keywordCount: number;
   serpDomainsFound: number;
   serpStatus: 'live' | 'fallback';
@@ -362,7 +415,12 @@ function emptyCompetitorIntelligenceResult(input: {
     detected_competitors: [],
     market_alternatives: [],
     competitors_by_tier: { tier_1: [], tier_2: [], tier_3: [] },
-    comparison: { company: input.companyMetrics, competitors: [] },
+    comparison: {
+      company: input.companyMetrics,
+      company_metrics_state: input.companyMetricsState,
+      company_metrics_basis: input.companyMetricsBasis,
+      competitors: [],
+    },
     generated_gaps: [],
     competitive_summary: buildCompetitiveSummary({ competitors: [], companyContext: input.companyContext, domain: input.domain }),
     keyword_gap: { missing_keywords: [], weak_keywords: [], strong_keywords: [] },
@@ -436,6 +494,8 @@ export function buildCompetitorIntelligence(params: {
       domain,
       companyContext,
       companyMetrics,
+      companyMetricsState: 'unavailable',
+      companyMetricsBasis: SYNC_BASELINE_BASIS,
       keywordCount: discoveryKeywords.length,
       serpDomainsFound: 0,
       serpStatus: 'fallback',
@@ -456,7 +516,12 @@ export function buildCompetitorIntelligence(params: {
     return {
       competitor,
       metrics: resolution.metrics,
-      deltas_vs_company: resolution.metrics ? subtractMetrics(resolution.metrics, companyMetrics) : null,
+      // WP-12 — a delta needs BOTH sides. `subtractMetrics` dereferences its right-hand
+      // operand, so a null baseline here is a TypeError, not a silent zero; and under this
+      // project's non-strict compiler nothing flags it. Guarded explicitly.
+      deltas_vs_company: resolution.metrics && companyMetrics
+        ? subtractMetrics(resolution.metrics, companyMetrics)
+        : null,
       metrics_state: resolution.state,
       metrics_basis: resolution.basis,
       crawl_outcome: resolution.crawl_outcome,
@@ -490,6 +555,8 @@ export function buildCompetitorIntelligence(params: {
     competitors_by_tier: groupCompetitorsByTier(comparisonEntries.map((entry) => entry.competitor)),
     comparison: {
       company: companyMetrics,
+      company_metrics_state: 'unavailable',
+      company_metrics_basis: SYNC_BASELINE_BASIS,
       competitors: comparisonEntries,
     },
     generated_gaps: generatedGaps,
@@ -641,9 +708,23 @@ export async function buildCompetitorIntelligenceActive(params: {
   const marketAlternatives = splitOutput.market_alternatives.map(toDetectedCompetitor);
   const evidenceStatus = deriveCompetitorEvidenceStatus(discovered.length);
 
-  const companyMetrics = computeCompanyMetrics({
-    decisions: params.decisions,
+  // ─── WP-12 — THE COMPANY SIDE IS NOW OBSERVED, NOT SYNTHESIZED ──────────────────────
+  // The subject's own public site is crawled by the same crawler, against the same reference
+  // keyword set used for every competitor, and mapped by the same seam. `companyMetrics` is
+  // the result of that observation or it is null; no other value can reach this variable.
+  // `computeCompanyMetrics` (the decision-count + presence-bonus synthesis REMEDIATION-003
+  // emptied) is deliberately NOT consulted here.
+  const companyBaseline = await resolveCompanyComparisonBaseline({
     resolvedInput: params.resolvedInput,
+    referenceKeywords: keywords,
+  });
+  const companyMetrics = companyBaseline.metrics;
+  console.info('[competitor-comparison][company-baseline]', {
+    domain,
+    state: companyBaseline.state,
+    crawl_outcome: companyBaseline.crawl_outcome,
+    // A baseline that is absent means the comparison abstains; that is a reportable event.
+    baseline_available: companyMetrics != null,
   });
 
   if (discovered.length === 0) {
@@ -656,6 +737,8 @@ export async function buildCompetitorIntelligenceActive(params: {
       domain,
       companyContext,
       companyMetrics,
+      companyMetricsState: companyBaseline.state,
+      companyMetricsBasis: companyBaseline.basis,
       keywordCount: keywords.length,
       serpDomainsFound: serpDomains.length,
       serpStatus,
@@ -719,7 +802,12 @@ export async function buildCompetitorIntelligenceActive(params: {
     comparisonEntries.push({
       competitor,
       metrics: resolution.metrics,
-      deltas_vs_company: resolution.metrics ? subtractMetrics(resolution.metrics, companyMetrics) : null,
+      // WP-12 — BOTH sides or nothing. `subtractMetrics` dereferences its right-hand operand,
+      // so an unguarded null baseline threw a TypeError here for every successfully crawled
+      // competitor; `"strict": false` gave no warning. A one-sided delta is equally forbidden.
+      deltas_vs_company: resolution.metrics && companyMetrics
+        ? subtractMetrics(resolution.metrics, companyMetrics)
+        : null,
       metrics_state: resolution.state,
       metrics_basis: resolution.basis,
       crawl_outcome: resolution.crawl_outcome,
@@ -759,6 +847,8 @@ export async function buildCompetitorIntelligenceActive(params: {
     competitors_by_tier: groupCompetitorsByTier(comparisonEntries.map((entry) => entry.competitor)),
     comparison: {
       company: companyMetrics,
+      company_metrics_state: companyBaseline.state,
+      company_metrics_basis: companyBaseline.basis,
       competitors: comparisonEntries,
     },
     generated_gaps: generatedGaps,

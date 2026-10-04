@@ -573,7 +573,10 @@ export interface SnapshotReport {
     market_type: MarketType;
     market_narrative: string;
     strategy_alignment: string;
-    market_position: 'below market' | 'at parity' | 'ahead';
+    /** WP-18 — `null` when no competitive evidence was observed. Never a position claim. */
+    market_position: MarketPositionClaim | null;
+    /** WP-18 — `measured` when a position was derived; `insufficient_signal` when it abstains. */
+    market_position_state: ScoreState;
     market_position_statement: string;
     position_implication: string;
     execution_risk: string;
@@ -941,6 +944,12 @@ export type CompanyNarrativeContext = {
 
 export type PositioningStrength = 'strong' | 'moderate' | 'weak';
 export type MarketType = 'competitive' | 'saturated' | 'emerging' | 'niche';
+/**
+ * WP-18 — the three claims the report may publish about relative market position. Absence of
+ * evidence is NOT a member: it is carried as `null` plus a `ScoreState` of
+ * `insufficient_signal`.
+ */
+export type MarketPositionClaim = 'below market' | 'at parity' | 'ahead';
 
 export type StrategicContext = {
   positioningStrength: PositioningStrength;
@@ -950,7 +959,10 @@ export type StrategicContext = {
   marketNarrative: string;
   keySuccessFactor: string;
   strategyAlignment: string;
-  marketPosition: 'below market' | 'at parity' | 'ahead';
+  /** WP-18 — `null` when no competitive evidence was observed. Never a position claim. */
+  marketPosition: MarketPositionClaim | null;
+  /** WP-18 — `measured` when a position was derived; `insufficient_signal` when it abstains. */
+  marketPositionState: ScoreState;
   marketPositionStatement: string;
   positionImplication: string;
   executionRisk: string;
@@ -1053,6 +1065,17 @@ export type SnapshotPlanItem = {
  * All counts are carried as the provider's own rounded LABELS (`~4K ads`), never as integers.
  */
 export type SnapshotAdvertising = {
+  /**
+   * WP-1 — WHICH advertising platform this surface describes.
+   *
+   * The model was structurally single-provider: no field named the platform anywhere, so every
+   * observation was Google because the only client was. This field makes that explicit. It is
+   * ADDITIVE: a renderer that ignores it behaves exactly as before, and one that adopts it can
+   * label or group by platform without any other part of the contract changing.
+   *
+   * Distinct from `source`, which names the evidence surface the observation came from.
+   */
+  platform: import('./ads/adsTransparencyObservation').AdsPlatform;
   /** How the attempt to reach the public surface ended — distinct from what it showed. */
   accessState: 'observed' | 'blocked' | 'restricted' | 'requires_auth' | 'unreachable' | 'unavailable';
   /** Why, when not `observed`. Never phrased as an absence of advertising. */
@@ -1077,6 +1100,13 @@ export type SnapshotAdvertising = {
 };
 
 export type SnapshotAdvertiserRecord = {
+  /**
+   * WP-1 — the platform this advertiser was observed on. Always equal to the containing surface's
+   * `platform` today, because one surface carries one observation. Present per record so that a
+   * future renderer can present advertisers from more than one platform in one list without a
+   * contract break.
+   */
+  platform: import('./ads/adsTransparencyObservation').AdsPlatform;
   advertiserId: string;
   legalName: string | null;
   basedIn: string | null;

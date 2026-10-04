@@ -42,6 +42,67 @@ function withEvidence(text: string, signal: string): string {
   return `${trimmed}. Evidence: ${signal}.`;
 }
 
+/**
+ * The five axes of the competitor positioning radar, in publication order.
+ *
+ * WP-13 — the ONE list every consumer of the radar must iterate. The competitor side carries
+ * five numbers by construction (an unobserved competitor is excluded wholesale by
+ * `competitorEntriesEligibleForRadar`), but the COMPANY side does not: all five of its source
+ * values are declared `number | null`, and each already carries an availability tag in the
+ * same payload (`seo_capability_radar.data_source_strength`,
+ * `ai_answer_presence_radar.axis_states`).
+ */
+export const COMPETITOR_RADAR_AXES = [
+  'content_score',
+  'keyword_coverage_score',
+  'authority_score',
+  'technical_score',
+  'ai_answer_presence_score',
+] as const;
+
+export type CompetitorRadarAxis = (typeof COMPETITOR_RADAR_AXES)[number];
+
+/**
+ * The company's own radar baseline BEFORE it is flattened onto the published wire shape.
+ *
+ * `null` means the axis was never observed — the same meaning the `ScoreState` vocabulary
+ * carries as `'unavailable'` / `'insufficient_signal'` on the producer of each source value.
+ * It is not zero, and it is not a floor.
+ */
+export type CompetitorRadarAxisValues = Record<CompetitorRadarAxis, number | null>;
+
+/**
+ * A radar axis is measured only when it is a real finite number.
+ *
+ * The guard is on the RAW value: `Number(null)` is `0` and `0` is finite, so coercing first
+ * and filtering after would re-create exactly the collapse this contract exists to remove.
+ */
+const measuredAxis = (value: number | null | undefined): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? clamp(Math.round(value), 0, 100) : null;
+
+/**
+ * WP-13 — the single derivation of the company's radar baseline.
+ *
+ * Both `buildCompetitorVisuals` (which publishes it) and `buildCompetitorIntelligenceSummary`
+ * (which states gaps against it) read it from here, so the drawn shape and the published gaps
+ * can never describe different baselines.
+ */
+export function deriveUserRadarAxisValues(params: {
+  visualIntelligence: SnapshotReport['visual_intelligence'];
+  geoAeoVisuals: SnapshotReport['geo_aeo_visuals'];
+}): CompetitorRadarAxisValues {
+  const radar = params.visualIntelligence.seo_capability_radar;
+  return {
+    content_score: measuredAxis(radar.content_quality_score),
+    keyword_coverage_score: measuredAxis(radar.keyword_research_score),
+    authority_score: measuredAxis(radar.backlinks_score),
+    technical_score: measuredAxis(radar.technical_seo_score),
+    ai_answer_presence_score: measuredAxis(
+      params.geoAeoVisuals.ai_answer_presence_radar.answer_coverage_score,
+    ),
+  };
+}
+
 function averageCompetitorRadarScore(item: {
   content_score: number;
   keyword_coverage_score: number;
@@ -56,6 +117,14 @@ function averageCompetitorRadarScore(item: {
     item.technical_score,
     item.ai_answer_presence_score,
   ]);
+}
+
+/** Mean of one radar shape over EXACTLY the axes the company was observed on — one denominator, both sides. */
+function averageOverAxes(
+  item: Record<CompetitorRadarAxis, number>,
+  axes: readonly CompetitorRadarAxis[],
+): number {
+  return average(axes.map((axis) => item[axis]));
 }
 
 /**
@@ -89,32 +158,22 @@ export function buildCompetitorVisuals(params: {
     );
   });
 
+  // WP-13 — the published wire shape of `competitor_positioning_radar.user` is five
+  // non-nullable numbers and is persisted and read back by every renderer, so widening it is a
+  // wire change and stays out of scope here (WP13_NULL_CONTRACT_DECISION §3.7/D8). What does
+  // NOT stay is the fiction that the flattened 0 is a measurement: the honest baseline is
+  // derived once, here, and `buildCompetitorIntelligenceSummary` is given THAT rather than the
+  // flattened shape, so no comparative claim is ever stated against an axis nobody observed.
+  const userAxisValues = deriveUserRadarAxisValues({
+    visualIntelligence: params.visualIntelligence,
+    geoAeoVisuals: params.geoAeoVisuals,
+  });
   const userRadar = {
-    content_score: clamp(
-      Math.round(params.visualIntelligence.seo_capability_radar.content_quality_score ?? 0),
-      0,
-      100,
-    ),
-    keyword_coverage_score: clamp(
-      Math.round(params.visualIntelligence.seo_capability_radar.keyword_research_score ?? 0),
-      0,
-      100,
-    ),
-    authority_score: clamp(
-      Math.round(params.visualIntelligence.seo_capability_radar.backlinks_score ?? 0),
-      0,
-      100,
-    ),
-    technical_score: clamp(
-      Math.round(params.visualIntelligence.seo_capability_radar.technical_seo_score ?? 0),
-      0,
-      100,
-    ),
-    ai_answer_presence_score: clamp(
-      Math.round(params.geoAeoVisuals.ai_answer_presence_radar.answer_coverage_score ?? 0),
-      0,
-      100,
-    ),
+    content_score: userAxisValues.content_score ?? 0,
+    keyword_coverage_score: userAxisValues.keyword_coverage_score ?? 0,
+    authority_score: userAxisValues.authority_score ?? 0,
+    technical_score: userAxisValues.technical_score ?? 0,
+    ai_answer_presence_score: userAxisValues.ai_answer_presence_score ?? 0,
   };
 
   const competitorRadar = competitorEntriesEligibleForRadar(comparisonEntries)
@@ -219,22 +278,43 @@ export function buildCompetitorVisuals(params: {
   };
 }
 
+/**
+ * WP-13 — `userAxisValues` is REQUIRED, and is the honest baseline rather than the flattened
+ * wire shape.
+ *
+ * Every number this function publishes — the three gap scores, the primary-gap ranking that
+ * selects the narrative and the recommended actions, the position verdict, and the evidence
+ * sentence — is a statement about the company RELATIVE to a competitor. Reading the flattened
+ * `competitor_positioning_radar.user` republished an unobserved axis as a measured 0, which
+ * handed the competitor's entire absolute score back as a measured gap: with no backlink
+ * source wired (the producer's own documented steady state) a competitor scoring 80 on
+ * authority produced an "80 point authority gap", won the primary-gap ranking outright, and
+ * dragged `competitive_position` toward `lagging` through a five-axis average containing two
+ * fabricated zeroes. Passing the raw `number | null` baseline makes that un-expressible.
+ */
 export function buildCompetitorIntelligenceSummary(params: {
   competitorIntelligence: CompetitorIntelligenceResult;
   competitorVisuals: SnapshotReport['competitor_visuals'];
+  userAxisValues: CompetitorRadarAxisValues;
   narrativeContext?: NarrativeContext;
 }): SnapshotReport['competitor_intelligence_summary'] {
   const radarCompetitors = params.competitorVisuals.competitor_positioning_radar.competitors;
   if (radarCompetitors.length === 0) return null;
 
-  const user = params.competitorVisuals.competitor_positioning_radar.user;
+  const userAxisValues = params.userAxisValues;
   const topCompetitor = [...radarCompetitors].sort(
     (left, right) => averageCompetitorRadarScore(right) - averageCompetitorRadarScore(left),
   )[0];
 
-  const keywordGap = clamp(topCompetitor.keyword_coverage_score - user.keyword_coverage_score, 0, 100);
-  const authorityGap = clamp(topCompetitor.authority_score - user.authority_score, 0, 100);
-  const answerGap = clamp(topCompetitor.ai_answer_presence_score - user.ai_answer_presence_score, 0, 100);
+  /** A gap needs BOTH sides. The company side unobserved yields null — never the competitor's absolute score. */
+  const gapOn = (axis: CompetitorRadarAxis): number | null => {
+    const own = userAxisValues[axis];
+    return own == null ? null : clamp(topCompetitor[axis] - own, 0, 100);
+  };
+
+  const keywordGap = gapOn('keyword_coverage_score');
+  const authorityGap = gapOn('authority_score');
+  const answerGap = gapOn('ai_answer_presence_score');
 
   const rankedGaps = [
     {
@@ -255,7 +335,14 @@ export function buildCompetitorIntelligenceSummary(params: {
       title: `AI answer presence is weaker than ${topCompetitor.name}`,
       reasoning: `${topCompetitor.name} is currently more answer-ready for AI retrieval patterns, reducing your visibility in answer-led discovery moments.`,
     },
-  ].sort((left, right) => right.score - left.score);
+  ]
+    .filter((gap): gap is typeof gap & { score: number } => gap.score !== null)
+    .sort((left, right) => right.score - left.score);
+
+  // Not one of the three comparable axes was observed on the company side, so there is no
+  // comparison to publish. This is the function's existing abstention route, the same one an
+  // empty radar takes — not a new vocabulary.
+  if (rankedGaps.length === 0) return null;
 
   const strongestGap = rankedGaps[0];
   const strongestGapConsequence =
@@ -335,8 +422,14 @@ export function buildCompetitorIntelligenceSummary(params: {
     },
   ].slice(0, 3);
 
-  const userAverage = averageCompetitorRadarScore(user);
-  const competitorAverage = average(radarCompetitors.map((item) => averageCompetitorRadarScore(item)));
+  // WP-13 — both sides are averaged over EXACTLY the axes the company was observed on. The
+  // denominator follows the observed count instead of staying pinned at five, so an
+  // unavailable axis cannot drag the verdict down on one side while counting in full on the
+  // other. `measuredAxes` is non-empty here: a ranked gap exists, so at least one of the three
+  // comparable axes was measured. The 6 / -5 bands are untouched.
+  const measuredAxes = COMPETITOR_RADAR_AXES.filter((axis) => userAxisValues[axis] != null);
+  const userAverage = average(measuredAxes.map((axis) => userAxisValues[axis] as number));
+  const competitorAverage = average(radarCompetitors.map((item) => averageOverAxes(item, measuredAxes)));
   const competitivePosition: 'leader' | 'competitive' | 'lagging' =
     userAverage >= competitorAverage + 6
       ? 'leader'
@@ -352,17 +445,23 @@ export function buildCompetitorIntelligenceSummary(params: {
   if (fallbackUsed && confidence === 'high') confidence = 'medium';
   if (fallbackUsed && radarCompetitors.length < 2) confidence = 'low';
 
-  const contentDepthGap = clamp(topCompetitor.content_score - user.content_score, 0, 100);
+  const contentDepthGap = gapOn('content_score');
   const positioningGap = clamp(
-    Math.round(averageCompetitorRadarScore(topCompetitor) - averageCompetitorRadarScore(user)),
+    Math.round(averageOverAxes(topCompetitor, measuredAxes) - userAverage),
     0,
     100,
   );
   const competitorSignals: NarrativeSignal[] = [
-    { key: 'authority_comparison', text: `authority comparison gap of ${Math.round(authorityGap)} points` },
-    { key: 'content_depth', text: `content depth gap of ${Math.round(contentDepthGap)} points` },
+    authorityGap == null
+      ? null
+      : { key: 'authority_comparison', text: `authority comparison gap of ${Math.round(authorityGap)} points` },
+    contentDepthGap == null
+      ? null
+      : { key: 'content_depth', text: `content depth gap of ${Math.round(contentDepthGap)} points` },
     { key: 'positioning', text: `market positioning gap of ${Math.round(positioningGap)} points` },
-  ].filter((signal) => signal.text.includes('0 points') === false);
+  ]
+    .filter((signal): signal is NarrativeSignal => signal !== null)
+    .filter((signal) => signal.text.includes('0 points') === false);
   if (competitorSignals.length === 0) {
     competitorSignals.push({
       key: 'positioning',
@@ -401,7 +500,15 @@ export function buildCompetitorIntelligenceSummary(params: {
   const explanationWithTransparency = fallbackUsed
     ? compactNarrative(`${compactCompetitorExplanation} ${fallbackTransparencyNote}`)
     : compactCompetitorExplanation;
-  const competitorEvidence = `keyword gap ${Math.round(keywordGap)} points, authority gap ${Math.round(authorityGap)} points, answer gap ${Math.round(answerGap)} points`;
+  // Only gaps that were actually measured are cited as evidence. An unobserved axis is left
+  // out of the sentence rather than asserted as "0 points", which reads as parity.
+  const competitorEvidence = [
+    keywordGap == null ? null : `keyword gap ${Math.round(keywordGap)} points`,
+    authorityGap == null ? null : `authority gap ${Math.round(authorityGap)} points`,
+    answerGap == null ? null : `answer gap ${Math.round(answerGap)} points`,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(', ');
   const competitorExplanationWithEvidence = compactNarrative(
     withEvidence(explanationWithTransparency, competitorEvidence),
   );

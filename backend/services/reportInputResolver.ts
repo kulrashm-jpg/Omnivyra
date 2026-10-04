@@ -1,6 +1,10 @@
 import { supabase } from '../db/supabaseClient';
 import { getGoogleSearchConsoleReadiness } from './googleProviderReadinessService';
-import { saveProfile, type CompanyProfile } from './companyProfileService';
+import { saveProfile, upsertCompanyProfilePayload, type CompanyProfile } from './companyProfileService';
+import {
+  assertReportObservationPayload,
+  buildReportInputObservation,
+} from './companyProfile/reportObservation';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   normalizeSocialUrl,
@@ -583,10 +587,14 @@ function buildPersistedSocialProfiles(
   });
 }
 
-export async function persistResolvedReportInputs(input: ResolvedReportInput): Promise<void> {
-  const socialProfiles = buildPersistedSocialProfiles(input);
-
-  const reportSettings = {
+/**
+ * The report's own bookkeeping namespace. `getDefaultInputs` reads `default_inputs` in preference
+ * to the durable profile columns, so this is what actually carries report continuity forward.
+ * Every sibling key already on the profile (`market_pulse`, `industry_review`, `entity_archetype`,
+ * `company_facts`, …) is preserved verbatim by the spread.
+ */
+function buildReportSettingsForRun(input: ResolvedReportInput) {
+  return {
     ...(input.profile?.report_settings ?? {}),
     default_inputs: {
       company_name: input.resolved.companyName,
@@ -603,6 +611,64 @@ export async function persistResolvedReportInputs(input: ResolvedReportInput): P
     last_uploaded_file_name: input.resolved.uploadedFileName,
     updated_at: new Date().toISOString(),
   };
+}
+
+/**
+ * WP-11 (Track J) — the NON-MUTATING report-input persist.
+ *
+ * Report generation may observe, infer, recommend and propose evolution; it may not ratify. This
+ * writes the report's own `report_settings` namespace and NOTHING else: no `name`, no
+ * `website_url`, no `category`, no `geography`/`geography_list`, no `competitors`/`competitors_list`,
+ * no `social_profiles`/`other_social_links` — and, critically, it never reaches `saveProfile`, whose
+ * `shouldRefreshClassification` branch re-runs `classifyCompanyBusiness` and REPLACES `industry`,
+ * `industry_list`, `category` and `category_list`. `industry_list` is the field the ICP generator
+ * reads (d99cf962), so that recompute let a report run silently change an ICP input.
+ *
+ * What the report resolved differently is recorded as a recommendation-only proposal under
+ * `report_settings.report_input_observation`, reusing the existing `industry_review` proposal shape.
+ *
+ * `assertReportObservationPayload` is the runtime tripwire: if a durable column is ever added back
+ * to this write, it throws rather than mutating the profile.
+ *
+ * User-initiated profile editing is untouched — it goes through `saveProfile` from
+ * `pages/api/company-profile/*` and `hooks/useCompanyProfileState.tsx` exactly as before.
+ */
+export async function persistReportInputsWithoutProfileMutation(input: ResolvedReportInput): Promise<void> {
+  // A report run must never CREATE a profile row. With no existing profile there is nothing whose
+  // report settings could be carried forward, and an upsert here would insert a near-empty company.
+  if (!input.profile) return;
+
+  const observation = buildReportInputObservation({
+    profile: input.profile,
+    reportCategory: input.reportCategory,
+    resolved: input.resolved,
+  });
+
+  const payload: Record<string, unknown> = {
+    company_id: input.companyId,
+    report_settings: {
+      ...buildReportSettingsForRun(input),
+      // Proposal only. Nothing reads this to overwrite a durable field.
+      report_input_observation: observation,
+    },
+  };
+  assertReportObservationPayload(payload);
+
+  const { error } = await upsertCompanyProfilePayload(payload, input.profile, 'report_input_observation');
+  if (error) {
+    console.warn('[reportInputResolver] report settings write failed:', error.message);
+  }
+}
+
+/**
+ * LEGACY, MUTATING persist — retained for the analytics report categories (performance / growth),
+ * which are outside WP-11's scope. Report 1 (snapshot) no longer reaches it: see
+ * `persistReportInputsWithoutProfileMutation` above and `snapshotInputResolver.ts`.
+ */
+export async function persistResolvedReportInputs(input: ResolvedReportInput): Promise<void> {
+  const socialProfiles = buildPersistedSocialProfiles(input);
+
+  const reportSettings = buildReportSettingsForRun(input);
 
   await saveProfile(
     {

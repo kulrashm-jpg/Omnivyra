@@ -10,6 +10,22 @@ type ReportViewPayloadLike = {
   } | null;
   unifiedIntelligenceSummary?: { unifiedScore?: number | null } | null;
   overallScore?: number;
+  // WP-13 DEFECT #9 — the UNFLATTENED sources of the company's five radar axes, already present on
+  // the view payload this module is handed. Read-only, and structural only: the published wire
+  // shape of `competitor_positioning_radar.user` is unchanged.
+  seoVisuals?: {
+    seoCapabilityRadar?: {
+      technical_seo_score?: number | null;
+      keyword_research_score?: number | null;
+      backlinks_score?: number | null;
+      content_quality_score?: number | null;
+    } | null;
+  } | null;
+  geoAeoVisuals?: {
+    aiAnswerPresenceRadar?: {
+      answer_coverage_score?: number | null;
+    } | null;
+  } | null;
 };
 
 type ReportViewCompetitorMovementComparison = {
@@ -91,23 +107,6 @@ function normalizeCompetitorDomain(value: string | undefined | null): string {
   return value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
 }
 
-function averageRadarScore(item: {
-  content_score: number;
-  keyword_coverage_score: number;
-  authority_score: number;
-  technical_score: number;
-  ai_answer_presence_score: number;
-}): number {
-  const values = [
-    Number(item.content_score ?? 0),
-    Number(item.keyword_coverage_score ?? 0),
-    Number(item.authority_score ?? 0),
-    Number(item.technical_score ?? 0),
-    Number(item.ai_answer_presence_score ?? 0),
-  ];
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
 function movementFromDeltas(values: Array<number | null>): 'improving' | 'declining' | 'stable' {
   const averageDelta = averageNullable(values);
   if (averageDelta == null) return 'stable';
@@ -133,6 +132,59 @@ function averageCompetitorScore(item: {
   return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
 }
 
+/**
+ * The five axes of the competitor positioning radar, in publication order.
+ *
+ * Mirrors `COMPETITOR_RADAR_AXES` in `snapshotReport/competitorSummaryHelpers.ts`, which is the
+ * canonical list; restated here so this read-path module does not pull the whole snapshot
+ * composition graph in for five strings.
+ */
+const USER_RADAR_AXES = [
+  'content_score',
+  'keyword_coverage_score',
+  'authority_score',
+  'technical_score',
+  'ai_answer_presence_score',
+] as const;
+
+type UserRadarAxis = (typeof USER_RADAR_AXES)[number];
+
+/**
+ * WP-13 DEFECT #9 — which radar axes the COMPANY was actually observed on.
+ *
+ * `competitor_positioning_radar.user` is the flattened wire shape: `buildCompetitorVisuals` writes
+ * `userAxisValues.<axis> ?? 0` for all five axes, deliberately, because widening the persisted
+ * shape is a wire change held out of scope (WP13_NULL_CONTRACT_DECISION §3.7/D8). A persisted 0 is
+ * therefore indistinguishable, ON ITS OWN, from "that axis was never observed".
+ *
+ * The distinguishing evidence is the UNFLATTENED source of each axis, carried in the same payload.
+ * These are exactly the five values `deriveUserRadarAxisValues` reads before flattening, and each
+ * is `number | null`, where `null` is the producers' `'unavailable'` / `'insufficient_signal'`
+ * state (`visualIntelligenceHelpers` leaves `backlinks_score` null unless an authority decision
+ * was actually measured, which is its documented steady state).
+ *
+ * The guard is on the RAW source value: `Number(null)` is `0` and `0` is finite, so coercing first
+ * and filtering after would re-create the collapse this exists to remove. A genuinely measured 0
+ * is a real score and stays in.
+ */
+function observedUserRadarAxes(payload: ReportViewPayloadLike): UserRadarAxis[] {
+  const seoRadar = payload.seoVisuals?.seoCapabilityRadar;
+  const aiRadar = payload.geoAeoVisuals?.aiAnswerPresenceRadar;
+  const sources: Record<UserRadarAxis, unknown> = {
+    content_score: seoRadar?.content_quality_score,
+    keyword_coverage_score: seoRadar?.keyword_research_score,
+    authority_score: seoRadar?.backlinks_score,
+    technical_score: seoRadar?.technical_seo_score,
+    ai_answer_presence_score: aiRadar?.answer_coverage_score,
+  };
+  return USER_RADAR_AXES.filter((axis) => isFiniteNumber(sources[axis]));
+}
+
+/** Mean of one radar shape over EXACTLY the given axes — one denominator, both sides. */
+function averageOverAxes(item: any, axes: readonly UserRadarAxis[]): number {
+  return axes.reduce((sum, axis) => sum + Number(item?.[axis] ?? 0), 0) / axes.length;
+}
+
 function findClosestCompetitor(payload: ReportViewPayloadLike): { domain: string; score: number } | null {
   const radar = payload.competitorVisuals?.competitorPositioningRadar;
   if (!radar || radar.competitors.length === 0) return null;
@@ -151,21 +203,56 @@ function findClosestCompetitor(payload: ReportViewPayloadLike): { domain: string
     }
   }
 
-  const userScore = averageCompetitorScore(radar.user);
+  // WP-13 DEFECT #9 — naming the closest competitor is a comparative claim, so the comparison runs
+  // over EXACTLY the axes the company was observed on, on both sides. Averaging the flattened
+  // `radar.user` over all five pulled the company's baseline toward 0 for every unobserved axis
+  // and systematically named a weaker competitor than the evidence supports. With no axis observed
+  // there is no baseline to compare against, so this abstains rather than guess — `competitor:
+  // null` is a state the timeline shape already carries and the renderers already handle.
+  //
+  // The competitor-side ranking policy, the published competitor `score` (its own full five-axis
+  // mean) and the movement-derived branch above are all unchanged.
+  const comparisonAxes = observedUserRadarAxes(payload);
+  if (comparisonAxes.length === 0) return null;
+
+  const userScore = averageOverAxes(radar.user, comparisonAxes);
   const closest = [...radar.competitors]
     .map((competitor: any) => ({
       domain: normalizeCompetitorDomain(competitor.domain || competitor.name) || competitor.name,
       score: averageCompetitorScore(competitor),
-      gapAbs: Math.abs(averageCompetitorScore(competitor) - userScore),
+      gapAbs: Math.abs(averageOverAxes(competitor, comparisonAxes) - userScore),
     }))
     .sort((left: any, right: any) => left.gapAbs - right.gapAbs)[0];
 
   return closest ? { domain: closest.domain, score: closest.score } : null;
 }
 
+/**
+ * WP-13 DEFECT #10 — the axes on which the COMPANY may be compared across two instants.
+ *
+ * #9 compared two sides at ONE instant, so "observed" could be read off one snapshot. #10
+ * compares ONE side at TWO instants, and an axis is only a temporal basis when it was usable at
+ * BOTH of them: the intersection, not the union, and not either snapshot's own set.
+ *
+ * Taking each snapshot's own observed set instead would reintroduce the defect in a subtler
+ * form — the two gaps would be means over DIFFERENT axis sets, so their difference would still
+ * mix a change of basis into what is published as a change of performance.
+ *
+ * Over one shared set S the published number is algebraically
+ *   mean_{a in S}( (competitor_now[a] - competitor_then[a]) - (company_now[a] - company_then[a]) )
+ * — a difference of real per-axis measurements on both sides, with no availability term in it.
+ */
+function comparableUserRadarAxes(
+  current: ReportViewPayloadLike,
+  previous: ReportViewPayloadLike,
+): UserRadarAxis[] {
+  const previousObserved = new Set(observedUserRadarAxes(previous));
+  return observedUserRadarAxes(current).filter((axis) => previousObserved.has(axis));
+}
+
 export function buildCompetitorMovementComparison(params: {
-  current: { reportId: string; competitorVisuals?: { competitorPositioningRadar?: any } };
-  previous: { reportId: string; competitorVisuals?: { competitorPositioningRadar?: any } };
+  current: ReportViewPayloadLike;
+  previous: ReportViewPayloadLike;
 }): any {
   const currentRadar = params.current.competitorVisuals?.competitorPositioningRadar;
   const previousRadar = params.previous.competitorVisuals?.competitorPositioningRadar;
@@ -190,6 +277,9 @@ export function buildCompetitorMovementComparison(params: {
 
   const previousCompetitors = previousRadar.competitors as any[];
   const currentCompetitors = currentRadar.competitors as any[];
+
+  // WP-13 DEFECT #10 — the single temporal basis for every competitor's gap change.
+  const comparableAxes = comparableUserRadarAxes(params.current, params.previous);
 
   const previousByDomain = new Map(
     previousCompetitors.map((competitor) => [normalizeCompetitorDomain(competitor.domain || competitor.name), competitor]),
@@ -217,9 +307,25 @@ export function buildCompetitorMovementComparison(params: {
         delta.ai_answer_delta,
       ]);
 
-      const currentGap = averageRadarScore(competitor) - averageRadarScore(currentRadar.user as any);
-      const previousGap = averageRadarScore(previousCompetitor as any) - averageRadarScore(previousRadar.user as any);
-      const gapChange = safeDelta(currentGap, previousGap);
+      // WP-13 DEFECT #10 — a gap change needs BOTH sides at BOTH instants. The company side is
+      // fenced by `comparableAxes`; the competitor side is fenced here, on the RAW value, for the
+      // same reason `safeDelta` already nulls a per-axis competitor delta when either end is
+      // absent. (`Number(x ?? 0)` would turn an absent competitor axis into a measured 0 on the
+      // very side the claim is made against.) Today every plotted competitor carries five finite
+      // numbers — `competitorEntriesEligibleForRadar` excludes an unobserved competitor wholesale
+      // — so this arm is a guard, not a behaviour change.
+      const gapAxes = comparableAxes.filter(
+        (axis) => isFiniteNumber(competitor?.[axis]) && isFiniteNumber(previousCompetitor?.[axis]),
+      );
+      // No axis is usable on both sides at both instants, so there is nothing to compare. This is
+      // the function's existing abstention: `gap_change: null` already drives `direction:
+      // 'unchanged'` and the "Insufficient matched history" narrative below.
+      const gapChange = gapAxes.length === 0
+        ? null
+        : safeDelta(
+            averageOverAxes(competitor, gapAxes) - averageOverAxes(currentRadar.user, gapAxes),
+            averageOverAxes(previousCompetitor, gapAxes) - averageOverAxes(previousRadar.user, gapAxes),
+          );
 
       return {
         domain,
@@ -270,8 +376,14 @@ export function buildCompetitorMovementComparison(params: {
         : direction === 'widening_gap'
           ? `${closest.domain} is pulling ahead (${Number(Math.abs(closest._gapChange).toFixed(1))} point wider gap).`
           : `Gap to ${closest.domain} is stable (${Number(closest._gapChange.toFixed(1)) >= 0 ? '+' : ''}${Number(closest._gapChange.toFixed(1))}).`;
+  // WP-13 DEFECT #10 — `partial` is the existing word for "comparable, but not on everything".
+  // A company axis usable in only one of the two snapshots narrows the temporal basis exactly as
+  // a missing competitor delta does, so it is reported the same way rather than passed off as a
+  // `complete` comparison. No new state: the three values and their renderers are unchanged.
+  const basisIsPartial = comparableAxes.length < USER_RADAR_AXES.length;
   const dataStatus: 'complete' | 'partial' | 'insufficient' =
-    matchedCompetitors.some((item: any) => Object.values(item.delta).some((value) => value == null))
+    basisIsPartial
+    || matchedCompetitors.some((item: any) => Object.values(item.delta).some((value) => value == null))
       ? 'partial'
       : 'complete';
 

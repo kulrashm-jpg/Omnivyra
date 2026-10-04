@@ -59,6 +59,9 @@ export type CanonicalExportPayload = {
   /** BETA-PHASE0-EXEC-001: carry the non-scored Declared Evidence section (EVIDENCE-EXEC-003) into the
    *  HTML/PDF export so it is no longer in-app-only. Optional/additive; rendered only when present + material. */
   declared_evidence?: CanonicalReport['declared_evidence'];
+  /** B7 (WP-10): the public-evidence market / ICP PROPOSAL. Strict pass-through; absent when the
+   *  builder did not produce one. Never a ratified ICP and never a profile change. */
+  market_icp_recommendation?: CanonicalReport['market_icp_recommendation'];
 
   // ── Report 1 surfaces (GAP-01) ────────────────────────────────────────────
   //
@@ -148,6 +151,8 @@ export function buildCanonicalExport(params: {
     evidence_readiness: report.evidence_readiness,
     // BETA-PHASE0-EXEC-001: non-scored Declared Evidence pass-through (no recompute, no derivation).
     declared_evidence: report.declared_evidence,
+    // B7 (WP-10): market / ICP proposal pass-through (no recompute, no derivation).
+    market_icp_recommendation: report.market_icp_recommendation,
     // GAP-01: Report 1 surfaces pass-through (no recompute, no derivation). Present in every
     // shape — the Report 1 decision layer is not an executive-only concern.
     report1: params.report1,

@@ -2,6 +2,7 @@ import type { buildReportScoreModel } from '../reportScoreModelService';
 import type { CompetitorIntelligenceResult } from '../reportCompetitorIntelligenceService';
 import type { buildPublicDomainAuditDecisions } from '../publicDomainAuditService';
 import type { PriorityType } from '../actionPriorityService';
+import type { ScoreState } from './canonicalScoreState';
 
 export const SNAPSHOT_MIN_INSIGHTS = 3;
 export const SNAPSHOT_MIN_ACTIONS = 2;
@@ -364,7 +365,10 @@ export interface SnapshotReport {
     market_type: MarketType;
     market_narrative: string;
     strategy_alignment: string;
-    market_position: 'below market' | 'at parity' | 'ahead';
+    /** WP-18 — `null` when no competitive evidence was observed. Never a position claim. */
+    market_position: MarketPositionClaim | null;
+    /** WP-18 — `measured` when a position was derived; `insufficient_signal` when it abstains. */
+    market_position_state: ScoreState;
     market_position_statement: string;
     position_implication: string;
     execution_risk: string;
@@ -455,6 +459,12 @@ export type CompanyNarrativeContext = {
 
 export type PositioningStrength = 'strong' | 'moderate' | 'weak';
 export type MarketType = 'competitive' | 'saturated' | 'emerging' | 'niche';
+/**
+ * WP-18 — the three claims the report may publish about relative market position. Absence of
+ * evidence is NOT a member: it is carried as `null` plus a `ScoreState` of
+ * `insufficient_signal`, the pairing WP-12 already uses for `company_metrics_state`.
+ */
+export type MarketPositionClaim = 'below market' | 'at parity' | 'ahead';
 export type StrategicContext = {
   positioningStrength: PositioningStrength;
   positioningNarrative: string;
@@ -463,7 +473,10 @@ export type StrategicContext = {
   marketNarrative: string;
   keySuccessFactor: string;
   strategyAlignment: string;
-  marketPosition: 'below market' | 'at parity' | 'ahead';
+  /** WP-18 — `null` when no competitive evidence was observed. Never a position claim. */
+  marketPosition: MarketPositionClaim | null;
+  /** WP-18 — `measured` when a position was derived; `insufficient_signal` when it abstains. */
+  marketPositionState: ScoreState;
   marketPositionStatement: string;
   positionImplication: string;
   executionRisk: string;

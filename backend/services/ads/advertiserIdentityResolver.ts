@@ -26,7 +26,15 @@
  * Matching a Wikidata LABEL against Google's legal name was considered and rejected: both are
  * brand strings derived from the same public usage, so agreement between them demonstrates only
  * that two systems know the brand. That is correlated evidence, not corroboration.
+ *
+ * ─── ONE DECLARED DEPENDENCY ──────────────────────────────────────────────
+ * `jurisdictionsAgree` delegates country equivalence to `backend/utils/countryNormalization`,
+ * which reads the runtime's ICU region data. That is the only thing in this file that is not a
+ * closed function of its arguments, and it is stated here rather than discovered later. It cannot
+ * reach the network, a database, a clock or the environment, and when ICU data is unavailable it
+ * degrades to plain textual comparison — never to a match it could not justify.
  */
+import { countriesEquivalent } from '../../utils/countryNormalization';
 
 /** What the Ads Transparency advertiser profile publicly exposes. Observation, not conclusion. */
 export interface ObservedAdvertiser {
@@ -94,15 +102,30 @@ export function normalizeLegalName(value: string | null | undefined): string | n
   return normalized || null;
 }
 
-/** Deterministic jurisdiction comparison. `the Netherlands` ≡ `Netherlands`; `NL` is NOT expanded. */
+/**
+ * Deterministic jurisdiction comparison. `the Netherlands` ≡ `Netherlands` ≡ `NL`.
+ *
+ * ─── WP-2 — WHY THE CODE IS NOW EXPANDED ──────────────────────────────────
+ * The two sides never spoke the same country vocabulary. The subject's jurisdiction is the raw
+ * JSON-LD `Organization.address.addressCountry`, read verbatim by `loadSubjectIdentity`, and in
+ * every measured case that is an ISO 3166-1 alpha-2 code: `hubspot.com` publishes `US`,
+ * `wix.com` publishes `IL`. Google's `Based in:` is always a full English name: `United States`,
+ * `Israel`. Compared as text those never agree, so this function returned false for jurisdictions
+ * that in fact corroborated each other, and a verified, exactly-name-matching advertiser was
+ * downgraded MATCHED -> PROBABLE_MATCH — losing `eligibleForCompanyClaim` and landing the
+ * company's own advertising in `otherAdvertisers`.
+ *
+ * The perverse consequence, pinned in the suite: a subject reached MATCHED only by publishing
+ * LESS identity information, because an `Organization` block with no address at all left this
+ * comparison unreached. Publishing a country was a penalty.
+ *
+ * Equivalence is decided by {@link countriesEquivalent} on an exact canonical key. No substring
+ * match, no similarity: `United States` and `United Kingdom` share a word and still disagree.
+ * Unknown or missing on either side stays false — absence is not agreement, and the caller above
+ * is written so that a false is only consulted when BOTH sides are present.
+ */
 export function jurisdictionsAgree(subject: string | null, advertiser: string | null): boolean {
-  const norm = (v: string | null) => {
-    const s = String(v ?? '').normalize('NFKC').toLowerCase().replace(/^the\s+/, '').replace(/[.,]/g, '').trim();
-    return s || null;
-  };
-  const a = norm(subject);
-  const b = norm(advertiser);
-  return a !== null && b !== null && a === b;
+  return countriesEquivalent(subject, advertiser);
 }
 
 /**

@@ -31,6 +31,9 @@ import {
   renderWebsiteChecks,
   renderWebsiteExperienceEvidence,
 } from './exportRendererReport1';
+// B7 (WP-10) — the public-evidence market / ICP proposal. Renders '' when the producer abstained
+// at the section level, so a report built without it is unchanged.
+import { renderMarketIcpRecommendation } from './exportRendererMarketIcp';
 import type {
   CanonicalPillarScore,
   CanonicalScore,
@@ -606,6 +609,11 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
           ${renderSearchVisibility(payload, EYEBROW_EVIDENCE)}
           ${renderPublicAdvertising(payload, EYEBROW_EVIDENCE)}
           ${renderCompetitiveTables(payload, EYEBROW_EVIDENCE)}
+          ${/* B7 (WP-10) — the market proposal. Sits immediately after the competition views
+                because those are the evidence most of it is reasoned from: the reader has just
+                seen who competes for the same buyer, and this states what market that implies —
+                as a proposal to review, never as a saved profile or an approved ICP. */ ''}
+          ${renderMarketIcpRecommendation(payload, EYEBROW_EVIDENCE)}
           ${renderMomentumMaturity(sections.momentum_maturity, surfaces, '08')}
           ${renderDataConfidenceCoverageSection(surfaces, '09')}
           ${renderChannelStrategySection(surfaces, '10', decisionLayerPopulated)}
