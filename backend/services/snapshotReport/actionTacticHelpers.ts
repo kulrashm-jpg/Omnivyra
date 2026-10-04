@@ -143,12 +143,25 @@ export function aiVisibilityTactics(
   aiVisibilityScore: number | null | undefined,
   publicAudit?: PublicAuditResult | null,
 ): string[] {
-  if ((aiVisibilityScore ?? 0) !== 0) return [];
+  // A null/unmeasured AI score is NOT a measured zero. `?? 0` coerced "we never checked" into
+  // "we checked and found nothing", which then emitted AI tactics as though an observation
+  // existed -- the same defect class as the GEO summary publishing "measured at 0/100".
+  // Only a real, finite zero earns these tactics.
+  if (typeof aiVisibilityScore !== 'number' || !Number.isFinite(aiVisibilityScore)) return [];
+  if (aiVisibilityScore !== 0) return [];
   const pages = topTrafficPotentialPages(publicAudit);
   if (pages.length === 0) return [];
   return [
     `Add FAQ schema and direct-answer sections to the top traffic-potential pages: ${pages.join(', ')}.`,
   ];
+}
+
+/**
+ * "a emerging market" shipped to a customer because the article was hard-coded. Chosen by sound
+ * rather than a single literal, so it stays correct as MarketType grows.
+ */
+export function indefiniteArticle(word: string): string {
+  return /^[aeiou]/i.test(word.trim()) ? 'an' : 'a';
 }
 
 export function structuredReasoning(params: {
@@ -160,7 +173,9 @@ export function structuredReasoning(params: {
   const geography = params.companyContext?.geography || '';
   const focus = [marketFocus, geography].filter(Boolean).join(' in ');
   const contextClause = focus ? `for ${focus}` : '';
-  const marketClause = params.strategicContext ? ` in a ${params.strategicContext.marketType} market` : '';
+  const marketClause = params.strategicContext
+    ? ` in ${indefiniteArticle(params.strategicContext.marketType)} ${params.strategicContext.marketType} market`
+    : '';
   return `${params.decision.description}${contextClause || marketClause ? ` This matters ${contextClause || ''}${marketClause}`.replace(/\s+/g, ' ').trim() : ''} because it affects how buyers discover, trust, and compare the offer before converting.`.replace(/\s+/g, ' ').trim();
 }
 

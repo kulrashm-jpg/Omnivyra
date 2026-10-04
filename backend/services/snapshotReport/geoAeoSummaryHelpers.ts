@@ -199,7 +199,7 @@ export function buildGeoAeoExecutiveSummary(params: {
               'If not addressed, authority in AI answer surfaces will remain weak even if technical SEO improves.',
           };
 
-  // ── Phase 2: actions derived from MEASURED deficits ─────────────────────────
+  // ── Phase 2: actions derived from STRUCTURAL readiness deficits ────────────
   //
   // BEFORE: a hardcoded three-element array, returned whether or not any AI evidence
   // existed — generic AEO best practice presented as a diagnosis.
@@ -219,25 +219,25 @@ export function buildGeoAeoExecutiveSummary(params: {
       key: 'answer_coverage', value: radar.answer_coverage_score as number,
       title: 'Add direct-answer sections to the highest-value query pages',
       linked_visual: 'matrix',
-      reason: (v) => `Answer coverage is measured at ${v}/100${missingQueries.length > 0 ? ` with ${missingQueries.length} query cluster(s) uncovered` : ''}.`,
+      reason: (v) => `Answer-coverage readiness scores ${v}/100 on the public crawl${missingQueries.length > 0 ? `, with ${missingQueries.length} query cluster(s) uncovered` : ''}. This rates the site's own content, not any observed AI answer.`,
     },
     {
       key: 'content_structure', value: radar.content_structure_score as number,
       title: 'Improve page structure with stronger summaries, FAQs, and heading hierarchy',
       linked_visual: 'funnel',
-      reason: (v) => `Content structure is measured at ${v}/100, which limits how reliably answers can be extracted.`,
+      reason: (v) => `Content-structure readiness scores ${v}/100 on the public crawl, which limits how reliably answers can be extracted. This rates the site's own content, not any observed AI answer.`,
     },
     {
       key: 'citation_readiness', value: radar.citation_readiness_score as number,
       title: 'Make key passages citation-ready with clear summaries and supporting evidence',
       linked_visual: 'funnel',
-      reason: (v) => `Citation readiness is measured at ${v}/100.`,
+      reason: (v) => `Citation readiness scores ${v}/100 on the public crawl. This rates the site's own content, not any observed AI answer.`,
     },
     {
       key: 'entity_clarity', value: radar.entity_clarity_score as number,
       title: 'Strengthen entity mentions and proof around the core brand and service terms',
       linked_visual: 'radar',
-      reason: (v) => `Entity clarity is measured at ${v}/100${entities.length > 0 ? ` across ${entities.length} detected entities` : ''}.`,
+      reason: (v) => `Entity clarity scores ${v}/100 on the public crawl${entities.length > 0 ? ` across ${entities.length} detected entities` : ''}. This rates the site's own content, not any observed AI answer.`,
     },
   ] as AeoAxis[]).filter((axis) => typeof axis.value === 'number');
 
@@ -274,9 +274,50 @@ export function buildGeoAeoExecutiveSummary(params: {
         (left, right) => right.answer_quality_score - left.answer_quality_score,
       )[0];
 
+  // ── Phase 2: say what was actually available, and decide ────────────────────
+  //
+  // The axes above rate the WEBSITE. Nothing here observed an answer engine, so this
+  // summary never reports AI retrieval as measured -- but "not measured" must not be the
+  // customer's final answer either. State the basis, state the limit, state what would
+  // unlock a real measurement, and still return a decision.
+  const aiRetrieval = {
+    state: 'insufficient_signal' as ScoreState,
+    basis: measuredAxisValues.length > 0
+      ? 'Public crawl of the site: heading structure, citation-shaped phrasing, entity mentions and query-answer coverage.'
+      : 'No public structural evidence was available for this domain.',
+    not_measurable:
+      'Whether AI answer engines actually retrieve, cite or name this brand. No answer-engine retrieval was performed for this report.',
+    unlock:
+      'Connect an answer-engine provider so branded, category and competitor queries can be checked directly. That replaces the structural inference above with observed AI visibility.',
+  };
+
+  const geoDecision = aiEvidenceSufficient
+    ? {
+        relevance: 'relevant' as const,
+        why: 'The site already publishes content that buyers ask questions about, so answer engines will read it whether or not it is optimised for them. Readiness is therefore worth improving now; it is also the only part of GEO that can be acted on without a provider.',
+        do_now: top3Actions.map((action) => action.action_title),
+        defer: [
+          'Defer any claim about current AI answer share, citation counts or competitor AI visibility until an answer-engine provider is connected.',
+        ],
+        measurement:
+          'Re-crawl and compare these readiness axes. Once an answer-engine provider is connected, measure branded and category query coverage and citation presence directly, against this run as the baseline.',
+      }
+    : {
+        relevance: 'conditional' as const,
+        why: 'Too little public structure was observed to judge answer-engine readiness for this domain. That is a gap in evidence, not a finding that the brand is absent from AI answers.',
+        do_now: [],
+        defer: [
+          'Defer GEO/AEO investment until the site has enough crawlable, answerable content for readiness to be assessed.',
+        ],
+        measurement:
+          'Re-run this report once the site exposes crawlable answer content; connect an answer-engine provider to measure AI visibility directly.',
+      };
+
   return {
     overall_ai_visibility_score: overallAiVisibilityScore,
     overall_ai_visibility_score_state: overallAiVisibilityScoreState,
+    ai_retrieval: aiRetrieval,
+    geo_decision: geoDecision,
     primary_gap: primaryGap,
     top_3_actions: top3Actions,
     visibility_opportunity: topQuery

@@ -1,5 +1,6 @@
 import type { ResolvedReportInput } from '../reportInputResolver';
 import type { CompanyNarrativeContext, NarrativeContext } from './types';
+import { isNonSpecificTaxonomyLabel } from '../companyContextTaxonomy';
 
 export function createNarrativeContext(): NarrativeContext {
   return {
@@ -30,6 +31,23 @@ export function firstNonEmpty(...values: Array<unknown>): string | null {
   return null;
 }
 
+/**
+ * Like `firstNonEmpty`, but skips terminal taxonomy buckets and placeholders.
+ *
+ * `report_settings.default_inputs` persists the classifier's fallback ("Other") for
+ * business_type/geography, and that value OUTRANKED the real profile columns here -- so a
+ * richly populated profile still rendered "for Other in Other". Falling through to the profile
+ * is the fix; returning null (and abstaining) is correct when nothing meaningful exists.
+ */
+export function firstMeaningful(...values: Array<unknown>): string | null {
+  for (const value of values) {
+    for (const candidate of splitCandidates(value)) {
+      if (!isNonSpecificTaxonomyLabel(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
 export function extractCompanyNarrativeContext(params: {
   resolvedInput?: ResolvedReportInput | null;
 }): CompanyNarrativeContext {
@@ -44,15 +62,36 @@ export function extractCompanyNarrativeContext(params: {
   const tagline = firstNonEmpty(profile?.unique_value);
   const homepageHeadline = firstNonEmpty(profile?.key_messages, profile?.campaign_focus);
   const primaryOffering = firstNonEmpty(profile?.products_services, profile?.products_services_list);
-  const businessType = firstNonEmpty(params.resolvedInput?.resolved.businessType, profile?.category, profile?.industry);
-  const geography = firstNonEmpty(params.resolvedInput?.resolved.geography, profile?.geography);
+  const extended = profile as {
+    category_list?: unknown; industry_list?: unknown; geography_list?: unknown;
+    competitors_list?: unknown; competitors?: unknown;
+  } | null | undefined;
+  const businessType = firstMeaningful(
+    params.resolvedInput?.resolved.businessType,
+    profile?.category,
+    profile?.industry,
+    extended?.category_list,
+    extended?.industry_list,
+  );
+  const geography = firstMeaningful(
+    params.resolvedInput?.resolved.geography,
+    profile?.geography,
+    extended?.geography_list,
+  );
+  // Company-DECLARED competitors. These are profile context, never public observations: they are
+  // deliberately kept out of `detected_competitors`, which is populated only by public discovery.
+  const declaredCompetitors = Array.from(new Set([
+    ...splitCandidates(params.resolvedInput?.resolved.competitors),
+    ...splitCandidates(extended?.competitors_list),
+    ...splitCandidates(extended?.competitors),
+  ].filter((name) => !isNonSpecificTaxonomyLabel(name))));
   // G4A: `resolved.companyContext` is typed non-optional but is absent at runtime on some resolver
   // paths, so the plain chain threw before any external dependency was reached. Guarded with the
   // same `?.` style the sibling consumer already uses
   // (competitorEngineServiceEngineDiscovery.ts:555 reads `context?.productServices?.[0]`).
   // Behaviour is unchanged whenever `companyContext` exists: an absent field already fell through
   // to the next `firstNonEmpty` candidate, and an absent array already fell through to the profile.
-  const marketFocus = firstNonEmpty(
+  const marketFocus = firstMeaningful(
     params.resolvedInput?.resolved.companyContext?.marketFocus,
     businessType,
     geography,
@@ -86,6 +125,7 @@ export function extractCompanyNarrativeContext(params: {
     geography,
     logoUrl,
     faviconUrl,
+    declaredCompetitors,
   };
 }
 

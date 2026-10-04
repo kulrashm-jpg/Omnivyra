@@ -104,9 +104,16 @@ describe('Report 1 evidence discipline — GEO/AEO', () => {
     expect(summary.primary_gap).not.toBeNull();
     expect(summary.top_3_actions.length).toBeGreaterThan(0);
     expect(summary.top_3_actions.length).toBeLessThanOrEqual(3);
-    // Every action must cite the measured value that caused it — not generic advice.
+    // Every action must cite the readiness value that caused it — not generic advice.
+    //
+    // PHASE 2 reworded the sentence away from "measured at N/100". These axes rate the
+    // WEBSITE via the public crawl; no answer engine was observed, and "measured" read to a
+    // customer as an AI result that nothing in this report supports. The CONTRACT this test
+    // locks is unchanged — the causing value must still appear — so the assertion is
+    // updated, not dropped, and the old phrasing is now forbidden outright.
     for (const action of summary.top_3_actions) {
-      expect(action.reasoning).toMatch(/measured at \d+\/100/);
+      expect(action.reasoning).toMatch(/\d+\/100/);
+      expect(action.reasoning).not.toMatch(/measured at \d+\/100/);
     }
   });
 

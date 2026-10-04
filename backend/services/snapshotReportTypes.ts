@@ -367,6 +367,21 @@ export interface SnapshotReport {
   geo_aeo_executive_summary: {
     overall_ai_visibility_score: number | null;
     overall_ai_visibility_score_state: ScoreState;
+    /** What evidence actually backed this section, and what would unlock a real measurement. */
+    ai_retrieval?: {
+      state: ScoreState;
+      basis: string;
+      not_measurable: string;
+      unlock: string;
+    };
+    /** GEO applicability decision. "Not measured" is never the customer's final answer. */
+    geo_decision?: {
+      relevance: 'relevant' | 'conditional';
+      why: string;
+      do_now: string[];
+      defer: string[];
+      measurement: string;
+    };
     /**
      * Phase 2: NULLABLE. When AI visibility is `insufficient_signal` or `unavailable`
      * there is no diagnosis to make, and the report must say nothing rather than assert
@@ -940,6 +955,8 @@ export type CompanyNarrativeContext = {
   geography: string | null;
   logoUrl: string | null;
   faviconUrl: string | null;
+  /** Company-DECLARED competitors from the profile. Never public observations. */
+  declaredCompetitors?: string[];
 };
 
 export type PositioningStrength = 'strong' | 'moderate' | 'weak';
