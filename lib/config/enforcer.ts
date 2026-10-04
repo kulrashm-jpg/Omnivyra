@@ -192,7 +192,16 @@ export function initEnforcer() {
         console.warn(`[WARN] Attempted to set process.env.${prop} from ${caller}`, {
           isProduction: process.env.NODE_ENV === 'production',
         });
-        return false; // Prevent mutation
+        // A `set` trap that returns falsish makes `process.env.X = ...` throw a
+        // TypeError ("trap returned falsish") in strict mode, which every ES
+        // module is. Libraries legitimately write env vars at import time --
+        // @sparticuz/chromium sets FONTCONFIG_PATH in setupLambdaEnvironment --
+        // and the throw aborted `import('@sparticuz/chromium')` entirely, which
+        // broke report PDF export on Vercel (all three renderer tiers then fell
+        // through). Perform the write and report success; env-write governance
+        // is the warning above, not a hard block. Mirrors `deleteProperty`.
+        target[prop] = value;
+        return true;
       },
 
       has(target: any, prop: string) {
