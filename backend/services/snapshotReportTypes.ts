@@ -364,6 +364,12 @@ export interface SnapshotReport {
     gaps: Array<{ area: string; why: string; impact: string; next_step: string; expected_benefit: string }>;
     next_moves: string[];
   } | null;
+  /**
+   * SLICE 3A — Organic + Paid acquisition decision. Optional and UNPOPULATED: 3A establishes
+   * the shape only, and no producer writes it yet. Absent means no decision was made, which
+   * a renderer must never treat as a default posture.
+   */
+  acquisition_decision?: import('./snapshotReport/acquisitionContract').AcquisitionDecision | null;
   geo_aeo_executive_summary: {
     overall_ai_visibility_score: number | null;
     overall_ai_visibility_score_state: ScoreState;

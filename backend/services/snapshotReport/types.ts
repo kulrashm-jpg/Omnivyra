@@ -176,6 +176,12 @@ export interface SnapshotReport {
       confidence: 'high' | 'medium' | 'low';
     };
   };
+  /**
+   * SLICE 3A — Organic + Paid acquisition decision. Optional and UNPOPULATED: 3A establishes
+   * the shape only, and no producer writes it yet. Absent means no decision was made, which
+   * a renderer must never treat as a default posture.
+   */
+  acquisition_decision?: import('./acquisitionContract').AcquisitionDecision | null;
   geo_aeo_executive_summary: {
     overall_ai_visibility_score: number;
     /** What evidence actually backed this section, and what would unlock a real measurement. */
