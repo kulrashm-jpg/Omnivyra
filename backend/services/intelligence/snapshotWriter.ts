@@ -19,6 +19,7 @@ import {
   classifyRecommendationStatus,
   getHistoricalStore,
 } from './historicalPersistence';
+import { buildComparabilityIdentity } from './comparabilityIdentity';
 
 export type ScanProfile = ReportSnapshotRecord['scan_profile'];
 
@@ -28,17 +29,57 @@ export type PersistSnapshotInput = {
   scanProfile: ScanProfile;
   engineVersion: string;
   providerOutcomes: ProviderHistoryRecord[];
+  /**
+   * The site this run actually measured (`buildCanonicalReport`'s
+   * `options.domain`). REQUIRED rather than optional: a snapshot recorded
+   * without it can never become a comparison baseline, and silently omitting
+   * it is exactly how a domain change becomes a published trend. Pass `null`
+   * only when the domain genuinely could not be resolved — the snapshot is
+   * still recorded (elapsed time is irrecoverable, so history is never thrown
+   * away) but it is reported as non-comparable instead of quietly compared.
+   */
+  domain: string | null;
 };
 
-export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Promise<{
+export type PersistSnapshotResult = {
   observedAt: string;
   written: boolean;
   reason?: string;
-}> {
+  /**
+   * BASELINE #1. `true` means the row carries a complete comparability
+   * identity and is therefore eligible to be the baseline a later run is
+   * measured against — i.e. the comparable-history clock has started.
+   * `false` means the row is durable history but can never anchor a delta.
+   */
+  comparable: boolean;
+  comparabilityReason: string | null;
+};
+
+export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Promise<PersistSnapshotResult> {
+  // Resolved BEFORE anything is written, so the row is stamped with the
+  // subject it measured at the moment it measured it. Reconstructing this
+  // later is impossible: `company_id` outlives a domain change, which is the
+  // whole problem the identity exists to solve.
+  const identity = buildComparabilityIdentity({
+    companyId: input.companyId,
+    domain: input.domain,
+    scanProfile: input.scanProfile,
+    engineVersion: input.engineVersion,
+  });
+  const comparabilityReason = identity
+    ? null
+    : 'Snapshot recorded without a complete comparability identity (company, measured domain, scan profile and engine version must all be known), so it cannot serve as a comparison baseline.';
+
   const store = getHistoricalStore();
   const operational = await store.isOperational();
   if (!operational) {
-    return { observedAt: new Date().toISOString(), written: false, reason: 'history-store-not-operational' };
+    return {
+      observedAt: new Date().toISOString(),
+      written: false,
+      reason: 'history-store-not-operational',
+      comparable: false,
+      comparabilityReason: 'History store is not operational — nothing was recorded.',
+    };
   }
 
   const observedAt = new Date().toISOString();
@@ -61,6 +102,10 @@ export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Pro
       engine_version: input.engineVersion,
       providers_used: providersUsed,
       providers_unavailable: providersUnavailable,
+      // Stamped only when the identity is complete. Writing a partial or
+      // guessed host would be worse than writing nothing: a reader cannot tell
+      // a guess from an observation, and the guess would compare equal.
+      ...(identity ? { subject_domain: identity.subject_domain } : {}),
     },
   };
 
@@ -177,5 +222,10 @@ export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Pro
     evidence,
   });
 
-  return { observedAt, written: true };
+  return {
+    observedAt,
+    written: true,
+    comparable: identity != null,
+    comparabilityReason,
+  };
 }

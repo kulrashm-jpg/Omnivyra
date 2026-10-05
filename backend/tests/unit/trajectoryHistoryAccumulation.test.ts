@@ -40,7 +40,19 @@ function snapshotRecord(authorityValue: number, observedAt: string): ReportSnaps
     maturity: 'building_baseline',
     maturity_stage: 'building_baseline',
     scan_profile: 'standard',
-    source_metadata: { engine_version: 'test', providers_used: [], providers_unavailable: [] },
+    source_metadata: {
+      engine_version: 'test',
+      providers_used: [],
+      providers_unavailable: [],
+      // COMPARABILITY: `CanonicalTrajectoryHistoryStore` now restricts the
+      // series to ONE comparability identity — velocity over snapshots that
+      // measured different sites (or used a different scan profile / engine
+      // version) measures the instrument, not the company. These fixtures are
+      // an accumulation series for one subject, so they share one
+      // `subject_domain`. The omitted case is the fail-closed one and is
+      // covered by report1SnapshotComparabilityIdentity.test.ts (G3).
+      subject_domain: 'accumulation-example.com',
+    },
   };
 }
 

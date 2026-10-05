@@ -36,6 +36,22 @@ export type ReportSnapshotRecord = {
     engine_version: string;
     providers_used: string[];
     providers_unavailable: string[];
+    /**
+     * COMPARABILITY: the normalized bare host this snapshot actually measured.
+     *
+     * Together with `company_id`, `scan_profile` and `engine_version` this is
+     * the snapshot's comparability identity (see `comparabilityIdentity.ts`).
+     * It is the one identity fact the schema never recorded, and it lives here
+     * rather than in a new column because `source_metadata` is already
+     * `jsonb NOT NULL` in `report_score_history` — an additive JSON key needs
+     * no migration.
+     *
+     * OPTIONAL ONLY for backwards compatibility: rows written before this key
+     * existed cannot carry it. Readers MUST treat its absence as "not
+     * comparable" rather than defaulting to the current domain — an unrecorded
+     * subject is exactly the domain change the guard exists to catch.
+     */
+    subject_domain?: string;
   };
 };
 

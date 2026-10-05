@@ -11,6 +11,14 @@
 //
 // "No fabrication" rule: when there is no prior snapshot, every delta is
 // `null` and the result carries `state: 'insufficient_history'`.
+//
+// COMPARABILITY rule (same family, stricter): a prior snapshot EXISTING is not
+// the same as a prior snapshot being COMPARABLE. Before this guard the
+// baseline was simply the most recent row for the same `company_id`, so a
+// website change, a different scan profile or a different scoring engine was
+// published as company movement. A pair that fails `compareComparability` now
+// yields `state: 'not_comparable'` carrying the reason — never a number, and
+// never silence.
 
 import type {
   CanonicalReport,
@@ -23,6 +31,7 @@ import type {
   ReportSnapshotRecord,
 } from './historicalPersistence';
 import { getHistoricalStore } from './historicalPersistence';
+import { selectComparableBaseline, type ComparabilityIdentity } from './comparabilityIdentity';
 
 export type DeltaDirection = 'improved' | 'regressed' | 'stagnated' | 'first_observation';
 
@@ -35,7 +44,13 @@ export type ScalarDelta = {
 };
 
 export type ChangeIntelligence = {
-  state: 'measured' | 'insufficient_history';
+  /**
+   * `not_comparable` is distinct from `insufficient_history` on purpose:
+   * "we have not measured you twice yet" and "we have measured you twice but
+   * not the same way" are different things to tell a reader, and only the
+   * first is fixed by waiting.
+   */
+  state: 'measured' | 'insufficient_history' | 'not_comparable';
   observed_at: string;
   comparison_baseline_at: string | null;
   // Top-level deltas
@@ -102,39 +117,93 @@ function evidenceFromHistory(snapshot: ReportSnapshotRecord | null): EvidenceTra
   };
 }
 
+/**
+ * The shape returned whenever NO delta may be published. Every scalar is built
+ * against a `null` previous, so each one is explicitly `delta: null` rather
+ * than `0` — absence is never a zero.
+ */
+function noDeltaResult(params: {
+  state: 'insufficient_history' | 'not_comparable';
+  current: CanonicalReport;
+  observedAt: string;
+  reason: string;
+}): ChangeIntelligence {
+  return {
+    state: params.state,
+    observed_at: params.observedAt,
+    comparison_baseline_at: null,
+    authority: buildScalarDelta(params.current.authority_overview.overall_score.value, null),
+    ai_visibility: buildScalarDelta(params.current.ai_surface_presence.score.value, null),
+    benchmark_percentile: buildScalarDelta(params.current.benchmark.overlay?.percentile ?? null, null),
+    pillars: params.current.pillars.map((p) => ({
+      pillar: p.pillar,
+      delta: buildScalarDelta(p.score.value, null),
+    })),
+    notable_changes: [],
+    evidence: evidenceFromHistory(null),
+    reason_unavailable: params.reason,
+  };
+}
+
+/**
+ * How far back to look for a comparable baseline.
+ *
+ * The previous value was 2, which only ever saw the single most recent prior
+ * row. That is now wrong: an incomparable run (one ad-hoc `deep` scan between
+ * two `standard` ones) must not hide the comparable run behind it. 24 matches
+ * the window the forecast and trajectory readers already use.
+ */
+const BASELINE_SEARCH_WINDOW = 24;
+
 export async function buildChangeIntelligence(params: {
   companyId: string;
   current: CanonicalReport;
+  /**
+   * The comparability identity of THIS run, built by the caller from the same
+   * facts it will hand `persistCanonicalSnapshot`. Explicitly `null`able and
+   * explicitly required: the parameter cannot be forgotten, and a `null` fails
+   * closed into `not_comparable` rather than silently comparing.
+   */
+  identity: ComparabilityIdentity | null;
 }): Promise<ChangeIntelligence> {
   const store = getHistoricalStore();
   const observedAt = new Date().toISOString();
 
-  const recentSnapshots = await store.loadSnapshots({ company_id: params.companyId, limit: 2 });
-  // The most-recent snapshot is what we COMPARE against, so we expect to find
-  // it BEFORE the current one is written. If only one snapshot exists, that's
-  // typically because this run wrote one — we look for the prior, not the current.
-  const baseline = recentSnapshots.find((s) => s.observed_at < observedAt) ?? null;
+  const recentSnapshots = await store.loadSnapshots({
+    company_id: params.companyId,
+    limit: BASELINE_SEARCH_WINDOW,
+  });
+  // The baseline is a PRIOR snapshot, so the current run's own row (if some
+  // caller already wrote it) is excluded before comparability is considered.
+  const priorSnapshots = recentSnapshots.filter((s) => s.observed_at < observedAt);
 
-  if (!baseline) {
-    return {
+  const selection = selectComparableBaseline({
+    current: params.identity,
+    priorSnapshots,
+  });
+
+  if (selection.state === 'no_history') {
+    return noDeltaResult({
       state: 'insufficient_history',
-      observed_at: observedAt,
-      comparison_baseline_at: null,
-      authority: buildScalarDelta(params.current.authority_overview.overall_score.value, null),
-      ai_visibility: buildScalarDelta(params.current.ai_surface_presence.score.value, null),
-      benchmark_percentile: buildScalarDelta(
-        params.current.benchmark.overlay?.percentile ?? null,
-        null,
-      ),
-      pillars: params.current.pillars.map((p) => ({
-        pillar: p.pillar,
-        delta: buildScalarDelta(p.score.value, null),
-      })),
-      notable_changes: [],
-      evidence: evidenceFromHistory(null),
-      reason_unavailable: 'No prior snapshot stored — change intelligence activates on the second report run.',
-    };
+      current: params.current,
+      observedAt,
+      reason: selection.reason,
+    });
   }
+
+  if (selection.state === 'not_comparable') {
+    // Prior runs exist, but none measured the same subject with the same
+    // instrument. Reporting `insufficient_history` here would be a lie by
+    // omission ("keep waiting"), so this is its own state.
+    return noDeltaResult({
+      state: 'not_comparable',
+      current: params.current,
+      observedAt,
+      reason: selection.reason,
+    });
+  }
+
+  const baseline: ReportSnapshotRecord = selection.baseline;
 
   const priorPillars = await store.loadPillarHistory({
     company_id: params.companyId,

@@ -716,7 +716,12 @@ export type CanonicalReport = {
 
   // Phase 5 — historical / operational sections.
   change_intelligence: {
-    state: 'measured' | 'insufficient_history';
+    // `not_comparable` = prior snapshots exist but none measured the same
+    // subject with the same instrument (see `intelligence/comparabilityIdentity.ts`).
+    // Deliberately distinct from `insufficient_history`, which only elapsed
+    // time can fix. Every consumer branches on `=== 'measured'`, so widening
+    // the union keeps all non-measured surfaces on their existing abstain path.
+    state: 'measured' | 'insufficient_history' | 'not_comparable';
     observed_at: string;
     comparison_baseline_at: string | null;
     authority_delta: { current: number | null; previous: number | null; delta: number | null; direction: 'improved' | 'regressed' | 'stagnated' | 'first_observation'; significant: boolean };

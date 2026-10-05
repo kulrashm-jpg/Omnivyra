@@ -68,6 +68,7 @@ import { persistCanonicalSnapshot, type ScanProfile } from '../intelligence/snap
 import { policyFor } from '../intelligence/executionPolicies';
 import { buildChangeIntelligence } from '../intelligence/deltaIntelligence';
 import { buildForecast } from '../intelligence/forecastService';
+import { buildComparabilityIdentity } from '../intelligence/comparabilityIdentity';
 import { buildProviderObservability } from '../intelligence/providerObservability';
 import { applyChangeAwareness } from '../intelligence/changeAwareInsights';
 import { getHistoricalStore } from '../intelligence/historicalPersistence';
@@ -397,6 +398,21 @@ function trustScoreFromSignals(result: TrustCoherenceResult): CanonicalScore {
 }
 
 // ── Top-level builder ─────────────────────────────────────────────────────────
+
+/**
+ * Fallback for `options.engineVersion`, previously an inline `'phase-5'`
+ * literal at the persist call site.
+ *
+ * NOTE FOR OPERATORS: no production caller supplies `engineVersion`
+ * (`snapshotReportService.ts` does not pass one), so every snapshot is stamped
+ * with this same string. It is part of the comparability identity and will
+ * correctly refuse a cross-engine comparison the moment distinct values are
+ * supplied — but until a real version is passed it discriminates nothing, and
+ * a scoring change will NOT be caught. Choosing what counts as a
+ * scoring-relevant engine change is a product decision, so no scheme is
+ * invented here.
+ */
+const DEFAULT_ENGINE_VERSION = 'phase-5';
 
 export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   brandName?: string | null;
@@ -800,9 +816,26 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   // (and so we don't double-write the current snapshot before comparing).
 
   const companyId = options?.companyId ?? '';
+
+  // The comparability identity of THIS run. Built once and shared by the three
+  // readers that subtract snapshots (change intelligence, forecast, and — via
+  // the newest stored row — authority trajectory) and by the writer, so the
+  // facts a snapshot is compared on are exactly the facts it was stamped with.
+  // `null` when any component is unknown; every consumer fails closed on it.
+  const comparabilityIdentity = buildComparabilityIdentity({
+    companyId,
+    domain: options?.domain ?? null,
+    scanProfile,
+    engineVersion: options?.engineVersion ?? DEFAULT_ENGINE_VERSION,
+  });
+
   if (companyId) {
     try {
-      const change = await buildChangeIntelligence({ companyId, current: reportShape });
+      const change = await buildChangeIntelligence({
+        companyId,
+        current: reportShape,
+        identity: comparabilityIdentity,
+      });
       reportShape.change_intelligence = {
         state: change.state,
         observed_at: change.observed_at,
@@ -821,7 +854,7 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
 
       if (policy.computeForecast) {
         const snapshots = await getHistoricalStore().loadSnapshots({ company_id: companyId, limit: 24 });
-        const forecast = buildForecast({ snapshots, horizonDays: 30 });
+        const forecast = buildForecast({ snapshots, horizonDays: 30, basis: comparabilityIdentity });
         reportShape.forecast = {
           state: forecast.state,
           horizon_days: forecast.horizon_days,
@@ -857,8 +890,12 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
           companyId,
           report: reportShape,
           scanProfile,
-          engineVersion: options?.engineVersion ?? 'phase-5',
+          engineVersion: options?.engineVersion ?? DEFAULT_ENGINE_VERSION,
           providerOutcomes: [], // Adapter-level outcomes are accumulated through the cost ledger; this slot remains for future per-call rows.
+          // The subject this run measured. Stamped onto the row so a LATER run
+          // can tell whether it is looking at the same website; without it the
+          // row is durable history but can never anchor a delta.
+          domain: options?.domain ?? null,
         });
         reportShape.scan_metadata.persisted = persisted.written;
         reportShape.scan_metadata.persisted_at = persisted.observedAt;
@@ -919,7 +956,11 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
       reportShape.override_disclosure = resolveOverrideTransparency(reportShape.active_overrides, reportShape.governance);
 
       // Comparison view (current vs historical / benchmark median).
-      reportShape.comparison = await buildComparisonView({ companyId, current: reportShape });
+      reportShape.comparison = await buildComparisonView({
+        companyId,
+        current: reportShape,
+        identity: comparabilityIdentity,
+      });
 
       // Collaboration records.
       const collab = getCollaborationStore();

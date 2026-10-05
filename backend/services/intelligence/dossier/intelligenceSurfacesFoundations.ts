@@ -275,7 +275,7 @@ export function buildComparativePositioning(report: CanonicalReport): Comparativ
 // ── 4. Trajectory & Movement ──────────────────────────────────────────────
 
 export type TrajectoryMovement = {
-  state: 'measured' | 'insufficient_history';
+  state: 'measured' | 'insufficient_history' | 'not_comparable';
   snapshots: Array<{ observed_at: string; value: number | null }>;
   authority_delta: { current: number | null; previous: number | null; delta: number | null; direction: string };
   ai_visibility_delta: { current: number | null; previous: number | null; delta: number | null; direction: string };
@@ -290,6 +290,20 @@ export function buildTrajectoryMovement(report: CanonicalReport): TrajectoryMove
     observed_at: s.observed_at,
     value: isMeasuredScore(s.score) ? (s.score.value as number) : null,
   }));
+  // `not_comparable` is NOT a shortage of history, and must not be reported as one. The
+  // previous snapshot exists; it measured a different subject, scan profile or engine, so it
+  // cannot serve as a baseline. Returned before the snapshot-count check deliberately: a long
+  // series of incomparable observations is still no trend, so a count can never promote it.
+  if (change.state === 'not_comparable') {
+    return {
+      state: 'not_comparable',
+      snapshots,
+      authority_delta: { current: null, previous: null, delta: null, direction: 'first_observation' },
+      ai_visibility_delta: { current: null, previous: null, delta: null, direction: 'first_observation' },
+      notable_changes: [],
+      read: 'A previous observation exists, but it is not comparable with this one — the subject domain, scan profile or engine version differs, so the two do not measure the same thing. This is not missing history; it is history that cannot be differenced. The present read is held as the new baseline.',
+    };
+  }
   if (change.state !== 'measured' && snapshots.filter((s) => s.value != null).length < 3) {
     return {
       state: 'insufficient_history',

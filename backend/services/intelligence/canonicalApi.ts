@@ -109,7 +109,14 @@ export async function getComparisonView(params: {
   companyId: string;
   current: CanonicalReport;
 }): Promise<ComparisonView> {
-  return buildComparisonView({ companyId: params.companyId, current: params.current });
+  // This wrapper receives only a tenant context, a company id and the report
+  // shape — none of which carries the measured domain or the engine version —
+  // so it cannot construct a comparability identity and passes `null`, giving
+  // an explicitly baseline-less view rather than an unguarded comparison. A
+  // caller that needs the prior-snapshot strip must build the identity where
+  // those facts exist (the canonical report builder does) and call
+  // `buildComparisonView` directly.
+  return buildComparisonView({ companyId: params.companyId, current: params.current, identity: null });
 }
 
 export function getExplanationsForReport(report: CanonicalReport): {
