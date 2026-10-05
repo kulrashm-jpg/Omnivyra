@@ -23,8 +23,10 @@ import type {
   AcquisitionNeedState,
   AcquisitionPosture,
   AcquisitionApplicability,
+  OrganicBand,
   OrganicCondition,
   PaidActivityObservation,
+  PaidPresenceState,
   PaidReadiness,
 } from './acquisitionContract';
 import type { ConfidenceBand } from './canonicalScoreState';
@@ -134,6 +136,78 @@ export type PostureInput = {
 
 const WEAK_ORGANIC_BANDS: ReadonlySet<string> = new Set(['developing', 'foundational']);
 
+// ── Presentation phrasing for the PERSISTED evidence basis ────────────────────
+//
+// `evidence.basis` is customer-facing prose AND it is persisted, so it is read by consumers
+// that have no display layer at all: the stored report, an export, an API reader. Building it
+// by interpolating the raw internal tokens published `demand need observed` to a company whose
+// need was merely DECLARED -- contradicting, in the same section, both `need.rationale` ("a
+// declaration of intent, not an observed shortfall") and `need.evidence.state` (`inferred`).
+// `BLOCKING`, `none_found` and `UNRESOLVED` leaked the same way.
+//
+// Only the rendering of those tokens into this one sentence changes here. No state value, no
+// posture, no gate and no evidence state is altered: `need.state` stays `observed` on its own
+// axis and `need.evidence.state` stays `inferred` on the evidence axis, exactly as the contract
+// intends.
+//
+// The wording is taken from the vocabulary 3H already shows customers and from this file's own
+// rationales, so the two can never disagree. It is restated rather than imported because those
+// maps live inside the HTML renderer: a decision service must not depend on a renderer, and 3H
+// is frozen. Each map is keyed by its closed union, so a new member cannot silently fall back
+// to a raw token -- it fails to compile until it is given words.
+
+const ORGANIC_BAND_PHRASE: Record<OrganicBand, string> = {
+  leading: 'is leading',
+  operational: 'is operational',
+  developing: 'is developing',
+  foundational: 'is foundational',
+  insufficient: 'could not be established',
+};
+
+const CONVERSION_GATE_PHRASE: Record<ConversionGate, string> = {
+  BLOCKING: 'the publicly observed conversion path carries a critical obstruction',
+  CONSTRAINED: 'the conversion pillar is partial rather than ready',
+  ADEQUATE: 'the conversion path can carry a bounded test',
+  NO_POSTURE: 'conversion readiness could not be evaluated',
+};
+
+const PAID_PRESENCE_PHRASE: Record<PaidPresenceState, string> = {
+  observed: 'public advertising was observed',
+  none_found: 'no public advertising was found through the available search',
+  not_observable: 'the public ad record could not be read',
+};
+
+// Inline `import type` deliberately: a top-level import of this module would put the word
+// "advertiser" into the region above `ConversionGate`, where a 3C test scans to prove that
+// `assessAcquisitionNeed` cannot reach ads, organic, conversion or competitor signals. That
+// assertion is correct and worth keeping, so the reference lives here instead.
+const ADVERTISER_IDENTITY_PHRASE:
+  Record<import('../ads/advertiserIdentityResolver').AdvertiserResolutionState, string> = {
+  MATCHED: 'advertiser identity matched this company',
+  PROBABLE_MATCH: 'advertiser identity is a probable match',
+  NOT_MATCHED: 'no advertiser matched this company',
+  UNRESOLVED: 'advertiser ownership could not be established',
+  INSUFFICIENT_EVIDENCE: 'there was not enough evidence to resolve advertiser identity',
+};
+
+/**
+ * Demand-need phrasing.
+ *
+ * The only correct reading of `observed` on the NEED axis is that a need was established FROM
+ * A DECLARATION -- never that a shortfall was seen. This is the same sentence 3H shows, so the
+ * persisted basis and the rendered label cannot drift apart.
+ */
+const DEMAND_NEED_PHRASE: Record<AcquisitionNeedState, string> = {
+  observed: 'a near-term demand need was declared',
+  not_established: 'no near-term demand need was established',
+  undetermined: 'a near-term demand need could not be established either way',
+};
+
+/** Capitalise a phrase that begins a sentence. The maps stay lower-case for mid-sentence use. */
+function sentenceCase(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /**
  * Decide the posture. Order encodes the locked matrix.
  *
@@ -213,10 +287,13 @@ export function decideAcquisitionPosture(input: PostureInput): AcquisitionDecisi
 
   const evidence: AcquisitionEvidence = {
     state: posture === 'INSUFFICIENT_EVIDENCE' ? 'insufficient_signal' : 'inferred',
-    basis:
-      `Organic condition ${organicBand}; conversion gate ${gate}; public paid activity `
-      + `${input.paidActivity.presence}; advertiser identity ${input.paidActivity.advertiserIdentity}; `
-      + `demand need ${input.need.state}.`,
+    basis: [
+      `Organic condition ${ORGANIC_BAND_PHRASE[organicBand]}.`,
+      `${sentenceCase(CONVERSION_GATE_PHRASE[gate])}.`,
+      `${sentenceCase(PAID_PRESENCE_PHRASE[input.paidActivity.presence])}, and `
+        + `${ADVERTISER_IDENTITY_PHRASE[input.paidActivity.advertiserIdentity]}.`,
+      `${sentenceCase(DEMAND_NEED_PHRASE[input.need.state])}.`,
+    ].join(' '),
     notMeasurable:
       'Spend, return on ad spend, cost per acquisition, conversion rate, lifetime value and profitability. No private performance data was available, and none was inferred from public evidence.',
     unlock: posture === 'INSUFFICIENT_EVIDENCE'

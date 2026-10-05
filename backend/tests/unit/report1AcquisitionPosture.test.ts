@@ -13,6 +13,7 @@ import {
   conversionGateFrom,
   decideAcquisitionPosture,
 } from '../../services/snapshotReport/acquisitionPosture';
+import type { ExperienceReadiness } from '../../services/digitalExperience';
 import type {
   OrganicCondition,
   PaidActivityObservation,
@@ -299,5 +300,112 @@ describe('3C scope boundary', () => {
     expect(found.length).toBeGreaterThan(0);
     // No synonym or invented posture.
     expect(body).not.toMatch(/'PAID_RECOMMENDED'|'ORGANIC_ONLY'|'PAID_READY'/);
+  });
+});
+
+// ── Persisted evidence prose must never expose an internal token ──────────────
+//
+// `decision.evidence.basis` is customer-facing AND persisted: 3H renders it verbatim and an
+// API reader sees it with no display layer at all. It used to be built by interpolating the
+// raw enums, which published "demand need observed" for a company whose need was only
+// DECLARED -- contradicting both the rationale and `need.evidence.state` in the same section.
+
+const GATE_READINESS: Array<[string, ExperienceReadiness | null, ExperienceReadiness | null]> = [
+  ['BLOCKING', 'obstructed', 'partial'],
+  ['CONSTRAINED', 'partial', 'partial'],
+  ['ADEQUATE', 'partial', 'ready'],
+  ['NO_POSTURE', null, null],
+];
+
+/** Every internal token that must never reach the persisted prose. */
+const FORBIDDEN_TOKENS = [
+  'BLOCKING', 'CONSTRAINED', 'ADEQUATE', 'NO_POSTURE',
+  'none_found', 'not_observable',
+  'MATCHED', 'NOT_MATCHED', 'PROBABLE_MATCH', 'UNRESOLVED', 'INSUFFICIENT_EVIDENCE',
+  'demand need observed', 'not_established', 'undetermined',
+  'insufficient',
+];
+
+describe('Evidence prose — no raw internal tokens', () => {
+  const BANDS: Array<OrganicCondition['band']> = ['leading', 'operational', 'developing', 'foundational', 'insufficient'];
+  const PRESENCES: Array<PaidActivityObservation['presence']> = ['observed', 'none_found', 'not_observable'];
+  const IDENTITIES: Array<PaidActivityObservation['advertiserIdentity']> = ['MATCHED', 'PROBABLE_MATCH', 'NOT_MATCHED', 'UNRESOLVED', 'INSUFFICIENT_EVIDENCE'];
+  const NEEDS = [NEED_DECLARED, NEED_NONE];
+
+  it('exposes no internal token across every state combination', () => {
+    let checked = 0;
+    for (const band of BANDS) {
+      for (const [, overall, pillar] of GATE_READINESS) {
+        for (const presence of PRESENCES) {
+          for (const identity of IDENTITIES) {
+            for (const need of NEEDS) {
+              const decision = decideAcquisitionPosture({
+                organic: organic(band),
+                paidActivity: paidActivity({ presence, advertiserIdentity: identity }),
+                paidReadiness: paidReadiness(),
+                need,
+                overallExperienceReadiness: overall,
+                conversionPillarReadiness: pillar,
+              });
+              for (const token of FORBIDDEN_TOKENS) {
+                expect(decision.evidence.basis).not.toContain(token);
+              }
+              checked += 1;
+            }
+          }
+        }
+      }
+    }
+    // Guard against a silently empty sweep.
+    expect(checked).toBe(BANDS.length * GATE_READINESS.length * PRESENCES.length * IDENTITIES.length * NEEDS.length);
+  });
+
+  it('states a declared need as declared, never as an observed shortfall', () => {
+    const basis = decideAcquisitionPosture({
+      organic: organic('developing'),
+      paidActivity: paidActivity(),
+      paidReadiness: paidReadiness(),
+      need: NEED_DECLARED,
+      overallExperienceReadiness: 'obstructed',
+      conversionPillarReadiness: 'partial',
+    }).evidence.basis;
+
+    expect(basis).toContain('A near-term demand need was declared');
+    expect(basis).not.toContain('demand need observed');
+    expect(basis).not.toContain('shortfall');
+  });
+
+  it('keeps the remaining facts truthful in words', () => {
+    const basis = decideAcquisitionPosture({
+      organic: organic('developing'),
+      paidActivity: paidActivity(),
+      paidReadiness: paidReadiness(),
+      need: NEED_DECLARED,
+      overallExperienceReadiness: 'obstructed',
+      conversionPillarReadiness: 'partial',
+    }).evidence.basis;
+
+    expect(basis).toContain('Organic condition is developing');
+    expect(basis).toContain('critical obstruction');
+    expect(basis).toContain('No public advertising was found through the available search');
+    expect(basis).toContain('advertiser ownership could not be established');
+  });
+
+  it('does not alter the need or its evidence state', () => {
+    expect(NEED_DECLARED.state).toBe('observed');
+    expect(NEED_DECLARED.evidence.state).toBe('inferred');
+  });
+
+  it('phrases every member of every closed union', () => {
+    const code = codeOnly();
+    for (const map of ['ORGANIC_BAND_PHRASE', 'CONVERSION_GATE_PHRASE', 'PAID_PRESENCE_PHRASE', 'ADVERTISER_IDENTITY_PHRASE', 'DEMAND_NEED_PHRASE']) {
+      expect(code).toContain(map);
+    }
+    // Typed by their unions, so a new member cannot fall back to a raw token.
+    expect(code).toContain('Record<OrganicBand, string>');
+    expect(code).toContain('Record<ConversionGate, string>');
+    expect(code).toContain('Record<PaidPresenceState, string>');
+    expect(code).toContain("Record<import('../ads/advertiserIdentityResolver').AdvertiserResolutionState, string>");
+    expect(code).toContain('Record<AcquisitionNeedState, string>');
   });
 });

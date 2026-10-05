@@ -522,3 +522,85 @@ describe('composer seam', () => {
     expect(block).not.toContain('assessDigitalExperience');
   });
 });
+
+// ── The REAL Drishiq shape, as production actually produced it ───────────────
+//
+// Report 2bb30e17-4254-463e-a8da-9add678cede1 (2026-10-05) is the evidence artifact from the
+// one authorized real-tenant run. It differs from the fixture above in a way that matters:
+// the conversion pillar is PARTIAL and overall readiness is obstructed via
+// value_communication, so the blocking dependency is value_communication rather than
+// conversion_readiness. That path existed in 3D's own tests but had never been exercised
+// through the producer, which is why the prose leak reached a customer before a test saw it.
+
+const drishiqProductionInput = (): AcquisitionProducerInput => ({
+  scoreDimensions: [
+    dimension('content_quality', 54, 'measured'),
+    dimension('coverage', 41, 'measured'),
+    dimension('reach', 32, 'measured'),
+    dimension('authority', null, 'insufficient_signal'),
+    dimension('aeo', 29, 'measured'),
+    dimension('platforms', null, 'unavailable'),
+  ],
+  searchVisibilityState: 'insufficient_signal',
+  geoVisibilityState: 'insufficient_signal',
+  advertising: advertising({ companyAdvertisers: [], subjectLegalNameUsed: null }),
+  digitalExperience: experience('obstructed', 'partial', 'obstructed'),
+  declaredProfile: DECLARED_PROFILE,
+});
+
+describe('producer — real Drishiq production shape', () => {
+  const decision = buildAcquisitionDecision(drishiqProductionInput());
+
+  it('reproduces the persisted posture, applicability, horizon and priority', () => {
+    expect(decision.posture).toBe('PAID_BLOCKED_BY_PREREQUISITE');
+    expect(decision.applicability).toBe('conditional');
+    expect(decision.horizon).toBe('immediate');
+    expect(decision.priority).toBe('high');
+  });
+
+  it('reproduces the persisted organic, paid and need states', () => {
+    expect(decision.organic?.band).toBe('developing');
+    expect(decision.paidActivity?.presence).toBe('none_found');
+    expect(decision.paidActivity?.advertiserIdentity).toBe('UNRESOLVED');
+    expect(decision.need?.state).toBe('observed');
+    expect(decision.need?.evidence.state).toBe('inferred');
+  });
+
+  it('names value_communication as the single blocking dependency', () => {
+    expect(decision.dependencies).toHaveLength(1);
+    expect(decision.dependencies[0].id).toBe('value_communication');
+    expect(decision.dependencies[0].kind).toBe('blocking');
+  });
+
+  it('keeps every downstream abstention intact', () => {
+    expect(decision.pilot).toBeNull();
+    expect(decision.budget).toBeNull();
+    expect(decision.learningFloor).toBeNull();
+    expect(decision.measurement).toBeNull();
+    expect(decision.reviewGate).toBeNull();
+  });
+
+  it('exposes no internal token in the persisted evidence prose', () => {
+    const basis = decision.evidence.basis;
+    expect(basis).not.toContain('demand need observed');
+    expect(basis).not.toContain('BLOCKING');
+    expect(basis).not.toContain('none_found');
+    expect(basis).not.toContain('UNRESOLVED');
+    expect(basis).not.toContain('insufficient');
+  });
+
+  it('states the same facts in truthful words', () => {
+    const basis = decision.evidence.basis;
+    expect(basis).toContain('Organic condition is developing');
+    expect(basis).toContain('critical obstruction');
+    expect(basis).toContain('No public advertising was found through the available search');
+    expect(basis).toContain('advertiser ownership could not be established');
+    expect(basis).toContain('A near-term demand need was declared');
+  });
+
+  it('never describes the declared need as an observed shortfall', () => {
+    const blob = JSON.stringify(decision);
+    expect(blob).toContain('declaration of intent, not an observed shortfall');
+    expect(blob).not.toContain('demand need observed');
+  });
+});
