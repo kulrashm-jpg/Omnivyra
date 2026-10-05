@@ -1077,3 +1077,286 @@ export function renderGeoEvidenceDecision(
     </section>
   `;
 }
+
+// ── SLICE 3H — ACQUISITION DECISION RENDERING ────────────────────────────────
+//
+// Pure presentation of the structured decision 3A-3G already made. This renderer
+// recomputes nothing: no posture, no need, no organic or paid condition, no dependency,
+// no pilot, no budget, no learning floor, no measurement, and no review outcome. Every
+// sentence below is either a display label for a value that exists, or a field printed
+// verbatim.
+//
+// Three presentation rules carry the evidence discipline the earlier slices established:
+//
+//  1. null, 0, [] and "not measurable" are different things and are never collapsed. A null
+//     baseline reads "not yet observed", never 0. An unavailable budget shows its unlock,
+//     never a zero amount.
+//  2. A display label may never imply more evidence than the underlying state. `inferred`
+//     never reads as measured, `insufficient_signal` never as a zero, `none_found` never as
+//     "does not advertise".
+//  3. The review gate is a PRE-COMMITTED framework, labelled as such. No runtime pilot
+//     execution exists in the product, so there is no outcome to report and none is implied.
+
+/** Display labels. The underlying enum values are never altered. */
+const ACQUISITION_POSTURE_LABEL: Record<string, string> = {
+  ORGANIC_LED: 'Organic-led',
+  ORGANIC_PLUS_CONTROLLED_PAID_PILOT: 'Organic + controlled paid pilot',
+  PAID_SUPPORTED_URGENCY: 'Paid-supported urgency',
+  PAID_SCALE_CANDIDATE: 'Paid scale candidate',
+  PAID_BLOCKED_BY_PREREQUISITE: 'Paid blocked by prerequisite',
+  PAID_NOT_CURRENTLY_RECOMMENDED: 'Paid not currently recommended',
+  INSUFFICIENT_EVIDENCE: 'Insufficient evidence',
+};
+
+/** Evidence state in plain words, without upgrading or downgrading it. */
+const EVIDENCE_STATE_LABEL: Record<string, string> = {
+  measured: 'Measured',
+  inferred: 'Inferred from available evidence',
+  insufficient_signal: 'Insufficient evidence',
+  unavailable: 'Not available',
+};
+
+const PAID_PRESENCE_LABEL: Record<string, string> = {
+  observed: 'Public advertising was observed',
+  none_found: 'No public advertising was found through the available search',
+  not_observable: 'The public ad record could not be read',
+};
+
+const ADVERTISER_IDENTITY_LABEL: Record<string, string> = {
+  MATCHED: 'Advertiser identity matched this company',
+  PROBABLE_MATCH: 'Advertiser identity is a probable match',
+  NOT_MATCHED: 'No advertiser matched this company',
+  UNRESOLVED: 'Advertiser ownership could not be established',
+  INSUFFICIENT_EVIDENCE: 'Not enough evidence to resolve advertiser identity',
+};
+
+const ORGANIC_BAND_LABEL: Record<string, string> = {
+  leading: 'Leading',
+  operational: 'Operational',
+  developing: 'Developing',
+  foundational: 'Foundational',
+  insufficient: 'Not established',
+};
+
+const NEED_STATE_LABEL: Record<string, string> = {
+  observed: 'A near-term demand need was declared',
+  not_established: 'No near-term demand need was established',
+  undetermined: 'A near-term demand need could not be established either way',
+};
+
+function label(map: Record<string, string>, key: string | null | undefined): string {
+  if (key == null) return '';
+  return map[key] ?? key;
+}
+
+function bullets(items: string[]): string {
+  return items
+    .map((item) => `<li style="font-size:10.5pt; line-height:1.6; margin:0 0 1.5mm; color:#1a2332;">${escape(item)}</li>`)
+    .join('');
+}
+
+function evidenceLine(evidence: { state: string; basis: string; notMeasurable: string | null; unlock: string | null }): string {
+  return `
+    <p style="font-size:10pt; line-height:1.55; margin:0 0 1.5mm; color:#334155;"><strong>${escape(label(EVIDENCE_STATE_LABEL, evidence.state))}.</strong> ${escape(evidence.basis)}</p>
+    ${evidence.notMeasurable ? `<p style="font-size:10pt; line-height:1.55; margin:0 0 1.5mm; color:#334155;"><strong>Not established.</strong> ${escape(evidence.notMeasurable)}</p>` : ''}
+    ${evidence.unlock ? `<p style="font-size:10pt; line-height:1.55; margin:0; color:#64748b;"><strong>What would unlock this.</strong> ${escape(evidence.unlock)}</p>` : ''}
+  `;
+}
+
+/**
+ * Render the acquisition decision.
+ *
+ * Omits entirely when no decision exists — which is every report today, because 3A-3G are
+ * pure functions with no producer yet. That is the correct behaviour: an empty section
+ * describing a decision nobody made would be worse than no section.
+ */
+export function renderAcquisitionDecision(
+  payload: CanonicalExportPayload,
+  eyebrow: string,
+): string {
+  const decision = payload.report1?.acquisition_decision;
+  if (!decision) return '';
+
+  const header = renderSectionHeader(
+    'Organic and Paid Acquisition',
+    'Does this company need near-term demand, and can it responsibly buy some?',
+    eyebrow,
+  );
+
+  const postureBlock = `
+    <div class="ds-playbook-group">
+      <div class="ds-playbook-group-header">
+        <p class="ds-playbook-group-label">Decision: ${escape(label(ACQUISITION_POSTURE_LABEL, decision.posture))}</p>
+        <p class="ds-playbook-group-desc">${escape(decision.rationale)}</p>
+      </div>
+      ${evidenceLine(decision.evidence)}
+    </div>
+  `;
+
+  const need = decision.need;
+  const needBlock = need
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Demand need: ${escape(label(NEED_STATE_LABEL, need.state))}</p>
+          <p class="ds-playbook-group-desc">${escape(need.rationale)}</p>
+        </div>
+        ${evidenceLine(need.evidence)}
+      </div>
+    `
+    : '';
+
+  const organic = decision.organic;
+  const organicBlock = organic
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Organic condition: ${escape(label(ORGANIC_BAND_LABEL, organic.band))}</p>
+          <p class="ds-playbook-group-desc">Assessed from the dimensions that could actually be observed. A dimension that was not measured is shown as not established — it is not counted as zero.</p>
+        </div>
+        ${organic.supportingDimensions.length > 0
+          ? `<ul style="margin:0 0 2mm; padding-left:5mm;">${bullets(organic.supportingDimensions.map((d) =>
+              `${d.key}: ${d.value === null ? 'not established' : String(d.value)} (${label(EVIDENCE_STATE_LABEL, d.state).toLowerCase()})`))}</ul>`
+          : ''}
+        ${evidenceLine(organic.evidence)}
+      </div>
+    `
+    : '';
+
+  const activity = decision.paidActivity;
+  const paidBlock = activity
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Public advertising</p>
+          <p class="ds-playbook-group-desc">${escape(label(PAID_PRESENCE_LABEL, activity.presence))}. ${escape(label(ADVERTISER_IDENTITY_LABEL, activity.advertiserIdentity))}${activity.platform ? ` on ${escape(activity.platform)}` : ''}.</p>
+        </div>
+        ${evidenceLine(activity.evidence)}
+      </div>
+    `
+    : '';
+
+  const dependencies = decision.dependencies;
+  const dependencyBlock = dependencies.length > 0
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Prerequisites</p>
+          <p class="ds-playbook-group-desc">A blocking prerequisite must be resolved before paid acquisition is a responsible next step. An advisory one does not prevent a test.</p>
+        </div>
+        <ul style="margin:0; padding-left:5mm;">
+          ${dependencies.map((dependency) => `<li style="font-size:10.5pt; line-height:1.6; margin:0 0 1.5mm; color:#1a2332;"><strong>${escape(dependency.label)} — ${dependency.kind === 'blocking' ? 'blocking' : 'advisory'}.</strong> ${escape(dependency.why)}${dependency.resolvedBy ? ` ${escape(dependency.resolvedBy)}` : ''}</li>`).join('')}
+        </ul>
+      </div>
+    `
+    : '';
+
+  const pilot = decision.pilot;
+  const pilotBlock = pilot
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Controlled pilot</p>
+          <p class="ds-playbook-group-desc">${escape(pilot.objective)}</p>
+        </div>
+        <ul style="margin:0; padding-left:5mm;">
+          ${bullets([
+            `Audience: ${pilot.audience ?? 'not established'}`,
+            `Channel: ${pilot.channel.kind === 'unavailable' ? `not established — ${pilot.channel.unlock}` : pilot.channel.name}`,
+            `Destination: ${pilot.destination ?? 'not established'}`,
+            `Primary conversion event: ${pilot.conversionEvent ?? 'not established'}`,
+            `Duration: ${pilot.durationDays === null ? 'not yet established' : `${pilot.durationDays} days`}`,
+          ])}
+        </ul>
+      </div>
+    `
+    : `
+      <p style="font-size:10.5pt; line-height:1.6; margin:0 0 3mm; color:#1a2332;">No controlled pilot has been specified. A paid experiment is only defined once the prerequisites above are resolved and the audience, destination and conversion event can each be established from evidence — so nothing has been proposed here rather than a partial plan.</p>
+    `;
+
+  const budget = decision.budget;
+  const budgetBlock = budget
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Budget</p>
+          <p class="ds-playbook-group-desc">${budget.state === 'declared'
+            ? `Company-declared: ${escape(String(budget.amount))} ${escape(budget.currency)}. This is a figure you supplied, not observed advertising spend.`
+            : budget.state === 'range_derivable'
+              ? `Derived range: ${escape(String(budget.min))}–${escape(String(budget.max))} ${escape(budget.currency)}. ${escape(budget.basis)}`
+              : `Not available. ${escape(budget.unlock)}`}</p>
+        </div>
+      </div>
+    `
+    : '';
+
+  const floor = decision.learningFloor;
+  const floorBlock = floor
+    ? `
+      <p style="font-size:10.5pt; line-height:1.6; margin:0 0 3mm; color:#1a2332;"><strong>Expected conversion events.</strong> ${floor.state === 'derived'
+        ? `${escape(String(floor.expectedConversionEvents))} — the number a declared budget could buy at a declared cost per conversion. ${escape(floor.basis)} Whether that is enough to interpret a result is a separate judgement.`
+        : `Not available. ${escape(floor.unlock)}`}</p>
+    `
+    : '';
+
+  const measurement = decision.measurement;
+  const measurementBlock = measurement
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">How this will be measured</p>
+          <p class="ds-playbook-group-desc">Primary outcome: ${escape(measurement.primaryKpi)}.</p>
+        </div>
+        <ul style="margin:0 0 2mm; padding-left:5mm;">
+          ${bullets([
+            `Source: ${measurement.source ?? 'not connected'}`,
+            `Can this be read today: ${measurement.measurementAvailable ? 'yes' : 'no'}`,
+            `Baseline: ${measurement.baseline ?? 'not yet observed'}`,
+            `Success target: ${measurement.successThreshold ?? 'not established — you would need to declare one'}`,
+            `Review period: ${measurement.reviewPeriodDays === null ? 'not yet established' : `${measurement.reviewPeriodDays} days`}`,
+            ...(measurement.secondaryKpis.length > 0 ? [`Secondary signals: ${measurement.secondaryKpis.join(', ')}`] : []),
+          ])}
+        </ul>
+        ${measurement.unlock ? `<p style="font-size:10pt; line-height:1.55; margin:0; color:#64748b;"><strong>What would unlock this.</strong> ${escape(measurement.unlock)}</p>` : ''}
+      </div>
+    `
+    : '';
+
+  const gate = decision.reviewGate;
+  const gateBlock = gate
+    ? `
+      <div class="ds-playbook-group">
+        <div class="ds-playbook-group-header">
+          <p class="ds-playbook-group-label">Review gate — agreed before any spend</p>
+          <p class="ds-playbook-group-desc">These are the conditions under which the test would be judged if it runs. They are not results: no experiment has been run.</p>
+        </div>
+        ${[
+          ['Stop', gate.stop],
+          ['Modify', gate.modify],
+          ['Continue', gate.proceed],
+          ['Scale', gate.scale],
+        ].map(([title, items]) => `
+          <p style="font-size:11pt; font-weight:600; margin:0 0 1mm; color:#0f172a;">${escape(title as string)}</p>
+          <ul style="margin:0 0 2.5mm; padding-left:5mm;">${bullets(items as string[])}</ul>
+        `).join('')}
+      </div>
+    `
+    : '';
+
+  return `
+    <section class="ds-section">
+      ${header}
+      <p class="ds-framing">Organic discovery compounds; paid acquisition buys information and time. This section states which of the two this company should be spending effort on now, what evidence that rests on, and what would change the answer. Nothing here is a claim about advertising performance — no spend, return, cost per acquisition or conversion rate is observable from public evidence.</p>
+      ${postureBlock}
+      ${needBlock}
+      ${organicBlock}
+      ${paidBlock}
+      ${dependencyBlock}
+      ${pilotBlock}
+      ${budgetBlock}
+      ${floorBlock}
+      ${measurementBlock}
+      ${gateBlock}
+    </section>
+  `;
+}

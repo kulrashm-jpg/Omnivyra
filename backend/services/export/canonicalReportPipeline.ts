@@ -109,6 +109,8 @@ export function renderCanonicalReportHtml(payload: ReportViewPayload): string {
       company_identity: payload.companyIdentity ?? null,
       website_checks: payload.websiteChecks ?? null,
       advertising: payload.advertising ?? null,
+      // 3H: carry the structured acquisition decision into the export, unchanged.
+      acquisition_decision: payload.acquisitionDecision ?? null,
       // PHASE 2B — carry Phase 2's GEO evidence boundary + decision into the export.
       geo_evidence_decision: payload.geoAeoExecutiveSummary
         ? {

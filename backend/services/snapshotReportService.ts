@@ -83,6 +83,7 @@ import {
 } from './snapshotReport/canonicalScoreState';
 // Report 1 assembly: cross-source opportunities, priorities and the 30/60/90 plan.
 import { assembleDigitalSnapshot } from './digitalSnapshotAssembly';
+import { buildAcquisitionDecision } from './snapshotReport/acquisitionDecision';
 // Phase 4: performance + digital-experience intelligence over the existing crawl corpus.
 import { assessDigitalExperience } from './digitalExperience';
 import { buildSearchFeatures } from './snapshotReport/searchFeatureHelpers';
@@ -871,6 +872,22 @@ export async function composeSnapshotReportFromDecisions(params: {
         observedAt: canonicalSnapshotShape.advertising.observedAt ?? null,
       }
       : null,
+  });
+
+  // ORGANIC + PAID ACQUISITION — the decision, produced from the finished state above.
+  //
+  // Same assembler position and the same discipline as `digital_snapshot`: it recomputes no
+  // dimension, no pillar, no readiness and no score. `buildAcquisitionDecision` is an
+  // orchestrator over the frozen 3A-3G functions, which own every rule it expresses. Inputs
+  // that do not exist are passed through as absent, so the decision abstains rather than
+  // inventing a pilot, a channel, a budget or a measured result.
+  canonicalSnapshotShape.acquisition_decision = buildAcquisitionDecision({
+    scoreDimensions: score.dimensions,
+    searchVisibilityState: canonicalSnapshotShape.search_visibility?.state ?? null,
+    geoVisibilityState: geoAeoExecutiveSummary.overall_ai_visibility_score_state,
+    advertising: canonicalSnapshotShape.advertising ?? null,
+    digitalExperience,
+    declaredProfile: params.resolvedInput?.profile ?? null,
   });
 
   return canonicalSnapshotShape;

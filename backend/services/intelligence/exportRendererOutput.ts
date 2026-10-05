@@ -27,6 +27,7 @@ import {
   renderDigitalSnapshotPriorities,
   renderNinetyDayPlan,
   renderSearchVisibility,
+  renderAcquisitionDecision,
   renderGeoEvidenceDecision,
   renderPublicAdvertising,
   renderWebsiteChecks,
@@ -614,6 +615,12 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
                 chases the same buyer, and refuses to merge the two. */ ''}
           ${renderSearchVisibility(payload, EYEBROW_EVIDENCE)}
           ${renderPublicAdvertising(payload, EYEBROW_EVIDENCE)}
+          ${/* 3H — the acquisition decision. Sits immediately after the public advertising
+                evidence because that is the evidence it most often has to refuse to over-read:
+                the reader has just seen what the ad record does and does not show, and this
+                states what should actually be done about demand. Omits entirely when no
+                decision exists. */ ''}
+          ${renderAcquisitionDecision(payload, EYEBROW_EVIDENCE)}
           ${renderCompetitiveTables(payload, EYEBROW_EVIDENCE)}
           ${/* B7 (WP-10) — the market proposal. Sits immediately after the competition views
                 because those are the evidence most of it is reasoned from: the reader has just

@@ -329,6 +329,11 @@ describe('GAP-08 · Test J — labels do not manufacture measurement', () => {
     const report = await compose(resolvedInput({ positioning: null, offering: null }));
     const bare = { ...report, company_identity: { fields: [], hasDeclared: false, hasObserved: false } };
     const html = renderOf(bare as SnapshotReport);
-    expect(html).not.toContain('Company Profile');
+    // The SECTION is what must be absent. A bare 'Company Profile' substring is no longer a
+    // proxy for it: the acquisition decision's evidence states, in the composer's own frozen
+    // wording, whether declared Company Profile context was available - prose about the
+    // source of a declaration, not the section that renders declarations.
+    expect(html).not.toContain('What does the public record say about this company');
+    expect(html).not.toContain('>Company Profile<');
   });
 });

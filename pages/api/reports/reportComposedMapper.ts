@@ -536,6 +536,11 @@ export function mapComposedReport(
     seoVisuals: reportType === 'snapshot' ? buildSeoVisuals(report) : undefined,
     geoAeoVisuals: reportType === 'snapshot' ? buildGeoAeoVisuals(report) : undefined,
     geoAeoExecutiveSummary: reportType === 'snapshot' ? buildGeoAeoExecutiveSummary(report) : undefined,
+    // 3H: strict pass-through of the structured acquisition decision. No producer writes it
+    // yet, so this is undefined on every real report today and the section omits.
+    acquisitionDecision: (report as { acquisition_decision?: unknown }).acquisition_decision as
+      | import('../../../backend/services/snapshotReport/acquisitionContract').AcquisitionDecision
+      | undefined,
     unifiedIntelligenceSummary: reportType === 'snapshot' ? buildUnifiedIntelligenceSummary(report) : undefined,
     competitorVisuals: reportType === 'snapshot' ? buildCompetitorVisuals(sanitizedReport) : undefined,
     competitorIntelligenceSummary: reportType === 'snapshot' ? buildCompetitorIntelligenceSummary(sanitizedReport) : undefined,

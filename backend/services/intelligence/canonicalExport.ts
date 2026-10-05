@@ -92,6 +92,11 @@ export type CanonicalExportPayload = {
      * Declared structurally rather than importing the view type, to keep the pages/ ->
      * backend/ boundary one-way.
      */
+    /**
+     * SLICE 3H — the structured acquisition decision produced by 3A-3G. Strict pass-through;
+     * `null` where no producer ran, so the renderer omits rather than invents.
+     */
+    acquisition_decision: SnapshotReport['acquisition_decision'] | null;
     geo_evidence_decision: {
       aiRetrieval: {
         state: string;
