@@ -10,6 +10,19 @@ import { config } from '@/config';
 import { resolveProviderCredential } from './providerCredentialResolver';
 import { fetchCanonicalSerp } from './serp/canonicalSerpClient';
 import type { SerpResultType } from './serp/serpResultTypes';
+// R1-D — the EXISTING classifier, reached from production for the first time.
+// `serpQueryUniverse` has held a deterministic branded/commercial/informational
+// classifier since Phase 3, and until now its only caller was a unit test: no
+// report ever carried a query class. Nothing is re-implemented here; the query
+// set competitor discovery already runs is classified with the module that was
+// written for exactly that and then left unwired.
+import {
+  brandTokensFor,
+  classifyQuery,
+  intentForClass,
+  type QueryClass,
+  type QueryIntent,
+} from './serpQueryUniverse';
 import {
   buildCompetitorFitRationale,
   buildCompetitorFitSignals,
@@ -616,6 +629,53 @@ export type SerpSearchObservation = {
   snippet: string | null;
   /** Organic rows the provider returned for this query — the window the position was found in. */
   resultCount: number;
+
+  // ─── R1-D: what makes this a measurement rather than a number ────────────
+  // Everything below answers a question a reader of a position MUST be able to
+  // ask: on which engine, via whom, when, and what kind of query was it. A rank
+  // without them is an assertion; with them it is an observation. All six are
+  // required rather than optional, so a future code path cannot produce a
+  // position that silently lacks its provenance.
+
+  /**
+   * What KIND of search this was, classified from the query text against the
+   * company's own brand tokens.
+   *
+   * "We rank #1" means something entirely different for the company's own name
+   * than for its category. Before this, every query was an unclassified string,
+   * so branded and non-branded visibility were indistinguishable in the output
+   * and a company ranking first for nothing but its own name read identically
+   * to one ranking first for its market.
+   */
+  queryClass: QueryClass;
+  /** The intent grouping, DERIVED from `queryClass` and never asserted separately. */
+  intent: QueryIntent;
+  /**
+   * The search engine whose results page was read. Null only if the provider
+   * returned rows without naming one, which the canonical client does not do.
+   */
+  engine: string | null;
+  /** The intermediary that fetched the page. Distinct from `engine`. */
+  provider: string | null;
+  /**
+   * When THIS query was observed, ISO-8601, as reported by the client that read
+   * it.
+   *
+   * Per observation, not per report. The surface previously carried one
+   * assembly-time timestamp for the whole set, which dated the composition
+   * rather than the evidence.
+   */
+  observedAt: string | null;
+  /**
+   * Other domains on this results page, in the provider's rank order.
+   *
+   * Competitor-overlap GROUNDWORK only, and deliberately nothing more: it
+   * records who else was on the page the company's own rank came from, which is
+   * the single comparison SERP alone can support. Nothing here is scored,
+   * qualified or classified as a competitor — that is the competitor engine's
+   * job, over its own evidence, and this array is not an input to it.
+   */
+  competitorDomains: string[];
 };
 
 /**
@@ -660,6 +720,20 @@ export type SerpKeywordResult = {
   reason: string | null;
   /** DG-001 — sibling evidence. Never merged into `rows`. */
   features: SerpFeatureRow[];
+  /**
+   * R1-D — the observation's identity, carried through from the canonical client.
+   *
+   * This projection previously dropped all three. The client knew which provider
+   * it used, which engine it asked for and when the page came back, and this
+   * type threw every one of them away one call later, which is why the report
+   * surface had to assert `provider: 'serpapi'` as a hard-coded literal and
+   * stamp its own assembly clock as the observation time.
+   *
+   * All three are null unless `status === 'ok'` — nothing was read otherwise.
+   */
+  provider: string | null;
+  engine: string | null;
+  observedAt: string | null;
 };
 
 /**
@@ -739,6 +813,13 @@ export async function fetchSerpResultsForKeyword(
       rows: [],
       reason: result.reason ?? 'Public search results could not be retrieved.',
       features: [],
+      // No page was read. The identity of an observation that did not happen is
+      // null on every axis — including the provider, which is named in the
+      // client's own failure result but must not travel on an empty row set as
+      // though something had been observed through it.
+      provider: null,
+      engine: null,
+      observedAt: null,
     };
   }
 
@@ -772,7 +853,22 @@ export async function fetchSerpResultsForKeyword(
       title: row.title ?? null,
     }));
 
-  return { status: 'ok', rows, reason: null, features };
+  // R1-D — the observation's identity travels WITH the rows, from the one place
+  // that knows it. Read from the client's result and never re-derived here: a
+  // second literal would be a second source of truth for which engine was read.
+  return {
+    status: 'ok',
+    rows,
+    reason: null,
+    features,
+    // `?? null` is not defensive noise: a provider result that does not STATE
+    // one of these must read as "not stated", never as `undefined`. `undefined`
+    // disappears from JSON entirely, so a stored observation would lose the
+    // field rather than record that it was unknown.
+    provider: result.provider ?? null,
+    engine: result.engine ?? null,
+    observedAt: result.observedAt ?? null,
+  };
 }
 
 /**
@@ -791,6 +887,16 @@ export async function discoverCompetitorDomainsFromSerp(params: {
   keywords: string[];
   ownDomain: string;
   geography: string | null;
+  /**
+   * R1-D — the company name, used ONLY to recognise a branded query.
+   *
+   * Optional, and its absence degrades honestly rather than silently: without
+   * it, brand detection falls back to the domain's bare label (`acme` for
+   * `acme.com`), which is the brand token for most companies and is derived
+   * from evidence the caller already passes. No query is added, removed or
+   * reordered by supplying it — it changes only how a query is LABELLED.
+   */
+  companyName?: string | null;
 }): Promise<{
   domains: string[];
   liveKeywordCount: number;
@@ -802,6 +908,13 @@ export async function discoverCompetitorDomainsFromSerp(params: {
    * the company's public search evidence was being thrown away. Collecting here means one request
    * per keyword still serves both purposes, and an own-domain observation survives even when
    * competitor qualification later rejects every other domain on the page.
+   *
+   * R1-D — each entry now carries its own query class, intent, engine, provider
+   * and observation time, so a position is traceable to the search that produced
+   * it. This also makes "QUERY CLASS UNAVAILABLE" a readable state rather than a
+   * missing one: a class with zero entries here was never searched, which is a
+   * different finding from a class that was searched and did not rank (present,
+   * with `position: null`). Neither is poor visibility.
    */
   searchObservations: SerpSearchObservation[];
   /**
@@ -837,12 +950,51 @@ export async function discoverCompetitorDomainsFromSerp(params: {
   const seenQueries = new Set<string>();
   const seenFeatureQueries = new Set<string>();
   let requestsMade = 0;
-  let acquisitionStatus: 'ok' | 'unavailable' | 'failed' = preflight.value ? 'failed' : 'unavailable';
-  let acquisitionReason: string | null = preflight.value ? null : (preflight.reason ?? 'No SERP provider credential is configured.');
+
+  // ─── R1-D: "NOT SEARCHED" IS NOT "SEARCH FAILED" ─────────────────────────
+  //
+  // THE DEFECT. This was `preflight.value ? 'failed' : 'unavailable'` — with a
+  // credential present, the run began life already declaring that SERP
+  // acquisition had FAILED, before a single request was issued. Nothing reset it
+  // when no request was issued at all, and the engine does call this with an
+  // empty keyword list: `keywords` there is built from extraction plus
+  // generation and is `[]` when both come back empty. The loop then ran zero
+  // times and the run reported `status: 'failed'` with `reason: null`, which the
+  // report surface renders as a provider error under the generic "Public search
+  // results could not be retrieved for this report."
+  //
+  // So a company for which NO QUERY WAS EVER RUN was reported as a company whose
+  // search provider broke. Those are two of the four states that must never
+  // collapse into one another, and neither of them is poor visibility.
+  //
+  // THE FIX. The status now starts at the only thing true before any request:
+  // nothing has been attempted. `attempted` counts dispatched queries, and
+  // `failed` is reachable ONLY from a request that was actually made and did not
+  // succeed. "Nothing was attempted" resolves to `unavailable` — which is the
+  // documented meaning of that state ("acquisition could not run") — and carries
+  // a reason that says precisely which of the two it was, rather than inheriting
+  // a generic retrieval failure.
+  let attempted = 0;
+  let acquisitionStatus: 'ok' | 'unavailable' | 'failed' = 'unavailable';
+  let acquisitionReason: string | null = preflight.value
+    // A credential exists, so if nothing runs it is because nothing was asked.
+    ? 'No search queries were available for this company, so no public search observation was attempted.'
+    : (preflight.reason ?? 'No SERP provider credential is configured.');
   const ownDomain = normalizeDomain(params.ownDomain);
+
+  // R1-D — brand tokens for query classification. Derived once, from the inputs
+  // the caller already supplies; no lookup, no network, no new evidence source.
+  const brandTokens = brandTokensFor({ companyName: params.companyName ?? null, domain: params.ownDomain });
+  const classOf = (query: string): { queryClass: QueryClass; intent: QueryIntent } => {
+    const queryClass = classifyQuery(query, brandTokens);
+    return { queryClass, intent: intentForClass(queryClass) };
+  };
 
   const runKeywordBatch = async (keywords: string[], retry: boolean): Promise<void> => {
     for (const keyword of keywords.slice(0, MAX_DISCOVERY_KEYWORDS)) {
+      // A query was dispatched. From here a `failed` verdict is earned rather
+      // than assumed — see the state note above.
+      attempted += 1;
       const result = await fetchSerpResultsForKeyword(keyword, params.geography);
       if (result.status === 'ok') {
         requestsMade += 1;
@@ -862,6 +1014,7 @@ export async function discoverCompetitorDomainsFromSerp(params: {
       if (result.status === 'ok' && ownDomain && !seenQueries.has(keyword)) {
         seenQueries.add(keyword);
         const own = result.rows.find((row) => row.domain === ownDomain);
+        const { queryClass, intent } = classOf(keyword);
         searchObservations.push({
           query: keyword,
           // The provider's own rank, never the post-filter array index.
@@ -870,6 +1023,27 @@ export async function discoverCompetitorDomainsFromSerp(params: {
           title: own?.title ?? null,
           snippet: own?.snippet ?? null,
           resultCount: result.rows.length,
+          // ─── R1-D — the provenance of this one measurement ───────────────
+          // Reached only inside `status === 'ok'`, so every observation that
+          // exists was produced by a page that was actually read. There is no
+          // branch that can append an observation without one.
+          queryClass,
+          intent,
+          engine: result.engine,
+          provider: result.provider,
+          // The time the page was read, from the client that read it — NOT this
+          // loop's clock and not the report's assembly clock.
+          observedAt: result.observedAt,
+          // Rank-ordered page neighbours, own domain excluded. Groundwork only:
+          // this is who else was on the page, not a competitor set. The blocked-
+          // host filter is deliberately NOT applied — it exists to keep
+          // directories and aggregators out of competitor QUALIFICATION, and
+          // removing them here would misreport what the results page contained.
+          competitorDomains: Array.from(new Set(
+            result.rows
+              .map((row) => row.domain)
+              .filter((domain): domain is string => Boolean(domain) && domain !== ownDomain),
+          )),
         });
       }
 
@@ -914,6 +1088,20 @@ export async function discoverCompetitorDomainsFromSerp(params: {
       });
       await runKeywordBatch(simplifiedKeywords, true);
     }
+  }
+
+  // ─── R1-D: the state invariant, enforced where it is produced ────────────
+  //
+  // `failed` is a claim about a request that happened. If nothing was dispatched
+  // it cannot be true, and the honest state is `unavailable` — "we could not
+  // look" — with a reason naming which of the two reasons applied. This is a
+  // belt-and-braces guard on the initialiser above rather than a second code
+  // path: the only way to reach `failed` is through a dispatched request, and if
+  // that ever stops being so, this corrects it instead of shipping the wrong
+  // state to a customer-facing surface.
+  if (attempted === 0 && acquisitionStatus === 'failed') {
+    acquisitionStatus = 'unavailable';
+    acquisitionReason = 'No search query was dispatched, so no public search observation was attempted.';
   }
 
   return {

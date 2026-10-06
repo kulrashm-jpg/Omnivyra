@@ -141,3 +141,42 @@ describe('wave-2 — the leading-band defence gate is reachable again', () => {
     expect(COMPLETE_RUN.measured_cells / (COMPLETE_RUN.measurable_cells as number)).toBeGreaterThanOrEqual(0.6);
   });
 });
+
+// ── WAVE-3 / R — the citation-density label states its own population ────────
+//
+// The numerator can only be drawn from measured cells (an unmeasurable cell has
+// `citation_rate: null`), so quoting it against the enumerated grid was incoherent AND
+// contradicted the coverage percentage rendered immediately above it in the same chip.
+
+describe('wave-3 — citation density is quoted over measured cells', () => {
+  it('names the measured population, not the whole grid', () => {
+    const label = buildAIVisibilityState(
+      reportWith(COMPLETE_RUN, 80, [0.9, 0.8, 0.2, 0.1]),
+    ).citation_density_label;
+    expect(label).toBe('2 of 4 measured cells citing reliably');
+    expect(label).not.toContain('of 20');
+  });
+
+  it('is unaffected by the size of the unmeasurable grid', () => {
+    // Grid doubles to 40; measurable stays 4. A density over what was measured cannot move.
+    const wide = buildAIVisibilityState(
+      reportWith({ ...COMPLETE_RUN, total_cells: 40, unavailable_cells: 38 }, 80, [0.9, 0.8, 0.2, 0.1]),
+    ).citation_density_label;
+    expect(wide).toBe('2 of 4 measured cells citing reliably');
+  });
+
+  it('has no density to state when nothing was measured', () => {
+    const label = buildAIVisibilityState(
+      reportWith({ measured_cells: 0, unavailable_cells: 20, total_cells: 20, measurable_cells: 4, structurally_unmeasurable_cells: 16 }, null),
+    ).citation_density_label;
+    expect(label).toBeNull();
+  });
+
+  it('no longer contradicts the coverage percentage beside it', () => {
+    // The two render in one chip: value = coverage %, detail = this label.
+    const surface = buildAIVisibilityState(reportWith(COMPLETE_RUN, 80, [0.9, 0.8, 0.2, 0.1]));
+    expect(surface.retrieval_consistency_pct).toBe(100);
+    // A 100% coverage read must not sit above a label implying 18 cells failed to cite.
+    expect(surface.citation_density_label).toContain('of 4 measured cells');
+  });
+});

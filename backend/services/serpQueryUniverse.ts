@@ -109,7 +109,33 @@ export function brandTokensFor(params: { companyName?: string | null; domain?: s
   const name = normalizeQuery(params.companyName ?? '');
   if (name) {
     tokens.add(name);
-    for (const word of name.split(' ')) if (word.length >= 4) tokens.add(word);
+    // ─── R1-D: A SINGLE WORD OF A MULTI-WORD NAME IS NOT A BRAND TOKEN ────
+    //
+    // THE DEFECT. This was `for (const word of name.split(' ')) if (word.length
+    // >= 4) tokens.add(word)`, which makes every word of the company name a
+    // brand token. Company names routinely CONTAIN their category: for
+    // "Northwind Analytics", `analytics` became a brand token, so "best mid
+    // market analytics software" classified as BRANDED. The same happens to
+    // every company called ...Software, ...Data, ...Marketing, ...Cloud,
+    // ...Labs, ...Health.
+    //
+    // WHY IT MATTERS HERE. This classifier is what splits branded from
+    // non-branded search visibility. The failure direction is the flattering
+    // one: a company's category queries get counted as brand queries, inflating
+    // the visibility it already has for its own name and erasing the category
+    // visibility it does not have — while the output still reads as measured.
+    //
+    // THE RULE. A brand token must IDENTIFY the company: the full name, or the
+    // registrable domain label, which is its public registered identity. One
+    // word out of several is ambiguous evidence, and the string alone cannot say
+    // which word is distinctive and which is the category.
+    //
+    // THE TRADE-OFF, ACCEPTED DELIBERATELY. "northwind reviews" now classifies
+    // commercial rather than branded. That is the CONSERVATIVE error: it
+    // declines to claim brand visibility it cannot establish, instead of
+    // claiming category visibility that was never measured. Making it stricter
+    // again needs a distinctiveness rule (e.g. a category-noun denylist), which
+    // is a product decision and is deliberately not invented here.
   }
   const host = String(params.domain ?? '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
   const label = host.split('.')[0];

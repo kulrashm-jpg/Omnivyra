@@ -386,28 +386,43 @@ export class WikidataAdapter implements KnowledgeGraphProvider {
         // Falling back to hit[0] here is the defect this fix exists to remove.
         hit = verified ? (candidates.find((c) => c.id === verified.id) ?? null) : null;
         if (!hit) {
+          // ─── AUTH-G-001 — A NO-HIT IS NOT A MEASURED ZERO ───────────────────
+          //
+          // THE DEFECT. This branch returned `state: 'measured'` with `score: 0`. Candidates
+          // existed but none declared this domain, which means ONE thing: we could not tell
+          // which organisation this is. It does not mean the organisation has zero knowledge-graph
+          // authority. `mergeEntityDimension` admits any result where
+          // `state === 'measured' && score != null`, and `0 != null` is true — so this zero
+          // OVERWROTE the baseline Entity Graph Strength with a hard 0 stamped `measured`,
+          // then entered the Authority pillar mean and the overall geometric mean as a real
+          // measurement. Every brand Wikidata cannot disambiguate was published as having been
+          // measured at zero external authority.
+          //
+          // THE CONTRACT. Absence of a record is absence of evidence. The honest state is
+          // `unavailable` with the reason and the unlock, exactly as the brand-name-missing and
+          // request-failed branches above and below already do. `score: null` makes
+          // `mergeEntityDimension` fall through to the baseline instead of overwriting it, and
+          // `isMeasured` then excludes the dimension from the pillar rather than dragging it to 0.
+          // The `wikidata_entity_unverified` observation is retained so this remains programmatically
+          // distinguishable from `wikidata_no_entity`, but on a `count: 0` trace so no confidence
+          // is earned from a finding that established nothing.
+          const reason =
+            'Wikidata returned candidates for this brand name but none declares this domain as its official website, so the subject’s entity could not be identified. This is an identification gap, not a measurement of zero authority. Unlock: add the official website (P856) to the brand’s Wikidata entity, or connect a knowledge-graph provider that resolves by domain.';
+          const unverifiedEvidence = unavailableEvidence(reason);
           const result: EntityIntelligenceResult = {
-            state: 'measured',
-            entity: {
-              wikidata_qid: null,
-              google_kg_mid: null,
-              schema_completeness: 0,
-              sameAs_count: 0,
-              sameAs_targets: [],
-              canonical_description: null,
-            },
-            score: 0,
+            state: 'unavailable',
+            entity: null,
+            score: null,
             evidence: {
-              count: 1,
-              sources: ['heuristic'],
-              freshness: { last_observed_at: new Date().toISOString(), age_hours: 0 },
+              ...unverifiedEvidence,
               observations: [
+                ...unverifiedEvidence.observations,
                 // Distinct from `wikidata_no_entity`: candidates DID exist, none of them declared
                 // this domain. "We could not tell which organisation this is" is its own finding.
                 { signal: 'wikidata_entity_unverified', source: 'wikidata', observed_at: new Date().toISOString() },
               ],
             },
-            reason_unavailable: null,
+            reason_unavailable: reason,
           };
           this.cache.set(cacheKey, result);
           return result;
@@ -427,26 +442,28 @@ export class WikidataAdapter implements KnowledgeGraphProvider {
     }
 
     if (!hit) {
+      // AUTH-G-001 — "not in Wikidata" is not "zero authority". Same contract as the
+      // domain-unverified branch above: no record found means nothing was established, so the
+      // result is `unavailable` with the reason and the unlock, never a measured 0 that
+      // `mergeEntityDimension` would push into the Authority pillar as a real measurement.
+      // Wikidata coverage of small and mid-market brands is sparse by construction, so a
+      // measured 0 here capped the Authority pillar for precisely the companies least likely
+      // to have an entity — the score was reporting Wikipedia's editorial reach, not theirs.
+      const reason =
+        'No Wikidata entity was found for this brand, so its knowledge-graph presence could not be established. Absence of a Wikidata record is not evidence of zero authority. Unlock: create or claim the brand’s Wikidata entity (including its official website, P856), or connect a knowledge-graph provider with broader coverage.';
+      const noEntityEvidence = unavailableEvidence(reason);
       const result: EntityIntelligenceResult = {
-        state: 'measured',
-        entity: {
-          wikidata_qid: null,
-          google_kg_mid: null,
-          schema_completeness: 0,
-          sameAs_count: 0,
-          sameAs_targets: [],
-          canonical_description: null,
-        },
-        score: 0,
+        state: 'unavailable',
+        entity: null,
+        score: null,
         evidence: {
-          count: 1,
-          sources: ['heuristic'],
-          freshness: { last_observed_at: new Date().toISOString(), age_hours: 0 },
+          ...noEntityEvidence,
           observations: [
+            ...noEntityEvidence.observations,
             { signal: 'wikidata_no_entity', source: 'wikidata', observed_at: new Date().toISOString() },
           ],
         },
-        reason_unavailable: null,
+        reason_unavailable: reason,
       };
       this.cache.set(cacheKey, result);
       return result;

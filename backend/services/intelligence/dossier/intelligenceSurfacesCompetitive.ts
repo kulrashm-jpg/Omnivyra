@@ -325,9 +325,21 @@ export function buildAIVisibilityState(report: CanonicalReport): AIVisibilitySta
   const citedCells = matrix
     ? matrix.cells.filter((c) => (c.citation_rate ?? 0) >= 0.6).length
     : 0;
-  const totalCells = matrix?.coverage.total_cells ?? 0;
-  const citation_density_label = matrix && totalCells > 0
-    ? `${citedCells} of ${totalCells} cells citing reliably`
+  // R / WAVE-3 — the numerator and the denominator must come from the SAME population.
+  //
+  // `citedCells` counts cells whose `citation_rate >= 0.6`, and a structurally unmeasurable
+  // cell carries `citation_rate: null`, so `(null ?? 0) >= 0.6` is never true — the numerator
+  // can only ever be drawn from MEASURED cells. Dividing it by the enumerated grid was
+  // therefore not merely pessimistic but incoherent, and it rendered directly beneath the
+  // Wave-2-corrected coverage percentage: a complete run printed "Coverage 100%" above
+  // "1 of 20 cells citing reliably", contradicting itself inside one component.
+  //
+  // This is a DENSITY statistic over what was measured, not a coverage percentage, so it does
+  // not re-open the coverage denominator question. The same file already states its population
+  // this way ("… of N measured cells …"), and the null guard moves from "a grid was enumerated"
+  // to "something was actually measured", which is when a density exists at all.
+  const citation_density_label = matrix && observedAiCells > 0
+    ? `${citedCells} of ${observedAiCells} measured cells citing reliably`
     : null;
 
   const reading = (() => {
