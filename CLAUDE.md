@@ -25,6 +25,14 @@ governed.
   without `--base` then records that commit as PRE_GOVERNANCE_ADOPTION_BASELINE and only later
   commits are governed. Adoption never creates commits, writes Jira, invokes JEV or modifies Claude
   transcripts.
+- **Not sure which Story or step applies:** `gov intake --worktree <path> [--session <uuid>]` is the
+  single entry point. It classifies the worktree (GOVERNED_RESUME, EXISTING_STORY, NEW_WORK or
+  PRE_GOVERNANCE_ADOPTION), reuses a matching Story instead of proposing a duplicate, and otherwise
+  stores a Story + AC proposal and prints its hash. It refuses on any ambiguity (two candidate
+  Stories, two sessions claiming the worktree, partial scope, prohibited paths, no registry id). It
+  never commits, stashes, resets or edits Jira. Only a human approves a proposal, with
+  `gov intake --apply sha256:<proposal>` in an interactive terminal under their own Jira identity;
+  `--bind` then hands over to `gov attach` / `gov start` with the Story key it printed.
 
 ## Evidence and authority
 

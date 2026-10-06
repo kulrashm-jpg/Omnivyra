@@ -15,6 +15,15 @@
  *   judge        --story OMNI-n --worktree <path> --evidence <sha256:...> --invoked-by <human|claude-code>:<id> [--write-back] [--model <id>]
  *   submit       --story OMNI-n --evidence <sha256:...> [--worktree <path>]
  *   check-merge  --story OMNI-n --worktree <path> --evidence <sha256:...>
+ *   intake       [--worktree <path>] [--session <uuid>] [--story OMNI-n] [--intent "<text>"]
+ *                [--authorized <pattern>]... [--prohibited <pattern>]... [--verification <id>]...
+ *                [--judgment-ac "<text>"]... [--base <ref>] [--bind]
+ *                (classifies the worktree — GOVERNED_RESUME / EXISTING_STORY / NEW_WORK /
+ *                PRE_GOVERNANCE_ADOPTION — and stores a Story proposal when none exists;
+ *                read-only apart from GOV_HOME; --bind hands over to attach / start)
+ *   intake       --apply sha256:<proposal>
+ *                (HUMAN only: interactive terminal, typed proposal hash, the human's own
+ *                Jira identity GOV_INTAKE_EMAIL + GOV_INTAKE_TOKEN; creates the Story/ACs)
  *
  * Explicit and user-invoked only: no background work, no automatic JEV, never
  * launches `claude`, never merges / releases / deploys, never moves a Jira
@@ -30,13 +39,31 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import readline from 'node:readline';
 import { FileAuditSink, defaultAuditDir, type AuditSink } from '../jev-bjc/audit';
 import { canonicalJson } from '../jev-bjc/canonical';
 import { createTypeSafeTransport, resolveApiKey, type JevTransport } from '../jev-bjc/provider';
 import { resolveModel } from '../jev-jira/cli';
 import { identityViolations, preflightPermissionKeys, resolveRuntimeIdentity, type RuntimeIdentity } from '../jev-jira/identity';
 import { JiraClientError, createJiraClient, type JiraClient, type JiraCredentials, type JiraPermissionProbe } from '../jev-jira/jiraClient';
-import { findByStory, bindSession } from './binding';
+import { findByStory, findBySession, bindSession, readBindings } from './binding';
+import {
+  appendIntakeAudit,
+  baselineCommands,
+  classifyIntake,
+  loadIntakeRules,
+  loadProposal,
+  renderProposalMarkdown,
+  samePath,
+  slugFrom,
+  storeProposal,
+  storyCandidateFromIssue,
+  type IntakeAuditInput,
+  type IntakeRules,
+  type StoryCandidate,
+} from './intake';
+import { applyIntakeProposal, createIntakeJira, createIntakeReader, resolveIntakeCredentials, type IntakeJira, type IntakeReader } from './intakeJira';
+import { parseNulList, parsePorcelainZ, readLiveSessions, type IntakeProbe, type LiveSession, type WorktreeState } from './intakeProbe';
 import { loadBundle } from './evidence';
 import { createJiraQuery, type JiraQuery } from './jiraQuery';
 import { runJudgeFlow } from './judgeFlow';
@@ -92,6 +119,20 @@ export interface GovDeps {
   resolveCommit: (dir: string, ref: string) => Promise<string | null>;
   /** True iff refs/heads/<branch> exists in `dir`. */
   branchExists: (dir: string, branch: string) => Promise<boolean>;
+  /** intake: read-only worktree probe. */
+  intakeProbe: IntakeProbe;
+  /** intake: live Claude sessions (registry under ~/.claude/sessions). */
+  liveSessions: (env: Record<string, string | undefined>) => LiveSession[];
+  /** intake: read-only active-Story search (reader credentials). */
+  intakeReader: (credentials: JiraCredentials) => IntakeReader;
+  /** intake --apply: Story/AC creation under the human's own Jira identity. */
+  intakeJira: (credentials: JiraCredentials) => IntakeJira;
+  /** intake: rules (default prohibited paths, path → registry ids), validated against the registry. */
+  intakeRules: (registry: VerificationRegistry) => IntakeRules;
+  /** intake --apply: true only for an interactive terminal (a human at the keyboard). */
+  isInteractive: () => boolean;
+  /** intake --apply: one line typed by the human. */
+  prompt: (question: string) => Promise<string>;
 }
 
 export const GOV_EXIT: Readonly<Record<GovStatus, number>> = {
@@ -124,6 +165,13 @@ const USAGE = [
   '  check-merge --story OMNI-<n> --worktree <path> --evidence <sha256:...>',
 ].join('\n');
 
+/** Governed entry (kept separate from the per-Story verbs above). */
+const INTAKE_USAGE = [
+  '  intake      [--worktree <path>] [--session <uuid>] [--story OMNI-<n>] [--intent "<text>"] [--authorized <p>]... [--prohibited <p>]...',
+  '              [--verification <id>]... [--judgment-ac "<text>"]... [--base <ref>] [--bind]',
+  '  intake      (human only, interactive terminal, your own Jira identity) --apply sha256:<proposal>',
+].join('\n');
+
 // ---------------------------------------------------------------- default deps
 
 function runGit(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -133,6 +181,37 @@ function runGit(args: string[]): Promise<{ code: number; stdout: string; stderr:
       resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
     });
   });
+}
+
+/**
+ * gov intake worktree probe — read-only git only (rev-parse, symbolic-ref,
+ * status, merge-base, diff). Never add / commit / stash / reset / checkout /
+ * rebase: intake reports the user's work, it never touches it.
+ */
+export function createIntakeProbe(): IntakeProbe {
+  return {
+    async worktreeState(worktree: string, baseRef: string): Promise<WorktreeState> {
+      const wt = path.resolve(worktree);
+      if (!REF_RE.test(baseRef)) throw new Error(`invalid base ref: ${baseRef}`);
+      const head = await runGit(['-C', wt, 'rev-parse', '--verify', 'HEAD']);
+      const headCommit = head.stdout.trim();
+      if (head.code !== 0 || !COMMIT_RE.test(headCommit)) throw new Error(`not a git worktree with a commit: ${posix(wt)}`);
+      const br = await runGit(['-C', wt, 'symbolic-ref', '--short', '-q', 'HEAD']);
+      const branch = br.code === 0 && br.stdout.trim() !== '' ? br.stdout.trim() : null;
+      const status = await runGit(['-C', wt, 'status', '--porcelain=v1', '-z', '--untracked-files=all']);
+      if (status.code !== 0) throw new Error(`git status failed in ${posix(wt)}`);
+      const dirty = parsePorcelainZ(status.stdout);
+      const mb = await runGit(['-C', wt, 'merge-base', 'HEAD', baseRef]);
+      const mergeBase = mb.code === 0 && COMMIT_RE.test(mb.stdout.trim()) ? mb.stdout.trim() : null;
+      let changed: string[] = [];
+      if (mergeBase !== null) {
+        const diff = await runGit(['-C', wt, 'diff', '--name-only', '-z', mergeBase, headCommit]);
+        if (diff.code !== 0) throw new Error(`git diff failed in ${posix(wt)}`);
+        changed = parseNulList(diff.stdout);
+      }
+      return { worktree: posix(wt), branch, head: headCommit, clean: dirty.length === 0, dirty_files: dirty, base_ref: baseRef, merge_base: mergeBase, changed_since_base: changed };
+    },
+  };
 }
 
 export function defaultGovDeps(): Omit<GovDeps, 'registry'> {
@@ -163,6 +242,20 @@ export function defaultGovDeps(): Omit<GovDeps, 'registry'> {
       const r = await runGit(['-C', dir, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
       return r.code === 0;
     },
+    intakeProbe: createIntakeProbe(),
+    liveSessions: (env) => readLiveSessions(env),
+    intakeReader: (credentials) => createIntakeReader({ credentials }),
+    intakeJira: (credentials) => createIntakeJira({ credentials }),
+    intakeRules: (registry) => loadIntakeRules(registry),
+    isInteractive: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
+    prompt: (question) =>
+      new Promise((resolve) => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        rl.question(question, (answer) => {
+          rl.close();
+          resolve(answer);
+        });
+      }),
   };
 }
 
@@ -907,9 +1000,339 @@ async function checkAdoptedCommits(
   return conclude();
 }
 
+// ---------------------------------------------------------------- intake
+
+/** Every value of a repeatable flag, in order. A flag present without a value is null (usage error). */
+function flagsAll(argv: string[], name: string): string[] | null {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] !== name) continue;
+    const v = argv[i + 1];
+    if (typeof v !== 'string' || v === '' || v.startsWith('--')) return null;
+    out.push(v);
+    i++;
+  }
+  return out;
+}
+
+const MAX_LISTED = 50;
+
+function listPaths(run: Run, label: string, paths: string[]): void {
+  run.io.out(`${label} (${paths.length}):`);
+  for (const p of paths.slice(0, MAX_LISTED)) run.io.out(`  ${p}`);
+  if (paths.length > MAX_LISTED) run.io.out(`  … ${paths.length - MAX_LISTED} more`);
+}
+
+/** `gov` as the README defines it; printed commands are for the human (or the governed session) to run. */
+const GOV = 'gov';
+
+async function cmdIntake(run: Run, argv: string[]): Promise<number> {
+  if (has(argv, '--apply')) return cmdIntakeApply(run, argv);
+  const wtArg = flag(argv, '--worktree');
+  if (has(argv, '--worktree') && wtArg === null) return usage(run, '--worktree needs a path');
+  const sessionArg = flag(argv, '--session');
+  if (has(argv, '--session') && (sessionArg === null || !SESSION_ID_RE.test(sessionArg))) return usage(run, '--session needs a lowercase uuid');
+  const storyFlag = flag(argv, '--story');
+  if (has(argv, '--story') && (storyFlag === null || !STORY_KEY_RE.test(storyFlag))) return usage(run, '--story needs OMNI-<n>');
+  const intent = flag(argv, '--intent');
+  if (has(argv, '--intent') && intent === null) return usage(run, '--intent needs text');
+  const baseRef = flag(argv, '--base') ?? DEFAULT_BASE_REF;
+  if (has(argv, '--base') && flag(argv, '--base') === null) return usage(run, '--base needs a ref');
+  const authorized = flagsAll(argv, '--authorized');
+  const prohibited = flagsAll(argv, '--prohibited');
+  const verification = flagsAll(argv, '--verification');
+  const judgmentAcs = flagsAll(argv, '--judgment-ac');
+  if (!authorized || !prohibited || !verification || !judgmentAcs) return usage(run, '--authorized, --prohibited, --verification and --judgment-ac each need a value');
+  const bind = has(argv, '--bind');
+  const worktree = path.resolve(wtArg ?? process.cwd());
+  run.result.intake = true;
+  const layout = layoutOf(run);
+
+  let rules: IntakeRules;
+  try {
+    rules = run.deps.intakeRules(run.deps.registry);
+  } catch (err) {
+    throw new Outcome('REFUSED', `intake rules are invalid: ${(err as Error).message}`);
+  }
+
+  let state;
+  try {
+    state = await run.deps.intakeProbe.worktreeState(worktree, baseRef);
+  } catch (err) {
+    throw new Outcome('REFUSED', `${posix(worktree)} is not a usable git worktree: ${(err as Error).message}`);
+  }
+  Object.assign(run.result, { worktree: state.worktree, branch: state.branch, head: state.head, merge_base: state.merge_base, clean: state.clean });
+  run.io.out(`Worktree: ${state.worktree}`);
+  run.io.out(`Branch: ${state.branch ?? '(detached)'}`);
+  run.io.out(`HEAD: ${state.head}`);
+  run.io.out(`Merge-base with ${state.base_ref}: ${state.merge_base ?? '(none)'}`);
+  run.io.out(`State: ${state.clean ? 'clean' : `DIRTY — ${state.dirty_files.length} uncommitted/untracked path(s); intake changes none of them`}`);
+  if (!state.clean) listPaths(run, 'Uncommitted paths', state.dirty_files);
+  if (state.changed_since_base.length > 0) listPaths(run, `Committed since merge-base`, state.changed_since_base);
+
+  let ledger: SessionBinding[];
+  try {
+    ledger = readBindings(layout);
+  } catch (err) {
+    throw new Outcome('INTEGRITY_FAILED', (err as Error).message);
+  }
+  const forWorktree = ledger.filter((b) => samePath(b.worktree, state.worktree));
+  let resumeCheck: { packetIntact: boolean; descends: boolean } | null = null;
+  if (forWorktree.length > 0) {
+    const latest = forWorktree[forWorktree.length - 1];
+    let packetIntact = false;
+    try {
+      loadPacket(layout, latest.story_key, latest.packet_hash);
+      packetIntact = true;
+    } catch {
+      packetIntact = false;
+    }
+    let descends = false;
+    try {
+      descends = (await run.deps.git.isAncestor(worktree, latest.base_commit, state.head)) === true;
+    } catch {
+      descends = false;
+    }
+    resumeCheck = { packetIntact, descends };
+  }
+
+  const sessionBoundStory = sessionArg ? (findBySession(layout, sessionArg)?.story_key ?? null) : null;
+  if (sessionArg) {
+    let file: string | null;
+    try {
+      file = findSessionFile(sessionArg, run.env);
+    } catch (err) {
+      throw new Outcome('REFUSED', (err as Error).message);
+    }
+    if (file === null) throw new Outcome('REFUSED', `no Claude transcript found for session ${sessionArg}`);
+  }
+  const live = run.deps.liveSessions(run.env);
+
+  let explicitStory: StoryCandidate | null = null;
+  let activeStories: StoryCandidate[] = [];
+  if (forWorktree.length === 0) {
+    const { credentials } = await preflightIdentity(run, false);
+    try {
+      if (storyFlag) {
+        const issue = await run.deps.jiraQuery(credentials).getStory(storyFlag);
+        explicitStory = issue ? storyCandidateFromIssue(issue) : null;
+      } else {
+        activeStories = (await run.deps.intakeReader(credentials).searchActiveStories()).map(storyCandidateFromIssue);
+      }
+    } catch (err) {
+      throw new Outcome('REFUSED', `Jira read failed: ${err instanceof JiraClientError ? err.code : (err as Error).message}`);
+    }
+  }
+
+  const decision = classifyIntake({
+    state,
+    bindingsForWorktree: forWorktree,
+    resumeCheck,
+    sessionId: sessionArg,
+    sessionBoundStory,
+    liveSessions: live,
+    explicitStoryKey: storyFlag,
+    explicitStory,
+    activeStories,
+    options: { intent, authorized, prohibited, verification, judgmentAcs },
+    rules,
+    registry: run.deps.registry,
+  });
+
+  const auditBase: Omit<IntakeAuditInput, 'event' | 'outcome'> = {
+    worktree: state.worktree,
+    branch: state.branch,
+    head: state.head,
+    merge_base: state.merge_base,
+    dirty_file_count: state.dirty_files.length,
+    session_id: sessionArg,
+  };
+  const audit = (input: Omit<IntakeAuditInput, keyof typeof auditBase> & Partial<typeof auditBase>) => appendIntakeAudit(layout, { ...auditBase, ...input } as IntakeAuditInput, run.deps.now);
+
+  if (decision.kind === 'REFUSED') {
+    run.result.refusal = decision.code;
+    run.io.err(`Intake refused [${decision.code}]: ${decision.message}`);
+    for (const d of decision.details.slice(0, MAX_LISTED)) run.io.err(`  ${d}`);
+    audit({ event: 'refused', refusal: decision.code, outcome: decision.message });
+    throw new Outcome('REFUSED', 'nothing was created, committed, bound or changed');
+  }
+  run.result.classification = decision.kind;
+  run.io.out(`Classification: ${decision.kind}`);
+
+  // 1. GOVERNED_RESUME — resume; never a second Story, baseline, binding or agent.
+  if (decision.kind === 'GOVERNED_RESUME') {
+    const b = decision.binding;
+    const md = layout.packetFile(b.story_key, b.packet_hash, 'md');
+    Object.assign(run.result, { story: b.story_key, session_id: b.session_id, packet_hash: b.packet_hash, packet_md: md });
+    run.io.out(`Governed by ${b.story_key} · session ${b.session_id} (${b.mode}) · packet ${b.packet_hash}`);
+    if (b.adoption) run.io.out(`Adoption baseline: ${b.adoption.baseline_commit} (${b.adoption.classification})`);
+    run.io.out('Resume normally (nothing new is created):');
+    if (live.some((s) => s.session_id === b.session_id)) {
+      run.io.out(`  The session is running: in its window, type @${md}`);
+    } else if (b.mode === 'new') {
+      run.io.out(`  cd ${quoteIfNeeded(winPathIfWindows(b.worktree))} && claude --resume ${b.session_id}`);
+    } else {
+      for (const step of buildResumeInstructions({ sessionId: b.session_id, sessionCwd: b.session_file?.cwd ?? b.worktree, packetMarkdownPath: md, fork: false }).steps) run.io.out(`  ${step}`);
+    }
+    run.io.out(`  Check the packet is current: ${GOV} packet --story ${b.story_key} --worktree ${quoteIfNeeded(b.worktree)}`);
+    audit({ event: 'classify', classification: decision.kind, candidate_story: b.story_key, session_id: b.session_id, packet_hash: b.packet_hash, adoption_classification: b.adoption ? b.adoption.classification : null, outcome: 'resume' });
+    return finish(run, 'OK');
+  }
+
+  // 2. EXISTING_STORY, or adoption with a covering Story.
+  if (decision.kind === 'EXISTING_STORY' || (decision.kind === 'PRE_GOVERNANCE_ADOPTION' && decision.candidate !== null)) {
+    const story = decision.kind === 'EXISTING_STORY' ? decision.story : decision.candidate!;
+    run.result.story = story.key;
+    run.io.out(`Story: ${story.key} — ${story.summary} (reused; no new Story)`);
+    const readiness = await readReadiness(run, story.key);
+    requireReady(run, readiness);
+    const owner = decision.owner;
+
+    if (decision.kind === 'PRE_GOVERNANCE_ADOPTION') {
+      run.io.out('PRE-GOVERNANCE ADOPTION: an adoption baseline is required. Intake never stashes, resets, rebases or commits.');
+      run.io.out(`Subject: ${decision.subject ?? '(unknown)'} · owner session: ${owner}`);
+      run.io.out('You (the human) make the baseline commit:');
+      for (const c of baselineCommands(state.worktree, story.key, story.summary, false)) run.io.out(`  ${c}`);
+      run.io.out('Then bind the existing session (it keeps running; no restart):');
+      run.io.out(`  ${GOV} intake --worktree ${quoteIfNeeded(state.worktree)} --session ${owner} --story ${story.key} --bind`);
+      audit({ event: 'classify', classification: decision.kind, candidate_story: story.key, session_id: owner, outcome: 'baseline required' });
+      return finish(run, 'OK');
+    }
+
+    // Clean tree: decide the hand-over to attach / start.
+    let headTrailers: Record<string, string[]> = {};
+    try {
+      headTrailers = await run.deps.git.commitTrailers(worktree, state.head);
+    } catch {
+      headTrailers = {};
+    }
+    const gb = headTrailers[TRAILER_GOVERNED_BY] ?? [];
+    const adoptedHead = gb.length > 0 && gb.every((v) => v === story.key) && (headTrailers[TRAILER_GOV_PACKET] ?? []).length === 0;
+    let handover: { verb: 'attach' | 'start'; argv: string[] } | null = null;
+    if (owner !== null) {
+      if (adoptedHead) handover = { verb: 'attach', argv: ['--story', story.key, '--session', owner, '--worktree', worktree] };
+      else if (state.changed_since_base.length === 0) handover = { verb: 'attach', argv: ['--story', story.key, '--session', owner, '--worktree', worktree, '--base', state.head] };
+    } else if (state.changed_since_base.length === 0) {
+      handover = { verb: 'start', argv: ['--story', story.key, '--slug', slugFrom(story.summary), '--repo', worktree, '--base', state.head] };
+    }
+    if (handover === null) {
+      run.io.out(`HEAD carries ${state.changed_since_base.length} pre-governance commit(s) since the merge-base. Make an adoption baseline (human), then bind:`);
+      for (const c of baselineCommands(state.worktree, story.key, story.summary, true)) run.io.out(`  ${c}`);
+      run.io.out(`  ${GOV} intake --worktree ${quoteIfNeeded(state.worktree)} --session ${owner ?? '<uuid of the owning session>'} --story ${story.key} --bind`);
+      audit({ event: 'classify', classification: decision.kind, candidate_story: story.key, session_id: owner, outcome: 'baseline required' });
+      return finish(run, 'OK');
+    }
+    const display = `${GOV} ${handover.verb} ${handover.argv.map((a) => quoteIfNeeded(posix(a))).join(' ')}`;
+    if (!bind) {
+      run.io.out('Next step (or re-run intake with --bind to do it now):');
+      run.io.out(`  ${display}`);
+      audit({ event: 'classify', classification: decision.kind, candidate_story: story.key, session_id: owner, outcome: `next: ${handover.verb}` });
+      return finish(run, 'OK');
+    }
+    run.io.out(`Binding through the existing gov ${handover.verb}:`);
+    let code: number;
+    try {
+      code = handover.verb === 'attach' ? await cmdAttach(run, handover.argv) : await cmdStart(run, handover.argv);
+    } catch (err) {
+      audit({ event: 'bind', classification: decision.kind, candidate_story: story.key, session_id: owner, outcome: `${handover.verb} refused: ${(err as Error).message}` });
+      throw err;
+    }
+    audit({
+      event: 'bind',
+      classification: decision.kind,
+      candidate_story: story.key,
+      session_id: (run.result.session_id as string | undefined) ?? owner,
+      packet_hash: (run.result.packet_hash as string | undefined) ?? null,
+      adoption_classification: run.result.adoption_baseline ? ADOPTION_CLASSIFICATION : null,
+      outcome: `${handover.verb} exit ${code}`,
+    });
+    return code;
+  }
+
+  // 3./4. NEW_WORK or adoption without a Story → proposal (nothing is created in Jira).
+  const proposal = decision.proposal!;
+  const stored = storeProposal(layout, proposal);
+  Object.assign(run.result, { proposal_hash: stored.proposal_hash, label: stored.label, proposal_md: intakeProposalMd(layout, stored.proposal_hash) });
+  if (decision.kind === 'PRE_GOVERNANCE_ADOPTION') {
+    run.io.out('PRE-GOVERNANCE ADOPTION: no Story covers this work; an adoption baseline will be required after the Story exists.');
+    run.io.out(`Subject: ${decision.subject ?? '(unknown)'} · owner session: ${decision.owner}`);
+  }
+  run.io.out('');
+  for (const line of renderProposalMarkdown(stored).split('\n')) run.io.out(line);
+  run.io.out(`Proposal stored: ${intakeProposalMd(layout, stored.proposal_hash)}`);
+  run.io.out('To approve, YOU run (interactive terminal, your own Jira identity in GOV_INTAKE_EMAIL / GOV_INTAKE_TOKEN):');
+  run.io.out(`  ${GOV} intake --apply ${stored.proposal_hash}`);
+  audit({ event: 'classify', classification: decision.kind, proposal_hash: stored.proposal_hash, label: stored.label, session_id: decision.owner, outcome: 'proposal stored' });
+  return finish(run, 'OK');
+}
+
+function intakeProposalMd(layout: GovLayout, hash: Sha256Ref): string {
+  return path.join(layout.home, 'intake', 'proposals', `${hash.slice('sha256:'.length)}.md`);
+}
+
+async function cmdIntakeApply(run: Run, argv: string[]): Promise<number> {
+  const hash = flag(argv, '--apply');
+  if (hash === null) return usage(run, '--apply needs sha256:<proposal hash>');
+  run.result.intake = true;
+  run.result.proposal_hash = hash;
+  const layout = layoutOf(run);
+  let stored;
+  try {
+    stored = loadProposal(layout, hash);
+  } catch (err) {
+    const msg = (err as Error).message;
+    throw new Outcome(msg.startsWith('INTEGRITY_FAILED') ? 'INTEGRITY_FAILED' : 'REFUSED', msg);
+  }
+  const p = stored.proposal;
+  const auditBase = { worktree: p.worktree, branch: p.branch, head: p.head, merge_base: p.merge_base, session_id: p.session_id, proposal_hash: stored.proposal_hash, label: stored.label, classification: p.classification };
+  const refuse = (message: string): never => {
+    appendIntakeAudit(layout, { ...auditBase, event: 'apply', outcome: `refused: ${message}` }, run.deps.now);
+    throw new Outcome('REFUSED', `${message}; nothing was created`);
+  };
+  if (run.deps.isInteractive() !== true) refuse('--apply needs an interactive terminal: a human approves by typing the proposal hash');
+  const creds = resolveIntakeCredentials(run.env);
+  if (creds.ok === false) refuse(creds.message);
+  for (const line of renderProposalMarkdown(stored).split('\n')) run.io.out(line);
+  const typed = (await run.deps.prompt('Type the full proposal hash to approve creating this Story in Jira: ')).trim();
+  if (typed !== stored.proposal_hash) refuse('the typed hash does not match the proposal');
+
+  const res = await applyIntakeProposal(stored, run.deps.intakeJira((creds as { credentials: JiraCredentials }).credentials));
+  Object.assign(run.result, { story: res.story_key, created_story: res.created_story, created_acs: res.created_acs, reused_acs: res.reused_acs });
+  appendIntakeAudit(
+    layout,
+    {
+      ...auditBase,
+      event: 'apply',
+      story_key: res.story_key,
+      created_acs: res.created_acs,
+      reused_acs: res.reused_acs,
+      approved_by: res.approved_by,
+      outcome: res.ok ? res.message : `${res.refusal}: ${res.message}`,
+    },
+    run.deps.now,
+  );
+  if (!res.ok) {
+    if (res.story_key) run.io.err(`Partial: ${res.story_key} exists; created ACs ${res.created_acs.join(', ') || 'none'}. Re-running --apply reuses them.`);
+    throw new Outcome(res.refusal === 'JIRA_ERROR' ? 'ERROR' : 'REFUSED', res.message);
+  }
+  const key = res.story_key!;
+  run.io.out(`Applied: ${res.message} (approved by ${res.approved_by?.display_name ?? 'unknown'})`);
+  run.io.out('Next:');
+  if (p.classification === 'PRE_GOVERNANCE_ADOPTION') {
+    run.io.out('  1. Make the adoption baseline (you):');
+    for (const c of baselineCommands(p.worktree, key, p.story.summary, false)) run.io.out(`     ${c}`);
+    run.io.out('  2. Bind the existing session (it keeps running; no restart):');
+    run.io.out(`     ${GOV} intake --worktree ${quoteIfNeeded(p.worktree)} --session ${p.session_id ?? '<uuid>'} --story ${key} --bind`);
+  } else {
+    run.io.out(`  ${GOV} intake --worktree ${quoteIfNeeded(p.worktree)}${p.session_id ? ` --session ${p.session_id}` : ''} --story ${key} --bind`);
+  }
+  return finish(run, 'OK');
+}
+
 function usage(run: Run, message?: string): number {
   if (message) run.io.err(message);
   run.io.err(USAGE);
+  run.io.err(INTAKE_USAGE);
   return GOV_EXIT_USAGE;
 }
 
@@ -937,6 +1360,7 @@ export async function runGov(argv: string[], env: Record<string, string | undefi
     judge: cmdJudge,
     submit: cmdSubmit,
     'check-merge': cmdCheckMerge,
+    intake: cmdIntake,
   };
   const handler = verb ? verbs[verb] : undefined;
   if (!handler) return usage(run, verb ? `unknown verb: ${verb}` : undefined);

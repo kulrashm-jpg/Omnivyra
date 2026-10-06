@@ -357,6 +357,83 @@ export interface JudgeFlowResult {
   error: string | null;
 }
 
+// ---------------------------------------------------------------- intake (governed entry)
+
+/**
+ * `gov intake` — the explicit front door into governed work. It classifies a
+ * worktree/session, proposes a Story + ACs when none exists, and hands over to
+ * the existing `start` / `attach`. Proposal mode is read-only (apart from the
+ * proposal and audit records under GOV_HOME); Jira creation happens only on
+ * `--apply`, run by a human under their own Jira identity after typing the
+ * proposal hash. Intake never reaches JEV, never transitions Jira, never edits
+ * an existing issue and never creates a commit.
+ */
+export const INTAKE_PROPOSAL_SCHEMA = 'gov-intake-proposal/1' as const;
+export const INTAKE_AUDIT_SCHEMA = 'gov-intake-audit/1' as const;
+export const INTAKE_RULES_SCHEMA = 'gov-intake-rules/1' as const;
+/** Idempotency label on an intake-created Story: `gov-intake-<first 12 hex of the proposal hash>`. */
+export const INTAKE_LABEL_PREFIX = 'gov-intake-' as const;
+
+/** First-match classification order: GOVERNED_RESUME, EXISTING_STORY, NEW_WORK, PRE_GOVERNANCE_ADOPTION. */
+export type IntakeClassification = 'GOVERNED_RESUME' | 'EXISTING_STORY' | 'NEW_WORK' | 'PRE_GOVERNANCE_ADOPTION';
+
+/** Why intake refused to proceed (fail closed; a human resolves it). */
+export type IntakeRefusalCode =
+  | 'INVALID_INPUT'
+  | 'CONFLICTING_BINDINGS' // the worktree carries bindings for more than one Story, or an invalid binding
+  | 'SESSION_BOUND_ELSEWHERE' // the session already governs a different Story
+  | 'DUPLICATE_SESSION' // more than one live session claims the worktree
+  | 'AMBIGUOUS_OWNERSHIP' // the owning session cannot be established; pass --session
+  | 'PROHIBITED_PATH_TOUCHED'
+  | 'AMBIGUOUS_STORY' // more than one Story's Authorized Paths cover the changes
+  | 'PARTIAL_SCOPE_MATCH' // a Story covers only part of the changes
+  | 'INTENT_REQUIRED' // the subject of new work cannot be established; pass --intent
+  | 'AUTHORIZED_PATHS_UNKNOWN'
+  | 'NO_REGISTRY_ID'; // no verification registry id covers the changed paths
+
+export interface IntakeProposedStory {
+  summary: string;
+  objective: string;
+  architecture: string | null;
+  invariants: string[];
+  authorized_paths: string[];
+  prohibited_paths: string[];
+  /** Registry ids, one per Verification Requirements line. */
+  verification_requirements: string[];
+}
+
+export interface IntakeProposedAc {
+  /** `AC-<n>`, numbered from 1 in proposal order. */
+  ac_id: string;
+  statement: string;
+  kind: AcKind;
+  /** Jira Evidence Kind label (Test / Typecheck / Build for Deterministic; Manual for Judgment). */
+  evidence_kind: string;
+  /** Registry id a Deterministic AC is proven by; null for Judgment. */
+  registry_id: string | null;
+}
+
+/** What a human approves by typing its hash. Deterministic: same inputs → same hash. */
+export interface IntakeProposal {
+  schema: typeof INTAKE_PROPOSAL_SCHEMA;
+  governance_version: typeof GOVERNANCE_VERSION;
+  classification: 'NEW_WORK' | 'PRE_GOVERNANCE_ADOPTION';
+  worktree: string;
+  branch: string | null;
+  head: string;
+  merge_base: string | null;
+  session_id: string | null;
+  story: IntakeProposedStory;
+  acceptance_criteria: IntakeProposedAc[];
+}
+
+export interface StoredIntakeProposal {
+  proposal: IntakeProposal;
+  proposal_hash: Sha256Ref;
+  /** `gov-intake-<hash12>`. */
+  label: string;
+}
+
 // ---------------------------------------------------------------- helpers (pure except fs layout guard)
 
 /** SHA-256 over BJC canonical JSON. */

@@ -1,0 +1,26 @@
+{
+  "schema": "gov-intake-rules/1",
+  "default_prohibited_paths": [
+    "supabase/migrations/**",
+    ".claude/settings*.json",
+    ".env*",
+    "vercel.json",
+    "railway.json",
+    "Dockerfile*",
+    ".github/workflows/**"
+  ],
+  "verification_mappings": [
+    {
+      "paths": ["scripts/jev-bjc/**", "scripts/jev-jira/**", "scripts/jev-flow/**", "backend/tests/unit/jev*", "CLAUDE.md", ".claude/skills/gov/**"],
+      "registry_ids": ["jev.unit", "scripts.typecheck"]
+    },
+    {
+      "paths": ["backend/tests/unit/report1*", "backend/services/canonicalReport/**", "backend/services/snapshotReport/**", "backend/services/snapshotReportService.ts"],
+      "registry_ids": ["report1.unit", "scripts.typecheck"]
+    },
+    {
+      "paths": ["backend/tests/unit/piScore*", "scripts/ci/scoring-surface-digest.js"],
+      "registry_ids": ["pi-score.unit", "pi-score.digest", "scripts.typecheck"]
+    }
+  ]
+}

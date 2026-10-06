@@ -167,6 +167,71 @@ Semantics:
 - **`--fork` / `--fork-session`:** resumes into a new session id, leaving the original conversation
   unchanged. Use it when the old conversation should stay as it was.
 
+## Governed entry: `gov intake`
+
+`gov intake` is the single front door when you do not yet know the Story, the ACs, the baseline or
+the attach command. It is explicit and user-invoked like every other verb: no hook, no prompt
+router, no JEV, no model selection.
+
+```
+gov intake [--worktree <path>] [--session <uuid>] [--story OMNI-n] [--intent "<text>"]
+           [--authorized <pattern>]... [--prohibited <pattern>]... [--verification <id>]...
+           [--judgment-ac "<text>"]... [--base <ref>] [--bind]
+gov intake --apply sha256:<proposal>          # human only
+```
+
+**Classification (first match wins):**
+
+| Result | When | What intake does |
+|---|---|---|
+| `GOVERNED_RESUME` | the worktree already has one valid binding (packet intact, HEAD descends from its base) | prints how to resume (a running window just types `@<packet.md>`); creates nothing — idempotent |
+| `EXISTING_STORY` | clean tree; exactly one active Story's Authorized Paths cover every changed path, or `--story` names one that does | reuses it; prints the exact `gov attach` / `gov start`; `--bind` runs it |
+| `NEW_WORK` | clean tree; no Story fits | stores a Story + AC proposal (deterministic ACs from the registry / `intake-rules.json`, plus any `--judgment-ac`) and prints its hash |
+| `PRE_GOVERNANCE_ADOPTION` | uncommitted / untracked changes | reports worktree, branch, HEAD, merge-base, every dirty path, subject and candidate Story; proposes a Story if none covers it; prints the exact adoption-baseline commit for the human. Never stashes, resets, rebases or commits |
+
+Changed paths = uncommitted paths + paths changed since `merge-base(HEAD, --base)` (default
+`origin/main`).
+
+**Fail closed (exit 11, nothing created):** two candidate Stories (`AMBIGUOUS_STORY`); a Story that
+covers only part of the changes (`PARTIAL_SCOPE_MATCH`); more than one live session claiming the
+worktree (`DUPLICATE_SESSION`); the session already governs another Story
+(`SESSION_BOUND_ELSEWHERE`); conflicting or invalid bindings (`CONFLICTING_BINDINGS`); uncommitted
+work with no establishable owner (`AMBIGUOUS_OWNERSHIP` — pass `--session`); prohibited paths
+touched (`PROHIBITED_PATH_TOUCHED`; defaults include `supabase/migrations/**`,
+`.claude/settings*.json`, `.env*` and deployment configuration); no derivable Authorized Paths
+(`AUTHORIZED_PATHS_UNKNOWN`); no registry id for the changed paths (`NO_REGISTRY_ID`); no subject
+(`INTENT_REQUIRED`).
+
+**Sessions:** a live session's recorded `cwd` is only a claim — Claude often records the main
+checkout while working in another worktree — so pass `--session <uuid>` whenever ownership is not
+unique. Intake locates the transcript by id only; it never reads transcript content.
+
+**`--apply` (human only):** requires an interactive terminal, the full proposal hash typed by the
+human, and the human's own Jira identity in `GOV_INTAKE_EMAIL` / `GOV_INTAKE_TOKEN` (a personal
+scoped token with read:jira-work, write:jira-work, read:jira-user). It refuses a service account,
+the provisioning / reader / advisory tokens, missing Browse + Create, and any create form that lacks
+an intended field or carries a gate field (Verification, Deterministic Result, Evidence References,
+Disposition, Gate Result, JEV fields, deployment fields). It then creates only the allowlisted Story
+fields (Summary, Objective, Architecture, Invariants, Authorized Paths, Prohibited Paths,
+Verification Requirements, the `gov-intake-<hash12>` label) and AC fields (parent, Summary, AC ID,
+Statement, Kind, Evidence Kind). It never edits an existing issue, never moves a workflow status and
+never sets gate state. Re-applying the same proposal reuses the labelled Story and existing AC IDs
+and creates only what is missing.
+
+**Records:** proposals are stored under `GOV_HOME/intake/proposals/<hash>.{json,md}`; every
+classify / refuse / apply / bind appends one metadata-only line to `GOV_HOME/intake/audit.jsonl`
+(classification, worktree, branch, HEAD, merge-base, session, candidate Story, proposal hash,
+created / reused keys, approving account, packet hash, adoption classification) — never
+transcripts, prompts, credentials or file contents.
+
+**Typical flows:**
+
+- New work: `gov intake --intent "<what>" [...]` → human `--apply` → `gov intake … --bind` (starts or
+  attaches through the existing verbs).
+- Existing dirty work in a running window: `gov intake --worktree <path> --session <uuid>` → human
+  `--apply` (if no Story fits) → human baseline commit (printed) → `gov intake … --bind` → type
+  `@<packet.md>` in the running window. No restart, no duplicate agent.
+
 ## Jira hierarchy (OMNI)
 
 | Tier | Item | Gate |

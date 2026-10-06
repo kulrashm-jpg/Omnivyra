@@ -12,7 +12,10 @@ checkout by absolute path (`node <TOOLING>/node_modules/tsx/dist/cli.mjs <TOOLIN
 
 ## Steps
 
-1. Ask for the Story key (`OMNI-<n>`) or confirm the one the user gave. Do not guess it.
+1. Ask for the Story key (`OMNI-<n>`) or confirm the one the user gave. Do not guess it. If the
+   user does not know it, run `gov intake --worktree <path> [--session <uuid>]` and report what it
+   prints: the classification, the reused Story, or the stored proposal hash. Approving a proposal
+   (`gov intake --apply sha256:<proposal>`) is the human's step; never run it yourself.
 2. Run what the user asks for:
    - `gov packet --story OMNI-n --worktree <path> [--regenerate]` — show the packet; regenerate only
      when it is STALE.
@@ -40,6 +43,7 @@ checkout by absolute path (`node <TOOLING>/node_modules/tsx/dist/cli.mjs <TOOLIN
 ## Never
 
 - Run `gov judge --write-back`.
+- Run `gov intake --apply`, or set GOV_INTAKE_EMAIL / GOV_INTAKE_TOKEN.
 - Transition Jira, or perform Record Result / Record Verification. `gov submit` only prints values
   for the human.
 - Merge, release or deploy.
