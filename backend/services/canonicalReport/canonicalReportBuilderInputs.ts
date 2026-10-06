@@ -363,7 +363,10 @@ function scoreFromAxis(params: {
   };
 }
 
-function aggregatePillarScore(dimensions: CanonicalDimension[]): CanonicalScore {
+// Exported so the pillar state rule can be exercised directly, as `aggregateOverallScore`,
+// `isMeasured` and `resolveAuthorityInflowState` in this file already are. A test that
+// re-implements this rule instead of calling it would pass while production diverged.
+export function aggregatePillarScore(dimensions: CanonicalDimension[]): CanonicalScore {
   const measuredValues = dimensions
     .filter((dim) => isMeasured(dim.score.value, dim.score.state))
     .map((dim) => dim.score.value as number);
@@ -382,7 +385,28 @@ function aggregatePillarScore(dimensions: CanonicalDimension[]): CanonicalScore 
     freshness: { last_observed_at: null, age_hours: null },
     observations: dimensions.flatMap((dim) => dim.score.evidence.observations),
   };
-  const state: ScoreState = measuredValues.length === dimensions.length
+  // WAVE-4A — a pillar is `measured` only when every contributing dimension is ITSELF
+  // `measured`.
+  //
+  // THE DEFECT. `isMeasured` deliberately admits `inferred` so a proxy still contributes a
+  // value — that is correct and unchanged. But the state was decided by COUNT alone
+  // (`measuredValues.length === dimensions.length`), so a pillar whose dimensions were *all*
+  // inferred heuristics was published as `measured`. Authority is exactly that case: both its
+  // dimensions are on-page proxies, and BR-H-001 downgrades one of them to `inferred` for
+  // precisely this reason — only for the pillar above it to relabel the pair `measured`.
+  //
+  // It is not only a label. `buildDataConfidence` counts `pillar.score.state`, so an
+  // all-inferred pillar was being counted in the customer-facing measured column of the Data
+  // Confidence & Coverage section — the one surface whose job is to disclose how much was
+  // actually observed.
+  //
+  // NO VALUE CHANGES. `isMeasured` is untouched, every contributing dimension still
+  // contributes, and the arithmetic mean is identical. Only the claim about the evidence
+  // changes, from "observed" to "inferred from available evidence".
+  const everyContributorMeasured = dimensions
+    .filter((dim) => isMeasured(dim.score.value, dim.score.state))
+    .every((dim) => dim.score.state === 'measured');
+  const state: ScoreState = measuredValues.length === dimensions.length && everyContributorMeasured
     ? 'measured'
     : measuredValues.length > 0
       ? 'inferred'
@@ -406,7 +430,13 @@ export function aggregateOverallScore(pillars: CanonicalPillarScore[]): Canonica
     freshness: { last_observed_at: null, age_hours: null },
     observations: pillars.flatMap((p) => p.score.evidence.observations),
   };
-  const state: ScoreState = measured.length === pillars.length
+  // WAVE-4A — same rule one level up: an overall score built entirely from inferred pillars is
+  // `inferred`, not `measured`. The >= half threshold for `inferred` is unchanged, and so is
+  // the geometric mean and which pillars contribute.
+  const everyContributingPillarMeasured = pillars
+    .filter((p) => isMeasured(p.score.value, p.score.state))
+    .every((p) => p.score.state === 'measured');
+  const state: ScoreState = measured.length === pillars.length && everyContributingPillarMeasured
     ? 'measured'
     : measured.length >= Math.ceil(pillars.length / 2)
       ? 'inferred'
