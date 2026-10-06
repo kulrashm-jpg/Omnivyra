@@ -45,7 +45,13 @@ export type ProbeObservationOutcome =
   /** We asked and the provider errored, timed out, or was rate-limited. */
   | 'provider_failed'
   /** Nothing to ask — no queries were derived for this class. */
-  | 'no_queries';
+  | 'no_queries'
+  /**
+   * D2 — no company identity reached the probe, so nothing the answer said could
+   * be attributed to anyone. The run is not a measurement of zero visibility; it
+   * is a measurement of nothing. See `resolveProbeIdentity`.
+   */
+  | 'no_identity';
 
 /** The only part of a mention this decision depends on. */
 export type GroundingObservation = {
@@ -60,20 +66,79 @@ export type ProbeOutcomeResolution = {
 };
 
 /**
+ * D2 — THE single place "do we know whose visibility this is?" is decided.
+ *
+ * ─── WHAT WENT WRONG ───────────────────────────────────────────────────────
+ * `buildAICitationMatrix` received `{ brandName, domain }` and forwarded neither
+ * to `provider.probe()`. Both adapters read them off the probe through a cast,
+ * so they silently defaulted to `''` and `null`. `extractCitation` then built an
+ * EMPTY candidate set, every mention came back `appeared: false`, and the first
+ * grounded run would have published `citation_rate: 0` in state `measured` for
+ * every cell — a false measured zero, sourced `answer_engine`, for a company the
+ * system never actually asked about.
+ *
+ * ─── THE RULE ──────────────────────────────────────────────────────────────
+ * A citation rate is a statement about a named company. With no name and no
+ * domain there is no subject, so there is no rate — not zero. Identity is
+ * therefore a PRECONDITION of measurement, checked before the grounding rules
+ * and before any paid provider call.
+ *
+ * Whitespace is not identity: a brand of `'   '` cannot match anything and is
+ * treated exactly as absent.
+ */
+export type ProbeIdentity = {
+  /** Trimmed brand label, or `''` when none was supplied. */
+  readonly brandName: string;
+  /** Trimmed domain, or null when none was supplied. */
+  readonly domain: string | null;
+  /**
+   * True when at least ONE of brand / domain can anchor a match. Either alone is
+   * enough: a brand label scores the prose, a domain scores the cited sources.
+   */
+  readonly resolved: boolean;
+};
+
+export function resolveProbeIdentity(params: {
+  brandName?: string | null;
+  domain?: string | null;
+}): ProbeIdentity {
+  const brandName = (params.brandName ?? '').trim();
+  const domainRaw = (params.domain ?? '').trim();
+  const domain = domainRaw.length > 0 ? domainRaw : null;
+  return { brandName, domain, resolved: brandName.length > 0 || domain !== null };
+}
+
+/** The customer-facing reason a probe was refused for want of a subject. */
+export const NO_IDENTITY_REASON =
+  'No company name or domain reached the AI visibility probe, so no answer could be attributed to this company. This is not a measured absence.';
+
+/**
  * Decide the evidence state for one provider × query-class probe.
  *
  * @param retrievalGrounded whether the PROVIDER retrieves from the live web.
  *        A property of the adapter, never inferred from the response — a chat
  *        model that happens to emit a URL has still not retrieved anything.
+ * @param identityResolved D2 — whether a company name or domain was actually
+ *        supplied. Required rather than defaulted: a new adapter must state it,
+ *        and cannot inherit a silent `true`.
  * @param observations one entry per query that produced an answer.
  * @param failureReason the first error seen, when no observation survived.
  */
 export function resolveProbeOutcome(params: {
   retrievalGrounded: boolean;
+  identityResolved: boolean;
   observations: readonly GroundingObservation[];
   failureReason: string | null;
 }): ProbeOutcomeResolution {
-  const { retrievalGrounded, observations, failureReason } = params;
+  const { retrievalGrounded, identityResolved, observations, failureReason } = params;
+
+  // D2 — checked FIRST, and ahead of the grounding rules, because without a
+  // subject even a perfectly grounded answer set says nothing about this
+  // company. `appeared: false` on every mention is then an artefact of having
+  // nothing to look for, not an observation that the brand was absent.
+  if (!identityResolved) {
+    return { state: 'unavailable', outcome: 'no_identity', reason: NO_IDENTITY_REASON };
+  }
 
   // Nothing came back at all. Separate "it broke" from "there was nothing to ask".
   if (observations.length === 0) {

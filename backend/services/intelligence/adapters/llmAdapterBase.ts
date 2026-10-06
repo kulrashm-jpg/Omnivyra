@@ -24,7 +24,12 @@ import {
 } from '../productionPrimitives';
 import { extractCitation } from '../citationExtractor';
 // D1 — the single seam that decides whether a probe may be called `measured`.
-import { resolveProbeOutcome } from '../aiVisibilityGrounding';
+// D2 — and the single seam that decides whether we know whose visibility it is.
+import {
+  NO_IDENTITY_REASON,
+  resolveProbeIdentity,
+  resolveProbeOutcome,
+} from '../aiVisibilityGrounding';
 import type {
   EvidenceSourceKind,
   EvidenceTrace,
@@ -150,8 +155,31 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
       };
     }
 
-    const brandName = (probe as AIVisibilityProbe & { brandName?: string }).brandName ?? '';
-    const domain = (probe as AIVisibilityProbe & { domain?: string | null }).domain ?? null;
+    // D2 — read the DECLARED identity fields (no cast) and refuse the run when
+    // neither is present. This gate sits ahead of the query loop deliberately:
+    // without a subject every answer would score `appeared: false`, so the paid
+    // calls would buy a citation rate of zero about nobody.
+    const identity = resolveProbeIdentity(probe);
+    if (!identity.resolved) {
+      logProviderCall({
+        providerId: this.id,
+        operation: 'probe',
+        status: 'unavailable',
+        reason: 'no_identity',
+      });
+      return {
+        provider: this.id,
+        query_class: probe.query_class,
+        state: 'unavailable',
+        observation_outcome: 'no_identity',
+        citation_rate: null,
+        mean_prominence: null,
+        mentions: [],
+        evidence: unavailableEvidence(NO_IDENTITY_REASON),
+        reason_unavailable: NO_IDENTITY_REASON,
+      };
+    }
+    const { brandName, domain } = identity;
 
     const mentions: CitationMention[] = [];
     let firstFailureReason: string | null = null;
@@ -248,6 +276,9 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
     // D1 — one decision, in one place, for every adapter that extends this base.
     const resolution = resolveProbeOutcome({
       retrievalGrounded: this.retrieval_grounded,
+      // D2 — true here by construction (the gate above returned otherwise); passed
+      // explicitly so the invariant is restated at the decision, not assumed.
+      identityResolved: identity.resolved,
       observations: mentions,
       failureReason: firstFailureReason,
     });

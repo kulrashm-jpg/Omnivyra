@@ -307,6 +307,74 @@ export function mergeAuthorityInflowDimension(
   return baseline;
 }
 
+/**
+ * D2 — the AI-surface rationale, told from what ACTUALLY happened.
+ *
+ * THE DEFECT. The unmeasured branch read, verbatim:
+ *
+ *   "AI surface presence cannot be measured — no LLM provider is configured.
+ *    N of 20 cells are unavailable."
+ *
+ * The only condition behind it was `measured_cells === 0`, which is the steady
+ * state in production WITH a provider configured: `OPENAI_API_KEY` is set, the
+ * ChatGPT adapter runs, bills, and returns `insufficient_signal` on every cell
+ * because a chat model is not retrieval-grounded (D1). The report then told the
+ * customer no provider was configured. It also called `insufficient_signal`
+ * cells "unavailable", conflating "we asked and the answer proves nothing" with
+ * "we never asked".
+ *
+ * THE FIX. The five findings the probe layer already distinguishes are read off
+ * the cells' `observation_outcome` and reported as themselves. No score, state,
+ * band or confidence is touched — this function returns prose only.
+ */
+export function aiSurfaceRationaleText(matrix: AICitationMatrix): string {
+  const { coverage, cells } = matrix;
+  const outcomes = new Set(cells.map((c) => c.observation_outcome));
+  const countOf = (outcome: string) => cells.filter((c) => c.observation_outcome === outcome).length;
+
+  if (coverage.measured_cells > 0) {
+    const denominator = coverage.measurable_cells > 0 ? coverage.measurable_cells : coverage.total_cells;
+    return (
+      `${coverage.measured_cells} of ${denominator} measurable provider×query-class checks returned grounded citation data` +
+      ` (${coverage.total_cells} checks enumerated; ${coverage.structurally_unmeasurable_cells} cannot be measured by the engines currently connected).` +
+      ` Overall AI surface presence is ${matrix.overall_score.value ?? '—'}/100.`
+    );
+  }
+
+  // No measurement. Say which of the four non-measured findings applies, most
+  // specific first — a run can contain several, and the most actionable leads.
+  if (!matrix.identity.resolved) {
+    return (
+      'AI surface presence was not measured: no company name or domain reached the answer-engine checks,' +
+      ' so no answer could be attributed to this company. This is not a measured absence from AI surfaces.'
+    );
+  }
+  if (outcomes.has('provider_failed')) {
+    return (
+      `AI surface presence was not measured: ${countOf('provider_failed')} of ${coverage.total_cells} checks reached a` +
+      ' configured provider that failed, errored or could not be loaded. The result is unknown, not absent.'
+    );
+  }
+  if (outcomes.has('ungrounded_answer')) {
+    return (
+      `AI surface presence was not measured: ${countOf('ungrounded_answer')} of ${coverage.total_cells} checks did receive an answer,` +
+      ' but from a model that does not retrieve from the live web and returned no verifiable sources.' +
+      ' A model recalling a name is not evidence that AI surfaces retrieve this company, so no rate is published.' +
+      ' Connecting a retrieval-grounded answer engine is what makes this measurable.'
+    );
+  }
+  if (outcomes.has('no_queries')) {
+    return (
+      `AI surface presence was not measured: ${countOf('no_queries')} of ${coverage.total_cells} checks had no question to ask,` +
+      ' because the business profile does not yet carry the brand name, category, competitors or products they are built from.'
+    );
+  }
+  return (
+    `AI surface presence was not measured: no answer engine was queried. ${countOf('no_provider')} of ${coverage.total_cells}` +
+    ' checks had no configured provider. Nothing here says this company is absent from AI surfaces.'
+  );
+}
+
 function summarizeMatrix(matrix: AICitationMatrix): AICitationMatrixSummary {
   return {
     state: matrix.overall_score.state,
@@ -638,9 +706,7 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
     ai_surface_presence: {
       score: aiSurfaceDim?.score ?? emptyCanonicalScore('insufficient_signal'),
       rationale: {
-        text: matrix.coverage.measured_cells > 0
-          ? `${matrix.coverage.measured_cells} of ${matrix.coverage.total_cells} provider×query-class cells returned live citation data. Overall AI surface presence is ${matrix.overall_score.value ?? '—'}/100.`
-          : `AI surface presence cannot be measured — no LLM provider is configured. ${matrix.coverage.unavailable_cells} of ${matrix.coverage.total_cells} cells are unavailable.`,
+        text: aiSurfaceRationaleText(matrix),
         confidence: matrix.overall_score.confidence,
         evidence: matrix.overall_score.evidence,
         maturity: legacyMaturity,

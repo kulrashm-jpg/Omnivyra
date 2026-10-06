@@ -418,7 +418,25 @@ export type AICitationMatrixSummary = {
     citation_rate: number | null;
     mean_prominence: number | null;
   }>;
-  coverage: { measured_cells: number; unavailable_cells: number; total_cells: number };
+  coverage: {
+    measured_cells: number;
+    unavailable_cells: number;
+    /** The ENUMERATED grid (providers × query classes). Unchanged; every existing consumer reads this. */
+    total_cells: number;
+    /**
+     * D2 — cells whose provider could actually yield a measurement: the honest
+     * denominator for a coverage percentage. `total_cells` is not, because it
+     * counts cells that can never be measured as configured, so dividing by it
+     * reports a shortfall the operator has no way to close.
+     *
+     * Optional because a report PERSISTED before D2 carries no such field. An
+     * absent value means "not recorded for this run", and a reader must fall
+     * back to the historical behaviour rather than read it as zero. Every
+     * freshly built report supplies it.
+     */
+    measurable_cells?: number;
+    structurally_unmeasurable_cells?: number;
+  };
 };
 
 export type EntityIntelligenceSummary = {

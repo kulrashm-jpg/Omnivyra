@@ -72,6 +72,18 @@ export type AIVisibilityProbe = {
   // The set of queries the orchestrator should ask. The provider decides nothing
   // about query content — that comes from the brand context.
   queries: string[];
+  // D2 — WHOSE visibility this probe measures. Declared, not optional, and no
+  // longer read through a cast: both adapters used to recover these with
+  // `(probe as … & { brandName?: string }).brandName ?? ''`, which compiled
+  // cleanly while the only producer forwarded neither. The result was a probe
+  // with no subject, whose every answer scored `appeared: false`.
+  //
+  // Either field alone can anchor a measurement — the brand label scores the
+  // answer prose, the domain scores the engine's cited sources — but with BOTH
+  // absent the probe is refused (`observation_outcome: 'no_identity'`) before
+  // any paid call. See `resolveProbeIdentity`.
+  brandName: string | null;
+  domain: string | null;
 };
 
 export type AIVisibilityProbeResult = {

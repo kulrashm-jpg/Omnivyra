@@ -49,6 +49,99 @@ class UnavailableLLMProvider implements LLMVisibilityProvider {
   }
 }
 
+/**
+ * D2 — "configured but broken" is NOT "not configured".
+ *
+ * THE DEFECT. Every adapter registration below is a dynamic `require()` wrapped
+ * in a `catch` with an empty body. When an LLM adapter's credential WAS set but
+ * the module failed to load — a syntax error, a bad transitive import, a bundler
+ * path that resolves at build time but not at runtime — the catch swallowed the
+ * error and the slot kept `UnavailableLLMProvider`, whose probe reports
+ * `observation_outcome: 'no_provider'` and the reason "adapter not configured —
+ * set the corresponding API key in env to enable."
+ *
+ * That sentence is false in exactly the case that matters: the key IS set. An
+ * operator reading it adds a credential that is already there, and a broken
+ * build is indistinguishable from an unconfigured one. The load failure left no
+ * trace anywhere — no log, no counter, no report field.
+ *
+ * THE FIX. The failure is recorded, and the slot is filled with a provider that
+ * says what actually happened: `provider_failed`, naming the adapter module and
+ * the error. The ScoreState is unchanged (`unavailable` either way) and no cell
+ * becomes measurable as a result — only the diagnosis improves. The text is the
+ * exception's own message; no environment value is ever read into it.
+ */
+export type AdapterLoadFailure = {
+  readonly slot: string;
+  readonly module: string;
+  readonly message: string;
+  readonly at: string;
+};
+
+const _adapterLoadFailures: AdapterLoadFailure[] = [];
+
+function recordAdapterLoadFailure(
+  slot: string,
+  moduleName: string,
+  error: unknown,
+): AdapterLoadFailure {
+  const failure: AdapterLoadFailure = {
+    slot,
+    module: moduleName,
+    message: error instanceof Error ? error.message : String(error),
+    at: new Date().toISOString(),
+  };
+  _adapterLoadFailures.push(failure);
+  // eslint-disable-next-line no-console
+  console.warn('[intelligence-provider] adapter_load_failed', failure);
+  return failure;
+}
+
+/** Load failures seen during bootstrap. Read-only; drives operator diagnosis and tests. */
+export function getAdapterLoadFailures(): readonly AdapterLoadFailure[] {
+  return [..._adapterLoadFailures];
+}
+
+class AdapterLoadFailedLLMProvider implements LLMVisibilityProvider {
+  constructor(
+    public readonly id: AIProviderId,
+    private readonly failure: AdapterLoadFailure,
+  ) {}
+  /** A module that did not load retrieves nothing, so `measured` stays unreachable. */
+  public readonly retrieval_grounded = false;
+  async isAvailable(): Promise<boolean> { return false; }
+  async probe(probe: AIVisibilityProbe): Promise<AIVisibilityProbeResult> {
+    return unavailableResult<AIVisibilityProbeResult>({
+      provider: this.id,
+      query_class: probe.query_class,
+      // We tried to wire it and it broke — categorically different from never
+      // having been asked to.
+      observation_outcome: 'provider_failed',
+      citation_rate: null,
+      mean_prominence: null,
+      mentions: [],
+      reason: `${this.id} adapter is configured but failed to load (${this.failure.module}): ${this.failure.message}`,
+    });
+  }
+}
+
+/**
+ * Register an LLM adapter, or — when its module fails to load — a provider that
+ * reports the load failure instead of impersonating an unconfigured slot.
+ */
+function registerLLMAdapterOrRecordFailure(
+  id: AIProviderId,
+  moduleName: string,
+  load: () => LLMVisibilityProvider,
+): void {
+  try {
+    registerLLMProvider(load());
+  } catch (error) {
+    const failure = recordAdapterLoadFailure(`llm:${id}`, moduleName, error);
+    registerLLMProvider(new AdapterLoadFailedLLMProvider(id, failure));
+  }
+}
+
 class UnavailableKnowledgeGraphProvider implements KnowledgeGraphProvider {
   public readonly id = 'unavailable';
   async isAvailable(): Promise<boolean> { return false; }
@@ -225,6 +318,8 @@ export function getCommercialProvider(): CommercialProvider {
 export function _resetIntelligenceRegistry(): void {
   _registry = defaultRegistry();
   _bootstrapped = false;
+  // D2 — recorded load failures belong to a bootstrap, so they reset with it.
+  _adapterLoadFailures.length = 0;
 }
 
 // ── Bootstrap: register real adapters when their env flags are set ────────────
@@ -242,7 +337,9 @@ function ensureBootstrapped(): void {
       const mod = require('./adapters/wikidataAdapter');
       registerKnowledgeGraphProvider(new mod.WikidataAdapter());
     } catch (error) {
-      // Adapter not present yet; remain unavailable.
+      // D2 — still unavailable, but no longer silent: a load failure is recorded so it
+      // cannot be mistaken for an adapter that was never configured.
+      recordAdapterLoadFailure('knowledge_graph', './adapters/wikidataAdapter', error);
     }
   }
 
@@ -261,7 +358,7 @@ function ensureBootstrapped(): void {
         new mod.ReportScoreHistoryAdapter(new storeMod.CanonicalTrajectoryHistoryStore()),
       );
     } catch (error) {
-      // Adapter not present yet; remain unavailable.
+      recordAdapterLoadFailure('trajectory', './adapters/reportScoreHistoryAdapter', error);
     }
   }
 
@@ -269,50 +366,43 @@ function ensureBootstrapped(): void {
   // Each adapter activates only when its env key is present. The adapters
   // themselves return `state: 'unavailable'` if they boot without credentials,
   // so the registry safely registers them even if the env var arrives later.
+  // D2 — a load failure here no longer disappears. Each slot either gets its real
+  // adapter or a provider that reports `provider_failed` with the module and the
+  // error, so "configured but broken" can never masquerade as "not configured".
   if (process.env.OPENAI_API_KEY) {
-    try {
+    registerLLMAdapterOrRecordFailure('chatgpt', './adapters/openaiAdapter', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/openaiAdapter');
-      registerLLMProvider(new mod.OpenAIChatGPTAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+      return new mod.OpenAIChatGPTAdapter();
+    });
   }
   if (process.env.ANTHROPIC_API_KEY) {
-    try {
+    registerLLMAdapterOrRecordFailure('claude', './adapters/anthropicAdapter', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/anthropicAdapter');
-      registerLLMProvider(new mod.AnthropicClaudeAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+      return new mod.AnthropicClaudeAdapter();
+    });
   }
   if (process.env.GEMINI_API_KEY) {
-    try {
+    registerLLMAdapterOrRecordFailure('gemini', './adapters/geminiAdapter', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/geminiAdapter');
-      registerLLMProvider(new mod.GeminiAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+      return new mod.GeminiAdapter();
+    });
   }
   if (process.env.PERPLEXITY_API_KEY) {
-    try {
+    registerLLMAdapterOrRecordFailure('perplexity', './adapters/perplexityAdapter', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/perplexityAdapter');
-      registerLLMProvider(new mod.PerplexityAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+      return new mod.PerplexityAdapter();
+    });
   }
   if (process.env.AZURE_COPILOT_API_KEY) {
-    try {
+    registerLLMAdapterOrRecordFailure('copilot', './adapters/copilotAdapter', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/copilotAdapter');
-      registerLLMProvider(new mod.CopilotAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
+      return new mod.CopilotAdapter();
+    });
   }
 
   // ── Authority inflow (backlinks) ────────────────────────────────────────────
@@ -322,7 +412,7 @@ function ensureBootstrapped(): void {
       const mod = require('./adapters/ahrefsAdapter');
       registerAuthorityInflowProvider(new mod.AhrefsAdapter());
     } catch (error) {
-      /* unavailable */
+      recordAdapterLoadFailure('authority_inflow', './adapters/ahrefsAdapter', error);
     }
   }
   // NOTE: mozAdapter / majesticAdapter conditional registrations were
@@ -352,7 +442,7 @@ function ensureBootstrapped(): void {
       const ing = require('../reviewIngestionService');
       agg.registerReviewSourceLoader(ing.createCanonicalReviewSourceLoader());
     } catch (error) {
-      /* unavailable */
+      recordAdapterLoadFailure('trust_coherence', './adapters/trustCoherenceAdapter', error);
     }
   }
 
@@ -363,7 +453,7 @@ function ensureBootstrapped(): void {
       const mod = require('./adapters/benchmarkDatasetAdapter');
       registerBenchmarkProvider(new mod.BenchmarkDatasetAdapter(process.env.BENCHMARK_DATASET_PATH));
     } catch (error) {
-      /* unavailable */
+      recordAdapterLoadFailure('benchmark', './adapters/benchmarkDatasetAdapter', error);
     }
   }
 
@@ -379,7 +469,7 @@ function ensureBootstrapped(): void {
       registerCommercialProvider(new mod.CommercialAdapter());
       mod.registerCommercialSourceLoader(mod.createCanonicalRevenueLoader());
     } catch (error) {
-      /* unavailable */
+      recordAdapterLoadFailure('commercial', './adapters/commercialAdapter', error);
     }
   }
 
@@ -403,7 +493,8 @@ function ensureBootstrapped(): void {
       const histMod = require('./historicalPersistence');
       histMod.registerHistoricalStore(new storeMod.SupabaseHistoryStore(clientMod.supabase));
     } catch (error) {
-      // Supabase unavailable in this env; retain the in-memory store.
+      // Retain the in-memory store, but record WHY the durable one did not load.
+      recordAdapterLoadFailure('historical_store', './supabaseHistoryStore', error);
     }
   }
 }

@@ -100,12 +100,21 @@ export function buildAIVisibilityProbes(
   providerIds: AIProviderId[],
   brandName: string,
   category: string | null,
+  // D2 — optional: this path (Evidence Platform ingestion) only ever receives a
+  // brand label. A brand alone is sufficient identity; null here means the
+  // engine's cited sources cannot be checked for the company's OWN domain, so
+  // `citation_corroborated` stays false — which is correct, not a measured zero.
+  domain: string | null = null,
 ): AIVisibilityProbe[] {
   const registry = buildAIVisibilityQueryRegistry(brandName, category);
   const probes: AIVisibilityProbe[] = [];
   for (const provider of providerIds) {
     for (const query_class of AI_QUERY_CLASSES) {
-      probes.push({ provider, query_class, queries: registry[query_class] });
+      // D2 — the SECOND producer that dropped identity. It built the queries from
+      // `brandName` and then handed the adapters a probe with no subject, so the
+      // adapters' identity fallback (`'' / null`) applied here too and every
+      // answer scored `appeared: false`. Same defect, different call site.
+      probes.push({ provider, query_class, queries: registry[query_class], brandName, domain });
     }
   }
   return probes;

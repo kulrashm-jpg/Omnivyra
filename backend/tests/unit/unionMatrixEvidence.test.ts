@@ -62,16 +62,20 @@ beforeEach(() => {
 
 describe('I1 — D1 × DG-008: the AI surface renders D1’s verdict, not its own', () => {
   it('no grounded provider → unavailable; ungrounded answer → insufficient_signal; never measured', () => {
-    expect(resolveProbeOutcome({ retrievalGrounded: false, observations: [], failureReason: null }).state)
+    expect(resolveProbeOutcome({ retrievalGrounded: false, identityResolved: true, observations: [], failureReason: null }).state)
       .toBe('unavailable');
     expect(resolveProbeOutcome({
       retrievalGrounded: false,
+      // D2 — identity is a PRECONDITION of any outcome other than `no_identity`,
+      // so it is stated here; this case is about grounding, not about identity.
+      identityResolved: true,
       observations: [{ appeared: true, grounded_sources: [] }],
       failureReason: null,
     }).state).toBe('insufficient_signal');
     // Grounded retrieval flag set, but no source ever came back: still not a measurement.
     expect(resolveProbeOutcome({
       retrievalGrounded: true,
+      identityResolved: true,
       observations: [{ appeared: true, grounded_sources: [] }],
       failureReason: null,
     }).state).toBe('insufficient_signal');
