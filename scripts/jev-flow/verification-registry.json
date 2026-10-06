@@ -56,6 +56,62 @@
       "argv": ["node", "scripts/ci/real-schema-suite.js", "backend/tests/realschema/rq_rpa_retry_claim.test.ts"],
       "evidence_kind": "test_run",
       "timeout_ms": 3600000
+    },
+    {
+      "id": "pi.unit",
+      "description": "Prospect Intelligence consolidation unit suites — the 64 PI test files, by exact path",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "--runTestsByPath", "backend/tests/unit/a3QuotaMalformedTenant.test.ts", "backend/tests/unit/b1bSourceArbitration.test.ts", "backend/tests/unit/b2ApolloProviderSlice.test.ts", "backend/tests/unit/b3OutcomeLifecycleProducer.test.ts", "backend/tests/unit/b4a1DiscoveryExecution.test.ts", "backend/tests/unit/b4a2TenantApolloAuthentication.test.ts", "backend/tests/unit/hardenInt001.test.ts", "backend/tests/unit/hardenInt002Operations.test.ts", "backend/tests/unit/int001aHardening.test.ts", "backend/tests/unit/int002FinalActivation.test.ts", "backend/tests/unit/int002Wave1Activation.test.ts", "backend/tests/unit/int002Wave2Envelope.test.ts", "backend/tests/unit/leadIntelligenceOrchestration.test.ts", "backend/tests/unit/leadIntelligenceReadApi.test.ts", "backend/tests/unit/li4eManualAdapter.test.ts", "backend/tests/unit/p2bAccountFirmographicPersistence.test.ts", "backend/tests/unit/piAutomaticBridge041am.test.ts", "backend/tests/unit/piCampaignIdentity014.test.ts", "backend/tests/unit/piCampaignListEdge016.test.ts", "backend/tests/unit/piCampaignSelection030.test.ts", "backend/tests/unit/piCampaignTarget029.test.ts", "backend/tests/unit/piDispatchability041ah.test.ts", "backend/tests/unit/piEmailActivation041ae.test.ts", "backend/tests/unit/piEmailResolution041a.test.ts", "backend/tests/unit/piEmailSendBoundary041a.test.ts", "backend/tests/unit/piEmailSendPath041a.test.ts", "backend/tests/unit/piExecutionInstance033.test.ts", "backend/tests/unit/piExecutionInvocation034.test.ts", "backend/tests/unit/piExecutionPlan036.test.ts", "backend/tests/unit/piExecutionSubject024.test.ts", "backend/tests/unit/piIcpFanout006.test.ts", "backend/tests/unit/piIngestConsolidation001aCanonicalWriterTripwire.test.ts", "backend/tests/unit/piIngestConsolidation001aLegacyCrmCharacterization.test.ts", "backend/tests/unit/piIngestConsolidation001bCrmSourceFence.test.ts", "backend/tests/unit/piIngestConsolidation001cCrmActivationFence.test.ts", "backend/tests/unit/piIngestConsolidation003bCrmLeadsRetirement.test.ts", "backend/tests/unit/piL003bOutcomeProvenance.test.ts", "backend/tests/unit/piList010.test.ts", "backend/tests/unit/piList010bEvaluation.test.ts", "backend/tests/unit/piListCuration012.test.ts", "backend/tests/unit/piOffering009Impl.test.ts", "backend/tests/unit/piOffering009ImplWorkspace.dom.test.tsx", "backend/tests/unit/piOutreachAnchor005PersonAnchor.test.ts", "backend/tests/unit/piOutreachBridge040.test.ts", "backend/tests/unit/piProgressionSweeper041ai.test.ts", "backend/tests/unit/piQualification008.test.ts", "backend/tests/unit/piScoreEvaluationJob.test.ts", "backend/tests/unit/piScoreKey007Identity.test.ts", "backend/tests/unit/piScoreRead009a.test.ts", "backend/tests/unit/piStepSettlement041ak.test.ts", "backend/tests/unit/piWorkflowDefinition032.test.ts", "backend/tests/unit/piWorkflowExecution037.test.ts", "backend/tests/unit/piWs4IngestionIntegration.test.ts", "backend/tests/unit/piWseOutcomeInterpreter.test.ts", "backend/tests/unit/prospectIdentityIngestionBoundary.test.ts", "backend/tests/unit/sendTransactionalEmailEscape.test.ts", "backend/tests/unit/sendTransactionalEmailLeadOutreach.test.ts", "backend/tests/unit/stabilizeInt002.test.ts", "backend/tests/unit/ws3Milestone4Governance.test.ts", "backend/tests/unit/ws3Milestone5aInternalDispatch.test.ts", "backend/tests/unit/ws3Milestone5bExternalDispatch.test.ts", "backend/tests/unit/ws3Milestone6Observability.test.ts", "backend/tests/unit/ws3Milestone7Feedback.test.ts", "backend/tests/unit/ws6aOutreachActivation.test.ts"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 1800000
+    },
+    {
+      "id": "app.typecheck",
+      "description": "TypeScript non-regression baseline across all 3 projects incl. pages/ and components/ (scripts/typecheck-baseline.js)",
+      "argv": ["node", "scripts/typecheck-baseline.js"],
+      "evidence_kind": "typecheck",
+      "timeout_ms": 3600000
+    },
+    {
+      "id": "route-auth",
+      "description": "Default-deny API route authentication gate (scripts/check-route-auth.js)",
+      "argv": ["node", "scripts/check-route-auth.js"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 600000
+    },
+    {
+      "id": "backend-tests.typecheck",
+      "description": "Backend-test typecheck non-regression gate: no net-new diagnostics (scripts/backend-tests-typecheck-baseline.js)",
+      "argv": ["node", "scripts/backend-tests-typecheck-baseline.js"],
+      "evidence_kind": "typecheck",
+      "timeout_ms": 1800000
+    },
+    {
+      "id": "db.schema-lint",
+      "description": "Static schema drift lint: every watched column reference has a creating migration (scripts/check-schema-drift.js; no database, no credentials)",
+      "argv": ["node", "scripts/check-schema-drift.js"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 300000
+    },
+    {
+      "id": "eng003.unit",
+      "description": "ENG-003 SES provider-event observability unit suites plus its three shared outcome pins, by exact path",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "--runTestsByPath", "backend/tests/unit/eng003SesProviderEvents.test.ts", "backend/tests/unit/piL003bOutcomeProvenance.test.ts", "backend/tests/unit/piWseOutcomeInterpreter.test.ts", "backend/tests/unit/ws3Milestone7Feedback.test.ts"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 900000
+    },
+    {
+      "id": "eng004.unit",
+      "description": "ENG-004 engagement message tenant hardening unit suites — the 9 engagement test files, by exact path",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "--runTestsByPath", "backend/tests/unit/eng004EngagementMessageTenant.test.ts", "backend/tests/unit/engagementAiActionabilityF5.test.ts", "backend/tests/unit/engagementAiDiversityF6.test.ts", "backend/tests/unit/engagementAiSendBoundaryF5.test.ts", "backend/tests/unit/engagementBulkDispatchAcceptance.test.ts", "backend/tests/unit/engagementBulkDmClosureP11.test.ts", "backend/tests/unit/engagementBulkGovernanceP12.test.ts", "backend/tests/unit/engagementDraftOwnershipP11.test.ts", "backend/tests/unit/sec91AEngagementReplyDraft.test.ts"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 900000
+    },
+    {
+      "id": "vercel.crons",
+      "description": "Every vercel.json cron is an existing route that authenticates the scheduler (scripts/ci/check-vercel-crons.js)",
+      "argv": ["node", "scripts/ci/check-vercel-crons.js"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 120000
     }
   ]
 }
