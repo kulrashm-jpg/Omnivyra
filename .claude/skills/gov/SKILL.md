@@ -43,7 +43,8 @@ checkout by absolute path (`node <TOOLING>/node_modules/tsx/dist/cli.mjs <TOOLIN
 ## Never
 
 - Run `gov judge --write-back`.
-- Run `gov intake --apply`, or set GOV_INTAKE_EMAIL / GOV_INTAKE_TOKEN.
+- Run `gov intake --apply` or `gov intake --check-forms`, or set GOV_INTAKE_EMAIL / GOV_INTAKE_TOKEN
+  (both use the human's own Jira identity).
 - Transition Jira, or perform Record Result / Record Verification. `gov submit` only prints values
   for the human.
 - Merge, release or deploy.

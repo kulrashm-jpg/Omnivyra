@@ -72,9 +72,27 @@ export const GATE_FIELD_IDS: readonly string[] = [
   AC_FIELDS.jevAdvisoryDisposition,
   STORY_FIELDS.gateResult,
   STORY_FIELDS.commit,
+  /** T3 Evidence Reference (T3 is a human gate). */
+  'customfield_10078',
+  /** Deployment Authorized By / At. */
+  'customfield_10079',
+  'customfield_10080',
 ];
-/** Gate fields recognised by name as well (deployment fields have no frozen id). */
-export const GATE_FIELD_NAME_RE = /^(verification|deterministic result|evidence references|gate result|jev\b.*|.*disposition|deployment\b.*|.*\bdeploy(ed|ment)?\b.*)$/i;
+/** Gate fields recognised by name as well (any future gate / deployment field). */
+export const GATE_FIELD_NAME_RE = /^(verification|deterministic result|evidence references?|gate result|t[123]\b.*|jev\b.*|.*disposition|deployment\b.*|.*\bdeploy(ed|ment)?\b.*)$/i;
+
+/**
+ * Fields Jira handles regardless of the create screen: project / issue type always, and `parent`
+ * for the Acceptance Criterion sub-task type (it may or may not be listed by createmeta).
+ */
+export function createFormImplicit(kind: 'story' | 'ac'): readonly string[] {
+  return kind === 'ac' ? ['project', 'issuetype', 'parent'] : ['project', 'issuetype'];
+}
+
+/** Story fields every intake proposal sends (Architecture / Invariants are optional). */
+export const STORY_ALWAYS_SENT: readonly string[] = ['summary', 'labels', STORY_FIELDS.objective, STORY_AUTHORIZED_PATHS_FIELD, STORY_FIELDS.prohibitedPaths, STORY_FIELDS.verificationRequirements];
+/** AC fields every intake-created AC sends. */
+export const AC_ALWAYS_SENT: readonly string[] = ['summary', 'parent', AC_FIELDS.acId, AC_FIELDS.statement, AC_FIELDS.kind, AC_FIELDS.evidenceKind];
 
 export function isGateField(fieldId: string, name: string): boolean {
   return GATE_FIELD_IDS.includes(fieldId) || GATE_FIELD_NAME_RE.test(name.trim());
@@ -299,11 +317,13 @@ export function createFormProblems(kind: 'story' | 'ac', form: CreateFormField[]
   const ids = new Set(form.map((f) => f.fieldId));
   const problems: string[] = [];
   for (const f of form) if (isGateField(f.fieldId, f.name)) problems.push(`gate field "${f.name || f.fieldId}" (${f.fieldId}) is on the ${kind} create form`);
-  for (const id of intended) if (id !== 'project' && id !== 'issuetype' && !ids.has(id)) problems.push(`field ${id} is not on the ${kind} create form`);
+  const implicit = createFormImplicit(kind);
+  for (const id of intended) if (!implicit.includes(id) && !ids.has(id)) problems.push(`field ${id} is not on the ${kind} create form`);
+  // The create form may expose ONLY the intake allowlist: any other field (gate or not) means the
+  // screen is not intake-safe — refuse rather than create through it.
   for (const f of form) {
-    if (f.required && !f.hasDefaultValue && !allowed.includes(f.fieldId) && f.fieldId !== 'reporter') {
-      problems.push(`required field "${f.name || f.fieldId}" (${f.fieldId}) is outside the intake allowlist`);
-    }
+    if (implicit.includes(f.fieldId) || allowed.includes(f.fieldId) || isGateField(f.fieldId, f.name)) continue;
+    problems.push(`field "${f.name || f.fieldId}" (${f.fieldId}) is on the ${kind} create form but outside the intake allowlist${f.required ? ' (required)' : ''}`);
   }
   return problems.sort();
 }
@@ -330,28 +350,49 @@ export const APPLY_REQUIRED_PERMISSIONS: readonly string[] = ['BROWSE_PROJECTS',
  * Checks identity, permissions and both create forms BEFORE creating
  * anything; then reuses or creates. Never edits, deletes or moves a workflow status.
  */
+export interface FormsCheck {
+  ok: boolean;
+  refusal: 'IDENTITY_NOT_HUMAN' | 'PERMISSION_MISSING' | 'CREATE_FORM_INVALID' | null;
+  message: string;
+  approved_by: { account_id: string; display_name: string } | null;
+  problems: string[];
+  story_form: CreateFormField[];
+  ac_form: CreateFormField[];
+}
+
+/**
+ * Read-only preflight shared by `--check-forms` and `--apply`: an active human account, Browse +
+ * Create in OMNI, and both create forms intake-safe for the intended fields. GET requests only.
+ */
+export async function checkCreateForms(jira: IntakeJira, storyIntended: readonly string[], acIntended: readonly string[]): Promise<FormsCheck> {
+  const out: FormsCheck = { ok: false, refusal: null, message: '', approved_by: null, problems: [], story_form: [], ac_form: [] };
+  const me = await jira.myself();
+  if (me.accountType !== 'atlassian' || me.active !== true) {
+    return Object.assign(out, { refusal: 'IDENTITY_NOT_HUMAN', message: `the Jira identity is not an active human account (accountType ${me.accountType || 'unknown'})` });
+  }
+  out.approved_by = { account_id: me.accountId, display_name: me.displayName };
+  const perms = await jira.permissions(APPLY_REQUIRED_PERMISSIONS);
+  const missing = APPLY_REQUIRED_PERMISSIONS.filter((k) => perms[k] !== true);
+  if (missing.length > 0) return Object.assign(out, { refusal: 'PERMISSION_MISSING', message: `the Jira identity lacks ${missing.join(', ')} in OMNI` });
+  out.story_form = await jira.createForm(ISSUE_TYPE.story);
+  out.ac_form = await jira.createForm(ISSUE_TYPE.acceptanceCriterion);
+  out.problems = [...createFormProblems('story', out.story_form, storyIntended), ...createFormProblems('ac', out.ac_form, acIntended)];
+  if (out.problems.length > 0) return Object.assign(out, { refusal: 'CREATE_FORM_INVALID', message: `create forms are not intake-safe: ${out.problems.join('; ')}` });
+  return Object.assign(out, { ok: true, message: 'both create forms expose only the intake allowlist and every field intake sends' });
+}
+
 export async function applyIntakeProposal(stored: StoredIntakeProposal, jira: IntakeJira): Promise<ApplyResult> {
   const result: ApplyResult = { ok: false, refusal: null, message: '', approved_by: null, story_key: null, created_story: false, created_acs: [], reused_acs: [] };
   const fail = (refusal: ApplyRefusal, message: string): ApplyResult => Object.assign(result, { ok: false, refusal, message });
   try {
-    const me = await jira.myself();
-    if (me.accountType !== 'atlassian' || me.active !== true) return fail('IDENTITY_NOT_HUMAN', `the Jira identity is not an active human account (accountType ${me.accountType || 'unknown'})`);
-    result.approved_by = { account_id: me.accountId, display_name: me.displayName };
-
-    const perms = await jira.permissions(APPLY_REQUIRED_PERMISSIONS);
-    const missing = APPLY_REQUIRED_PERMISSIONS.filter((k) => perms[k] !== true);
-    if (missing.length > 0) return fail('PERMISSION_MISSING', `the Jira identity lacks ${missing.join(', ')} in OMNI`);
-
     const storyFields = storyPayload(stored);
     const acFields = stored.proposal.acceptance_criteria.map((ac) => acPayload('OMNI-1', ac));
     assertIntakeFields('story', storyFields);
     for (const f of acFields) assertIntakeFields('ac', f);
     const acIntended = [...new Set(acFields.flatMap((f) => Object.keys(f)))];
-    const problems = [
-      ...createFormProblems('story', await jira.createForm(ISSUE_TYPE.story), Object.keys(storyFields)),
-      ...createFormProblems('ac', await jira.createForm(ISSUE_TYPE.acceptanceCriterion), acIntended),
-    ];
-    if (problems.length > 0) return fail('CREATE_FORM_INVALID', `nothing was created: ${problems.join('; ')}`);
+    const forms = await checkCreateForms(jira, Object.keys(storyFields), acIntended);
+    result.approved_by = forms.approved_by;
+    if (!forms.ok) return fail(forms.refusal ?? 'CREATE_FORM_INVALID', forms.refusal === 'CREATE_FORM_INVALID' ? `nothing was created: ${forms.problems.join('; ')}` : forms.message);
 
     const existing = await jira.searchKeys(`project = OMNI AND issuetype = ${ISSUE_TYPE.story} AND labels = "${stored.label}" ORDER BY key ASC`);
     if (existing.length > 1) return fail('DUPLICATE_INTAKE_STORY', `${existing.length} Stories carry ${stored.label}: ${existing.join(', ')}`);

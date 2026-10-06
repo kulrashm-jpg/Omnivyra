@@ -771,6 +771,8 @@ describe('gov intake --apply — human-applied creation', () => {
       { fieldId: STORY_FIELDS.gateResult, name: 'Gate Result' },
       { fieldId: 'customfield_19999', name: 'Deployment Authorized By' },
       { fieldId: AC_FIELDS.verification, name: 'Verification' },
+      { fieldId: 'customfield_10078', name: 'T3 Evidence Reference' },
+      { fieldId: 'customfield_10080', name: 'Deployment Authorized At' },
     ]) {
       const ctx = makeCtx(applyServer({ storyForm: [...DEFAULT_STORY_FORM, gate] }));
       const { hash } = await newWorkProposal(ctx);
@@ -779,11 +781,52 @@ describe('gov intake --apply — human-applied creation', () => {
       expect(out.code).toBe(GOV_EXIT.REFUSED);
       expect(ctx.server.requests.some((r) => r.method === 'POST')).toBe(false);
     }
-    expect(createFormProblems('story', [...DEFAULT_STORY_FORM, { fieldId: 'customfield_1', name: 'Verification Requirements', required: false, hasDefaultValue: false }].map((f) => ({ required: false, hasDefaultValue: false, ...f })), ['summary'])).toEqual([]);
+    // The real Verification Requirements field is allowlisted, not a gate field.
+    const named = DEFAULT_STORY_FORM.map((f) => ({ ...f, name: f.fieldId === STORY_FIELDS.verificationRequirements ? 'Verification Requirements' : f.name, required: false, hasDefaultValue: false }));
+    expect(createFormProblems('story', named, ['summary'])).toEqual([]);
     const problems = createFormProblems('ac', [{ fieldId: 'customfield_9', name: 'Risk', required: true, hasDefaultValue: false }], ['summary']);
     expect(problems).toHaveLength(2);
-    expect(problems.some((p) => /required field "Risk"/.test(p))).toBe(true);
+    expect(problems.some((p) => /field "Risk" \(customfield_9\) is on the ac create form but outside the intake allowlist \(required\)/.test(p))).toBe(true);
     expect(problems.some((p) => /summary is not on the ac create form/.test(p))).toBe(true);
+  });
+
+  it('15b. any non-allowlisted field on a create form (even a harmless one) fails closed', async () => {
+    for (const [form, extra] of [
+      ['story', { fieldId: 'customfield_10082', name: 'Owner' }],
+      ['story', { fieldId: 'description', name: 'Description' }],
+      ['ac', { fieldId: 'customfield_10089', name: 'Branch' }],
+      ['ac', { fieldId: 'reporter', name: 'Reporter' }],
+    ] as const) {
+      const ctx = makeCtx(applyServer(form === 'story' ? { storyForm: [...DEFAULT_STORY_FORM, extra] } : { acForm: [...DEFAULT_AC_FORM, extra] }));
+      const { hash } = await newWorkProposal(ctx);
+      ctx.typed = hash;
+      const out = await gov(ctx, ['intake', '--apply', hash]);
+      expect({ form, extra: extra.name, code: out.code }).toEqual({ form, extra: extra.name, code: GOV_EXIT.REFUSED });
+      expect(ctx.server.requests.some((r) => r.method === 'POST')).toBe(false);
+    }
+  });
+
+  it('--check-forms: read-only verdict on the create forms (GET only, no prompt, nothing created)', async () => {
+    const ok = makeCtx(applyServer({ acForm: DEFAULT_AC_FORM.filter((f) => f.fieldId !== 'parent') }));
+    const pass = await gov(ok, ['intake', '--check-forms']);
+    expect(pass.code).toBe(0);
+    expect(pass.result.forms_ok).toBe(true);
+    expect(ok.prompts).toBe(0);
+    expect(ok.server.requests.every((r) => r.method === 'GET')).toBe(true);
+    expect(auditLines(ok).map((a) => [a.event, a.outcome])).toEqual([['check-forms', 'create forms intake-safe']]);
+
+    const bad = makeCtx(applyServer({ storyForm: [...DEFAULT_STORY_FORM, { fieldId: STORY_FIELDS.gateResult, name: 'Gate Result' }, { fieldId: 'customfield_10082', name: 'Owner' }] }));
+    const fail = await gov(bad, ['intake', '--check-forms']);
+    expect(fail.code).toBe(GOV_EXIT.REFUSED);
+    expect(fail.result.problems).toBe(2);
+    expect(fail.out.join('\n')).toMatch(/customfield_10077 \| Gate Result \| GATE — must be removed/);
+    expect(fail.out.join('\n')).toMatch(/customfield_10082 \| Owner \| NOT ALLOWED — must be removed/);
+    expect(bad.server.requests.some((r) => r.method !== 'GET')).toBe(false);
+
+    const svc = makeCtx();
+    svc.env.GOV_INTAKE_TOKEN = READER_TOKEN;
+    expect((await gov(svc, ['intake', '--check-forms'])).code).toBe(GOV_EXIT.REFUSED);
+    expect(svc.server.requests).toEqual([]);
   });
 
   it('19. intake has no transition / edit / delete route', () => {

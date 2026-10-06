@@ -178,6 +178,7 @@ gov intake [--worktree <path>] [--session <uuid>] [--story OMNI-n] [--intent "<t
            [--authorized <pattern>]... [--prohibited <pattern>]... [--verification <id>]...
            [--judgment-ac "<text>"]... [--base <ref>] [--bind]
 gov intake --apply sha256:<proposal>          # human only
+gov intake --check-forms                      # human identity, read-only
 ```
 
 **Classification (first match wins):**
@@ -210,8 +211,14 @@ unique. Intake locates the transcript by id only; it never reads transcript cont
 human, and the human's own Jira identity in `GOV_INTAKE_EMAIL` / `GOV_INTAKE_TOKEN` (a personal
 scoped token with read:jira-work, write:jira-work, read:jira-user). It refuses a service account,
 the provisioning / reader / advisory tokens, missing Browse + Create, and any create form that lacks
-an intended field or carries a gate field (Verification, Deterministic Result, Evidence References,
-Disposition, Gate Result, JEV fields, deployment fields). It then creates only the allowlisted Story
+an intended field or exposes ANY field outside the intake allowlist — in particular a gate field
+(Verification, Deterministic Result, Evidence References, Disposition, Gate Result, JEV fields,
+T3 Evidence Reference, Deployment Authorized By / At). The OMNI Story and Acceptance Criterion
+create screens must therefore be intake-safe (only the allowlisted fields) before the first
+`--apply`; until then `--apply` refuses with CREATE_FORM_INVALID and creates nothing. To check the
+forms without applying anything, the human runs `gov intake --check-forms` (same identity, GET
+only, no prompt): it lists every field on both create forms as allowed / GATE / NOT ALLOWED and
+exits 0 only when both are intake-safe. It then creates only the allowlisted Story
 fields (Summary, Objective, Architecture, Invariants, Authorized Paths, Prohibited Paths,
 Verification Requirements, the `gov-intake-<hash12>` label) and AC fields (parent, Summary, AC ID,
 Statement, Kind, Evidence Kind). It never edits an existing issue, never moves a workflow status and

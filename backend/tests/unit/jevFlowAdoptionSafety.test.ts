@@ -552,6 +552,9 @@ describe('3. no Jira write in the entry path', () => {
       'JEV Model': AC_FIELDS.jevModel,
       'JEV Input Hash': AC_FIELDS.jevInputHash,
       Commit: STORY_FIELDS.commit,
+      'T3 Evidence Reference': 'customfield_10078',
+      'Deployment Authorized By': 'customfield_10079',
+      'Deployment Authorized At': 'customfield_10080',
     };
     for (const [name, id] of Object.entries(PROTECTED)) {
       expect({ name, inStory: ij.STORY_CREATE_FIELDS.includes(id), inAc: ij.AC_CREATE_FIELDS.includes(id) }).toEqual({ name, inStory: false, inAc: false });
@@ -561,7 +564,7 @@ describe('3. no Jira write in the entry path', () => {
       expect(() => ij.assertIntakeFields('ac', { summary: 's', [id]: 'x' })).toThrow();
     }
     // Deployment fields have no frozen id: they are recognised (and refused on a create form) by name.
-    for (const name of ['Deployment Authorized By', 'Deployment Authorized At', 'Deployed At', 'Deployment Environment']) {
+    for (const name of ['Deployment Authorized By', 'Deployment Authorized At', 'Deployed At', 'Deployment Environment', 'T1 Disposition', 'T2 Evidence Reference', 'T3 Approval']) {
       expect({ name, gate: ij.isGateField('customfield_99999', name) }).toEqual({ name, gate: true });
     }
     for (const sys of ['status', 'resolution', 'assignee', 'fixVersions']) {

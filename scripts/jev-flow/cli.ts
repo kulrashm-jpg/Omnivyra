@@ -24,6 +24,8 @@
  *   intake       --apply sha256:<proposal>
  *                (HUMAN only: interactive terminal, typed proposal hash, the human's own
  *                Jira identity GOV_INTAKE_EMAIL + GOV_INTAKE_TOKEN; creates the Story/ACs)
+ *   intake       --check-forms
+ *                (HUMAN identity, read-only: are the OMNI Story / AC create forms intake-safe?)
  *
  * Explicit and user-invoked only: no background work, no automatic JEV, never
  * launches `claude`, never merges / releases / deploys, never moves a Jira
@@ -62,7 +64,22 @@ import {
   type IntakeRules,
   type StoryCandidate,
 } from './intake';
-import { applyIntakeProposal, createIntakeJira, createIntakeReader, resolveIntakeCredentials, type IntakeJira, type IntakeReader } from './intakeJira';
+import {
+  AC_ALWAYS_SENT,
+  AC_CREATE_FIELDS,
+  STORY_ALWAYS_SENT,
+  STORY_CREATE_FIELDS,
+  applyIntakeProposal,
+  checkCreateForms,
+  createFormImplicit,
+  createIntakeJira,
+  createIntakeReader,
+  isGateField,
+  resolveIntakeCredentials,
+  type FormsCheck,
+  type IntakeJira,
+  type IntakeReader,
+} from './intakeJira';
 import { parseNulList, parsePorcelainZ, readLiveSessions, type IntakeProbe, type LiveSession, type WorktreeState } from './intakeProbe';
 import { loadBundle } from './evidence';
 import { createJiraQuery, type JiraQuery } from './jiraQuery';
@@ -170,6 +187,7 @@ const INTAKE_USAGE = [
   '  intake      [--worktree <path>] [--session <uuid>] [--story OMNI-<n>] [--intent "<text>"] [--authorized <p>]... [--prohibited <p>]...',
   '              [--verification <id>]... [--judgment-ac "<text>"]... [--base <ref>] [--bind]',
   '  intake      (human only, interactive terminal, your own Jira identity) --apply sha256:<proposal>',
+  '  intake      (human only, your own Jira identity; read-only) --check-forms',
 ].join('\n');
 
 // ---------------------------------------------------------------- default deps
@@ -1028,6 +1046,7 @@ const GOV = 'gov';
 
 async function cmdIntake(run: Run, argv: string[]): Promise<number> {
   if (has(argv, '--apply')) return cmdIntakeApply(run, argv);
+  if (has(argv, '--check-forms')) return cmdIntakeCheckForms(run);
   const wtArg = flag(argv, '--worktree');
   if (has(argv, '--worktree') && wtArg === null) return usage(run, '--worktree needs a path');
   const sessionArg = flag(argv, '--session');
@@ -1268,6 +1287,38 @@ async function cmdIntake(run: Run, argv: string[]): Promise<number> {
 
 function intakeProposalMd(layout: GovLayout, hash: Sha256Ref): string {
   return path.join(layout.home, 'intake', 'proposals', `${hash.slice('sha256:'.length)}.md`);
+}
+
+/**
+ * `gov intake --check-forms` — read-only: under the human's own Jira identity, confirm the OMNI
+ * Story and Acceptance Criterion create forms are intake-safe. GET requests only; creates nothing.
+ */
+async function cmdIntakeCheckForms(run: Run): Promise<number> {
+  run.result.intake = true;
+  run.result.check_forms = true;
+  const layout = layoutOf(run);
+  const creds = resolveIntakeCredentials(run.env);
+  if (creds.ok === false) throw new Outcome('REFUSED', creds.message);
+  let forms: FormsCheck;
+  try {
+    forms = await checkCreateForms(run.deps.intakeJira(creds.credentials), STORY_ALWAYS_SENT, AC_ALWAYS_SENT);
+  } catch (err) {
+    throw new Outcome('ERROR', `Jira read failed: ${(err as Error & { code?: string }).code ?? (err as Error).message}`);
+  }
+  for (const [kind, form] of [['story', forms.story_form], ['ac', forms.ac_form]] as const) {
+    if (form.length === 0) continue;
+    run.io.out(`${kind === 'story' ? 'Story' : 'Acceptance Criterion'} create form (${form.length} field(s)):`);
+    for (const f of form) {
+      const allowed = (kind === 'story' ? STORY_CREATE_FIELDS : AC_CREATE_FIELDS).includes(f.fieldId) || createFormImplicit(kind).includes(f.fieldId);
+      const verdict = isGateField(f.fieldId, f.name) ? 'GATE — must be removed' : allowed ? 'allowed' : 'NOT ALLOWED — must be removed';
+      run.io.out(`  ${f.fieldId} | ${f.name}${f.required ? ' (required)' : ''} | ${verdict}`);
+    }
+  }
+  for (const p of forms.problems) run.io.err(`  - ${p}`);
+  Object.assign(run.result, { forms_ok: forms.ok, problems: forms.problems.length, refusal: forms.refusal });
+  appendIntakeAudit(layout, { event: 'check-forms', approved_by: forms.approved_by, outcome: forms.ok ? 'create forms intake-safe' : `${forms.refusal}: ${forms.problems.length} problem(s)` }, run.deps.now);
+  if (!forms.ok) throw new Outcome('REFUSED', forms.message);
+  return finish(run, 'OK', forms.message);
 }
 
 async function cmdIntakeApply(run: Run, argv: string[]): Promise<number> {

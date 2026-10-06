@@ -479,7 +479,7 @@ export interface IntakeAuditRecord {
   schema: typeof INTAKE_AUDIT_SCHEMA;
   governance_version: typeof GOVERNANCE_VERSION;
   at: string;
-  event: 'classify' | 'refused' | 'apply' | 'bind';
+  event: 'classify' | 'refused' | 'apply' | 'bind' | 'check-forms';
   classification: IntakeClassification | null;
   refusal: IntakeRefusalCode | null;
   worktree: string | null;
