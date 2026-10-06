@@ -91,8 +91,14 @@ export interface ExperiencePage {
   page_type?: string | null;
   title?: string | null;
   meta_description?: string | null;
-  headings?: Array<{ level?: number; text?: string }> | null;
-  ctas?: Array<{ text?: string; href?: string | null }> | null;
+  /**
+   * R1-C — `textSource` is written by the crawler when a heading's text did NOT come
+   * from ordinary text content: `'image_alt'` / `'aria_label'` when the accessible
+   * name supplied it, `'none'` when the element exists but carries nothing readable.
+   * Absent on rows crawled before R1-C, and absent for an ordinary text heading.
+   */
+  headings?: Array<{ level?: number; text?: string; textSource?: string }> | null;
+  ctas?: Array<{ text?: string; href?: string | null; source?: string }> | null;
   internal_link_count?: number | null;
   http_status?: number | null;
   crawl_depth?: number | null;
@@ -289,20 +295,46 @@ export function assessDigitalExperience(params: {
 
   // ── Value communication ─────────────────────────────────────────────────────
   let vcEvaluated = 0;
-  const home = pages.find((p) => matches(p, ['home']) || /^https?:\/\/[^/]+\/?$/.test(p.url ?? ''));
+  // R1-C — the home page is IDENTIFIED, not guessed from array order.
+  //
+  // `matches(p, ['home'])` is a substring test over url + title + page_type, so
+  // `/homes-for-sale` satisfied it, and whichever such page the query returned first
+  // (the rows arrive newest-crawled first) became "the home page". Preference order
+  // now: the page the crawler CLASSIFIED as home, then a root-path URL, and only then
+  // the loose match. When none of the three identifies a page, nothing is asserted.
+  const home = pages.find((p) => String(p.page_type ?? '').toLowerCase() === 'home')
+    ?? pages.find((p) => /^https?:\/\/[^/]+\/?$/.test(p.url ?? ''))
+    ?? pages.find((p) => matches(p, ['home']));
   vcEvaluated += 1;
   if (home) {
-    const homeH1 = (home.headings ?? []).some((h) => Number(h?.level) === 1);
+    // R1-C — three states, not two. A heading element the crawler SAW with no
+    // readable text is not the same finding as no heading element at all, and
+    // neither is the same as an H1 this static parse simply cannot see.
+    const h1s = (home.headings ?? []).filter((h) => Number(h?.level) === 1);
+    const hasH1Element = h1s.length > 0;
+    const h1HasText = h1s.some((h) => String(h?.text ?? '').trim().length > 0);
     const homeWords = Number(home.wordCount ?? 0);
-    if (!homeH1 || homeWords < THIN_PAGE_WORDS) {
+    const h1Statement = h1HasText
+      ? 'has an H1'
+      : hasH1Element
+        ? 'has an H1 element that carries no readable text (image or icon only, with no alt text)'
+        : 'exposes NO H1 heading in the HTML served to the crawler';
+    // Absence of an H1 in static HTML is only EVIDENCE of absence when the page is
+    // server-rendered. Where client-side rendering is suspected the limitation is
+    // already reported above, so this must not be restated as a critical defect.
+    const h1AbsenceIsEstablished = h1HasText || !csr;
+    const detectionNote = csr && !h1HasText
+      ? ' — detection is static-HTML only, so a heading rendered by JavaScript would not be observed here'
+      : '';
+    if (!h1HasText || homeWords < THIN_PAGE_WORDS) {
       add({
         pillar: 'value_communication',
         problem: 'The home page does not clearly state what the company does',
-        evidence: `Home page ${homeH1 ? 'has an H1' : 'has NO H1 heading'} and carries ${homeWords} words of extractable copy`,
+        evidence: `Home page (${home.url}) ${h1Statement} and carries ${homeWords} words of extractable copy${detectionNote}`,
         whyItMatters: 'A visitor who cannot tell what is offered within a few seconds has no reason to continue, and answer engines have nothing definitive to extract.',
         action: 'Lead with a headline that names the offering and the customer, followed by a short supporting paragraph.',
-        severity: !homeH1 ? 'critical' : 'moderate', effort: 'low',
-        measurement: 'Re-crawl and confirm the home page exposes an H1 and at least 150 words.',
+        severity: !h1HasText && h1AbsenceIsEstablished ? 'critical' : 'moderate', effort: 'low',
+        measurement: 'Re-crawl and confirm the home page exposes an H1 with readable text and at least 150 words.',
       });
     }
   }
@@ -340,21 +372,40 @@ export function assessDigitalExperience(params: {
 
   // ── Conversion readiness ────────────────────────────────────────────────────
   let crEvaluated = 0;
-  const withCta = pages.filter((p) => (p.ctas ?? []).length > 0);
-  crEvaluated += 1;
-  if (withCta.length / n < 0.5) {
+  // ── R1-C — CTA coverage is measured over pages whose BODY WAS READ ──────────
+  //
+  // `pages` is every row that produced an HTTP response, which by construction
+  // INCLUDES the 4xx and 5xx rows: `fetchHtml` deliberately does not read an error
+  // page's body (an error page's HTML is not site content), so such a row has an
+  // empty `ctas` array for a reason that has nothing to do with the site's
+  // conversion design. Counting it in the denominator turned "this URL is broken"
+  // into "this page offers no next step" — a second, invented finding from one
+  // observation, and one that also drags coverage below the 50% threshold and so
+  // manufactures the finding for sites that are above it.
+  //
+  // Broken pages are already reported, correctly and once, under information
+  // accessibility. The denominator here is the pages whose markup was read.
+  const readable = pages.filter((p) => reachabilityForPage(p).outcome === 'success');
+  const readableCount = readable.length;
+  const withCta = readable.filter((p) => (p.ctas ?? []).length > 0);
+  // Not an evaluated signal when nothing was readable: counting it as evaluated and
+  // then emitting no finding would read back as "conversion readiness: ready" for a
+  // site whose every page answered with an error.
+  if (readableCount > 0) crEvaluated += 1;
+  if (readableCount > 0 && withCta.length / readableCount < 0.5) {
+    const excluded = n - readableCount;
     add({
       pillar: 'conversion_readiness',
       problem: 'Most pages offer no clear next step',
-      evidence: `Only ${withCta.length} of ${n} pages expose a call to action`,
+      evidence: `Only ${withCta.length} of ${readableCount} readable pages expose a call to action${excluded > 0 ? ` (${excluded} further page${excluded === 1 ? '' : 's'} answered with an error and ${excluded === 1 ? 'was' : 'were'} excluded — a page whose body was never read is not evidence of a missing CTA)` : ''}`,
       whyItMatters: 'A visitor who is convinced still needs somewhere to go; a page without a next step relies on them finding one themselves.',
       action: 'Add a single primary call to action to each commercially relevant page.',
       severity: withCta.length === 0 ? 'critical' : 'moderate', effort: 'low',
-      measurement: 'Re-crawl and confirm CTA coverage above 50% of pages.',
+      measurement: 'Re-crawl and confirm CTA coverage above 50% of readable pages.',
     });
   }
 
-  const ctaTexts = pages.flatMap((p) => (p.ctas ?? []).map((c) => String(c?.text ?? '').toLowerCase().trim())).filter(Boolean);
+  const ctaTexts = readable.flatMap((p) => (p.ctas ?? []).map((c) => String(c?.text ?? '').toLowerCase().trim())).filter(Boolean);
   crEvaluated += 1;
   if (ctaTexts.length > 0) {
     const actionable = ctaTexts.filter((t) => ACTION_VERBS.some((v) => t.includes(v)));

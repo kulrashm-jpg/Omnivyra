@@ -9,14 +9,54 @@ import { hasHttpResponse, isHttpErrorOutcome, reachabilityForPage } from './craw
 // ── BETA-EVIDENCE-EXEC-003 — declared (non-scored) evidence aggregation ────────
 // Reuses signals already extracted by the crawler (crawl_metadata.signals) + the existing legal-page
 // classification. Pure aggregation: no scoring, no verification, no recommendation.
-const LEGAL_TRANSPARENCY_DEFS: Array<{ key: string; label: string; re: RegExp }> = [
-  { key: 'privacy', label: 'Privacy Policy', re: /privacy/i },
-  { key: 'terms', label: 'Terms', re: /terms|tos/i },
-  { key: 'cookie', label: 'Cookie Policy', re: /cookie/i },
-  { key: 'legal_notice', label: 'Legal Notice', re: /legal[-_/ ]?notice|\blegal\b/i },
-  { key: 'disclosure', label: 'Disclosure', re: /disclosure|disclaimer/i },
-  { key: 'imprint', label: 'Imprint', re: /imprint|impressum/i },
+/**
+ * R1-C — legal-transparency slugs, matched on PATH SEGMENTS.
+ *
+ * ─── WHAT WAS WRONG ────────────────────────────────────────────────────────────
+ * `/terms|tos/i` was tested against the whole URL as a bare substring, so `tos`
+ * matched inside `photos`: `https://example.com/photos` and every
+ * `/blog/best-photos` URL were recorded as the site's Terms page. That is a
+ * fabricated declaration of legal transparency — it claims the site publishes
+ * terms when it may publish none — and it is the direction of error that matters
+ * most, because the whole point of the block is to report what is MISSING.
+ * `privacy`, `cookie` and the rest had the same unanchored shape.
+ *
+ * ─── THE FIX ───────────────────────────────────────────────────────────────────
+ * Each slug must occupy a whole path segment, or a hyphen/underscore-delimited
+ * word inside one (`/terms-of-service`, `/legal/privacy_policy`). The anchoring is
+ * the same shape `inferPageType` already uses for the identical job, so the
+ * classifier and this reader agree rather than each guessing. Only the URL's PATH
+ * is examined: a host like `photos.example.com` is not a legal page either.
+ */
+const LEGAL_TRANSPARENCY_DEFS: Array<{ key: string; label: string; slugs: readonly string[] }> = [
+  { key: 'privacy', label: 'Privacy Policy', slugs: ['privacy', 'privacy-policy', 'privacidad', 'datenschutz'] },
+  { key: 'terms', label: 'Terms', slugs: ['terms', 'tos', 'terms-of-service', 'terms-of-use', 'terms-and-conditions'] },
+  { key: 'cookie', label: 'Cookie Policy', slugs: ['cookie', 'cookies', 'cookie-policy'] },
+  { key: 'legal_notice', label: 'Legal Notice', slugs: ['legal', 'legal-notice', 'legals', 'mentions-legales'] },
+  { key: 'disclosure', label: 'Disclosure', slugs: ['disclosure', 'disclaimer', 'disclosures'] },
+  { key: 'imprint', label: 'Imprint', slugs: ['imprint', 'impressum'] },
 ];
+
+/** Every slug that makes a URL path a legal-transparency page, flattened. */
+const LEGAL_SLUGS: readonly string[] = [...new Set(LEGAL_TRANSPARENCY_DEFS.flatMap((def) => def.slugs))];
+
+/** The URL's path, lowercased. Empty when the value is not a parseable URL. */
+function urlPath(value: string | null | undefined): string {
+  try { return new URL(String(value ?? '')).pathname.toLowerCase(); } catch { return ''; }
+}
+
+/**
+ * True when one of `slugs` occupies a whole path segment, or a `-`/`_`-delimited
+ * word within one. `tos` therefore matches `/legal/tos` and `/tos-2024` but NOT
+ * `/photos`; `terms` matches `/terms-of-service` but not `/determinism`.
+ */
+function pathDeclaresSlug(path: string, slugs: readonly string[]): boolean {
+  if (!path) return false;
+  return slugs.some((slug) => {
+    const escaped = slug.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    return new RegExp(`(?:^|[/\\-_.])${escaped}(?:[/\\-_.]|$)`, 'i').test(path);
+  });
+}
 
 function declaredHost(u: string): string {
   try { return new URL(u).host.replace(/^www\./, ''); } catch { return ''; }
@@ -66,7 +106,7 @@ function buildDeclaredEvidence(pages: CanonicalPageRow[], legalPages: string[]):
   const legalItems = LEGAL_TRANSPARENCY_DEFS.map((d) => ({
     key: d.key,
     label: d.label,
-    present: legalPages.some((u) => d.re.test(u)),
+    present: legalPages.some((u) => pathDeclaresSlug(urlPath(u), d.slugs)),
   }));
   return {
     // Emitted only when the site actually declared something — an absent block means "the site
@@ -339,15 +379,33 @@ export async function buildPublicDomainAuditDecisions(params: {
   const context = await loadAuditContext(params.companyId, params.domainScope);
   const { pages, content, links } = context;
 
+  /**
+   * R1-C — the home page is IDENTIFIED or it is null.
+   *
+   * The old fallback was `pages[0]?.url`, and `pages` arrives ordered by
+   * `last_crawled_at` DESC (loadAuditContext), so when no page was classified `home`
+   * the field reported THE MOST RECENTLY CRAWLED PAGE as the customer's home page —
+   * typically a blog post. Everything that reads `site_structure.homepage` then
+   * described that page as the home page. Returning null instead is the honest
+   * answer: no home page was observed, which is a finding in itself.
+   */
+  const homepageRow = pages.find((page) => normalizeText(page.page_type) === 'home')
+    ?? pages.find((page) => { const path = urlPath(page.url); return path === '/' || path === ''; })
+    ?? null;
+
   const structure = {
-    homepage: pages.find((page) => normalizeText(page.page_type) === 'home')?.url ?? pages[0]?.url ?? null,
+    homepage: homepageRow?.url ?? null,
     product_pages: pages.filter((page) => /product|feature|solution/i.test(`${page.page_type ?? ''} ${page.url}`)).map((page) => page.url),
     pricing_pages: pages.filter((page) => /pricing/i.test(`${page.page_type ?? ''} ${page.url}`)).map((page) => page.url),
     blog_pages: pages.filter((page) => /blog/i.test(`${page.page_type ?? ''} ${page.url}`)).map((page) => page.url),
     contact_pages: pages.filter((page) => /contact|get-in-touch|book/i.test(`${page.page_type ?? ''} ${page.url}`)).map((page) => page.url),
     geo_pages: inferGeoPages(pages, params.resolvedInput),
     // BETA-AUTHORITY-EXEC-002 (Wave-1) — legal-transparency pages via the existing page-classification pipeline.
-    legal_pages: pages.filter((page) => /\blegal\b|privacy|terms|cookie|imprint|impressum|disclosure|disclaimer/i.test(`${page.page_type ?? ''} ${page.url}`)).map((page) => page.url),
+    // R1-C: segment-anchored, and over the URL PATH only. The previous unanchored
+    // substring test matched `tos` inside `photos`, so any `/photos` or
+    // `/blog/best-photos` URL was collected here and then reported as the site's
+    // Terms page — a legal declaration the site never made.
+    legal_pages: pages.filter((page) => pathDeclaresSlug(urlPath(page.url), LEGAL_SLUGS)).map((page) => page.url),
   };
 
   // BETA-EVIDENCE-EXEC-003 — non-scored declared evidence, aggregated from already-extracted crawl signals.
@@ -453,10 +511,38 @@ export async function buildPublicDomainAuditDecisions(params: {
     if (!current) return false;
     return allPages.findIndex((candidate) => normalizeText(candidate.meta_title || candidate.title) === current) !== index;
   });
-  const pagesWithoutH1 = pages.filter((page) => {
-    if (!Array.isArray(page.headings) || page.headings.length === 0) return true;
-    return !page.headings.some((heading) => typeof heading !== 'string' && Number(heading?.level ?? 0) === 1 && textLength(heading?.text) > 0);
+  // ── R1-C — H1 ABSENCE IS A CLAIM, SO IT NEEDS A PAGE THAT WAS READ ──────────
+  //
+  // Two separate falsehoods lived in this predicate.
+  //
+  //   1. It ran over `pages`, which includes rows nobody fetched (GA4-created
+  //      rows, transport failures, timeouts). Those have `headings = null`, so the
+  //      page was reported to the customer as having no H1 — a negative finding
+  //      about their site derived from the fact that the crawler never looked.
+  //      The population is now the pages that RESPONDED and whose body was read.
+  //
+  //   2. It collapsed "no H1 element exists" into "no H1 with text". The crawler
+  //      now records a heading element even when it strips to nothing, with
+  //      `textSource: 'none'`, so the two are reported separately below. An H1
+  //      that is a bare unlabelled logo is a real defect, but it is a DIFFERENT
+  //      defect from a page with no H1 at all, and the fix differs too.
+  //
+  // What neither split can do is see an H1 injected by JavaScript. This is a
+  // static parse, so "no H1 in the served HTML" is exactly what is asserted, and
+  // the evidence block says so rather than claiming the page has no headline.
+  const h1Observable = respondedPages.filter((page) => !isHttpErrorOutcome(reachabilityForPage(page).outcome));
+  const h1Entries = (page: CanonicalPageRow) => (Array.isArray(page.headings) ? page.headings : [])
+    .filter((heading): heading is { level?: number; text?: string } =>
+      typeof heading !== 'string' && Number(heading?.level ?? 0) === 1);
+  /** No H1 ELEMENT at all in the served HTML. */
+  const pagesWithNoH1Element = h1Observable.filter((page) => h1Entries(page).length === 0);
+  /** An H1 element exists but carries no readable text (image/icon with no alt). */
+  const pagesWithTextlessH1 = h1Observable.filter((page) => {
+    const entries = h1Entries(page);
+    return entries.length > 0 && !entries.some((heading) => textLength(heading?.text) > 0);
   });
+  /** Both together — the population the existing decision and evidence report on. */
+  const pagesWithoutH1 = [...pagesWithNoH1Element, ...pagesWithTextlessH1];
   const thinPages = pages.filter((page) => {
     const wordCount = (contentByPage.get(page.id) ?? []).reduce((sum, row) => sum + safeWords(row.content_text), 0);
     const importantPage = /home|pricing|product|feature|landing|contact/.test(normalizeText(page.page_type));
@@ -583,10 +669,28 @@ export async function buildPublicDomainAuditDecisions(params: {
 
   const decisions: PersistedDecisionObject[] = [];
 
-  const homepageCopy = pageTitles[0] ?? '';
+  // ── R1-C — "HOMEPAGE POSITIONING" MUST BE READ OFF THE HOME PAGE ────────────
+  //
+  // This was `pageTitles[0]`, and `pageTitles` is index-parallel to `pages`, which
+  // `loadAuditContext` orders by `last_crawled_at` DESC. So the copy judged as the
+  // customer's "homepage positioning" was the copy of whichever page happened to be
+  // crawled LAST — on any multi-page site, a blog post or a legal page. The decision
+  // then told the customer their home page fails to state who it is for, on evidence
+  // taken from a page that is not their home page.
+  //
+  // The home page is now the one identified above. When none was identified the
+  // decision is not emitted at all: "we could not establish the home page" is the
+  // honest output, and it is strictly better than a confident claim about the wrong
+  // page. The site-wide heading corpus is left exactly as it was — widening or
+  // narrowing which pages feed the signal is a separate question from reading the
+  // right page.
+  const homepageCopy = homepageRow
+    ? `${homepageRow.title ?? ''} ${homepageRow.meta_title ?? ''} ${homepageRow.meta_description ?? ''}`.trim()
+    : '';
+  const homepageIdentified = homepageRow !== null;
   const audienceSignal = /(for|teams|businesses|companies|agencies|buyers|operators|founders|marketers)/i.test(homepageCopy + ' ' + headingTexts.join(' '));
   const valueSignal = /(helps|increase|reduce|improve|grow|save|automate|scale|faster|clear)/i.test(homepageCopy + ' ' + headingTexts.join(' '));
-  if (!audienceSignal || !valueSignal) {
+  if (homepageIdentified && (!audienceSignal || !valueSignal)) {
     decisions.push(createDecision({
       companyId: params.companyId,
       reportTier,
@@ -772,6 +876,15 @@ export async function buildPublicDomainAuditDecisions(params: {
       evidence: {
         thin_page_count: thinPages.length,
         pages_without_h1_count: pagesWithoutH1.length,
+        // R1-C — the two H1 states, separated, plus the limit of the detector that
+        // produced them. A reader must be able to see that "no H1" here means "no H1
+        // in the HTML the crawler was served", which is not the same claim as "this
+        // page has no headline" for a client-rendered site.
+        pages_with_no_h1_element_count: pagesWithNoH1Element.length,
+        pages_with_textless_h1_count: pagesWithTextlessH1.length,
+        h1_detection: 'static_html_only',
+        h1_detection_limitation: 'An H1 inserted by JavaScript after load is not observable by this crawl, so absence in the served HTML is not proof the rendered page has no H1.',
+        h1_pages_examined: h1Observable.length,
       },
     }));
   }

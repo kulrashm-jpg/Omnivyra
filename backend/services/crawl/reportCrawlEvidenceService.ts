@@ -83,26 +83,55 @@ const SOFT_BUDGET_MS = Math.max(5000, Number(process.env.REPORT_CRAWL_SOFT_BUDGE
  * the report was composed from the old one. The domain row is re-resolved per call because the
  * crawl itself creates it for a first-time domain.
  */
-async function countPages(companyId: string, targetUrl: string): Promise<{ count: number; lastCrawledAt: string | null }> {
+async function countPages(companyId: string, targetUrl: string): Promise<{ count: number; readable: number; lastCrawledAt: string | null }> {
   const scope = await resolveReportDomainScope(companyId, targetUrl);
-  if (scope.domainId === null) return { count: 0, lastCrawledAt: null };
-  const [{ count }, { data }] = await Promise.all([
+  if (scope.domainId === null) return { count: 0, readable: 0, lastCrawledAt: null };
+  const [{ count }, readableRes, { data }] = await Promise.all([
     supabase
       .from('canonical_pages')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
       .eq('domain_id', scope.domainId),
+    // ── R1-C — "USABLE EVIDENCE" MEANS A PAGE WHOSE BODY WAS READ ────────────
+    //
+    // `canonical_pages` is not the crawler's private table. `ga4IngestionService.
+    // upsertPage` writes a row for every analytics path it sees, with no
+    // `http_status` at all, and the crawler itself writes a row for every 404,
+    // 500 and transport failure. The total row count therefore answered a
+    // different question from the one being asked here, which is "do we have
+    // website evidence worth composing a report from?".
+    //
+    // Read naively, two genuinely crawled pages plus three GA4 rows cleared the
+    // three-page usable threshold, so the decision came back `reused` and the
+    // report was composed from two pages of evidence while reporting five. Ten
+    // fresh 404 rows did the same with no readable content at all.
+    //
+    // The 2xx filter is applied SERVER-SIDE, so this stays one cheap exact count
+    // rather than a row scan, and it cannot be fooled by the `0` sentinel (a
+    // transport failure) or by a NULL status (never fetched).
+    supabase
+      .from('canonical_pages')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .eq('domain_id', scope.domainId)
+      .gte('http_status', 200)
+      .lt('http_status', 300),
+    // Freshness comes off the same readable population: the newest timestamp on a
+    // row nobody could read is not evidence that this report's evidence is fresh.
     supabase
       .from('canonical_pages')
       .select('last_crawled_at')
       .eq('company_id', companyId)
       .eq('domain_id', scope.domainId)
+      .gte('http_status', 200)
+      .lt('http_status', 300)
       .not('last_crawled_at', 'is', null)
       .order('last_crawled_at', { ascending: false })
       .limit(1),
   ]);
   return {
     count: count ?? 0,
+    readable: (readableRes as { count?: number | null }).count ?? 0,
     lastCrawledAt: (data?.[0]?.last_crawled_at as string | undefined) ?? null,
   };
 }
@@ -183,7 +212,7 @@ export async function ensureReportCrawlEvidence(params: {
 
   const scoped = { ...base, targetUrl };
 
-  let before: { count: number; lastCrawledAt: string | null };
+  let before: { count: number; readable: number; lastCrawledAt: string | null };
   try {
     before = await countPages(params.companyId, targetUrl);
   } catch (error) {
@@ -199,8 +228,13 @@ export async function ensureReportCrawlEvidence(params: {
   }
 
   const ageMs = before.lastCrawledAt ? Date.now() - Date.parse(before.lastCrawledAt) : null;
-  const usable = before.count >= MIN_USABLE_PAGES;
+  // R1-C — the threshold is applied to the READABLE pages, not to every row that
+  // happens to exist for this domain. See `countPages`.
+  const usable = before.readable >= MIN_USABLE_PAGES;
   const fresh = ageMs !== null && Number.isFinite(ageMs) && ageMs < cooldownMs;
+  /** Rows that exist but carry no readable body, stated rather than silently folded in. */
+  const nonReadable = Math.max(0, before.count - before.readable);
+  const storedSummary = `${before.readable} readable page(s)${nonReadable > 0 ? ` (plus ${nonReadable} stored row(s) with no readable body — analytics-only, error or unreachable)` : ''}`;
 
   if (usable && fresh) {
     return {
@@ -211,7 +245,7 @@ export async function ensureReportCrawlEvidence(params: {
       lastCrawledAt: before.lastCrawledAt,
       ageMs,
       durationMs: Date.now() - startedAt,
-      reason: `${before.count} stored pages, last crawled ${Math.round((ageMs ?? 0) / 3_600_000)}h ago (within ${Math.round(cooldownMs / 3_600_000)}h cooldown)`,
+      reason: `${storedSummary}, last crawled ${Math.round((ageMs ?? 0) / 3_600_000)}h ago (within ${Math.round(cooldownMs / 3_600_000)}h cooldown)`,
     };
   }
 
@@ -219,7 +253,7 @@ export async function ensureReportCrawlEvidence(params: {
   const decisionReason = before.count === 0
     ? 'no stored pages'
     : !usable
-      ? `only ${before.count} stored page(s), below the ${MIN_USABLE_PAGES}-page usable threshold`
+      ? `only ${storedSummary}, below the ${MIN_USABLE_PAGES}-page usable threshold`
       : `stored evidence is ${ageMs === null ? 'undated' : `${Math.round(ageMs / 3_600_000)}h old`}, past the ${Math.round(cooldownMs / 3_600_000)}h cooldown`;
 
   let timer: NodeJS.Timeout | undefined;
@@ -261,6 +295,7 @@ export async function ensureReportCrawlEvidence(params: {
 
     const after = await countPages(params.companyId, targetUrl).catch(() => ({
       count: before.count + outcome.result.pagesInserted,
+      readable: before.readable + outcome.result.pagesInserted,
       lastCrawledAt: before.lastCrawledAt,
     }));
     return {
