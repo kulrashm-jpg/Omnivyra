@@ -185,7 +185,7 @@ const USAGE = [
 /** Governed entry (kept separate from the per-Story verbs above). */
 const INTAKE_USAGE = [
   '  intake      [--worktree <path>] [--session <uuid>] [--story OMNI-<n>] [--intent "<text>"] [--authorized <p>]... [--prohibited <p>]...',
-  '              [--verification <id>]... [--judgment-ac "<text>"]... [--base <ref>] [--bind]',
+  '              [--verification <id>]... [--judgment-ac "<text>"]... [--authorize-protected <id>]... [--base <ref>] [--bind]',
   '  intake      (human only, interactive terminal, your own Jira identity) --apply sha256:<proposal>',
   '  intake      (human only, your own Jira identity; read-only) --check-forms',
 ].join('\n');
@@ -1061,10 +1061,14 @@ async function cmdIntake(run: Run, argv: string[]): Promise<number> {
   const prohibited = flagsAll(argv, '--prohibited');
   const verification = flagsAll(argv, '--verification');
   const judgmentAcs = flagsAll(argv, '--judgment-ac');
-  if (!authorized || !prohibited || !verification || !judgmentAcs) return usage(run, '--authorized, --prohibited, --verification and --judgment-ac each need a value');
+  const authorizations = flagsAll(argv, '--authorize-protected');
+  if (!authorized || !prohibited || !verification || !judgmentAcs || !authorizations) {
+    return usage(run, '--authorized, --prohibited, --verification, --judgment-ac and --authorize-protected each need a value');
+  }
   const bind = has(argv, '--bind');
   const worktree = path.resolve(wtArg ?? process.cwd());
   run.result.intake = true;
+  if (authorizations.length > 0) run.result.protected_authorizations = [...new Set(authorizations)].sort();
   const layout = layoutOf(run);
 
   let rules: IntakeRules;
@@ -1153,7 +1157,7 @@ async function cmdIntake(run: Run, argv: string[]): Promise<number> {
     explicitStoryKey: storyFlag,
     explicitStory,
     activeStories,
-    options: { intent, authorized, prohibited, verification, judgmentAcs },
+    options: { intent, authorized, prohibited, verification, judgmentAcs, authorizations },
     rules,
     registry: run.deps.registry,
   });
@@ -1165,6 +1169,7 @@ async function cmdIntake(run: Run, argv: string[]): Promise<number> {
     merge_base: state.merge_base,
     dirty_file_count: state.dirty_files.length,
     session_id: sessionArg,
+    protected_authorizations: [...new Set(authorizations)].sort(),
   };
   const audit = (input: Omit<IntakeAuditInput, keyof typeof auditBase> & Partial<typeof auditBase>) => appendIntakeAudit(layout, { ...auditBase, ...input } as IntakeAuditInput, run.deps.now);
 

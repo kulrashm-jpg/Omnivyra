@@ -58,12 +58,50 @@ export interface IntakeVerificationMapping {
   registry_ids: string[];
 }
 
+/**
+ * A reviewed, exact-path exception to the default prohibited paths (e.g. one Story's own
+ * migration files, or vercel.json for an activation Story). It lifts the default
+ * prohibition ONLY for its listed files and ONLY when named with `--authorize-protected`;
+ * the proposal must then carry every `required_verification` id.
+ */
+export interface ProtectedPathAuthorization {
+  id: string;
+  description: string;
+  /** Exact repo-relative file paths. No wildcards; each must fall under a default prohibited pattern. */
+  paths: string[];
+  /** Registry ids the proposal's Verification Requirements must include. */
+  required_verification: string[];
+}
+
 export interface IntakeRules {
   schema: typeof INTAKE_RULES_SCHEMA;
   /** Always prohibited in an intake proposal; any change touching them is refused. */
   default_prohibited_paths: string[];
   /** Changed path → registry ids that verify it. A changed path no mapping covers is NO_REGISTRY_ID. */
   verification_mappings: IntakeVerificationMapping[];
+  /** Reviewed exact-path exceptions; empty unless a reviewed rules change adds one. */
+  protected_path_authorizations: ProtectedPathAuthorization[];
+}
+
+export const AUTHORIZATION_ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/;
+
+/** Validates one authorization against the defaults and the registry. Throws on anything wrong. Pure. */
+function validateAuthorization(a: unknown, defaults: string[], known: Set<string>): ProtectedPathAuthorization {
+  const x = a as ProtectedPathAuthorization;
+  if (!x || typeof x !== 'object' || typeof x.id !== 'string' || !AUTHORIZATION_ID_RE.test(x.id)) throw new Error('intake rules: authorization id must match ^[a-z0-9][a-z0-9._-]{1,63}$');
+  const where = `intake rules: authorization ${x.id}`;
+  if (typeof x.description !== 'string' || x.description.trim() === '') throw new Error(`${where}: description is required`);
+  if (!Array.isArray(x.paths) || x.paths.length === 0) throw new Error(`${where}: paths must be a non-empty array`);
+  if (!Array.isArray(x.required_verification) || x.required_verification.length === 0) throw new Error(`${where}: required_verification must be a non-empty array`);
+  for (const p of x.paths) {
+    if (typeof p !== 'string' || p.includes('*') || p.endsWith('/')) throw new Error(`${where}: ${JSON.stringify(p)} is not an exact file path (no wildcards)`);
+    const why = pathPatternProblem(p);
+    if (why !== null) throw new Error(`${where}: invalid path ${JSON.stringify(p)}: ${why}`);
+    if (!defaults.some((d) => matchesPattern(p, d))) throw new Error(`${where}: ${p} is not under a default prohibited path, so it needs no authorization`);
+  }
+  if (new Set(x.paths).size !== x.paths.length) throw new Error(`${where}: duplicate path`);
+  for (const id of x.required_verification) if (!known.has(id)) throw new Error(`${where}: unknown registry id ${JSON.stringify(id)}`);
+  return { id: x.id, description: x.description, paths: [...x.paths], required_verification: [...x.required_verification] };
 }
 
 export const DEFAULT_INTAKE_RULES_FILE = path.join(__dirname, 'intake-rules.json');
@@ -89,11 +127,21 @@ export function validateIntakeRules(value: unknown, registry: VerificationRegist
     }
     for (const id of m.registry_ids) if (!known.has(id)) throw new Error(`intake rules: unknown registry id ${JSON.stringify(id)}`);
   }
+  const rawAuth: unknown = (v as { protected_path_authorizations?: unknown }).protected_path_authorizations;
+  if (rawAuth !== undefined && !Array.isArray(rawAuth)) throw new Error('intake rules: protected_path_authorizations must be an array');
+  const authorizations = ((rawAuth as unknown[] | undefined) ?? []).map((a) => validateAuthorization(a, v.default_prohibited_paths, known));
+  if (new Set(authorizations.map((a) => a.id)).size !== authorizations.length) throw new Error('intake rules: duplicate authorization id');
   return {
     schema: INTAKE_RULES_SCHEMA,
     default_prohibited_paths: [...v.default_prohibited_paths],
     verification_mappings: v.verification_mappings.map((m) => ({ paths: [...m.paths], registry_ids: [...m.registry_ids] })),
+    protected_path_authorizations: authorizations,
   };
+}
+
+/** Digest of one authorization (recorded in the proposal and the Story invariants). Pure. */
+export function authorizationDigest(a: ProtectedPathAuthorization): Sha256Ref {
+  return canonicalHash(a);
 }
 
 export function loadIntakeRules(registry: VerificationRegistry, file: string = DEFAULT_INTAKE_RULES_FILE): IntakeRules {
@@ -137,6 +185,8 @@ export interface IntakeOptions {
   prohibited: string[];
   verification: string[];
   judgmentAcs: string[];
+  /** `--authorize-protected <id>` values; absent / empty = today's behaviour exactly. */
+  authorizations?: string[];
 }
 
 export interface IntakeInput {
@@ -251,6 +301,12 @@ export function classifyIntake(input: IntakeInput): IntakeDecision {
   const unknownIds = options.verification.filter((id) => !REGISTRY_ID_RE.test(id) || !known.has(id));
   if (unknownIds.length > 0) return refuse('NO_REGISTRY_ID', 'verification ids are not in the registry', unknownIds);
   if (input.explicitStoryKey !== null && !STORY_KEY_RE.test(input.explicitStoryKey)) return refuse('INVALID_INPUT', 'invalid --story');
+  // Protected-path authorizations: only reviewed ids from the rules; none named = today's behaviour.
+  const requested = [...new Set(options.authorizations ?? [])];
+  const unknownAuth = requested.filter((id) => !rules.protected_path_authorizations.some((a) => a.id === id));
+  if (unknownAuth.length > 0) return refuse('UNKNOWN_AUTHORIZATION', 'protected-path authorization ids are not in the reviewed intake rules', unknownAuth);
+  const applied = rules.protected_path_authorizations.filter((a) => requested.includes(a.id)).sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  const lifted = new Set(applied.flatMap((a) => a.paths));
 
   // 1. GOVERNED_RESUME.
   const bindings = input.bindingsForWorktree;
@@ -283,8 +339,12 @@ export function classifyIntake(input: IntakeInput): IntakeDecision {
 
   // Changed paths and the prohibited boundary.
   const changed = [...new Set([...state.dirty_files, ...state.changed_since_base].map(posix))].sort();
-  const prohibited = [...new Set([...rules.default_prohibited_paths, ...options.prohibited])];
-  const touched = changed.filter((p) => covers(prohibited, p));
+  const userProhibited = [...new Set(options.prohibited)];
+  // A default pattern is dropped from the proposal ONLY when it covers an authorized exact file;
+  // the Story then authorizes exactly those files, and verify refuses anything else as unauthorized.
+  const dropped = rules.default_prohibited_paths.filter((d) => [...lifted].some((p) => matchesPattern(p, d)));
+  const prohibited = [...new Set([...rules.default_prohibited_paths.filter((d) => !dropped.includes(d)), ...userProhibited])];
+  const touched = changed.filter((p) => (covers(rules.default_prohibited_paths, p) && !lifted.has(p)) || covers(userProhibited, p));
   if (touched.length > 0) return refuse('PROHIBITED_PATH_TOUCHED', 'the work touches prohibited paths', touched);
 
   // Story resolution.
@@ -329,11 +389,18 @@ export function classifyIntake(input: IntakeInput): IntakeDecision {
   const summary = intent ?? `Adopt existing work on ${state.branch}`;
   const objective = intent ?? `Adopt the pre-governance work on branch ${state.branch} (HEAD ${state.head}) and continue it under governance.`;
 
-  const authorized = options.authorized.length > 0 ? [...new Set(options.authorized)].sort() : deriveAuthorizedPaths(changed);
+  const authorized =
+    options.authorized.length > 0
+      ? [...new Set(options.authorized)].sort()
+      : lifted.size === 0
+        ? deriveAuthorizedPaths(changed)
+        : [...new Set([...deriveAuthorizedPaths(changed.filter((p) => !lifted.has(p))), ...lifted])].sort();
   if (authorized.length === 0) return refuse('AUTHORIZED_PATHS_UNKNOWN', 'no changed paths to derive Authorized Paths from; pass --authorized <pattern>');
   const outside = changed.filter((p) => !covers(authorized, p));
   if (outside.length > 0) return refuse('AUTHORIZED_PATHS_UNKNOWN', 'the Authorized Paths do not cover every changed path', outside);
-  const authorizedProhibited = authorized.filter((a) => prohibited.some((p) => matchesPattern(a.replace(/\/\*\*$/, '/x'), p) || a === p));
+  const authorizedProhibited = authorized.filter(
+    (a) => !lifted.has(a) && (prohibited.some((p) => matchesPattern(a.replace(/\/\*\*$/, '/x'), p) || a === p) || dropped.some((d) => patternsMayOverlap(a, d))),
+  );
   if (authorizedProhibited.length > 0) return refuse('PROHIBITED_PATH_TOUCHED', 'Authorized Paths overlap prohibited paths', authorizedProhibited);
 
   let verification: string[];
@@ -347,6 +414,10 @@ export function classifyIntake(input: IntakeInput): IntakeDecision {
     const ids: string[] = [];
     for (const m of rules.verification_mappings) if (changed.some((p) => covers(m.paths, p))) for (const id of m.registry_ids) if (!ids.includes(id)) ids.push(id);
     verification = ids;
+  }
+  const missingRequired = applied.flatMap((a) => a.required_verification.filter((id) => !verification.includes(id)).map((id) => `${a.id}: ${id}`));
+  if (missingRequired.length > 0) {
+    return refuse('AUTHORIZATION_VERIFICATION_MISSING', 'a protected-path authorization requires verification the proposal does not carry; pass it with --verification', missingRequired);
   }
 
   const acs: IntakeProposedAc[] = [];
@@ -374,14 +445,34 @@ export function classifyIntake(input: IntakeInput): IntakeDecision {
       summary,
       objective,
       architecture: null,
-      invariants: [],
+      invariants: applied.map((a) => `Protected-path authorization ${a.id} (${authorizationDigest(a)}): only these exact protected files may change: ${a.paths.join(', ')}`),
       authorized_paths: authorized,
       prohibited_paths: [...prohibited].sort(),
       verification_requirements: verification,
     },
     acceptance_criteria: acs,
   };
+  // Present only when used, so proposals without an authorization hash exactly as before.
+  if (applied.length > 0) proposal.protected_authorizations = applied.map((a) => ({ id: a.id, digest: authorizationDigest(a) }));
   return { kind, candidate: null, proposal, changed, subject, owner };
+}
+
+/**
+ * Conservative: could some path match both patterns? Exact paths are matched
+ * directly; for globs, the literal prefixes before the first `*` overlap when
+ * one is a prefix of the other (may over-report — fails closed). Pure.
+ */
+export function patternsMayOverlap(a: string, b: string): boolean {
+  const lit = (p: string) => {
+    const i = p.indexOf('*');
+    return i < 0 ? null : p.slice(0, i);
+  };
+  const la = lit(a);
+  const lb = lit(b);
+  if (la === null && lb === null) return a === b;
+  if (la === null) return matchesPattern(a, b);
+  if (lb === null) return matchesPattern(b, a);
+  return la.startsWith(lb) || lb.startsWith(la);
 }
 
 // ---------------------------------------------------------------- proposal store
@@ -498,6 +589,8 @@ export interface IntakeAuditRecord {
   approved_by: { account_id: string; display_name: string } | null;
   packet_hash: string | null;
   adoption_classification: typeof ADOPTION_CLASSIFICATION | null;
+  /** `--authorize-protected` ids named on this run (reviewed exact-path exceptions). */
+  protected_authorizations: string[];
   outcome: string;
 }
 
@@ -527,6 +620,7 @@ export function appendIntakeAudit(layout: GovLayout, input: IntakeAuditInput, no
     approved_by: input.approved_by ?? null,
     packet_hash: input.packet_hash ?? null,
     adoption_classification: input.adoption_classification ?? null,
+    protected_authorizations: input.protected_authorizations ?? [],
     outcome: input.outcome,
   };
   const file = intakeLayout(layout).auditFile;

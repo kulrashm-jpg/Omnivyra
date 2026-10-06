@@ -389,7 +389,9 @@ export type IntakeRefusalCode =
   | 'PARTIAL_SCOPE_MATCH' // a Story covers only part of the changes
   | 'INTENT_REQUIRED' // the subject of new work cannot be established; pass --intent
   | 'AUTHORIZED_PATHS_UNKNOWN'
-  | 'NO_REGISTRY_ID'; // no verification registry id covers the changed paths
+  | 'NO_REGISTRY_ID' // no verification registry id covers the changed paths
+  | 'UNKNOWN_AUTHORIZATION' // --authorize-protected names an id the reviewed rules do not define
+  | 'AUTHORIZATION_VERIFICATION_MISSING'; // an applied authorization's required verification is absent
 
 export interface IntakeProposedStory {
   summary: string;
@@ -425,6 +427,11 @@ export interface IntakeProposal {
   session_id: string | null;
   story: IntakeProposedStory;
   acceptance_criteria: IntakeProposedAc[];
+  /**
+   * Reviewed exact-path protected authorizations applied (`--authorize-protected`), with the
+   * digest of each rules entry. ABSENT when none applies, so such proposals hash as before.
+   */
+  protected_authorizations?: Array<{ id: string; digest: Sha256Ref }>;
 }
 
 export interface StoredIntakeProposal {

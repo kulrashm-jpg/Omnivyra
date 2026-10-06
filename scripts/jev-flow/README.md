@@ -203,6 +203,20 @@ touched (`PROHIBITED_PATH_TOUCHED`; defaults include `supabase/migrations/**`,
 (`AUTHORIZED_PATHS_UNKNOWN`); no registry id for the changed paths (`NO_REGISTRY_ID`); no subject
 (`INTENT_REQUIRED`).
 
+**Protected-path authorizations (`--authorize-protected <id>`):** a Story that legitimately owns
+specific protected files — its own migrations, or `vercel.json` for an activation Story — names a
+reviewed entry from `intake-rules.json` `protected_path_authorizations`. Each entry lists **exact
+file paths only** (no wildcards; each must fall under a default prohibited pattern) and the
+`required_verification` registry ids. With the flag, intake lifts the default prohibition for
+exactly those files: they enter Authorized Paths exactly, the default pattern that covered them is
+dropped from that Story's Prohibited Paths (verify still refuses any changed path not authorized),
+any authorized glob that could reach into the dropped area is refused, and the Story Invariants and
+the proposal record the authorization id and digest. Refusals: an unknown id
+(`UNKNOWN_AUTHORIZATION`), a missing required check (`AUTHORIZATION_VERIFICATION_MISSING` — pass it
+with `--verification`), and any other protected path, user `--prohibited` path or Story prohibition
+(`PROHIBITED_PATH_TOUCHED`; those are never lifted). Without the flag nothing changes, including
+proposal hashes. Adding an entry is a reviewed change to `intake-rules.json`.
+
 **Sessions:** a live session's recorded `cwd` is only a claim — Claude often records the main
 checkout while working in another worktree — so pass `--session <uuid>` whenever ownership is not
 unique. Intake locates the transcript by id only; it never reads transcript content.

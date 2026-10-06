@@ -22,5 +22,6 @@
       "paths": ["backend/tests/unit/piScore*", "scripts/ci/scoring-surface-digest.js"],
       "registry_ids": ["pi-score.unit", "pi-score.digest", "scripts.typecheck"]
     }
-  ]
+  ],
+  "protected_path_authorizations": []
 }
