@@ -191,7 +191,10 @@ describe('Phase 4 — performance aggregation', () => {
 
   it('all-failed observations stay unavailable and surface the provider reason', () => {
     const evidence = aggregatePerformanceEvidence({
-      observations: [unavailableObservation({ url: 'https://acme.test/', formFactor: 'mobile', reason: 'quota exceeded' })],
+      // E made `failureKind` required so a new failure path cannot be added without classifying
+      // it. 'quota exceeded' IS the rate-limited condition — the same kind `failureFromStatus`
+      // assigns to 429 — so the existing vocabulary already has the right word for this fixture.
+      observations: [unavailableObservation({ url: 'https://acme.test/', formFactor: 'mobile', reason: 'quota exceeded', failureKind: 'rate_limited' })],
       eligiblePages: 5,
     });
     expect(evidence.state).toBe('unavailable');

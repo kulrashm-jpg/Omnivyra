@@ -55,6 +55,7 @@ import {
 import { PerplexityAdapter } from '../../services/intelligence/adapters/perplexityAdapter';
 import { OpenAIChatGPTAdapter } from '../../services/intelligence/adapters/openaiAdapter';
 import type {
+  AIQueryClass,
   AIVisibilityProbe,
   AIVisibilityProbeResult,
   LLMVisibilityProvider,
@@ -63,7 +64,11 @@ import type { CanonicalReport } from '../../services/canonicalReport/canonicalRe
 
 const BRAND = 'Northwind Analytics';
 const DOMAIN = 'northwind.test';
-const BRANDED_QUERIES = { branded: [`What is ${BRAND}?`] } as const;
+// `as const` made this a readonly tuple, which cannot satisfy the mutable `string[]` the
+// query-set parameter declares — one fixture, 24 call sites, 24 identical TS2322s. Typed as the
+// parameter's own type instead: the fixture is the same value and the production contract is
+// untouched; only the fixture now states the shape it is actually passed as.
+const BRANDED_QUERIES: Partial<Record<AIQueryClass, string[]>> = { branded: [`What is ${BRAND}?`] };
 
 /** Perplexity's shape: an answer plus the grounded `citations[]` sonar returns. */
 const perplexityBody = (content: string, citations: string[]) => ({

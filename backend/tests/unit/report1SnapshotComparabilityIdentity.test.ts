@@ -702,7 +702,8 @@ describe('comparability — [negative control] the pre-fix selector still produc
 
 import { buildTrajectoryMovement } from '../../services/intelligence/dossier/intelligenceSurfacesFoundations';
 import { renderTrajectoryMovement } from '../../services/intelligence/exportRendererSectionsA';
-import type { CanonicalReport } from '../../services/canonicalReport/canonicalReportTypes';
+// `CanonicalReport` is already imported at the top of this file; a second `import type` of the
+// same name is a duplicate declaration (TS2300), not an additional import.
 
 const reportWithChangeState = (
   state: 'measured' | 'insufficient_history' | 'not_comparable',

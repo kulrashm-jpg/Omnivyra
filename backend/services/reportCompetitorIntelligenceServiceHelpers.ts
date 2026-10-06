@@ -975,7 +975,20 @@ export async function discoverCompetitorDomainsFromSerp(params: {
   // a reason that says precisely which of the two it was, rather than inheriting
   // a generic retrieval failure.
   let attempted = 0;
-  let acquisitionStatus: 'ok' | 'unavailable' | 'failed' = 'unavailable';
+  // TypeScript narrows a `let` to its initialising LITERAL, and every assignment that can
+  // reach `failed` happens inside `runKeywordBatch` below — a closure the compiler cannot
+  // prove runs. So the compiler modelled this variable as permanently `'unavailable'` and
+  // called the invariant guard at the return site a dead comparison (TS2367), even though the
+  // guard is live at runtime. Reading the initial value through a typed constant keeps the
+  // variable's declared domain, so the compiler's model matches the real state machine.
+  //
+  // This changes nothing about the state machine: the initial value is still `unavailable`,
+  // `failed` is still reachable only from a dispatched request, and the guard is unchanged.
+  // An annotated `const` does not help: the compiler narrows a `const` to its literal too.
+  // A call's result is typed by the declared return type and is not narrowed to a literal, so
+  // this is the minimal way to give the variable its true domain.
+  const initialAcquisitionStatus = (): 'ok' | 'unavailable' | 'failed' => 'unavailable';
+  let acquisitionStatus = initialAcquisitionStatus();
   let acquisitionReason: string | null = preflight.value
     // A credential exists, so if nothing runs it is because nothing was asked.
     ? 'No search queries were available for this company, so no public search observation was attempted.'
