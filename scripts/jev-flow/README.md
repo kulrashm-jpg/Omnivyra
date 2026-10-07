@@ -239,6 +239,15 @@ Statement, Kind, Evidence Kind). It never edits an existing issue, never moves a
 never sets gate state. Re-applying the same proposal reuses the labelled Story and existing AC IDs
 and creates only what is missing.
 
+**Credential freshness (Windows only):** before any Jira request, both `--check-forms` and
+`--apply` compare `GOV_INTAKE_EMAIL` / `GOV_INTAKE_TOKEN` in the process with the Windows User
+environment (one read-only `reg query HKCU\Environment /v <name>` per variable, no shell), which is
+the authoritative source. A mismatch refuses with "`<name>` process environment is stale; refresh
+the process environment from the Windows User environment before retrying." A value missing from
+either side, an unreadable User environment, or a non-Windows platform also refuses — there is no
+fallback to the process value. Values are compared in memory only; they are never printed,
+audited or written, and the process environment is never overwritten.
+
 **Records:** proposals are stored under `GOV_HOME/intake/proposals/<hash>.{json,md}`; every
 classify / refuse / apply / bind appends one metadata-only line to `GOV_HOME/intake/audit.jsonl`
 (classification, worktree, branch, HEAD, merge-base, session, candidate Story, proposal hash,

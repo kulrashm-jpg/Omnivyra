@@ -342,11 +342,45 @@ describe('1. no gov module writes git history', () => {
     for (const chain of sites) expect(chain[chain.length - 1]).toBe('cmdStart');
   });
 
-  it('the only other process launches are taskkill and the node-only verification runner', () => {
-    expect([...new Set(all.otherCommands)]).toEqual(['taskkill']);
+  it('the only other process launches are taskkill, the node-only verification runner and the one read-only intake reg query', () => {
+    expect([...new Set(all.otherCommands)]).toEqual(['reg', 'taskkill']);
+    expect(all.otherCommands.filter((c) => c === 'reg')).toHaveLength(1);
     expect(spawnSpec(['node', 'x.js'], { cwd: os.tmpdir() }).command).toBe(process.execPath);
     expect(spawnSpec(['node', 'x.js'], { cwd: os.tmpdir() }).options.shell).toBe(false);
     expect(() => spawnSpec(['git', 'commit', '-m', 'x'], { cwd: os.tmpdir() })).toThrow();
+  });
+
+  it('the single reg launch is a read-only `reg query HKCU\\Environment /v <name>` in readWindowsUserEnv (cli.ts), execFile, no shell, name-guarded', () => {
+    const sites: ts.CallExpression[] = [];
+    for (const f of FLOW_FILES) {
+      walk(parse(f), (n) => {
+        if (ts.isCallExpression(n) && n.arguments.length > 0 && literalText(n.arguments[0]) === 'reg') sites.push(n);
+      });
+    }
+    expect(sites).toHaveLength(1);
+    const call = sites[0];
+    expect(call.getSourceFile().fileName).toBe('cli.ts');
+    expect(call.expression.getText()).toBe('execFile');
+    expect(functionChain(call)).toEqual(['<anonymous>', 'readWindowsUserEnv']);
+    const argv = call.arguments[1];
+    expect(argv && ts.isArrayLiteralExpression(argv)).toBe(true);
+    const els = (argv as ts.ArrayLiteralExpression).elements;
+    expect(els.slice(0, 3).map((e) => literalText(e))).toEqual(['query', 'HKCU\\Environment', '/v']);
+    expect(els).toHaveLength(4);
+    expect(ts.isIdentifier(els[3]) && els[3].text === 'name').toBe(true);
+    const opts = call.arguments[2];
+    expect(opts && ts.isObjectLiteralExpression(opts)).toBe(true);
+    const shell = (opts as ts.ObjectLiteralExpression).properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText() === 'shell') as ts.PropertyAssignment | undefined;
+    expect(shell?.initializer.kind).toBe(ts.SyntaxKind.FalseKeyword);
+    const reader = parse('cli.ts')
+      .statements.filter(ts.isFunctionDeclaration)
+      .find((d) => d.name?.text === 'readWindowsUserEnv');
+    expect(reader).toBeDefined();
+    const body = reader!.getText();
+    expect(body).toMatch(/process\.platform !== 'win32'/);
+    expect(body).toMatch(/INTAKE_FRESHNESS_VARS as readonly string\[\]\)\.includes\(name\)/);
+    expect(body.indexOf('INTAKE_FRESHNESS_VARS')).toBeLessThan(body.indexOf("'reg'"));
+    expect(body).not.toMatch(/console\.|io\.(out|err)|appendIntakeAudit|writeFile/);
   });
 
   it('no git library is imported by any gov module', () => {

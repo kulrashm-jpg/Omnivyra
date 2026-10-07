@@ -75,8 +75,14 @@ import {
   createIntakeJira,
   createIntakeReader,
   isGateField,
+  INTAKE_FRESHNESS_VARS,
+  checkIntakeCredentialFreshness,
+  parseRegQueryValue,
   resolveIntakeCredentials,
   type FormsCheck,
+  type IntakeFreshnessVar,
+  type UserEnvRead,
+  type UserEnvReader,
   type IntakeJira,
   type IntakeReader,
 } from './intakeJira';
@@ -150,6 +156,34 @@ export interface GovDeps {
   isInteractive: () => boolean;
   /** intake --apply: one line typed by the human. */
   prompt: (question: string) => Promise<string>;
+  /** intake --check-forms / --apply: reads one human-intake variable from the authoritative Windows User environment. */
+  readUserEnv: UserEnvReader;
+}
+
+/**
+ * The single read-only registry launch: `reg query HKCU\Environment /v <name>` for GOV_INTAKE_EMAIL /
+ * GOV_INTAKE_TOKEN only (execFile, no shell). Non-Windows always refuses — the Windows User
+ * environment is the only authoritative source, and there is no fallback. Raw output is parsed
+ * and discarded; it is never logged, audited or returned.
+ */
+export function readWindowsUserEnv(name: IntakeFreshnessVar): Promise<UserEnvRead> {
+  if (process.platform !== 'win32') {
+    return Promise.resolve({ state: 'unavailable', reason: 'the Windows User environment is only available on Windows' });
+  }
+  if (!(INTAKE_FRESHNESS_VARS as readonly string[]).includes(name)) {
+    return Promise.resolve({ state: 'unavailable', reason: 'only the human-intake variables can be read' });
+  }
+  return new Promise((resolve) => {
+    execFile(
+      'reg',
+      ['query', 'HKCU\\Environment', '/v', name],
+      { shell: false, windowsHide: true, encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024 },
+      (err, stdout) => {
+        const code = err ? (err as { code?: unknown }).code : 0;
+        resolve(parseRegQueryValue(name, err ? null : String(stdout), typeof code === 'number' ? code : null));
+      },
+    );
+  });
 }
 
 export const GOV_EXIT: Readonly<Record<GovStatus, number>> = {
@@ -274,6 +308,7 @@ export function defaultGovDeps(): Omit<GovDeps, 'registry'> {
           resolve(answer);
         });
       }),
+    readUserEnv: readWindowsUserEnv,
   };
 }
 
@@ -1304,6 +1339,8 @@ async function cmdIntakeCheckForms(run: Run): Promise<number> {
   const layout = layoutOf(run);
   const creds = resolveIntakeCredentials(run.env);
   if (creds.ok === false) throw new Outcome('REFUSED', creds.message);
+  const fresh = await checkIntakeCredentialFreshness(run.env, run.deps.readUserEnv);
+  if (fresh.ok === false) throw new Outcome('REFUSED', fresh.message);
   let forms: FormsCheck;
   try {
     forms = await checkCreateForms(run.deps.intakeJira(creds.credentials), STORY_ALWAYS_SENT, AC_ALWAYS_SENT);
@@ -1348,6 +1385,8 @@ async function cmdIntakeApply(run: Run, argv: string[]): Promise<number> {
   if (run.deps.isInteractive() !== true) refuse('--apply needs an interactive terminal: a human approves by typing the proposal hash');
   const creds = resolveIntakeCredentials(run.env);
   if (creds.ok === false) refuse(creds.message);
+  const fresh = await checkIntakeCredentialFreshness(run.env, run.deps.readUserEnv);
+  if (fresh.ok === false) refuse(fresh.message);
   for (const line of renderProposalMarkdown(stored).split('\n')) run.io.out(line);
   const typed = (await run.deps.prompt('Type the full proposal hash to approve creating this Story in Jira: ')).trim();
   if (typed !== stored.proposal_hash) refuse('the typed hash does not match the proposal');

@@ -43,6 +43,7 @@ import {
   resolveIntakeCredentials,
   routeAllowed,
   storyPayload,
+  type UserEnvRead,
 } from '../../../scripts/jev-flow/intakeJira';
 import { parseNulList, parsePorcelainZ, readLiveSessions, type LiveSession, type WorktreeState } from '../../../scripts/jev-flow/intakeProbe';
 import { loadRegistry } from '../../../scripts/jev-flow/registry';
@@ -300,6 +301,9 @@ interface Ctx {
   interactive: boolean;
   typed: string | null;
   prompts: number;
+  /** Windows User environment fake; null = mirrors ctx.env (fresh). */
+  userEnv: ((name: string) => Promise<UserEnvRead>) | null;
+  userEnvReads: string[];
   deps: Partial<GovDeps>;
 }
 
@@ -320,6 +324,8 @@ function makeCtx(server: ApplyServer = applyServer()): Ctx {
     interactive: true,
     typed: null,
     prompts: 0,
+    userEnv: null,
+    userEnvReads: [],
     env: { GOV_HOME: home, CLAUDE_PROJECTS_DIR: projects, JEV_JIRA_IDENTITY: 'reader', JEV_READER_TOKEN: READER_TOKEN, GOV_INTAKE_EMAIL: HUMAN_EMAIL, GOV_INTAKE_TOKEN: HUMAN_TOKEN },
     deps: {},
   };
@@ -344,6 +350,12 @@ function makeCtx(server: ApplyServer = applyServer()): Ctx {
     prompt: async () => {
       ctx.prompts += 1;
       return ctx.typed ?? '';
+    },
+    readUserEnv: async (name) => {
+      ctx.userEnvReads.push(name);
+      if (ctx.userEnv) return ctx.userEnv(name);
+      const v = ctx.env[name];
+      return v ? { state: 'present', value: v } : { state: 'absent' };
     },
   };
   return ctx;
@@ -912,6 +924,105 @@ describe('gov intake --apply — human-applied creation', () => {
       expect(resolveIntakeCredentials({ GOV_INTAKE_EMAIL: HUMAN_EMAIL, GOV_INTAKE_TOKEN: HUMAN_TOKEN, [env]: HUMAN_TOKEN }).ok).toBe(false);
     }
     expect(resolveIntakeCredentials({ GOV_INTAKE_EMAIL: 'x@SERVICEACCOUNT.atlassian.com', GOV_INTAKE_TOKEN: HUMAN_TOKEN }).ok).toBe(false);
+  });
+});
+
+// ================================================================ credential freshness (CLI)
+
+describe('gov intake — human credential freshness (Windows User environment is authoritative)', () => {
+  const ROTATED_TOKEN = ['human', 'rotated', 'value'].join('-');
+  const OTHER_EMAIL = 'other-human@example.invalid';
+  const HUMAN_ENV: Record<string, string> = { GOV_INTAKE_EMAIL: HUMAN_EMAIL, GOV_INTAKE_TOKEN: HUMAN_TOKEN };
+  const stale = (name: string, value: string) => async (n: string): Promise<UserEnvRead> => ({ state: 'present', value: n === name ? value : HUMAN_ENV[n] });
+  const noValues = (ctx: Ctx, out: RunOut) => {
+    const all = JSON.stringify([out.out, out.err, out.result, auditLines(ctx)]);
+    for (const v of [HUMAN_TOKEN, ROTATED_TOKEN]) expect(all).not.toContain(v);
+  };
+
+  it('matching process and User values: --check-forms and --apply proceed, both variables checked', async () => {
+    const forms = makeCtx(applyServer({ acForm: DEFAULT_AC_FORM.filter((f) => f.fieldId !== 'parent') }));
+    expect((await gov(forms, ['intake', '--check-forms'])).code).toBe(0);
+    expect(forms.userEnvReads).toEqual(['GOV_INTAKE_EMAIL', 'GOV_INTAKE_TOKEN']);
+    const ctx = makeCtx();
+    const { hash } = await newWorkProposal(ctx);
+    ctx.typed = hash;
+    expect((await gov(ctx, ['intake', '--apply', hash])).code).toBe(0);
+    expect(ctx.userEnvReads).toEqual(['GOV_INTAKE_EMAIL', 'GOV_INTAKE_TOKEN']);
+  });
+
+  for (const [label, name, value] of [
+    ['stale token', 'GOV_INTAKE_TOKEN', ROTATED_TOKEN],
+    ['stale email', 'GOV_INTAKE_EMAIL', OTHER_EMAIL],
+  ] as const) {
+    it(`${label}: --check-forms refuses before any Jira request`, async () => {
+      const ctx = makeCtx();
+      ctx.userEnv = stale(name, value);
+      const out = await gov(ctx, ['intake', '--check-forms']);
+      expect(out.code).toBe(GOV_EXIT.REFUSED);
+      expect(out.err.join('\n')).toContain(`${name} process environment is stale; refresh the process environment from the Windows User environment before retrying.`);
+      expect(ctx.server.requests).toEqual([]);
+      noValues(ctx, out);
+    });
+
+    it(`${label}: --apply refuses before the prompt and before any Jira request, and audits without values`, async () => {
+      const ctx = makeCtx();
+      const { hash } = await newWorkProposal(ctx);
+      ctx.typed = hash;
+      ctx.userEnv = stale(name, value);
+      const out = await gov(ctx, ['intake', '--apply', hash]);
+      expect(out.code).toBe(GOV_EXIT.REFUSED);
+      expect(out.err.join('\n')).toContain(`${name} process environment is stale`);
+      expect(ctx.prompts).toBe(0);
+      expect(ctx.server.requests).toEqual([]);
+      const applied = auditLines(ctx).filter((a) => a.event === 'apply');
+      expect(applied).toHaveLength(1);
+      expect(String(applied[0].outcome)).toMatch(new RegExp(`^refused: ${name} process environment is stale`));
+      noValues(ctx, out);
+    });
+  }
+
+  it('User value absent: both paths refuse before any Jira request', async () => {
+    const ctx = makeCtx();
+    ctx.userEnv = async (n) => (n === 'GOV_INTAKE_TOKEN' ? { state: 'absent' } : { state: 'present', value: HUMAN_ENV[n] });
+    const out = await gov(ctx, ['intake', '--check-forms']);
+    expect(out.code).toBe(GOV_EXIT.REFUSED);
+    expect(out.err.join('\n')).toContain('GOV_INTAKE_TOKEN is not set in the Windows User environment');
+    const { hash } = await newWorkProposal(ctx);
+    ctx.typed = hash;
+    expect((await gov(ctx, ['intake', '--apply', hash])).code).toBe(GOV_EXIT.REFUSED);
+    expect(ctx.prompts).toBe(0);
+    expect(ctx.server.requests).toEqual([]);
+  });
+
+  it('User environment unavailable (unsupported platform / unreadable) or the reader throws: refuses, never falls back to the process value', async () => {
+    for (const reader of [
+      async (): Promise<UserEnvRead> => ({ state: 'unavailable', reason: 'the Windows User environment is only available on Windows' }),
+      async (): Promise<UserEnvRead> => {
+        throw new Error(`boom ${HUMAN_TOKEN}`);
+      },
+    ]) {
+      const ctx = makeCtx();
+      ctx.userEnv = reader;
+      const out = await gov(ctx, ['intake', '--check-forms']);
+      expect(out.code).toBe(GOV_EXIT.REFUSED);
+      expect(out.err.join('\n')).toContain('cannot verify GOV_INTAKE_EMAIL freshness');
+      expect(ctx.server.requests).toEqual([]);
+      noValues(ctx, out);
+      const { hash } = await newWorkProposal(ctx);
+      ctx.typed = hash;
+      const ap = await gov(ctx, ['intake', '--apply', hash]);
+      expect(ap.code).toBe(GOV_EXIT.REFUSED);
+      expect(ctx.prompts).toBe(0);
+      expect(ctx.server.requests).toEqual([]);
+      noValues(ctx, ap);
+    }
+  });
+
+  it('the process environment is never overwritten by the check', async () => {
+    const ctx = makeCtx();
+    ctx.userEnv = stale('GOV_INTAKE_TOKEN', ROTATED_TOKEN);
+    await gov(ctx, ['intake', '--check-forms']);
+    expect(ctx.env.GOV_INTAKE_TOKEN).toBe(HUMAN_TOKEN);
   });
 });
 

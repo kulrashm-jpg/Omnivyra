@@ -20,6 +20,7 @@
  *
  * Errors carry a code and an HTTP status only — never a body or a credential.
  */
+import crypto from 'node:crypto';
 import { AC_FIELDS, ISSUE_TYPE, JIRA_GATEWAY_BASE, JIRA_TOKEN_ENV, OMNI_PROJECT_ID, STORY_FIELDS } from '../jev-jira/fields';
 import { ISSUE_KEY_RE, authorizationHeader, createJiraClient, type JiraCredentials, type JiraIssue } from '../jev-jira/jiraClient';
 import { IDENTITY_TOKEN_ENV } from '../jev-jira/identity';
@@ -214,6 +215,61 @@ export function resolveIntakeCredentials(env: Record<string, string | undefined>
   const reserved = [env[JIRA_TOKEN_ENV], env[IDENTITY_TOKEN_ENV.reader], env[IDENTITY_TOKEN_ENV.advisory]].map((t) => (t ?? '').trim()).filter((t) => t !== '');
   if (reserved.includes(token)) return { ok: false, message: `${INTAKE_TOKEN_ENV} must not be the provisioning, reader or advisory token` };
   return { ok: true, credentials: { mode: 'basic', email, token }, email };
+}
+
+// ---------------------------------------------------------------- credential freshness
+
+/** The two human-intake variables whose freshness is checked; the only names the User-environment reader accepts. */
+export const INTAKE_FRESHNESS_VARS = [INTAKE_EMAIL_ENV, INTAKE_TOKEN_ENV] as const;
+export type IntakeFreshnessVar = (typeof INTAKE_FRESHNESS_VARS)[number];
+
+/** A read of one variable from the authoritative Windows User environment. Reasons are fixed strings, never registry output. */
+export type UserEnvRead = { state: 'present'; value: string } | { state: 'absent' } | { state: 'unavailable'; reason: string };
+export type UserEnvReader = (name: IntakeFreshnessVar) => Promise<UserEnvRead>;
+
+/**
+ * Interprets `reg query HKCU\Environment /v <name>` output. Pure. `stdout` is null when reg failed;
+ * reg exits 1 when the value does not exist. Never returns or embeds raw output.
+ */
+export function parseRegQueryValue(name: IntakeFreshnessVar, stdout: string | null, exitCode: number | null): UserEnvRead {
+  if (stdout === null) return exitCode === 1 ? { state: 'absent' } : { state: 'unavailable', reason: 'the Windows User environment could not be read' };
+  const m = new RegExp(`^\\s+${name}\\s+(REG_SZ|REG_EXPAND_SZ)\\s+(.*?)\\s*$`, 'm').exec(stdout);
+  if (!m) return { state: 'unavailable', reason: 'the Windows User environment returned an unrecognised entry' };
+  if (m[1] === 'REG_EXPAND_SZ' && m[2].includes('%')) return { state: 'unavailable', reason: 'the Windows User environment value is an unexpanded expandable string' };
+  return m[2] === '' ? { state: 'absent' } : { state: 'present', value: m[2] };
+}
+
+/** Equality without early exit on the first differing character (values are never compared as plain strings). */
+function sameSecret(a: string, b: string): boolean {
+  const ha = crypto.createHash('sha256').update(a, 'utf8').digest();
+  const hb = crypto.createHash('sha256').update(b, 'utf8').digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+export type FreshnessResult = { ok: true } | { ok: false; variable: IntakeFreshnessVar; message: string };
+
+/**
+ * Fails closed unless BOTH human-intake variables in this process equal the authoritative Windows
+ * User environment. A stale process (a shell started before the User variable was replaced) is
+ * refused before any Jira request. Messages name the variable, never a value.
+ */
+export async function checkIntakeCredentialFreshness(env: Record<string, string | undefined>, readUserEnv: UserEnvReader): Promise<FreshnessResult> {
+  for (const name of INTAKE_FRESHNESS_VARS) {
+    const processValue = (env[name] ?? '').trim();
+    if (processValue === '') return { ok: false, variable: name, message: `${name} is not set in this process` };
+    let user: UserEnvRead;
+    try {
+      user = await readUserEnv(name);
+    } catch {
+      user = { state: 'unavailable', reason: 'the Windows User environment could not be read' };
+    }
+    if (user.state === 'unavailable') return { ok: false, variable: name, message: `cannot verify ${name} freshness: ${user.reason}; refusing (the Windows User environment is the authoritative source)` };
+    if (user.state === 'absent') return { ok: false, variable: name, message: `${name} is not set in the Windows User environment; set it there, then refresh this process` };
+    if (!sameSecret(processValue, user.value.trim())) {
+      return { ok: false, variable: name, message: `${name} process environment is stale; refresh the process environment from the Windows User environment before retrying.` };
+    }
+  }
+  return { ok: true };
 }
 
 export interface CreateFormField {
