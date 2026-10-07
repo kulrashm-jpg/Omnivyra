@@ -33,12 +33,16 @@ import {
   AC_CREATE_FIELDS,
   GATE_FIELD_IDS,
   INTAKE_ROUTES,
+  STORY_ALWAYS_SENT,
   STORY_CREATE_FIELDS,
+  acPayload,
   assertIntakeFields,
+  createFormImplicit,
   createFormProblems,
   createIntakeJira,
   resolveIntakeCredentials,
   routeAllowed,
+  storyPayload,
 } from '../../../scripts/jev-flow/intakeJira';
 import { parseNulList, parsePorcelainZ, readLiveSessions, type LiveSession, type WorktreeState } from '../../../scripts/jev-flow/intakeProbe';
 import { loadRegistry } from '../../../scripts/jev-flow/registry';
@@ -804,6 +808,62 @@ describe('gov intake --apply — human-applied creation', () => {
       expect({ form, extra: extra.name, code: out.code }).toEqual({ form, extra: extra.name, code: GOV_EXIT.REFUSED });
       expect(ctx.server.requests.some((r) => r.method === 'POST')).toBe(false);
     }
+  });
+
+  it('15c. Story form with Jira\'s implied parent is accepted, and the Story payload never carries parent', async () => {
+    const ctx = makeCtx(applyServer({ storyForm: [...DEFAULT_STORY_FORM, { fieldId: 'parent', name: 'Parent' }] }));
+    const { hash } = await newWorkProposal(ctx);
+    ctx.typed = hash;
+    const out = await gov(ctx, ['intake', '--apply', hash]);
+    expect(out.code).toBe(0);
+    const posts = ctx.server.requests.filter((r) => r.method === 'POST').map((r) => (r.body as { fields: Record<string, unknown> }).fields);
+    const storyPost = posts.find((f) => (f.issuetype as { id: string }).id === '10005')!;
+    expect(Object.keys(storyPost)).not.toContain('parent');
+    // ACs still carry their parent Story, unchanged.
+    for (const ac of posts.filter((f) => (f.issuetype as { id: string }).id === '10074')) expect(ac.parent).toEqual({ key: 'OMNI-200' });
+  });
+
+  it('15d. parent is validation-only for Story: implied on the form, never allowlisted, never in a payload', () => {
+    expect(createFormImplicit('story')).toEqual(['project', 'issuetype', 'parent']);
+    expect(STORY_CREATE_FIELDS).not.toContain('parent');
+    expect(() => assertIntakeFields('story', { summary: 's', parent: { key: 'OMNI-1' } })).toThrow(/allowlist/);
+    const stored = {
+      proposal: {
+        story: { summary: 's', objective: 'o', architecture: 'a', invariants: ['i'], authorized_paths: ['src/**'], prohibited_paths: ['.env*'], verification_requirements: ['t.pass'] },
+        acceptance_criteria: [],
+      },
+      label: 'gov-intake-000000000000',
+    } as unknown as Parameters<typeof storyPayload>[0];
+    expect(Object.keys(storyPayload(stored))).not.toContain('parent');
+    // The live OMNI shape after hardening: the 8 approved fields + implied project/issuetype/parent.
+    const live = [
+      ...['summary', 'labels', 'customfield_10075', 'customfield_10083', 'customfield_10085', 'customfield_10086', 'customfield_10087', 'customfield_10088'].map((fieldId) => ({ fieldId, name: fieldId, required: fieldId === 'summary', hasDefaultValue: false })),
+      { fieldId: 'parent', name: 'Parent', required: false, hasDefaultValue: false },
+      { fieldId: 'project', name: 'Project', required: true, hasDefaultValue: false },
+      { fieldId: 'issuetype', name: 'Issue Type', required: true, hasDefaultValue: false },
+    ];
+    expect(createFormProblems('story', live, STORY_ALWAYS_SENT)).toEqual([]);
+    // Any other unexpected field is still refused — alongside an implied parent too.
+    for (const extra of [{ fieldId: 'description', name: 'Description' }, { fieldId: 'reporter', name: 'Reporter' }, { fieldId: 'customfield_10089', name: 'Branch' }, { fieldId: 'customfield_10082', name: 'Owner' }]) {
+      const problems = createFormProblems('story', [...live, { ...extra, required: false, hasDefaultValue: false }], STORY_ALWAYS_SENT);
+      expect(problems).toEqual([`field "${extra.name}" (${extra.fieldId}) is on the story create form but outside the intake allowlist`]);
+    }
+    // Gate fields are still gate findings on the Story form.
+    expect(createFormProblems('story', [...live, { fieldId: 'customfield_10077', name: 'Gate Result', required: false, hasDefaultValue: false }], STORY_ALWAYS_SENT)).toEqual([
+      'gate field "Gate Result" (customfield_10077) is on the story create form',
+    ]);
+  });
+
+  it('15e. AC parent behaviour is unchanged: implied on the form, allowlisted, and sent', () => {
+    expect(createFormImplicit('ac')).toEqual(['project', 'issuetype', 'parent']);
+    expect(AC_CREATE_FIELDS).toContain('parent');
+    const ac = acPayload('OMNI-7', { ac_id: 'AC-1', statement: 's', kind: 'Deterministic', evidence_kind: 'Test', registry_id: 't.pass' });
+    expect(ac.parent).toEqual({ key: 'OMNI-7' });
+    expect(() => assertIntakeFields('ac', ac)).not.toThrow();
+    const acForm = DEFAULT_AC_FORM.map((f) => ({ ...f, required: false, hasDefaultValue: false }));
+    const intended = Object.keys(ac);
+    expect(createFormProblems('ac', acForm, intended)).toEqual([]);
+    expect(createFormProblems('ac', acForm.filter((f) => f.fieldId !== 'parent'), intended)).toEqual([]);
   });
 
   it('--check-forms: read-only verdict on the create forms (GET only, no prompt, nothing created)', async () => {

@@ -82,11 +82,19 @@ export const GATE_FIELD_IDS: readonly string[] = [
 export const GATE_FIELD_NAME_RE = /^(verification|deterministic result|evidence references?|gate result|t[123]\b.*|jev\b.*|.*disposition|deployment\b.*|.*\bdeploy(ed|ment)?\b.*)$/i;
 
 /**
- * Fields Jira handles regardless of the create screen: project / issue type always, and `parent`
- * for the Acceptance Criterion sub-task type (it may or may not be listed by createmeta).
+ * Fields Jira lists on a create form regardless of the configured create screen — tolerated by
+ * the form check only, never added to a creation allowlist:
+ *  - `project` / `issuetype`: always;
+ *  - `parent` for the Acceptance Criterion sub-task type (its parent Story; intake sends it);
+ *  - `parent` for Story: Jira's issue hierarchy (Epic) field, listed by createmeta even when it is
+ *    not on the intake-safe Story create screen (OMNI 10142). Intake NEVER sends it for a Story —
+ *    `parent` is not in STORY_CREATE_FIELDS, so assertIntakeFields refuses it in a Story payload.
  */
+const STORY_FORM_IMPLICIT: readonly string[] = ['project', 'issuetype', 'parent'];
+const AC_FORM_IMPLICIT: readonly string[] = ['project', 'issuetype', 'parent'];
+
 export function createFormImplicit(kind: 'story' | 'ac'): readonly string[] {
-  return kind === 'ac' ? ['project', 'issuetype', 'parent'] : ['project', 'issuetype'];
+  return kind === 'ac' ? AC_FORM_IMPLICIT : STORY_FORM_IMPLICIT;
 }
 
 /** Story fields every intake proposal sends (Architecture / Invariants are optional). */
