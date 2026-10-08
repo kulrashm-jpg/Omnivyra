@@ -1,3 +1,5 @@
+// R1-L2 -- the Report 1 query-origin allow-list (no private member, by design).
+import type { Report1QueryOrigin } from './report1QueryUniverse';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { SerpResultType } from './serp/serpResultTypes';
 import type { ReportReadinessResult } from './reportReadinessService';
@@ -766,6 +768,31 @@ export type SnapshotSearchObservation = {
    * results page actually contained.
    */
   competitorDomains?: string[];
+
+  // ─── R1-L2: QUERY ORIGIN — A DIFFERENT AXIS FROM OBSERVATION PROVENANCE ───
+  //
+  // `engine`/`provider`/`observedAt` answer "where did this ANSWER come from".
+  // The two fields below answer "why did Report 1 ask this QUESTION". They are
+  // not interchangeable and must never be rendered as one statement.
+  //
+  // QUERY ORIGIN IS NOT EVIDENCE. `observed_public` means the query TEXT was
+  // derived from public page material; it asserts nothing about search demand,
+  // volume, or whether anyone actually runs the query. The SERP result remains
+  // the only observation in this chain.
+  //
+  // GSC IS NOT REPRESENTABLE. `Report1QueryOrigin` has no private member, so a
+  // Search Console-derived query cannot be expressed here at all. That is the
+  // type-level half of the GSC-isolation decision.
+  //
+  // OPTIONAL, like the four fields above: a report composed before L-2 carries
+  // neither, and absent means "origin not recorded for this run". A reader must
+  // NOT infer an origin from the query text — a query reading "x competitors" is
+  // not evidence that a template produced it.
+
+  /** The permitted input that put this query in the universe. */
+  queryOrigin?: Report1QueryOrigin | null;
+  /** The construction-time reason this query was checked. Never re-derived at render time. */
+  queryRationale?: string | null;
 };
 
 /**

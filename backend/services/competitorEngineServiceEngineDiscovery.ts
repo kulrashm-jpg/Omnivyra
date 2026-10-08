@@ -610,15 +610,36 @@ export function extractCompetitiveContextFromResolvedInput(
   // upstream via resolveCompanyProjection); flag OFF (default) preserves the legacy sparse-context fallback.
   if (!mayFabricateSparseIdentity(isCompanyProjectionAuthoritative())) return extractedContext;
 
-  return {
-    ...extractedContext,
-    marketFocus: 'business software and marketing automation',
-    primaryService: 'marketing automation software',
-    targetCustomer: 'business growth teams and marketers',
-    idealCustomerProfile: 'B2B teams evaluating growth, CRM, and campaign software',
-    brandPositioning: 'software platform for growth and customer acquisition',
-    businessModel: 'B2B SaaS',
-  };
+  return { ...extractedContext, ...SPARSE_IDENTITY_FALLBACK_CONTEXT };
+}
+
+/**
+ * The hard-coded identity substituted above when the profile is too sparse to describe the
+ * company. Extracted to a named constant so it has ONE home and can be RECOGNISED by consumers;
+ * the values, the gate and the behaviour are all unchanged.
+ *
+ * R1-L2 — Report 1 needs to recognise it because these values are FABRICATED, not declared. A
+ * query built on them is reported as a generic fallback; calling it "declared" would present a
+ * hard-coded template as something the company said about itself.
+ */
+export const SPARSE_IDENTITY_FALLBACK_CONTEXT = {
+  marketFocus: 'business software and marketing automation',
+  primaryService: 'marketing automation software',
+  targetCustomer: 'business growth teams and marketers',
+  idealCustomerProfile: 'B2B teams evaluating growth, CRM, and campaign software',
+  brandPositioning: 'software platform for growth and customer acquisition',
+  businessModel: 'B2B SaaS',
+} as const;
+
+/**
+ * True when a context value is the fabricated sparse-identity text rather than anything the
+ * company declared. Read-only recognition: it changes no behaviour and no query.
+ */
+export function isSparseIdentityFallbackValue(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const normalized = String(value).trim().toLowerCase();
+  return Object.values(SPARSE_IDENTITY_FALLBACK_CONTEXT)
+    .some((fallback) => fallback.toLowerCase() === normalized);
 }
 
 export function buildCompetitorFitSignals(

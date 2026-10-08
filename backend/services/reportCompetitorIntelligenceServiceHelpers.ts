@@ -23,11 +23,18 @@ import {
   type QueryClass,
   type QueryIntent,
 } from './serpQueryUniverse';
+// R1-L2 -- the Report 1 query-origin allow-list. GSC is structurally absent from this taxonomy.
+import {
+  type Report1Query,
+  type Report1QueryCandidate,
+  type Report1QueryOrigin,
+} from './report1QueryUniverse';
 import {
   buildCompetitorFitRationale,
   buildCompetitorFitSignals,
   evaluateCompetitorCandidate,
   extractCompetitiveContextFromResolvedInput,
+  isSparseIdentityFallbackValue,
   scoreCompetitorCandidate,
   type CompanyCompetitiveContext as EngineCompanyCompetitiveContext,
   type CompetitorSource as EngineCompetitorSource,
@@ -487,14 +494,89 @@ function extractDiscoveryFields(companyProfile: DiscoveryKeywordInput): {
   };
 }
 
-export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput): string[] {
+/**
+ * R1-L2 -- the declared/template discovery candidates, each carrying the origin that produced it.
+ *
+ * This is the SAME query construction `generateDiscoveryKeywords` has always performed, in the
+ * same order; the only addition is that every candidate records WHY it exists at the moment it
+ * is built. Nothing downstream may re-derive that from the query text.
+ *
+ * THE BASE DECIDES THE ORIGIN. A template is only as grounded as the term it is applied to, so a
+ * template built on the generic fallback is reported as `derived_fallback`, not
+ * `derived_template`. Calling it a template would imply a real category stood behind it.
+ */
+export function generateDiscoveryQueryCandidates(
+  companyProfile: DiscoveryKeywordInput,
+): Report1QueryCandidate[] {
   const fields = extractDiscoveryFields(companyProfile);
   const category = normalizeQueryPart(fields.category, 5);
   const product = normalizeQueryPart(fields.product, 5);
   const problem = normalizeQueryPart(fields.problem, 5);
   const icp = normalizeQueryPart(fields.icp, 5);
   const domainTerms = extractDomainKeywords(fields.domain).join(' ');
+
+  // BASE SELECTION IS UNCHANGED, DELIBERATELY -- this is the original expression, `??` and all.
+  //
+  // `extractDomainKeywords(...).join(' ')` returns '' rather than null when a domain yields no
+  // tokens, and '' is not nullish, so the trailing 'business software' is UNREACHABLE: the real
+  // fallback has always been an EMPTY base, producing bare template queries ('competitors',
+  // 'alternatives'). Rewriting this as a truthiness chain would make the literal reachable and
+  // would therefore SILENTLY CHANGE which queries Report 1 dispatches. L-2 discloses the
+  // fallback; it does not alter query behaviour. The dead branch is reported, not fixed here.
   const base = category ?? product ?? problem ?? domainTerms ?? 'business software';
+
+  // ALL-OR-NOTHING. The sparse-identity substitution replaces the whole context object in one
+  // spread, so either every field is the company's or every field is the hard-coded template.
+  // One flag therefore models it exactly, and it governs EVERY candidate below -- not just the
+  // base -- because the product, problem, ICP and vertical-trigger text are substituted too.
+  const contextIsFabricated = isSparseIdentityFallbackValue(fields.category)
+    || isSparseIdentityFallbackValue(fields.product)
+    || isSparseIdentityFallbackValue(fields.problem)
+    || isSparseIdentityFallbackValue(fields.icp);
+  const FABRICATED_RATIONALE =
+    'Generic category template. No declared or public subject context was available for this company, '
+    + 'so a hard-coded placeholder identity was used — this is not a statement about this company.';
+  /** Route every candidate through one place, so no branch can quietly claim `declared`. */
+  const tag = (
+    value: string,
+    origin: Report1QueryOrigin,
+    rationale: string,
+    basis: string,
+  ): Report1QueryCandidate => (contextIsFabricated
+    ? { value, origin: 'derived_fallback', rationale: FABRICATED_RATIONALE, basis: 'fabricated placeholder identity' }
+    : { value, origin, rationale, basis });
+
+  // Provenance for whichever branch supplied the base.
+  //
+  // A FABRICATED IDENTITY IS NOT A DECLARATION. When the profile is too sparse to describe the
+  // company, `extractCompetitiveContextFromResolvedInput` substitutes a hard-coded identity
+  // ('business software and marketing automation', ...) — its own comment calls this fabricating
+  // the owner's identity. Those values arrive here indistinguishable from real ones, so a naive
+  // classifier would label a template as something the company said about itself. Recognising the
+  // substitute keeps `declared` meaning declared. It changes no query: the same text is still
+  // dispatched, it is simply reported as the generic fallback it is.
+  //
+  // BOTH other fallback shapes — an empty base, and the unreachable generic literal — resolve
+  // here too, so no ungrounded query can be presented as the company's declared category.
+  // The RAW field is tested, never the normalized one: `normalizeQueryPart(..., 5)` truncates to
+  // five tokens, so a longer substituted value ('software platform for growth and customer
+  // acquisition') would stop matching the sentinel and would read as declared.
+  const declaredBase = (normalized: string | null, raw: string | null): boolean =>
+    Boolean(normalized) && !isSparseIdentityFallbackValue(raw);
+  const baseSource: { origin: Report1QueryOrigin; basis: string } =
+    declaredBase(category, fields.category) ? { origin: 'declared', basis: 'company profile: category' }
+      : declaredBase(product, fields.product) ? { origin: 'declared', basis: 'company profile: product or service' }
+        : declaredBase(problem, fields.problem) ? { origin: 'declared', basis: 'company profile: problem or positioning' }
+          : domainTerms.trim() ? { origin: 'observed_public', basis: 'public domain label' }
+            : { origin: 'derived_fallback', basis: 'no declared or public subject context' };
+  const templateOrigin: Report1QueryOrigin =
+    baseSource.origin === 'derived_fallback' ? 'derived_fallback' : 'derived_template';
+  const templateRationale = baseSource.origin === 'derived_fallback'
+    ? 'Generic category template. No declared or public subject context was available for this company.'
+    : 'Category template applied to the ' + baseSource.basis + '.';
+  const tmpl = (value: string): Report1QueryCandidate =>
+    tag(value, templateOrigin, templateRationale, baseSource.basis);
+
   const contextText = [
     fields.category,
     fields.product,
@@ -503,27 +585,43 @@ export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput)
     domainTerms,
   ].filter(Boolean).join(' ').toLowerCase();
 
-  const queries: string[] = [];
-  pushUniqueQuery(queries, `${base} competitors`);
-  pushUniqueQuery(queries, `${base} alternatives`);
-  pushUniqueQuery(queries, `${base} software platforms`);
-  pushUniqueQuery(queries, `best ${base} software`);
-  pushUniqueQuery(queries, `${base} comparison`);
+  const candidates: Report1QueryCandidate[] = [];
+  candidates.push(tmpl(`${base} competitors`));
+  candidates.push(tmpl(`${base} alternatives`));
+  candidates.push(tmpl(`${base} software platforms`));
+  candidates.push(tmpl(`best ${base} software`));
+  candidates.push(tmpl(`${base} comparison`));
   if (product) {
-    pushUniqueQuery(queries, `${product} competitors`);
-    pushUniqueQuery(queries, `${product} alternatives`);
-    pushUniqueQuery(queries, `alternatives to ${product}`);
-    pushUniqueQuery(queries, `best ${product} software`);
-    pushUniqueQuery(queries, `${product} tools`);
+    const on = 'company profile: product or service';
+    const why = 'Category template applied to the declared product or service.';
+    for (const value of [
+      `${product} competitors`,
+      `${product} alternatives`,
+      `alternatives to ${product}`,
+      `best ${product} software`,
+      `${product} tools`,
+    ]) candidates.push(tag(value, 'derived_template', why, on));
   }
   if (problem) {
-    pushUniqueQuery(queries, `${problem} tools`);
-    pushUniqueQuery(queries, `software for ${problem}`);
+    const on = 'company profile: problem or positioning';
+    const why = 'Category template applied to the declared problem or positioning.';
+    for (const value of [`${problem} tools`, `software for ${problem}`]) {
+      candidates.push(tag(value, 'derived_template', why, on));
+    }
   }
-  if (icp && category) pushUniqueQuery(queries, `${icp} ${category} platforms`);
+  if (icp && category) {
+    candidates.push(tag(
+      `${icp} ${category} platforms`,
+      'derived_template',
+      'Category template combining the declared customer segment and category.',
+      'company profile: customer segment and category',
+    ));
+  }
 
+  // Vertical template sets, selected by a deterministic match on the DECLARED context text.
+  // Fixed lists rather than base-derived, so the basis names the set instead of a profile field.
   if (/\b(mental|wellness|wellbeing|therapy|therapeutic|reflection|self reflection|self-reflection|clarity|emotional|mood|journaling|meditation|mindfulness|stress|anxiety)\b/.test(contextText)) {
-    [
+    for (const value of [
       'AI mental wellness apps',
       'AI therapy chatbot competitors',
       'self reflection AI tools',
@@ -531,11 +629,16 @@ export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput)
       'digital therapy platforms',
       'guided journaling apps',
       'emotional wellbeing AI apps',
-    ].forEach((query) => pushUniqueQuery(queries, query));
+    ]) candidates.push(tag(
+      value,
+      'derived_template',
+      'Fixed wellness-vertical template set, selected by the declared company context.',
+      'template set: wellness',
+    ));
   }
 
   if (/\b(marketing|crm|sales|campaign|growth|seo|content|revenue|customer|automation|lead|pipeline|demand)\b/.test(contextText)) {
-    [
+    for (const value of [
       'marketing automation platforms',
       'B2B marketing operating system competitors',
       'campaign execution software',
@@ -547,17 +650,35 @@ export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput)
       'Zoho CRM alternatives',
       'best CRM software for marketing automation',
       'customer growth software platforms',
-    ].forEach((query) => pushUniqueQuery(queries, query));
+    ]) candidates.push(tag(
+      value,
+      'derived_template',
+      'Fixed marketing-vertical template set, selected by the declared company context.',
+      'template set: marketing',
+    ));
   }
 
-  [
+  for (const value of [
     `${base} tools`,
     `${base} apps`,
     `${base} platforms`,
     `${base} market leaders`,
     `${base} category competitors`,
-  ].forEach((query) => pushUniqueQuery(queries, query));
+  ]) candidates.push(tmpl(value));
 
+  return candidates;
+}
+
+/**
+ * The plain string list this function has always returned. Implemented in terms of the
+ * origin-tagged candidates above so the two can never drift: same order, same `pushUniqueQuery`
+ * dedupe, same cap of 10.
+ */
+export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput): string[] {
+  const queries: string[] = [];
+  for (const candidate of generateDiscoveryQueryCandidates(companyProfile)) {
+    pushUniqueQuery(queries, candidate.value);
+  }
   return queries.slice(0, 10);
 }
 
@@ -676,6 +797,23 @@ export type SerpSearchObservation = {
    * job, over its own evidence, and this array is not an input to it.
    */
   competitorDomains: string[];
+
+  // ─── R1-L2: WHY THIS QUERY WAS ASKED ─────────────────────────────────────
+  //
+  // Query origin is a DIFFERENT fact from everything above. `engine`/`provider`/
+  // `observedAt` say where the ANSWER came from; these two say why Report 1 put
+  // the QUESTION. They must never be conflated or rendered as one line: a
+  // declared query that returned a Google result is both declared and observed,
+  // on different axes.
+  //
+  // Carried from construction. `null` means the caller supplied no universe for
+  // this query, which reads as "origin not recorded" — never as a guess from the
+  // query text.
+
+  /** The permitted input that put this query in the universe. Never a private source. */
+  queryOrigin: Report1QueryOrigin | null;
+  /** The construction-time sentence explaining the choice. Never re-derived downstream. */
+  queryRationale: string | null;
 };
 
 /**
@@ -897,6 +1035,19 @@ export async function discoverCompetitorDomainsFromSerp(params: {
    * reordered by supplying it — it changes only how a query is LABELLED.
    */
   companyName?: string | null;
+  /**
+   * R1-L2 — the construction-time origin of each query, keyed on the lowercased
+   * query text.
+   *
+   * LOOKUP, NOT INFERENCE. The caller built this map when it built the query
+   * universe; this function only retrieves what was recorded. A query missing
+   * from the map gets `null`, so an un-provenanced query stays un-provenanced
+   * rather than acquiring an origin guessed from its wording.
+   *
+   * Optional: callers that do not build a universe (and historical callers) are
+   * unaffected and their observations carry `null`.
+   */
+  queryOrigins?: ReadonlyMap<string, Report1Query>;
 }): Promise<{
   domains: string[];
   liveKeywordCount: number;
@@ -995,6 +1146,32 @@ export async function discoverCompetitorDomainsFromSerp(params: {
     : (preflight.reason ?? 'No SERP provider credential is configured.');
   const ownDomain = normalizeDomain(params.ownDomain);
 
+  // ─── R1-L2: ORIGIN FOR THE SIMPLIFIED RETRY BATCH ────────────────────────
+  //
+  // This function dispatches a SECOND batch of its own when nothing ranked: it simplifies each
+  // keyword and runs those. Those queries are not in the caller's universe, so without this they
+  // would reach the report with no recorded origin at all — an un-provenanced query created
+  // inside the producer.
+  //
+  // A simplified form INHERITS its parent's origin: stripping 'best'/'software'/'tools' is a
+  // mechanical reduction of the same term from the same source, so the origin is unchanged.
+  // Inventing a new one would be fabricated provenance, and leaving it null would hide a query
+  // the report nonetheless shows. This is the same rule `expandReport1QueryUniverse` applies.
+  const originByQuery = new Map<string, Report1Query>(params.queryOrigins ?? []);
+  const inheritOriginForSimplified = (original: string): void => {
+    const parent = originByQuery.get(original.toLowerCase());
+    if (!parent) return;
+    const simplified = simplifyKeyword(original);
+    const key = simplified.toLowerCase();
+    if (simplified.length < 3 || originByQuery.has(key)) return;
+    originByQuery.set(key, {
+      query: simplified,
+      origin: parent.origin,
+      rationale: `${parent.rationale} Broadened form of the same term.`,
+      basis: parent.basis,
+    });
+  };
+
   // R1-D — brand tokens for query classification. Derived once, from the inputs
   // the caller already supplies; no lookup, no network, no new evidence source.
   const brandTokens = brandTokensFor({ companyName: params.companyName ?? null, domain: params.ownDomain });
@@ -1028,6 +1205,8 @@ export async function discoverCompetitorDomainsFromSerp(params: {
         seenQueries.add(keyword);
         const own = result.rows.find((row) => row.domain === ownDomain);
         const { queryClass, intent } = classOf(keyword);
+        // R1-L2 — the RECORDED origin for this exact query. Retrieval by key, not inference.
+        const recordedOrigin = originByQuery.get(keyword.toLowerCase()) ?? null;
         searchObservations.push({
           query: keyword,
           // The provider's own rank, never the post-filter array index.
@@ -1057,6 +1236,11 @@ export async function discoverCompetitorDomainsFromSerp(params: {
               .map((row) => row.domain)
               .filter((domain): domain is string => Boolean(domain) && domain !== ownDomain),
           )),
+          // R1-L2 — why the question was asked, as recorded when the universe was
+          // built. A different axis from the four fields above, which say where
+          // the answer came from. Null when the caller recorded nothing.
+          queryOrigin: recordedOrigin?.origin ?? null,
+          queryRationale: recordedOrigin?.rationale ?? null,
         });
       }
 
@@ -1093,6 +1277,9 @@ export async function discoverCompetitorDomainsFromSerp(params: {
   await runKeywordBatch(params.keywords, false);
 
   if (ranked.size === 0 && params.keywords.length > 0) {
+    // R1-L2 -- record the inherited origin BEFORE dispatching, so the retry batch's
+    // observations carry provenance rather than arriving unattributed.
+    for (const original of params.keywords) inheritOriginForSimplified(original);
     const simplifiedKeywords = [...new Set(params.keywords.map(simplifyKeyword).filter((keyword) => keyword.length >= 3))];
     if (simplifiedKeywords.length > 0) {
       console.warn('[competitor-discovery][serp-retry-simplified]', {

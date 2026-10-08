@@ -210,7 +210,64 @@ This item is **closed as correct by design**. No production behaviour change is 
 exact-string test that pins `"4 of 20 provider × query-class cells measured"` is the negative
 control: it fails if the denominator is ever switched.
 
-## 13. What this contract does not define
+## 13. SERP query selection — GSC is isolated (R1-L2)
+
+Report 1 reports positions for a set of search queries. **Which queries get checked is itself a
+provenance question**, and it was previously answered by private data.
+
+**The defect.** The query set was seeded from `canonical_keywords` — a table only
+`gscIngestionService` writes — ordered by `keyword_metrics.impressions`, and canonical membership
+carried the largest term in the keyword scorer. Private Search Console history therefore selected
+up to 8 of the 10 dispatched queries. `evidenceProvenance.ts` classes `gsc` as `CONNECTED_SOURCE`
+and calls that entry "the boundary that keeps Report 1 honest about being a public report": the
+boundary held for evidence and was bypassed for selection.
+
+**The decision: GSC ISOLATED.** The owner decision is that private GSC data must not influence the
+Report 1 SERP query universe. GSC remains fully available to its other consumers
+(`seoIntelligenceService`, `performanceSearchIntelligenceService`, `intentIntelligenceService`,
+`geoStrategyIntelligenceService`) and to any future connected-data report.
+
+The contract this establishes:
+
+1. **Report 1 SERP query selection does not use private GSC data.** `extractPublicQueryTerms`
+   reads only public page sources; `extractTopKeywords` is retained, unchanged, for non-Report-1
+   use and is no longer on this path. GSC is OUTSIDE the selection mechanism — an allow-list, not
+   a filter applied after the fact, matching how `REPORT1_PROVENANCE` itself is defined.
+2. **GSC remains available to other connected-data consumers.** Nothing about ingestion, the
+   tables or the other readers changed.
+3. **Query origin is retained from construction through rendering.** `Report1QueryOrigin` is one
+   of `observed_public` · `declared` · `derived_template` · `derived_fallback`, recorded where the
+   query is built and carried on the observation as `queryOrigin` / `queryRationale`. There is no
+   private member in the type, so a GSC-derived query is not expressible.
+4. **Query origin is NOT SERP evidence.** It records why a question was asked. `observed_public`
+   means the query TEXT was derived from public page material — never that the query itself was
+   observed, and never that anyone searches it. Report 1 holds no search-demand evidence of any
+   kind.
+5. **SERP results remain public observations.** `engine` / `provider` / `observedAt` are unchanged
+   and remain a separate axis from query origin. The two are rendered as distinct statements and
+   must never be merged.
+6. **The query universe is bounded.** It is capped at 10 and is disclosed as a bounded set, never
+   as complete market search coverage. "Checked, not found" is only as meaningful as the question
+   asked, so the question is now disclosed beside it.
+7. **Historical observations without a recorded origin are not retroactively classified.** A
+   pre-L-2 report renders "origin not recorded for this observation". Origin is never inferred
+   from query text — a query reading `"x competitors"` is not evidence that a template produced it.
+
+**Fallback and fabricated identity.** Two ungrounded cases are now disclosed rather than silent.
+When no declared or public subject exists the base has always been empty (the `'business software'`
+literal in the `??` chain is unreachable, because `extractDomainKeywords(...).join(' ')` returns
+`''`, which is not nullish). And when the profile is too sparse,
+`extractCompetitiveContextFromResolvedInput` substitutes a hard-coded identity wholesale — its own
+comment describes this as fabricating the owner's identity. Both now report `derived_fallback`,
+because neither is a statement about the company. **Query behaviour is unchanged in both cases**;
+only the label is new. L-2 discloses provenance, it does not alter which queries are dispatched.
+
+**Not changed by L-2:** no scoring, no pillar or dimension, no evidence state, no coverage
+denominator, no comparability identity, and no migration. The comparability identity deliberately
+does **not** gain a query-universe dimension — the point of the slice is to remove the hidden GSC
+dimension, not to record it.
+
+## 14. What this contract does not define
 
 Deliberately absent, because each is an unresolved owner decision rather than an implementation
 detail: adoption of the 9-pillar framework · the 196/197 fixed denominator · `D12 — Local

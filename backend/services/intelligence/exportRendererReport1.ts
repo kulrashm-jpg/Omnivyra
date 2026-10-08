@@ -34,6 +34,8 @@
  * Styling reuses the existing dossier vocabulary (`ds-section`, `ds-framing`,
  * `ds-playbook-group`, `ds-pill`, `ds-methodology*`). No new stylesheet, no new pipeline.
  */
+// R1-L2 -- reader-facing origin wording is owned by the query-universe module, never restated here.
+import { QUERY_ORIGIN_LABEL } from '../report1QueryUniverse';
 import type { CanonicalExportPayload } from './canonicalExport';
 import { escape } from './exportRendererCoreModel';
 import { renderSectionHeader } from './exportRendererSectionsA';
@@ -616,6 +618,52 @@ function observationProvenance(observation: SearchVisibility['observations'][num
   return `<p style="font-size:9pt; margin:1mm 0 0; color:#64748b;">${text}</p>`;
 }
 
+/**
+ * R1-L2 -- WHY Report 1 asked this question.
+ *
+ * A DIFFERENT AXIS FROM `observationProvenance` ABOVE, and deliberately a separate function so
+ * the two cannot be merged into one line. That function says where the ANSWER came from (engine,
+ * provider, reading time); this one says why the QUESTION was put. A declared query that returned
+ * a Google result is both declared and observed, on different axes, and collapsing them would
+ * make the query selection look like an observed market signal.
+ *
+ * RECORDED ORIGIN ONLY. The origin is read from the observation, where the query builder wrote it
+ * at construction. Nothing here inspects the query TEXT: a query reading "x competitors" is not
+ * evidence that a competitor template produced it, and guessing would manufacture provenance. An
+ * observation with no recorded origin -- every report composed before L-2 -- says so in those
+ * words and is never retroactively classified.
+ *
+ * WHAT THIS MUST NEVER SAY. Not "observed query": the page TEXT was observed, the query was
+ * DERIVED from it. Not "search demand", "public demand" or "users search for": nothing in Report 1
+ * establishes that anyone runs these queries, and no private keyword metric is available to it.
+ */
+function queryRationale(observation: SearchVisibility['observations'][number]): string {
+  const origin = observation.queryOrigin;
+  const text = origin
+    ? `Why this query was checked: ${escape(QUERY_ORIGIN_LABEL[origin])}.${observation.queryRationale ? ` ${escape(observation.queryRationale)}` : ''}`
+    : 'Why this query was checked: not recorded for this observation.';
+  return `<p style="font-size:9pt; margin:1mm 0 0; color:#64748b;">${text}</p>`;
+}
+
+/**
+ * R1-L2 -- the bounded-set disclosure.
+ *
+ * The query universe is capped, so the set checked is a SAMPLE chosen from this company's public
+ * pages and declared profile -- never the set of queries that matter in its market, which Report 1
+ * has no evidence about. Without this line a reader could take "checked, not found" across the set
+ * as a market-wide absence. It also surfaces the generic fallback, which previously ran silently.
+ */
+function queryUniverseDisclosure(search: SearchVisibility): string {
+  const fellBack = search.observations.some((o) => o.queryOrigin === 'derived_fallback');
+  const recorded = search.observations.some((o) => Boolean(o.queryOrigin));
+  if (!recorded) return '';
+  const base = `The ${search.observations.length} quer${search.observations.length === 1 ? 'y' : 'ies'} below were chosen from this company's public page text and its declared profile. This is a bounded set, not a claim of complete market search coverage, and the selection uses no connected analytics property.`;
+  const fallbackNote = fellBack
+    ? ' Some queries fell back to generic category wording because no declared or public subject context was available for this company — those are not evidence about what this company does.'
+    : '';
+  return `<p style="font-size:9.5pt; line-height:1.6; margin:0 0 3mm; color:#475569;">${escape(base)}${fallbackNote ? escape(fallbackNote) : ''}</p>`;
+}
+
 export function renderSearchVisibility(
   payload: CanonicalExportPayload,
   eyebrow: string,
@@ -652,6 +700,7 @@ export function renderSearchVisibility(
     <section class="ds-section">
       ${header}
       <p class="ds-framing">Measured by running public search queries and recording where — or whether — this domain appears. Positions are the search provider's own ranks, not a derived score. This is public-record evidence only; it is not a reading of any connected analytics property.</p>
+      ${queryUniverseDisclosure(search)}
       <p style="font-size:10.5pt; line-height:1.6; margin:0 0 3mm; color:#1a2332;">${summary}</p>
       ${ranked.length > 0 ? `
         <div class="ds-playbook-group">
@@ -668,6 +717,7 @@ export function renderSearchVisibility(
               ${o.url ? `<p style="font-size:9.5pt; margin:0 0 1mm; color:#64748b;">${escape(o.url)}</p>` : ''}
               ${o.snippet ? `<p style="font-size:10pt; line-height:1.55; margin:0; color:#334155;">${escape(o.snippet)}</p>` : ''}
               ${observationProvenance(o)}
+              ${queryRationale(o)}
             </div>
           `).join('')}
         </div>
@@ -679,7 +729,7 @@ export function renderSearchVisibility(
             <p class="ds-playbook-group-desc">These queries ran and the domain did not appear in the results returned. That is an observation, not a ranking of zero.</p>
           </div>
           <ul style="margin:0; padding-left:5mm; font-size:10pt; line-height:1.6; color:#334155;">
-            ${absent.slice(0, 10).map((o) => `<li style="margin:0 0 1mm;">${escape(o.query)} <span style="color:#64748b;">— not in the top ${escape(String(o.resultCount))} results</span></li>`).join('')}
+            ${absent.slice(0, 10).map((o) => `<li style="margin:0 0 2mm;">${escape(o.query)} <span style="color:#64748b;">— not in the top ${escape(String(o.resultCount))} results</span>${queryRationale(o)}</li>`).join('')}
           </ul>
         </div>
       ` : ''}
