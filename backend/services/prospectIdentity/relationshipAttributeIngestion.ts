@@ -398,17 +398,42 @@ export async function assertRelationshipAttribute(
     throw new Error(`relationshipAttributeIngestion: canonical update failed: ${applied.error.message}`);
   }
 
-  // ── 9. Stamp the winning assertions ────────────────────────────────────
-  // Only if not already stamped, and never cleared — the same rule the person
-  // boundary follows.
+  // ── 9. Provenance: APPEND the decision, then STAMP the winner ──────────
+  // The same two steps, in the same order, as the person/account boundary's
+  // `recordCanonicalProvenance`. That function is module-private to a
+  // protected file, so the MECHANISM is reused — one decision log, the same
+  // columns, the same semantics — rather than the function itself.
   //
-  // NOTE, reported rather than worked around: there is no append-only DECISION
-  // log at relationship scope. `canonical_attribute_decisions` has no
-  // `relationship_id` and its entity_type CHECK admits only person|account, so
-  // a relationship decision cannot be recorded there without a migration. The
-  // stamp below plus the assertion rows preserve WHAT won and WHY; what is not
-  // preserved is the history of a value winning, losing and winning again.
+  // Why both: `applied_to_canonical_at` has room for exactly one event, so it
+  // cannot express a value winning, losing and winning again. The log can, and
+  // it is append-only by trigger, so a later re-win adds a row rather than
+  // rewriting one.
+  //
+  // Nothing is logged when arbitration applies nothing. That is the whole
+  // distinction the log encodes: a losing assertion is EVIDENCE, and only a
+  // canonical decision is a DECISION. It is also what makes a replay
+  // idempotent, since an already-in-force value applies nothing.
   for (const a of decision.apply) {
+    const logged = await ownedDbTable('canonical_attribute_decisions').insert({
+      organization_id: input.organizationId,
+      entity_type: 'relationship',
+      // A relationship decision describes an employment, so it names neither
+      // a person nor an account.
+      person_id: null,
+      account_id: null,
+      relationship_id: input.relationshipId,
+      attribute: a.attribute,
+      assertion_id: a.assertionId,
+      value: a.value,
+      reason: a.reason,
+      decided_at: now,
+    });
+    if (logged.error) {
+      throw new Error(`relationshipAttributeIngestion: canonical decision log failed: ${logged.error.message}`);
+    }
+
+    // Only if not already stamped, and never cleared — the same rule the
+    // person boundary follows. The log carries any later re-win.
     const stamped = await ownedDbTable('source_assertions')
       .update({ applied_to_canonical_at: now, applied_reason: a.reason })
       .eq('id', a.assertionId)

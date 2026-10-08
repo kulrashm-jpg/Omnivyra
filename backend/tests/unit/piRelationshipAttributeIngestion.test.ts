@@ -374,6 +374,90 @@ describe('arbitration integration', () => {
   });
 });
 
+describe('the canonical decision log', () => {
+  it('appends ONE relationship decision per applied attribute, with full content', async () => {
+    seedRelationship(REL_A);
+    const res = await call();
+    expect(res.ok).toBe(true);
+
+    const logged = db.inserts.filter((i) => i.table === 'canonical_attribute_decisions');
+    expect(logged).toHaveLength(1);
+    expect(logged[0].payload).toMatchObject({
+      organization_id: ORG_A,
+      entity_type: 'relationship',
+      relationship_id: REL_A,
+      // A relationship decision describes an employment, so it names neither.
+      person_id: null,
+      account_id: null,
+      attribute: 'job_title',
+      value: 'VP Sales',
+      reason: 'single_uncontested_assertion',
+      decided_at: NOW,
+    });
+    // The logged assertion is the one arbitration actually chose.
+    expect(logged[0].payload.assertion_id).toBe(res.canonicalApplied[0].assertionId);
+  });
+
+  it('logs the decision BEFORE stamping the assertion', async () => {
+    seedRelationship(REL_A);
+    await call();
+    // The same order as the person/account boundary: append the decision, then
+    // stamp. A stamp without a logged decision would be a canonical write with
+    // no audit row.
+    const order: string[] = [];
+    for (const i of db.inserts) if (i.table === 'canonical_attribute_decisions') order.push('log');
+    for (const u of db.updates) if (u.table === 'source_assertions') order.push('stamp');
+    expect(order).toEqual(['log', 'stamp']);
+  });
+
+  it('logs NOTHING when arbitration applies nothing', async () => {
+    // An unattested incumbent: evidence is recorded, no canonical decision is
+    // made, so there is no decision to log. This is also what makes a replay
+    // idempotent.
+    seedRelationship(REL_A, { job_title: 'Operator Typed This' });
+    const res = await call();
+    expect(res.canonicalApplied).toEqual([]);
+    expect(db.inserts.filter((i) => i.table === 'canonical_attribute_decisions')).toEqual([]);
+  });
+
+  it('a replay that changes nothing logs no second decision', async () => {
+    seedRelationship(REL_A);
+    await call();
+    const after = db.inserts.filter((i) => i.table === 'canonical_attribute_decisions').length;
+    // The value is now in force, so arbitration applies nothing the second time.
+    await call();
+    expect(db.inserts.filter((i) => i.table === 'canonical_attribute_decisions').length).toBe(after);
+  });
+
+  it('a decision-log failure aborts rather than leaving an unaudited canonical value', async () => {
+    seedRelationship(REL_A);
+    db.insertError = {
+      table: 'canonical_attribute_decisions',
+      code: '23503', message: 'violates canonical_decisions_relationship_tenant_fk',
+    };
+    await expect(call()).rejects.toThrow(/canonical decision log failed/);
+    // The assertion was never stamped, so nothing claims to have been applied.
+    expect(db.updates.filter((u) => u.table === 'source_assertions')).toEqual([]);
+  });
+
+  it('logs one decision per attribute when several apply at once', async () => {
+    seedRelationship(REL_A);
+    // Evidence for a second attribute that has been waiting to apply.
+    (db.tables['source_assertions'] ??= []).push({
+      id: 'dept-1', organization_id: ORG_A, relationship_id: REL_A,
+      attribute: 'department', normalized_value: 'Sales', provider: 'apollo',
+      confidence: null, observed_at: '2026-02-01T00:00:00.000Z',
+      recorded_at: '2026-02-01T00:00:00.000Z', superseded_at: null,
+      applied_to_canonical_at: null, applied_reason: null,
+    });
+    const res = await call();
+    expect(res.canonicalApplied.map((a: any) => a.attribute).sort()).toEqual(['department', 'job_title']);
+    const logged = db.inserts.filter((i) => i.table === 'canonical_attribute_decisions');
+    expect(logged.map((l) => l.payload.attribute).sort()).toEqual(['department', 'job_title']);
+    for (const l of logged) expect(l.payload.relationship_id).toBe(REL_A);
+  });
+});
+
 describe('idempotency', () => {
   it('a duplicate claim is reported as already present, not as an error', async () => {
     seedRelationship(REL_A);

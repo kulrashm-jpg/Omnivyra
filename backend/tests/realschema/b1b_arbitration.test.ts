@@ -175,13 +175,18 @@ describe('B1b — schema shape', () => {
     expect(rows[0].tenant).toBe(1);
   });
 
-  it('has 3 composite tenant-safe foreign keys, tenant always the second leg', async () => {
+  it('has 4 composite tenant-safe foreign keys, tenant always the second leg', async () => {
     const { rows } = await db.query(`
       SELECT con.conname, pg_get_constraintdef(con.oid) d
         FROM pg_constraint con JOIN pg_class s ON s.oid=con.conrelid
        WHERE con.contype='f' AND s.relname='canonical_attribute_decisions'
          AND array_length(con.conkey,1)=2 ORDER BY con.conname`);
-    expect(rows).toHaveLength(3);
+    // Four since migration 20261124000000 added
+    // `canonical_decisions_relationship_tenant_fk`, the relationship subject.
+    // The invariant below is what this test is really for and it is unchanged:
+    // the loop still runs over every composite FK, so widening the count
+    // strengthens the coverage rather than relaxing it.
+    expect(rows).toHaveLength(4);
     for (const r of rows as any[]) expect(r.d).toMatch(/, organization_id\)/);
   });
 
