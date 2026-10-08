@@ -132,7 +132,22 @@ const PILLAR_LABEL: Record<PillarKey, string> = {
 
 // ── Core classifier ───────────────────────────────────────────────────────────
 
-export function classifyMaturity(report: CanonicalReport): MaturityClassification {
+/**
+ * Exactly what `classifyMaturity` reads — the overall score and the pillar set.
+ *
+ * Declared because its only caller builds a deliberate partial object (the maturity stage has to
+ * be classified BEFORE the full report exists) and previously reached the full `CanonicalReport`
+ * parameter through `as unknown as CanonicalReport`. That cast asserted a shape the value did not
+ * have: three of `authority_overview`'s five fields were absent. Had this function ever started
+ * reading another field it would have received `undefined` at runtime with nothing failing to
+ * compile. A full `CanonicalReport` still satisfies this structurally, so no caller is narrowed.
+ */
+export type MaturityClassificationInput = {
+  authority_overview: Pick<CanonicalReport['authority_overview'], 'overall_score'>;
+  pillars: CanonicalReport['pillars'];
+};
+
+export function classifyMaturity(report: MaturityClassificationInput): MaturityClassification {
   const overall = report.authority_overview.overall_score;
   const stage = stageFromValue(overall.value, overall.state);
 

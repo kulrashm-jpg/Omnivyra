@@ -629,11 +629,15 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
 
   // Maturity stage classification (canonical 6-stage model). Derives from the
   // measured overall score; no synthesis when score is null.
-  const placeholderReportForMaturity = {
-    authority_overview: { overall_score: overall, maturity: snapshot.system_maturity },
+  // Typed against `MaturityClassificationInput` — exactly the two values the classifier reads —
+  // so no cast is needed. The previous `as unknown as CanonicalReport` claimed a shape this
+  // object did not have (`headline`, `primary_constraint` and `next_unlock` were all absent) and
+  // would have silently supplied `undefined` had the classifier ever read one of them. The
+  // unread `maturity` field is dropped for the same reason: it was never consulted.
+  const maturityClassification = classifyMaturity({
+    authority_overview: { overall_score: overall },
     pillars,
-  } as unknown as CanonicalReport;
-  const maturityClassification = classifyMaturity(placeholderReportForMaturity);
+  });
   const legacyMaturity: SystemMaturityClass = legacyClassFromStage(maturityClassification.stage);
 
   // Phase 3: actions are now maturity-aware — built AFTER the maturity stage is
