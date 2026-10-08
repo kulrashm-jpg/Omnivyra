@@ -584,6 +584,8 @@ export async function composeSnapshotReportFromDecisions(params: {
     brandName: companyContext.companyName,
     domain: companyContext.domain,
     category: params.resolvedInput?.resolved.businessType ?? null,
+    // Declared geography, for the backlink strategy's geographic relevance. Declared, never observed.
+    declaredGeography: params.resolvedInput?.resolved.geography ?? null,
     competitors: (params.resolvedInput?.resolved.competitors ?? []).map((c) => String(c)),
     productServices: companyContext.productServices,
     companyId: params.companyId,

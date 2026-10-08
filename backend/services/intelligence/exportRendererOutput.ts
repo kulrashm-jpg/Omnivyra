@@ -36,6 +36,7 @@ import {
 // B7 (WP-10) — the public-evidence market / ICP proposal. Renders '' when the producer abstained
 // at the section level, so a report built without it is unchanged.
 import { renderMarketIcpRecommendation } from './exportRendererMarketIcp';
+import { renderBacklinkAuthority } from './exportRendererBacklinkStrategy';
 import type {
   CanonicalPillarScore,
   CanonicalScore,
@@ -627,6 +628,13 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
                 seen who competes for the same buyer, and this states what market that implies —
                 as a proposal to review, never as a saved profile or an approved ICP. */ ''}
           ${renderMarketIcpRecommendation(payload, EYEBROW_EVIDENCE)}
+          ${/* External authority: what the public record shows about inbound authority, and which
+                KINDS of authority would be worth building. Placed after the market proposal
+                because the strategy half is reasoned from the same category/market context the
+                reader has just seen. The two halves render as separately headed blocks: a
+                recommended TYPE is never an existing backlink, and an unmeasured profile is
+                never a weakness. */ ''}
+          ${renderBacklinkAuthority(payload, EYEBROW_EVIDENCE)}
           ${renderMomentumMaturity(sections.momentum_maturity, surfaces, '08')}
           ${renderDataConfidenceCoverageSection(surfaces, '09')}
           ${renderChannelStrategySection(surfaces, '10', decisionLayerPopulated)}

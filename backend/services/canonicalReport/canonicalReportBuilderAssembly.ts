@@ -37,6 +37,9 @@ import { resolveEvidenceReadiness } from './reportEvidenceReadiness';
 // B7 (WP-10): public-evidence market / ICP PROPOSAL. Pure functions over values already held —
 // no provider call, no query, no write. See `reportMarketRecommendation.ts`.
 import { collectMarketIcpEvidence, resolveMarketIcpRecommendation } from './reportMarketRecommendation';
+// Certified backlink surface. Pure functions over values already held here: no provider
+// call, no query, no write. See `reportBacklinkStrategy.ts`.
+import { summarizeBacklinkObservation, buildBacklinkStrategy } from './reportBacklinkStrategy';
 // BETA-EXEC-004: deterministic engine-evidence contract for evidence-driven dimension rationales.
 import {
   type EngineEvidenceInput,
@@ -494,6 +497,12 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   tenantContext?: TenantContext;
   // BETA-EVIDENCE-EXEC-003: non-scored declared evidence (sameAs / certifications / legal transparency),
   // aggregated upstream from crawl signals. Pure passthrough into the presentation-only section — never scored.
+  /**
+   * Company-DECLARED geography from the resolved report input. Carried so the backlink
+   * strategy can judge geographic relevance; it is labelled `declared` throughout and is
+   * never presented as observed market evidence.
+   */
+  declaredGeography?: string | null;
   declaredEvidence?: CanonicalDeclaredEvidence | null;
   // BETA-EXEC-002: measured evidence from the Website Intelligence Brand + Accessibility
   // engines. Optional + additive — omitting it reproduces the prior behaviour exactly.
@@ -1096,6 +1105,60 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
       observedAt: tenantContext.request_at ?? null,
     }),
   );
+
+  // ── Backlink authority: OBSERVATION and STRATEGY, produced separately ───────
+  //
+  // Both are pure computations over values this function already holds. Nothing here calls a
+  // provider, opens a connection, reads a credential or writes anything: the measured half is
+  // read back off `reportShape.authority_inflow`, which the canonical pipeline has already
+  // populated from the existing provider abstraction, so no new provider path is introduced.
+  //
+  // CONTEXT IS DECLARED, AND STAYS DECLARED. `company_context.primary_offering`,
+  // `.positioning` and `.market_context`, `options.category` and `options.declaredGeography`
+  // all originate in the tenant's Company Profile. They are passed on the `declared` channel,
+  // which the certified module labels `declared` / `INFERRED` forever and never upgrades to an
+  // observation — the same boundary `market_icp_recommendation` above abstains to protect. The
+  // difference is that this surface is explicitly a declared-context PROPOSAL, not a claim
+  // about the market.
+  //
+  // NO OBSERVED TOPICS, NO HISTORY. The snapshot carries no topic-coverage field and no
+  // backlink referring-domain history is persisted, so `assets.topicsCovered` is absent and
+  // `history` is empty. Growth therefore reports `insufficient_history` — the current profile,
+  // never momentum.
+  const backlinkMeasured = reportShape.authority_inflow.profile;
+  const backlinkInput = {
+    declared: {
+      category: options?.category ?? null,
+      offering: snapshot.company_context.primary_offering ?? null,
+      positioning: snapshot.company_context.positioning ?? null,
+      target_market: snapshot.company_context.market_context ?? null,
+      geography: options?.declaredGeography ?? null,
+    },
+    measurement: backlinkMeasured
+      ? {
+        state: backlinkMeasured.state,
+        referring_domains: backlinkMeasured.referring_domains,
+        backlinks: backlinkMeasured.total_backlinks,
+        authority: backlinkMeasured.domain_authority,
+        observed_at: reportShape.authority_inflow.score.evidence.freshness.last_observed_at ?? null,
+        source: 'backlink_api' as const,
+        reason_unavailable: backlinkMeasured.reason_unavailable,
+      }
+      : null,
+    // A serialization of the EXISTING comparability identity — the same four fields
+    // `compareComparability` uses. It introduces no new comparability rule; it only lets a
+    // stored backlink snapshot be matched against this run.
+    comparabilityKey: comparabilityIdentity
+      ? [comparabilityIdentity.company_id, comparabilityIdentity.subject_domain,
+        comparabilityIdentity.scan_profile, comparabilityIdentity.engine_version].join('|')
+      : null,
+    history: [],
+    observedAt: tenantContext.request_at ?? null,
+  };
+  reportShape.backlink_authority = {
+    observation: summarizeBacklinkObservation(backlinkInput),
+    strategy: buildBacklinkStrategy(backlinkInput),
+  };
 
   return reportShape;
 }

@@ -834,6 +834,23 @@ export type CanonicalReport = {
    */
   market_icp_recommendation?: import('./reportMarketRecommendation').MarketIcpRecommendation;
 
+  /**
+   * Backlink authority OBSERVATION + contextual link STRATEGY, as two separate values.
+   *
+   * They are deliberately NOT merged, and there is deliberately no `backlink_score`,
+   * `backlink_health` or single recommendation string: the whole point of the certified
+   * surface is that "what exists" and "what would be valuable to build" are different kinds
+   * of evidence and must never render as the same kind. `observation` carries the measured
+   * profile or an explicit unavailable state; `strategy.kind` is the literal `'proposal'`, so
+   * no consumer can read a recommended TYPE as an existing backlink.
+   *
+   * Optional and additive — omitting it reproduces the prior report exactly.
+   */
+  backlink_authority?: {
+    observation: import('./reportBacklinkStrategy').BacklinkObservation;
+    strategy: import('./reportBacklinkStrategy').BacklinkStrategy;
+  };
+
   explanations: {
     authority_overall: import('../intelligence/explainabilityEngine').Explanation;
     pillars: Array<{ pillar: PillarKey; explanation: import('../intelligence/explainabilityEngine').Explanation }>;
