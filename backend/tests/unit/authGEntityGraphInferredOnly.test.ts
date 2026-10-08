@@ -98,7 +98,16 @@ describe('AUTH-G-004 non-vacuity — a labelling correction, not a suppression',
     const dim = entityDimension(74);
     const authority = groupDimensionsByPillar([dim]).find((p) => p.pillar === 'authority');
     expect(authority?.score.value).toBe(74);
-    expect(authority?.score.state).toBe('measured');
+    // WAVE-4A — the pillar reads `inferred`, not `measured`, and that is the ratified
+    // contract: `aggregatePillarScore` calls a pillar `measured` only when every
+    // CONTRIBUTING dimension is itself `measured`, and this single reading is an on-page
+    // heuristic. The pillar still AGGREGATES it -- the value above is unchanged at 74 and the
+    // dimension is still carried below -- which is what this non-vacuity block exists to
+    // prove. The earlier `measured` expectation was pinning the exact defect Wave 4A fixed:
+    // an all-inferred pillar published as observed, and counted in the customer-facing
+    // measured column of Data Confidence & Coverage.
+    expect(authority?.score.state).toBe('inferred');
+    expect(authority?.score.state).not.toBe('measured');
     expect(authority?.dimensions).toHaveLength(1);
   });
 
