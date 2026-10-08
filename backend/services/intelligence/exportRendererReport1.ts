@@ -588,6 +588,34 @@ type SearchVisibility = NonNullable<Report1['search_visibility']>;
  * A position is never printed as 0. Absence renders as "not in the results returned", because a
  * rank of zero does not exist and a reader would take it for one.
  */
+/**
+ * Per-observation provenance: which engine returned this page, via which provider, and when the
+ * page was read.
+ *
+ * WHY PER OBSERVATION. The section footer states one provider and one time for the whole run. Two
+ * observations can legitimately differ -- a different engine, a different provider, a different
+ * reading minute -- and stating a single pair for all of them attributes a position to a search
+ * that did not produce it. Each row now carries the search that produced it, so a reader can audit
+ * one position without trusting a section-level summary.
+ *
+ * ABSENT IS OMITTED, NEVER SUBSTITUTED. There is no fallback to the section's `observedAt`, none to
+ * the composer's clock and none to the current time: a position whose reading time was not recorded
+ * states what it has and stays silent about the rest. When nothing at all was recorded the row says
+ * so in those words, because "not recorded" is a different statement from a value.
+ *
+ * `engine` and `provider` stay DISTINCT facts and are never printed as if one implied the other.
+ */
+function observationProvenance(observation: SearchVisibility['observations'][number]): string {
+  const parts: string[] = [];
+  if (observation.engine) parts.push(`engine ${escape(observation.engine)}`);
+  if (observation.provider) parts.push(`via ${escape(observation.provider)}`);
+  if (observation.observedAt) parts.push(`read ${escape(observation.observedAt.slice(0, 10))}`);
+  const text = parts.length > 0
+    ? parts.join(' · ')
+    : 'search provenance not recorded for this observation';
+  return `<p style="font-size:9pt; margin:1mm 0 0; color:#64748b;">${text}</p>`;
+}
+
 export function renderSearchVisibility(
   payload: CanonicalExportPayload,
   eyebrow: string,
@@ -639,6 +667,7 @@ export function renderSearchVisibility(
               ${o.title ? `<p style="font-size:10.5pt; margin:0 0 1mm; color:#1a2332;">${escape(o.title)}</p>` : ''}
               ${o.url ? `<p style="font-size:9.5pt; margin:0 0 1mm; color:#64748b;">${escape(o.url)}</p>` : ''}
               ${o.snippet ? `<p style="font-size:10pt; line-height:1.55; margin:0; color:#334155;">${escape(o.snippet)}</p>` : ''}
+              ${observationProvenance(o)}
             </div>
           `).join('')}
         </div>
