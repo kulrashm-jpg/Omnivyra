@@ -54,6 +54,7 @@ gate, merge, release, deploy) to a human.
 | `gov judge --story OMNI-n --worktree <path> --evidence <sha256:…> --invoked-by <human\|claude-code>:<id> [--write-back] [--model <id>]` | BJC + bounded JEV advisory per AC. `--write-back` writes only the four advisory fields (human-run). Never transitions Jira. | `GOV_HOME`; Jira advisory fields with `--write-back` |
 | `gov submit --story OMNI-n --evidence <sha256:…> [--worktree <path>]` | Prints the values a **human** records in Jira. | nothing |
 | `gov check-merge --story OMNI-n --worktree <path> --evidence <sha256:…>` | Deterministic merge gate for a human or CI. Fails closed. Never merges. | nothing |
+| `gov audit-branch --worktree <path> [--base <ref>]` | Read-only detection of commits in base..HEAD that do not carry governance (see *Detection*). Blocks nothing. | nothing |
 
 Exit codes: `0` OK · `10` NOT_READY · `11` REFUSED · `12` STALE · `13` INTEGRITY_FAILED ·
 `14` VERIFICATION_FAILED · `15` SCOPE_VIOLATION · `16` JUDGMENT_UNAVAILABLE · `64` usage · `70` ERROR.
@@ -326,6 +327,26 @@ producing items `EV-1…` with exit code, timeout flag, `argv_digest` and the ha
 captured log. The bundle (`gov-evidence/1`) is PASS only if scope is ok and every item passed.
 It is stored under `GOV_HOME/evidence/` by `bundle_hash`; logs never leave `GOV_HOME`.
 
+### Protected paths after intake
+
+Intake's default prohibited paths (`supabase/migrations/**`, `.env*`, `.claude/settings*.json`,
+`vercel.json`, `railway.json`, `Dockerfile*`, `.github/workflows/**`) are protected in `gov verify`
+and `gov check-merge` too, not only at intake. A Story created by hand in Jira can name such a path in
+its own Authorized Paths, and that is no longer enough. A changed protected path is accepted only when
+the Story Invariants cite a reviewed `protected_path_authorizations` entry with its exact id and digest
+(the line intake writes: `Protected-path authorization <id> (sha256:…): …`), that entry lists the exact
+file, and the packet carries the entry's `required_verification`.
+
+- `gov verify` refuses with `SCOPE_VIOLATION` (15) before any command runs.
+- `gov check-merge` recomputes the check from git over base..HEAD, so a bundle stored before the check
+  existed gets no pass.
+- A citation of an unknown id, a digest that differs from the reviewed rules, or a missing required
+  check also fails closed.
+- If the rules cannot be read, verify refuses (11) and check-merge fails (13).
+
+The policy is the tool checkout's `intake-rules.json`. Enforcement only refuses; it never widens a
+Story's Authorized Paths.
+
 ## BJC / JEV boundary
 
 `gov judge` builds one bounded BJC request per AC and calls BJC `judge()`; it is the only way gov
@@ -354,7 +375,8 @@ reaches JEV.
 
 `gov check-merge` passes only when: the binding exists; the packet hash matches; the evidence
 bundle hash matches; HEAD equals the bundle's HEAD and the tree is clean; the deterministic result
-is PASS; scope is ok; and the commit rule holds:
+is PASS; scope is ok; every changed protected path is under an exact reviewed authorization
+(`protected-paths`, see *Protected paths after intake*); and the commit rule holds:
 
 - **new task / `--base` attach:** at least one commit base..HEAD, every one carrying
   `Governed-By: OMNI-n` and `Gov-Packet: sha256:…`;
@@ -363,6 +385,43 @@ is PASS; scope is ok; and the commit rule holds:
   `Governed-By: OMNI-n` and the exact `Gov-Packet` (zero governed commits is allowed).
 
 Any mismatch, ambiguity or git error fails closed (exit 13). check-merge never merges.
+
+## Detection: `gov audit-branch`
+
+```
+gov audit-branch --worktree <path> [--base <ref>]      # default base: origin/main
+```
+
+Read-only. It classifies every commit in base..HEAD from its trailers:
+
+| Class | Meaning |
+|---|---|
+| `GOVERNED` | One `Governed-By` Story and one `Gov-Packet` whose packet is stored intact in this `GOV_HOME` for that Story. |
+| `GOVERNED_UNVERIFIED_PACKET` | Well-formed trailers, but the packet is not stored here, so the claim cannot be confirmed. |
+| `ADOPTION_BASELINE` | `Governed-By` alone, and a ledger binding records this commit as the Story's adoption baseline. |
+| `MALFORMED` | The commit claims governance, but its trailers are inconsistent. |
+| `UNGOVERNED` | No governance trailer: plain work. |
+
+Exit status:
+
+- `0` when every commit is `GOVERNED` or `ADOPTION_BASELINE`, or there are none.
+- `13` (`INTEGRITY_FAILED`) otherwise, with verdict `UNGOVERNED_DETECTED` or `UNVERIFIABLE` in
+  `GOV_RESULT`.
+
+`GOVERNED` proves only the trailers and the packet. It does not prove scope, evidence or which session
+wrote the commit; use `gov verify` and `gov check-merge` for those.
+
+It writes nothing: no git history, no GOV_HOME file, no Jira, no JEV. It never blocks a merge. Making
+it a required check would change who can merge, and that is a human authority decision.
+
+## Harness certification
+
+`HARNESS-CERTIFICATION.md` is the Harness Certification Matrix and Report. It covers every entry and
+continuation path (H rows), the negative and bypass tests (N rows) and the known bypasses (B rows), with
+each result marked PASS, FAIL, DEFERRED or INSUFFICIENT_EVIDENCE.
+`backend/tests/unit/jevHarnessCertification.test.ts` keeps it honest: cited tests must exist, and the
+preserved findings cannot be quietly upgraded. The harness is governed for work that enters through
+`gov`. Entry and deployment are not enforced; the document records both as deliberate deferrals.
 
 ## Prohibited
 

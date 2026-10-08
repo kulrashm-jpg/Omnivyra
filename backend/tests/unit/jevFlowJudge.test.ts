@@ -391,6 +391,45 @@ describe('gov judge — fail closed before any JEV call', () => {
     expect(calls(transport)).toBe(0);
   });
 
+  it.each([
+    ['an id that is not EV-<n>', { id: 'X-1' }],
+    ['an unknown evidence kind', { evidence_kind: 'lint' }],
+    ['a result that is neither PASS nor FAIL', { result: 'SKIPPED' }],
+    ['a log hash that is not sha256:<hex>', { log_sha256: 'md5:abc' }],
+    ['a non-string registry id', { registry_id: 7 }],
+    ['a finished_at that is not an ISO date', { finished_at: 'yesterday' }],
+  ])('a malformed evidence item (%s) → REFUSED, no JEV call, nothing written', async (_label, bad) => {
+    const stored = makePacket();
+    const good = makeBundle(stored).bundle;
+    const evidence = makeBundle(stored, { over: { items: [good.items[0], { ...good.items[1], ...bad } as unknown as EvidenceItem] } });
+    const { result, transport, jira } = await run({ stored, evidence });
+    expect(result.status).toBe('REFUSED');
+    expect(result.error).toBe('evidence bundle has a malformed evidence item');
+    expect(calls(transport)).toBe(0);
+    expect(jira.updates).toEqual([]);
+  });
+
+  it('duplicate evidence ids → REFUSED, no JEV call, nothing written', async () => {
+    const stored = makePacket();
+    const good = makeBundle(stored).bundle;
+    const evidence = makeBundle(stored, { over: { items: [good.items[0], { ...good.items[1], id: 'EV-1' }] } });
+    const { result, transport, jira } = await run({ stored, evidence });
+    expect(result.status).toBe('REFUSED');
+    expect(result.error).toBe('evidence bundle has duplicate evidence ids');
+    expect(calls(transport)).toBe(0);
+    expect(jira.updates).toEqual([]);
+  });
+
+  it('a bundle with no PASS/FAIL deterministic result → REFUSED, never treated as PASS', async () => {
+    const stored = makePacket();
+    const evidence = makeBundle(stored, { over: { deterministic_result: 'UNKNOWN' as unknown as DeterministicResult } });
+    const { result, transport, jira } = await run({ stored, evidence });
+    expect(result.status).toBe('REFUSED');
+    expect(result.error).toBe('evidence bundle has no deterministic result');
+    expect(calls(transport)).toBe(0);
+    expect(jira.updates).toEqual([]);
+  });
+
   it('invalid invoked-by → REFUSED (Phase 2 identity rule)', async () => {
     const { result, transport } = await run({ input: { invokedBy: 'bot:x' } });
     expect(result.status).toBe('REFUSED');

@@ -26,6 +26,9 @@
  *                Jira identity GOV_INTAKE_EMAIL + GOV_INTAKE_TOKEN; creates the Story/ACs)
  *   intake       --check-forms
  *                (HUMAN identity, read-only: are the OMNI Story / AC create forms intake-safe?)
+ *   audit-branch --worktree <path> [--base <ref>]
+ *                (read-only detection: classifies every commit in base..HEAD as governed,
+ *                adoption baseline, malformed or ungoverned; writes nothing, blocks nothing)
  *
  * Explicit and user-invoked only: no background work, no automatic JEV, never
  * launches `claude`, never merges / releases / deploys, never moves a Jira
@@ -48,6 +51,7 @@ import { createTypeSafeTransport, resolveApiKey, type JevTransport } from '../je
 import { resolveModel } from '../jev-jira/cli';
 import { identityViolations, preflightPermissionKeys, resolveRuntimeIdentity, type RuntimeIdentity } from '../jev-jira/identity';
 import { JiraClientError, createJiraClient, type JiraClient, type JiraCredentials, type JiraPermissionProbe } from '../jev-jira/jiraClient';
+import { AUDIT_COMMIT_CLASSES, auditBranch } from './auditBranch';
 import { findByStory, findBySession, bindSession, readBindings } from './binding';
 import {
   appendIntakeAudit,
@@ -92,6 +96,7 @@ import { createJiraQuery, type JiraQuery } from './jiraQuery';
 import { runJudgeFlow } from './judgeFlow';
 import { buildPacket, detectStale, loadPacket, storePacket } from './packet';
 import { checkReadiness, checkReadinessReport, type ReadinessReport } from './readiness';
+import { describeProtectedViolation, evaluateProtectedPaths, loadProtectedPathPolicy, type ProtectedPathPolicy } from './protectedPaths';
 import { loadRegistry } from './registry';
 import { createGitProbe } from './scope';
 import { buildResumeInstructions, buildStartCommand, findSessionFile, fingerprintSession, newSessionId } from './session';
@@ -158,6 +163,8 @@ export interface GovDeps {
   prompt: (question: string) => Promise<string>;
   /** intake --check-forms / --apply: reads one human-intake variable from the authoritative Windows User environment. */
   readUserEnv: UserEnvReader;
+  /** verify / check-merge: the reviewed protected-path policy (B3); throws when unavailable (fail closed). */
+  protectedPolicy: (registry: VerificationRegistry) => ProtectedPathPolicy;
 }
 
 /**
@@ -223,6 +230,9 @@ const INTAKE_USAGE = [
   '  intake      (human only, interactive terminal, your own Jira identity) --apply sha256:<proposal>',
   '  intake      (human only, your own Jira identity; read-only) --check-forms',
 ].join('\n');
+
+/** Read-only detection (kept separate: it governs no Story and needs no binding). */
+const AUDIT_USAGE = '  audit-branch --worktree <path> [--base <ref>]   (read-only: reports commits in base..HEAD that do not carry governance)';
 
 // ---------------------------------------------------------------- default deps
 
@@ -309,6 +319,7 @@ export function defaultGovDeps(): Omit<GovDeps, 'registry'> {
         });
       }),
     readUserEnv: readWindowsUserEnv,
+    protectedPolicy: (registry) => loadProtectedPathPolicy(registry),
   };
 }
 
@@ -759,6 +770,12 @@ async function cmdVerify(run: Run, argv: string[]): Promise<number> {
   const binding = requireBinding(layout, story, worktree);
   const stored = loadPacketOrFail(layout, story, binding.packet_hash);
   run.result.packet_hash = stored.packet_hash;
+  let protectedPolicy: ProtectedPathPolicy;
+  try {
+    protectedPolicy = run.deps.protectedPolicy(run.deps.registry);
+  } catch (err) {
+    throw new Outcome('REFUSED', `protected-path policy unavailable: ${(err as Error).message}`);
+  }
   const r = await runVerification({
     packet: stored.packet,
     packetHash: stored.packet_hash,
@@ -768,6 +785,7 @@ async function cmdVerify(run: Run, argv: string[]): Promise<number> {
     layout,
     runner: run.deps.runner,
     now: run.deps.now,
+    protectedPolicy,
   });
   run.io.out(`Verification: ${r.status} — ${r.message}`);
   if (r.scope) {
@@ -952,6 +970,26 @@ async function cmdCheckMerge(run: Run, argv: string[]): Promise<number> {
   print({ name: 'deterministic', ok: b.deterministic_result === 'PASS', detail: `deterministic ${b.deterministic_result}`, fail: 'VERIFICATION_FAILED' });
   print({ name: 'scope', ok: !!b.scope && b.scope.ok === true, detail: b.scope && b.scope.ok === true ? 'scope ok' : 'scope violation recorded', fail: 'SCOPE_VIOLATION' });
 
+  // (e2) protected paths (B3), recomputed from git over base..HEAD against the reviewed policy:
+  // the bundle alone is not trusted for this, and a bundle from before enforcement gets no pass.
+  let guarded: ReturnType<typeof evaluateProtectedPaths>;
+  try {
+    const policy = run.deps.protectedPolicy(run.deps.registry);
+    const changed = await git.changedPaths(worktree, base.commit, head);
+    guarded = evaluateProtectedPaths(changed, { invariants: stored.packet.story.invariants ?? [], registry_ids: stored.packet.verification.registry_ids ?? [] }, policy);
+  } catch (err) {
+    print({ name: 'protected-paths', ok: false, detail: `protected-path check unavailable: ${(err as Error).message}`, fail: 'INTEGRITY_FAILED' });
+    return conclude();
+  }
+  print({
+    name: 'protected-paths',
+    ok: guarded.ok,
+    detail: guarded.ok
+      ? `${guarded.protected_changed.length} protected path(s) changed, each under an exact reviewed authorization`
+      : describeProtectedViolation(guarded),
+    fail: 'SCOPE_VIOLATION',
+  });
+
   // (f, g) every commit in base..HEAD carries both trailers; at least one commit
   // (an adopted Story may have zero governed commits after its baseline).
   const adoption = binding.adoption ?? null;
@@ -1051,6 +1089,58 @@ async function checkAdoptedCommits(
     fail: 'INTEGRITY_FAILED',
   });
   return conclude();
+}
+
+// ---------------------------------------------------------------- audit-branch
+
+/**
+ * `gov audit-branch` (N-14 detection, A1(b)). Read-only: git through the probe, GOV_HOME
+ * packets and ledger read, nothing written anywhere. OK only when every commit in
+ * base..HEAD is GOVERNED or a recorded ADOPTION_BASELINE (or there are none); any
+ * ungoverned, malformed or unverifiable commit is INTEGRITY_FAILED. It never blocks,
+ * merges, releases or deploys — wiring it into a required check is a human authority decision.
+ */
+async function cmdAuditBranch(run: Run, argv: string[]): Promise<number> {
+  const wtArg = flag(argv, '--worktree');
+  if (!wtArg) return usage(run, 'audit-branch needs --worktree <path>');
+  const baseRef = flag(argv, '--base') ?? DEFAULT_BASE_REF;
+  const worktree = path.resolve(wtArg);
+  const layout = layoutOf(run);
+  const base = await resolveBase(run, worktree, baseRef);
+  let head: string;
+  try {
+    head = await run.deps.git.headCommit(worktree);
+  } catch (err) {
+    throw new Outcome('REFUSED', `not a git worktree with a commit: ${posix(worktree)} (${(err as Error).message})`);
+  }
+  const bindings = readBindings(layout);
+  let report: Awaited<ReturnType<typeof auditBranch>>;
+  try {
+    report = await auditBranch({
+      git: run.deps.git,
+      worktree,
+      base,
+      head,
+      packetIntact: (story, hash) => {
+        try {
+          loadPacket(layout, story, hash as Sha256Ref);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      isAdoptionBaseline: (story, commit) => bindings.some((b) => b.story_key === story && b.adoption?.baseline_commit === commit),
+    });
+  } catch (err) {
+    throw new Outcome('INTEGRITY_FAILED', `cannot audit ${base}..${head}: ${(err as Error).message}`);
+  }
+  Object.assign(run.result, { worktree: posix(worktree), base_commit: base, head_commit: head, verdict: report.verdict, counts: report.counts });
+  run.io.out(`gov audit-branch ${posix(worktree)}: ${base.slice(0, 12)}..${head.slice(0, 12)} (${report.commits.length} commit(s); read-only, nothing written)`);
+  for (const c of report.commits) run.io.out(`  ${c.commit.slice(0, 12)} ${c.classification} — ${c.detail}`);
+  run.io.out(`Counts: ${AUDIT_COMMIT_CLASSES.map((k) => `${k}=${report.counts[k]}`).join(' ')}`);
+  run.io.out('Detection only: GOVERNED means the trailers reference an intact stored packet — it does not prove scope, evidence or session; use gov verify / check-merge.');
+  if (report.verdict === 'NO_COMMITS' || report.verdict === 'ALL_GOVERNED') return finish(run, 'OK', `verdict ${report.verdict}`);
+  return finish(run, 'INTEGRITY_FAILED', `verdict ${report.verdict}`);
 }
 
 // ---------------------------------------------------------------- intake
@@ -1428,6 +1518,7 @@ function usage(run: Run, message?: string): number {
   if (message) run.io.err(message);
   run.io.err(USAGE);
   run.io.err(INTAKE_USAGE);
+  run.io.err(AUDIT_USAGE);
   return GOV_EXIT_USAGE;
 }
 
@@ -1456,6 +1547,7 @@ export async function runGov(argv: string[], env: Record<string, string | undefi
     submit: cmdSubmit,
     'check-merge': cmdCheckMerge,
     intake: cmdIntake,
+    'audit-branch': cmdAuditBranch,
   };
   const handler = verb ? verbs[verb] : undefined;
   if (!handler) return usage(run, verb ? `unknown verb: ${verb}` : undefined);

@@ -904,7 +904,8 @@ describe('gov check-merge', () => {
     const r = await gov(ctx, ['check-merge', '--story', STORY, '--worktree', f.worktree, '--evidence', f.bundleHash]);
     expect(r.code).toBe(0);
     expect(r.out.filter((l) => l.includes('[FAIL]'))).toEqual([]);
-    expect(r.out.filter((l) => l.includes('[PASS]'))).toHaveLength(9);
+    expect(r.out.filter((l) => l.includes('[PASS]'))).toHaveLength(10);
+    expect(r.out).toContain('  [PASS] protected-paths: 0 protected path(s) changed, each under an exact reviewed authorization');
   });
 
   it('commits without trailers → 13', async () => {

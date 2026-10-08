@@ -452,7 +452,8 @@ describe('gov check-merge — adopted Story', () => {
     const r = await checkMerge(ctx, f.repo, f.bundle);
     expect(r.code).toBe(0);
     expect(r.out.filter((l) => l.includes('[FAIL]'))).toEqual([]);
-    expect(r.out.filter((l) => l.includes('[PASS]'))).toHaveLength(10);
+    expect(r.out.filter((l) => l.includes('[PASS]'))).toHaveLength(11);
+    expect(r.out).toContain('  [PASS] protected-paths: 0 protected path(s) changed, each under an exact reviewed authorization');
     const text = r.out.join('\n');
     expect(text).toContain(`[PASS] adoption-baseline: baseline ${f.baseline.slice(0, 12)} PRE_GOVERNANCE_ADOPTION_BASELINE`);
     expect(text).toContain(`baseline ${f.baseline.slice(0, 12)} PRE_GOVERNANCE_ADOPTION_BASELINE; 0 governed commit(s)`);
