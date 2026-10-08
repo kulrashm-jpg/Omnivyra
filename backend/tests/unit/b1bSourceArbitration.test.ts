@@ -9,6 +9,21 @@
  * they were the part the owner was asked to rule on and the part most likely to be
  * "simplified" later by someone who has not read the reasoning.
  */
+// b1b.2 attached storage to the authority seam. These tests are about the
+// ARBITRATION RULES, not about storage, so the store is stubbed to "this tenant
+// has declared nothing" -- which is what every tenant looked like under b1b.1
+// and is still the default. Declaration behaviour is covered separately.
+const declarations = { rows: [] as Array<{
+  organizationId: string; entityType: string; attribute: string;
+  providers: readonly string[]; declaredByUserId: string | null; updatedAt: string | null;
+}> };
+jest.mock('../../services/prospectIdentity/attributeAuthorityStore', () => ({
+  AUTHORITY_ENTITY_TYPES: ['person', 'account', 'relationship'],
+  isAuthorityEntityType: (v: unknown) =>
+    typeof v === 'string' && ['person', 'account', 'relationship'].includes(v),
+  loadAuthorityDeclarations: async () => declarations.rows,
+}));
+
 import {
   decideCanonicalUpdates, type ArbitrationCandidate,
 } from '../../services/prospectIdentity/ingestionBoundary';
@@ -257,12 +272,52 @@ describe('D-3 — declared authority, as data', () => {
 
 // ════════════════════════════════════════════════════════════════════════════
 describe('the authority declaration itself', () => {
-  it('names no provider and no attribute in code — O-1 and O-7 are deferred', async () => {
+  it('names no provider in code, and a tenant that declared nothing is source-neutral', async () => {
+    // O-1 still holds: nothing is seeded, so a tenant which has made no
+    // declaration resolves empty and arbitration falls through to D-1/D-2.
+    // O-7's deferral is what b1b.2 lifted -- a tenant MAY now declare manual
+    // authority -- but nothing declares it on their behalf.
+    declarations.rows = [];
     const person = await resolveAttributeAuthority('11111111-1111-4111-8111-111111111111', 'person');
     const account = await resolveAttributeAuthority('11111111-1111-4111-8111-111111111111', 'account');
+    const relationship = await resolveAttributeAuthority('11111111-1111-4111-8111-111111111111', 'relationship');
     expect(person.byAttribute).toEqual({});
     expect(account.byAttribute).toEqual({});
+    expect(relationship.byAttribute).toEqual({});
     expect(ATTRIBUTE_AUTHORITY_VERSION).toMatch(/^b1b\./);
+  });
+
+  it('a declaration takes effect through the resolver, and only for its own scope', async () => {
+    declarations.rows = [{
+      organizationId: '11111111-1111-4111-8111-111111111111',
+      entityType: 'person', attribute: 'job_title', providers: ['alpha'],
+      declaredByUserId: null, updatedAt: null,
+    }];
+    const person = await resolveAttributeAuthority('11111111-1111-4111-8111-111111111111', 'person');
+    expect(authoritativeProvidersFor(person, 'job_title')).toEqual(['alpha']);
+    // The stub answers every scope with the same row; the resolver still only
+    // admits attributes the REQUESTED scope actually has, so an account
+    // declaration cannot be fabricated out of a person one.
+    const account = await resolveAttributeAuthority('11111111-1111-4111-8111-111111111111', 'account');
+    expect(authoritativeProvidersFor(account, 'job_title')).toEqual([]);
+    declarations.rows = [];
+  });
+
+  it('a stored-but-EMPTY declaration is source-neutral, not "nothing may win"', async () => {
+    declarations.rows = [{
+      organizationId: '11111111-1111-4111-8111-111111111111',
+      entityType: 'person', attribute: 'job_title', providers: [],
+      declaredByUserId: null, updatedAt: null,
+    }];
+    const person = await resolveAttributeAuthority('11111111-1111-4111-8111-111111111111', 'person');
+    expect(person.byAttribute).toEqual({});
+
+    // And arbitration still applies D-1 to the ordinary candidates.
+    const d = decideCanonicalUpdates({ job_title: null }, [
+      c('a1', 'VP', { observed_at: T1 }), c('a2', 'CRO', { observed_at: T2 }),
+    ], P, person);
+    expect(d.apply[0]).toMatchObject({ value: 'CRO', reason: 'newest_observation' });
+    declarations.rows = [];
   });
 
   it('refuses to resolve without a tenant — authority is never global', async () => {

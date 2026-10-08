@@ -17,34 +17,73 @@
  * NO PROVIDER IS NAMED ANYWHERE IN THIS MODULE EITHER. A declaration is data a
  * tenant holds; it is never a fact about the codebase.
  *
- * ─── WHAT IS DELIBERATELY NOT HERE ─────────────────────────────────────────
- * No storage. The owner ratified O-1 and O-7 as DEFERRED:
+ * ─── STORAGE (b1b.2) ──────────────────────────────────────────────────────
+ * b1b.1 left `resolveAttributeAuthority` as a SEAM with no storage behind it,
+ * on two ratified grounds:
  *
  *   O-1  "Do not seed an operative Sales Navigator authority declaration."
  *   O-7  "Do NOT declare manual/operator assertions universally authoritative.
  *         Manual assertions participate in normal arbitration until a separate
  *         owner decision establishes manual authority."
  *
- * So there is no authoritative source today, for any attribute, in any tenant.
- * Creating a table to hold zero rows would reproduce exactly the defect O-3
- * names: `unified_persons.source_priority` is a JSONB column with zero readers
- * and zero writers that reads as though precedence were configured. One of
- * those is enough.
+ * That separate owner decision has now been taken, so the seam is wired to
+ * `attribute_authority_declarations` (migration 20261123000000). The storage
+ * itself lives in `attributeAuthorityStore` — not here — because this module is
+ * exempted from the LI-1 name scan on the strict condition that it cannot reach
+ * a database, and b1b.1 said in as many words that a gate attaching storage
+ * "must therefore put that storage in its own module".
  *
- * `resolveAttributeAuthority` is therefore the SEAM, not the storage. It returns
- * an empty declaration today, and it is the single place a future gate attaches
- * a table, a settings row or a policy service — without touching arbitration.
+ * What did NOT change: O-1 still holds, nothing is seeded, and nothing is
+ * universally authoritative. Human precedence became POSSIBLE, not automatic.
+ * A tenant that declares nothing behaves exactly as it did under b1b.1.
  *
  * ─── WHAT AN EMPTY DECLARATION MEANS ───────────────────────────────────────
  * Source-neutral. Arbitration falls straight through to recency (D-1) and the
- * confidence tie-break (D-2). That is today's intended behaviour, not a
- * degraded mode, and it is why deferring every declaration blocks nothing.
+ * confidence tie-break (D-2). That is the intended behaviour, not a degraded
+ * mode. It is NOT "no candidate may win": authority narrows the field, so an
+ * empty declaration narrows nothing.
+ *
+ * An absent row and a stored-but-empty declaration both resolve this way. They
+ * differ only in the audit trail: one tenant never answered the question, the
+ * other answered "nothing here is authoritative".
  */
 
-import type { SourceEntityType } from './ingestionBoundary';
+import { PERSON_ATTRIBUTE_COLUMNS, ACCOUNT_ATTRIBUTE_COLUMNS } from './attributes';
+import { loadAuthorityDeclarations } from './attributeAuthorityStore';
+import type { AuthorityEntityType } from './attributeAuthorityStore';
+
+export type { AuthorityEntityType };
 
 /** Bumped when the declaration contract changes, so a caller can trace it. */
-export const ATTRIBUTE_AUTHORITY_VERSION = 'b1b.1';
+export const ATTRIBUTE_AUTHORITY_VERSION = 'b1b.2';
+
+/**
+ * The attributes a RELATIONSHIP declaration may address.
+ *
+ * These are facts about an employment rather than about a person, which is why
+ * they are addressable at relationship scope at all: a tenant must be able to
+ * declare who is authoritative for a title at one employer without that
+ * decision reaching the same person's title at another.
+ *
+ * They are also members of the person surface, because the person spine still
+ * carries them for its existing readers. Scope is what distinguishes the two
+ * declarations, not the attribute name.
+ */
+export const RELATIONSHIP_AUTHORITY_COLUMNS = [
+  'job_title', 'department', 'seniority', 'buying_role',
+] as const;
+
+/**
+ * The canonical surface a declaration may name, per scope. A declaration over
+ * an attribute the scope does not have is REJECTED rather than stored, because
+ * a typo that silently declares authority over nothing reads exactly like a
+ * declaration that took effect.
+ */
+export function authoritySurfaceFor(entityType: AuthorityEntityType): readonly string[] {
+  if (entityType === 'account') return ACCOUNT_ATTRIBUTE_COLUMNS;
+  if (entityType === 'relationship') return RELATIONSHIP_AUTHORITY_COLUMNS;
+  return PERSON_ATTRIBUTE_COLUMNS;
+}
 
 /**
  * One tenant's authority declaration for ONE entity type.
@@ -60,7 +99,7 @@ export const ATTRIBUTE_AUTHORITY_VERSION = 'b1b.1';
  * and a declaration must not fail on 'Apollo' vs 'apollo'.
  */
 export interface AttributeAuthority {
-  readonly entityType: SourceEntityType;
+  readonly entityType: AuthorityEntityType;
   /**
    * attribute -> the provider keys declared authoritative for it.
    *
@@ -74,7 +113,7 @@ export interface AttributeAuthority {
 }
 
 /** The source-neutral declaration. Returned whenever nothing is declared. */
-export function noAttributeAuthority(entityType: SourceEntityType): AttributeAuthority {
+export function noAttributeAuthority(entityType: AuthorityEntityType): AttributeAuthority {
   return { entityType, byAttribute: {} };
 }
 
@@ -119,7 +158,7 @@ export function authoritativeProvidersFor(
  * taken effect.
  */
 export function buildAttributeAuthority(
-  entityType: SourceEntityType,
+  entityType: AuthorityEntityType,
   declared: Readonly<Record<string, readonly string[]>>,
   allowedColumns: readonly string[],
 ): { authority: AttributeAuthority; rejected: string[] } {
@@ -141,24 +180,39 @@ export function buildAttributeAuthority(
 }
 
 /**
- * Resolve the declaration for a tenant and entity type.
+ * Resolve the declaration for a tenant and entity type. THE single production
+ * authority-resolution path — there is deliberately no second one.
  *
- * TODAY: always source-neutral. O-1 and O-7 are ratified as deferred, so no
- * authoritative source exists for any attribute in any tenant, and this
- * function performs NO I/O — it cannot fail, cannot be slow and cannot leak
- * across tenants.
+ * The tenant argument is REQUIRED and validated. A resolver that accepts an
+ * absent tenant is a resolver that will one day return another tenant's policy,
+ * and now that storage exists behind this call that is no longer hypothetical:
+ * the tenant is the first leg of the key it reads.
  *
- * The tenant argument is REQUIRED even though it is currently unused, and it is
- * validated. A resolver that accepts an absent tenant is a resolver that will
- * one day return another tenant's policy; refusing now is free, and the seam is
- * the only place that guarantee can be made before storage exists.
+ * It does NOT fall back to source-neutral when the read fails. A tenant that
+ * declared human authority losing it to a transient outage would be the exact
+ * defect this contract exists to prevent, and silently applying recency instead
+ * would be invisible. The store throws; so does this.
  */
 export async function resolveAttributeAuthority(
   organizationId: string,
-  entityType: SourceEntityType,
+  entityType: AuthorityEntityType,
 ): Promise<AttributeAuthority> {
   if (!organizationId || typeof organizationId !== 'string' || !organizationId.trim()) {
     throw new Error('resolveAttributeAuthority: organizationId is required — authority is never global');
   }
-  return noAttributeAuthority(entityType);
+
+  const rows = await loadAuthorityDeclarations(organizationId, entityType);
+  if (rows.length === 0) return noAttributeAuthority(entityType);
+
+  const declared: Record<string, readonly string[]> = {};
+  for (const row of rows) declared[row.attribute] = row.providers;
+
+  // Through the validating constructor rather than cast straight in: it drops
+  // an attribute the scope does not have, and an entry naming no usable
+  // provider. A stored-but-empty declaration therefore arrives here and leaves
+  // as source-neutral, which is the ratified meaning of empty.
+  const { authority } = buildAttributeAuthority(
+    entityType, declared, authoritySurfaceFor(entityType),
+  );
+  return authority;
 }

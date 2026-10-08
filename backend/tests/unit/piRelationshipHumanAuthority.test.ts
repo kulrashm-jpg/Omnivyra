@@ -10,23 +10,43 @@
  *   1. WITH a declaration naming `human` for an attribute, b1b.1 lets the human
  *      value win even when a provider observed something later. The mechanism
  *      works.
- *   2. There is currently NO WAY FOR A TENANT TO MAKE THAT DECLARATION.
- *      `resolveAttributeAuthority` is the only production path and it always
- *      returns an empty declaration, so in production the newer PROVIDER value
- *      still wins over a human correction by recency.
+ *   2. A tenant CAN now make that declaration. b1b.2 attached storage to the
+ *      resolver seam (migration 20261123000000), so the gap this file used to
+ *      record as a dependency is closed. What remains true, and is still
+ *      pinned below, is that nothing declares it on a tenant's behalf: a tenant
+ *      with no declaration keeps exactly the old recency behaviour.
  *
- * Both are pinned here deliberately. The second is a gate dependency, not
- * something to fix in passing: closing it means giving authority declarations
- * storage and a tenant-facing writer, which changes `attributeAuthority.ts` —
- * a protected B1b file. So it is reported, not patched, and this test will fail
- * the moment someone implements it, which is exactly when the claim in the
- * report stops being true.
+ * Both are pinned here deliberately, because the second is the easy thing to
+ * get wrong. "Human corrections are protected" must mean "protected where the
+ * tenant said so", never "humans always win" — the latter would be the origin
+ * magic D-3 was ratified to avoid.
  *
  * Nothing here is relationship-specific yet, because relationship-scoped
  * arbitration is itself deferred: this gate only makes the relationship
  * SUBJECT expressible. What it establishes is that human provenance has
  * somewhere to live and a defined way to be honoured.
  */
+// Storage is stubbed: this file is about PRECEDENCE, and the store has its own
+// suite. `rows` is what the tenant has declared; `lastTenant` proves the
+// resolver asks for the tenant it was given rather than any tenant.
+const declarations = {
+  rows: [] as Array<{
+    organizationId: string; entityType: string; attribute: string;
+    providers: readonly string[]; declaredByUserId: string | null; updatedAt: string | null;
+  }>,
+  lastTenant: null as string | null,
+};
+jest.mock('../../services/prospectIdentity/attributeAuthorityStore', () => ({
+  AUTHORITY_ENTITY_TYPES: ['person', 'account', 'relationship'],
+  isAuthorityEntityType: (v: unknown) =>
+    typeof v === 'string' && ['person', 'account', 'relationship'].includes(v),
+  loadAuthorityDeclarations: async (organizationId: string, entityType: string) => {
+    declarations.lastTenant = organizationId;
+    return declarations.rows.filter(
+      (r) => r.organizationId === organizationId && r.entityType === entityType);
+  },
+}));
+
 import {
   decideCanonicalUpdates, type ArbitrationCandidate,
 } from '../../services/prospectIdentity/ingestionBoundary';
@@ -95,23 +115,45 @@ describe('S — with a human authority declaration, the human value holds', () =
   });
 });
 
-describe('S — the operational gap, stated as a test rather than a claim', () => {
-  it('no tenant can currently declare authority: the resolver returns an EMPTY declaration', async () => {
+describe('S — no declaration means the OLD behaviour, not a new default', () => {
+  it('a tenant that declared nothing resolves to an empty declaration', async () => {
+    declarations.rows = [];
     const authority = await resolveAttributeAuthority(ORG_A, 'person');
     expect(authority.byAttribute).toEqual({});
     expect(authoritativeProvidersFor(authority, 'job_title')).toEqual([]);
   });
 
-  it('so without a declaration a newer PROVIDER value still wins over a human correction', async () => {
+  it('and then a newer PROVIDER value still wins over a human correction', async () => {
+    declarations.rows = [];
     const authority = await resolveAttributeAuthority(ORG_A, 'person');
     const d = decideCanonicalUpdates({ job_title: null }, [PROVIDER, HUMAN], P, authority);
-    // This is the honest current behaviour, not the desired one. Success
-    // criterion 19 ("human corrections cannot silently lose to provider
-    // assertions") is therefore NOT yet satisfied in production, and that is
-    // reported as a dependency rather than fixed here: the fix changes
-    // attributeAuthority.ts, which this gate must not touch.
+    // Deliberate, and the point of the whole design: without a declaration
+    // b1b.2 behaves exactly like b1b.1. Human precedence is something a tenant
+    // ASKS FOR; it is never conferred by the word 'human'.
     expect(d.apply[0]).toMatchObject({ value: 'VP Sales', assertionId: 'p1' });
     expect(d.contested).toContain('job_title');
+  });
+
+  it('a DECLARED tenant gets the human value through the same resolver', async () => {
+    declarations.rows = [{
+      organizationId: ORG_A, entityType: 'person', attribute: 'job_title',
+      providers: ['human'], declaredByUserId: 'user-a', updatedAt: null,
+    }];
+    const authority = await resolveAttributeAuthority(ORG_A, 'person');
+    const d = decideCanonicalUpdates({ job_title: null }, [PROVIDER, HUMAN], P, authority);
+    expect(d.apply[0]).toMatchObject({
+      value: 'Chief Revenue Officer', assertionId: 'h1', reason: 'authoritative_source',
+    });
+    declarations.rows = [];
+  });
+
+  it('a declaration cannot reach another tenant', async () => {
+    // The stub records which tenant was asked for; the resolver must pass the
+    // tenant it was given, because that is the first leg of the storage key.
+    declarations.rows = [];
+    await resolveAttributeAuthority(ORG_A, 'person');
+    expect(declarations.lastTenant).toBe(ORG_A);
+    await expect(resolveAttributeAuthority('', 'person')).rejects.toThrow(/organizationId is required/);
   });
 
   it('origin is recorded on the assertion either way, so the correction is never LOST', () => {
