@@ -89,6 +89,9 @@ import { assessDigitalExperience } from './digitalExperience';
 import { buildSearchFeatures } from './snapshotReport/searchFeatureHelpers';
 import { buildAdvertisingSurface } from './ads/advertisingSurface';
 import { collectPerformanceEvidence, loadExperiencePages } from './digitalExperienceRepository';
+// Observed subjects: literal title/heading text from the pages already loaded above. A pure
+// function over values this service holds -- no query, no clock, no provider.
+import { collectObservedSubjects } from './snapshotReport/observedSubjects';
 // Phase 3: the two competition views, built from the canonical relation model.
 import { buildCompetitiveTables, buildCompetitorTableRows } from './competitiveTables';
 import { buildCanonicalReport } from './canonicalReport/canonicalReportBuilder';
@@ -740,6 +743,13 @@ export async function composeSnapshotReportFromDecisions(params: {
       : rankedObservations.length > 0
         ? 'measured'
         : 'insufficient_signal';
+  // Observed subjects, from the SAME domain-scoped crawl pages loaded for the experience
+  // surface. `loadExperiencePages` reads `canonical_pages` + `page_content` filtered by
+  // company_id and domain_id, so nothing from Search Console, a competitor or the Company
+  // Profile can reach this channel. Page-level evidence only: it states what a page says, not
+  // what the company covers.
+  canonicalSnapshotShape.observed_subjects = collectObservedSubjects(experiencePages);
+
   canonicalSnapshotShape.search_visibility = {
     state: searchState,
     // Provider identity only — never a credential, never an environment-variable name.

@@ -40,6 +40,7 @@ import { collectMarketIcpEvidence, resolveMarketIcpRecommendation } from './repo
 // Certified backlink surface. Pure functions over values already held here: no provider
 // call, no query, no write. See `reportBacklinkStrategy.ts`.
 import { summarizeBacklinkObservation, buildBacklinkStrategy } from './reportBacklinkStrategy';
+import { distinctSubjectValues } from '../snapshotReport/observedSubjects';
 // BETA-EXEC-004: deterministic engine-evidence contract for evidence-driven dimension rationales.
 import {
   type EngineEvidenceInput,
@@ -1121,10 +1122,12 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   // difference is that this surface is explicitly a declared-context PROPOSAL, not a claim
   // about the market.
   //
-  // NO OBSERVED TOPICS, NO HISTORY. The snapshot carries no topic-coverage field and no
-  // backlink referring-domain history is persisted, so `assets.topicsCovered` is absent and
-  // `history` is empty. Growth therefore reports `insufficient_history` — the current profile,
-  // never momentum.
+  // OBSERVED SUBJECTS, NO HISTORY. `assets.topicsCovered` is now fed from the snapshot's
+  // page-level observed subjects -- literal title/heading text from this company's own crawled
+  // pages, deduplicated to the flat string list this seam takes. Absent or empty still reads as
+  // insufficient evidence downstream, never as "no subjects". No backlink referring-domain
+  // history is persisted, so `history` is empty and growth reports `insufficient_history` --
+  // the current profile, never momentum.
   const backlinkMeasured = reportShape.authority_inflow.profile;
   const backlinkInput = {
     declared: {
@@ -1133,6 +1136,11 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
       positioning: snapshot.company_context.positioning ?? null,
       target_market: snapshot.company_context.market_context ?? null,
       geography: options?.declaredGeography ?? null,
+    },
+    assets: {
+      // Verbatim first-observed spellings, deduplicated on the normalized key. Page-level
+      // evidence: it states what a page says, not what the company covers.
+      topicsCovered: distinctSubjectValues(snapshot.observed_subjects ?? []),
     },
     measurement: backlinkMeasured
       ? {

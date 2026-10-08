@@ -244,6 +244,11 @@ export interface SnapshotReport {
    */
   advertising?: SnapshotAdvertising | null;
   /**
+   * Page-level observed subjects from this run's crawl. Optional and additive; absent on reports
+   * composed before the producer existed.
+   */
+  observed_subjects?: SnapshotObservedSubject[] | null;
+  /**
    * GAP-08 — the customer-facing identity fields with their provenance made explicit, so declared
    * information can never be read as public observation.
    */
@@ -761,6 +766,27 @@ export type SnapshotSearchObservation = {
    * results page actually contained.
    */
   competitorDomains?: string[];
+};
+
+/**
+ * Page-level observed subjects: literal title/heading text from the company's own crawled pages,
+ * each attributed to its source URL and crawl time. See `snapshotReport/observedSubjects`.
+ *
+ * It asserts only that the text exists on that page. It is NOT a claim that the company covers
+ * the subject or has authority on it. Inferred topics are a separate, deliberately unbuilt channel.
+ *
+ * OPTIONAL: a report composed before this existed carries none, and absent means "not established
+ * for this run" -- never "no subjects". An empty array means the producer ran and found nothing
+ * admissible, which reads the same way to a consumer.
+ */
+export type SnapshotObservedSubject = {
+  text: string;
+  normalized: string;
+  origin: 'title' | 'heading';
+  sourceUrl: string;
+  observedAt: string | null;
+  headingLevel: number | null;
+  textSource: string | null;
 };
 
 export type SnapshotSearchVisibility = {

@@ -158,7 +158,9 @@ describe('evidence state propagates and declared never becomes observed', () => 
       observedMarketSignals: [{ value: 'career clarity tools', source: 'serp' }],
     });
     const rec = strategy.recommendations.find((r) => r.backlinkType === 'topical_editorial');
-    expect(rec?.evidenceBasis.join(' ')).toContain('Observed site topics');
+    // Wording clarified: these are literal title/heading text observed on the company's own
+    // pages, so "subjects" rather than "topics". Evidence semantics are unchanged.
+    expect(rec?.evidenceBasis.join(' ')).toContain('Observed site subjects');
     // Positioning was not supplied, so nothing declared entered the basis: state is observed.
     expect(rec?.evidenceState).toBe('observed');
     expect(rec?.provenance).toBe('PUBLIC_OBSERVED');

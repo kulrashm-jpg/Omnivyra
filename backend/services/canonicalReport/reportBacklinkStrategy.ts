@@ -822,7 +822,10 @@ export function buildBacklinkStrategy(input: BacklinkStrategyInput): BacklinkStr
     const states: BacklinkEvidenceState[] = [];
 
     if (ctx.topicsCovered.length > 0) {
-      evidenceBasis.push(`Observed site topics: ${ctx.topicsCovered.join(', ')}`);
+      // WORDING-ONLY CLARIFICATION. These values are literal title/heading text observed on
+      // the company's own pages. "Subjects" says that; "topics" invites the reader to hear
+      // subject-matter authority, which one heading does not establish. No logic changes.
+      evidenceBasis.push(`Observed site subjects: ${ctx.topicsCovered.join(', ')}`);
       states.push('observed');
     } else if (ctx.declaredTopics) {
       evidenceBasis.push(`Declared category/offering: ${ctx.declaredTopics}`);

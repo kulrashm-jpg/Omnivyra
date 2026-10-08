@@ -111,6 +111,13 @@ export interface ExperiencePage {
     signals?: { form_count?: number; img_count?: number; img_with_alt?: number };
     reachability?: PersistedReachability | null;
   } | null;
+  /**
+   * When this page was last crawled. The repository already ORDERS by this column; it is now
+   * selected and mapped so an observation derived from this page can state when the page was
+   * read. Nullable and never substituted: a page row without it yields a null observation time
+   * rather than borrowing the report's own clock.
+   */
+  last_crawled_at?: string | null;
 }
 
 const PILLAR_LABEL: Record<ExperiencePillar, string> = {
