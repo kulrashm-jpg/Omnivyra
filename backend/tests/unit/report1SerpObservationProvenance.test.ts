@@ -36,6 +36,9 @@
  * leave the process — see backend/tests/helpers/hermeticNetwork.ts.
  */
 import { installHermeticFetch, type HermeticFetchHandle } from '../helpers/hermeticNetwork';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import type { SnapshotSearchObservation } from '../../services/snapshotReportTypes';
 
 jest.mock('../../../lib/security/safeFetch', () =>
   // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -382,5 +385,152 @@ describe('R1-D · competitor overlap groundwork', () => {
       expect(observation.observedAt).not.toBeNull();
       expect(observation.engine).toBe(REPORT_SERP_ENGINE);
     }
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// R1-D RETENTION — the observed provenance survives to the snapshot contract
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The four fields above were produced, tested and then invisible: the snapshot
+// assigns the producer's array straight through with no `.map()`, so the values
+// were already present at runtime and already persisted, but
+// `SnapshotSearchObservation` declared only six fields, so nothing downstream
+// could read them. These tests pin the retention, not a new measurement.
+
+describe('R1-D retention — observed provenance reaches the snapshot contract', () => {
+  it('a real producer observation is readable through SnapshotSearchObservation', async () => {
+    const result = await discoverCompetitorDomainsFromSerp({
+      keywords: ['mid market analytics'], ownDomain: OWN, geography: null, companyName: BRAND,
+    });
+    expect(result.acquisitionStatus).toBe('ok');
+
+    // The ASSIGNMENT the snapshot performs, typed as the snapshot declares it.
+    // Before this slice the four reads below did not compile.
+    const retained: SnapshotSearchObservation[] = result.searchObservations;
+    const [observation] = retained;
+
+    expect(observation.engine).toBe(REPORT_SERP_ENGINE);
+    expect(observation.provider).toBe(REPORT_SERP_PROVIDER);
+    expect(typeof observation.observedAt).toBe('string');
+    expect(Number.isNaN(Date.parse(observation.observedAt as string))).toBe(false);
+    expect(Array.isArray(observation.competitorDomains)).toBe(true);
+  });
+
+  it('page neighbours are retained in rank order with the own domain excluded', async () => {
+    const result = await discoverCompetitorDomainsFromSerp({
+      keywords: ['mid market analytics'], ownDomain: OWN, geography: null, companyName: BRAND,
+    });
+    const retained: SnapshotSearchObservation[] = result.searchObservations;
+    const neighbours = retained[0].competitorDomains ?? [];
+
+    // Ranks 1,2,3 then 5 on the fixture page; the company itself is at 4.
+    expect(neighbours).toEqual([
+      'contoso-insight.test', 'fabrikam-data.test', 'adventure-works.test', 'tailspin.test',
+    ]);
+    expect(neighbours).not.toContain(OWN);
+  });
+
+  it('PAGE NEIGHBOURS ARE NOT A QUALIFIED COMPETITOR SET', async () => {
+    // The semantic guard. `competitorDomains` is what the results page contained,
+    // which is a different claim from "these are this company's competitors". The
+    // blocked-host filter that gates competitor QUALIFICATION is deliberately not
+    // applied to it, so the two sets are not interchangeable and the field must
+    // never be renamed or rendered as a competitor list.
+    const result = await discoverCompetitorDomainsFromSerp({
+      keywords: ['mid market analytics'], ownDomain: OWN, geography: null, companyName: BRAND,
+    });
+    const retained: SnapshotSearchObservation[] = result.searchObservations;
+    const neighbours = retained[0].competitorDomains ?? [];
+
+    expect(neighbours.length).toBeGreaterThan(0);
+    // The retained field carries bare hostnames only — no score, no qualification
+    // verdict, nothing a reader could mistake for a competitor assessment.
+    for (const domain of neighbours) expect(typeof domain).toBe('string');
+  });
+
+  it('a blocked host is retained as a page neighbour but never qualified', async () => {
+    // The proof that the two sets are different CONCEPTS, not merely different
+    // arrays. `linkedin.com` is on the qualification blocklist precisely because a
+    // social/aggregator host is not a competitor; it is still genuinely what the
+    // results page contained, so retention must keep it while qualification drops
+    // it. On a page with no blocked host the two sets coincide, which is why this
+    // case -- not an inequality assertion -- is the load-bearing one.
+    serpHandler = () => ({
+      data: {
+        organic_results: [
+          { position: 1, link: 'https://www.linkedin.com/company/x', title: 'LinkedIn', snippet: 'a' },
+          { position: 2, link: 'https://contoso-insight.test/', title: 'Contoso Insight', snippet: 'b' },
+          { position: 3, link: `https://${OWN}/solutions`, title: 'Northwind Analytics', snippet: 'c' },
+        ],
+      },
+    });
+    const result = await discoverCompetitorDomainsFromSerp({
+      keywords: ['mid market analytics'], ownDomain: OWN, geography: null, companyName: BRAND,
+    });
+    const retained: SnapshotSearchObservation[] = result.searchObservations;
+    const neighbours = retained[0].competitorDomains ?? [];
+
+    // Retained: what the page actually contained.
+    expect(neighbours.some((d) => d.includes('linkedin.com'))).toBe(true);
+    // Not qualified: the gated competitor set excludes it.
+    expect(result.domains.some((d) => String(d).includes('linkedin.com'))).toBe(false);
+    // So the two are provably distinct sets here.
+    expect(result.domains).not.toEqual(neighbours);
+  });
+
+  it('a failed read retains NULLS, never fabricated provenance', async () => {
+    serpHandler = () => { throw new Error('upstream 503'); };
+    const result = await discoverCompetitorDomainsFromSerp({
+      keywords: ['mid market analytics'], ownDomain: OWN, geography: null, companyName: BRAND,
+    });
+    const retained: SnapshotSearchObservation[] = result.searchObservations;
+
+    // No observation exists at all for a page that was never read — and if a
+    // future path ever appended one, it must not invent provenance.
+    for (const observation of retained) {
+      expect(observation.engine).toBeNull();
+      expect(observation.observedAt).toBeNull();
+      expect(observation.observedAt).not.toBe('');
+    }
+    expect(result.acquisitionStatus).not.toBe('ok');
+  });
+
+  it('the observed-evidence contract excludes DERIVED query class and intent', () => {
+    // `queryClass` and `intent` exist on the producer but are classified from the
+    // query text against brand tokens. Retaining them here would put a derivation
+    // inside the observed-evidence contract, so the snapshot type deliberately
+    // omits both. This reads the declaration itself, because the omission is the
+    // contract.
+    const declaration = readFileSync(
+      join(__dirname, '..', '..', 'services', 'snapshotReportTypes.ts'), 'utf8',
+    );
+    const start = declaration.indexOf('export type SnapshotSearchObservation');
+    const end = declaration.indexOf('export type SnapshotSearchVisibility');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const body = declaration.slice(start, end);
+
+    // Observed fields are declared.
+    for (const field of ['engine', 'provider', 'observedAt', 'competitorDomains']) {
+      expect(body).toMatch(new RegExp('^\\s+' + field + '\\?:', 'm'));
+    }
+    // Derived fields are not.
+    expect(body).not.toMatch(/^\s+queryClass\??:/m);
+    expect(body).not.toMatch(/^\s+intent\??:/m);
+    // Unacquired fields are not.
+    expect(body).not.toMatch(/^\s+geography\??:/m);
+    expect(body).not.toMatch(/^\s+device\??:/m);
+  });
+
+  it('no visibility score is introduced by retaining evidence', () => {
+    const declaration = readFileSync(
+      join(__dirname, '..', '..', 'services', 'snapshotReportTypes.ts'), 'utf8',
+    );
+    const start = declaration.indexOf('export type SnapshotSearchObservation');
+    const end = declaration.indexOf('export type SnapshotSearchVisibility');
+    const body = declaration.slice(start, end);
+    expect(body).not.toMatch(/score/i);
+    expect(body).not.toMatch(/coverageRate|positionQuality|visibilityValue/);
   });
 });

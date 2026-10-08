@@ -724,6 +724,43 @@ export type SnapshotSearchObservation = {
   snippet: string | null;
   /** Organic rows returned for this query — the window the position was (or was not) found in. */
   resultCount: number;
+
+  // --- R1-D RETENTION: the search that produced this position --------------
+  //
+  // The producer (`SerpSearchObservation`) has carried these four since R1-D and
+  // `report1SerpObservationProvenance` pins each one, including that they are
+  // `null` rather than `undefined` so they survive JSON. The snapshot assigns the
+  // producer's array straight through with no `.map()`, and every consumer between
+  // here and the renderer passes `search_visibility` wholesale, so the values were
+  // already present at runtime and already persisted - they were simply not
+  // DECLARED, so nothing downstream could read them.
+  //
+  // Declaring them retains evidence that already exists. It adds no acquisition,
+  // no request and no derivation.
+  //
+  // OPTIONAL because a report composed before R1-D carries none of them, exactly
+  // as `features` below is optional. Absent means "not recorded for this run" and
+  // a reader must fall back rather than read it as a finding.
+  //
+  // DELIBERATELY NOT HERE: `queryClass` and `intent`. The producer holds both, but
+  // they are DERIVED from the query text against brand tokens, not observed, so
+  // they are kept out of the observed-evidence contract. `geography` and `device`
+  // are not acquired at all and are absent for that reason.
+
+  /** The search engine that returned this page, as requested. Null when no page was read. */
+  engine?: string | null;
+  /** The provider that served the response. A distinct fact from `engine`. */
+  provider?: string | null;
+  /** When the page was read, from the client that read it - never the composer's clock. */
+  observedAt?: string | null;
+  /**
+   * Rank-ordered domains that appeared on this page beside the company, own domain
+   * excluded. PAGE NEIGHBOURS, NOT A QUALIFIED COMPETITOR SET: the blocked-host
+   * filter that keeps directories and aggregators out of competitor qualification is
+   * deliberately not applied here, because removing them would misreport what the
+   * results page actually contained.
+   */
+  competitorDomains?: string[];
 };
 
 export type SnapshotSearchVisibility = {
