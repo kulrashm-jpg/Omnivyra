@@ -123,14 +123,22 @@ jest.mock('../../db/writeOwner', () => ({
 
     b.update = (patch: Row) => {
       const uf: Array<[string, unknown]> = [];
+      const ufIn: Array<[string, unknown[]]> = [];
       const u: Record<string, unknown> = {};
       const apply = () => {
-        const hit = (db[table] ?? []).filter((r) => uf.every(([k, v]) => (v === null ? r[k] == null : r[k] === v)));
+        const hit = (db[table] ?? []).filter((r) =>
+          uf.every(([k, v]) => (v === null ? r[k] == null : r[k] === v))
+          && ufIn.every(([k, vs]) => vs.includes(r[k] as never)));
         for (const r of hit) Object.assign(r, patch);
         return hit;
       };
       u.eq = (k: string, v: unknown) => { uf.push([k, v]); return u; };
       u.is = (k: string, v: unknown) => { uf.push([k, v]); return u; };
+      // B1b reconciles assertion liveness by updating several rows in ONE
+      // statement, which the real PostgREST builder has always supported. Without
+      // this the boundary throws a TypeError and every ingestion in this file
+      // fails for a reason that has nothing to do with ingestion.
+      u.in = (k: string, vs: unknown[]) => { ufIn.push([k, vs]); return u; };
       u.select = async () => ({ data: apply().map((r) => ({ id: r.id })), error: null });
       (u as { then?: unknown }).then = (res: (v: unknown) => void) => res({ data: apply(), error: null });
       return u;

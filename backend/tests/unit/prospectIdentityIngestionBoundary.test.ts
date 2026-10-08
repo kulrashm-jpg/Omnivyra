@@ -1,5 +1,14 @@
 /**
- * LI-2 — ingestion boundary contract lock.
+ * Ingestion boundary contract lock — LI-2's invariants, B1b's rules.
+ *
+ * B1b (ratified by D22-B1a) replaced LI-2's "never overwrite" with re-arbitration,
+ * and made recency the primary rule. Three expectations below changed BECAUSE the
+ * policy changed, and each was rewritten to state the new rule rather than deleted:
+ * the no-overwrite test became the unattested-incumbent test, the empty-string test
+ * says what an empty string now is, and "never picks the newest" became "picks the
+ * newest ONLY under the ratified rule". What did NOT change is what this file exists
+ * to protect: a value written that no source justified, and a provider reaching
+ * around the boundary.
  *
  * Two classes of failure are guarded here.
  *
@@ -21,6 +30,16 @@ import { PERSON_ATTRIBUTE_COLUMNS, ACCOUNT_ATTRIBUTE_COLUMNS } from '../../servi
 
 const A = (attribute: string, value: string | null, id: string) =>
   ({ attribute, normalized_value: value, id });
+
+/**
+ * A candidate carrying the fields arbitration reads. `A` above stays deliberately
+ * timestamp-less: under D-1 a candidate that cannot be ordered in time cannot win
+ * on recency, so `A` exercises the fail-closed path and `C` the deciding one.
+ */
+const C = (
+  attribute: string, value: string | null, id: string,
+  over: { provider?: string; observed_at?: string | null; recorded_at?: string | null; confidence?: number | null } = {},
+) => ({ attribute, normalized_value: value, id, provider: 'p', observed_at: null, recorded_at: null, confidence: null, ...over });
 
 describe('computePayloadHash', () => {
   it('is deterministic and order-independent', () => {
@@ -97,12 +116,25 @@ describe('decideCanonicalUpdates — RULE B: sources disagree', () => {
     expect(d.withhold).toEqual([{ attribute: 'job_title', reason: 'sources_disagree' }]);
   });
 
-  it('does not silently pick the first, the newest, or a preferred provider', () => {
-    // Any of those would be a precedence policy, which LI-2 is forbidden to invent.
-    const d = decideCanonicalUpdates({ country_code: null },
+  it('never picks the first, and picks the newest ONLY under the ratified rule', () => {
+    // Unordered candidates: nothing wins. This is LI-2's behaviour, preserved —
+    // what B1b changed is that recency may decide, not that something must.
+    const blind = decideCanonicalUpdates({ country_code: null },
       [A('country_code', 'IN', 'a1'), A('country_code', 'GB', 'a2'), A('country_code', 'US', 'a3')],
       PERSON_ATTRIBUTE_COLUMNS);
-    expect(d.apply).toHaveLength(0);
+    expect(blind.apply).toHaveLength(0);
+    expect(blind.withhold).toEqual([{ attribute: 'country_code', reason: 'sources_disagree' }]);
+
+    // Given observation times, D-1 decides: the NEWEST wins. Note it is neither
+    // the first nor the most confident — confidence is a tie-break only (D-2).
+    const timed = decideCanonicalUpdates({ country_code: null }, [
+      C('country_code', 'IN', 'a1', { observed_at: '2026-01-01T00:00:00.000Z', confidence: 0.99 }),
+      C('country_code', 'GB', 'a2', { observed_at: '2026-03-01T00:00:00.000Z', confidence: 0.10 }),
+      C('country_code', 'US', 'a3', { observed_at: '2026-02-01T00:00:00.000Z', confidence: 0.50 }),
+    ], PERSON_ATTRIBUTE_COLUMNS);
+    expect(timed.apply).toEqual([
+      { attribute: 'country_code', value: 'GB', assertionId: 'a2', reason: 'newest_observation' },
+    ]);
   });
 
   it('a disagreement on one attribute does not block an uncontested other', () => {
@@ -114,16 +146,39 @@ describe('decideCanonicalUpdates — RULE B: sources disagree', () => {
   });
 });
 
-describe('decideCanonicalUpdates — RULE C: never overwrite', () => {
-  it('withholds when the canonical value is already set', () => {
+describe('decideCanonicalUpdates — D-4: re-arbitration, guarded by the unattested incumbent', () => {
+  it('refuses to overwrite a canonical value that no live assertion attests', () => {
+    // This replaces LI-2's RULE C. The refusal is narrower but the REASON is
+    // stronger: 'CRO' is supported by no evidence, so it came from before or from
+    // outside this layer and cannot be re-derived if it is lost.
     const d = decideCanonicalUpdates({ job_title: 'CRO' }, [A('job_title', 'VP Sales', 'a1')], PERSON_ATTRIBUTE_COLUMNS);
     expect(d.apply).toEqual([]);
-    expect(d.withhold).toEqual([{ attribute: 'job_title', reason: 'canonical_value_already_set' }]);
+    expect(d.withhold).toEqual([{ attribute: 'job_title', reason: 'unattested_incumbent' }]);
   });
 
-  it('treats an empty string as set — re-arbitration is LI-6, not here', () => {
+  it('an empty string is an unattested incumbent, not a value to overwrite blindly', () => {
     const d = decideCanonicalUpdates({ city: '' }, [A('city', 'London', 'a1')], PERSON_ATTRIBUTE_COLUMNS);
     expect(d.apply).toEqual([]);
+    expect(d.withhold).toEqual([{ attribute: 'city', reason: 'unattested_incumbent' }]);
+  });
+
+  it('re-arbitrates when the incumbent IS attested — the defect D-4 exists to fix', () => {
+    // 'VP Sales' is canonical AND still asserted, so it is attested; a newer
+    // observation says 'CRO'. Under LI-2 this was frozen for ever.
+    const d = decideCanonicalUpdates({ job_title: 'VP Sales' }, [
+      C('job_title', 'VP Sales', 'a1', { observed_at: '2026-01-01T00:00:00.000Z' }),
+      C('job_title', 'CRO', 'a2', { observed_at: '2026-06-01T00:00:00.000Z' }),
+    ], PERSON_ATTRIBUTE_COLUMNS);
+    expect(d.apply).toEqual([
+      { attribute: 'job_title', value: 'CRO', assertionId: 'a2', reason: 'newest_observation' },
+    ]);
+    expect(d.withhold).toEqual([]);
+  });
+
+  it('writes nothing at all when the canonical value is already the winner', () => {
+    const d = decideCanonicalUpdates({ job_title: 'VP Sales' }, [A('job_title', 'VP Sales', 'a1')], PERSON_ATTRIBUTE_COLUMNS);
+    expect(d.apply).toEqual([]);
+    expect(d.withhold).toEqual([]);
   });
 });
 
@@ -175,12 +230,21 @@ describe('LI-2 — provider code cannot bypass the boundary', () => {
     // boundary already wrote; it is never a write, and this exemption does not
     // widen who may write.
     join('services', 'prospectIcp', 'criteria.ts'),
+    // B1b's authority declaration, on exactly the same grounds and held to exactly
+    // the same stricter check. It is flagged by the name scan for an unlucky
+    // reason: `authority` IS an LI-1 person column, so a type annotation reading
+    // `authority: AttributeAuthority` looks like an update payload. It writes
+    // nothing, and the no-database assertion below is what keeps that true —
+    // including against a future gate that attaches storage to the resolver seam,
+    // which must therefore put that storage in its own module.
+    join('services', 'prospectIdentity', 'attributeAuthority.ts'),
   ];
 
   /** Files exempted from the name scan above, each of which must touch no database. */
   const NAME_ONLY_FILES = [
     'services/prospectIdentity/attributes.ts',
     'services/prospectIcp/criteria.ts',
+    'services/prospectIdentity/attributeAuthority.ts',
   ];
   const ATTRS = [...PERSON_ATTRIBUTE_COLUMNS, ...ACCOUNT_ATTRIBUTE_COLUMNS]
     .filter((c) => c !== 'attributes_source' && c !== 'attributes_updated_at' && c !== 'region' && c !== 'city');
@@ -227,7 +291,7 @@ describe('LI-2 — provider code cannot bypass the boundary', () => {
   it('the boundary is the declared single writer', () => {
     const src = readFileSync(join(ROOT, 'services/prospectIdentity/ingestionBoundary.ts'), 'utf8');
     expect(src).toContain('THIS IS THE ONLY PLACE CANONICAL ATTRIBUTES MAY BE WRITTEN');
-    expect(INGESTION_BOUNDARY_VERSION).toMatch(/^li2\./);
+    expect(INGESTION_BOUNDARY_VERSION).toMatch(/^b1b\./);
   });
 
   it('the boundary does not resolve identity — that stays with the existing resolver', () => {
