@@ -177,16 +177,46 @@ sourced answer that does not name the company is a **genuine measured zero** and
 one. The citation-density label states its own population:
 `"${citedCells} of ${observedAiCells} measured cells citing reliably"`.
 
-`aiCoverageGate.coverageLabel` still divides by `total_cells`. It is **parked**: it is pinned by an
-exact-string test and is entangled with `supportsGeneralClaim`, which is provider-quantified, so
-changing it requires an owner decision about whether an ungroundable provider counts against
-generality.
+### Two coverage figures, two denominators, both correct
+
+The AI surface carries **two** coverage figures. They answer different questions, so they
+deliberately divide by different populations. Reading one as a stale version of the other is the
+mistake this section exists to prevent.
+
+| | Citation-rate / measurement coverage | AI coverage qualifier (grid shortfall) |
+|---|---|---|
+| Question | *Of the cells that were structurally measurable, how much was actually measured?* | *Of the enumerated provider × query-class grid, how much produced a measurement?* |
+| Expression | `measured_cells / measurable_cells` | `measured_cells / total_cells` |
+| Where | `retrieval_consistency_pct` (`intelligenceSurfacesCompetitive`) | `aiCoverageGate.coverageLabel` |
+| Emitted | always, as the customer-visible rate | only when `supportsGeneralClaim` is false, paired with the providers that were not queried |
+| `measurable_cells === 0` | `null` — no percentage exists | still discloses `0 of N`, because the shortfall is the point |
+
+**`coverageLabel` is correct by design, and `total_cells` is its correct denominator.** It is not a
+coverage ratio at all: it names its own unit — `"N of M provider × query-class cells measured"` — and
+it exists solely to qualify a sentence that would otherwise generalise over AI systems the report
+never asked. `aiCoverageQualifier` returns `''` whenever `supportsGeneralClaim` holds, so the label
+appears only alongside `unqueriedLabel`, which names the silent providers.
+
+`supportsGeneralClaim` is **provider-quantified** (`providers.length > 0 && unmeasuredProviders.length === 0`),
+not cell-quantified, because the gated claims quantify over AI systems rather than over cells.
+
+Switching `coverageLabel` to `measurable_cells` would **regress the GAP-12 protection**: with no
+provider or an unresolved identity the denominator is 0, so the disclosure would vanish entirely;
+with partial coverage it would read "8 of 10" while hiding the structurally unmeasurable cells that
+no operator asked. Either outcome restores absence-of-evidence-as-evidence-of-absence, which is
+precisely what GAP-12 closed.
+
+This item is **closed as correct by design**. No production behaviour change is required, and the
+exact-string test that pins `"4 of 20 provider × query-class cells measured"` is the negative
+control: it fails if the denominator is ever switched.
 
 ## 13. What this contract does not define
 
 Deliberately absent, because each is an unresolved owner decision rather than an implementation
 detail: adoption of the 9-pillar framework · the 196/197 fixed denominator · `D12 — Local
 discovery` · business-weighted pillars · historical Momentum · the Authority naming questions ·
-`aiCoverageGate.coverageLabel` · the audit's Implementation Coverage, Capability Maturity and
-Evaluable Coverage metrics, which are audit-level framework classifications and are **not** live
-product scores.
+the audit's Implementation Coverage, Capability Maturity and Evaluable Coverage metrics, which are
+audit-level framework classifications and are **not** live product scores.
+
+`aiCoverageGate.coverageLabel` was previously listed here as unresolved. It is **no longer open** —
+§12 settles it as correct by design.
