@@ -49,6 +49,7 @@ jest.mock('../../services/campaignBlueprintService', () => ({
   assertBlueprintMutable: jest.fn().mockResolvedValue(undefined),
   BlueprintImmutableError: class BlueprintImmutableError extends Error {},
   BlueprintExecutionFreezeError: class BlueprintExecutionFreezeError extends Error {},
+  BlueprintMutabilityReadError: class BlueprintMutabilityReadError extends Error {},
 }));
 
 const mockAcquireLock = jest.fn().mockResolvedValue('lock-1');
@@ -455,6 +456,16 @@ describe('idempotency and concurrency', () => {
     expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
     // The lock was never held by us, so nothing to release.
     expect(mockReleaseLock).not.toHaveBeenCalled();
+  });
+
+  it('a genuine blueprint-state read failure is 503, not a policy conflict', async () => {
+    wireSupabase({});
+    const mocked = jest.requireMock('../../services/campaignBlueprintService');
+    mocked.assertBlueprintMutable.mockRejectedValueOnce(new mocked.BlueprintMutabilityReadError('campaigns read failed'));
+    const res = await post();
+    expect(res.statusCode).toBe(503);
+    expect(res.body.code).toBe('BLUEPRINT_STATE_READ_FAILED');
+    expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
   });
 
   it('two sequential releases of the same campaign schedule each row at most once', async () => {

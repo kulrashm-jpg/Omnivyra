@@ -68,6 +68,7 @@ import {
   assertBlueprintMutable,
   BlueprintImmutableError,
   BlueprintExecutionFreezeError,
+  BlueprintMutabilityReadError,
 } from '../../../../backend/services/campaignBlueprintService';
 import {
   assertCampaignNotFinalized,
@@ -526,6 +527,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(409).json({
         code: 'CAMPAIGN_FINALIZED',
         message: 'Campaign is finalized and cannot be modified.',
+      });
+    }
+    if (error instanceof BlueprintMutabilityReadError) {
+      return res.status(503).json({
+        code: 'BLUEPRINT_STATE_READ_FAILED',
+        message: 'Blueprint state could not be read. Try again shortly.',
       });
     }
     if (error instanceof BlueprintExecutionFreezeError) {

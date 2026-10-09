@@ -68,6 +68,7 @@ import {
   assertBlueprintMutable,
   BlueprintExecutionFreezeError,
   BlueprintImmutableError,
+  BlueprintMutabilityReadError,
 } from '@/backend/services/campaignBlueprintService';
 import {
   getPlatformCapability,
@@ -380,6 +381,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         row.execution_id ? { affectedSlots: [row.execution_id] } : undefined,
       );
     } catch (lockError) {
+      if (lockError instanceof BlueprintMutabilityReadError) {
+        return res.status(503).json({
+          error: 'Item lock state could not be read. Try again shortly.',
+          code: 'BLUEPRINT_STATE_READ_FAILED',
+        });
+      }
       if (lockError instanceof BlueprintExecutionFreezeError) {
         return res.status(409).json({
           error: 'Item is inside its execution freeze window and cannot be moved.',

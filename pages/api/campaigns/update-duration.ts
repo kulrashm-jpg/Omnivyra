@@ -13,7 +13,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
-import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../backend/services/campaignBlueprintService';
+import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError, BlueprintMutabilityReadError } from '../../../backend/services/campaignBlueprintService';
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
@@ -98,6 +98,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       await assertBlueprintMutable(campaignId);
     } catch (err: any) {
+      if (err instanceof BlueprintMutabilityReadError) {
+        return res.status(503).json({
+          code: 'BLUEPRINT_STATE_READ_FAILED',
+          message: 'Blueprint state could not be read. Try again shortly.',
+        });
+      }
       if (err instanceof BlueprintExecutionFreezeError) {
         await recordGovernanceEvent({
           companyId,

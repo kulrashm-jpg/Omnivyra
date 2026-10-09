@@ -128,9 +128,11 @@ jest.mock('../../services/campaignBlueprintService', () => {
       this.freezeWindowHours = freezeWindowHours;
     }
   }
+  class BlueprintMutabilityReadError extends Error { code = 'BLUEPRINT_STATE_READ_FAILED'; }
   return {
     BlueprintImmutableError,
     BlueprintExecutionFreezeError,
+    BlueprintMutabilityReadError,
     assertBlueprintMutable: jest.fn(async (campaignId: string, options: unknown) => {
       guardCalls.push({ campaignId, options });
       if (guardThrows) throw guardThrows;
@@ -142,6 +144,7 @@ import handler from '../../../pages/api/activity-workspace/[id]/reschedule';
 import {
   BlueprintExecutionFreezeError,
   BlueprintImmutableError,
+  BlueprintMutabilityReadError,
 } from '../../services/campaignBlueprintService';
 
 const HOUR = 3600000;
@@ -236,6 +239,14 @@ describe('move validation — deterministic failures', () => {
     expect(res.statusCode).toBe(409);
     expect(res.body.code).toBe('MOVE_ITEM_LOCKED');
     expect(ownedUpdates).toHaveLength(0); // locked items are never written
+  });
+
+  it('a genuine lock-state read failure is 503, distinct from a locked item', async () => {
+    guardThrows = new BlueprintMutabilityReadError('scheduled_posts read failed');
+    const res = await post({ week_number: 3, scheduled_at: future(48) });
+    expect(res.statusCode).toBe(503);
+    expect(res.body.code).toBe('BLUEPRINT_STATE_READ_FAILED');
+    expect(ownedUpdates).toHaveLength(0); // nothing is written when lock state is unknown
   });
 
   it('one post per platform per day: occupied target slot rejects', async () => {

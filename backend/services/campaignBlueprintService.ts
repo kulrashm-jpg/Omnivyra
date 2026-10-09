@@ -6,6 +6,7 @@
 import { supabase } from '../db/supabaseClient';
 import { BLUEPRINT_FREEZE_WINDOW_HOURS } from '../governance/GovernanceConfig';
 import { blueprintPerItemLocksEnabled } from '../../config/featureFlags';
+import { campaignLifecycleSelect } from '../../lib/campaign/executionStatusCompat';
 import { memoRequest } from './requestScopedMemo';
 
 /** Stage 11: Deterministic guard — campaign must have duration_weeks set before blueprint resolution. */
@@ -43,6 +44,56 @@ export class BlueprintExecutionFreezeError extends Error {
   }
 }
 
+/**
+ * A genuine database read failure while evaluating blueprint mutability.
+ *
+ * The guard used to treat every read error as "mutable" and return, so any
+ * failed read — including the permanent 42703 on the absent
+ * `campaigns.execution_status` column — silently disabled it. It now fails
+ * closed: callers map this to 503 (retryable), distinct from a policy
+ * conflict (409) and from a missing campaign (the guard allows; callers
+ * own the 404).
+ */
+export class BlueprintMutabilityReadError extends Error {
+  code = 'BLUEPRINT_STATE_READ_FAILED' as const;
+  httpStatus = 503 as const;
+  source: string;
+  constructor(source: string, cause?: unknown) {
+    const detail = (cause as { message?: unknown } | null | undefined)?.message;
+    super(`Blueprint mutability could not be evaluated: ${source} read failed${typeof detail === 'string' && detail ? ` (${detail})` : ''}.`);
+    this.name = 'BlueprintMutabilityReadError';
+    this.source = source;
+  }
+}
+
+/** PostgREST / Postgres `undefined_column`. */
+const UNDEFINED_COLUMN = '42703';
+
+/**
+ * Read the OPTIONAL legacy `campaigns.execution_status` column.
+ *
+ * The column is absent in production (see lib/campaign/executionStatusCompat.ts):
+ * an absent column — or a null value — is NO SIGNAL, never a state. A value
+ * that is genuinely present is still honoured. Same narrow contract as
+ * pages/api/campaigns/[id]/release.ts readOptionalExecutionStatus:
+ *   • 42703 (column absent) → null
+ *   • present               → the value, upper-cased (null when empty)
+ *   • any other error       → BlueprintMutabilityReadError (never disguised)
+ */
+async function readOptionalExecutionStatus(campaignId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('campaigns')
+    .select('execution_status')
+    .eq('id', campaignId)
+    .maybeSingle();
+  if (error) {
+    if ((error as { code?: unknown }).code === UNDEFINED_COLUMN) return null;
+    throw new BlueprintMutabilityReadError('campaigns.execution_status', error);
+  }
+  const value = (data as { execution_status?: unknown } | null)?.execution_status;
+  return typeof value === 'string' && value.trim() ? value.trim().toUpperCase() : null;
+}
+
 /** R2-P2 — optional scoping for the mutability check. `affectedSlots` are
  *  the EXISTING execution identifiers (daily_content_plans.execution_id)
  *  a scoped operation touches; whole-campaign operations omit it and
@@ -67,6 +118,13 @@ export interface BlueprintMutabilityOptions {
  * scheduling never freezes unrelated items; cancelled/draft/blocked items
  * never protect anything. Same guard API, same error types — only the
  * decision model changes, via configuration.
+ *
+ * Read contract (both doctrines): the campaign is read through the
+ * canonical lifecycle select, which never names the absent
+ * `execution_status` column. A missing campaign is allowed (callers own the
+ * 404). A missing or null lifecycle value is NO SIGNAL — it is never
+ * synthesized into 'ACTIVE'. Any genuine read failure throws
+ * BlueprintMutabilityReadError; no read in this guard allows on error.
  */
 export async function assertBlueprintMutable(
   campaignId: string,
@@ -74,15 +132,17 @@ export async function assertBlueprintMutable(
 ): Promise<void> {
   const { data: campaign, error: campError } = await supabase
     .from('campaigns')
-    .select('execution_status, blueprint_status, duration_weeks')
+    .select(campaignLifecycleSelect('duration_weeks'))
     .eq('id', campaignId)
     .maybeSingle();
 
-  if (campError || !campaign) return;
+  if (campError) throw new BlueprintMutabilityReadError('campaigns', campError);
+  if (!campaign) return;
+
+  const row = campaign as unknown as { blueprint_status?: unknown; duration_weeks?: number | null };
 
   // Campaigns without duration are not yet initialized — allow pre-planning and blueprint generation
-  const durationWeeks = (campaign as { duration_weeks?: number | null }).duration_weeks;
-  if (durationWeeks == null) {
+  if (row.duration_weeks == null) {
     return;
   }
 
@@ -90,8 +150,12 @@ export async function assertBlueprintMutable(
     return assertPerItemLocksNotBreached(campaignId, options);
   }
 
-  const executionStatus = String(campaign.execution_status ?? 'ACTIVE').toUpperCase();
-  const blueprintStatus = String(campaign.blueprint_status ?? 'ACTIVE').toUpperCase();
+  // Absent column / null value → null (no signal). Never defaulted to 'ACTIVE'.
+  const executionStatus = await readOptionalExecutionStatus(campaignId);
+  const blueprintStatus =
+    typeof row.blueprint_status === 'string' && row.blueprint_status.trim()
+      ? row.blueprint_status.trim().toUpperCase()
+      : null;
 
   if (blueprintStatus === 'INVALIDATED') {
     await assertFreezeWindowNotBreached(campaignId);
@@ -113,7 +177,8 @@ export async function assertBlueprintMutable(
     .limit(1)
     .maybeSingle();
 
-  if (!schedError && scheduled) {
+  if (schedError) throw new BlueprintMutabilityReadError('scheduled_posts', schedError);
+  if (scheduled) {
     throw new BlueprintImmutableError('Blueprint cannot be modified while campaign is in execution.');
   }
 }
@@ -140,7 +205,7 @@ async function assertPerItemLocksNotBreached(
       .select('scheduled_post_id')
       .eq('campaign_id', campaignId)
       .in('execution_id', affected);
-    if (planError) return; // fail-open matches the legacy guard's error posture
+    if (planError) throw new BlueprintMutabilityReadError('daily_content_plans', planError);
     postIdFilter = (Array.isArray(planRows) ? planRows : [])
       .map((r) => (r as { scheduled_post_id?: unknown }).scheduled_post_id)
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
@@ -153,7 +218,8 @@ async function assertPerItemLocksNotBreached(
     .eq('campaign_id', campaignId);
   if (postIdFilter) query = query.in('id', postIdFilter);
   const { data: posts, error: postsError } = await query;
-  if (postsError || !Array.isArray(posts) || posts.length === 0) return;
+  if (postsError) throw new BlueprintMutabilityReadError('scheduled_posts', postsError);
+  if (!Array.isArray(posts) || posts.length === 0) return;
 
   const now = Date.now();
   let nearestFrozenHours: number | null = null;
@@ -195,7 +261,8 @@ async function assertFreezeWindowNotBreached(campaignId: string): Promise<void> 
     .limit(1)
     .maybeSingle();
 
-  if (error || !earliest?.scheduled_at) return;
+  if (error) throw new BlueprintMutabilityReadError('scheduled_posts', error);
+  if (!earliest?.scheduled_at) return;
 
   const scheduledAt = new Date(earliest.scheduled_at).getTime();
   const now = Date.now();
