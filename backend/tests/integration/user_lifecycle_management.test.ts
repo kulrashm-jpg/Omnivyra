@@ -1,378 +1,251 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
+/**
+ * User lifecycle management — /api/users/* against the REAL authorization chain.
+ *
+ * Only the database and the identity provider are faked (routeAuthHarness).
+ * withRBAC, enforceRole, getUserRole, isSuperAdmin, resolveUserContext and
+ * userManagementService.requireUserAdminAccess all run for real, so the
+ * authorization assertions below exercise production code. The previous
+ * version of this suite re-implemented enforceRole/getUserRole/isSuperAdmin
+ * inside the test, so its authorization assertions only tested the mock.
+ *
+ * Invariants covered:
+ *  - only an ACTIVE super admin bypasses company scope;
+ *  - a cross-company request is rejected and writes nothing;
+ *  - a non-admin role is rejected and writes nothing;
+ *  - the service re-checks the company the request actually acts on
+ *    (body.companyId), independently of the company withRBAC authorized;
+ *  - identity creation fails closed: no users / user_company_roles row is
+ *    written when the unified_persons step fails.
+ *
+ * POLICY PENDING (COMPANY_ADMIN): the routes allow [SUPER_ADMIN, ADMIN], but
+ * getUserRole normalizes ADMIN and COMPANY_ADMIN rows to COMPANY_ADMIN, so a
+ * company admin is rejected (403 FORBIDDEN_ROLE) even in its own company. The
+ * tests in "COMPANY_ADMIN in its own company" pin that CURRENT fail-closed
+ * behaviour; they are not a statement of intended policy. Allowing company
+ * admins must first add a role allowlist to invite / role update: today the
+ * role is written verbatim from the request body, and an active SUPER_ADMIN
+ * row in any company is platform super admin.
+ */
+import type { NextApiRequest } from 'next';
 import inviteHandler from '../../../pages/api/users/invite';
 import listHandler from '../../../pages/api/users/index';
 import roleHandler from '../../../pages/api/users/[userId]/role';
 import removeHandler from '../../../pages/api/users/[userId]/index';
 import { logUserManagementAudit } from '../../services/campaignAuditService';
-import { Role } from '../../services/rbacService';
+import { inviteUser } from '../../services/userManagementService';
+import { resolveUserContext } from '../../services/userContextService';
+import {
+  seed, invoke, failTable, rows, writeCalls, CO_A, CO_B, USER_A, USER_B, USER_SUPER, TOKENS,
+} from '../helpers/routeAuthHarness';
 
-jest.mock('../../services/rbacService', () => ({
-  ...jest.requireActual('../../services/rbacService'),
-  enforceRole: jest.fn(),
-  getUserRole: jest.fn(),
-  isSuperAdmin: jest.fn(),
+jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
+jest.mock('../../db/supabaseClient', () => require('../helpers/routeAuthHarness').supabaseModule());
+jest.mock('../../db/writeOwner', () => require('../helpers/routeAuthHarness').writeOwnerModule());
+jest.mock('../../services/supabaseAuthService', () => require('../helpers/routeAuthHarness').authModule());
+jest.mock('../../security/IdentityResolver', () => require('../helpers/routeAuthHarness').identityModule());
+jest.mock('../../../lib/auth/rateLimit', () => ({ checkRateLimit: async () => ({ allowed: true }) }));
+jest.mock('../../services/campaignAuditService', () => ({
+  ...jest.requireActual('../../services/campaignAuditService'),
+  logUserManagementAudit: jest.fn(),
 }));
 
-const { enforceRole, getUserRole, isSuperAdmin } = jest.requireMock('../../services/rbacService');
+const TARGET_A = 'trgt-a-00-0000-0000-00000000000a';
+const TARGET_B = 'trgt-b-00-0000-0000-00000000000b';
+const IDENTITY_TABLES = ['users', 'unified_persons', 'user_company_roles'];
 
-jest.mock('../../db/supabaseClient', () => ({
-  supabase: {
-    from: jest.fn(),
-    auth: {
-      admin: {
-        getUserByEmail: jest.fn(),
-        createUser: jest.fn(),
-        getUserById: jest.fn(),
-      },
-    },
-  },
-}));
+const roleRow = (user_id: string, company_id: string, role: string, status = 'active') =>
+  ({ user_id, company_id, role, status });
 
-jest.mock('../../services/userContextService', () => ({
-  resolveUserContext: jest.fn(),
-}));
-
-jest.mock('../../services/campaignAuditService', () => {
-  const actual = jest.requireActual('../../services/campaignAuditService');
-  return {
-    ...actual,
-    logUserManagementAudit: jest.fn(),
-  };
-});
-
-const { supabase } = jest.requireMock('../../db/supabaseClient');
-const { resolveUserContext } = jest.requireMock('../../services/userContextService');
-
-const createMockRes = () => {
-  const res: Partial<NextApiResponse> & { statusCode?: number; body?: any } = {};
-  res.status = (code: number) => {
-    res.statusCode = code;
-    return res as NextApiResponse;
-  };
-  res.json = (payload: any) => {
-    res.body = payload;
-    return res as NextApiResponse;
-  };
-  return res as NextApiResponse & { statusCode?: number; body?: any };
-};
-
-type RoleRow = { user_id: string; company_id: string; role: string; status?: string };
-const roleRows: RoleRow[] = [];
-const authUsers: Record<string, { id: string; email: string }> = {};
-
-const buildQuery = (table: string) => {
-  const state: { filters: Record<string, any>; op?: string; updatePayload?: any } = { filters: {} };
-  const query: any = {
-    select: jest.fn().mockReturnThis(),
-    eq: jest.fn((field: string, value: any) => {
-      state.filters[field] = value;
-      return query;
-    }),
-    in: jest.fn((field: string, values: any[]) => {
-      state.filters[field] = values;
-      state.op = 'in';
-      return query;
-    }),
-    limit: jest.fn().mockReturnThis(),
-    insert: jest.fn((payload: any) => {
-      if (table === 'users') {
-        const rows = Array.isArray(payload) ? payload : [payload];
-        rows.forEach((row) => {
-          const id = `user-${Object.keys(authUsers).length + 1}`;
-          authUsers[id] = { id, email: row.email };
-        });
-        return query;
-      }
-      const rows = Array.isArray(payload) ? payload : [payload];
-      rows.forEach((row) => roleRows.push(row));
-      return query;
-    }),
-    maybeSingle: jest.fn(async () => {
-      if (table === 'users') {
-        const user = Object.values(authUsers).find((row) => row.email === state.filters.email) ?? null;
-        return { data: user, error: null };
-      }
-      return { data: null, error: null };
-    }),
-    single: jest.fn(async () => {
-      if (table === 'users') {
-        const user = Object.values(authUsers).find((row) => row.email === state.filters.email) ?? Object.values(authUsers).slice(-1)[0] ?? null;
-        return { data: user, error: null };
-      }
-      return { data: null, error: null };
-    }),
-    update: jest.fn((payload: any) => {
-      state.op = 'update';
-      state.updatePayload = payload;
-      return query;
-    }),
-    delete: jest.fn(() => {
-      state.op = 'delete';
-      return query;
-    }),
-    then: (resolve: any) => {
-      if (table === 'user_company_roles') {
-        if (state.op === 'update' && state.updatePayload) {
-          roleRows.forEach((row) => {
-            if (
-              row.user_id === state.filters.user_id &&
-              row.company_id === state.filters.company_id
-            ) {
-              Object.assign(row, state.updatePayload);
-            }
-          });
-          const updated = roleRows.filter(
-            (r) => r.user_id === state.filters.user_id && r.company_id === state.filters.company_id
-          );
-          return resolve({ data: updated, error: null });
-        }
-        if (state.op === 'delete') {
-          for (let i = roleRows.length - 1; i >= 0; i -= 1) {
-            const row = roleRows[i];
-            if (
-              row.user_id === state.filters.user_id &&
-              row.company_id === state.filters.company_id
-            ) {
-              roleRows.splice(i, 1);
-            }
-          }
-          return resolve({ data: null, error: null });
-        }
-        const filtered = roleRows.filter((row) => {
-          if (state.filters.user_id && row.user_id !== state.filters.user_id) return false;
-          if (state.filters.company_id && row.company_id !== state.filters.company_id) return false;
-          if (state.filters.role && row.role !== state.filters.role) return false;
-          if (state.filters.status && (row.status ?? 'active') !== state.filters.status) return false;
-          return true;
-        });
-        return resolve({ data: filtered, error: null });
-      }
-      if (table === 'users') {
-        let users = Object.values(authUsers);
-        if (state.op === 'in' && Array.isArray(state.filters.id)) {
-          users = users.filter((row) => state.filters.id.includes(row.id));
-        }
-        return resolve({ data: users, error: null });
-      }
-      return resolve({ data: [], error: null });
-    },
-  };
-  return query;
-};
-
-describe('User lifecycle management', () => {
+describe('User lifecycle management (real authorization chain)', () => {
   beforeEach(() => {
-    roleRows.splice(0, roleRows.length);
-    Object.keys(authUsers).forEach((key) => delete authUsers[key]);
-    (isSuperAdmin as jest.Mock).mockImplementation(async (userId: string) => {
-      return roleRows.some((r) => r.user_id === userId && r.role === 'SUPER_ADMIN');
+    jest.clearAllMocks();
+    seed({
+      users: [
+        { id: TARGET_A, email: 'target-a@example.test' },
+        { id: TARGET_B, email: 'target-b@example.test' },
+      ],
+      user_company_roles: [
+        roleRow(TARGET_A, CO_A, 'CONTENT_CREATOR'),
+        roleRow(TARGET_B, CO_B, 'CONTENT_MANAGER'),
+      ],
     });
-    (getUserRole as jest.Mock).mockImplementation(async (userId: string, companyId: string) => {
-      const row = roleRows.find(
-        (r) => r.user_id === userId && r.company_id === companyId && (r.status ?? 'active') === 'active'
+  });
+
+  describe('active super admin', () => {
+    it('Super admin can invite user', async () => {
+      const res = await invoke(inviteHandler, {
+        method: 'POST',
+        as: 'SUPER',
+        query: { companyId: CO_B },
+        body: { email: 'New@Example.test', companyId: CO_B, role: 'CONTENT_MANAGER' },
+      });
+
+      expect(res.status).toBe(200);
+      const person = rows('unified_persons').find((p) => p.primary_email === 'new@example.test');
+      expect(person).toMatchObject({ company_id: CO_B });
+      const user = rows('users').find((u) => u.email === 'new@example.test');
+      expect(user).toMatchObject({ unified_person_id: person!.id });
+      expect(rows('user_company_roles')).toContainEqual(
+        expect.objectContaining({ user_id: user!.id, company_id: CO_B, role: 'CONTENT_MANAGER' }),
       );
-      if (!row) {
-        const hasAnyRole = roleRows.some((r) => r.user_id === userId);
-        return { role: null, error: hasAnyRole ? 'COMPANY_ACCESS_DENIED' : null };
-      }
-      return { role: row.role === 'ADMIN' ? Role.ADMIN : (row.role as any), error: null };
     });
-    (enforceRole as jest.Mock).mockImplementation(async ({ req, res, companyId, allowedRoles }: any) => {
-      const user = await resolveUserContext(req);
-      if (!companyId) {
-        res.status(400).json({ error: 'companyId required' });
-        return null;
-      }
-      const superAdminRow = roleRows.find((r) => r.user_id === user.userId && r.role === 'SUPER_ADMIN');
-      if (superAdminRow && allowedRoles.includes(Role.SUPER_ADMIN)) {
-        return { userId: user.userId, role: Role.SUPER_ADMIN };
-      }
-      const row = roleRows.find(
-        (r) => r.user_id === user.userId && r.company_id === companyId && (r.status ?? 'active') === 'active'
+
+    it('Role update works', async () => {
+      const res = await invoke(roleHandler, {
+        method: 'PATCH',
+        as: 'SUPER',
+        query: { userId: TARGET_A },
+        body: { role: 'CONTENT_MANAGER', companyId: CO_A },
+      });
+
+      expect(res.status).toBe(200);
+      expect(rows('user_company_roles').find((r) => r.user_id === TARGET_A)?.role).toBe('CONTENT_MANAGER');
+    });
+
+    it('Remove user works', async () => {
+      const res = await invoke(removeHandler, {
+        method: 'DELETE',
+        as: 'SUPER',
+        query: { userId: TARGET_A, companyId: CO_A },
+      });
+
+      expect(res.status).toBe(200);
+      expect(rows('user_company_roles').some((r) => r.user_id === TARGET_A)).toBe(false);
+      expect(rows('user_company_roles').some((r) => r.user_id === TARGET_B)).toBe(true);
+    });
+
+    it('List users scoped to company', async () => {
+      const res = await invoke(listHandler, { method: 'GET', as: 'SUPER', query: { companyId: CO_A } });
+
+      expect(res.status).toBe(200);
+      const ids = (res.body?.users ?? []).map((u: { user_id: string }) => u.user_id);
+      expect(ids).toEqual(expect.arrayContaining([USER_A, USER_SUPER, TARGET_A]));
+      expect(ids).not.toContain(TARGET_B);
+      expect(ids).not.toContain(USER_B);
+    });
+
+    it('Audit logs created', async () => {
+      await invoke(inviteHandler, {
+        method: 'POST',
+        as: 'SUPER',
+        query: { companyId: CO_A },
+        body: { email: 'audit@example.test', companyId: CO_A, role: 'CONTENT_MANAGER' },
+      });
+
+      expect(logUserManagementAudit).toHaveBeenCalledWith(
+        'USER_INVITED',
+        expect.objectContaining({ actor_user_id: USER_SUPER, company_id: CO_A, role: 'CONTENT_MANAGER' }),
       );
-      const role = row?.role ?? null;
-      if (!role) {
-        if (roleRows.some((r) => r.user_id === user.userId)) {
-          res.status(403).json({ error: 'COMPANY_SCOPE_VIOLATION' });
-          return null;
-        }
-        res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-        return null;
-      }
-      const roleToUse = role === 'ADMIN' ? Role.ADMIN : role;
-      if (!allowedRoles.includes(roleToUse) && !allowedRoles.includes(role)) {
-        res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-        return null;
-      }
-      return { userId: user.userId, role: roleToUse };
-    });
-    (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
-    (supabase.auth.admin.getUserByEmail as jest.Mock).mockImplementation(async (email: string) => {
-      const user = Object.values(authUsers).find((u) => u.email === email);
-      return { data: { user }, error: null };
-    });
-    (supabase.auth.admin.createUser as jest.Mock).mockImplementation(async ({ email }: any) => {
-      const id = `user-${Object.keys(authUsers).length + 1}`;
-      const user = { id, email };
-      authUsers[id] = user;
-      return { data: { user }, error: null };
-    });
-    (supabase.auth.admin.getUserById as jest.Mock).mockImplementation(async (id: string) => {
-      return { data: { user: authUsers[id] || null }, error: null };
     });
   });
 
-  it('Super admin can invite user', async () => {
-    resolveUserContext.mockResolvedValue({
-      userId: 'super-1',
-      role: 'admin',
-      companyIds: ['company-a'],
-      defaultCompanyId: 'company-a',
+  describe('denials write nothing', () => {
+    it('Admin cannot invite user in other company', async () => {
+      const res = await invoke(inviteHandler, {
+        method: 'POST',
+        as: 'A',
+        query: { companyId: CO_B },
+        body: { email: 'other@example.test', companyId: CO_B, role: 'CONTENT_CREATOR' },
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body?.error).toBe('COMPANY_SCOPE_VIOLATION');
+      expect(writeCalls(IDENTITY_TABLES)).toEqual([]);
     });
-    roleRows.push({ user_id: 'super-1', company_id: 'company-a', role: 'SUPER_ADMIN' });
-    const req = {
-      method: 'POST',
-      body: { email: 'new@example.com', companyId: 'company-b', role: 'CONTENT_MANAGER' },
-      query: { companyId: 'company-b' },
-    } as unknown as NextApiRequest;
-    const res = createMockRes();
-    await inviteHandler(req, res);
-    expect(res.statusCode).toBe(200);
-    expect(roleRows.some((row) => row.company_id === 'company-b')).toBe(true);
+
+    it('Content role cannot invite user (403)', async () => {
+      seed({ user_company_roles: [roleRow(USER_B, CO_A, 'CONTENT_CREATOR')] });
+
+      const res = await invoke(inviteHandler, {
+        method: 'POST',
+        as: 'B',
+        query: { companyId: CO_A },
+        body: { email: 'blocked@example.test', companyId: CO_A, role: 'CONTENT_PLANNER' },
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body?.error).toBe('FORBIDDEN_ROLE');
+      expect(writeCalls(IDENTITY_TABLES)).toEqual([]);
+    });
+
+    it('an inactive SUPER_ADMIN row grants no cross-company access', async () => {
+      seed({ user_company_roles: [roleRow(USER_B, CO_B, 'SUPER_ADMIN', 'inactive')] });
+
+      const res = await invoke(inviteHandler, {
+        method: 'POST',
+        as: 'B',
+        query: { companyId: CO_A },
+        body: { email: 'escalate@example.test', companyId: CO_A, role: 'COMPANY_ADMIN' },
+      });
+
+      expect(res.status).toBe(403);
+      expect(writeCalls(IDENTITY_TABLES)).toEqual([]);
+    });
+
+    it('an unauthenticated request is rejected', async () => {
+      const res = await invoke(inviteHandler, {
+        method: 'POST',
+        as: null,
+        query: { companyId: CO_A },
+        body: { email: 'anon@example.test', companyId: CO_A, role: 'CONTENT_CREATOR' },
+      });
+
+      expect(res.status).toBe(401);
+      expect(writeCalls(IDENTITY_TABLES)).toEqual([]);
+    });
+
+    it('the service re-checks the company it acts on, not only the one withRBAC authorized', async () => {
+      const requester = await resolveUserContext({
+        headers: { authorization: `Bearer ${TOKENS.A}` },
+      } as unknown as NextApiRequest);
+
+      const result = await inviteUser('mismatch@example.test', CO_B, 'CONTENT_CREATOR', requester);
+
+      expect(result).toEqual({ ok: false, status: 403, error: 'COMPANY_SCOPE_VIOLATION' });
+      expect(writeCalls(IDENTITY_TABLES)).toEqual([]);
+    });
   });
 
-  it('Admin can invite user in own company', async () => {
-    resolveUserContext.mockResolvedValue({
-      userId: 'admin-1',
-      role: 'admin',
-      companyIds: ['company-a'],
-      defaultCompanyId: 'company-a',
+  describe('identity creation', () => {
+    it('fails closed: no user or role row is written when unified_persons fails', async () => {
+      failTable('unified_persons');
+
+      const outcome = await invoke(inviteHandler, {
+        method: 'POST',
+        as: 'SUPER',
+        query: { companyId: CO_A },
+        body: { email: 'identity-fail@example.test', companyId: CO_A, role: 'CONTENT_CREATOR' },
+      }).then(
+        (res) => ({ status: res.status as number | null }),
+        () => ({ status: null as number | null }),
+      );
+
+      expect(outcome.status).not.toBe(200);
+      expect(writeCalls(['users', 'user_company_roles'])).toEqual([]);
+      expect(rows('users').some((u) => u.email === 'identity-fail@example.test')).toBe(false);
+      expect(logUserManagementAudit).not.toHaveBeenCalled();
     });
-    roleRows.push({ user_id: 'admin-1', company_id: 'company-a', role: 'ADMIN' });
-    const req = {
-      method: 'POST',
-      body: { email: 'own@example.com', companyId: 'company-a', role: 'CONTENT_CREATOR' },
-      query: { companyId: 'company-a' },
-    } as unknown as NextApiRequest;
-    const res = createMockRes();
-    await inviteHandler(req, res);
-    expect(res.statusCode).toBe(200);
   });
 
-  it('Admin cannot invite user in other company', async () => {
-    resolveUserContext.mockResolvedValue({
-      userId: 'admin-2',
-      role: 'admin',
-      companyIds: ['company-a'],
-      defaultCompanyId: 'company-a',
-    });
-    roleRows.push({ user_id: 'admin-2', company_id: 'company-a', role: 'ADMIN' });
-    const req = {
-      method: 'POST',
-      body: { email: 'other@example.com', companyId: 'company-b', role: 'CONTENT_CREATOR' },
-      query: { companyId: 'company-b' },
-    } as unknown as NextApiRequest;
-    const res = createMockRes();
-    await inviteHandler(req, res);
-    expect(res.statusCode).toBe(403);
-    expect(res.body?.error).toBe('COMPANY_SCOPE_VIOLATION');
-  });
+  describe('COMPANY_ADMIN in its own company (policy pending — current fail-closed behaviour)', () => {
+    it('Admin can invite user in own company: currently rejected with FORBIDDEN_ROLE', async () => {
+      const res = await invoke(inviteHandler, {
+        method: 'POST',
+        as: 'A',
+        query: { companyId: CO_A },
+        body: { email: 'own@example.test', companyId: CO_A, role: 'CONTENT_CREATOR' },
+      });
 
-  it('Content role cannot invite user (403)', async () => {
-    resolveUserContext.mockResolvedValue({
-      userId: 'creator-1',
-      role: 'user',
-      companyIds: ['company-a'],
-      defaultCompanyId: 'company-a',
+      expect(res.status).toBe(403);
+      expect(res.body?.error).toBe('FORBIDDEN_ROLE');
+      expect(writeCalls(IDENTITY_TABLES)).toEqual([]);
     });
-    roleRows.push({ user_id: 'creator-1', company_id: 'company-a', role: 'CONTENT_CREATOR' });
-    const req = {
-      method: 'POST',
-      body: { email: 'blocked@example.com', companyId: 'company-a', role: 'CONTENT_PLANNER' },
-      query: { companyId: 'company-a' },
-    } as unknown as NextApiRequest;
-    const res = createMockRes();
-    await inviteHandler(req, res);
-    expect(res.statusCode).toBe(403);
-    expect(res.body?.error).toBe('FORBIDDEN_ROLE');
-  });
 
-  it('Role update works', async () => {
-    resolveUserContext.mockResolvedValue({
-      userId: 'admin-3',
-      role: 'admin',
-      companyIds: ['company-a'],
-      defaultCompanyId: 'company-a',
-    });
-    roleRows.push({ user_id: 'admin-3', company_id: 'company-a', role: 'ADMIN' });
-    roleRows.push({ user_id: 'target-1', company_id: 'company-a', role: 'CONTENT_CREATOR' });
-    const req = {
-      method: 'PATCH',
-      query: { userId: 'target-1' },
-      body: { role: 'CONTENT_MANAGER', companyId: 'company-a' },
-    } as unknown as NextApiRequest;
-    const res = createMockRes();
-    await roleHandler(req, res);
-    expect(res.statusCode).toBe(200);
-    expect(roleRows.find((row) => row.user_id === 'target-1')?.role).toBe('CONTENT_MANAGER');
-  });
+    it('listing its own company: currently rejected with FORBIDDEN_ROLE', async () => {
+      const res = await invoke(listHandler, { method: 'GET', as: 'A', query: { companyId: CO_A } });
 
-  it('Remove user works', async () => {
-    resolveUserContext.mockResolvedValue({
-      userId: 'admin-4',
-      role: 'admin',
-      companyIds: ['company-a'],
-      defaultCompanyId: 'company-a',
+      expect(res.status).toBe(403);
+      expect(res.body?.error).toBe('FORBIDDEN_ROLE');
     });
-    roleRows.push({ user_id: 'admin-4', company_id: 'company-a', role: 'ADMIN' });
-    roleRows.push({ user_id: 'target-2', company_id: 'company-a', role: 'CONTENT_CREATOR' });
-    const req = {
-      method: 'DELETE',
-      query: { userId: 'target-2', companyId: 'company-a' },
-    } as unknown as NextApiRequest;
-    const res = createMockRes();
-    await removeHandler(req, res);
-    expect(res.statusCode).toBe(200);
-    expect(roleRows.some((row) => row.user_id === 'target-2')).toBe(false);
-  });
-
-  it('List users scoped to company', async () => {
-    resolveUserContext.mockResolvedValue({
-      userId: 'admin-5',
-      role: 'admin',
-      companyIds: ['company-a'],
-      defaultCompanyId: 'company-a',
-    });
-    roleRows.push({ user_id: 'admin-5', company_id: 'company-a', role: 'ADMIN' });
-    roleRows.push({ user_id: 'target-3', company_id: 'company-a', role: 'CONTENT_CREATOR' });
-    roleRows.push({ user_id: 'target-4', company_id: 'company-b', role: 'CONTENT_MANAGER' });
-    authUsers['target-3'] = { id: 'target-3', email: 't3@example.com' };
-    authUsers['target-4'] = { id: 'target-4', email: 't4@example.com' };
-    const req = {
-      method: 'GET',
-      query: { companyId: 'company-a' },
-    } as unknown as NextApiRequest;
-    const res = createMockRes();
-    await listHandler(req, res);
-    expect(res.statusCode).toBe(200);
-    expect(res.body?.users).toHaveLength(2);
-  });
-
-  it('Audit logs created', async () => {
-    resolveUserContext.mockResolvedValue({
-      userId: 'admin-6',
-      role: 'admin',
-      companyIds: ['company-a'],
-      defaultCompanyId: 'company-a',
-    });
-    roleRows.push({ user_id: 'admin-6', company_id: 'company-a', role: 'ADMIN' });
-    const req = {
-      method: 'POST',
-      body: { email: 'audit@example.com', companyId: 'company-a', role: 'CONTENT_MANAGER' },
-      query: { companyId: 'company-a' },
-    } as unknown as NextApiRequest;
-    const res = createMockRes();
-    await inviteHandler(req, res);
-    expect(logUserManagementAudit).toHaveBeenCalled();
   });
 });
