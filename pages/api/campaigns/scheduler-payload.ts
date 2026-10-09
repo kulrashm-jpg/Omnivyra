@@ -163,6 +163,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (error instanceof PrePlanningRequiredError || error?.code === 'PRE_PLANNING_REQUIRED') {
       return res.status(412).json({ code: 'PRE_PLANNING_REQUIRED', message: error?.message });
     }
+    // BlueprintMutabilityReadError (assertBlueprintActive via the active-blueprint plan read)
+    if (error?.code === 'BLUEPRINT_STATE_READ_FAILED') {
+      return res.status(503).json({ code: 'BLUEPRINT_STATE_READ_FAILED', message: 'Blueprint state could not be read. Try again shortly.' });
+    }
     return res.status(500).json({ error: error?.message || 'Failed to build scheduler payload' });
   }
 }

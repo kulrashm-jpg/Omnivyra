@@ -323,7 +323,13 @@ import {
 /**
  * Assert campaign blueprint is active for execution.
  * Scheduler and plan consumers must call this before using blueprint for execution.
- * @throws Error if blueprint_status is not ACTIVE
+ *
+ * Read contract (`blueprint_status` exists in production):
+ *   • genuine read failure            → BlueprintMutabilityReadError (fails closed; 503)
+ *   • missing campaign                → allowed — callers own the 404
+ *   • null blueprint_status           → NO SIGNAL — allowed, never synthesized into 'ACTIVE'
+ *   • any other value but 'ACTIVE'    → Error('Blueprint outdated. Regeneration required.')
+ * @throws Error if blueprint_status is present and not ACTIVE
  */
 export async function assertBlueprintActive(campaignId: string): Promise<void> {
   const { data, error } = await supabase
@@ -331,8 +337,10 @@ export async function assertBlueprintActive(campaignId: string): Promise<void> {
     .select('blueprint_status')
     .eq('id', campaignId)
     .maybeSingle();
-  if (error) return; // Allow on error for backward compat when column missing
-  const status = data?.blueprint_status ?? 'ACTIVE';
+  if (error) throw new BlueprintMutabilityReadError('campaigns.blueprint_status', error);
+  if (!data) return;
+  const status = (data as { blueprint_status?: unknown }).blueprint_status;
+  if (status == null) return;
   if (status !== 'ACTIVE') {
     throw new Error('Blueprint outdated. Regeneration required.');
   }

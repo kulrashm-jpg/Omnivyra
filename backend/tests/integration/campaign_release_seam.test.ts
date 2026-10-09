@@ -468,6 +468,16 @@ describe('idempotency and concurrency', () => {
     expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
   });
 
+  it('an active-blueprint read failure (assertBlueprintActive) is also 503', async () => {
+    wireSupabase({});
+    const mocked = jest.requireMock('../../services/campaignBlueprintService');
+    mocked.assertBlueprintActive.mockRejectedValueOnce(new mocked.BlueprintMutabilityReadError('blueprint_status read failed'));
+    const res = await post();
+    expect(res.statusCode).toBe(503);
+    expect(res.body.code).toBe('BLUEPRINT_STATE_READ_FAILED');
+    expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
+  });
+
   it('two sequential releases of the same campaign schedule each row at most once', async () => {
     // First release: both rows eligible.
     wireSupabase({ planRows: [approvedRow('a', 1, 'linkedin'), approvedRow('b', 1, 'x')] });

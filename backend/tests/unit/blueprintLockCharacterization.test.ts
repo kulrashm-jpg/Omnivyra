@@ -78,6 +78,7 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 
 import {
+  assertBlueprintActive,
   assertBlueprintMutable,
   isBlueprintMutable,
   getBlueprintBlockReason,
@@ -339,5 +340,44 @@ describe('FAIL-CLOSED read contract (production shape: execution_status column a
     failingTables = ['scheduled_posts'];
     expect(await isBlueprintMutable('c-1')).toBe(false);
     expect(await getBlueprintBlockReason('c-1')).toBe('IMMUTABLE');
+  });
+});
+
+describe('assertBlueprintActive — read contract', () => {
+  it('an ACTIVE blueprint passes', async () => {
+    campaignRow = { blueprint_status: 'ACTIVE' };
+    await expect(assertBlueprintActive('c-1')).resolves.toBeUndefined();
+  });
+
+  it('a present non-ACTIVE status keeps its existing policy error', async () => {
+    campaignRow = { blueprint_status: 'INVALIDATED' };
+    await expect(assertBlueprintActive('c-1')).rejects.toThrow('Blueprint outdated. Regeneration required.');
+    await expect(assertBlueprintActive('c-1')).rejects.not.toBeInstanceOf(BlueprintMutabilityReadError);
+  });
+
+  it('a null blueprint_status is no signal, not a manufactured ACTIVE or a failure', async () => {
+    campaignRow = { blueprint_status: null };
+    await expect(assertBlueprintActive('c-1')).resolves.toBeUndefined();
+  });
+
+  it('a missing campaign is allowed (callers own the 404)', async () => {
+    campaignRow = null;
+    await expect(assertBlueprintActive('c-1')).resolves.toBeUndefined();
+  });
+
+  it('the absent execution_status column is never read', async () => {
+    execStatusColumnAbsent = true;
+    campaignRow = { blueprint_status: 'ACTIVE' };
+    await expect(assertBlueprintActive('c-1')).resolves.toBeUndefined();
+    expect(campaignSelects.every((s) => findAbsentColumns(s).length === 0)).toBe(true);
+  });
+
+  it('a genuine read failure fails closed with the typed error', async () => {
+    campaignRow = { blueprint_status: 'ACTIVE' };
+    failingTables = ['campaigns'];
+    const err = await assertBlueprintActive('c-1').catch((e) => e);
+    expect(err).toBeInstanceOf(BlueprintMutabilityReadError);
+    expect(err.code).toBe('BLUEPRINT_STATE_READ_FAILED');
+    expect(err.httpStatus).toBe(503);
   });
 });

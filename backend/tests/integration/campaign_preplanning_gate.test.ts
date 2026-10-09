@@ -63,7 +63,7 @@ import updateDurationHandler from '../../../pages/api/campaigns/update-duration'
 import regenerateBlueprintHandler from '../../../pages/api/campaigns/regenerate-blueprint';
 import { recordGovernanceEvent } from '../../services/GovernanceEventService';
 import { supabase } from '../../db/supabaseClient';
-import { PrePlanningRequiredError, getResolvedCampaignPlanContext } from '../../services/campaignBlueprintService';
+import { PrePlanningRequiredError, BlueprintMutabilityReadError, getResolvedCampaignPlanContext } from '../../services/campaignBlueprintService';
 import { runPrePlanning } from '../../services/CampaignPrePlanningService';
 
 type ChainResult = { data: any; error: any };
@@ -115,6 +115,23 @@ describe('Campaign Pre-Planning Gate', () => {
         code: 'PRE_PLANNING_REQUIRED',
         message: 'Campaign duration not initialized. Run pre-planning first.',
       });
+    });
+
+    it('scheduler-payload returns 503 when the active-blueprint read genuinely fails', async () => {
+      (getResolvedCampaignPlanContext as jest.Mock).mockRejectedValue(
+        new BlueprintMutabilityReadError('campaigns.blueprint_status', { message: 'connection reset' })
+      );
+
+      const req = createApiRequestMock({
+        method: 'POST',
+        body: { companyId: COMPANY_ID, campaignId: CAMPAIGN_ID, weekNumber: 1 },
+      });
+      const res = createMockRes();
+
+      await schedulerPayloadHandler(req, res);
+
+      expect(res.statusCode).toBe(503);
+      expect(res.body).toMatchObject({ code: 'BLUEPRINT_STATE_READ_FAILED' });
     });
   });
 
