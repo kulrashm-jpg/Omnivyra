@@ -20,7 +20,7 @@ describe('media upload validation service', () => {
       skipLiveness: true,
     });
     expect(result.valid).toBe(false);
-    if (!result.valid) {
+    if (result.valid === false) {
       expect(result.errors.some((e) => /required/i.test(e))).toBe(true);
     }
   });
@@ -32,7 +32,7 @@ describe('media upload validation service', () => {
       skipLiveness: true,
     });
     expect(result.valid).toBe(false);
-    if (!result.valid) {
+    if (result.valid === false) {
       expect(result.errors.some((e) => /valid http/i.test(e))).toBe(true);
     }
   });
@@ -45,7 +45,7 @@ describe('media upload validation service', () => {
       mimeType: 'video/mp4',
     });
     expect(result.valid).toBe(false);
-    if (!result.valid) {
+    if (result.valid === false) {
       expect(result.errors.some((e) => /Unsupported content_type/i.test(e))).toBe(true);
     }
   });
@@ -59,7 +59,7 @@ describe('media upload validation service', () => {
       skipLiveness: true,
     });
     expect(result.valid).toBe(false);
-    if (!result.valid) {
+    if (result.valid === false) {
       expect(result.errors.some((e) => /not compatible/i.test(e))).toBe(true);
     }
   });
@@ -97,7 +97,7 @@ describe('media upload validation service', () => {
       skipLiveness: true,
     });
     expect(result.valid).toBe(false);
-    if (!result.valid) {
+    if (result.valid === false) {
       expect(result.errors.some((e) => /size/i.test(e) && /limit/i.test(e))).toBe(true);
     }
   });
@@ -119,7 +119,7 @@ describe('media upload validation service', () => {
       skipLiveness: true,
     });
     expect(result.valid).toBe(false);
-    if (!result.valid) {
+    if (result.valid === false) {
       expect(result.errors.some((e) => /Could not detect media MIME/i.test(e))).toBe(true);
     }
   });
@@ -220,7 +220,7 @@ describe('media upload validation service', () => {
     test('mismatched category → not ok with reason', () => {
       const result = compareSniffedToClientMime({ sniffed: 'image/png', claimed: 'video/mp4' });
       expect(result.ok).toBe(false);
-      if (!result.ok) {
+      if (result.ok === false) {
         expect(result.reason).toMatch(/Client claimed/);
         expect(result.sniffed).toBe('image/png');
         expect(result.claimed).toBe('video/mp4');

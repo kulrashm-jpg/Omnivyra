@@ -115,7 +115,7 @@ describe('verifyStripeWebhookSignature', () => {
     const bad = `t=${now},v1=${'00'.repeat(32)}`;
     const r = verifyStripeWebhookSignature({ rawBody: body, signatureHeader: bad, secret, nowEpochSeconds: now });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('signature_mismatch');
+    if (r.ok === false) expect(r.reason).toBe('signature_mismatch');
   });
 
   test('timestamp older than tolerance → rejected', () => {
@@ -126,19 +126,19 @@ describe('verifyStripeWebhookSignature', () => {
       nowEpochSeconds: now, toleranceSeconds: 300,
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('timestamp_out_of_tolerance');
+    if (r.ok === false) expect(r.reason).toBe('timestamp_out_of_tolerance');
   });
 
   test('missing signature fields → rejected', () => {
     const r = verifyStripeWebhookSignature({ rawBody: '{}', signatureHeader: 't=1234567890', secret, nowEpochSeconds: now });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('missing_signature_fields');
+    if (r.ok === false) expect(r.reason).toBe('missing_signature_fields');
   });
 
   test('empty header → rejected', () => {
     const r = verifyStripeWebhookSignature({ rawBody: '{}', signatureHeader: '', secret, nowEpochSeconds: now });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('missing_signature_header');
+    if (r.ok === false) expect(r.reason).toBe('missing_signature_header');
   });
 
   test('multiple v1 candidates: any valid passes (Stripe key rotation case)', () => {

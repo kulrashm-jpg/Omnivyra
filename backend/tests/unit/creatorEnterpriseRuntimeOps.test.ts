@@ -131,7 +131,7 @@ describe('creator enterprise runtime operations', () => {
       }],
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.errors).toEqual(expect.arrayContaining(['attachment_0_accessibility_manifest_failed']));
+    if (result.ok === false) expect(result.errors).toEqual(expect.arrayContaining(['attachment_0_accessibility_manifest_failed']));
   });
 
   it('materially differentiates platform geometry engines', () => {

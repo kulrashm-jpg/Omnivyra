@@ -74,7 +74,7 @@ describe('creator rollout closure', () => {
     });
 
     expect(result.ok).toBe(false);
-    if (!result.ok) {
+    if (result.ok === false) {
       expect(result.errors).toEqual(expect.arrayContaining([
         'attachment_0_ocr_confidence_below_threshold',
         'attachment_0_ocr_cta_phrase_detected',

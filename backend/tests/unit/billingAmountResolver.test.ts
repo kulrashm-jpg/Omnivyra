@@ -58,7 +58,7 @@ describe('billingAmountResolver — rejection behavior', () => {
     async (ref) => {
       const r = await resolveBillingAmount({ intentType: 'subscription', reference: ref });
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.code).toBe('malformed_reference');
+      if (r.ok === false) expect(r.code).toBe('malformed_reference');
     },
   );
 
@@ -66,21 +66,21 @@ describe('billingAmountResolver — rejection behavior', () => {
     __row = null; __error = null;
     const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'plan_does_not_exist' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('unknown_reference');
+    if (r.ok === false) expect(r.code).toBe('unknown_reference');
   });
 
   test('kind mismatch → unknown_reference', async () => {
     __row = { kind: 'topup', amount_minor: 50000, currency: 'INR', enabled: true };
     const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'topup_credits_500' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('unknown_reference');
+    if (r.ok === false) expect(r.code).toBe('unknown_reference');
   });
 
   test('disabled catalog entry → disabled_reference', async () => {
     __row = { kind: 'subscription', amount_minor: 99900, currency: 'INR', enabled: false };
     const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'plan_legacy_v1' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('disabled_reference');
+    if (r.ok === false) expect(r.code).toBe('disabled_reference');
   });
 });
 
@@ -103,14 +103,14 @@ describe('billingAmountResolver — compiled-fallback (default-preserving)', () 
     __throw = true;
     const r = await resolveBillingAmount({ intentType: 'topup', reference: 'topup_legacy_pack' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('disabled_reference');
+    if (r.ok === false) expect(r.code).toBe('disabled_reference');
   });
 
   test('fallback preserves unknown rejection (no fallback entry)', async () => {
     __throw = true;
     const r = await resolveBillingAmount({ intentType: 'topup', reference: 'topup_not_in_fallback' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('unknown_reference');
+    if (r.ok === false) expect(r.code).toBe('unknown_reference');
   });
 
   test('never throws even when the DB read rejects', async () => {

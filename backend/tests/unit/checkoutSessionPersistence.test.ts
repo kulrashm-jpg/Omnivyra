@@ -246,7 +246,7 @@ describe('checkout persistence — provider-governance compatibility', () => {
     const { deps, rec } = makeDeps({ persisted: PERSISTED_SESSION });
     const r = await orchestrateCheckoutSession({ ...BASE_ARGS, provider: 'paypal' as any }, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('unknown_provider');
+    if (r.ok === false) expect(r.code).toBe('unknown_provider');
     expect(rec.findCalls).toHaveLength(0); // rejected before the store is consulted
   });
 });

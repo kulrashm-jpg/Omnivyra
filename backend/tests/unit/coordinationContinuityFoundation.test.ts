@@ -52,7 +52,7 @@ describe('OMNI-COORD-002 — SemanticRootRegistry', () => {
     const reg = createInMemorySemanticRootRegistry();
     const r = await reg.register({ ...rootInput, companyId: '' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('TENANT_REQUIRED');
+    if (r.ok === false) expect(r.error.code).toBe('TENANT_REQUIRED');
   });
 });
 

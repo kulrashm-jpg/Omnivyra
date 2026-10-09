@@ -146,7 +146,7 @@ describe('hidden_billing_catalog — seed ↔ COMPILED_FALLBACK parity', () => {
     for (const entry of parseSeed(readMigration()).filter((r) => !r.enabled)) {
       const r = await resolveBillingAmount({ intentType: entry.kind, reference: entry.reference_key });
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.code).toBe('disabled_reference');
+      if (r.ok === false) expect(r.code).toBe('disabled_reference');
     }
   });
 
@@ -155,6 +155,6 @@ describe('hidden_billing_catalog — seed ↔ COMPILED_FALLBACK parity', () => {
     const sub = seed.find((r) => r.kind === 'subscription' && r.enabled)!;
     const r = await resolveBillingAmount({ intentType: 'topup', reference: sub.reference_key });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('unknown_reference');
+    if (r.ok === false) expect(r.code).toBe('unknown_reference');
   });
 });

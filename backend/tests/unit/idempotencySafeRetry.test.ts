@@ -105,21 +105,21 @@ describe('safeRetryOperation', () => {
   it('requires a reason', async () => {
     const r = await safeRetryOperation({ surface: 'billing_operations', id: 'op-1', actorUserId: 'a', reason: '' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('REASON_REQUIRED');
+    if (r.ok === false) expect(r.code).toBe('REASON_REQUIRED');
   });
 
   it('REFUSES when a completed CONFIRM settlement exists (replay protection)', async () => {
     mockSupabase({ idempotencyKey: 'key-x', settledRows: [{ id: 't1', execution_phase: 'confirm' }] });
     const r = await safeRetryOperation({ surface: 'billing_operations', id: 'op-1', actorUserId: 'a', reason: 'stuck' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('COMPLETED_SETTLEMENT');
+    if (r.ok === false) expect(r.code).toBe('COMPLETED_SETTLEMENT');
   });
 
   it('REFUSES when a completed GRANT settlement exists', async () => {
     mockSupabase({ idempotencyKey: 'key-x', settledRows: [{ id: 't1', execution_phase: 'grant' }] });
     const r = await safeRetryOperation({ surface: 'billing_operations', id: 'op-1', actorUserId: 'a', reason: 'stuck' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('COMPLETED_SETTLEMENT');
+    if (r.ok === false) expect(r.code).toBe('COMPLETED_SETTLEMENT');
   });
 
   it('REFUSES when an active HOLD exists with no sibling (drift)', async () => {
@@ -131,7 +131,7 @@ describe('safeRetryOperation', () => {
     });
     const r = await safeRetryOperation({ surface: 'billing_operations', id: 'op-1', actorUserId: 'a', reason: 'stuck' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('ACTIVE_RESERVATION');
+    if (r.ok === false) expect(r.code).toBe('ACTIVE_RESERVATION');
   });
 
   it('REFUSES when the stuck row is already terminal', async () => {
@@ -143,7 +143,7 @@ describe('safeRetryOperation', () => {
     });
     const r = await safeRetryOperation({ surface: 'billing_operations', id: 'op-1', actorUserId: 'a', reason: 'stuck' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('NOT_RECOVERABLE');
+    if (r.ok === false) expect(r.code).toBe('NOT_RECOVERABLE');
   });
 
   it('SUCCEEDS on clean state — supersedes + mints a new key + lineage', async () => {

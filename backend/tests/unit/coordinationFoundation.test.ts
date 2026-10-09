@@ -48,7 +48,7 @@ describe('coordination foundation — CommunicationRegistry', () => {
     const reg = createInMemoryCommunicationRegistry({ comparator: inertComparator });
     const r = await reg.register(base({ companyId: '' }));
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('TENANT_REQUIRED');
+    if (r.ok === false) expect(r.error.code).toBe('TENANT_REQUIRED');
 
     const l = await reg.lookup('');
     expect(l.ok).toBe(false);

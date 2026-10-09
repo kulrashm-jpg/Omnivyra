@@ -276,7 +276,7 @@ describe('billingBootstrapValidator', () => {
     });
     const g = await assertBillingSchemaReady();
     expect(g.ready).toBe(false);
-    if (!g.ready) {
+    if (g.ready === false) {
       expect(g.status).toBe(503);
       expect(g.body.code).toBe('BILLING_SCHEMA_NOT_READY');
     }
