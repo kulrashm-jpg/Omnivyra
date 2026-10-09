@@ -25,18 +25,63 @@ let failExecStatusRead = false;
 /** Every select list issued against `campaigns`. */
 const campaignSelects: string[] = [];
 
+/**
+ * Real column lists, read from the canonical baseline schema at test time —
+ * never hand-copied — so the fake answers an unknown column the way PostgREST
+ * does (42703). This is what lets a schema mismatch such as selecting
+ * `scheduled_posts.scheduled_at` (the real column is `scheduled_for`) fail a
+ * test instead of passing silently.
+ */
+function baselineColumns(table: string): Set<string> {
+  // Loaded here, not via top-level imports: this runs at module scope above them.
+  const { readFileSync } = jest.requireActual<typeof import('fs')>('fs');
+  const { join } = jest.requireActual<typeof import('path')>('path');
+  const sql = readFileSync(join(__dirname, '../../../supabase/_schema/baseline.sql'), 'utf8');
+  const start = sql.indexOf(`CREATE TABLE public.${table} (`);
+  if (start < 0) throw new Error(`baseline schema has no table public.${table}`);
+  const body = sql.slice(start, sql.indexOf('\n);', start));
+  const cols = new Set<string>();
+  for (const line of body.split(/\r?\n/).slice(1)) {
+    const m = line.match(/^\s{4}([a-z_][a-z0-9_]*)\s/);
+    if (m) cols.add(m[1]);
+  }
+  if (cols.size === 0) throw new Error(`no columns parsed for public.${table}`);
+  return cols;
+}
+const KNOWN_COLUMNS: Record<string, Set<string>> = {
+  // execution_status is the optional legacy column: allowed here so the
+  // column-PRESENT case stays testable; its ABSENT case (production) is
+  // simulated explicitly by execStatusColumnAbsent below.
+  campaigns: new Set([...baselineColumns('campaigns'), 'execution_status']),
+  scheduled_posts: baselineColumns('scheduled_posts'),
+  daily_content_plans: baselineColumns('daily_content_plans'),
+};
+/** Every unknown column referenced by the code under test (must stay empty). */
+const unknownColumnRefs: string[] = [];
+
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: (table: string) => {
       let selected = '';
       let inFilter: unknown[] | null = null;
+      let orderColumn: string | null = null;
+      const unknown: string[] = [];
+      const check = (col: string) => {
+        const known = KNOWN_COLUMNS[table];
+        if (known && col !== '*' && !known.has(col)) {
+          unknown.push(col);
+          unknownColumnRefs.push(`${table}.${col}`);
+        }
+      };
       const builder: any = {};
       builder.select = (cols: string) => {
         selected = cols;
         if (table === 'campaigns') campaignSelects.push(cols);
+        cols.split(',').map((c) => c.trim()).filter(Boolean).forEach(check);
         return builder;
       };
       const forcedError = () => {
+        if (unknown.length > 0) return { code: '42703', message: `column ${table}.${unknown[0]} does not exist` };
         if (failingTables.includes(table)) return { code: 'XX000', message: `forced failure on ${table}` };
         if (table === 'campaigns' && selected.includes('execution_status')) {
           if (failExecStatusRead) return { code: 'XX000', message: 'forced execution_status failure' };
@@ -44,14 +89,17 @@ jest.mock('../../db/supabaseClient', () => ({
         }
         return null;
       };
-      for (const op of ['eq', 'order', 'limit']) builder[op] = () => builder;
-      builder.in = (_col: string, vals: unknown[]) => { inFilter = vals; return builder; };
+      builder.eq = (col: string) => { check(col); return builder; };
+      builder.limit = () => builder;
+      builder.order = (col: string) => { check(col); orderColumn = col; return builder; };
+      builder.in = (col: string, vals: unknown[]) => { check(col); inFilter = vals; return builder; };
       const rowsFor = (): Row[] => {
         if (table === 'scheduled_posts') {
           const base = inFilter ? postRows.filter((p) => (inFilter as unknown[]).includes(p.id)) : postRows;
-          if (selected.includes('scheduled_at') && !selected.includes('status')) {
-            // legacy earliest-post query — emulate order by scheduled_at asc
-            return [...base].sort((a, b) => String(a.scheduled_at ?? '').localeCompare(String(b.scheduled_at ?? '')));
+          if (orderColumn) {
+            const col = orderColumn;
+            // ascending, like PostgREST's default; rows use ISO-8601 UTC strings
+            return [...base].sort((a, b) => String(a[col] ?? '').localeCompare(String(b[col] ?? '')));
           }
           return base;
         }
@@ -87,6 +135,7 @@ import {
   BlueprintMutabilityReadError,
 } from '../../services/campaignBlueprintService';
 import { findAbsentColumns } from '../../../lib/campaign/executionStatusCompat';
+import { supabase } from '../../db/supabaseClient';
 
 const HOURS = 3600000;
 const at = (hoursFromNow: number) => new Date(Date.now() + hoursFromNow * HOURS).toISOString();
@@ -100,6 +149,13 @@ beforeEach(() => {
   failExecStatusRead = false;
   campaignSelects.length = 0;
   delete process.env.BLUEPRINT_PER_ITEM_LOCKS;
+});
+
+afterEach(() => {
+  // The code under test must never reference a column the real schema lacks.
+  const refs = [...unknownColumnRefs];
+  unknownColumnRefs.length = 0;
+  expect(refs).toEqual([]);
 });
 
 afterAll(() => { delete process.env.BLUEPRINT_PER_ITEM_LOCKS; });
@@ -124,14 +180,14 @@ describe('LEGACY characterization — campaign-wide guard (flag off, the default
     // (lib/campaign/executionStatusCompat.ts). Previously this row was blanket-frozen.
     campaignRow = { execution_status: null, blueprint_status: 'ACTIVE', duration_weeks: 4 };
     await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
-    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_at: at(100) }];
+    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_for: at(100) }];
     await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintImmutableError);
     expect(await getBlueprintBlockReason('c-1')).toBe('IMMUTABLE');
   });
 
   it('non-ACTIVE, non-PAUSED campaigns freeze the moment ANY scheduled post exists', async () => {
     campaignRow = { execution_status: 'COMPLETED', blueprint_status: 'ACTIVE', duration_weeks: 4 };
-    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_at: at(100) }]; // far future — still frozen
+    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_for: at(100) }]; // far future — still frozen
     await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintImmutableError);
     postRows = [];
     await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
@@ -139,12 +195,12 @@ describe('LEGACY characterization — campaign-wide guard (flag off, the default
 
   it('PAUSED / INVALIDATED escape the blanket but hit the CAMPAIGN-WIDE 24h window (earliest post)', async () => {
     campaignRow = { execution_status: 'PAUSED', blueprint_status: 'ACTIVE', duration_weeks: 4 };
-    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_at: at(100) }];
+    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_for: at(100) }];
     await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
 
     postRows = [
-      { id: 'sp-1', status: 'scheduled', scheduled_at: at(2) }, // inside 24h → freezes EVERYTHING
-      { id: 'sp-2', status: 'scheduled', scheduled_at: at(100) },
+      { id: 'sp-1', status: 'scheduled', scheduled_for: at(2) }, // inside 24h → freezes EVERYTHING
+      { id: 'sp-2', status: 'scheduled', scheduled_for: at(100) },
     ];
     const err = await assertBlueprintMutable('c-1').catch((e) => e);
     expect(err).toBeInstanceOf(BlueprintExecutionFreezeError);
@@ -167,8 +223,8 @@ describe('CANONICAL — per-item lock doctrine (BLUEPRINT_PER_ITEM_LOCKS=true)',
 
   it('an ACTIVE campaign with only far-future items is MUTABLE (no blanket freeze)', async () => {
     postRows = [
-      { id: 'sp-1', status: 'scheduled', scheduled_at: at(100) },
-      { id: 'sp-2', status: 'scheduled', scheduled_at: at(48) },
+      { id: 'sp-1', status: 'scheduled', scheduled_for: at(100) },
+      { id: 'sp-2', status: 'scheduled', scheduled_for: at(48) },
     ];
     await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
     expect(await isBlueprintMutable('c-1')).toBe(true);
@@ -178,8 +234,8 @@ describe('CANONICAL — per-item lock doctrine (BLUEPRINT_PER_ITEM_LOCKS=true)',
   it('publishing / published items protect the blueprint (IMMUTABLE)', async () => {
     for (const status of ['publishing', 'published']) {
       postRows = [
-        { id: 'sp-1', status, scheduled_at: at(-1) },
-        { id: 'sp-2', status: 'scheduled', scheduled_at: at(100) },
+        { id: 'sp-1', status, scheduled_for: at(-1) },
+        { id: 'sp-2', status: 'scheduled', scheduled_for: at(100) },
       ];
       await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintImmutableError);
       expect(await getBlueprintBlockReason('c-1')).toBe('IMMUTABLE');
@@ -188,22 +244,22 @@ describe('CANONICAL — per-item lock doctrine (BLUEPRINT_PER_ITEM_LOCKS=true)',
 
   it('an item inside ITS OWN 24h window freezes (nearest item reported); failed-retryable counts, cancelled never does', async () => {
     postRows = [
-      { id: 'sp-1', status: 'scheduled', scheduled_at: at(2) },
-      { id: 'sp-2', status: 'scheduled', scheduled_at: at(10) },
-      { id: 'sp-3', status: 'scheduled', scheduled_at: at(100) },
+      { id: 'sp-1', status: 'scheduled', scheduled_for: at(2) },
+      { id: 'sp-2', status: 'scheduled', scheduled_for: at(10) },
+      { id: 'sp-3', status: 'scheduled', scheduled_for: at(100) },
     ];
     const err = await assertBlueprintMutable('c-1').catch((e) => e);
     expect(err).toBeInstanceOf(BlueprintExecutionFreezeError);
     expect(err.hoursUntilExecution).toBeLessThanOrEqual(2.01); // nearest, not first-row
     expect(err.freezeWindowHours).toBe(24);
 
-    postRows = [{ id: 'sp-1', status: 'failed', scheduled_at: at(-3) }]; // past-dated retryable
+    postRows = [{ id: 'sp-1', status: 'failed', scheduled_for: at(-3) }]; // past-dated retryable
     await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintExecutionFreezeError);
 
     postRows = [
-      { id: 'sp-1', status: 'cancelled', scheduled_at: at(1) },
-      { id: 'sp-2', status: 'draft', scheduled_at: at(1) },
-      { id: 'sp-3', status: 'blocked', scheduled_at: at(1) },
+      { id: 'sp-1', status: 'cancelled', scheduled_for: at(1) },
+      { id: 'sp-2', status: 'draft', scheduled_for: at(1) },
+      { id: 'sp-3', status: 'blocked', scheduled_for: at(1) },
     ];
     await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
   });
@@ -215,8 +271,8 @@ describe('CANONICAL — per-item lock doctrine (BLUEPRINT_PER_ITEM_LOCKS=true)',
       { execution_id: 'ex-unscheduled', scheduled_post_id: null },
     ];
     postRows = [
-      { id: 'sp-frozen', status: 'scheduled', scheduled_at: at(1) },   // inside window
-      { id: 'sp-free', status: 'scheduled', scheduled_at: at(100) },   // far future
+      { id: 'sp-frozen', status: 'scheduled', scheduled_for: at(1) },   // inside window
+      { id: 'sp-free', status: 'scheduled', scheduled_for: at(100) },   // far future
     ];
 
     // Whole-campaign op: the frozen item blocks
@@ -259,7 +315,7 @@ describe('FAIL-CLOSED read contract (production shape: execution_status column a
   it('a missing execution_status column does not skip evaluation: posts still decide (legacy)', async () => {
     campaignRow = { blueprint_status: 'ACTIVE', duration_weeks: 4 };
     await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
-    postRows = [{ id: 'sp-1', status: 'failed', scheduled_at: at(100) }];
+    postRows = [{ id: 'sp-1', status: 'failed', scheduled_for: at(100) }];
     await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintImmutableError);
   });
 
@@ -270,9 +326,9 @@ describe('FAIL-CLOSED read contract (production shape: execution_status column a
 
   it('INVALIDATED keeps the 24h freeze rule when execution_status is absent', async () => {
     campaignRow = { blueprint_status: 'INVALIDATED', duration_weeks: 4 };
-    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_at: at(2) }];
+    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_for: at(2) }];
     await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintExecutionFreezeError);
-    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_at: at(100) }];
+    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_for: at(100) }];
     await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
   });
 
@@ -322,15 +378,15 @@ describe('FAIL-CLOSED read contract (production shape: execution_status column a
     process.env.BLUEPRINT_PER_ITEM_LOCKS = 'true';
     campaignRow = { blueprint_status: 'ACTIVE', duration_weeks: 4 };
 
-    postRows = [{ id: 'sp-1', status: 'published', scheduled_at: at(-5) }];
+    postRows = [{ id: 'sp-1', status: 'published', scheduled_for: at(-5) }];
     await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintImmutableError);
 
-    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_at: at(3) }];
+    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_for: at(3) }];
     await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintExecutionFreezeError);
 
     postRows = [
-      { id: 'sp-1', status: 'scheduled', scheduled_at: at(100) },
-      { id: 'sp-2', status: 'cancelled', scheduled_at: at(1) },
+      { id: 'sp-1', status: 'scheduled', scheduled_for: at(100) },
+      { id: 'sp-2', status: 'cancelled', scheduled_for: at(1) },
     ];
     await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
   });
@@ -379,5 +435,74 @@ describe('assertBlueprintActive — read contract', () => {
     expect(err).toBeInstanceOf(BlueprintMutabilityReadError);
     expect(err.code).toBe('BLUEPRINT_STATE_READ_FAILED');
     expect(err.httpStatus).toBe(503);
+  });
+});
+
+describe('SCHEMA — scheduled_posts timestamp is scheduled_for (no scheduled_at column)', () => {
+  it('the fake rejects an unknown column exactly like PostgREST (42703)', async () => {
+    const { data, error } = await supabase
+      .from('scheduled_posts')
+      .select('scheduled_at')
+      .eq('campaign_id', 'c-1')
+      .maybeSingle();
+    expect(data).toBeNull();
+    expect(error).toEqual({ code: '42703', message: 'column scheduled_posts.scheduled_at does not exist' });
+    expect(unknownColumnRefs).toEqual(['scheduled_posts.scheduled_at']);
+    unknownColumnRefs.length = 0; // deliberate in this test only
+  });
+
+  it('per-item freeze is evaluated from scheduled_for', async () => {
+    process.env.BLUEPRINT_PER_ITEM_LOCKS = 'true';
+    campaignRow = { blueprint_status: 'ACTIVE', duration_weeks: 4 };
+
+    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_for: at(3) }];
+    const err = await assertBlueprintMutable('c-1').catch((e) => e);
+    expect(err).toBeInstanceOf(BlueprintExecutionFreezeError);
+    expect(err.hoursUntilExecution).toBeGreaterThan(2.9);
+    expect(err.hoursUntilExecution).toBeLessThanOrEqual(3);
+
+    postRows = [{ id: 'sp-1', status: 'scheduled', scheduled_for: at(30) }];
+    await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
+  });
+
+  it('the freeze window uses the EARLIEST scheduled_for, whatever the row order', async () => {
+    campaignRow = { blueprint_status: 'INVALIDATED', duration_weeks: 4 };
+    postRows = [
+      { id: 'sp-late', status: 'scheduled', scheduled_for: at(100) },
+      { id: 'sp-soon', status: 'scheduled', scheduled_for: at(5) },
+    ];
+    const err = await assertBlueprintMutable('c-1').catch((e) => e);
+    expect(err).toBeInstanceOf(BlueprintExecutionFreezeError);
+    expect(err.hoursUntilExecution).toBeLessThanOrEqual(5);
+
+    postRows = [{ id: 'sp-late', status: 'scheduled', scheduled_for: at(100) }];
+    await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
+  });
+});
+
+describe('CHARACTERIZATION — how current rules treat each post category (policy NOT decided here)', () => {
+  it('per-item: past scheduled/failed items freeze regardless of age; other non-published statuses never block', async () => {
+    process.env.BLUEPRINT_PER_ITEM_LOCKS = 'true';
+    campaignRow = { blueprint_status: 'ACTIVE', duration_weeks: 4 };
+
+    for (const [status, hoursFromNow] of [
+      ['failed', -2], ['failed', -200], ['scheduled', -2], ['scheduled', -200],
+    ] as const) {
+      postRows = [{ id: 'sp-1', status, scheduled_for: at(hoursFromNow) }];
+      await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintExecutionFreezeError);
+    }
+    for (const status of ['cancelled', 'draft', 'blocked']) {
+      postRows = [{ id: 'sp-1', status, scheduled_for: at(-200) }];
+      await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
+    }
+  });
+
+  it('legacy freeze window considers the earliest post of ANY status, including past published ones', async () => {
+    campaignRow = { blueprint_status: 'INVALIDATED', duration_weeks: 4 };
+    postRows = [
+      { id: 'sp-old', status: 'published', scheduled_for: at(-500) },
+      { id: 'sp-new', status: 'scheduled', scheduled_for: at(100) },
+    ];
+    await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintExecutionFreezeError);
   });
 });

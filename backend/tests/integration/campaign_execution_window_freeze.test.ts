@@ -82,7 +82,7 @@ describe('Execution Window Freeze Guard', () => {
         }
         if (table === 'scheduled_posts') {
           return chain({
-            data: { scheduled_at: in12h },
+            data: { scheduled_for: in12h },
             error: null,
           });
         }
@@ -144,7 +144,7 @@ describe('Execution Window Freeze Guard', () => {
         }
         if (table === 'scheduled_posts') {
           return chain({
-            data: { scheduled_at: in48h },
+            data: { scheduled_for: in48h },
             error: null,
           });
         }
@@ -229,7 +229,7 @@ describe('Execution Window Freeze Guard', () => {
         }
         if (table === 'scheduled_posts') {
           return chain({
-            data: { scheduled_at: in12h },
+            data: { scheduled_for: in12h },
             error: null,
           });
         }
@@ -274,7 +274,7 @@ describe('Execution Window Freeze Guard', () => {
         }
         if (table === 'scheduled_posts') {
           return chain({
-            data: { scheduled_at: in12h },
+            data: { scheduled_for: in12h },
             error: null,
           });
         }

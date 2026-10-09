@@ -212,9 +212,11 @@ async function assertPerItemLocksNotBreached(
     if (postIdFilter.length === 0) return; // affected slots have no live items
   }
 
+  // `scheduled_posts` has no `scheduled_at` column — the timestamp is
+  // `scheduled_for` (timestamptz NOT NULL; baseline schema and production).
   let query = supabase
     .from('scheduled_posts')
-    .select('id, status, scheduled_at')
+    .select('id, status, scheduled_for')
     .eq('campaign_id', campaignId);
   if (postIdFilter) query = query.in('id', postIdFilter);
   const { data: posts, error: postsError } = await query;
@@ -223,7 +225,7 @@ async function assertPerItemLocksNotBreached(
 
   const now = Date.now();
   let nearestFrozenHours: number | null = null;
-  for (const post of posts as Array<{ status?: string | null; scheduled_at?: string | null }>) {
+  for (const post of posts as Array<{ status?: string | null; scheduled_for?: string | null }>) {
     const status = String(post.status ?? '').toLowerCase();
     if (status === 'publishing' || status === 'published') {
       throw new BlueprintImmutableError(
@@ -233,8 +235,8 @@ async function assertPerItemLocksNotBreached(
     // Live items (scheduled, or failed awaiting retry) lock only inside
     // their OWN window; cancelled/draft/blocked never protect anything.
     if (status !== 'scheduled' && status !== 'failed') continue;
-    if (!post.scheduled_at) continue;
-    const hoursUntil = (new Date(post.scheduled_at).getTime() - now) / 3600000;
+    if (!post.scheduled_for) continue;
+    const hoursUntil = (new Date(post.scheduled_for).getTime() - now) / 3600000;
     if (hoursUntil <= BLUEPRINT_FREEZE_WINDOW_HOURS) {
       nearestFrozenHours = nearestFrozenHours === null ? hoursUntil : Math.min(nearestFrozenHours, hoursUntil);
     }
@@ -255,16 +257,16 @@ async function assertPerItemLocksNotBreached(
 async function assertFreezeWindowNotBreached(campaignId: string): Promise<void> {
   const { data: earliest, error } = await supabase
     .from('scheduled_posts')
-    .select('scheduled_at')
+    .select('scheduled_for')
     .eq('campaign_id', campaignId)
-    .order('scheduled_at', { ascending: true })
+    .order('scheduled_for', { ascending: true })
     .limit(1)
     .maybeSingle();
 
   if (error) throw new BlueprintMutabilityReadError('scheduled_posts', error);
-  if (!earliest?.scheduled_at) return;
+  if (!earliest?.scheduled_for) return;
 
-  const scheduledAt = new Date(earliest.scheduled_at).getTime();
+  const scheduledAt = new Date(earliest.scheduled_for).getTime();
   const now = Date.now();
   const hoursUntilExecution = (scheduledAt - now) / 3600000;
 
