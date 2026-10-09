@@ -1,5 +1,6 @@
 import type { PersistedDecisionObject } from '../../services/decisionObjectService';
 import { buildReportScoreModel } from '../../services/reportScoreModelService';
+import { buildResolvedReportFields } from '../helpers/resolvedReportInputFixture';
 
 function makeDecision(params: {
   id: string;
@@ -76,7 +77,7 @@ describe('reportScoreModelService', () => {
           social_links: [],
           competitors: [],
         },
-        resolved: {
+        resolved: buildResolvedReportFields({
           companyName: null,
           websiteDomain: 'example.com',
           businessType: null,
@@ -86,7 +87,7 @@ describe('reportScoreModelService', () => {
           source: 'manual-entry',
           uploadedFileName: null,
           manualData: null,
-        },
+        }),
         integrations: {
           google_analytics: { connected: false, source: 'system', label: 'Google Analytics' },
           google_search_console: { connected: false, source: 'system', label: 'Google Search Console' },

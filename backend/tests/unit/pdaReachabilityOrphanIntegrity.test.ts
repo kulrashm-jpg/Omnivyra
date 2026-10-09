@@ -35,6 +35,7 @@ jest.mock('../../db/supabaseClient', () => ({
 
 import { buildPublicDomainAuditDecisions } from '../../services/publicDomainAuditService';
 import type { ResolvedReportInput } from '../../services/reportInputResolver';
+import { buildResolvedReportFields } from '../helpers/resolvedReportInputFixture';
 
 const COMPANY_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -73,7 +74,7 @@ const RESOLVED_INPUT = {
     social_links: [],
     competitors: [],
   },
-  resolved: {
+  resolved: buildResolvedReportFields({
     companyName: null,
     websiteDomain: 'example.com',
     businessType: 'B2B SaaS',
@@ -83,7 +84,7 @@ const RESOLVED_INPUT = {
     source: 'manual-entry',
     uploadedFileName: null,
     manualData: null,
-  },
+  }),
   integrations: {},
 } as unknown as ResolvedReportInput;
 

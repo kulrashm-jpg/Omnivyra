@@ -7,6 +7,7 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 
 import { buildPublicDomainAuditDecisions } from '../../services/publicDomainAuditService';
+import { buildResolvedReportFields } from '../helpers/resolvedReportInputFixture';
 
 function makeBuilder(data: unknown, error: { message: string } | null = null) {
   return {
@@ -85,7 +86,7 @@ describe('publicDomainAuditService', () => {
           social_links: [],
           competitors: [],
         },
-        resolved: {
+        resolved: buildResolvedReportFields({
           companyName: null,
           websiteDomain: 'example.com',
           businessType: 'B2B SaaS',
@@ -95,7 +96,7 @@ describe('publicDomainAuditService', () => {
           source: 'manual-entry',
           uploadedFileName: null,
           manualData: null,
-        },
+        }),
         integrations: {
           google_analytics: { connected: false, source: 'system', label: 'Google Analytics' },
           google_search_console: { connected: false, source: 'system', label: 'Google Search Console' },
@@ -201,7 +202,7 @@ describe('publicDomainAuditService', () => {
           social_links: [],
           competitors: [],
         },
-        resolved: {
+        resolved: buildResolvedReportFields({
           companyName: null,
           websiteDomain: 'example.com',
           businessType: 'Local Services',
@@ -211,7 +212,7 @@ describe('publicDomainAuditService', () => {
           source: 'manual-entry',
           uploadedFileName: null,
           manualData: null,
-        },
+        }),
         integrations: {
           google_analytics: { connected: false, source: 'system', label: 'Google Analytics' },
           google_search_console: { connected: false, source: 'system', label: 'Google Search Console' },
