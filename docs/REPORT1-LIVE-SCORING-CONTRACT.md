@@ -267,7 +267,75 @@ denominator, no comparability identity, and no migration. The comparability iden
 does **not** gain a query-universe dimension — the point of the slice is to remove the hidden GSC
 dimension, not to record it.
 
-## 14. What this contract does not define
+**Comparing a report across the transition.** Two reports for the same company, one from before
+commit `04328d6c` and one from after, can list **different queries** in the search-visibility
+section. For a tenant whose earlier query set was GSC-seeded this is expected rather than a
+regression: the questions changed because the selection rule changed.
+
+This is a query-selection and content transition, **not a scoring transition**, and that
+distinction is what makes it safe to accept rather than to suppress:
+
+- **No persisted score depends on the query universe.** `search_visibility` is not one of the nine
+  dimensions and is not read by the score path, so no pillar score, overall score, maturity stage
+  or forecast value moves because the query set changed.
+- **Score trends are already guarded.** Change intelligence, delta, forecast and authority
+  trajectory each filter stored history through the comparability identity before subtracting
+  anything, and all four components of that identity are unchanged by L-2.
+- **The section carries no cross-era comparison.** The search-visibility surface reports the
+  current run only — no trend, no delta, no previous-period figure — so no reader is shown two
+  query universes on one axis.
+
+**What cannot be recovered for a pre-L-2 report.** Those observations carry no `queryOrigin` or
+`queryRationale`, and the query universe behind them cannot be reconstructed after the fact:
+`canonical_keywords` is continuously upserted by GSC ingestion, so the keyword set as it stood at
+the time of a past run no longer exists. How much GSC contributed to any historical query set is
+therefore unknowable, and it must be left unknown — never estimated, and never assigned from the
+query wording, which cannot tell a GSC-seeded term from an identical page-derived one.
+
+## 14. Recommendation lifecycle — absence is not resolution
+
+`report_recommendation_history` records where each recommendation sits in its lifecycle. The
+writer previously recorded **`resolved`** for any action missing from the current run, which
+asserts that the customer **completed the work**. Set membership was the entire basis for that
+claim, and it establishes nothing of the kind.
+
+Action ids are built from title text (`<source>:<title>`), and those titles interpolate the
+measured domain, the discovered competitor name, a query and a keyword. The ordinary reasons an
+action stops appearing are therefore that **its identifier changed**, that the surface generating
+it was not measured, or that the scan profile narrowed. None of those is an achievement.
+
+The contract this establishes:
+
+1. **Absence is not resolution.** A prior action missing from the current run is recorded as
+   **`no_longer_surfaced`**.
+2. **`no_longer_surfaced` means the action IDENTIFIER stopped appearing** — not that the
+   underlying finding is fixed, gone, or proven resolved.
+3. **`resolved` is not emitted by current code.** It remains in the vocabulary only because
+   historical rows carry it.
+4. **Legacy `resolved` rows are unchanged and have unknown provenance.** The system cannot
+   distinguish a genuine completion from a disappearance, so those rows are preserved exactly as
+   stored and are never reclassified or backfilled. Because no new `resolved` row is written, the
+   value itself now marks a row as legacy.
+5. **Reappearance is not regression.** An action that returns after `no_longer_surfaced` — or
+   after a legacy `resolved` — is `persistent`, and `regressed` only on a genuine severity
+   escalation. The gap is already recorded in the preceding row, so it is not re-asserted in the
+   row that follows it.
+6. **No completion evidence is inferred.** Not from a dismissal (which is suppression), not from a
+   measured pillar, not from action age, title wording, or a changed query. The collaboration
+   status table that carries a `completed` value is deliberately **not** wired into this
+   lifecycle: it has no production writer, no uniqueness or ordering contract, no tenant identity
+   reachable from the writer, and it loads one phase after history is persisted.
+7. **Forward-only.** New facts are appended as new rows; a stored row is never read-modified-
+   written. A permanently absent action records its absence once, not on every later run.
+8. **Title-derived action identity remains unstable**, so this lifecycle cannot track a finding
+   across a rename. That is a known limitation and a separate future workstream; it is the reason
+   point 2 is worded as narrowly as it is.
+
+The application vocabulary and the database CHECK constraint on
+`report_recommendation_history.status` must agree — a status added to one and not the other is
+rejected at write time, and the snapshot bundle write is not retry-safe.
+
+## 15. What this contract does not define
 
 Deliberately absent, because each is an unresolved owner decision rather than an implementation
 detail: adoption of the 9-pillar framework · the 196/197 fixed denominator · `D12 — Local

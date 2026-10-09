@@ -95,7 +95,37 @@ export type RecommendationHistoryRecord = {
   pillar: PillarKey;
   severity: 'critical' | 'moderate' | 'low';
   leverage_score: number;
-  status: 'first_seen' | 'persistent' | 'resolved' | 'regressed';
+  /**
+   * Lifecycle position of THIS row.
+   *
+   * ─── `no_longer_surfaced` vs `resolved` ──────────────────────────────────
+   *
+   * ABSENCE IS NOT RESOLUTION. The writer previously recorded `resolved` for any
+   * action that stopped appearing, which asserts the customer completed the work.
+   * Nothing established that: an action disappears when its identifier changes,
+   * when a surface was not measured, or when the scan profile narrowed. Those are
+   * not achievements, and the system holds no evidence of completion -- the only
+   * per-action signal that exists is `recommendation_dismissal`, which is
+   * suppression, and the collaboration status table has no production writer.
+   *
+   * `no_longer_surfaced` states only what is known: this action IDENTIFIER
+   * stopped appearing. It is NOT a claim that the underlying finding is fixed or
+   * gone. Because action ids are built from title text, the common cause is an
+   * identifier change rather than a finding going away.
+   *
+   * `resolved` IS NOT EMITTED by current code. It survives in the union because
+   * historical rows carry it and are never rewritten. Their provenance is
+   * unknown -- the system cannot tell a genuine completion from a disappearance
+   * -- so the value is effectively a CLOSED, LEGACY-ONLY member, and the value
+   * itself is what distinguishes a legacy row from a new one.
+   *
+   * DATABASE CONTRACT. This union is mirrored by a CHECK constraint on
+   * `report_recommendation_history.status`. The two must agree, which
+   * `report1RecommendationStatusVocabulary.test.ts` pins against the SQL text:
+   * a member added here without the migration is rejected at write time, and the
+   * bundle write is not retry-safe.
+   */
+  status: 'first_seen' | 'persistent' | 'resolved' | 'regressed' | 'no_longer_surfaced';
 };
 
 export type EvidenceHistoryRecord = {
@@ -271,8 +301,24 @@ export function classifyRecommendationStatus(params: {
   prior: RecommendationHistoryRecord | null;
 }): RecommendationHistoryRecord['status'] {
   if (!params.prior) return 'first_seen';
-  if (params.prior.status === 'resolved') return 'regressed';
-  // Severity escalation = regressed; otherwise persistent.
+
+  // ─── REAPPEARANCE AFTER A GAP IS NOT A REGRESSION ────────────────────────
+  //
+  // This previously read `if (params.prior.status === 'resolved') return
+  // 'regressed'`, which asserts the finding had been FIXED and has come back.
+  // For a legacy `resolved` row that claim is unsupported: the row's provenance
+  // is unknown, so "it was fixed" is exactly the inference being removed from
+  // this lifecycle. The same applies to a prior `no_longer_surfaced`.
+  //
+  // NOTHING IS LOST BY DROPPING THE RULE. The gap is already recorded, in the
+  // PRIOR row, which says `no_longer_surfaced` (or legacy `resolved`) and is
+  // queryable by `(company_id, action_id, observed_at)`. Re-encoding the gap in
+  // the row that follows it would add no fact and would require asserting an
+  // interpretation of it.
+  //
+  // So presence is classified on the only evidence this function actually has:
+  // severity. `persistent` is the RESIDUAL bucket here -- it is reached by the
+  // absence of escalation, not by a positive claim of continuous presence.
   const order = { low: 0, moderate: 1, critical: 2 } as const;
   if (order[params.current.severity] > order[params.prior.severity]) return 'regressed';
   return 'persistent';

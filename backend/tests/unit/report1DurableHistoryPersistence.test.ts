@@ -83,11 +83,18 @@ function bundle() {
     id: 'aaaaaaaa-0000-4000-8000-000000000003', company_id: COMPANY, observed_at: OBSERVED_AT,
     provider_id: 'wikidata', outcome: 'measured', latency_ms: 120, cache_hit: false, reason: null,
   }] as unknown as ProviderHistoryRecord[];
-  const recommendations = [{
+  // TYPED, NOT CAST. This fixture previously carried `severity: 'high'` and
+  // `status: 'new'` behind `as unknown as` — neither is a member of its union,
+  // and `'new'` is also rejected by the `report_recommendation_history.status`
+  // CHECK constraint, so the row asserted a write shape the database would have
+  // refused. ts-jest is transpile-only and the client here is a mock, so nothing
+  // caught it. Annotating the array instead of casting it means the compiler now
+  // holds this fixture to the contract it is claiming to exercise.
+  const recommendations: RecommendationHistoryRecord[] = [{
     id: 'aaaaaaaa-0000-4000-8000-000000000004', company_id: COMPANY, observed_at: OBSERVED_AT,
-    action_id: 'fix-titles', title: 'Fix titles', pillar: 'foundation', severity: 'high',
-    leverage_score: 8, status: 'new',
-  }] as unknown as RecommendationHistoryRecord[];
+    action_id: 'fix-titles', title: 'Fix titles', pillar: 'foundation', severity: 'critical',
+    leverage_score: 8, status: 'first_seen',
+  }];
   const evidence = [{
     id: 'aaaaaaaa-0000-4000-8000-000000000005', company_id: COMPANY, observed_at: OBSERVED_AT,
     scope: { kind: 'overall' }, evidence_count: 12, evidence_sources: ['crawler'],
