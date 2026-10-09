@@ -55,6 +55,7 @@ gate, merge, release, deploy) to a human.
 | `gov submit --story OMNI-n --evidence <sha256:…> [--worktree <path>]` | Prints the values a **human** records in Jira. | nothing |
 | `gov check-merge --story OMNI-n --worktree <path> --evidence <sha256:…>` | Deterministic merge gate for a human or CI. Fails closed. Never merges. | nothing |
 | `gov audit-branch --worktree <path> [--base <ref>]` | Read-only detection of commits in base..HEAD that do not carry governance (see *Detection*). Blocks nothing. | nothing |
+| `gov admit [--worktree <path>] [--session <uuid>] [--base <ref>]` | Read-only admission: identifies which live Claude Code session is asking from agreeing evidence, classifies the work with the intake classifier and prints the next gov command (see *Session admission*). Runs nothing it prints. | nothing |
 
 Exit codes: `0` OK · `10` NOT_READY · `11` REFUSED · `12` STALE · `13` INTEGRITY_FAILED ·
 `14` VERIFICATION_FAILED · `15` SCOPE_VIOLATION · `16` JUDGMENT_UNAVAILABLE · `64` usage · `70` ERROR.
@@ -262,6 +263,37 @@ transcripts, prompts, credentials or file contents.
 - Existing dirty work in a running window: `gov intake --worktree <path> --session <uuid>` → human
   `--apply` (if no Story fits) → human baseline commit (printed) → `gov intake … --bind` → type
   `@<packet.md>` in the running window. No restart, no duplicate agent.
+
+
+## Session admission: `gov admit`
+
+```
+gov admit [--worktree <path>] [--session <uuid>] [--base <ref>]     # default worktree: cwd; base: origin/main
+```
+
+The `/gov` skill's step 0. It answers "is this conversation entering governed work, and how?" without
+anyone looking up a session UUID, and it changes nothing.
+
+1. **Who is asking, from agreeing evidence.** Claude Code injects its session id, pid and messaging socket into every
+   tool process. Admission accepts them only when they agree with the session registry record
+   `~/.claude/sessions/<pid>.json`, the pid is alive and the session's named pipe is present (the
+   pipe namespace is listed, never opened). A working directory is never evidence. With no injected
+   identity at all, `--session <uuid>` is validated against the same live registry; with partial or
+   contradictory identity nothing falls back. An explicit `--session` must equal the proven session,
+   so a forked conversation cannot admit itself as its origin.
+2. **Strict liveness.** Unlike intake's live-session list, an unreadable or missing registry, an
+   unreadable or malformed record, a live pid whose pipe is gone (a possibly reused pid) or a pipe whose pid is
+   gone refuses instead of reading as "no sessions". On Windows the actual process start is not
+   compared with the record's `procStart` (that needs a process launch); the pipe check only mitigates
+   PID reuse and does not prove process identity (limitation F-9 in `HARNESS-CERTIFICATION.md`).
+3. **What the work is.** Intake's own input gathering and `classifyIntake`, with nothing stored:
+   GOVERNED_RESUME, EXISTING_STORY, PRE_GOVERNANCE_ADOPTION and NEW_WORK print the next command;
+   CONFLICTING_BINDINGS, SESSION_BOUND_ELSEWHERE, DUPLICATE_SESSION, AMBIGUOUS_OWNERSHIP and the other
+   intake refusals print none (exit 11). Identity and worktree failures are UNSUPPORTED (exit 11).
+
+Admission never stores a proposal, writes the intake audit, binds, writes Jira, commits, invokes JEV
+or executes the command it prints. The user decides: on yes the session runs exactly that command;
+on no nothing has happened.
 
 ## Jira hierarchy (OMNI)
 

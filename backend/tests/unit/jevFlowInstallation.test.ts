@@ -158,3 +158,37 @@ describe('OMNI-13 AC-5 — no automatic or hidden interception', () => {
     expect(read(SKILL_MD)).toMatch(/^description: User-invoked\. .*Use only when the user asks for governed work or types \/gov\.$/m);
   });
 });
+
+describe('OMNI-38 — /gov step 0 is an explicit, read-only admission', () => {
+  const admitFlags = (): Set<string> => {
+    const m = /const ADMIT_USAGE = '(.*)';/.exec(read(CLI_TS));
+    if (!m) throw new Error('cli.ts ADMIT_USAGE not found');
+    return new Set([...m[1].matchAll(/(--[a-z-]+)/g)].map((x) => x[1]));
+  };
+
+  it('the skill runs gov admit first and runs its printed command only on an explicit yes', () => {
+    const text = read(SKILL_MD);
+    expect(text).toContain('0. Admission first: run `gov admit --worktree <path>` from this conversation.');
+    expect(text).toContain('Only on an explicit yes, run exactly the printed command.');
+    expect(text).toContain('Never guess a session id');
+    expect(text).toContain("- Run the command `gov admit` prints without the user's explicit yes.");
+    expect(text.indexOf('0. Admission first')).toBeLessThan(text.indexOf('1. Ask for the Story key'));
+  });
+
+  it('CLAUDE.md documents admission as read-only and never evidence from a working directory', () => {
+    const text = read(CLAUDE_MD);
+    expect(text).toContain('`gov admit [--worktree <path>]` is a read-only admission check.');
+    expect(text).toContain('a working directory is never evidence');
+    expect(text).toContain('It binds, stores, commits and');
+  });
+
+  it.each([
+    ['CLAUDE.md', CLAUDE_MD],
+    ['SKILL.md', SKILL_MD],
+  ])('%s: every documented gov admit flag exists in ADMIT_USAGE', (_name, file) => {
+    const accepted = admitFlags();
+    const docs = [...read(file).matchAll(/gov admit((?: \[?--[a-z-]+(?: [^\s`|\]]+)?\]?)+)/g)];
+    expect(docs.length).toBeGreaterThan(0);
+    for (const d of docs) for (const f of d[1].matchAll(/(--[a-z-]+)/g)) expect({ flag: f[1], accepted: accepted.has(f[1]) }).toEqual({ flag: f[1], accepted: true });
+  });
+});

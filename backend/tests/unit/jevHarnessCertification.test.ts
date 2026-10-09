@@ -119,13 +119,13 @@ describe('PASS is backed by evidence that exists', () => {
     const refs = r['Evidence Hash'].split(';').map((s) => s.trim()).filter(Boolean);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) {
-      const ok = /^sha256:[0-9a-f]{64}$/.test(ref) || (ref.startsWith('S2:') && PACKET_IDS.includes(ref.slice(3)));
+      const ok = /^sha256:[0-9a-f]{64}$/.test(ref) || (/^S[24]:/.test(ref) && PACKET_IDS.includes(ref.slice(3)));
       expect({ ref, ok }).toEqual({ ref, ok: true });
     }
   });
 
   it.each(pass.map((r) => [r.ID, r] as const))('%s names the commit that carries the boundary', (_id, r) => {
-    expect(r.Commit).toMatch(/^(S2 HEAD|[0-9a-f]{8,40})$/);
+    expect(r.Commit).toMatch(/^(S2 HEAD|S4 HEAD|[0-9a-f]{8,40})$/);
   });
 
   it('every H row reports live operation separately (Live: …) so PASS never silently means "observed live"', () => {
@@ -184,9 +184,20 @@ describe('preserved findings cannot be quietly upgraded', () => {
     expect(row('B4').Result).toBe('INSUFFICIENT_EVIDENCE');
   });
 
-  it('H-06 does not claim a live JEV run; H-14 and N-19..N-22 are deferred to S4', () => {
+  it('H-06 does not claim a live JEV run', () => {
     expect(row('H-06').Notes).toMatch(/Live: NOT RUN/);
-    for (const id of ['H-14', 'N-19', 'N-20', 'N-21', 'N-22']) expect(row(id).Result).toBe('DEFERRED');
+  });
+
+  it('H-14 and N-19..N-22 are PASS only on the OMNI-38 admission tests and S4 evidence, and F-9 keeps the process-start limit', () => {
+    for (const id of ['H-14', 'N-19', 'N-20', 'N-21', 'N-22']) {
+      const r = row(id);
+      expect({ id, result: r.Result }).toEqual({ id, result: 'PASS' });
+      expect({ id, admission: citations(r['Negative Test']).length > 0 && citations(r['Negative Test']).every((c) => c.file === 'jevFlowAdmission.test.ts') }).toEqual({ id, admission: true });
+      expect({ id, evidence: r['Evidence Hash'], commit: r.Commit }).toEqual({ id, evidence: 'S4:jev.unit', commit: 'S4 HEAD' });
+      expect(r.Notes).toMatch(/OMNI-38/);
+    }
+    expect(row('H-14').Notes).toMatch(/F-9/);
+    expect(DOC).toMatch(/\n- \*\*F-9: `gov admit` does not compare the actual process start/);
   });
 });
 
@@ -207,8 +218,8 @@ describe('report', () => {
     expect(DOC).toContain(`\n${heading}\n`);
   });
 
-  it('every preserved finding F-1..F-8 is listed', () => {
-    for (let i = 1; i <= 8; i++) expect(DOC).toMatch(new RegExp(`\\n- \\*\\*F-${i}[ :]`));
+  it('every preserved finding F-1..F-9 is listed', () => {
+    for (let i = 1; i <= 9; i++) expect(DOC).toMatch(new RegExp(`\\n- \\*\\*F-${i}[ :]`));
   });
 
   it('never claims the harness is fully governed (the only occurrence is the explicit negation)', () => {

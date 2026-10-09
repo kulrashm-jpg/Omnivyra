@@ -90,7 +90,8 @@ import {
   type IntakeJira,
   type IntakeReader,
 } from './intakeJira';
-import { parseNulList, parsePorcelainZ, readLiveSessions, type IntakeProbe, type LiveSession, type WorktreeState } from './intakeProbe';
+import { NEW_WORK_INPUT_CODES, readStrictSessions, resolveAdmittedSession, type SessionEvidencePort } from './admission';
+import { createSessionEvidencePort, parseNulList, parsePorcelainZ, readLiveSessions, type IntakeProbe, type LiveSession, type WorktreeState } from './intakeProbe';
 import { loadBundle } from './evidence';
 import { createJiraQuery, type JiraQuery } from './jiraQuery';
 import { runJudgeFlow } from './judgeFlow';
@@ -165,6 +166,8 @@ export interface GovDeps {
   readUserEnv: UserEnvReader;
   /** verify / check-merge: the reviewed protected-path policy (B3); throws when unavailable (fail closed). */
   protectedPolicy: (registry: VerificationRegistry) => ProtectedPathPolicy;
+  /** admit: read-only session evidence (registry, pid liveness, pipe namespace); every read throws on failure. */
+  sessionEvidence: (env: Record<string, string | undefined>) => SessionEvidencePort;
 }
 
 /**
@@ -233,6 +236,9 @@ const INTAKE_USAGE = [
 
 /** Read-only detection (kept separate: it governs no Story and needs no binding). */
 const AUDIT_USAGE = '  audit-branch --worktree <path> [--base <ref>]   (read-only: reports commits in base..HEAD that do not carry governance)';
+
+/** Read-only admission (kept separate: it binds nothing and executes nothing it prints). */
+const ADMIT_USAGE = '  admit       [--worktree <path>] [--session <uuid>] [--base <ref>]   (read-only: identifies this session, classifies the work, prints the next gov command)';
 
 // ---------------------------------------------------------------- default deps
 
@@ -320,6 +326,7 @@ export function defaultGovDeps(): Omit<GovDeps, 'registry'> {
       }),
     readUserEnv: readWindowsUserEnv,
     protectedPolicy: (registry) => loadProtectedPathPolicy(registry),
+    sessionEvidence: (env) => createSessionEvidencePort(env),
   };
 }
 
@@ -1169,33 +1176,25 @@ function listPaths(run: Run, label: string, paths: string[]): void {
 /** `gov` as the README defines it; printed commands are for the human (or the governed session) to run. */
 const GOV = 'gov';
 
-async function cmdIntake(run: Run, argv: string[]): Promise<number> {
-  if (has(argv, '--apply')) return cmdIntakeApply(run, argv);
-  if (has(argv, '--check-forms')) return cmdIntakeCheckForms(run);
-  const wtArg = flag(argv, '--worktree');
-  if (has(argv, '--worktree') && wtArg === null) return usage(run, '--worktree needs a path');
-  const sessionArg = flag(argv, '--session');
-  if (has(argv, '--session') && (sessionArg === null || !SESSION_ID_RE.test(sessionArg))) return usage(run, '--session needs a lowercase uuid');
-  const storyFlag = flag(argv, '--story');
-  if (has(argv, '--story') && (storyFlag === null || !STORY_KEY_RE.test(storyFlag))) return usage(run, '--story needs OMNI-<n>');
-  const intent = flag(argv, '--intent');
-  if (has(argv, '--intent') && intent === null) return usage(run, '--intent needs text');
-  const baseRef = flag(argv, '--base') ?? DEFAULT_BASE_REF;
-  if (has(argv, '--base') && flag(argv, '--base') === null) return usage(run, '--base needs a ref');
-  const authorized = flagsAll(argv, '--authorized');
-  const prohibited = flagsAll(argv, '--prohibited');
-  const verification = flagsAll(argv, '--verification');
-  const judgmentAcs = flagsAll(argv, '--judgment-ac');
-  const authorizations = flagsAll(argv, '--authorize-protected');
-  if (!authorized || !prohibited || !verification || !judgmentAcs || !authorizations) {
-    return usage(run, '--authorized, --prohibited, --verification, --judgment-ac and --authorize-protected each need a value');
-  }
-  const bind = has(argv, '--bind');
-  const worktree = path.resolve(wtArg ?? process.cwd());
-  run.result.intake = true;
-  if (authorizations.length > 0) run.result.protected_authorizations = [...new Set(authorizations)].sort();
-  const layout = layoutOf(run);
+/** What intake (and admission) gather before classifying; read-only apart from the Jira GETs. */
+interface IntakeGatherInput {
+  worktree: string;
+  baseRef: string;
+  sessionArg: string | null;
+  storyFlag: string | null;
+  /** Read at the same point intake always read it (after the session transcript check). */
+  readLive: () => LiveSession[];
+  options: { intent: string | null; authorized: string[]; prohibited: string[]; verification: string[]; judgmentAcs: string[]; authorizations: string[] };
+}
 
+/**
+ * Intake's input gathering and classification, shared verbatim by `gov intake` and `gov admit`:
+ * rules → worktree state → ledger → resume check → session lookup → live sessions → Jira → classifyIntake.
+ * Writes nothing; refusals are thrown as Outcomes exactly as intake always threw them.
+ */
+async function gatherIntake(run: Run, layout: GovLayout, input: IntakeGatherInput) {
+  const { worktree, baseRef, sessionArg, storyFlag } = input;
+  const { intent, authorized, prohibited, verification, judgmentAcs, authorizations } = input.options;
   let rules: IntakeRules;
   try {
     rules = run.deps.intakeRules(run.deps.registry);
@@ -1254,7 +1253,7 @@ async function cmdIntake(run: Run, argv: string[]): Promise<number> {
     }
     if (file === null) throw new Outcome('REFUSED', `no Claude transcript found for session ${sessionArg}`);
   }
-  const live = run.deps.liveSessions(run.env);
+  const live = input.readLive();
 
   let explicitStory: StoryCandidate | null = null;
   let activeStories: StoryCandidate[] = [];
@@ -1285,6 +1284,44 @@ async function cmdIntake(run: Run, argv: string[]): Promise<number> {
     options: { intent, authorized, prohibited, verification, judgmentAcs, authorizations },
     rules,
     registry: run.deps.registry,
+  });
+  return { state, forWorktree, live, decision };
+}
+
+async function cmdIntake(run: Run, argv: string[]): Promise<number> {
+  if (has(argv, '--apply')) return cmdIntakeApply(run, argv);
+  if (has(argv, '--check-forms')) return cmdIntakeCheckForms(run);
+  const wtArg = flag(argv, '--worktree');
+  if (has(argv, '--worktree') && wtArg === null) return usage(run, '--worktree needs a path');
+  const sessionArg = flag(argv, '--session');
+  if (has(argv, '--session') && (sessionArg === null || !SESSION_ID_RE.test(sessionArg))) return usage(run, '--session needs a lowercase uuid');
+  const storyFlag = flag(argv, '--story');
+  if (has(argv, '--story') && (storyFlag === null || !STORY_KEY_RE.test(storyFlag))) return usage(run, '--story needs OMNI-<n>');
+  const intent = flag(argv, '--intent');
+  if (has(argv, '--intent') && intent === null) return usage(run, '--intent needs text');
+  const baseRef = flag(argv, '--base') ?? DEFAULT_BASE_REF;
+  if (has(argv, '--base') && flag(argv, '--base') === null) return usage(run, '--base needs a ref');
+  const authorized = flagsAll(argv, '--authorized');
+  const prohibited = flagsAll(argv, '--prohibited');
+  const verification = flagsAll(argv, '--verification');
+  const judgmentAcs = flagsAll(argv, '--judgment-ac');
+  const authorizations = flagsAll(argv, '--authorize-protected');
+  if (!authorized || !prohibited || !verification || !judgmentAcs || !authorizations) {
+    return usage(run, '--authorized, --prohibited, --verification, --judgment-ac and --authorize-protected each need a value');
+  }
+  const bind = has(argv, '--bind');
+  const worktree = path.resolve(wtArg ?? process.cwd());
+  run.result.intake = true;
+  if (authorizations.length > 0) run.result.protected_authorizations = [...new Set(authorizations)].sort();
+  const layout = layoutOf(run);
+
+  const { state, live, decision } = await gatherIntake(run, layout, {
+    worktree,
+    baseRef,
+    sessionArg,
+    storyFlag,
+    readLive: () => run.deps.liveSessions(run.env),
+    options: { intent, authorized, prohibited, verification, judgmentAcs, authorizations },
   });
 
   const auditBase: Omit<IntakeAuditInput, 'event' | 'outcome'> = {
@@ -1415,6 +1452,116 @@ async function cmdIntake(run: Run, argv: string[]): Promise<number> {
   return finish(run, 'OK');
 }
 
+/**
+ * `gov admit` — explicit, read-only admission. Identifies which live Claude Code session is asking
+ * (admission.ts), classifies the work with intake's own gathering and classifier, and prints the
+ * exact next gov command. It never stores a proposal, writes the intake audit, binds, calls Jira
+ * for anything but GETs, commits, invokes JEV, or executes the command it prints: the user decides.
+ */
+async function cmdAdmit(run: Run, argv: string[]): Promise<number> {
+  const wtArg = flag(argv, '--worktree');
+  if (has(argv, '--worktree') && wtArg === null) return usage(run, '--worktree needs a path');
+  const sessionArg = flag(argv, '--session');
+  if (has(argv, '--session') && (sessionArg === null || !SESSION_ID_RE.test(sessionArg))) return usage(run, '--session needs a lowercase uuid');
+  const baseRef = flag(argv, '--base') ?? DEFAULT_BASE_REF;
+  if (has(argv, '--base') && flag(argv, '--base') === null) return usage(run, '--base needs a ref');
+  const worktree = path.resolve(wtArg ?? process.cwd());
+  run.result.admit = true;
+  run.result.next_command = null;
+  const NOTHING = 'Admission is read-only: nothing was bound, stored, created, committed or executed.';
+  const refuseAs = (classification: string, code: string, message: string, details: string[] = []): never => {
+    Object.assign(run.result, { classification, refusal: code });
+    run.io.out(`Classification: ${classification}`);
+    run.io.err(`Admission refused [${code}]: ${message}`);
+    for (const d of details.slice(0, MAX_LISTED)) run.io.err(`  ${d}`);
+    run.io.out(NOTHING);
+    throw new Outcome('REFUSED', 'admission refused; nothing changed');
+  };
+
+  // 1. Who is asking — from agreeing evidence, never inferred from a cwd.
+  let port: SessionEvidencePort;
+  try {
+    port = run.deps.sessionEvidence(run.env);
+  } catch {
+    return refuseAs('UNSUPPORTED', 'REGISTRY_UNAVAILABLE', 'the session evidence cannot be read');
+  }
+  const strict = readStrictSessions(port);
+  const admitted = resolveAdmittedSession(run.env, strict, sessionArg);
+  if (admitted.ok === false) {
+    return refuseAs('UNSUPPORTED', admitted.code, admitted.message, admitted.code === 'SELF_ID_UNAVAILABLE' ? ['Admission never falls back to the working directory.'] : []);
+  }
+  const self = admitted.session_id;
+  Object.assign(run.result, { session_id: self, pid: admitted.pid, identity_source: admitted.source, proc_start_checked: admitted.proc_start_checked });
+  run.io.out(`Session: ${self} (pid ${admitted.pid}; ${admitted.source === 'self' ? 'identified from this process: registry, pid and socket agree' : 'explicit --session, validated against the live registry'})`);
+  if (!admitted.proc_start_checked) run.io.out('  (process start not compared: not knowable here without launching a process; the session-pipe check only mitigates PID reuse — F-9)');
+  const live = strict.ok ? strict.live.map((r) => ({ session_id: r.session_id, cwd: r.cwd, status: r.status, pid: r.pid })) : [];
+
+  // 2. What the work is — intake's own gathering and classifier, with nothing stored.
+  const layout = layoutOf(run);
+  let gathered: Awaited<ReturnType<typeof gatherIntake>>;
+  try {
+    gathered = await gatherIntake(run, layout, {
+      worktree,
+      baseRef,
+      sessionArg: self,
+      storyFlag: null,
+      readLive: () => live,
+      options: { intent: null, authorized: [], prohibited: [], verification: [], judgmentAcs: [], authorizations: [] },
+    });
+  } catch (err) {
+    if (err instanceof Outcome && err.status === 'REFUSED') return refuseAs('UNSUPPORTED', 'NOT_ADMISSIBLE', err.message);
+    throw err;
+  }
+  const { state, decision } = gathered;
+  const sessionBinding = findBySession(layout, self);
+  run.io.out(`Session binding: ${sessionBinding ? `${sessionBinding.story_key} (${sessionBinding.mode}) in ${sessionBinding.worktree}` : 'none'}`);
+  const wt = quoteIfNeeded(state.worktree);
+  const next = (lines: string[], command: string) => {
+    run.result.next_command = command;
+    run.io.out('Next governed step — run it ONLY after the user explicitly says yes:');
+    for (const l of lines) run.io.out(`  ${l}`);
+    run.io.out(`  ${command}`);
+    run.io.out(NOTHING);
+    return finish(run, 'OK');
+  };
+
+  if (decision.kind === 'REFUSED') {
+    if (NEW_WORK_INPUT_CODES.includes(decision.code)) {
+      run.result.classification = 'NEW_WORK';
+      run.io.out('Classification: NEW_WORK (no Story covers this work; a proposal needs its intent and scope)');
+      return next(['Describe the work, then propose a Story (the proposal is stored; Story creation stays the human --apply):'], `${GOV} intake --worktree ${wt} --session ${self} --intent "<what this work is>" [--authorized <path>]... [--verification <id>]...`);
+    }
+    return refuseAs(decision.code, decision.code, decision.message, decision.details);
+  }
+  run.result.classification = decision.kind;
+  run.io.out(`Classification: ${decision.kind}`);
+
+  if (decision.kind === 'GOVERNED_RESUME') {
+    const b = decision.binding;
+    Object.assign(run.result, { story: b.story_key, packet_hash: b.packet_hash });
+    run.io.out(`Story: ${b.story_key} · packet ${b.packet_hash} · base ${b.base_commit}`);
+    if (b.adoption) run.io.out(`Adoption baseline: ${b.adoption.baseline_commit} (${b.adoption.classification})`);
+    return next(['Already governed by this session. Confirm the packet is current, then continue the work:'], `${GOV} packet --story ${b.story_key} --worktree ${wt}`);
+  }
+  if (decision.kind === 'EXISTING_STORY') {
+    run.result.story = decision.story.key;
+    run.io.out(`Story: ${decision.story.key} — ${decision.story.summary}`);
+    return next(['Bind this session to the existing Story through intake (it re-checks everything, then runs gov attach/start):'], `${GOV} intake --worktree ${wt} --session ${self} --story ${decision.story.key} --bind`);
+  }
+  // PRE_GOVERNANCE_ADOPTION / NEW_WORK with a proposal (admission never stores it).
+  if (decision.candidate !== null) {
+    run.result.story = decision.candidate.key;
+    run.io.out(`Story: ${decision.candidate.key} — ${decision.candidate.summary}`);
+    run.io.out(`Subject: ${decision.subject ?? '(unknown)'} · uncommitted paths: ${state.dirty_files.length}`);
+    return next(
+      ['A HUMAN first commits the adoption baseline (never Claude):', ...baselineCommands(state.worktree, decision.candidate.key, decision.candidate.summary, false).map((c) => `  ${c}`), 'Then bind:'],
+      `${GOV} intake --worktree ${wt} --session ${self} --story ${decision.candidate.key} --bind`,
+    );
+  }
+  run.io.out(`Subject: ${decision.subject ?? '(unknown)'} · no Story covers this work`);
+  return next(['Propose a Story for it (the proposal is stored; Story creation stays the human --apply):'], `${GOV} intake --worktree ${wt} --session ${self}`);
+}
+
 function intakeProposalMd(layout: GovLayout, hash: Sha256Ref): string {
   return path.join(layout.home, 'intake', 'proposals', `${hash.slice('sha256:'.length)}.md`);
 }
@@ -1519,6 +1666,7 @@ function usage(run: Run, message?: string): number {
   run.io.err(USAGE);
   run.io.err(INTAKE_USAGE);
   run.io.err(AUDIT_USAGE);
+  run.io.err(ADMIT_USAGE);
   return GOV_EXIT_USAGE;
 }
 
@@ -1548,6 +1696,7 @@ export async function runGov(argv: string[], env: Record<string, string | undefi
     'check-merge': cmdCheckMerge,
     intake: cmdIntake,
     'audit-branch': cmdAuditBranch,
+    admit: cmdAdmit,
   };
   const handler = verb ? verbs[verb] : undefined;
   if (!handler) return usage(run, verb ? `unknown verb: ${verb}` : undefined);

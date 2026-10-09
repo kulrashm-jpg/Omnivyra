@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { SessionEvidencePort } from './admission';
 import { SESSION_ID_RE } from './types';
 
 export const CLAUDE_SESSIONS_DIR_ENV = 'CLAUDE_SESSIONS_DIR';
@@ -120,4 +121,30 @@ export function readLiveSessions(env: Record<string, string | undefined>, isPidA
     out.push({ session_id: sid, cwd: typeof rec.cwd === 'string' ? posix(rec.cwd) : null, status: typeof rec.status === 'string' ? rec.status : null, pid });
   }
   return out;
+}
+
+const WIN_PIPE_ROOT = '\\\\.\\pipe\\';
+
+/**
+ * The read-only evidence port `gov admit` validates against (see admission.ts). Unlike
+ * readLiveSessions, nothing here turns a failure into "no sessions": a missing or unreadable
+ * registry, record or pipe namespace THROWS. Pipes are enumerated (a directory listing of the
+ * pipe namespace), never opened or connected to. No process is launched, so the actual process
+ * start is 'unsupported'; the session's pipe (which normally ends with its process) is the only PID-reuse
+ * mitigation — it does not prove process identity and leaves residual risk (finding F-9).
+ */
+export function createSessionEvidencePort(env: Record<string, string | undefined>): SessionEvidencePort {
+  const dir = claudeSessionsDir(env);
+  return {
+    registry: {
+      list: () => fs.readdirSync(dir),
+      read: (file) => fs.readFileSync(path.join(dir, path.basename(file)), 'utf8'),
+    },
+    isPidAlive: defaultIsPidAlive,
+    listPipes: () => {
+      if (process.platform !== 'win32') throw new Error('session sockets are named pipes on Windows only');
+      return new Set(fs.readdirSync(WIN_PIPE_ROOT));
+    },
+    processStart: () => 'unsupported',
+  };
 }

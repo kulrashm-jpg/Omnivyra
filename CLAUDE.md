@@ -25,6 +25,11 @@ governed.
   without `--base` then records that commit as PRE_GOVERNANCE_ADOPTION_BASELINE and only later
   commits are governed. Adoption never creates commits, writes Jira, invokes JEV or modifies Claude
   transcripts.
+- **Entering from a conversation:** `gov admit [--worktree <path>]` is a read-only admission check.
+  It identifies which live session is asking (the injected session id, the session registry record, a
+  live pid and the session socket must agree; a working directory is never evidence), classifies the
+  work with the intake classifier and prints the next gov command. It binds, stores, commits and
+  runs nothing; the user decides whether to run what it prints.
 - **Not sure which Story or step applies:** `gov intake --worktree <path> [--session <uuid>]` is the
   single entry point. It classifies the worktree (GOVERNED_RESUME, EXISTING_STORY, NEW_WORK or
   PRE_GOVERNANCE_ADOPTION), reuses a matching Story instead of proposing a duplicate, and otherwise

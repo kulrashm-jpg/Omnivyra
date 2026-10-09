@@ -53,7 +53,7 @@ deliberate deferrals (N-14 enforcement / B1, N-18 / B2). H-13 is a FAIL.
 | H-11 | deterministic vs JEV → BJC precedence | continuation boundary | BJC `combine()` | `judge()` | deterministic result derived from evidence items | advisory input only | human disposition for Judgment ACs | `jevBjcJudge.test.ts: 4. deterministic PASS + JEV CONTRADICTS => PASS_DISPUTED, review, never FAIL`; `jevBjcJudge.test.ts: 5. deterministic FAIL + JEV SUPPORTS stays FAIL (conflict surfaced)`; `jevFlowJudge.test.ts: deterministic FAIL + JEV SUPPORTS → combined FAIL, never PASS; Jira JEV verdict CONFLICT` | PASS | S2:jev.unit | a39402e8 | Live: PASS for the Jira side. AC Verify (T41) refuses JEV Verdict CONFLICT; runtime-verified on 2026-10-01 against fixtures OMNI-4 and OMNI-5. |
 | H-12 | T1 / T2 / T3 gates → authority boundaries | human authority | human; Jira roles | Jira Verify (41) conditions; Release (61) Release Approvers | Gate Result, Verified ACs | none (cannot write gate fields or transition) | T1, T2, T3 | `jevJiraIntegration.test.ts: 15. the parent Story (Gate Result) is never written`; `jevFlowIntake.test.ts: 15. a gate field on a create form fails closed and nothing is created`; `jevJiraIntegration.test.ts: 16/17. the integration has no transition path` | PASS | S2:jev.unit; sha256:55df064f31399df81991e09239018c9b91328762d194328371da0ac9c50a9210; sha256:51a65c56511a298ab74cca9cbdc235d9aae65fe82e15cf5914eb3635464f35fe | a39402e8 | Live: PASS (snapshots). Story Verify needs Gate Result PASS and every sub-task Verified; Workstream and Epic Verify need Gate Result PASS. T2/T3 content is human judgment with no deterministic link. Findings F-3 and F-4. |
 | H-13 | integration / release / deployment → human-only authority | human authority | human | merge; Jira Integrate (51) / Release (61); `npm run deploy:prod`; Railway deploy on merge | none tied to a Story | none | integration, release, deployment | `jevFlowCli.test.ts: registers no hooks and has no Jira transition / write path of its own`; `jevJiraIntegration.test.ts: 16/17. the integration has no transition path` | FAIL | sha256:55df064f31399df81991e09239018c9b91328762d194328371da0ac9c50a9210; sha256:51a65c56511a298ab74cca9cbdc235d9aae65fe82e15cf5914eb3635464f35fe | — | Preserved finding F-1: Integrate (51) has no transition condition on any OMNI issue type, so any Engineer can integrate a Verified item. Release (61) is limited to Release Approvers. Deployment is not gated in code (N-18 DEFERRED). JEV and gov hold no integration, release or deploy path, and the service identities see zero transitions (N-12/N-13). The boundary is human by Jira role and convention, not enforced. Not changed here: Jira configuration is out of scope. |
-| H-14 | gov admit → governed session admission | planned entry (S4) | — | `gov admit` (not built) | — | none | yes/no before executing the printed command | — | DEFERRED | — | — | Deliberate deferral: S4 is built after S2 from S2's governed HEAD. Proposal cc50b2457cdd… is stored and not applied. |
+| H-14 | gov admit → governed session admission | read-only admission in front of the entries | the asking session, identified from agreeing evidence; the user decides | `gov admit [--worktree] [--session] [--base]` | identity only when the injected session id, the registry record, a live pid and the session pipe agree; intake’s own classifier; nothing written | none | an explicit yes before the printed command is run | `jevFlowAdmission.test.ts: one proven live session + a clean branch with no Story → NEW_WORK, prints (never runs) gov intake --intent`; `jevFlowAdmission.test.ts: a real governed binding (gov attach) → GOVERNED_RESUME with the packet step`; `jevFlowAdmission.test.ts: cmdAdmit has no write, bind, store, audit, Jira-write, JEV, git-write or process surface` | PASS | S4:jev.unit | S4 HEAD | OMNI-38. Live: PASS 2026-10-09, read-only, in session 26b18a5f: GOVERNED_RESUME on OMNI-38; `--session` naming another live session and a forged id both refused SESSION_MISMATCH; GOV_HOME and refs byte-identical. The actual process start is not compared on Windows (F-9). |
 
 ## Negative / bypass certification
 
@@ -77,10 +77,10 @@ deliberate deferrals (N-14 enforcement / B1, N-18 / B2). H-13 is a FAIL.
 | N-16 | automatic / hidden JEV invocation | absence | repo | — | no hooks, no plugin enablement, no automatic import path | none | — | `jevBjcIsolation.test.ts: no repo Claude setting registers hooks or enables the claude-jev plugin`; `jevFlowInstallation.test.ts: no .claude/settings*.json declares a hooks key`; `jevFlowAdoptionSafety.test.ts: no module contains Claude Code hook tokens or settings writes` | PASS | S2:jev.unit | 20039f3e | Proven for the repository only. User-level configuration is B4. |
 | N-17 | unauthorized Jira field write-back | refusal | client | `assertAdvisoryOnly` | every non-advisory field refused before any request | four fields only | — | `jevJiraIntegration.test.ts: the client refuses every human-only field before any request`; `jevJiraIntegration.test.ts: the update touches only advisory fields`; `jevFlowAdoptionSafety.test.ts: the only Jira writes in jev-flow are Phase 2 writeAdvisoryFields in judgeFlow.ts and intake issue creation in intakeJira.ts` | PASS | S2:jev.unit | a39402e8 | — |
 | N-18 | release / deployment without a human gate | deliberate classification | human | `npm run deploy:prod`; Railway deploy on merge to main | none | none | deployment | — | DEFERRED | — | — | Owner decision A2(c). `deploy:prod` checks the SHA and a clean tree but never reads Jira or Deployment Authorized By. The Railway worker deploys about 5 s after a merge to main, so the human merge is the worker's deployment gate. Not PASS: no code enforces a human deployment decision. |
-| N-19 | admission: self-identification mismatch | refusal (S4) | — | `gov admit` (not built) | — | none | — | — | DEFERRED | — | — | Deliberate deferral to S4 (gov admit), not built yet. |
-| N-20 | admission: forged session id | refusal (S4) | — | `gov admit` (not built) | — | none | — | — | DEFERRED | — | — | Deliberate deferral to S4 (gov admit), not built yet. |
-| N-21 | admission: forked session | refusal (S4) | — | `gov admit` (not built) | — | none | — | — | DEFERRED | — | — | Deliberate deferral to S4. Owner decision: forks have no admission authority. |
-| N-22 | admission: user declines | zero trace (S4) | — | `gov admit` (not built) | — | none | — | — | DEFERRED | — | — | Deliberate deferral to S4 (gov admit), not built yet. |
+| N-19 | admission: self-identification mismatch | refusal | gov admit | `gov admit` | session id, registry, pid, socket and pipe must agree; any disagreement refuses before classification | none | — | `jevFlowAdmission.test.ts: env session id disagreeing with the registry → SESSION_MISMATCH`; `jevFlowAdmission.test.ts: registry/socket disagreement → SOCKET_MISMATCH`; `jevFlowAdmission.test.ts: a pid with no live record (dead, stale or unknown) → PROCESS_NOT_LIVE`; `jevFlowAdmission.test.ts: 9. a live pid whose session pipe is gone is a reused pid (PID_REUSED)` | PASS | S4:jev.unit | S4 HEAD | OMNI-38. Identity is never inferred from a cwd; incomplete self evidence never falls back to `--session`. |
+| N-20 | admission: forged session id | refusal | gov admit | `gov admit --session <uuid>` | an explicit id must be a live, unique registry session (same strict validation) | none | — | `jevFlowAdmission.test.ts: with no self evidence at all, --session gets the same live-registry validation`; `jevFlowAdmission.test.ts: explicit --session with no self evidence follows the same live-registry validation` | PASS | S4:jev.unit | S4 HEAD | OMNI-38. A forged, stale or reused-pid id is refused. |
+| N-21 | admission: forked session | refusal | gov admit + intake classifier | `gov admit [--session <origin>]` | a session may only admit itself; the origin’s binding refuses the fork (DUPLICATE_SESSION) | none | — | `jevFlowAdmission.test.ts: --session equal to the proven self is accepted; any other session is refused (forks gain no authority)`; `jevFlowAdmission.test.ts: a forked session (its own id) on its origin` | PASS | S4:jev.unit | S4 HEAD | OMNI-38. Owner decision: forks have no admission authority. |
+| N-22 | admission: user declines | zero trace | gov admit | `gov admit` | admission writes nothing and runs nothing; every CLI case byte-compares the repo, GOV_HOME and transcripts | none | the user’s yes or no | `jevFlowAdmission.test.ts: declining is the default: admission leaves zero trace (no ledger, proposal, audit, git or transcript change)` | PASS | S4:jev.unit | S4 HEAD | OMNI-38. Declining is simply not running the printed command. |
 
 ## Bypass paths
 
@@ -98,7 +98,8 @@ deliberate deferrals (N-14 enforcement / B1, N-18 / B2). H-13 is a FAIL.
 `gov intake` (H-01), `gov start` (H-02), `gov attach --base` (H-03) and adoption via `gov attach` (H-04)
 are the supported governed entries. Two further JEV entry points exist outside `gov`: `jev-jira judge-ac`
 (H-06b) and `jev-bjc judge` (H-06c). Both are explicit, bounded and advisory, and neither can transition
-Jira or override deterministic evidence. `gov admit` (H-14) is deferred to S4.
+Jira or override deterministic evidence. `gov admit` (H-14, OMNI-38) is a read-only admission in front of these entries:
+it proves the asking session, classifies the work with intake’s classifier and prints the next command; it runs nothing.
 
 ### Certified continuation paths
 
@@ -184,6 +185,12 @@ T2 and T3 carry no deterministic link to evidence. They are human decisions reco
   `backend/tests/setupEnv.ts` accepts no env file only under `CI=true`; its production-marker check runs
   in every mode.
 - **F-8: credential freshness covers only the human intake identity.**
+- **F-9: `gov admit` does not compare the actual process start with the registry’s procStart on Windows.**
+  Reading another process’s start time needs a process launch, which admission does not make. The only
+  PID-reuse mitigation is the session’s named pipe, which normally ends with its process and is enumerated,
+  never opened. This does not prove process identity and does not eliminate PID-reuse risk; the residual
+  risk is accepted as an open limitation. Where a start-time probe is available it must match, and a start
+  that cannot be established refuses.
 
 ### Remaining gaps
 
@@ -191,13 +198,13 @@ T2 and T3 carry no deterministic link to evidence. They are human decisions reco
 - B2 / N-18: deployment is not Jira-gated.
 - B4: user-level plugin configuration is not inspected.
 - H-06: no live JEV run.
-- F-1 to F-8 above.
+- F-1 to F-9 above.
 
 ### Deliberate deferrals
 
 - **A1:** enforcement of governed entry (B1). Detection is delivered as `gov audit-branch`.
 - **A2(c):** deployment gating (N-18, B2).
-- **S4:** session admission (H-14, N-19 to N-22).
+- **S4:** none. Session admission (H-14, N-19 to N-22) is delivered by OMNI-38; F-9 records its limit.
 
 ### Certification SHA
 
@@ -205,3 +212,4 @@ The certification SHA is the HEAD of branch `omni-32/harness-certification` at w
 `gov verify --story OMNI-32` produced a PASS bundle. It is recorded in that bundle, in the `gov submit`
 output that a human copies into Jira Evidence References, and in `GOV_HOME/evidence/harness/PROGRESS.md`.
 It cannot be written into this file, because this file is part of the verified tree.
+`S4:<registry id>` and `S4 HEAD` mean the same for OMNI-38 (session admission): its own `gov verify` bundle and governed commit.

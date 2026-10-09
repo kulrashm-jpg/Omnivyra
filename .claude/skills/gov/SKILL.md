@@ -12,6 +12,16 @@ checkout by absolute path (`node <TOOLING>/node_modules/tsx/dist/cli.mjs <TOOLIN
 
 ## Steps
 
+0. Admission first: run `gov admit --worktree <path>` from this conversation. It is read-only: it
+   identifies which live session is asking (its injected session id, registry record, live pid and
+   session socket must agree; never the working directory), classifies the work with intake's
+   classifier and prints ONE next gov command. Show the user the session, the classification and
+   that command, then ask explicitly whether to govern this work.
+   - Only on an explicit yes, run exactly the printed command. On no, do nothing more: admission
+     left no trace.
+   - On UNSUPPORTED or a refusal (DUPLICATE_SESSION, AMBIGUOUS_OWNERSHIP, SESSION_BOUND_ELSEWHERE,
+     CONFLICTING_BINDINGS), report it and stop. Never guess a session id or pass another session's
+     id with `--session`.
 1. Ask for the Story key (`OMNI-<n>`) or confirm the one the user gave. Do not guess it. If the
    user does not know it, run `gov intake --worktree <path> [--session <uuid>]` and report what it
    prints: the classification, the reused Story, or the stored proposal hash. Approving a proposal
@@ -43,6 +53,7 @@ checkout by absolute path (`node <TOOLING>/node_modules/tsx/dist/cli.mjs <TOOLIN
 ## Never
 
 - Run `gov judge --write-back`.
+- Run the command `gov admit` prints without the user's explicit yes.
 - Run `gov intake --apply` or `gov intake --check-forms`, or set GOV_INTAKE_EMAIL / GOV_INTAKE_TOKEN
   (both use the human's own Jira identity).
 - Transition Jira, or perform Record Result / Record Verification. `gov submit` only prints values
