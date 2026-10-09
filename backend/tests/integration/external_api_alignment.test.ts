@@ -170,12 +170,15 @@ describe('External API alignment', () => {
       created_at: new Date().toISOString(),
     });
 
-    const summary = await externalApiService.fetchExternalTrends('US', 'marketing', { recordHealth: true });
+    const summary = await externalApiService.fetchExternalTrends('US', 'marketing', undefined, { recordHealth: true });
     expect(summary.missing_env_placeholders).toContain('missing_env:MISSING_KEY');
 
     await setCachedResponse(buildCacheKey({ apiId: 'api-2', geo: 'marketing', category: undefined, userId: 'system:US' }), { items: [] }, 1000);
-    const cachedSummary = await externalApiService.fetchExternalTrends('US', 'marketing', { recordHealth: true });
+    const cachedSummary = await externalApiService.fetchExternalTrends('US', 'marketing', undefined, { recordHealth: true });
     expect(getCacheStats().hits).toBeGreaterThan(0);
+    // The seeded payload ({ items: [] }) differs from what the fetch mock returns, so this proves
+    // the second call was served from the seeded cache entry rather than a fresh upstream fetch.
+    expect(cachedSummary.results.find((r) => r.source.id === 'api-2')).toMatchObject({ cache_hit: true, payload: { items: [] } });
     expect(updateApiHealth).toHaveBeenCalled();
     externalApiService.recordSignalConfidenceSummary([0.6, 0.8]);
     expect(cachedSummary.cache_stats.hits).toBeGreaterThanOrEqual(0);

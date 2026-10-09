@@ -225,7 +225,7 @@ describe('Governance Performance Guardrails', () => {
       expect(rejected.length).toBe(1);
       const err = (rejected[0] as PromiseRejectedResult).reason;
       expect(err).toBeInstanceOf(SnapshotRestoreInProgressError);
-      expect((err as Error).code).toBe('SNAPSHOT_RESTORE_IN_PROGRESS');
+      expect((err as SnapshotRestoreInProgressError).code).toBe('SNAPSHOT_RESTORE_IN_PROGRESS');
     });
   });
 
