@@ -10,11 +10,31 @@ import { config } from '@/config';
 import { resolveProviderCredential } from './providerCredentialResolver';
 import { fetchCanonicalSerp } from './serp/canonicalSerpClient';
 import type { SerpResultType } from './serp/serpResultTypes';
+// R1-D — the EXISTING classifier, reached from production for the first time.
+// `serpQueryUniverse` has held a deterministic branded/commercial/informational
+// classifier since Phase 3, and until now its only caller was a unit test: no
+// report ever carried a query class. Nothing is re-implemented here; the query
+// set competitor discovery already runs is classified with the module that was
+// written for exactly that and then left unwired.
+import {
+  brandTokensFor,
+  classifyQuery,
+  intentForClass,
+  type QueryClass,
+  type QueryIntent,
+} from './serpQueryUniverse';
+// R1-L2 -- the Report 1 query-origin allow-list. GSC is structurally absent from this taxonomy.
+import {
+  type Report1Query,
+  type Report1QueryCandidate,
+  type Report1QueryOrigin,
+} from './report1QueryUniverse';
 import {
   buildCompetitorFitRationale,
   buildCompetitorFitSignals,
   evaluateCompetitorCandidate,
   extractCompetitiveContextFromResolvedInput,
+  isSparseIdentityFallbackValue,
   scoreCompetitorCandidate,
   type CompanyCompetitiveContext as EngineCompanyCompetitiveContext,
   type CompetitorSource as EngineCompetitorSource,
@@ -474,14 +494,89 @@ function extractDiscoveryFields(companyProfile: DiscoveryKeywordInput): {
   };
 }
 
-export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput): string[] {
+/**
+ * R1-L2 -- the declared/template discovery candidates, each carrying the origin that produced it.
+ *
+ * This is the SAME query construction `generateDiscoveryKeywords` has always performed, in the
+ * same order; the only addition is that every candidate records WHY it exists at the moment it
+ * is built. Nothing downstream may re-derive that from the query text.
+ *
+ * THE BASE DECIDES THE ORIGIN. A template is only as grounded as the term it is applied to, so a
+ * template built on the generic fallback is reported as `derived_fallback`, not
+ * `derived_template`. Calling it a template would imply a real category stood behind it.
+ */
+export function generateDiscoveryQueryCandidates(
+  companyProfile: DiscoveryKeywordInput,
+): Report1QueryCandidate[] {
   const fields = extractDiscoveryFields(companyProfile);
   const category = normalizeQueryPart(fields.category, 5);
   const product = normalizeQueryPart(fields.product, 5);
   const problem = normalizeQueryPart(fields.problem, 5);
   const icp = normalizeQueryPart(fields.icp, 5);
   const domainTerms = extractDomainKeywords(fields.domain).join(' ');
+
+  // BASE SELECTION IS UNCHANGED, DELIBERATELY -- this is the original expression, `??` and all.
+  //
+  // `extractDomainKeywords(...).join(' ')` returns '' rather than null when a domain yields no
+  // tokens, and '' is not nullish, so the trailing 'business software' is UNREACHABLE: the real
+  // fallback has always been an EMPTY base, producing bare template queries ('competitors',
+  // 'alternatives'). Rewriting this as a truthiness chain would make the literal reachable and
+  // would therefore SILENTLY CHANGE which queries Report 1 dispatches. L-2 discloses the
+  // fallback; it does not alter query behaviour. The dead branch is reported, not fixed here.
   const base = category ?? product ?? problem ?? domainTerms ?? 'business software';
+
+  // ALL-OR-NOTHING. The sparse-identity substitution replaces the whole context object in one
+  // spread, so either every field is the company's or every field is the hard-coded template.
+  // One flag therefore models it exactly, and it governs EVERY candidate below -- not just the
+  // base -- because the product, problem, ICP and vertical-trigger text are substituted too.
+  const contextIsFabricated = isSparseIdentityFallbackValue(fields.category)
+    || isSparseIdentityFallbackValue(fields.product)
+    || isSparseIdentityFallbackValue(fields.problem)
+    || isSparseIdentityFallbackValue(fields.icp);
+  const FABRICATED_RATIONALE =
+    'Generic category template. No declared or public subject context was available for this company, '
+    + 'so a hard-coded placeholder identity was used — this is not a statement about this company.';
+  /** Route every candidate through one place, so no branch can quietly claim `declared`. */
+  const tag = (
+    value: string,
+    origin: Report1QueryOrigin,
+    rationale: string,
+    basis: string,
+  ): Report1QueryCandidate => (contextIsFabricated
+    ? { value, origin: 'derived_fallback', rationale: FABRICATED_RATIONALE, basis: 'fabricated placeholder identity' }
+    : { value, origin, rationale, basis });
+
+  // Provenance for whichever branch supplied the base.
+  //
+  // A FABRICATED IDENTITY IS NOT A DECLARATION. When the profile is too sparse to describe the
+  // company, `extractCompetitiveContextFromResolvedInput` substitutes a hard-coded identity
+  // ('business software and marketing automation', ...) — its own comment calls this fabricating
+  // the owner's identity. Those values arrive here indistinguishable from real ones, so a naive
+  // classifier would label a template as something the company said about itself. Recognising the
+  // substitute keeps `declared` meaning declared. It changes no query: the same text is still
+  // dispatched, it is simply reported as the generic fallback it is.
+  //
+  // BOTH other fallback shapes — an empty base, and the unreachable generic literal — resolve
+  // here too, so no ungrounded query can be presented as the company's declared category.
+  // The RAW field is tested, never the normalized one: `normalizeQueryPart(..., 5)` truncates to
+  // five tokens, so a longer substituted value ('software platform for growth and customer
+  // acquisition') would stop matching the sentinel and would read as declared.
+  const declaredBase = (normalized: string | null, raw: string | null): boolean =>
+    Boolean(normalized) && !isSparseIdentityFallbackValue(raw);
+  const baseSource: { origin: Report1QueryOrigin; basis: string } =
+    declaredBase(category, fields.category) ? { origin: 'declared', basis: 'company profile: category' }
+      : declaredBase(product, fields.product) ? { origin: 'declared', basis: 'company profile: product or service' }
+        : declaredBase(problem, fields.problem) ? { origin: 'declared', basis: 'company profile: problem or positioning' }
+          : domainTerms.trim() ? { origin: 'observed_public', basis: 'public domain label' }
+            : { origin: 'derived_fallback', basis: 'no declared or public subject context' };
+  const templateOrigin: Report1QueryOrigin =
+    baseSource.origin === 'derived_fallback' ? 'derived_fallback' : 'derived_template';
+  const templateRationale = baseSource.origin === 'derived_fallback'
+    ? 'Generic category template. No declared or public subject context was available for this company.'
+    : 'Category template applied to the ' + baseSource.basis + '.';
+  const tmpl = (value: string): Report1QueryCandidate =>
+    tag(value, templateOrigin, templateRationale, baseSource.basis);
+
   const contextText = [
     fields.category,
     fields.product,
@@ -490,27 +585,43 @@ export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput)
     domainTerms,
   ].filter(Boolean).join(' ').toLowerCase();
 
-  const queries: string[] = [];
-  pushUniqueQuery(queries, `${base} competitors`);
-  pushUniqueQuery(queries, `${base} alternatives`);
-  pushUniqueQuery(queries, `${base} software platforms`);
-  pushUniqueQuery(queries, `best ${base} software`);
-  pushUniqueQuery(queries, `${base} comparison`);
+  const candidates: Report1QueryCandidate[] = [];
+  candidates.push(tmpl(`${base} competitors`));
+  candidates.push(tmpl(`${base} alternatives`));
+  candidates.push(tmpl(`${base} software platforms`));
+  candidates.push(tmpl(`best ${base} software`));
+  candidates.push(tmpl(`${base} comparison`));
   if (product) {
-    pushUniqueQuery(queries, `${product} competitors`);
-    pushUniqueQuery(queries, `${product} alternatives`);
-    pushUniqueQuery(queries, `alternatives to ${product}`);
-    pushUniqueQuery(queries, `best ${product} software`);
-    pushUniqueQuery(queries, `${product} tools`);
+    const on = 'company profile: product or service';
+    const why = 'Category template applied to the declared product or service.';
+    for (const value of [
+      `${product} competitors`,
+      `${product} alternatives`,
+      `alternatives to ${product}`,
+      `best ${product} software`,
+      `${product} tools`,
+    ]) candidates.push(tag(value, 'derived_template', why, on));
   }
   if (problem) {
-    pushUniqueQuery(queries, `${problem} tools`);
-    pushUniqueQuery(queries, `software for ${problem}`);
+    const on = 'company profile: problem or positioning';
+    const why = 'Category template applied to the declared problem or positioning.';
+    for (const value of [`${problem} tools`, `software for ${problem}`]) {
+      candidates.push(tag(value, 'derived_template', why, on));
+    }
   }
-  if (icp && category) pushUniqueQuery(queries, `${icp} ${category} platforms`);
+  if (icp && category) {
+    candidates.push(tag(
+      `${icp} ${category} platforms`,
+      'derived_template',
+      'Category template combining the declared customer segment and category.',
+      'company profile: customer segment and category',
+    ));
+  }
 
+  // Vertical template sets, selected by a deterministic match on the DECLARED context text.
+  // Fixed lists rather than base-derived, so the basis names the set instead of a profile field.
   if (/\b(mental|wellness|wellbeing|therapy|therapeutic|reflection|self reflection|self-reflection|clarity|emotional|mood|journaling|meditation|mindfulness|stress|anxiety)\b/.test(contextText)) {
-    [
+    for (const value of [
       'AI mental wellness apps',
       'AI therapy chatbot competitors',
       'self reflection AI tools',
@@ -518,11 +629,16 @@ export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput)
       'digital therapy platforms',
       'guided journaling apps',
       'emotional wellbeing AI apps',
-    ].forEach((query) => pushUniqueQuery(queries, query));
+    ]) candidates.push(tag(
+      value,
+      'derived_template',
+      'Fixed wellness-vertical template set, selected by the declared company context.',
+      'template set: wellness',
+    ));
   }
 
   if (/\b(marketing|crm|sales|campaign|growth|seo|content|revenue|customer|automation|lead|pipeline|demand)\b/.test(contextText)) {
-    [
+    for (const value of [
       'marketing automation platforms',
       'B2B marketing operating system competitors',
       'campaign execution software',
@@ -534,17 +650,35 @@ export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput)
       'Zoho CRM alternatives',
       'best CRM software for marketing automation',
       'customer growth software platforms',
-    ].forEach((query) => pushUniqueQuery(queries, query));
+    ]) candidates.push(tag(
+      value,
+      'derived_template',
+      'Fixed marketing-vertical template set, selected by the declared company context.',
+      'template set: marketing',
+    ));
   }
 
-  [
+  for (const value of [
     `${base} tools`,
     `${base} apps`,
     `${base} platforms`,
     `${base} market leaders`,
     `${base} category competitors`,
-  ].forEach((query) => pushUniqueQuery(queries, query));
+  ]) candidates.push(tmpl(value));
 
+  return candidates;
+}
+
+/**
+ * The plain string list this function has always returned. Implemented in terms of the
+ * origin-tagged candidates above so the two can never drift: same order, same `pushUniqueQuery`
+ * dedupe, same cap of 10.
+ */
+export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput): string[] {
+  const queries: string[] = [];
+  for (const candidate of generateDiscoveryQueryCandidates(companyProfile)) {
+    pushUniqueQuery(queries, candidate.value);
+  }
   return queries.slice(0, 10);
 }
 
@@ -616,6 +750,70 @@ export type SerpSearchObservation = {
   snippet: string | null;
   /** Organic rows the provider returned for this query — the window the position was found in. */
   resultCount: number;
+
+  // ─── R1-D: what makes this a measurement rather than a number ────────────
+  // Everything below answers a question a reader of a position MUST be able to
+  // ask: on which engine, via whom, when, and what kind of query was it. A rank
+  // without them is an assertion; with them it is an observation. All six are
+  // required rather than optional, so a future code path cannot produce a
+  // position that silently lacks its provenance.
+
+  /**
+   * What KIND of search this was, classified from the query text against the
+   * company's own brand tokens.
+   *
+   * "We rank #1" means something entirely different for the company's own name
+   * than for its category. Before this, every query was an unclassified string,
+   * so branded and non-branded visibility were indistinguishable in the output
+   * and a company ranking first for nothing but its own name read identically
+   * to one ranking first for its market.
+   */
+  queryClass: QueryClass;
+  /** The intent grouping, DERIVED from `queryClass` and never asserted separately. */
+  intent: QueryIntent;
+  /**
+   * The search engine whose results page was read. Null only if the provider
+   * returned rows without naming one, which the canonical client does not do.
+   */
+  engine: string | null;
+  /** The intermediary that fetched the page. Distinct from `engine`. */
+  provider: string | null;
+  /**
+   * When THIS query was observed, ISO-8601, as reported by the client that read
+   * it.
+   *
+   * Per observation, not per report. The surface previously carried one
+   * assembly-time timestamp for the whole set, which dated the composition
+   * rather than the evidence.
+   */
+  observedAt: string | null;
+  /**
+   * Other domains on this results page, in the provider's rank order.
+   *
+   * Competitor-overlap GROUNDWORK only, and deliberately nothing more: it
+   * records who else was on the page the company's own rank came from, which is
+   * the single comparison SERP alone can support. Nothing here is scored,
+   * qualified or classified as a competitor — that is the competitor engine's
+   * job, over its own evidence, and this array is not an input to it.
+   */
+  competitorDomains: string[];
+
+  // ─── R1-L2: WHY THIS QUERY WAS ASKED ─────────────────────────────────────
+  //
+  // Query origin is a DIFFERENT fact from everything above. `engine`/`provider`/
+  // `observedAt` say where the ANSWER came from; these two say why Report 1 put
+  // the QUESTION. They must never be conflated or rendered as one line: a
+  // declared query that returned a Google result is both declared and observed,
+  // on different axes.
+  //
+  // Carried from construction. `null` means the caller supplied no universe for
+  // this query, which reads as "origin not recorded" — never as a guess from the
+  // query text.
+
+  /** The permitted input that put this query in the universe. Never a private source. */
+  queryOrigin: Report1QueryOrigin | null;
+  /** The construction-time sentence explaining the choice. Never re-derived downstream. */
+  queryRationale: string | null;
 };
 
 /**
@@ -660,6 +858,20 @@ export type SerpKeywordResult = {
   reason: string | null;
   /** DG-001 — sibling evidence. Never merged into `rows`. */
   features: SerpFeatureRow[];
+  /**
+   * R1-D — the observation's identity, carried through from the canonical client.
+   *
+   * This projection previously dropped all three. The client knew which provider
+   * it used, which engine it asked for and when the page came back, and this
+   * type threw every one of them away one call later, which is why the report
+   * surface had to assert `provider: 'serpapi'` as a hard-coded literal and
+   * stamp its own assembly clock as the observation time.
+   *
+   * All three are null unless `status === 'ok'` — nothing was read otherwise.
+   */
+  provider: string | null;
+  engine: string | null;
+  observedAt: string | null;
 };
 
 /**
@@ -739,6 +951,13 @@ export async function fetchSerpResultsForKeyword(
       rows: [],
       reason: result.reason ?? 'Public search results could not be retrieved.',
       features: [],
+      // No page was read. The identity of an observation that did not happen is
+      // null on every axis — including the provider, which is named in the
+      // client's own failure result but must not travel on an empty row set as
+      // though something had been observed through it.
+      provider: null,
+      engine: null,
+      observedAt: null,
     };
   }
 
@@ -772,7 +991,22 @@ export async function fetchSerpResultsForKeyword(
       title: row.title ?? null,
     }));
 
-  return { status: 'ok', rows, reason: null, features };
+  // R1-D — the observation's identity travels WITH the rows, from the one place
+  // that knows it. Read from the client's result and never re-derived here: a
+  // second literal would be a second source of truth for which engine was read.
+  return {
+    status: 'ok',
+    rows,
+    reason: null,
+    features,
+    // `?? null` is not defensive noise: a provider result that does not STATE
+    // one of these must read as "not stated", never as `undefined`. `undefined`
+    // disappears from JSON entirely, so a stored observation would lose the
+    // field rather than record that it was unknown.
+    provider: result.provider ?? null,
+    engine: result.engine ?? null,
+    observedAt: result.observedAt ?? null,
+  };
 }
 
 /**
@@ -791,6 +1025,29 @@ export async function discoverCompetitorDomainsFromSerp(params: {
   keywords: string[];
   ownDomain: string;
   geography: string | null;
+  /**
+   * R1-D — the company name, used ONLY to recognise a branded query.
+   *
+   * Optional, and its absence degrades honestly rather than silently: without
+   * it, brand detection falls back to the domain's bare label (`acme` for
+   * `acme.com`), which is the brand token for most companies and is derived
+   * from evidence the caller already passes. No query is added, removed or
+   * reordered by supplying it — it changes only how a query is LABELLED.
+   */
+  companyName?: string | null;
+  /**
+   * R1-L2 — the construction-time origin of each query, keyed on the lowercased
+   * query text.
+   *
+   * LOOKUP, NOT INFERENCE. The caller built this map when it built the query
+   * universe; this function only retrieves what was recorded. A query missing
+   * from the map gets `null`, so an un-provenanced query stays un-provenanced
+   * rather than acquiring an origin guessed from its wording.
+   *
+   * Optional: callers that do not build a universe (and historical callers) are
+   * unaffected and their observations carry `null`.
+   */
+  queryOrigins?: ReadonlyMap<string, Report1Query>;
 }): Promise<{
   domains: string[];
   liveKeywordCount: number;
@@ -802,6 +1059,13 @@ export async function discoverCompetitorDomainsFromSerp(params: {
    * the company's public search evidence was being thrown away. Collecting here means one request
    * per keyword still serves both purposes, and an own-domain observation survives even when
    * competitor qualification later rejects every other domain on the page.
+   *
+   * R1-D — each entry now carries its own query class, intent, engine, provider
+   * and observation time, so a position is traceable to the search that produced
+   * it. This also makes "QUERY CLASS UNAVAILABLE" a readable state rather than a
+   * missing one: a class with zero entries here was never searched, which is a
+   * different finding from a class that was searched and did not rank (present,
+   * with `position: null`). Neither is poor visibility.
    */
   searchObservations: SerpSearchObservation[];
   /**
@@ -837,12 +1101,90 @@ export async function discoverCompetitorDomainsFromSerp(params: {
   const seenQueries = new Set<string>();
   const seenFeatureQueries = new Set<string>();
   let requestsMade = 0;
-  let acquisitionStatus: 'ok' | 'unavailable' | 'failed' = preflight.value ? 'failed' : 'unavailable';
-  let acquisitionReason: string | null = preflight.value ? null : (preflight.reason ?? 'No SERP provider credential is configured.');
+
+  // ─── R1-D: "NOT SEARCHED" IS NOT "SEARCH FAILED" ─────────────────────────
+  //
+  // THE DEFECT. This was `preflight.value ? 'failed' : 'unavailable'` — with a
+  // credential present, the run began life already declaring that SERP
+  // acquisition had FAILED, before a single request was issued. Nothing reset it
+  // when no request was issued at all, and the engine does call this with an
+  // empty keyword list: `keywords` there is built from extraction plus
+  // generation and is `[]` when both come back empty. The loop then ran zero
+  // times and the run reported `status: 'failed'` with `reason: null`, which the
+  // report surface renders as a provider error under the generic "Public search
+  // results could not be retrieved for this report."
+  //
+  // So a company for which NO QUERY WAS EVER RUN was reported as a company whose
+  // search provider broke. Those are two of the four states that must never
+  // collapse into one another, and neither of them is poor visibility.
+  //
+  // THE FIX. The status now starts at the only thing true before any request:
+  // nothing has been attempted. `attempted` counts dispatched queries, and
+  // `failed` is reachable ONLY from a request that was actually made and did not
+  // succeed. "Nothing was attempted" resolves to `unavailable` — which is the
+  // documented meaning of that state ("acquisition could not run") — and carries
+  // a reason that says precisely which of the two it was, rather than inheriting
+  // a generic retrieval failure.
+  let attempted = 0;
+  // TypeScript narrows a `let` to its initialising LITERAL, and every assignment that can
+  // reach `failed` happens inside `runKeywordBatch` below — a closure the compiler cannot
+  // prove runs. So the compiler modelled this variable as permanently `'unavailable'` and
+  // called the invariant guard at the return site a dead comparison (TS2367), even though the
+  // guard is live at runtime. Reading the initial value through a typed constant keeps the
+  // variable's declared domain, so the compiler's model matches the real state machine.
+  //
+  // This changes nothing about the state machine: the initial value is still `unavailable`,
+  // `failed` is still reachable only from a dispatched request, and the guard is unchanged.
+  // An annotated `const` does not help: the compiler narrows a `const` to its literal too.
+  // A call's result is typed by the declared return type and is not narrowed to a literal, so
+  // this is the minimal way to give the variable its true domain.
+  const initialAcquisitionStatus = (): 'ok' | 'unavailable' | 'failed' => 'unavailable';
+  let acquisitionStatus = initialAcquisitionStatus();
+  let acquisitionReason: string | null = preflight.value
+    // A credential exists, so if nothing runs it is because nothing was asked.
+    ? 'No search queries were available for this company, so no public search observation was attempted.'
+    : (preflight.reason ?? 'No SERP provider credential is configured.');
   const ownDomain = normalizeDomain(params.ownDomain);
+
+  // ─── R1-L2: ORIGIN FOR THE SIMPLIFIED RETRY BATCH ────────────────────────
+  //
+  // This function dispatches a SECOND batch of its own when nothing ranked: it simplifies each
+  // keyword and runs those. Those queries are not in the caller's universe, so without this they
+  // would reach the report with no recorded origin at all — an un-provenanced query created
+  // inside the producer.
+  //
+  // A simplified form INHERITS its parent's origin: stripping 'best'/'software'/'tools' is a
+  // mechanical reduction of the same term from the same source, so the origin is unchanged.
+  // Inventing a new one would be fabricated provenance, and leaving it null would hide a query
+  // the report nonetheless shows. This is the same rule `expandReport1QueryUniverse` applies.
+  const originByQuery = new Map<string, Report1Query>(params.queryOrigins ?? []);
+  const inheritOriginForSimplified = (original: string): void => {
+    const parent = originByQuery.get(original.toLowerCase());
+    if (!parent) return;
+    const simplified = simplifyKeyword(original);
+    const key = simplified.toLowerCase();
+    if (simplified.length < 3 || originByQuery.has(key)) return;
+    originByQuery.set(key, {
+      query: simplified,
+      origin: parent.origin,
+      rationale: `${parent.rationale} Broadened form of the same term.`,
+      basis: parent.basis,
+    });
+  };
+
+  // R1-D — brand tokens for query classification. Derived once, from the inputs
+  // the caller already supplies; no lookup, no network, no new evidence source.
+  const brandTokens = brandTokensFor({ companyName: params.companyName ?? null, domain: params.ownDomain });
+  const classOf = (query: string): { queryClass: QueryClass; intent: QueryIntent } => {
+    const queryClass = classifyQuery(query, brandTokens);
+    return { queryClass, intent: intentForClass(queryClass) };
+  };
 
   const runKeywordBatch = async (keywords: string[], retry: boolean): Promise<void> => {
     for (const keyword of keywords.slice(0, MAX_DISCOVERY_KEYWORDS)) {
+      // A query was dispatched. From here a `failed` verdict is earned rather
+      // than assumed — see the state note above.
+      attempted += 1;
       const result = await fetchSerpResultsForKeyword(keyword, params.geography);
       if (result.status === 'ok') {
         requestsMade += 1;
@@ -862,6 +1204,9 @@ export async function discoverCompetitorDomainsFromSerp(params: {
       if (result.status === 'ok' && ownDomain && !seenQueries.has(keyword)) {
         seenQueries.add(keyword);
         const own = result.rows.find((row) => row.domain === ownDomain);
+        const { queryClass, intent } = classOf(keyword);
+        // R1-L2 — the RECORDED origin for this exact query. Retrieval by key, not inference.
+        const recordedOrigin = originByQuery.get(keyword.toLowerCase()) ?? null;
         searchObservations.push({
           query: keyword,
           // The provider's own rank, never the post-filter array index.
@@ -870,6 +1215,32 @@ export async function discoverCompetitorDomainsFromSerp(params: {
           title: own?.title ?? null,
           snippet: own?.snippet ?? null,
           resultCount: result.rows.length,
+          // ─── R1-D — the provenance of this one measurement ───────────────
+          // Reached only inside `status === 'ok'`, so every observation that
+          // exists was produced by a page that was actually read. There is no
+          // branch that can append an observation without one.
+          queryClass,
+          intent,
+          engine: result.engine,
+          provider: result.provider,
+          // The time the page was read, from the client that read it — NOT this
+          // loop's clock and not the report's assembly clock.
+          observedAt: result.observedAt,
+          // Rank-ordered page neighbours, own domain excluded. Groundwork only:
+          // this is who else was on the page, not a competitor set. The blocked-
+          // host filter is deliberately NOT applied — it exists to keep
+          // directories and aggregators out of competitor QUALIFICATION, and
+          // removing them here would misreport what the results page contained.
+          competitorDomains: Array.from(new Set(
+            result.rows
+              .map((row) => row.domain)
+              .filter((domain): domain is string => Boolean(domain) && domain !== ownDomain),
+          )),
+          // R1-L2 — why the question was asked, as recorded when the universe was
+          // built. A different axis from the four fields above, which say where
+          // the answer came from. Null when the caller recorded nothing.
+          queryOrigin: recordedOrigin?.origin ?? null,
+          queryRationale: recordedOrigin?.rationale ?? null,
         });
       }
 
@@ -906,6 +1277,9 @@ export async function discoverCompetitorDomainsFromSerp(params: {
   await runKeywordBatch(params.keywords, false);
 
   if (ranked.size === 0 && params.keywords.length > 0) {
+    // R1-L2 -- record the inherited origin BEFORE dispatching, so the retry batch's
+    // observations carry provenance rather than arriving unattributed.
+    for (const original of params.keywords) inheritOriginForSimplified(original);
     const simplifiedKeywords = [...new Set(params.keywords.map(simplifyKeyword).filter((keyword) => keyword.length >= 3))];
     if (simplifiedKeywords.length > 0) {
       console.warn('[competitor-discovery][serp-retry-simplified]', {
@@ -914,6 +1288,20 @@ export async function discoverCompetitorDomainsFromSerp(params: {
       });
       await runKeywordBatch(simplifiedKeywords, true);
     }
+  }
+
+  // ─── R1-D: the state invariant, enforced where it is produced ────────────
+  //
+  // `failed` is a claim about a request that happened. If nothing was dispatched
+  // it cannot be true, and the honest state is `unavailable` — "we could not
+  // look" — with a reason naming which of the two reasons applied. This is a
+  // belt-and-braces guard on the initialiser above rather than a second code
+  // path: the only way to reach `failed` is through a dispatched request, and if
+  // that ever stops being so, this corrects it instead of shipping the wrong
+  // state to a customer-facing surface.
+  if (attempted === 0 && acquisitionStatus === 'failed') {
+    acquisitionStatus = 'unavailable';
+    acquisitionReason = 'No search query was dispatched, so no public search observation was attempted.';
   }
 
   return {

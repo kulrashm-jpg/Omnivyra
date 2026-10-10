@@ -418,7 +418,25 @@ export type AICitationMatrixSummary = {
     citation_rate: number | null;
     mean_prominence: number | null;
   }>;
-  coverage: { measured_cells: number; unavailable_cells: number; total_cells: number };
+  coverage: {
+    measured_cells: number;
+    unavailable_cells: number;
+    /** The ENUMERATED grid (providers × query classes). Unchanged; every existing consumer reads this. */
+    total_cells: number;
+    /**
+     * D2 — cells whose provider could actually yield a measurement: the honest
+     * denominator for a coverage percentage. `total_cells` is not, because it
+     * counts cells that can never be measured as configured, so dividing by it
+     * reports a shortfall the operator has no way to close.
+     *
+     * Optional because a report PERSISTED before D2 carries no such field. An
+     * absent value means "not recorded for this run", and a reader must fall
+     * back to the historical behaviour rather than read it as zero. Every
+     * freshly built report supplies it.
+     */
+    measurable_cells?: number;
+    structurally_unmeasurable_cells?: number;
+  };
 };
 
 export type EntityIntelligenceSummary = {
@@ -716,7 +734,12 @@ export type CanonicalReport = {
 
   // Phase 5 — historical / operational sections.
   change_intelligence: {
-    state: 'measured' | 'insufficient_history';
+    // `not_comparable` = prior snapshots exist but none measured the same
+    // subject with the same instrument (see `intelligence/comparabilityIdentity.ts`).
+    // Deliberately distinct from `insufficient_history`, which only elapsed
+    // time can fix. Every consumer branches on `=== 'measured'`, so widening
+    // the union keeps all non-measured surfaces on their existing abstain path.
+    state: 'measured' | 'insufficient_history' | 'not_comparable';
     observed_at: string;
     comparison_baseline_at: string | null;
     authority_delta: { current: number | null; previous: number | null; delta: number | null; direction: 'improved' | 'regressed' | 'stagnated' | 'first_observation'; significant: boolean };
@@ -810,6 +833,23 @@ export type CanonicalReport = {
    * evidence does not support it. Optional for backward compatibility.
    */
   market_icp_recommendation?: import('./reportMarketRecommendation').MarketIcpRecommendation;
+
+  /**
+   * Backlink authority OBSERVATION + contextual link STRATEGY, as two separate values.
+   *
+   * They are deliberately NOT merged, and there is deliberately no `backlink_score`,
+   * `backlink_health` or single recommendation string: the whole point of the certified
+   * surface is that "what exists" and "what would be valuable to build" are different kinds
+   * of evidence and must never render as the same kind. `observation` carries the measured
+   * profile or an explicit unavailable state; `strategy.kind` is the literal `'proposal'`, so
+   * no consumer can read a recommended TYPE as an existing backlink.
+   *
+   * Optional and additive — omitting it reproduces the prior report exactly.
+   */
+  backlink_authority?: {
+    observation: import('./reportBacklinkStrategy').BacklinkObservation;
+    strategy: import('./reportBacklinkStrategy').BacklinkStrategy;
+  };
 
   explanations: {
     authority_overall: import('../intelligence/explainabilityEngine').Explanation;

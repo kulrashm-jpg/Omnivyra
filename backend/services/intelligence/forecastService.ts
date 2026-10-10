@@ -10,6 +10,14 @@
 //   - Spike filter: drop snapshots whose score is > 2σ from the trendline (outliers)
 //   - Volatility detection: if residual stdev / range > 0.45, refuse to project
 //   - Insufficient-history: <3 measured snapshots → unavailable
+//   - Comparability: the regression runs over ONE comparability identity only
+//
+// On that last point: a least-squares line drawn through snapshots that
+// measured different websites, under different scan profiles, or with
+// different engine versions has a slope but no meaning. The series is
+// therefore restricted to the snapshots comparable with the caller-supplied
+// basis BEFORE the minimum count is applied, so a history made of
+// incomparable runs reports `insufficient_history` rather than a projection.
 
 import type {
   CanonicalScore,
@@ -17,6 +25,7 @@ import type {
   EvidenceTrace,
 } from '../canonicalReport/canonicalReportTypes';
 import type { ReportSnapshotRecord } from './historicalPersistence';
+import { filterComparableSnapshots, type ComparabilityIdentity } from './comparabilityIdentity';
 
 export type ForecastResult = {
   state: 'measured' | 'unavailable';
@@ -116,15 +125,33 @@ function bandLabelFromValue(value: number): CanonicalScore['band'] {
 export function buildForecast(params: {
   snapshots: ReportSnapshotRecord[];
   horizonDays: number;
+  /**
+   * The comparability identity the projection is FOR. Required and explicitly
+   * `null`able so a caller cannot omit it and get an unguarded regression; a
+   * `null` basis drops every snapshot and the forecast reports
+   * `insufficient_history`.
+   */
+  basis: ComparabilityIdentity | null;
   scoreSelector?: (s: ReportSnapshotRecord) => number | null;
 }): ForecastResult {
   const horizon = params.horizonDays;
   const selector = params.scoreSelector ?? ((s: ReportSnapshotRecord) => s.authority_score.value);
 
-  const sorted = snapshotsSortedAsc(params.snapshots);
+  // Comparability first: a snapshot that measured a different subject or used
+  // a different instrument is not a point on this company's trend line.
+  const comparable = filterComparableSnapshots(params.basis, params.snapshots);
+  const discarded = params.snapshots.length - comparable.length;
+
+  const sorted = snapshotsSortedAsc(comparable);
   const measured = sorted.filter((s) => selector(s) != null);
 
   if (measured.length < MIN_HISTORY) {
+    // Naming the discarded rows matters: "have 1" when the store holds 7 looks
+    // like a bug unless the reason says the other 6 were not comparable.
+    const comparabilityNote =
+      discarded > 0
+        ? ` ${discarded} stored snapshot${discarded === 1 ? ' was' : 's were'} excluded as not comparable with this run.`
+        : '';
     return {
       state: 'unavailable',
       horizon_days: horizon,
@@ -132,7 +159,7 @@ export function buildForecast(params: {
       confidence_band: null,
       trajectory: 'insufficient_history',
       history_count: measured.length,
-      reason_unavailable: `Need at least ${MIN_HISTORY} measured snapshots; have ${measured.length}.`,
+      reason_unavailable: `Need at least ${MIN_HISTORY} measured comparable snapshots; have ${measured.length}.${comparabilityNote}`,
     };
   }
 

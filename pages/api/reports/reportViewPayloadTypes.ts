@@ -200,6 +200,12 @@ export type ReportViewPayload = {
   seoVisuals?: ReportViewSeoVisuals;
   geoAeoVisuals?: ReportViewGeoAeoVisuals;
   geoAeoExecutiveSummary?: ReportViewGeoAeoExecutiveSummary;
+  /**
+   * SLICE 3H — the structured acquisition decision, strict pass-through. Absent until a
+   * producer exists; the renderer omits the section entirely when it is.
+   */
+  acquisitionDecision?:
+    import('../../../backend/services/snapshotReport/acquisitionContract').AcquisitionDecision | null;
   unifiedIntelligenceSummary?: ReportViewUnifiedIntelligenceSummary;
   competitorVisuals?: ReportViewCompetitorVisuals;
   competitorIntelligenceSummary?: ReportViewCompetitorIntelligenceSummary;

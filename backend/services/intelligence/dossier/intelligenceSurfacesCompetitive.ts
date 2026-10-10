@@ -303,15 +303,43 @@ export function buildAIVisibilityState(report: CanonicalReport): AIVisibilitySta
     : null;
 
   // Retrieval consistency (% of cells measured) and citation density (cited cells / total).
-  const retrieval_consistency_pct = matrix && matrix.coverage.total_cells > 0
-    ? Math.round((matrix.coverage.measured_cells / matrix.coverage.total_cells) * 100)
-    : null;
+  // The honest denominator, for the same reason `reportEvidenceReadiness` uses it: this is a
+  // COVERAGE percentage, and `total_cells` counts cells no configuration can ever measure, so
+  // dividing by it reports a shortfall the operator has no way to close. A run that measured
+  // every measurable cell is 100% covered, not 20%.
+  //
+  // `measurable_cells === 0` is not 0% — no percentage exists, because nothing here can be
+  // measured at all. A report PERSISTED before the field existed keeps its historical
+  // denominator rather than reading as zero.
+  const aiCoverageCells = matrix?.coverage ?? null;
+  const retrieval_consistency_pct = (() => {
+    if (!aiCoverageCells) return null;
+    if (aiCoverageCells.measurable_cells === undefined) {
+      return aiCoverageCells.total_cells > 0
+        ? Math.round((aiCoverageCells.measured_cells / aiCoverageCells.total_cells) * 100)
+        : null;
+    }
+    if (aiCoverageCells.measurable_cells <= 0) return null;
+    return Math.round((aiCoverageCells.measured_cells / aiCoverageCells.measurable_cells) * 100);
+  })();
   const citedCells = matrix
     ? matrix.cells.filter((c) => (c.citation_rate ?? 0) >= 0.6).length
     : 0;
-  const totalCells = matrix?.coverage.total_cells ?? 0;
-  const citation_density_label = matrix && totalCells > 0
-    ? `${citedCells} of ${totalCells} cells citing reliably`
+  // R / WAVE-3 — the numerator and the denominator must come from the SAME population.
+  //
+  // `citedCells` counts cells whose `citation_rate >= 0.6`, and a structurally unmeasurable
+  // cell carries `citation_rate: null`, so `(null ?? 0) >= 0.6` is never true — the numerator
+  // can only ever be drawn from MEASURED cells. Dividing it by the enumerated grid was
+  // therefore not merely pessimistic but incoherent, and it rendered directly beneath the
+  // Wave-2-corrected coverage percentage: a complete run printed "Coverage 100%" above
+  // "1 of 20 cells citing reliably", contradicting itself inside one component.
+  //
+  // This is a DENSITY statistic over what was measured, not a coverage percentage, so it does
+  // not re-open the coverage denominator question. The same file already states its population
+  // this way ("… of N measured cells …"), and the null guard moves from "a grid was enumerated"
+  // to "something was actually measured", which is when a density exists at all.
+  const citation_density_label = matrix && observedAiCells > 0
+    ? `${citedCells} of ${observedAiCells} measured cells citing reliably`
     : null;
 
   const reading = (() => {
@@ -553,7 +581,16 @@ export function buildAIStrategicUnlock(report: CanonicalReport): AIStrategicUnlo
   }
 
   // 2. Trajectory at leading band → defend.
-  if (aiValue >= 75 && matrix && matrix.coverage.measured_cells / Math.max(matrix.coverage.total_cells, 1) >= 0.6) {
+  // Same honest denominator. Against `total_cells` this gate was structurally unreachable:
+  // only retrieval-grounded cells can ever be measured, so the ratio could not exceed ~0.2 and
+  // the 0.6 threshold could never be met by any run, however complete.
+  const unlockCoverageRatio = (() => {
+    const c = matrix?.coverage;
+    if (!c) return 0;
+    const denominator = c.measurable_cells === undefined ? c.total_cells : c.measurable_cells;
+    return denominator > 0 ? c.measured_cells / denominator : 0;
+  })();
+  if (aiValue >= 75 && matrix && unlockCoverageRatio >= 0.6) {
     return {
       concept: 'trajectory_defence',
       concept_label: 'Trajectory Defence',

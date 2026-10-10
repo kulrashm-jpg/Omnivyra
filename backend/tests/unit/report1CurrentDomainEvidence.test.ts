@@ -13,7 +13,20 @@
 export {};
 
 type Row = Record<string, unknown>;
-type Filter = { op: 'eq' | 'in' | 'notNull' | 'gte'; column: string; value?: unknown };
+type Filter = { op: 'eq' | 'in' | 'notNull' | 'gte' | 'lt'; column: string; value?: unknown };
+
+/**
+ * R1-C — numeric-aware comparison, so an `http_status` range filter behaves the way
+ * PostgREST does on an integer column rather than lexicographically.
+ */
+const cmp = (left: unknown, right: unknown): number => {
+  const a = Number(left);
+  const b = Number(right);
+  if (Number.isFinite(a) && Number.isFinite(b)) return a === b ? 0 : a < b ? -1 : 1;
+  const sa = String(left);
+  const sb = String(right);
+  return sa === sb ? 0 : sa < sb ? -1 : 1;
+};
 
 const HOUR = 3_600_000;
 const fresh = () => new Date(Date.now() - HOUR).toISOString();
@@ -79,7 +92,8 @@ jest.mock('../../db/supabaseClient', () => {
         if (f.op === 'eq') rows = rows.filter((r) => r[f.column] === f.value);
         if (f.op === 'in') rows = rows.filter((r) => (f.value as unknown[]).includes(r[f.column]));
         if (f.op === 'notNull') rows = rows.filter((r) => r[f.column] != null);
-        if (f.op === 'gte') rows = rows.filter((r) => String(r[f.column]) >= String(f.value));
+        if (f.op === 'gte') rows = rows.filter((r) => r[f.column] != null && cmp(r[f.column], f.value) >= 0);
+        if (f.op === 'lt') rows = rows.filter((r) => r[f.column] != null && cmp(r[f.column], f.value) < 0);
       }
       if (order) {
         const { column, ascending } = order;
@@ -95,6 +109,7 @@ jest.mock('../../db/supabaseClient', () => {
       in: (column: string, value: unknown[]) => { filters.push({ op: 'in', column, value }); return q; },
       not: (column: string, _op: string, _v: unknown) => { filters.push({ op: 'notNull', column }); return q; },
       gte: (column: string, value: unknown) => { filters.push({ op: 'gte', column, value }); return q; },
+      lt: (column: string, value: unknown) => { filters.push({ op: 'lt', column, value }); return q; },
       order: (column: string, opts?: { ascending?: boolean }) => { order = { column, ascending: opts?.ascending !== false }; return q; },
       limit: (n: number) => { limit = n; return q; },
       maybeSingle: async () => {

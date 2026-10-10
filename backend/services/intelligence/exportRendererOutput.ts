@@ -27,6 +27,8 @@ import {
   renderDigitalSnapshotPriorities,
   renderNinetyDayPlan,
   renderSearchVisibility,
+  renderAcquisitionDecision,
+  renderGeoEvidenceDecision,
   renderPublicAdvertising,
   renderWebsiteChecks,
   renderWebsiteExperienceEvidence,
@@ -34,6 +36,7 @@ import {
 // B7 (WP-10) — the public-evidence market / ICP proposal. Renders '' when the producer abstained
 // at the section level, so a report built without it is unchanged.
 import { renderMarketIcpRecommendation } from './exportRendererMarketIcp';
+import { renderBacklinkAuthority } from './exportRendererBacklinkStrategy';
 import type {
   CanonicalPillarScore,
   CanonicalScore,
@@ -595,6 +598,11 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
                 reading them established, check by check, including what could not be read. */ ''}
           ${renderWebsiteChecks(payload, EYEBROW_EVIDENCE)}
           ${renderAiDiscoverability(sections.ai_discoverability, surfaces, '03')}
+          ${/* PHASE 2B — sits immediately after §03 for the same reason website checks follow
+                website evidence: the reader has just seen AI readiness scores, and this states
+                what those scores are evidence OF, what was never measured, what would unlock a
+                real measurement, and what to do meanwhile. */ ''}
+          ${renderGeoEvidenceDecision(payload, EYEBROW_EVIDENCE)}
           ${renderTrustConsistency(sections.trust_consistency, '04')}
           ${renderStrategicConstraints(sections.strategic_constraints, payload, surfaces, '05')}
           ${renderMarketPosition(sections.market_position, surfaces, '06')}
@@ -608,12 +616,25 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
                 chases the same buyer, and refuses to merge the two. */ ''}
           ${renderSearchVisibility(payload, EYEBROW_EVIDENCE)}
           ${renderPublicAdvertising(payload, EYEBROW_EVIDENCE)}
+          ${/* 3H — the acquisition decision. Sits immediately after the public advertising
+                evidence because that is the evidence it most often has to refuse to over-read:
+                the reader has just seen what the ad record does and does not show, and this
+                states what should actually be done about demand. Omits entirely when no
+                decision exists. */ ''}
+          ${renderAcquisitionDecision(payload, EYEBROW_EVIDENCE)}
           ${renderCompetitiveTables(payload, EYEBROW_EVIDENCE)}
           ${/* B7 (WP-10) — the market proposal. Sits immediately after the competition views
                 because those are the evidence most of it is reasoned from: the reader has just
                 seen who competes for the same buyer, and this states what market that implies —
                 as a proposal to review, never as a saved profile or an approved ICP. */ ''}
           ${renderMarketIcpRecommendation(payload, EYEBROW_EVIDENCE)}
+          ${/* External authority: what the public record shows about inbound authority, and which
+                KINDS of authority would be worth building. Placed after the market proposal
+                because the strategy half is reasoned from the same category/market context the
+                reader has just seen. The two halves render as separately headed blocks: a
+                recommended TYPE is never an existing backlink, and an unmeasured profile is
+                never a weakness. */ ''}
+          ${renderBacklinkAuthority(payload, EYEBROW_EVIDENCE)}
           ${renderMomentumMaturity(sections.momentum_maturity, surfaces, '08')}
           ${renderDataConfidenceCoverageSection(surfaces, '09')}
           ${renderChannelStrategySection(surfaces, '10', decisionLayerPopulated)}

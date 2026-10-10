@@ -12,6 +12,12 @@
 // "No misleading comparison semantics" rule:
 //   - Any comparison axis whose underlying value is null gets `state: 'unavailable'`.
 //   - Confidence-low scores are flagged so the UI can render the comparison muted.
+//   - COMPARABILITY: the prior-snapshot baseline and the maturity progression
+//     strip are both cross-snapshot statements, so they obey the same rule as
+//     change intelligence, forecast and trajectory — the baseline must share
+//     this run's comparability identity, or there is no baseline. Before the
+//     guard this engine took `loadSnapshots({ company_id })[0]`, so a website
+//     change published a numeric delta on every axis at once.
 
 import type {
   CanonicalReport,
@@ -21,6 +27,11 @@ import type {
 } from '../canonicalReport/canonicalReportTypes';
 import { PILLAR_META } from '../canonicalReport/canonicalReportTypes';
 import { getHistoricalStore } from './historicalPersistence';
+import {
+  filterComparableSnapshots,
+  selectComparableBaseline,
+  type ComparabilityIdentity,
+} from './comparabilityIdentity';
 
 export type ComparisonAxis = {
   key: string;
@@ -42,6 +53,12 @@ export type ComparisonStrip = {
   baseline_label: string;
   baseline_observed_at: string | null;
   axes: ComparisonAxis[];
+  /**
+   * Why this strip has no baseline, when it has none. Non-null for exactly the
+   * two honest "no number" cases — no prior snapshot at all, and a prior
+   * snapshot that is not comparable — so the absence is never silent.
+   */
+  baseline_reason_unavailable: string | null;
 };
 
 export type MaturityProgressionStripEntry = {
@@ -120,11 +137,28 @@ function buildAxis(params: {
 export async function buildComparisonView(params: {
   companyId: string;
   current: CanonicalReport;
+  /**
+   * This run's comparability identity. Required and explicitly `null`able: a
+   * `null` yields no prior-snapshot baseline and an empty progression strip
+   * rather than an unguarded comparison.
+   */
+  identity: ComparabilityIdentity | null;
 }): Promise<ComparisonView> {
   const store = getHistoricalStore();
-  const recent = await store.loadSnapshots({ company_id: params.companyId, limit: 2 });
   const observedAtNow = new Date().toISOString();
-  const prior = recent.find((s) => s.observed_at < observedAtNow) ?? null;
+  // The window is wide enough to reach past an incomparable run (a one-off
+  // `deep` scan) to the comparable one behind it; the old `limit: 2` could
+  // only ever see the single most recent row.
+  const recent = await store.loadSnapshots({ company_id: params.companyId, limit: 24 });
+  const selection = selectComparableBaseline({
+    current: params.identity,
+    priorSnapshots: recent.filter((s) => s.observed_at < observedAtNow),
+  });
+  const prior = selection.state === 'comparable' ? selection.baseline : null;
+  // `buildAxis` already renders a null baseline as `state: 'unavailable'` with
+  // `delta: null`, so refusing the baseline is all that is needed to stop a
+  // number being published; the reason below is what stops it being silent.
+  const priorBaselineReason = selection.state === 'comparable' ? null : selection.reason;
 
   // ── Prior-snapshot strip ────────────────────────────────────────────────────
   const priorPillarRows = prior
@@ -174,8 +208,14 @@ export async function buildComparisonView(params: {
   });
 
   // ── Maturity progression strip ─────────────────────────────────────────────
+  // A progression strip IS a trend statement, so it may only plot points that
+  // belong on one axis. Snapshots from a previous website or a different scan
+  // profile are dropped rather than drawn alongside the current ones.
   const allRecent = await store.loadSnapshots({ company_id: params.companyId, limit: 12 });
-  const maturity_progression: MaturityProgressionStripEntry[] = allRecent
+  const maturity_progression: MaturityProgressionStripEntry[] = filterComparableSnapshots(
+    params.identity,
+    allRecent,
+  )
     .slice()
     .sort((a, b) => (a.observed_at < b.observed_at ? -1 : 1))
     .map((s) => ({
@@ -187,9 +227,14 @@ export async function buildComparisonView(params: {
   return {
     prior_snapshot_strip: {
       baseline_kind: 'prior_snapshot',
-      baseline_label: prior ? `Snapshot from ${new Date(prior.observed_at).toLocaleDateString()}` : 'No prior snapshot',
+      baseline_label: prior
+        ? `Snapshot from ${new Date(prior.observed_at).toLocaleDateString()}`
+        : selection.state === 'not_comparable'
+          ? 'No comparable prior snapshot'
+          : 'No prior snapshot',
       baseline_observed_at: prior?.observed_at ?? null,
       axes: priorAxes,
+      baseline_reason_unavailable: priorBaselineReason,
     },
     benchmark_strip: {
       baseline_kind: 'benchmark_median',
@@ -198,6 +243,9 @@ export async function buildComparisonView(params: {
         : 'Benchmark not loaded',
       baseline_observed_at: null,
       axes: benchmarkAxes,
+      // The benchmark baseline is a peer median, not a prior snapshot of this
+      // company, so snapshot comparability does not apply to it.
+      baseline_reason_unavailable: benchmark ? null : 'Benchmark overlay is not loaded for this run.',
     },
     maturity_progression,
   };

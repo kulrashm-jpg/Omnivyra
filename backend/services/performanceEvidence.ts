@@ -24,6 +24,22 @@
  * reliable operation.
  */
 import type { ScoreState } from './snapshotReport/canonicalScoreState';
+// E — FAILURE VOCABULARY IS NOT INVENTED HERE. `ProviderFailureKind` and
+// `failureFromStatus` are the project's existing provider-failure taxonomy
+// (CPG-012 §10, registry/providerContract): every way a provider can fail, kept
+// distinct "because the operator remedy differs (wait / get a key / fix a parser
+// / nothing), and none of them is evidence of anything about the company". That
+// is precisely the distinction this file needs, so it is reused rather than
+// restated. `failureFromStatus` is generic HTTP semantics, not a registry rule,
+// and `providerContract` has only type-level imports of its own — so this file
+// stays pure.
+import {
+  failureFromStatus,
+  type ProviderFailureKind,
+} from './companyProfile/grounding/registry/providerContract';
+// E — one readiness vocabulary across Report 1 providers. Type-only, erased at
+// compile time: no runtime dependency on the intelligence registry.
+import type { ProviderSlotAvailability } from './intelligence/providerRegistry';
 
 const PSI_ENDPOINT = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
 
@@ -97,6 +113,26 @@ export interface PerformanceObservation {
   provider: 'pagespeed_insights';
   state: ScoreState;
   reasonUnavailable: string | null;
+  /**
+   * E — WHY `state` ALONE WAS NOT ENOUGH.
+   *
+   * Four different things produced `state: 'unavailable'` and nothing but the
+   * prose in `reasonUnavailable` told them apart: a missing dedicated quota, a
+   * 429, a timeout, and a provider that answered with no usable metric. A
+   * consumer that wanted to behave differently for a transient failure than for
+   * "the provider has nothing on this URL" had to regex an English sentence, so
+   * in practice nobody did and all four read as one undifferentiated absence.
+   *
+   * `failureKind` is the machine-readable half of that reason, in the project's
+   * existing `ProviderFailureKind` vocabulary. It is `null` when, and only when,
+   * the observation is `measured`.
+   *
+   * It is NOT a score and can never become one: every value here still leaves
+   * `state: 'unavailable'` and every metric `null`. In particular `not_found`
+   * ("the provider answered, and has no usable metric for this URL") is not a
+   * measured zero and no verdict is derived from it.
+   */
+  failureKind: ProviderFailureKind | null;
   /** Lighthouse JS execution time, used as a client-rendering signal. */
   jsBootupMs: number | null;
 }
@@ -108,11 +144,60 @@ export interface PerformanceEvidence {
   byFormFactor: Record<FormFactor, { measured: number; verdict: PerformanceVerdict }>;
   state: ScoreState;
   reasonUnavailable: string | null;
+  /**
+   * E — the report-level counterpart of `PerformanceObservation.failureKind`:
+   * why NO observation could be measured. Optional because the "PageSpeed is
+   * not enabled for this environment" envelope is built by
+   * `digitalExperienceRepository.collectPerformanceEvidence`, which this module
+   * does not own; that path still carries its reason in prose only.
+   */
+  failureKind?: ProviderFailureKind | null;
 }
 
 export function isPageSpeedConfigured(): boolean {
   // Keyless operation is supported; this reports whether a DEDICATED quota is configured.
   return Boolean(process.env.PAGESPEED_API_KEY);
+}
+
+/**
+ * E — PageSpeed readiness, in the shared readiness vocabulary, with the exact
+ * operator prerequisite.
+ *
+ * Read-only: no network call, no credential value read, no score touched. It
+ * reports the SAME two environment variables `pageSpeedEnabled()` gates on
+ * (`digitalExperienceRepository`), and a focused test asserts the two agree on
+ * every combination, so this cannot drift into describing a gate that is not the
+ * one in force.
+ *
+ * PageSpeed is never `CREDENTIAL_REQUIRED`: the API works keyless on a shared
+ * quota, so the absence of a key is a DECISION not to call it (the shared quota
+ * is routinely exhausted and costs tens of seconds for a 429). `DISABLED` is the
+ * honest term.
+ */
+export function describePageSpeedReadiness(): {
+  availability: ProviderSlotAvailability;
+  prerequisite: readonly string[];
+  detail: string;
+} {
+  if (process.env.PAGESPEED_API_KEY?.trim()) {
+    return {
+      availability: 'CONFIGURED',
+      prerequisite: [],
+      detail: 'PageSpeed Insights has a dedicated quota (PAGESPEED_API_KEY). Reachability is not asserted here — only a call can establish it.',
+    };
+  }
+  if (/^(1|true|on|yes)$/i.test(process.env.PAGESPEED_ENABLED ?? '')) {
+    return {
+      availability: 'CONFIGURED',
+      prerequisite: ['PAGESPEED_API_KEY'],
+      detail: 'PageSpeed Insights is enabled on the keyless SHARED quota, which is frequently exhausted (HTTP 429). Set PAGESPEED_API_KEY for a dedicated quota.',
+    };
+  }
+  return {
+    availability: 'DISABLED',
+    prerequisite: ['PAGESPEED_API_KEY', 'PAGESPEED_ENABLED'],
+    detail: 'Performance evidence is not collected: neither PAGESPEED_API_KEY nor PAGESPEED_ENABLED is set. No performance claim is made about the site — the capability is off.',
+  };
 }
 
 /** Classify a lab value against the published thresholds. Pure. */
@@ -220,22 +305,34 @@ export function parsePageSpeedResponse(params: {
     reasonUnavailable: measured.length > 0
       ? null
       : 'PageSpeed returned no usable field or lab metrics for this URL.',
+    // E — the provider ANSWERED and holds no usable metric for this URL
+    // (`not_found` in the shared vocabulary: "answered: no such identifier /
+    // empty record"). That is categorically not a slow page, and not a
+    // transport failure either.
+    failureKind: measured.length > 0 ? null : 'not_found',
     jsBootupMs: Number.isFinite(Number(lr.audits?.['bootup-time']?.numericValue))
       ? Number(lr.audits['bootup-time'].numericValue)
       : null,
   };
 }
 
-/** An observation representing a provider that could not be reached. Never a score. */
+/**
+ * An observation representing a provider that could not be reached. Never a score.
+ *
+ * E — `failureKind` is REQUIRED, not optional: a new failure path cannot be added
+ * without deciding which kind of failure it is, which is the whole point of
+ * keeping them distinct.
+ */
 export function unavailableObservation(params: {
-  url: string; formFactor: FormFactor; reason: string;
+  url: string; formFactor: FormFactor; reason: string; failureKind: ProviderFailureKind;
 }): PerformanceObservation {
   return {
     url: params.url, finalUrl: null, formFactor: params.formFactor,
     metrics: REPORTED_METRICS.map(unavailableMetric),
     overallCategory: 'NONE', providerPerformanceScore: null,
     observedAt: new Date().toISOString(), provider: 'pagespeed_insights',
-    state: 'unavailable', reasonUnavailable: params.reason, jsBootupMs: null,
+    state: 'unavailable', reasonUnavailable: params.reason,
+    failureKind: params.failureKind, jsBootupMs: null,
   };
 }
 
@@ -274,9 +371,25 @@ export async function fetchPageSpeed(params: {
         reason: response.status === 429
           ? `PageSpeed quota exceeded (${detail}). Set PAGESPEED_API_KEY for a dedicated quota.`
           : `PageSpeed request failed: ${detail}`,
+        // E — classified by the SHARED HTTP mapping (`failureFromStatus`), so a
+        // 429 is `rate_limited`, a 5xx is `retrieval_failed` and a 4xx is not
+        // quietly folded in with either.
+        failureKind: failureFromStatus(response.status, 'pagespeed').failure,
       });
     }
-    const body = await response.json();
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch (error) {
+      // E — a 200 whose body is not the expected JSON is `malformed_response`,
+      // not a transport failure and certainly not a measurement.
+      return unavailableObservation({
+        url: params.url, formFactor: params.formFactor,
+        reason: `PageSpeed returned a response that could not be parsed: ${
+          (error instanceof Error ? error.message : String(error)).slice(0, 200)}`,
+        failureKind: 'malformed_response',
+      });
+    }
     return parsePageSpeedResponse({ body, url: params.url, formFactor: params.formFactor });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -285,6 +398,9 @@ export async function fetchPageSpeed(params: {
       reason: /abort|timeout/i.test(message)
         ? `PageSpeed timed out after ${params.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms.`
         : `PageSpeed request error: ${message.slice(0, 200)}`,
+      // E — timeout, connection reset and DNS failure are all transient
+      // retrieval failures in the shared vocabulary. None of them is a zero.
+      failureKind: 'retrieval_failed',
     });
   }
 }
@@ -331,5 +447,10 @@ export function aggregatePerformanceEvidence(params: {
     reasonUnavailable: measured.length > 0
       ? null
       : observations[0]?.reasonUnavailable ?? 'No performance evidence was collected.',
+    // E — carry the first observation's kind alongside its reason, so the
+    // report-level absence is as diagnosable as the per-URL one. Null when
+    // something was measured, and null when there was nothing to attempt (no
+    // observation means no provider failure to report).
+    failureKind: measured.length > 0 ? null : observations[0]?.failureKind ?? null,
   };
 }

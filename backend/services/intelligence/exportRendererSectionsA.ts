@@ -314,7 +314,10 @@ export function renderComparativePositioning(pos: ComparativePositioning): strin
 }
 
 export function renderTrajectoryMovement(traj: TrajectoryMovement): string {
-  if (traj.state === 'insufficient_history') {
+  // Fail closed on ANY non-measured state. Matching `insufficient_history` alone would let
+  // `not_comparable` fall through to the full trend render below — drawing a spark line and a
+  // delta across two observations that do not measure the same thing.
+  if (traj.state !== 'measured') {
     return `
       <div class="ds-isurface">
         <p class="ds-isurface-eyebrow">Trajectory & Movement</p>

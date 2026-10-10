@@ -150,6 +150,11 @@ describe('I8 — DG-011 × Report 1: presence is decided from organic rows, neve
     })),
     reason: null,
     features,
+    // R1-D — a successful read carries its own provenance; all three are null only when
+    // `status !== 'ok'`.
+    provider: 'serpapi',
+    engine: 'google',
+    observedAt: '2026-10-06T00:00:00.000Z',
   });
 
   const observe = (result: SerpKeywordResult) =>

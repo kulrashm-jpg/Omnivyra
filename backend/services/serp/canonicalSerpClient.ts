@@ -61,6 +61,24 @@ import { markFeatureBlockEntry } from './serpResultTypes';
 export const REPORT_SERP_PROVIDER = 'serpapi' as const;
 export type ReportSerpProvider = typeof REPORT_SERP_PROVIDER;
 
+/**
+ * The SEARCH ENGINE the pinned provider is asked to read.
+ *
+ * Distinct from the provider, and the distinction is the point: `serpapi` is the
+ * intermediary that fetched the page, `google` is the engine whose results page
+ * was read. A rank of 3 means nothing without both — "third on Google" and
+ * "third on Bing" are different facts about the same company, and a report that
+ * records only the intermediary cannot tell a reader which one it is holding.
+ *
+ * Exported and used to SET the request parameter below, so the engine recorded
+ * on an observation is the same literal that was requested. Before this, the
+ * engine was an inline `'google'` in the URL and was recorded nowhere at all, so
+ * it could never be stated as evidence and could drift from the request without
+ * a single test noticing.
+ */
+export const REPORT_SERP_ENGINE = 'google' as const;
+export type ReportSerpEngine = typeof REPORT_SERP_ENGINE;
+
 /** Why a query produced nothing. `ok` means the provider answered. */
 export type CanonicalSerpStatus = 'ok' | 'unavailable' | 'failed';
 
@@ -89,13 +107,35 @@ export interface CanonicalSerpResult {
   readonly reason: string | null;
   /** The provider actually used. Recorded as report evidence, never inferred. */
   readonly provider: ReportSerpProvider | null;
+  /**
+   * The engine actually read. Null whenever no results page was read.
+   *
+   * Non-null ONLY on `ok`. A refusal and a provider failure both read nothing,
+   * and naming an engine for them would attach engine identity to a page that
+   * was never retrieved.
+   */
+  readonly engine: ReportSerpEngine | null;
+  /**
+   * When the provider answered, ISO-8601. Null whenever nothing was observed.
+   *
+   * This is the OBSERVATION time — the moment this results page was read — and
+   * it is captured here because here is the only place that knows it. A consumer
+   * that stamps its own clock later records when it assembled a report, not when
+   * search was observed; for a surface whose whole claim is "this is what public
+   * search showed", those are different facts and only one of them is evidence.
+   */
+  readonly observedAt: string | null;
 }
 
 const refuse = (
   refusedBy: CanonicalSerpRefusal,
   reason: string | null,
   status: CanonicalSerpStatus = 'unavailable',
-): CanonicalSerpResult => ({ status, refusedBy, rows: [], reason, provider: null });
+): CanonicalSerpResult => ({
+  status, refusedBy, rows: [], reason, provider: null,
+  // Nothing was read, so neither an engine nor an observation time exists.
+  engine: null, observedAt: null,
+});
 
 /**
  * The HTTP seam, isolated so a test can replace it without a network and
@@ -238,7 +278,9 @@ export async function fetchCanonicalSerp(
   const startedAt = Date.now();
   const query = input.geography ? `${input.query} ${input.geography}` : input.query;
   const url = new URL('https://serpapi.com/search.json');
-  url.searchParams.set('engine', 'google');
+  // The SAME literal that is reported as the observation's engine. One source, so
+  // the recorded engine cannot disagree with the engine that was requested.
+  url.searchParams.set('engine', REPORT_SERP_ENGINE);
   url.searchParams.set('q', query);
   // The caller's depth, never a substitute.
   url.searchParams.set('num', String(input.depth));
@@ -256,11 +298,16 @@ export async function fetchCanonicalSerp(
     }
     const body = await response.json() as Record<string, unknown>;
 
+    // The instant the results page was in hand. Taken ONCE and reused for both
+    // the usage ledger and the returned evidence, so the ledger entry and the
+    // observation can never disagree about when this query was read.
+    const observedAt = new Date().toISOString();
+
     // The call happened. Record it in BOTH ledgers — and only now.
     if (scanId) {
       recordUsage(scanId, {
         provider_id: 'serp', operation: input.operation, request_count: 1, cost_usd: null,
-        cache_hit: false, observed_at: new Date().toISOString(),
+        cache_hit: false, observed_at: observedAt,
       });
     }
     void recordProviderUsage({ providerId, units: 1, operation: input.operation });
@@ -276,6 +323,8 @@ export async function fetchCanonicalSerp(
       rows: parse([...organic, ...siblings]),
       reason: null,
       provider: providerId,
+      engine: REPORT_SERP_ENGINE,
+      observedAt,
     };
   } catch (error) {
     // SEC-E3: the request URL carries `api_key` (SerpAPI has no header auth).
@@ -287,7 +336,16 @@ export async function fetchCanonicalSerp(
     });
     // A provider that was reached and failed is `failed`, not `unavailable`:
     // "we could not ask" and "we asked and it broke" are different findings.
-    return { status: 'failed', refusedBy: null, rows: [], reason, provider: providerId };
+    //
+    // `engine` and `observedAt` stay NULL. The provider is named because it is
+    // the thing that failed, but no results page was read, so there is no engine
+    // reading and no observation instant to report. Stamping the attempt time
+    // here would hand a downstream reader a timestamp for evidence that does not
+    // exist.
+    return {
+      status: 'failed', refusedBy: null, rows: [], reason, provider: providerId,
+      engine: null, observedAt: null,
+    };
   }
 }
 

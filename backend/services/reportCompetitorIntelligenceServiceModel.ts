@@ -7,6 +7,13 @@ import { classifyDecisionType } from './decisionTypeRegistry';
 import { impactScore } from './reportDecisionUtils';
 import { supabase } from '../db/supabaseClient';
 import { scopeExcludesAllPages, withDomainScope, type ReportDomainScope } from './crawl/reportDomainScope';
+// R1-L2 -- the Report 1 query-origin allow-list. GSC is structurally absent from this taxonomy.
+import {
+  mergeReport1QueryUniverse,
+  type Report1Query,
+  type Report1QueryCandidate,
+  type Report1QueryOrigin,
+} from './report1QueryUniverse';
 import axios from 'axios';
 import { config } from '@/config';
 import {
@@ -69,9 +76,10 @@ import {
   type CompanyCompetitiveContext,
   type DomainCrawlSignals,
   generateDiscoveryKeywords,
+  generateDiscoveryQueryCandidates,
 } from "./reportCompetitorIntelligenceServiceHelpers";
 
-export { generateDiscoveryKeywords } from "./reportCompetitorIntelligenceServiceHelpers";
+export { generateDiscoveryKeywords, generateDiscoveryQueryCandidates } from "./reportCompetitorIntelligenceServiceHelpers";
 
 
 export type CompetitorClassification = 'direct_competitor' | 'seo_competitor' | 'authority_leader';
@@ -574,6 +582,78 @@ export function buildProviderCompetitorCandidates(params: {
 // as candidates via a keyword→relevance score — hardcoded generation. The KB is now used for
 // ENRICHMENT of independently-discovered competitors only (applyKnownCompetitorEnrichment).
 
+/**
+ * R1-L2 -- the origin-preserving second discovery batch.
+ *
+ * The engine widens the query set only when the first batch found too few competitor domains.
+ * The widened set is built from the SAME permitted inputs as the first, and every added query
+ * records its own origin, so the second batch cannot become an unprovenanced back door.
+ *
+ * SIMPLIFIED FORMS INHERIT. Stripping 'best'/'software'/'tools' from an existing query does not
+ * change where the query came from, so the reduced form keeps its parent's origin rather than
+ * being relabelled a template. Inventing a new origin for a mechanical reduction would be
+ * fabricated provenance.
+ */
+export function expandReport1QueryUniverse(params: {
+  universe: readonly Report1Query[];
+  companyContext: CompanyCompetitiveContext;
+  businessContext: string;
+  /** Where `businessContext` itself came from, resolved by the caller that built it. */
+  businessContextSource: { origin: Report1QueryOrigin; basis: string };
+  limit?: number;
+}): Report1Query[] {
+  const candidates: Report1QueryCandidate[] = [];
+
+  // 1. Everything already chosen, with the origin it was chosen under.
+  for (const entry of params.universe) {
+    candidates.push({
+      value: entry.query, origin: entry.origin, rationale: entry.rationale, basis: entry.basis,
+    });
+  }
+
+  // 2. The declared/template set, origin-tagged at its own construction.
+  for (const candidate of generateDiscoveryQueryCandidates(params.companyContext)) {
+    candidates.push(candidate);
+  }
+
+  // 3. Simplified forms of (1), inheriting their parent's origin.
+  for (const entry of params.universe) {
+    const simplified = entry.query
+      .toLowerCase()
+      .replace(/\b(best|top|leading|competitors?|alternatives?|platforms?|software|tools?|apps?|services?)\b/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (simplified.length < 3) continue;
+    candidates.push({
+      value: simplified,
+      origin: entry.origin,
+      rationale: entry.rationale + ' Broadened form of the same term.',
+      basis: entry.basis,
+    });
+  }
+
+  // 4. Commercial templates on the business-context label, carrying that label's own origin.
+  const ctxOrigin = params.businessContextSource.origin;
+  const ctxTemplateOrigin: Report1QueryOrigin =
+    ctxOrigin === 'derived_fallback' ? 'derived_fallback' : 'derived_template';
+  const ctxRationale = ctxOrigin === 'derived_fallback'
+    ? 'Generic category template. No declared or public subject context was available for this company.'
+    : 'Category template applied to the ' + params.businessContextSource.basis + '.';
+  for (const suffix of ['competitors', 'alternatives', 'software', 'tools', 'platforms']) {
+    candidates.push({
+      value: params.businessContext + ' ' + suffix,
+      origin: ctxTemplateOrigin,
+      rationale: ctxRationale,
+      basis: params.businessContextSource.basis,
+    });
+  }
+
+  return mergeReport1QueryUniverse(candidates, {
+    limit: params.limit ?? 10,
+    normalize: (value) => normalizeQueryPart(value, 8),
+  });
+}
+
 export function expandDiscoveryKeywords(
   keywords: string[],
   companyContext: CompanyCompetitiveContext,
@@ -666,6 +746,15 @@ async function loadKeywordPageSources(
   return { pageRowsRes, linkRowsRes, contentRowsRes };
 }
 
+/**
+ * NOT A REPORT 1 PATH -- see `extractPublicQueryTerms` below.
+ *
+ * This reads `canonical_keywords` (a table only GSC ingestion writes) ranked by
+ * `keyword_metrics.impressions`, and gives canonical membership the largest term in its scorer.
+ * That is CONNECTED_SOURCE data, which `REPORT1_PROVENANCE` excludes, so under the GSC-isolation
+ * decision it must not choose which queries Report 1 checks. It is left intact and unchanged for
+ * any non-Report-1 consumer; Report 1 simply no longer calls it.
+ */
 export async function extractTopKeywords(params: {
   companyId: string;
   domain: string;
@@ -757,5 +846,105 @@ export async function extractTopKeywords(params: {
     .sort((left, right) => right.score - left.score)
     .map((item) => item.keyword)
     .slice(0, MAX_DISCOVERY_KEYWORDS);
+}
+
+/**
+ * R1-L2 -- the Report 1 SERP query universe's PUBLIC half, with origin recorded per term.
+ *
+ * ALLOW-LIST. The only inputs are the page sources `loadKeywordPageSources` already reads --
+ * `canonical_pages` titles/headings, internal `page_links` anchor text and `page_content` body
+ * phrases, all domain-scoped under R1-OPEN-01 -- plus the public domain label and the declared
+ * business type. `canonical_keywords` and `keyword_metrics` are NOT read here, and there is no
+ * branch that could reach them: GSC is outside this function, not filtered inside it.
+ *
+ * WHAT CHANGED FROM `extractTopKeywords`. The canonical (GSC) source tier, which carried the
+ * largest source boost, is gone -- not demoted, absent. The remaining tiers keep their existing
+ * relative weights so public term ordering is unchanged from what it was once GSC is removed.
+ *
+ * DERIVED FROM PUBLIC, NOT OBSERVED. `observed_public` records that the TERM came from public
+ * page material. The query is still a question; only the SERP result is an observation.
+ */
+export async function extractPublicQueryTerms(params: {
+  companyId: string;
+  domain: string;
+  businessType: string | null;
+  /** R1-OPEN-01: restrict page-derived keyword sources to the report's current domain. */
+  domainScope?: ReportDomainScope;
+}): Promise<Report1QueryCandidate[]> {
+  const { pageRowsRes, linkRowsRes, contentRowsRes } = await loadKeywordPageSources(
+    params.companyId,
+    params.domainScope,
+  );
+
+  const scopedPageRows = ((pageRowsRes.data ?? []) as Array<{ title?: string | null; headings?: unknown; crawl_depth?: number | null }>)
+    .filter((row) => row.crawl_depth == null || Number(row.crawl_depth) <= MAX_CRAWL_DEPTH)
+    .slice(0, MAX_KEYWORD_SOURCE_PAGES);
+  const pageTexts = scopedPageRows
+    .flatMap((row) => {
+      const headingTexts = Array.isArray(row.headings)
+        ? (row.headings as Array<{ text?: string }>).map((item) => String(item?.text ?? ''))
+        : [];
+      return [String(row.title ?? ''), ...headingTexts];
+    })
+    .filter((text) => text.trim().length > 0);
+
+  const anchorTexts = ((linkRowsRes.data ?? []) as Array<{ anchor_text?: string | null }>)
+    .map((row) => String(row.anchor_text ?? '').trim())
+    .filter((item) => item.length > 0);
+  const repeatedPhrases = topPhrasesFromTexts(
+    ((contentRowsRes.data ?? []) as Array<{ content_text?: string | null }>)
+      .map((row) => String(row.content_text ?? '').slice(0, 600)),
+    MAX_DISCOVERY_KEYWORDS,
+  );
+
+  const fromPages = topTokensFromTexts(pageTexts, MAX_DISCOVERY_KEYWORDS);
+  const fromAnchors = topTokensFromTexts(anchorTexts, MAX_DISCOVERY_KEYWORDS);
+  const fromPhrases = repeatedPhrases;
+  const fromBusiness = extractBusinessKeywords(params.businessType);
+  const fromDomain = extractDomainKeywords(params.domain);
+
+  // One entry per term, carrying the source that first produced it. Insertion order is the
+  // source precedence; the score below decides the final ordering, exactly as before.
+  const origins = new Map<string, { origin: Report1QueryOrigin; rationale: string; basis: string; tier: number }>();
+  const record = (
+    terms: readonly string[],
+    origin: Report1QueryOrigin,
+    rationale: string,
+    basis: string,
+    tier: number,
+  ): void => {
+    for (const term of terms) {
+      const value = String(term ?? '').toLowerCase();
+      if (value.length < 3 || origins.has(value)) continue;
+      origins.set(value, { origin, rationale, basis, tier });
+    }
+  };
+
+  record(fromAnchors, 'observed_public',
+    'Term repeated in this site\'s own public internal link text.', 'public internal anchor text', 3);
+  record(fromPhrases, 'observed_public',
+    'Phrase repeated across this site\'s public page text.', 'repeated public page text', 2);
+  record(fromPages, 'observed_public',
+    'Term taken from this site\'s public page titles and headings.', 'public page titles and headings', 2);
+  record(fromBusiness, 'declared',
+    'Term from the business type the company declared.', 'company profile: business type', 1);
+  record(fromDomain, 'observed_public',
+    'Term read from the company\'s own public domain label.', 'public domain label', 1);
+
+  const scored = [...origins.entries()].map(([keyword, meta]) => {
+    const intent = classifyIntent(keyword);
+    const intentBoost = intent === 'comparison' ? 3 : intent === 'commercial' ? 2 : 1;
+    return { keyword, meta, score: meta.tier + intentBoost };
+  });
+
+  return scored
+    .sort((left, right) => right.score - left.score)
+    .slice(0, MAX_DISCOVERY_KEYWORDS)
+    .map((item) => ({
+      value: item.keyword,
+      origin: item.meta.origin,
+      rationale: item.meta.rationale,
+      basis: item.meta.basis,
+    }));
 }
 

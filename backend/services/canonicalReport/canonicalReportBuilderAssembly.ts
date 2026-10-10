@@ -37,6 +37,10 @@ import { resolveEvidenceReadiness } from './reportEvidenceReadiness';
 // B7 (WP-10): public-evidence market / ICP PROPOSAL. Pure functions over values already held —
 // no provider call, no query, no write. See `reportMarketRecommendation.ts`.
 import { collectMarketIcpEvidence, resolveMarketIcpRecommendation } from './reportMarketRecommendation';
+// Certified backlink surface. Pure functions over values already held here: no provider
+// call, no query, no write. See `reportBacklinkStrategy.ts`.
+import { summarizeBacklinkObservation, buildBacklinkStrategy } from './reportBacklinkStrategy';
+import { distinctSubjectValues } from '../snapshotReport/observedSubjects';
 // BETA-EXEC-004: deterministic engine-evidence contract for evidence-driven dimension rationales.
 import {
   type EngineEvidenceInput,
@@ -68,6 +72,7 @@ import { persistCanonicalSnapshot, type ScanProfile } from '../intelligence/snap
 import { policyFor } from '../intelligence/executionPolicies';
 import { buildChangeIntelligence } from '../intelligence/deltaIntelligence';
 import { buildForecast } from '../intelligence/forecastService';
+import { buildComparabilityIdentity } from '../intelligence/comparabilityIdentity';
 import { buildProviderObservability } from '../intelligence/providerObservability';
 import { applyChangeAwareness } from '../intelligence/changeAwareInsights';
 import { getHistoricalStore } from '../intelligence/historicalPersistence';
@@ -306,6 +311,74 @@ export function mergeAuthorityInflowDimension(
   return baseline;
 }
 
+/**
+ * D2 — the AI-surface rationale, told from what ACTUALLY happened.
+ *
+ * THE DEFECT. The unmeasured branch read, verbatim:
+ *
+ *   "AI surface presence cannot be measured — no LLM provider is configured.
+ *    N of 20 cells are unavailable."
+ *
+ * The only condition behind it was `measured_cells === 0`, which is the steady
+ * state in production WITH a provider configured: `OPENAI_API_KEY` is set, the
+ * ChatGPT adapter runs, bills, and returns `insufficient_signal` on every cell
+ * because a chat model is not retrieval-grounded (D1). The report then told the
+ * customer no provider was configured. It also called `insufficient_signal`
+ * cells "unavailable", conflating "we asked and the answer proves nothing" with
+ * "we never asked".
+ *
+ * THE FIX. The five findings the probe layer already distinguishes are read off
+ * the cells' `observation_outcome` and reported as themselves. No score, state,
+ * band or confidence is touched — this function returns prose only.
+ */
+export function aiSurfaceRationaleText(matrix: AICitationMatrix): string {
+  const { coverage, cells } = matrix;
+  const outcomes = new Set(cells.map((c) => c.observation_outcome));
+  const countOf = (outcome: string) => cells.filter((c) => c.observation_outcome === outcome).length;
+
+  if (coverage.measured_cells > 0) {
+    const denominator = coverage.measurable_cells > 0 ? coverage.measurable_cells : coverage.total_cells;
+    return (
+      `${coverage.measured_cells} of ${denominator} measurable provider×query-class checks returned grounded citation data` +
+      ` (${coverage.total_cells} checks enumerated; ${coverage.structurally_unmeasurable_cells} cannot be measured by the engines currently connected).` +
+      ` Overall AI surface presence is ${matrix.overall_score.value ?? '—'}/100.`
+    );
+  }
+
+  // No measurement. Say which of the four non-measured findings applies, most
+  // specific first — a run can contain several, and the most actionable leads.
+  if (!matrix.identity.resolved) {
+    return (
+      'AI surface presence was not measured: no company name or domain reached the answer-engine checks,' +
+      ' so no answer could be attributed to this company. This is not a measured absence from AI surfaces.'
+    );
+  }
+  if (outcomes.has('provider_failed')) {
+    return (
+      `AI surface presence was not measured: ${countOf('provider_failed')} of ${coverage.total_cells} checks reached a` +
+      ' configured provider that failed, errored or could not be loaded. The result is unknown, not absent.'
+    );
+  }
+  if (outcomes.has('ungrounded_answer')) {
+    return (
+      `AI surface presence was not measured: ${countOf('ungrounded_answer')} of ${coverage.total_cells} checks did receive an answer,` +
+      ' but from a model that does not retrieve from the live web and returned no verifiable sources.' +
+      ' A model recalling a name is not evidence that AI surfaces retrieve this company, so no rate is published.' +
+      ' Connecting a retrieval-grounded answer engine is what makes this measurable.'
+    );
+  }
+  if (outcomes.has('no_queries')) {
+    return (
+      `AI surface presence was not measured: ${countOf('no_queries')} of ${coverage.total_cells} checks had no question to ask,` +
+      ' because the business profile does not yet carry the brand name, category, competitors or products they are built from.'
+    );
+  }
+  return (
+    `AI surface presence was not measured: no answer engine was queried. ${countOf('no_provider')} of ${coverage.total_cells}` +
+    ' checks had no configured provider. Nothing here says this company is absent from AI surfaces.'
+  );
+}
+
 function summarizeMatrix(matrix: AICitationMatrix): AICitationMatrixSummary {
   return {
     state: matrix.overall_score.state,
@@ -398,6 +471,21 @@ function trustScoreFromSignals(result: TrustCoherenceResult): CanonicalScore {
 
 // ── Top-level builder ─────────────────────────────────────────────────────────
 
+/**
+ * Fallback for `options.engineVersion`, previously an inline `'phase-5'`
+ * literal at the persist call site.
+ *
+ * NOTE FOR OPERATORS: no production caller supplies `engineVersion`
+ * (`snapshotReportService.ts` does not pass one), so every snapshot is stamped
+ * with this same string. It is part of the comparability identity and will
+ * correctly refuse a cross-engine comparison the moment distinct values are
+ * supplied — but until a real version is passed it discriminates nothing, and
+ * a scoring change will NOT be caught. Choosing what counts as a
+ * scoring-relevant engine change is a product decision, so no scheme is
+ * invented here.
+ */
+const DEFAULT_ENGINE_VERSION = 'phase-5';
+
 export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   brandName?: string | null;
   domain?: string | null;
@@ -410,6 +498,12 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   tenantContext?: TenantContext;
   // BETA-EVIDENCE-EXEC-003: non-scored declared evidence (sameAs / certifications / legal transparency),
   // aggregated upstream from crawl signals. Pure passthrough into the presentation-only section — never scored.
+  /**
+   * Company-DECLARED geography from the resolved report input. Carried so the backlink
+   * strategy can judge geographic relevance; it is labelled `declared` throughout and is
+   * never presented as observed market evidence.
+   */
+  declaredGeography?: string | null;
   declaredEvidence?: CanonicalDeclaredEvidence | null;
   // BETA-EXEC-002: measured evidence from the Website Intelligence Brand + Accessibility
   // engines. Optional + additive — omitting it reproduces the prior behaviour exactly.
@@ -545,11 +639,15 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
 
   // Maturity stage classification (canonical 6-stage model). Derives from the
   // measured overall score; no synthesis when score is null.
-  const placeholderReportForMaturity = {
-    authority_overview: { overall_score: overall, maturity: snapshot.system_maturity },
+  // Typed against `MaturityClassificationInput` — exactly the two values the classifier reads —
+  // so no cast is needed. The previous `as unknown as CanonicalReport` claimed a shape this
+  // object did not have (`headline`, `primary_constraint` and `next_unlock` were all absent) and
+  // would have silently supplied `undefined` had the classifier ever read one of them. The
+  // unread `maturity` field is dropped for the same reason: it was never consulted.
+  const maturityClassification = classifyMaturity({
+    authority_overview: { overall_score: overall },
     pillars,
-  } as unknown as CanonicalReport;
-  const maturityClassification = classifyMaturity(placeholderReportForMaturity);
+  });
   const legacyMaturity: SystemMaturityClass = legacyClassFromStage(maturityClassification.stage);
 
   // Phase 3: actions are now maturity-aware — built AFTER the maturity stage is
@@ -622,9 +720,7 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
     ai_surface_presence: {
       score: aiSurfaceDim?.score ?? emptyCanonicalScore('insufficient_signal'),
       rationale: {
-        text: matrix.coverage.measured_cells > 0
-          ? `${matrix.coverage.measured_cells} of ${matrix.coverage.total_cells} provider×query-class cells returned live citation data. Overall AI surface presence is ${matrix.overall_score.value ?? '—'}/100.`
-          : `AI surface presence cannot be measured — no LLM provider is configured. ${matrix.coverage.unavailable_cells} of ${matrix.coverage.total_cells} cells are unavailable.`,
+        text: aiSurfaceRationaleText(matrix),
         confidence: matrix.overall_score.confidence,
         evidence: matrix.overall_score.evidence,
         maturity: legacyMaturity,
@@ -800,9 +896,26 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   // (and so we don't double-write the current snapshot before comparing).
 
   const companyId = options?.companyId ?? '';
+
+  // The comparability identity of THIS run. Built once and shared by the three
+  // readers that subtract snapshots (change intelligence, forecast, and — via
+  // the newest stored row — authority trajectory) and by the writer, so the
+  // facts a snapshot is compared on are exactly the facts it was stamped with.
+  // `null` when any component is unknown; every consumer fails closed on it.
+  const comparabilityIdentity = buildComparabilityIdentity({
+    companyId,
+    domain: options?.domain ?? null,
+    scanProfile,
+    engineVersion: options?.engineVersion ?? DEFAULT_ENGINE_VERSION,
+  });
+
   if (companyId) {
     try {
-      const change = await buildChangeIntelligence({ companyId, current: reportShape });
+      const change = await buildChangeIntelligence({
+        companyId,
+        current: reportShape,
+        identity: comparabilityIdentity,
+      });
       reportShape.change_intelligence = {
         state: change.state,
         observed_at: change.observed_at,
@@ -821,7 +934,7 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
 
       if (policy.computeForecast) {
         const snapshots = await getHistoricalStore().loadSnapshots({ company_id: companyId, limit: 24 });
-        const forecast = buildForecast({ snapshots, horizonDays: 30 });
+        const forecast = buildForecast({ snapshots, horizonDays: 30, basis: comparabilityIdentity });
         reportShape.forecast = {
           state: forecast.state,
           horizon_days: forecast.horizon_days,
@@ -857,8 +970,12 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
           companyId,
           report: reportShape,
           scanProfile,
-          engineVersion: options?.engineVersion ?? 'phase-5',
+          engineVersion: options?.engineVersion ?? DEFAULT_ENGINE_VERSION,
           providerOutcomes: [], // Adapter-level outcomes are accumulated through the cost ledger; this slot remains for future per-call rows.
+          // The subject this run measured. Stamped onto the row so a LATER run
+          // can tell whether it is looking at the same website; without it the
+          // row is durable history but can never anchor a delta.
+          domain: options?.domain ?? null,
         });
         reportShape.scan_metadata.persisted = persisted.written;
         reportShape.scan_metadata.persisted_at = persisted.observedAt;
@@ -919,7 +1036,11 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
       reportShape.override_disclosure = resolveOverrideTransparency(reportShape.active_overrides, reportShape.governance);
 
       // Comparison view (current vs historical / benchmark median).
-      reportShape.comparison = await buildComparisonView({ companyId, current: reportShape });
+      reportShape.comparison = await buildComparisonView({
+        companyId,
+        current: reportShape,
+        identity: comparabilityIdentity,
+      });
 
       // Collaboration records.
       const collab = getCollaborationStore();
@@ -985,6 +1106,67 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
       observedAt: tenantContext.request_at ?? null,
     }),
   );
+
+  // ── Backlink authority: OBSERVATION and STRATEGY, produced separately ───────
+  //
+  // Both are pure computations over values this function already holds. Nothing here calls a
+  // provider, opens a connection, reads a credential or writes anything: the measured half is
+  // read back off `reportShape.authority_inflow`, which the canonical pipeline has already
+  // populated from the existing provider abstraction, so no new provider path is introduced.
+  //
+  // CONTEXT IS DECLARED, AND STAYS DECLARED. `company_context.primary_offering`,
+  // `.positioning` and `.market_context`, `options.category` and `options.declaredGeography`
+  // all originate in the tenant's Company Profile. They are passed on the `declared` channel,
+  // which the certified module labels `declared` / `INFERRED` forever and never upgrades to an
+  // observation — the same boundary `market_icp_recommendation` above abstains to protect. The
+  // difference is that this surface is explicitly a declared-context PROPOSAL, not a claim
+  // about the market.
+  //
+  // OBSERVED SUBJECTS, NO HISTORY. `assets.topicsCovered` is now fed from the snapshot's
+  // page-level observed subjects -- literal title/heading text from this company's own crawled
+  // pages, deduplicated to the flat string list this seam takes. Absent or empty still reads as
+  // insufficient evidence downstream, never as "no subjects". No backlink referring-domain
+  // history is persisted, so `history` is empty and growth reports `insufficient_history` --
+  // the current profile, never momentum.
+  const backlinkMeasured = reportShape.authority_inflow.profile;
+  const backlinkInput = {
+    declared: {
+      category: options?.category ?? null,
+      offering: snapshot.company_context.primary_offering ?? null,
+      positioning: snapshot.company_context.positioning ?? null,
+      target_market: snapshot.company_context.market_context ?? null,
+      geography: options?.declaredGeography ?? null,
+    },
+    assets: {
+      // Verbatim first-observed spellings, deduplicated on the normalized key. Page-level
+      // evidence: it states what a page says, not what the company covers.
+      topicsCovered: distinctSubjectValues(snapshot.observed_subjects ?? []),
+    },
+    measurement: backlinkMeasured
+      ? {
+        state: backlinkMeasured.state,
+        referring_domains: backlinkMeasured.referring_domains,
+        backlinks: backlinkMeasured.total_backlinks,
+        authority: backlinkMeasured.domain_authority,
+        observed_at: reportShape.authority_inflow.score.evidence.freshness.last_observed_at ?? null,
+        source: 'backlink_api' as const,
+        reason_unavailable: backlinkMeasured.reason_unavailable,
+      }
+      : null,
+    // A serialization of the EXISTING comparability identity — the same four fields
+    // `compareComparability` uses. It introduces no new comparability rule; it only lets a
+    // stored backlink snapshot be matched against this run.
+    comparabilityKey: comparabilityIdentity
+      ? [comparabilityIdentity.company_id, comparabilityIdentity.subject_domain,
+        comparabilityIdentity.scan_profile, comparabilityIdentity.engine_version].join('|')
+      : null,
+    history: [],
+    observedAt: tenantContext.request_at ?? null,
+  };
+  reportShape.backlink_authority = {
+    observation: summarizeBacklinkObservation(backlinkInput),
+    strategy: buildBacklinkStrategy(backlinkInput),
+  };
 
   return reportShape;
 }

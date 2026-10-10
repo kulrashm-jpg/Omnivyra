@@ -40,7 +40,13 @@ function expectedCtrByPosition(avgPosition: number): number {
   return 0.015;
 }
 
-function isAuthorityDecision(decision: PersistedDecisionObject): boolean {
+/**
+ * AUTH-G-003 — retained for documentation of the chain this file no longer feeds; see the
+ * `backlinks_score` block below. It is deliberately NOT used to produce a backlink number or a
+ * `backlink_signals` provenance tag any more: matching `/authority|backlink|trust|brand/` against
+ * a decision's issue_type identifies an ON-PAGE FINDING, never an inbound link.
+ */
+export function isAuthorityDecision(decision: PersistedDecisionObject): boolean {
   return /authority|backlink|trust|brand/.test(decision.issue_type);
 }
 
@@ -322,17 +328,43 @@ export function buildSnapshotVisualIntelligence(params: {
     : null;
   const rankState: ScoreState = rankTrackingScore != null ? 'measured' : 'insufficient_signal';
 
-  // Backlinks: only render a number if we genuinely have authority decisions backing it.
-  // Otherwise stay honest with insufficient_signal until a real backlink data source is wired.
-  const hasAuthorityDecisions = params.decisions.some((decision) => isAuthorityDecision(decision));
-  const authorityValue = scoreByKey.get('authority');
-  const authorityState = stateByKey.get('authority');
-  const backlinksScore = hasAuthorityDecisions && typeof authorityValue === 'number' && authorityState === 'measured'
-    ? authorityValue
-    : null;
-  const backlinksState: ScoreState = backlinksScore != null
-    ? 'measured'
-    : 'unavailable';
+  // ─── AUTH-G-003 — ON-PAGE CONTENT CANNOT BECOME BACKLINK EVIDENCE ──────────
+  //
+  // THE DEFECT. `backlinks_score` was `scoreByKey.get('authority')`, gated on at least one
+  // decision whose issue_type matched `/authority|backlink|trust|brand/`. Three things were
+  // wrong with that, and they compounded:
+  //
+  //   1. NOTHING INBOUND WAS OBSERVED. The `authority` axis is built by
+  //      `reportScoreModelService.dimensionFromDecisions` as `100 − mean(severity)` of on-page
+  //      findings. Its upstream evidence includes `competitor_backlink_advantage`, which
+  //      `reportCompetitorIntelligenceServiceEngine` derives from `authorityProxy` — a count of
+  //      the words "case study / customer / trusted / review / award / featured / partner" in
+  //      page copy, plus 8 for a schema block. A credibility-word count was being published on
+  //      an axis named `backlinks_score`.
+  //   2. IT SCORED PROBLEMS, NOT AUTHORITY. Because `dimensionFromDecisions` returns
+  //      `insufficient_signal` at zero decisions, a site with NO authority problem got NO
+  //      backlink number, while a site with problems got `100 − severity` — so the axis fell as
+  //      detection improved and existed only where something was wrong. It was a problem-severity
+  //      complement wearing an inbound-authority label.
+  //   3. IT LAUNDERED ITS OWN PROVENANCE. The value carried the `backlink_signals` source tag
+  //      (removed below), which `canonicalReportBuilderInputs.evidenceSourceFromTag` mapped to the
+  //      canonical `backlink_api` evidence kind — an on-page heuristic arriving labelled as a
+  //      backlink provider's observation.
+  //
+  // THE CONTRACT. External authority requires external evidence. There is no on-page
+  // substitute, so this axis abstains: `null` at `unavailable`, with the unlock stated on the
+  // `authority_inflow` dimension's rationale. This is the repository's established posture for a
+  // value that cannot be established (REMEDIATION-003, WP-15, BR-C-001) and `null` was already a
+  // legal value here on every report with no authority decision, so no consumer shape changes.
+  //
+  // THE CAPABILITY IS NOT LOST. When a real backlink provider is configured,
+  // `canonicalReportBuilderAssembly.mergeAuthorityInflowDimension` substitutes the provider's
+  // measured score over this baseline — that is the only path by which Authority Inflow becomes
+  // a measurement, and it is unaffected by this change. The on-page findings themselves are
+  // untouched and still surface as authority DECISIONS; only their use AS an inbound-link score
+  // was the lie.
+  const backlinksScore: number | null = null;
+  const backlinksState: ScoreState = 'unavailable';
 
   const competitorIntelligenceScore = competitorStandingValues.length > 0
     ? Math.round(competitorStandingValues.reduce((sum, value) => sum + value, 0) / competitorStandingValues.length)
@@ -378,9 +410,11 @@ export function buildSnapshotVisualIntelligence(params: {
       ]
     : null;
   const rankSourceTags = searchKeywordRows.length > 0 ? ['GSC'] : null;
-  const backlinksSourceTags = backlinksScore != null
-    ? params.decisions.some((decision) => isAuthorityDecision(decision)) ? ['backlink_signals', 'heuristic'] : ['heuristic']
-    : null;
+  // AUTH-G-003 — the `backlink_signals` tag is gone. It claimed backlink provenance for an
+  // on-page decision heuristic and `evidenceSourceFromTag` promoted it to the canonical
+  // `backlink_api` evidence kind. Only a real backlink provider may tag this axis, and it does so
+  // through its own evidence trace in `mergeAuthorityInflowDimension`, not through this baseline.
+  const backlinksSourceTags: string[] | null = null;
   const competitorSourceTags = competitorStandingValues.length > 0 ? ['competitor_intelligence', 'heuristic'] : null;
   const contentSourceTags = wiContentUsable
     ? ['website_intelligence:content', 'crawler']
@@ -504,7 +538,9 @@ export function buildSnapshotVisualIntelligence(params: {
         technical_seo_score: inferDataSourceStrength({ available: technicalSeoScore != null, sourceTags: technicalSourceTags, confidence: crawlConfidence }),
         keyword_research_score: inferDataSourceStrength({ available: keywordResearchScore != null, sourceTags: keywordSourceTags, confidence: opportunityConfidence, inferred: true }),
         rank_tracking_score: inferDataSourceStrength({ available: rankTrackingScore != null, sourceTags: rankSourceTags, confidence: searchVisibilityFunnel.confidence }),
-        backlinks_score: inferDataSourceStrength({ available: backlinksScore != null, sourceTags: backlinksSourceTags, confidence: backlinksSourceTags?.includes('backlink_signals') ? 'medium' : 'low', inferred: !backlinksSourceTags?.includes('backlink_signals') }),
+        // AUTH-G-003 — no on-page path may describe this axis as backlink-sourced, so there is no
+        // `backlink_signals` branch left to raise its confidence. Unavailable, lowest confidence.
+        backlinks_score: inferDataSourceStrength({ available: backlinksScore != null, sourceTags: backlinksSourceTags, confidence: 'low', inferred: true }),
         competitor_intelligence_score: inferDataSourceStrength({ available: competitorIntelligenceScore != null, sourceTags: competitorSourceTags, confidence: competitorStandingValues.length >= 2 ? 'medium' : 'low', inferred: true }),
         content_quality_score: inferDataSourceStrength({ available: contentQualityScore != null, sourceTags: contentSourceTags, confidence: params.publicAudit?.decisions?.length ? 'medium' : 'low', inferred: !params.publicAudit?.decisions?.length }),
       },

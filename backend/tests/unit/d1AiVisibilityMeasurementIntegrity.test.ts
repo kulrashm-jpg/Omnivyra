@@ -224,6 +224,7 @@ describe('D1 — resolveProbeOutcome is the single place state is decided', () =
     for (const observations of [[grounded], [grounded, grounded]]) {
       const out = resolveProbeOutcome({
         retrievalGrounded: false,
+        identityResolved: true,
         observations,
         failureReason: null,
       });
@@ -233,14 +234,14 @@ describe('D1 — resolveProbeOutcome is the single place state is decided', () =
 
   it('grounded provider with at least one sourced observation is measured', () => {
     expect(
-      resolveProbeOutcome({ retrievalGrounded: true, observations: [grounded], failureReason: null })
+      resolveProbeOutcome({ retrievalGrounded: true, identityResolved: true, observations: [grounded], failureReason: null })
         .state,
     ).toBe('measured');
   });
 
   it('grounded provider with zero sourced observations is insufficient_signal', () => {
     expect(
-      resolveProbeOutcome({ retrievalGrounded: true, observations: [ungrounded], failureReason: null })
+      resolveProbeOutcome({ retrievalGrounded: true, identityResolved: true, observations: [ungrounded], failureReason: null })
         .state,
     ).toBe('insufficient_signal');
   });
@@ -248,6 +249,7 @@ describe('D1 — resolveProbeOutcome is the single place state is decided', () =
   it('no observations plus a failure reason is provider_failed', () => {
     const out = resolveProbeOutcome({
       retrievalGrounded: true,
+      identityResolved: true,
       observations: [],
       failureReason: 'timeout',
     });
@@ -258,7 +260,7 @@ describe('D1 — resolveProbeOutcome is the single place state is decided', () =
   it('never returns measured for an empty observation set', () => {
     for (const retrievalGrounded of [true, false]) {
       expect(
-        resolveProbeOutcome({ retrievalGrounded, observations: [], failureReason: null }).state,
+        resolveProbeOutcome({ retrievalGrounded, identityResolved: true, observations: [], failureReason: null }).state,
       ).not.toBe('measured');
     }
   });

@@ -25,7 +25,7 @@ const unavailable = (
 
 export const ANTICIPATED_PROVIDERS: EvidenceProviderDescriptor[] = [
   unavailable({
-    providerId: 'backlink.authority', providerName: 'Backlink / Domain Authority (Ahrefs · Moz · Majestic)', version: '0.1.0',
+    providerId: 'backlink.authority', providerName: 'Backlink / Domain Authority (Ahrefs)', version: '0.1.0',
     capabilities: ['backlinks', 'domain_authority', 'referring_domains', 'anchor_diversity', 'spam_score'],
     supportedEvidence: ['backlink_authority', 'referring_domains', 'domain_authority', 'dofollow_ratio'],
     rateLimits: { requestsPerWindow: 500, windowSeconds: 60, remaining: null },
@@ -34,7 +34,11 @@ export const ANTICIPATED_PROVIDERS: EvidenceProviderDescriptor[] = [
     consumerEngines: ['authority', 'authority.backlink', 'website.brand'],
     requiredEvidence: ['real referring domains + domain authority (currently inferred/null)'],
     currentWorkaround: 'authority is INFERRED from on-site/crawl signals; domain_authority is nullable/manual (BETA-AUDIT-004)',
-    priority: 'critical', envKeys: ['AHREFS_API_KEY', 'MOZ_API_KEY', 'MAJESTIC_API_KEY'],
+    // `envKeys` is OPERATOR GUIDANCE: `providerActivationMatrix` prints it verbatim as
+    // "set credentials: ...". Moz and Majestic have no adapter in this repo, so naming their
+    // keys sent operators to settings that enable nothing. Only implemented prerequisites are
+    // listed, matching `PROVIDER_SLOTS.authority_inflow`, which names AHREFS_API_KEY alone.
+    priority: 'critical', envKeys: ['AHREFS_API_KEY'],
   }),
   unavailable({
     providerId: 'search_console', providerName: 'Google Search Console', version: '0.1.0',

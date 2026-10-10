@@ -37,7 +37,7 @@ export async function loadExperiencePages(companyId: string, domainScope?: Repor
   try {
     let pagesQuery = supabase
       .from('canonical_pages')
-      .select('id, url, page_type, title, meta_description, headings, ctas, internal_link_count, http_status, crawl_depth, crawl_metadata')
+      .select('id, url, page_type, title, meta_description, headings, ctas, internal_link_count, http_status, crawl_depth, crawl_metadata, last_crawled_at')
       .eq('company_id', companyId);
     if (domainScope) pagesQuery = pagesQuery.eq('domain_id', domainScope.domainId as string);
     const { data: pages } = await pagesQuery
@@ -76,6 +76,7 @@ export async function loadExperiencePages(companyId: string, domainScope?: Repor
       crawl_depth: (row as { crawl_depth?: number | null }).crawl_depth ?? null,
       wordCount: wordsByPage.get(String((row as { id?: string }).id ?? '')) ?? 0,
       crawl_metadata: (row as { crawl_metadata?: ExperiencePage['crawl_metadata'] }).crawl_metadata ?? null,
+      last_crawled_at: (row as { last_crawled_at?: string | null }).last_crawled_at ?? null,
     }));
   } catch {
     return [];

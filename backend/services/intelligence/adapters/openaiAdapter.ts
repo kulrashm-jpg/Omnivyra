@@ -27,7 +27,12 @@ import {
 } from '../productionPrimitives';
 import { extractCitation } from '../citationExtractor';
 // D1 — the single seam that decides whether a probe may be called `measured`.
-import { resolveProbeOutcome } from '../aiVisibilityGrounding';
+// D2 — and the single seam that decides whether we know whose visibility it is.
+import {
+  NO_IDENTITY_REASON,
+  resolveProbeIdentity,
+  resolveProbeOutcome,
+} from '../aiVisibilityGrounding';
 import { formatQueryForProvider } from '../queryOrchestrator';
 import type {
   EvidenceSourceKind,
@@ -230,8 +235,30 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
       };
     }
 
-    const brandName = (probe as AIVisibilityProbe & { brandName?: string }).brandName ?? '';
-    const domain = (probe as AIVisibilityProbe & { domain?: string | null }).domain ?? null;
+    // D2 — the DECLARED identity fields (no cast), and a refusal when neither is
+    // present. Ahead of the query loop on purpose: OpenAI calls are paid, and a
+    // subject-less run can only ever buy a citation rate of zero about nobody.
+    const identity = resolveProbeIdentity(probe);
+    if (!identity.resolved) {
+      logProviderCall({
+        providerId: this.id,
+        operation: 'probe',
+        status: 'unavailable',
+        reason: 'no_identity',
+      });
+      return {
+        provider: this.id,
+        query_class: probe.query_class,
+        state: 'unavailable',
+        observation_outcome: 'no_identity',
+        citation_rate: null,
+        mean_prominence: null,
+        mentions: [],
+        evidence: unavailableEvidence(NO_IDENTITY_REASON),
+        reason_unavailable: NO_IDENTITY_REASON,
+      };
+    }
+    const { brandName, domain } = identity;
 
     const mentions: CitationMention[] = [];
     let firstFailureReason: string | null = null;
@@ -330,6 +357,9 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
     // own opinion about what counts as measured.
     const resolution = resolveProbeOutcome({
       retrievalGrounded: this.retrieval_grounded,
+      // D2 — true by construction here; stated explicitly so the precondition is
+      // visible at the decision rather than assumed from the early return above.
+      identityResolved: identity.resolved,
       observations: mentions,
       failureReason: firstFailureReason,
     });

@@ -1,3 +1,5 @@
+// R1-L2 -- the Report 1 query-origin allow-list (no private member, by design).
+import type { Report1QueryOrigin } from './report1QueryUniverse';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { SerpResultType } from './serp/serpResultTypes';
 import type { ReportReadinessResult } from './reportReadinessService';
@@ -244,6 +246,11 @@ export interface SnapshotReport {
    */
   advertising?: SnapshotAdvertising | null;
   /**
+   * Page-level observed subjects from this run's crawl. Optional and additive; absent on reports
+   * composed before the producer existed.
+   */
+  observed_subjects?: SnapshotObservedSubject[] | null;
+  /**
    * GAP-08 — the customer-facing identity fields with their provenance made explicit, so declared
    * information can never be read as public observation.
    */
@@ -364,9 +371,30 @@ export interface SnapshotReport {
     gaps: Array<{ area: string; why: string; impact: string; next_step: string; expected_benefit: string }>;
     next_moves: string[];
   } | null;
+  /**
+   * SLICE 3A — Organic + Paid acquisition decision. Optional and UNPOPULATED: 3A establishes
+   * the shape only, and no producer writes it yet. Absent means no decision was made, which
+   * a renderer must never treat as a default posture.
+   */
+  acquisition_decision?: import('./snapshotReport/acquisitionContract').AcquisitionDecision | null;
   geo_aeo_executive_summary: {
     overall_ai_visibility_score: number | null;
     overall_ai_visibility_score_state: ScoreState;
+    /** What evidence actually backed this section, and what would unlock a real measurement. */
+    ai_retrieval?: {
+      state: ScoreState;
+      basis: string;
+      not_measurable: string;
+      unlock: string;
+    };
+    /** GEO applicability decision. "Not measured" is never the customer's final answer. */
+    geo_decision?: {
+      relevance: 'relevant' | 'conditional';
+      why: string;
+      do_now: string[];
+      defer: string[];
+      measurement: string;
+    };
     /**
      * Phase 2: NULLABLE. When AI visibility is `insufficient_signal` or `unavailable`
      * there is no diagnosis to make, and the report must say nothing rather than assert
@@ -703,6 +731,89 @@ export type SnapshotSearchObservation = {
   snippet: string | null;
   /** Organic rows returned for this query — the window the position was (or was not) found in. */
   resultCount: number;
+
+  // --- R1-D RETENTION: the search that produced this position --------------
+  //
+  // The producer (`SerpSearchObservation`) has carried these four since R1-D and
+  // `report1SerpObservationProvenance` pins each one, including that they are
+  // `null` rather than `undefined` so they survive JSON. The snapshot assigns the
+  // producer's array straight through with no `.map()`, and every consumer between
+  // here and the renderer passes `search_visibility` wholesale, so the values were
+  // already present at runtime and already persisted - they were simply not
+  // DECLARED, so nothing downstream could read them.
+  //
+  // Declaring them retains evidence that already exists. It adds no acquisition,
+  // no request and no derivation.
+  //
+  // OPTIONAL because a report composed before R1-D carries none of them, exactly
+  // as `features` below is optional. Absent means "not recorded for this run" and
+  // a reader must fall back rather than read it as a finding.
+  //
+  // DELIBERATELY NOT HERE: `queryClass` and `intent`. The producer holds both, but
+  // they are DERIVED from the query text against brand tokens, not observed, so
+  // they are kept out of the observed-evidence contract. `geography` and `device`
+  // are not acquired at all and are absent for that reason.
+
+  /** The search engine that returned this page, as requested. Null when no page was read. */
+  engine?: string | null;
+  /** The provider that served the response. A distinct fact from `engine`. */
+  provider?: string | null;
+  /** When the page was read, from the client that read it - never the composer's clock. */
+  observedAt?: string | null;
+  /**
+   * Rank-ordered domains that appeared on this page beside the company, own domain
+   * excluded. PAGE NEIGHBOURS, NOT A QUALIFIED COMPETITOR SET: the blocked-host
+   * filter that keeps directories and aggregators out of competitor qualification is
+   * deliberately not applied here, because removing them would misreport what the
+   * results page actually contained.
+   */
+  competitorDomains?: string[];
+
+  // ─── R1-L2: QUERY ORIGIN — A DIFFERENT AXIS FROM OBSERVATION PROVENANCE ───
+  //
+  // `engine`/`provider`/`observedAt` answer "where did this ANSWER come from".
+  // The two fields below answer "why did Report 1 ask this QUESTION". They are
+  // not interchangeable and must never be rendered as one statement.
+  //
+  // QUERY ORIGIN IS NOT EVIDENCE. `observed_public` means the query TEXT was
+  // derived from public page material; it asserts nothing about search demand,
+  // volume, or whether anyone actually runs the query. The SERP result remains
+  // the only observation in this chain.
+  //
+  // GSC IS NOT REPRESENTABLE. `Report1QueryOrigin` has no private member, so a
+  // Search Console-derived query cannot be expressed here at all. That is the
+  // type-level half of the GSC-isolation decision.
+  //
+  // OPTIONAL, like the four fields above: a report composed before L-2 carries
+  // neither, and absent means "origin not recorded for this run". A reader must
+  // NOT infer an origin from the query text — a query reading "x competitors" is
+  // not evidence that a template produced it.
+
+  /** The permitted input that put this query in the universe. */
+  queryOrigin?: Report1QueryOrigin | null;
+  /** The construction-time reason this query was checked. Never re-derived at render time. */
+  queryRationale?: string | null;
+};
+
+/**
+ * Page-level observed subjects: literal title/heading text from the company's own crawled pages,
+ * each attributed to its source URL and crawl time. See `snapshotReport/observedSubjects`.
+ *
+ * It asserts only that the text exists on that page. It is NOT a claim that the company covers
+ * the subject or has authority on it. Inferred topics are a separate, deliberately unbuilt channel.
+ *
+ * OPTIONAL: a report composed before this existed carries none, and absent means "not established
+ * for this run" -- never "no subjects". An empty array means the producer ran and found nothing
+ * admissible, which reads the same way to a consumer.
+ */
+export type SnapshotObservedSubject = {
+  text: string;
+  normalized: string;
+  origin: 'title' | 'heading';
+  sourceUrl: string;
+  observedAt: string | null;
+  headingLevel: number | null;
+  textSource: string | null;
 };
 
 export type SnapshotSearchVisibility = {
@@ -940,6 +1051,8 @@ export type CompanyNarrativeContext = {
   geography: string | null;
   logoUrl: string | null;
   faviconUrl: string | null;
+  /** Company-DECLARED competitors from the profile. Never public observations. */
+  declaredCompetitors?: string[];
 };
 
 export type PositioningStrength = 'strong' | 'moderate' | 'weak';

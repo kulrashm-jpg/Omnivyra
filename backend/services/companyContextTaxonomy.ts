@@ -149,6 +149,27 @@ export function normalizeTaxonomyKey(
   return match?.key ?? canonical;
 }
 
+/**
+ * Terminal buckets ("Other") and generic placeholders are classification fallbacks, not
+ * descriptions of a business. They are harmless inside a <select>, but Report 1 interpolates
+ * company context into customer-visible prose, where a persisted "Other" became
+ * "in Other in Other" for a tenant whose profile actually held
+ * "AI tool for structured thinking..." and "India, Global".
+ *
+ * Callers treat a non-specific label as ABSENT so a real profile value can win instead, and
+ * abstain when nothing better exists rather than inventing specificity.
+ */
+const NON_SPECIFIC_TAXONOMY_LABELS = new Set<string>([
+  'other', 'others', 'none', 'n_a', 'na', 'unknown', 'unspecified',
+  'not_applicable', 'not_specified', 'general', 'misc', 'miscellaneous',
+]);
+
+export function isNonSpecificTaxonomyLabel(value: unknown): boolean {
+  const canonical = canonicalize(String(value ?? '').trim());
+  if (!canonical) return true;
+  return NON_SPECIFIC_TAXONOMY_LABELS.has(canonical);
+}
+
 export function taxonomyOptions(taxonomy: CompanyContextTaxonomyName): TaxonomyEntry[] {
   return COMPANY_CONTEXT_TAXONOMY[taxonomy] ?? [];
 }

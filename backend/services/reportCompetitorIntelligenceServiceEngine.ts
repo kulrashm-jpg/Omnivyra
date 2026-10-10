@@ -70,7 +70,15 @@ import {
 
 export { generateDiscoveryKeywords } from "./reportCompetitorIntelligenceServiceHelpers";
 
-import { type CompetitorClassification, type ComparisonMetrics, type CompetitorComparisonEntry, type CompetitorGap, type CompetitorIntelligenceResult, groupCompetitorsByTier, buildCompetitiveSummary, MAX_COMPETITORS, MAX_COMPETITOR_ENGINE_OUTPUT, MAX_COMPETITOR_PAGES, MAX_CRAWL_DEPTH, MIN_SERP_DOMAINS_PER_KEYWORD, toDetectedCompetitor, devCompetitorScoringDebug, buildManualCompetitorCandidates, buildStoredCompetitorCandidates, buildProviderCompetitorCandidates, expandDiscoveryKeywords, extractTopKeywords } from './reportCompetitorIntelligenceServiceModel';
+import { type CompetitorClassification, type ComparisonMetrics, type CompetitorComparisonEntry, type CompetitorGap, type CompetitorIntelligenceResult, groupCompetitorsByTier, buildCompetitiveSummary, MAX_COMPETITORS, MAX_COMPETITOR_ENGINE_OUTPUT, MAX_COMPETITOR_PAGES, MAX_CRAWL_DEPTH, MIN_SERP_DOMAINS_PER_KEYWORD, toDetectedCompetitor, devCompetitorScoringDebug, buildManualCompetitorCandidates, buildStoredCompetitorCandidates, buildProviderCompetitorCandidates, expandReport1QueryUniverse, extractPublicQueryTerms, generateDiscoveryQueryCandidates } from './reportCompetitorIntelligenceServiceModel';
+// R1-L2 — the Report 1 query-origin allow-list. There is no `gsc` member, by design.
+import {
+  indexQueryOrigins,
+  mergeReport1QueryUniverse,
+  queryTexts,
+  type Report1QueryCandidate,
+  type Report1QueryOrigin,
+} from './report1QueryUniverse';
 import { assembleEvidenceCompetitorCandidates, deriveCompetitorEvidenceStatus, type CompetitorEvidenceStatus } from './competitorCandidateAssembly';
 // D8 — reachability classification reused from the canonical D2 contract; competitor
 // crawl failures are classified with the same vocabulary as every other crawl.
@@ -600,8 +608,22 @@ export async function buildCompetitorIntelligenceActive(params: {
   const companyContext = extractCompanyCompetitiveContext(params.resolvedInput);
   const businessContext = companyContext.marketFocus ? titleCase(companyContext.marketFocus) : businessType ? titleCase(businessType) : domainToName(domain);
 
-  const generatedKeywords = generateDiscoveryKeywords(params.resolvedInput ?? companyContext);
-  const extractedKeywords = await extractTopKeywords({
+  // ─── R1-L2: THE REPORT 1 QUERY UNIVERSE ──────────────────────────────────
+  //
+  // GSC ISOLATION. This used to call `extractTopKeywords`, which reads `canonical_keywords` (a
+  // table only GSC ingestion writes) ordered by `keyword_metrics.impressions` and gives canonical
+  // membership the largest term in its scorer. Private Search Console history therefore decided
+  // up to 8 of these 10 queries, and two tenants with identical public sites could be asked
+  // different questions with nothing recording the difference.
+  //
+  // `extractPublicQueryTerms` reads the public page sources ONLY. GSC is not filtered out of the
+  // ranking here -- it is outside this path entirely, which is what makes the isolation
+  // structural rather than a deny-list someone can forget to maintain.
+  //
+  // Every query now carries the origin it was built under, recorded at construction. Nothing
+  // downstream re-derives it from the query text.
+  const declaredCandidates = generateDiscoveryQueryCandidates(params.resolvedInput ?? companyContext);
+  const publicCandidates = await extractPublicQueryTerms({
     companyId: params.companyId,
     domain,
     businessType,
@@ -612,18 +634,27 @@ export async function buildCompetitorIntelligenceActive(params: {
       domain,
       error: error instanceof Error ? error.message : String(error),
     });
-    return [] as string[];
+    return [] as Report1QueryCandidate[];
   });
-  const keywords = [...extractedKeywords, ...generatedKeywords].reduce<string[]>((merged, keyword) => {
-    const normalized = normalizeQueryPart(keyword, 8);
-    if (!normalized) return merged;
-    if (!merged.some((item) => item.toLowerCase() === normalized.toLowerCase())) merged.push(normalized);
-    return merged;
-  }, []).slice(0, 10);
+  // Public terms first, then declared/template — the order the previous merge used, so only the
+  // removal of the GSC tier changes which queries survive the cap.
+  const queryUniverse = mergeReport1QueryUniverse([...publicCandidates, ...declaredCandidates], {
+    limit: 10,
+    normalize: (value) => normalizeQueryPart(value, 8),
+  });
+  const keywords = queryTexts(queryUniverse);
+  // Where `businessContext` came from, resolved beside the label itself so the expansion batch
+  // can tag its templates honestly rather than assuming a declared category.
+  const businessContextSource: { origin: Report1QueryOrigin; basis: string } = companyContext.marketFocus
+    ? { origin: 'declared', basis: 'company profile: category' }
+    : businessType
+      ? { origin: 'declared', basis: 'company profile: business type' }
+      : { origin: 'observed_public', basis: 'public domain label' };
   const serpDiscovery = await discoverCompetitorDomainsFromSerp({
     keywords,
     ownDomain: domain,
     geography,
+    queryOrigins: indexQueryOrigins(queryUniverse),
   });
   let serpDomains = serpDiscovery.domains;
   let liveKeywordCount = serpDiscovery.liveKeywordCount;
@@ -636,11 +667,18 @@ export async function buildCompetitorIntelligenceActive(params: {
   let searchAcquisitionReason = serpDiscovery.acquisitionReason;
   let searchRequestsMade = serpDiscovery.requestsMade;
   if (serpDomains.length < MIN_SERP_DOMAINS_PER_KEYWORD) {
-    const expandedKeywords = expandDiscoveryKeywords(keywords, companyContext, businessContext);
+    // R1-L2 — the widened batch keeps per-query origin; it is not an unprovenanced back door.
+    const expandedUniverse = expandReport1QueryUniverse({
+      universe: queryUniverse,
+      companyContext,
+      businessContext,
+      businessContextSource,
+    });
     const expandedDiscovery = await discoverCompetitorDomainsFromSerp({
-      keywords: expandedKeywords,
+      keywords: queryTexts(expandedUniverse),
       ownDomain: domain,
       geography,
+      queryOrigins: indexQueryOrigins(expandedUniverse),
     });
     serpDomains = [...serpDomains, ...expandedDiscovery.domains].reduce<string[]>((merged, candidateDomain) => {
       if (!merged.includes(candidateDomain)) merged.push(candidateDomain);

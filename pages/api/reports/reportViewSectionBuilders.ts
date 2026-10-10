@@ -289,6 +289,25 @@ export function buildGeoAeoExecutiveSummary(report: any): any {
   return {
     overallAiVisibilityScore: typeof summary.overall_ai_visibility_score === 'number' ? summary.overall_ai_visibility_score : null,
     overallAiVisibilityScoreState: summary.overall_ai_visibility_score_state || 'insufficient_signal',
+    // PHASE 2B — strict pass-through of the Phase 2 evidence boundary and decision.
+    // Absent in, absent out: no placeholder copy, exactly as primaryGap below.
+    aiRetrieval: summary.ai_retrieval
+      ? {
+          state: summary.ai_retrieval.state,
+          basis: summary.ai_retrieval.basis,
+          notMeasurable: summary.ai_retrieval.not_measurable,
+          unlock: summary.ai_retrieval.unlock,
+        }
+      : null,
+    geoDecision: summary.geo_decision
+      ? {
+          relevance: summary.geo_decision.relevance,
+          why: summary.geo_decision.why,
+          doNow: Array.isArray(summary.geo_decision.do_now) ? summary.geo_decision.do_now : [],
+          defer: Array.isArray(summary.geo_decision.defer) ? summary.geo_decision.defer : [],
+          measurement: summary.geo_decision.measurement,
+        }
+      : null,
     // The view layer must not resurrect a gap the builder deliberately withheld.
     // `geoAeoSummaryHelpers` sets `primary_gap: null` when AI evidence is insufficient;
     // these `||` fallbacks previously substituted placeholder copy — including a confident

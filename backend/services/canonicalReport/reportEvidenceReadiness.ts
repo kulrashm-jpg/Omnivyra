@@ -67,10 +67,41 @@ export function resolveEvidenceReadiness(report: CanonicalReport): EvidenceReadi
   const coverage_percentage = allDims.length ? Math.round((measuredOrInferred / allDims.length) * 100) : 0;
 
   const competitorCount = report.competitive_surface_share?.competitors?.length ?? 0;
+  // D2 — the AI coverage denominator.
+  //
+  // THE DEFECT. This read `measured_cells / total_cells`, and `total_cells` is
+  // the ENUMERATED grid: 5 providers × 4 query classes = 20. Only ONE adapter in
+  // the repo is retrieval-grounded, and by the D1 rule only a grounded provider
+  // can reach `measured`, so 16 of those 20 cells can never be measured as
+  // configured. The percentage therefore reported a shortfall no operator could
+  // close: a perfect run against every connectable engine still capped at 20%,
+  // and the "AI visibility" gap below (threshold < 50%) fired permanently.
+  //
+  // THE FIX. Divide by the cells that COULD be measured. This narrows a
+  // denominator to exclude structurally unmeasurable cells; it changes no
+  // weighting, no pillar, no score and no state.
+  //
+  // `measurable_cells === 0` is NOT 0% — it means no percentage exists, because
+  // nothing in this configuration can be measured at all. That reads as null and
+  // is reported as its own gap below rather than as a low score.
+  //
+  // A report PERSISTED before D2 carries no `measurable_cells`; for those the
+  // historical `total_cells` denominator is retained rather than invented.
   const aiCoverage = report.ai_surface_presence?.citation_matrix?.coverage ?? null;
-  const ai_coverage_percentage = aiCoverage && aiCoverage.total_cells > 0
-    ? Math.round((aiCoverage.measured_cells / aiCoverage.total_cells) * 100)
-    : null;
+  const aiMeasurableCells = aiCoverage?.measurable_cells;
+  const ai_coverage_percentage = (() => {
+    if (!aiCoverage) return null;
+    if (aiMeasurableCells === undefined) {
+      return aiCoverage.total_cells > 0
+        ? Math.round((aiCoverage.measured_cells / aiCoverage.total_cells) * 100)
+        : null;
+    }
+    if (aiMeasurableCells <= 0) return null;
+    return Math.round((aiCoverage.measured_cells / aiMeasurableCells) * 100);
+  })();
+  /** True when the matrix exists but nothing in it could be measured at all. */
+  const aiNothingMeasurable =
+    aiCoverage != null && aiMeasurableCells !== undefined && aiMeasurableCells <= 0;
 
   // The 6 canonical evidence sources (mirrors buildDataSourceStatusPanels).
   const sources = {
@@ -123,10 +154,22 @@ export function resolveEvidenceReadiness(report: CanonicalReport): EvidenceReadi
       expected_benefit: 'Replaces the on-site estimate with measured external authority.',
     });
   }
-  if (ai_coverage_percentage != null && ai_coverage_percentage < 50) {
+  // D2 — the gap survives the denominator narrowing. Previously the only branch
+  // was "< 50%", so once the percentage became null (nothing measurable) the gap
+  // would have vanished silently and the report would have looked MORE complete
+  // for being less measurable. The two cases are now reported separately.
+  if (aiNothingMeasurable) {
     gaps.push({
       area: 'AI visibility',
-      why: `AI answer-engine coverage is limited (${ai_coverage_percentage}% of checks measured).`,
+      why: 'No answer engine that retrieves from the live web is connected, so AI visibility cannot be measured at all.',
+      impact: 'AI presence is unmeasured — not low. Nothing in this report says this company is absent from AI answers.',
+      next_step: 'Connect a retrieval-grounded answer engine, then regenerate the report.',
+      expected_benefit: 'Turns AI visibility from unmeasurable into a measured, checkable result.',
+    });
+  } else if (ai_coverage_percentage != null && ai_coverage_percentage < 50) {
+    gaps.push({
+      area: 'AI visibility',
+      why: `AI answer-engine coverage is limited (${ai_coverage_percentage}% of the checks that can be measured were measured).`,
       impact: 'AI presence is based on a small number of observations.',
       next_step: 'Complete the business profile (brand name, competitors, products) and connect additional AI answer engines.',
       expected_benefit: 'Broader, higher-confidence AI visibility measurement.',

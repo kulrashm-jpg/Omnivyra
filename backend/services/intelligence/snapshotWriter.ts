@@ -19,8 +19,22 @@ import {
   classifyRecommendationStatus,
   getHistoricalStore,
 } from './historicalPersistence';
+import { buildComparabilityIdentity } from './comparabilityIdentity';
 
 export type ScanProfile = ReportSnapshotRecord['scan_profile'];
+
+/**
+ * Statuses that already record an absence, so a still-absent action must not
+ * append another row on the next run.
+ *
+ * `no_longer_surfaced` is the one this code writes. `resolved` is here because
+ * historical rows carry it: treating it as terminal is what keeps a legacy row
+ * from being re-described by today's rules, which would be a retrospective
+ * reclassification of data whose provenance is unknown.
+ */
+const ABSENCE_ALREADY_RECORDED: ReadonlySet<RecommendationHistoryRecord['status']> = new Set<
+  RecommendationHistoryRecord['status']
+>(['no_longer_surfaced', 'resolved']);
 
 export type PersistSnapshotInput = {
   companyId: string;
@@ -28,17 +42,57 @@ export type PersistSnapshotInput = {
   scanProfile: ScanProfile;
   engineVersion: string;
   providerOutcomes: ProviderHistoryRecord[];
+  /**
+   * The site this run actually measured (`buildCanonicalReport`'s
+   * `options.domain`). REQUIRED rather than optional: a snapshot recorded
+   * without it can never become a comparison baseline, and silently omitting
+   * it is exactly how a domain change becomes a published trend. Pass `null`
+   * only when the domain genuinely could not be resolved — the snapshot is
+   * still recorded (elapsed time is irrecoverable, so history is never thrown
+   * away) but it is reported as non-comparable instead of quietly compared.
+   */
+  domain: string | null;
 };
 
-export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Promise<{
+export type PersistSnapshotResult = {
   observedAt: string;
   written: boolean;
   reason?: string;
-}> {
+  /**
+   * BASELINE #1. `true` means the row carries a complete comparability
+   * identity and is therefore eligible to be the baseline a later run is
+   * measured against — i.e. the comparable-history clock has started.
+   * `false` means the row is durable history but can never anchor a delta.
+   */
+  comparable: boolean;
+  comparabilityReason: string | null;
+};
+
+export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Promise<PersistSnapshotResult> {
+  // Resolved BEFORE anything is written, so the row is stamped with the
+  // subject it measured at the moment it measured it. Reconstructing this
+  // later is impossible: `company_id` outlives a domain change, which is the
+  // whole problem the identity exists to solve.
+  const identity = buildComparabilityIdentity({
+    companyId: input.companyId,
+    domain: input.domain,
+    scanProfile: input.scanProfile,
+    engineVersion: input.engineVersion,
+  });
+  const comparabilityReason = identity
+    ? null
+    : 'Snapshot recorded without a complete comparability identity (company, measured domain, scan profile and engine version must all be known), so it cannot serve as a comparison baseline.';
+
   const store = getHistoricalStore();
   const operational = await store.isOperational();
   if (!operational) {
-    return { observedAt: new Date().toISOString(), written: false, reason: 'history-store-not-operational' };
+    return {
+      observedAt: new Date().toISOString(),
+      written: false,
+      reason: 'history-store-not-operational',
+      comparable: false,
+      comparabilityReason: 'History store is not operational — nothing was recorded.',
+    };
   }
 
   const observedAt = new Date().toISOString();
@@ -61,6 +115,10 @@ export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Pro
       engine_version: input.engineVersion,
       providers_used: providersUsed,
       providers_unavailable: providersUnavailable,
+      // Stamped only when the identity is complete. Writing a partial or
+      // guessed host would be worse than writing nothing: a reader cannot tell
+      // a guess from an observation, and the guess would compare equal.
+      ...(identity ? { subject_domain: identity.subject_domain } : {}),
     },
   };
 
@@ -101,9 +159,35 @@ export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Pro
       prior: priorByActionId.get(action.id) ?? null,
     }),
   }));
-  // Mark resolved any prior actions that no longer surface.
+  // ─── ABSENCE IS NOT RESOLUTION ─────────────────────────────────────────────
+  //
+  // THE DEFECT. This block wrote `status: 'resolved'` for any prior action
+  // missing from the current run. Set membership was the entire basis, so the
+  // report recorded that the customer had COMPLETED work whenever an action id
+  // stopped appearing. Action ids are built from title text (`<source>:<title>`)
+  // and those titles interpolate the measured domain, the discovered competitor
+  // name, a query and a keyword -- so the usual causes of disappearance are an
+  // identifier change, a surface that was not measured, or a narrower scan
+  // profile. None of them is an achievement.
+  //
+  // There is no completion evidence to consult. The only per-action signal in
+  // the system is `recommendation_dismissal`, which is suppression; the
+  // collaboration status table that does carry a `completed` value has no
+  // production writer, no uniqueness or ordering contract, no tenant identity
+  // reachable from here, and is loaded one phase AFTER this write. So `resolved`
+  // is no longer emitted at all -- it remains in the union only for historical
+  // rows, whose provenance is unknown and which are never rewritten.
+  //
+  // WHAT IS RECORDED. `no_longer_surfaced`: this identifier stopped appearing,
+  // and nothing beyond that.
+  //
+  // FORWARD-ONLY. A prior row is never read-modified-written; a new row is
+  // appended. `ABSENCE_ALREADY_RECORDED` is what stops a permanently-absent
+  // action appending an identical row on every later run. Legacy `resolved` is
+  // terminal for the same reason, which is also what leaves historical rows
+  // untouched.
   for (const [actionId, prior] of priorByActionId.entries()) {
-    if (!currentActionIds.has(actionId) && prior.status !== 'resolved') {
+    if (!currentActionIds.has(actionId) && !ABSENCE_ALREADY_RECORDED.has(prior.status)) {
       recommendations.push({
         id: randomUUID(),
         company_id: input.companyId,
@@ -113,7 +197,7 @@ export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Pro
         pillar: prior.pillar,
         severity: prior.severity,
         leverage_score: prior.leverage_score,
-        status: 'resolved',
+        status: 'no_longer_surfaced',
       });
     }
   }
@@ -177,5 +261,10 @@ export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Pro
     evidence,
   });
 
-  return { observedAt, written: true };
+  return {
+    observedAt,
+    written: true,
+    comparable: identity != null,
+    comparabilityReason,
+  };
 }

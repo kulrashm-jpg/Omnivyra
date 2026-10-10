@@ -13,6 +13,9 @@ import type {
   LLMVisibilityProvider,
 } from './providerInterfaces';
 import { AI_PROVIDERS, AI_QUERY_CLASSES, unavailableEvidence } from './providerInterfaces';
+// D2 — the probe identity seam, shared with the adapters so "do we know whose
+// visibility this is?" is answered the same way everywhere.
+import { resolveProbeIdentity, type ProbeObservationOutcome } from './aiVisibilityGrounding';
 import { getAllLLMProviders } from './providerRegistry';
 import type {
   CanonicalScore,
@@ -25,6 +28,22 @@ export type AICitationMatrixCell = {
   provider: AIProviderId;
   query_class: AIQueryClass;
   state: ScoreState;
+  /**
+   * D2 — WHY the cell is in this state, at a finer grain than the four canonical
+   * states can express. The cell used to DROP the probe's `observation_outcome`,
+   * which collapsed distinct findings into one value: "we never asked" and "we
+   * asked and it broke" both arrived as `unavailable` and nothing downstream
+   * could tell them apart. Carried verbatim from the probe result.
+   */
+  observation_outcome: ProbeObservationOutcome;
+  /**
+   * D2 — true when nothing about the present configuration could make this cell
+   * measurable: the provider is not retrieval-grounded, so by the D1 rule
+   * `measured` is unreachable for it however often it answers. Distinct from
+   * "not measured yet" — a grounded provider that merely lacks a credential
+   * becomes measurable when the credential arrives and is NOT counted here.
+   */
+  structurally_unmeasurable: boolean;
   citation_rate: number | null;
   mean_prominence: number | null;
   observed_count: number;
@@ -51,8 +70,36 @@ export type AICitationMatrix = {
     citation_rate: number | null;
     mean_prominence: number | null;
   }>;
-  // Surface-level summary: how many cells are measured vs. unavailable.
-  coverage: { measured_cells: number; unavailable_cells: number; total_cells: number };
+  /**
+   * D2 — the identity the whole matrix was measured FOR. A citation rate is a
+   * statement about a named company, so the surface carries the subject it was
+   * computed against and whether that subject existed at all. `resolved: false`
+   * means every cell was refused for want of a subject — not that the company is
+   * invisible to AI.
+   */
+  identity: { brand_name: string | null; domain: string | null; resolved: boolean };
+  /**
+   * Surface-level summary.
+   *
+   * D2 — `total_cells` is the ENUMERATED grid (providers × query classes) and is
+   * preserved byte-for-byte for every existing consumer. It is the wrong
+   * denominator for a coverage percentage, because it counts cells that can
+   * never be measured as configured: with only one retrieval-grounded adapter in
+   * the repo, 16 of the 20 enumerated cells belong to chat models for which D1
+   * makes `measured` unreachable. Dividing by 20 therefore reports a shortfall
+   * the operator cannot close and understates coverage by design.
+   *
+   * `measurable_cells` is the honest denominator: cells whose provider could
+   * yield a measurement. It is 0 when no grounded adapter is active, which must
+   * read as "no percentage exists", never as 0%.
+   */
+  coverage: {
+    measured_cells: number;
+    unavailable_cells: number;
+    total_cells: number;
+    measurable_cells: number;
+    structurally_unmeasurable_cells: number;
+  };
 };
 
 export type CitationMatrixInput = {
@@ -155,6 +202,9 @@ export async function buildAICitationMatrix(
 ): Promise<AICitationMatrix> {
   const activeProviders = providers ?? getAllLLMProviders();
   const cells: AICitationMatrixCell[] = [];
+  // D2 — the subject of the whole matrix, decided once, by the same seam the
+  // adapters use. Whitespace-only input is not identity.
+  const identity = resolveProbeIdentity(input);
 
   for (const provider of activeProviders) {
     for (const queryClass of AI_QUERY_CLASSES) {
@@ -163,11 +213,24 @@ export async function buildAICitationMatrix(
         provider: provider.id,
         query_class: queryClass,
         queries,
+        // D2 — THE DEFECT, FIXED. This producer received `{ brandName, domain }`
+        // and forwarded neither, so both adapters fell back to `''` / `null`,
+        // `extractCitation` built an empty candidate set, and every mention came
+        // back `appeared: false`. The first grounded run would therefore have
+        // published `citation_rate: 0` in state `measured` for every cell — a
+        // false measured zero, stamped `answer_engine`, about a company the
+        // probes never actually named.
+        brandName: identity.brandName.length > 0 ? identity.brandName : null,
+        domain: identity.domain,
       });
       cells.push({
         provider: provider.id,
         query_class: queryClass,
         state: result.state,
+        observation_outcome: result.observation_outcome,
+        // D2 — a fixed property of the ADAPTER, read from the provider rather
+        // than inferred from its answer, exactly as the D1 rule requires.
+        structurally_unmeasurable: !provider.retrieval_grounded,
         citation_rate: result.citation_rate,
         mean_prominence: result.mean_prominence,
         observed_count: citationMentionFromResult(result).filter((m) => m.appeared).length,
@@ -220,10 +283,25 @@ export async function buildAICitationMatrix(
     overall_score: overallScore,
     by_provider: byProvider,
     by_query_class: byQueryClass,
+    identity: {
+      brand_name: identity.brandName.length > 0 ? identity.brandName : null,
+      domain: identity.domain,
+      resolved: identity.resolved,
+    },
     coverage: {
       measured_cells: cells.filter((c) => c.state === 'measured').length,
       unavailable_cells: cells.filter((c) => c.state === 'unavailable').length,
+      // Preserved exactly: the enumerated grid every existing consumer reads.
       total_cells: cells.length,
+      // D2 — the honest denominator. With no subject NOTHING is measurable, so
+      // identity gates this too: a matrix with no company attached must not
+      // report a coverage percentage of any kind.
+      measurable_cells: identity.resolved
+        ? cells.filter((c) => !c.structurally_unmeasurable).length
+        : 0,
+      structurally_unmeasurable_cells: identity.resolved
+        ? cells.filter((c) => c.structurally_unmeasurable).length
+        : cells.length,
     },
   };
 }
@@ -261,9 +339,14 @@ export function deriveCitationQueries(params: {
       (competitor) => `Compare ${params.brandName} vs ${competitor}.`,
     );
   }
-  if (params.productServices.length > 0) {
+  // D2 — the `expertise` class REQUIRES the brand label. It used to fall back to
+  // "What expertise does this company bring to X?", a question that names nobody:
+  // whatever an engine answered, the reply could not be scored for or against
+  // this company, yet the cell would still have carried a citation rate. An
+  // un-askable class is honestly `no_queries` instead.
+  if (params.productServices.length > 0 && params.brandName) {
     queries.expertise = params.productServices.slice(0, 3).map(
-      (service) => `What expertise does ${params.brandName ?? 'this company'} bring to ${service}?`,
+      (service) => `What expertise does ${params.brandName} bring to ${service}?`,
     );
   }
   return queries;

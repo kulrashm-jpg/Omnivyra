@@ -111,7 +111,13 @@ describe('R1-OPEN-01 — outer call sites (source contract)', () => {
   it('competitor discovery scopes both its answer-topic read and the SERP keyword seed', () => {
     const engine = source('backend/services/reportCompetitorIntelligenceServiceEngine.ts');
     const active = engine.slice(engine.indexOf('export async function buildCompetitorIntelligenceActive('));
-    expect(active).toMatch(/extractTopKeywords\(\{[^}]*domainScope: params\.domainScope/);
+    // R1-L2 renamed this seam: the Report 1 query universe is now built by
+    // `extractPublicQueryTerms`, which reads the public page sources only. The INVARIANT pinned
+    // here is unchanged — the seed must still be scoped to the report's current domain — so only
+    // the function name moves. `extractTopKeywords` still exists for non-Report-1 use and is
+    // deliberately no longer reachable from this path, which the second assertion now pins.
+    expect(active).toMatch(/extractPublicQueryTerms\(\{[^}]*domainScope: params\.domainScope/);
+    expect(active).not.toMatch(/extractTopKeywords\(\{/);
     expect(active).toMatch(/withDomainScope\(\s*supabase\s*\.from\('canonical_pages'\)/);
   });
 

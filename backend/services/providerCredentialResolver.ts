@@ -92,6 +92,41 @@ export const PROVIDER_CREDENTIALS: Record<string, ProviderCredentialDescriptor> 
     envNames: [],
     rationale: 'Wikidata is a public, keyless API. There is no credential to manage.',
   },
+  // ── E · two Report 1 providers this registry did not declare ────────────────
+  //
+  // By this module's own rule — "Adding a Report 1 provider without an entry
+  // here is a bug" — Perplexity and Ahrefs were bugs: both are live Report 1
+  // providers, neither had a descriptor, so `resolveProviderCredential` answered
+  // `source: 'unavailable'` with "not declared in PROVIDER_CREDENTIALS" and
+  // `describeProviderCredential` answered "Unregistered provider." for the two
+  // capabilities an operator is most likely to ask about (AI visibility and
+  // backlink authority).
+  //
+  // Both are declared ENVIRONMENT_MANAGED because that is what the runtime
+  // actually does, verified in code and not assumed:
+  //   • Perplexity — `llmAdapterBase.getCredential()` returns
+  //     `process.env[config.envKey]`, and `perplexityAdapter.config.envKey` is
+  //     `PERPLEXITY_API_KEY`. The adapter never consults this resolver.
+  //   • Ahrefs — `ahrefsAdapter.lookup()` reads `process.env.AHREFS_API_KEY`
+  //     directly.
+  // Declaring either SUPER_ADMIN_MANAGED would offer a credential control the
+  // runtime ignores — the silent-failure class this module exists to prevent.
+  // The entries therefore make the providers DIAGNOSABLE; they do not claim a
+  // managed credential path that does not exist.
+  perplexity: {
+    key: 'perplexity',
+    sourceName: null,
+    mode: 'ENVIRONMENT_MANAGED',
+    envNames: ['PERPLEXITY_API_KEY'],
+    rationale: 'Perplexity is the only retrieval-grounded AI engine wired into Report 1, so AI visibility is honestly unmeasurable without it. The adapter reads PERPLEXITY_API_KEY from the environment and consults no credential store; no Super Admin control is offered because none would be honoured.',
+  },
+  ahrefs: {
+    key: 'ahrefs',
+    sourceName: null,
+    mode: 'ENVIRONMENT_MANAGED',
+    envNames: ['AHREFS_API_KEY'],
+    rationale: 'Ahrefs is the only implemented backlink/authority provider (Moz and Majestic have no adapter in the repo). The adapter reads AHREFS_API_KEY from the environment and consults no credential store; no Super Admin control is offered because none would be honoured.',
+  },
 };
 
 export interface ResolvedProviderCredential {

@@ -321,6 +321,25 @@ export function renderExecutiveRealitySnapshot(
   `;
 }
 
+/**
+ * WAVE-4A — the evidence state of a pillar score, in the words the report already uses.
+ *
+ * The pillar card rendered a number and a band and NOT the state, so an `inferred` 21 was
+ * visually identical to a `measured` 21: a figure built from on-page proxies read as an
+ * observation of the outside world. The number is unchanged; what is added is the claim the
+ * number is entitled to make.
+ *
+ * Restated rather than imported: the equivalent map lives inside `exportRendererReport1`,
+ * which is frozen and does not export it, and a renderer should not depend on another
+ * renderer. The wording matches what that map and this file's own hero already say.
+ */
+const PILLAR_STATE_LABEL: Record<string, string> = {
+  measured: 'Measured',
+  inferred: 'Inferred from available evidence',
+  insufficient_signal: 'Insufficient evidence',
+  unavailable: 'Not available',
+};
+
 function renderPillar(pillar: CanonicalPillarScore): string {
   const accent = PILLAR_ACCENT[pillar.pillar];
   const measured =
@@ -328,11 +347,13 @@ function renderPillar(pillar: CanonicalPillarScore): string {
     pillar.score.state !== 'insufficient_signal' &&
     pillar.score.state !== 'unavailable';
   const pct = measured ? Math.max(0, Math.min(100, Math.round(pillar.score.value as number))) : 0;
+  const stateLabel = PILLAR_STATE_LABEL[pillar.score.state] ?? pillar.score.state;
   return `
     <div class="ds-pillar">
       <div class="ds-pillar-rail" style="border-left-color: ${accent};">
         <div class="ds-pillar-score">${scoreNumber(pillar.score)}<span class="ds-pillar-score-of">/100</span></div>
         <div class="ds-pillar-band">${escape(scoreBand(pillar.score))}</div>
+        <div class="ds-pillar-state" style="font-size:7.5pt; line-height:1.3; margin-top:1mm; color:#64748b;">${escape(stateLabel)}</div>
       </div>
       <div>
         <p class="ds-pillar-name">${escape(pillar.label)}</p>

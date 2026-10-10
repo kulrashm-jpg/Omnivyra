@@ -83,11 +83,15 @@ import {
 } from './snapshotReport/canonicalScoreState';
 // Report 1 assembly: cross-source opportunities, priorities and the 30/60/90 plan.
 import { assembleDigitalSnapshot } from './digitalSnapshotAssembly';
+import { buildAcquisitionDecision } from './snapshotReport/acquisitionDecision';
 // Phase 4: performance + digital-experience intelligence over the existing crawl corpus.
 import { assessDigitalExperience } from './digitalExperience';
 import { buildSearchFeatures } from './snapshotReport/searchFeatureHelpers';
 import { buildAdvertisingSurface } from './ads/advertisingSurface';
 import { collectPerformanceEvidence, loadExperiencePages } from './digitalExperienceRepository';
+// Observed subjects: literal title/heading text from the pages already loaded above. A pure
+// function over values this service holds -- no query, no clock, no provider.
+import { collectObservedSubjects } from './snapshotReport/observedSubjects';
 // Phase 3: the two competition views, built from the canonical relation model.
 import { buildCompetitiveTables, buildCompetitorTableRows } from './competitiveTables';
 import { buildCanonicalReport } from './canonicalReport/canonicalReportBuilder';
@@ -583,6 +587,8 @@ export async function composeSnapshotReportFromDecisions(params: {
     brandName: companyContext.companyName,
     domain: companyContext.domain,
     category: params.resolvedInput?.resolved.businessType ?? null,
+    // Declared geography, for the backlink strategy's geographic relevance. Declared, never observed.
+    declaredGeography: params.resolvedInput?.resolved.geography ?? null,
     competitors: (params.resolvedInput?.resolved.competitors ?? []).map((c) => String(c)),
     productServices: companyContext.productServices,
     companyId: params.companyId,
@@ -737,6 +743,13 @@ export async function composeSnapshotReportFromDecisions(params: {
       : rankedObservations.length > 0
         ? 'measured'
         : 'insufficient_signal';
+  // Observed subjects, from the SAME domain-scoped crawl pages loaded for the experience
+  // surface. `loadExperiencePages` reads `canonical_pages` + `page_content` filtered by
+  // company_id and domain_id, so nothing from Search Console, a competitor or the Company
+  // Profile can reach this channel. Page-level evidence only: it states what a page says, not
+  // what the company covers.
+  canonicalSnapshotShape.observed_subjects = collectObservedSubjects(experiencePages);
+
   canonicalSnapshotShape.search_visibility = {
     state: searchState,
     // Provider identity only — never a credential, never an environment-variable name.
@@ -871,6 +884,22 @@ export async function composeSnapshotReportFromDecisions(params: {
         observedAt: canonicalSnapshotShape.advertising.observedAt ?? null,
       }
       : null,
+  });
+
+  // ORGANIC + PAID ACQUISITION — the decision, produced from the finished state above.
+  //
+  // Same assembler position and the same discipline as `digital_snapshot`: it recomputes no
+  // dimension, no pillar, no readiness and no score. `buildAcquisitionDecision` is an
+  // orchestrator over the frozen 3A-3G functions, which own every rule it expresses. Inputs
+  // that do not exist are passed through as absent, so the decision abstains rather than
+  // inventing a pilot, a channel, a budget or a measured result.
+  canonicalSnapshotShape.acquisition_decision = buildAcquisitionDecision({
+    scoreDimensions: score.dimensions,
+    searchVisibilityState: canonicalSnapshotShape.search_visibility?.state ?? null,
+    geoVisibilityState: geoAeoExecutiveSummary.overall_ai_visibility_score_state,
+    advertising: canonicalSnapshotShape.advertising ?? null,
+    digitalExperience,
+    declaredProfile: params.resolvedInput?.profile ?? null,
   });
 
   return canonicalSnapshotShape;

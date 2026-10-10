@@ -51,10 +51,20 @@ const serpOk = (rows: Array<{ url: string; title?: string | null; snippet?: stri
   // from organic `rows` alone (socialPresenceObservation never reads `features`),
   // so this changes the fixture's shape, not what DG-011 observes.
   features: [],
+  // R1-D — the observation's identity. A successful read HAS a provider, an engine and a time;
+  // the contract states all three are null unless `status === 'ok'`, so an `ok` fixture must
+  // carry them or it is not a faithful stand-in for what the client returns.
+  provider: 'serpapi',
+  engine: 'google',
+  observedAt: '2026-10-06T00:00:00.000Z',
 });
 
-// Same shape DG-001's own failure path returns: no rows, no features.
-const serpDown = (status: 'unavailable' | 'failed'): SerpKeywordResult => ({ status, rows: [], reason: 'x', features: [] });
+// Same shape DG-001's own failure path returns: no rows, no features — and, per the R1-D
+// contract, NO provenance: nothing was read, so naming an engine or stamping a time would date
+// evidence that does not exist.
+const serpDown = (status: 'unavailable' | 'failed'): SerpKeywordResult => ({
+  status, rows: [], reason: 'x', features: [], provider: null, engine: null, observedAt: null,
+});
 
 const observe = (
   candidateUrls: string[],

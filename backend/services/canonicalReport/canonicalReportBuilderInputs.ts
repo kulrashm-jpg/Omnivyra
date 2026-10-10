@@ -140,7 +140,17 @@ function evidenceSourceFromTag(tag: string): EvidenceSourceKind {
   if (normalized === 'crawler') return 'crawler';
   if (normalized === 'website_intelligence:technical' || normalized === 'website_intelligence:content') return 'crawler';
   if (normalized === 'gsc') return 'gsc';
-  if (normalized === 'backlink_signals' || normalized === 'backlink_api') return 'backlink_api';
+  // AUTH-G-003 — `backlink_signals` NO LONGER CONFERS `backlink_api`.
+  //
+  // This is the `GSC` and `website_intelligence:` error running a third time. `backlink_signals`
+  // was never a backlink provider's tag: the snapshot radar attached it to a `backlinks_score`
+  // derived from on-page authority DECISIONS (see AUTH-G-003 in `visualIntelligenceHelpers`),
+  // and this line promoted it to the canonical `backlink_api` evidence kind — an on-page
+  // heuristic arriving already labelled as an external provider's observation, so no downstream
+  // provenance guard could have caught it. Only `backlink_api`, which the Ahrefs adapter sets on
+  // its OWN trace from a real response, maps to `backlink_api`. `backlink_signals` now falls
+  // through to `heuristic` (INFERRED), which is the safe direction.
+  if (normalized === 'backlink_api') return 'backlink_api';
   if (normalized === 'competitor_intelligence') return 'competitor_intelligence';
   if (normalized === 'social_links') return 'social_links';
   return 'heuristic';
@@ -353,7 +363,10 @@ function scoreFromAxis(params: {
   };
 }
 
-function aggregatePillarScore(dimensions: CanonicalDimension[]): CanonicalScore {
+// Exported so the pillar state rule can be exercised directly, as `aggregateOverallScore`,
+// `isMeasured` and `resolveAuthorityInflowState` in this file already are. A test that
+// re-implements this rule instead of calling it would pass while production diverged.
+export function aggregatePillarScore(dimensions: CanonicalDimension[]): CanonicalScore {
   const measuredValues = dimensions
     .filter((dim) => isMeasured(dim.score.value, dim.score.state))
     .map((dim) => dim.score.value as number);
@@ -372,7 +385,28 @@ function aggregatePillarScore(dimensions: CanonicalDimension[]): CanonicalScore 
     freshness: { last_observed_at: null, age_hours: null },
     observations: dimensions.flatMap((dim) => dim.score.evidence.observations),
   };
-  const state: ScoreState = measuredValues.length === dimensions.length
+  // WAVE-4A — a pillar is `measured` only when every contributing dimension is ITSELF
+  // `measured`.
+  //
+  // THE DEFECT. `isMeasured` deliberately admits `inferred` so a proxy still contributes a
+  // value — that is correct and unchanged. But the state was decided by COUNT alone
+  // (`measuredValues.length === dimensions.length`), so a pillar whose dimensions were *all*
+  // inferred heuristics was published as `measured`. Authority is exactly that case: both its
+  // dimensions are on-page proxies, and BR-H-001 downgrades one of them to `inferred` for
+  // precisely this reason — only for the pillar above it to relabel the pair `measured`.
+  //
+  // It is not only a label. `buildDataConfidence` counts `pillar.score.state`, so an
+  // all-inferred pillar was being counted in the customer-facing measured column of the Data
+  // Confidence & Coverage section — the one surface whose job is to disclose how much was
+  // actually observed.
+  //
+  // NO VALUE CHANGES. `isMeasured` is untouched, every contributing dimension still
+  // contributes, and the arithmetic mean is identical. Only the claim about the evidence
+  // changes, from "observed" to "inferred from available evidence".
+  const everyContributorMeasured = dimensions
+    .filter((dim) => isMeasured(dim.score.value, dim.score.state))
+    .every((dim) => dim.score.state === 'measured');
+  const state: ScoreState = measuredValues.length === dimensions.length && everyContributorMeasured
     ? 'measured'
     : measuredValues.length > 0
       ? 'inferred'
@@ -396,7 +430,13 @@ export function aggregateOverallScore(pillars: CanonicalPillarScore[]): Canonica
     freshness: { last_observed_at: null, age_hours: null },
     observations: pillars.flatMap((p) => p.score.evidence.observations),
   };
-  const state: ScoreState = measured.length === pillars.length
+  // WAVE-4A — same rule one level up: an overall score built entirely from inferred pillars is
+  // `inferred`, not `measured`. The >= half threshold for `inferred` is unchanged, and so is
+  // the geometric mean and which pillars contribute.
+  const everyContributingPillarMeasured = pillars
+    .filter((p) => isMeasured(p.score.value, p.score.state))
+    .every((p) => p.score.state === 'measured');
+  const state: ScoreState = measured.length === pillars.length && everyContributingPillarMeasured
     ? 'measured'
     : measured.length >= Math.ceil(pillars.length / 2)
       ? 'inferred'
@@ -490,15 +530,43 @@ function dimAuthorityInflow(ctx: DimensionContext): CanonicalDimension {
     label: 'Authority Inflow',
     pillar: 'authority',
     score: scoreFromAxis({ value: typeof value === 'number' ? value : null, state, evidence: buildEvidence({ observations }) }),
-    rationale: 'Inbound authority signals — backlinks and brand-mention reinforcement. Heuristic (inferred from on-site authority signals) until a backlink provider is connected, at which point it becomes measured.',
+    // AUTH-G-003 — the old rationale promised "Heuristic (inferred from on-site authority
+    // signals)", which described the defect as if it were the design: on-site signals are not
+    // inbound authority at any confidence level, so there was no honest reading of that number.
+    // The baseline axis now abstains (see AUTH-G-003 in `visualIntelligenceHelpers`), so the
+    // rationale states the gap and the unlock instead of a proxy's provenance.
+    rationale: 'Inbound authority signals — referring domains, backlink quality, and brand-mention reinforcement. These can only be established by an external backlink provider; on-site content cannot evidence them, so this axis stays unavailable until one is connected. Unlock: connect a backlink provider (AHREFS_API_KEY) to make Authority Inflow measured.',
   };
 }
 
 function dimEntityGraphStrength(ctx: DimensionContext): CanonicalDimension {
   const radar = ctx.snapshot.geo_aeo_visuals.ai_answer_presence_radar;
   const value = radar.entity_clarity_score;
-  const stateHint = radar.axis_states?.entity_clarity_score;
-  const state: ScoreState = stateHint ?? (typeof value === 'number' ? 'measured' : 'insufficient_signal');
+  // ─── AUTH-G-004 — ON-PAGE TOKEN REPETITION IS NOT KNOWLEDGE-GRAPH STRENGTH ──
+  //
+  // THE DEFECT. The state was `axis_states?.entity_clarity_score ?? …`, and
+  // `geoAeoSummaryHelpers.axisStateFromValue` returns `'measured'` for ANY numeric value. So
+  // `entity_clarity_score` — which `publicDomainAuditService` computes from `titleTokenCounts`
+  // as the mean of `(count / headings) × 140 × 0.6` and `(pages containing / pages) × 0.4`, i.e.
+  // how often the site repeats its own title tokens across its own headings and pages — was
+  // published as a MEASURED "Entity Graph Strength" in the Authority pillar, under a rationale
+  // claiming "sameAs linkage". A site that repeats its brand name in every H1 scored as a
+  // well-linked knowledge-graph entity. Nothing external was consulted.
+  //
+  // THE CONTRACT. This is exactly the D1 pattern already corrected for `ai_surface_presence`
+  // in this file: on-page structure predicts entity clarity, it never witnesses an entity
+  // graph. `inferred` is the ceiling, applied here rather than trusting the axis hint, whose
+  // value is computed from value-presence alone. No value changes and `inferred` aggregates
+  // exactly like `measured` (`isMeasured`), so the pillar and the band are untouched — what
+  // changes is that the number no longer claims to be an external measurement.
+  //
+  // MEASURED entity strength has exactly one source: the knowledge-graph provider, substituted
+  // over this baseline by `canonicalReportBuilderAssembly.mergeEntityDimension`. That merge
+  // admits a provider result only when `state === 'measured' && score != null` — which is why
+  // AUTH-G-001 matters here too: before it, a Wikidata no-hit arrived as `measured` with score
+  // `0` and OVERWROTE this baseline with a hard zero. It now arrives `unavailable`, so the merge
+  // falls through and the honest on-page `inferred` reading survives.
+  const state: ScoreState = typeof value === 'number' ? 'inferred' : 'insufficient_signal';
   const observations: EvidenceObservation[] = [];
   if (typeof radar.entity_clarity_score === 'number') {
     observations.push({ signal: 'entity_clarity', source: 'crawler', observed_at: null });
@@ -508,7 +576,7 @@ function dimEntityGraphStrength(ctx: DimensionContext): CanonicalDimension {
     label: 'Entity Graph Strength',
     pillar: 'authority',
     score: scoreFromAxis({ value: typeof value === 'number' ? value : null, state, evidence: buildEvidence({ observations }) }),
-    rationale: 'Knowledge-graph entity clarity, sameAs linkage, topical entity coverage.',
+    rationale: 'How clearly the brand presents itself as a distinct entity. Inferred from on-page entity clarity (how consistently the site names its own subject across titles, headings and pages) — it is not a measurement of knowledge-graph presence or sameAs linkage, which only a knowledge-graph provider can establish. Unlock: a resolvable Wikidata or knowledge-graph entity makes this measured.',
   };
 }
 
