@@ -12,12 +12,18 @@
  */
 
 import { supabase } from './supabaseClient';
+import { isRetryStateColumnMissing } from '../queue/publishRetryState';
 
 export interface QueueJob {
   id: string;
   scheduled_post_id: string;
   job_type: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * Present only once migration 20261202000000 is applied (select('*') omits
+   * an absent column). See backend/queue/publishRetryState.ts.
+   */
+  retry_state?: 'awaiting_retry' | 'exhausted' | null;
   attempts: number;
   max_attempts: number;
   scheduled_for: string;
@@ -151,13 +157,131 @@ export async function updateQueueJobStatus(
     updateData.result_data = updates.result_data;
   }
 
-  const { error } = await supabase
+  let query = supabase
     .from('queue_jobs')
     .update(updateData)
     .eq('id', jobId);
 
+  // A 'failed' write only lands on a row that can still fail. It must never
+  // overwrite a cancellation: a cancel that lands while a delivery is in flight
+  // would otherwise be turned back into 'failed', and a 'failed' row is
+  // runnable again on BullMQ's next delivery — the cancelled post would
+  // publish. 'completed' stays unconditional: it records a publish that
+  // actually happened, which is the truth even for a row cancelled meanwhile.
+  if (status === 'failed') {
+    query = query.in('status', QUEUE_JOB_FAILABLE_FROM_STATUSES);
+  }
+
+  const { error } = await query;
+
   if (error) {
     throw new Error(`Failed to update queue job: ${error.message}`);
+  }
+}
+
+/** The statuses a publish delivery can legitimately fail out of. */
+const QUEUE_JOB_FAILABLE_FROM_STATUSES = ['pending', 'processing', 'failed'];
+
+export type QueueJobProcessingClaim =
+  | { claimed: true }
+  | { claimed: false; reason: 'not_runnable' | 'changed_since_read' };
+
+/**
+ * Compare-and-set a queue_jobs row into 'processing' for ONE delivery.
+ *
+ * The publish processor used to write 'processing' unconditionally, so a row
+ * cancelled after the job was read (or before it, when job.remove() could not
+ * delete a job BullMQ was already holding) was flipped back to live and
+ * published anyway. The database is the authority: the UPDATE only lands when
+ * the row is still in the exact state the caller read and judged runnable, and
+ * zero affected rows means this delivery must not publish.
+ *
+ * Runnable snapshots:
+ *   pending                       — first delivery.
+ *   failed, retry_state NULL      — unknown; never treated as terminal.
+ *   failed, 'awaiting_retry'      — BullMQ's backoff re-delivery.
+ *   processing (stale)            — the caller has already applied the
+ *                                   replay-suppression window; the CAS pins
+ *                                   updated_at so two stale re-deliveries
+ *                                   cannot both win.
+ * Everything else — cancelled, completed, failed+'exhausted', poisoned, an
+ * unknown status — is refused without a write.
+ *
+ * `retry_state` is only named when the snapshot carries it (the row was read
+ * with select('*')), so this runs unchanged against a database where migration
+ * 20261202000000 has not been applied.
+ */
+export async function claimQueueJobForProcessing(
+  jobId: string,
+  snapshot: { status?: string | null; updated_at?: string | null; retry_state?: string | null },
+): Promise<QueueJobProcessingClaim> {
+  const status = snapshot.status ?? null;
+  const hasRetryState = Object.prototype.hasOwnProperty.call(snapshot, 'retry_state');
+  const retryState = hasRetryState ? (snapshot.retry_state ?? null) : null;
+
+  const runnable =
+    status === 'pending' ||
+    status === 'processing' ||
+    (status === 'failed' && retryState !== 'exhausted');
+  if (!runnable) return { claimed: false, reason: 'not_runnable' };
+
+  const payload: Record<string, unknown> = {
+    status: 'processing',
+    updated_at: new Date().toISOString(),
+  };
+  // A claimed row is no longer waiting for a retry — it is running one.
+  if (hasRetryState) payload.retry_state = null;
+
+  let query = supabase.from('queue_jobs').update(payload).eq('id', jobId).eq('status', status);
+  if (status === 'processing') {
+    query = snapshot.updated_at
+      ? query.eq('updated_at', snapshot.updated_at)
+      : query.is('updated_at', null);
+  }
+  if (status === 'failed' && hasRetryState) {
+    query = retryState === null ? query.is('retry_state', null) : query.eq('retry_state', retryState);
+  }
+
+  const { data, error } = await query.select('id');
+  if (error) {
+    throw new Error(`Failed to claim queue job ${jobId} for processing: ${error.message}`);
+  }
+  return Array.isArray(data) && data.length > 0
+    ? { claimed: true }
+    : { claimed: false, reason: 'changed_since_read' };
+}
+
+/**
+ * Record whether BullMQ will deliver a failed job again.
+ *
+ * Lands only on a row that is still 'failed': a row cancelled or completed in
+ * the meantime keeps its state. Never throws — it runs on the failure path,
+ * where the original error must be the one that propagates.
+ *
+ *   'written'        — the state is durable.
+ *   'not_failed'     — the row is not 'failed' (or does not exist); nothing
+ *                      written.
+ *   'column_missing' — migration 20261202000000 is not applied; the row stays
+ *                      unknown (NULL semantics).
+ *   'error'          — any other write failure; the row stays unknown.
+ */
+export async function recordQueueJobRetryState(
+  jobId: string,
+  retryState: 'awaiting_retry' | 'exhausted',
+): Promise<'written' | 'not_failed' | 'column_missing' | 'error'> {
+  try {
+    const { data, error } = await supabase
+      .from('queue_jobs')
+      .update({ retry_state: retryState, updated_at: new Date().toISOString() })
+      .eq('id', jobId)
+      .eq('status', 'failed')
+      .select('id');
+    if (error) {
+      return isRetryStateColumnMissing(error) ? 'column_missing' : 'error';
+    }
+    return Array.isArray(data) && data.length > 0 ? 'written' : 'not_failed';
+  } catch {
+    return 'error';
   }
 }
 

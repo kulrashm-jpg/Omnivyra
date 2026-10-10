@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
+import { cancelScheduledPostQueueEntry, enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 
 /**
  * POST /api/scheduler/retry   (BETA-007 · RULE 3)
@@ -58,13 +58,45 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Reset for a clean re-run and fire almost immediately (delay > 0 so it enqueues
   // directly rather than deferring to the safety-net cron).
   const scheduledFor = new Date(Date.now() + 3000).toISOString();
-  const { error: resetError } = await supabase
+
+  // Retire the job this retry supersedes BEFORE creating its replacement. A
+  // post can be 'failed' while its last job still sits in BullMQ backoff (its
+  // queue_jobs row 'failed' too, retry pending): left alone, that job is
+  // delivered again, claims the post this route is about to make claimable,
+  // and the new job publishes it a second time. The cancel is database-first —
+  // the worker refuses a cancelled row even if removing the BullMQ job fails.
+  //
+  // A DATABASE error here means the old job's state is unknown, so nothing is
+  // reset and nothing is enqueued. A BullMQ removal error alone does not block:
+  // the row is already 'cancelled', which is what the worker obeys.
+  const cancel = await cancelScheduledPostQueueEntry(scheduledPostId, { reason: 'superseded_by_manual_retry' });
+  if (cancel.errors.some((e) => e.startsWith('queue_jobs'))) {
+    return res.status(503).json({
+      status: 'failed',
+      error: 'Could not retire the previous publish job. Nothing was changed; please retry.',
+      code: 'PRIOR_JOB_CANCEL_FAILED',
+      retryable: true,
+    });
+  }
+
+  // Compare-and-set on 'failed': the status checked above was a read, and a
+  // delivery that claimed the post since then must not have its claim
+  // overwritten back to 'scheduled'.
+  const { data: resetRows, error: resetError } = await supabase
     .from('scheduled_posts')
     .update({ status: 'scheduled', error_message: null, error_code: null, scheduled_for: scheduledFor })
     .eq('id', scheduledPostId)
-    .eq('user_id', user.id);
+    .eq('user_id', user.id)
+    .eq('status', 'failed')
+    .select('id');
   if (resetError) {
     return res.status(500).json({ error: 'Failed to reset post for retry', code: 'RESET_FAILED' });
+  }
+  if (!Array.isArray(resetRows) || resetRows.length === 0) {
+    return res.status(409).json({
+      error: 'The post changed while the retry was being prepared. Refresh and try again.',
+      code: 'NOT_RETRYABLE',
+    });
   }
 
   try {

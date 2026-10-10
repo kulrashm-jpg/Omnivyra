@@ -37,6 +37,8 @@ import { supabase } from '../../db/supabaseClient';
 import {
   getQueueJob,
   updateQueueJobStatus,
+  claimQueueJobForProcessing,
+  recordQueueJobRetryState,
   createQueueJobLog,
   getScheduledPost,
   updateScheduledPostOnPublish,
@@ -68,6 +70,7 @@ import { createUserNotification } from '../../services/userNotificationService';
 import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
 import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
 import { runJob } from '../../services/jobRunner';
+import { RETRY_STATE_EXHAUSTED, retryStateAfterFailedDelivery } from '../publishRetryState';
 
 interface PublishJobData {
   scheduled_post_id: string;
@@ -145,55 +148,95 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
 
   if (outcome.status === 'completed') return;
 
-  if (outcome.status === 'tenant_invalid') {
-    // The owning org is gone or suspended. Mark the job failed with a
-    // terminal classification so BullMQ doesn't retry — the underlying
-    // tenant cannot accept the publish.
-    try {
-      await updateQueueJobStatus(jobId as string, 'failed', {
-        error_message: `Tenant invalid: ${outcome.reason}`,
-        error_code:    'PUBLISH_BLOCKED_TENANT_INVALID',
-      });
-      await createQueueJobLog(
-        jobId as string,
-        'warn',
-        `Publish blocked: tenant invalid (${outcome.reason})`,
-        { social_account_id, scheduled_post_id, executionId: outcome.ctx.executionId }
+  // Every branch below ends this delivery with a throw, which BullMQ records
+  // as a failed attempt. Record whether that attempt leaves a retry pending
+  // BEFORE the throw reaches BullMQ (see recordRetryStateForFailedDelivery).
+  try {
+    if (outcome.status === 'tenant_invalid') {
+      // The owning org is gone or suspended. Mark the job failed with a
+      // terminal classification so BullMQ doesn't retry — the underlying
+      // tenant cannot accept the publish.
+      try {
+        await updateQueueJobStatus(jobId as string, 'failed', {
+          error_message: `Tenant invalid: ${outcome.reason}`,
+          error_code:    'PUBLISH_BLOCKED_TENANT_INVALID',
+        });
+        await createQueueJobLog(
+          jobId as string,
+          'warn',
+          `Publish blocked: tenant invalid (${outcome.reason})`,
+          { social_account_id, scheduled_post_id, executionId: outcome.ctx.executionId }
+        );
+      } catch {
+        /* fail-soft */
+      }
+      const blockedError: Error & { skipQueueStatusUpdate?: true } = new Error(
+        `PUBLISH_BLOCKED_TENANT_INVALID:${outcome.reason}`,
       );
-    } catch {
-      /* fail-soft */
+      blockedError.skipQueueStatusUpdate = true;
+      throw blockedError;
     }
-    const blockedError: Error & { skipQueueStatusUpdate?: true } = new Error(
-      `PUBLISH_BLOCKED_TENANT_INVALID:${outcome.reason}`,
-    );
-    blockedError.skipQueueStatusUpdate = true;
-    throw blockedError;
-  }
 
-  if (outcome.status === 'dead_letter_skip') {
-    // Operator must explicitly replay. Don't re-execute or re-retry.
-    const skipError: Error & { skipQueueStatusUpdate?: true } = new Error(
-      `PUBLISH_DEAD_LETTER_SKIP:${outcome.reason}`,
-    );
-    skipError.skipQueueStatusUpdate = true;
-    throw skipError;
-  }
+    if (outcome.status === 'dead_letter_skip') {
+      // Operator must explicitly replay. Don't re-execute or re-retry.
+      const skipError: Error & { skipQueueStatusUpdate?: true } = new Error(
+        `PUBLISH_DEAD_LETTER_SKIP:${outcome.reason}`,
+      );
+      skipError.skipQueueStatusUpdate = true;
+      throw skipError;
+    }
 
-  if (outcome.status === 'pressure_rejected') {
-    // Governor refused — back off and let BullMQ's broker-level retry
-    // handle this delivery again. Throw a real Error so BullMQ records
-    // the failure and applies its retry/backoff. We do NOT mark the
-    // queue_job 'failed' because the next delivery attempt is still
-    // valid work; pressure is transient.
-    throw new Error(`PUBLISH_PRESSURE_REJECTED:${outcome.reason}:key=${outcome.key}`);
-  }
+    if (outcome.status === 'pressure_rejected') {
+      // Governor refused — back off and let BullMQ's broker-level retry
+      // handle this delivery again. Throw a real Error so BullMQ records
+      // the failure and applies its retry/backoff. We do NOT mark the
+      // queue_job 'failed' because the next delivery attempt is still
+      // valid work; pressure is transient.
+      throw new Error(`PUBLISH_PRESSURE_REJECTED:${outcome.reason}:key=${outcome.key}`);
+    }
 
-  // outcome.status === 'failed' — re-throw so BullMQ records the failure
-  // and applies its own retry policy. The DLQ entry was already enriched
-  // by the runner.
-  if (outcome.status === 'failed') {
-    if (outcome.error instanceof Error) throw outcome.error;
-    throw new Error(String(outcome.error));
+    // outcome.status === 'failed' — re-throw so BullMQ records the failure
+    // and applies its own retry policy. The DLQ entry was already enriched
+    // by the runner.
+    if (outcome.status === 'failed') {
+      if (outcome.error instanceof Error) throw outcome.error;
+      throw new Error(String(outcome.error));
+    }
+  } catch (deliveryError) {
+    await recordRetryStateForFailedDelivery(jobId as string, job);
+    throw deliveryError;
+  }
+}
+
+/**
+ * Durable retry state for a delivery that is about to fail (Step 2).
+ *
+ * `queue_jobs.status = 'failed'` is written on every failed delivery, final or
+ * not; whether BullMQ will deliver the job again lives only in Redis. This
+ * writes that fact next to the status, from the same numbers BullMQ itself
+ * uses (attemptsMade before this delivery, opts.attempts), so cancellation and
+ * the duplicate guards can see a job waiting in backoff.
+ *
+ * Lands only while the row is 'failed' — a path that did not mark the row
+ * failed (pressure rejection leaves it 'pending'), or a row cancelled
+ * meanwhile, is left alone. Best-effort by design: a lost write leaves the row
+ * NULL (unknown), which is never treated as terminal, and the original error
+ * still propagates.
+ */
+async function recordRetryStateForFailedDelivery(
+  jobId: string,
+  job: Pick<Job<PublishJobData>, 'attemptsMade' | 'opts'>,
+): Promise<void> {
+  const retryState = retryStateAfterFailedDelivery(job.attemptsMade, job.opts?.attempts);
+  let outcome: Awaited<ReturnType<typeof recordQueueJobRetryState>>;
+  try {
+    outcome = await recordQueueJobRetryState(jobId, retryState);
+  } catch {
+    // Must never replace the delivery's own error with its own.
+    outcome = 'error';
+  }
+  if (outcome === 'error') {
+    console.warn(`[publishProcessor] retry_state '${retryState}' not recorded for job ${jobId}; row stays unknown`);
   }
 }
 
@@ -223,6 +266,24 @@ async function processPublishJobInner(params: {
 
     if (queueJob.status === 'completed') {
       console.log(`✅ Job ${jobId} already completed, skipping (idempotency)`);
+      return;
+    }
+
+    // Cancellation is decided by the DATABASE, not by whether job.remove()
+    // managed to delete the BullMQ job. remove() cannot delete a job BullMQ is
+    // already holding (active/locked), and a Redis hiccup can defeat it too —
+    // either way the job is still delivered. A row the cancel helper (or the
+    // reliability sweeps) marked 'cancelled' is never published.
+    if (queueJob.status === 'cancelled') {
+      console.log(`⏹️ Job ${jobId} was cancelled, skipping (database cancellation is authoritative)`);
+      return;
+    }
+
+    // The final delivery already failed and was recorded as such. A delivery
+    // arriving after that (a stalled re-delivery after a crash between the
+    // state write and BullMQ's own failure record) must not publish.
+    if (queueJob.status === 'failed' && queueJob.retry_state === RETRY_STATE_EXHAUSTED) {
+      console.log(`⏹️ Job ${jobId} exhausted its retries, skipping`);
       return;
     }
 
@@ -330,8 +391,20 @@ async function processPublishJobInner(params: {
       }
     }
 
-    // Step 4: Update job status to 'processing'
-    await updateQueueJobStatus(jobId as string, 'processing');
+    // Step 4: Claim the job row — compare-and-set into 'processing'.
+    //
+    // Was an unconditional write, which re-animated a row cancelled after the
+    // Step-1 read: 'cancelled' became 'processing' and the post published. The
+    // claim only lands while the row is still in the state read at Step 1, so a
+    // cancellation (or a competing delivery) in between leaves zero affected
+    // rows and this delivery stops here without touching the platform.
+    const jobClaim = await claimQueueJobForProcessing(jobId as string, queueJob);
+    if (jobClaim.claimed === false) {
+      console.warn(
+        `⚠️ Job ${jobId}: queue_job claim refused (${jobClaim.reason}, read status '${queueJob.status}') — not publishing`,
+      );
+      return;
+    }
     await createQueueJobLog(jobId as string, 'info', `Started processing scheduled_post ${scheduled_post_id}`);
 
     // ── Step 4a: POST-LEVEL PUBLISH CLAIM ────────────────────────────────

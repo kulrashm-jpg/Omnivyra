@@ -13,6 +13,11 @@ import { supabase } from '../db/supabaseClient';
 import { getQueue } from '../queue/bullmqClient';
 import { createQueueJob } from '../db/queries';
 import { isLiveQueueJobDuplicateViolation } from '../services/boltScheduleIdempotency';
+import {
+  RETRY_STATE_EXHAUSTED,
+  findAwaitingRetryQueueJobs,
+  isRetryStateColumnMissing,
+} from '../queue/publishRetryState';
 
 /**
  * The columns `queue_jobs` actually has in the deployed database.
@@ -120,6 +125,26 @@ export async function enqueueScheduledPostAt(
 
   if (existing) {
     console.log(`[enqueueScheduledPostAt] duplicate – queue_job ${existing.id} already exists for post ${scheduledPostId}`);
+    return 'duplicate';
+  }
+
+  // A job waiting in BullMQ backoff is live too: its status is 'failed', but
+  // BullMQ will deliver it again and it will claim the post. Same three-state
+  // contract as above — unreadable means unknown means fail closed.
+  const awaitingRetry = await findAwaitingRetryQueueJobs([scheduledPostId]);
+  if (awaitingRetry.ok === false) {
+    console.error('[enqueueScheduledPostAt] awaiting-retry check failed – refusing to enqueue', {
+      scheduled_post_id: scheduledPostId,
+      message: awaitingRetry.message,
+    });
+    throw new Error(
+      `Failed to query queue_jobs for awaiting-retry check (post ${scheduledPostId}): ${awaitingRetry.message}`,
+    );
+  }
+  if (awaitingRetry.rows.length > 0) {
+    console.log(
+      `[enqueueScheduledPostAt] duplicate – queue_job ${awaitingRetry.rows[0].id} is awaiting a BullMQ retry for post ${scheduledPostId}`,
+    );
     return 'duplicate';
   }
 
@@ -320,6 +345,16 @@ export async function atomicCancelAndReEnqueueScheduledPost(input: {
         .maybeSingle();
       if (data) priorQueueJob = data as any;
     } catch { /* swallow — best effort */ }
+    // A job waiting in BullMQ backoff is the live job for the gate below just
+    // as a pending one is: if the cancel cannot retire it, it will still fire.
+    if (!priorQueueJob) {
+      try {
+        const awaiting = await findAwaitingRetryQueueJobs([input.scheduledPostId]);
+        if (awaiting.ok === true && awaiting.rows.length > 0) {
+          priorQueueJob = { id: awaiting.rows[0].id, status: 'failed', scheduled_for: null };
+        }
+      } catch { /* swallow — best effort, same as the capture above */ }
+    }
 
     // ── 1. Cancel old entries ──────────────────────────────────────────
     const cancelResult = await cancelScheduledPostQueueEntry(input.scheduledPostId, {
@@ -401,7 +436,10 @@ export async function atomicCancelAndReEnqueueScheduledPost(input: {
           // returns the row to the live set. `updated_at` already carries the
           // transition time.
           .update({
-            status: 'pending',
+            // A job captured while awaiting a BullMQ retry goes back to
+            // 'failed' — the state its retry_state (left untouched by the
+            // cancel) describes — not to 'pending', which it never was.
+            status: priorQueueJob.status === 'failed' ? 'failed' : 'pending',
             error_message: `rollback_from_atomic_reschedule:${enqueueError?.message ?? 'unknown'}`,
             updated_at: new Date().toISOString(),
           })
@@ -554,6 +592,75 @@ export async function cancelScheduledPostQueueEntry(
       }
     } catch (updateError) {
       result.errors.push(`queue_jobs cancel update threw: ${(updateError as Error)?.message ?? 'unknown'}`);
+    }
+  }
+
+  // ── 1b. Retire failed rows that may still be retried ───────────────────
+  // A failed delivery leaves status='failed' while BullMQ holds the job in
+  // backoff and WILL deliver it again — at which point it claims the post and
+  // publishes at the old time. Such a row is live, and is retired here exactly
+  // like a pending one.
+  //
+  // Which failed rows: every one not recorded as 'exhausted'. 'awaiting_retry'
+  // is a known pending retry; NULL is UNKNOWN (every row older than migration
+  // 20261202000000, or one whose state write did not land) and is never
+  // treated as terminal. Before the migration nothing can be shown terminal,
+  // so every failed row is retired.
+  //
+  // error_message is left as written: it is the record of the failure that
+  // happened, and retry_state is left as written too (the worker owns it).
+  // The status predicate is load-bearing for the same reason as above — a row
+  // a re-delivery has claimed back into 'processing' meanwhile is not touched
+  // here (it was not in the set this SELECT saw), so its executor is not
+  // destroyed.
+  let failedIds: string[] = [];
+  try {
+    const withState = await ownedDbTable('queue_jobs')
+      .select('id, retry_state')
+      .eq('scheduled_post_id', scheduledPostId)
+      .eq('status', 'failed');
+    const lookup: {
+      data: Array<{ id: string; retry_state?: string | null }> | null;
+      error: { message: string } | null;
+    } = withState.error && isRetryStateColumnMissing(withState.error)
+      ? await ownedDbTable('queue_jobs')
+        .select('id')
+        .eq('scheduled_post_id', scheduledPostId)
+        .eq('status', 'failed')
+      : withState;
+    if (lookup.error) {
+      result.errors.push(`queue_jobs failed-row lookup: ${lookup.error.message}`);
+    } else if (Array.isArray(lookup.data)) {
+      failedIds = lookup.data
+        .filter((r) => (r.retry_state ?? null) !== RETRY_STATE_EXHAUSTED)
+        .map((r) => r.id)
+        .filter(Boolean);
+    }
+  } catch (lookupError) {
+    result.errors.push(`queue_jobs failed-row lookup threw: ${(lookupError as Error)?.message ?? 'unknown'}`);
+  }
+
+  if (failedIds.length > 0) {
+    try {
+      const { data: cancelledRows, error: updateError } = await ownedDbTable('queue_jobs')
+        .update({
+          status: 'cancelled',
+          updated_at: new Date().toISOString(),
+        })
+        .in('id', failedIds)
+        .eq('status', 'failed')
+        .select('id');
+      if (updateError) {
+        result.errors.push(`queue_jobs failed-row cancel update: ${updateError.message}`);
+      } else {
+        const ids = (Array.isArray(cancelledRows) ? cancelledRows : [])
+          .map((r) => String((r as { id: string }).id))
+          .filter(Boolean);
+        cancelledIds = cancelledIds.concat(ids);
+        result.db_cancelled = cancelledIds.length;
+      }
+    } catch (updateError) {
+      result.errors.push(`queue_jobs failed-row cancel update threw: ${(updateError as Error)?.message ?? 'unknown'}`);
     }
   }
 
