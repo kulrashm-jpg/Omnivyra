@@ -154,7 +154,7 @@ export function useCampaignDetailsCore() {
     extraParams: activeTab !== 'overview' ? { tab: activeTab } : undefined,
   });
   const [governanceStatus, setGovernanceStatus] = useState<{
-    governance: { durationWeeks: number | null; priorityLevel: string; blueprintStatus: string; durationLocked: boolean; lastPreemptedAt: string | null; cooldownActive: boolean; blueprintImmutable?: boolean; blueprintFrozen?: boolean };
+    governance: { durationWeeks: number | null; priorityLevel: string; blueprintStatus: string; durationLocked: boolean; lastPreemptedAt: string | null; cooldownActive: boolean; blueprintImmutable?: boolean; blueprintFrozen?: boolean; blueprintStateUnavailable?: boolean };
     latestGovernanceEvent: { eventType: string; eventStatus: string; createdAt: string; metadata: Record<string, unknown> } | null;
     trade_off_options?: Array<{ type: string; [key: string]: unknown }>;
   } | null>(null);

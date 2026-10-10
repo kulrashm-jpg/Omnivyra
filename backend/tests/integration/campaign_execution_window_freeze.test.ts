@@ -42,9 +42,15 @@ function chain(result: { data: any; error: any }) {
     limit: jest.fn().mockReturnThis(),
     maybeSingle: jest.fn().mockResolvedValue(result),
     update: jest.fn().mockReturnValue(updateChain),
+    // The guard reads a campaign's posts as a LIST (id, status, scheduled_for)
+    // and awaits the builder, as PostgREST list reads do.
+    then: (ok: (r: { data: any; error: any }) => unknown) => Promise.resolve(result).then(ok),
   };
   return q;
 }
+
+/** One scheduled post at `scheduledFor`, in the guard's list-read shape. */
+const scheduledPostRows = (scheduledFor: string) => [{ id: 'sp-1', status: 'scheduled', scheduled_for: scheduledFor }];
 
 describe('Execution Window Freeze Guard', () => {
   beforeEach(() => {
@@ -82,7 +88,7 @@ describe('Execution Window Freeze Guard', () => {
         }
         if (table === 'scheduled_posts') {
           return chain({
-            data: { scheduled_for: in12h },
+            data: scheduledPostRows(in12h),
             error: null,
           });
         }
@@ -144,7 +150,7 @@ describe('Execution Window Freeze Guard', () => {
         }
         if (table === 'scheduled_posts') {
           return chain({
-            data: { scheduled_for: in48h },
+            data: scheduledPostRows(in48h),
             error: null,
           });
         }
@@ -229,7 +235,7 @@ describe('Execution Window Freeze Guard', () => {
         }
         if (table === 'scheduled_posts') {
           return chain({
-            data: { scheduled_for: in12h },
+            data: scheduledPostRows(in12h),
             error: null,
           });
         }
@@ -274,7 +280,7 @@ describe('Execution Window Freeze Guard', () => {
         }
         if (table === 'scheduled_posts') {
           return chain({
-            data: { scheduled_for: in12h },
+            data: scheduledPostRows(in12h),
             error: null,
           });
         }

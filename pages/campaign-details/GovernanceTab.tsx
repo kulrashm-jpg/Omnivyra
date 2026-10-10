@@ -145,6 +145,17 @@ export default function GovernanceTab({
               </p>
             </div>
           )}
+          {governanceStatus.governance?.blueprintStateUnavailable && !governanceLocked && (
+            <div className="mb-6 rounded-xl border-2 border-gray-200 bg-gray-50 p-4">
+              <div className="flex items-center gap-2 font-semibold text-gray-800">
+                <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                Blueprint Lock Status Unavailable
+              </div>
+              <p className="mt-1 text-sm text-gray-700">
+                The blueprint&apos;s lock state could not be checked right now. Changes will be refused until it can be verified — try again shortly.
+              </p>
+            </div>
+          )}
           <GovernanceStatusCard
             governance={governanceStatus.governance}
             latestEvent={governanceStatus.latestGovernanceEvent}

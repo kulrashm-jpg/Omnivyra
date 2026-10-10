@@ -199,6 +199,8 @@ export interface GovernanceStatusState {
     cooldownActive: boolean;
     blueprintImmutable?: boolean;
     blueprintFrozen?: boolean;
+    /** Lock state could not be evaluated (read failure) — not a confirmed lock. */
+    blueprintStateUnavailable?: boolean;
   };
   latestGovernanceEvent: {
     eventType: string;

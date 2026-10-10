@@ -6,7 +6,7 @@ import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockd
 import { scheduleStructuredPlan, ScheduleEligibilityError } from '../../../../backend/services/structuredPlanScheduler';
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
-import { assertBlueprintActive, assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../../backend/services/campaignBlueprintService';
+import { assertBlueprintActive, assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError, BlueprintMutabilityReadError } from '../../../../backend/services/campaignBlueprintService';
 import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../../backend/services/CampaignFinalizationGuard';
 import { normalizeExecutionState } from '../../../../backend/governance/ExecutionStateMachine';
 import { assertSchedulerExecutable, SchedulerIntegrityError } from '../../../../backend/services/SchedulerIntegrityGuard';
@@ -234,6 +234,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json(result);
   } catch (error: any) {
+    // The guard could not READ the blueprint state. That is not a policy
+    // verdict (409) and not a server bug (500): it is retryable, and nothing
+    // was mutated.
+    if (error instanceof BlueprintMutabilityReadError) {
+      return res.status(503).json({
+        code: 'BLUEPRINT_STATE_READ_FAILED',
+        message: 'Blueprint state could not be read. Try again shortly.',
+      });
+    }
     const companyId = await getCompanyId(id);
     const { data: camp } = await supabase
       .from('campaigns')

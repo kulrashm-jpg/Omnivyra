@@ -8,6 +8,11 @@ import { BLUEPRINT_FREEZE_WINDOW_HOURS } from '../governance/GovernanceConfig';
 import { blueprintPerItemLocksEnabled } from '../../config/featureFlags';
 import { campaignLifecycleSelect } from '../../lib/campaign/executionStatusCompat';
 import { memoRequest } from './requestScopedMemo';
+import {
+  classifyPostQueueJobs,
+  isRetryStateColumnMissing,
+  type PostRetryClass,
+} from '../queue/publishRetryState';
 
 /** Stage 11: Deterministic guard — campaign must have duration_weeks set before blueprint resolution. */
 export class PrePlanningRequiredError extends Error {
@@ -106,15 +111,18 @@ export interface BlueprintMutabilityOptions {
  * Assert blueprint is mutable before any mutation (update-duration, regenerate, negotiate, etc).
  *
  * LEGACY doctrine (default — BLUEPRINT_PER_ITEM_LOCKS unset/false):
- * Throws BlueprintImmutableError when campaign is ACTIVE or has scheduled/published posts.
- * Throws BlueprintExecutionFreezeError when first scheduled post is within freeze window.
+ * Throws BlueprintImmutableError when campaign is ACTIVE or has a PROTECTING post
+ * (scheduled, publishing, published, or failed and not terminally resolved).
  * Allows mutation only when blueprint_status === 'INVALIDATED' or execution_status === 'PAUSED',
- * and no scheduled post within BLUEPRINT_FREEZE_WINDOW_HOURS.
+ * and then throws BlueprintExecutionFreezeError when the earliest protecting post
+ * (scheduled, publishing, failed-not-terminal — not published) is within
+ * BLUEPRINT_FREEZE_WINDOW_HOURS.
  *
  * CANONICAL doctrine (BLUEPRINT_PER_ITEM_LOCKS=true — SPEC-001 §2, R2-P2):
  * immutability is PER-ITEM, never campaign-wide. An item protects the
  * blueprint only when it is publishing/published, or when it is live
- * (scheduled/failed-retryable) inside ITS OWN freeze window. Campaign-level
+ * (scheduled, or failed and not terminally resolved) inside ITS OWN freeze
+ * window. Campaign-level
  * scheduling never freezes unrelated items; cancelled/draft/blocked items
  * never protect anything. Same guard API, same error types — only the
  * decision model changes, via configuration.
@@ -170,18 +178,149 @@ export async function assertBlueprintMutable(
     throw new BlueprintImmutableError('Blueprint cannot be modified while campaign is in execution.');
   }
 
-  const { data: scheduled, error: schedError } = await supabase
-    .from('scheduled_posts')
-    .select('id')
-    .eq('campaign_id', campaignId)
-    .limit(1)
-    .maybeSingle();
-
-  if (schedError) throw new BlueprintMutabilityReadError('scheduled_posts', schedError);
-  if (scheduled) {
+  // Legacy blanket: the campaign is in execution while ANY of its posts still
+  // PROTECTS the blueprint. That used to be "any scheduled_posts row at all",
+  // so a cancelled, draft or blocked row — or a failed one the pipeline had
+  // finished with — froze the campaign forever. The approved protecting-status
+  // policy decides instead; there is no time window in this campaign-wide rule.
+  const posts = await readCampaignPosts(campaignId, null);
+  if (await hasProtectingPost(posts)) {
     throw new BlueprintImmutableError('Blueprint cannot be modified while campaign is in execution.');
   }
 }
+
+/**
+ * The approved protecting-status policy, shared by all three guard paths:
+ *
+ *   publishing, published  → protect (the per-item rule makes them IMMUTABLE;
+ *                            the legacy freeze window ignores `published` —
+ *                            history is not upcoming execution)
+ *   scheduled              → protects
+ *   failed                 → protects unless its queue_jobs show the publish
+ *                            pipeline is TERMINALLY done with it
+ *                            (classifyPostQueueJobs). UNKNOWN — no rows, a NULL
+ *                            retry_state, an unrecognised value, or the column
+ *                            absent before migration 20261202000000 — protects.
+ *   cancelled, draft, blocked → never protect on their own
+ *   NULL / unrecognised    → UNKNOWN, protects like scheduled (fail-safe)
+ */
+type GuardPost = { id: string; status: string; scheduled_for: string | null };
+
+async function readCampaignPosts(campaignId: string, postIdFilter: string[] | null): Promise<GuardPost[]> {
+  // `scheduled_posts` has no `scheduled_at` column — the timestamp is
+  // `scheduled_for` (timestamptz NOT NULL; baseline schema and production).
+  let query = supabase
+    .from('scheduled_posts')
+    .select('id, status, scheduled_for')
+    .eq('campaign_id', campaignId);
+  if (postIdFilter) query = query.in('id', postIdFilter);
+  const { data, error } = await query;
+  if (error) throw new BlueprintMutabilityReadError('scheduled_posts', error);
+  return (Array.isArray(data) ? data : []).map((row) => {
+    const r = row as { id?: unknown; status?: unknown; scheduled_for?: unknown };
+    return {
+      id: String(r.id ?? ''),
+      status: String(r.status ?? '').toLowerCase(),
+      scheduled_for: typeof r.scheduled_for === 'string' ? r.scheduled_for : null,
+    };
+  });
+}
+
+/**
+ * Classify failed posts from ALL of their queue_jobs rows, in one read.
+ * Before migration 20261202000000 the retry_state column is absent: nothing can
+ * be shown terminal, so every failed post is UNKNOWN (the pre-migration,
+ * fail-safe answer). Any other read failure is a typed 503, never "no rows".
+ */
+async function classifyFailedPosts(postIds: string[]): Promise<Map<string, PostRetryClass>> {
+  const classes = new Map<string, PostRetryClass>();
+  if (postIds.length === 0) return classes;
+  const { data, error } = await supabase
+    .from('queue_jobs')
+    .select('scheduled_post_id, status, retry_state')
+    .in('scheduled_post_id', postIds);
+  if (error) {
+    if (isRetryStateColumnMissing(error)) {
+      for (const id of postIds) classes.set(id, 'UNKNOWN');
+      return classes;
+    }
+    throw new BlueprintMutabilityReadError('queue_jobs', error);
+  }
+  const rowsByPost = new Map<string, Array<{ status?: unknown; retry_state?: unknown }>>();
+  for (const row of Array.isArray(data) ? data : []) {
+    const r = row as { scheduled_post_id?: unknown; status?: unknown; retry_state?: unknown };
+    const key = String(r.scheduled_post_id ?? '');
+    const list = rowsByPost.get(key) ?? [];
+    list.push({ status: r.status, retry_state: r.retry_state });
+    rowsByPost.set(key, list);
+  }
+  for (const id of postIds) classes.set(id, classifyPostQueueJobs(rowsByPost.get(id) ?? []));
+  return classes;
+}
+
+function hoursUntil(post: GuardPost, now: number): number | null {
+  if (!post.scheduled_for) return null;
+  const at = new Date(post.scheduled_for).getTime();
+  return Number.isFinite(at) ? (at - now) / 3600000 : null;
+}
+
+/** Legacy blanket: does any post protect the blueprint, at any time? */
+async function hasProtectingPost(posts: GuardPost[]): Promise<boolean> {
+  if (posts.some((p) =>
+    p.status === 'scheduled' || p.status === 'publishing' || p.status === 'published' || isUnrecognizedPostStatus(p.status),
+  )) {
+    return true;
+  }
+  const failedIds = posts.filter((p) => p.status === 'failed').map((p) => p.id);
+  if (failedIds.length === 0) return false;
+  const classes = await classifyFailedPosts(failedIds);
+  return failedIds.some((id) => classes.get(id) !== 'TERMINAL');
+}
+
+/**
+ * Hours until the nearest PROTECTING post inside the freeze window (overdue
+ * posts count — they are negative), or null when none is. `windowStatuses` are
+ * the non-failed statuses that protect on the calling path; failed posts in the
+ * window protect unless TERMINAL.
+ */
+async function nearestProtectingHoursInWindow(
+  posts: GuardPost[],
+  windowStatuses: ReadonlySet<string>,
+): Promise<number | null> {
+  const now = Date.now();
+  let nearest: number | null = null;
+  const consider = (hours: number) => { nearest = nearest === null ? hours : Math.min(nearest, hours); };
+  const failedInWindow: Array<{ id: string; hours: number }> = [];
+  for (const post of posts) {
+    const hours = hoursUntil(post, now);
+    if (hours === null || hours > BLUEPRINT_FREEZE_WINDOW_HOURS) continue;
+    if (windowStatuses.has(post.status) || isUnrecognizedPostStatus(post.status)) consider(hours);
+    else if (post.status === 'failed') failedInWindow.push({ id: post.id, hours });
+  }
+  if (failedInWindow.length > 0) {
+    const classes = await classifyFailedPosts(failedInWindow.map((f) => f.id));
+    for (const f of failedInWindow) {
+      if (classes.get(f.id) !== 'TERMINAL') consider(f.hours);
+    }
+  }
+  return nearest;
+}
+
+/**
+ * scheduled_posts.status is CHECK-constrained to these values but NULLABLE, so
+ * a NULL (or any value outside the set) can be stored. Such a post's state is
+ * UNKNOWN and is treated as protecting — the same fail-safe rule as an unknown
+ * retry state — never silently as cancelled/draft.
+ */
+const KNOWN_POST_STATUSES: ReadonlySet<string> = new Set([
+  'draft', 'scheduled', 'publishing', 'published', 'failed', 'cancelled', 'blocked',
+]);
+function isUnrecognizedPostStatus(status: string): boolean {
+  return !KNOWN_POST_STATUSES.has(status);
+}
+
+const PER_ITEM_WINDOW_STATUSES: ReadonlySet<string> = new Set(['scheduled']);
+const LEGACY_FREEZE_WINDOW_STATUSES: ReadonlySet<string> = new Set(['scheduled', 'publishing']);
 
 /**
  * R2-P2 — the canonical per-item evaluation. Deterministic precedence:
@@ -212,35 +351,18 @@ async function assertPerItemLocksNotBreached(
     if (postIdFilter.length === 0) return; // affected slots have no live items
   }
 
-  // `scheduled_posts` has no `scheduled_at` column — the timestamp is
-  // `scheduled_for` (timestamptz NOT NULL; baseline schema and production).
-  let query = supabase
-    .from('scheduled_posts')
-    .select('id, status, scheduled_for')
-    .eq('campaign_id', campaignId);
-  if (postIdFilter) query = query.in('id', postIdFilter);
-  const { data: posts, error: postsError } = await query;
-  if (postsError) throw new BlueprintMutabilityReadError('scheduled_posts', postsError);
-  if (!Array.isArray(posts) || posts.length === 0) return;
+  const posts = await readCampaignPosts(campaignId, postIdFilter);
+  if (posts.length === 0) return;
 
-  const now = Date.now();
-  let nearestFrozenHours: number | null = null;
-  for (const post of posts as Array<{ status?: string | null; scheduled_for?: string | null }>) {
-    const status = String(post.status ?? '').toLowerCase();
-    if (status === 'publishing' || status === 'published') {
-      throw new BlueprintImmutableError(
-        'Blueprint cannot be modified: an item is publishing or already published. Unaffected items remain editable via scoped operations.',
-      );
-    }
-    // Live items (scheduled, or failed awaiting retry) lock only inside
-    // their OWN window; cancelled/draft/blocked never protect anything.
-    if (status !== 'scheduled' && status !== 'failed') continue;
-    if (!post.scheduled_for) continue;
-    const hoursUntil = (new Date(post.scheduled_for).getTime() - now) / 3600000;
-    if (hoursUntil <= BLUEPRINT_FREEZE_WINDOW_HOURS) {
-      nearestFrozenHours = nearestFrozenHours === null ? hoursUntil : Math.min(nearestFrozenHours, hoursUntil);
-    }
+  if (posts.some((p) => p.status === 'publishing' || p.status === 'published')) {
+    throw new BlueprintImmutableError(
+      'Blueprint cannot be modified: an item is publishing or already published. Unaffected items remain editable via scoped operations.',
+    );
   }
+  // Live items lock only inside their OWN window: scheduled (overdue
+  // included), and failed unless the publish pipeline is terminally done
+  // with it. cancelled/draft/blocked never protect anything.
+  const nearestFrozenHours = await nearestProtectingHoursInWindow(posts, PER_ITEM_WINDOW_STATUSES);
   if (nearestFrozenHours !== null) {
     throw new BlueprintExecutionFreezeError(
       `Blueprint modifications are locked within ${BLUEPRINT_FREEZE_WINDOW_HOURS} hours of an item's execution.`,
@@ -251,26 +373,21 @@ async function assertPerItemLocksNotBreached(
 }
 
 /**
- * Stage 16: Check that earliest scheduled post is not within freeze window.
- * Throws BlueprintExecutionFreezeError when within BLUEPRINT_FREEZE_WINDOW_HOURS.
+ * Stage 16: the campaign-wide freeze window (legacy doctrine; the PAUSED and
+ * INVALIDATED escapes both land here). Throws BlueprintExecutionFreezeError
+ * when the earliest PROTECTING post is within BLUEPRINT_FREEZE_WINDOW_HOURS.
+ *
+ * It used to take the earliest post of ANY status, so a long-published,
+ * cancelled, draft or blocked post — always in the past — froze the campaign
+ * forever. Candidates are now scheduled, publishing, and failed posts the
+ * pipeline is not terminally done with; `published` is history, not upcoming
+ * execution, and does not participate here.
  */
 async function assertFreezeWindowNotBreached(campaignId: string): Promise<void> {
-  const { data: earliest, error } = await supabase
-    .from('scheduled_posts')
-    .select('scheduled_for')
-    .eq('campaign_id', campaignId)
-    .order('scheduled_for', { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const posts = await readCampaignPosts(campaignId, null);
+  const hoursUntilExecution = await nearestProtectingHoursInWindow(posts, LEGACY_FREEZE_WINDOW_STATUSES);
 
-  if (error) throw new BlueprintMutabilityReadError('scheduled_posts', error);
-  if (!earliest?.scheduled_for) return;
-
-  const scheduledAt = new Date(earliest.scheduled_for).getTime();
-  const now = Date.now();
-  const hoursUntilExecution = (scheduledAt - now) / 3600000;
-
-  if (hoursUntilExecution <= BLUEPRINT_FREEZE_WINDOW_HOURS) {
+  if (hoursUntilExecution !== null) {
     throw new BlueprintExecutionFreezeError(
       `Blueprint modifications are locked within ${BLUEPRINT_FREEZE_WINDOW_HOURS} hours of execution.`,
       hoursUntilExecution,
@@ -295,12 +412,19 @@ export async function isBlueprintMutable(
   }
 }
 
-/** Stage 16: Block reason for UI differentiation (red vs orange banner). */
-export type BlueprintBlockReason = 'IMMUTABLE' | 'FROZEN' | null;
+/**
+ * Stage 16: Block reason for UI differentiation (red vs orange banner).
+ * 'UNAVAILABLE' — the lock state could not be evaluated (a read failed). It is
+ * NOT a confirmed lock, and NOT mutable either: mutations still fail closed
+ * with 503 on the server.
+ */
+export type BlueprintBlockReason = 'IMMUTABLE' | 'FROZEN' | 'UNAVAILABLE' | null;
 
 /**
  * Get why blueprint mutation is blocked. Returns null when mutable.
  * Used by campaign-status API for UI (blueprintImmutable vs blueprintFrozen).
+ * Only the two policy errors are a confirmed state; anything else — the typed
+ * read failure, or an unexpected error — is 'UNAVAILABLE', never 'IMMUTABLE'.
  */
 export async function getBlueprintBlockReason(
   campaignId: string,
@@ -312,7 +436,7 @@ export async function getBlueprintBlockReason(
   } catch (err) {
     if (err instanceof BlueprintExecutionFreezeError) return 'FROZEN';
     if (err instanceof BlueprintImmutableError) return 'IMMUTABLE';
-    return 'IMMUTABLE';
+    return 'UNAVAILABLE';
   }
 }
 import type { CampaignBlueprint } from '../types/CampaignBlueprint';

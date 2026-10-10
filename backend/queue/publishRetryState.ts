@@ -65,6 +65,47 @@ export function retryStateAfterFailedDelivery(
 }
 
 /**
+ * Whether the publish pipeline can still act on a post, judged from ALL of its
+ * queue_jobs rows:
+ *
+ *   LIVE     — some row is pending or processing, or failed and awaiting a
+ *              BullMQ retry: a delivery is coming.
+ *   UNKNOWN  — no row is live, but the pipeline's intent cannot be shown to be
+ *              over: there are no rows at all (a failed thread child rides its
+ *              root's job and has none of its own), a failed row has a NULL
+ *              retry_state (written before migration 20261202000000, or its
+ *              state write was lost), or a status/state is not recognised.
+ *   TERMINAL — at least one row, and every row is cancelled, completed, or
+ *              failed with retry_state 'exhausted'.
+ *
+ * One exhausted row never makes a post terminal on its own: every row has to
+ * agree. Rows read without the retry_state column (pre-migration) carry no
+ * retry_state, so their failed rows are UNKNOWN. Pure: no I/O.
+ */
+export type PostRetryClass = 'LIVE' | 'UNKNOWN' | 'TERMINAL';
+
+export function classifyPostQueueJobs(
+  rows: ReadonlyArray<{ status?: unknown; retry_state?: unknown }>,
+): PostRetryClass {
+  if (rows.length === 0) return 'UNKNOWN';
+  let unknown = false;
+  for (const row of rows) {
+    const status = row.status;
+    if (status === 'pending' || status === 'processing') return 'LIVE';
+    if (status === 'cancelled' || status === 'completed') continue;
+    if (status === 'failed') {
+      const state = row.retry_state;
+      if (state === RETRY_STATE_AWAITING) return 'LIVE';
+      if (state === RETRY_STATE_EXHAUSTED) continue;
+      unknown = true; // NULL, absent, or an unrecognised value
+      continue;
+    }
+    unknown = true; // unrecognised status
+  }
+  return unknown ? 'UNKNOWN' : 'TERMINAL';
+}
+
+/**
  * Failed queue_jobs rows whose BullMQ job is still waiting to retry
  * (`retry_state = 'awaiting_retry'`) for the given posts. These are LIVE for
  * duplicate purposes even though their status is 'failed'.
