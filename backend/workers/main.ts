@@ -76,15 +76,168 @@ const AI_HEAVY_POOL = definePool({ name: 'ai-heavy-slot', defaultLimit: 3, maxLi
 import { runRenderParityPreflight, logPreflightReport } from './renderParityPreflight';
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
 import { assertJobCampaignBinding } from '../queue/jobProcessors/jobTenantBinding';
-import { startCron } from '../scheduler/cron';
+import { startCron, stopCron } from '../scheduler/cron';
 import {
   drainConsumers,
   closeWithin,
   once,
   resolveDrainDeadlineMs,
   POST_DRAIN_STEP_TIMEOUT_MS,
+  runRuntimeStops,
+  type RuntimeStop,
   type ShutdownConsumer,
 } from './workerShutdown';
+
+// ── Graceful shutdown — installed BEFORE any worker is constructed ────────────
+//
+// Every BullMQ Worker in the next section starts consuming the moment it is
+// constructed (at module load), and main() then spends seconds on boot work —
+// Redis preflight, parity preflight, cache warmup, shared-consumer
+// registration, the scheduler's boot cycle. The SIGTERM/SIGINT handlers used to
+// be registered at the very END of main(), so a signal in that window got
+// Node's default: an immediate kill mid-job, no drain, no claim release, no
+// lock release. They are now registered here, before the first Worker exists;
+// main()'s boot steps check `shuttingDown` before starting anything new, and
+// shared consumers that finish registering after the signal are closed at once.
+//
+// Worst-case duration (DEFAULT 15 s drain): the consumer drain and the
+// scheduler stop run CONCURRENTLY under the one drain deadline (15 s), then
+// three teardown steps capped at 3 s each (9 s) = 24 s, finishing ~1 s before
+// the hard-exit backstop at drainDeadlineMs + 10_000 (25 s). The platform's
+// SIGTERM→SIGKILL window must exceed 25 s, or the drain is cut short.
+
+/** Set by the first shutdown signal; every boot step checks it before starting work. */
+let shuttingDown = false;
+/** Stop functions for the timers/loops main() starts, recorded as each one starts. */
+const runtimeStops: RuntimeStop[] = [];
+/**
+ * The shared consumers. Empty until registerSharedConsumers() returns, so a
+ * signal that beats registration drains the inline workers only.
+ */
+let sharedConsumers: SharedConsumerHandles = { workers: [], closeQueues: async () => {}, failures: [] };
+
+// Hand back every BOLT claim this process still holds. Graceful shutdown
+// CANNOT guarantee a multi-minute run completes, so the honest goal is to
+// make the interruption immediately visible instead of leaving the next
+// attempt to wait out the lock TTL. Status is deliberately untouched: the
+// job may still be retried, and declaring it failed here would make
+// executeBoltPipelineRuntime refuse to re-enter.
+const releaseHeldBoltClaims = async (): Promise<void> => {
+  const held = getHeldRunLocks();
+  if (held.length === 0) return;
+  console.warn('[main] releasing in-flight BOLT claims', { count: held.length });
+  await Promise.allSettled(held.map(async ({ runId, token }) => {
+    const result = await releaseBoltRunClaimOnShutdown(runId, token);
+    // `strict: false` — narrow by member presence, not by the `ok` flag.
+    if ('error' in result) {
+      console.error('[main] BOLT claim release failed', { run_id: runId, error: result.error });
+    }
+  }));
+};
+
+// WS-1 (STEP 3AH-132): the drained set is DERIVED, never hand-listed. The
+// nine inline workers this file constructs, plus EVERY handle
+// registerSharedConsumers hands back — with the corrected topology, exactly
+// one per `consumedVia: 'shared'` queue in workerTopologyManifest.ts.
+// Six families used to register consumers whose handles were discarded
+// (the content-*, creator-*, whatsapp-broadcast, whatsapp-webhook and
+// analytics-ingestion families, plus the producer Queues opened by
+// content-queues-init), so 13 consumers and their producer connections
+// survived every SIGTERM. A shared queue added to the manifest is now
+// drained here automatically: nothing here can drift from registration.
+// Evaluated at shutdown time, after module load has constructed every inline
+// worker below; the shared set is empty if the signal beat registration.
+const shutdownConsumers = (): ShutdownConsumer[] => [
+  { name: 'publish', close: () => publishWorker.close() },
+  { name: 'bolt-execution', close: () => boltWorker.close() },
+  { name: 'engagement-polling', close: () => engagementWorker.close() },
+  { name: 'intelligence-polling', close: () => intelligenceWorker.close() },
+  { name: 'engine-jobs', close: () => engineWorker.close() },
+  { name: 'ai-heavy', close: () => campaignWorker.close() },
+  { name: 'creator-render', close: () => creatorRenderWorker.close() },
+  { name: 'lead-thread-recompute', close: () => leadThreadRecomputeWorker.close() },
+  { name: 'conversation-memory-rebuild', close: () => conversationMemoryRebuildWorker.close() },
+  ...sharedConsumers.workers.map((w) => ({ name: w.name, close: () => w.close() })),
+];
+
+const shutdown = async (signal: string) => {
+  shuttingDown = true;
+  console.info(`[main] ${signal} received — shutting down gracefully`);
+  // No NEW work first: the publishing_jobs poll, monitors and recovery timers
+  // stop before anything is drained.
+  runRuntimeStops(runtimeStops);
+  // Bounded drain. `worker.close()` waits for in-flight jobs, which is right
+  // — but a BOLT run takes minutes and no container grace period is that
+  // long, so an unbounded wait guarantees we are SIGKILLed mid-await and the
+  // reconciliation below never runs. Capping the wait trades "finish the job"
+  // (unachievable) for "record that the job was interrupted" (achievable).
+  const drainDeadlineMs = resolveDrainDeadlineMs(process.env.WORKER_DRAIN_TIMEOUT_MS);
+  // SEC-C6: hard backstop. The co-located scheduler no longer exits the
+  // process underneath this drain, so guarantee an exit even if claim
+  // release or connection close hangs (e.g. Redis unreachable).
+  const hardExit = setTimeout(() => {
+    console.error('[main] shutdown exceeded its budget — forcing exit');
+    process.exit(0);
+  }, drainDeadlineMs + 10_000);
+  if (typeof hardExit.unref === 'function') hardExit.unref();
+
+  // The co-located scheduler stops CONCURRENTLY with the consumer drain and
+  // under the same deadline: no new cycle starts, its timers are cleared, and
+  // an in-flight cycle (the boot cycle included) is awaited — it releases the
+  // cycle lock in a `finally`. A cycle still running at the deadline is
+  // reported, not cancelled. In CRON_SERVICE_MODE=worker-only this is a no-op.
+  let schedulerCycle = 'unknown';
+  const schedulerStopped = closeWithin('scheduler stop', drainDeadlineMs, async () => {
+    schedulerCycle = await stopCron(drainDeadlineMs);
+  });
+  const consumers = shutdownConsumers();
+  const outcome = await drainConsumers(consumers, drainDeadlineMs);
+  const schedulerOutcome = await schedulerStopped;
+
+  // Each post-drain step gets its own cap: all three talk to Redis/Postgres
+  // and can hang when the backend is already gone. 3 × 3 s = 9 s fits inside
+  // the 10 s hard-exit grace, so a normal shutdown finishes BEFORE the
+  // backstop rather than relying on it.
+  await closeWithin('BOLT claim release', POST_DRAIN_STEP_TIMEOUT_MS, releaseHeldBoltClaims);
+  // WS-1: the producer Queues opened by content-queues-init had no close
+  // path at all — their Redis connections outlived every shutdown.
+  await closeWithin('producer queue close', POST_DRAIN_STEP_TIMEOUT_MS, sharedConsumers.closeQueues);
+  await closeWithin('connection close', POST_DRAIN_STEP_TIMEOUT_MS, async () => {
+    await closeConnections();
+  });
+  // Honest reporting: a deadline that elapsed, or a consumer whose close()
+  // rejected, is never logged as a clean shutdown — and neither is a
+  // scheduler cycle that was still running at the deadline.
+  if (outcome.drained && schedulerOutcome === 'closed' && schedulerCycle !== 'timeout') {
+    console.info(`[main] shutdown complete — all ${consumers.length} consumers drained, scheduler stopped`);
+  } else {
+    console.warn('[main] shutdown finished WITHOUT a clean drain', {
+      consumers: consumers.length,
+      closed: outcome.closed.length,
+      pending: outcome.pending,
+      failed: outcome.failed,
+      scheduler: schedulerOutcome,
+      schedulerCycle,
+    });
+  }
+  clearTimeout(hardExit);
+  process.exit(0);
+};
+
+// `once`: a second SIGTERM joins the in-flight shutdown instead of starting a
+// competing one that would close already-closing handles and race it to exit.
+// Railway sends SIGTERM on every redeploy and can follow with more.
+const onSignal = once(shutdown);
+
+process.on('SIGTERM', () => { void onSignal('SIGTERM'); });
+process.on('SIGINT',  () => { void onSignal('SIGINT'); });
+
+/** True — and says so — when a shutdown signal arrived while main() was booting. */
+function bootAbortedByShutdown(step: string): boolean {
+  if (!shuttingDown) return false;
+  console.warn(`[main] shutdown began during boot (after ${step}) — nothing further is started`);
+  return true;
+}
 
 // ── Worker instances ──────────────────────────────────────────────────────────
 
@@ -424,6 +577,7 @@ async function main(): Promise<void> {
   logBootProvenance();
   // Redis readiness gate — before any queue processing begins
   await ensureRedisReady();
+  if (bootAbortedByShutdown('redis preflight')) return;
 
   // Parity preflight — verify this runtime can do what localhost does (render
   // SVG text glyphs = fonts present) and has prod-required env/assets. Logged
@@ -437,6 +591,7 @@ async function main(): Promise<void> {
   // Pre-warm template cache (zero GPT cost, improves first-job latency)
   await runCacheWarmup().catch((err) =>
     console.warn('[main] cache warmup failed (non-fatal):', err?.message));
+  if (bootAbortedByShutdown('cache warmup')) return;
 
   // F-07 / W1-3 — ALL shared consumers (creator content, whatsapp, analytics,
   // content-* text family, planner-refinement, listening/semantic/replay) are
@@ -447,7 +602,24 @@ async function main(): Promise<void> {
   // had prod producers but no prod consumer — their jobs sat in `waiting`
   // forever. Per-family non-fatal + loud semantics are preserved inside
   // registerSharedConsumers. Manifest: backend/queue/workerTopologyManifest.ts.
-  const sharedConsumers: SharedConsumerHandles = await registerSharedConsumers({ bootstrap: 'prod' });
+  const registered: SharedConsumerHandles = await registerSharedConsumers({ bootstrap: 'prod' });
+  if (shuttingDown) {
+    // The signal arrived while these were being registered: the drain has
+    // already taken its snapshot, so close the late arrivals — consumers and
+    // their producer queues — here, under one bounded deadline.
+    console.warn('[main] shutdown began during shared-consumer registration — closing them now', {
+      count: registered.workers.length,
+    });
+    await drainConsumers(
+      [
+        ...registered.workers.map((w) => ({ name: w.name, close: () => w.close() })),
+        { name: 'late producer queues', close: registered.closeQueues },
+      ],
+      POST_DRAIN_STEP_TIMEOUT_MS,
+    );
+    return;
+  }
+  sharedConsumers = registered;
 
   // Scheduler — runs the 10-min social-account token refresh (X tokens
   // expire in 2h) plus all other cron cycles. Co-located in the worker
@@ -493,15 +665,27 @@ async function main(): Promise<void> {
     const { startBaselineCaptureLoop } = await import('../observability/baseline');
     stopBaselineLoop = startBaselineCaptureLoop();
   } catch { /* measurement must never break the worker */ }
+  runtimeStops.push({ label: 'baseline loop', stop: stopBaselineLoop });
+  if (bootAbortedByShutdown('baseline loop')) {
+    stopBaselineLoop();
+    return;
+  }
+
+  // From here to the end of main() there is no await: every loop and timer
+  // below is started and recorded for shutdown in one synchronous run, so a
+  // signal cannot land between starting one and recording it.
 
   // Autoscaling monitor — fires signal when queue depth > 500 or latency > 10s
   const stopPublishingJobsLoop = startPublishingJobsLoop();
+  runtimeStops.push({ label: 'publishing_jobs poll', stop: stopPublishingJobsLoop });
 
   let _cachedLatency = 0;
-  setInterval(async () => {
+  const latencyTimer = setInterval(async () => {
     try { _cachedLatency = (await getMetricsSnapshot()).avgLatencyMs; } catch { /* ignore */ }
   }, 300_000); // 5 min — was 30s; each call issues redis.info('memory')
+  runtimeStops.push({ label: 'latency sampler', stop: () => clearInterval(latencyTimer) });
   const stopMonitor = startAutoScalingMonitor(300_000, () => _cachedLatency); // 5 min — was 30s; each check queries 4 queues
+  runtimeStops.push({ label: 'autoscaling monitor', stop: stopMonitor });
   const orphanRecoveryTimer = setInterval(() => {
     void recoverOrphanedCreatorRenderJobs().catch((error) => {
       console.warn('[creator-render-worker] orphan recovery failed', {
@@ -509,6 +693,7 @@ async function main(): Promise<void> {
       });
     });
   }, 10 * 60 * 1000);
+  runtimeStops.push({ label: 'orphan recovery', stop: () => clearInterval(orphanRecoveryTimer) });
 
   console.info('[main] all workers running', {
     queues: ['publish', 'bolt-execution', 'engagement-polling',
@@ -525,108 +710,8 @@ async function main(): Promise<void> {
     pid: process.pid,
   });
 
-  // ── Graceful shutdown ───────────────────────────────────────────────────────
-
-  // Hand back every BOLT claim this process still holds. Graceful shutdown
-  // CANNOT guarantee a multi-minute run completes, so the honest goal is to
-  // make the interruption immediately visible instead of leaving the next
-  // attempt to wait out the lock TTL. Status is deliberately untouched: the
-  // job may still be retried, and declaring it failed here would make
-  // executeBoltPipelineRuntime refuse to re-enter.
-  const releaseHeldBoltClaims = async (): Promise<void> => {
-    const held = getHeldRunLocks();
-    if (held.length === 0) return;
-    console.warn('[main] releasing in-flight BOLT claims', { count: held.length });
-    await Promise.allSettled(held.map(async ({ runId, token }) => {
-      const result = await releaseBoltRunClaimOnShutdown(runId, token);
-      // `strict: false` — narrow by member presence, not by the `ok` flag.
-      if ('error' in result) {
-        console.error('[main] BOLT claim release failed', { run_id: runId, error: result.error });
-      }
-    }));
-  };
-
-  // WS-1 (STEP 3AH-132): the drained set is DERIVED, never hand-listed. The
-  // nine inline workers this file constructs, plus EVERY handle
-  // registerSharedConsumers hands back — with the corrected topology, exactly
-  // one per `consumedVia: 'shared'` queue in workerTopologyManifest.ts.
-  // Six families used to register consumers whose handles were discarded
-  // (the content-*, creator-*, whatsapp-broadcast, whatsapp-webhook and
-  // analytics-ingestion families, plus the producer Queues opened by
-  // content-queues-init), so 13 consumers and their producer connections
-  // survived every SIGTERM. A shared queue added to the manifest is now
-  // drained here automatically: nothing here can drift from registration.
-  const shutdownConsumers = (): ShutdownConsumer[] => [
-    { name: 'publish', close: () => publishWorker.close() },
-    { name: 'bolt-execution', close: () => boltWorker.close() },
-    { name: 'engagement-polling', close: () => engagementWorker.close() },
-    { name: 'intelligence-polling', close: () => intelligenceWorker.close() },
-    { name: 'engine-jobs', close: () => engineWorker.close() },
-    { name: 'ai-heavy', close: () => campaignWorker.close() },
-    { name: 'creator-render', close: () => creatorRenderWorker.close() },
-    { name: 'lead-thread-recompute', close: () => leadThreadRecomputeWorker.close() },
-    { name: 'conversation-memory-rebuild', close: () => conversationMemoryRebuildWorker.close() },
-    ...sharedConsumers.workers.map((w) => ({ name: w.name, close: () => w.close() })),
-  ];
-
-  const shutdown = async (signal: string) => {
-    console.info(`[main] ${signal} received — shutting down gracefully`);
-    stopMonitor();
-    stopPublishingJobsLoop();
-    stopBaselineLoop();
-    clearInterval(orphanRecoveryTimer);
-    // Bounded drain. `worker.close()` waits for in-flight jobs, which is right
-    // — but a BOLT run takes minutes and no container grace period is that
-    // long, so an unbounded wait guarantees we are SIGKILLed mid-await and the
-    // reconciliation below never runs. Capping the wait trades "finish the job"
-    // (unachievable) for "record that the job was interrupted" (achievable).
-    const drainDeadlineMs = resolveDrainDeadlineMs(process.env.WORKER_DRAIN_TIMEOUT_MS);
-    // SEC-C6: hard backstop. The co-located scheduler no longer exits the
-    // process underneath this drain, so guarantee an exit even if claim
-    // release or connection close hangs (e.g. Redis unreachable).
-    const hardExit = setTimeout(() => {
-      console.error('[main] shutdown exceeded its budget — forcing exit');
-      process.exit(0);
-    }, drainDeadlineMs + 10_000);
-    if (typeof hardExit.unref === 'function') hardExit.unref();
-
-    const consumers = shutdownConsumers();
-    const outcome = await drainConsumers(consumers, drainDeadlineMs);
-
-    // Each post-drain step gets its own cap: all three talk to Redis/Postgres
-    // and can hang when the backend is already gone. 3 × 3 s = 9 s fits inside
-    // the 10 s hard-exit grace, so a normal shutdown finishes BEFORE the
-    // backstop rather than relying on it.
-    await closeWithin('BOLT claim release', POST_DRAIN_STEP_TIMEOUT_MS, releaseHeldBoltClaims);
-    // WS-1: the producer Queues opened by content-queues-init had no close
-    // path at all — their Redis connections outlived every shutdown.
-    await closeWithin('producer queue close', POST_DRAIN_STEP_TIMEOUT_MS, sharedConsumers.closeQueues);
-    await closeWithin('connection close', POST_DRAIN_STEP_TIMEOUT_MS, async () => {
-      await closeConnections();
-    });
-    // Honest reporting: a deadline that elapsed, or a consumer whose close()
-    // rejected, is never logged as a clean shutdown.
-    if (outcome.drained) {
-      console.info(`[main] shutdown complete — all ${consumers.length} consumers drained`);
-    } else {
-      console.warn('[main] shutdown finished WITHOUT a clean drain', {
-        consumers: consumers.length,
-        closed: outcome.closed.length,
-        pending: outcome.pending,
-        failed: outcome.failed,
-      });
-    }
-    clearTimeout(hardExit);
-    process.exit(0);
-  };
-
-  // `once`: a second SIGTERM joins the in-flight shutdown instead of starting a
-  // competing one that would close already-closing handles and race it to exit.
-  // Railway sends SIGTERM on every redeploy and can follow with more.
-  const onSignal = once(shutdown);
-
-  process.on('SIGTERM', () => { void onSignal('SIGTERM'); });
-  process.on('SIGINT',  () => { void onSignal('SIGINT'); });
+  // Graceful shutdown is installed at module load, BEFORE the first Worker is
+  // constructed — see the section above "Worker instances".
 
   // Unhandled rejections — log and keep running (workers are resilient)
   process.on('unhandledRejection', (reason) => {

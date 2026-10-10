@@ -15,6 +15,7 @@ import {
   once,
   postDrainBudgetMs,
   resolveDrainDeadlineMs,
+  runRuntimeStops,
   type ShutdownConsumer,
 } from '../../workers/workerShutdown';
 
@@ -163,5 +164,21 @@ describe('once — SIGTERM/SIGINT determinism', () => {
     await guarded('SIGINT');
     await guarded('SIGTERM');
     expect(runs).toEqual(['SIGINT']);
+  });
+});
+
+describe('runRuntimeStops — producers of new work stop first, each in isolation', () => {
+  it('runs every stop, reports a failing one by label, and empties the list so stops run once', () => {
+    const order: string[] = [];
+    const stops = [
+      { label: 'publishing_jobs poll', stop: () => { order.push('poll'); } },
+      { label: 'autoscaling monitor', stop: () => { throw new Error('monitor handle gone'); } },
+      { label: 'orphan recovery', stop: () => { order.push('orphan'); } },
+    ];
+    const result = runRuntimeStops(stops);
+    expect(order).toEqual(['poll', 'orphan']);
+    expect(result).toEqual({ stopped: ['publishing_jobs poll', 'orphan recovery'], failed: ['autoscaling monitor'] });
+    expect(stops).toHaveLength(0);
+    expect(runRuntimeStops(stops)).toEqual({ stopped: [], failed: [] });
   });
 });
