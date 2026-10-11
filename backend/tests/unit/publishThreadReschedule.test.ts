@@ -47,7 +47,7 @@ function rowMatches(row: Row, f: Filters): boolean {
   return true;
 }
 
-/** Runs inside the serialised write of a scheduled_posts update, before its predicate. */
+/** Runs inside the serialised write of EVERY scheduled_posts update, before its predicate (cleared per test). */
 let beforePostUpdate: ((payload: Row, f: Filters) => void) | null = null;
 let idSeq = 0;
 
@@ -69,11 +69,7 @@ function buildChain(table: string) {
       rows.push(...created);
       return { data: created, error: null };
     }
-    if (updatePayload && table === 'scheduled_posts' && beforePostUpdate) {
-      const hook = beforePostUpdate;
-      beforePostUpdate = null;
-      hook(updatePayload, f);
-    }
+    if (updatePayload && table === 'scheduled_posts' && beforePostUpdate) beforePostUpdate(updatePayload, f);
     let hit = rows.filter((r) => rowMatches(r, f));
     if (orderBy) {
       const key = orderBy;
@@ -527,5 +523,59 @@ describe('Closure-004 — unpublished threads: replace, remove, repeat, race', (
     await processPublishJob(job('qj-2', rootId)).catch(() => undefined);
     expect(platformCalls).toHaveLength(3);
     for (const c of childrenOf(rootId)) expect(callsFor(String(c.id))).toBe(1);
+  });
+});
+
+describe('Closure-004 — the re-schedule service holds on its own (defence in depth)', () => {
+  test("called directly with another user's id for the owner's root: refused, nothing changed", async () => {
+    const rootId = await ownerThread('one', 'two', 'three');
+    const before = snapshot();
+    const { rescheduleExistingThread } = await import('../../services/threadRuntime/threadReschedule');
+    const { supabase } = await import('../../db/supabaseClient');
+    const r = await rescheduleExistingThread(supabase as unknown as Parameters<typeof rescheduleExistingThread>[0], {
+      rootId, userId: OTHER, rootUpdate: { content: 'hijack' }, children: [{ position: 1, content: 'x' }],
+    });
+    expect(r).toMatchObject({ ok: false, code: 'THREAD_CHANGED_CONCURRENTLY' });
+    expect(posts()).toEqual(before);
+    expect(rpcCalls.filter((n) => n === 'replace_thread_children')).toHaveLength(0);
+  });
+
+  test("a child whose code changes (same status) between the read and its fence is not fenced or replaced", async () => {
+    const rootId = await ownerThread('one', 'two', 'three');
+    const [c1] = childrenOf(rootId);
+    Object.assign(c1, { status: 'failed', error_code: 'TWITTER_RATE_LIMIT' });
+    let raced = false;
+    beforePostUpdate = (_p, f) => {
+      if (!raced && f.eq.id === c1.id) { raced = true; c1.error_code = 'PUBLISH_OUTCOME_UNCERTAIN'; }
+    };
+    const res = await schedule(OWNER, nodesOf('x', 'y', 'z'));
+    expect(res.statusCode).toBe(409);
+    expect(rpcCalls.filter((n) => n === 'replace_thread_children')).toHaveLength(0);
+    expect(posts().find((r) => r.id === c1.id)).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+  });
+
+  test('a race on the SECOND child rolls back the fence already written on the first', async () => {
+    const rootId = await ownerThread('one', 'two', 'three');
+    const [c1, c2] = childrenOf(rootId);
+    beforePostUpdate = (_p, f) => {
+      if (f.eq.id === c2.id && c2.status === 'draft') Object.assign(c2, { status: 'publishing', error_code: 'PUBLISH_CLAIMED:publisher' });
+    };
+    const res = await schedule(OWNER, nodesOf('x', 'y', 'z'));
+    expect(res.statusCode).toBe(409);
+    expect(rpcCalls.filter((n) => n === 'replace_thread_children')).toHaveLength(0);
+    expect(posts().find((r) => r.id === c1.id)?.error_code).toBeNull(); // fence rolled back
+  });
+
+  test('the root changes (a publisher claims it) after the children were swapped: the root is NOT rewritten', async () => {
+    const rootId = await ownerThread('one', 'two', 'three');
+    beforePostUpdate = (p, f) => {
+      if (f.eq.id === rootId && p.content === 'NEW ROOT') {
+        Object.assign(posts().find((r) => r.id === rootId) as Row, { status: 'publishing', error_code: 'PUBLISH_CLAIMED:publisher' });
+      }
+    };
+    const res = await schedule(OWNER, nodesOf('NEW ROOT', 'b', 'c'));
+    expect(res.statusCode).toBe(409);
+    expect(res.body?.code).toBe('THREAD_CHANGED_CONCURRENTLY');
+    expect(posts().find((r) => r.id === rootId)).toMatchObject({ content: 'one', status: 'publishing' });
   });
 });
