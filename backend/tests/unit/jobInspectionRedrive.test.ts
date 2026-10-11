@@ -45,7 +45,10 @@ jest.mock('../../queue/contentGenerationQueues', () => ({
   getContentQueue: () => ({ add: mockAdd }),
 }));
 
-import { replayDeadLetterEntry, replayableQueueNames, PUBLISH_REDRIVE_UNSUPPORTED } from '../../services/jobInspection';
+import {
+  replayDeadLetterEntry, replayableQueueNames, PUBLISH_REDRIVE_UNSUPPORTED,
+  REDRIVE_QUEUE_OVERRIDE_NOT_PERMITTED, REDRIVE_JOB_NAME_NOT_PERMITTED,
+} from '../../services/jobInspection';
 
 function seed(id: string, workerName: string, payload: Record<string, unknown> = { x: 1 }) {
   mockRows[id] = {
@@ -117,6 +120,28 @@ describe('DLQ re-drive — replayDeadLetterEntry', () => {
     await expect(replayDeadLetterEntry('e4')).rejects.toThrow('unknown_target_queue');
     expect(mockAdd).not.toHaveBeenCalled();
     expect(mockRows.e4).toBeDefined(); // not removed on failure
+  });
+
+  // ── Closure-009: the override contract ─────────────────────────────────
+  test('a payload whose worker IS a queue cannot be moved onto another queue', async () => {
+    seed('o1', 'ai-heavy', { a: 1 });
+    await expect(replayDeadLetterEntry('o1', { queueName: 'posting', jobName: 'posting' })).rejects.toThrow(REDRIVE_QUEUE_OVERRIDE_NOT_PERMITTED);
+    expect(mockAdd).not.toHaveBeenCalled();
+    expect(mockRows.o1).toBeDefined();
+  });
+
+  test('naming the payload own queue explicitly is not an override', async () => {
+    seed('o2', 'ai-heavy', { a: 1 });
+    const r = await replayDeadLetterEntry('o2', { queueName: 'ai-heavy' });
+    expect(r.targetQueue).toBe('ai-heavy');
+    expect(mockAdd).toHaveBeenCalledTimes(1);
+  });
+
+  test('a job name that is neither the target queue nor the original worker is refused', async () => {
+    seed('o3', 'ai-heavy', { a: 1 });
+    await expect(replayDeadLetterEntry('o3', { jobName: 'lead-thread-recompute' })).rejects.toThrow(REDRIVE_JOB_NAME_NOT_PERMITTED);
+    expect(mockAdd).not.toHaveBeenCalled();
+    expect(mockRows.o3).toBeDefined();
   });
 
   test('bolt-execution resolves to the bolt queue getter', async () => {
