@@ -395,9 +395,14 @@ describe('publishProcessor — post-level publish claim', () => {
     expect(post('sp-1').status).toBe('published');
   });
 
-  test('a stale claim from a hard-killed worker can be reclaimed', async () => {
+  test('a stale PRE-CALL claim from a hard-killed worker can be reclaimed', async () => {
     seedPost('sp-1', {
       status: 'publishing',
+      // A claim taken under the fenced protocol that never reached its
+      // platform call (PUBLISH_CLAIMED:<token>, no PUBLISH_CALL_STARTED). Only
+      // such a claim may be taken over; an old 'publishing' row with no token,
+      // or one whose call started, never is (Closure-003 tests below).
+      error_code: 'PUBLISH_CLAIMED:dead-runtime',
       platform_post_id: null,
       updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // > 5min window
     });

@@ -14,6 +14,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { requireCampaignTenantAccess } from '@/backend/security/TenantGuard';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
+import { hasUncertainOutcome, PUBLISH_OUTCOME_UNCERTAIN } from '@/backend/queue/publishOutcome';
 import { grantEarnCredit } from '@/backend/services/earnCreditsService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 // Step-16: automatic pre-enqueue shared-media finalization. OUTSIDE
@@ -341,6 +342,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       let rootId: string;
       if (existingRootId) {
+        // Re-scheduling an existing thread rewrites its root and REPLACES its
+        // children. If any node's last attempt may already have published it,
+        // that would erase the evidence and queue it again: refuse until the
+        // node is reconciled.
+        const [{ data: rootRows }, { data: childRows }] = await Promise.all([
+          supabase.from('scheduled_posts').select('id, status, error_code, platform_post_id').eq('id', existingRootId),
+          supabase.from('scheduled_posts').select('id, status, error_code, platform_post_id').eq('parent_post_id', existingRootId),
+        ]);
+        const uncertainNode = [
+          ...(Array.isArray(rootRows) ? rootRows : []),
+          ...(Array.isArray(childRows) ? childRows : []),
+        ].find((r) => hasUncertainOutcome(r as { status?: string | null; error_code?: string | null; platform_post_id?: string | null }));
+        if (uncertainNode) {
+          return respondOutcomeUncertain(res, String((uncertainNode as { id?: unknown }).id ?? existingRootId));
+        }
         const rootUpdate: Record<string, unknown> = {
           user_id: userId,
           social_account_id: socialAccountId,
@@ -455,7 +471,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // ownership IS user_id — the same model MEDIA-SEC-001 established.
         const { data: existing } = await supabase
           .from('scheduled_posts')
-          .select('id')
+          .select('id, status, error_code, platform_post_id')
           .eq('user_id', userId)
           .eq('campaign_id', campaignIdUuid)
           .eq('platform', platformNorm)
@@ -464,6 +480,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           .limit(1)
           .maybeSingle();
 
+        if (existing?.id && hasUncertainOutcome(existing)) {
+          return respondOutcomeUncertain(res, existing.id);
+        }
         if (existing?.id) {
           console.log('[schedule] dedup match (campaign+platform+title), updating:', existing.id);
           const { error: updateErr } = await tryUpdate(existing.id, fullRow);
@@ -496,12 +515,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // supplied, so this lookup was likewise able to select another user's row.
         const { data: existing } = await supabase
           .from('scheduled_posts')
-          .select('id')
+          .select('id, status, error_code, platform_post_id')
           .eq('user_id', userId)
           .eq('repurpose_parent_execution_id', executionIdStr)
           .eq('platform', platformNorm)
           .maybeSingle();
 
+        if (existing?.id && hasUncertainOutcome(existing)) {
+          return respondOutcomeUncertain(res, existing.id);
+        }
         if (existing?.id) {
           console.log('[schedule] dedup match (repurpose_id+platform), updating:', existing.id);
           const { error: updateErr } = await tryUpdate(existing.id, fullRow);
@@ -584,6 +606,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.error('[activity-workspace/schedule]', err);
     return res.status(500).json({ error: err?.message || 'Failed to schedule post' });
   }
+}
+
+/**
+ * 409 for a re-schedule that would overwrite a post (or thread node) whose
+ * last publish attempt may already have published it. The durable backstop is
+ * that every publish path refuses a row carrying the uncertain code whatever
+ * its status (backend/queue/publishOutcome.ts).
+ */
+function respondOutcomeUncertain(res: NextApiResponse, scheduledPostId: string) {
+  return res.status(409).json({
+    error:
+      'This post may already have been published: its last attempt reached the platform but the result was not ' +
+      'saved. Check the platform and have the outcome reconciled before scheduling it again.',
+    code: PUBLISH_OUTCOME_UNCERTAIN,
+    requires: 'reconciliation',
+    scheduled_post_id: scheduledPostId,
+  });
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.

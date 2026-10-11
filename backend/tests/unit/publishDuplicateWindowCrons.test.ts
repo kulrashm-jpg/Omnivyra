@@ -43,7 +43,7 @@ jest.mock('../../db/supabaseClient', () => ({
       };
       builder.select = () => builder;
       builder.update = (p: Row) => { updatePayload = p; return builder; };
-      for (const op of ['eq', 'lt', 'lte', 'in']) {
+      for (const op of ['eq', 'lt', 'lte', 'in', 'is']) {
         builder[op] = (col: string, val: unknown) => { filters = [...filters, [op, col, val]]; return builder; };
       }
       builder.order = () => builder;
@@ -139,5 +139,31 @@ describe('Workstream C — sweep-stuck-publishing labels the outcome uncertain',
     expect(String(payload.error_message)).toMatch(/swept/);
     expect(filters).toEqual(expect.arrayContaining([['eq', 'id', 'sp-9'], ['eq', 'status', 'publishing']]));
     expect(res.body).toMatchObject({ scanned: 1, swept: 1 });
+  });
+});
+
+describe('Closure-003 — the sweep is a compare-and-set on the exact code it read', () => {
+  it('a pre-call claim becomes PUBLISH_NOT_ATTEMPTED, pinned to that token', async () => {
+    stuckPosts = [{ id: 'sp-7', is_thread_start: null, parent_post_id: null, updated_at: '2026-01-01T00:00:00Z', error_code: 'PUBLISH_CLAIMED:tok-7' }];
+    const res = mockRes();
+    await sweepStuckPublishing(cronReq(), res);
+    const [{ payload, filters }] = postUpdates;
+    expect(payload).toMatchObject({ status: 'failed', error_code: 'PUBLISH_NOT_ATTEMPTED' });
+    expect(filters).toEqual(expect.arrayContaining([
+      ['eq', 'id', 'sp-7'], ['eq', 'status', 'publishing'], ['eq', 'error_code', 'PUBLISH_CLAIMED:tok-7'],
+    ]));
+  });
+
+  it('a started call becomes uncertain, pinned to PUBLISH_CALL_STARTED; a legacy row is pinned to a NULL code', async () => {
+    stuckPosts = [
+      { id: 'sp-8', is_thread_start: null, parent_post_id: null, updated_at: '2026-01-01T00:00:00Z', error_code: 'PUBLISH_CALL_STARTED' },
+      { id: 'sp-9', is_thread_start: null, parent_post_id: null, updated_at: '2026-01-01T00:00:00Z', error_code: null },
+    ];
+    const res = mockRes();
+    await sweepStuckPublishing(cronReq(), res);
+    expect(postUpdates[0].payload.error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
+    expect(postUpdates[0].filters).toEqual(expect.arrayContaining([['eq', 'error_code', 'PUBLISH_CALL_STARTED']]));
+    expect(postUpdates[1].payload.error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
+    expect(postUpdates[1].filters).toEqual(expect.arrayContaining([['is', 'error_code', null]]));
   });
 });

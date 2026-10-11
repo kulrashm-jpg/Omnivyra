@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { cancelScheduledPostQueueEntry, enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
+import { hasUncertainOutcome, PUBLISH_OUTCOME_UNCERTAIN } from '@/backend/queue/publishOutcome';
 
 /**
  * POST /api/scheduler/retry   (BETA-007 · RULE 3)
@@ -34,7 +35,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Ownership: a user can only retry their own posts (same scoping as the list endpoint).
   const { data: post, error: postError } = await supabase
     .from('scheduled_posts')
-    .select('id, user_id, social_account_id, status, platform')
+    .select('id, user_id, social_account_id, status, platform, error_code, platform_post_id')
     .eq('id', scheduledPostId)
     .eq('user_id', user.id)
     .maybeSingle();
@@ -46,6 +47,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(409).json({
       error: `Only failed posts can be retried (current status: ${post.status}).`,
       code: 'NOT_RETRYABLE',
+    });
+  }
+  // A failure whose outcome is uncertain may already be LIVE on the platform.
+  // A retry would publish it again, so it is refused here — before anything is
+  // cancelled or reset — until an authorized operator has reconciled it
+  // (POST /api/super-admin/publish/reconcile). Reconciled as 'not_published',
+  // the post carries PUBLISH_RECONCILED_NOT_PUBLISHED and this retry is the
+  // deliberate next step.
+  if (hasUncertainOutcome(post)) {
+    return res.status(409).json({
+      error:
+        'This post may already have been published: the last attempt reached the platform but its result ' +
+        'was not saved. Check the platform and have the outcome reconciled before retrying.',
+      code: PUBLISH_OUTCOME_UNCERTAIN,
+      requires: 'reconciliation',
     });
   }
   if (!post.social_account_id) {
@@ -79,16 +95,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // Compare-and-set on 'failed': the status checked above was a read, and a
-  // delivery that claimed the post since then must not have its claim
-  // overwritten back to 'scheduled'.
-  const { data: resetRows, error: resetError } = await supabase
+  // Compare-and-set on 'failed' AND the error_code read: the checks above were
+  // a read. A delivery that claimed the post since then must not have its
+  // claim overwritten back to 'scheduled', and a post whose outcome became
+  // uncertain since then must not be cleared.
+  let reset = supabase
     .from('scheduled_posts')
     .update({ status: 'scheduled', error_message: null, error_code: null, scheduled_for: scheduledFor })
     .eq('id', scheduledPostId)
     .eq('user_id', user.id)
-    .eq('status', 'failed')
-    .select('id');
+    .eq('status', 'failed');
+  reset = post.error_code == null ? reset.is('error_code', null) : reset.eq('error_code', post.error_code);
+  const { data: resetRows, error: resetError } = await reset.select('id');
   if (resetError) {
     return res.status(500).json({ error: 'Failed to reset post for retry', code: 'RESET_FAILED' });
   }

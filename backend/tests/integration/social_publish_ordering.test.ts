@@ -278,3 +278,28 @@ describe('D2 — a suppressed duplicate writes no status over the claim holder',
       expect.objectContaining({ post_id: 'post-1', status: 'FAILED', last_error: 'token expired' }));
   });
 });
+
+describe('Closure-003 — the route distinguishes "unsafe until reconciled" from "another operation owns it"', () => {
+  it('outcome_uncertain → 409 PUBLISH_OUTCOME_UNCERTAIN, and no status is written', async () => {
+    mockPublishNow.mockResolvedValue({
+      status: 'FAILED', suppressed: true, refusal: 'outcome_uncertain',
+      message: 'Publish refused: the previous attempt may already have published this post.',
+      timestamp: '2026-09-01T09:00:00Z',
+    });
+    const res = await call();
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'PUBLISH_OUTCOME_UNCERTAIN', requires: 'reconciliation' });
+    expect(mockUpdatePostPublishStatus).not.toHaveBeenCalled();
+    expect(postUpdates).toEqual([]);
+  });
+
+  it.each(['held_by_another_execution', 'call_in_flight'])('%s → 200 FAILED with the refusal named, and no status is written', async (refusal) => {
+    mockPublishNow.mockResolvedValue({
+      status: 'FAILED', suppressed: true, refusal, message: 'Duplicate publish suppressed', timestamp: '2026-09-01T09:00:00Z',
+    });
+    const res = await call();
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ status: 'FAILED', refusal });
+    expect(mockUpdatePostPublishStatus).not.toHaveBeenCalled();
+  });
+});

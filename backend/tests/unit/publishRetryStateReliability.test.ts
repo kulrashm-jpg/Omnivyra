@@ -977,7 +977,10 @@ function seedDiedAttempt(postOverrides: Row, withMarker: boolean): void {
 
 describe('Workstream C — termination before vs. after the platform call', () => {
   test('died BEFORE the platform call (no marker): the re-delivery publishes once', async () => {
-    seedDiedAttempt({}, false);
+    // The previous attempt died holding a FENCED pre-call claim (no
+    // PUBLISH_CALL_STARTED): provably no call. An old row with no claim token
+    // proves nothing and is never taken over — see Closure-003 below.
+    seedDiedAttempt({ error_code: 'PUBLISH_CLAIMED:dead-attempt' }, false);
     await processPublishJob(delivery('qj-1', 'sp-1', 0));
     expect(publishesFor('sp-1')).toBe(1);
     expect(qjob('qj-1').status).toBe('completed');
@@ -1397,5 +1400,138 @@ describe('Closure-002 — reconciliation, then an explicitly authorized retry', 
     spy.mockRestore();
     expect(r).toEqual({ status: 'changed' });
     expect(post('sp-1').status).toBe('failed');
+  });
+});
+
+// ─── Closure-003 — manual retry (R1) and the queue against direct claims (R4) ─
+
+describe('Closure-003 R1 — manual retry refuses an uncertain post', () => {
+  test.each(['PUBLISH_OUTCOME_UNCERTAIN', 'PUBLISH_CALL_STARTED'])(
+    '%s: 409 PUBLISH_OUTCOME_UNCERTAIN, and nothing is cancelled, reset or enqueued',
+    async (code) => {
+      seedPost('sp-1', { status: 'failed', error_code: code, error_message: 'may be live' });
+      seedJob('qj-old', 'sp-1', { status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN', retry_state: 'exhausted' });
+      const postBefore = { ...post('sp-1') };
+      const jobBefore = { ...qjob('qj-old') };
+
+      const res = await callRetry('sp-1');
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ code: 'PUBLISH_OUTCOME_UNCERTAIN', requires: 'reconciliation' });
+      expect(String(res.body?.error)).toMatch(/reconcil/i);
+      expect(post('sp-1')).toEqual(postBefore);
+      expect(qjob('qj-old')).toEqual(jobBefore);
+      expect(jobsFor('sp-1')).toHaveLength(1);
+      expect(bullAdds).toHaveLength(0);
+      expect(publishesFor('sp-1')).toBe(0);
+    },
+  );
+
+  test('mixed version (retry_state column absent): still refused', async () => {
+    schema.migrated = false;
+    seedPost('sp-1', { status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    expect((await callRetry('sp-1')).statusCode).toBe(409);
+    expect(bullAdds).toHaveLength(0);
+  });
+
+  test("another user's uncertain post: still 404, no state disclosed", async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN', user_id: '00000000-0000-4000-8000-0000000000ff' });
+    const res = await callRetry('sp-1');
+    expect(res.statusCode).toBe(404);
+    expect(res.body?.code).toBe('NOT_FOUND');
+  });
+
+  test('the post becomes uncertain between the read and the reset: the reset matches nothing (409), nothing enqueued', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    seedJob('qj-old', 'sp-1', { status: 'failed', retry_state: 'awaiting_retry' });
+    // Lands inside the queue cancel that precedes the reset.
+    beforeQueueJobUpdate = () => { post('sp-1').error_code = 'PUBLISH_OUTCOME_UNCERTAIN'; };
+
+    const res = await callRetry('sp-1');
+    expect(res.statusCode).toBe(409);
+    expect(res.body?.code).toBe('NOT_RETRYABLE');
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    expect(bullAdds).toHaveLength(0);
+  });
+
+  test('an ordinary failure (including a safe pre-send failure) still retries and publishes once', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'PUBLISH_ERROR' });
+    const res = await callRetry('sp-1');
+    expect(res.statusCode).toBe(200);
+    const replacement = liveJobsFor('sp-1')[0];
+    await processPublishJob(delivery(String(replacement.id), 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1').status).toBe('published');
+  });
+});
+
+describe('Closure-003 R4 — the queue never takes over a claim whose call may be in flight', () => {
+  const TEN_MIN_AGO = (): string => new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
+  test.each([
+    ['a live direct-publish call (PUBLISH_CALL_STARTED, fresh)', { error_code: 'PUBLISH_CALL_STARTED' }],
+    ['a direct-publish call that looks stale (PUBLISH_CALL_STARTED, 10 min old)', { error_code: 'PUBLISH_CALL_STARTED', updated_at: 'STALE' }],
+    ['a live pre-call claim (PUBLISH_CLAIMED, fresh)', { error_code: 'PUBLISH_CLAIMED:direct-1' }],
+    ['a legacy publishing row with no token (looks stale)', { error_code: null, updated_at: 'STALE' }],
+  ])('%s: no call, the post is left exactly as it is', async (_label, over) => {
+    const overrides: Row = { status: 'publishing', ...over };
+    if (overrides.updated_at === 'STALE') overrides.updated_at = TEN_MIN_AGO();
+    seedPost('sp-1', overrides);
+    seedJob('qj-1', 'sp-1');
+    const before = { ...post('sp-1') };
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).resolves.toBeUndefined();
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1')).toEqual(before);
+    expect(qjob('qj-1').status).toBe('completed');
+  });
+
+  test('a stale PRE-CALL claim is taken over (fenced) and published once', async () => {
+    seedPost('sp-1', { status: 'publishing', error_code: 'PUBLISH_CLAIMED:dead', updated_at: TEN_MIN_AGO() });
+    seedJob('qj-1', 'sp-1');
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1')).toMatchObject({ status: 'published', error_code: null });
+  });
+
+  test('the post becomes uncertain between the read and the post claim: no call, the job ends uncertain', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    seedJob('qj-1', 'sp-1', { status: 'failed', retry_state: 'awaiting_retry' });
+    // Lands inside the JOB claim, which precedes the POST claim.
+    beforeQueueJobUpdate = () => { post('sp-1').error_code = 'PUBLISH_OUTCOME_UNCERTAIN'; };
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 1))).resolves.toBeUndefined();
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(qjob('qj-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN', retry_state: 'exhausted' });
+    expect(post('sp-1').error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
+  });
+
+  test('the worker claim records a token; a pre-call throw restores status AND the original code', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    seedJob('qj-1', 'sp-1', { status: 'failed', retry_state: 'awaiting_retry' });
+    const media = jest.requireMock('../../services/mediaReferenceResolver') as { refreshDurableMediaBeforePublish: jest.Mock };
+    let duringPrep: string | null = null;
+    media.refreshDurableMediaBeforePublish.mockImplementationOnce(async () => {
+      duringPrep = String(post('sp-1').error_code);
+      throw new Error('boom');
+    });
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 1))).rejects.toThrow('boom');
+    expect(duringPrep).toMatch(/^PUBLISH_CLAIMED:/);
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    expect(publishesFor('sp-1')).toBe(0);
+  });
+
+  test('the worker claim was taken over before its call: the superseded worker does not call (fence)', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    const media = jest.requireMock('../../services/mediaReferenceResolver') as { refreshDurableMediaBeforePublish: jest.Mock };
+    media.refreshDurableMediaBeforePublish.mockImplementationOnce(async () => {
+      // Another execution replaced this worker's claim token meanwhile.
+      post('sp-1').error_code = 'PUBLISH_CLAIMED:someone-else';
+    });
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).rejects.toThrow('PUBLISH_ABORTED_POST_NOT_HELD');
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1')).toMatchObject({ status: 'publishing', error_code: 'PUBLISH_CLAIMED:someone-else' });
   });
 });

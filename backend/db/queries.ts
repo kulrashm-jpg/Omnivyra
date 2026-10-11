@@ -13,7 +13,7 @@
 
 import { supabase } from './supabaseClient';
 import { isRetryStateColumnMissing, PUBLISH_OUTCOME_UNCERTAIN } from '../queue/publishRetryState';
-import { PUBLISH_CALL_STARTED } from '../queue/publishOutcome';
+import { PUBLISH_CALL_STARTED, publishClaimCode } from '../queue/publishOutcome';
 
 export interface QueueJob {
   id: string;
@@ -299,18 +299,20 @@ export async function recordHeldQueueJobOutcomeUncertain(jobId: string, message:
 }
 
 /**
- * Record — compare-and-set on 'publishing', immediately before the platform
- * call — that THIS attempt is calling the platform for the post (durable
- * per-row marker, see backend/queue/publishOutcome.ts). Zero rows means the
- * row is no longer held as 'publishing' and the caller must NOT call the
- * platform; a write error throws for the same reason.
+ * Record — immediately before the platform call — that THIS attempt is calling
+ * the platform for the post (durable per-row marker, see
+ * backend/queue/publishOutcome.ts). Compare-and-set on 'publishing' AND on the
+ * caller's own claim token: if the claim was taken over or swept meanwhile, the
+ * token no longer matches, zero rows change, and the caller must NOT call the
+ * platform. A write error throws for the same reason.
  */
-export async function markScheduledPostPlatformCallStarted(postId: string): Promise<boolean> {
+export async function markScheduledPostPlatformCallStarted(postId: string, claimToken: string): Promise<boolean> {
   const { data, error } = await supabase
     .from('scheduled_posts')
     .update({ error_code: PUBLISH_CALL_STARTED, updated_at: new Date().toISOString() })
     .eq('id', postId)
     .eq('status', 'publishing')
+    .eq('error_code', publishClaimCode(claimToken))
     .select('id');
   if (error) throw new Error(`Failed to record platform-call start for scheduled post ${postId}: ${error.message}`);
   return Array.isArray(data) && data.length > 0;

@@ -15,10 +15,16 @@
  * re-delivery AND operator resume), the stuck-publishing sweeper and the
  * blueprint guard all read the same fact:
  *
- *   PUBLISH_CALL_STARTED      — written, compare-and-set on 'publishing',
- *                               immediately before the platform call. A row
- *                               still carrying it was interrupted at or after
- *                               the call. It never means "published".
+ *   PUBLISH_CLAIMED:<token>   — written WITH status 'publishing' by the claim
+ *                               (single posts and thread nodes). No platform
+ *                               call has started. The token fences the claim:
+ *                               only the execution holding it can move the row
+ *                               on to PUBLISH_CALL_STARTED.
+ *   PUBLISH_CALL_STARTED      — written, compare-and-set FROM the holder's own
+ *                               PUBLISH_CLAIMED:<token>, immediately before the
+ *                               platform call. A row still carrying it was
+ *                               interrupted at or after the call. It never
+ *                               means "published", and it is never taken over.
  *   PUBLISH_OUTCOME_UNCERTAIN — the attempt may have created the post.
  *   PUBLISH_RECONCILED_NOT_PUBLISHED
  *                             — a person checked the platform and found no
@@ -34,6 +40,27 @@ export const PUBLISH_CALL_STARTED = 'PUBLISH_CALL_STARTED' as const;
 export const PUBLISH_RECONCILED_NOT_PUBLISHED = 'PUBLISH_RECONCILED_NOT_PUBLISHED' as const;
 /** A failure recorded before any platform request was sent — safe to retry. */
 export const PUBLISH_NOT_ATTEMPTED = 'PUBLISH_NOT_ATTEMPTED' as const;
+/** Prefix of the claim token stored in error_code while 'publishing', pre-call. */
+export const PUBLISH_CLAIMED_PREFIX = 'PUBLISH_CLAIMED:' as const;
+
+/** The error_code value that records a claim held under `token`. */
+export function publishClaimCode(token: string): string {
+  return `${PUBLISH_CLAIMED_PREFIX}${token}`;
+}
+
+/**
+ * True when the row records a claim taken by the current protocol and NO
+ * platform call has started under it. Only such a claim may ever be taken
+ * over (by a stale-claim takeover or the sweeper): replacing its token fences
+ * the previous holder out of the marker write, so that holder can never start
+ * a call afterwards. Elapsed time alone proves nothing.
+ */
+export function isPreCallClaim(row: { status?: string | null; error_code?: string | null }): boolean {
+  return String(row.status ?? '').toLowerCase() === 'publishing'
+    && typeof row.error_code === 'string'
+    && row.error_code.startsWith(PUBLISH_CLAIMED_PREFIX)
+    && row.error_code.length > PUBLISH_CLAIMED_PREFIX.length;
+}
 
 /**
  * Adapter failure codes that PROVE no post was created: the failure happened
@@ -125,12 +152,28 @@ export type PostOutcomeEvidence = {
 };
 
 /**
+ * Does the row record that a previous attempt may have published it?
+ * Decided by the error_code, NOT by the status: a writer that moves the row to
+ * 'scheduled' (an edit, a re-schedule, a "publish now" that only re-queues)
+ * without reconciling it does not make the post any less possibly-live. Only
+ * a 'publishing' row (held — see publishOutcomeBlocksAttempt) and a row with a
+ * platform_post_id (published) are excluded.
+ */
+export function hasUncertainOutcome(row: PostOutcomeEvidence): boolean {
+  if (row.platform_post_id) return false;
+  const status = String(row.status ?? '').toLowerCase();
+  if (status === 'publishing' || status === 'published') return false;
+  return row.error_code === PUBLISH_OUTCOME_UNCERTAIN || row.error_code === PUBLISH_CALL_STARTED;
+}
+
+/**
  * May a publish attempt start for this row, as far as its OWN durable evidence
  * goes? Refuses:
  *   - 'publishing' — another execution holds it, or one died holding it; the
  *     sweeper owns labelling a dead hold, never a re-run.
- *   - 'failed' with PUBLISH_OUTCOME_UNCERTAIN or PUBLISH_CALL_STARTED (the
- *     marker survives the previous sweeper, which set only status/message).
+ *   - any status carrying PUBLISH_OUTCOME_UNCERTAIN or PUBLISH_CALL_STARTED
+ *     (hasUncertainOutcome; the marker survives the previous sweeper, which set
+ *     only status/message).
  *   - with `missingCodeIsUncertain`, 'failed' with no code at all. Thread nodes
  *     use this: before this change the orchestrator wrote node failures with no
  *     code, and the previous sweeper did too, so a code-less failed node cannot
@@ -144,10 +187,8 @@ export function publishOutcomeBlocksAttempt(
   if (row.platform_post_id) return null;
   const status = String(row.status ?? '').toLowerCase();
   if (status === 'publishing') return 'in_flight';
-  if (status !== 'failed') return null;
-  const code = row.error_code ?? null;
-  if (code === PUBLISH_OUTCOME_UNCERTAIN || code === PUBLISH_CALL_STARTED) return 'uncertain';
-  if (!code && options.missingCodeIsUncertain) return 'uncertain';
+  if (hasUncertainOutcome(row)) return 'uncertain';
+  if (status === 'failed' && !row.error_code && options.missingCodeIsUncertain) return 'uncertain';
   return null;
 }
 

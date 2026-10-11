@@ -42,7 +42,10 @@ jest.mock('../../db/supabaseClient', () => ({ supabase: { from: () => ({}) } }))
 
 import {
   classifyPublishAttempt,
+  hasUncertainOutcome,
+  isPreCallClaim,
   isUncertainFailedPost,
+  publishClaimCode,
   publishOutcomeBlocksAttempt,
 } from '../../queue/publishOutcome';
 import { publishToPlatform } from '../../adapters/platformAdapter';
@@ -151,5 +154,31 @@ describe("publishToPlatform — 'not_sent' evidence", () => {
     expect(r.error?.code).toBe('PUBLISH_ERROR');
     expect(r.error?.delivery).toBeUndefined();
     expect(classifyPublishAttempt(r)).toBe('ambiguous');
+  });
+});
+
+describe('Closure-003 — claim evidence helpers', () => {
+  it('isPreCallClaim: only publishing + PUBLISH_CLAIMED:<token>', () => {
+    expect(isPreCallClaim({ status: 'publishing', error_code: 'PUBLISH_CLAIMED:abc' })).toBe(true);
+    expect(isPreCallClaim({ status: 'publishing', error_code: 'PUBLISH_CLAIMED:' })).toBe(false);
+    expect(isPreCallClaim({ status: 'publishing', error_code: 'PUBLISH_CALL_STARTED' })).toBe(false);
+    expect(isPreCallClaim({ status: 'publishing', error_code: null })).toBe(false);
+    expect(isPreCallClaim({ status: 'failed', error_code: 'PUBLISH_CLAIMED:abc' })).toBe(false);
+  });
+
+  it('hasUncertainOutcome is decided by the code, not the status (except publishing / published)', () => {
+    for (const status of ['failed', 'scheduled', 'draft', 'blocked', 'cancelled']) {
+      expect(hasUncertainOutcome({ status, error_code: 'PUBLISH_OUTCOME_UNCERTAIN' })).toBe(true);
+      expect(hasUncertainOutcome({ status, error_code: 'PUBLISH_CALL_STARTED' })).toBe(true);
+    }
+    expect(hasUncertainOutcome({ status: 'publishing', error_code: 'PUBLISH_CALL_STARTED' })).toBe(false);
+    expect(hasUncertainOutcome({ status: 'published', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' })).toBe(false);
+    expect(hasUncertainOutcome({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN', platform_post_id: 'p' })).toBe(false);
+    expect(hasUncertainOutcome({ status: 'failed', error_code: 'PUBLISH_RECONCILED_NOT_PUBLISHED' })).toBe(false);
+    expect(publishOutcomeBlocksAttempt({ status: 'scheduled', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' })).toBe('uncertain');
+  });
+
+  it('publishClaimCode round-trips through isPreCallClaim', () => {
+    expect(isPreCallClaim({ status: 'publishing', error_code: publishClaimCode('t-1') })).toBe(true);
   });
 });

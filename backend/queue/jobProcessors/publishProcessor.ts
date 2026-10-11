@@ -268,6 +268,9 @@ async function processPublishJobInner(params: {
   // Set once this execution owns the post-level claim, so the catch block
   // knows whether it has anything to give back.
   let heldClaimFromStatus: string | null = null;
+  // The claim's fence and the error_code it replaced (restored on release).
+  let heldClaimToken: string | null = null;
+  let heldClaimFromErrorCode: string | null = null;
   // Set once this execution has recorded that it is calling the platform. From
   // then on an unexpected throw must NOT give the claim back for a retry: the
   // request may have created the post (see backend/queue/publishOutcome.ts).
@@ -550,16 +553,32 @@ async function processPublishJobInner(params: {
         scheduledPostId:   scheduled_post_id,
         snapshotStatus:    (scheduledPost as { status?: string | null }).status ?? null,
         snapshotUpdatedAt: (scheduledPost as { updated_at?: string | null }).updated_at ?? null,
+        snapshotErrorCode: (scheduledPost as { error_code?: string | null }).error_code ?? null,
       });
 
+      if (!claim.claimed && claim.reason === 'outcome_uncertain') {
+        // The post itself became unsafe (its outcome is uncertain) between
+        // the read above and the claim. Same answer as the gate above: no
+        // call, and this job ends failed with the uncertain code, no retry.
+        await recordHeldQueueJobOutcomeUncertain(jobId as string, PUBLISH_OUTCOME_UNCERTAIN_MESSAGE);
+        await createQueueJobLog(jobId as string, 'warn', 'Post publish outcome uncertain — not publishing', {
+          scheduled_post_id, reason: claim.reason,
+        });
+        return;
+      }
+
       if (!claim.claimed) {
-        // Another execution owns this post. Do NOT call the platform: that is
-        // exactly the duplicate publish this boundary exists to prevent.
-        // Complete this job rather than throwing — the holder owns the retry,
-        // so a BullMQ retry here would only re-contend.
+        // Another execution owns this post (or it is not publishable). Do NOT
+        // call the platform: that is exactly the duplicate publish this
+        // boundary exists to prevent. Complete this job rather than throwing —
+        // the holder owns the retry, so a BullMQ retry would only re-contend.
         const message = claim.reason === 'already_published'
           ? 'Already published (post-level claim: another execution completed it)'
-          : 'Duplicate publish suppressed (post-level claim held by another execution)';
+          : claim.reason === 'call_in_flight'
+            ? 'Duplicate publish suppressed (another execution has started the platform call)'
+            : claim.reason === 'not_claimable'
+              ? 'Publish skipped (post is not in a publishable status)'
+              : 'Duplicate publish suppressed (post-level claim held by another execution)';
         console.warn(`⚠️ Job ${jobId}: ${message} — scheduled_post ${scheduled_post_id}`);
         await updateQueueJobStatus(jobId as string, 'completed', {
           result_data: { message, suppressed: true, reason: claim.reason },
@@ -571,6 +590,8 @@ async function processPublishJobInner(params: {
       }
 
       heldClaimFromStatus = claim.fromStatus;
+      heldClaimToken = claim.token;
+      heldClaimFromErrorCode = claim.fromErrorCode;
     }
 
     // Step 4b: Centralized publish-readiness gate (Round-4 item 1) — the
@@ -594,7 +615,9 @@ async function processPublishJobInner(params: {
         error_message: pubReadiness.message,
         error_code: pubReadiness.code,
       });
-      await updateScheduledPostOnFailure(scheduled_post_id, pubReadiness.message).catch(() => {});
+      // With its code in the same update, replacing this execution's claim
+      // token: a pre-call failure, retryable as before.
+      await updateScheduledPostOnFailure(scheduled_post_id, pubReadiness.message, undefined, pubReadiness.code).catch(() => {});
       await createQueueJobLog(jobId as string, 'warn', 'Publish blocked: readiness validation failed', {
         code: pubReadiness.code, platform: scheduledPost.platform,
       });
@@ -725,9 +748,10 @@ async function processPublishJobInner(params: {
     }
 
     // The same evidence ON THE POST, which every path reads (the queue marker
-    // is this job's alone). Compare-and-set on 'publishing': zero rows means
+    // is this job's alone). Compare-and-set from THIS execution's own claim
+    // token: zero rows means the claim was taken over or swept meanwhile, so
     // this execution no longer holds the post and must not call the platform.
-    const postCallRecorded = await markScheduledPostPlatformCallStarted(scheduled_post_id);
+    const postCallRecorded = await markScheduledPostPlatformCallStarted(scheduled_post_id, heldClaimToken as string);
     if (!postCallRecorded) {
       const abortError: Error & { skipQueueStatusUpdate?: true } = new Error('PUBLISH_ABORTED_POST_NOT_HELD');
       abortError.skipQueueStatusUpdate = true;
@@ -939,11 +963,16 @@ async function processPublishJobInner(params: {
     // paths wrote 'failed'). It only fires on an UNEXPECTED throw, where it
     // restores the exact status this execution claimed from — leaving the row
     // as retryable as it was before, never more blocked.
-    if (heldClaimFromStatus) {
+    if (heldClaimFromStatus && heldClaimToken) {
       const restoreStatus = heldClaimFromStatus;
+      const token = heldClaimToken;
       heldClaimFromStatus = null;
+      heldClaimToken = null;
       try {
-        await releaseScheduledPostPublishClaim(scheduled_post_id, restoreStatus);
+        await releaseScheduledPostPublishClaim(scheduled_post_id, restoreStatus, {
+          token,
+          restoreErrorCode: heldClaimFromErrorCode,
+        });
       } catch (releaseError) {
         console.warn(
           '[publishProcessor] publish-claim release threw (non-fatal):',

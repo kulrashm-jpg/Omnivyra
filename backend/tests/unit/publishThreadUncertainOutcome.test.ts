@@ -523,3 +523,90 @@ describe('R3 — duplicate and concurrent delivery of the same thread', () => {
     for (const id of ['t0', 't1', 't2']) expect(node(id).status).toBe('published');
   });
 });
+
+// ─── Closure-003 — the sweeper judges a stuck row by what it proves ─────────
+
+describe('Closure-003 — sweeper: pre-call claims vs possibly-started calls', () => {
+  const singlePost = (over: Row): void => {
+    store.scheduled_posts.push({
+      id: 'sp-1', user_id: USER, social_account_id: ACCOUNT, campaign_id: null, platform: 'twitter',
+      content_type: 'tweet', content: 'single', media_urls: [], scheduled_for: new Date(Date.now() - 60_000).toISOString(),
+      platform_post_id: null, error_message: null, is_thread_start: false, parent_post_id: null, thread_position: null,
+      created_at: new Date().toISOString(), updated_at: STALE(), ...over,
+    });
+  };
+  const singleJob = (over: Row = {}): void => {
+    store.queue_jobs.push({
+      id: 'qj-s', scheduled_post_id: 'sp-1', job_type: 'publish', status: 'pending', attempts: 0, max_attempts: 3,
+      retry_state: null, metadata: {}, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...over,
+    });
+  };
+  const singleDelivery = (attemptsMade = 0) => ({
+    id: 'qj-s', data: { scheduled_post_id: 'sp-1', social_account_id: ACCOUNT, user_id: USER }, attemptsMade, opts: { attempts: 3 },
+  }) as unknown as Parameters<typeof processPublishJob>[0];
+
+  test('direct publish-now died after its marker (PUBLISH_CALL_STARTED): sweep → uncertain → a queue delivery calls nothing', async () => {
+    singlePost({ status: 'publishing', error_code: 'PUBLISH_CALL_STARTED' });
+    singleJob();
+    await runSweeper();
+    expect(node('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+
+    await processPublishJob(singleDelivery());
+    expect(callsFor('sp-1')).toBe(0);
+    expect(qjob('qj-s')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+  });
+
+  test('a legacy stuck row with no claim token is labelled uncertain (nothing proves its call did not start)', async () => {
+    singlePost({ status: 'publishing', error_code: null });
+    await runSweeper();
+    expect(node('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+  });
+
+  test('a stuck PRE-CALL claim is swept to a retryable PUBLISH_NOT_ATTEMPTED, and the next delivery publishes once', async () => {
+    singlePost({ status: 'publishing', error_code: 'PUBLISH_CLAIMED:dead-holder' });
+    singleJob();
+    const body = await runSweeper();
+    expect(body).toMatchObject({ swept: 1 });
+    expect(node('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_NOT_ATTEMPTED' });
+
+    await processPublishJob(singleDelivery());
+    expect(callsFor('sp-1')).toBe(1);
+    expect(node('sp-1').status).toBe('published');
+  });
+
+  test('the sweep fences a node holder that is still alive before its call: it never calls; resume then publishes once', async () => {
+    seedThread();
+    const pn = jest.requireMock('../../services/publishNowService') as { refreshScheduledPostMediaFromRefs: jest.Mock };
+    pn.refreshScheduledPostMediaFromRefs.mockImplementationOnce(async () => {
+      // The run holds t0 with a pre-call claim and stalls past the threshold.
+      expect(String(node('t0').error_code)).toMatch(/^PUBLISH_CLAIMED:/);
+      node('t0').updated_at = STALE();
+      await runSweeper();
+      expect(node('t0')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_NOT_ATTEMPTED' });
+    });
+
+    const r = await publishThread({ root_scheduled_post_id: 't0', social_account_id: ACCOUNT, user_id: USER });
+    expect(callsFor('t0')).toBe(0); // its marker write no longer matches its token
+    expect(r.uncertain).toBeUndefined();
+
+    await resumeThreadPublish({ root_scheduled_post_id: 't0' });
+    expect(platformCalls.map((c) => c.rowId)).toEqual(['t0', 't1', 't2']);
+  });
+
+  test('a sweep racing a holder that has just recorded its call start does not overwrite it', async () => {
+    seedThread();
+    duringCall = async (rowId) => {
+      if (rowId !== 't0') return;
+      duringCall = null;
+      node('t0').updated_at = STALE();
+      await runSweeper(); // row says PUBLISH_CALL_STARTED → uncertain, by evidence
+    };
+    await publishThread({ root_scheduled_post_id: 't0', social_account_id: ACCOUNT, user_id: USER });
+    // The holder's success write is CAS on 'publishing' and loses to the sweep:
+    // the node is recorded uncertain (never 'published' by inference), and
+    // nothing calls the platform for it again.
+    expect(node('t0')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    await resumeThreadPublish({ root_scheduled_post_id: 't0' });
+    expect(callsFor('t0')).toBe(1);
+  });
+});

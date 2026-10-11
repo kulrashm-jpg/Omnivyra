@@ -285,9 +285,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         user_id: post.user_id,
       });
 
-      // A suppressed result means another execution holds the publish claim
-      // and owns the outcome: writing 'failed' would overwrite its live
-      // 'publishing' row or its 'published', so nothing is written.
+      // A suppressed result means the post's status belongs to someone else —
+      // another execution holds the publish claim, or the post's uncertain
+      // outcome awaits reconciliation: writing 'failed' would overwrite a live
+      // 'publishing' row, a 'published' one, or the uncertain record, so
+      // nothing is written.
       if (!result.suppressed) {
         await updatePostPublishStatus({
           post_id: post.id,
@@ -297,7 +299,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
 
+      // The post itself is unsafe to publish until reconciled — distinct from
+      // "another operation holds it" (which stays a 200 FAILED, as before).
+      if (result.refusal === 'outcome_uncertain') {
+        return res.status(409).json({
+          status: result.status,
+          code: 'PUBLISH_OUTCOME_UNCERTAIN',
+          requires: 'reconciliation',
+          platform: post.platform,
+          message: result.message,
+          timestamp: result.timestamp,
+        });
+      }
+
       return res.status(200).json({
+        ...(result.refusal ? { refusal: result.refusal } : {}),
         status: result.status,
         platform: post.platform,
         external_post_id: result.external_post_id,

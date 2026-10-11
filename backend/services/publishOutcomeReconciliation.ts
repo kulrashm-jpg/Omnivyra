@@ -75,16 +75,21 @@ export async function reconcileUncertainPublish(
     `[reconciled ${new Date().toISOString()} by ${input.actorUserId}: ${input.resolution}] ${note.slice(0, 500)}` +
     (evidence.error_message ? ` | previously: ${String(evidence.error_message).slice(0, 500)}` : '');
 
-  // Compare-and-set on the exact uncertain state read above.
+  // Compare-and-set on the exact uncertain state read above. The row lands on
+  // 'failed' whatever status it was read in (an uncertain post can have been
+  // moved to 'scheduled' by an older build): reconciling 'not_published' never
+  // re-queues anything by itself — the retry is the operator's next, separate
+  // step — and 'published' is recorded from 'failed' below.
   let query = supabase
     .from('scheduled_posts')
     .update({
+      status: 'failed',
       error_code: input.resolution === 'published' ? null : PUBLISH_RECONCILED_NOT_PUBLISHED,
       error_message: stamp,
       updated_at: new Date().toISOString(),
     })
     .eq('id', scheduledPostId)
-    .eq('status', 'failed')
+    .eq('status', String(evidence.status ?? ''))
     .is('platform_post_id', null);
   query = previousCode === null ? query.is('error_code', null) : query.eq('error_code', previousCode);
   const { data, error } = await query.select('id');

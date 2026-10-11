@@ -14,9 +14,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * run on the same row would throw), and nothing automatically reaps it.
  *
  * This endpoint finds rows that have been 'publishing' for longer than
- * STUCK_PUBLISHING_THRESHOLD_MS and transitions them to 'failed' with
- * error_code PUBLISH_OUTCOME_UNCERTAIN. The state machine permits
- * 'publishing → failed', so this is a legal terminal transition.
+ * STUCK_PUBLISHING_THRESHOLD_MS and transitions them to 'failed': with
+ * PUBLISH_NOT_ATTEMPTED when the row still carries a pre-call claim token
+ * (no platform call started — and replacing the token fences the holder out of
+ * ever starting one), otherwise with PUBLISH_OUTCOME_UNCERTAIN. The age only
+ * selects candidates; what the row proves decides the label. The state
+ * machine permits 'publishing → failed', so this is a legal terminal transition.
  *
  * We do NOT auto-resume here. A row stuck in 'publishing' may have a
  * platform-side post that was never recorded (split-brain), and its
@@ -35,7 +38,11 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
-import { PUBLISH_OUTCOME_UNCERTAIN } from '../../../backend/queue/publishRetryState';
+import {
+  isPreCallClaim,
+  PUBLISH_NOT_ATTEMPTED,
+  PUBLISH_OUTCOME_UNCERTAIN,
+} from '../../../backend/queue/publishOutcome';
 
 const DEFAULT_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 const BATCH_SIZE = 100;
@@ -75,7 +82,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const { data: stuck, error: fetchErr } = await supabase
       .from('scheduled_posts')
-      .select('id, platform, parent_post_id, is_thread_start, updated_at')
+      .select('id, platform, parent_post_id, is_thread_start, updated_at, error_code')
       .eq('status', 'publishing')
       .lt('updated_at', cutoffIso)
       .order('updated_at', { ascending: true })
@@ -88,25 +95,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     results.scanned = stuck.length;
 
-    for (const row of stuck as Array<{ id: string; updated_at: string; is_thread_start: boolean | null; parent_post_id: string | null }>) {
-      // CAS-style guard: only transition rows still at 'publishing'. A
-      // concurrent orchestrator run that just finished would have already
-      // flipped the row to 'published'/'failed'; we must not overwrite.
-      const { data: updated, error: updateErr } = await supabase
+    for (const row of stuck as Array<{ id: string; updated_at: string; is_thread_start: boolean | null; parent_post_id: string | null; error_code: string | null }>) {
+      // What the row itself proves (backend/queue/publishOutcome.ts):
+      //   PUBLISH_CLAIMED:<token> — claimed by the current protocol and NO
+      //     platform call started. Replacing the token fences the holder out
+      //     of its marker write, so it can never start one: a plain,
+      //     retryable PUBLISH_NOT_ATTEMPTED is safe — by evidence, not by age.
+      //   anything else (PUBLISH_CALL_STARTED, or a legacy row with no token)
+      //     — a call may have reached the platform: PUBLISH_OUTCOME_UNCERTAIN,
+      //     which the worker, the thread orchestrator, publish-now, manual
+      //     retry and the blueprint guard all treat as possibly live.
+      const preCall = isPreCallClaim({ status: 'publishing', error_code: row.error_code });
+      // Compare-and-set on 'publishing' AND the exact error_code read: a
+      // holder that recorded its call start (or finished) in between wins, and
+      // the row is left for the next sweep to judge on what it then says.
+      let sweep = supabase
         .from('scheduled_posts')
         .update({
           status: 'failed',
-          // A row stuck in 'publishing' had its claim held by an execution that
-          // never recorded a result: whether the platform accepted the post is
-          // unknown. Say so explicitly, so the queue worker, the blueprint guard
-          // and operators treat it as possibly live rather than as a known failure.
-          error_code: PUBLISH_OUTCOME_UNCERTAIN,
-          error_message: `Stuck in publishing state for >= ${Math.round(thresholdMs / 1000)}s — swept`,
+          error_code: preCall ? PUBLISH_NOT_ATTEMPTED : PUBLISH_OUTCOME_UNCERTAIN,
+          error_message: preCall
+            ? `Stuck in publishing state for >= ${Math.round(thresholdMs / 1000)}s before any platform call — swept, safe to retry`
+            : `Stuck in publishing state for >= ${Math.round(thresholdMs / 1000)}s — swept; the platform call may have succeeded`,
           updated_at: new Date().toISOString(),
         })
         .eq('id', row.id)
-        .eq('status', 'publishing')
-        .select('id');
+        .eq('status', 'publishing');
+      sweep = row.error_code === null || row.error_code === undefined
+        ? sweep.is('error_code', null)
+        : sweep.eq('error_code', row.error_code);
+      const { data: updated, error: updateErr } = await sweep.select('id');
 
       if (updateErr) {
         results.errors.push(`[${row.id}] update failed: ${updateErr.message}`);

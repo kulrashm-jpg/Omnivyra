@@ -15,6 +15,7 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 import { resolvePublishMedia } from '@/backend/services/creator/creatorPublishResolution';
+import { hasUncertainOutcome, PUBLISH_OUTCOME_UNCERTAIN } from '@/backend/queue/publishOutcome';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const { user, error } = await getSupabaseUserFromRequest(req);
@@ -93,6 +94,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           patchMediaUrls = mediaUrls;
         }
 
+        // A status change on a post whose last attempt may already have
+        // published it would re-queue it without reconciliation.
+        if (updateData.status !== undefined && (await refuseIfOutcomeUncertain(res, id, userId))) return;
+
         await updateLegacyScheduledPost({
           userId,
           id,
@@ -152,6 +157,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           });
         }
 
+        if (await refuseIfOutcomeUncertain(res, id, userId)) return;
+
         // Queue for immediate publishing (DB scheduler picks up due posts)
         await publishLegacyScheduledPostNow({ userId, id });
         try {
@@ -186,6 +193,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       error: error.message,
     });
   }
+}
+
+/**
+ * Refuse (409, PUBLISH_OUTCOME_UNCERTAIN) when the post's last publish attempt
+ * may already have published it: re-scheduling or "publish now" here would
+ * queue it again. The operator reconciles it first
+ * (POST /api/super-admin/publish/reconcile). Returns true when it responded.
+ *
+ * A read-then-write check: the durable backstop is that every publish path
+ * (worker, publish-now, cron, thread orchestrator) refuses a row carrying the
+ * uncertain code whatever its status (backend/queue/publishOutcome.ts), and
+ * neither writer below touches error_code.
+ */
+async function refuseIfOutcomeUncertain(res: NextApiResponse, id: string, userId: string): Promise<boolean> {
+  const { data: current } = await supabase
+    .from('scheduled_posts')
+    .select('id, status, error_code, platform_post_id')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (!current || !hasUncertainOutcome(current)) return false;
+  res.status(409).json({
+    success: false,
+    error:
+      'This post may already have been published: its last attempt reached the platform but the result was not ' +
+      'saved. Check the platform and have the outcome reconciled before scheduling or publishing it again.',
+    code: PUBLISH_OUTCOME_UNCERTAIN,
+    requires: 'reconciliation',
+  });
+  return true;
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.

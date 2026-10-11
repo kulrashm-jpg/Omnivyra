@@ -406,9 +406,14 @@ describe('publishNow — post-level publish claim (direct path: cron + manual)',
     expect(retry.status).toBe('PUBLISHED');
   });
 
-  test('a stale claim from a hard-killed runtime can be reclaimed', async () => {
+  test('a stale PRE-CALL claim from a hard-killed runtime can be reclaimed', async () => {
     seedPost('sp-1', {
       status: 'publishing',
+      // A claim taken under the fenced protocol that never reached its
+      // platform call (PUBLISH_CLAIMED:<token>, no PUBLISH_CALL_STARTED). Only
+      // such a claim may be taken over; an old 'publishing' row with no token,
+      // or one whose call started, never is (Closure-003 tests below).
+      error_code: 'PUBLISH_CLAIMED:dead-runtime',
       platform_post_id: null,
       updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // > 5min window
     });
@@ -420,9 +425,10 @@ describe('publishNow — post-level publish claim (direct path: cron + manual)',
     expect(post('sp-1').status).toBe('published');
   });
 
-  test('two racing reclaimers of one stale claim still yield exactly one publish', async () => {
+  test('two racing reclaimers of one stale PRE-CALL claim still yield exactly one publish', async () => {
     seedPost('sp-1', {
       status: 'publishing',
+      error_code: 'PUBLISH_CLAIMED:dead-runtime',
       platform_post_id: null,
       updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
     });
@@ -587,5 +593,154 @@ describe('Closure-002 R5 — ambiguous outcomes on the direct path', () => {
     spy.mockRestore();
     expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
     expect(cronWouldSelect()).toEqual([]);
+  });
+});
+
+// ─── Closure-003 — publish-now claim safety (R2a, R2b, R4) ──────────────────
+//
+// The claim is FENCED: it stores PUBLISH_CLAIMED:<token>, and the pre-call
+// marker (PUBLISH_CALL_STARTED) is a compare-and-set from that exact token. A
+// stale-claim takeover is allowed only for a claim that never reached its
+// call, and it replaces the token — so the previous holder can never start a
+// call afterwards. Elapsed time alone authorizes nothing.
+
+describe('Closure-003 — publish-now refuses an uncertain post (R2b)', () => {
+  test.each([
+    ['failed', 'PUBLISH_OUTCOME_UNCERTAIN'],
+    ['failed', 'PUBLISH_CALL_STARTED'],
+    ['scheduled', 'PUBLISH_OUTCOME_UNCERTAIN'], // moved back by an older build
+  ])('%s + %s: no call, refusal outcome_uncertain, row untouched', async (status, code) => {
+    seedPost('sp-1', { status, error_code: code, error_message: 'may be live' });
+    const before = { ...post('sp-1') };
+
+    const r = await run('sp-1');
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(r).toMatchObject({ status: 'FAILED', suppressed: true, refusal: 'outcome_uncertain' });
+    expect(r.message).toMatch(/reconcile/i);
+    expect(post('sp-1')).toEqual(before);
+  });
+
+  test('reconciled not_published (or an ordinary failure) is publishable again', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'PUBLISH_RECONCILED_NOT_PUBLISHED' });
+    seedPost('sp-2', { status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    expect((await run('sp-1')).status).toBe('PUBLISHED');
+    expect((await run('sp-2')).status).toBe('PUBLISHED');
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(publishesFor('sp-2')).toBe(1);
+  });
+});
+
+describe('Closure-003 — no takeover while a platform call may be in flight (R2a)', () => {
+  const adapter = (): { publishToPlatform: jest.Mock } => require('../../adapters/platformAdapter');
+  const media = (): { refreshDurableMediaBeforePublish: jest.Mock } => require('../../services/mediaReferenceResolver');
+  const TEN_MIN_AGO = (): string => new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
+  test('a SLOW call (row looks stale) is not taken over by another publish-now; the holder\'s success stands', async () => {
+    seedPost('sp-1');
+    let second: Awaited<ReturnType<typeof run>> | null = null;
+    adapter().publishToPlatform.mockImplementationOnce(async (id: string) => {
+      platformCalls.push(id);
+      // 10 minutes into a slow call: the claim LOOKS dead by its timestamp.
+      expect(post('sp-1')).toMatchObject({ status: 'publishing', error_code: 'PUBLISH_CALL_STARTED' });
+      post('sp-1').updated_at = TEN_MIN_AGO();
+      second = await run('sp-1', 'api');
+      return { success: true, platform_post_id: 'plat_slow', post_url: 'https://x.test/slow', published_at: new Date() };
+    });
+
+    const first = await run('sp-1', 'scheduler');
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(second).toMatchObject({ status: 'FAILED', suppressed: true, refusal: 'call_in_flight' });
+    expect(first.status).toBe('PUBLISHED');
+    expect(post('sp-1')).toMatchObject({ status: 'published', platform_post_id: 'plat_slow', error_code: null });
+  });
+
+  test('a stale PRE-CALL claim is taken over, and the superseded holder never calls the platform (fence)', async () => {
+    seedPost('sp-1');
+    let takeover: Awaited<ReturnType<typeof run>> | null = null;
+    media().refreshDurableMediaBeforePublish.mockImplementationOnce(async () => {
+      // Holder A is still before its call, but stalls long enough to look dead.
+      expect(String(post('sp-1').error_code)).toMatch(/^PUBLISH_CLAIMED:/);
+      post('sp-1').updated_at = TEN_MIN_AGO();
+      takeover = await run('sp-1', 'api'); // B takes the claim over and publishes
+    });
+
+    const holder = await run('sp-1', 'scheduler'); // A resumes after B
+    expect(takeover).toMatchObject({ status: 'PUBLISHED' });
+    expect(holder).toMatchObject({ status: 'FAILED', suppressed: true, refusal: 'held_by_another_execution' });
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1').status).toBe('published');
+  });
+
+  test('a legacy stale publishing row (no claim token) is never taken over — nothing proves its call did not start', async () => {
+    seedPost('sp-1', { status: 'publishing', error_code: null, updated_at: TEN_MIN_AGO() });
+    const r = await run('sp-1');
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(r).toMatchObject({ suppressed: true, refusal: 'held_by_another_execution' });
+    expect(post('sp-1').status).toBe('publishing');
+  });
+
+  test('a stale publishing row whose call STARTED is never taken over, however old', async () => {
+    seedPost('sp-1', { status: 'publishing', error_code: 'PUBLISH_CALL_STARTED', updated_at: new Date(0).toISOString() });
+    const r = await run('sp-1');
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(r).toMatchObject({ suppressed: true, refusal: 'call_in_flight' });
+  });
+
+  test('two concurrent publish-now requests on a failed post: one call', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    const results = await Promise.all([run('sp-1', 'api'), run('sp-1', 'api')]);
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(results.map((r) => r.status).sort()).toEqual(['FAILED', 'PUBLISHED']);
+  });
+
+  test('two concurrent takeovers of one stale pre-call claim: one call', async () => {
+    seedPost('sp-1', { status: 'publishing', error_code: 'PUBLISH_CLAIMED:dead', updated_at: TEN_MIN_AGO() });
+    await Promise.all([run('sp-1'), run('sp-1'), run('sp-1')]);
+    expect(publishesFor('sp-1')).toBe(1);
+  });
+});
+
+describe('Closure-003 — the direct path writes its pre-call marker (R4)', () => {
+  test('the claim records a token; the call starts only after PUBLISH_CALL_STARTED replaced it', async () => {
+    seedPost('sp-1');
+    const adapter = require('../../adapters/platformAdapter') as { publishToPlatform: jest.Mock };
+    let duringCall: string | null = null;
+    adapter.publishToPlatform.mockImplementationOnce(async (id: string) => {
+      platformCalls.push(id);
+      duringCall = String(post('sp-1').error_code);
+      return { success: true, platform_post_id: 'p1', post_url: 'u', published_at: new Date() };
+    });
+    await run('sp-1');
+    expect(duringCall).toBe('PUBLISH_CALL_STARTED');
+    expect(post('sp-1').error_code).toBeNull();
+  });
+
+  test('the marker write fails: no call, and the claim is given back with the original code', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    const queries = require('../../db/queries');
+    const spy = jest.spyOn(queries, 'markScheduledPostPlatformCallStarted').mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(run('sp-1')).rejects.toThrow('connection terminated');
+    spy.mockRestore();
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+  });
+
+  test('a pre-call throw releases the claim and restores status AND code', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    const media = require('../../services/mediaReferenceResolver') as { refreshDurableMediaBeforePublish: jest.Mock };
+    media.refreshDurableMediaBeforePublish.mockImplementationOnce(async () => { throw new Error('boom'); });
+    await expect(run('sp-1')).rejects.toThrow('boom');
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+  });
+
+  test('a confirmed success is never overwritten by a later duplicate', async () => {
+    seedPost('sp-1');
+    await run('sp-1');
+    const published = { ...post('sp-1') };
+    const again = await run('sp-1');
+    expect(again.status).toBe('PUBLISHED');
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1')).toEqual(published);
   });
 });

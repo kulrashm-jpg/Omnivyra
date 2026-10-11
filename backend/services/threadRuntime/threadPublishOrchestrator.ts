@@ -69,10 +69,12 @@ import { publishToPlatform } from '../../adapters/platformAdapter';
 import {
   classifyPublishAttempt,
   publishOutcomeBlocksAttempt,
+  publishClaimCode,
   PUBLISH_NOT_ATTEMPTED,
   PUBLISH_OUTCOME_UNCERTAIN,
   PUBLISH_OUTCOME_UNCERTAIN_MESSAGE,
 } from '../../queue/publishOutcome';
+import { randomUUID } from 'crypto';
 import {
   assertCanTransition,
   type ThreadPublishStatus,
@@ -154,13 +156,24 @@ async function transitionRowStatus(
   rowId: string,
   fromStatus: ThreadPublishStatus,
   toStatus: ThreadPublishStatus,
+  claim?: { token: string; expectedErrorCode: string | null },
 ): Promise<TransitionResult> {
   assertCanTransition(fromStatus, toStatus);
-  const { data, error } = await ownedDbTable('scheduled_posts')
-    .update({ status: toStatus, updated_at: new Date().toISOString() })
+  const payload: Record<string, unknown> = { status: toStatus, updated_at: new Date().toISOString() };
+  // A publish claim also records its fencing token (PUBLISH_CLAIMED:<token>)
+  // and pins the error_code that was read, so a node that became uncertain
+  // since the read is not claimed.
+  if (claim) payload.error_code = publishClaimCode(claim.token);
+  let query = ownedDbTable('scheduled_posts')
+    .update(payload)
     .eq('id', rowId)
-    .eq('status', fromStatus)
-    .select('id');
+    .eq('status', fromStatus);
+  if (claim) {
+    query = claim.expectedErrorCode === null
+      ? query.is('error_code', null)
+      : query.eq('error_code', claim.expectedErrorCode);
+  }
+  const { data, error } = await query.select('id');
   if (error) {
     throw new Error(`Failed to transition ${rowId} from ${fromStatus} to ${toStatus}: ${error.message}`);
   }
@@ -283,8 +296,15 @@ async function publishOneNode(input: {
   // All valid per threadPublishStates. CAS ensures we don't overwrite a row
   // an operator (or concurrent run) just mutated.
   let entryTransition: TransitionResult;
+  // The node claim's fence: only this run can move the node from
+  // PUBLISH_CLAIMED:<token> to PUBLISH_CALL_STARTED, so a sweep (or any other
+  // writer) that replaces the token stops it from ever calling the platform.
+  const nodeClaimToken = randomUUID();
   try {
-    entryTransition = await transitionRowStatus(row.id, fromStatus, 'publishing');
+    entryTransition = await transitionRowStatus(row.id, fromStatus, 'publishing', {
+      token: nodeClaimToken,
+      expectedErrorCode: typeof row.error_code === 'string' ? row.error_code : null,
+    });
   } catch (err) {
     return { ok: false, message: `Status transition failed: ${(err as Error).message}` };
   }
@@ -312,12 +332,12 @@ async function publishOneNode(input: {
     /* fail-open — never block a node publish on snapshot refresh */
   }
 
-  // Record — immediately before the call, compare-and-set on 'publishing' —
-  // that this node's platform call is starting. Without it a crash during the
-  // call would look like one before it. No marker, no call.
+  // Record — immediately before the call, compare-and-set from this run's own
+  // claim token — that this node's platform call is starting. Without it a
+  // crash during the call would look like one before it. No marker, no call.
   let callRecorded: boolean;
   try {
-    callRecorded = await markScheduledPostPlatformCallStarted(row.id);
+    callRecorded = await markScheduledPostPlatformCallStarted(row.id, nodeClaimToken);
   } catch (err) {
     const message = `Platform-call marker could not be recorded; not publishing: ${(err as Error).message}`;
     // Nothing was sent: give the node back as an ordinary (retryable) failure.
