@@ -172,6 +172,41 @@ export const PROSPECT_INGEST = 'prospect.ingest' as const;
  */
 export const PROSPECT_ICP_MANAGE = 'prospect.icp.manage' as const;
 
+/**
+ * EXECUTE a billable enrichment call against a third-party provider using the
+ * tenant's own stored credential — `POST /api/prospects/:id/enrich` (OD-A).
+ *
+ * PER-TENANT, and its own capability rather than a reuse of the two above, for
+ * the reason `PROSPECT_ICP_MANAGE` already gives about `PROSPECT_INGEST`: they
+ * authorise different kinds of act.
+ *
+ *   - `PROSPECT_INGEST` authorises an ASSERTION ABOUT ONE PERSON. Its blast
+ *     radius is one row. It touches no provider, no credential and no network.
+ *   - `PROSPECT_ICP_MANAGE` authorises a DEFINITION governing every prospect
+ *     the tenant will score. Tenant-wide, but it spends nothing.
+ *   - This capability authorises EGRESS TO A THIRD PARTY that the vendor BILLS
+ *     THE TENANT FOR, once per invocation.
+ *
+ * Before OD-A the enrich route was membership-only: `requireTenantAccess` with
+ * no options filters by role only when `requireRoleIn` is supplied, so every
+ * active member at any of the seven canonical roles — including `VIEW_ONLY`,
+ * whose whole grant set is CAMPAIGN_VIEW + the two MFA capabilities — could
+ * cause a real paid call, while importing one prospect required admin-tier
+ * `PROSPECT_INGEST`. Spending the tenant's money was easier than adding a row
+ * to it. PI-ADR-007 closes that asymmetry.
+ *
+ * Granted EXACTLY as narrowly as the other two — COMPANY_ADMIN and SUPER_ADMIN,
+ * nothing else — and holding NO hierarchy relationship in either direction. In
+ * particular it does NOT imply `PROSPECT_INGEST`: importing people and paying a
+ * vendor to describe them are separate authorities, and someone may legitimately
+ * hold either alone.
+ *
+ * Deliberately NOT step-up-gated. Step-up is reserved for platform-tier and
+ * irreversible actions; a single tenant-funded call, bounded by the required
+ * daily ceiling (PI-ADR-007 §4), is neither.
+ */
+export const PROSPECT_ENRICH_EXECUTE = 'prospect.enrich.execute' as const;
+
 // ── Content Architect (Wave Phase 1 — replaces synthetic userId='content_architect') ──
 /** Read campaign/company-profile data across companies. Content Architect role. */
 export const CONTENT_ARCHITECT_READ = 'content_architect.read' as const;
@@ -230,6 +265,8 @@ export const ALL_CAPABILITIES = [
   PROSPECT_INGEST,
   // Prospect ICP — per-tenant authority to define and ratify the profile
   PROSPECT_ICP_MANAGE,
+  // Prospect enrichment — per-tenant authority to spend on a provider call
+  PROSPECT_ENRICH_EXECUTE,
   // Phase: Platform Authority Isolation — platform-tier billing capabilities
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,

@@ -27,6 +27,25 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * the path is not authorization: the planning seam re-checks the tenant on its
  * own read, and a prospect in another tenant is unreadable there.
  *
+ * ─── AND MEMBERSHIP IS NOT ENOUGH (OD-A / PI-ADR-007) ─────────────────────
+ * Membership answers WHICH tenant. It does not answer WHETHER this principal
+ * may spend that tenant's money. `requireTenantAccess` filters by role only
+ * when `requireRoleIn` is supplied, so before OD-A every active member at any
+ * of the seven canonical roles — `VIEW_ONLY` included — could cause a real,
+ * billable provider call, while importing one prospect required admin-tier
+ * `PROSPECT_INGEST`. Spending was easier than writing.
+ *
+ * The owner decided self-serve enrichment IS intended but is ADMIN-TIER ONLY,
+ * so `PROSPECT_ENRICH_EXECUTE` (COMPANY_ADMIN + SUPER_ADMIN) is now required,
+ * bound to the VERIFIED tenant id and checked in the order the three
+ * `lead-ingestion` routes already use. `requireCapability` writes its own
+ * 401/403 and audits the decision, so no refusal vocabulary is invented here.
+ *
+ * The second half of that decision lives one layer down: the daily provider
+ * call ceiling is now REQUIRED, so a tenant with no ceiling configured is
+ * refused at `authorizeCost` with `cost_denied` and zero transport. This route
+ * does not implement that and must not duplicate it — see spendCeiling.ts.
+ *
  * ─── WHY A DISTINCT ROUTE ─────────────────────────────────────────────────
  * `/api/prospects/[id]` is documented GET-only and answers "everything the
  * platform can say about one Prospect" — a read that scores nothing and
@@ -35,6 +54,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantAccess } from '../../../../backend/security/TenantGuard';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { PROSPECT_ENRICH_EXECUTE } from '../../../../shared/contracts/security';
 import { executeProspectEnrichment } from '../../../../backend/apiHandlers/prospects/prospectIntelligenceRead';
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -50,6 +71,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const tenant = await requireTenantAccess(req, res, companyId);
   if (!tenant) return;
+
+  // Membership said WHICH tenant. This says WHETHER this principal may spend
+  // it. Bound to the verified companyId, never to anything from the body.
+  const guard = await requireCapability(req, res, {
+    capability: PROSPECT_ENRICH_EXECUTE,
+    organizationId: companyId,
+    reason: 'execute a billable provider enrichment call funded by this tenant',
+  });
+  if (guard.ok !== true) return;
 
   const prospectId = str(Array.isArray(req.query.id) ? req.query.id[0] : req.query.id);
   if (!prospectId) return res.status(400).json({ error: 'prospect id is required' });
