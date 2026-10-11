@@ -14,6 +14,16 @@ import { hasUncertainOutcome, PUBLISH_OUTCOME_UNCERTAIN } from '@/backend/queue/
  * /api/scheduler/posts. Reuses the existing scheduler — no new queue/worker.
  *
  * Body: { scheduled_post_id: string }
+ *
+ * TENANT authority (Closure-010, owner decision): this is the post OWNER's
+ * retry of their own definitely-failed post — deliberately NOT a platform
+ * recovery route (those need publish.recovery.manage + step-up + an active
+ * platform SUPER_ADMIN). Identity is the authenticated session only; every
+ * read and write is pinned to `user_id = session user`, so another member of
+ * the same company and another tenant both get the same 404. Retryable means
+ * status 'failed', no published identity (platform_post_id), no uncertain or
+ * call-started outcome, not a thread child; everything else is refused before
+ * anything is cancelled or reset.
  */
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -49,6 +59,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(409).json({
       error: 'This post is part of a thread. Retry the thread from its first post instead.',
       code: 'THREAD_CHILD_NOT_RETRYABLE',
+    });
+  }
+  // A published identity is never "definitely failed": a failure write that
+  // landed on a row a concurrent execution had just published (the unguarded
+  // updateScheduledPostOnFailure branch) leaves status 'failed' beside a
+  // platform_post_id. Refused, not reset (Closure-010).
+  if (post.platform_post_id) {
+    return res.status(409).json({
+      error: 'This post is already published on the platform; there is nothing to retry.',
+      code: 'POST_ALREADY_PUBLISHED',
     });
   }
   if (post.status !== 'failed') {
@@ -112,7 +132,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .update({ status: 'scheduled', error_message: null, error_code: null, scheduled_for: scheduledFor })
     .eq('id', scheduledPostId)
     .eq('user_id', user.id)
-    .eq('status', 'failed');
+    .eq('status', 'failed')
+    .is('platform_post_id', null);
   reset = post.error_code == null ? reset.is('error_code', null) : reset.eq('error_code', post.error_code);
   const { data: resetRows, error: resetError } = await reset.select('id');
   if (resetError) {
