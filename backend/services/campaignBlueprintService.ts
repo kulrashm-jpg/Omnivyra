@@ -237,7 +237,7 @@ async function classifyFailedPosts(postIds: string[]): Promise<Map<string, PostR
   if (postIds.length === 0) return classes;
   const { data, error } = await supabase
     .from('queue_jobs')
-    .select('scheduled_post_id, status, retry_state')
+    .select('scheduled_post_id, status, retry_state, error_code')
     .in('scheduled_post_id', postIds);
   if (error) {
     if (isRetryStateColumnMissing(error)) {
@@ -246,12 +246,12 @@ async function classifyFailedPosts(postIds: string[]): Promise<Map<string, PostR
     }
     throw new BlueprintMutabilityReadError('queue_jobs', error);
   }
-  const rowsByPost = new Map<string, Array<{ status?: unknown; retry_state?: unknown }>>();
+  const rowsByPost = new Map<string, Array<{ status?: unknown; retry_state?: unknown; error_code?: unknown }>>();
   for (const row of Array.isArray(data) ? data : []) {
-    const r = row as { scheduled_post_id?: unknown; status?: unknown; retry_state?: unknown };
+    const r = row as { scheduled_post_id?: unknown; status?: unknown; retry_state?: unknown; error_code?: unknown };
     const key = String(r.scheduled_post_id ?? '');
     const list = rowsByPost.get(key) ?? [];
-    list.push({ status: r.status, retry_state: r.retry_state });
+    list.push({ status: r.status, retry_state: r.retry_state, error_code: r.error_code });
     rowsByPost.set(key, list);
   }
   for (const id of postIds) classes.set(id, classifyPostQueueJobs(rowsByPost.get(id) ?? []));

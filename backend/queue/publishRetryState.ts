@@ -30,6 +30,12 @@ import { ownedDbTable } from '../db/writeOwner';
 
 export const RETRY_STATE_AWAITING = 'awaiting_retry' as const;
 export const RETRY_STATE_EXHAUSTED = 'exhausted' as const;
+/**
+ * queue_jobs.error_code / scheduled_posts.error_code for a publish whose outcome
+ * is unknown: the worker died after sending the post to the platform and before
+ * any result was saved. See markQueueJobOutcomeUncertain (backend/db/queries.ts).
+ */
+export const PUBLISH_OUTCOME_UNCERTAIN = 'PUBLISH_OUTCOME_UNCERTAIN' as const;
 export type PublishRetryState = typeof RETRY_STATE_AWAITING | typeof RETRY_STATE_EXHAUSTED;
 
 /**
@@ -85,7 +91,7 @@ export function retryStateAfterFailedDelivery(
 export type PostRetryClass = 'LIVE' | 'UNKNOWN' | 'TERMINAL';
 
 export function classifyPostQueueJobs(
-  rows: ReadonlyArray<{ status?: unknown; retry_state?: unknown }>,
+  rows: ReadonlyArray<{ status?: unknown; retry_state?: unknown; error_code?: unknown }>,
 ): PostRetryClass {
   if (rows.length === 0) return 'UNKNOWN';
   let unknown = false;
@@ -94,6 +100,10 @@ export function classifyPostQueueJobs(
     if (status === 'pending' || status === 'processing') return 'LIVE';
     if (status === 'cancelled' || status === 'completed') continue;
     if (status === 'failed') {
+      // An uncertain publish outcome (the worker died after sending the post to
+      // the platform) may already be LIVE on the platform. It is never treated
+      // as terminally resolved, whatever its retry state says.
+      if (row.error_code === PUBLISH_OUTCOME_UNCERTAIN) { unknown = true; continue; }
       const state = row.retry_state;
       if (state === RETRY_STATE_AWAITING) return 'LIVE';
       if (state === RETRY_STATE_EXHAUSTED) continue;

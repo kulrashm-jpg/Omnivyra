@@ -39,6 +39,10 @@ import {
   updateQueueJobStatus,
   claimQueueJobForProcessing,
   recordQueueJobRetryState,
+  markQueueJobPlatformCallStarted,
+  markQueueJobOutcomeUncertain,
+  readPlatformCallMarker,
+  PUBLISH_OUTCOME_UNCERTAIN,
   createQueueJobLog,
   getScheduledPost,
   updateScheduledPostOnPublish,
@@ -331,6 +335,50 @@ async function processPublishJobInner(params: {
       return;
     }
 
+    // Uncertain outcome — a previous attempt of THIS job died after it started
+    // the platform call. Reaching here means the job is 'processing' and older
+    // than the replay window (a fresh one returned above), the attempt recorded
+    // that it was calling the platform, and the post is still 'publishing' (no
+    // result was persisted: neither the published nor the failed write landed).
+    // The post may already be live. No adapter can make the call idempotent, so
+    // calling again risks a public duplicate: record the uncertainty, stop, and
+    // leave the retry to a person who has checked the platform. A death BEFORE
+    // the marker (no call started) still retries normally below.
+    if (
+      queueJob.status === 'processing' &&
+      scheduledPost.is_thread_start !== true &&
+      (scheduledPost as { status?: string | null }).status === 'publishing' &&
+      readPlatformCallMarker(queueJob.metadata)
+    ) {
+      const uncertainMessage =
+        'Publish outcome unknown: the worker stopped after sending this post to the platform and before ' +
+        'the result was saved. It may already be live — check the platform before retrying.';
+      const marked = await markQueueJobOutcomeUncertain(jobId as string, queueJob, uncertainMessage);
+      if (!marked) {
+        console.warn(`⚠️ Job ${jobId}: uncertain-outcome transition lost to a concurrent change — not publishing`);
+        return;
+      }
+      const { error: postUncertainError } = await supabase
+        .from('scheduled_posts')
+        .update({
+          status: 'failed',
+          error_code: PUBLISH_OUTCOME_UNCERTAIN,
+          error_message: uncertainMessage,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', scheduled_post_id)
+        .eq('status', 'publishing');
+      if (postUncertainError) {
+        console.error(`[publishProcessor] uncertain-outcome post write failed for ${scheduled_post_id}:`, postUncertainError.message);
+      }
+      await createQueueJobLog(jobId as string, 'warn', 'Publish outcome uncertain — not republishing', {
+        scheduled_post_id,
+        platform_call: readPlatformCallMarker(queueJob.metadata),
+      });
+      console.warn(`⚠️ Job ${jobId}: ${PUBLISH_OUTCOME_UNCERTAIN} for scheduled_post ${scheduled_post_id} — not republishing`);
+      return;
+    }
+
     // ── Step 3: PER-POST publish authorization (R2-IMPL B1) ────────────────
     //
     // Was: campaign active AND campaign_readiness.readiness_state === 'ready'.
@@ -580,6 +628,17 @@ async function processPublishJobInner(params: {
       );
       console.error(`❌ Thread publish failed: ${threadErrorMessage}`);
       throw new Error(threadErrorMessage);
+    }
+
+    // Record that THIS attempt is about to call the platform (see the
+    // uncertain-outcome check above). If the row is no longer 'processing' — a
+    // cancel landed after the claim — do not call the platform; the throw
+    // releases the post claim in the catch below.
+    const platformCallRecorded = await markQueueJobPlatformCallStarted(jobId as string, queueJob.metadata);
+    if (!platformCallRecorded) {
+      const abortError: Error & { skipQueueStatusUpdate?: true } = new Error('PUBLISH_ABORTED_JOB_NOT_PROCESSING');
+      abortError.skipQueueStatusUpdate = true;
+      throw abortError;
     }
 
     console.log(`🚀 Publishing to platform via adapter...`);

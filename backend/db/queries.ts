@@ -12,7 +12,7 @@
  */
 
 import { supabase } from './supabaseClient';
-import { isRetryStateColumnMissing } from '../queue/publishRetryState';
+import { isRetryStateColumnMissing, PUBLISH_OUTCOME_UNCERTAIN } from '../queue/publishRetryState';
 
 export interface QueueJob {
   id: string;
@@ -182,6 +182,93 @@ export async function updateQueueJobStatus(
 /** The statuses a publish delivery can legitimately fail out of. */
 const QUEUE_JOB_FAILABLE_FROM_STATUSES = ['pending', 'processing', 'failed'];
 
+/**
+ * Uncertain publish outcome (duplicate-publication guard).
+ *
+ * No platform adapter here can make post creation idempotent (none sends an
+ * idempotency key or client request id), so a worker that dies AFTER the
+ * platform request is sent leaves an outcome nobody can know from the database:
+ * the post may already be live. Re-delivering and republishing then risks a
+ * public duplicate; marking it plainly failed would hide that it may be live.
+ *
+ * The queue path therefore records, immediately before the platform call, a
+ * per-attempt marker in queue_jobs.metadata (an existing jsonb column — no
+ * migration). A re-delivery that finds the job still 'processing' past the
+ * replay window, with that marker set and the post still 'publishing', does
+ * NOT call the platform again: it records PUBLISH_OUTCOME_UNCERTAIN and stops,
+ * so a person checks the platform before any retry.
+ */
+export { PUBLISH_OUTCOME_UNCERTAIN };
+export const PLATFORM_CALL_MARKER_KEY = 'platform_call';
+
+function metadataObject(metadata: unknown): Record<string, unknown> {
+  return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? { ...(metadata as Record<string, unknown>) }
+    : {};
+}
+
+/** The metadata with the platform-call marker removed (other keys preserved). */
+export function withoutPlatformCallMarker(metadata: unknown): Record<string, unknown> {
+  const next = metadataObject(metadata);
+  delete next[PLATFORM_CALL_MARKER_KEY];
+  return next;
+}
+
+/** The platform-call marker on a queue_jobs row, if a call was started and not resolved. */
+export function readPlatformCallMarker(metadata: unknown): { started_at: string } | null {
+  const marker = metadataObject(metadata)[PLATFORM_CALL_MARKER_KEY];
+  if (!marker || typeof marker !== 'object') return null;
+  const startedAt = (marker as { started_at?: unknown }).started_at;
+  return typeof startedAt === 'string' && startedAt ? { started_at: startedAt } : null;
+}
+
+/**
+ * Record — immediately before the platform call — that this attempt is about
+ * to call the platform. Lands only while the row is still 'processing'; zero
+ * rows (cancelled or taken over meanwhile) means the caller must NOT call the
+ * platform. A write error throws: without the marker, a death during the call
+ * would be indistinguishable from one before it, so the call must not happen.
+ */
+export async function markQueueJobPlatformCallStarted(
+  jobId: string,
+  snapshotMetadata: unknown,
+): Promise<boolean> {
+  const metadata = withoutPlatformCallMarker(snapshotMetadata);
+  metadata[PLATFORM_CALL_MARKER_KEY] = { started_at: new Date().toISOString() };
+  const { data, error } = await supabase
+    .from('queue_jobs')
+    .update({ metadata, updated_at: new Date().toISOString() })
+    .eq('id', jobId)
+    .eq('status', 'processing')
+    .select('id');
+  if (error) throw new Error(`Failed to record platform-call start for queue job ${jobId}: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Terminally record an uncertain outcome on the queue job: failed, never
+ * retried automatically, with an explicit code. Compare-and-set on the exact
+ * stale 'processing' row that was read, so two re-deliveries cannot both act.
+ */
+export async function markQueueJobOutcomeUncertain(
+  jobId: string,
+  snapshot: { updated_at?: string | null; retry_state?: string | null },
+  message: string,
+): Promise<boolean> {
+  const payload: Record<string, unknown> = {
+    status: 'failed',
+    error_code: PUBLISH_OUTCOME_UNCERTAIN,
+    error_message: message,
+    updated_at: new Date().toISOString(),
+  };
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'retry_state')) payload.retry_state = 'exhausted';
+  let query = supabase.from('queue_jobs').update(payload).eq('id', jobId).eq('status', 'processing');
+  query = snapshot.updated_at ? query.eq('updated_at', snapshot.updated_at) : query.is('updated_at', null);
+  const { data, error } = await query.select('id');
+  if (error) throw new Error(`Failed to record uncertain outcome for queue job ${jobId}: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
 export type QueueJobProcessingClaim =
   | { claimed: true }
   | { claimed: false; reason: 'not_runnable' | 'changed_since_read' };
@@ -213,7 +300,13 @@ export type QueueJobProcessingClaim =
  */
 export async function claimQueueJobForProcessing(
   jobId: string,
-  snapshot: { status?: string | null; updated_at?: string | null; retry_state?: string | null },
+  snapshot: {
+    status?: string | null;
+    updated_at?: string | null;
+    retry_state?: string | null;
+    error_code?: string | null;
+    metadata?: unknown;
+  },
 ): Promise<QueueJobProcessingClaim> {
   const status = snapshot.status ?? null;
   const hasRetryState = Object.prototype.hasOwnProperty.call(snapshot, 'retry_state');
@@ -222,7 +315,7 @@ export async function claimQueueJobForProcessing(
   const runnable =
     status === 'pending' ||
     status === 'processing' ||
-    (status === 'failed' && retryState !== 'exhausted');
+    (status === 'failed' && retryState !== 'exhausted' && snapshot.error_code !== PUBLISH_OUTCOME_UNCERTAIN);
   if (!runnable) return { claimed: false, reason: 'not_runnable' };
 
   const payload: Record<string, unknown> = {
@@ -231,6 +324,12 @@ export async function claimQueueJobForProcessing(
   };
   // A claimed row is no longer waiting for a retry — it is running one.
   if (hasRetryState) payload.retry_state = null;
+  // A new attempt starts with no platform call recorded. A marker left by an
+  // EARLIER attempt (which finished, or failed before calling) must not make
+  // this attempt look like one that died mid-call.
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'metadata')) {
+    payload.metadata = withoutPlatformCallMarker(snapshot.metadata);
+  }
 
   let query = supabase.from('queue_jobs').update(payload).eq('id', jobId).eq('status', status);
   if (status === 'processing') {
