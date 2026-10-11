@@ -285,12 +285,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         user_id: post.user_id,
       });
 
-      await updatePostPublishStatus({
-        post_id: post.id,
-        status: result.status,
-        external_post_id: result.external_post_id,
-        last_error: result.status === 'PUBLISHED' ? undefined : result.message,
-      });
+      // A suppressed result means another execution holds the publish claim
+      // and owns the outcome: writing 'failed' would overwrite its live
+      // 'publishing' row or its 'published', so nothing is written.
+      if (!result.suppressed) {
+        await updatePostPublishStatus({
+          post_id: post.id,
+          status: result.status,
+          external_post_id: result.external_post_id,
+          last_error: result.status === 'PUBLISHED' ? undefined : result.message,
+        });
+      }
 
       return res.status(200).json({
         status: result.status,

@@ -512,3 +512,20 @@ describe('publishNow — the MANUAL "publish now" path keeps working', () => {
     }
   });
 });
+
+describe('D2 — a suppressed result is machine-distinguishable from a real failure', () => {
+  test('the suppression result carries suppressed: true so callers write no status', async () => {
+    seedPost('sp-1', { status: 'publishing', updated_at: new Date().toISOString(), platform_post_id: null });
+    const result = await run('sp-1');
+    expect(result.status).toBe('FAILED');
+    expect(result.suppressed).toBe(true);
+    expect(post('sp-1').status).toBe('publishing');
+  });
+
+  test('a genuine publish never carries the flag', async () => {
+    seedPost('sp-1');
+    const result = await run('sp-1', 'scheduler');
+    expect(result.status).toBe('PUBLISHED');
+    expect(result.suppressed).toBeUndefined();
+  });
+});

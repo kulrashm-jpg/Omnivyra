@@ -176,6 +176,14 @@ export type PublishNowInput = {
 
 export type PublishNowResult = {
   status: 'PUBLISHED' | 'FAILED';
+  /**
+   * Set ONLY when this call did not publish because another execution holds
+   * the post-level claim. The holder owns the outcome and writes the terminal
+   * status, so a caller must NOT write any status for this result — writing
+   * 'failed' here would flip the holder's live 'publishing' row (making it
+   * claimable and republishable mid-flight) or overwrite its 'published'.
+   */
+  suppressed?: true;
   external_post_id?: string;
   post_url?: string;
   published_at?: string;
@@ -552,7 +560,7 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       scheduledPostId: scheduled_post_id,
       reason: claim.reason,
     });
-    return { status: 'FAILED', message, timestamp };
+    return { status: 'FAILED', message, timestamp, suppressed: true };
   }
 
   try {

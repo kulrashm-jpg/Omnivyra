@@ -255,3 +255,26 @@ describe('WSF-ORD-006 — the owner and the super-admin are unaffected', () => {
     expect(mockPublishNow).not.toHaveBeenCalled();
   });
 });
+
+describe('D2 — a suppressed duplicate writes no status over the claim holder', () => {
+  it('publishNow suppressed (claim held elsewhere) → updatePostPublishStatus is NOT called', async () => {
+    mockPublishNow.mockResolvedValue({
+      status: 'FAILED', suppressed: true,
+      message: 'Duplicate publish suppressed: another execution holds the claim',
+      timestamp: '2026-09-01T09:00:00Z',
+    });
+    const res = await call();
+    expect(mockPublishNow).toHaveBeenCalledTimes(1);
+    expect(mockUpdatePostPublishStatus).not.toHaveBeenCalled();
+    expect(postUpdates).toEqual([]);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.status).toBe('FAILED');
+  });
+
+  it('an ordinary FAILED result still records the failure', async () => {
+    mockPublishNow.mockResolvedValue({ status: 'FAILED', message: 'token expired', timestamp: '2026-09-01T09:00:00Z' });
+    await call();
+    expect(mockUpdatePostPublishStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ post_id: 'post-1', status: 'FAILED', last_error: 'token expired' }));
+  });
+});
