@@ -835,3 +835,45 @@ describe('STEP 4 — an unrecognised or NULL post status is UNKNOWN and protects
     });
   }
 });
+
+// ─── Workstream C — an uncertain publish outcome is never TERMINAL ───────────
+//
+// A queue row the worker recorded as PUBLISH_OUTCOME_UNCERTAIN carries
+// retry_state='exhausted' (it must never be retried automatically), yet the
+// post may already be live on the platform. The guard must keep protecting it.
+
+const qjc = (postId: string, status: unknown, retryState: unknown, errorCode: unknown): Row =>
+  ({ scheduled_post_id: postId, status, retry_state: retryState, error_code: errorCode });
+
+describe('Workstream C — classifyPostQueueJobs and PUBLISH_OUTCOME_UNCERTAIN', () => {
+  const cases: Array<[string, Row[], 'LIVE' | 'UNKNOWN' | 'TERMINAL']> = [
+    ['failed + exhausted + uncertain', [qjc('p', 'failed', 'exhausted', 'PUBLISH_OUTCOME_UNCERTAIN')], 'UNKNOWN'],
+    ['failed + uncertain, column absent (mixed version)', [{ scheduled_post_id: 'p', status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' }], 'UNKNOWN'],
+    ['failed + exhausted + a KNOWN platform error stays terminal', [qjc('p', 'failed', 'exhausted', 'RATE_LIMITED')], 'TERMINAL'],
+    ['failed + exhausted + NULL error_code stays terminal', [qjc('p', 'failed', 'exhausted', null)], 'TERMINAL'],
+    ['uncertain beside terminal rows still UNKNOWN', [qjc('p', 'failed', 'exhausted', 'PUBLISH_OUTCOME_UNCERTAIN'), qj('p', 'completed', null)], 'UNKNOWN'],
+    ['uncertain beside a live row is LIVE', [qjc('p', 'failed', 'exhausted', 'PUBLISH_OUTCOME_UNCERTAIN'), qj('p', 'pending', null)], 'LIVE'],
+  ];
+  it.each(cases)('%s', (_label, rows, expected) => {
+    expect(classifyPostQueueJobs(rows)).toBe(expected);
+  });
+});
+
+describe('Workstream C — the per-item guard protects an uncertain post', () => {
+  beforeEach(() => {
+    process.env.BLUEPRINT_PER_ITEM_LOCKS = 'true';
+    campaignRow = { blueprint_status: 'ACTIVE', duration_weeks: 4 };
+  });
+
+  it('a failed post whose only queue row is exhausted-but-uncertain freezes the blueprint', async () => {
+    postRows = [{ id: 'sp-1', status: 'failed', scheduled_for: at(-3) }];
+    queueRows = [qjc('sp-1', 'failed', 'exhausted', 'PUBLISH_OUTCOME_UNCERTAIN')];
+    await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintExecutionFreezeError);
+  });
+
+  it('the same row with a known platform failure is terminal and does not block', async () => {
+    postRows = [{ id: 'sp-1', status: 'failed', scheduled_for: at(-3) }];
+    queueRows = [qjc('sp-1', 'failed', 'exhausted', 'RATE_LIMITED')];
+    await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
+  });
+});

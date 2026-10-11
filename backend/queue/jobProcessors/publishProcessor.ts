@@ -338,16 +338,29 @@ async function processPublishJobInner(params: {
     // Uncertain outcome — a previous attempt of THIS job died after it started
     // the platform call. Reaching here means the job is 'processing' and older
     // than the replay window (a fresh one returned above), the attempt recorded
-    // that it was calling the platform, and the post is still 'publishing' (no
-    // result was persisted: neither the published nor the failed write landed).
-    // The post may already be live. No adapter can make the call idempotent, so
-    // calling again risks a public duplicate: record the uncertainty, stop, and
-    // leave the retry to a person who has checked the platform. A death BEFORE
-    // the marker (no call started) still retries normally below.
+    // that it was calling the platform, and no platform_post_id was saved (the
+    // short-circuit above returned otherwise). The post may already be live. No
+    // adapter can make the call idempotent, so calling again risks a public
+    // duplicate: record the uncertainty, stop, and leave the retry to a person
+    // who has checked the platform. A death BEFORE the marker (no call started)
+    // still retries normally below.
+    //
+    // The post is usually NOT 'publishing' any more by the time BullMQ
+    // re-delivers a stalled job (30–60 min): /api/cron/sweep-stuck-publishing
+    // turns rows stuck in 'publishing' for >10 min into 'failed' — older sweeper
+    // builds without any error_code, newer ones with PUBLISH_OUTCOME_UNCERTAIN.
+    // A handled platform failure always records its own error_code, so a
+    // 'failed' post with no code (or the uncertain code) is the swept, unknown
+    // case — never a known failure.
+    const postStatus = (scheduledPost as { status?: string | null }).status ?? null;
+    const postErrorCode = (scheduledPost as { error_code?: string | null }).error_code ?? null;
+    const outcomeUnresolvedPost =
+      postStatus === 'publishing' ||
+      (postStatus === 'failed' && (!postErrorCode || postErrorCode === PUBLISH_OUTCOME_UNCERTAIN));
     if (
       queueJob.status === 'processing' &&
       scheduledPost.is_thread_start !== true &&
-      (scheduledPost as { status?: string | null }).status === 'publishing' &&
+      outcomeUnresolvedPost &&
       readPlatformCallMarker(queueJob.metadata)
     ) {
       const uncertainMessage =
@@ -367,7 +380,10 @@ async function processPublishJobInner(params: {
           updated_at: new Date().toISOString(),
         })
         .eq('id', scheduled_post_id)
-        .eq('status', 'publishing');
+        // Only a row whose outcome is still unrecorded: never over a
+        // 'published' row or one carrying a platform_post_id.
+        .in('status', ['publishing', 'failed'])
+        .is('platform_post_id', null);
       if (postUncertainError) {
         console.error(`[publishProcessor] uncertain-outcome post write failed for ${scheduled_post_id}:`, postUncertainError.message);
       }

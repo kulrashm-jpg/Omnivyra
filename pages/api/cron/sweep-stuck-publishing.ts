@@ -34,6 +34,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
+import { PUBLISH_OUTCOME_UNCERTAIN } from '../../../backend/queue/publishRetryState';
 
 const DEFAULT_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 const BATCH_SIZE = 100;
@@ -94,6 +95,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .from('scheduled_posts')
         .update({
           status: 'failed',
+          // A row stuck in 'publishing' had its claim held by an execution that
+          // never recorded a result: whether the platform accepted the post is
+          // unknown. Say so explicitly, so the queue worker, the blueprint guard
+          // and operators treat it as possibly live rather than as a known failure.
+          error_code: PUBLISH_OUTCOME_UNCERTAIN,
           error_message: `Stuck in publishing state for >= ${Math.round(thresholdMs / 1000)}s — swept`,
           updated_at: new Date().toISOString(),
         })

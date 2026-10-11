@@ -949,3 +949,146 @@ describe('mixed versions — rows written by the previous worker after the migra
     expect(qjob('qj-1').retry_state).toBeNull();
   });
 });
+
+// ─── Workstream C — uncertain publish outcome (duplicate-publication guard) ──
+//
+// A worker that dies AFTER the platform request is sent leaves an outcome the
+// database cannot know: the post may already be live. These tests pin that a
+// stalled re-delivery of such a job never calls the platform again, while a
+// death BEFORE the call (no marker) and a KNOWN failure still retry normally.
+
+const STALE = (): string => new Date(Date.now() - 40 * 60 * 1000).toISOString(); // BullMQ stall re-delivery: 30–60 min
+const MARKER = (): Row => ({ platform_call: { started_at: new Date(Date.now() - 41 * 60 * 1000).toISOString() } });
+const isMarkerWrite = (payload: Row | null): boolean =>
+  !!payload && !!payload.metadata && !!(payload.metadata as Row).platform_call;
+
+/** A job whose previous attempt died: still 'processing', older than the replay window. */
+function seedDiedAttempt(postOverrides: Row, withMarker: boolean): void {
+  seedPost('sp-1', { status: 'publishing', updated_at: STALE(), ...postOverrides });
+  seedJob('qj-1', 'sp-1', { status: 'processing', updated_at: STALE(), metadata: withMarker ? MARKER() : {} });
+}
+
+describe('Workstream C — termination before vs. after the platform call', () => {
+  test('died BEFORE the platform call (no marker): the re-delivery publishes once', async () => {
+    seedDiedAttempt({}, false);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(qjob('qj-1').status).toBe('completed');
+    expect(post('sp-1').status).toBe('published');
+  });
+
+  test('died DURING the call or after the platform accepted it (marker, post still publishing): NO republish, uncertainty recorded', async () => {
+    seedDiedAttempt({}, true);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(qjob('qj-1')).toMatchObject({ status: 'failed', retry_state: 'exhausted', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    expect(String(post('sp-1').error_message)).toContain('check the platform before retrying');
+  });
+
+  test('the post was already swept by the CURRENT sweeper (failed, no error_code): still uncertain, no republish', async () => {
+    seedDiedAttempt({ status: 'failed', error_code: null, error_message: 'Stuck in publishing state for >= 600s — swept' }, true);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(qjob('qj-1').error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+  });
+
+  test('the post was swept by the UPDATED sweeper (failed + PUBLISH_OUTCOME_UNCERTAIN): no republish', async () => {
+    seedDiedAttempt({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' }, true);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(qjob('qj-1').status).toBe('failed');
+  });
+
+  test('a KNOWN platform failure was persisted (failed WITH a platform error_code): the re-delivery retries normally', async () => {
+    seedDiedAttempt({ status: 'failed', error_code: 'RATE_LIMITED', error_message: 'slow down' }, true);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1').status).toBe('published');
+  });
+
+  test('died AFTER the result was saved (platform_post_id present): completed, no republish', async () => {
+    seedDiedAttempt({ status: 'published', platform_post_id: 'plat_existing' }, true);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(qjob('qj-1').status).toBe('completed');
+    expect(post('sp-1').platform_post_id).toBe('plat_existing');
+  });
+});
+
+describe('Workstream C — repeated and concurrent delivery', () => {
+  test('a later delivery of an uncertain job never publishes', async () => {
+    seedDiedAttempt({}, true);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    await processPublishJob(delivery('qj-1', 'sp-1', 1));
+    await processPublishJob(delivery('qj-1', 'sp-1', 2));
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(qjob('qj-1').error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
+  });
+
+  test('two concurrent stale re-deliveries: zero publishes, the job ends failed', async () => {
+    seedDiedAttempt({}, true);
+    await Promise.all([
+      processPublishJob(delivery('qj-1', 'sp-1', 0)),
+      processPublishJob(delivery('qj-1', 'sp-1', 0)),
+    ]);
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(qjob('qj-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+  });
+
+  test('mixed version (retry_state column absent): the uncertain row is still never re-run', async () => {
+    schema.migrated = false;
+    seedPost('sp-1', { status: 'publishing', updated_at: STALE() });
+    seedJob('qj-1', 'sp-1', { status: 'processing', updated_at: STALE(), metadata: MARKER() });
+    expect('retry_state' in qjob('qj-1')).toBe(false);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(qjob('qj-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    // A crash-time re-delivery finds 'failed' with no retry state — the
+    // uncertain code alone keeps it from being claimed and republished.
+    await processPublishJob(delivery('qj-1', 'sp-1', 1));
+    expect(publishesFor('sp-1')).toBe(0);
+  });
+});
+
+describe('Workstream C — the per-attempt platform-call marker', () => {
+  test('the processing claim clears a marker left by an earlier attempt; the marker is set after the claim, before the call', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'RATE_LIMITED' });
+    seedJob('qj-1', 'sp-1', { status: 'failed', retry_state: 'awaiting_retry', metadata: { other: 'kept', ...MARKER() } });
+    const updates: Row[] = [];
+    queueJobFault = (op, payload) => { if (op === 'update' && payload) updates.push({ ...payload }); return null; };
+
+    await processPublishJob(delivery('qj-1', 'sp-1', 1));
+
+    const claim = updates.find((u) => u.status === 'processing') as Row;
+    expect(claim.metadata).toEqual({ other: 'kept' });
+    const markerWrite = updates.find((u) => u.status === undefined && isMarkerWrite(u)) as Row;
+    expect(markerWrite).toBeDefined();
+    expect((markerWrite.metadata as Row).other).toBe('kept');
+    expect(updates.indexOf(markerWrite)).toBeGreaterThan(updates.indexOf(claim));
+    expect(publishesFor('sp-1')).toBe(1);
+  });
+
+  test('a cancel that lands between the claim and the marker: the platform is NOT called and the post claim is released', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    queueJobFault = (op, payload) => {
+      if (op === 'update' && isMarkerWrite(payload)) qjob('qj-1').status = 'cancelled';
+      return null;
+    };
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).rejects.toThrow('PUBLISH_ABORTED_JOB_NOT_PROCESSING');
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(qjob('qj-1').status).toBe('cancelled');
+    expect(post('sp-1').status).toBe('scheduled');
+  });
+
+  test('a marker write that FAILS: the platform is never called (a death during the call would otherwise be undetectable)', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    queueJobFault = (op, payload) =>
+      op === 'update' && isMarkerWrite(payload) ? { code: '08006', message: 'connection terminated' } : null;
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).rejects.toThrow('connection terminated');
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1').status).toBe('scheduled');
+  });
+});
