@@ -293,6 +293,16 @@ describe('reschedule — races and honest results', () => {
     expect(queueEffects()).toEqual([]);
   });
 
+  it('the post is unscheduled (status only) between the check and the re-time: 409, the cancelled post is not re-timed', async () => {
+    world();
+    mockBeforePostUpdate = () => { concurrentWrite(POST, { status: 'cancelled' }); };
+    const r = await reschedule('A');
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ code: 'SCHEDULED_POST_CHANGED_CONCURRENTLY' });
+    expect(post(POST)).toMatchObject({ status: 'cancelled', scheduled_for: ORIGINAL_AT });
+    expect(queueEffects()).toEqual([]);
+  });
+
   it('a failed re-queue is reported (502 QUEUE_REENQUEUE_FAILED), not a false 200 "re_enqueued"', async () => {
     world();
     mockReenqueueOk = false;

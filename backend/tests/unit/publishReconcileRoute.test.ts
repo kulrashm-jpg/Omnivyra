@@ -97,3 +97,17 @@ describe('POST /api/super-admin/publish/reconcile', () => {
     expect(mockReconcile).not.toHaveBeenCalled();
   });
 });
+
+describe('Closure-005 — the route itself requires platform authority (independent of the service)', () => {
+  it.each([
+    ['a direct dashboard-view grant', { userId: 'support-1', legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'org-a', role: 'COMPANY_ADMIN', status: 'active' }] }],
+    ['a legacy bridge principal', { userId: 'legacy-bridge', legacyCookieSuperAdmin: true, organizations: [] }],
+  ])('%s → 403 before the service is called; no audit', async (_who, principal) => {
+    mockRequireCapability.mockResolvedValue({ ok: true, principal });
+    const res = await call(BODY);
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ code: 'PLATFORM_SUPER_ADMIN_REQUIRED' });
+    expect(mockReconcile).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+});
