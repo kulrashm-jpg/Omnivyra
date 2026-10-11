@@ -52,6 +52,9 @@ jest.mock('../../db/writeOwner', () => ({
         filters[k] = v;
         return api;
       }),
+      // `.is()` — the cancel's processing-row predicate on metadata->platform_call
+      // (Closure-008 B4); rows here carry no metadata, so it never excludes one.
+      is: jest.fn((k: string, v: null) => { filters[k] = v; return api; }),
       order: jest.fn(() => api),
       limit: jest.fn(() => api),
       maybeSingle: jest.fn(async () => {

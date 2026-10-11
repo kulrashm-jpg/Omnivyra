@@ -171,8 +171,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const scheduledPostId: string | null = linkedPost?.id ?? null;
   const cancelReason = userReason ? `user_unscheduled:${userReason}` : 'user_unscheduled';
 
-  // ── Cancel the post (and, for a thread, its children), then its queue job,
-  // under the advisory lock that serializes with a concurrent reschedule ──
+  // ── Cancel the post (and, for a thread, its children), then its queue job.
+  // The queue lock taken below is NOT an exclusion guarantee (its fallback
+  // always acquires — see tryAcquireScheduledPostQueueLock); a concurrent
+  // reschedule is ordered by the post compare-and-set, which runs first ──
   let queueResult: Awaited<ReturnType<typeof cancelScheduledPostQueueEntry>> = { db_cancelled: 0, queue_removed: 0, errors: [] };
   let threadChildrenCancelled = 0;
   if (linkedPost) {

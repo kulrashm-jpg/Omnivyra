@@ -196,22 +196,49 @@ export async function enqueueScheduledPostAt(
   }
 
   const queue = getQueue();
-  await enqueueOrThrow(
-    queue,
-    'publish',
-    'publish',
-    {
-      scheduled_post_id: scheduledPostId,
-      social_account_id: socialAccountId,
-      user_id: userId,
-    },
-    {
-      jobId: queueJobId,
-      delay: delayMs,          // fires at the exact scheduled_for time
-      removeOnComplete: true,
-      removeOnFail: false,
-    },
-  );
+  try {
+    await enqueueOrThrow(
+      queue,
+      'publish',
+      'publish',
+      {
+        scheduled_post_id: scheduledPostId,
+        social_account_id: socialAccountId,
+        user_id: userId,
+      },
+      {
+        jobId: queueJobId,
+        delay: delayMs,          // fires at the exact scheduled_for time
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    );
+  } catch (enqueueError) {
+    // Closure-008 B1 — the row above is live ('pending') but nothing will
+    // run it: left in place it blocks this post's re-enqueue and the
+    // safety-net cron (both see a live row) until the drift sweep. Retire it,
+    // compare-and-set on the state this call created. 'cancelled' is the
+    // terminal, non-live state; if the add did reach Redis after all, the
+    // worker refuses a cancelled row, and the post — still 'scheduled' — is
+    // picked up by the safety-net. A retire that fails is left to the drift
+    // sweep; the enqueue error is reported either way.
+    try {
+      await ownedDbTable('queue_jobs')
+        .update({
+          status: 'cancelled',
+          error_message: `enqueue_failed:${(enqueueError as Error)?.message ?? 'unknown'}`,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', queueJobId)
+        .eq('status', 'pending');
+    } catch (retireError) {
+      console.warn('[enqueueScheduledPostAt] could not retire the row of a failed enqueue', {
+        queue_job_id: queueJobId,
+        message: (retireError as Error)?.message,
+      });
+    }
+    throw enqueueError;
+  }
 
   const firesAt = new Date(scheduledFor).toISOString();
   console.log(`[enqueueScheduledPostAt] post ${scheduledPostId} enqueued – fires in ${Math.round(delayMs / 1000)}s at ${firesAt}`);
@@ -219,14 +246,27 @@ export async function enqueueScheduledPostAt(
 }
 
 /**
- * Acquire a Postgres advisory lock keyed on a scheduled_post UUID.
+ * Try to take the scheduled-post queue lock.
  *
- * Uses `pg_advisory_xact_lock` (transaction-scoped) so the lock auto-releases
- * when the surrounding transaction commits/rollbacks. Since Supabase JS
- * doesn't expose transactions, we call an `rpc('try_scheduled_post_lock')`
- * helper that the DB exposes; if the RPC isn't present we fall back to a
- * lighter-weight optimistic check on `queue_jobs.updated_at` to detect
- * concurrent mutations.
+ * NOT A MUTUAL-EXCLUSION GUARANTEE (Closure-008 B3). Read this before relying
+ * on it:
+ *   - the RPC (migration 20260657) is a SESSION-scoped pg_try_advisory_lock
+ *     released by a separate RPC — not `pg_advisory_xact_lock` as this comment
+ *     used to say — and migration 20261009000000 records that it was never
+ *     applied. As written it also could not work through pooled PostgREST
+ *     connections (acquire and release may land on different sessions), and
+ *     its two-key call passes BIGINTs to a function whose two-key form takes
+ *     int4 (code review; not verified against a live database). Do not
+ *     deploy it as written.
+ *   - so the fallback runs, and it ALWAYS reports acquired:true (its
+ *     queue_jobs read is not compared with anything).
+ * Making the fallback fail closed would turn every unschedule and reschedule
+ * into a 409 (the RPC is never there). Callers must therefore be correct
+ * WITHOUT exclusion — and are: the post-level compare-and-sets (owner, status,
+ * error_code, platform_post_id, and updated_at for reschedule), the queue
+ * cancel's status compare-and-set, the live-row unique index, the post-level
+ * publish claim, and atomicCancelAndReEnqueueScheduledPost's check that a
+ * 'duplicate' live job is at the requested time.
  *
  * The lock is intentionally non-blocking: this is `pg_try_advisory_lock`
  * semantics, returning `acquired: false` immediately on contention so the
@@ -292,20 +332,119 @@ export async function tryAcquireScheduledPostQueueLock(
 }
 
 /**
+ * The scheduled_for of the post's live (pending/processing) queue row.
+ * scheduledFor is null when there is no live row; ok:false when unreadable.
+ */
+async function liveQueueJobScheduledFor(
+  scheduledPostId: string,
+): Promise<{ ok: true; scheduledFor: string | null } | { ok: false; reason: string }> {
+  try {
+    const { data, error } = await ownedDbTable('queue_jobs')
+      .select('id, scheduled_for')
+      .eq('scheduled_post_id', scheduledPostId)
+      .in('status', ['pending', 'processing'])
+      .limit(1);
+    if (error) return { ok: false, reason: error.message };
+    const row = Array.isArray(data) && data.length > 0 ? (data[0] as { scheduled_for?: string | null }) : null;
+    return { ok: true, scheduledFor: row?.scheduled_for ?? null };
+  } catch (lookupError) {
+    return { ok: false, reason: (lookupError as Error)?.message ?? 'unknown' };
+  }
+}
+
+/**
+ * Whether a queue_jobs.metadata value carries the platform-call marker — the
+ * 'platform_call' key queries.markQueueJobPlatformCallStarted writes
+ * (PLATFORM_CALL_MARKER_KEY), the same key the cancel's
+ * `metadata->platform_call` predicate reads.
+ */
+function hasPlatformCallMarker(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return false;
+  const marker = (metadata as Record<string, unknown>).platform_call;
+  return marker !== null && marker !== undefined;
+}
+
+export type QueueJobRollbackOutcome = 'restored' | 'skipped' | 'failed' | 'not_needed';
+
+/** BullMQ states in which a job will still be delivered to the worker. */
+const RUNNABLE_BULLMQ_STATES: ReadonlySet<string> = new Set(['delayed', 'waiting', 'prioritized']);
+
+/**
+ * Closure-008 B1 — restore the queue_job a reschedule cancelled, only when
+ * doing so is TRUE:
+ *   - never a row that was 'processing': a worker owned it, and it may already
+ *     have started the platform call; re-arming it is not a rollback;
+ *   - only when its BullMQ job still exists in a runnable state — a database
+ *     row saying 'pending' is not evidence that anything will run it;
+ *   - only while the row is still 'cancelled' (compare-and-set + read-back):
+ *     a worker that since completed it, or any other newer state, is never
+ *     overwritten, and terminal states are never reverted to 'pending'.
+ */
+async function restoreCancelledQueueJob(
+  prior: { id: string; status: string },
+  enqueueError: Error | null,
+): Promise<{ outcome: QueueJobRollbackOutcome; reason?: string }> {
+  if (prior.status === 'processing') {
+    return { outcome: 'skipped', reason: 'prior_job_was_processing' };
+  }
+  try {
+    const job = await getQueue().getJob(prior.id);
+    if (!job) return { outcome: 'skipped', reason: 'bullmq_job_removed' };
+    const state = typeof job.getState === 'function' ? String(await job.getState()) : 'unknown';
+    if (!RUNNABLE_BULLMQ_STATES.has(state)) {
+      return { outcome: 'skipped', reason: `bullmq_job_not_runnable:${state}` };
+    }
+  } catch (queueError) {
+    return { outcome: 'skipped', reason: `bullmq_unverifiable:${(queueError as Error)?.message ?? 'unknown'}` };
+  }
+  try {
+    // `ownedDbTable` RETURNS `{error}` rather than throwing: the result and
+    // the affected rows are both inspected, never assumed.
+    const { data: restoredRows, error: rollbackError } = await ownedDbTable('queue_jobs')
+      .update({
+        // A job captured while awaiting a BullMQ retry goes back to 'failed' —
+        // the state its retry_state (left untouched by the cancel) describes.
+        status: prior.status === 'failed' ? 'failed' : 'pending',
+        error_message: `rollback_from_atomic_reschedule:${enqueueError?.message ?? 'unknown'}`,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', prior.id)
+      .eq('status', 'cancelled')
+      .select('id');
+    if (rollbackError) return { outcome: 'failed', reason: `queue_jobs rollback update: ${rollbackError.message}` };
+    if (!Array.isArray(restoredRows) || restoredRows.length === 0) {
+      return { outcome: 'skipped', reason: 'queue_job_state_changed' };
+    }
+    console.warn('[atomic-reschedule][rollback]', {
+      restored_queue_job: prior.id,
+      reason: enqueueError?.message ?? 'unknown',
+    });
+    return { outcome: 'restored' };
+  } catch (rollbackError) {
+    return { outcome: 'failed', reason: (rollbackError as Error)?.message ?? 'unknown' };
+  }
+}
+
+/**
  * Atomic cancel + enqueue. Wraps the existing cancel + enqueue helpers
  * with:
- *   - an advisory lock on the scheduled_post (best-effort; falls back to
- *     optimistic detection when the lock RPC isn't deployed)
+ *   - the scheduled-post queue lock — NOT an exclusion guarantee (see
+ *     tryAcquireScheduledPostQueueLock); correctness rests on the
+ *     compare-and-sets and on step 2a below
  *   - idempotency keys derived from `${scheduledPostId}:${scheduledFor}`
  *     so a retry can't double-enqueue
- *   - structured rollback: if enqueue fails after cancel, the prior
- *     queue_job is restored to `pending` so the safety-net cron will
- *     still publish at the OLD time. This avoids stranding the post
- *     entirely on a partial failure.
+ *   - guarded rollback (Closure-008): if enqueue fails after cancel, the
+ *     prior queue_job is restored ONLY when its BullMQ job demonstrably still
+ *     exists in a runnable state AND the row is still the 'cancelled' row this
+ *     cancel left (compare-and-set). The cancel normally REMOVES the BullMQ
+ *     job, so the usual outcome is 'skipped': restoring the row then would
+ *     create a live 'pending' row with nothing to run it, which blocks
+ *     re-enqueue and the safety-net cron until the drift sweep. The post
+ *     already carries the new time; the caller records the failure and the
+ *     safety-net cron / a repeated reschedule enqueues it.
  *
- * Returns a small report describing the operation. Callers (reschedule
- * API) should treat the operation as successful even on lock contention
- * — the 409 is surfaced by the caller's revision check.
+ * Returns a small report describing the operation; ok:false whenever the
+ * post's live queue job is not demonstrably the one requested here.
  */
 export async function atomicCancelAndReEnqueueScheduledPost(input: {
   scheduledPostId: string;
@@ -318,7 +457,11 @@ export async function atomicCancelAndReEnqueueScheduledPost(input: {
   locked: boolean;
   cancel: { db_cancelled: number; queue_removed: number; errors: string[] };
   enqueue: 'enqueued' | 'duplicate' | 'past' | 'failed';
-  rollback?: 'attempted' | 'not_needed';
+  rollback?: QueueJobRollbackOutcome;
+  /** Why a rollback was skipped or failed (absent when restored / not needed). */
+  rollback_reason?: string;
+  /** Set when enqueue said 'duplicate' but the live job is not at the requested time (ok:false). */
+  duplicate_conflict?: string;
   idempotency_key: string;
 }> {
   const idempotencyKey = `reschedule:${input.scheduledPostId}:${new Date(input.newScheduledFor).getTime()}`;
@@ -343,7 +486,12 @@ export async function atomicCancelAndReEnqueueScheduledPost(input: {
         .eq('scheduled_post_id', input.scheduledPostId)
         .in('status', ['pending', 'processing'])
         .maybeSingle();
-      if (data) priorQueueJob = data as any;
+      // Copied, not referenced: the restore below decides on the state seen
+      // HERE (before the cancel), never on whatever the row says afterwards.
+      if (data) {
+        const row = data as { id: string; status: string; scheduled_for: string | null };
+        priorQueueJob = { id: String(row.id), status: String(row.status), scheduled_for: row.scheduled_for ?? null };
+      }
     } catch { /* swallow — best effort */ }
     // A job waiting in BullMQ backoff is the live job for the gate below just
     // as a pending one is: if the cancel cannot retire it, it will still fire.
@@ -420,52 +568,47 @@ export async function atomicCancelAndReEnqueueScheduledPost(input: {
       enqueueResult = 'failed';
     }
 
-    // ── 3. Rollback on partial failure ─────────────────────────────────
-    if (enqueueResult === 'failed' && priorQueueJob) {
-      try {
-        // The result is inspected for the same reason the cancel above inspects
-        // its own: `ownedDbTable` is a passthrough to supabase.from(), which
-        // RETURNS `{error}` rather than throwing, so the surrounding try/catch
-        // can never see a PostgREST failure. Reporting `rollback: 'attempted'`
-        // on an unchecked write is how a silent failure gets recorded as a
-        // successful one — the exact pattern this release exists to remove.
-        const { error: rollbackError } = await ownedDbTable('queue_jobs')
-          // Same deployed-column mapping as the cancel above. `completed_at:
-          // null` was a no-op clear of a column that does not exist; there is
-          // nothing to clear, because restoring `status` to 'pending' IS what
-          // returns the row to the live set. `updated_at` already carries the
-          // transition time.
-          .update({
-            // A job captured while awaiting a BullMQ retry goes back to
-            // 'failed' — the state its retry_state (left untouched by the
-            // cancel) describes — not to 'pending', which it never was.
-            status: priorQueueJob.status === 'failed' ? 'failed' : 'pending',
-            error_message: `rollback_from_atomic_reschedule:${enqueueError?.message ?? 'unknown'}`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', priorQueueJob.id);
-        if (rollbackError) {
-          throw new Error(`queue_jobs rollback update: ${rollbackError.message}`);
-        }
-        console.warn('[atomic-reschedule][rollback]', {
-          scheduled_post_id: input.scheduledPostId,
-          restored_queue_job: priorQueueJob.id,
-          reason: enqueueError?.message ?? 'unknown',
-        });
+    // ── 2a. A 'duplicate' after OUR cancel is success only if it is OUR time ─
+    // Closure-008 B3. The queue lock is not a mutual-exclusion guarantee (its
+    // fallback always acquires), so a concurrent reschedule of the same post
+    // can insert its live row between our cancel and our insert. The unique
+    // index then rejects ours as 'duplicate' — which used to be reported as
+    // ok:true while the only live job fires at the OTHER request's time. A
+    // duplicate is accepted only when the live row is for exactly the time
+    // requested here (an identical concurrent reschedule); otherwise it is a
+    // reported failure, and the caller's repeat-reschedule recovery applies.
+    if (enqueueResult === 'duplicate') {
+      const live = await liveQueueJobScheduledFor(input.scheduledPostId);
+      const requestedAt = new Date(input.newScheduledFor).getTime();
+      const sameTime = live.ok === true && live.scheduledFor !== null
+        && new Date(live.scheduledFor).getTime() === requestedAt;
+      if (!sameTime) {
         return {
           ok: false,
           locked: true,
           cancel: cancelResult,
-          enqueue: 'failed',
-          rollback: 'attempted',
+          enqueue: 'duplicate',
+          rollback: 'not_needed',
+          duplicate_conflict: live.ok === true
+            ? (live.scheduledFor === null ? 'no_live_job_at_requested_time' : 'live_job_for_another_time')
+            : `live_job_unverifiable:${live.reason}`,
           idempotency_key: idempotencyKey,
         };
-      } catch (rollbackError) {
-        console.warn('[atomic-reschedule][rollback-failed]', {
-          scheduled_post_id: input.scheduledPostId,
-          message: (rollbackError as Error)?.message,
-        });
       }
+    }
+
+    // ── 3. Guarded rollback on partial failure ─────────────────────────
+    if (enqueueResult === 'failed' && priorQueueJob) {
+      const rollback = await restoreCancelledQueueJob(priorQueueJob, enqueueError);
+      return {
+        ok: false,
+        locked: true,
+        cancel: cancelResult,
+        enqueue: 'failed',
+        rollback: rollback.outcome,
+        ...(rollback.reason ? { rollback_reason: rollback.reason } : {}),
+        idempotency_key: idempotencyKey,
+      };
     }
 
     return {
@@ -473,7 +616,9 @@ export async function atomicCancelAndReEnqueueScheduledPost(input: {
       locked: true,
       cancel: cancelResult,
       enqueue: enqueueResult,
-      rollback: enqueueResult === 'failed' ? 'attempted' : 'not_needed',
+      // Nothing was captured to restore (or nothing failed): never report an
+      // 'attempted' rollback that did not happen.
+      rollback: 'not_needed',
       idempotency_key: idempotencyKey,
     };
   } finally {
@@ -488,9 +633,10 @@ export async function atomicCancelAndReEnqueueScheduledPost(input: {
  * fire at the old time after the row has been retimed (or removed).
  *
  * Behavior:
- *   1. Marks the matching `queue_jobs` rows (status ∈ pending/processing)
- *      as `status='cancelled'` so the persistence layer reflects the
- *      cancellation.
+ *   1. Marks the matching `queue_jobs` rows as `status='cancelled'`: every
+ *      pending row, and every processing row whose platform call has NOT
+ *      started (Closure-008 B4). A processing row whose call started stays
+ *      with its worker and is listed in `call_started_not_cancelled`.
  *   2. Removes the BullMQ job by its `jobId` (queue_jobs row ID) — ONLY if
  *      step 1 landed. BullMQ job removal is idempotent — missing jobs report
  *      null without throwing.
@@ -510,8 +656,9 @@ export async function atomicCancelAndReEnqueueScheduledPost(input: {
 export async function cancelScheduledPostQueueEntry(
   scheduledPostId: string,
   options: { reason?: string } = {},
-): Promise<{ db_cancelled: number; queue_removed: number; errors: string[] }> {
-  const result = { db_cancelled: 0, queue_removed: 0, errors: [] as string[] };
+): Promise<{ db_cancelled: number; queue_removed: number; errors: string[]; call_started_not_cancelled?: string[] }> {
+  const result: { db_cancelled: number; queue_removed: number; errors: string[]; call_started_not_cancelled?: string[] } =
+    { db_cancelled: 0, queue_removed: 0, errors: [] };
 
   // ── 1. Mark queue_jobs rows cancelled ──────────────────────────────────
   let pendingIds: string[] = [];
@@ -573,22 +720,61 @@ export async function cancelScheduledPostQueueEntry(
       // is the same "count what you intended, not what persisted" mistake that
       // let the original cancellation failure stay invisible. It must come from
       // the affected rows.
-      const { data: cancelledRows, error: updateError } = await ownedDbTable('queue_jobs')
-        .update({
-          status: 'cancelled',
-          error_message: options.reason ?? 'queue_entry_cancelled',
-          updated_at: new Date().toISOString(),
-        })
+      //
+      // Closure-008 B4 — two compare-and-sets, not one. A 'pending' row is
+      // always cancellable. A 'processing' row is cancellable ONLY while its
+      // platform-call marker (queue_jobs.metadata.platform_call, written by
+      // markQueueJobPlatformCallStarted under status='processing') is absent:
+      // once the call has started, marking the row cancelled would make the
+      // queue record claim nothing happened while the worker's outcome — a
+      // publish, a failure, or an UNCERTAIN result — is still being written.
+      // Such a row is left to its worker (and reported below); the race is
+      // closed in both orders, because the marker write itself requires
+      // status='processing'.
+      const cancelPatch = {
+        status: 'cancelled',
+        error_message: options.reason ?? 'queue_entry_cancelled',
+        updated_at: new Date().toISOString(),
+      };
+      const pendingCancel = await ownedDbTable('queue_jobs')
+        .update(cancelPatch)
         .in('id', pendingIds)
-        .in('status', ['pending', 'processing'])
+        .eq('status', 'pending')
         .select('id');
+      const processingCancel = pendingCancel.error
+        ? null
+        : await ownedDbTable('queue_jobs')
+          .update(cancelPatch)
+          .in('id', pendingIds)
+          .eq('status', 'processing')
+          .is('metadata->platform_call', null)
+          .select('id');
+      const updateError = pendingCancel.error ?? processingCancel?.error ?? null;
+      const cancelledRows = [
+        ...(Array.isArray(pendingCancel.data) ? pendingCancel.data : []),
+        ...(Array.isArray(processingCancel?.data) ? processingCancel!.data : []),
+      ];
+      cancelledIds = cancelledRows
+        .map((r) => String((r as { id: string }).id))
+        .filter(Boolean);
+      result.db_cancelled = cancelledIds.length;
       if (updateError) {
         result.errors.push(`queue_jobs cancel update: ${updateError.message}`);
       } else {
-        cancelledIds = (Array.isArray(cancelledRows) ? cancelledRows : [])
-          .map((r) => String((r as { id: string }).id))
-          .filter(Boolean);
-        result.db_cancelled = cancelledIds.length;
+        // Rows still live after both writes: a processing row whose platform
+        // call has started (or one a worker moved meanwhile). Re-read so the
+        // report names only rows that are genuinely call-started.
+        const leftover = pendingIds.filter((id) => !cancelledIds.includes(id));
+        if (leftover.length > 0) {
+          const { data: still } = await ownedDbTable('queue_jobs')
+            .select('id, status, metadata')
+            .in('id', leftover)
+            .eq('status', 'processing');
+          const callStarted = (Array.isArray(still) ? still : [])
+            .filter((r) => hasPlatformCallMarker((r as { metadata?: unknown }).metadata))
+            .map((r) => String((r as { id: string }).id));
+          if (callStarted.length > 0) result.call_started_not_cancelled = callStarted;
+        }
       }
     } catch (updateError) {
       result.errors.push(`queue_jobs cancel update threw: ${(updateError as Error)?.message ?? 'unknown'}`);

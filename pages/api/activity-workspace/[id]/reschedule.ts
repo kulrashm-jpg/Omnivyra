@@ -776,8 +776,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //   - takes the scheduled_post queue lock. NOT a mutual-exclusion
     //     guarantee (Closure-006): its fallback always acquires. Concurrent
     //     reschedules are serialized by the updated_at compare-and-set above.
-    //   - rolls back the cancel if the new enqueue fails (the old job is
-    //     restored to `pending` so the safety-net cron still publishes)
+    //   - on a failed enqueue, restores the old job ONLY if its BullMQ job
+    //     still exists and the row is still cancelled (Closure-008); usually
+    //     the cancel removed it, and the safety-net cron enqueues the post
+    //     at its new time once due (no live row is left to block it)
     //   - includes an idempotency key derived from the new scheduled_for
     if (newScheduledAtIso) {
       // The post's OWNER and account, from the guarded read (the owner is
