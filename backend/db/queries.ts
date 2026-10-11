@@ -13,6 +13,7 @@
 
 import { supabase } from './supabaseClient';
 import { isRetryStateColumnMissing, PUBLISH_OUTCOME_UNCERTAIN } from '../queue/publishRetryState';
+import { PUBLISH_CALL_STARTED } from '../queue/publishOutcome';
 
 export interface QueueJob {
   id: string;
@@ -252,7 +253,7 @@ export async function markQueueJobPlatformCallStarted(
  */
 export async function markQueueJobOutcomeUncertain(
   jobId: string,
-  snapshot: { updated_at?: string | null; retry_state?: string | null },
+  snapshot: { status?: string | null; updated_at?: string | null; retry_state?: string | null },
   message: string,
 ): Promise<boolean> {
   const payload: Record<string, unknown> = {
@@ -262,10 +263,78 @@ export async function markQueueJobOutcomeUncertain(
     updated_at: new Date().toISOString(),
   };
   if (Object.prototype.hasOwnProperty.call(snapshot, 'retry_state')) payload.retry_state = 'exhausted';
-  let query = supabase.from('queue_jobs').update(payload).eq('id', jobId).eq('status', 'processing');
+  // Compare-and-set on the status that was read ('processing' when the
+  // snapshot does not say), pinned by updated_at below.
+  const expectedStatus = snapshot.status ?? 'processing';
+  let query = supabase.from('queue_jobs').update(payload).eq('id', jobId).eq('status', expectedStatus);
   query = snapshot.updated_at ? query.eq('updated_at', snapshot.updated_at) : query.is('updated_at', null);
   const { data, error } = await query.select('id');
   if (error) throw new Error(`Failed to record uncertain outcome for queue job ${jobId}: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Record an uncertain outcome on a queue job THIS delivery holds ('processing',
+ * claimed by it — so no updated_at pin). Failed, never retried automatically:
+ * the processor refuses a failed row carrying the code, and retry_state is set
+ * to 'exhausted' where the column exists. Returns false when the row is no
+ * longer 'processing' (a cancel landed); throws on a write error.
+ */
+export async function recordHeldQueueJobOutcomeUncertain(jobId: string, message: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('queue_jobs')
+    .update({
+      status: 'failed',
+      error_code: PUBLISH_OUTCOME_UNCERTAIN,
+      error_message: message,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId)
+    .eq('status', 'processing')
+    .select('id');
+  if (error) throw new Error(`Failed to record uncertain outcome for queue job ${jobId}: ${error.message}`);
+  const applied = Array.isArray(data) && data.length > 0;
+  if (applied) await recordQueueJobRetryState(jobId, 'exhausted');
+  return applied;
+}
+
+/**
+ * Record — compare-and-set on 'publishing', immediately before the platform
+ * call — that THIS attempt is calling the platform for the post (durable
+ * per-row marker, see backend/queue/publishOutcome.ts). Zero rows means the
+ * row is no longer held as 'publishing' and the caller must NOT call the
+ * platform; a write error throws for the same reason.
+ */
+export async function markScheduledPostPlatformCallStarted(postId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('scheduled_posts')
+    .update({ error_code: PUBLISH_CALL_STARTED, updated_at: new Date().toISOString() })
+    .eq('id', postId)
+    .eq('status', 'publishing')
+    .select('id');
+  if (error) throw new Error(`Failed to record platform-call start for scheduled post ${postId}: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Record that a post's publish outcome is unknown: failed, with
+ * PUBLISH_OUTCOME_UNCERTAIN. Only over a row whose outcome is still unrecorded
+ * — never a 'published' row or one carrying a platform_post_id.
+ */
+export async function markScheduledPostOutcomeUncertain(postId: string, message: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('scheduled_posts')
+    .update({
+      status: 'failed',
+      error_code: PUBLISH_OUTCOME_UNCERTAIN,
+      error_message: message,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', postId)
+    .in('status', ['publishing', 'failed'])
+    .is('platform_post_id', null)
+    .select('id');
+  if (error) throw new Error(`Failed to record uncertain outcome for scheduled post ${postId}: ${error.message}`);
   return Array.isArray(data) && data.length > 0;
 }
 
@@ -454,6 +523,8 @@ export async function updateScheduledPostOnPublish(
     post_url: postUrl,
     published_at: publishedAt?.toISOString() || new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    // The outcome is now known: clear any attempt marker or earlier failure code.
+    error_code: null,
   };
 
   let applied = true;
@@ -510,12 +581,17 @@ export async function updateScheduledPostOnFailure(
   postId: string,
   errorMessage: string,
   expectedFromStatus?: string,
+  errorCode?: string,
 ): Promise<ScheduledPostTerminalWriteResult> {
-  const updatePayload = {
+  const updatePayload: Record<string, unknown> = {
     status: 'failed',
     error_message: errorMessage,
     updated_at: new Date().toISOString(),
   };
+  // Written in the SAME update as the status when given, so a failed row never
+  // exists without its classification (a code-less failure reads as uncertain
+  // on thread nodes — see backend/queue/publishOutcome.ts).
+  if (errorCode) updatePayload.error_code = errorCode;
 
   if (expectedFromStatus) {
     const { data, error } = await supabase

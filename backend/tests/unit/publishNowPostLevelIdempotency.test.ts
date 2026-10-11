@@ -140,7 +140,10 @@ jest.mock('../../adapters/platformAdapter', () => ({
     // what makes a real publish outlive a single 60s cron tick.
     await new Promise((r) => setTimeout(r, 15));
     if (platformOutcome === 'failure') {
-      return { success: false, error: { code: 'RATE_LIMITED', message: 'slow down', retryable: true } };
+      // A real adapter code for an explicit 429 rejection (linkedinAdapter).
+      // (Was the made-up 'RATE_LIMITED', which no adapter emits — an unknown
+      // code is now an uncertain outcome; see backend/queue/publishOutcome.ts.)
+      return { success: false, error: { code: 'LINKEDIN_RATE_LIMIT', message: 'slow down', retryable: true } };
     }
     return {
       success: true,
@@ -387,8 +390,11 @@ describe('publishNow — post-level publish claim (direct path: cron + manual)',
   test('an unexpected throw CAS-restores the pre-claim status, so nothing is stranded', async () => {
     seedPost('sp-1');
 
-    const adapter = require('../../adapters/platformAdapter');
-    adapter.publishToPlatform.mockImplementationOnce(async () => { throw new Error('socket hang up'); });
+    // Thrown after the claim but BEFORE the platform call (nothing was sent),
+    // where restoring the claim is correct. A throw from the platform call
+    // itself is an uncertain outcome instead — see "Closure-002 R5" below.
+    const media = require('../../services/mediaReferenceResolver');
+    media.refreshDurableMediaBeforePublish.mockImplementationOnce(async () => { throw new Error('socket hang up'); });
 
     await expect(run('sp-1')).rejects.toThrow('socket hang up');
 
@@ -527,5 +533,59 @@ describe('D2 — a suppressed result is machine-distinguishable from a real fail
     const result = await run('sp-1', 'scheduler');
     expect(result.status).toBe('PUBLISHED');
     expect(result.suppressed).toBeUndefined();
+  });
+});
+
+// ─── Closure-002 R5 — the direct publish path (cron safety net, publish-now) ──
+//
+// The cron re-selects every 'scheduled' row, so a row put back to 'scheduled'
+// after a call that may have reached the platform is an AUTOMATIC duplicate.
+
+describe('Closure-002 R5 — ambiguous outcomes on the direct path', () => {
+  const adapter = (): { publishToPlatform: jest.Mock } => require('../../adapters/platformAdapter');
+
+  test('an adapter throw: the row is recorded uncertain, NOT restored to scheduled — the cron cannot re-select it', async () => {
+    seedPost('sp-1');
+    adapter().publishToPlatform.mockImplementationOnce(async (id: string) => {
+      platformCalls.push(id);
+      throw new Error('socket hang up');
+    });
+
+    await expect(run('sp-1')).rejects.toThrow('socket hang up');
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN', platform_post_id: null });
+    expect(cronWouldSelect()).toEqual([]);
+    expect(publishesFor('sp-1')).toBe(1);
+  });
+
+  test('an ambiguous adapter failure is recorded with the uncertain code (not the categorised one)', async () => {
+    seedPost('sp-1');
+    adapter().publishToPlatform.mockImplementationOnce(async (id: string) => {
+      platformCalls.push(id);
+      return { success: false, error: { code: 'LINKEDIN_NETWORK_ERROR', message: 'reset', retryable: true } };
+    });
+
+    const r = await run('sp-1', 'scheduler');
+    expect(r.status).toBe('FAILED');
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    expect(String(post('sp-1').error_message)).toContain('check the platform');
+    expect(cronWouldSelect()).toEqual([]);
+  });
+
+  test('a confirmed rejection keeps its own code', async () => {
+    seedPost('sp-1');
+    platformOutcome = 'failure';
+    await run('sp-1', 'scheduler');
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+  });
+
+  test('the success write fails after the platform accepted: uncertain, not restored', async () => {
+    seedPost('sp-1');
+    const queries = require('../../db/queries');
+    const spy = jest.spyOn(queries, 'updateScheduledPostOnPublish').mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(run('sp-1')).rejects.toThrow('connection terminated');
+    spy.mockRestore();
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    expect(cronWouldSelect()).toEqual([]);
   });
 });

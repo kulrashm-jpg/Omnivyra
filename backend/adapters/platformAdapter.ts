@@ -68,6 +68,10 @@ export async function publishToPlatform(
 ): Promise<PublishResult> {
   console.log(`🚀 Publishing post ${scheduledPostId} via account ${socialAccountId}`);
 
+  // Set immediately before control passes to a platform adapter. A throw that
+  // lands in the catch below before then provably sent nothing; one after it
+  // may have escaped an adapter after its create-post request went out.
+  let dispatched = false;
   try {
     // Step 1: Fetch scheduled post
     const scheduledPost = await getScheduledPost(scheduledPostId);
@@ -108,6 +112,7 @@ export async function publishToPlatform(
           code: failure.code,
           message: failure.message,
           retryable: false,
+          delivery: 'not_sent',
         },
       };
     }
@@ -197,6 +202,7 @@ export async function publishToPlatform(
     // Step 5: Route to platform-specific adapter
     let result: PublishResult;
 
+    dispatched = true;
     switch (platform) {
       case 'linkedin':
         result = await publishToLinkedIn(scheduledPost, socialAccount, token);
@@ -245,6 +251,7 @@ export async function publishToPlatform(
         code: 'PUBLISH_ERROR',
         message: error.message,
         retryable: true, // Most errors are retryable
+        ...(dispatched ? {} : { delivery: 'not_sent' as const }),
       },
     };
   }

@@ -47,7 +47,16 @@ import {
   getScheduledPost,
   updateScheduledPostOnPublish,
   updateScheduledPostOnFailure,
+  markScheduledPostPlatformCallStarted,
+  markScheduledPostOutcomeUncertain,
+  recordHeldQueueJobOutcomeUncertain,
 } from '../../db/queries';
+import {
+  classifyPublishAttempt,
+  publishOutcomeBlocksAttempt,
+  PUBLISH_CALL_STARTED,
+  PUBLISH_OUTCOME_UNCERTAIN_MESSAGE,
+} from '../publishOutcome';
 import { publishToPlatform } from '../../adapters/platformAdapter';
 import { publishThread } from '../../services/threadRuntime/threadPublishOrchestrator';
 import { validatePublishReadiness } from '../../services/publishReadinessValidator';
@@ -259,6 +268,12 @@ async function processPublishJobInner(params: {
   // Set once this execution owns the post-level claim, so the catch block
   // knows whether it has anything to give back.
   let heldClaimFromStatus: string | null = null;
+  // Set once this execution has recorded that it is calling the platform. From
+  // then on an unexpected throw must NOT give the claim back for a retry: the
+  // request may have created the post (see backend/queue/publishOutcome.ts).
+  let platformCallStarted = false;
+  // The id the platform returned, kept so an uncertain record can carry it.
+  let confirmedPlatformPostId: string | null = null;
 
   try {
     // Step 1: Idempotency check - verify job not already processed
@@ -393,6 +408,40 @@ async function processPublishJobInner(params: {
       });
       console.warn(`⚠️ Job ${jobId}: ${PUBLISH_OUTCOME_UNCERTAIN} for scheduled_post ${scheduled_post_id} — not republishing`);
       return;
+    }
+
+    // Uncertain outcome recorded ON THE POST — by any execution, not just this
+    // job: an ambiguous adapter failure, a sweep, a publish-now attempt, or the
+    // previous sweeper leaving PUBLISH_CALL_STARTED behind. Whatever queue job
+    // is delivering now (fresh, in backoff, or a stale re-delivery without its
+    // own marker), it must not call the platform for this post. Thread roots
+    // are checked per node by the orchestrator instead.
+    if (scheduledPost.is_thread_start !== true) {
+      const postEvidence = scheduledPost as { status?: string | null; error_code?: string | null; platform_post_id?: string | null };
+      const blockedBy = publishOutcomeBlocksAttempt(postEvidence);
+      if (blockedBy === 'uncertain') {
+        const marked = await markQueueJobOutcomeUncertain(jobId as string, queueJob, PUBLISH_OUTCOME_UNCERTAIN_MESSAGE);
+        if (postEvidence.error_code === PUBLISH_CALL_STARTED) {
+          await markScheduledPostOutcomeUncertain(scheduled_post_id, PUBLISH_OUTCOME_UNCERTAIN_MESSAGE);
+        }
+        await createQueueJobLog(jobId as string, 'warn', 'Post publish outcome uncertain — not publishing', {
+          scheduled_post_id, post_error_code: postEvidence.error_code, job_marked: marked,
+        });
+        console.warn(`⚠️ Job ${jobId}: scheduled_post ${scheduled_post_id} has an uncertain outcome — not publishing`);
+        return;
+      }
+      if (blockedBy === 'in_flight' && postEvidence.error_code === PUBLISH_CALL_STARTED) {
+        // Another execution is calling (or died calling) the platform for this
+        // post. The post-level stale-claim takeover below would let this job
+        // call it again; stop here instead. The sweeper labels a dead hold.
+        const message = 'Duplicate publish suppressed (another execution started the platform call)';
+        await updateQueueJobStatus(jobId as string, 'completed', {
+          result_data: { message, suppressed: true, reason: 'platform_call_started' },
+        });
+        await createQueueJobLog(jobId as string, 'warn', message, { scheduled_post_id });
+        console.warn(`⚠️ Job ${jobId}: ${message} — scheduled_post ${scheduled_post_id}`);
+        return;
+      }
     }
 
     // ── Step 3: PER-POST publish authorization (R2-IMPL B1) ────────────────
@@ -614,6 +663,24 @@ async function processPublishJobInner(params: {
         return;
       }
 
+      // Stopped at a node whose outcome is unknown or still in flight. A
+      // BullMQ retry would only reach the same node again — or, worse, an
+      // older build would republish it — so this job ends here, failed with
+      // the uncertain code and no retry. A person reconciles the node, then
+      // resumes the thread.
+      if (threadResult.uncertain) {
+        const uncertainMessage = threadResult.message || PUBLISH_OUTCOME_UNCERTAIN_MESSAGE;
+        await recordHeldQueueJobOutcomeUncertain(jobId as string, uncertainMessage);
+        await createQueueJobLog(
+          jobId as string,
+          'warn',
+          `Thread stopped at position ${threadResult.failed_at_position ?? '?'}: outcome uncertain — not retrying`,
+          { root_id: threadResult.root_id, failed_at_position: threadResult.failed_at_position },
+        );
+        console.warn(`⚠️ Thread ${threadResult.root_id}: ${uncertainMessage}`);
+        return;
+      }
+
       // FAILED — orchestrator already set the failed row to status='failed'
       // and marked downstream rows as 'blocked'. Bridge into the queue's
       // retry semantics: mark queue_job 'failed' with the same exponential
@@ -657,17 +724,51 @@ async function processPublishJobInner(params: {
       throw abortError;
     }
 
-    console.log(`🚀 Publishing to platform via adapter...`);
-    const result = await publishToPlatform(scheduled_post_id, social_account_id);
+    // The same evidence ON THE POST, which every path reads (the queue marker
+    // is this job's alone). Compare-and-set on 'publishing': zero rows means
+    // this execution no longer holds the post and must not call the platform.
+    const postCallRecorded = await markScheduledPostPlatformCallStarted(scheduled_post_id);
+    if (!postCallRecorded) {
+      const abortError: Error & { skipQueueStatusUpdate?: true } = new Error('PUBLISH_ABORTED_POST_NOT_HELD');
+      abortError.skipQueueStatusUpdate = true;
+      throw abortError;
+    }
 
-    if (result.success && result.platform_post_id) {
+    console.log(`🚀 Publishing to platform via adapter...`);
+    platformCallStarted = true;
+    const result = await publishToPlatform(scheduled_post_id, social_account_id);
+    const attemptOutcome = classifyPublishAttempt(result);
+
+    // The request may have created the post (5xx, network loss, timeout, an
+    // escaped throw, a success with no id). `retryable: true` is not evidence
+    // that a retry is safe. Record the uncertainty and end the job WITHOUT a
+    // BullMQ retry; a person checks the platform and reconciles.
+    if (attemptOutcome === 'ambiguous') {
+      const detail = result.error?.message
+        ? ` Adapter said: ${result.error.message}`
+        : result.success ? ' The platform reported success without a post id.' : '';
+      const uncertainMessage = `${PUBLISH_OUTCOME_UNCERTAIN_MESSAGE}${detail}`;
+      heldClaimFromStatus = null; // never give this claim back for a retry
+      await markScheduledPostOutcomeUncertain(scheduled_post_id, uncertainMessage);
+      await recordHeldQueueJobOutcomeUncertain(jobId as string, uncertainMessage);
+      await createQueueJobLog(jobId as string, 'warn', 'Publish outcome uncertain after the platform call — not retrying', {
+        scheduled_post_id, adapter_error: result.error ?? null,
+      });
+      console.warn(`⚠️ Job ${jobId}: ${PUBLISH_OUTCOME_UNCERTAIN} for scheduled_post ${scheduled_post_id} — not retrying`);
+      return;
+    }
+
+    if (attemptOutcome === 'published' && result.platform_post_id) {
       // Step 6: Success - update scheduled_posts
+      confirmedPlatformPostId = result.platform_post_id;
       await updateScheduledPostOnPublish(
         scheduled_post_id,
         result.platform_post_id,
         result.post_url || '',
         result.published_at
       );
+      // The outcome is durable now; a later throw is an ordinary one.
+      platformCallStarted = false;
       // P1-B — advance variant experiment tracker. Mirrors the pattern
       // used in publishNowService. Best-effort; failures never block
       // publish success.
@@ -754,13 +855,20 @@ async function processPublishJobInner(params: {
         void checkAndCompleteCampaignIfEligible(scheduledPost.campaign_id).catch(() => {});
       }
     } else {
-      // Step 8: Failure - categorize error and update scheduled_posts status
+      // Step 8: Failure - categorize error and update scheduled_posts status.
+      // Only reached for a CONFIRMED rejection or pre-send failure
+      // (classifyPublishAttempt === 'not_created'): the platform created
+      // nothing, so the ordinary retry policy applies and the deliberate throw
+      // below is not an uncertain outcome.
+      platformCallStarted = false;
       const platformError = categorizeError(
         scheduledPost.platform,
         result.error || { message: 'Unknown error' }
       );
 
-      await updateScheduledPostOnFailure(scheduled_post_id, platformError.user_message);
+      // The code lands in the same update as the status (and replaces the
+      // PUBLISH_CALL_STARTED marker), so the row is never failed-without-code.
+      await updateScheduledPostOnFailure(scheduled_post_id, platformError.user_message, undefined, platformError.code);
       
       // Update scheduled_post with error code
       await supabase
@@ -794,6 +902,36 @@ async function processPublishJobInner(params: {
     }
   } catch (error: any) {
     console.error(`❌ Error processing job ${jobId}:`, error.message);
+
+    // A throw AFTER the platform call started and before its outcome was saved
+    // (the adapter threw, the success write failed, ...): the post may be live.
+    // Giving the claim back and letting BullMQ retry is exactly the duplicate
+    // this must prevent. Record the uncertainty and end the job — no rethrow,
+    // so no retry. Never inferred as success from the marker; only a saved
+    // platform_post_id is success.
+    if (platformCallStarted) {
+      platformCallStarted = false;
+      heldClaimFromStatus = null;
+      const known = confirmedPlatformPostId
+        ? ` The platform returned post id ${confirmedPlatformPostId} but saving it failed.`
+        : '';
+      const uncertainMessage = `${PUBLISH_OUTCOME_UNCERTAIN_MESSAGE}${known} (${error?.message ?? 'unexpected error'})`;
+      try {
+        await markScheduledPostOutcomeUncertain(scheduled_post_id, uncertainMessage);
+      } catch (writeError) {
+        // The post keeps PUBLISH_CALL_STARTED, which every reader treats as uncertain.
+        console.error('[publishProcessor] uncertain-outcome post write failed:', writeError instanceof Error ? writeError.message : String(writeError));
+      }
+      try {
+        await recordHeldQueueJobOutcomeUncertain(jobId as string, uncertainMessage);
+      } catch (writeError) {
+        console.error('[publishProcessor] uncertain-outcome job write failed:', writeError instanceof Error ? writeError.message : String(writeError));
+      }
+      await createQueueJobLog(jobId as string, 'warn', 'Publish outcome uncertain (error after the platform call) — not retrying', {
+        scheduled_post_id, error: error?.message ?? null, platform_post_id: confirmedPlatformPostId,
+      });
+      return;
+    }
 
     // Give the post-level claim back before anything else. A compare-and-set
     // on 'publishing', so it is a no-op when a terminal status was already

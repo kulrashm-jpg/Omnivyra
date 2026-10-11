@@ -249,7 +249,11 @@ jest.mock('../../adapters/platformAdapter', () => ({
       await hook();
     }
     if (platformOutcome === 'failure') {
-      return { success: false, error: { code: 'RATE_LIMITED', message: 'slow down', retryable: true } };
+      // A real adapter code for an explicit 429 rejection (linkedinAdapter): a
+      // CONFIRMED "nothing was created" failure, which retries. (Was the
+      // made-up 'RATE_LIMITED', which no adapter emits — an unknown code is now
+      // an uncertain outcome; see backend/queue/publishOutcome.ts.)
+      return { success: false, error: { code: 'LINKEDIN_RATE_LIMIT', message: 'slow down', retryable: true } };
     }
     return {
       success: true,
@@ -583,8 +587,11 @@ describe('Step 2 — queue_jobs.retry_state records whether BullMQ will retry', 
   test('an unexpected throw (not a handled platform failure) also records the retry state', async () => {
     seedPost('sp-1');
     seedJob('qj-1', 'sp-1');
-    const adapter = jest.requireMock('../../adapters/platformAdapter') as { publishToPlatform: jest.Mock };
-    adapter.publishToPlatform.mockImplementationOnce(async () => { throw new Error('socket hang up'); });
+    // Thrown after the claim but BEFORE the platform call (nothing was sent).
+    // A throw from the platform call itself is an uncertain outcome instead —
+    // see "Closure-002 R5" below.
+    const media = jest.requireMock('../../services/mediaReferenceResolver') as { refreshDurableMediaBeforePublish: jest.Mock };
+    media.refreshDurableMediaBeforePublish.mockImplementationOnce(async () => { throw new Error('socket hang up'); });
 
     await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).rejects.toThrow('socket hang up');
     expect(qjob('qj-1').status).toBe('failed');
@@ -1090,5 +1097,285 @@ describe('Workstream C — the per-attempt platform-call marker', () => {
     await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).rejects.toThrow('connection terminated');
     expect(publishesFor('sp-1')).toBe(0);
     expect(post('sp-1').status).toBe('scheduled');
+  });
+});
+
+// ─── Closure-002 R5 — ambiguous adapter outcomes never retry automatically ───
+//
+// No adapter makes post creation idempotent, so after a request that may have
+// reached the platform, a retry can publish twice. Only a CONFIRMED rejection
+// or pre-send failure retries; everything else is PUBLISH_OUTCOME_UNCERTAIN:
+// post and job failed with that code, the job exhausted, the delivery ends
+// WITHOUT a throw (so BullMQ does not retry), and every later delivery — of
+// this job or any other job for the post — refuses to call the platform.
+
+import * as queriesModule from '../../db/queries';
+import { reconcileUncertainPublish } from '../../services/publishOutcomeReconciliation';
+
+const adapterMock = (): { publishToPlatform: jest.Mock } =>
+  jest.requireMock('../../adapters/platformAdapter') as { publishToPlatform: jest.Mock };
+/** Next platform call returns `result` (and is counted like any other call). */
+function nextPlatformResult(result: Row): void {
+  adapterMock().publishToPlatform.mockImplementationOnce(async (scheduledPostId: string) => {
+    platformCalls.push(scheduledPostId);
+    return result;
+  });
+}
+/** Next platform call throws — the outcome is unknown. */
+function nextPlatformThrow(message: string): void {
+  adapterMock().publishToPlatform.mockImplementationOnce(async (scheduledPostId: string) => {
+    platformCalls.push(scheduledPostId);
+    throw new Error(message);
+  });
+}
+function expectUncertain(postId: string, jobId: string): void {
+  expect(post(postId)).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN', platform_post_id: null });
+  expect(qjob(jobId)).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+  if (schema.migrated) expect(qjob(jobId).retry_state).toBe('exhausted');
+}
+
+describe('Closure-002 R5 — confirmed failures still retry', () => {
+  test('a pre-send failure (delivery: not_sent) is retryable: failed + awaiting_retry, and the backoff delivery publishes', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult({ success: false, error: { code: 'PUBLISH_ERROR', message: 'Social account not found', retryable: true, delivery: 'not_sent' } });
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).rejects.toThrow('Social account not found');
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_ERROR' });
+    expect(qjob('qj-1')).toMatchObject({ status: 'failed', retry_state: 'awaiting_retry' });
+
+    await processPublishJob(delivery('qj-1', 'sp-1', 1));
+    expect(publishesFor('sp-1')).toBe(2);
+    expect(post('sp-1').status).toBe('published');
+    expect(post('sp-1').error_code).toBeNull();
+  });
+
+  test('a confirmed rejection (explicit 429) retries; the code lands in the same update as the status', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    const spy = jest.spyOn(queriesModule, 'updateScheduledPostOnFailure');
+    nextPlatformResult({ success: false, error: { code: 'LINKEDIN_RATE_LIMIT', message: 'throttled', retryable: true } });
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).rejects.toThrow('throttled');
+    expect(spy).toHaveBeenCalledWith('sp-1', 'throttled', undefined, 'LINKEDIN_RATE_LIMIT');
+    spy.mockRestore();
+    expect(qjob('qj-1').retry_state).toBe('awaiting_retry');
+
+    await processPublishJob(delivery('qj-1', 'sp-1', 1));
+    expect(publishesFor('sp-1')).toBe(2);
+    expect(post('sp-1').status).toBe('published');
+  });
+});
+
+describe('Closure-002 R5 — ambiguous outcomes are recorded uncertain and never retried', () => {
+  const ambiguous: Array<[string, () => void]> = [
+    ['the platform accepted the post but the response was lost (network error)', () =>
+      nextPlatformResult({ success: false, error: { code: 'LINKEDIN_NETWORK_ERROR', message: 'socket hang up', retryable: true } })],
+    ['a timeout after the request may have reached the platform', () =>
+      nextPlatformResult({ success: false, error: { code: 'LINKEDIN_API_ERROR', message: 'timeout of 30000ms exceeded', retryable: true } })],
+    ['a 5xx (generic *_API_ERROR, retryable: true)', () =>
+      nextPlatformResult({ success: false, error: { code: 'TWITTER_API_ERROR', message: 'Request failed with status code 503', retryable: true } })],
+    ['an adapter exception with unknown outcome (throws out of the adapter)', () => nextPlatformThrow('ECONNRESET')],
+    ['an escaped throw AFTER dispatch (PUBLISH_ERROR without not_sent)', () =>
+      nextPlatformResult({ success: false, error: { code: 'PUBLISH_ERROR', message: 'Cannot read properties of undefined', retryable: true } })],
+    ['a success without a post id (malformed adapter outcome)', () =>
+      nextPlatformResult({ success: true, platform_post_id: undefined })],
+    ['an unknown code', () =>
+      nextPlatformResult({ success: false, error: { code: 'SOMETHING_NEW', message: '?', retryable: false } })],
+    ['no error object at all', () => nextPlatformResult({ success: false })],
+  ];
+
+  test.each(ambiguous)('%s: one call, uncertain, the delivery resolves (no BullMQ retry)', async (_label, arrange) => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    arrange();
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).resolves.toBeUndefined();
+    expect(publishesFor('sp-1')).toBe(1);
+    expectUncertain('sp-1', 'qj-1');
+    expect(String(post('sp-1').error_message)).toContain('check the platform');
+  });
+
+  test('repeated BullMQ attempts after an uncertain result never call the platform again', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult({ success: false, error: { code: 'LINKEDIN_NETWORK_ERROR', message: 'reset', retryable: true } });
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+
+    await processPublishJob(delivery('qj-1', 'sp-1', 1));
+    await processPublishJob(delivery('qj-1', 'sp-1', 2));
+    expect(publishesFor('sp-1')).toBe(1);
+    expectUncertain('sp-1', 'qj-1');
+  });
+
+  test('mixed version (retry_state column absent): still recorded uncertain and never re-run', async () => {
+    schema.migrated = false;
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformThrow('socket hang up');
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).resolves.toBeUndefined();
+    await processPublishJob(delivery('qj-1', 'sp-1', 1));
+    expect(publishesFor('sp-1')).toBe(1);
+    expectUncertain('sp-1', 'qj-1');
+  });
+
+  test('ANOTHER job for the same post (fresh, e.g. the safety-net cron) refuses an uncertain post', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    seedJob('qj-2', 'sp-1'); // pending, no marker of its own
+
+    await expect(processPublishJob(delivery('qj-2', 'sp-1', 0))).resolves.toBeUndefined();
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(qjob('qj-2')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+  });
+
+  test('sweeper → re-delivery after an ambiguous outcome: no second call', async () => {
+    // Ambiguous attempt, then (as in production) the swept/labelled post and a
+    // stalled re-delivery of the same job id.
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult({ success: false, error: { code: 'FACEBOOK_API_ERROR', message: 'socket hang up', retryable: true } });
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    qjob('qj-1').status = 'processing'; // a stall re-delivery of a job BullMQ still held
+    qjob('qj-1').updated_at = new Date(Date.now() - 40 * 60 * 1000).toISOString();
+
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1').error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
+  });
+
+  test('the post carries PUBLISH_CALL_STARTED during the call and loses it once the outcome is saved', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    let duringCall: Row | null = null;
+    duringPlatformCall = async () => { duringCall = { ...post('sp-1') }; };
+
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(duringCall).toMatchObject({ status: 'publishing', error_code: 'PUBLISH_CALL_STARTED' });
+    expect(post('sp-1')).toMatchObject({ status: 'published', error_code: null });
+  });
+
+  test('the previous sweeper left PUBLISH_CALL_STARTED on a failed post: no call, relabelled uncertain', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'PUBLISH_CALL_STARTED', error_message: 'Stuck in publishing state for >= 600s — swept' });
+    seedJob('qj-2', 'sp-1');
+
+    await processPublishJob(delivery('qj-2', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1').error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
+  });
+
+  test('a stale publishing post whose call started elsewhere is NOT taken over by another job', async () => {
+    seedPost('sp-1', {
+      status: 'publishing', error_code: 'PUBLISH_CALL_STARTED',
+      updated_at: new Date(Date.now() - 8 * 60 * 1000).toISOString(), // past the 5-minute stale-claim window
+    });
+    seedJob('qj-2', 'sp-1');
+
+    await processPublishJob(delivery('qj-2', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1')).toMatchObject({ status: 'publishing', error_code: 'PUBLISH_CALL_STARTED' });
+    expect(qjob('qj-2').status).toBe('completed');
+  });
+
+  test('the platform accepted the post but saving the id failed: uncertain (id kept in the message), no retry', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    const spy = jest.spyOn(queriesModule, 'updateScheduledPostOnPublish').mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).resolves.toBeUndefined();
+    spy.mockRestore();
+    expect(publishesFor('sp-1')).toBe(1);
+    expectUncertain('sp-1', 'qj-1');
+    expect(String(post('sp-1').error_message)).toContain('plat_sp-1_1');
+
+    await processPublishJob(delivery('qj-1', 'sp-1', 1));
+    expect(publishesFor('sp-1')).toBe(1);
+  });
+
+  test('the post-level marker write fails: the platform is never called, and the claim is given back', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    const spy = jest.spyOn(queriesModule, 'markScheduledPostPlatformCallStarted').mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).rejects.toThrow('connection terminated');
+    spy.mockRestore();
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1').status).toBe('scheduled');
+  });
+});
+
+describe('Closure-002 — reconciliation, then an explicitly authorized retry', () => {
+  async function uncertainPost(): Promise<void> {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult({ success: false, error: { code: 'LINKEDIN_NETWORK_ERROR', message: 'reset', retryable: true } });
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(post('sp-1').error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
+  }
+
+  test("'not_published' makes the post an ordinary failure; the operator's retry publishes it exactly once more", async () => {
+    await uncertainPost();
+    const r = await reconcileUncertainPublish({
+      scheduledPostId: 'sp-1', resolution: 'not_published', actorUserId: USER, note: 'checked LinkedIn: no post',
+    });
+    expect(r).toMatchObject({ status: 'reconciled', previous_error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_RECONCILED_NOT_PUBLISHED' });
+    expect(String(post('sp-1').error_message)).toContain('checked LinkedIn: no post');
+
+    // Nothing retries on its own: the old job is exhausted.
+    await processPublishJob(delivery('qj-1', 'sp-1', 1));
+    expect(publishesFor('sp-1')).toBe(1);
+
+    const res = await callRetry('sp-1');
+    expect(res.statusCode).toBe(200);
+    const replacement = liveJobsFor('sp-1')[0];
+    await processPublishJob(delivery(String(replacement.id), 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(2);
+    expect(post('sp-1').status).toBe('published');
+  });
+
+  test("'published' records the platform id; nothing publishes again", async () => {
+    await uncertainPost();
+    const r = await reconcileUncertainPublish({
+      scheduledPostId: 'sp-1', resolution: 'published', platformPostId: 'urn:li:share:42',
+      postUrl: 'https://linkedin.test/42', actorUserId: USER, note: 'found it live',
+    });
+    expect(r).toMatchObject({ status: 'reconciled', resolution: 'published' });
+    expect(post('sp-1')).toMatchObject({ status: 'published', platform_post_id: 'urn:li:share:42', error_code: null });
+
+    const res = await callRetry('sp-1');
+    expect(res.statusCode).not.toBe(200);
+    expect(publishesFor('sp-1')).toBe(1);
+  });
+
+  test('reconciliation is refused for a post that is not uncertain, and needs a note (and an id for published)', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    await expect(reconcileUncertainPublish({
+      scheduledPostId: 'sp-1', resolution: 'not_published', actorUserId: USER, note: 'x',
+    })).resolves.toMatchObject({ status: 'not_uncertain' });
+
+    seedPost('sp-2', { status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    await expect(reconcileUncertainPublish({
+      scheduledPostId: 'sp-2', resolution: 'not_published', actorUserId: USER, note: '  ',
+    })).resolves.toMatchObject({ status: 'invalid' });
+    await expect(reconcileUncertainPublish({
+      scheduledPostId: 'sp-2', resolution: 'published', actorUserId: USER, note: 'live',
+    })).resolves.toMatchObject({ status: 'invalid' });
+    expect(post('sp-2').error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
+  });
+
+  test('a concurrent change between the read and the write is reported, never overwritten', async () => {
+    seedPost('sp-1', { status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    const spy = jest.spyOn(queriesModule, 'getScheduledPost').mockImplementationOnce(async () => {
+      const snapshot = { ...post('sp-1') };
+      post('sp-1').error_code = 'PUBLISH_RECONCILED_NOT_PUBLISHED'; // another operator won
+      return snapshot as unknown as Awaited<ReturnType<typeof queriesModule.getScheduledPost>>;
+    });
+    const r = await reconcileUncertainPublish({
+      scheduledPostId: 'sp-1', resolution: 'published', platformPostId: 'p', actorUserId: USER, note: 'n',
+    });
+    spy.mockRestore();
+    expect(r).toEqual({ status: 'changed' });
+    expect(post('sp-1').status).toBe('failed');
   });
 });

@@ -14,18 +14,19 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * run on the same row would throw), and nothing automatically reaps it.
  *
  * This endpoint finds rows that have been 'publishing' for longer than
- * STUCK_PUBLISHING_THRESHOLD_MS and transitions them to 'failed' with a
- * marker error message. The state machine permits 'publishing → failed', so
- * this is a legal terminal transition. Operators can then resume affected
- * threads via the resume endpoint, which transitions 'failed → publishing'
- * and replays through the orchestrator (skipping already-published siblings).
+ * STUCK_PUBLISHING_THRESHOLD_MS and transitions them to 'failed' with
+ * error_code PUBLISH_OUTCOME_UNCERTAIN. The state machine permits
+ * 'publishing → failed', so this is a legal terminal transition.
  *
  * We do NOT auto-resume here. A row stuck in 'publishing' may have a
- * platform-side post that the orchestrator never recorded (split-brain).
- * Flipping back to 'scheduled' would risk a duplicate publish; flipping to
- * 'failed' parks the row and forces the operator to acknowledge the
- * recovery path. The orchestrator's per-row platform_post_id idempotency
- * still protects the resumed run from double-publishing the same node.
+ * platform-side post that was never recorded (split-brain), and its
+ * platform_post_id is null exactly then — so per-row platform_post_id
+ * idempotency does NOT protect a resumed run from publishing it twice. The
+ * uncertain code does: the queue worker, thread re-delivery and the operator
+ * resume endpoint all refuse to publish such a row (backend/queue/
+ * publishOutcome.ts). An operator checks the platform and reconciles the row
+ * (POST /api/super-admin/publish/reconcile) — recording the post id if it is
+ * live, or marking it not published — and only then retries or resumes.
  *
  * Protected by CRON_SECRET. Idempotent: re-running scans for any rows that
  * have since become stuck again.

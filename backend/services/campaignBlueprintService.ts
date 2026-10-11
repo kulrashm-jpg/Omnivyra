@@ -13,6 +13,7 @@ import {
   isRetryStateColumnMissing,
   type PostRetryClass,
 } from '../queue/publishRetryState';
+import { isUncertainFailedPost } from '../queue/publishOutcome';
 
 /** Stage 11: Deterministic guard — campaign must have duration_weeks set before blueprint resolution. */
 export class PrePlanningRequiredError extends Error {
@@ -204,26 +205,44 @@ export async function assertBlueprintMutable(
  *   cancelled, draft, blocked → never protect on their own
  *   NULL / unrecognised    → UNKNOWN, protects like scheduled (fail-safe)
  */
-type GuardPost = { id: string; status: string; scheduled_for: string | null };
+type GuardPost = {
+  id: string;
+  status: string;
+  scheduled_for: string | null;
+  /** The post's OWN outcome evidence (backend/queue/publishOutcome.ts). */
+  error_code: string | null;
+  platform_post_id: string | null;
+};
 
 async function readCampaignPosts(campaignId: string, postIdFilter: string[] | null): Promise<GuardPost[]> {
   // `scheduled_posts` has no `scheduled_at` column — the timestamp is
   // `scheduled_for` (timestamptz NOT NULL; baseline schema and production).
   let query = supabase
     .from('scheduled_posts')
-    .select('id, status, scheduled_for')
+    .select('id, status, scheduled_for, error_code, platform_post_id')
     .eq('campaign_id', campaignId);
   if (postIdFilter) query = query.in('id', postIdFilter);
   const { data, error } = await query;
   if (error) throw new BlueprintMutabilityReadError('scheduled_posts', error);
   return (Array.isArray(data) ? data : []).map((row) => {
-    const r = row as { id?: unknown; status?: unknown; scheduled_for?: unknown };
+    const r = row as { id?: unknown; status?: unknown; scheduled_for?: unknown; error_code?: unknown; platform_post_id?: unknown };
     return {
       id: String(r.id ?? ''),
       status: String(r.status ?? '').toLowerCase(),
       scheduled_for: typeof r.scheduled_for === 'string' ? r.scheduled_for : null,
+      error_code: typeof r.error_code === 'string' ? r.error_code : null,
+      platform_post_id: typeof r.platform_post_id === 'string' ? r.platform_post_id : null,
     };
   });
+}
+
+/**
+ * A failed post whose own row records an uncertain publish outcome may
+ * already be live, whatever its queue rows say (an exhausted queue job is
+ * TERMINAL for the pipeline, not proof nothing was published). It protects.
+ */
+function failedPostProtects(post: GuardPost, classes: Map<string, PostRetryClass>): boolean {
+  return isUncertainFailedPost(post) || classes.get(post.id) !== 'TERMINAL';
 }
 
 /**
@@ -271,10 +290,10 @@ async function hasProtectingPost(posts: GuardPost[]): Promise<boolean> {
   )) {
     return true;
   }
-  const failedIds = posts.filter((p) => p.status === 'failed').map((p) => p.id);
-  if (failedIds.length === 0) return false;
-  const classes = await classifyFailedPosts(failedIds);
-  return failedIds.some((id) => classes.get(id) !== 'TERMINAL');
+  const failed = posts.filter((p) => p.status === 'failed');
+  if (failed.length === 0) return false;
+  const classes = await classifyFailedPosts(failed.map((p) => p.id));
+  return failed.some((p) => failedPostProtects(p, classes));
 }
 
 /**
@@ -290,17 +309,17 @@ async function nearestProtectingHoursInWindow(
   const now = Date.now();
   let nearest: number | null = null;
   const consider = (hours: number) => { nearest = nearest === null ? hours : Math.min(nearest, hours); };
-  const failedInWindow: Array<{ id: string; hours: number }> = [];
+  const failedInWindow: Array<{ post: GuardPost; hours: number }> = [];
   for (const post of posts) {
     const hours = hoursUntil(post, now);
     if (hours === null || hours > BLUEPRINT_FREEZE_WINDOW_HOURS) continue;
     if (windowStatuses.has(post.status) || isUnrecognizedPostStatus(post.status)) consider(hours);
-    else if (post.status === 'failed') failedInWindow.push({ id: post.id, hours });
+    else if (post.status === 'failed') failedInWindow.push({ post, hours });
   }
   if (failedInWindow.length > 0) {
-    const classes = await classifyFailedPosts(failedInWindow.map((f) => f.id));
+    const classes = await classifyFailedPosts(failedInWindow.map((f) => f.post.id));
     for (const f of failedInWindow) {
-      if (classes.get(f.id) !== 'TERMINAL') consider(f.hours);
+      if (failedPostProtects(f.post, classes)) consider(f.hours);
     }
   }
   return nearest;

@@ -14,6 +14,7 @@ import {
   getScheduledPost,
   updateScheduledPostOnPublish,
   updateScheduledPostOnFailure,
+  markScheduledPostOutcomeUncertain,
 } from '../db/queries';
 import { publishToPlatform } from '../adapters/platformAdapter';
 import { categorizeError } from './errorRecoveryService';
@@ -40,6 +41,11 @@ import { recordAuditEntry } from './creatorAuditTrailService';
 import { recordPublishFailure } from './creatorQueueReliabilityService';
 import { validateCreatorPublishSemanticsLive } from './creatorPublishValidation';
 import { publishThread } from './threadRuntime/threadPublishOrchestrator';
+import {
+  classifyPublishAttempt,
+  PUBLISH_OUTCOME_UNCERTAIN,
+  PUBLISH_OUTCOME_UNCERTAIN_MESSAGE,
+} from '../queue/publishOutcome';
 
 /**
  * Publish-time re-validation for attachment-required posts. The
@@ -177,11 +183,14 @@ export type PublishNowInput = {
 export type PublishNowResult = {
   status: 'PUBLISHED' | 'FAILED';
   /**
-   * Set ONLY when this call did not publish because another execution holds
-   * the post-level claim. The holder owns the outcome and writes the terminal
-   * status, so a caller must NOT write any status for this result — writing
-   * 'failed' here would flip the holder's live 'publishing' row (making it
-   * claimable and republishable mid-flight) or overwrite its 'published'.
+   * Set ONLY when the post's status is owned by someone else and a caller
+   * must NOT write any status for this result:
+   *   - another execution holds the post-level claim. The holder writes the
+   *     terminal status; writing 'failed' here would flip its live
+   *     'publishing' row (making it claimable and republishable mid-flight) or
+   *     overwrite its 'published'.
+   *   - a thread run stopped at a node whose outcome is uncertain or in
+   *     flight. The orchestrator recorded each node's state itself.
    */
   suppressed?: true;
   external_post_id?: string;
@@ -487,6 +496,10 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       published_at: threadResult.status === 'PUBLISHED' ? threadResult.timestamp : undefined,
       message: threadResult.message,
       timestamp: threadResult.timestamp,
+      // Stopped at a node whose outcome is unknown or in flight: the
+      // orchestrator recorded the per-node state, and a caller's status write
+      // on the root would only overwrite it.
+      ...(threadResult.uncertain ? { suppressed: true as const } : {}),
     };
   }
 
@@ -563,12 +576,32 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     return { status: 'FAILED', message, timestamp, suppressed: true };
   }
 
+  const attempt: SingleRowAttempt = { platformCallInFlight: false };
   try {
-    return await runSingleRowPublish(input, scheduledPost, timestamp);
+    return await runSingleRowPublish(input, scheduledPost, timestamp, attempt);
   } catch (error) {
-    // Unexpected throw. CAS-restore the exact status claimed from, so the row
-    // is left exactly as retryable as it was before the claim — never more
-    // blocked. A no-op when a terminal status was already written.
+    // A throw while the platform call's outcome was unsaved (the adapter threw,
+    // or the success/failure write failed): the post may be live. Restoring
+    // the claimed-from status would put a 'scheduled' row back in front of the
+    // cron — an automatic duplicate. Record the uncertainty instead.
+    if (attempt.platformCallInFlight) {
+      try {
+        await markScheduledPostOutcomeUncertain(
+          scheduled_post_id,
+          `${PUBLISH_OUTCOME_UNCERTAIN_MESSAGE} (${error instanceof Error ? error.message : String(error)})`,
+        );
+      } catch (markError) {
+        console.error(
+          '[publishNow] uncertain-outcome write failed; the row stays publishing for the sweeper:',
+          markError instanceof Error ? markError.message : String(markError),
+        );
+      }
+      throw error;
+    }
+    // Unexpected throw BEFORE the platform call. CAS-restore the exact status
+    // claimed from, so the row is left exactly as retryable as it was before
+    // the claim — never more blocked. A no-op when a terminal status was
+    // already written.
     try {
       await releaseScheduledPostPublishClaim(scheduled_post_id, claim.fromStatus);
     } catch (releaseError) {
@@ -589,10 +622,14 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
  * from here either writes a terminal status ('published' / 'failed') — which
  * releases the claim by definition — or throws, which the caller CAS-restores.
  */
+/** Whether the platform call has started and its outcome is not yet saved. */
+type SingleRowAttempt = { platformCallInFlight: boolean };
+
 async function runSingleRowPublish(
   input: PublishNowInput,
   scheduledPost: Awaited<ReturnType<typeof getScheduledPost>>,
   timestamp: string,
+  attempt: SingleRowAttempt,
 ): Promise<PublishNowResult> {
   const { scheduled_post_id, social_account_id, user_id } = input;
 
@@ -785,6 +822,7 @@ async function runSingleRowPublish(
   // publishes non-expired media without any adapter change.
   await refreshDurableMediaBeforePublish(scheduled_post_id);
 
+  attempt.platformCallInFlight = true;
   const result = await publishToPlatform(scheduled_post_id, social_account_id);
 
   if (result.success && result.platform_post_id) {
@@ -794,6 +832,7 @@ async function runSingleRowPublish(
       result.post_url || '',
       result.published_at
     );
+    attempt.platformCallInFlight = false;
     // P3-1 — advance the variant experiment tracker for any variant
     // that ships with this scheduled_post. Best-effort; failures
     // never block publish.
@@ -863,16 +902,27 @@ async function runSingleRowPublish(
     };
   }
 
-  const platformError = categorizeError(
+  const categorized = categorizeError(
     scheduledPost.platform,
     result.error || { message: 'Unknown error' }
   );
   // Use the raw message (actual error) so callers can surface it; fall back to user_message
-  const errorDetail = platformError.message && platformError.message !== 'Unknown error'
-    ? platformError.message
-    : platformError.user_message;
+  const categorizedDetail = categorized.message && categorized.message !== 'Unknown error'
+    ? categorized.message
+    : categorized.user_message;
+  // A failure that does not PROVE the platform created nothing (5xx, network
+  // loss, timeout, an escaped throw, a success with no id) is recorded as an
+  // uncertain outcome, not as an ordinary failure: the post may be live, and
+  // the queue worker and thread orchestrator refuse to publish it again until
+  // a person reconciles it (backend/queue/publishOutcome.ts).
+  const uncertain = classifyPublishAttempt(result) !== 'not_created';
+  const platformError = uncertain ? { ...categorized, code: PUBLISH_OUTCOME_UNCERTAIN } : categorized;
+  const errorDetail = uncertain
+    ? `${PUBLISH_OUTCOME_UNCERTAIN_MESSAGE} Adapter said: ${categorizedDetail}`
+    : categorizedDetail;
 
-  await updateScheduledPostOnFailure(scheduled_post_id, errorDetail);
+  await updateScheduledPostOnFailure(scheduled_post_id, errorDetail, undefined, platformError.code);
+  attempt.platformCallInFlight = false;
   await ownedDbTable('scheduled_posts')
     .update({
       error_code: platformError.code,

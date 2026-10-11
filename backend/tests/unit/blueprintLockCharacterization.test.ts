@@ -877,3 +877,42 @@ describe('Workstream C — the per-item guard protects an uncertain post', () =>
     await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
   });
 });
+
+// ─── Closure-002 — the post's OWN uncertain outcome protects ────────────────
+//
+// An exhausted queue row is TERMINAL for the pipeline, not proof that nothing
+// was published. A failed post whose own row says the outcome is uncertain
+// (or still carries the platform-call marker) may be live, so it protects.
+
+describe('Closure-002 — a failed post with an uncertain outcome protects whatever its queue rows say', () => {
+  beforeEach(() => {
+    process.env.BLUEPRINT_PER_ITEM_LOCKS = 'true';
+    campaignRow = { blueprint_status: 'ACTIVE', duration_weeks: 4 };
+  });
+
+  it.each(['PUBLISH_OUTCOME_UNCERTAIN', 'PUBLISH_CALL_STARTED'])(
+    'per-item: failed + %s with a TERMINAL queue row freezes the blueprint',
+    async (code) => {
+      postRows = [{ id: 'sp-1', status: 'failed', scheduled_for: at(-3), error_code: code, platform_post_id: null }];
+      queueRows = [qj('sp-1', 'failed', 'exhausted')];
+      await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintExecutionFreezeError);
+    },
+  );
+
+  it('per-item: the same post reconciled as not published is terminal again', async () => {
+    postRows = [{ id: 'sp-1', status: 'failed', scheduled_for: at(-3), error_code: 'PUBLISH_RECONCILED_NOT_PUBLISHED', platform_post_id: null }];
+    queueRows = [qj('sp-1', 'failed', 'exhausted')];
+    await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
+  });
+
+  it('legacy blanket (flag off): an uncertain failed post with terminal queue rows protects; a known failure does not', async () => {
+    delete process.env.BLUEPRINT_PER_ITEM_LOCKS;
+    queueRows = [qj('sp-1', 'failed', 'exhausted'), qj('sp-1', 'cancelled', null)];
+
+    postRows = [{ id: 'sp-1', status: 'failed', scheduled_for: at(500), error_code: 'LINKEDIN_RATE_LIMIT', platform_post_id: null }];
+    await expect(assertBlueprintMutable('c-1')).resolves.toBeUndefined();
+
+    postRows = [{ id: 'sp-1', status: 'failed', scheduled_for: at(500), error_code: 'PUBLISH_OUTCOME_UNCERTAIN', platform_post_id: null }];
+    await expect(assertBlueprintMutable('c-1')).rejects.toThrow(BlueprintImmutableError);
+  });
+});
