@@ -65,6 +65,13 @@ import {
 import { emitCreatorEvent, CREATOR_EVENTS } from '@/backend/services/creatorOperationalTelemetryService';
 import { recordAuditEntry } from '@/backend/services/creatorAuditTrailService';
 import { authorizeLinkedPostMutation, pinErrorCode } from '@/backend/services/linkedScheduledPostGuard';
+
+/**
+ * Plan-row content key recording a reschedule whose queue step failed after
+ * the post and the plan were re-timed (Closure-006). Cleared by the next
+ * successful reschedule of the row.
+ */
+const RESCHEDULE_INCOMPLETE_KEY = 'reschedule_incomplete';
 import {
   assertBlueprintMutable,
   BlueprintExecutionFreezeError,
@@ -449,12 +456,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // 4. Platform moves re-target the scheduled post's social account —
-    //    resolved the same way the schedule endpoint resolves it.
+    //    resolved the same way the schedule endpoint resolves it: the POST
+    //    OWNER's own active account for the target platform, within the
+    //    authorized company. (Closure-006: this used to pick ANY active
+    //    company account for the platform — possibly a teammate's — so a move
+    //    could publish the owner's post through another user's account.)
     if (platformChanged && priorScheduledPostId) {
       const platformAlias = targetPlatform === 'x' ? 'twitter' : targetPlatform;
       const { data: account } = await supabase
         .from('social_accounts')
         .select('id')
+        .eq('user_id', String(linkedPost?.user_id ?? ''))
         .eq('is_active', true)
         .eq('company_id', companyId)
         .in('platform', Array.from(new Set([targetPlatform, platformAlias])))
@@ -475,6 +487,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   //  → delete prior storage object best-effort.
   let updatedContent = currentContent;
   let mediaReplaced = false;
+  let deferredStorageDelete: string | null = null;
   if (mediaUrl) {
     const validation = await validateMediaUpload({
       mediaUrl,
@@ -553,10 +566,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     updatedContent = toReady.content;
     mediaReplaced = true;
 
-    // Best-effort delete of the prior object now that the new URL is
-    // about to be persisted. We delete BEFORE the scheduled_posts /
-    // daily_content_plans update so a successful delete doesn't strand
-    // anything in storage; the row's state still points at the new URL.
+    // Best-effort delete of the prior object — DEFERRED (Closure-006) until
+    // the scheduled_posts and daily_content_plans writes below have both
+    // landed: deleted earlier, a write that then failed (or lost a race)
+    // left the row pointing at an object that no longer exists.
     //
     // P1-B — the object deleted here must belong to THIS activity. The
     // recorded URL is tenant-writable, so its path is a claim, not a
@@ -568,7 +581,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const priorObjectPath = extractStorageObjectPath(priorUploadedUrl);
     if (priorObjectPath && priorUploadedUrl !== mediaUrl) {
       if (isActivityObjectPath(priorObjectPath, id, companyId)) {
-        void deleteStorageObject(priorObjectPath);
+        deferredStorageDelete = priorObjectPath;
       } else {
         console.warn('[reschedule] prior object outside this activity; not deleted', {
           daily_plan_id: id,
@@ -649,20 +662,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     };
     dailyPlanPatch.content = JSON.stringify(updatedContent);
   }
-  const { error: dailyUpdateError } = await ownedDbTable('daily_content_plans')
-    .update(dailyPlanPatch)
-    .eq('id', id);
-  if (dailyUpdateError) {
-    return res.status(500).json({ error: `Failed to update row: ${dailyUpdateError.message}` });
+  // A completed reschedule clears the marker an earlier, partially failed
+  // one left (see the queue step below).
+  if (Object.prototype.hasOwnProperty.call(updatedContent, RESCHEDULE_INCOMPLETE_KEY)) {
+    const { [RESCHEDULE_INCOMPLETE_KEY]: _cleared, ...rest } = updatedContent;
+    void _cleared;
+    updatedContent = rest;
+    dailyPlanPatch.content = JSON.stringify(updatedContent);
   }
 
-  // ── Update scheduled_posts (media + time) ─────────────────────────────
-  let scheduledPostUserId: string | null = null;
-  let scheduledPostSocialAccountId: string | null = null;
+  // ── Order (Closure-006): the guarded scheduled_posts compare-and-set FIRST,
+  // then the plan row, then the queue. A post write that loses a race now
+  // changes nothing at all (it used to leave a re-timed plan row over an
+  // unchanged post). A plan write that fails after the post write is undone
+  // by a compensating compare-and-set; a queue step that fails is recorded
+  // durably on the plan row (RESCHEDULE_INCOMPLETE_KEY) and repaired by
+  // repeating the same reschedule.
+  const postWriteAt = new Date().toISOString();
+  const guardPost = linkedPost as NonNullable<typeof linkedPost>;
+  let scheduledPostPatch: Record<string, unknown> | null = null;
+  // The values this request overwrites, copied BEFORE the write (the undo below
+  // restores exactly these).
+  const priorPostValues: Record<string, unknown> = {
+    media_urls: guardPost?.media_urls ?? null,
+    scheduled_for: guardPost?.scheduled_for ?? null,
+    platform: guardPost?.platform ?? null,
+    social_account_id: guardPost?.social_account_id ?? null,
+  };
   if (priorScheduledPostId) {
-    const scheduledPostPatch: Record<string, unknown> = {
-      updated_at: new Date().toISOString(),
-    };
+    scheduledPostPatch = { updated_at: postWriteAt };
     if (mediaReplaced) {
       scheduledPostPatch.media_urls = [mediaUrl];
     }
@@ -675,11 +703,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       scheduledPostPatch.social_account_id = moveSocialAccountId;
     }
     // Compare-and-set on exactly the state judged safe above (owner,
-    // campaign, status, error_code, no platform_post_id): a publisher that
-    // claimed the post since then makes this match nothing, and the re-time
-    // is refused rather than applied to an in-flight or published post.
-    const guardPost = linkedPost as NonNullable<typeof linkedPost>;
-    const { data: postUpdated, error: postUpdateError } = await pinErrorCode(
+    // campaign, status, error_code, no platform_post_id) AND on the row
+    // version read (updated_at — a re-time changes neither status nor code,
+    // so this is what makes a second, concurrent re-time lose): a publisher
+    // that claimed the post since, or another re-time, makes this match
+    // nothing, and NOTHING has been written yet.
+    let postQuery = pinErrorCode(
       ownedDbTable('scheduled_posts')
         .update(scheduledPostPatch)
         .eq('id', priorScheduledPostId)
@@ -688,24 +717,55 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .eq('status', String(guardPost.status ?? ''))
         .is('platform_post_id', null),
       guardPost.error_code,
-    ).select('id');
-    if (!postUpdateError && (!Array.isArray(postUpdated) || postUpdated.length === 0)) {
-      return res.status(409).json({
-        error: 'The scheduled post changed while it was being re-timed (it may be publishing). Refresh and retry.',
-        code: 'SCHEDULED_POST_CHANGED_CONCURRENTLY',
-        scheduled_post_id: priorScheduledPostId,
-        partial: true,
-      });
-    }
+    );
+    postQuery = guardPost.updated_at == null ? postQuery.is('updated_at', null) : postQuery.eq('updated_at', guardPost.updated_at);
+    const { data: postUpdated, error: postUpdateError } = await postQuery.select('id');
     if (postUpdateError) {
       console.warn('[reschedule] scheduled_posts update failed', { id, priorScheduledPostId, error: postUpdateError.message });
       return res.status(500).json({
-        error: `Row state advanced but scheduled_post update failed: ${postUpdateError.message}`,
+        error: `The scheduled post could not be updated: ${postUpdateError.message}. Nothing was changed.`,
         code: 'SCHEDULED_POST_UPDATE_FAILED',
-        partial: true,
+        partial: false,
       });
     }
+    if (!Array.isArray(postUpdated) || postUpdated.length === 0) {
+      return res.status(409).json({
+        error: 'The scheduled post changed while it was being re-timed (it may be publishing, or re-timed elsewhere). Nothing was changed; refresh and retry.',
+        code: 'SCHEDULED_POST_CHANGED_CONCURRENTLY',
+        scheduled_post_id: priorScheduledPostId,
+        partial: false,
+      });
+    }
+  }
 
+  const { error: dailyUpdateError } = await ownedDbTable('daily_content_plans')
+    .update(dailyPlanPatch)
+    .eq('id', id);
+  if (dailyUpdateError) {
+    // Undo the post write (compare-and-set on the version this request
+    // wrote, so a later writer is never clobbered).
+    let restored = !priorScheduledPostId;
+    if (priorScheduledPostId && scheduledPostPatch) {
+      const restorePatch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      for (const col of ['media_urls', 'scheduled_for', 'platform', 'social_account_id'] as const) {
+        if (col in scheduledPostPatch) restorePatch[col] = priorPostValues[col];
+      }
+      const { data: undone } = await ownedDbTable('scheduled_posts')
+        .update(restorePatch)
+        .eq('id', priorScheduledPostId)
+        .eq('updated_at', postWriteAt)
+        .select('id');
+      restored = Array.isArray(undone) && undone.length > 0;
+    }
+    return res.status(500).json({
+      error: `Failed to update row: ${dailyUpdateError.message}`,
+      code: 'RESCHEDULE_PLAN_WRITE_FAILED',
+      partial: !restored,
+      ...(restored ? {} : { recovery: 'repeat_reschedule', scheduled_post_id: priorScheduledPostId }),
+    });
+  }
+
+  if (priorScheduledPostId) {
     // ── Queue re-enqueue: cancel old job, enqueue a fresh one at the new
     // scheduled_for. Only when the time actually changed (retime path or
     // combined). Pure media replacement at the same time keeps the
@@ -713,25 +773,46 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // `media_urls` from the DB at fire time.
     //
     // Uses `atomicCancelAndReEnqueueScheduledPost` for serialization:
-    //   - acquires an advisory lock on the scheduled_post so concurrent
-    //     reschedules from two tabs can't race
+    //   - takes the scheduled_post queue lock. NOT a mutual-exclusion
+    //     guarantee (Closure-006): its fallback always acquires. Concurrent
+    //     reschedules are serialized by the updated_at compare-and-set above.
     //   - rolls back the cancel if the new enqueue fails (the old job is
     //     restored to `pending` so the safety-net cron still publishes)
     //   - includes an idempotency key derived from the new scheduled_for
     if (newScheduledAtIso) {
-      try {
-        const { data: postLookup } = await supabase
-          .from('scheduled_posts')
-          .select('user_id, social_account_id')
-          .eq('id', priorScheduledPostId)
-          .maybeSingle();
-        scheduledPostUserId = (postLookup as any)?.user_id ?? null;
-        scheduledPostSocialAccountId = (postLookup as any)?.social_account_id ?? null;
-      } catch (lookupError) {
-        console.warn('[reschedule] scheduled_post user/account lookup failed', { id, message: (lookupError as Error)?.message });
-      }
+      // The post's OWNER and account, from the guarded read (the owner is
+      // whom the job publishes as; never the caller).
+      const scheduledPostUserId: string | null = guardPost.user_id ?? null;
       // R2-P3: a platform move re-enqueues against the NEW account.
-      if (moveSocialAccountId) scheduledPostSocialAccountId = moveSocialAccountId;
+      const scheduledPostSocialAccountId: string | null = moveSocialAccountId ?? guardPost.social_account_id ?? null;
+      const recordIncomplete = async (reason: string): Promise<boolean> => {
+        // Durable, observable partial completion: the plan row and the post
+        // carry the new time, the queue does not. Repeating the same
+        // reschedule repairs it (and clears this marker).
+        const marked = {
+          ...updatedContent,
+          [RESCHEDULE_INCOMPLETE_KEY]: {
+            stage: 'queue',
+            reason,
+            scheduled_post_id: priorScheduledPostId,
+            target_scheduled_at: newScheduledAtIso,
+            at: new Date().toISOString(),
+            recovery: 'repeat_reschedule',
+          },
+        };
+        // The response says whether the marker landed: it never claims a
+        // durable record it could not write.
+        try {
+          const { error: markError } = await ownedDbTable('daily_content_plans')
+            .update({ content: JSON.stringify(marked) })
+            .eq('id', id);
+          if (markError) console.warn('[reschedule] incomplete marker write failed', { id, error: markError.message });
+          return !markError;
+        } catch (markError) {
+          console.warn('[reschedule] incomplete marker write threw', { id, message: (markError as Error)?.message });
+          return false;
+        }
+      };
       if (scheduledPostUserId && scheduledPostSocialAccountId) {
         const atomicResult = await atomicCancelAndReEnqueueScheduledPost({
           scheduledPostId: priorScheduledPostId,
@@ -748,10 +829,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             dailyPlanId: id,
             metadata: { operation: 'reschedule_retime' },
           });
+          const incompleteRecorded = await recordIncomplete('lock_contention');
           return res.status(409).json({
-            error: 'Another reschedule is in progress for this post. Refresh and retry.',
+            error: 'Another reschedule is in progress for this post. The new time is saved but its publish job was not re-queued; repeat the reschedule.',
             code: 'CONCURRENT_QUEUE_MUTATION',
             scheduled_post_id: priorScheduledPostId,
+            partial: true,
+            recovery: 'repeat_reschedule',
+            incomplete_recorded: incompleteRecorded,
           });
         }
         emitCreatorEvent({
@@ -768,9 +853,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             rollback: atomicResult.rollback,
           });
           // Was reported as 200 queue:'re_enqueued' — a false success.
+          const incompleteRecorded = await recordIncomplete(`reenqueue_${atomicResult.enqueue}`);
           return res.status(502).json({
+            recovery: 'repeat_reschedule',
             error: 'The post was re-timed but its publish job could not be re-queued. Retry the reschedule.',
             code: 'QUEUE_REENQUEUE_FAILED',
+            incomplete_recorded: incompleteRecorded,
             partial: true,
             scheduled_post_id: priorScheduledPostId,
             enqueue: atomicResult.enqueue,
@@ -799,6 +887,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       console.warn('[reschedule] FK column update skipped (likely pre-migration)', { id, message: (fkError as Error)?.message });
     }
   }
+
+  if (deferredStorageDelete) void deleteStorageObject(deferredStorageDelete);
 
   emitCreatorEvent({
     event: CREATOR_EVENTS.RESCHEDULE_REQUESTED,

@@ -38,13 +38,26 @@ export type LinkedPost = {
   platform_post_id: string | null;
   is_thread_start: boolean | null;
   parent_post_id: string | null;
+  /**
+   * The row version a compare-and-set pins (Closure-006): a re-time does not
+   * change status or error_code, so without it two concurrent re-times both
+   * pass and the plan and the post can end up describing different times.
+   */
+  updated_at?: string | null;
+  /** The values a re-time overwrites — kept so a failed later step can restore them. */
+  scheduled_for?: string | null;
+  media_urls?: string[] | null;
+  platform?: string | null;
+  social_account_id?: string | null;
 };
 
 export type LinkedPostDecision =
   | { ok: true; post: LinkedPost | null; threadChildren: LinkedPost[] }
   | { ok: false; httpStatus: 403 | 409 | 503; code: string; error: string; nodeIds?: string[] };
 
-const POST_COLUMNS = 'id, user_id, campaign_id, status, error_code, platform_post_id, is_thread_start, parent_post_id';
+const POST_COLUMNS =
+  'id, user_id, campaign_id, status, error_code, platform_post_id, is_thread_start, parent_post_id, ' +
+  'updated_at, scheduled_for, media_urls, platform, social_account_id';
 
 const IDENTITY_REFUSAL: Record<Exclude<ThreadNodeIdentity, 'replaceable'>, { code: string; error: string }> = {
   published: {

@@ -283,13 +283,18 @@ describe('unschedule — threads and races', () => {
 });
 
 describe('reschedule — races and honest results', () => {
-  it('a publisher claims the post between the check and the re-time: 409 (partial), the claim is not overwritten, nothing re-queued', async () => {
+  // Closure-006: the post compare-and-set now runs BEFORE the plan write, so a
+  // lost race changes nothing at all — `partial: false` (it was `true` while
+  // the plan row had already been re-timed over an unchanged post).
+  it('a publisher claims the post between the check and the re-time: 409 (nothing written), the claim is not overwritten, nothing re-queued', async () => {
     world();
+    const planBefore = JSON.parse(JSON.stringify(rows('daily_content_plans')[0]));
     mockBeforePostUpdate = () => { concurrentWrite(POST, { status: 'publishing', error_code: 'PUBLISH_CALL_STARTED' }); };
     const r = await reschedule('A');
     expect(r.status).toBe(409);
-    expect(r.body).toMatchObject({ code: 'SCHEDULED_POST_CHANGED_CONCURRENTLY', partial: true });
+    expect(r.body).toMatchObject({ code: 'SCHEDULED_POST_CHANGED_CONCURRENTLY', partial: false });
     expect(post(POST)).toMatchObject({ status: 'publishing', scheduled_for: ORIGINAL_AT });
+    expect(rows('daily_content_plans')[0]).toEqual(planBefore);
     expect(queueEffects()).toEqual([]);
   });
 
