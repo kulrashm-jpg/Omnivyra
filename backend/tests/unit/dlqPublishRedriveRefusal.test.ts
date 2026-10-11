@@ -7,9 +7,9 @@
  * any claim: the re-drive could never publish. The route used to answer 200
  * `redriven`, audit `result: 'redriven'`, and delete the dead-letter row.
  *
- * The authorization gate is deliberately NOT under test here (the
- * privileged-write decision for this route is deferred to the owner): it is
- * mocked to admit, and the test pins only what happens after it.
+ * The authorization gates are NOT under test here (closure009PrivilegedWrite-
+ * Authorization covers them): requireCapability is mocked to admit an active
+ * platform SUPER_ADMIN, and the test pins only what happens after the gates.
  */
 
 const mockRows: Record<string, Record<string, unknown>> = {};
@@ -20,7 +20,12 @@ jest.mock('../../services/requestAccessService', () => ({
   requireAdminRateLimit: jest.fn(async () => true),
 }));
 jest.mock('../../security/requireCapability', () => ({
-  requireCapability: jest.fn(async () => ({ ok: true, principal: { userId: 'operator-1' } })),
+  // An active platform SUPER_ADMIN: since Closure-009 the re-drive also needs
+  // platform write authority, and this suite pins what happens AFTER the gates.
+  requireCapability: jest.fn(async () => ({
+    ok: true,
+    principal: { userId: 'operator-1', legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' }] },
+  })),
 }));
 jest.mock('../../services/adminAuditService', () => ({
   recordAdminAudit: (...a: unknown[]) => mockAudit(...a),

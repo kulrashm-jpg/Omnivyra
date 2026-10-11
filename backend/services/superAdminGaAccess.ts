@@ -4,17 +4,21 @@
  * Unifies what `ga-connect`, `ga-select-property`, and `ga-analytics-summary`
  * use so they no longer give asymmetric outcomes for the same caller.
  *
- * Auth rule (single source of truth):
- *   1. A VALID legacy bridge cookie is accepted — delegated to
- *      `requireCapability` → IdentityResolver → the signed-cookie resolver.
- *      SEC-001B: this previously read "`super_admin_session=1` is accepted",
- *      which has been false since Phase 2 began issuing HMAC-signed values;
- *      a static `=1` is now rejected as `legacy_format`.
- *   2. Otherwise the caller must be a Supabase user whose `user_company_roles`
- *      contains a SUPER_ADMIN row (delegated to rbacService.isPlatformSuperAdmin).
- *      No `status='active'` filter — that filter was the source of the
- *      "valid Super Admin gets 403 from /ga-connect but 200 from
- *      /ga-analytics-summary" bug.
+ * READ rule — requireSuperAdminGaAccess: requireCapability(
+ * SUPER_ADMIN_DASHBOARD_VIEW) and nothing else. (This comment used to claim a
+ * `rbacService.isPlatformSuperAdmin` fallback; no such check exists.) The
+ * GET-only callers (analytics-health, ga/gsc-analytics-summary, …) use it.
+ *
+ * WRITE rule — requireSuperAdminGaWriteAccess (Closure-009, owner decision):
+ * every POST that connects, re-points, synchronises or acquires (ga/gsc-connect,
+ * ga/gsc-select-property, ga/gsc-sync, serp-acquisition) needs, in order:
+ *   1. the admin rate limit;
+ *   2. INTEGRATION_PLATFORM_OAUTH_MANAGE — the dedicated platform
+ *      integration-management WRITE capability, with its registered
+ *      (passkey + trusted-device) step-up; the bridge can never satisfy it;
+ *   3. platform write authority: an ACTIVE platform SUPER_ADMIN role on a
+ *      canonical principal — so a direct capability_assignments grant of the
+ *      capability alone is still refused.
  *
  * On failure this writes a standardized error JSON:
  *   { status: 'error', code, message }
@@ -22,8 +26,10 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../shared/contracts/security';
+import { INTEGRATION_PLATFORM_OAUTH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../shared/contracts/security';
 import { requireCapability } from '../security/requireCapability';
+import { requirePlatformWriteAuthority } from '../security/platformWriteAuthority';
+import { requireAdminRateLimit } from './requestAccessService';
 
 export type SuperAdminGaPrincipal = {
   userId: string | null;
@@ -47,4 +53,24 @@ export async function requireSuperAdminGaAccess(
     userId: guard.principal.legacyCookieSuperAdmin ? null : guard.principal.userId,
     via: guard.principal.legacyCookieSuperAdmin ? 'cookie' : 'supabase',
   };
+}
+
+/**
+ * The WRITE gate for the platform's own analytics integration (see the module
+ * comment). Returns null — with the response already written — on any denial;
+ * nothing has been read or written by then.
+ */
+export async function requireSuperAdminGaWriteAccess(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  operation: string,
+): Promise<{ userId: string } | null> {
+  if (!(await requireAdminRateLimit(req, res, `rl:super-admin:analytics-write:${operation}`, 10, 60))) return null;
+  const guard = await requireCapability(req, res, {
+    capability: INTEGRATION_PLATFORM_OAUTH_MANAGE,
+    reason: `platform analytics integration write: ${operation}`,
+  });
+  if (guard.ok !== true) return null;
+  if (!requirePlatformWriteAuthority(res, guard.principal, operation)) return null;
+  return { userId: guard.principal.userId };
 }

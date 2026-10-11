@@ -218,6 +218,11 @@ export async function replayableQueueNames(): Promise<string[]> {
   ];
 }
 
+/** A queueName override onto a queue other than the dead letter's own (Closure-009). */
+export const REDRIVE_QUEUE_OVERRIDE_NOT_PERMITTED = 'redrive_queue_override_not_permitted';
+/** A jobName that is neither the target queue nor the original worker (Closure-009). */
+export const REDRIVE_JOB_NAME_NOT_PERMITTED = 'redrive_job_name_not_permitted';
+
 /** Error message for a refused publish re-drive (see replayDeadLetterEntry). */
 export const PUBLISH_REDRIVE_UNSUPPORTED =
   'publish_redrive_unsupported: re-publish the post through POST /api/scheduler/retry';
@@ -267,6 +272,21 @@ export async function replayDeadLetterEntry(
   // dead-letter row stays and nothing is reported as re-driven.
   if (isPublishDeadLetter(entry.workerName, targetQueue, jobName)) {
     throw new Error(PUBLISH_REDRIVE_UNSUPPORTED);
+  }
+
+  // Closure-009 (owner decision) — the override contract. A payload is
+  // re-driven onto the queue it came from. `queueName` may only be overridden
+  // when the dead letter's worker name is NOT itself a re-drivable queue (a
+  // worker label that differs from its queue name); `jobName` must name the
+  // target queue or the original worker. Anything else would move one
+  // worker's payload onto an unrelated queue or job.
+  const workerName = String(entry.workerName ?? '').trim();
+  const replayable = await replayableQueueNames();
+  if (opts.queueName !== undefined && replayable.includes(workerName) && targetQueue !== workerName) {
+    throw new Error(`${REDRIVE_QUEUE_OVERRIDE_NOT_PERMITTED}: ${workerName} -> ${targetQueue}`);
+  }
+  if (jobName !== targetQueue && jobName !== workerName) {
+    throw new Error(`${REDRIVE_JOB_NAME_NOT_PERMITTED}: ${jobName}`);
   }
 
   const queue = await resolveReplayQueue(targetQueue);

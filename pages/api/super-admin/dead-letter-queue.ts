@@ -30,6 +30,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { requirePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import {
@@ -119,6 +120,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     reason: req.method === 'POST' ? 'super-admin dead-letter-queue re-drive' : 'super-admin dead-letter-queue inspection',
   });
   if (guard.ok !== true) return;
+  // Closure-009 (owner decision): re-drive is a platform-wide WRITE.
+  if (req.method === 'POST' && !requirePlatformWriteAuthority(res, guard.principal, 'dlq.redrive')) return;
 
   try {
     if (req.method === 'POST') {

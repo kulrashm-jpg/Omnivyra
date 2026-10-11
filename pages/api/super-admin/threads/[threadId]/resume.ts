@@ -11,7 +11,7 @@ import { logger } from '../../../../../backend/services/logger';
 import { requireAdminRateLimit } from '../../../../../backend/services/requestAccessService';
 import { requireCapability } from '../../../../../backend/security/requireCapability';
 import { requirePlatformWriteAuthority } from '../../../../../backend/security/platformWriteAuthority';
-import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../../shared/contracts/security/SecurityCapabilities';
+import { PUBLISH_RECOVERY_MANAGE } from '../../../../../shared/contracts/security/SecurityCapabilities';
 import {
   insertAuditLogStrict,
   SYSTEM_USER_ID,
@@ -30,7 +30,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const guard = await requireCapability(req, res, {
-    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    capability: PUBLISH_RECOVERY_MANAGE,
     reason: `operator resumes thread ${rootId}`,
     resourceId: rootId,
   });
@@ -68,7 +68,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     targetUserId: null,
     companyId: null,
     metadata: {
-      capability: SUPER_ADMIN_DASHBOARD_VIEW,
+      capability: PUBLISH_RECOVERY_MANAGE,
       reason,
       root_id: rootId,
       outcome: result.status,

@@ -2,8 +2,8 @@
  * Closure-005 — publish-recovery WRITES need platform authority, not the
  * dashboard-view capability.
  *
- * The three super-admin write routes are still gated by
- * requireCapability(SUPER_ADMIN_DASHBOARD_VIEW) (CPG-065 pins that), and now
+ * The three super-admin write routes are gated by requireCapability — since
+ * Closure-009 on PUBLISH_RECOVERY_MANAGE with step-up (CPG-065 pins it) — and
  * additionally by requirePlatformWriteAuthority: an active platform
  * SUPER_ADMIN role on a canonical, non-bridge principal. A principal that
  * merely HOLDS the view capability — a direct `capability_assignments` grant,

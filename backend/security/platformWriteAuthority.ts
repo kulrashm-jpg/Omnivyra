@@ -10,11 +10,13 @@
  *   - legacy bridge principals (LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES), and
  *   - any user granted it directly through `capability_assignments`.
  * Holding a capability does not prove platform authority
- * (isPlatformSuperAdminPrincipal). No dedicated publish-recovery write
- * capability exists yet — adding one (and whether it needs step-up) is an
- * owner decision — so these writes additionally require the established
- * predicate for platform authority: an active platform SUPER_ADMIN role on a
- * canonical (non-bridge) principal. Real platform super-admins remain
+ * (isPlatformSuperAdminPrincipal): `capability_assignments` can grant any
+ * capability directly to any user. So platform writes require the established
+ * predicate for platform authority — an active platform SUPER_ADMIN role on a
+ * canonical (non-bridge) principal — IN ADDITION to their capability gate.
+ * (Closure-009: the publish-recovery routes now gate on the dedicated
+ * PUBLISH_RECOVERY_MANAGE capability with step-up, and this helper also backs
+ * the other platform-wide write routes; see their call sites.) Real platform super-admins remain
  * platform-wide by design (AuthorizationService / TenantGuard); bridge
  * principals never are.
  */

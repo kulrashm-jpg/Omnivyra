@@ -48,6 +48,9 @@ import {
   // Phase 1 — super-admin canonicalization
   SUPER_ADMIN_DASHBOARD_VIEW,
   INTEGRATION_PLATFORM_OAUTH_MANAGE,
+  OUTREACH_PLATFORM_MANAGE,
+  PUBLISH_RECOVERY_MANAGE,
+  PLATFORM_CONTROLS_MANAGE,
   BLOG_PUBLISH_MANAGE,
   CONSUMPTION_VIEW_AGGREGATE,
   INTELLIGENCE_OVERRIDE_MANAGE,
@@ -124,6 +127,11 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     BILLING_PLATFORM_MANAGE,
     BILLING_PLAN_MANAGE,
     BILLING_GRANT_FREE_CREDITS,
+    // Closure-009 (owner decision) — platform-tier writes, step-up required,
+    // SUPER_ADMIN ONLY (never a tenant role, never the legacy bridge).
+    OUTREACH_PLATFORM_MANAGE,
+    PUBLISH_RECOVERY_MANAGE,
+    PLATFORM_CONTROLS_MANAGE,
     // Prospect identity spine. No hierarchy entry — it implies nothing.
     PROSPECT_INGEST,
     // Prospect ICP definition + ratification. Also no hierarchy entry, and

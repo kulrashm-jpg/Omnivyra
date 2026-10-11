@@ -150,7 +150,7 @@ import { PLATFORM_TIER_CAPABILITIES, assertPlatformCapabilityIsolation } from '.
 import { getStepUpPolicy } from '../../security/stepup/StepUpPolicyRegistry';
 import {
   BILLING_MANAGE, BILLING_PLAN_MANAGE, BILLING_PLATFORM_MANAGE, BILLING_PURCHASE, CONTENT_PUBLISH,
-  INTEGRATION_PLATFORM_OAUTH_MANAGE, STEP_UP_REQUIRED_CAPABILITIES, SUPER_ADMIN_DASHBOARD_VIEW,
+  INTEGRATION_PLATFORM_OAUTH_MANAGE, PUBLISH_RECOVERY_MANAGE, STEP_UP_REQUIRED_CAPABILITIES, SUPER_ADMIN_DASHBOARD_VIEW,
 } from '../../../shared/contracts/security';
 import type { AuthenticatedPrincipal, Capability } from '../../../shared/contracts/security';
 import observabilityRoute from '../../../pages/api/super-admin/observability';
@@ -262,8 +262,8 @@ const SURFACES: Surface[] = [
   { name: 'GET super-admin/reconciliation-summary', handler: reconSummaryRoute as Handler, method: 'GET', capability: SUPER_ADMIN_DASHBOARD_VIEW, group: 'content', effects: [] },
   { name: 'GET super-admin/system-health-summary', handler: healthSummaryRoute as Handler, method: 'GET', capability: SUPER_ADMIN_DASHBOARD_VIEW, group: 'content', effects: [] },
   { name: 'POST super-admin/linkedin-media-smoke-test', handler: smokeTestRoute as Handler, method: 'POST', body: { scheduledPostId: 'row-1', socialAccountId: 'acct-1', sourceUrl: 'https://example.test/a.jpg', mimeType: 'image/jpeg' }, capability: INTEGRATION_PLATFORM_OAUTH_MANAGE, group: 'content', effects: [fx.getSocialAccount, fx.getToken, fx.getOrUploadLinkedInAsset, fx.insertAuditLogStrict] },
-  { name: 'POST super-admin/threads/[threadId]/reconcile', handler: threadReconcileRoute as Handler, method: 'POST', query: { threadId: 'row-1' }, capability: SUPER_ADMIN_DASHBOARD_VIEW, group: 'content', effects: [fx.reconcileRow, fx.insertAuditLogStrict] },
-  { name: 'POST super-admin/threads/[threadId]/resume', handler: threadResumeRoute as Handler, method: 'POST', query: { threadId: 'root-1' }, capability: SUPER_ADMIN_DASHBOARD_VIEW, group: 'content', effects: [fx.resumeThreadPublish, fx.insertAuditLogStrict] },
+  { name: 'POST super-admin/threads/[threadId]/reconcile', handler: threadReconcileRoute as Handler, method: 'POST', query: { threadId: 'row-1' }, capability: PUBLISH_RECOVERY_MANAGE, group: 'content', effects: [fx.reconcileRow, fx.insertAuditLogStrict] },
+  { name: 'POST super-admin/threads/[threadId]/resume', handler: threadResumeRoute as Handler, method: 'POST', query: { threadId: 'root-1' }, capability: PUBLISH_RECOVERY_MANAGE, group: 'content', effects: [fx.resumeThreadPublish, fx.insertAuditLogStrict] },
   { name: 'GET super-admin/pricing', handler: pricingRoute as Handler, method: 'GET', capability: BILLING_PLAN_MANAGE, group: 'billing', effects: [fx.getFxConfig, fx.getPlanPricing] },
   { name: 'POST super-admin/pricing', handler: pricingRoute as Handler, method: 'POST', body: { action: 'fx', currency: 'EUR', rate: 0.9 }, capability: BILLING_PLAN_MANAGE, group: 'billing', effects: [fx.setFxRate, fx.setPriceOverride, fx.setPlanPricing] },
   { name: 'POST admin/billing/allocate', handler: allocateRoute as Handler, method: 'POST', body: { dry_run: false }, capability: BILLING_PLATFORM_MANAGE, group: 'billing', effects: [fx.runMonthlyAllocationSweep] },
@@ -346,7 +346,8 @@ describe('Test 4 — tenant capabilities cannot substitute for the platform capa
       'admin/billing/allocate.ts', 'admin/billing/reconcile.ts', 'super-admin/razorpay/verify-staging-payment.ts',
       'super-admin/monetization/operations.ts',
     ];
-    const platformNames = new Set(['SUPER_ADMIN_DASHBOARD_VIEW', 'INTEGRATION_PLATFORM_OAUTH_MANAGE', 'BILLING_PLATFORM_MANAGE', 'BILLING_PLAN_MANAGE']);
+    // Closure-009: the thread recovery routes gate on PUBLISH_RECOVERY_MANAGE (platform-tier, step-up).
+    const platformNames = new Set(['SUPER_ADMIN_DASHBOARD_VIEW', 'INTEGRATION_PLATFORM_OAUTH_MANAGE', 'BILLING_PLATFORM_MANAGE', 'BILLING_PLAN_MANAGE', 'PUBLISH_RECOVERY_MANAGE']);
     for (const f of files) {
       const src = fs.readFileSync(path.join(__dirname, '../../../pages/api', f), 'utf8');
       // The requirement object runs to the gate's own closing `});` line, so an
@@ -365,7 +366,7 @@ describe('Test 4 — tenant capabilities cannot substitute for the platform capa
 });
 
 describe('Test 5 — platform capability isolation', () => {
-  const USED = [SUPER_ADMIN_DASHBOARD_VIEW, INTEGRATION_PLATFORM_OAUTH_MANAGE, BILLING_PLATFORM_MANAGE, BILLING_PLAN_MANAGE];
+  const USED = [SUPER_ADMIN_DASHBOARD_VIEW, INTEGRATION_PLATFORM_OAUTH_MANAGE, BILLING_PLATFORM_MANAGE, BILLING_PLAN_MANAGE, PUBLISH_RECOVERY_MANAGE];
   it('every capability the routes now require is platform-tier', () => {
     for (const c of USED) expect(PLATFORM_TIER_CAPABILITIES).toContain(c);
   });

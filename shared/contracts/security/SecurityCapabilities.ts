@@ -69,11 +69,42 @@ export const MFA_VIEW_FACTORS        = 'mfa.view_factors' as const;
 export const SUPER_ADMIN_DASHBOARD_VIEW = 'super_admin.dashboard.view' as const;
 
 /**
- * Manage GLOBAL platform OAuth client credentials (across all tenants).
- * SUPER_ADMIN-only. NOT inherited from `INTEGRATION_MANAGE` because
- * `INTEGRATION_MANAGE` is a per-tenant capability granted to org admins.
+ * Manage GLOBAL platform OAuth client credentials (across all tenants), and —
+ * Closure-009, owner decision — the platform's OWN integration writes: the
+ * Omnivyra Google Analytics / Search Console connection, property selection,
+ * synchronization, and SERP acquisition. SUPER_ADMIN-only, step-up required.
+ * NOT inherited from `INTEGRATION_MANAGE` because `INTEGRATION_MANAGE` is a
+ * per-tenant capability granted to org admins. Reading that analytics data
+ * stays on SUPER_ADMIN_DASHBOARD_VIEW.
  */
 export const INTEGRATION_PLATFORM_OAUTH_MANAGE = 'integration.platform.oauth.manage' as const;
+
+/**
+ * Closure-009 (owner decision) — approve and activate Lead Outreach tasks for
+ * ANY tenant: the human approval gate before real people are contacted, and
+ * the dispatch that follows it. SUPER_ADMIN-only, platform-tier, step-up
+ * required. Replaces the read-only SUPER_ADMIN_DASHBOARD_VIEW gate on
+ * /api/super-admin/outreach/{approve,activate}.
+ */
+export const OUTREACH_PLATFORM_MANAGE = 'outreach.platform.manage' as const;
+
+/**
+ * Closure-009 (owner decision) — publish RECOVERY across tenants: record a
+ * reconciled outcome for an uncertain publish, resume a thread, or reconcile a
+ * thread node against the provider. SUPER_ADMIN-only, platform-tier, step-up
+ * required. Holding it never makes an uncertain outcome retryable: the
+ * PUBLISH_CALL_STARTED / uncertain gates and claim fencing still decide.
+ */
+export const PUBLISH_RECOVERY_MANAGE = 'publish.recovery.manage' as const;
+
+/**
+ * Closure-009 (owner decision) — change platform-wide runtime CONTROLS whose
+ * misuse disables safety for every tenant: rollout overrides and kill-switches
+ * (outbound moderation, tenant guard, policy gate, …). SUPER_ADMIN-only,
+ * platform-tier, step-up required. Exists so those writes can carry a
+ * registered step-up policy (StepUpPolicyRegistry keys policies by capability).
+ */
+export const PLATFORM_CONTROLS_MANAGE = 'platform.controls.manage' as const;
 
 /** Manage blog admin surfaces (intelligence-blog auto-publishing). */
 export const BLOG_PUBLISH_MANAGE = 'blog.publish.manage' as const;
@@ -271,6 +302,10 @@ export const ALL_CAPABILITIES = [
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
   BILLING_GRANT_FREE_CREDITS,
+  // Closure-009 — platform-tier write capabilities (owner decision)
+  OUTREACH_PLATFORM_MANAGE,
+  PUBLISH_RECOVERY_MANAGE,
+  PLATFORM_CONTROLS_MANAGE,
   // Bridge marker
   SUPER_ADMIN_LEGACY_BRIDGE,
 ] as const;
@@ -351,4 +386,8 @@ export const STEP_UP_REQUIRED_CAPABILITIES: ReadonlyArray<Capability> = [
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
   BILLING_GRANT_FREE_CREDITS,
+  // Closure-009 — owner decision: each requires step-up.
+  OUTREACH_PLATFORM_MANAGE,
+  PUBLISH_RECOVERY_MANAGE,
+  PLATFORM_CONTROLS_MANAGE,
 ] as const;
