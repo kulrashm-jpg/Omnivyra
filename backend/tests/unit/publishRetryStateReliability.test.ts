@@ -1334,6 +1334,26 @@ describe('Closure-002 — reconciliation, then an explicitly authorized retry', 
     expect(post('sp-1').status).toBe('published');
   });
 
+  test('mixed version: after reconciling not_published, a stale re-delivery of the OLD uncertain job still never publishes — only the explicit retry does', async () => {
+    // Without the retry_state column nothing marks the old job exhausted; its
+    // own PUBLISH_OUTCOME_UNCERTAIN code is the only thing that keeps the
+    // claim from running it once the post itself is retryable again.
+    schema.migrated = false;
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult({ success: false, error: { code: 'LINKEDIN_NETWORK_ERROR', message: 'reset', retryable: true } });
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(qjob('qj-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    expect('retry_state' in qjob('qj-1')).toBe(false);
+
+    await reconcileUncertainPublish({
+      scheduledPostId: 'sp-1', resolution: 'not_published', actorUserId: USER, note: 'checked: absent',
+    });
+    await processPublishJob(delivery('qj-1', 'sp-1', 1)); // BullMQ re-delivery of the old job
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1').error_code).toBe('PUBLISH_RECONCILED_NOT_PUBLISHED');
+  });
+
   test("'published' records the platform id; nothing publishes again", async () => {
     await uncertainPost();
     const r = await reconcileUncertainPublish({
