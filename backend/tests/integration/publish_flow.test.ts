@@ -24,7 +24,10 @@ function applyFilters(
   lteFilters?: Record<string, any>,
   // JSONB containment (`.contains(col, obj)`). Optional trailing parameter, so
   // every existing call site stays valid.
-  containsFilters?: Record<string, any>
+  containsFilters?: Record<string, any>,
+  // `.is(col, null)` — Postgres IS NULL (a missing column counts as NULL).
+  // Also optional and trailing, for the same reason.
+  isFilters?: Record<string, any>
 ) {
   let result = rows;
   for (const [k, v] of Object.entries(filters)) {
@@ -55,11 +58,16 @@ function applyFilters(
       });
     }
   }
+  if (isFilters) {
+    for (const [k, v] of Object.entries(isFilters)) {
+      result = result.filter((r: any) => (r[k] ?? null) === v);
+    }
+  }
   return result;
 }
 
 function buildChain(table: string) {
-  const state: any = { filters: {}, inFilters: {}, lteFilters: {}, containsFilters: {}, updateData: null };
+  const state: any = { filters: {}, inFilters: {}, lteFilters: {}, containsFilters: {}, isFilters: {}, updateData: null };
   const self: any = {
     select: jest.fn().mockReturnThis(),
     insert: jest.fn().mockImplementation((row: any) => {
@@ -94,11 +102,15 @@ function buildChain(table: string) {
       state.containsFilters[field] = criteria;
       return self;
     }),
+    is: jest.fn((field: string, value: any) => {
+      state.isFilters[field] = value;
+      return self;
+    }),
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     single: jest.fn().mockImplementation(() => {
       const rows = store[table] || [];
-      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters, state.containsFilters);
+      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters, state.containsFilters, state.isFilters);
       let data = filtered[0] || null;
       if (self._inserted) data = self._inserted;
       if (state.updateData && data) {
@@ -108,14 +120,14 @@ function buildChain(table: string) {
     }),
     maybeSingle: jest.fn().mockImplementation(() => {
       const rows = store[table] || [];
-      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters, state.containsFilters);
+      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters, state.containsFilters, state.isFilters);
       const data = filtered[0] || null;
       return Promise.resolve({ data, error: null });
     }),
   };
   self.then = jest.fn().mockImplementation((resolve: any) => {
     const rows = store[table] || [];
-    const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters, state.containsFilters);
+    const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters, state.containsFilters, state.isFilters);
     if (state._isDelete) {
       const ids = new Set(filtered.map((r: any) => r.id));
       store[table] = (store[table] || []).filter((r: any) => !ids.has(r.id));

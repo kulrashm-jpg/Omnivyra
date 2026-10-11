@@ -1535,3 +1535,34 @@ describe('Closure-003 R4 — the queue never takes over a claim whose call may b
     expect(post('sp-1')).toMatchObject({ status: 'publishing', error_code: 'PUBLISH_CLAIMED:someone-else' });
   });
 });
+
+describe('Closure-003 — reconciling an uncertain post an older build moved back to scheduled', () => {
+  test("'not_published' lands on failed + reconciled: nothing re-queues it by itself; the explicit retry does", async () => {
+    seedPost('sp-1', { status: 'scheduled', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    seedJob('qj-1', 'sp-1'); // a pending job an older build enqueued
+
+    // Before reconciliation the pending job refuses it.
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(0);
+
+    const r = await reconcileUncertainPublish({
+      scheduledPostId: 'sp-1', resolution: 'not_published', actorUserId: USER, note: 'checked: absent',
+    });
+    expect(r).toMatchObject({ status: 'reconciled' });
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_RECONCILED_NOT_PUBLISHED' });
+
+    const res = await callRetry('sp-1');
+    expect(res.statusCode).toBe(200);
+    await processPublishJob(delivery(String(liveJobsFor('sp-1')[0].id), 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(1);
+  });
+
+  test("'published' records the id from a scheduled + uncertain row", async () => {
+    seedPost('sp-1', { status: 'scheduled', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    const r = await reconcileUncertainPublish({
+      scheduledPostId: 'sp-1', resolution: 'published', platformPostId: 'urn:li:share:7', actorUserId: USER, note: 'live',
+    });
+    expect(r).toMatchObject({ status: 'reconciled', resolution: 'published' });
+    expect(post('sp-1')).toMatchObject({ status: 'published', platform_post_id: 'urn:li:share:7', error_code: null });
+  });
+});
