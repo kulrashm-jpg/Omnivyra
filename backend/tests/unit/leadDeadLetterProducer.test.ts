@@ -114,6 +114,13 @@ describe('fleet dead-letter coverage (worker_dead_letter_queue)', () => {
     'queue/workerTopology.ts': 'workers built via getWorker() — covered by the factory',
     'queue/startWorkers.ts': 'creator-render has its own DLQ (creatorRenderDurableQueue)',
     'workers/main.ts': 'creator-render exempt; every other handler covered (asserted below)',
+    // Its `failed` listener reconciles the bolt_execution_runs ROW after a
+    // terminal job failure; it is not a dead-letter site. It is only ever
+    // attached to the bolt-execution worker built by getWorker(), whose own
+    // listener already dead-letters the JOB — calling deadLetterOnExhaustion
+    // here too would dead-letter every exhausted bolt job twice. The premise is
+    // asserted below, so the exemption cannot outlive it.
+    'services/boltExecutionRecovery.ts': 'bolt run-row reconciliation on a getWorker() worker (asserted below)',
   };
 
   const walk = (dir: string, out: string[] = []): string[] => {
@@ -148,6 +155,30 @@ describe('fleet dead-letter coverage (worker_dead_letter_queue)', () => {
     expect(src).toMatch(/deadLetterOnExhaustion\(queueName, job, err\)/);
     expect(src).toMatch(/deadLetterOnExhaustion\('engagement-polling', job, err\)/);
     expect(src).toMatch(/deadLetterOnExhaustion\(name, job, err\)/);
+  });
+
+  it('the boltExecutionRecovery exemption holds: its handler only rides getWorker()-built workers', () => {
+    // The exemption above is valid ONLY while (a) that module never builds a
+    // worker of its own and (b) every worker it attaches to comes from the
+    // getWorker() factory, which dead-letters. Either change reopens the gap,
+    // so either change fails here.
+    const recovery = read('services/boltExecutionRecovery.ts');
+    expect(recovery).not.toMatch(/new Worker\(|getWorker\(/);
+
+    const callSites: Array<{ rel: string; arg: string }> = [];
+    for (const rel of walk('.')) {
+      if (rel === 'services/boltExecutionRecovery.ts') continue;
+      for (const m of read(rel).matchAll(/attachBoltRunReconciliation\(\s*([A-Za-z_$][\w$]*)\s*\)/g)) {
+        callSites.push({ rel, arg: m[1] });
+      }
+    }
+    // Non-vacuous: the production and dev bootstraps both attach it.
+    expect(callSites.map((c) => c.rel).sort()).toEqual(['queue/startWorkers.ts', 'workers/main.ts']);
+    for (const { rel, arg } of callSites) {
+      const builtByFactory = new RegExp(`\\b${arg}\\s*=\\s*getWorker\\(\\s*'bolt-execution'`);
+      expect({ rel, arg, builtByFactory: builtByFactory.test(read(rel)) })
+        .toEqual({ rel, arg, builtByFactory: true });
+    }
   });
 
   it('reuses the platform sink rather than introducing a new one', () => {
