@@ -25,6 +25,7 @@ import { safeEnqueue } from '../middleware/queueBackpressure';
 import { config } from '@/config';
 import { CronGuard } from '../utils/cronGuard';
 import { cronInstr } from '../utils/cronInstrumentation';
+import { createCycleGate, DEFAULT_CYCLE_STOP_BOUND_MS, type CycleStopResult } from './schedulerCycleGate';
 // W6-1 / W6-3 (Foundation Batch E)
 import { withLease, lockInstanceId } from '../../lib/platform/distributedLock';
 import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
@@ -368,6 +369,21 @@ let lastScheduledLeadRunMs   = 0;   // timestamp for shouldRunCronJob
 let cronInterval: NodeJS.Timeout | null = null;
 const cronGuard = new CronGuard();
 
+// Shutdown-safe cycle lifecycle (see schedulerCycleGate.ts): no new cycle once
+// stopping, no in-process overlap, lock released in a `finally`, and a bounded
+// wait for the in-flight cycle on shutdown. The fail-open / fail-closed policy
+// for an UNAVAILABLE lock stays in CronGuard (CRON_LOCK_FAIL_CLOSED).
+const cycleGate = createCycleGate({
+  acquire: () => cronGuard.tryAcquireLock(cronInstr.instanceId),
+  release: () => cronGuard.releaseLock(cronInstr.instanceId),
+});
+/** Set by startCron once its shutdown is defined; stopCron() runs it for a host. */
+let registeredShutdown: ((signal: string) => Promise<void>) | null = null;
+/** Bound the next shutdown waits for an in-flight cycle (a host passes its drain deadline). */
+let cycleStopBoundMs = DEFAULT_CYCLE_STOP_BOUND_MS;
+/** Outcome of the in-flight-cycle wait, for the host's shutdown report. */
+let lastCycleStop: CycleStopResult | 'not_started' = 'not_started';
+
 // Active worker timers — tracked so they can be cleared on shutdown
 const workerTimers: NodeJS.Timeout[] = [];
 
@@ -459,6 +475,9 @@ function scheduleWorker(
     return fn();
   };
   const tick = () => {
+    // A worker that was mid-run when shutdown cleared the timers must not
+    // re-arm itself afterwards.
+    if (cycleGate.isStopping()) return;
     const delay = intervalMs + Math.random() * jitterMs;
     const timer = setTimeout(async () => {
       let hadError = false;
@@ -497,6 +516,55 @@ function scheduleWorker(
 async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
   console.log('[cron] starting scheduler loop');
   console.log(`[cron] base tick: ${CRON_INTERVAL_MS / 1000}s | publish safety-net cadence: ${BASE_TICK_MS / 1000}s (working-hours gated)`);
+
+  // Graceful shutdown — defined (and, standalone, registered) BEFORE the first
+  // await, so a signal that arrives during boot — including while the boot
+  // cycle below is running — is coordinated instead of killing the process
+  // mid-cycle. Every boot step re-checks cycleGate.isStopping() before arming
+  // anything new. Single-flight: a second signal joins the first.
+  let shutdownInFlight: Promise<void> | null = null;
+  const shutdown = async (signal: string) => {
+    if (shutdownInFlight) return shutdownInFlight;
+    shutdownInFlight = (async () => {
+      console.log(`\n Received ${signal}. Shutting down cron...`);
+      if (cronInterval) {
+        clearInterval(cronInterval);
+        cronInterval = null;
+      }
+      // Clear all worker timers registered via scheduleWorker()
+      for (const t of workerTimers) clearTimeout(t);
+      workerTimers.length = 0;
+      // No new cycle from here on; wait (bounded) for the one in flight, which
+      // releases its lock in a `finally`. A cycle still running at the bound is
+      // reported, not cancelled.
+      lastCycleStop = await cycleGate.stop(cycleStopBoundMs);
+      // Close Redis clients
+      cronGuard.shutdown();
+      // 3AH-142: self-deregister from omnivyra:cron:instances BEFORE
+      // cronInstr.shutdown(), which nulls the Redis handle this needs. Bounded at
+      // 2 s and never throws. When the worker hosts the scheduler it calls this
+      // through stopCron() from its own bounded drain; standalone cron owns its
+      // own exit.
+      await cronInstr.deregister();
+      cronInstr.shutdown();
+      shutdownAdminRuntimeConfig();
+      shutdownIntentExecutionRedis();
+      // SEC-C6: a host with its own drain (worker main) exits after draining.
+      if (!opts.hostOwnsShutdown) {
+        process.exit(0);
+      }
+    })();
+    return shutdownInFlight;
+  };
+  registeredShutdown = shutdown;
+
+  // A host that owns shutdown (worker main) drives it through stopCron() from
+  // its own single SIGTERM handler; registering here as well would run the
+  // teardown twice, concurrently with the host's drain.
+  if (!opts.hostOwnsShutdown) {
+    process.on('SIGINT', () => { void shutdown('SIGINT'); });
+    process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+  }
 
   const redisReadyForQueues = await verifyRedisReadyForBackgroundRuntime('cron');
 
@@ -537,6 +605,11 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
     console.info('[cron-guard] last-run timestamps restored — tasks will respect their intervals on startup');
   }
 
+  if (cycleGate.isStopping()) {
+    console.info('[cron] shutdown began during boot — no startup work, no timers armed');
+    return;
+  }
+
   // First execution: run intelligence polling immediately (don't wait 2 hours)
   if (redisReadyForQueues && !lastIntelligencePollingEnqueue) {
     lastIntelligencePollingEnqueue = Date.now();
@@ -553,6 +626,14 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
   // Run full scheduler cycle immediately on startup
   _lastPublishCycleRun = Date.now();
   await runSchedulerCycle();
+
+  // The boot cycle is the longest window in startCron. A shutdown that began
+  // during it has already cleared the (not-yet-armed) timers, so arming them
+  // now would leave a live interval behind the host's exit.
+  if (cycleGate.isStopping()) {
+    console.info('[cron] shutdown began during the boot cycle — timers not armed');
+    return;
+  }
 
   // W1-2 (B-01 fix): base tick fires every CRON_INTERVAL_MS (default 15 min,
   // env CRON_INTERVAL_SECONDS) — previously it fired at BASE_TICK_MS (4 h),
@@ -873,38 +954,27 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
     LIFECYCLE_SWEEP_INTERVAL_MS, 'dataLifecycleSweep',
     ['policies', 'pruned']
   );
+  // Graceful shutdown is defined and registered at the top of startCron.
+}
 
-  // Graceful shutdown
-  const shutdown = async (signal: string) => {
-    console.log(`\n Received ${signal}. Shutting down cron...`);
-    if (cronInterval) {
-      clearInterval(cronInterval);
-      cronInterval = null;
-    }
-    // Clear all worker timers registered via scheduleWorker()
-    for (const t of workerTimers) clearTimeout(t);
-    workerTimers.length = 0;
-    // Close Redis clients
-    cronGuard.shutdown();
-    // 3AH-142: self-deregister from omnivyra:cron:instances BEFORE
-    // cronInstr.shutdown(), which nulls the Redis handle this needs. Bounded at
-    // 2 s and never throws. Standalone cron owns its own exit, so this always
-    // completes there; when the worker hosts the scheduler this handler is
-    // registered first and now yields on this await, after which main's own
-    // handler runs concurrently — best-effort by design (a missed ZREM only
-    // restores the pre-fix behaviour: the entry ages out via INSTANCE_TTL_MS).
-    await cronInstr.deregister();
-    cronInstr.shutdown();
-    shutdownAdminRuntimeConfig();
-    shutdownIntentExecutionRedis();
-    // SEC-C6: a host with its own drain (worker main) exits after draining.
-    if (!opts.hostOwnsShutdown) {
-      process.exit(0);
-    }
-  };
-
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+/**
+ * Stop the scheduler for a host that owns shutdown (backend/workers/main.ts).
+ *
+ * Runs the same teardown as the scheduler's own signal handler — no new cycle,
+ * timers cleared, the in-flight cycle awaited up to `cycleBoundMs`, clients
+ * closed, instance deregistered — and never exits the process. Safe before
+ * startCron has defined its shutdown (boot still in its first await): the gate
+ * is closed so the boot cycle never starts and startCron arms no timers.
+ * Idempotent with any concurrent call.
+ */
+async function stopCron(cycleBoundMs: number): Promise<CycleStopResult | 'not_started'> {
+  cycleStopBoundMs = cycleBoundMs;
+  if (!registeredShutdown) {
+    lastCycleStop = await cycleGate.stop(cycleBoundMs);
+    return lastCycleStop;
+  }
+  await registeredShutdown('host-stop');
+  return lastCycleStop;
 }
 
 /**
@@ -924,12 +994,18 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
  * (startup run, exported API, scripts) behave exactly as before.
  */
 async function runSchedulerCycle(opts: { includePublishSafetyNet?: boolean } = {}) {
-  // ── Distributed lock: skip cycle if another instance is already running ─────
-  const lockAcquired = await cronGuard.tryAcquireLock(cronInstr.instanceId);
-  if (!lockAcquired) {
+  // ── Distributed lock + shutdown coordination ────────────────────────────────
+  // The gate acquires the cross-instance lock, refuses to start once shutdown
+  // has begun or while this process already runs a cycle, and releases the
+  // lock in a `finally` — a cycle that throws no longer strands it for the TTL.
+  // A throw from the body still propagates to the caller, as before.
+  const result = await cycleGate.run(() => runSchedulerCycleBody(opts));
+  if (result === 'skipped_lock_held') {
     console.warn('[cron] lock held by another instance — skipping cycle');
-    return;
   }
+}
+
+async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }) {
 
   // Warm cron admin-config cache so shouldRunCronJob() reads current overrides
   await getCronAdminConfig();
@@ -1748,9 +1824,7 @@ async function runSchedulerCycle(opts: { includePublishSafetyNet?: boolean } = {
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,
   });
-
-  // Release distributed lock now that cycle is complete
-  void cronGuard.releaseLock(cronInstr.instanceId);
+  // The distributed lock is released by cycleGate.run's `finally`.
 }
 
 // Start cron if this file is run directly
@@ -1761,4 +1835,4 @@ if (require.main === module) {
   });
 }
 
-export { startCron, runSchedulerCycle };
+export { startCron, runSchedulerCycle, stopCron };

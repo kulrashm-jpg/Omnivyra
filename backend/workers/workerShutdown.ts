@@ -156,6 +156,33 @@ export async function closeWithin(
   }
 }
 
+/** A timer or loop the host started, and how to stop it. */
+export interface RuntimeStop {
+  label: string;
+  stop: () => void;
+}
+
+/**
+ * Stop every recorded producer of NEW work (polls, monitors, recovery timers)
+ * — the first thing a shutdown does, before anything is drained. Empties the
+ * list, so a stop runs once even if called again. A stop that throws is
+ * reported by label and never prevents the others or the drain.
+ */
+export function runRuntimeStops(stops: RuntimeStop[]): { stopped: string[]; failed: string[] } {
+  const stopped: string[] = [];
+  const failed: string[] = [];
+  for (const entry of stops.splice(0)) {
+    try {
+      entry.stop();
+      stopped.push(entry.label);
+    } catch (err) {
+      failed.push(entry.label);
+      console.warn(`[worker-shutdown] stopping ${entry.label} failed`, errorMessage(err));
+    }
+  }
+  return { stopped, failed };
+}
+
 /**
  * Second-signal idempotence. Railway sends SIGTERM and, if the process is still
  * alive, can follow with more; an ordinary async handler would start a second
