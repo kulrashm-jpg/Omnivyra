@@ -1,7 +1,7 @@
 {
   "projects": {
     "tsconfig.backend.json": 0,
-    "tsconfig.backend-tests.json": 259
+    "tsconfig.backend-tests.json": 162
   },
   "measured": "2026-08-19, branch main @ ba51e282, typescript 6.0.3 (re-measured by PHASE-2Z-X)",
   "note": [

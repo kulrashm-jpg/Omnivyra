@@ -70,7 +70,7 @@ describe('AUTH-001 §5 — canonical public-email domain list', () => {
   test('client error copy uses provider names, not naive capitalization', () => {
     const check = validateEmailDomain('someone@gmail.com');
     expect(check.valid).toBe(false);
-    if (!check.valid) {
+    if (check.valid === false) {
       expect(check.reason).toContain('Gmail');
       expect(check.reason).not.toContain('Gmail.Com');
     }

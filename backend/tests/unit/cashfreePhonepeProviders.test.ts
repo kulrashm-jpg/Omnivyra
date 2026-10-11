@@ -184,7 +184,7 @@ describe('cashfree + phonepe — governance enforcement', () => {
       makeDeps({ provider: p, available: false, gateReason: 'provider_disabled' }),
     );
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('provider_disabled');
+    if (r.ok === false) expect(r.code).toBe('provider_disabled');
   });
 
   test.each(NEW_PROVIDERS)('maintenance-mode %s → provider_in_maintenance rejection', async (p) => {
@@ -193,7 +193,7 @@ describe('cashfree + phonepe — governance enforcement', () => {
       makeDeps({ provider: p, available: false, gateReason: 'provider_in_maintenance' }),
     );
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('provider_in_maintenance');
+    if (r.ok === false) expect(r.code).toBe('provider_in_maintenance');
   });
 
   test.each(NEW_PROVIDERS)('geography-unsupported %s → provider_geography_unsupported rejection', async (p) => {
@@ -202,7 +202,7 @@ describe('cashfree + phonepe — governance enforcement', () => {
       makeDeps({ provider: p, available: false, gateReason: 'provider_geography_unsupported', country: 'US' }),
     );
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('provider_geography_unsupported');
+    if (r.ok === false) expect(r.code).toBe('provider_geography_unsupported');
   });
 });
 
