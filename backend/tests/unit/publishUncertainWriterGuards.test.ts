@@ -96,6 +96,19 @@ jest.mock('../../services/creator/media', () => ({ runSharedMediaPreEnqueue: jes
 jest.mock('../../services/earnCreditsService', () => ({ grantEarnCredit: jest.fn(async () => ({ granted: false })) }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../middleware/withIdempotency', () => ({ withIdempotency: (h: unknown) => h }));
+// The multi-row thread branch (shadow mode) — only reached when `nodes` is sent.
+jest.mock('../../../lib/thread/threadRuntimeMode', () => ({
+  getThreadRuntimeMode: () => 'shadow',
+  isMultiRowWriteEnabled: () => true,
+  isLegacyJoinedWriteSkipped: () => false,
+  checkEnforceGate: () => ({ allowed: true }),
+}));
+const mockReplaceChildren = jest.fn(async () => undefined);
+jest.mock('../../../lib/thread/threadNodePersistence', () => ({
+  insertThreadAtomic: jest.fn(async () => ({ rootId: 'new-root', childIds: [] })),
+  replaceThreadChildren: (...a: unknown[]) => (mockReplaceChildren as (...x: unknown[]) => Promise<undefined>)(...a),
+  ThreadInsertError: class ThreadInsertError extends Error {},
+}));
 
 import schedulePostHandler from '../../../pages/api/schedule/posts/[id]';
 import activityScheduleHandler from '../../../pages/api/activity-workspace/schedule';
@@ -233,5 +246,32 @@ describe('F5 — POST /api/activity-workspace/schedule re-scheduling an existing
     expect(res.statusCode).toBe(200);
     expect(postWrites().filter((w) => w.op === 'update')).toEqual([]);
     expect(postWrites().filter((w) => w.op === 'insert')).toHaveLength(1);
+  });
+});
+
+describe('F5 — re-scheduling an existing THREAD (root updated in place, children replaced)', () => {
+  const thread = (childOver: Row): void => {
+    posts = [
+      post({ id: 't0', title: 'Thread', is_thread_start: true, status: 'published', error_code: null, platform_post_id: 'tw0', parent_post_id: null }),
+      post({ id: 't1', title: null, is_thread_start: false, parent_post_id: 't0', status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT', ...childOver }),
+    ];
+  };
+  const nodes = [{ position: 0, content: 'first' }, { position: 1, content: 'second' }];
+
+  it('a node with an uncertain outcome: 409, the root is not rewritten and the children are not replaced', async () => {
+    thread({ error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+    const res = await callActivitySchedule({ title: 'Thread', nodes });
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'PUBLISH_OUTCOME_UNCERTAIN', scheduled_post_id: 't1' });
+    expect(postWrites().filter((w) => w.op === 'update')).toEqual([]);
+    expect(mockReplaceChildren).not.toHaveBeenCalled();
+  });
+
+  it('no uncertain node: the existing root is updated and its children replaced, as before', async () => {
+    thread({});
+    const res = await callActivitySchedule({ title: 'Thread', nodes });
+    expect(res.statusCode).toBe(200);
+    expect(postWrites().some((w) => w.op === 'update' && w.filters.id === 't0')).toBe(true);
+    expect(mockReplaceChildren).toHaveBeenCalledTimes(1);
   });
 });

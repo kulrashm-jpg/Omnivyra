@@ -610,3 +610,22 @@ describe('Closure-003 — sweeper: pre-call claims vs possibly-started calls', (
     expect(callsFor('t0')).toBe(1);
   });
 });
+
+describe('Closure-003 — a node that becomes uncertain between the read and its claim', () => {
+  test('the node claim pins the error_code it read: no claim, no call', async () => {
+    seedThread({ t0: { status: 'failed', error_code: 'TWITTER_RATE_LIMIT' } });
+    let raced = false;
+    postUpdateFault = (payload) => {
+      if (!raced && payload.status === 'publishing' && String(payload.error_code).startsWith('PUBLISH_CLAIMED:')) {
+        raced = true;
+        node('t0').error_code = 'PUBLISH_OUTCOME_UNCERTAIN'; // e.g. another writer recorded it just now
+      }
+      return null;
+    };
+    const r = await publishThread({ root_scheduled_post_id: 't0', social_account_id: ACCOUNT, user_id: USER });
+    expect(raced).toBe(true);
+    expect(platformCalls).toHaveLength(0);
+    expect(r.status).toBe('FAILED');
+    expect(node('t0')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+  });
+});
