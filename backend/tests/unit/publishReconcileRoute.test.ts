@@ -40,11 +40,17 @@ async function call(body: Record<string, unknown>, method = 'POST') {
   await (handler as unknown as (rq: Record<string, unknown>, rs: typeof res) => Promise<void>)({ method, body, headers: {} }, res);
   return res;
 }
+/** A canonical principal holding the active platform SUPER_ADMIN role. */
+const PLATFORM_ADMIN = {
+  userId: 'admin-1',
+  legacyCookieSuperAdmin: false,
+  organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' }],
+};
 const BODY = { scheduled_post_id: 'sp-1', resolution: 'not_published', note: 'checked the platform' };
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockRequireCapability.mockResolvedValue({ ok: true, principal: { userId: 'admin-1' } });
+  mockRequireCapability.mockResolvedValue({ ok: true, principal: PLATFORM_ADMIN });
   mockReconcile.mockResolvedValue({ status: 'reconciled', resolution: 'not_published', previous_error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
 });
 
@@ -64,7 +70,7 @@ describe('POST /api/super-admin/publish/reconcile', () => {
     const res = await call(BODY);
     expect(res.statusCode).toBe(200);
     expect(mockReconcile).toHaveBeenCalledWith(expect.objectContaining({
-      scheduledPostId: 'sp-1', resolution: 'not_published', actorUserId: 'admin-1', note: 'checked the platform',
+      scheduledPostId: 'sp-1', resolution: 'not_published', actor: PLATFORM_ADMIN, note: 'checked the platform',
     }));
     expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({
       actorUserId: 'admin-1',

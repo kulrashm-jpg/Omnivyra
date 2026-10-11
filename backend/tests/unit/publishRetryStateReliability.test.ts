@@ -1319,7 +1319,7 @@ describe('Closure-002 — reconciliation, then an explicitly authorized retry', 
   test("'not_published' makes the post an ordinary failure; the operator's retry publishes it exactly once more", async () => {
     await uncertainPost();
     const r = await reconcileUncertainPublish({
-      scheduledPostId: 'sp-1', resolution: 'not_published', actorUserId: USER, note: 'checked LinkedIn: no post',
+      scheduledPostId: 'sp-1', resolution: 'not_published', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'checked LinkedIn: no post',
     });
     expect(r).toMatchObject({ status: 'reconciled', previous_error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
     expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_RECONCILED_NOT_PUBLISHED' });
@@ -1350,7 +1350,7 @@ describe('Closure-002 — reconciliation, then an explicitly authorized retry', 
     expect('retry_state' in qjob('qj-1')).toBe(false);
 
     await reconcileUncertainPublish({
-      scheduledPostId: 'sp-1', resolution: 'not_published', actorUserId: USER, note: 'checked: absent',
+      scheduledPostId: 'sp-1', resolution: 'not_published', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'checked: absent',
     });
     await processPublishJob(delivery('qj-1', 'sp-1', 1)); // BullMQ re-delivery of the old job
     expect(publishesFor('sp-1')).toBe(1);
@@ -1361,7 +1361,7 @@ describe('Closure-002 — reconciliation, then an explicitly authorized retry', 
     await uncertainPost();
     const r = await reconcileUncertainPublish({
       scheduledPostId: 'sp-1', resolution: 'published', platformPostId: 'urn:li:share:42',
-      postUrl: 'https://linkedin.test/42', actorUserId: USER, note: 'found it live',
+      postUrl: 'https://linkedin.test/42', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'found it live',
     });
     expect(r).toMatchObject({ status: 'reconciled', resolution: 'published' });
     expect(post('sp-1')).toMatchObject({ status: 'published', platform_post_id: 'urn:li:share:42', error_code: null });
@@ -1374,15 +1374,15 @@ describe('Closure-002 — reconciliation, then an explicitly authorized retry', 
   test('reconciliation is refused for a post that is not uncertain, and needs a note (and an id for published)', async () => {
     seedPost('sp-1', { status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
     await expect(reconcileUncertainPublish({
-      scheduledPostId: 'sp-1', resolution: 'not_published', actorUserId: USER, note: 'x',
+      scheduledPostId: 'sp-1', resolution: 'not_published', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'x',
     })).resolves.toMatchObject({ status: 'not_uncertain' });
 
     seedPost('sp-2', { status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
     await expect(reconcileUncertainPublish({
-      scheduledPostId: 'sp-2', resolution: 'not_published', actorUserId: USER, note: '  ',
+      scheduledPostId: 'sp-2', resolution: 'not_published', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: '  ',
     })).resolves.toMatchObject({ status: 'invalid' });
     await expect(reconcileUncertainPublish({
-      scheduledPostId: 'sp-2', resolution: 'published', actorUserId: USER, note: 'live',
+      scheduledPostId: 'sp-2', resolution: 'published', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'live',
     })).resolves.toMatchObject({ status: 'invalid' });
     expect(post('sp-2').error_code).toBe('PUBLISH_OUTCOME_UNCERTAIN');
   });
@@ -1395,7 +1395,7 @@ describe('Closure-002 — reconciliation, then an explicitly authorized retry', 
       return snapshot as unknown as Awaited<ReturnType<typeof queriesModule.getScheduledPost>>;
     });
     const r = await reconcileUncertainPublish({
-      scheduledPostId: 'sp-1', resolution: 'published', platformPostId: 'p', actorUserId: USER, note: 'n',
+      scheduledPostId: 'sp-1', resolution: 'published', platformPostId: 'p', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'n',
     });
     spy.mockRestore();
     expect(r).toEqual({ status: 'changed' });
@@ -1546,7 +1546,7 @@ describe('Closure-003 — reconciling an uncertain post an older build moved bac
     expect(publishesFor('sp-1')).toBe(0);
 
     const r = await reconcileUncertainPublish({
-      scheduledPostId: 'sp-1', resolution: 'not_published', actorUserId: USER, note: 'checked: absent',
+      scheduledPostId: 'sp-1', resolution: 'not_published', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'checked: absent',
     });
     expect(r).toMatchObject({ status: 'reconciled' });
     expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_RECONCILED_NOT_PUBLISHED' });
@@ -1560,7 +1560,7 @@ describe('Closure-003 — reconciling an uncertain post an older build moved bac
   test("'published' records the id from a scheduled + uncertain row", async () => {
     seedPost('sp-1', { status: 'scheduled', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
     const r = await reconcileUncertainPublish({
-      scheduledPostId: 'sp-1', resolution: 'published', platformPostId: 'urn:li:share:7', actorUserId: USER, note: 'live',
+      scheduledPostId: 'sp-1', resolution: 'published', platformPostId: 'urn:li:share:7', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'live',
     });
     expect(r).toMatchObject({ status: 'reconciled', resolution: 'published' });
     expect(post('sp-1')).toMatchObject({ status: 'published', platform_post_id: 'urn:li:share:7', error_code: null });
@@ -1586,5 +1586,19 @@ describe('Closure-004 — a thread child is never published on its own', () => {
     expect(publishesFor('sp-child')).toBe(0);
     expect(qjob('qj-child')).toMatchObject({ status: 'failed', error_code: 'THREAD_CHILD_NOT_STANDALONE', retry_state: 'exhausted' });
     expect(post('sp-child').status).toBe('scheduled');
+  });
+});
+
+describe('Closure-005 — a cancelled (unscheduled) post cannot be republished by a leftover job', () => {
+  test.each([
+    ['a pending job the cancel missed', { status: 'pending' }],
+    ['a job in backoff', { status: 'failed', retry_state: 'awaiting_retry' }],
+    ['a stale processing re-delivery', { status: 'processing', updated_at: new Date(Date.now() - 40 * 60 * 1000).toISOString() }],
+  ])('%s: no platform call, the post stays cancelled', async (_label, jobOver) => {
+    seedPost('sp-1', { status: 'cancelled', error_message: 'user_unscheduled' });
+    seedJob('qj-left', 'sp-1', jobOver);
+    await processPublishJob(delivery('qj-left', 'sp-1', 1)).catch(() => undefined);
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1').status).toBe('cancelled');
   });
 });

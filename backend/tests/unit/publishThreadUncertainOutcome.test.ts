@@ -387,7 +387,7 @@ describe('R3 — super-admin resume consults the same durable state', () => {
 
     // The operator checked X: t1 is NOT there.
     await expect(reconcileUncertainPublish({
-      scheduledPostId: 't1', resolution: 'not_published', actorUserId: USER, note: 'not on the timeline',
+      scheduledPostId: 't1', resolution: 'not_published', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'not on the timeline',
     })).resolves.toMatchObject({ status: 'reconciled' });
 
     const r = await resumeThreadPublish({ root_scheduled_post_id: 't0' });
@@ -403,7 +403,7 @@ describe('R3 — super-admin resume consults the same durable state', () => {
       t1: { status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' },
     });
     await reconcileUncertainPublish({
-      scheduledPostId: 't1', resolution: 'published', platformPostId: 'tw_found', actorUserId: USER, note: 'found it',
+      scheduledPostId: 't1', resolution: 'published', platformPostId: 'tw_found', actor: { userId: USER, legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'found it',
     });
     await resumeThreadPublish({ root_scheduled_post_id: 't0' });
     expect(platformCalls.map((c) => c.rowId)).toEqual(['t2']);

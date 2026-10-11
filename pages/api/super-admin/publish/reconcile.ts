@@ -16,6 +16,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { logger } from '../../../../backend/services/logger';
 import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requirePlatformWriteAuthority } from '../../../../backend/security/platformWriteAuthority';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security/SecurityCapabilities';
 import {
   insertAuditLogStrict,
@@ -50,6 +51,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     resourceId: scheduledPostId,
   });
   if (guard.ok !== true) return;
+  // A WRITE: the dashboard-view capability alone (also held by bridge
+  // principals and by direct view grants) is not enough — see
+  // backend/security/platformWriteAuthority.ts. Nothing below runs otherwise.
+  if (!requirePlatformWriteAuthority(res, guard.principal, 'publish.reconcile')) return;
   const actorUserId = guard.principal.userId || SYSTEM_USER_ID;
 
   let result;
@@ -59,7 +64,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       resolution: body.resolution as PublishReconciliationResolution,
       platformPostId: body.platform_post_id ?? null,
       postUrl: body.post_url ?? null,
-      actorUserId,
+      actor: guard.principal,
       note: String(body.note ?? ''),
     });
   } catch (err) {
@@ -68,6 +73,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   switch (result.status) {
+    case 'forbidden':
+      return res.status(403).json({ error: 'Forbidden', code: 'PLATFORM_SUPER_ADMIN_REQUIRED', operation: 'publish.reconcile' });
     case 'invalid':
       return res.status(400).json({ error: 'INVALID_RECONCILIATION', details: result.reason });
     case 'not_found':

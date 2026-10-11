@@ -54,7 +54,7 @@ jest.mock('../../db/supabaseClient', () => ({
         maybeSingle: jest.fn(async () => {
           if (table === 'daily_content_plans') return { data: planRow, error: null };
           if (table === 'campaigns') return { data: { company_id: 'company-1' }, error: null };
-          if (table === 'scheduled_posts') return { data: { id: 'sp-1', campaign_id: 'campaign-1', user_id: 'user-1', social_account_id: 'sa-old' }, error: null };
+          if (table === 'scheduled_posts') return { data: { id: 'sp-1', campaign_id: 'campaign-1', user_id: 'user-1', social_account_id: 'sa-old', status: 'scheduled', error_code: null, platform_post_id: null }, error: null };
           if (table === 'social_accounts') return { data: socialAccountRow, error: null };
           return { data: null, error: null };
         }),
@@ -77,9 +77,12 @@ jest.mock('../../db/writeOwner', () => ({
       select: jest.fn(() => api),
       eq: jest.fn((k: string, v: any) => { filters[k] = v; return api; }),
       update: jest.fn((p: Row) => { updatePayload = p; return api; }),
+      is: jest.fn((k: string, v: any) => { filters[`is:${k}`] = v; return api; }),
       then(resolve: any) {
         if (updatePayload) ownedUpdates.push({ table, payload: updatePayload, filter: { ...filters } });
-        return Promise.resolve({ data: null, error: null }).then(resolve);
+      // A compare-and-set update reports the row it matched (the post is in the
+      // state the route judged safe in these fixtures).
+        return Promise.resolve({ data: updatePayload ? [{ id: 'matched' }] : null, error: null }).then(resolve);
       },
     };
     return api;

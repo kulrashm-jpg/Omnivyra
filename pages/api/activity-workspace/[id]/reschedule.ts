@@ -64,6 +64,7 @@ import {
 } from '@/backend/scheduler/schedulerService';
 import { emitCreatorEvent, CREATOR_EVENTS } from '@/backend/services/creatorOperationalTelemetryService';
 import { recordAuditEntry } from '@/backend/services/creatorAuditTrailService';
+import { authorizeLinkedPostMutation, pinErrorCode } from '@/backend/services/linkedScheduledPostGuard';
 import {
   assertBlueprintMutable,
   BlueprintExecutionFreezeError,
@@ -292,6 +293,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     execution_id: string | null;
     week_number: number | null;
   };
+  // ── Resolve company + auth — BEFORE anything about the row's state is
+  // disclosed (format, lifecycle state, revision) ────────────────────────
+  let companyId: string | null = null;
+  try {
+    const { data: campaignRow } = await supabase
+      .from('campaigns')
+      .select('company_id')
+      .eq('id', row.campaign_id)
+      .maybeSingle();
+    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
+  } catch {
+    /* fall through */
+  }
+  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+  const access = await enforceCompanyAccess({ req, res, companyId });
+  if (!access) return;
+
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {
     return res.status(409).json({
@@ -323,22 +341,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  // ── Resolve company + auth ────────────────────────────────────────────
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', row.campaign_id)
-      .maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch {
-    /* fall through */
-  }
-  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
-
   // ── Find the existing scheduled_post (for media_urls / scheduled_for update) ──
   const priorScheduledPostId = typeof currentContent.scheduled_post_id === 'string'
     ? (currentContent.scheduled_post_id as string)
@@ -350,22 +352,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // one company could point their own row at another tenant's post and have
   // the writes below retime it, swap its media and re-enqueue it on that
   // tenant's social account. Checked before every write and queue mutation.
-  if (priorScheduledPostId) {
-    const { data: linkedPost, error: linkedPostError } = await supabase
-      .from('scheduled_posts')
-      .select('id, campaign_id')
-      .eq('id', priorScheduledPostId)
-      .maybeSingle();
-    if (linkedPostError) {
-      return res.status(503).json({ error: 'Failed to verify the scheduled post. Please retry.', code: 'SCHEDULED_POST_LOOKUP_FAILED' });
-    }
-    if (!linkedPost || String((linkedPost as { campaign_id?: string | null }).campaign_id ?? '') !== String(row.campaign_id)) {
-      return res.status(409).json({
-        error: 'The scheduled post linked to this row does not belong to its campaign.',
-        code: 'SCHEDULED_POST_NOT_IN_CAMPAIGN',
-      });
-    }
+  // Closure-005 — and must be OWNED by the caller (company membership alone
+  // never authorizes changing another user's post), not be a thread child on
+  // its own, and be in a state where re-timing it cannot lose or repeat a
+  // publication (published / in flight / uncertain are refused).
+  const linkedDecision = await authorizeLinkedPostMutation({
+    postId: priorScheduledPostId,
+    campaignId: row.campaign_id,
+    userId: access.userId,
+    missingPost: 'refuse',
+  });
+  if (linkedDecision.ok === false) {
+    return res.status(linkedDecision.httpStatus).json({
+      error: linkedDecision.error,
+      code: linkedDecision.code,
+      ...(linkedDecision.nodeIds ? { node_ids: linkedDecision.nodeIds } : {}),
+    });
   }
+  const linkedPost = linkedDecision.post;
 
   // ── R2-P3: MOVE validation (all checks before any write) ───────────────
   const targetPlatform = movePlatform ?? normalizePlatformKey(row.platform ?? '');
@@ -670,9 +674,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       scheduledPostPatch.platform = targetPlatform;
       scheduledPostPatch.social_account_id = moveSocialAccountId;
     }
-    const { error: postUpdateError } = await ownedDbTable('scheduled_posts')
-      .update(scheduledPostPatch)
-      .eq('id', priorScheduledPostId);
+    // Compare-and-set on exactly the state judged safe above (owner,
+    // campaign, status, error_code, no platform_post_id): a publisher that
+    // claimed the post since then makes this match nothing, and the re-time
+    // is refused rather than applied to an in-flight or published post.
+    const guardPost = linkedPost as NonNullable<typeof linkedPost>;
+    const { data: postUpdated, error: postUpdateError } = await pinErrorCode(
+      ownedDbTable('scheduled_posts')
+        .update(scheduledPostPatch)
+        .eq('id', priorScheduledPostId)
+        .eq('campaign_id', row.campaign_id)
+        .eq('user_id', String(guardPost.user_id ?? ''))
+        .eq('status', String(guardPost.status ?? ''))
+        .is('platform_post_id', null),
+      guardPost.error_code,
+    ).select('id');
+    if (!postUpdateError && (!Array.isArray(postUpdated) || postUpdated.length === 0)) {
+      return res.status(409).json({
+        error: 'The scheduled post changed while it was being re-timed (it may be publishing). Refresh and retry.',
+        code: 'SCHEDULED_POST_CHANGED_CONCURRENTLY',
+        scheduled_post_id: priorScheduledPostId,
+        partial: true,
+      });
+    }
     if (postUpdateError) {
       console.warn('[reschedule] scheduled_posts update failed', { id, priorScheduledPostId, error: postUpdateError.message });
       return res.status(500).json({
@@ -743,6 +767,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             enqueue: atomicResult.enqueue,
             rollback: atomicResult.rollback,
           });
+          // Was reported as 200 queue:'re_enqueued' — a false success.
+          return res.status(502).json({
+            error: 'The post was re-timed but its publish job could not be re-queued. Retry the reschedule.',
+            code: 'QUEUE_REENQUEUE_FAILED',
+            partial: true,
+            scheduled_post_id: priorScheduledPostId,
+            enqueue: atomicResult.enqueue,
+            rollback: atomicResult.rollback,
+          });
         }
       } else {
         // Couldn't resolve user/account — fall back to the legacy
@@ -782,6 +815,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   recordAuditEntry({
     action: 'schedule_rescheduled',
     actorKind: 'user',
+    actorUserId: access.userId,
     source: 'api',
     dailyPlanId: id,
     scheduledPostId: priorScheduledPostId,

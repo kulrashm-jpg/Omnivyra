@@ -435,7 +435,7 @@ describe('Closure-004 — re-scheduling never erases or re-publishes a published
 
     outcomeFor.clear();
     await reconcileUncertainPublish({
-      scheduledPostId: String(c2.id), resolution: 'not_published', actorUserId: 'admin', note: 'not on the timeline',
+      scheduledPostId: String(c2.id), resolution: 'not_published', actor: { userId: 'admin', legacyCookieSuperAdmin: false, organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' as const }] }, note: 'not on the timeline',
     });
     await resumeThreadPublish({ root_scheduled_post_id: rootId });
     expect(callsFor(String(c2.id))).toBe(2); // the ambiguous attempt + the one after reconciliation

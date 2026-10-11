@@ -58,7 +58,7 @@ jest.mock('../../db/supabaseClient', () => ({
         maybeSingle: jest.fn(async () => {
           // Lookup of scheduled_posts user_id/social_account_id during reschedule
           if (table === 'scheduled_posts') {
-            return { data: { id: 'sp-1', campaign_id: 'campaign-1', user_id: 'user-1', social_account_id: 'sa-1' }, error: null };
+            return { data: { id: 'sp-1', campaign_id: 'campaign-1', user_id: 'user-1', social_account_id: 'sa-1', status: 'scheduled', error_code: null, platform_post_id: null }, error: null };
           }
           return { data: supabaseRows[`${table}:single`] ?? null, error: null };
         }),
@@ -80,12 +80,15 @@ function chain(table: string) {
     select: jest.fn(() => api),
     eq: jest.fn((k: string, v: any) => { filters[k] = v; return api; }),
     update: jest.fn((p: Record<string, any>) => { updatePayload = p; return api; }),
+    is: jest.fn((k: string, v: any) => { filters[`is:${k}`] = v; return api; }),
     maybeSingle: jest.fn(async () => ({ data: null, error: null })),
     then(resolve: any) {
       if (updatePayload) {
         ownedUpdates.push({ table, payload: updatePayload, filter: { ...filters } });
       }
-      return Promise.resolve({ data: null, error: null }).then(resolve);
+    // A compare-and-set update reports the row it matched (the post is in the
+    // state the route judged safe in these fixtures).
+      return Promise.resolve({ data: updatePayload ? [{ id: 'matched' }] : null, error: null }).then(resolve);
     },
   };
   return api;

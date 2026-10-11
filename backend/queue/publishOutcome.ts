@@ -79,9 +79,22 @@ export type ThreadNodeIdentity =
  * converted into a new publishable node.
  */
 export function classifyThreadNodeIdentity(row: PostOutcomeEvidence): ThreadNodeIdentity {
+  return classifyPublishIdentity(row, { missingCodeIsUncertain: true });
+}
+
+/**
+ * The same classification for a standalone post (unschedule / re-time): a
+ * code-less failure of a SINGLE post is an ordinary legacy failure, not an
+ * uncertain one (only thread nodes were written without codes).
+ */
+export function classifySinglePostIdentity(row: PostOutcomeEvidence): ThreadNodeIdentity {
+  return classifyPublishIdentity(row, { missingCodeIsUncertain: false });
+}
+
+function classifyPublishIdentity(row: PostOutcomeEvidence, options: { missingCodeIsUncertain: boolean }): ThreadNodeIdentity {
   const status = String(row.status ?? '').toLowerCase();
   if (row.platform_post_id || status === 'published') return 'published';
-  const blocked = publishOutcomeBlocksAttempt(row, { missingCodeIsUncertain: true });
+  const blocked = publishOutcomeBlocksAttempt(row, options);
   if (blocked === 'in_flight') return 'in_flight';
   if (blocked === 'uncertain') return 'uncertain';
   return 'replaceable';

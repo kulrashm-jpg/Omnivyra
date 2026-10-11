@@ -23,6 +23,7 @@
 import { supabase } from '../db/supabaseClient';
 import { getScheduledPost, updateScheduledPostOnPublish } from '../db/queries';
 import { publishOutcomeBlocksAttempt, PUBLISH_RECONCILED_NOT_PUBLISHED } from '../queue/publishOutcome';
+import { hasPlatformWriteAuthority, type PlatformWriteActor } from '../security/platformWriteAuthority';
 
 export type PublishReconciliationResolution = 'published' | 'not_published';
 
@@ -32,13 +33,20 @@ export type ReconcileUncertainPublishInput = {
   /** Required for 'published': the id of the post as seen on the platform. */
   platformPostId?: string | null;
   postUrl?: string | null;
-  actorUserId: string;
+  /**
+   * The authenticated operator. This service is an authorization boundary
+   * (it records a post as published, or as safe to publish again): it refuses
+   * anyone without platform write authority — a view-only grant or a bridge
+   * principal included — before reading or writing anything.
+   */
+  actor: PlatformWriteActor;
   /** Required: what the operator checked, for the audit trail. */
   note: string;
 };
 
 export type ReconcileUncertainPublishResult =
   | { status: 'reconciled'; resolution: PublishReconciliationResolution; previous_error_code: string | null }
+  | { status: 'forbidden' }
   | { status: 'invalid'; reason: string }
   | { status: 'not_found' }
   | { status: 'not_uncertain'; current_status: string | null; current_error_code: string | null }
@@ -47,6 +55,7 @@ export type ReconcileUncertainPublishResult =
 export async function reconcileUncertainPublish(
   input: ReconcileUncertainPublishInput,
 ): Promise<ReconcileUncertainPublishResult> {
+  if (!hasPlatformWriteAuthority(input.actor)) return { status: 'forbidden' };
   const scheduledPostId = String(input.scheduledPostId ?? '').trim();
   const note = String(input.note ?? '').trim();
   const platformPostId = String(input.platformPostId ?? '').trim();
@@ -72,7 +81,7 @@ export async function reconcileUncertainPublish(
 
   const previousCode = evidence.error_code ?? null;
   const stamp =
-    `[reconciled ${new Date().toISOString()} by ${input.actorUserId}: ${input.resolution}] ${note.slice(0, 500)}` +
+    `[reconciled ${new Date().toISOString()} by ${input.actor.userId}: ${input.resolution}] ${note.slice(0, 500)}` +
     (evidence.error_message ? ` | previously: ${String(evidence.error_message).slice(0, 500)}` : '');
 
   // Compare-and-set on the exact uncertain state read above. The row lands on

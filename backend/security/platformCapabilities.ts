@@ -211,7 +211,7 @@ export const CROSS_ORGANIZATION_IDENTITY_CAPABILITIES: ReadonlyArray<Capability>
  *
  * Pure — reads only the resolved principal, no I/O.
  */
-export function isPlatformSuperAdminPrincipal(principal: AuthenticatedPrincipal): boolean {
+export function isPlatformSuperAdminPrincipal(principal: Pick<AuthenticatedPrincipal, 'organizations'>): boolean {
   return principal.organizations.some(
     (m) => m.role === 'SUPER_ADMIN' && m.status === 'active',
   );

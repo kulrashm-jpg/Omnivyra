@@ -45,6 +45,7 @@ import {
 import { cancelScheduledPostQueueEntry, tryAcquireScheduledPostQueueLock } from '@/backend/scheduler/schedulerService';
 import { emitCreatorEvent, CREATOR_EVENTS } from '@/backend/services/creatorOperationalTelemetryService';
 import { recordAuditEntry } from '@/backend/services/creatorAuditTrailService';
+import { authorizeLinkedPostMutation, pinErrorCode } from '@/backend/services/linkedScheduledPostGuard';
 
 type UnscheduleBody = {
   reason?: unknown;
@@ -97,6 +98,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     content_status: string | null;
     platform: string | null;
   };
+
+  // ── Resolve company + auth — BEFORE anything about the row's state is
+  // disclosed (format, lifecycle state, revision) ─────────────────────────
+  let companyId: string | null = null;
+  try {
+    const { data: campaignRow } = await supabase
+      .from('campaigns')
+      .select('company_id')
+      .eq('id', row.campaign_id)
+      .maybeSingle();
+    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
+  } catch {
+    /* fall through */
+  }
+  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+  const access = await enforceCompanyAccess({ req, res, companyId });
+  if (!access) return;
+
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {
     return res.status(409).json({
@@ -125,88 +144,100 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  // ── Resolve company + auth ──────────────────────────────────────────
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', row.campaign_id)
-      .maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch {
-    /* fall through */
-  }
-  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
-
   const linkedPostId = typeof currentContent.scheduled_post_id === 'string'
     ? (currentContent.scheduled_post_id as string)
     : null;
 
-  // 3AH-92 — the post named by the row's content must belong to this row's
-  // (authorized) campaign. The content JSON is tenant-writable (e.g.
-  // commit-daily-plan stores it verbatim), so without this check a member of
-  // one company could point their own row at another tenant's post and have
-  // the steps below cancel its publish job and mark it cancelled. A post that
-  // no longer exists leaves nothing to cancel; the row still unschedules.
-  let scheduledPostId: string | null = null;
-  if (linkedPostId) {
-    const { data: linkedPost, error: linkedPostError } = await supabase
-      .from('scheduled_posts')
-      .select('id, campaign_id')
-      .eq('id', linkedPostId)
-      .maybeSingle();
-    if (linkedPostError) {
-      return res.status(503).json({ error: 'Failed to verify the scheduled post. Please retry.', code: 'SCHEDULED_POST_LOOKUP_FAILED' });
-    }
-    if (linkedPost) {
-      if (String((linkedPost as { campaign_id?: string | null }).campaign_id ?? '') !== String(row.campaign_id)) {
-        return res.status(409).json({
-          error: 'The scheduled post linked to this row does not belong to its campaign.',
-          code: 'SCHEDULED_POST_NOT_IN_CAMPAIGN',
-        });
-      }
-      scheduledPostId = linkedPostId;
-    }
+  // 3AH-92 + Closure-005 — the post named by the row's content must belong to
+  // this row's (authorized) campaign, be OWNED by the caller (company
+  // membership alone never authorizes changing another user's post), not be
+  // a thread child on its own, and be in a state where cancelling it cannot
+  // lose or repeat a publication. A post that no longer exists leaves nothing
+  // to cancel; the row still unschedules.
+  const decision = await authorizeLinkedPostMutation({
+    postId: linkedPostId,
+    campaignId: row.campaign_id,
+    userId: access.userId,
+    missingPost: 'allow',
+  });
+  if (decision.ok === false) {
+    return res.status(decision.httpStatus).json({
+      error: decision.error,
+      code: decision.code,
+      ...(decision.nodeIds ? { node_ids: decision.nodeIds } : {}),
+    });
   }
+  const linkedPost = decision.post;
+  const scheduledPostId: string | null = linkedPost?.id ?? null;
+  const cancelReason = userReason ? `user_unscheduled:${userReason}` : 'user_unscheduled';
 
-  // ── Cancel queue job (under advisory lock to serialize with concurrent reschedule) ──
+  // ── Cancel the post (and, for a thread, its children), then its queue job,
+  // under the advisory lock that serializes with a concurrent reschedule ──
   let queueResult: Awaited<ReturnType<typeof cancelScheduledPostQueueEntry>> = { db_cancelled: 0, queue_removed: 0, errors: [] };
-  if (scheduledPostId) {
-    const lock = await tryAcquireScheduledPostQueueLock(scheduledPostId);
+  let threadChildrenCancelled = 0;
+  if (linkedPost) {
+    const lock = await tryAcquireScheduledPostQueueLock(linkedPost.id);
     if (!lock.acquired) {
       return res.status(409).json({
         error: 'Another reschedule / unschedule is in progress for this post. Refresh and retry.',
         code: 'CONCURRENT_QUEUE_MUTATION',
-        scheduled_post_id: scheduledPostId,
+        scheduled_post_id: linkedPost.id,
       });
     }
     try {
-      queueResult = await cancelScheduledPostQueueEntry(scheduledPostId, {
-        reason: userReason ? `user_unscheduled:${userReason}` : 'user_unscheduled',
-      });
-    } catch (cancelError) {
-      console.warn('[unschedule] queue cancel threw (non-fatal)', { scheduledPostId, message: (cancelError as Error)?.message });
+      // Compare-and-set on exactly the state that was judged safe (status,
+      // error_code, no platform_post_id, owner, campaign). A publisher that
+      // claimed the post in between makes this match nothing — and, the
+      // other way round, a publisher's claim (which pins status and code)
+      // cannot land after this does. Only one of them wins. The cancelled
+      // status keeps any later delivery of an old job from publishing it
+      // (publish authorization refuses 'cancelled').
+      if (linkedPost.status !== 'cancelled') {
+        const cancelled = await pinErrorCode(
+          ownedDbTable('scheduled_posts')
+            .update({ status: 'cancelled', error_message: cancelReason, updated_at: new Date().toISOString() })
+            .eq('id', linkedPost.id)
+            .eq('campaign_id', row.campaign_id)
+            .eq('user_id', String(linkedPost.user_id ?? ''))
+            .eq('status', String(linkedPost.status ?? ''))
+            .is('platform_post_id', null),
+          linkedPost.error_code,
+        ).select('id');
+        if (cancelled.error) {
+          return res.status(500).json({ error: `Failed to cancel the scheduled post: ${cancelled.error.message}`, code: 'SCHEDULED_POST_CANCEL_FAILED' });
+        }
+        if (!Array.isArray(cancelled.data) || cancelled.data.length === 0) {
+          return res.status(409).json({
+            error: 'The scheduled post changed while it was being unscheduled (it may be publishing). Refresh and retry.',
+            code: 'SCHEDULED_POST_CHANGED_CONCURRENTLY',
+            scheduled_post_id: linkedPost.id,
+          });
+        }
+      }
+      // A thread is unscheduled as a whole: its (unpublished, judged-safe)
+      // children are cancelled too, each compare-and-set on what was read.
+      // The root is already cancelled, so no run of this thread can start.
+      for (const child of decision.threadChildren) {
+        if (child.status === 'cancelled') continue;
+        const childCancelled = await pinErrorCode(
+          ownedDbTable('scheduled_posts')
+            .update({ status: 'cancelled', error_message: cancelReason, updated_at: new Date().toISOString() })
+            .eq('id', child.id)
+            .eq('parent_post_id', linkedPost.id)
+            .eq('user_id', String(linkedPost.user_id ?? ''))
+            .eq('status', String(child.status ?? ''))
+            .is('platform_post_id', null),
+          child.error_code,
+        ).select('id');
+        if (!childCancelled.error && Array.isArray(childCancelled.data) && childCancelled.data.length > 0) threadChildrenCancelled++;
+      }
+      try {
+        queueResult = await cancelScheduledPostQueueEntry(linkedPost.id, { reason: cancelReason });
+      } catch (cancelError) {
+        console.warn('[unschedule] queue cancel threw (non-fatal: the post is already cancelled)', { scheduledPostId: linkedPost.id, message: (cancelError as Error)?.message });
+      }
     } finally {
       await lock.release();
-    }
-  }
-
-  // ── Mark the scheduled_posts row as cancelled ───────────────────────
-  if (scheduledPostId) {
-    try {
-      await ownedDbTable('scheduled_posts')
-        .update({
-          status: 'cancelled',
-          error_message: userReason ? `user_unscheduled:${userReason}` : 'user_unscheduled',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', scheduledPostId)
-        .eq('campaign_id', row.campaign_id);
-    } catch (postError) {
-      console.warn('[unschedule] scheduled_posts mark-cancelled failed (non-fatal)', { scheduledPostId, message: (postError as Error)?.message });
     }
   }
 
@@ -264,7 +295,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     scheduledPostId: scheduledPostId,
     previousState: { lifecycle_state: currentState },
     newState: { lifecycle_state: transition.to },
-    metadata: { queue: queueResult },
+    actorUserId: access.userId,
+    metadata: { queue: queueResult, thread_children_cancelled: threadChildrenCancelled },
   });
 
   return res.status(200).json({
@@ -278,6 +310,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       queue_removed: queueResult.queue_removed,
       had_errors: queueResult.errors.length > 0,
     },
+    thread_children_cancelled: threadChildrenCancelled,
     revision: readLifecycleRevision(transition.content),
   });
 }
