@@ -55,9 +55,9 @@ export type LinkedPostDecision =
   | { ok: true; post: LinkedPost | null; threadChildren: LinkedPost[] }
   | { ok: false; httpStatus: 403 | 409 | 503; code: string; error: string; nodeIds?: string[] };
 
-const POST_COLUMNS =
-  'id, user_id, campaign_id, status, error_code, platform_post_id, is_thread_start, parent_post_id, ' +
-  'updated_at, scheduled_for, media_urls, platform, social_account_id';
+// One string literal (not a concatenation): supabase-js derives the row type
+// from the literal; a widened `string` loses it.
+const POST_COLUMNS = 'id, user_id, campaign_id, status, error_code, platform_post_id, is_thread_start, parent_post_id, updated_at, scheduled_for, media_urls, platform, social_account_id';
 
 const IDENTITY_REFUSAL: Record<Exclude<ThreadNodeIdentity, 'replaceable'>, { code: string; error: string }> = {
   published: {
