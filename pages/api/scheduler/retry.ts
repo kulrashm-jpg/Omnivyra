@@ -35,13 +35,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Ownership: a user can only retry their own posts (same scoping as the list endpoint).
   const { data: post, error: postError } = await supabase
     .from('scheduled_posts')
-    .select('id, user_id, social_account_id, status, platform, error_code, platform_post_id')
+    .select('id, user_id, social_account_id, status, platform, error_code, platform_post_id, parent_post_id')
     .eq('id', scheduledPostId)
     .eq('user_id', user.id)
     .maybeSingle();
 
   if (postError || !post) {
     return res.status(404).json({ error: 'Scheduled post not found', code: 'NOT_FOUND' });
+  }
+  // A thread child is published only by its thread (as a reply, once). Retried
+  // on its own it would be re-queued as a standalone post.
+  if (post.parent_post_id) {
+    return res.status(409).json({
+      error: 'This post is part of a thread. Retry the thread from its first post instead.',
+      code: 'THREAD_CHILD_NOT_RETRYABLE',
+    });
   }
   if (post.status !== 'failed') {
     return res.status(409).json({

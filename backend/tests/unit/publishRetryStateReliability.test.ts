@@ -1566,3 +1566,25 @@ describe('Closure-003 — reconciling an uncertain post an older build moved bac
     expect(post('sp-1')).toMatchObject({ status: 'published', platform_post_id: 'urn:li:share:7', error_code: null });
   });
 });
+
+describe('Closure-004 — a thread child is never published on its own', () => {
+  test('manual retry of a failed thread child: 409 THREAD_CHILD_NOT_RETRYABLE, nothing reset or enqueued', async () => {
+    seedPost('sp-root', { is_thread_start: true, status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    seedPost('sp-child', { parent_post_id: 'sp-root', status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT' });
+    const before = { ...post('sp-child') };
+    const res = await callRetry('sp-child');
+    expect(res.statusCode).toBe(409);
+    expect(res.body?.code).toBe('THREAD_CHILD_NOT_RETRYABLE');
+    expect(post('sp-child')).toEqual(before);
+    expect(bullAdds).toHaveLength(0);
+  });
+
+  test('a queue job for a thread child ends failed and exhausted, without a platform call', async () => {
+    seedPost('sp-child', { parent_post_id: 'sp-root', status: 'scheduled' });
+    seedJob('qj-child', 'sp-child');
+    await expect(processPublishJob(delivery('qj-child', 'sp-child', 0))).resolves.toBeUndefined();
+    expect(publishesFor('sp-child')).toBe(0);
+    expect(qjob('qj-child')).toMatchObject({ status: 'failed', error_code: 'THREAD_CHILD_NOT_STANDALONE', retry_state: 'exhausted' });
+    expect(post('sp-child').status).toBe('scheduled');
+  });
+});

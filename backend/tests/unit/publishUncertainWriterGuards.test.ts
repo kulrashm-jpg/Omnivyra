@@ -29,6 +29,7 @@ const writes: Array<{ op: 'insert' | 'update'; table: string; filters: Row; row:
 
 function makeQuery(table: string) {
   const f: Row = {};
+  const isF: Row = {};
   let op: 'select' | 'insert' | 'update' = 'select';
   let payload: Row = {};
   const b: Record<string, unknown> = {};
@@ -38,12 +39,20 @@ function makeQuery(table: string) {
   b.limit = chain;
   b.in = (col: string, vals: unknown[]) => { f[col] = vals; return b; };
   b.eq = (col: string, val: unknown) => { f[col] = val; return b; };
+  b.is = (col: string, val: unknown) => { isF[col] = val; return b; };
   b.insert = (p: Row) => { op = 'insert'; payload = p; return b; };
   b.update = (p: Row) => { op = 'update'; payload = p; return b; };
-  const matches = (r: Row) => Object.entries(f).every(([k, v]) => r[k] === v);
+  const matches = (r: Row) =>
+    Object.entries(f).every(([k, v]) => r[k] === v) && Object.entries(isF).every(([k, v]) => (r[k] ?? null) === v);
   const resolveList = (): { data: unknown; error: null } => {
     if (op !== 'select') {
-      writes.push({ op, table, filters: { ...f }, row: payload });
+      writes.push({ op, table, filters: { ...f, ...isF }, row: payload });
+      if (op === 'update' && table === 'scheduled_posts') {
+        // Compare-and-set semantics: the update lands on (and reports) exactly the matching rows.
+        const hit = posts.filter(matches);
+        hit.forEach((r) => Object.assign(r, payload));
+        return { data: hit.map((r) => ({ ...r })), error: null };
+      }
       return { data: op === 'insert' ? { id: 'new-post-1' } : null, error: null };
     }
     if (table === 'scheduled_posts') return { data: posts.filter(matches).map((r) => ({ ...r })), error: null };
@@ -252,7 +261,9 @@ describe('F5 — POST /api/activity-workspace/schedule re-scheduling an existing
 describe('F5 — re-scheduling an existing THREAD (root updated in place, children replaced)', () => {
   const thread = (childOver: Row): void => {
     posts = [
-      post({ id: 't0', title: 'Thread', is_thread_start: true, status: 'published', error_code: null, platform_post_id: 'tw0', parent_post_id: null }),
+      // An unpublished root: a thread with a PUBLISHED node is refused
+      // outright (Closure-004 — see publishThreadReschedule.test.ts).
+      post({ id: 't0', title: 'Thread', is_thread_start: true, status: 'scheduled', error_code: null, platform_post_id: null, parent_post_id: null }),
       post({ id: 't1', title: null, is_thread_start: false, parent_post_id: 't0', status: 'failed', error_code: 'LINKEDIN_RATE_LIMIT', ...childOver }),
     ];
   };

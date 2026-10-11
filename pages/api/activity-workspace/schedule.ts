@@ -30,9 +30,9 @@ import {
 import { parseThreadNodesPayload } from '@/lib/thread/threadNodeContract';
 import {
   insertThreadAtomic,
-  replaceThreadChildren,
   ThreadInsertError,
 } from '@/lib/thread/threadNodePersistence';
+import { rescheduleExistingThread } from '@/backend/services/threadRuntime/threadReschedule';
 import {
   canonicalizePlatformForDb,
   canonicalizeContentTypeForDb,
@@ -324,9 +324,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       let existingRootId: string | null = null;
       if (campaignIdUuid && titleNormForRoot) {
         try {
+          // Scoped to the AUTHENTICATED owner, as the single-row dedup below
+          // has been since ACTIVITY-SEC-001. campaign + platform + title are all
+          // caller-supplied, and the campaign check is company-level: without
+          // this filter the match could be another user's thread in the same
+          // company, which the re-schedule would then rewrite and re-own.
           const { data: existing } = await supabase
             .from('scheduled_posts')
             .select('id')
+            .eq('user_id', userId)
             .eq('campaign_id', campaignIdUuid)
             .eq('platform', platformNorm)
             .eq('title', titleNormForRoot)
@@ -343,22 +349,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       let rootId: string;
       if (existingRootId) {
         // Re-scheduling an existing thread rewrites its root and REPLACES its
-        // children. If any node's last attempt may already have published it,
-        // that would erase the evidence and queue it again: refuse until the
-        // node is reconciled.
-        const [{ data: rootRows }, { data: childRows }] = await Promise.all([
-          supabase.from('scheduled_posts').select('id, status, error_code, platform_post_id').eq('id', existingRootId),
-          supabase.from('scheduled_posts').select('id, status, error_code, platform_post_id').eq('parent_post_id', existingRootId),
-        ]);
-        const uncertainNode = [
-          ...(Array.isArray(rootRows) ? rootRows : []),
-          ...(Array.isArray(childRows) ? childRows : []),
-        ].find((r) => hasUncertainOutcome(r as { status?: string | null; error_code?: string | null; platform_post_id?: string | null }));
-        if (uncertainNode) {
-          return respondOutcomeUncertain(res, String((uncertainNode as { id?: unknown }).id ?? existingRootId));
-        }
+        // children. That is only allowed while no node has an identity to lose
+        // (published, in flight, or uncertain) — see
+        // backend/services/threadRuntime/threadReschedule.ts for the rules and
+        // the fence that makes the replace safe against a concurrent publisher.
         const rootUpdate: Record<string, unknown> = {
-          user_id: userId,
           social_account_id: socialAccountId,
           campaign_id: campaignIdUuid,
           platform: platformNorm,
@@ -369,12 +364,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           status: rootStatus, // Phase 1B.1A: 'draft' in shadow, 'scheduled' in enforce.
           updated_at: new Date().toISOString(),
         };
-        const { error: rootUpdateErr } = await supabase
-          .from('scheduled_posts')
-          .update(rootUpdate)
-          .eq('id', existingRootId);
-        if (rootUpdateErr) throw new ThreadInsertError(rootUpdateErr.message, rootUpdateErr.code ?? null);
-        await replaceThreadChildren(supabase, existingRootId, parsedNodes.slice(1));
+        const outcome = await rescheduleExistingThread(supabase, {
+          rootId: existingRootId,
+          userId,
+          rootUpdate,
+          children: parsedNodes.slice(1),
+        });
+        if (outcome.ok === false) {
+          if (outcome.code === 'PUBLISH_OUTCOME_UNCERTAIN') {
+            return respondOutcomeUncertain(res, outcome.nodeIds[0] ?? existingRootId);
+          }
+          return res.status(409).json({
+            error: outcome.message,
+            code: outcome.code,
+            scheduled_post_id: existingRootId,
+            node_ids: outcome.nodeIds,
+          });
+        }
         rootId = existingRootId;
       } else {
         const result = await insertThreadAtomic(supabase, {
@@ -402,7 +408,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             repurpose_total: Number.isFinite(Number(repurposeTotal)) ? Number(repurposeTotal) : 1,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', rootId);
+          .eq('id', rootId)
+          .eq('user_id', userId);
       } catch (repurposeErr: any) {
         console.warn('[schedule] repurpose extras update failed on thread root (non-fatal):', repurposeErr?.message);
       }

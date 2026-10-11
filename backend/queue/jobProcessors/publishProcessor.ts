@@ -419,6 +419,17 @@ async function processPublishJobInner(params: {
     // is delivering now (fresh, in backoff, or a stale re-delivery without its
     // own marker), it must not call the platform for this post. Thread roots
     // are checked per node by the orchestrator instead.
+    //
+    // A thread CHILD is never published by its own job: only its thread's
+    // orchestrator publishes it (as a reply, once). A job for a child (e.g. a
+    // direct retry of a failed child) ends here, failed and never retried.
+    if ((scheduledPost as { parent_post_id?: string | null }).parent_post_id) {
+      const message = 'Thread child not published on its own: publish or resume its thread root instead.';
+      await updateQueueJobStatus(jobId as string, 'failed', { error_message: message, error_code: 'THREAD_CHILD_NOT_STANDALONE' });
+      await recordQueueJobRetryState(jobId as string, RETRY_STATE_EXHAUSTED);
+      await createQueueJobLog(jobId as string, 'warn', message, { scheduled_post_id });
+      return;
+    }
     if (scheduledPost.is_thread_start !== true) {
       const postEvidence = scheduledPost as { status?: string | null; error_code?: string | null; platform_post_id?: string | null };
       const blockedBy = publishOutcomeBlocksAttempt(postEvidence);

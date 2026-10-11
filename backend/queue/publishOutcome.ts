@@ -49,6 +49,45 @@ export function publishClaimCode(token: string): string {
 }
 
 /**
+ * Prefix of the fence a thread re-schedule writes on every child it is about
+ * to replace (THREAD_RESCHEDULING:<token>), compare-and-set on the state it
+ * read. A publisher reads a fenced child as held (publishOutcomeBlocksAttempt
+ * → 'in_flight') and never claims it; a publisher that claimed the child
+ * first makes the fence write miss, and the re-schedule is refused.
+ */
+export const THREAD_RESCHEDULING_PREFIX = 'THREAD_RESCHEDULING:' as const;
+
+export function threadReschedulingCode(token: string): string {
+  return `${THREAD_RESCHEDULING_PREFIX}${token}`;
+}
+
+/** How a thread re-schedule must treat an existing node (root or child). */
+export type ThreadNodeIdentity =
+  /** Has an external identity (platform_post_id) or is recorded published. */
+  | 'published'
+  /** A publisher holds it, or a call may be in flight, or a re-schedule fences it. */
+  | 'in_flight'
+  /** Its last attempt may have published it; only reconciliation resolves it. */
+  | 'uncertain'
+  /** Never reached the platform as far as its own row proves. */
+  | 'replaceable';
+
+/**
+ * Classify an existing thread node for a re-schedule. Only a 'replaceable'
+ * node may be deleted, rewritten or re-published by a re-schedule: it has no
+ * external identity to lose. Everything else is refused, never silently
+ * converted into a new publishable node.
+ */
+export function classifyThreadNodeIdentity(row: PostOutcomeEvidence): ThreadNodeIdentity {
+  const status = String(row.status ?? '').toLowerCase();
+  if (row.platform_post_id || status === 'published') return 'published';
+  const blocked = publishOutcomeBlocksAttempt(row, { missingCodeIsUncertain: true });
+  if (blocked === 'in_flight') return 'in_flight';
+  if (blocked === 'uncertain') return 'uncertain';
+  return 'replaceable';
+}
+
+/**
  * True when the row records a claim taken by the current protocol and NO
  * platform call has started under it. Only such a claim may ever be taken
  * over (by a stale-claim takeover or the sweeper): replacing its token fences
@@ -187,6 +226,8 @@ export function publishOutcomeBlocksAttempt(
   if (row.platform_post_id) return null;
   const status = String(row.status ?? '').toLowerCase();
   if (status === 'publishing') return 'in_flight';
+  // Fenced by a thread re-schedule that is about to replace it.
+  if (typeof row.error_code === 'string' && row.error_code.startsWith(THREAD_RESCHEDULING_PREFIX)) return 'in_flight';
   if (hasUncertainOutcome(row)) return 'uncertain';
   if (status === 'failed' && !row.error_code && options.missingCodeIsUncertain) return 'uncertain';
   return null;

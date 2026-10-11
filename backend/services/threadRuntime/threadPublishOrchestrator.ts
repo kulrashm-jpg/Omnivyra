@@ -132,6 +132,17 @@ async function loadThreadRows(rootId: string): Promise<Array<Record<string, any>
     return null;
   }
 
+  // Every node is published under the ROOT's account and owner. A child that
+  // belongs to another user is not part of this owner's thread (a corrupted
+  // or re-owned row): refuse the whole thread rather than publish it.
+  const foreignChild = (children ?? []).find((c: Record<string, any>) => c.user_id !== root.user_id);
+  if (foreignChild) {
+    console.error('[threadPublishOrchestrator] thread has a child owned by another user — refusing', {
+      rootId, childId: foreignChild.id,
+    });
+    return null;
+  }
+
   // Root is position 0; children are positions 1..N. Return as an ordered array.
   const ordered: Array<Record<string, any>> = [root, ...(children ?? [])];
   return ordered;

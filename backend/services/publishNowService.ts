@@ -578,6 +578,25 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     };
   }
 
+  // A thread CHILD is only ever published by its thread's orchestrator: as a
+  // reply to its predecessor, under the root's claim protocol, once. Published
+  // on its own it would go out out of order (not as a reply), outside the
+  // thread's node bookkeeping — and the thread run would publish it again.
+  if ((scheduledPost as { parent_post_id?: string | null }).parent_post_id) {
+    logger.warn('publishNow.thread_child_refused', {
+      surface: 'publishNow',
+      publishSource: input.publish_source ?? 'unknown',
+      scheduledPostId: scheduled_post_id,
+    });
+    return {
+      status: 'FAILED',
+      message: 'Publish refused: this post is part of a thread and is published only with its thread (publish or resume the thread root).',
+      timestamp,
+      suppressed: true,
+      refusal: 'not_claimable',
+    };
+  }
+
   // ── POST-LEVEL PUBLISH CLAIM ───────────────────────────────────────────
   //
   // The short-circuit above is a READ-then-ACT on `platform_post_id`: two

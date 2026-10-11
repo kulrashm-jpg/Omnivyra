@@ -744,3 +744,15 @@ describe('Closure-003 — the direct path writes its pre-call marker (R4)', () =
     expect(post('sp-1')).toEqual(published);
   });
 });
+
+describe('Closure-004 — publish-now refuses a thread child', () => {
+  test('a child id is refused (not_claimable): no claim, no call, row untouched', async () => {
+    seedPost('sp-child', { parent_post_id: 'sp-root', status: 'scheduled' });
+    const before = { ...post('sp-child') };
+    const r = await run('sp-child');
+    expect(r).toMatchObject({ status: 'FAILED', suppressed: true, refusal: 'not_claimable' });
+    expect(r.message).toMatch(/thread/i);
+    expect(publishesFor('sp-child')).toBe(0);
+    expect(post('sp-child')).toEqual(before);
+  });
+});
