@@ -197,3 +197,61 @@ export function describeStepUpOutcome(outcome: StepUpOutcome): string {
       return `Step-up is not available: ${outcome.reason}. Enroll a passkey at /settings/security and retry.`;
   }
 }
+
+/**
+ * Closure-011 — submit a super-admin WRITE through the established step-up
+ * flow, with the three results a call site actually acts on:
+ *
+ *   ok      — the write succeeded (2xx). Read `response`.
+ *   failed  — the server refused for a reason step-up cannot fix (a 400/404/
+ *             409/429/5xx, or a 403 the elevation did not clear). Show the
+ *             SERVER's own message from `response` — not "Access denied",
+ *             which describeStepUpOutcome would say for every refusal.
+ *   blocked — nothing was done and the caller should say why in `message`:
+ *             the session is gone (401 NOT_AUTHENTICATED), the operator
+ *             cancelled the passkey prompt, step-up is unavailable (no
+ *             passkey, unsupported browser), or — with `interactive: false` —
+ *             step-up is required but no ceremony may be started.
+ *
+ * Every Closure-009 step-up route authorizes BEFORE any read or write, so a
+ * STEP_UP_REQUIRED answer guarantees nothing happened and the single retry
+ * after elevation is the first execution. `interactive: false` is for calls
+ * not made from a user gesture (an automatic refresh): a passkey prompt may not
+ * be raised there, so STEP_UP_REQUIRED is returned as `blocked`.
+ */
+export type SuperAdminWriteResult =
+  | { status: 'ok'; response: Response }
+  | { status: 'failed'; response: Response }
+  | { status: 'blocked'; message: string };
+
+export const STEP_UP_DEFERRED_MESSAGE =
+  'This action needs a passkey confirmation. Run it again from its button to confirm.';
+
+export async function submitSuperAdminWrite(
+  fire: () => Promise<Response>,
+  options: { interactive?: boolean; onChallengeStart?: () => void } = {},
+): Promise<SuperAdminWriteResult> {
+  const first = await fire();
+  if (options.interactive === false) {
+    if (first.ok) return { status: 'ok', response: first };
+    const failure = await classifyAuthFailure(first);
+    if (failure.kind === 'step_up_required' || failure.kind === 'trusted_device_required') {
+      return { status: 'blocked', message: STEP_UP_DEFERRED_MESSAGE };
+    }
+    if (failure.kind === 'not_authenticated') {
+      return { status: 'blocked', message: describeStepUpOutcome({ kind: 'session_lost', failure, response: first }) };
+    }
+    return { status: 'failed', response: first };
+  }
+  const outcome = await runStepUpFlowIfNeeded(first, fire, {
+    onChallengeStart: options.onChallengeStart ? () => options.onChallengeStart?.() : undefined,
+  });
+  switch (outcome.kind) {
+    case 'success':
+      return { status: 'ok', response: outcome.response };
+    case 'auth_banner':
+      return { status: 'failed', response: outcome.response };
+    default:
+      return { status: 'blocked', message: describeStepUpOutcome(outcome) };
+  }
+}

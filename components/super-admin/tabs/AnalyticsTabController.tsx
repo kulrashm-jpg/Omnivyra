@@ -8,6 +8,7 @@ import {
   type GoogleAnalyticsCompanySummary,
 } from '@/pages/super-admin.types';
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { submitSuperAdminWrite } from '@/lib/security/superAdminStepUp';
 import {
   Activity,
   AlertCircle,
@@ -209,6 +210,42 @@ export function useAnalyticsTabController(props: AnalyticsTabProps) {
   const [isLoadingGaAnalytics, setIsLoadingGaAnalytics] = useState(false);
   const [gaAnalyticsError, setGaAnalyticsError] = useState<string | null>(null);
   const [gaNotice, setGaNotice] = useState<string | null>(null);
+
+  /**
+   * Closure-011 — every analytics WRITE (connect, property selection, sync)
+   * goes through the established super-admin step-up flow: a 401
+   * STEP_UP_REQUIRED runs the passkey ceremony and retries ONCE (the route
+   * authorizes before doing anything, so the retry is the first execution);
+   * a lost session, a cancelled or unavailable step-up, and any server refusal
+   * end as an error — never as a success. `interactive: false` (the automatic
+   * refresh) never raises a passkey prompt.
+   */
+  const analyticsWrite = useCallback(async (
+    url: string,
+    body: unknown,
+    fallback: string,
+    options: { interactive?: boolean } = {},
+  ): Promise<any> => {
+    const fire = () => fetchWithAuth(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const result = await submitSuperAdminWrite(fire, {
+      interactive: options.interactive,
+      onChallengeStart: () => setGaNotice('Confirm with your passkey to continue…'),
+    });
+    if (result.status === 'blocked') {
+      setGaNotice(null);
+      throw new Error(result.message);
+    }
+    const data = await result.response.json().catch(() => null);
+    if (result.status === 'failed') {
+      setGaNotice(null);
+      throw new Error(readErrorMessage(data, fallback));
+    }
+    return data;
+  }, []);
   const [gaConnecting, setGaConnecting] = useState(false);
   const [gaRefreshing, setGaRefreshing] = useState(false);
   const [autoGaRefreshAttempted, setAutoGaRefreshAttempted] = useState(false);
@@ -306,12 +343,8 @@ export function useAnalyticsTabController(props: AnalyticsTabProps) {
       analytics_surface: 'super_admin',
     });
     try {
-      const response = await fetchWithAuth('/api/super-admin/ga-connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok || !data?.authorizationUrl) {
+      const data = await analyticsWrite('/api/super-admin/ga-connect', undefined, 'Failed to connect Google Analytics');
+      if (!data?.authorizationUrl) {
         throw new Error(readErrorMessage(data, 'Failed to connect Google Analytics'));
       }
       window.location.href = data.authorizationUrl;
@@ -327,15 +360,7 @@ export function useAnalyticsTabController(props: AnalyticsTabProps) {
     setGaAnalyticsError(null);
     setGaNotice(null);
     try {
-      const response = await fetchWithAuth('/api/super-admin/ga-select-property', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ propertyId: selectedPropertyId }),
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(readErrorMessage(data, 'Failed to select Google Analytics property'));
-      }
+      await analyticsWrite('/api/super-admin/ga-select-property', { propertyId: selectedPropertyId }, 'Failed to select Google Analytics property');
       setGaNotice('Google Analytics property selected.');
       await loadGaAnalytics();
     } catch (error: any) {
@@ -354,12 +379,8 @@ export function useAnalyticsTabController(props: AnalyticsTabProps) {
       analytics_surface: 'super_admin',
     });
     try {
-      const response = await fetchWithAuth('/api/super-admin/gsc-connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok || !data?.authorizationUrl) {
+      const data = await analyticsWrite('/api/super-admin/gsc-connect', undefined, 'Failed to connect Search Console');
+      if (!data?.authorizationUrl) {
         throw new Error(readErrorMessage(data, 'Failed to connect Search Console'));
       }
       window.location.href = data.authorizationUrl;
@@ -375,15 +396,7 @@ export function useAnalyticsTabController(props: AnalyticsTabProps) {
     setGaAnalyticsError(null);
     setGaNotice(null);
     try {
-      const response = await fetchWithAuth('/api/super-admin/gsc-select-property', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ propertyId: selectedGscPropertyId }),
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(readErrorMessage(data, 'Failed to select Search Console property'));
-      }
+      await analyticsWrite('/api/super-admin/gsc-select-property', { propertyId: selectedGscPropertyId }, 'Failed to select Search Console property');
       setGaNotice('Search Console property selected.');
       await loadGaAnalytics();
     } catch (error: any) {
@@ -405,14 +418,9 @@ export function useAnalyticsTabController(props: AnalyticsTabProps) {
       automatic: Boolean(options?.automatic),
     });
     try {
-      const response = await fetchWithAuth('/api/super-admin/ga-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const data = await analyticsWrite('/api/super-admin/ga-sync', undefined, 'Failed to refresh Google Analytics', {
+        interactive: !options?.automatic,
       });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(readErrorMessage(data, 'Failed to refresh Google Analytics'));
-      }
       setGaNotice(
         data?.status === 'synced'
           ? 'Google Analytics refreshed.'
@@ -431,7 +439,7 @@ export function useAnalyticsTabController(props: AnalyticsTabProps) {
     } finally {
       setGaRefreshing(false);
     }
-  }, [loadGaAnalytics]);
+  }, [analyticsWrite, loadGaAnalytics]);
 
   const handleRefreshSearchConsole = useCallback(async () => {
     setGscRefreshing(true);
@@ -443,14 +451,7 @@ export function useAnalyticsTabController(props: AnalyticsTabProps) {
       automatic: false,
     });
     try {
-      const response = await fetchWithAuth('/api/super-admin/gsc-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(readErrorMessage(data, 'Failed to refresh Search Console'));
-      }
+      const data = await analyticsWrite('/api/super-admin/gsc-sync', undefined, 'Failed to refresh Search Console');
       const written = typeof data?.records_written === 'number' ? ` (${data.records_written} records)` : '';
       setGaNotice(
         data?.status === 'synced'
@@ -470,7 +471,7 @@ export function useAnalyticsTabController(props: AnalyticsTabProps) {
     } finally {
       setGscRefreshing(false);
     }
-  }, [loadGaAnalytics]);
+  }, [analyticsWrite, loadGaAnalytics]);
 
   useEffect(() => {
     const status = gaSummary?.ga_status;
