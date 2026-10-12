@@ -115,6 +115,16 @@ describe('trusting a device', () => {
     expect(new Date(String(mockRows.find((x) => x.user_id === 'someone-else')!.expires_at)).getTime()).toBeLessThan(Date.now());
   });
 
+  it('the caller\'s OWN dormant row is revived even when another user has a row for the same fingerprint', async () => {
+    seedRow({ id: 'dev-theirs', user_id: 'someone-else', expires_at: past() });
+    seedRow({ id: 'dev-mine', expires_at: past() });
+    const r = await register({ userId: USER, fingerprint: FP, label: 'mine' });
+    expect(r.ok).toBe(true);
+    expect(mockRows).toHaveLength(2);
+    expect(mockRows.find((x) => x.id === 'dev-mine')).toMatchObject({ revoked_at: null, label: 'mine' });
+    expect(new Date(String(mockRows.find((x) => x.id === 'dev-theirs')!.expires_at)).getTime()).toBeLessThan(Date.now());
+  });
+
   it('a concurrent re-trust revives it first: the compare-and-set loses and the caller gets ALREADY_TRUSTED, nothing clobbered', async () => {
     seedRow({ expires_at: past() });
     const concurrentExpiry = future();
