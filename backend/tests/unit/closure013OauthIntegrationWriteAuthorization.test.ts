@@ -356,6 +356,11 @@ describe('the Closure-012 principal: VIEW_ONLY + DIRECT grants + valid passkey s
     expect(denial[0]).toMatchObject({ capability: INTEGRATION_PLATFORM_OAUTH_MANAGE, actorUserId: GRANTEE, actorSessionId: `sess-${GRANTEE}` });
     expect(String(denial[0].reason)).toContain('PLATFORM_SUPER_ADMIN_REQUIRED');
   });
+  it.each(each(SURFACES))('%s → the refused write leaves NO allowed / elevated_route_accessed row for the write capability', async (_n, s) => {
+    await call(s, { user: GRANTEE });
+    expect(mockSecurityAudit.filter((e) => e.capability === INTEGRATION_PLATFORM_OAUTH_MANAGE
+      && (e.decision === 'allowed' || e.decision === 'elevated_route_accessed'))).toEqual([]);
+  });
 });
 
 describe('an ordinary tenant administrator (no grants, valid passkey step-up, trusted device)', () => {
