@@ -29,7 +29,10 @@ const PREFIX = `c12val-${randomUUID().slice(0, 8)}`;
 // ── Real queue, with fault injection (a Redis error on remove / add) ─────────
 let mockRealQueue: Queue | null = null;
 const mockFailRemoveFor = new Set<string>();
+const mockFailGetJobFor = new Set<string>();
 let mockFailNextAdd = false;
+/** Runs once, the first time getJob is asked for this id (lets a concurrent writer land mid-operation). */
+const mockOnGetJob = new Map<string, () => Promise<void>>();
 function mockQueueFacade(): Queue {
   const q = mockRealQueue as Queue;
   return new Proxy(q, {
@@ -42,6 +45,9 @@ function mockQueueFacade(): Queue {
       }
       if (prop === 'getJob') {
         return async (id: string) => {
+          const hook = mockOnGetJob.get(id);
+          if (hook) { mockOnGetJob.delete(id); await hook(); }
+          if (mockFailGetJobFor.has(id)) throw new Error('injected: redis getJob failed');
           const job = await target.getJob(id);
           if (!job || !mockFailRemoveFor.has(id)) return job;
           return new Proxy(job, {
@@ -186,6 +192,8 @@ d('Closure-012 Section C — real BullMQ (loopback Redis DB 15, isolated prefix)
     holds.splice(0).forEach((release) => release());
     await Promise.all(workers.splice(0).map((w) => w.close()));
     mockFailRemoveFor.clear();
+    mockFailGetJobFor.clear();
+    mockOnGetJob.clear();
     mockFailNextAdd = false;
     for (const k of Object.keys(mockTables)) delete mockTables[k];
     await (mockRealQueue as Queue).obliterate({ force: true });
@@ -285,6 +293,32 @@ d('Closure-012 Section C — real BullMQ (loopback Redis DB 15, isolated prefix)
     expect(row(orphan)).toMatchObject({ status: 'cancelled', error_message: 'drift_self_heal' });
     expect(row(healthy).status).toBe('pending');
     expect(await state(healthy)).toBe('delayed');
+  });
+
+  it('C6b — drift sweep: a Redis ERROR probing a row is UNKNOWN, never "missing": the row is not cancelled', async () => {
+    const id = await liveJob('sp-c6c');
+    mockFailGetJobFor.add(id);
+    const r = await sweepQueueDrift({ maxScan: 100 });
+    expect(r).toMatchObject({ drift_found: 0, drift_cancelled: 0, peer_unknown: 1 });
+    expect(row(id).status).toBe('pending');
+    mockFailGetJobFor.clear();
+    expect(await state(id)).toBe('delayed');
+  });
+
+  it('C9 — a concurrent reschedule inserts its live row + real job between our cancel and our insert: we report FAILURE (duplicate_conflict), never ok', async () => {
+    const old = await liveJob('sp-c9');
+    const theirs = randomUUID();
+    const theirAt = FUTURE(7);
+    // The cancel removes our old job via getJob(old); the other request lands right after.
+    mockOnGetJob.set(old, async () => {
+      mockTables.queue_jobs.push({ id: theirs, scheduled_post_id: 'sp-c9', job_type: 'publish', status: 'pending', scheduled_for: theirAt, metadata: null });
+      await (mockRealQueue as Queue).add('publish', { scheduled_post_id: 'sp-c9' }, { jobId: theirs, delay: 7 * 3_600_000 });
+    });
+    const r = await atomicCancelAndReEnqueueScheduledPost({ scheduledPostId: 'sp-c9', userId: 'u', socialAccountId: 'sa', newScheduledFor: FUTURE(3) });
+    expect(r).toMatchObject({ ok: false, enqueue: 'duplicate', duplicate_conflict: 'live_job_for_another_time' });
+    expect(liveRows('sp-c9').map((x) => x.id)).toEqual([theirs]);
+    expect(await state(theirs)).toBe('delayed');
+    expect(await state(old)).toBe('missing');
   });
 
   it('C8 — two concurrent reschedules of one post to DIFFERENT times: one live row, its real job is that row, and only the request whose time it carries may report success', async () => {

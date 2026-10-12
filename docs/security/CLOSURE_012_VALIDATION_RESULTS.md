@@ -43,7 +43,7 @@ Prerequisites to unblock, each needing the owner's authorization:
 ## 3. Section C — real BullMQ: results
 
 Harness: `backend/tests/integration/closure012RealBullmqValidation.test.ts`
-(opt-in `OMNIVYRA_REAL_BULLMQ_VALIDATION=1`). Real: BullMQ 5.76.6 Queue +
+(opt-in `OMNIVYRA_REAL_BULLMQ_VALIDATION=1`); 11/11 passed. Real: BullMQ 5.76.6 Queue +
 Worker on Memurai, and the production code under test
 (`atomicCancelAndReEnqueueScheduledPost`, `cancelScheduledPostQueueEntry`,
 `sweepQueueDrift`, `replayDeadLetterEntry`). Faked: the database (in-memory,
@@ -59,6 +59,8 @@ write-time predicates; live-row uniqueness simulated), the provider, telemetry.
 | C3c stale job whose row already `completed` | job still **delayed** | row stays `completed`; nothing cancelled | **PASS** |
 | C5 DLQ re-drive of a publish entry | **0 jobs** added | dead letter kept; `publish_redrive_unsupported` | **PASS** |
 | C6 drift sweep | healthy job **delayed** | orphan pending row (no job) `cancelled: drift_self_heal`; healthy row untouched; `peer_unknown: 0` | **PASS** |
+| C6b drift probe hits a Redis ERROR (injected) | job still **delayed** | row NOT cancelled; `peer_unknown: 1` (unknown is never "missing") | **PASS** |
+| C9 a concurrent reschedule lands its live row + real job between our cancel and our insert | their job **delayed**; our old job **missing** | only their row live; we report `ok:false`, `duplicate_conflict: live_job_for_another_time` | **PASS** |
 | C8 two concurrent reschedules to different times | exactly **one** live job = the live row's id | exactly one live row; any `ok:true` matches its own time; not both ok | **PASS** |
 | C4 uncertain provider outcome through the real publish worker | — | — | **NOT RUN** — needs the real publish processor + database (Section A prerequisites); covered only by unit suites |
 | C7 mixed old/new versions | — | — | **BLOCKED** — needs two deployable builds (old worker image) on an isolated stack; not constructible without Docker |
