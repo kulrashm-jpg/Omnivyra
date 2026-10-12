@@ -133,9 +133,13 @@ export async function runStepUpFlowIfNeeded(
       const errMsg = err instanceof Error ? err.message : String(err);
       // Distinguish user cancellation (normal) from infrastructure
       // failure (passkey absent / browser unsupported / verify endpoint
-      // returned non-2xx).
+      // returned non-2xx). A real browser cancel is a DOMException /
+      // WebAuthnError whose NAME is NotAllowedError (or AbortError) and whose
+      // message does not repeat the name, so the name is checked too.
+      const errName = err instanceof Error ? err.name : '';
       const lower = errMsg.toLowerCase();
-      if (lower.includes('user cancel') || lower.includes('aborterror') || lower.includes('notallowederror')) {
+      if (errName === 'NotAllowedError' || errName === 'AbortError'
+        || lower.includes('user cancel') || lower.includes('aborterror') || lower.includes('notallowederror')) {
         return { kind: 'step_up_user_cancelled', failure, response: initial };
       }
       return { kind: 'step_up_unavailable', failure, response: initial, reason: errMsg };

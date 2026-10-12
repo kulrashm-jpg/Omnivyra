@@ -107,6 +107,28 @@ describe('submitSuperAdminWrite', () => {
     expect(mockTrust).not.toHaveBeenCalled();
   });
 
+  it('a REAL browser cancel (name NotAllowedError, message without the name) is classified as cancelled, not unavailable', async () => {
+    // Shape observed from Chromium via @simplewebauthn/browser in the Closure-012 A3 run.
+    const err = new Error('The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.');
+    err.name = 'NotAllowedError';
+    mockCeremony.mockRejectedValue(err);
+    const fire = route(STEP_UP, () => res(200, { ok: true }));
+    const r = await submitSuperAdminWrite(fire);
+    expect(r).toEqual({ status: 'blocked', message: expect.stringMatching(/cancelled/i) });
+    expect(fire).toHaveBeenCalledTimes(1);
+    expect(mockTrust).not.toHaveBeenCalled();
+  });
+
+  it('an AbortError by name is also a cancel', async () => {
+    const err = new Error('The operation was aborted.');
+    err.name = 'AbortError';
+    mockCeremony.mockRejectedValue(err);
+    const fire = route(STEP_UP);
+    const r = await submitSuperAdminWrite(fire);
+    expect(r).toEqual({ status: 'blocked', message: expect.stringMatching(/cancelled/i) });
+    expect(fire).toHaveBeenCalledTimes(1);
+  });
+
   it('step-up UNAVAILABLE (no passkey enrolled / verify failed / unsupported browser): blocked with an explicit reason, nothing retried', async () => {
     mockCeremony.mockRejectedValue(new Error('No passkey registered for this account'));
     const fire = route(STEP_UP);
