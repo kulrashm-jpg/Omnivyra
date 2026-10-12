@@ -21,8 +21,10 @@
  * principals never are.
  */
 
-import type { NextApiResponse } from 'next';
-import type { AuthenticatedPrincipal } from '../../shared/contracts/security';
+import type { NextApiRequest, NextApiResponse } from 'next';
+import type { AuthenticatedPrincipal, Capability } from '../../shared/contracts/security';
+import { getTrustedClientIpOrNull } from '../../lib/security/clientIp';
+import { logSecurityEvent } from './audit/SecurityAuditService';
 import { isPlatformSuperAdminPrincipal } from './platformCapabilities';
 
 /** The fields platform write authority is decided from. */
@@ -52,4 +54,36 @@ export function requirePlatformWriteAuthority(
     operation,
   });
   return false;
+}
+
+/**
+ * Closure-013 (D-3) — the audited form of requirePlatformWriteAuthority.
+ *
+ * requireCapability has already logged `elevated_route_accessed` (or nothing,
+ * without step-up) by the time this runs, so a refusal here would otherwise
+ * leave a trail that reads as an allowed elevated access. This records the
+ * refusal as `elevated_route_denied` before answering 403. Await it:
+ * `if (!(await enforcePlatformWriteAuthority(...))) return;`.
+ */
+export async function enforcePlatformWriteAuthority(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  actor: PlatformWriteActor & Partial<Pick<AuthenticatedPrincipal, 'sessionId' | 'supabaseUid'>>,
+  capability: Capability,
+  operation: string,
+): Promise<boolean> {
+  if (hasPlatformWriteAuthority(actor)) return true;
+  await logSecurityEvent({
+    capability,
+    decision: 'elevated_route_denied',
+    reason: `${operation} | PLATFORM_SUPER_ADMIN_REQUIRED`,
+    actorUserId: actor?.userId ?? null,
+    actorSessionId: actor?.sessionId ?? null,
+    principalUserId: actor?.userId ?? null,
+    principalSupabaseUid: actor?.supabaseUid ?? null,
+    viaLegacyBridge: actor?.legacyCookieSuperAdmin === true,
+    ip: getTrustedClientIpOrNull(req),
+    userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+  });
+  return requirePlatformWriteAuthority(res, actor, operation);
 }

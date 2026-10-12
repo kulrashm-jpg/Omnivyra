@@ -41,6 +41,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSocialAccount } from '../../../backend/db/queries';
 import { getToken } from '../../../backend/auth/tokenStore';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security/SecurityCapabilities';
 import {
@@ -70,6 +71,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     reason: 'operator smoke-tests LinkedIn media upload pipeline',
   });
   if (guard.ok !== true) return;
+  // Closure-013 (D-3): this reads a tenant's LinkedIn token and uploads to the
+  // provider — it needs an active platform SUPER_ADMIN before any of that.
+  if (!(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'linkedin_media_smoke_test'))) return;
   const actorUserId = guard.principal.userId || SYSTEM_USER_ID;
 
   const body = (typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {}) as SmokeTestBody;

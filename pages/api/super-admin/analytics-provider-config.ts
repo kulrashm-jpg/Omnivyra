@@ -25,6 +25,7 @@ import {
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 async function requireAnalyticsProviderRead(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
@@ -73,6 +74,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       reason: 'analytics provider OAuth credentials mutation',
     });
     if (guard.ok !== true) return;
+    // Closure-013 (D-3): GA/GSC credential writes also need an active platform SUPER_ADMIN.
+    if (!(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'analytics_provider_config.write'))) return;
 
     try {
       const enabled = Boolean(req.body?.enabled);

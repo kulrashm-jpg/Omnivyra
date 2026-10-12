@@ -23,6 +23,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { encryptCredential, decryptCredential } from '../../../backend/auth/credentialEncryption';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenUrl: string; scopes: string[] }> = {
@@ -69,6 +70,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     requireStepUp,
   });
   if (guard.ok !== true) return;
+  // Closure-013 (D-3): a direct capability grant plus step-up is not platform
+  // authority — every non-GET (POST, DELETE, and any other mutating method)
+  // also needs an active platform SUPER_ADMIN, before any read or write.
+  if (req.method !== 'GET'
+    && !(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'platform_oauth_configs.write'))) return;
 
   if (req.method === 'GET') {
     const { data: configs } = await supabase

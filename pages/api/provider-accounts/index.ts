@@ -18,6 +18,7 @@ import {
 // Remediation: server-side env-var-name validation (no secrets in a name field).
 import { describeRejectedEnvVarName, isEnvVarName } from '../../../backend/security/credentialSafety';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 // ── Auth guards ────────────────────────────────────────────────────────────────
@@ -75,6 +76,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       reason: 'provider-account credential creation',
     });
     if (guard.ok !== true) return;
+    // Closure-013 (D-3): platform credential writes also need an active platform SUPER_ADMIN.
+    if (!(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'provider_accounts.create'))) return;
     const session = { userId: guard.principal.userId };
 
     const {

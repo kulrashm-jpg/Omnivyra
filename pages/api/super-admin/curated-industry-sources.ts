@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import {
   INTEGRATION_PLATFORM_OAUTH_MANAGE,
   SUPER_ADMIN_DASHBOARD_VIEW,
@@ -89,6 +90,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const guard = await requireCatalogCapability(req, res);
   if (guard.ok !== true) return;
+  // Closure-013 (D-3): catalog writes are platform-wide controls — they also
+  // need an active platform SUPER_ADMIN (rate limit above, step-up in the guard).
+  if (req.method !== 'GET'
+    && !(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'curated_industry_sources.write'))) return;
 
   if (req.method === 'GET') {
     const { data, error } = await supabase

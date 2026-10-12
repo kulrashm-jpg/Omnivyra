@@ -16,6 +16,7 @@ import {
 import { describeRejectedEnvVarName, isEnvVarName } from '../../../backend/security/credentialSafety';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -35,6 +36,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     resourceId: id,
   });
   if (guard.ok !== true) return;
+  // Closure-013 (D-3): this route only mutates (PUT/DELETE); platform authority
+  // is checked before the account lookup so a refused caller learns nothing.
+  if (!(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'provider_accounts.update'))) return;
   const session = { userId: guard.principal.userId };
   void session; // reserved for future audit linkage
 
