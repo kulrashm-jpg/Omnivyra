@@ -21,6 +21,7 @@ import { supabase } from '../db/supabaseClient';
 import { getToken, isTokenExpiringSoon, markSocialAccountNeedsReauth } from '../auth/tokenStore';
 import { refreshPlatformToken, refreshTwitterTokenIfNeeded } from '../auth/tokenRefresh';
 import { getScheduledPost, getSocialAccount } from '../db/queries';
+import { resolveCertFakePublisher } from './certFakePublisher';
 import { publishToLinkedIn } from './linkedinAdapter';
 import { publishToX } from './xAdapter';
 import { publishToInstagram } from './instagramAdapter';
@@ -115,6 +116,17 @@ export async function publishToPlatform(
           delivery: 'not_sent',
         },
       };
+    }
+
+    // Closure-014 (G): certification-only fake provider. Consulted BEFORE the
+    // social account, token read/decrypt and OAuth refresh, so while it is
+    // active no real adapter or refresh can run. Inert unless
+    // CERT_FAKE_PUBLISHER=1; throws (→ 'not_sent' below) if that flag is set in
+    // an environment that is not provably certification-only.
+    const certFake = resolveCertFakePublisher();
+    if (certFake) {
+      dispatched = true;
+      return await certFake.publish(scheduledPost);
     }
 
     // Step 2: Fetch social account

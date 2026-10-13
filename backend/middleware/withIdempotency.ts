@@ -29,7 +29,24 @@ type Options = {
    * double-settlement guard.
    */
   staleLockMs?: number;
+  /**
+   * Closure-014 (B): a PURE pre-reservation authorization predicate (no
+   * response, no audit). When it answers false the caller cannot possibly be
+   * authorized, so NO idempotency row is reserved: the handler runs directly
+   * and issues its own audited denial. Callers that pass it still get the
+   * handler's full audited check (capability, step-up, device) afterwards.
+   */
+  authorize?: (req: NextApiRequest) => Promise<boolean>;
 };
+
+/**
+ * Closure-014 (B): authentication / authorization / rate-limit refusals are
+ * never cached as `completed`. A denied request has no business effect, and
+ * caching it made the SAME key replay e.g. 401 STEP_UP_REQUIRED after the
+ * operator completed the passkey step-up. Such rows are left `failed`, which
+ * the existing resume path re-evaluates for the same caller and payload.
+ */
+const UNCACHED_DENIAL_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
 
 const DEFAULT_STALE_LOCK_MS = Number(process.env.IDEMPOTENCY_STALE_LOCK_MS ?? '') || 10 * 60 * 1000;
 
@@ -254,6 +271,18 @@ export function withIdempotency(
       return res.status(401).json({ error: 'Unauthorized', code: 'IDEMPOTENCY_PRINCIPAL_REQUIRED' });
     }
 
+    // Closure-014 (B): a caller that cannot possibly be authorized reserves
+    // nothing — the handler runs directly and answers with its own audited
+    // denial. A predicate error fails toward the normal (reserving) path, never
+    // toward skipping the handler's own authorization.
+    if (options.authorize) {
+      let mayAttempt = true;
+      try { mayAttempt = await options.authorize(req); } catch { mayAttempt = true; }
+      if (!mayAttempt) {
+        return runWithRequestContext({ requestId, correlationId: requestId }, () => handler(req, res));
+      }
+    }
+
     const run = async () => {
       let existing = await loadExisting(scope, callerId, idempotencyKey);
 
@@ -402,11 +431,12 @@ export function withIdempotency(
 
       (res as any).json = async (body: unknown) => {
         capturedBody = body;
+        const denial = UNCACHED_DENIAL_STATUSES.has(statusCode);
         await markRecord(scope, callerId, idempotencyKey, {
-          status: statusCode >= 500 ? 'failed' : 'completed',
+          status: statusCode >= 500 || denial ? 'failed' : 'completed',
           response_status: statusCode,
           response_body: body,
-          last_error: statusCode >= 500 ? JSON.stringify(body) : null,
+          last_error: statusCode >= 500 ? JSON.stringify(body) : denial ? `denied:${statusCode}` : null,
         });
         return originalJson(body);
       };

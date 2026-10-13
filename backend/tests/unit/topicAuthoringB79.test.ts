@@ -6,6 +6,13 @@
  * relationship, and synthesises no angle_label.
  */
 
+// Closure-014 (D): this route now rate-limits writes before authorization. This suite tests
+// authorization/business behaviour, not the limiter (covered by closure014AdminRateLimit and the
+// Closure-013 sibling suite), so the limiter passes through — the established pattern.
+jest.mock('../../services/requestAccessService', () => ({
+  ...jest.requireActual('../../services/requestAccessService'),
+  requireAdminRateLimit: async () => true,
+}));
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn() } }));
 
 const mockRequireCapability = jest.fn();

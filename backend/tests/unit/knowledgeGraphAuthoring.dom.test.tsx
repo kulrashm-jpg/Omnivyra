@@ -10,6 +10,9 @@
 
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+// Closure-014 (C): the component's writes go through performSuperAdminWrite; the ESM-only
+// WebAuthn client is not loadable by Jest and no step-up is exercised in these suites.
+jest.mock('../../../lib/security/stepUpClient', () => ({ triggerWebAuthnStepUp: jest.fn() }));
 import KnowledgeGraphCuration from '../../../components/admin/knowledgeGraphCuration';
 
 const TOPICS_API = '/api/admin/knowledge-graph/topics';
@@ -30,12 +33,12 @@ function mockFetch(authoringReply: { ok: boolean; status: number; json: unknown 
   (global as unknown as { fetch: unknown }).fetch = jest.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null });
     if (url.startsWith(TOPICS_API)) {
-      return { ok: true, status: 200, json: async () => ({ items, hasMore: false }) } as never;
+      return { ok: true, status: 200, headers: new Headers(), clone() { return this; }, json: async () => ({ items, hasMore: false }) } as never;
     }
     if (url.startsWith(AUTHORING_API)) {
-      return { ok: authoringReply.ok, status: authoringReply.status, json: async () => authoringReply.json } as never;
+      return { ok: authoringReply.ok, status: authoringReply.status, headers: new Headers(), clone() { return this; }, json: async () => authoringReply.json } as never;
     }
-    return { ok: true, status: 200, json: async () => ({ ok: true, action: 'confirmed', topicId: 't2' }) } as never;
+    return { ok: true, status: 200, headers: new Headers(), clone() { return this; }, json: async () => ({ ok: true, action: 'confirmed', topicId: 't2' }) } as never;
   });
 }
 
@@ -107,7 +110,7 @@ describe('B7.9 · create action on the existing surface', () => {
   it('prevents duplicate submission while pending', async () => {
     (global as unknown as { fetch: unknown }).fetch = jest.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null });
-      if (url.startsWith(TOPICS_API)) return { ok: true, status: 200, json: async () => ({ items: [identity], hasMore: false }) } as never;
+      if (url.startsWith(TOPICS_API)) return { ok: true, status: 200, headers: new Headers(), clone() { return this; }, json: async () => ({ items: [identity], hasMore: false }) } as never;
       return new Promise(() => {}) as never;   // hangs
     });
     render(<KnowledgeGraphCuration />);

@@ -18,6 +18,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { BILLING_PLATFORM_MANAGE } from '../../../../shared/contracts/security/SecurityCapabilities';
 import {
   GOVERNED_PROVIDERS,
@@ -42,6 +43,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Allow', 'GET, PATCH');
     return res.status(405).json({ error: 'method_not_allowed' });
   }
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:payment-providers', 10, 60, { sensitive: true }))) return;
 
   const guard = await requireCapability(req, res, {
     capability: BILLING_PLATFORM_MANAGE,

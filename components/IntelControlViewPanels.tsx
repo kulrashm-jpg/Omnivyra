@@ -16,6 +16,7 @@ import {
   TrendingUp, Activity, Shield, BarChart2,
 } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
+import { performSuperAdminWrite } from '../lib/security/superAdminWrite';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -194,18 +195,17 @@ export function GlobalConfigTab() {
     if (!patch || Object.keys(patch).length === 0) return;
     setSaving(s => new Set(s).add(row.job_type));
     try {
-      const r = await fetch('/api/admin/intelligence/scheduler-config', {
+      const r = await performSuperAdminWrite(() => fetch('/api/admin/intelligence/scheduler-config', {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ job_type: row.job_type, ...patch }),
-      });
+      }));
       if (r.ok) {
         setEdits(prev => { const n = { ...prev }; delete n[row.job_type]; return n; });
         setMsg({ type: 'ok', text: `${row.label} updated.` });
         load();
       } else {
-        const d = await r.json();
-        setMsg({ type: 'err', text: d.error ?? 'Update failed' });
+        setMsg({ type: 'err', text: r.message });
       }
     } finally {
       setSaving(s => { const n = new Set(s); n.delete(row.job_type); return n; });
@@ -397,18 +397,17 @@ export function CompanyOverridesTab() {
     if (!patch) return;
     setSaving(s => new Set(s).add(job.job_type));
     try {
-      const r = await fetch('/api/admin/intelligence/scheduler-overrides', {
+      const r = await performSuperAdminWrite(() => fetch('/api/admin/intelligence/scheduler-overrides', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ company_id: selectedId, job_type: job.job_type, ...patch }),
-      });
+      }));
       if (r.ok) {
         setMsg({ type: 'ok', text: `Override saved for ${job.label}.` });
         setEditOverride(prev => { const n = { ...prev }; delete n[job.job_type]; return n; });
         loadOverrides(selectedId);
       } else {
-        const d = await r.json();
-        setMsg({ type: 'err', text: d.error ?? 'Save failed' });
+        setMsg({ type: 'err', text: r.message });
       }
     } finally {
       setSaving(s => { const n = new Set(s); n.delete(job.job_type); return n; });
@@ -419,14 +418,16 @@ export function CompanyOverridesTab() {
     if (!job.override) return;
     setDeleting(s => new Set(s).add(job.job_type));
     try {
-      const r = await fetch('/api/admin/intelligence/scheduler-overrides', {
+      const r = await performSuperAdminWrite(() => fetch('/api/admin/intelligence/scheduler-overrides', {
         method:  'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ company_id: selectedId, job_type: job.job_type }),
-      });
+      }));
       if (r.ok) {
         setMsg({ type: 'ok', text: `Override removed — ${job.label} now uses global defaults.` });
         loadOverrides(selectedId);
+      } else {
+        setMsg({ type: 'err', text: r.message });
       }
     } finally {
       setDeleting(s => { const n = new Set(s); n.delete(job.job_type); return n; });

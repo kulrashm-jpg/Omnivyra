@@ -9,6 +9,7 @@ import { ContentQualityPanel, type ImproveArea } from '../../../../components/co
 import { Loader2 } from 'lucide-react';
 import type { MediaBlockItem } from '../../../../components/blog/BlogMediaBlock';
 import type { ContentBlock } from '../../../../lib/blog/blockTypes';
+import { performSuperAdminWrite } from '../../../../lib/security/superAdminWrite';
 
 function useBlogAccess() {
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -134,7 +135,8 @@ export default function AdminBlogEditPage() {
     setError(null);
     setIsSaving(true);
     try {
-      const res = await fetch(`/api/admin/blog/${id}`, {
+      // blog.publish.manage: a write may need passkey step-up; fire() builds a fresh request per attempt.
+      const r = await performSuperAdminWrite(() => fetch(`/api/admin/blog/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -154,9 +156,11 @@ export default function AdminBlogEditPage() {
           is_featured:          state.is_featured,
           published_at:         state.status === 'published' ? (post?.published_at || new Date().toISOString()) : state.published_at || undefined,
         }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Save failed');
+      }));
+      if (!r.ok) {
+        setError(r.message);
+        return;
+      }
       router.push('/admin/blog');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');

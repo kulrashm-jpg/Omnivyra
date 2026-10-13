@@ -390,4 +390,8 @@ export const STEP_UP_REQUIRED_CAPABILITIES: ReadonlyArray<Capability> = [
   OUTREACH_PLATFORM_MANAGE,
   PUBLISH_RECOVERY_MANAGE,
   PLATFORM_CONTROLS_MANAGE,
+  // Closure-014 (C) — every platform-tier write capability now requires step-up.
+  BLOG_PUBLISH_MANAGE,
+  CRON_CONFIG_MANAGE,
+  INTELLIGENCE_OVERRIDE_MANAGE,
 ] as const;

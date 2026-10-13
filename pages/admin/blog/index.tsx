@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { FileText, Plus, Edit, Trash2, Eye, Loader2 } from 'lucide-react';
+import { performSuperAdminWrite } from '../../../lib/security/superAdminWrite';
 
 type BlogRow = {
   id: string;
@@ -54,8 +55,11 @@ export default function AdminBlogListPage() {
     if (!confirm('Delete this post?')) return;
     setDeletingId(id);
     try {
-      const res = await fetch(`/api/admin/blog/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Delete failed');
+      const r = await performSuperAdminWrite(() => fetch(`/api/admin/blog/${id}`, { method: 'DELETE' }));
+      if (!r.ok) {
+        setError(r.message);
+        return;
+      }
       setPosts((prev) => prev.filter((p) => p.id !== id));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Delete failed');

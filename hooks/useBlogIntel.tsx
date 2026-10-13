@@ -56,6 +56,7 @@ import {
 } from '../lib/content/writingStyleEngine';
 import type { CompanyProfile } from '../lib/shared/companyProfileTypes';
 import AIBlogCardModal from '../components/blog/AIBlogCardModal';
+import { performSuperAdminWrite } from '../lib/security/superAdminWrite';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -474,14 +475,14 @@ export function useBlogIntel() {
     if (!newSeriesTitle.trim()) return;
     setSavingSeries(true);
     try {
-      const r = await fetch('/api/admin/blog/series', {
+      const r = await performSuperAdminWrite(() => fetch('/api/admin/blog/series', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: newSeriesTitle.trim(), description: newSeriesDesc.trim() || undefined }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error);
+      }));
+      if (!r.ok) throw new Error(r.message);
+      const d = r.body as SeriesRow;
       setSeries((prev) => [{ ...d, blog_series_posts: [] }, ...prev]);
       setNewSeriesTitle('');
       setNewSeriesDesc('');
@@ -494,7 +495,9 @@ export function useBlogIntel() {
 
   const deleteSeries = async (id: string) => {
     if (!confirm('Delete this series? Posts are not deleted.')) return;
-    await fetch(`/api/admin/blog/series/${id}`, { method: 'DELETE', credentials: 'include' });
+    // Only drop the row once the server confirmed the delete (step-up may be required).
+    const r = await performSuperAdminWrite(() => fetch(`/api/admin/blog/series/${id}`, { method: 'DELETE', credentials: 'include' }));
+    if (!r.ok) { alert(r.message); return; }
     setSeries((prev) => prev.filter((s) => s.id !== id));
   };
 
@@ -507,7 +510,7 @@ export function useBlogIntel() {
     if (!editSeries) return;
     setSavingEdit(true);
     try {
-      await fetch(`/api/admin/blog/series/${editSeries.id}`, {
+      const r = await performSuperAdminWrite(() => fetch(`/api/admin/blog/series/${editSeries.id}`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -516,7 +519,8 @@ export function useBlogIntel() {
           description: editSeries.description,
           posts:       editPosts.map((p, i) => ({ blog_id: p.blog_id, position: i })),
         }),
-      });
+      }));
+      if (!r.ok) { alert(r.message); return; }
       setSeries((prev) => prev.map((s) =>
         s.id === editSeries.id
           ? { ...editSeries, blog_series_posts: editPosts }
@@ -547,14 +551,14 @@ export function useBlogIntel() {
     if (!relSource || !relTarget) return;
     setSavingRel(true);
     try {
-      const r = await fetch('/api/admin/blog/relationships', {
+      const r = await performSuperAdminWrite(() => fetch('/api/admin/blog/relationships', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source_blog_id: relSource, target_blog_id: relTarget, relationship_type: relType }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error);
+      }));
+      if (!r.ok) throw new Error(r.message);
+      const d = r.body as RelRow;
       setRelationships((prev) => [d, ...prev]);
       setRelSource(''); setRelTarget('');
     } catch (e) {
@@ -565,7 +569,9 @@ export function useBlogIntel() {
   };
 
   const deleteRelationship = async (id: string) => {
-    await fetch(`/api/admin/blog/relationships?id=${id}`, { method: 'DELETE', credentials: 'include' });
+    // Only drop the row once the server confirmed the delete (step-up may be required).
+    const res = await performSuperAdminWrite(() => fetch(`/api/admin/blog/relationships?id=${id}`, { method: 'DELETE', credentials: 'include' }));
+    if (!res.ok) { alert(res.message); return; }
     setRelationships((prev) => prev.filter((r) => r.id !== id));
   };
 

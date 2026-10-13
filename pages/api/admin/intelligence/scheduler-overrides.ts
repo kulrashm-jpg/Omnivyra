@@ -27,9 +27,13 @@ import {
   type CompanyOverride,
 } from '../../../../backend/services/intelligenceConfigService';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW, INTELLIGENCE_OVERRIDE_MANAGE } from '../../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:admin:intel:scheduler-overrides', 20, 60))) return;
+
   const cap = req.method === 'GET' ? SUPER_ADMIN_DASHBOARD_VIEW : INTELLIGENCE_OVERRIDE_MANAGE;
   const guard = await requireCapability(req, res, {
     capability: cap,

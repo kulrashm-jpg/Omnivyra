@@ -2,9 +2,18 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../../backend/services/requestAccessService';
 import { BLOG_PUBLISH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET') {
+    const rl = req.method === 'DELETE'
+      ? await requireAdminRateLimit(req, res, 'rl:admin:blog:series:delete', 10, 60, { sensitive: true })
+      : await requireAdminRateLimit(req, res, 'rl:admin:blog:series:write', 30, 60);
+    if (!rl) return;
+  }
+
   const cap = req.method === 'GET' ? SUPER_ADMIN_DASHBOARD_VIEW : BLOG_PUBLISH_MANAGE;
   const guard = await requireCapability(req, res, {
     capability: cap,

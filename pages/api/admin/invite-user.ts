@@ -11,6 +11,7 @@ import { isNonWorkEmailDomain } from '../../../backend/services/domainEligibilit
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
 import { isPlatformSuperAdminPrincipal } from '../../../backend/security/platformCapabilities';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { mayAttemptInvite } from '../../../backend/security/preAuthorization';
 import { IDENTITY_ADMIN_ASSIGN } from '../../../shared/contracts/security';
 import { insertAuditLogStrict } from '../../../backend/services/auditActorService';
 
@@ -181,4 +182,4 @@ async function handler(
   }
 }
 
-export default __createApiRoute(withIdempotency(handler, { scope: 'admin-invite-user' }), { route: '/api/admin/invite-user' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-invite-user', authorize: mayAttemptInvite }), { route: '/api/admin/invite-user' });

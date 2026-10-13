@@ -2,12 +2,16 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { BILLING_GRANT_FREE_CREDITS } from '../../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST' && req.method !== 'DELETE') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:usage:revoke-access', 20, 60, { sensitive: true }))) return;
 
   // Phase 2 mutation gate. Revoking usage-report access mirrors the
   // grant capability for symmetry — both touch the same billing surface.

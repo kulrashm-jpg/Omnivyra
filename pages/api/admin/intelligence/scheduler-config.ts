@@ -19,9 +19,13 @@ import {
   getRecentExecutionLogs,
 } from '../../../../backend/services/intelligenceConfigService';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW, INTELLIGENCE_OVERRIDE_MANAGE } from '../../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:admin:intel:scheduler-config', 20, 60))) return;
+
   // GET = read; PUT = mutation.
   const cap = req.method === 'PUT' ? INTELLIGENCE_OVERRIDE_MANAGE : SUPER_ADMIN_DASHBOARD_VIEW;
   const guard = await requireCapability(req, res, {

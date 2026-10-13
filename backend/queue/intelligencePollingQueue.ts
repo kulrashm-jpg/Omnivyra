@@ -9,6 +9,7 @@ import { Queue } from 'bullmq';
 import { applyQueueProtection, getQueuePrefix } from './bullmqClient';
 import { instrumentQueue } from './queueInstrumentation';
 import { enqueueOrThrow } from '../middleware/queueBackpressure';
+import { parseRedisConnectionUrl } from '../../lib/redis/redisUrl';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
@@ -17,13 +18,10 @@ const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 
 function getConnection() {
   if (REDIS_URL && REDIS_URL.includes('://')) {
-    const parsed = new URL(REDIS_URL);
-    const needsTls = parsed.hostname.includes('upstash.io');
+    // Closure-014 (D-1): shared strict parser — keeps the database index, ACL
+    // username and decoded password; TLS for rediss:// as well as Upstash.
     return {
-      host: parsed.hostname || 'localhost',
-      port: parseInt(parsed.port || '6379', 10),
-      password: parsed.password || undefined,
-      ...(needsTls ? { tls: {} } : {}),
+      ...parseRedisConnectionUrl(REDIS_URL),
       enableReadyCheck: false,
       maxRetriesPerRequest: null,
     };

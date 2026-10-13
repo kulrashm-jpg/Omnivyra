@@ -17,10 +17,14 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { IDENTITY_ADMIN_REVOKE } from '@/shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:admin:revoke-super-admin', 5, 60, { sensitive: true }))) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {});
   const { userId } = body as { userId?: string };

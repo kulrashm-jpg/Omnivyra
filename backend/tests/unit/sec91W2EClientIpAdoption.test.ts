@@ -31,12 +31,20 @@ jest.mock('../../services/authResolver', () => ({
 
 // IP-keyed limiter (lib/auth/rateLimit): record the key, deny, so routes stop at 429.
 const mockRateLimitKeys: string[] = [];
+const mockBootstrapAdminLimitKeys: string[] = [];
 jest.mock('../../../lib/auth/rateLimit', () => {
   const actual = jest.requireActual('../../../lib/auth/rateLimit');
   return {
     ...actual,
-    checkRateLimit: jest.fn(async (key: string) => {
+    checkRateLimit: jest.fn(async (key: string, config?: { keyPrefix?: string }) => {
       mockRateLimitKeys.push(key);
+      // Closure-014 (D): bootstrap-super-admin now ALSO has a per-route admin write limit in
+      // front of its env-credential failure limiter. Let that one pass (its IP keying is
+      // asserted below) so the env-credential limiter stays observable.
+      if (config?.keyPrefix === 'rl:admin:bootstrap-super-admin') {
+        mockBootstrapAdminLimitKeys.push(key);
+        return { allowed: true, remaining: 4, resetAt: Math.floor(Date.now() / 1000) + 60, bypassed: false };
+      }
       return { allowed: false, remaining: 0, resetAt: Math.floor(Date.now() / 1000) + 60, bypassed: false };
     }),
   };
@@ -318,6 +326,8 @@ describe('admin/bootstrap-super-admin: the env-credential limiter keys on the tr
     expect(statuses).toEqual([401, 401, 401, 401, 401, 429]);
     const ips = mockAudit.map((e) => e.ip);
     expect(new Set(ips)).toEqual(new Set([PEER]));
+    // Closure-014 (D): the new per-route admin limit keys on the same trusted peer, never the spoofed XFF.
+    expect(new Set(mockBootstrapAdminLimitKeys)).toEqual(new Set([PEER]));
   });
 });
 

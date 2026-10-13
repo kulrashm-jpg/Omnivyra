@@ -33,6 +33,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
     capability: INTELLIGENCE_OVERRIDE_MANAGE,
     reason: 'knowledge-graph topic review (GET)',
+    // Closure-014 (C): a read-only review route — no step-up for reads.
+    requireStepUp: false,
   });
   if (guard.ok !== true) return; // denied; requireCapability responded + audited
 

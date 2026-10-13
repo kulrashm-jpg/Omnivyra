@@ -15,9 +15,13 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { invalidateDomainCache } from '@/backend/services/domainEligibilityService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:free-credits:requests', 30, 60))) return;
+
   // Phase: Platform Authority Isolation. billing.grant_free_credits is a
   // SUPER_ADMIN-only platform-tier capability; replaces the previous
   // BILLING_MANAGE gate which is per-tenant.

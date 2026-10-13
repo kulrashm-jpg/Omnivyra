@@ -11,6 +11,16 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
+import { mayAttemptCapability } from '../../../backend/security/preAuthorization';
+import { IDENTITY_ADMIN_ASSIGN, IDENTITY_ADMIN_DELETE, type Capability } from '../../../shared/contracts/security';
+
+/** Closure-014 (B): the write capability each method's handler requires (usersMutations / usersRead). */
+function usersWriteCapability(req: NextApiRequest): Capability | null {
+  const m = (req.method ?? '').toUpperCase();
+  if (m === 'DELETE') return IDENTITY_ADMIN_DELETE;
+  if (m === 'POST' || m === 'PATCH') return IDENTITY_ADMIN_ASSIGN;
+  return null;
+}
 import { requireSuperAdminAccess } from '../../../backend/apiHandlers/superAdmin/usersShared';
 import { handleUsersGet, handleUsersPatch } from '../../../backend/apiHandlers/superAdmin/usersRead';
 import { handleUsersPost, handleUsersDelete } from '../../../backend/apiHandlers/superAdmin/usersMutations';
@@ -28,4 +38,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-users', methods: ['POST', 'PATCH', 'DELETE'] }), { route: '/api/super-admin/users' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-users', methods: ['POST', 'PATCH', 'DELETE'], authorize: mayAttemptCapability(usersWriteCapability) }), { route: '/api/super-admin/users' });

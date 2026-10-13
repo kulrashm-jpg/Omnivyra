@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../../backend/services/requestAccessService';
 import { BLOG_PUBLISH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../../shared/contracts/security';
 
 function slugify(text: string): string {
@@ -9,6 +10,9 @@ function slugify(text: string): string {
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:admin:blog:series:create', 30, 60))) return;
+
   const cap = req.method === 'GET' ? SUPER_ADMIN_DASHBOARD_VIEW : BLOG_PUBLISH_MANAGE;
   const guard = await requireCapability(req, res, {
     capability: cap,

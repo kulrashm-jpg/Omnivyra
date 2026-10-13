@@ -57,6 +57,7 @@ import {
 import { logAuthEvent } from '../../../../lib/auth/auditLog';
 import { validateWorkEmail } from '../../../../lib/auth/serverValidation';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { mayAttemptCapability } from '../../../../backend/security/preAuthorization';
 import { IDENTITY_ADMIN_ASSIGN } from '../../../../shared/contracts/security';
 import { getRequestContext } from '../../../../backend/services/requestContext';
 import { getCanonicalAppUrl } from '../../../../backend/config/getCanonicalAppUrl';
@@ -364,4 +365,5 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 export default withIdempotency(handler, {
   scope: 'super-admin-users-create',
   methods: ['POST'],
+  authorize: mayAttemptCapability(IDENTITY_ADMIN_ASSIGN),
 });

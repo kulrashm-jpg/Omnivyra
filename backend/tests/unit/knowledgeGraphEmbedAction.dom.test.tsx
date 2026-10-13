@@ -10,6 +10,9 @@
 
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+// Closure-014 (C): the component's writes go through performSuperAdminWrite; the ESM-only
+// WebAuthn client is not loadable by Jest and no step-up is exercised in these suites.
+jest.mock('../../../lib/security/stepUpClient', () => ({ triggerWebAuthnStepUp: jest.fn() }));
 import KnowledgeGraphCuration from '../../../components/admin/knowledgeGraphCuration';
 
 const TOPICS_API = '/api/admin/knowledge-graph/topics';
@@ -30,12 +33,12 @@ function mockFetch(embedReply: { ok: boolean; status: number; json: unknown }, i
   (global as unknown as { fetch: unknown }).fetch = jest.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null });
     if (url.startsWith(TOPICS_API)) {
-      return { ok: true, status: 200, json: async () => ({ items, hasMore: false }) } as never;
+      return { ok: true, status: 200, headers: new Headers(), clone() { return this; }, json: async () => ({ items, hasMore: false }) } as never;
     }
     if (url.startsWith(EMBED_API)) {
-      return { ok: embedReply.ok, status: embedReply.status, json: async () => embedReply.json } as never;
+      return { ok: embedReply.ok, status: embedReply.status, headers: new Headers(), clone() { return this; }, json: async () => embedReply.json } as never;
     }
-    return { ok: true, status: 200, json: async () => ({ ok: true, action: 'confirmed', topicId: 't2' }) } as never;
+    return { ok: true, status: 200, headers: new Headers(), clone() { return this; }, json: async () => ({ ok: true, action: 'confirmed', topicId: 't2' }) } as never;
   });
 }
 
@@ -116,7 +119,7 @@ describe('B7.8-C.6 · duplicate submission', () => {
     (global as unknown as { fetch: unknown }).fetch = jest.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null });
       if (url.startsWith(TOPICS_API)) {
-        return { ok: true, status: 200, json: async () => ({ items: [identity], hasMore: false }) } as never;
+        return { ok: true, status: 200, headers: new Headers(), clone() { return this; }, json: async () => ({ items: [identity], hasMore: false }) } as never;
       }
       return new Promise(() => {}) as never;      // hangs
     });
@@ -206,7 +209,7 @@ describe('B7.8-C.6 · route state handling', () => {
     (global as unknown as { fetch: unknown }).fetch = jest.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, method: init?.method ?? 'GET', body: null });
       if (url.startsWith(TOPICS_API)) {
-        return { ok: true, status: 200, json: async () => ({ items: [identity], hasMore: false }) } as never;
+        return { ok: true, status: 200, headers: new Headers(), clone() { return this; }, json: async () => ({ items: [identity], hasMore: false }) } as never;
       }
       throw new Error('offline');
     });

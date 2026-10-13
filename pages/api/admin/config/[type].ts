@@ -20,6 +20,7 @@ import {
   type ConfigUpdateInput,
 } from '@/backend/services/configService';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { INTELLIGENCE_OVERRIDE_MANAGE } from '@/shared/contracts/security';
 
 const VALID_TYPES = new Set([
@@ -32,9 +33,14 @@ const VALID_TYPES = new Set([
 ]);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:admin:config:write', 20, 60))) return;
+
   const guard = await requireCapability(req, res, {
     capability: INTELLIGENCE_OVERRIDE_MANAGE,
     reason: `admin/config/${req.query.type} (${req.method})`,
+    // Closure-014 (C): reading a config is not a write — only POST requires step-up.
+    requireStepUp: req.method !== 'GET',
   });
   if (guard.ok !== true) return;
   const resolveChangedBy = async () => guard.principal.email || guard.principal.userId;

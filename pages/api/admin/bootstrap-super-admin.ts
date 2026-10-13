@@ -68,6 +68,7 @@ import { ownedDbTable } from '../../../backend/db/writeOwner';
 import { logger } from '../../../backend/services/logger';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { evaluateStepUp } from '../../../backend/security/StepUpAuthorizationService';
 import { getStepUpPolicy } from '../../../backend/security/stepup/StepUpPolicyRegistry';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
@@ -86,6 +87,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:admin:bootstrap-super-admin', 5, 60, { sensitive: true }))) return;
 
   const body = parseBody(req);
   const rawMode = body.mode;

@@ -25,6 +25,7 @@ import {
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
@@ -54,6 +55,9 @@ async function requireAnalyticsProviderRead(req: NextApiRequest, res: NextApiRes
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:analytics-provider-config', 10, 60, { sensitive: true }))) return;
+
   if (req.method === 'GET') {
     if (!(await requireAnalyticsProviderRead(req, res))) return;
     try {

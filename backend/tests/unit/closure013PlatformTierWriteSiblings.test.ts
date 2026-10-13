@@ -105,9 +105,19 @@ jest.mock('../../security/audit/SecurityAuditService', () => ({
 jest.mock('../../services/logger', () => ({ logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
 jest.mock('../../services/userColumnProjection', () => ({ tolerantUserSelect: jest.fn() }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
+/** Closure-014 (D): flip to make every admin rate limit refuse (the real 429 contract is unit-tested separately). */
+let mockRateLimited = false;
+const mockRateLimitPrefixes: string[] = [];
 jest.mock('../../services/requestAccessService', () => {
   const actual = jest.requireActual('../../services/requestAccessService');
-  return { ...actual, requireAdminRateLimit: async () => true };
+  return {
+    ...actual,
+    requireAdminRateLimit: async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => unknown } }, prefix: string) => {
+      mockRateLimitPrefixes.push(prefix);
+      if (mockRateLimited) { res.status(429).json({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' }); return false; }
+      return true;
+    },
+  };
 });
 
 import fs from 'fs';
@@ -200,6 +210,7 @@ beforeAll(() => { (global as { fetch: unknown }).fetch = fetchSpy; });
 beforeEach(() => {
   for (const k of Object.keys(mockTables)) delete mockTables[k];
   mockWrites.length = 0; mockRpc.length = 0; mockReads.length = 0; mockSecurityAudit.length = 0; fetchSpy.mockClear();
+  mockRateLimited = false; mockRateLimitPrefixes.length = 0;
   mockTables.user_company_roles = [
     role(GRANTEE_ALL, A, 'VIEW_ONLY'), role(GRANTEE_READ, A, 'VIEW_ONLY'), role(TENANT_ADMIN, A, 'COMPANY_ADMIN'),
     role(SUPER_DEACTIVATED, P, 'SUPER_ADMIN', 'inactive'),
@@ -238,14 +249,14 @@ function load(route: string): Handler {
   }
   return handlers.get(route)!;
 }
-async function call(route: string, method: string, who: { user?: string; bridge?: boolean } | null) {
+async function call(route: string, method: string, who: { user?: string; bridge?: boolean } | null, opts: { emptyBody?: boolean } = {}) {
   const headers: Record<string, string> = { 'idempotency-key': `c13-${route}-${method}`, 'content-type': 'application/json' };
   if (who?.user) headers['x-test-user'] = who.user;
   if (who?.bridge) headers['x-test-bridge'] = '1';
   const req = {
     headers, method, url: `/api/${route}`, socket: {}, cookies: {},
     query: { id: 'x-1', type: 'x', invitationId: 'inv-1', threadId: 't-1' },
-    body: { ...WELL_FORMED_BODY, ...(BODY_OVERRIDES[route] ?? {}) },
+    body: opts.emptyBody ? {} : { ...WELL_FORMED_BODY, ...(BODY_OVERRIDES[route] ?? {}) },
   };
   const res = fakeRes();
   await load(route)(req, res);
@@ -307,6 +318,43 @@ describe('a read-only platform capability never authorizes a write', () => {
   });
 });
 
+describe('Closure-014 (B): validation-before-authorization is side-effect free', () => {
+  it.each(PAIRS)('%s → an EMPTY body from every refused principal produces no business effect, whatever status answers first', async (_n, route, method) => {
+    for (const who of [{ user: GRANTEE_ALL }, { user: GRANTEE_READ }, { user: TENANT_ADMIN }, { user: SUPER_DEACTIVATED }, { bridge: true }, null]) {
+      mockWrites.length = 0; mockRpc.length = 0; mockReads.length = 0; mockSecurityAudit.length = 0; fetchSpy.mockClear();
+      const r = await call(route, method, who, { emptyBody: true });
+      expect(r.statusCode).toBeGreaterThanOrEqual(400);
+      expectNothingHappened();
+    }
+  });
+});
+
+describe('Closure-014 (D): every platform-tier write route is rate limited before authorization', () => {
+  it.each(PAIRS)('%s → over the limit: 429 RATE_LIMITED, no authorization decision, no business effect', async (_n, route, method) => {
+    mockRateLimited = true;
+    const r = await call(route, method, { user: GRANTEE_ALL });
+    if (TOMBSTONES.has(route)) { expect(r.statusCode).toBe(410); return; }
+    expect(r.statusCode).toBe(429);
+    expect(code(r)).toBe('RATE_LIMITED');
+    expect(mockSecurityAudit.filter((e) => WRITE_CAPS.has(String(e.capability)))).toEqual([]);
+    expectNothingHappened();
+  });
+  it('rate-limit prefixes are distinct per route family (no accidental shared bucket across unrelated controls)', async () => {
+    const byRoute = new Map<string, Set<string>>();
+    for (const [, route, method] of PAIRS) {
+      mockRateLimitPrefixes.length = 0;
+      await call(route, method, { user: GRANTEE_ALL });
+      byRoute.set(route, new Set([...(byRoute.get(route) ?? []), ...mockRateLimitPrefixes]));
+    }
+    const owners = new Map<string, string>();
+    for (const [route, prefixes] of byRoute) for (const p of prefixes) {
+      const top = route.split('/').slice(0, 2).join('/');
+      if (owners.has(p)) expect(owners.get(p)!.split('/').slice(0, 2).join('/')).toBe(top); else owners.set(p, route);
+    }
+    expect(owners.size).toBeGreaterThan(30);
+  });
+});
+
 describe('other refused principals', () => {
   it.each(PAIRS)('%s → an ordinary tenant administrator is denied, nothing happens', async (_n, route, method) => {
     const r = await call(route, method, { user: TENANT_ADMIN });
@@ -347,7 +395,14 @@ describe('static completeness — no platform-tier write route escapes the guard
     for (const f of files) {
       const t = fs.readFileSync(f, 'utf8');
       if (!CAP_NAMES.some((c) => new RegExp(`\\b${c}\\b`).test(t))) continue;
-      const viaGuard = /requireCapability\(/.test(t);
+      // A route may authorize in the handler modules it delegates to (e.g. super-admin/users.ts →
+      // backend/apiHandlers); follow ONE level of relative imports. A file that authorizes nowhere still fails.
+      const delegated = [...t.matchAll(/from '(\.\.?\/[^']+)'/g)]
+        .map((m) => path.resolve(path.dirname(f), m[1]))
+        .map((p) => [`${p}.ts`, `${p}.tsx`, path.join(p, 'index.ts')].find((c) => fs.existsSync(c)))
+        .filter((c): c is string => Boolean(c))
+        .some((c) => /requireCapability\(/.test(fs.readFileSync(c, 'utf8')));
+      const viaGuard = /requireCapability\(/.test(t) || delegated;
       const viaHelper = /requirePlatformWriteAuthority|enforcePlatformWriteAuthority|requireSuperAdminGaWriteAccess/.test(t);
       if (!viaGuard && !viaHelper) escapes.push(path.relative(ROOT, f).replace(/\\/g, '/'));
     }
@@ -384,8 +439,12 @@ async function gate(who: string | null, capability: string, method: string | und
   return { out, res };
 }
 
-/** Platform-tier write capabilities with no registered step-up policy today. */
-const NO_STEP_UP_POLICY = new Set<string>(['intelligence.override.manage', 'cron.config.manage', 'blog.publish.manage']);
+/**
+ * Platform-tier write capabilities with no registered step-up policy. Closure-014 (C)
+ * registered the last three (blog / cron / intelligence), so this is now empty: every
+ * platform-tier write requires a passkey step-up.
+ */
+const NO_STEP_UP_POLICY = new Set<string>([]);
 
 describe('requireCapability platform-tier write guard', () => {
   const WRITE_TIER = PLATFORM_TIER_CAPABILITIES.filter((c) => c !== SUPER_ADMIN_DASHBOARD_VIEW && c !== CONSUMPTION_VIEW_AGGREGATE);
@@ -426,7 +485,7 @@ describe('requireCapability platform-tier write guard', () => {
   it.each(WRITE_TIER.map((c) => [c]))('%s: an active SUPER_ADMIN WITHOUT step-up still gets the step-up requirement where one is registered (not weakened, not a 403)', async (c) => {
     const { out, res } = await gate(SUPER_NO_STEPUP, c, 'POST');
     if (NO_STEP_UP_POLICY.has(c)) {
-      // Pre-existing policy: these platform writes register no step-up (reported, not changed here).
+      // No platform-tier write capability is in this set any more (Closure-014).
       expect(out.ok).toBe(true);
       return;
     }

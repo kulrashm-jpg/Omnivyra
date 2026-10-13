@@ -19,6 +19,7 @@
  * live server-side; none of them is duplicated or second-guessed here.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { performSuperAdminWrite } from '../../lib/security/superAdminWrite';
 
 type ReviewTopic = {
   id: string;
@@ -69,6 +70,14 @@ const EMBED_FEEDBACK: Record<EmbedState, { tone: 'ok' | 'warn' | 'err'; text: st
 
 const TONE_COLOR = { ok: 'green', warn: '#a15c00', err: 'crimson' } as const;
 
+type EmbedReply = { status?: unknown; reason?: unknown; error?: unknown; code?: unknown };
+
+/** Body of a refused embed response (the write helper reads a clone, so the original is unread). */
+async function readJson(res: Response | null): Promise<EmbedReply | null> {
+  if (!res) return null;
+  try { return (await res.json()) as EmbedReply; } catch { return null; }
+}
+
 export default function KnowledgeGraphCuration(): React.ReactElement {
   const [filter, setFilter] = useState<Filter>('identities');
   const [search, setSearch] = useState('');
@@ -109,22 +118,26 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
 
   useEffect(() => { void load(filter, page, search); }, [load, filter, page, search]);
 
-  /** Both actions delegate to B7.5; its deterministic response is surfaced verbatim. */
+  /**
+   * Both actions delegate to B7.5; its deterministic response is surfaced verbatim.
+   * intelligence.override.manage writes may need a passkey step-up first —
+   * performSuperAdminWrite runs it and retries once; a cancel is never success.
+   */
   const mutate = useCallback(async (method: 'POST' | 'DELETE', body: Record<string, string>) => {
     setMsg(null);
     try {
-      const res = await fetch(CURATION_API, {
+      const r = await performSuperAdminWrite(() => fetch(CURATION_API, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      }));
+      if (!r.ok) {
         // Surface B7.5's deterministic failure (would_create_cycle,
         // canonical_is_alias, …) rather than optimistically overwriting state.
-        setMsg({ type: 'err', text: String(json.error || json.code || 'Failed (' + res.status + ')') });
+        setMsg({ type: 'err', text: r.message });
         return;
       }
+      const json = (r.body ?? {}) as { action?: unknown; topicId?: unknown };
       setMsg({ type: 'ok', text: String(json.action) + ': ' + String(json.topicId) });
       await load(filter, page, search);
     } catch (e) {
@@ -150,23 +163,46 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
     setEmbed((m) => ({ ...m, [topicId]: 'pending' }));
     setEmbedDetail((m) => ({ ...m, [topicId]: '' }));
 
+    // The route answers non-2xx with a NAMED state (disabled / not_found / error
+    // + reason), so the last response is kept to read that state; a transport
+    // rejection is kept so its own reason is surfaced, not a generic one.
+    const seen: { last: Response | null; thrown: unknown } = { last: null, thrown: null };
     try {
-      const res = await fetch(EMBED_API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // topicId is the ONLY field. No company, provider, model, cost or text
-        // is sent — the route ignores extra fields, and the provider input is
-        // read server-side from the stored canonical label.
-        body: JSON.stringify({ topicId }),
+      const r = await performSuperAdminWrite(async () => {
+        try {
+          const res = await fetch(EMBED_API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            // topicId is the ONLY field. No company, provider, model, cost or text
+            // is sent — the route ignores extra fields, and the provider input is
+            // read server-side from the stored canonical label.
+            body: JSON.stringify({ topicId }),
+          });
+          seen.last = res;
+          return res;
+        } catch (e) {
+          seen.thrown = e;
+          throw e;
+        }
       });
-      const json = await res.json().catch(() => ({}));
+
+      if (!r.ok && r.status === null) {
+        // Step-up cancelled/failed, session lost, or network error: nothing was
+        // accepted. Not "unauthorized" — the operator can confirm and retry.
+        const detail = seen.thrown instanceof Error && seen.thrown.message ? seen.thrown.message : r.message;
+        setEmbed((m) => ({ ...m, [topicId]: 'error' }));
+        setEmbedDetail((m) => ({ ...m, [topicId]: detail }));
+        return;
+      }
+
+      const json: EmbedReply = (r.ok ? (r.body as EmbedReply | null) : await readJson(seen.last)) ?? {};
 
       // Trust the route's own state name when it gives one; fall back to the
       // transport status only for guard rejections, which never carry a body.
       const named = typeof json.status === 'string' ? (json.status as EmbedState) : null;
       const state: EmbedState = named && EMBED_FEEDBACK[named]
         ? named
-        : res.status === 401 || res.status === 403
+        : r.status === 403
           ? 'unauthorized'
           : 'error';
 
@@ -176,7 +212,7 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
       setEmbedDetail((m) => ({
         ...m,
         [topicId]: state === 'error'
-          ? String(json.reason || json.error || json.code || 'HTTP ' + res.status)
+          ? String(json.reason || json.error || json.code || (r.ok ? 'HTTP ' + r.status : r.message))
           : '',
       }));
     } catch (e) {
@@ -202,16 +238,16 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
     setCreating(true);
     setCreateMsg(null);
     try {
-      const res = await fetch(AUTHORING_API, {
+      const r = await performSuperAdminWrite(() => fetch(AUTHORING_API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: newLabel }),   // the ONLY field sent
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setCreateMsg({ type: 'err', text: String(json.error || json.code || 'Failed (' + res.status + ')') });
+      }));
+      if (!r.ok) {
+        setCreateMsg({ type: 'err', text: r.message });
         return;
       }
+      const json = (r.body ?? {}) as { canonicalLabel?: unknown };
       setCreateMsg({ type: 'ok', text: 'Created: ' + String(json.canonicalLabel ?? newLabel) });
       setNewLabel('');
       await load(filter, page, search);
@@ -230,16 +266,16 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
   const renameTopic = useCallback(async (topicId: string, label: string) => {
     setCreateMsg(null);
     try {
-      const res = await fetch(AUTHORING_API, {
+      const r = await performSuperAdminWrite(() => fetch(AUTHORING_API, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topicId, label }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setCreateMsg({ type: 'err', text: String(json.error || json.code || 'Failed (' + res.status + ')') });
+      }));
+      if (!r.ok) {
+        setCreateMsg({ type: 'err', text: r.message });
         return;
       }
+      const json = (r.body ?? {}) as { action?: unknown; canonicalLabel?: unknown };
       setCreateMsg({ type: 'ok', text: String(json.action) + ': ' + String(json.canonicalLabel) });
       await load(filter, page, search);
     } catch (e) {

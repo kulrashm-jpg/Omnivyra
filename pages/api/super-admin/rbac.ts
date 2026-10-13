@@ -6,6 +6,7 @@ import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { logger } from '../../../backend/services/logger';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { mayAttemptCapability } from '../../../backend/security/preAuthorization';
 import { IDENTITY_ADMIN } from '../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -60,4 +61,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-rbac', methods: ['POST'] }), { route: '/api/super-admin/rbac' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-rbac', methods: ['POST'], authorize: mayAttemptCapability(IDENTITY_ADMIN) }), { route: '/api/super-admin/rbac' });

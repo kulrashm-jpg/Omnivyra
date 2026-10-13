@@ -11,6 +11,7 @@ import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from 
 import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import type { BlogGenerationOutput } from '../../../lib/blog/blogGenerationEngine';
 import { realizeGeneratedBlocks } from '../../../lib/content/realizeGeneratedDocument';
+import { performSuperAdminWrite } from '../../../lib/security/superAdminWrite';
 
 function useBlogAccess() {
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -234,7 +235,8 @@ export default function AdminBlogNewPage() {
     setError(null);
     setIsSaving(true);
     try {
-      const res = await fetch('/api/admin/blog', {
+      // blog.publish.manage: a write may need passkey step-up; fire() builds a fresh request per attempt.
+      const r = await performSuperAdminWrite(() => fetch('/api/admin/blog', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -257,9 +259,11 @@ export default function AdminBlogNewPage() {
           primary_keyword:      primaryKeyword || undefined,
           secondary_keywords:   secondaryKeywords?.length ? secondaryKeywords : undefined,
         }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Save failed');
+      }));
+      if (!r.ok) {
+        setError(r.message);
+        return;
+      }
       router.push('/admin/blog');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');

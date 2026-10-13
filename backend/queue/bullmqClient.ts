@@ -25,7 +25,7 @@ import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollou
 import { getMetricsReport } from '../../lib/redis/instrumentation';
 import IORedis from 'ioredis';
 import { createHash } from 'crypto';
-import { isRedisUrlTLS } from '../../lib/redis/sanitizer';
+import { parseRedisConnectionUrl } from '../../lib/redis/redisUrl';
 import {
   boundedRetryStrategy,
   isNonRecoverableRedisError,
@@ -112,17 +112,10 @@ function parseRedisUrl(url: string) {
   if (urlMatch) url = urlMatch[0];
 
   if (url.includes('://')) {
-    const parsed = new URL(url);
-    const host = parsed.hostname;
-    // TLS decision is centralized in sanitizer.isRedisUrlTLS (single
-    // authority) — honors BOTH rediss:// scheme AND Upstash hosts.
-    const needsTls = isRedisUrlTLS(url);
-    return {
-      host,
-      port: parseInt(parsed.port || '6379'),
-      password: parsed.password || undefined,
-      ...(needsTls ? { tls: {} } : {}),
-    };
+    // Closure-014 (D-1): the shared strict parser keeps the database index, the
+    // ACL username and the decoded password, and throws (as `new URL` did)
+    // rather than guess. TLS stays centralized in sanitizer.isRedisUrlTLS.
+    return parseRedisConnectionUrl(url);
   }
   return {
     host: 'localhost',
@@ -205,6 +198,10 @@ function rawConnectionOptions(): Record<string, unknown> {
     host: redisConfig.host,
     port: redisConfig.port,
     password: redisConfig.password,
+    // Closure-014 (D-1): the database index and ACL username survive into every
+    // BullMQ / probe / spread connection (they were silently dropped here).
+    ...('username' in redisConfig && redisConfig.username ? { username: redisConfig.username } : {}),
+    ...('db' in redisConfig && redisConfig.db !== undefined ? { db: redisConfig.db } : {}),
     ...(redisConfig.tls ? { tls: redisConfig.tls } : {}),
     enableReadyCheck: false,
     maxRetriesPerRequest: null as null,

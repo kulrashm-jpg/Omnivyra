@@ -271,12 +271,26 @@ export function expandWithHierarchy(
 }
 
 /**
+ * Roles whose capabilities are honoured ONLY under their exact canonical
+ * spelling. Closure-014 (A): every platform-authority predicate compares the
+ * role exactly — isPlatformSuperAdminPrincipal, rbacService.hasActiveSuperAdminRow,
+ * the startup identity check — while this function upper-cased, so an active
+ * `super_admin` row received every SUPER_ADMIN capability (including all
+ * platform-tier ones) without platform authority. Aligning HERE, fail-closed,
+ * makes the capability layer agree with the authority layer; legacy spellings
+ * are surfaced by the grant-impact query and normalized as data by the owner.
+ * Tenant roles keep their historical case-insensitive mapping.
+ */
+const EXACT_SPELLING_ROLES: ReadonlySet<string> = new Set(['SUPER_ADMIN']);
+
+/**
  * Resolve a role to its hierarchy-expanded capability set.
  * Unknown roles return an empty list.
  */
 export function capabilitiesForRole(role: string | null | undefined): ReadonlyArray<Capability> {
   if (!role) return [];
   const upper = role.toUpperCase() as CanonicalRole;
+  if (EXACT_SPELLING_ROLES.has(upper) && role !== upper) return [];
   const base = ROLE_CAPABILITIES[upper];
   if (!base) return [];
   return expandWithHierarchy(base);

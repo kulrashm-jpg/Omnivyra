@@ -24,9 +24,52 @@ const PROD_MARKERS = [
 ];
 const CONNECTION_VARS = [
   'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY',
-  'SUPABASE_POOLER_DB_URL', 'DATABASE_URL', 'DIRECT_URL',
-  'REDIS_URL', 'UPSTASH_REDIS_REST_URL', 'SUPABASE_ACCESS_TOKEN',
+  'SUPABASE_POOLER_DB_URL', 'SUPABASE_POOLER_URL', 'DATABASE_URL', 'DIRECT_URL', 'MIGRATION_DATABASE_URL',
+  'REDIS_URL', 'CREATOR_RENDER_REDIS_URL', 'UPSTASH_REDIS_REST_URL', 'SUPABASE_ACCESS_TOKEN',
 ];
+
+/**
+ * Closure-014 (F): certification is an ALLOW-list, not only a deny-list. Under
+ * CERT_ENV=1 every one of these connection targets, when set, must resolve to a
+ * loopback host — so a new production host (not yet in PROD_MARKERS) or a
+ * shared non-production Redis can never be reached from certification.
+ * (backend/db/supabaseClient.ts prefers SUPABASE_POOLER_URL over SUPABASE_URL.)
+ */
+const LOOPBACK_REQUIRED_VARS = [
+  'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_URL', 'SUPABASE_POOLER_URL', 'SUPABASE_POOLER_DB_URL',
+  'DATABASE_URL', 'DIRECT_URL', 'MIGRATION_DATABASE_URL',
+  'REDIS_URL', 'CREATOR_RENDER_REDIS_URL', 'UPSTASH_REDIS_REST_URL',
+];
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/** Hostname of a URL-shaped value, or null when it is not URL-shaped. Never returns credentials. */
+function hostOf(value) {
+  const m = String(value).match(/[a-z][a-z0-9+.-]*:\/\/\S+/i);
+  if (!m) return null;
+  try { return new URL(m[0]).hostname.toLowerCase(); } catch (_) { return '(unparseable)'; }
+}
+
+/** Pure scan used by the guard and by tests. Violations name the variable, never its value. */
+function scanCertEnv(env = process.env) {
+  const violations = [];
+  for (const key of CONNECTION_VARS) {
+    const val = env[key];
+    if (typeof val !== 'string') continue;
+    for (const marker of PROD_MARKERS) if (val.includes(marker)) violations.push(`${key} → "${marker}"`);
+  }
+  for (const key of LOOPBACK_REQUIRED_VARS) {
+    const val = env[key];
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const host = hostOf(val);
+    if (host === null) violations.push(`${key} → not a URL (a loopback URL is required under CERT_ENV=1)`);
+    else if (!LOOPBACK_HOSTS.has(host)) violations.push(`${key} → non-loopback host "${host}"`);
+  }
+  if (env.OMNIVYRA_ALLOW_SHARED_QUEUES && /^(1|true|yes)$/i.test(String(env.OMNIVYRA_ALLOW_SHARED_QUEUES))) {
+    violations.push('OMNIVYRA_ALLOW_SHARED_QUEUES → shared production queue keyspace is forbidden under CERT_ENV=1');
+  }
+  if (env.NODE_ENV === 'production') violations.push('NODE_ENV → "production" selects the shared production queue keyspace');
+  return violations;
+}
 
 /** Resolve the env file per the cert-aware priority. */
 function resolveEnvFile(cwd = process.cwd()) {
@@ -40,14 +83,9 @@ function resolveEnvFile(cwd = process.cwd()) {
 /** In-process guard: only active under CERT_ENV=1. Exits on any prod marker. */
 function assertCertIsolationInProcess(env = process.env) {
   if (env.CERT_ENV !== '1') return { ok: true, violations: [] };
-  const violations = [];
-  for (const key of CONNECTION_VARS) {
-    const val = env[key];
-    if (typeof val !== 'string') continue;
-    for (const marker of PROD_MARKERS) if (val.includes(marker)) violations.push(`${key} → "${marker}"`);
-  }
+  const violations = scanCertEnv(env);
   if (violations.length) {
-    console.error('[cert-isolation:in-process] REFUSING — certification env points at PRODUCTION:\n  ' + violations.join('\n  '));
+    console.error('[cert-isolation:in-process] REFUSING — certification env is not confined to loopback / points at PRODUCTION:\n  ' + violations.join('\n  '));
     process.exit(1);
   }
   return { ok: true, violations: [] };
@@ -63,4 +101,4 @@ function loadCertAwareEnv(cwd = process.cwd()) {
   return file;
 }
 
-module.exports = { resolveEnvFile, loadCertAwareEnv, assertCertIsolationInProcess, PROD_MARKERS, CONNECTION_VARS };
+module.exports = { resolveEnvFile, loadCertAwareEnv, assertCertIsolationInProcess, scanCertEnv, PROD_MARKERS, CONNECTION_VARS, LOOPBACK_REQUIRED_VARS };

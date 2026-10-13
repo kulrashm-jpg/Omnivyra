@@ -23,6 +23,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { encryptCredential, decryptCredential } from '../../../backend/auth/credentialEncryption';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
@@ -51,6 +52,9 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
 };
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:platform-oauth-configs', 20, 60, { sensitive: true }))) return;
+
   // Split the gate by method. GET returns metadata only (which platforms
   // are configured, the enabled flag, the 6-char client_id preview, and
   // updated_at) — no secret material is decrypted into the response, so
