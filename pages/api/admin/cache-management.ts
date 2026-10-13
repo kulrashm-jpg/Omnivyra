@@ -12,7 +12,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import IORedis from 'ioredis';
 import { requireCapability } from '../../../backend/security/requireCapability';
-import { requirePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { getCacheStats as getExtApiStats } from '../../../backend/services/redisExternalApiCache';
@@ -22,13 +21,14 @@ const requireSuperAdmin = async (req: NextApiRequest, res: NextApiResponse): Pro
   const guard = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'cache management',
+    // Closure-009 (owner decision): a flush deletes platform-wide cache data —
+    // a WRITE needing platform authority. Closure-015: enforced (and audited)
+    // inside requireCapability. Reads (GET) stay on the view capability.
+    requirePlatformAuthority: req.method === 'POST',
   });
   if (guard.ok !== true) return false;
-  // Closure-009 (owner decision): a flush deletes platform-wide cache data —
-  // a WRITE. Reads (GET) stay on the view capability.
   if (req.method === 'POST') {
     if (!(await requireAdminRateLimit(req, res, 'rl:admin:cache-management', 10, 60))) return false;
-    if (!requirePlatformWriteAuthority(res, guard.principal, 'cache.flush')) return false;
   }
   return true;
 };

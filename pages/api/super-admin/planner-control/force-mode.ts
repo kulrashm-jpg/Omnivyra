@@ -19,7 +19,6 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../../backend/security/requireCapability';
-import { requirePlatformWriteAuthority } from '../../../../backend/security/platformWriteAuthority';
 import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 import { logger } from '../../../../backend/services/logger';
@@ -46,10 +45,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const auth = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'planner_force_mode_operation',
+    // Closure-009 (owner decision): a platform-wide WRITE needing platform
+    // authority. Closure-015: enforced (and audited) inside requireCapability.
+    requirePlatformAuthority: true,
   });
   if (!auth.ok) return;
-  // Closure-009 (owner decision): a platform-wide WRITE.
-  if (!requirePlatformWriteAuthority(res, auth.principal, 'planner.force_mode')) return;
   const operatorId =
     (auth.principal as { userId?: string }).userId ??
     (auth.principal as { id?: string }).id ??

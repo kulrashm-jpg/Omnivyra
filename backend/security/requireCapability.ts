@@ -68,6 +68,18 @@ export interface RequireCapabilityOptions {
    * policy AND this is omitted, no step-up is required.
    */
   stepUpOverride?: StepUpRequirement;
+  /**
+   * Closure-015 — this request also requires platform authority (an active,
+   * canonical platform SUPER_ADMIN), whatever the capability's tier or the
+   * HTTP method. For a WRITE gated on a read-only platform capability (the
+   * Closure-009 dashboard-view write routes) and for a READ of cross-tenant or
+   * credential-adjacent data gated on a platform-tier write capability. A holder
+   * without authority is refused by the same audited path as the D-3 guard,
+   * before the capability decision, so the trail records `elevated_route_denied`
+   * and never `allowed`. Non-holders keep CAPABILITY_NOT_HELD. Set it only for
+   * the request kinds that need it (e.g. `req.method === 'POST'`).
+   */
+  requirePlatformAuthority?: boolean;
 }
 
 export type RequireCapabilityResult =
@@ -146,8 +158,10 @@ export async function requireCapability(
   // `elevated_route_denied` — never `allowed` or `elevated_route_accessed` —
   // and never reaches a step-up prompt. A principal that does not hold the
   // capability keeps the established CAPABILITY_NOT_HELD denial below.
+  // Closure-015: a route may extend the same refusal to a request that is not
+  // a platform-tier write by itself (see `requirePlatformAuthority`).
   if (
-    isPlatformTierWrite(options.capability, req.method)
+    (isPlatformTierWrite(options.capability, req.method) || options.requirePlatformAuthority === true)
     && principal.capabilities.includes(options.capability)
     && !hasPlatformWriteAuthority(principal)
   ) {

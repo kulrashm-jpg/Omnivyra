@@ -72,6 +72,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       ? 'platform OAuth credential admin (read)'
       : 'platform OAuth credential admin',
     requireStepUp,
+    // Closure-015: the GET lists platform OAuth configuration metadata
+    // (configured/enabled flags, client-id previews). Like the writes, it is for
+    // platform operators only: a direct grant does not unlock it. Step-up stays
+    // GET-exempt.
+    requirePlatformAuthority: true,
   });
   if (guard.ok !== true) return;
   // Closure-013 (D-3): a direct capability grant plus step-up is not platform

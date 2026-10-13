@@ -20,7 +20,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../backend/security/requireCapability';
-import { requirePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -81,6 +80,10 @@ async function handler(
   const guard = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'integration-audit',
+    // Closure-009 (owner decision): a re-test makes outbound calls with the
+    // tenant's stored credentials and writes state — a platform-wide WRITE
+    // needing platform authority. Closure-015: enforced (and audited) here.
+    requirePlatformAuthority: req.method === 'POST',
   });
   if (guard.ok !== true) return;
 
@@ -88,10 +91,7 @@ async function handler(
     return handleGet(req, res);
   }
   if (req.method === 'POST') {
-    // Closure-009 (owner decision): a re-test makes outbound calls with the
-    // tenant's stored credentials and writes state — a platform-wide WRITE.
     if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:integration-audit', 20, 60))) return;
-    if (!requirePlatformWriteAuthority(res, guard.principal, 'integration_audit.retest')) return;
     return handlePost(req, res);
   }
   res.setHeader('Allow', 'GET, POST');

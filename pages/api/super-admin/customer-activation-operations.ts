@@ -14,7 +14,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../backend/security/requireCapability';
-import { requirePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -40,12 +39,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'super-admin customer-activation-operations',
+    // Closure-009 (owner decision): POST is a platform-wide WRITE needing
+    // platform authority. Closure-015: enforced (and audited) in requireCapability.
+    requirePlatformAuthority: req.method === 'POST',
   });
   if (!guard.ok) return;
-  // Closure-009 (owner decision): POST is a platform-wide WRITE.
   if (req.method === 'POST') {
     if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:customer-activation-ops', 30, 60))) return;
-    if (!requirePlatformWriteAuthority(res, guard.principal, 'customer_activation.operate')) return;
   }
 
   try {

@@ -145,6 +145,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     capability: INTEGRATION_PLATFORM_OAUTH_MANAGE,
     reason: 'integration health read',
     requireStepUp: false,
+    // Closure-015: this read returns every tenant's connection state, company
+    // names and provider errors. Its audience is platform operators, so a
+    // direct grant of the write capability (inert for writes since D-3) does
+    // not unlock it: an active platform SUPER_ADMIN is required, refusal audited.
+    requirePlatformAuthority: true,
   });
   if (guard.ok !== true) return;
 

@@ -13,7 +13,6 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createApiRoute } from '../../../lib/platform/routeFactory';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
-import { requirePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security/SecurityCapabilities';
 import {
   captureBaseline,
@@ -31,10 +30,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'operator manages performance baselines',
+    // Closure-009 (owner decision): capturing a baseline is a platform WRITE
+    // needing platform authority. Closure-015: enforced (and audited) here.
+    requirePlatformAuthority: req.method === 'POST',
   });
   if (guard.ok !== true) return;
-  // Closure-009 (owner decision): capturing a baseline is a platform WRITE.
-  if (req.method === 'POST' && !requirePlatformWriteAuthority(res, guard.principal, 'observability.baseline.capture')) return;
 
   try {
     if (req.method === 'POST') {
