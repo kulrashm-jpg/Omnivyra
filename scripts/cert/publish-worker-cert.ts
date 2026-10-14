@@ -8,8 +8,13 @@
  * or the publishing_jobs loop can start.
  *
  * Usage (certification stack only):
- *   ENV_FILE=.env.cert CERT_ENV=1 CERT_FAKE_PUBLISHER=1 \
- *     npx ts-node --transpile-only -r tsconfig-paths/register scripts/cert/publish-worker-cert.ts [--check]
+ *   ENV_FILE=.env.cert CERT_FAKE_PUBLISHER=1 node scripts/cert/publish-worker-cert.cjs [--check]
+ * (also `npm run cert:publish-worker -- --check`). The .cjs runner loads this
+ * file through ts-node in CommonJS mode (the repository's established form, as
+ * `audit:blog-matrix`). Closure-014A: plain
+ * `npx ts-node …` does NOT work here — the root tsconfig emits ES modules, so
+ * the dynamic imports below resolve as native ESM and fail (closed) for lack
+ * of a file extension.
  * `--check` performs every guard and prints the plan, then exits without
  * constructing a Worker.
  *

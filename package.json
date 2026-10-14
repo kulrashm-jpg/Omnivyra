@@ -145,6 +145,7 @@
     "cert:db:build": "bash scripts/cert/build-cert-db.sh",
     "cert:api:up": "docker start $(docker ps -aq --filter name=_certenv)",
     "dev:cert": "node scripts/cert/dev-cert.mjs",
+    "cert:publish-worker": "node scripts/cert/publish-worker-cert.cjs",
     "audit:architecture-risk": "node architecture-migration/tools/ownership-risk-audit.mjs",
     "audit:semantic-enforcement": "node architecture-migration/tools/semantic-enforcement-engine.mjs",
     "audit:semantic-resolution": "node architecture-migration/tools/semantic-enforcement-engine.mjs --resolution-completion",
