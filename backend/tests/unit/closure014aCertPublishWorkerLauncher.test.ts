@@ -19,6 +19,10 @@ const SAFE = {
   SUPABASE_URL: 'http://127.0.0.1:54321', NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:54321',
   DATABASE_URL: 'postgresql://cert:placeholder@127.0.0.1:54322/postgres',
   REDIS_URL: 'redis://127.0.0.1:6390/3',
+  // Closure-014C: --check now imports the worker modules, which validate config at import.
+  // Non-secret placeholders only.
+  SUPABASE_SECRET_KEY: 'cert-placeholder-not-a-key', NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'cert-placeholder-not-a-key',
+  OPENAI_API_KEY: 'cert-placeholder-not-a-key', ENCRYPTION_KEY: '0'.repeat(64),
 };
 
 function runCheck(over: Record<string, string | undefined>) {

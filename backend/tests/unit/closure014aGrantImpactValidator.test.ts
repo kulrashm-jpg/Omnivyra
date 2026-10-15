@@ -68,10 +68,10 @@ function fixtureScript(opts: { mismatch?: boolean; failOnInsertNo?: number } = {
 const Q = { q1: 'WITH write_tier ... holders AS (...)', q2: 'WITH write_tier ... exact_sa AS (...)' };
 
 describe('loopback target guard', () => {
-  it.each(['postgresql://u:p@127.0.0.1:54322/postgres', 'postgresql://u:p@localhost:54322/x', 'postgresql://u:p@[::1]:54322/x'])('accepts %s', (u) => {
+  it.each(['postgresql://u:p@127.0.0.1:54322/postgres', 'postgresql://u:p@localhost:54322/x', 'postgresql://u:placeholder@[::1]:54322/x'])('accepts %s', (u) => {
     expect(() => V.assertLoopbackTarget(u)).not.toThrow();
   });
-  it.each(['postgresql://u:p@db.klkiseupptzbecbxwrky.supabase.co:5432/postgres', 'postgresql://u:p@10.0.0.5:5432/x', 'not a url'])('refuses %s without echoing it', (u) => {
+  it.each(['postgresql://u:placeholder@db.klkiseupptzbecbxwrky.supabase.co:5432/postgres', 'postgresql://u:placeholder@10.0.0.5:5432/x', 'not a url'])('refuses %s without echoing it', (u) => {
     let msg = '';
     try { V.assertLoopbackTarget(u); } catch (e) { msg = (e as Error).message; }
     expect(msg).toMatch(/^REFUSING/);

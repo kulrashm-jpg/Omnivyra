@@ -50,10 +50,17 @@ async function main(): Promise<void> {
   assertQueueConsumerRuntimeAllowed('cert-publish-worker');
 
   console.log(`[cert-publish-worker] plan: queue=publish prefix=${ns.prefix} consumers=1 provider=cert-fake egress=loopback-only`);
-  if (process.argv.includes('--check')) { console.log('[cert-publish-worker] --check OK; no worker started'); return; }
 
+  // Closure-014C — resolve the worker modules BEFORE the --check exit, so check
+  // mode exercises exactly the module resolution a real start uses. (014A's
+  // --check returned first and passed while every real start failed on the
+  // '@/' path alias inside this import graph.) Importing creates no Worker and
+  // no Redis connection; both are lazy.
   const { getWorker } = await import('../../backend/queue/bullmqClient');
   const { processPublishJob } = await import('../../backend/queue/jobProcessors/publishProcessor');
+  console.log('[cert-publish-worker] worker modules resolved (bullmqClient, publishProcessor)');
+  if (process.argv.includes('--check')) { console.log('[cert-publish-worker] --check OK; no worker started'); return; }
+
   const worker = getWorker('publish', processPublishJob, { concurrency: 1 });
   console.log('[cert-publish-worker] publish consumer started');
 

@@ -189,8 +189,11 @@ describe('policy separation (source-level pin)', () => {
   it('tenant retry carries no platform recovery capability, step-up gate or platform authority', () => {
     const src = read('scheduler/retry.ts');
     expect(src).not.toMatch(/PUBLISH_RECOVERY_MANAGE|requirePlatformWriteAuthority|requireCapability\s*\(/);
-    // Every read and write is pinned to the session user.
-    expect(src.match(/\.eq\('user_id', user\.id\)/g)?.length).toBe(2);
+    // Every read and write is pinned to the session user: one user pin per
+    // scheduled_posts statement (read, claim, release, reset, restore — Closure-014C).
+    const statements = src.match(/\.from\('scheduled_posts'\)/g)?.length ?? 0;
+    expect(statements).toBe(5);
+    expect(src.match(/\.eq\('user_id', user\.id\)/g)?.length).toBe(statements);
   });
 
   it.each(['super-admin/publish/reconcile.ts', 'super-admin/threads/[threadId]/resume.ts', 'super-admin/threads/[threadId]/reconcile.ts'])(

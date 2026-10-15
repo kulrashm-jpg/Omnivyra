@@ -366,7 +366,7 @@ export function RateLimiterTab({
 }: {
   redis:          RedisLiveReport | null;
   rlConfig:       RateLimitAdminConfig | null;
-  onRlConfigSave: (cfg: RateLimitAdminConfig) => Promise<void>;
+  onRlConfigSave: (cfg: RateLimitAdminConfig) => Promise<{ ok: boolean }>;
 }) {
   const [drafts, setDrafts]           = useState<Record<string, RateLimitEndpointOverride>>({});
   const [expandCommands, setExpCmd]   = useState(false);
@@ -394,9 +394,13 @@ export function RateLimiterTab({
         updatedAt: new Date().toISOString(),
         endpoints: { ...(rlConfig?.endpoints ?? {}), [key]: { limit, windowSecs } },
       };
-      await onRlConfigSave(next);
-      setSavedKey(key);
-      setTimeout(() => setSavedKey(null), 2500);
+      // "Saved" only after the server confirmed it; a refusal keeps the draft
+      // (the panel shows why in its "Not saved" banner).
+      const r = await onRlConfigSave(next);
+      if (r.ok) {
+        setSavedKey(key);
+        setTimeout(() => setSavedKey(null), 2500);
+      }
     } finally { setSaving(false); }
   };
 

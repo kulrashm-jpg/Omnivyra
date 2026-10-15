@@ -41,6 +41,7 @@ import { withIdempotency } from '../../../../backend/middleware/withIdempotency'
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { randomInt, randomUUID } from 'crypto';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
@@ -65,6 +66,7 @@ import {
 import { emitCreatorEvent, CREATOR_EVENTS } from '@/backend/services/creatorOperationalTelemetryService';
 import { recordAuditEntry } from '@/backend/services/creatorAuditTrailService';
 import { authorizeLinkedPostMutation, pinErrorCode } from '@/backend/services/linkedScheduledPostGuard';
+import { reschedulingCode, reschedulingFenceState } from '@/backend/queue/publishOutcome';
 
 /**
  * Plan-row content key recording a reschedule whose queue step failed after
@@ -280,7 +282,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── Load row + assert attachment-required + currently scheduled-ish ────
   const { data: rowData, error: rowError } = await supabase
     .from('daily_content_plans')
-    .select('id, campaign_id, content_type, content, content_status, platform, scheduled_time, date, execution_id, week_number')
+    .select('id, campaign_id, content_type, content, content_status, platform, scheduled_time, date, execution_id, week_number, updated_at')
     .eq('id', id)
     .maybeSingle();
   if (rowError) {
@@ -299,7 +301,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     date: string | null;
     execution_id: string | null;
     week_number: number | null;
+    updated_at: string | null;
   };
+  // The plan version this request read (Closure-014C): copied now, it is what
+  // the plan write below compares against.
+  const planVersionRead: string | null = row.updated_at ?? null;
   // ── Resolve company + auth — BEFORE anything about the row's state is
   // disclosed (format, lifecycle state, revision) ────────────────────────
   let companyId: string | null = null;
@@ -377,6 +383,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
   const linkedPost = linkedDecision.post;
+  // The post state this request read (Closure-014C): copied now — every
+  // compare-and-set below pins it and the undo restores it.
+  const postRead = {
+    status: linkedPost?.status ?? null,
+    error_code: linkedPost?.error_code ?? null,
+    updated_at: linkedPost?.updated_at ?? null,
+    user_id: linkedPost?.user_id ?? null,
+  };
+  // Another reschedule of this post is still writing its plan row / queue
+  // (it holds the RESCHEDULING fence). Refused before anything is written —
+  // reschedules of one post serialize instead of interleaving (Closure-014C).
+  if (priorScheduledPostId && reschedulingFenceState(postRead.error_code, Date.now()) === 'live') {
+    return res.status(409).json({
+      error: 'Another reschedule of this item is in progress. Wait a moment, then refresh and retry.',
+      code: 'RESCHEDULE_IN_PROGRESS',
+      scheduled_post_id: priorScheduledPostId,
+      partial: false,
+    });
+  }
 
   // ── R2-P3: MOVE validation (all checks before any write) ───────────────
   const targetPlatform = movePlatform ?? normalizePlatformKey(row.platform ?? '');
@@ -628,12 +653,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const contentStatusValue = mediaReplaced
     ? CREATOR_LIFECYCLE_STATES.SCHEDULED
     : (currentState === 'ready_for_schedule' ? CREATOR_LIFECYCLE_STATES.READY_FOR_SCHEDULE : CREATOR_LIFECYCLE_STATES.SCHEDULED);
+  // Closure-014C — the plan row's updated_at is this route's version fence:
+  // the plan write is a compare-and-set on the version read, and the
+  // incomplete marker may only land on the version THIS request wrote. Unique
+  // (microsecond suffix) so two requests in the same millisecond never share it.
+  const planWriteAt = new Date().toISOString().replace(/Z$/, `${String(randomInt(0, 1000)).padStart(3, '0')}Z`);
   const dailyPlanPatch: Record<string, unknown> = {
     content: JSON.stringify(updatedContent),
     content_status: contentStatusValue,
     failure_reason: null,
     failure_type: null,
-    updated_at: new Date().toISOString(),
+    updated_at: planWriteAt,
   };
   if (newScheduledAtIso) {
     // Keep the daily_content_plans.date / scheduled_time columns aligned so
@@ -681,6 +711,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const postWriteAt = new Date().toISOString();
   const guardPost = linkedPost as NonNullable<typeof linkedPost>;
   let scheduledPostPatch: Record<string, unknown> | null = null;
+  // The fence this request writes with its post compare-and-set and clears last.
+  const fence = reschedulingCode(Date.now(), randomUUID());
   // The values this request overwrites, copied BEFORE the write (the undo below
   // restores exactly these).
   const priorPostValues: Record<string, unknown> = {
@@ -690,7 +722,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     social_account_id: guardPost?.social_account_id ?? null,
   };
   if (priorScheduledPostId) {
-    scheduledPostPatch = { updated_at: postWriteAt };
+    scheduledPostPatch = { updated_at: postWriteAt, error_code: fence };
     if (mediaReplaced) {
       scheduledPostPatch.media_urls = [mediaUrl];
     }
@@ -713,12 +745,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .update(scheduledPostPatch)
         .eq('id', priorScheduledPostId)
         .eq('campaign_id', row.campaign_id)
-        .eq('user_id', String(guardPost.user_id ?? ''))
-        .eq('status', String(guardPost.status ?? ''))
+        .eq('user_id', String(postRead.user_id ?? ''))
+        .eq('status', String(postRead.status ?? ''))
         .is('platform_post_id', null),
-      guardPost.error_code,
+      postRead.error_code,
     );
-    postQuery = guardPost.updated_at == null ? postQuery.is('updated_at', null) : postQuery.eq('updated_at', guardPost.updated_at);
+    postQuery = postRead.updated_at == null ? postQuery.is('updated_at', null) : postQuery.eq('updated_at', postRead.updated_at);
     const { data: postUpdated, error: postUpdateError } = await postQuery.select('id');
     if (postUpdateError) {
       console.warn('[reschedule] scheduled_posts update failed', { id, priorScheduledPostId, error: postUpdateError.message });
@@ -738,25 +770,68 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  const { error: dailyUpdateError } = await ownedDbTable('daily_content_plans')
+  // Undo the post write — compare-and-set on THIS request's fence, never on a
+  // timestamp: scheduled_posts carries a BEFORE UPDATE trigger (updated_at =
+  // CURRENT_TIMESTAMP), so the value this request sent is not what is stored
+  // and the previous undo, pinned on it, could never match in Postgres. While
+  // the fence holds no other reschedule can have written the post, so the
+  // values restored (and the error_code read) are the committed state this
+  // request built on. True when nothing of ours remains.
+  const undoPostWrite = async (): Promise<boolean> => {
+    if (!priorScheduledPostId || !scheduledPostPatch) return true;
+    const restorePatch: Record<string, unknown> = { updated_at: new Date().toISOString(), error_code: postRead.error_code };
+    for (const col of ['media_urls', 'scheduled_for', 'platform', 'social_account_id'] as const) {
+      if (col in scheduledPostPatch) restorePatch[col] = priorPostValues[col];
+    }
+    // Pinned on the fence AND on what this request wrote: a non-reschedule
+    // writer (unschedule, a publisher claim, …) that moved the post on since is
+    // never clobbered — the undo then matches nothing (partial: true).
+    let undo = ownedDbTable('scheduled_posts')
+      .update(restorePatch)
+      .eq('id', priorScheduledPostId)
+      .eq('error_code', fence)
+      .eq('status', String(postRead.status ?? ''));
+    for (const col of ['scheduled_for', 'platform', 'social_account_id'] as const) {
+      if (col in scheduledPostPatch) undo = undo.eq(col, String(scheduledPostPatch[col]));
+    }
+    const { data: undone } = await undo.select('id');
+    return Array.isArray(undone) && undone.length > 0;
+  };
+  // Clear the fence (compare-and-set on it): the last write of a reschedule
+  // that kept its post write. A publisher that claimed the post meanwhile has
+  // replaced the fence with its own claim, and this then changes nothing.
+  const releaseFence = async (): Promise<void> => {
+    if (!priorScheduledPostId || !scheduledPostPatch) return;
+    try {
+      await ownedDbTable('scheduled_posts')
+        .update({ error_code: null })
+        .eq('id', priorScheduledPostId)
+        .eq('error_code', fence);
+    } catch (releaseError) {
+      console.warn('[reschedule] fence release failed', { priorScheduledPostId, message: (releaseError as Error)?.message });
+    }
+  };
+
+  // Compare-and-set on the plan version read: a plan row another reschedule
+  // (or any writer) changed since this request read it is never overwritten
+  // with this request's stale copy (Closure-014C).
+  let planQuery = ownedDbTable('daily_content_plans')
     .update(dailyPlanPatch)
     .eq('id', id);
+  planQuery = planVersionRead == null ? planQuery.is('updated_at', null) : planQuery.eq('updated_at', planVersionRead);
+  const { data: planUpdated, error: dailyUpdateError } = await planQuery.select('id');
+  if (!dailyUpdateError && (!Array.isArray(planUpdated) || planUpdated.length === 0)) {
+    const restored = await undoPostWrite();
+    return res.status(409).json({
+      error: 'The item changed while it was being re-timed (another reschedule may have won). Refresh and retry.',
+      code: 'SCHEDULED_POST_CHANGED_CONCURRENTLY',
+      scheduled_post_id: priorScheduledPostId,
+      partial: !restored,
+      ...(restored ? {} : { recovery: 'repeat_reschedule' }),
+    });
+  }
   if (dailyUpdateError) {
-    // Undo the post write (compare-and-set on the version this request
-    // wrote, so a later writer is never clobbered).
-    let restored = !priorScheduledPostId;
-    if (priorScheduledPostId && scheduledPostPatch) {
-      const restorePatch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-      for (const col of ['media_urls', 'scheduled_for', 'platform', 'social_account_id'] as const) {
-        if (col in scheduledPostPatch) restorePatch[col] = priorPostValues[col];
-      }
-      const { data: undone } = await ownedDbTable('scheduled_posts')
-        .update(restorePatch)
-        .eq('id', priorScheduledPostId)
-        .eq('updated_at', postWriteAt)
-        .select('id');
-      restored = Array.isArray(undone) && undone.length > 0;
-    }
+    const restored = await undoPostWrite();
     return res.status(500).json({
       error: `Failed to update row: ${dailyUpdateError.message}`,
       code: 'RESCHEDULE_PLAN_WRITE_FAILED',
@@ -803,13 +878,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           },
         };
         // The response says whether the marker landed: it never claims a
-        // durable record it could not write.
+        // durable record it could not write. Compare-and-set on the plan
+        // version THIS request wrote (Closure-014C): a newer reschedule that
+        // has since rewritten the row is never overwritten with this request's
+        // stale copy and a "repeat" hint for a time nobody wants any more.
         try {
-          const { error: markError } = await ownedDbTable('daily_content_plans')
+          const { data: markRows, error: markError } = await ownedDbTable('daily_content_plans')
             .update({ content: JSON.stringify(marked) })
-            .eq('id', id);
+            .eq('id', id)
+            .eq('updated_at', planWriteAt)
+            .select('id');
           if (markError) console.warn('[reschedule] incomplete marker write failed', { id, error: markError.message });
-          return !markError;
+          return !markError && Array.isArray(markRows) && markRows.length > 0;
         } catch (markError) {
           console.warn('[reschedule] incomplete marker write threw', { id, message: (markError as Error)?.message });
           return false;
@@ -831,6 +911,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             dailyPlanId: id,
             metadata: { operation: 'reschedule_retime' },
           });
+          await releaseFence();
           const incompleteRecorded = await recordIncomplete('lock_contention');
           return res.status(409).json({
             error: 'Another reschedule is in progress for this post. The new time is saved but its publish job was not re-queued; repeat the reschedule.',
@@ -854,6 +935,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             enqueue: atomicResult.enqueue,
             rollback: atomicResult.rollback,
           });
+          await releaseFence();
           // Was reported as 200 queue:'re_enqueued' — a false success.
           const incompleteRecorded = await recordIncomplete(`reenqueue_${atomicResult.enqueue}`);
           return res.status(502).json({
@@ -889,6 +971,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       console.warn('[reschedule] FK column update skipped (likely pre-migration)', { id, message: (fkError as Error)?.message });
     }
   }
+
+  // Every write of this reschedule has landed: clear the fence (Closure-014C).
+  await releaseFence();
 
   if (deferredStorageDelete) void deleteStorageObject(deferredStorageDelete);
 

@@ -49,6 +49,55 @@ export function publishClaimCode(token: string): string {
 }
 
 /**
+ * Prefix of the claim a tenant retry (POST /api/scheduler/retry) writes on a
+ * 'failed' post BEFORE it touches the post's queue jobs:
+ * RETRY_PREPARING:<epochMs>:<uuid>, compare-and-set on the error_code it read.
+ * The post stays 'failed' (not claimable by any publisher), and only the holder
+ * may cancel the prior jobs and reset the post — a losing concurrent retry is
+ * refused before it can cancel anything (Closure-014C). A claim older than
+ * RETRY_CLAIM_STALE_MS is dead (its request outlived every function timeout)
+ * and may be taken over.
+ */
+export const RETRY_PREPARING_PREFIX = 'RETRY_PREPARING:' as const;
+export const RETRY_CLAIM_STALE_MS = 15 * 60 * 1000;
+
+export function retryPreparingCode(nowMs: number, token: string): string {
+  return `${RETRY_PREPARING_PREFIX}${nowMs}:${token}`;
+}
+
+/** 'live' while a retry may still be acting on the post, 'stale' once it is provably dead, null if not a retry claim. */
+export function retryClaimState(errorCode: string | null | undefined, nowMs: number): 'live' | 'stale' | null {
+  return timedFenceState(errorCode, RETRY_PREPARING_PREFIX, nowMs);
+}
+
+/**
+ * Prefix of the fence an activity-workspace reschedule writes on a single post
+ * TOGETHER WITH the new time (one compare-and-set), holds while it writes the
+ * plan row and re-queues, and clears last: RESCHEDULING:<epochMs>:<uuid>.
+ * Another reschedule that reads a live fence is refused before it writes
+ * anything, so reschedules of one post serialize and no compensating undo can
+ * restore another request's transient write (Closure-014C). Not a publisher
+ * block: a publisher's claim pins the error_code it read, exactly as before.
+ * A fence older than RETRY_CLAIM_STALE_MS is dead and may be taken over.
+ */
+export const RESCHEDULING_PREFIX = 'RESCHEDULING:' as const;
+
+export function reschedulingCode(nowMs: number, token: string): string {
+  return `${RESCHEDULING_PREFIX}${nowMs}:${token}`;
+}
+
+export function reschedulingFenceState(errorCode: string | null | undefined, nowMs: number): 'live' | 'stale' | null {
+  return timedFenceState(errorCode, RESCHEDULING_PREFIX, nowMs);
+}
+
+function timedFenceState(errorCode: string | null | undefined, prefix: string, nowMs: number): 'live' | 'stale' | null {
+  if (typeof errorCode !== 'string' || !errorCode.startsWith(prefix)) return null;
+  const at = Number(errorCode.slice(prefix.length).split(':')[0]);
+  if (!Number.isFinite(at)) return 'live';
+  return nowMs - at > RETRY_CLAIM_STALE_MS ? 'stale' : 'live';
+}
+
+/**
  * Prefix of the fence a thread re-schedule writes on every child it is about
  * to replace (THREAD_RESCHEDULING:<token>), compare-and-set on the state it
  * read. A publisher reads a fenced child as held (publishOutcomeBlocksAttempt

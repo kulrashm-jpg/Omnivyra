@@ -573,13 +573,22 @@ export default function RedisEfficiencyPanel() {
 
   // ── Config save handlers ─────────────────────────────────────────────────────
 
-  const saveRlConfig = async (cfg: RateLimitAdminConfig) => {
-    await fetch('/api/admin/rate-limit-config', {
+  // Closure-014C — the route is wrapped by withIdempotency, so a write without
+  // an Idempotency-Key was ALWAYS refused (400) while this replaced local config
+  // and the tab showed "saved". Same contract as the queue/cron saves below:
+  // fresh key per attempt, local config only changes on a confirmed 2xx, every
+  // refusal (429 with its Retry-After, 4xx, 5xx, network) reaches the
+  // "Not saved" banner. Transport only — the route's authorization is unchanged.
+  const saveRlConfig = async (cfg: RateLimitAdminConfig): Promise<SuperAdminWriteOutcome> => {
+    setSaveError(null);
+    const r = await performSuperAdminWrite(() => fetch('/api/admin/rate-limit-config', {
       method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: freshIdempotencyHeaders(),
       body: JSON.stringify(cfg),
-    });
-    setRlConfig(cfg);
+    }));
+    if (r.ok) setRlConfig(cfg);
+    else setSaveError(r.message);
+    return r;
   };
 
   // cron.config.manage writes: fresh Idempotency-Key per attempt (the step-up retry is a
@@ -646,7 +655,8 @@ export default function RedisEfficiencyPanel() {
           const cur = newEndpoints[p.key] ?? { limit: defaults?.defaultLimit ?? 10, windowSecs: defaults?.defaultWindowSecs ?? 900 };
           newEndpoints[p.key] = { ...cur, limit: Math.max(1, Math.ceil(cur.limit * 0.8)) };
         }
-        await saveRlConfig({ v: 1, updatedAt: new Date().toISOString(), endpoints: newEndpoints });
+        const r = await saveRlConfig({ v: 1, updatedAt: new Date().toISOString(), endpoints: newEndpoints });
+        if (!r.ok) { setShowOptimize(false); return; }
       }
       setShowOptimize(false);
     } finally { setApplyingOpt(false); }
