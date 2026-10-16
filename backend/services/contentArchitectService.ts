@@ -133,10 +133,12 @@ export async function resolveCompanyAccess(
   roleError = roleResult.error;
   if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
     const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+    // Closure-015D removed SUPER_ADMIN here; Closure-015E: getCompanyRoleIncludingInvited
+    // now resolves ACTIVE memberships only, so an INVITED membership of any role no
+    // longer reaches this branch — invited memberships confer nothing before acceptance.
     if (
       fallbackRole === Role.COMPANY_ADMIN ||
-      fallbackRole === Role.ADMIN ||
-      fallbackRole === Role.SUPER_ADMIN
+      fallbackRole === Role.ADMIN
     ) {
       role = fallbackRole;
       roleError = null;

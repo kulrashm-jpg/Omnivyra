@@ -1,6 +1,11 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createApiRequestMock, createMockRes } from '../utils';
 
+// Closure-015E: withRBAC now refuses tenant principals for a missing / non-active
+// company (companyOperationalState). This suite's fake database models no
+// companies table and tests a different property, so the company is operational
+// here; company status itself is proven in closure015eInvitationAndCompanyStatus.
+jest.mock('../../services/companyOperationalState', () => ({ companyOperationalState: async () => 'operational' }));
 jest.mock('../../../backend/db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
 }));

@@ -27,6 +27,17 @@
       "audit": "AUTHZ-SERVICE-LAYER-DETECTOR-001",
       "reverified": "2026-09-13 against main 07acd0a7: same line, same shape. Every reader of access_requests.organization_id (admin/access-requests/approve, onboarding/complete, onboarding/setup-company, admin/external-users) filters status='approved', and the only approval path (admin/access-requests/approve) overwrites organization_id with the admin-chosen company, so the requester-derived value is never read back as a tenant.",
       "moved": "2026-09-15 STEP 3AH-91 integration: 108 → 110. SEC91-W2E added one import and one comment line above it (trusted client IP); the membership query is byte-identical and none of the readers listed above changed."
+    },
+    {
+      "site": "pages/api/admin/bootstrap-super-admin.ts:468",
+      "classification": "binding-target",
+      "reason": "assignSuperAdmin falls back to the target user's most recent membership row (any status) only to choose WHICH company the SUPER_ADMIN membership row is bound to, when the caller gave no organizationId and the user has no active_company_id. It authorizes nothing: the grant itself is authorized by requireCapability(identity.admin.assign) + step-up in every mode before assignSuperAdmin runs.",
+      "caveat": "A stale (inactive / invited / expired) membership can be chosen as the binding company. With the Closure-015L/015M database guard (supabase/proposals/closure015l/01_*, 02_*) a binding company that is missing, disabled, suspended or soft-deleted is refused by the trigger and by assign_super_admin.",
+      "would_become_a_defect_if": "the derived company is ever used as a tenant predicate or to grant anything other than the governed SUPER_ADMIN binding, or the identity.admin.assign + step-up gate in front of assignSuperAdmin is removed.",
+      "owner": "platform-security",
+      "recorded": "2026-10-16",
+      "audit": "CLOSURE-015M",
+      "note": "Previously classified SAFE only because the existing-row branch (row.status === 'active') fell inside the detector's 1600-character context window; Closure-015M inserted the governed assign_super_admin call between them, which moved it out of the window. The query itself is byte-identical (line 467 → 468 by one added import)."
     }
   ]
 }

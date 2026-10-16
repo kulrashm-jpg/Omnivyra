@@ -10,6 +10,14 @@ jest.mock('../../services/CampaignPrePlanningService', () => ({
   runPrePlanning: jest.fn(),
 }));
 jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (h: any) => h }));
+// Closure-015C: functional suite — authorization is mocked as a pass-through (above), so the
+// handlers' active-platform-super-admin guard is stubbed too. The authorization decision itself
+// is covered, over real enforceRole/isPlatformSuperAdmin, by closure015cGlobalRouteContainment.test.ts.
+jest.mock('../../security/requireActivePlatformSuperAdmin', () => ({ requireActivePlatformSuperAdmin: async () => true }));
+// Closure-015D: unlock / restore-snapshot also pass the PLATFORM_CONTROLS_MANAGE step-up and
+// platform write authority — stubbed likewise here; the real chain is covered by closure015dGlobalRouteStepUp.
+jest.mock('../../security/requireCapability', () => ({ requireCapability: async () => ({ ok: true, principal: { userId: 'test-user' } }) }));
+jest.mock('../../security/platformWriteAuthority', () => ({ enforcePlatformWriteAuthority: async () => true }));
 
 import { supabase } from '../../db/supabaseClient';
 import { getGovernancePolicyHash } from '../../governance/GovernancePolicy';
@@ -334,7 +342,7 @@ describe('Governance Snapshot', () => {
         return chain({ data: null, error: null });
       });
 
-      const req: any = { method: 'POST', body: { snapshotId: 'snap-1' } };
+      const req: any = { method: 'POST', body: { snapshotId: 'snap-1' }, headers: {} }; // Closure-015J (R-10): the route now applies the per-route admin rate limit, which reads req.headers.
       const res = mockRes() as any;
 
       await restoreSnapshotHandler(req, res);
@@ -354,7 +362,7 @@ describe('Governance Snapshot', () => {
         return chain({ data: null, error: null });
       });
 
-      const req: any = { method: 'POST', body: { snapshotId: 'nonexistent' } };
+      const req: any = { method: 'POST', body: { snapshotId: 'nonexistent' }, headers: {} }; // Closure-015J (R-10): the route now applies the per-route admin rate limit, which reads req.headers.
       const res = mockRes() as any;
 
       await restoreSnapshotHandler(req, res);

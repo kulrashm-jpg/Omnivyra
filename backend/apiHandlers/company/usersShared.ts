@@ -13,6 +13,7 @@ import {
 import { createAndSendInvitation } from '../../services/invitationService';
 import { withIdempotency } from '../../middleware/withIdempotency';
 import { logger } from '../../services/logger';
+import { normalizeRole } from '../../services/rbacPrimitives';
 
 export const mapAppRoleToRbac = (role: string): Role | null => {
   const normalized = role.toUpperCase();
@@ -152,25 +153,49 @@ export const normalizeInviteRole = (role: string) => {
   return upper;
 };
 
+/**
+ * Closure-015J (R-13) — re-inviting must never reset an ACTIVE member. Every
+ * membership row of the user in this company is read (the only uniqueness is the
+ * partial index on active rows, so a user may hold an active row next to stale
+ * ones); an active row refuses the invite (ALREADY_ACTIVE_MEMBER — role changes of
+ * active members go through the governed role routes). A non-active row (invited,
+ * expired, inactive) is re-invited as before, but only by a conditional write on
+ * id + role + status as read: a concurrent activation / role change in between
+ * makes it STALE_MEMBERSHIP instead of being overwritten. A SUPER_ADMIN row is
+ * never rewritten (backstop for the route-level Closure-015I R-2 check).
+ */
+export type UpsertUserCompanyRoleError =
+  | 'ALREADY_ACTIVE_MEMBER'
+  | 'STALE_MEMBERSHIP'
+  | 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE';
+
 export const upsertUserCompanyRole = async (
   userId: string,
   companyId: string,
   role: string,
   name?: string | null
-) => {
+): Promise<{ error: string | null; code?: UpsertUserCompanyRoleError }> => {
   const { data: existing, error: existingError } = await supabase
     .from('user_company_roles')
-    .select('id, role')
+    .select('id, role, status')
     .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .limit(1);
+    .eq('company_id', companyId);
 
   if (existingError) {
     return { error: existingError.message };
   }
 
-  if (existing && existing.length > 0) {
-    const row = existing[0];
+  const rows = ((existing ?? []) as Array<{ id: string; role: string | null; status: string | null }>)
+    .map((r) => ({ id: r.id, role: r.role, status: r.status }));
+  if (rows.some((r) => String(r.role ?? '').trim().toUpperCase() === 'SUPER_ADMIN')) {
+    return { error: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE', code: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE' };
+  }
+  if (rows.some((r) => r.status === 'active')) {
+    return { error: 'ALREADY_ACTIVE_MEMBER', code: 'ALREADY_ACTIVE_MEMBER' };
+  }
+
+  if (rows.length > 0) {
+    const row = rows[0];
     const updates: Record<string, any> = {
       role,
       status: 'invited',
@@ -180,12 +205,15 @@ export const upsertUserCompanyRole = async (
     if (name) {
       updates.name = name;
     }
-    if (row.role !== role) {
-      updates.role = role;
-    }
-    const { error } = await supabase.from('user_company_roles').update(updates).eq('id', row.id);
+    let write = supabase.from('user_company_roles').update(updates).eq('id', row.id);
+    write = row.role === null ? write.is('role', null) : write.eq('role', row.role);
+    write = row.status === null ? write.is('status', null) : write.eq('status', row.status);
+    const { data: written, error } = await write.select('id');
     if (error) {
       return { error: error.message };
+    }
+    if (!written || written.length === 0) {
+      return { error: 'STALE_MEMBERSHIP', code: 'STALE_MEMBERSHIP' };
     }
     return { error: null };
   }
@@ -204,6 +232,33 @@ export const upsertUserCompanyRole = async (
     return { error: error.message };
   }
   return { error: null };
+};
+
+/**
+ * Closure-015G — the target membership a company-scoped mutation acts on, read
+ * BEFORE any write. A SUPER_ADMIN row (any status) is platform authority: a
+ * company-scoped route never changes or removes it, whoever calls — grant and
+ * revocation are identity.admin.assign / identity.admin.revoke (governed,
+ * step-up). The returned snapshot is what the caller's conditional write must
+ * still match, so a concurrent promotion to SUPER_ADMIN is never overwritten.
+ */
+export type TargetMembership = { id: string; role: string; status: string | null };
+export type TargetMembershipLookup =
+  | { ok: true; row: TargetMembership; privileged: boolean }
+  | { ok: false; status: 404 | 503; error: 'MEMBERSHIP_NOT_FOUND' | 'MEMBERSHIP_LOOKUP_FAILED' };
+export const readTargetMembership = async (userId: string, companyId: string): Promise<TargetMembershipLookup> => {
+  const { data, error } = await supabase
+    .from('user_company_roles')
+    .select('id, role, status')
+    .eq('user_id', userId)
+    .eq('company_id', companyId)
+    .limit(1);
+  if (error) return { ok: false, status: 503, error: 'MEMBERSHIP_LOOKUP_FAILED' };
+  const found = (data ?? [])[0] as { id: string; role: string; status?: string | null } | undefined;
+  if (!found) return { ok: false, status: 404, error: 'MEMBERSHIP_NOT_FOUND' };
+  // Snapshot the values the conditional write compares against, at read time.
+  const row: TargetMembership = { id: found.id, role: found.role, status: found.status ?? null };
+  return { ok: true, row, privileged: normalizeRole(row.role) === Role.SUPER_ADMIN };
 };
 
 export const insertAuditLog = async (input: {

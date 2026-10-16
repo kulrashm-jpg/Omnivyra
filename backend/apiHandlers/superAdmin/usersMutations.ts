@@ -2,6 +2,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../db/supabaseClient';
 import { Role, ALL_ROLES } from '../../services/rbacService';
+import { normalizeRole } from '../../services/rbacPrimitives';
 import { createAndSendInvitation } from '../../services/invitationService';
 import { requireAdminRateLimit } from '../../services/requestAccessService';
 import { withIdempotency } from '../../middleware/withIdempotency';
@@ -128,8 +129,45 @@ export async function handleUsersPost(req: NextApiRequest, res: NextApiResponse)
       if (userErr || !userId) {
         return res.status(500).json({ error: 'FAILED_TO_SAVE_USER', details: userErr });
       }
+      // Closure-015I (review R-3) — an existing SUPER_ADMIN membership of the
+      // invitee in this company (any status) is never rewritten by an invite
+      // (upsertUserCompanyRole resets role + status 'invited'): platform authority
+      // changes only through the governed assign / revoke flows. Refused before the
+      // upsert and before any invitation is created or sent.
+      const { data: existingRows, error: existingError } = await supabase
+        .from('user_company_roles')
+        .select('id, role, status')
+        .eq('user_id', userId)
+        .eq('company_id', companyId)
+        .limit(1);
+      if (existingError) {
+        return res.status(503).json({ error: 'MEMBERSHIP_LOOKUP_FAILED' });
+      }
+      const existingRow = (existingRows ?? [])[0] as { role: string } | undefined;
+      if (existingRow && normalizeRole(existingRow.role) === Role.SUPER_ADMIN) {
+        await insertAuditLog({
+          actorUserId: guard.principal.userId,
+          action: 'PRIVILEGED_MEMBERSHIP_MUTATION_DENIED',
+          targetUserId: userId,
+          companyId,
+          metadata: { route: 'super-admin/users', operation: 'INVITE_USER', requested_role: desiredRole },
+        });
+        return res.status(403).json({
+          error: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE',
+          details: 'Platform super-admin authority is changed only through the governed assign / revoke flows.',
+        });
+      }
+
       // 2. Create/update company role
       const roleResult = await upsertUserCompanyRole(userId, companyId, desiredRole);
+      // Closure-015J (R-13): an active member is not re-invited (no reset, no
+      // invitation); a membership that changed since it was read is not overwritten.
+      if (roleResult.ok !== true && (roleResult.error === 'ALREADY_ACTIVE_MEMBER' || roleResult.error === 'STALE_MEMBERSHIP')) {
+        return res.status(409).json({ error: roleResult.error });
+      }
+      if (roleResult.ok !== true && roleResult.error === 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE') {
+        return res.status(403).json({ error: roleResult.error });
+      }
       if (!roleResult.ok) {
         return res.status(500).json({ error: 'FAILED_TO_ASSIGN_ROLE', details: roleResult.error });
       }
@@ -296,42 +334,94 @@ export async function handleUsersDelete(req: NextApiRequest, res: NextApiRespons
     // identity.admin.delete is policy-marked as requiring phishing-resistant
     // step-up on a trusted device (StepUpPolicyRegistry). Bridge principals
     // cannot satisfy this and are rejected automatically.
+    //
+    // Closure-015H (F-5): NO organizationId. identity.admin.delete is
+    // platform-tier (platformCapabilities.ts: such routes "can omit
+    // organizationId" — no tenant role can hold it) and AuthorizationService
+    // waives the actor-in-target-org check only for identity.admin.assign, so
+    // binding the TARGET company here refused every platform super admin who is
+    // not a member of it (NOT_ORG_MEMBER). Platform write authority and the
+    // registered step-up still apply; the target company is recorded in the
+    // audit reason / resource id.
     const guard = await requireCapability(req, res, {
       capability: IDENTITY_ADMIN_DELETE,
-      reason: 'super-admin deletes a user (auth + DB soft-delete + role deactivation)',
-      resourceId: userId,
-      organizationId: companyId,
+      reason: companyId
+        ? `super-admin removes ${userId} from company ${String(companyId)} (super-admin/users)`
+        : 'super-admin deletes a user (auth + DB soft-delete + role deactivation)',
+      resourceId: companyId ? `${String(companyId)}:${userId}` : userId,
     });
     // Denied: requireCapability already wrote the response. Report HANDLED so
     // the route shell does not fall through to its trailing 405 (2Z-AF).
     if (guard.ok !== true) return true;
+    const actorUserId = guard.principal.userId;
 
     // Route 1: Delete user from specific company
     if (companyId) {
-      const { data, error } = await supabase
+      // Closure-015H — read the target membership first; never delete a
+      // SUPER_ADMIN row (any status): platform authority is removed only by the
+      // governed revoke / downgrade flow (identity.admin.revoke). The delete is
+      // conditional on the row read (id, role, status) — a concurrent promotion
+      // or status change makes it match nothing (409), never a wrong delete.
+      const { data: current, error: readError } = await supabase
         .from('user_company_roles')
-        .delete()
+        .select('id, role, status')
         .eq('user_id', userId)
         .eq('company_id', companyId)
-        .select('user_id, company_id');
-
-      if (error) {
-        logger.error('super_admin_users_delete_company_failed', { userId, companyId, message: error.message });
-        return res.status(500).json({ 
-          error: 'FAILED_TO_DELETE_USER',
-          details: error.message
-        });
+        .limit(1);
+      if (readError) {
+        logger.error('super_admin_users_delete_company_lookup_failed', { userId, companyId, message: readError.message });
+        return res.status(503).json({ error: 'MEMBERSHIP_LOOKUP_FAILED' });
       }
-      
-      if (!data || data.length === 0) {
-        return res.status(404).json({ 
+      const found = (current ?? [])[0] as { id: string; role: string; status?: string | null } | undefined;
+      if (!found) {
+        return res.status(404).json({
           error: 'USER_NOT_FOUND',
           details: `No user record found for userId: ${userId} in companyId: ${companyId}`,
         });
       }
+      // Snapshot the values the conditional delete compares against, at read time.
+      const readId = found.id;
+      const readRole = found.role;
+      const readStatus = found.status ?? null;
+      if (normalizeRole(readRole) === Role.SUPER_ADMIN) {
+        await insertAuditLog({
+          actorUserId,
+          action: 'PRIVILEGED_MEMBERSHIP_DELETE_DENIED',
+          targetUserId: userId,
+          companyId,
+          metadata: { route: 'super-admin/users', membership_status: readStatus },
+        });
+        return res.status(403).json({
+          error: 'SUPER_ADMIN_MEMBERSHIP_NOT_REMOVABLE_HERE',
+          details: 'Platform super-admin authority is removed only through the governed revoke flow.',
+        });
+      }
+
+      let removal = supabase
+        .from('user_company_roles')
+        .delete()
+        .eq('id', readId)
+        .eq('role', readRole);
+      removal = readStatus === null ? removal.is('status', null) : removal.eq('status', readStatus);
+      const { data, error } = await removal.select('user_id, company_id');
+
+      if (error) {
+        logger.error('super_admin_users_delete_company_failed', { userId, companyId, message: error.message });
+        return res.status(500).json({
+          error: 'FAILED_TO_DELETE_USER',
+          details: error.message,
+        });
+      }
+
+      if (!data || data.length === 0) {
+        return res.status(409).json({
+          error: 'STALE_MEMBERSHIP',
+          details: 'The membership changed after it was read; reload and try again.',
+        });
+      }
 
       await insertAuditLog({
-        actorUserId: null,
+        actorUserId,
         action: 'SUPER_ADMIN_USER_DELETE',
         targetUserId: userId,
         companyId,
@@ -347,6 +437,34 @@ export async function handleUsersDelete(req: NextApiRequest, res: NextApiRespons
     //   3. Soft-delete the users row
     //   4. Deactivate every user_company_roles row for the user
     try {
+      // Closure-015H — deleting a user deactivates EVERY membership below; that
+      // must never remove platform super-admin authority. A user holding a
+      // SUPER_ADMIN membership in any status is refused before anything is
+      // touched (auth account, users row, memberships); revoke first through the
+      // governed flow (identity.admin.revoke).
+      const { data: memberships, error: membershipsError } = await supabase
+        .from('user_company_roles')
+        .select('id, role, status')
+        .eq('user_id', userId);
+      if (membershipsError) {
+        logger.error('super_admin_users_delete_membership_lookup_failed', { userId, message: membershipsError.message });
+        return res.status(503).json({ error: 'MEMBERSHIP_LOOKUP_FAILED' });
+      }
+      const privileged = ((memberships ?? []) as Array<{ role: string; status?: string | null }>)
+        .filter((m) => normalizeRole(m.role) === Role.SUPER_ADMIN);
+      if (privileged.length > 0) {
+        await insertAuditLog({
+          actorUserId,
+          action: 'PRIVILEGED_MEMBERSHIP_DELETE_DENIED',
+          targetUserId: userId,
+          metadata: { route: 'super-admin/users', scope: 'user', membership_statuses: privileged.map((m) => m.status ?? null) },
+        });
+        return res.status(403).json({
+          error: 'SUPER_ADMIN_MEMBERSHIP_NOT_REMOVABLE_HERE',
+          details: 'Platform super-admin authority is removed only through the governed revoke flow.',
+        });
+      }
+
       // Step A: look up the user row to get the auth identity
       const { data: userRecord, error: lookupError } = await supabase
         .from('users')
@@ -383,6 +501,22 @@ export async function handleUsersDelete(req: NextApiRequest, res: NextApiRespons
         }
       }
 
+      // Closure-015I (H-5): a failure AFTER the irreversible auth deletion is
+      // reported as partial — which steps completed — and recorded for recovery.
+      // The recovery audit never masks the original failure response.
+      const reportPartial = async (failedStep: string, completed: string[], message: string) => {
+        try {
+          await insertAuditLog({
+            actorUserId,
+            action: 'SUPER_ADMIN_USER_DELETE_PARTIAL',
+            targetUserId: userId,
+            metadata: { failed_step: failedStep, completed, message },
+          });
+        } catch (auditError: any) {
+          logger.error('super_admin_users_delete_partial_audit_failed', { userId, message: auditError?.message });
+        }
+      };
+
       // Step C: soft-delete the users row (preserves audit trail, blocks re-signup)
       const now = new Date().toISOString();
       const { data: userData, error: userError } = await supabase
@@ -402,7 +536,9 @@ export async function handleUsersDelete(req: NextApiRequest, res: NextApiRespons
           message: userError.message,
           action: `Manual fix: UPDATE users SET is_deleted=true, deleted_at=now() WHERE id='${userId}'`,
         });
-        return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: userError.message });
+        const completed = supabaseUid ? ['auth_account_deleted'] : [];
+        await reportPartial('soft_delete_user', completed, userError.message);
+        return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: userError.message, partial: completed.length > 0, completed });
       }
 
       if (!updatedInTable && !supabaseUid) {
@@ -416,16 +552,21 @@ export async function handleUsersDelete(req: NextApiRequest, res: NextApiRespons
       const { error: rolesError } = await supabase
         .from('user_company_roles')
         .update({ status: 'inactive', deactivated_at: now, updated_at: now })
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        // Closure-015H: SUPER_ADMIN rows are never deactivated here (backstop for
+        // a promotion that lands after the membership check above).
+        .neq('role', Role.SUPER_ADMIN);
 
       if (rolesError) {
         // Non-fatal: auth + users row are already handled; log and continue.
         logger.error('super_admin_users_delete_role_deactivate_failed', { userId, message: rolesError.message });
-        return res.status(500).json({ error: 'FAILED_TO_DEACTIVATE_USER_ROLES', details: rolesError.message });
+        const completed = [...(supabaseUid ? ['auth_account_deleted'] : []), ...(updatedInTable ? ['user_soft_deleted'] : [])];
+        await reportPartial('deactivate_memberships', completed, rolesError.message);
+        return res.status(500).json({ error: 'FAILED_TO_DEACTIVATE_USER_ROLES', details: rolesError.message, partial: completed.length > 0, completed });
       }
 
       await insertAuditLog({
-        actorUserId: null,
+        actorUserId,
         action: 'SUPER_ADMIN_USER_DELETE_UNASSIGNED',
         targetUserId: userId,
       });

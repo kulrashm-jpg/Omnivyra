@@ -65,6 +65,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { timingSafeEqual } from 'crypto';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { logger } from '../../../backend/services/logger';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
 import { requireCapability } from '../../../backend/security/requireCapability';
@@ -475,6 +476,35 @@ async function assignSuperAdmin(
 
   if (!organizationId) {
     return { ok: false, reason: 'no_organization_to_bind', status: 412 };
+  }
+
+  // Closure-015M (D): the governed grant function (supabase/proposals/closure015l/
+  // 02_assign_super_admin_rpc.sql). One transaction that locks the company row
+  // FIRST (FOR SHARE) and then the membership row — the same lock order as the
+  // lifecycle functions, which removes the deadlock window a direct UPDATE has
+  // (verified on a throwaway Postgres) — and refuses a missing / disabled /
+  // suspended / soft-deleted company. Authorization stays here: the callers run
+  // requireCapability(identity.admin.assign) + step-up before reaching this, and
+  // the function is executable by service_role only. Until the function is
+  // deployed (PGRST202 / 42883) the two-statement path below runs unchanged.
+  {
+    const { data: rpcRows, error: rpcError } = await supabase.rpc('assign_super_admin', {
+      p_user_id: userId,
+      p_company_id: organizationId,
+    });
+    if (!rpcError) {
+      const row = (Array.isArray(rpcRows) ? rpcRows[0] : rpcRows) as { role_row_id?: string } | null;
+      if (!row?.role_row_id) return { ok: false, reason: 'db_rpc_no_result', status: 500 };
+      return { ok: true, roleRowId: row.role_row_id, organizationId };
+    }
+    const code = (rpcError as { code?: string }).code;
+    const message = String((rpcError as { message?: string }).message ?? '');
+    if (message.includes('SUPER_ADMIN_MEMBERSHIP_COMPANY_')) {
+      return { ok: false, reason: message.includes('MISSING') ? 'company_missing' : 'company_not_active', status: 409 };
+    }
+    if (code !== 'PGRST202' && code !== '42883') {
+      return { ok: false, reason: `db_rpc_failed:${message}`, status: 500 };
+    }
   }
 
   // Upsert: if the user already has a role in this org, update it to SUPER_ADMIN

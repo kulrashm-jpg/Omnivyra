@@ -47,12 +47,20 @@ async function buildPrincipalView(req: NextApiRequest): Promise<PolicyPrincipalV
   const p = result.principal;
   const organizationRoles: Record<string, string> = {};
   for (const m of p.organizations) {
-    if (m.status === 'active' || m.status === 'invited') {
+    // Closure-015E — ACTIVE memberships only, matching route authorization
+    // (getUserRole / TenantGuard): an invited membership confers no company
+    // authority before acceptance.
+    if (m.status === 'active') {
       organizationRoles[m.organizationId] = m.role;
     }
   }
+  // Closure-015D — platform super admin only from an ACTIVE SUPER_ADMIN
+  // membership (the canonical predicate, isPlatformSuperAdminPrincipal). An
+  // invited row never confers platform-wide authority before acceptance (nor,
+  // since Closure-015E, company authority: organizationRoles is active-only).
   const isPlatformSuperAdmin =
-    p.legacyCookieSuperAdmin || Object.values(organizationRoles).includes('SUPER_ADMIN');
+    p.legacyCookieSuperAdmin ||
+    p.organizations.some((m) => m.status === 'active' && m.role === 'SUPER_ADMIN');
   // INV-8: memoise the resolved principal in the request context (fail-safe).
   // SEC-91 W2-G (W2G-5) — setPrincipal now also records the principal on the
   // LIVE context (staged by the ai-guard-principal flag), so the handler sees

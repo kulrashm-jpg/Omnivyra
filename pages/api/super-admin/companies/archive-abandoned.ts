@@ -36,11 +36,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!orgId)  return res.status(400).json({ error: 'orgId is required' });
   if (!reason) return res.status(400).json({ error: 'reason is required' });
 
+  // Closure-015J (R-4): NO organizationId. organization.delete is platform-tier
+  // (platformCapabilities.ts: such routes may omit organizationId — no tenant role
+  // can hold it). AuthorizationService waives the actor-in-target-org check only for
+  // identity.admin.assign, and an ABANDONED org has no active members by definition,
+  // so binding it refused every platform super admin (NOT_ORG_MEMBER). Platform write
+  // authority, the registered step-up and the rate limit above still apply; the org
+  // is the audited resource.
   const guard = await requireCapability(req, res, {
     capability:     ORGANIZATION_DELETE,
     reason:         `super-admin archives abandoned org ${orgId} (force=${force})`,
     resourceId:     orgId,
-    organizationId: orgId,
   });
   if (guard.ok !== true) return;
 
@@ -55,6 +61,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const status =
       result.reason === 'NO_ORG'         ? 404 :
       result.reason === 'NOT_ABANDONED'  ? 409 :
+      result.reason === 'CONFLICT'       ? 409 :
+      result.reason === 'SUPER_ADMIN_MEMBERSHIP' ? 409 : // Closure-015M (R-15)
       result.reason === 'DB_ERROR'       ? 500 :
       400;
     return res.status(status).json({ ok: false, code: result.reason, detail: result.detail });

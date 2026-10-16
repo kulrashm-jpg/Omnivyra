@@ -12,6 +12,7 @@ import {
 import type { Capability } from '../../../shared/contracts/security';
 import {
   cascadeDisableCompany,
+  hardDeleteCompany,
   softDeleteCompanyWithCascade,
 } from '../../../backend/services/lifecycleGovernance';
 import {
@@ -41,6 +42,38 @@ function capabilityForMethod(method: string | undefined): Capability {
   if (method === 'POST' || method === 'PATCH') return IDENTITY_ADMIN_ASSIGN;
   return SUPER_ADMIN_DASHBOARD_VIEW;
 }
+
+/**
+ * Closure-015J (R-9) / Closure-015L — application-level guard for the company
+ * lifecycle operations (disable, soft delete, hard delete). An ACTIVE
+ * SUPER_ADMIN membership stored in the company is platform authority that only
+ * identity.admin.revoke may remove; the operation is refused while one exists.
+ *
+ * This is defence in depth, NOT the concurrency boundary: it is a read in its
+ * own statement, so a membership activated after it is not seen. The boundary is
+ * the database (supabase/proposals/closure015l/01_…): the lifecycle functions
+ * lock the company row and refuse in the same transaction, and every write that
+ * produces an active SUPER_ADMIN serializes on that row. The database refusal
+ * surfaces here as COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP (see isSuperAdminRefusal).
+ */
+async function activeSuperAdminCount(companyId: string): Promise<{ count: number } | { error: true }> {
+  const { data, error } = await supabase
+    .from('user_company_roles')
+    .select('user_id, role, status')
+    .eq('company_id', companyId)
+    .eq('status', 'active');
+  if (error) return { error: true };
+  const count = ((data ?? []) as Array<{ role: string }>)
+    .filter((m) => String(m.role ?? '').trim().toUpperCase() === 'SUPER_ADMIN').length;
+  return { count };
+}
+
+const SUPER_ADMIN_REFUSAL_DETAILS =
+  'Revoke the platform super-admin membership(s) in this company through the governed flow first.';
+
+/** A lifecycle RPC refused by the database guard (Closure-015L). */
+const isSuperAdminRefusal = (message: string | undefined): boolean =>
+  typeof message === 'string' && message.includes('COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP');
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:companies', 20, 60))) return;
@@ -192,10 +225,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
 
+      // Closure-015L (R-9b): disabling runs disable_company_cascade, which
+      // deactivates EVERY active membership of the company — SUPER_ADMIN
+      // included. Refused while an active SUPER_ADMIN membership exists
+      // (application guard; the database guard is the concurrency boundary).
+      const privileged = await activeSuperAdminCount(companyId);
+      if ('error' in privileged) {
+        return res.status(503).json({ error: 'MEMBERSHIP_LOOKUP_FAILED' });
+      }
+      if (privileged.count > 0) {
+        return res.status(409).json({
+          error: 'COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP',
+          details: SUPER_ADMIN_REFUSAL_DETAILS,
+          count: privileged.count,
+        });
+      }
+
       let cascade;
       try {
         cascade = await cascadeDisableCompany(companyId, actorUserId, `disable:${reasonText}`);
       } catch (err: any) {
+        // Closure-015L: the database guard refused (a membership activated
+        // after the application check). Nothing was changed — the RPC rolled back.
+        if (isSuperAdminRefusal(err?.message)) {
+          return res.status(409).json({ error: 'COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP', details: SUPER_ADMIN_REFUSAL_DETAILS });
+        }
         logger.error('super_admin_company_disable_cascade_failed', {
           companyId,
           message: err?.message ?? String(err),
@@ -286,6 +340,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         ? reason.trim().slice(0, 500)
         : 'super-admin company delete';
 
+    // Closure-015J (R-9): both deletion paths remove every membership of the
+    // company (hard: DELETE; soft: the cascade RPC deactivates them). An ACTIVE
+    // SUPER_ADMIN membership stored in this company is platform authority that
+    // only the governed revoke / downgrade flow may remove — revoke (or reassign)
+    // it first. Inactive / invited SUPER_ADMIN rows confer nothing and do not block.
+    // Read-only precondition; a lookup failure fails closed. (Closure-015L:
+    // shared with disable — activeSuperAdminCount; the DB guard is the boundary.)
+    {
+      const privileged = await activeSuperAdminCount(companyId);
+      if ('error' in privileged) {
+        return res.status(503).json({ error: 'MEMBERSHIP_LOOKUP_FAILED' });
+      }
+      if (privileged.count > 0) {
+        return res.status(409).json({
+          error: 'COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP',
+          details: SUPER_ADMIN_REFUSAL_DETAILS,
+          count: privileged.count,
+        });
+      }
+    }
+
     // Phase 2.B default: SOFT delete via soft_delete_company RPC. The
     // cascade deactivates memberships, revokes sessions, and bumps each
     // affected user's session_revoked_after. Data is preserved.
@@ -295,12 +370,100 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // is gated by an explicit `hard=true` body flag in addition to the
     // ORGANIZATION_DELETE capability.
     if (hard === true) {
+      // Closure-015L: the atomic database path first — hard_delete_company locks
+      // the company row, refuses while an active SUPER_ADMIN membership exists
+      // and deletes memberships + profile + company in ONE transaction, so no
+      // concurrently activated SUPER_ADMIN can be removed or left orphaned (every
+      // such write serializes on the company row and refuses once it is gone).
+      // Until the function is deployed (FUNCTION_MISSING) the Closure-015K
+      // statement-level path below runs, with its documented residual.
+      let atomic;
+      try {
+        atomic = await hardDeleteCompany(companyId, actorUserId, `delete:${reasonText}`);
+      } catch (err: any) {
+        if (isSuperAdminRefusal(err?.message)) {
+          return res.status(409).json({ error: 'COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP', details: SUPER_ADMIN_REFUSAL_DETAILS });
+        }
+        if (typeof err?.message === 'string' && err.message.includes('COMPANY_NOT_FOUND')) {
+          return res.status(404).json({ error: 'COMPANY_NOT_FOUND' });
+        }
+        logger.error('super_admin_company_hard_delete_failed', { companyId, message: err?.message ?? String(err) });
+        // Atomic: the transaction rolled back — nothing was deleted.
+        return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY', partial: false });
+      }
+      if (atomic.ok === true) {
+        await insertAuditLogStrict({
+          actorUserId,
+          action: 'SUPER_ADMIN_COMPANY_HARD_DELETE',
+          targetUserId: null,
+          companyId,
+          metadata: {
+            capability: ORGANIZATION_DELETE,
+            reason: reasonText,
+            mode: 'hard',
+            atomic: true,
+            deleted_memberships: atomic.deletedMemberships,
+            deleted_profiles: atomic.deletedProfiles,
+          },
+        });
+        return res.status(200).json({ success: true, mode: 'hard', atomic: true });
+      }
+
+      // Closure-015K (R-9, hard path): the pre-check above is not atomic with
+      // this deletion — a SUPER_ADMIN membership can be granted / re-activated
+      // in between (assignSuperAdmin writes role 'SUPER_ADMIN' by INSERT or by
+      // UPDATE of the existing row). So the bulk DELETE itself excludes
+      // role = 'SUPER_ADMIN': within that single statement no SUPER_ADMIN row is
+      // ever removed, whatever commits concurrently (a row being updated to
+      // SUPER_ADMIN is re-checked against the predicate after its lock is
+      // released). The rows left behind are then re-read: an ACTIVE
+      // SUPER_ADMIN row stops the deletion before the company is touched; every
+      // other remaining row is removed one by one, conditional on id + role +
+      // status as read, so a row activated in between is never removed either.
+      const partial = (error: string, status: number, extra: Record<string, unknown> = {}) =>
+        res.status(status).json({ error, partial: true, completed: ['memberships_deleted'], ...extra });
       const { error: rolesError } = await supabase
         .from('user_company_roles')
         .delete()
-        .eq('company_id', companyId);
+        .eq('company_id', companyId)
+        .neq('role', 'SUPER_ADMIN');
       if (rolesError) {
         return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY_USERS' });
+      }
+      const { data: remaining, error: remainingError } = await supabase
+        .from('user_company_roles')
+        .select('id, role, status')
+        .eq('company_id', companyId);
+      if (remainingError) {
+        return partial('MEMBERSHIP_LOOKUP_FAILED', 503);
+      }
+      const leftover = ((remaining ?? []) as Array<{ id: string; role: string; status: string | null }>)
+        .map((r) => ({ id: r.id, role: r.role, status: r.status }));
+      const activeSuperAdmins = leftover.filter(
+        (r) => r.status === 'active' && String(r.role ?? '').trim().toUpperCase() === 'SUPER_ADMIN',
+      );
+      if (activeSuperAdmins.length > 0) {
+        return partial('COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP', 409, {
+          details: 'A platform super-admin membership became active during deletion; it was kept and the company was not deleted.',
+          count: activeSuperAdmins.length,
+        });
+      }
+      for (const row of leftover) {
+        let removal = supabase
+          .from('user_company_roles')
+          .delete()
+          .eq('id', row.id)
+          .eq('role', row.role);
+        removal = row.status === null ? removal.is('status', null) : removal.eq('status', row.status);
+        const { data: removed, error: removeError } = await removal.select('id');
+        if (removeError) {
+          return partial('FAILED_TO_DELETE_COMPANY_USERS', 500);
+        }
+        if (!removed || removed.length === 0) {
+          return partial('STALE_MEMBERSHIP', 409, {
+            details: 'A membership of this company changed during deletion; it was kept and the company was not deleted.',
+          });
+        }
       }
 
       const { error: profileError } = await supabase
@@ -351,6 +514,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       cascade = await softDeleteCompanyWithCascade(companyId, actorUserId, `delete:${reasonText}`);
     } catch (err: any) {
+      // Closure-015L: refused by the database guard (activated after the
+      // application check); the RPC rolled back — nothing was changed.
+      if (isSuperAdminRefusal(err?.message)) {
+        return res.status(409).json({ error: 'COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP', details: SUPER_ADMIN_REFUSAL_DETAILS });
+      }
       logger.error('super_admin_company_soft_delete_failed', {
         companyId,
         message: err?.message ?? String(err),

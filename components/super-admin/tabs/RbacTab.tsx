@@ -3,10 +3,14 @@ import { getAuthToken } from '@/utils/getAuthToken';
 import { type RbacPermissions, roleOptions } from '@/pages/super-admin.types';
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
 import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
+import { performSuperAdminWrite, freshIdempotencyHeaders } from '@/lib/security/superAdminWrite';
 
 export default function RbacTab() {
 
   const [rbacRoles, setRbacRoles] = useState<string[]>([]);
+  // Closure-015L: the stored version this editor loaded — sent back on save so a
+  // concurrent change by another administrator is refused (409), not overwritten.
+  const [rbacVersion, setRbacVersion] = useState<number | null>(null);
   const [rbacPermissions, setRbacPermissions] = useState<RbacPermissions>({});
   const [rbacError, setRbacError] = useState<string | null>(null);
   const [rbacDraftPermissions, setRbacDraftPermissions] = useState<RbacPermissions>({});
@@ -26,9 +30,10 @@ export default function RbacTab() {
     (async () => {
       try {
         const res = await fetchWithAuth('/api/super-admin/rbac');
-        const result = await parseJsonResponse<{ roles?: string[]; permissions?: RbacPermissions; error?: string; message?: string }>(res, '/api/super-admin/rbac');
+        const result = await parseJsonResponse<{ roles?: string[]; permissions?: RbacPermissions; version?: number | null; error?: string; message?: string }>(res, '/api/super-admin/rbac');
         if (result.ok === true) {
           setRbacRoles(result.data?.roles || []);
+          setRbacVersion(typeof result.data?.version === 'number' ? result.data.version : null);
           setRbacPermissions(result.data?.permissions || {});
           setRbacError(null);
           return;
@@ -111,18 +116,24 @@ export default function RbacTab() {
     setRbacSaveError(null);
     setRbacSaveSuccess(null);
     try {
-      const response = await fetchWithAuth('/api/super-admin/rbac', {
+      // Closure-015J — the route is wrapped by withIdempotency and requires
+      // identity.admin step-up, but this save sent no Idempotency-Key (always
+      // refused 400) and never ran the step-up challenge. Same contract as the
+      // other super-admin writes: fresh key per attempt (the step-up retry is a
+      // second request); local state only changes on a confirmed 2xx.
+      const result = await performSuperAdminWrite(() => fetchWithAuth('/api/super-admin/rbac', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: displayRoles, permissions: rbacDraftPermissions }),
-      });
-      const result = await parseJsonResponse<{ roles?: string[]; permissions?: RbacPermissions }>(response, '/api/super-admin/rbac');
+        headers: freshIdempotencyHeaders(),
+        body: JSON.stringify({ roles: displayRoles, permissions: rbacDraftPermissions, expectedVersion: rbacVersion }),
+      }));
       if (result.ok !== true) {
         setRbacSaveError(result.message || 'Failed to update RBAC configuration');
         return;
       }
-      setRbacRoles(result.data?.roles || displayRoles);
-      setRbacPermissions(result.data?.permissions || rbacDraftPermissions);
+      const saved = (result.body ?? {}) as { roles?: string[]; permissions?: RbacPermissions; version?: number | null };
+      setRbacVersion(typeof saved.version === 'number' ? saved.version : null);
+      setRbacRoles(saved.roles || displayRoles);
+      setRbacPermissions(saved.permissions || rbacDraftPermissions);
       setRbacSaveSuccess('RBAC permissions updated.');
       setRbacDirty(false);
     } catch (error: unknown) {

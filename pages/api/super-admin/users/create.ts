@@ -137,6 +137,47 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   const companyName = (companyRow as any).name || null;
 
+  // Closure-015J (R-8): an existing SUPER_ADMIN membership of this email in this
+  // company (any status) is platform authority — creating / re-inviting the user
+  // must not overwrite it (upsertCompanyRole rewrites role + status). Checked
+  // read-only BEFORE any side effect (auth provisioning, users row, membership,
+  // invitation); a lookup failure fails closed.
+  {
+    const { data: existingUser, error: existingUserErr } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle();
+    if (existingUserErr) {
+      return res.status(503).json({ error: 'MEMBERSHIP_LOOKUP_FAILED' });
+    }
+    if (existingUser) {
+      const { data: existingRoles, error: existingRolesErr } = await supabase
+        .from('user_company_roles')
+        .select('id, role, status')
+        .eq('user_id', (existingUser as { id: string }).id)
+        .eq('company_id', companyId);
+      if (existingRolesErr) {
+        return res.status(503).json({ error: 'MEMBERSHIP_LOOKUP_FAILED' });
+      }
+      if (((existingRoles ?? []) as Array<{ role: string }>).some((r) => String(r.role ?? '').trim().toUpperCase() === Role.SUPER_ADMIN)) {
+        return res.status(403).json({
+          error: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE',
+          details: 'Platform super-admin authority is changed only through the governed assign / revoke flows.',
+        });
+      }
+      // Closure-015J (R-13): an ACTIVE member with a different role is not
+      // re-created / re-invited (that reset it to 'invited'); same-role is the
+      // documented no-op. Refused before any side effect.
+      if (((existingRoles ?? []) as Array<{ role: string; status: string | null }>).some((r) => r.status === 'active' && r.role !== role)) {
+        return res.status(409).json({
+          error: 'ALREADY_ACTIVE_MEMBER',
+          details: 'Change an active member’s role through the governed role routes.',
+        });
+      }
+    }
+  }
+
   // ── Temp password generation (server-side only) ───────────────────────────
   let temporaryPassword: string | null = null;
   if (inviteMode === 'temp_password') {
@@ -195,6 +236,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     status: roleStatus,
   });
   if (roleResult.ok !== true) {
+    // Closure-015J (R-8): the upsert's own SUPER_ADMIN backstop (a race past the pre-check).
+    if (roleResult.error === 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE') {
+      return res.status(403).json({ error: roleResult.error });
+    }
+    // Closure-015J (R-13): active member not rewritten / row changed concurrently.
+    if (roleResult.error === 'ALREADY_ACTIVE_MEMBER' || roleResult.error === 'STALE_MEMBERSHIP') {
+      return res.status(409).json({ error: roleResult.error });
+    }
     logger.error('super_admin_create_role_upsert_failed', { email, error: roleResult.error });
     return res.status(500).json({ error: 'FAILED_TO_ASSIGN_ROLE', details: roleResult.error });
   }

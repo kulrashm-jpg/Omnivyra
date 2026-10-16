@@ -274,21 +274,35 @@ export async function upsertCompanyRole(input: {
   status: 'invited' | 'active';
 }): Promise<{ ok: true; created: boolean; previousRole: string | null; previousStatus: string | null }
   | { ok: false; error: string }> {
+  // Closure-015J (R-8 / R-13): every membership row of the user in this company
+  // (only active rows are unique), not an arbitrary first one.
   const { data: existingRows, error: selErr } = await supabase
     .from('user_company_roles')
     .select('id, role, status')
     .eq('user_id', input.userId)
-    .eq('company_id', input.companyId)
-    .limit(1);
+    .eq('company_id', input.companyId);
   if (selErr) return { ok: false, error: selErr.message };
 
   const now = new Date().toISOString();
 
-  if (existingRows && existingRows.length > 0) {
-    const row = existingRows[0] as { id: string; role: string; status: string | null };
-    if (row.status === 'active' && row.role === input.role) {
-      return { ok: true, created: false, previousRole: row.role, previousStatus: row.status };
+  const rows = ((existingRows ?? []) as Array<{ id: string; role: string; status: string | null }>)
+    .map((r) => ({ id: r.id, role: r.role, status: r.status }));
+  if (rows.length > 0) {
+    // Closure-015J (R-8): never rewrite a SUPER_ADMIN membership (any status).
+    if (rows.some((r) => String(r.role ?? '').trim().toUpperCase() === 'SUPER_ADMIN')) {
+      return { ok: false, error: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE' };
     }
+    const active = rows.find((r) => r.status === 'active');
+    if (active && active.role === input.role) {
+      return { ok: true, created: false, previousRole: active.role, previousStatus: active.status };
+    }
+    // Closure-015J (R-13): an ACTIVE member is never rewritten here (this reset it
+    // to 'invited' with the new role in magic-link mode, removing its access).
+    // Role changes of active members go through the governed role routes.
+    if (active) {
+      return { ok: false, error: 'ALREADY_ACTIVE_MEMBER' };
+    }
+    const row = rows[0];
     const patch: Record<string, unknown> = {
       role: input.role,
       status: input.status,
@@ -298,11 +312,17 @@ export async function upsertCompanyRole(input: {
     if (input.status === 'active') patch.accepted_at = now;
     else patch.invited_at = now;
 
-    const { error: updErr } = await supabase
+    // Closure-015J (R-13): conditional on the row as read — a concurrent
+    // activation / role change is not overwritten (STALE_MEMBERSHIP).
+    let write = supabase
       .from('user_company_roles')
       .update(patch)
       .eq('id', row.id);
+    write = row.role === null ? write.is('role', null) : write.eq('role', row.role);
+    write = row.status === null ? write.is('status', null) : write.eq('status', row.status);
+    const { data: written, error: updErr } = await write.select('id');
     if (updErr) return { ok: false, error: updErr.message };
+    if (!written || written.length === 0) return { ok: false, error: 'STALE_MEMBERSHIP' };
     return { ok: true, created: false, previousRole: row.role, previousStatus: row.status };
   }
 

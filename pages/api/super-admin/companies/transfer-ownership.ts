@@ -86,6 +86,9 @@ function mapReasonToStatus(reason: string): number {
     case 'STALE_MEMBERSHIP':  return 409;
     case 'NO_FROM_ROLE':      return 409;
     case 'ORG_INACTIVE':      return 409;
+    case 'SUPER_ADMIN_MEMBERSHIP': return 409; // Closure-015J (R-7)
+    case 'INVALID_DEMOTE_ROLE':    return 400; // Closure-015J (R-7)
+    case 'CONFLICT':               return 409; // Closure-015J (R-7)
     case 'DB_ERROR':          return 500;
     default:                  return 400;
   }

@@ -84,14 +84,16 @@ describe('invited COMPANY_ADMIN of a non-operational company', () => {
     expect(await campaign('INVITED_ADMIN')).toMatchObject({ allowed: false, status: 403 });
   });
 
-  it('company status lookup error → retryable 503 on both guards, never an allow', async () => {
+  // Closure-015E: an invited membership no longer reaches the company-status
+  // branch at all (no invited-admin fallback), so a lookup error is never even
+  // consulted for it — the invariant "never an allow" holds with a plain 403.
+  it('company status lookup error → never an allow (Closure-015E: refused as a non-member, 403)', async () => {
     failTable('companies');
     const g = await guard('INVITED_ADMIN');
-    expect(g).toMatchObject({ allowed: false, status: 503 });
-    expect(g.body).toMatchObject({ retryable: true });
+    expect(g).toMatchObject({ allowed: false, status: 403 });
     const c = await campaign('INVITED_ADMIN');
-    expect(c).toMatchObject({ allowed: false, status: 503 });
-    expect(c.body).toMatchObject({ retryable: true });
+    expect(c).toMatchObject({ allowed: false });
+    expect([403, 503]).toContain(c.status);
   });
 
   it('real routes: content list (enforceCompanyAccess) and campaign summary (requireCampaignAccess) → 403, no data', async () => {
@@ -105,9 +107,12 @@ describe('invited COMPANY_ADMIN of a non-operational company', () => {
 });
 
 describe('unchanged behaviour', () => {
-  it('invited COMPANY_ADMIN of an ACTIVE company keeps its legacy access on both guards', async () => {
-    expect(await guard('INVITED_ADMIN')).toMatchObject({ allowed: true });
-    expect(await campaign('INVITED_ADMIN')).toMatchObject({ allowed: true });
+  // Closure-015E (owner-authorized policy change): the legacy invited-admin
+  // access this pinned is removed — invited memberships confer nothing before
+  // acceptance, whatever the company's state.
+  it('invited COMPANY_ADMIN of an ACTIVE company is refused on both guards (Closure-015E)', async () => {
+    expect(await guard('INVITED_ADMIN')).toMatchObject({ allowed: false, status: 403 });
+    expect(await campaign('INVITED_ADMIN')).toMatchObject({ allowed: false, status: 403 });
   });
 
   it('invited CONTENT_CREATOR (non-admin) is refused on both guards, active company', async () => {

@@ -118,12 +118,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             role:       'COMPANY_ADMIN',
             status:     'active',
           });
-        } else if (existingRole.role === 'SUPER_ADMIN') {
-          // Downgrade accidental SUPER_ADMIN to COMPANY_ADMIN
-          await sb.from('user_company_roles')
-            .update({ role: 'COMPANY_ADMIN' })
-            .eq('id', existingRole.id);
         }
+        // Closure-015J (R-6): an existing SUPER_ADMIN membership is left untouched — it
+        // already exceeds COMPANY_ADMIN, and platform super-admin authority changes only
+        // through identity.admin.assign / identity.admin.revoke. (This formerly
+        // "downgraded accidental SUPER_ADMIN to COMPANY_ADMIN", a legacy cleanup that
+        // silently removed governed platform authority.) Any other existing role is
+        // likewise left as is.
         // Any other role (COMPANY_ADMIN, CONTENT_CREATOR, etc.) — leave untouched
       }
 

@@ -190,9 +190,9 @@ export async function requireCampaignAccess(
       return null;
     }
     // SEC-91 W2-G (STEP 3AH-91, W2G-4) — organization state on this path too.
-    // It admits principals the fast path does not: an INVITED
-    // COMPANY_ADMIN/ADMIN/SUPER_ADMIN row (getUserRole's legacy fallback) and an
-    // active member whose context membership read failed. Neither was checked
+    // It admits principals the fast path does not: an active member whose
+    // context membership read failed (and, before Closure-015E removed
+    // getUserRole's invited fallback, an INVITED COMPANY_ADMIN/ADMIN/SUPER_ADMIN row). Neither was checked
     // against companies.status, so an invited admin kept campaign access to a
     // suspended / inactive / deleted company. Same decision as the fast path and
     // as enforceCompanyAccess's invited fallback: non-operational ⇒ 403, lookup

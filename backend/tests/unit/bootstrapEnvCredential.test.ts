@@ -25,6 +25,12 @@ jest.mock('../../services/requestAccessService', () => ({
   ...jest.requireActual('../../services/requestAccessService'),
   requireAdminRateLimit: async () => true,
 }));
+// Closure-015M: the route now tries the governed assign_super_admin RPC first; this models the
+// CURRENT deployment (function not deployed → PGRST202), so the ownedDbTable path below is exercised.
+jest.mock('../../db/supabaseClient', () => {
+  const client = { rpc: async () => ({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.assign_super_admin' } }) };
+  return { supabase: client, default: client };
+});
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (...args: unknown[]) => dbMock(...args),
 }));

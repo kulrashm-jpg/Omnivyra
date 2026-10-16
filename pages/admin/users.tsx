@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { safeFetchJson } from '@/lib/utils/safeFetchJson';
+import { performSuperAdminWrite, freshIdempotencyHeaders } from '@/lib/security/superAdminWrite';
 
 type UserRow = {
   user_id: string;
@@ -15,6 +16,11 @@ const ROLE_OPTIONS = [
   'CONTENT_ENGAGER',
 ];
 
+// Closure-015I (F-3): invitations use the governed invitation vocabulary
+// (POST /api/admin/invite-user VALID_ROLES = invitations_role_check). COMPANY_ADMIN
+// is offered to super-admin viewers only, as ADMIN was before.
+const INVITE_ROLE_OPTIONS = ['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY'];
+
 export default function AdminUsersPage() {
   const {
     companies,
@@ -25,7 +31,7 @@ export default function AdminUsersPage() {
   } = useCompanyContext();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState('CONTENT_MANAGER');
+  const [inviteRole, setInviteRole] = useState('CONTENT_CREATOR');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -37,6 +43,10 @@ export default function AdminUsersPage() {
     }
     return ROLE_OPTIONS;
   }, [userRole]);
+  const inviteRoleOptions = useMemo(
+    () => (userRole === 'SUPER_ADMIN' ? [...INVITE_ROLE_OPTIONS, 'COMPANY_ADMIN'] : INVITE_ROLE_OPTIONS),
+    [userRole],
+  );
 
   const loadUsers = async () => {
     if (!selectedCompanyId) return;
@@ -62,16 +72,24 @@ export default function AdminUsersPage() {
     setIsSaving(true);
     setErrorMessage(null);
     setSuccessMessage(null);
-    const result = await safeFetchJson('/api/users/invite', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({
-        email: inviteEmail,
-        companyId: selectedCompanyId,
-        role: inviteRole,
+    // Closure-015I (F-3): the governed invitation route — durable, expiring
+    // invitation + email via invitationService; super-admin cross-organization
+    // invites need identity.admin.assign with passkey step-up (performSuperAdminWrite
+    // runs the ceremony and retries once). withIdempotency requires a key: a FRESH
+    // one per attempt, so the post-step-up retry is not answered from the stored
+    // denial of the first attempt.
+    const result = await performSuperAdminWrite(() =>
+      fetch('/api/admin/invite-user', {
+        method: 'POST',
+        headers: freshIdempotencyHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          email: inviteEmail,
+          companyId: selectedCompanyId,
+          role: inviteRole,
+        }),
       }),
-    });
+    );
     if (result.ok === true) {
       setInviteEmail('');
       setSuccessMessage('User invited');
@@ -85,12 +103,17 @@ export default function AdminUsersPage() {
   const updateRole = async (userId: string, role: string) => {
     if (!selectedCompanyId) return;
     setErrorMessage(null);
-    const result = await safeFetchJson(`/api/users/${userId}/role`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ role, companyId: selectedCompanyId }),
-    });
+    // Closure-015E: a role change is identity assignment (IDENTITY_ADMIN_ASSIGN,
+    // passkey step-up on a trusted device). performSuperAdminWrite runs the
+    // step-up ceremony on STEP_UP_REQUIRED and retries once with a fresh request.
+    const result = await performSuperAdminWrite(() =>
+      fetch(`/api/users/${userId}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ role, companyId: selectedCompanyId }),
+      }),
+    );
     if (result.ok === true) {
       await loadUsers();
     } else {
@@ -101,10 +124,13 @@ export default function AdminUsersPage() {
   const removeUser = async (userId: string) => {
     if (!selectedCompanyId) return;
     setErrorMessage(null);
-    const result = await safeFetchJson(`/api/users/${userId}?companyId=${selectedCompanyId}`, {
-      method: 'DELETE',
-      credentials: 'same-origin',
-    });
+    // Closure-015F: identity deletion (IDENTITY_ADMIN_DELETE, passkey step-up).
+    const result = await performSuperAdminWrite(() =>
+      fetch(`/api/users/${userId}?companyId=${selectedCompanyId}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      }),
+    );
     if (result.ok === true) {
       await loadUsers();
     } else {
@@ -163,7 +189,7 @@ export default function AdminUsersPage() {
               value={inviteRole}
               onChange={(e) => setInviteRole(e.target.value)}
             >
-              {roleOptions.map((role) => (
+              {inviteRoleOptions.map((role) => (
                 <option key={role} value={role}>
                   {role}
                 </option>

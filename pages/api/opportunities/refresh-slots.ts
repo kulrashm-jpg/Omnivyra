@@ -5,6 +5,7 @@ import { Role } from '../../../backend/services/rbacService';
 import { runOpportunitySlotsScheduler } from '../../../backend/services/opportunitySlotsScheduler';
 import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
+import { requireActivePlatformSuperAdmin } from '../../../backend/security/requireActivePlatformSuperAdmin';
 
 /**
  * POST /api/opportunities/refresh-slots
@@ -23,6 +24,14 @@ async function runRefresh(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
+// Closure-015C (P1): the scheduler runs for EVERY company. withRBAC([SUPER_ADMIN]) also
+// admits an INVITED company-scoped SUPER_ADMIN membership; only an active platform
+// super admin (or the cron secret, above) may run it.
+async function runRefreshAsPlatformSuperAdmin(req: NextApiRequest, res: NextApiResponse) {
+  if (!(await requireActivePlatformSuperAdmin(req, res, 'opportunities.refresh_slots'))) return;
+  return runRefresh(req, res);
+}
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -33,7 +42,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (cronSecret && constantTimeEqual(authHeader, bearerAuthorization(cronSecret))) {
     return runRefresh(req, res);
   }
-  return withRBAC(runRefresh, [Role.SUPER_ADMIN])(req, res);
+  return withRBAC(runRefreshAsPlatformSuperAdmin, [Role.SUPER_ADMIN])(req, res);
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.

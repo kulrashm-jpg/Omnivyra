@@ -1,5 +1,6 @@
 import type { NextApiHandler, NextApiRequest, NextApiResponse } from 'next';
 import { enforceRole, Role, ALL_ROLES } from '../services/rbacService';
+import { companyOperationalState } from '../services/companyOperationalState';
 
 /**
  * WITHRBAC-STRUCT-001 — what withRBAC puts on `req.rbac`.
@@ -61,6 +62,34 @@ export const withRBAC = (
 
     const result = await enforceRole({ req, res, companyId, allowedRoles: finalAllowedRoles });
     if (!result) return;
+
+    /*
+     * Closure-015E — company operational state, as the canonical tenant guard
+     * (TenantGuard.assertTenantAccess) and enforceCompanyAccess already decide
+     * it: a tenant principal is refused for a company that is missing or whose
+     * companies.status is not 'active' (suspended / soft-deleted); a transient
+     * read failure answers a retryable 503, never an allow. Platform principals
+     * keep TenantGuard's bypass and never depend on the company read: the
+     * active platform super admin (enforceRole's bypass, the only path that
+     * yields SUPER_ADMIN) and the content-architect principal. None of the
+     * withRBAC routes is a billing / reactivation / export / recovery flow
+     * (Closure-015E route inventory), so no tenant exception applies.
+     */
+    if (result.role !== Role.SUPER_ADMIN && result.userId !== 'content_architect') {
+      const orgState = await companyOperationalState(companyId as string);
+      if (orgState === 'lookup_error') {
+        res.status(503).json({
+          error: 'Membership check is temporarily unavailable. Please try again.',
+          code: 'TENANT_LOOKUP_ERROR',
+          retryable: true,
+        });
+        return;
+      }
+      if (orgState === 'not_operational') {
+        res.status(403).json({ error: 'Access denied to company' });
+        return;
+      }
+    }
 
     /*
      * WITHRBAC-STRUCT-001 — expose the authorized company. Purely additive:

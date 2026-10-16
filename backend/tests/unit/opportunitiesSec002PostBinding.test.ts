@@ -46,6 +46,11 @@ const fillCalls: Array<{ companyId: string; type: string }> = [];
 const listCalls: Array<{ companyId: string; type: string }> = [];
 const countCalls: Array<{ companyId: string; type: string }> = [];
 
+// Closure-015E: withRBAC now refuses tenant principals for a missing / non-active
+// company (companyOperationalState). This suite's fake database models no
+// companies table and tests a different property, so the company is operational
+// here; company status itself is proven in closure015eInvitationAndCompanyStatus.
+jest.mock('../../services/companyOperationalState', () => ({ companyOperationalState: async () => 'operational' }));
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () =>
     authUser ? { user: { id: authUser, email: 'u@e.com', emailVerified: true }, error: null }
