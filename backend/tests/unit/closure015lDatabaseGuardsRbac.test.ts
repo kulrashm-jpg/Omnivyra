@@ -440,15 +440,58 @@ describe('B — the proposed SQL (static structure only; real-Postgres proof is 
   // migration batch, preserved (with its rollback) under supabase/deferred without a version prefix.
   it('the rbac_config contract REVOKE is deferred: in supabase/deferred only, never in supabase/migrations', () => {
     const root = path.resolve(__dirname, '../../../supabase');
-    const contract = 'REVOKE INSERT, UPDATE, DELETE ON public.rbac_config FROM service_role';
+    // Closure-015Q (F-1): the contract revokes EVERYTHING the application roles hold (the hosted default
+    // privileges grant ALL), then grants back only SELECT; the identity sequence is revoked too.
+    const contract = 'REVOKE ALL ON TABLE public.rbac_config FROM PUBLIC, anon, authenticated, authenticator, service_role';
     const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
       e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.sql') ? [path.join(d, e.name)] : []);
-    expect(walk(path.join(root, 'migrations')).filter((f) => fs.readFileSync(f, 'utf8').includes(contract))).toEqual([]);
+    // Closure-015R: the forward pre-C-7 reduction (20261211000001) shares the REVOKE ALL line, so the
+    // "never in supabase/migrations" check pins what only the CONTRACT has: its SELECT-only grant (which
+    // removes the legacy INSERT) and its post-condition marker.
+    for (const needle of [
+      'GRANT SELECT ON TABLE public.rbac_config TO service_role;',
+      'RBAC_CONTRACT_POSTCONDITION',
+      'RBAC_CONTRACT_PRECONDITION',
+      'REVOKE INSERT, UPDATE, DELETE ON public.rbac_config FROM service_role',
+    ]) {
+      expect(walk(path.join(root, 'migrations')).filter((f) => fs.readFileSync(f, 'utf8').includes(needle))).toEqual([]);
+    }
+    // and no migration revokes INSERT from service_role on its own (that is the C-7-gated step)
+    // (SQL only: 0003's VARIANT B documentation mentions such a REVOKE in a `--` comment)
+    const sqlOnly = (f: string) => fs.readFileSync(f, 'utf8').split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
+    expect(walk(path.join(root, 'migrations')).filter((f) => /REVOKE\s+INSERT\b[^;]*rbac_config/i.test(sqlOnly(f)))).toEqual([]);
     const deferred = fs.readFileSync(path.join(root, 'deferred/rbac_config_contract_legacy_insert.sql'), 'utf8');
     expect(deferred).toContain(contract);
+    expect(deferred).toContain('GRANT SELECT ON TABLE public.rbac_config TO service_role;');
+    expect(deferred).toMatch(/REVOKE ALL ON SEQUENCE %s FROM PUBLIC, anon, authenticated, authenticator, service_role/);
+    expect(deferred).toMatch(/RBAC_CONTRACT_POSTCONDITION/);
+    expect(deferred).not.toMatch(/^\s*GRANT\s+(?!SELECT ON TABLE public\.rbac_config TO service_role;)/m);
     expect(deferred).toMatch(/DEFERRED by Closure-015P/);
-    expect(fs.readFileSync(path.join(root, 'deferred/rollbacks/rbac_config_contract_legacy_insert_rollback.sql'), 'utf8'))
-      .toContain('GRANT INSERT ON public.rbac_config TO service_role');
+    const rollback = fs.readFileSync(path.join(root, 'deferred/rollbacks/rbac_config_contract_legacy_insert_rollback.sql'), 'utf8');
+    expect(rollback).toContain('GRANT INSERT ON TABLE public.rbac_config TO service_role;');
+    // the rollback re-opens only the legacy INSERT — never the broad hosted default
+    expect(rollback.split('\n').filter((l) => /^\s*GRANT\b/.test(l))).toEqual(['GRANT INSERT ON TABLE public.rbac_config TO service_role;']);
+  });
+
+  // Closure-015R (owner decision 2): the forward pre-C-7 privilege reduction, after 0004.
+  it('the pre-C-7 reduction (20261211000001) follows 0004 and grants service_role exactly SELECT, INSERT; its rollback never re-grants the broad default', () => {
+    const migrations = path.resolve(__dirname, '../../../supabase/migrations');
+    const files = fs.readdirSync(migrations).filter((f) => /^\d{14}_.*\.sql$/.test(f)).sort();
+    const name = '20261211000001_rbac_config_pre_c7_privilege_reduction.sql';
+    expect(files).toContain(name);
+    expect(files.indexOf(name)).toBe(files.indexOf('20261210000004_activate_invitation_membership.sql') + 1);
+    // the only migrations granting on rbac_config are 0003 (creation) and this one
+    expect(files.filter((f) => /GRANT[^;]*ON\s+(TABLE\s+)?public\.rbac_config\b/i.test(fs.readFileSync(path.join(migrations, f), 'utf8'))))
+      .toEqual(['20261210000003_rbac_config.sql', name]);
+    const sql = fs.readFileSync(path.join(migrations, name), 'utf8');
+    expect(sql).toContain('REVOKE ALL ON TABLE public.rbac_config FROM PUBLIC, anon, authenticated, authenticator, service_role;');
+    expect(sql.split('\n').filter((l) => /^\s*GRANT\b/.test(l))).toEqual(['GRANT SELECT, INSERT ON TABLE public.rbac_config TO service_role;']);
+    expect(sql).toMatch(/REVOKE ALL ON SEQUENCE %s FROM PUBLIC, anon, authenticated, authenticator, service_role/);
+    expect(sql).toMatch(/RBAC_PRIVILEGE_REDUCTION_POSTCONDITION/);
+    expect(sql).toMatch(/^BEGIN;$/m);
+    expect(sql).toMatch(/^COMMIT;$/m);
+    const rollback = fs.readFileSync(path.join(migrations, 'rollbacks/rbac_config_pre_c7_privilege_reduction_rollback.sql'), 'utf8');
+    expect(rollback.split('\n').filter((l) => /^\s*GRANT\b/.test(l))).toEqual(['GRANT SELECT, INSERT ON TABLE public.rbac_config TO service_role;']);
   });
 
   it('the direct-grant guard (0002) stays INVOKER-rights and refuses before taking the company lock', () => {

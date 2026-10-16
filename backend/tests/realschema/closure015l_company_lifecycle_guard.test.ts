@@ -6,8 +6,10 @@
  *     npm run test:realschema -- closure015l
  *
  * (scripts/ci/real-schema-ci.sh provisions a throwaway container from baseline.sql; setup.ts
- * refuses managed hosts.) beforeAll applies the PROPOSAL files from supabase/proposals/closure015l
- * to that throwaway database — they are not migrations.
+ * refuses managed hosts.) Closure-015R: when the promoted migrations 20261210000001..3 are installed
+ * (the CI replay), the suite tests those INSTALLED objects and applies nothing; only on a database
+ * with none of them does beforeAll apply the PROPOSAL files from supabase/proposals/closure015l
+ * (they are not migrations). A partial install is refused. See "setup isolation" at the end.
  *
  * Deterministic in the style of concurrency.test.ts: session A opens a transaction and holds it,
  * session B is issued, A commits, and B's SQLSTATE / message is asserted. No sleep decides an
@@ -68,14 +70,61 @@ const activeSA = async () =>
   (await db.query(`SELECT count(*)::int AS n FROM public.user_company_roles WHERE company_id = $1 AND role = 'SUPER_ADMIN' AND status = 'active'`, [CO])).rows[0].n as number;
 const companyRow = async () => (await db.query('SELECT status, deleted_at FROM public.companies WHERE id = $1', [CO])).rows[0];
 
+/**
+ * Closure-015R — setup isolation. The objects this suite exercises, as installed by the promoted
+ * migrations 20261210000001..3 (or, on a database without them, by the 015L proposals). The setup
+ * decision is taken from the VERIFIED DATABASE STATE, never from suite order or an env var alone:
+ *   • every object present → test what is INSTALLED and apply NOTHING. Re-applying the stale 015L
+ *     proposal 01 would replace the guard installed by 20261210000002 with its pre-015P body (no
+ *     SUPER_ADMIN_GRANT_NOT_GOVERNED) for every later suite sharing the database;
+ *   • no object present    → apply the proposals (the original operator-run path), unless
+ *     C15N_NO_APPLY=1 forbids applying anything — then refuse, there is nothing to test;
+ *   • some present         → refuse: overlaying proposal SQL on a partial install could downgrade it.
+ */
+const PROMOTED_FUNCTIONS: Record<string, string> = {
+  guard_super_admin_membership_company: 'public.guard_super_admin_membership_company()',
+  hard_delete_company: 'public.hard_delete_company(uuid, uuid, text)',
+  assign_super_admin: 'public.assign_super_admin(uuid, uuid)',
+  save_rbac_config: 'public.save_rbac_config(jsonb, jsonb, uuid, bigint)',
+};
+type SetupState = { defs: Record<string, string | null>; trigger: string | null; rbacTable: boolean; guardGoverned: boolean };
+async function readSetupState(): Promise<SetupState> {
+  const fns = (await db.query(
+    `SELECT t.k, md5(pg_get_functiondef(to_regprocedure(t.sig))) AS def
+       FROM unnest($1::text[], $2::text[]) AS t(k, sig)`,
+    [Object.keys(PROMOTED_FUNCTIONS), Object.values(PROMOTED_FUNCTIONS)])).rows;
+  const misc = (await db.query(
+    `SELECT (SELECT md5(pg_get_triggerdef(oid)) FROM pg_trigger
+              WHERE tgname = 'trg_guard_super_admin_membership_company' AND tgrelid = 'public.user_company_roles'::regclass) AS trigger,
+            to_regclass('public.rbac_config') IS NOT NULL AS rbac_table,
+            coalesce(pg_get_functiondef(to_regprocedure('public.guard_super_admin_membership_company()')) LIKE '%SUPER_ADMIN_GRANT_NOT_GOVERNED%', false) AS governed`)).rows[0];
+  return {
+    defs: Object.fromEntries(fns.map((r) => [r.k as string, (r.def as string | null) ?? null])),
+    trigger: (misc.trigger as string | null) ?? null,
+    rbacTable: misc.rbac_table === true,
+    guardGoverned: misc.governed === true,
+  };
+}
+const presence = (s: SetupState): boolean[] => [...Object.values(s.defs).map((d) => d !== null), s.trigger !== null, s.rbacTable];
+let setupBefore: SetupState;
+let setupMode: 'installed' | 'proposals';
+
 beforeAll(async () => {
   // Closure-015M: 02 (governed grant RPC) is applied too, so its lock order is exercised.
-  // Closure-015O: C15N_NO_APPLY=1 tests the objects already INSTALLED (e.g. by the promoted
-  // supabase/migrations/20261210000001..5 replay) instead of re-applying the 015L proposals.
-  for (const f of (process.env.C15N_NO_APPLY === '1' ? [] : ['01_company_lifecycle_super_admin_guard.sql', '02_assign_super_admin_rpc.sql', '03_rbac_config.sql'])) {
-    // 03 creates a table (not idempotent): apply it only when the table does not exist yet.
-    if (f.startsWith('03_') && (await db.query("SELECT to_regclass('public.rbac_config') AS t")).rows[0].t) continue;
-    await db.query(fs.readFileSync(path.join(PROPOSALS, f), 'utf8'));
+  setupBefore = await readSetupState();
+  const present = presence(setupBefore);
+  if (present.every(Boolean)) {
+    setupMode = 'installed';
+  } else if (present.some(Boolean)) {
+    throw new Error(`closure015l: the guard objects are PARTIALLY installed (${JSON.stringify({ ...setupBefore.defs, trigger: setupBefore.trigger, rbac_config: setupBefore.rbacTable })}) — `
+      + 'refusing to overlay the 015L proposals on them; install supabase/migrations/20261210000001..3 completely');
+  } else if (process.env.C15N_NO_APPLY === '1') {
+    throw new Error('closure015l: C15N_NO_APPLY=1 but none of the guard objects is installed — nothing to test');
+  } else {
+    setupMode = 'proposals';
+    for (const f of ['01_company_lifecycle_super_admin_guard.sql', '02_assign_super_admin_rpc.sql', '03_rbac_config.sql']) {
+      await db.query(fs.readFileSync(path.join(PROPOSALS, f), 'utf8'));
+    }
   }
   for (const [id, email] of [[U1, 'c15l-u1@example.test'], [U2, 'c15l-u2@example.test'], [ACTOR, 'c15l-actor@example.test']]) {
     await db.query(`INSERT INTO public.users (id, email, name) VALUES ($1, $2, 'c15l') ON CONFLICT (id) DO NOTHING`, [id, email]);
@@ -404,5 +453,32 @@ describe('015M — rbac_config: initialization, latest committed version, invali
     await db.query(`INSERT INTO public.rbac_config (roles, permissions) VALUES ('["SUPER_ADMIN"]'::jsonb, '{"ASSIGN_ROLE":"COMPANY_ADMIN"}'::jsonb)`);
     const v = Number((await db.query('SELECT max(version) AS v FROM public.rbac_config')).rows[0].v);
     expect(Number((await db.query(saveP(v, P1))).rows[0].version)).toBe(v + 1);
+  });
+});
+
+// Closure-015R — runs LAST in this file, so it checks the database AFTER every test above.
+describe('setup isolation (Closure-015R): the suite never downgrades installed objects', () => {
+  it('the setup decision followed the verified database state', async () => {
+    const before = presence(setupBefore);
+    expect(setupMode).toBe(before.every(Boolean) ? 'installed' : 'proposals');
+    // whichever path ran, every object the suite needs is now present
+    expect(presence(await readSetupState()).every(Boolean)).toBe(true);
+  });
+
+  it('installed → nothing applied (every function and the trigger byte-for-byte unchanged); proposals → created from nothing', async () => {
+    const after = await readSetupState();
+    if (setupMode === 'installed') {
+      expect(after.defs).toEqual(setupBefore.defs);
+      expect(after.trigger).toBe(setupBefore.trigger);
+    } else {
+      expect(Object.values(setupBefore.defs).every((d) => d === null) && setupBefore.trigger === null).toBe(true);
+      expect(Object.values(after.defs).every((d) => d !== null) && after.trigger !== null).toBe(true);
+    }
+  });
+
+  it('the direct-grant guard (SUPER_ADMIN_GRANT_NOT_GOVERNED, 20261210000002) is never downgraded', async () => {
+    const after = await readSetupState();
+    // installed: exactly as found (a governed guard stays governed); proposals: the 015L body, which predates 0002
+    expect(after.guardGoverned).toBe(setupMode === 'installed' ? setupBefore.guardGoverned : false);
   });
 });
