@@ -45,8 +45,14 @@ LABEL_KEY="com.omnivyra.w6-harness"
 # W6-SAFE-01 — a per-invocation nonce. Written nowhere else, so it cannot match an
 # earlier run, a concurrent run, or another workstream's container. It AUTHORIZES
 # NOTHING; it only lets cleanup re-verify the container this run created.
+#
+# `tr -d '\r\n'`, NOT '\n': `openssl rand -hex` emits CRLF on MSYS/mingw64, so
+# stripping only \n leaves a trailing \r. That makes the string 33 characters, the
+# hex guard below rejects it, and the harness refuses to start at all on Git Bash
+# with a message blaming a missing openssl. CI never saw it because ubuntu emits
+# LF. The CID-file read below already normalises both for the same reason.
 RUN_NONCE="$( (openssl rand -hex 16 2>/dev/null \
-               || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n') | tr -d '\n' )"
+               || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n') | tr -d '\r\n' )"
 case "$RUN_NONCE" in
   *[!0-9a-f]*) RUN_NONCE="" ;;
   *) [ "${#RUN_NONCE}" -eq 32 ] || RUN_NONCE="" ;;
@@ -328,12 +334,35 @@ else
   [ "${#CID}" -ge 12 ] || fail "docker run returned an implausibly short container id"
   OWN_CID="$CID"
   echo "  created container $OWN_CID"
-  for i in $(seq 1 60); do
-    if docker exec "$OWN_CID" pg_isready -U postgres -d w6 >/dev/null 2>&1; then
-      echo "  ready after $((i * 2))s"; break
+  # `pg_isready` alone is NOT a readiness signal for a FIRST start. The postgres
+  # entrypoint runs initdb, brings up a TEMPORARY server on the unix socket to
+  # apply initialisation, stops it, then execs the real server. pg_isready is
+  # socket-based and succeeds against that temporary server, so the first real
+  # statement lands during its shutdown:
+  #
+  #   psql: error: connection to server on socket ".s.PGSQL.5432" failed:
+  #         FATAL:  the database system is shutting down
+  #
+  # Observed locally at "ready after 12s" with a 120s budget still unspent — the
+  # loop was told ready too early, it did not time out. CI never sees this because
+  # CI supplies a database and starts no container, so only container mode is
+  # affected.
+  #
+  # So require a REAL query round-trip, and require it on CONSECUTIVE polls: any
+  # failure resets the streak, which the temporary server cannot survive because
+  # its shutdown breaks the sequence. Three successes span >= 4s of wall time.
+  ready_streak=0
+  for i in $(seq 1 90); do
+    if docker exec "$OWN_CID" psql -U postgres -d w6 -tAc 'select 1' >/dev/null 2>&1; then
+      ready_streak=$((ready_streak + 1))
+    else
+      ready_streak=0
+    fi
+    if [ "$ready_streak" -ge 3 ]; then
+      echo "  ready after $((i * 2))s (3 consecutive query round-trips)"; break
     fi
     sleep 2
-    [ "$i" = "60" ] && fail "database never became ready"
+    [ "$i" = "90" ] && fail "database never became stably ready"
   done
   # THE AUTHORIZATION CHAIN: every destructive command is addressed to the ID this
   # invocation created. No name is resolved, no URL is parsed, no stamp consulted.
