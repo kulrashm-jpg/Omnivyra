@@ -30,6 +30,8 @@ import {
   type AdsTransparencyClient,
   type AdvertiserProfileObservation,
 } from '../../services/ads/adsTransparencyObservation';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { buildAdvertisingSurface } from '../../services/ads/advertisingSurface';
 import { adsHistoryForPlatform } from '../../services/ads/adsDueSubjects';
 import type { SubjectIdentity } from '../../services/ads/advertiserIdentityResolver';
@@ -133,16 +135,33 @@ beforeEach(() => {
 // ── 1. The vocabulary ─────────────────────────────────────────────────────────
 
 describe('the platform vocabulary is declared, never inferred', () => {
-  it('declares exactly one platform, because exactly one client exists', () => {
-    // A second member here without a client that can observe it would be a promise the
-    // acquisition cannot keep. Adding one is deliberately a code change, not a data change.
-    expect(KNOWN_ADS_PLATFORMS).toEqual(['google']);
+  it('declares exactly the platforms that have a client, and no more', () => {
+    // The guard is unchanged in PURPOSE: a member here without a client that can observe it
+    // would be a promise the acquisition cannot keep. `meta` was added in R1-META-01 together
+    // with `metaAdLibraryClient.ts`, so the union and the clients still correspond one-to-one.
+    // Adding a platform remains a code change, never a data change.
+    expect(KNOWN_ADS_PLATFORMS).toEqual(['google', 'meta']);
     expect(ADS_PLATFORM_GOOGLE).toBe('google');
+  });
+
+  it('every declared platform is backed by a client module that declares it', () => {
+    // The assertion the hard-coded count used to stand in for, now stated directly so it keeps
+    // holding as platforms are added rather than needing an edit each time.
+    const clientFor: Record<string, string> = {
+      google: 'adsTransparencyBrowserClient.ts',
+      meta: 'metaAdLibraryClient.ts',
+    };
+    for (const platform of KNOWN_ADS_PLATFORMS) {
+      const module = clientFor[platform];
+      expect(module).toBeDefined();
+      expect(existsSync(join(__dirname, '../../services/ads', module))).toBe(true);
+    }
   });
 
   it('recognises only platforms this build can actually observe', () => {
     expect(isAdsPlatform('google')).toBe(true);
-    for (const unknown of ['meta', 'linkedin', 'tiktok', 'x', 'reddit', '', null, undefined, 7]) {
+    expect(isAdsPlatform('meta')).toBe(true);
+    for (const unknown of ['linkedin', 'tiktok', 'x', 'reddit', '', null, undefined, 7]) {
       expect(isAdsPlatform(unknown)).toBe(false);
     }
   });
@@ -160,20 +179,26 @@ describe('the legacy rule — a platform-less observation is Google, explicitly'
 
   it('keeps a declared known platform as itself', () => {
     expect(resolveObservedPlatform('google')).toBe('google');
+    // R1-META-01 — meta is now a declared platform, so it round-trips as itself rather than
+    // being rejected. The legacy rule below is what keeps it from reading as Google.
+    expect(resolveObservedPlatform('meta')).toBe('meta');
   });
 
   it('never coerces an UNKNOWN platform to Google', () => {
     // The dangerous case. A row written by a future build that observes another platform must not
-    // be served as Google evidence — that would be an attribution nothing observed.
-    expect(resolveObservedPlatform('meta')).toBeNull();
+    // be served as Google evidence — that would be an attribution nothing observed. `linkedin`
+    // stands in for that future platform now that `meta` has a client of its own.
     expect(resolveObservedPlatform('linkedin')).toBeNull();
+    expect(resolveObservedPlatform('tiktok')).toBeNull();
     expect(resolveObservedPlatform(42)).toBeNull();
   });
 
   it('applies the same rule to a stored scope, and rejects a non-ads scope outright', () => {
     expect(adsRowPlatform({ kind: 'ads_transparency' })).toBe('google');
     expect(adsRowPlatform({ kind: 'ads_transparency', platform: 'google' })).toBe('google');
-    expect(adsRowPlatform({ kind: 'ads_transparency', platform: 'meta' })).toBeNull();
+    // A meta row reads as meta — never as Google, which is the property that matters.
+    expect(adsRowPlatform({ kind: 'ads_transparency', platform: 'meta' })).toBe('meta');
+    expect(adsRowPlatform({ kind: 'ads_transparency', platform: 'linkedin' })).toBeNull();
     expect(adsRowPlatform({ kind: 'serp_rank' })).toBeNull();
     expect(adsRowPlatform(null)).toBeNull();
   });

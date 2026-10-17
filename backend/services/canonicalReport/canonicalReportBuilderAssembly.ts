@@ -977,7 +977,12 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
           // row is durable history but can never anchor a delta.
           domain: options?.domain ?? null,
         });
-        reportShape.scan_metadata.persisted = persisted.written;
+        // R1-HIST-01 — `persisted` is a claim the reader can act on, so it requires BOTH that the
+        // write executed and that the store it went to keeps it. The in-memory store satisfies the
+        // first and not the second, and it is what runs whenever the durable store is not
+        // registered — including when SUPABASE_HISTORY_ENABLED is set but the admin client fails
+        // to resolve, in which case the registry deliberately retains the volatile store.
+        reportShape.scan_metadata.persisted = persisted.written && persisted.durable;
         reportShape.scan_metadata.persisted_at = persisted.observedAt;
       }
     } catch (error) {

@@ -56,7 +56,15 @@ export type PersistSnapshotInput = {
 
 export type PersistSnapshotResult = {
   observedAt: string;
+  /** The write EXECUTED against the registered store. Says nothing about outliving the process. */
   written: boolean;
+  /**
+   * R1-HIST-01. The store the write went to keeps it beyond this process. Reported separately
+   * from {@link written} because the in-memory store executes writes faithfully and loses them on
+   * the next cold start; a report that treated "executed" as "persisted" claimed durable history
+   * it did not have. Only `written && durable` may be surfaced as persisted.
+   */
+  durable: boolean;
   reason?: string;
   /**
    * BASELINE #1. `true` means the row carries a complete comparability
@@ -89,6 +97,7 @@ export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Pro
     return {
       observedAt: new Date().toISOString(),
       written: false,
+      durable: false,
       reason: 'history-store-not-operational',
       comparable: false,
       comparabilityReason: 'History store is not operational — nothing was recorded.',
@@ -264,6 +273,7 @@ export async function persistCanonicalSnapshot(input: PersistSnapshotInput): Pro
   return {
     observedAt,
     written: true,
+    durable: store.durable,
     comparable: identity != null,
     comparabilityReason,
   };

@@ -181,7 +181,18 @@ export interface HistoricalStore {
   /** Benchmark history (one row per scan; rare changes). */
   loadBenchmarkHistory(range: HistoryRange): Promise<BenchmarkHistoryRecord[]>;
 
-  /** True when the underlying backend is reachable and writes are durable. */
+  /**
+   * Whether writes to this backend SURVIVE THE PROCESS.
+   *
+   * R1-HIST-01. Declared by the implementation, never inferred by a caller — the same rule an
+   * ads client follows in declaring its own platform. `isOperational()` cannot answer this: the
+   * in-memory store is perfectly reachable and its writes genuinely execute, they simply do not
+   * outlive a cold start. Conflating the two is what let a report state that it had persisted
+   * its score history when nothing durable had been written.
+   */
+  readonly durable: boolean;
+
+  /** True when the underlying backend is reachable and the write will execute. */
   isOperational(): Promise<boolean>;
 }
 
@@ -197,6 +208,9 @@ export class InMemoryHistoryStore implements HistoricalStore {
   private benchmarks: BenchmarkHistoryRecord[] = [];
   private recommendations: RecommendationHistoryRecord[] = [];
   private evidence: EvidenceHistoryRecord[] = [];
+
+  /** Process-local: the provider registry's own words are that it "resets on every cold start". */
+  readonly durable = false;
 
   async isOperational(): Promise<boolean> {
     return true;
