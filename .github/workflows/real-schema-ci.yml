@@ -69,6 +69,17 @@ jobs:
       # Localhost service container. Deliberately NOT a repository secret:
       # this job must never be able to reach production.
       W6_DB_URL: postgres://postgres:w6@localhost:5432/w6
+      # This job, and only this job, declares that the harness may apply the
+      # bootstrap, the baseline restore and the migration replay to a database it
+      # did not create: the `services:` container above, on an ephemeral
+      # GitHub-hosted runner that is destroyed when the job ends.
+      #
+      # This is a DECLARATION OF INTENT by the workflow author, and a CONFINEMENT
+      # of the script to this context. It is NOT proof that the script owns or
+      # created that database — the script cannot prove that and does not claim
+      # to. Ownership is proven only in container mode, by the container ID the
+      # invocation itself created.
+      W6_CI_SERVICE_DB: '1'
       PGPASSWORD: w6
 
     steps:
