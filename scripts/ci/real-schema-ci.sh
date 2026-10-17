@@ -195,11 +195,24 @@ trap on_exit EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
-# W6-SAFE-02 — ACCIDENT GUARD, NOT AN OWNERSHIP PROOF. Emptiness does not prove a
-# database is disposable: an emptied real database would pass, and so would a
-# production database tunnelled to loopback. Authorization comes from the
-# container-ID chain (container mode) or from the ephemeral-runner confinement
-# (CI mode). This only stops an ACCIDENTAL overwrite of a populated database.
+# W6-SAFE-02 — ACCIDENT GUARD, NOT AN OWNERSHIP PROOF.
+#
+# These checks REDUCE RISK. They DO NOT PROVE OWNERSHIP of a supplied database,
+# and nothing in this script should be read as claiming they do. Specifically: a
+# PRISTINE REMOTE DATABASE PASSES THE TABLE-COUNT CHECK. So does a real database
+# that was deliberately emptied, and so does one reached over a forwarded port or
+# a tunnel. Emptiness is evidence that there is nothing to lose, not evidence of
+# who owns the thing.
+#
+# Ownership is PROVEN in exactly one place: container mode, where the container ID
+# came from the `docker run` this invocation issued and every destructive command
+# is addressed to that ID. For a supplied database there is NO ownership proof —
+# only CONFINEMENT to a declared ephemeral GitHub-hosted runner, whose VM and
+# service container are destroyed when the job ends. That guarantee belongs to the
+# workflow, not to this script.
+#
+# What this function does, therefore, is stop an ACCIDENTAL overwrite of a
+# POPULATED database. That is its whole claim.
 #
 # Every assignment is split from its declaration: `local x=$(cmd)` returns the
 # status of `local`, so a failing psql would silently yield an empty string.
@@ -210,10 +223,24 @@ assert_not_populated() {
   tables=$("${PSQL[@]}" -tAc "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p')")
   ledger=$("${PSQL[@]}" -tAc "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='supabase_migrations'")
   echo "  database=$db  server=$addr  public-tables=$tables  ledger-objects=$ledger"
-  case "$addr" in
-    127.0.0.1|::1|unix-socket) ;;
-    *) fail "server reports address '$addr', which is not loopback — refusing bootstrap, baseline and replay" ;;
-  esac
+  # The server address is RECORDED FOR DIAGNOSIS AND NOT ASSERTED.
+  #
+  # PROVEN WRONG BY CI RUN 39034965362: `inet_server_addr()` reports the address
+  # the SERVER sees for itself, which under a GitHub Actions `services:` topology
+  # is the Docker bridge IP (172.18.0.2) even though the client reached it on
+  # localhost through a forwarded port. The assertion tested the wrong end of the
+  # connection and refused the only topology in which this path is permitted.
+  #
+  # The meaningful loopback check is the CLIENT-side one on W6_DB_URL, enforced
+  # before we connect at all, and it stays. In container mode psql runs over a
+  # unix socket, so this check was trivially satisfied there and never load-bearing.
+  #
+  # WHAT IS GIVEN UP, PLAINLY: nothing here detects a loopback URL that is
+  # tunnelled or port-forwarded to a REMOTE server, because that is the same
+  # shape as the CI service container and is not distinguishable from it. No
+  # RFC1918/private-address allowlist is used in its place — "private address" is
+  # not a safety property, and a branch whose only purpose is to resemble a check
+  # is worse than its absence.
   [ "$recov"  = "f" ] || fail "target is in recovery (a standby) — refusing DDL"
   [ "$tables" = "0" ] || fail "target holds $tables table(s) in schema public. A harness database is created empty; refusing to overwrite a populated database."
   [ "$ledger" = "0" ] || fail "target carries a supabase_migrations ledger ($ledger object(s)) — a managed database, not a harness one. Refusing DDL."
