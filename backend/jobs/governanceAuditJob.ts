@@ -26,24 +26,27 @@ export async function runAllCompanyAudits(): Promise<void> {
     return;
   }
 
-  // OMNI-GOV-002 — constitutional admission gate (feature-flagged, OFF by
-  // default). When the flag is off, `evaluateAdmission` bypasses instantly
-  // (admitted:true, no runtime spawn) and the sweep runs exactly as before. In
-  // enforce mode it invokes the certified runtime via the published adapter and
-  // skips the sweep if admission is not granted. The runtime alone decides — no
-  // governance logic is duplicated and nothing frozen is modified.
-  const admission = await evaluateAdmission({ operation: 'governance.audit.sweep' });
-  if (!admission.admitted) {
-    console.log('GovernanceAuditJob: skipped — constitutional admission not granted', {
-      disposition: admission.disposition,
-      reason: admission.reason,
-      mode: admission.mode,
-    });
-    return;
-  }
-
+  // Claim the guard synchronously, before the first await: an await between
+  // the check above and this assignment lets a concurrent call pass the check
+  // too. In-process only; the `finally` below releases it on every path.
   auditJobRunning = true;
   try {
+    // OMNI-GOV-002 — constitutional admission gate (feature-flagged, OFF by
+    // default). When the flag is off, `evaluateAdmission` bypasses instantly
+    // (admitted:true, no runtime spawn) and the sweep runs exactly as before. In
+    // enforce mode it invokes the certified runtime via the published adapter and
+    // skips the sweep if admission is not granted. The runtime alone decides — no
+    // governance logic is duplicated and nothing frozen is modified.
+    const admission = await evaluateAdmission({ operation: 'governance.audit.sweep' });
+    if (!admission.admitted) {
+      console.log('GovernanceAuditJob: skipped — constitutional admission not granted', {
+        disposition: admission.disposition,
+        reason: admission.reason,
+        mode: admission.mode,
+      });
+      return;
+    }
+
     const { data, error } = await supabase
       .from('campaign_versions')
       .select('company_id');
