@@ -25,6 +25,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { createApiRoute } from '../../../lib/platform/routeFactory';
 import { withTenantGuard } from '../../../backend/security/withTenantGuard';
 import {
   createInMemoryStore, type GroundingStorePort, type PersistedField, type PersistedClaim,
@@ -278,10 +279,23 @@ async function handler(
   }
 }
 
-export default withTenantGuard(handler, {
-  resolveCompanyId: (req) => {
-    const q = req.query as Record<string, unknown>;
-    const v = q.companyId;
-    return typeof v === 'string' && v.trim() ? v.trim() : null;
-  },
-});
+/**
+ * W0-1/W0-2 — route-factory adoption.
+ *
+ * `createApiRoute` wraps the ALREADY-GUARDED handler, so the composition is
+ * factory(guard(handler)): the tenant guard still authorizes before the handler runs and still
+ * returns its own 401/403, byte-for-byte as before. The factory adds only what every other adopted
+ * route gets — request-execution context, observability and error classification — and it rethrows,
+ * so Next.js error handling is unchanged. No protection was removed, and no marker was added merely
+ * to satisfy the adoption check.
+ */
+export default createApiRoute(
+  withTenantGuard(handler, {
+    resolveCompanyId: (req) => {
+      const q = req.query as Record<string, unknown>;
+      const v = q.companyId;
+      return typeof v === 'string' && v.trim() ? v.trim() : null;
+    },
+  }),
+  { route: '/api/company-grounding/[companyId]' },
+);

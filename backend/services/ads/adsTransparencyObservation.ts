@@ -28,19 +28,25 @@ import {
  * was Google by assumption: there was no field for it anywhere in the model, and the only reason a
  * reader knew the evidence was Google was that the only client ever written happened to be.
  *
- * The union has exactly ONE member on purpose. Adding a platform is not a typing change: it
- * requires a client that can observe that platform, so a second member here without one would be
- * a promise the acquisition cannot keep — and an exhaustiveness check that silently stopped
- * meaning anything. Nothing infers a platform from data; a platform is DECLARED by the client
- * that made the observation.
+ * A member is added ONLY together with a client that can actually observe that platform:
+ * otherwise the union is a promise the acquisition cannot keep, and the exhaustiveness check
+ * silently stops meaning anything. Nothing infers a platform from data; a platform is DECLARED by
+ * the client that made the observation.
+ *
+ * `meta` was added with `metaAdLibraryClient.ts`. Its archive coverage is narrower than Google's
+ * (non-political advertising only where the ad delivered to the EU/UK), which the client enforces
+ * by refusing to search rather than returning an empty result that would read as "no ads".
  */
-export type AdsPlatform = 'google';
+export type AdsPlatform = 'google' | 'meta';
 
-/** Google, observed through the public Ads Transparency Center. The only platform implemented. */
+/** Google, observed through the public Ads Transparency Center. */
 export const ADS_PLATFORM_GOOGLE: AdsPlatform = 'google';
 
+/** Meta, observed through the public Ad Library API (`ads_archive`). */
+export const ADS_PLATFORM_META: AdsPlatform = 'meta';
+
 /** Every platform this build can observe or interpret. */
-export const KNOWN_ADS_PLATFORMS: readonly AdsPlatform[] = [ADS_PLATFORM_GOOGLE];
+export const KNOWN_ADS_PLATFORMS: readonly AdsPlatform[] = [ADS_PLATFORM_GOOGLE, ADS_PLATFORM_META];
 
 /**
  * How an observation that carries NO platform is interpreted.
@@ -187,11 +193,27 @@ export function accessStateFromError(error: unknown): { state: AdsAccessState; r
   if (/captcha|robot|unusual traffic|bot/.test(message)) {
     return { state: 'blocked', reason: 'The provider challenged the request; no bypass was attempted.' };
   }
-  if (/region|not available in your/.test(message)) {
+  // `forbidden` covers an HTTP 403: the provider refused to serve THIS request from THIS vantage,
+  // which is a restriction on access and not a statement about the advertising itself.
+  if (/region|not available in your|forbidden/.test(message)) {
     return { state: 'restricted', reason: 'The provider did not serve this surface to the observation vantage.' };
   }
   if (/timeout|timed out|econnreset|enotfound|network|navigation/.test(message)) {
     return { state: 'unreachable', reason: 'The public surface could not be reached for this report.' };
+  }
+  // A provider rate limit is the provider refusing to serve more, which is what `blocked` means.
+  // It is NOT an absence of advertising and NOT a vantage problem, so it gets its own reason
+  // rather than falling through to the generic one.
+  if (/rate limit|too many requests/.test(message)) {
+    return { state: 'blocked', reason: 'The provider rate-limited the request, so the observation is incomplete.' };
+  }
+  // The platform's archive does not carry this class of advertising for this delivery area at
+  // all. Distinct from "we looked and found none": nothing was searchable in the first place.
+  if (/archive coverage/.test(message)) {
+    return {
+      state: 'unavailable',
+      reason: 'The platform archive does not cover this advertising for the requested delivery area, so presence could neither be observed nor excluded.',
+    };
   }
   return { state: 'unavailable', reason: 'Public advertising evidence could not be acquired for this report.' };
 }

@@ -39,6 +39,9 @@ type SupabaseClientShape = {
 export class SupabaseHistoryStore implements HistoricalStore {
   constructor(private readonly client: SupabaseClientShape) {}
 
+  /** R1-HIST-01 — rows land in `report_score_history` and outlive the process. */
+  readonly durable = true;
+
   async isOperational(): Promise<boolean> {
     try {
       const { error } = await (this.client.from('report_score_history').select('id').limit(1) as Promise<{
