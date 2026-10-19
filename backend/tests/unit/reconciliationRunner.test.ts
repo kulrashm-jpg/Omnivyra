@@ -52,7 +52,7 @@ describe('validateManifest', () => {
   test('rejects unsupported provider', () => {
     const r = validateManifest({ provider: 'mystery', providerInvoiceId: 'x', periodStart: 'x', periodEnd: 'x', payload: {} });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/unsupported_provider/);
+    if (r.ok === false) expect(r.error).toMatch(/unsupported_provider/);
   });
 
   test('rejects missing required string fields', () => {
@@ -66,7 +66,7 @@ describe('validateManifest', () => {
   test('rejects missing payload', () => {
     const r = validateManifest({ provider: 'openai', providerInvoiceId: 'x', periodStart: 'a', periodEnd: 'b', rates: {} });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toBe('missing_payload');
+    if (r.ok === false) expect(r.error).toBe('missing_payload');
   });
 
   test('rejects invalid kind per provider', () => {
@@ -121,14 +121,14 @@ describe('dispatchReconciliation — routes to the correct orchestrator', () => 
     const raw = loadFixture(fixtureRel);
     const validated = validateManifest(raw);
     expect(validated.ok).toBe(true);
-    if (!validated.ok) throw new Error(validated.error);
+    if (validated.ok === false) throw new Error(validated.error);
     const manifest: ReconciliationManifest = validated.manifest;
 
     const { spies, orchestrators } = makeSpyOrchestrators();
     const outcome = await dispatchReconciliation(manifest, orchestrators);
 
     expect(outcome.ok).toBe(true);
-    if (!outcome.ok) throw new Error(outcome.error);
+    if (outcome.ok === false) throw new Error(outcome.error);
     expect(outcome.provider).toBe(provider);
 
     // Verify the called orchestrator received the right keys.
@@ -149,7 +149,7 @@ describe('dispatchReconciliation — routes to the correct orchestrator', () => 
   test('openai orchestrator gets rates but NO kind field (orchestrator has no kind param)', async () => {
     const raw = loadFixture('openai/happy.json');
     const v = validateManifest(raw);
-    if (!v.ok) throw new Error(v.error);
+    if (v.ok === false) throw new Error(v.error);
     const { spies, orchestrators } = makeSpyOrchestrators();
     await dispatchReconciliation(v.manifest, orchestrators);
     const arg = spies.openai.mock.calls[0][0];
@@ -159,7 +159,7 @@ describe('dispatchReconciliation — routes to the correct orchestrator', () => 
 
   test('audio orchestrator gets providerTag + kind', async () => {
     const v = validateManifest(loadFixture('audio/happy.json'));
-    if (!v.ok) throw new Error(v.error);
+    if (v.ok === false) throw new Error(v.error);
     const { spies, orchestrators } = makeSpyOrchestrators();
     await dispatchReconciliation(v.manifest, orchestrators);
     const arg = spies.audio.mock.calls[0][0];
@@ -169,7 +169,7 @@ describe('dispatchReconciliation — routes to the correct orchestrator', () => 
 
   test('image orchestrator gets providerTag + optional usageEventsProviderName', async () => {
     const v = validateManifest(loadFixture('image/happy.json'));
-    if (!v.ok) throw new Error(v.error);
+    if (v.ok === false) throw new Error(v.error);
     const { spies, orchestrators } = makeSpyOrchestrators();
     await dispatchReconciliation(v.manifest, orchestrators);
     const arg = spies.image.mock.calls[0][0];
@@ -179,7 +179,7 @@ describe('dispatchReconciliation — routes to the correct orchestrator', () => 
 
   test('gemini gcb_export passes projectOrgMap when provided', async () => {
     const v = validateManifest(loadFixture('gemini/happy.json'));
-    if (!v.ok) throw new Error(v.error);
+    if (v.ok === false) throw new Error(v.error);
     const { spies, orchestrators } = makeSpyOrchestrators();
     await dispatchReconciliation(v.manifest, orchestrators);
     const arg = spies.gemini.mock.calls[0][0];
@@ -188,7 +188,7 @@ describe('dispatchReconciliation — routes to the correct orchestrator', () => 
 
   test('stripe orchestrator receives kind but no rates field', async () => {
     const v = validateManifest(loadFixture('stripe/happy.json'));
-    if (!v.ok) throw new Error(v.error);
+    if (v.ok === false) throw new Error(v.error);
     const { spies, orchestrators } = makeSpyOrchestrators();
     await dispatchReconciliation(v.manifest, orchestrators);
     const arg = spies.stripe.mock.calls[0][0];
@@ -210,7 +210,7 @@ describe('fixtures — every committed fixture validates and dispatches', () => 
     const raw = loadFixture(`${provider}/${scenario}.json`);
     const v = validateManifest(raw);
     expect(v.ok).toBe(true);
-    if (!v.ok) throw new Error(v.error);
+    if (v.ok === false) throw new Error(v.error);
     const { orchestrators } = makeSpyOrchestrators();
     const r = await dispatchReconciliation(v.manifest, orchestrators);
     expect(r.ok).toBe(true);
@@ -231,19 +231,19 @@ describe('assertLocalhostOnly', () => {
   test('rejects when SUPABASE_URL is not set', () => {
     const r = assertLocalhostOnly({});
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toBe('no_supabase_url_set');
+    if (r.ok === false) expect(r.error).toBe('no_supabase_url_set');
   });
 
   test('rejects when SUPABASE_URL is non-local', () => {
     const r = assertLocalhostOnly({ SUPABASE_URL: 'https://klkiseupptzbecbxwrky.supabase.co' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/non_local_supabase_url_blocked/);
+    if (r.ok === false) expect(r.error).toMatch(/non_local_supabase_url_blocked/);
   });
 
   test('rejects when localhost but RECONCILE_LOCAL_RUNNER not set', () => {
     const r = assertLocalhostOnly({ SUPABASE_URL: 'http://127.0.0.1:54321' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/RECONCILE_LOCAL_RUNNER=1 not set/);
+    if (r.ok === false) expect(r.error).toMatch(/RECONCILE_LOCAL_RUNNER=1 not set/);
   });
 
   test('accepts 127.0.0.1 with opt-in flag', () => {
@@ -262,7 +262,7 @@ describe('assertLocalhostOnly', () => {
 describe('dispatchReconciliation — error propagation', () => {
   test('orchestrator throws → DispatchOutcome.ok=false with error', async () => {
     const v = validateManifest(loadFixture('openai/happy.json'));
-    if (!v.ok) throw new Error(v.error);
+    if (v.ok === false) throw new Error(v.error);
     const orchestrators: DispatchOrchestrators = {
       openai:    jest.fn(async () => { throw new Error('synthetic_db_failure'); }) as never,
       anthropic: jest.fn() as never,
@@ -273,7 +273,7 @@ describe('dispatchReconciliation — error propagation', () => {
     };
     const r = await dispatchReconciliation(v.manifest, orchestrators);
     expect(r.ok).toBe(false);
-    if (!r.ok) {
+    if (r.ok === false) {
       expect(r.provider).toBe('openai');
       expect(r.error).toBe('synthetic_db_failure');
     }

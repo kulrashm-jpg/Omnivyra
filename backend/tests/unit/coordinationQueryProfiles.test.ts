@@ -66,7 +66,7 @@ describe('WS-2D — framework', () => {
     const { profiles } = await build();
     const r = await profiles.timeline('');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('TENANT_REQUIRED');
+    if (r.ok === false) expect(r.error.code).toBe('TENANT_REQUIRED');
   });
 
   it('wraps every response in the canonical envelope', async () => {

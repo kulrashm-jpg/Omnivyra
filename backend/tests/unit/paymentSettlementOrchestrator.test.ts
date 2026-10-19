@@ -129,12 +129,12 @@ describe('settlement — webhook normalization', () => {
   test('missing session reference → invalid', () => {
     const r = normalizeSettlementWebhook('razorpay', razorpay('payment.captured', 'captured', ''));
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('missing_session_reference');
+    if (r.ok === false) expect(r.reason).toBe('missing_session_reference');
   });
   test('unmapped provider status → invalid (no silent fallthrough)', () => {
     const r = normalizeSettlementWebhook('cashfree', cashfree('WEIRD', 'TELEPORTED'));
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain('unmapped_status');
+    if (r.ok === false) expect(r.reason).toContain('unmapped_status');
   });
   test('normalizedStatus is ALWAYS one of the 7 internal states (no provider leakage)', () => {
     const all = [

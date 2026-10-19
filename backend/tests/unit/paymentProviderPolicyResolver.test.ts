@@ -123,7 +123,7 @@ describe('resolver — disabled exclusion', () => {
     __rows = [row('stripe', { enabled: false })];
     const gate = await isProviderAvailableForCheckout('stripe');
     expect(gate.ok).toBe(false);
-    if (!gate.ok) expect(gate.reason).toBe('provider_disabled');
+    if (gate.ok === false) expect(gate.reason).toBe('provider_disabled');
   });
 });
 
@@ -144,7 +144,7 @@ describe('resolver — maintenance-mode filtering', () => {
     __rows = [row('razorpay', { enabled: true, maintenance_mode: true })];
     const gate = await isProviderAvailableForCheckout('razorpay');
     expect(gate.ok).toBe(false);
-    if (!gate.ok) expect(gate.reason).toBe('provider_in_maintenance');
+    if (gate.ok === false) expect(gate.reason).toBe('provider_in_maintenance');
   });
 });
 
@@ -175,7 +175,7 @@ describe('resolver — geography filtering', () => {
     __rows = [row('razorpay', { enabled: true, supported_countries: ['IN'] })];
     const gate = await isProviderAvailableForCheckout('razorpay', { country: 'DE' });
     expect(gate.ok).toBe(false);
-    if (!gate.ok) expect(gate.reason).toBe('provider_geography_unsupported');
+    if (gate.ok === false) expect(gate.reason).toBe('provider_geography_unsupported');
   });
 });
 
@@ -292,6 +292,6 @@ describe('resolver — geographyKnown conservative fallback', () => {
     __rows = [row('razorpay', { enabled: true, supported_countries: ['IN'] })];
     const gate = await isProviderAvailableForCheckout('razorpay', { geographyKnown: false });
     expect(gate.ok).toBe(false);
-    if (!gate.ok) expect(gate.reason).toBe('provider_geography_unsupported');
+    if (gate.ok === false) expect(gate.reason).toBe('provider_geography_unsupported');
   });
 });

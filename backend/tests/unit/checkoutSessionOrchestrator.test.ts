@@ -98,19 +98,19 @@ describe('orchestrator — input validation', () => {
     const { deps } = makeDeps();
     const r = await orchestrateCheckoutSession({ ...BASE_ARGS, intentType: 'mystery' as any }, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('invalid_intent_type');
+    if (r.ok === false) expect(r.code).toBe('invalid_intent_type');
   });
   test('empty reference → rejected', async () => {
     const { deps } = makeDeps();
     const r = await orchestrateCheckoutSession({ ...BASE_ARGS, reference: '  ' }, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('invalid_reference');
+    if (r.ok === false) expect(r.code).toBe('invalid_reference');
   });
   test('unknown provider → rejected', async () => {
     const { deps } = makeDeps();
     const r = await orchestrateCheckoutSession({ ...BASE_ARGS, provider: 'paypal' as any }, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('unknown_provider');
+    if (r.ok === false) expect(r.code).toBe('unknown_provider');
   });
 });
 
@@ -119,21 +119,21 @@ describe('orchestrator — provider eligibility / governance enforcement', () =>
     const { deps } = makeDeps({ availableProviders: [], gateReason: 'provider_disabled' });
     const r = await orchestrateCheckoutSession(BASE_ARGS, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('provider_disabled');
+    if (r.ok === false) expect(r.code).toBe('provider_disabled');
   });
 
   test('maintenance-mode provider → provider_in_maintenance rejection', async () => {
     const { deps } = makeDeps({ availableProviders: [], gateReason: 'provider_in_maintenance' });
     const r = await orchestrateCheckoutSession(BASE_ARGS, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('provider_in_maintenance');
+    if (r.ok === false) expect(r.code).toBe('provider_in_maintenance');
   });
 
   test('geography-unsupported provider → provider_geography_unsupported rejection', async () => {
     const { deps } = makeDeps({ availableProviders: [], gateReason: 'provider_geography_unsupported' });
     const r = await orchestrateCheckoutSession(BASE_ARGS, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('provider_geography_unsupported');
+    if (r.ok === false) expect(r.code).toBe('provider_geography_unsupported');
   });
 
   test('provider absent from governance → not exposed (rejected, not created)', async () => {
@@ -209,7 +209,7 @@ describe('orchestrator — NOT_IMPLEMENTED passthrough normalization', () => {
     });
     const r = await orchestrateCheckoutSession(BASE_ARGS, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('provider_error');
+    if (r.ok === false) expect(r.code).toBe('provider_error');
   });
 });
 
@@ -267,7 +267,7 @@ describe('orchestrator — amount-resolution rejection', () => {
     const { deps, dispatchCalls } = makeDeps();
     const r = await orchestrateCheckoutSession({ ...BASE_ARGS, reference: 'topup_does_not_exist' }, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('unknown_reference');
+    if (r.ok === false) expect(r.code).toBe('unknown_reference');
     expect(dispatchCalls).toHaveLength(0);
   });
 
@@ -275,7 +275,7 @@ describe('orchestrator — amount-resolution rejection', () => {
     const { deps, dispatchCalls } = makeDeps();
     const r = await orchestrateCheckoutSession({ ...BASE_ARGS, reference: 'topup_legacy_pack' }, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('disabled_reference');
+    if (r.ok === false) expect(r.code).toBe('disabled_reference');
     expect(dispatchCalls).toHaveLength(0);
   });
 
@@ -283,7 +283,7 @@ describe('orchestrator — amount-resolution rejection', () => {
     const { deps, dispatchCalls } = makeDeps();
     const r = await orchestrateCheckoutSession({ ...BASE_ARGS, reference: 'Bad Ref!' }, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('malformed_reference');
+    if (r.ok === false) expect(r.code).toBe('malformed_reference');
     expect(dispatchCalls).toHaveLength(0);
   });
 
@@ -302,7 +302,7 @@ describe('orchestrator — provider/currency compatibility enforcement', () => {
     const { deps, dispatchCalls } = makeDeps({ governedCurrencies: ['USD'] });
     const r = await orchestrateCheckoutSession(BASE_ARGS, deps);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('provider_currency_incompatible');
+    if (r.ok === false) expect(r.code).toBe('provider_currency_incompatible');
     // Rejected BEFORE dispatchCheckout — no provider session created.
     expect(dispatchCalls).toHaveLength(0);
   });

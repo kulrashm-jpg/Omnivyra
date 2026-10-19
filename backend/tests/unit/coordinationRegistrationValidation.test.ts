@@ -161,7 +161,7 @@ describe('WS-2B-validate — Phase 2: lifecycle validation', () => {
       const p = makePipeline();
       const r = await p.advanceLifecycle('', 'any', 'generated');
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.error.code).toBe('TENANT_REQUIRED');
+      if (r.ok === false) expect(r.error.code).toBe('TENANT_REQUIRED');
     });
   });
 });

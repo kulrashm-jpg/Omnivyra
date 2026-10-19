@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-04",
+  "generated": "2026-10-09",
   "typescript": "6.0.3",
   "note": [
     "PB-011 per-error identity baseline for the backend certification surface.",
@@ -21,7 +21,7 @@
       "files": {}
     },
     "tsconfig.backend-tests.json": {
-      "total": 259,
+      "total": 162,
       "files": {
         "backend/tests/integration/campaign_preemption_execution.test.ts": [
           {
@@ -176,13 +176,6 @@
             "count": 2
           }
         ],
-        "backend/tests/orchestration/distributed/executionClaimingEngine.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'reason' does not exist on type 'ClaimOwnershipOutcome'.",
-            "count": 2
-          }
-        ],
         "backend/tests/unit/activityAiIsolation.test.ts": [
           {
             "code": "TS2345",
@@ -191,16 +184,6 @@
           }
         ],
         "backend/tests/unit/aiSafetyWave1.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'ParseResult<{ b: number; }>'.",
-            "count": 1
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'ParseResult<unknown>'.",
-            "count": 2
-          },
           {
             "code": "TS2339",
             "message": "Property 'trust_scorable' does not exist on type '{ source_type: string; source_url: any; source_credibility: number; confidence_score: number; } & { __provenance: ProvenanceVerdict; }'.",
@@ -214,13 +197,6 @@
             "count": 2
           }
         ],
-        "backend/tests/unit/auth001PublicEmailDomains.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'reason' does not exist on type '{ valid: true; } | { valid: false; reason: string; }'.",
-            "count": 2
-          }
-        ],
         "backend/tests/unit/authorityVelocityHonestState.test.ts": [
           {
             "code": "TS2322",
@@ -228,51 +204,7 @@
             "count": 1
           }
         ],
-        "backend/tests/unit/billingAmountResolver.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'ResolveAmountResult'.",
-            "count": 6
-          }
-        ],
-        "backend/tests/unit/billingSchemaVerification.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'body' does not exist on type '{ ready: true; } | { ready: false; status: 503; body: { error: string; code: \"BILLING_SCHEMA_NOT_READY\"; remediation: string; }; }'.",
-            "count": 1
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'status' does not exist on type '{ ready: true; } | { ready: false; status: 503; body: { error: string; code: \"BILLING_SCHEMA_NOT_READY\"; remediation: string; }; }'.",
-            "count": 1
-          }
-        ],
         "backend/tests/unit/blueprintExecutionResolver.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'blueprint' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
-            "count": 2
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'blueprint' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; execution_source: \"validated_blueprint\"; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
-            "count": 1
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'execution_source' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; execution_source: \"validated_blueprint\"; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
-            "count": 1
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'failure' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
-            "count": 3
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'failure' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; execution_source: \"validated_blueprint\"; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
-            "count": 1
-          },
           {
             "code": "TS2345",
             "message": "Argument of type '{ campaign_blueprint_validated: any; campaign_blueprint: { duration_weeks: number; weekly_plan: { week_number: number; stage: string; stage_objective: string; psychological_goal: string; momentum_level: string; primary_recommendations: any[]; supporting_recommendations: any[]; }[]; progression_summary: string; }; }' is not assignable to parameter of type 'RecommendationResultLike'.",
@@ -325,46 +257,11 @@
             "count": 3
           }
         ],
-        "backend/tests/unit/cashfreePhonepeProviders.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'OrchestrateCheckoutResult'.",
-            "count": 3
-          }
-        ],
-        "backend/tests/unit/checkoutSessionOrchestrator.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'OrchestrateCheckoutResult'.",
-            "count": 11
-          }
-        ],
-        "backend/tests/unit/checkoutSessionPersistence.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'OrchestrateCheckoutResult'.",
-            "count": 1
-          }
-        ],
         "backend/tests/unit/contentIntelligenceAlignment.test.ts": [
           {
             "code": "TS2740",
             "message": "Type '{ week_number: number; theme: string; trend_influence: undefined[]; }' is missing the following properties from type '{ week_number: number; theme: string; campaign_objective: CampaignObjective; trend_influence: string[]; platforms: string[]; content_types: Record<string, string[]>; ... 4 more ...; version: number; }': campaign_objective, platforms, content_types, frequency_per_platform, and 4 more.",
             "count": 2
-          }
-        ],
-        "backend/tests/unit/coordinationContinuityFoundation.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'CoordinationResult<SemanticRoot>'.",
-            "count": 1
-          }
-        ],
-        "backend/tests/unit/coordinationFoundation.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'CoordinationResult<CommunicationRecord>'.",
-            "count": 1
           }
         ],
         "backend/tests/unit/coordinationIntelligence.test.ts": [
@@ -379,29 +276,12 @@
             "code": "TS2322",
             "message": "Type '\"generated\"' is not assignable to type 'GenerationStage'.",
             "count": 1
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'CoordinationResult<ProfileResponse<TimelineProfileData>>'.",
-            "count": 1
-          }
-        ],
-        "backend/tests/unit/coordinationRegistrationPipeline.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'CoordinationResult<RegistrationOutcome>'.",
-            "count": 1
           }
         ],
         "backend/tests/unit/coordinationRegistrationValidation.test.ts": [
           {
             "code": "TS2322",
             "message": "Type '\"generated\"' is not assignable to type 'GenerationStage'.",
-            "count": 1
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'CoordinationResult<{ changed: boolean; state: CommunicationLifecycleState; }>'.",
             "count": 1
           }
         ],
@@ -443,39 +323,6 @@
             "code": "TS2352",
             "message": "Conversion of type 'CommunicationStrategy' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
             "count": 1
-          }
-        ],
-        "backend/tests/unit/creatorEnterpriseClosure.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'errors' does not exist on type 'CreatorPublishValidationResult'.",
-            "count": 1
-          }
-        ],
-        "backend/tests/unit/creatorEnterpriseRuntimeOps.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'errors' does not exist on type 'CreatorPublishValidationResult'.",
-            "count": 1
-          }
-        ],
-        "backend/tests/unit/creatorRolloutClosure.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'errors' does not exist on type 'CreatorLivePublishValidationResult'.",
-            "count": 1
-          }
-        ],
-        "backend/tests/unit/creditApprovalService.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'ProposeApprovalResult'.",
-            "count": 1
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'SignApprovalResult'.",
-            "count": 2
           }
         ],
         "backend/tests/unit/csa002ReadinessHistory.test.ts": [
@@ -604,51 +451,11 @@
             "count": 1
           }
         ],
-        "backend/tests/unit/hiddenBillingCatalogParity.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'ResolveAmountResult'.",
-            "count": 2
-          }
-        ],
-        "backend/tests/unit/idempotencySafeRetry.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'SafeRetryResult'.",
-            "count": 5
-          }
-        ],
-        "backend/tests/unit/mediaUploadValidationService.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'errors' does not exist on type 'MediaUploadValidation'.",
-            "count": 6
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'reason' does not exist on type '{ ok: true; sniffed: string; claimed: string; } | { ok: false; sniffed: string; claimed: string; reason: string; }'.",
-            "count": 1
-          }
-        ],
         "backend/tests/unit/onboard001rLifecycleAndReadiness.test.ts": [
           {
             "code": "TS2322",
             "message": "Type '{ id: JourneyStageId; title: string; why: string; mandatory: boolean; skippable: boolean; dismissible: boolean; dependsOn: JourneyStageId[]; ... 7 more ...; overriddenAt?: string | null; }' is not assignable to type 'JourneyStageView'.",
             "count": 1
-          }
-        ],
-        "backend/tests/unit/paymentProviderPolicyResolver.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'reason' does not exist on type '{ ok: true; } | { ok: false; reason: string; }'.",
-            "count": 4
-          }
-        ],
-        "backend/tests/unit/paymentSettlementOrchestrator.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'reason' does not exist on type 'NormalizeResult'.",
-            "count": 2
           }
         ],
         "backend/tests/unit/perplexityAdapterCapabilityAdoption.test.ts": [
@@ -689,18 +496,6 @@
             "count": 1
           }
         ],
-        "backend/tests/unit/platformContentCapability.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'ValidationResult'.",
-            "count": 5
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'message' does not exist on type 'ValidationResult'.",
-            "count": 1
-          }
-        ],
         "backend/tests/unit/platformHistory.test.ts": [
           {
             "code": "TS2741",
@@ -727,23 +522,6 @@
             "code": "TS2578",
             "message": "Unused '@ts-expect-error' directive.",
             "count": 1
-          }
-        ],
-        "backend/tests/unit/reconciliationRunner.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type '{ ok: true; } | { ok: false; error: string; }'.",
-            "count": 3
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type '{ ok: true; manifest: ReconciliationManifest; } | { ok: false; error: string; }'.",
-            "count": 10
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'DispatchOutcome'.",
-            "count": 2
           }
         ],
         "backend/tests/unit/reportScoreModelService.test.ts": [
@@ -790,25 +568,6 @@
             "code": "TS2739",
             "message": "Type '{ dimensions: { strategy_id: string; strategy_family: \"quote\"; content_type: \"image\"; layout_type: \"image-overlay\"; render_strategy_id: string; purpose_family: \"quote\"; }; companyId: string; campaignId: string; creatorId: string; platform: string; mediaBundleMetadata: null; }' is missing the following properties from type 'StrategyAttribution': variantId, variantFamily",
             "count": 1
-          }
-        ],
-        "backend/tests/unit/stripeWebhookService.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'reason' does not exist on type 'VerifySignatureResult'.",
-            "count": 4
-          }
-        ],
-        "backend/tests/unit/structuredOutputAdoptionWave1c.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'ParseResult<{ b: number; }>'.",
-            "count": 1
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type 'ParseResult<unknown>'.",
-            "count": 2
           }
         ],
         "backend/tests/unit/trustGracefulDegradation.test.ts": [

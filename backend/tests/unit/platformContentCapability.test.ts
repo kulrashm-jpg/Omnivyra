@@ -228,7 +228,7 @@ describe('platformContentValidator — server-side hard validation', () => {
       payload: { hasText: true, mediaUrls: [] },
     });
     expect(result.ok).toBe(false);
-    if (result.ok) return;
+    if (result.ok === true) return;
     expect(result.code).toBe('CAPABILITY_NOT_SUPPORTED');
     expect(result.platform).toBe('instagram');
   });
@@ -267,7 +267,7 @@ describe('platformContentValidator — server-side hard validation', () => {
       payload: { hasText: true },
     });
     expect(result.ok).toBe(false);
-    if (result.ok) return;
+    if (result.ok === true) return;
     expect(result.code).toBe('PLATFORM_NOT_REGISTERED');
   });
 
@@ -278,7 +278,7 @@ describe('platformContentValidator — server-side hard validation', () => {
       payload: {},
     });
     expect(result.ok).toBe(false);
-    if (result.ok) return;
+    if (result.ok === true) return;
     expect(result.code).toBe('CAPABILITY_UNRESOLVED');
   });
 
@@ -300,7 +300,7 @@ describe('platformContentValidator — server-side hard validation', () => {
       payload: { hasText: true },
     });
     expect(result.ok).toBe(false);
-    if (result.ok) return;
+    if (result.ok === true) return;
     expect(result.code).toBe('CAPABILITY_NOT_SUPPORTED');
   });
 
@@ -363,7 +363,7 @@ describe('invariants — registry integrity (Round 2 Phase 5)', () => {
           },
         });
         expect(result.ok).toBe(true);
-        if (!result.ok) {
+        if (result.ok === false) {
           // Surface which combo failed for easier debugging.
           throw new Error(`validator rejected ${platform}/${cap}: ${result.code} ${result.message}`);
         }

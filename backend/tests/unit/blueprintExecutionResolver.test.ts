@@ -103,7 +103,7 @@ describe('blueprintExecutionResolver', () => {
     it('returns safe failure when blueprint is null', () => {
       const out = checkExecutionBlueprintGuard(null);
       expect(out.ok).toBe(false);
-      expect(out.failure).toEqual({
+      if (out.ok === false) expect(out.failure).toEqual({
         status: 'no_execution_blueprint',
         reason: 'campaign blueprint missing or invalid',
       });
@@ -112,7 +112,7 @@ describe('blueprintExecutionResolver', () => {
     it('returns safe failure when blueprint is undefined', () => {
       const out = checkExecutionBlueprintGuard(undefined);
       expect(out.ok).toBe(false);
-      expect(out.failure.status).toBe('no_execution_blueprint');
+      if (out.ok === false) expect(out.failure.status).toBe('no_execution_blueprint');
     });
 
     it('returns safe failure when weekly_plan is empty', () => {
@@ -122,15 +122,17 @@ describe('blueprintExecutionResolver', () => {
         progression_summary: 'x',
       });
       expect(out.ok).toBe(false);
-      expect(out.failure.status).toBe('no_execution_blueprint');
+      if (out.ok === false) expect(out.failure.status).toBe('no_execution_blueprint');
     });
 
     it('returns ok when blueprint has valid weekly_plan', () => {
       const bp = mkBlueprint(4);
       const out = checkExecutionBlueprintGuard(bp);
       expect(out.ok).toBe(true);
-      expect(out.blueprint).toBe(bp);
-      expect(out.blueprint.weekly_plan).toHaveLength(4);
+      if (out.ok === true) {
+        expect(out.blueprint).toBe(bp);
+        expect(out.blueprint.weekly_plan).toHaveLength(4);
+      }
     });
   });
 
@@ -138,7 +140,7 @@ describe('blueprintExecutionResolver', () => {
     it('returns execution guard failure when missing', () => {
       const out = resolveAndGuardExecutionBlueprint(null);
       expect(out.ok).toBe(false);
-      expect(out.failure).toEqual({
+      if (out.ok === false) expect(out.failure).toEqual({
         status: 'no_execution_blueprint',
         reason: 'campaign blueprint missing or invalid',
       });
@@ -152,8 +154,10 @@ describe('blueprintExecutionResolver', () => {
       };
       const out = resolveAndGuardExecutionBlueprint(result);
       expect(out.ok).toBe(true);
-      expect(out.blueprint).toBe(validated);
-      expect(out.execution_source).toBe(EXECUTION_SOURCE_VALIDATED);
+      if (out.ok === true) {
+        expect(out.blueprint).toBe(validated);
+        expect(out.execution_source).toBe(EXECUTION_SOURCE_VALIDATED);
+      }
     });
   });
 });

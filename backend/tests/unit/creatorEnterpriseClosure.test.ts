@@ -194,7 +194,7 @@ describe('creator enterprise closure', () => {
       scheduledPostId: 'sp1',
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) {
+    if (result.ok === false) {
       expect(result.errors).toEqual(expect.arrayContaining([
         'attachment_0_missing_renderer_identity',
         'attachment_0_missing_render_manifest',

@@ -94,7 +94,7 @@ describe('ExecutionClaimingEngine', () => {
     const r = await h.engine.claimNext({ workerId: 'w' });
     expect(r).not.toBeNull();
     expect(r!.ownership.ok).toBe(false);
-    if (!r!.ownership.ok) expect(r!.ownership.reason).toBe('execution_missing');
+    if (r!.ownership.ok === false) expect(r!.ownership.reason).toBe('execution_missing');
   });
 
   test('split-brain: live lease causes takeover refusal + queue entry release', async () => {
@@ -107,7 +107,7 @@ describe('ExecutionClaimingEngine', () => {
     const r = await h.engine.claimNext({ workerId: 'w_b' });
     expect(r).not.toBeNull();
     expect(r!.ownership.ok).toBe(false);
-    if (!r!.ownership.ok) expect(r!.ownership.reason).toBe('lease_takeover_refused');
+    if (r!.ownership.ok === false) expect(r!.ownership.reason).toBe('lease_takeover_refused');
     // Queue entry should be back to queued for a future attempt.
     const after = await h.queue.get(r!.queueEntry.queueEntryId);
     expect(after?.status).toBe('queued');

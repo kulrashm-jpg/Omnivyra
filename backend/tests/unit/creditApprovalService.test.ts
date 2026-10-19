@@ -41,7 +41,7 @@ describe('creditApprovalService', () => {
         payload: { organizationId: 'o', reason: 'r', amountCredits: 0 },
       });
       expect(res.ok).toBe(false);
-      if (!res.ok) expect(res.code).toBe('INVALID_AMOUNT');
+      if (res.ok === false) expect(res.code).toBe('INVALID_AMOUNT');
     });
 
     it('auto-approves when required_approvals = 1', async () => {
@@ -92,14 +92,14 @@ describe('creditApprovalService', () => {
       (supabase.rpc as AnyMock).mockResolvedValueOnce({ data: null, error: { message: 'APPROVAL_SELF_NOT_ALLOWED' } });
       const res = await signApproval({ approvalId: 'a', approverId: 'u', decision: 'approve' });
       expect(res.ok).toBe(false);
-      if (!res.ok) expect(res.code).toBe('SELF_SIGN_BLOCKED');
+      if (res.ok === false) expect(res.code).toBe('SELF_SIGN_BLOCKED');
     });
 
     it('classifies expired', async () => {
       (supabase.rpc as AnyMock).mockResolvedValueOnce({ data: null, error: { message: 'APPROVAL_EXPIRED' } });
       const res = await signApproval({ approvalId: 'a', approverId: 'u', decision: 'approve' });
       expect(res.ok).toBe(false);
-      if (!res.ok) expect(res.code).toBe('EXPIRED');
+      if (res.ok === false) expect(res.code).toBe('EXPIRED');
     });
 
     it('returns success payload on successful sign', async () => {

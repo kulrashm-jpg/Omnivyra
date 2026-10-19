@@ -40,12 +40,12 @@ describe('WAVE-1 §C1 — Canonical safe-parse', () => {
   it('returns a typed AiError (never throws) on non-JSON', () => {
     const r = parseStructured('the weather is nice');
     expect(r.ok).toBe(false);
-    if (!r.ok) { expect(r.error.code).toBe('VALIDATION_BAD_OUTPUT'); expect(isAiError(r.error)).toBe(true); }
+    if (r.ok === false) { expect(r.error.code).toBe('VALIDATION_BAD_OUTPUT'); expect(isAiError(r.error)).toBe(true); }
   });
   it('rejects when schema validation fails', () => {
     const r = parseStructured('{"a":1}', { validate: (v): v is { b: number } => typeof (v as any)?.b === 'number' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('VALIDATION_REJECTED');
+    if (r.ok === false) expect(r.error.code).toBe('VALIDATION_REJECTED');
   });
   it('parseStructuredOr degrades gracefully to a fallback', () => {
     expect(parseStructuredOr('garbage', { fallback: true })).toEqual({ fallback: true });

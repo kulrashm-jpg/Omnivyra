@@ -19,7 +19,7 @@ describe('WAVE-1C-001 — structured output adoption', () => {
   it('malformed JSON → typed AiError, no throw', () => {
     const r = parseModelOutput('not json at all', { surface: 't' });
     expect(r.ok).toBe(false);
-    if (!r.ok) { expect(r.error.code).toBe('VALIDATION_BAD_OUTPUT'); expect(r.error.category).toBe('validation'); }
+    if (r.ok === false) { expect(r.error.code).toBe('VALIDATION_BAD_OUTPUT'); expect(r.error.category).toBe('validation'); }
   });
   it('partial/truncated JSON → typed AiError', () => {
     const r = parseModelOutput('{"a":1, "b":', { surface: 't' });
@@ -28,7 +28,7 @@ describe('WAVE-1C-001 — structured output adoption', () => {
   it('schema mismatch → VALIDATION_REJECTED', () => {
     const r = parseModelOutput('{"a":1}', { surface: 't', validate: (v): v is { b: number } => typeof (v as any)?.b === 'number' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('VALIDATION_REJECTED');
+    if (r.ok === false) expect(r.error.code).toBe('VALIDATION_REJECTED');
   });
   it('empty output → typed failure (no throw)', () => {
     expect(parseModelOutput('', { surface: 't' }).ok).toBe(false);

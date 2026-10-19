@@ -108,7 +108,7 @@ describe('WS-2B — registerCommunication (idempotency)', () => {
       const p = makePipeline();
       const r = await p.registerCommunication(req({ companyId: '' }));
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.error.code).toBe('TENANT_REQUIRED');
+      if (r.ok === false) expect(r.error.code).toBe('TENANT_REQUIRED');
     });
   });
 
