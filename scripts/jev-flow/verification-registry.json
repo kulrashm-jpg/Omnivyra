@@ -35,6 +35,13 @@
       "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/report1"],
       "evidence_kind": "test_run",
       "timeout_ms": 900000
+    },
+    {
+      "id": "ca003-p0.unit",
+      "description": "CA-003 P0 tenant-ownership route and service tests (backend/tests/unit/ca003P0*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/ca003P0"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 600000
     }
   ]
 }

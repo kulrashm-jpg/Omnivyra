@@ -407,6 +407,86 @@ describe('gov start', () => {
   });
 });
 
+// ---------------------------------------------------------------- ready
+
+describe('gov ready', () => {
+  /** Every creating dependency throws, so a call fails the run as well as the assertion. */
+  function readyCtx(): Ctx & { creators: jest.Mock[] } {
+    const never = () => jest.fn(async () => { throw new Error('ready must not create or resolve anything'); });
+    const createWorktree = never();
+    const branchExists = never();
+    const resolveCommit = never();
+    const ctx = makeCtx({ createWorktree, branchExists, resolveCommit });
+    return { ...ctx, creators: [createWorktree, branchExists, resolveCommit] };
+  }
+
+  function expectNothingCreated(ctx: Ctx & { creators: jest.Mock[] }): void {
+    for (const m of ctx.creators) expect(m).not.toHaveBeenCalled();
+    expect(listFiles(ctx.e.home)).toEqual([]);
+    expect(ledger(ctx.e)).toEqual([]);
+    expect(ctx.world.updates).toEqual([]);
+    expect(ctx.world.otherCalls).toEqual([]);
+  }
+
+  it('ready Story → OK 0 through the preflighted reader identity; nothing created', async () => {
+    const ctx = readyCtx();
+    const r = await gov(ctx, ['ready', '--story', STORY]);
+    expect(r.code).toBe(0);
+    expect(r.result).toEqual({ verb: 'ready', story: STORY, status: 'OK' });
+    expect(r.out.join('\n')).toContain(`Story ${STORY} is READY; nothing was created`);
+    expect(ctx.deps.jiraQuery).toHaveBeenCalledTimes(1);
+    expect(ctx.world.tokensUsed).toEqual([READER_TOKEN]);
+    expectNothingCreated(ctx);
+  });
+
+  it('Story with no AC → NOT_READY 10 with findings; nothing created', async () => {
+    const ctx = readyCtx();
+    ctx.world.acs = [];
+    const r = await gov(ctx, ['ready', '--story', STORY]);
+    expect(r.code).toBe(GOV_EXIT.NOT_READY);
+    expect(r.err.join('\n')).toContain('NO_ACCEPTANCE_CRITERIA');
+    expect(r.result.findings).toEqual(expect.arrayContaining(['NO_ACCEPTANCE_CRITERIA']));
+    expectNothingCreated(ctx);
+  });
+
+  it('registry id absent from this checkout\'s registry → NOT_READY 10 (UNKNOWN_REGISTRY_ID)', async () => {
+    const ctx = readyCtx();
+    ctx.world.story = storyIssue({ [STORY_FIELDS.verificationRequirements]: 't.pass\nnot.in.registry' });
+    const r = await gov(ctx, ['ready', '--story', STORY]);
+    expect(r.code).toBe(10);
+    expect(r.err.join('\n')).toContain('UNKNOWN_REGISTRY_ID');
+    expectNothingCreated(ctx);
+  });
+
+  it('identity: missing / wrong identity, missing token or an over-privileged reader token → REFUSED 11 before any Jira read', async () => {
+    const ctx = readyCtx();
+    const args = ['ready', '--story', STORY];
+    const noId = await gov(ctx, args, { ...ctx.e.env, JEV_JIRA_IDENTITY: undefined });
+    const bad = await gov(ctx, args, { ...ctx.e.env, JEV_JIRA_IDENTITY: 'provision' });
+    const noToken = await gov(ctx, args, { ...ctx.e.env, JEV_READER_TOKEN: undefined });
+    const adv = await gov(ctx, args, { ...ctx.e.env, JEV_JIRA_IDENTITY: 'advisory', JEV_ADVISORY_TOKEN: ADVISORY_TOKEN });
+    const over = await gov(ctx, args, { ...ctx.e.env, JEV_READER_TOKEN: ADVISORY_TOKEN });
+    for (const r of [noId, bad, noToken, adv, over]) {
+      expect(r.code).toBe(11);
+      expect([...r.out, ...r.err].join('\n')).not.toContain(ADVISORY_TOKEN);
+      expect([...r.out, ...r.err].join('\n')).not.toContain(READER_TOKEN);
+    }
+    expect(noToken.err.join('\n')).toContain('JEV_READER_TOKEN must be set');
+    expect(over.err.join('\n')).toContain('EDIT_ISSUES must NOT be granted');
+    expect(ctx.deps.jiraQuery).not.toHaveBeenCalled();
+    expectNothingCreated(ctx);
+  });
+
+  it('missing or invalid --story → usage 64; nothing read or created', async () => {
+    const ctx = readyCtx();
+    expect((await gov(ctx, ['ready'])).code).toBe(64);
+    expect((await gov(ctx, ['ready', '--story', 'OMNI-0'])).code).toBe(64);
+    expect((await gov(ctx, ['ready', '--story', 'not-a-key'])).code).toBe(64);
+    expect(ctx.deps.jiraClient).not.toHaveBeenCalled();
+    expectNothingCreated(ctx);
+  });
+});
+
 // ---------------------------------------------------------------- attach
 
 function writeTranscript(e: Env, cwd: string | null): string {

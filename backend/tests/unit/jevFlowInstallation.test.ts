@@ -95,7 +95,7 @@ describe('OMNI-13 AC-3 — every documented gov invocation matches the real CLI'
   const spec = cliSpec();
 
   it('the CLI usage text was parsed for every verb', () => {
-    expect(Object.keys(spec).sort()).toEqual(['attach', 'check-merge', 'judge', 'packet', 'start', 'submit', 'verify']);
+    expect(Object.keys(spec).sort()).toEqual(['attach', 'check-merge', 'judge', 'packet', 'ready', 'start', 'submit', 'verify']);
     expect([...spec.start.required]).toEqual(expect.arrayContaining(['--story', '--slug', '--repo']));
   });
 

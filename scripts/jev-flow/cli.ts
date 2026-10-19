@@ -3,6 +3,7 @@
  *
  *   node node_modules/tsx/dist/cli.mjs scripts/jev-flow/cli.ts <verb> [flags]
  *
+ *   ready        --story OMNI-n   (readiness only: GET-only Jira reads; creates nothing)
  *   start        --story OMNI-n --slug <slug> --repo <git repo> [--base <ref>] [--worktree-root <dir>]
  *   attach       --story OMNI-n --session <uuid> [--worktree <path>] [--base <ref>] [--fork]
  *                (--worktree defaults to the current directory; without --base and
@@ -113,6 +114,7 @@ const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/~^@-]*$/;
 
 const USAGE = [
   'usage: cli.ts <verb> [flags]',
+  '  ready       --story OMNI-<n>',
   '  start       --story OMNI-<n> --slug <slug> --repo <git repo> [--base <ref>] [--worktree-root <dir>]',
   '  attach      --story OMNI-<n> --session <uuid> [--worktree <path>] [--base <ref>] [--fork]',
   '  packet      --story OMNI-<n> --worktree <path> [--regenerate]',
@@ -316,6 +318,20 @@ async function adoptionBaselineProblem(git: GitProbe, worktree: string, story: s
 }
 
 // ---------------------------------------------------------------- verbs
+
+/**
+ * Readiness only, through the same reader identity, permission preflight and
+ * GET-only query as `start`. Never resolves a base and never creates a branch,
+ * worktree, packet or binding; GOV_HOME is not touched.
+ */
+async function cmdReady(run: Run, argv: string[]): Promise<number> {
+  const story = storyArg(argv);
+  if (!story) return usage(run, 'ready needs --story OMNI-<n>');
+  run.result.story = story;
+  const readiness = await readReadiness(run, story);
+  requireReady(run, readiness);
+  return finish(run, 'OK', `Story ${story} is READY; nothing was created`);
+}
 
 async function cmdStart(run: Run, argv: string[]): Promise<number> {
   const story = storyArg(argv);
@@ -861,6 +877,7 @@ export async function runGov(argv: string[], env: Record<string, string | undefi
   });
   const run: Run = { io, env, deps: resolved, result: { verb: verb ?? null } };
   const verbs: Record<string, (r: Run, a: string[]) => Promise<number>> = {
+    ready: cmdReady,
     start: cmdStart,
     attach: cmdAttach,
     packet: cmdPacket,
