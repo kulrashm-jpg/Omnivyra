@@ -52,10 +52,28 @@ describe('W5-3 images / W5-4 fonts', () => {
   test('render-blocking Google Fonts @import removed; next/font variables exposed; consumers migrated', () => {
     expect(read('styles/globals.css')).not.toContain('fonts.googleapis.com');
     const app = read('pages/_app.tsx');
-    expect(app).toContain("from 'next/font/google'");
-    expect(app).toContain("weight: ['400', '500', '600', '700', '800']"); // Inter parity with the removed @import
     expect(app).toContain('--font-inter');
     expect(app).toContain('--font-poppins');
+    // CB-12: the fonts are vendored (next/font/local); the build no longer fetches them from Google.
+    expect(app).not.toMatch(/from ['"]next\/font\/google['"]/);
+    expect(app).toContain("from '../styles/fonts/webFonts'");
+    const fonts = read('styles/fonts/webFonts.ts');
+    expect(fonts).not.toMatch(/from ['"]next\/font\/google['"]/);
+    expect(fonts).toContain("from 'next/font/local'");
+    // Same families (the @font-face names stay literal: inline styles reference them) and weights.
+    expect(fonts).toContain("{ prop: 'font-family', value: 'Inter' }");
+    expect(fonts).toContain("{ prop: 'font-family', value: 'Poppins' }");
+    expect(fonts).toContain("path: './inter/inter-latin-wght-normal.woff2', weight: '400 800'"); // Inter 400–800 (variable)
+    for (const w of ['600', '700', '800']) {
+      expect(fonts).toContain(`path: './poppins/poppins-latin-${w}-normal.woff2', weight: '${w}'`);
+    }
+    // Every subset face declares a real unicode-range (an undefined one renders as `unicode-range:undefined`).
+    const ranges = [...fonts.matchAll(/prop: 'unicode-range', value: '([^']*)'/g)].map((m) => m[1]);
+    expect(ranges).toHaveLength(10); // Inter: 7 subsets; Poppins: 3 subsets
+    for (const r of ranges) expect(r).toMatch(/^U\+[0-9A-F]/);
+    for (const rel of ['styles/fonts/inter/OFL.txt', 'styles/fonts/poppins/OFL.txt']) {
+      expect(read(rel)).toContain('SIL OPEN FONT LICENSE Version 1.1');
+    }
     // No orphaned literal font-family references remain on the migrated surfaces.
     for (const rel of ['components/landing/HeroSection.tsx', 'components/landing/MarketingLandingPageMain.tsx', 'pages/about.tsx']) {
       expect(read(rel)).not.toMatch(/fontFamily: "'(Poppins|Inter)'/);

@@ -32,22 +32,12 @@ import PageLoader from '../components/PageLoader';
 // consumers reference the CSS variables exposed below (landing/about inline
 // styles migrated in this wave). Kills the fonts.googleapis.com round-trip
 // on first paint of every page.
-import { Inter, Poppins } from 'next/font/google';
+// CB-12: the font files are now vendored (styles/fonts, via next/font/local), so
+// the build no longer downloads them from Google Fonts. Same families, weights,
+// display and CSS variables.
+import { interFont, poppinsFont } from '../styles/fonts/webFonts';
 import { initClientPerf, markRouteChange } from '../lib/observability/clientPerf';
 import { captureClickIds, ensureVisitorIds, recordJourneyEvent, recordJourneyPage } from '../lib/website/journeyIntelligence';
-
-const interFont = Inter({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700', '800'],
-  display: 'swap',
-  variable: '--font-inter',
-});
-const poppinsFont = Poppins({
-  subsets: ['latin'],
-  weight: ['600', '700', '800'],
-  display: 'swap',
-  variable: '--font-poppins',
-});
 import {
   WEBSITE_GA_MEASUREMENT_ID,
   flushQueuedWebsiteEvents,
