@@ -49,7 +49,7 @@ import { ownedDbTable } from '../../db/writeOwner';
 import { mayContact, type GovernanceType } from '../prospectIdentity/contactGovernance';
 import { loadGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
 import { recordContactGovernance, revokeContactGovernance } from '../prospectIdentity/contactGovernanceWriter';
-import { contactClaimTypesForChannel } from '../prospectIdentity/erasurePlan';
+import { resolveRecipientOwner } from '../prospectIdentity/recipientOwner';
 import {
   recordGovernanceFailClosed,
   recordGovernanceGateDecision,
@@ -118,83 +118,10 @@ class GovernanceStageError extends Error {
 }
 
 /**
- * W2-B / D-2 — WHO is this recipient, within this tenant?
- *
- * ─── THE DEFECT THIS CLOSES ───────────────────────────────────────────────
- * This seam is reached with a raw recipient and no identity, so it used to ask
- * `loadGovernanceRecords` for TARGET-anchored records only. A canonical record
- * anchored to a person with `target_normalized = NULL` was therefore
- * unmatchable here, and a person who unsubscribed was reported as not
- * suppressed. W2-A classified this C-1.
- *
- * ─── WHY `identity_claims`, AND WHY THIS IS NOT A SECOND IDENTITY MODEL ───
- * `identity_claims` is already the canonical endpoint-to-person store: it is
- * what `personErasure` reads to find a person's contact points, and its
- * `normalized_value` is produced by the SAME normalisers that
- * `normalizeGovernanceTarget` uses. So the reverse lookup is keyed on the
- * identical string the governance reader compares against. `claim_type` is
- * narrowed by `contactClaimTypesForChannel`, the same helper the erasure planner
- * uses to decide which contact points a channel can govern.
- *
- * ─── TENANT ───────────────────────────────────────────────────────────────
- * `organization_id` is the FIRST predicate. An endpoint that belongs to another
- * tenant's person resolves to nothing here, and even if it somehow did resolve,
- * `loadGovernanceRecords` and `mayContact` each filter on the tenant again.
- *
- * ─── THREE OUTCOMES, AND ONLY ONE OF THEM IS AN ERROR ─────────────────────
- *   resolved      — exactly one person claims this endpoint
- *   absent        — the table answered and no person claims it. NOT an error:
- *                   target-only matching legitimately remains in force
- *   `ok: false`   — the read failed, or two different persons claim the same
- *                   endpoint. We do not know whose restriction might apply, and
- *                   uncertainty must never become an allow
- *
- * Ambiguity should be unrepresentable — `uq_identity_claims_tenant_identity` is
- * unique on `(organization_id, claim_type, platform, normalized_value)` among
- * live rows — but it is checked rather than assumed, because a `'*'` channel
- * queries two claim types at once and the cost of being wrong here is
- * contacting someone who asked us not to.
+ * W2-B / D-2 — the person behind a recipient is resolved by
+ * `prospectIdentity/recipientOwner.resolveRecipientOwner` (WP3 / L1 moved it
+ * there unchanged so Path A and Path B share one lookup).
  */
-interface TargetPersonResolution {
-  /** FALSE means the person is UNKNOWN and the caller must fail closed. */
-  ok: boolean;
-  personId: string | null;
-  reason: string | null;
-}
-
-async function resolvePersonForTarget(
-  companyId: string,
-  channel: string,
-  normalizedTarget: string | null,
-): Promise<TargetPersonResolution> {
-  // Nothing to resolve from. Not a failure: `isSuppressed` has already refused
-  // an empty target, and a caller with no target has nothing to look up.
-  if (!normalizedTarget) return { ok: true, personId: null, reason: 'no_target_to_resolve' };
-
-  let res: { data?: unknown; error?: unknown };
-  try {
-    res = await ownedDbTable('identity_claims')
-      .select('person_id')
-      .eq('organization_id', companyId)          // TENANT FIRST, always
-      .eq('normalized_value', normalizedTarget)
-      .is('revoked_at', null)
-      .in('claim_type', [...contactClaimTypesForChannel(channel)]);
-  } catch {
-    return { ok: false, personId: null, reason: 'contact_point_read_failed' };
-  }
-  if (res?.error) return { ok: false, personId: null, reason: 'contact_point_read_failed' };
-
-  const ids = [...new Set(
-    ((res?.data ?? []) as Array<Record<string, unknown>>)
-      .map((r) => (typeof r.person_id === 'string' && r.person_id.trim() ? r.person_id : null))
-      .filter((v): v is string => v !== null),
-  )];
-
-  if (ids.length > 1) return { ok: false, personId: null, reason: 'ambiguous_contact_point' };
-  if (ids.length === 1) return { ok: true, personId: ids[0], reason: null };
-  // The table answered: no person claims this endpoint. Target matching stands.
-  return { ok: true, personId: null, reason: 'no_person_claim' };
-}
 
 /**
  * Consult the CANONICAL store. Returns null when it has nothing to say.
@@ -205,13 +132,13 @@ async function resolvePersonForTarget(
  * failure mode this layer exists to prevent.
  *
  * W2-B: a person anchor IS now resolved from the recipient (see
- * `resolvePersonForTarget`), so person-anchored and target-anchored records are
+ * `resolveRecipientOwner`), so person-anchored and target-anchored records are
  * both visible here. Target matching is unchanged and still applies on its own.
  */
 async function canonicalVerdict(companyId: string, channel: string, target: string): Promise<SuppressionResult | null> {
   const normalizedTarget = normalizeGovernanceTarget(channel, target);
 
-  const person = await resolvePersonForTarget(companyId, channel, normalizedTarget);
+  const person = await resolveRecipientOwner(companyId, channel, normalizedTarget);
   if (!person.ok) throw new GovernanceStageError('person_resolution', person.reason ?? 'person_unresolved');
 
   const loaded = await loadGovernanceRecords({ organizationId: companyId, personId: person.personId, target, channel });

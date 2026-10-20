@@ -32,6 +32,7 @@ import {
 } from './governance';
 import { mayContact } from '../prospectIdentity/contactGovernance';
 import { loadGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
+import { resolveRecipientOwner } from '../prospectIdentity/recipientOwner';
 import { resolveLeadPersonId, resolvePersonAnchor, type PersonAnchorResolution } from './personAnchor';
 import { recordFailure, recordGovernanceEvaluation, recordGovernanceFailure, recordGovernanceGate, recordStageOutcome } from './telemetry';
 import type { OutreachTask } from './types';
@@ -228,7 +229,44 @@ export async function resolveCanonicalGovernanceWithAnchor(
     now: evaluatedAt,
     records: loaded.records,
   });
-  return { verdict, anchor };
+
+  // WP3 / L2 — the recipient's OWNER, as a block-only supplement.
+  //
+  // The frozen anchor order above decides WHICH identity this decision is
+  // recorded against, and it is untouched: the returned `anchor` is exactly what
+  // it resolved. But the address being contacted may belong to a different
+  // person — or to someone when the task has no anchor at all — and a
+  // restriction recorded against that person must still stop the send.
+  //
+  // It can only ADD a block. A non-allowed anchored verdict is returned as is,
+  // before the lookup, so nothing found here can lift it. An unreadable or
+  // ambiguous ownership answer fails closed, because we then do not know whose
+  // restriction applies.
+  if (verdict.decision !== 'allowed' || !normalizedTarget) return { verdict, anchor };
+
+  const owner = await resolveRecipientOwner(companyId, channel, normalizedTarget);
+  if (!owner.ok) {
+    return { verdict: failClosed('governance_person_resolution_failed_failclosed'), anchor };
+  }
+  if (!owner.personId || owner.personId === anchor.personId) return { verdict, anchor };
+
+  let ownerLoaded;
+  try {
+    ownerLoaded = await loadGovernanceRecords({ organizationId: companyId, personId: owner.personId, target: recipient, channel });
+  } catch {
+    return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor };
+  }
+  if (!ownerLoaded.ok) return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor };
+
+  const ownerVerdict = mayContact({
+    organizationId: companyId,
+    personId: owner.personId,
+    targetNormalized: normalizedTarget,
+    channel,
+    now: evaluatedAt,
+    records: ownerLoaded.records,
+  });
+  return { verdict: ownerVerdict.decision === 'allowed' ? verdict : ownerVerdict, anchor };
 }
 
 /**

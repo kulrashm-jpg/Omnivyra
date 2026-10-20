@@ -16,6 +16,8 @@
 //   AWS_ACCESS_KEY_ID     — IAM credential with ses:SendEmail
 //   AWS_SECRET_ACCESS_KEY — IAM credential
 //   APP_URL               — public base URL for CTA links (e.g. "https://omnivyra.com")
+//   SES_CONFIGURATION_SET — WP3: required for `lead_outreach` only; routes its
+//                           delivery, bounce and complaint events to SNS
 //
 // Caller (Next.js API): supabase.functions.invoke('send-transactional-email', { body })
 // Callers use the server client, which sends a project SECRET key on the
@@ -28,8 +30,20 @@
 //     --project-ref klkiseupptzbecbxwrky --no-verify-jwt
 
 import { SESClient, SendEmailCommand } from "npm:@aws-sdk/client-ses@3.658.1";
+// WP3 / L5 — SES API v2, for `lead_outreach` ONLY. The v1 SendEmail above cannot
+// carry custom headers; v2's Simple content can (`Message.Headers`, max 15), so
+// List-Unsubscribe goes out without hand-built MIME. The seven composed
+// templates keep the v1 path unchanged.
+import { SESv2Client, SendEmailCommand as SendEmailV2Command } from "npm:@aws-sdk/client-sesv2@3.658.1";
 import { authorizeServiceCaller } from "./auth.ts";
 import { escapeHtml, escapeHtmlBlock, safeHref } from "./escape.ts";
+import {
+  listUnsubscribeHeaders,
+  UNSUBSCRIBE_LINK_LABEL,
+  unsubscribeTextFooter,
+  validateUnsubscribeUrl,
+  type MessageHeader,
+} from "./unsubscribe.ts";
 
 type Template =
   | { type: "team_invite"; recipientEmail: string; inviteUrl: string }
@@ -91,19 +105,27 @@ type Template =
   // So this variant carries the finished message and this function only encodes it
   // for transport. It is not a template in the sense the others are, and it must
   // never grow fields that would let it reinterpret the content.
+  //
+  // WP3 / L5 — `unsubscribeUrl` is the one addition, and it is not content: it is
+  // the signed link the footer and the List-Unsubscribe header carry. It is
+  // allow-listed before render (see unsubscribe.ts).
   | {
       type: "lead_outreach";
       recipientEmail: string;
       subject: string;
       body: string;
+      unsubscribeUrl: string;
     };
 
 /**
  * `text` is the OPTIONAL plain-text MIME part. Only the pass-through template sets
  * it: the seven composed templates leave it undefined, so their SES request keeps
  * exactly the shape it had before PI-041-A-O — a `Body` carrying `Html` alone.
+ *
+ * `headers` (WP3) is likewise set only by `lead_outreach`, and only the v2 send
+ * path reads it.
  */
-type Envelope = { to: string; subject: string; html: string; text?: string };
+type Envelope = { to: string; subject: string; html: string; text?: string; headers?: MessageHeader[] };
 
 function getAppUrl(): string {
   return (Deno.env.get("APP_URL") ?? "https://omnivyra.com").replace(/\/$/, "");
@@ -273,11 +295,20 @@ function render(t: Template): Envelope {
     // Deliberately NOT wrapped in `actionLayout`: that adds a heading and a CTA
     // button, which would be content nobody authored.
     case "lead_outreach": {
+      // WP3 / L5 — the ONLY addition is the unsubscribe footer AFTER the authored
+      // body (in both parts) and the List-Unsubscribe headers. The body itself is
+      // still never altered: it is the exact prefix of the text part, so the
+      // byte-for-byte statement above now holds for that prefix. `unsubscribeUrl`
+      // was allow-listed by the handler; safeHref re-checks it and escapes it for
+      // the attribute.
+      const href = safeHref(t.unsubscribeUrl);
       return {
         to: t.recipientEmail,
         subject: t.subject,
-        html: escapeHtmlBlock(t.body),
-        text: t.body,
+        html: escapeHtmlBlock(t.body)
+          + `<br><br><p style="font-size:12px;color:#6b7280">To stop receiving these emails, <a href="${href}">${escapeHtml(UNSUBSCRIBE_LINK_LABEL)}</a>.</p>`,
+        text: t.body + unsubscribeTextFooter(t.unsubscribeUrl),
+        headers: listUnsubscribeHeaders(t.unsubscribeUrl),
       };
     }
   }
@@ -287,9 +318,10 @@ function render(t: Template): Envelope {
  * Send one envelope, returning the SES `MessageId` when SES supplies one.
  *
  * PI-041-A-O: the identifier is RETURNED rather than discarded because the
- * outreach attempt has a `provider_message_id` column for exactly this, and
- * without it no later delivery or bounce event could be correlated to a send. It
- * is never manufactured — when SES returns nothing, this returns null.
+ * outreach delivery evidence row (`outreach_delivery_evidence.provider_message_id`)
+ * records it, and without it no later delivery or bounce event could be
+ * correlated to a send. It is never manufactured — when SES returns nothing,
+ * this returns null.
  */
 async function sendViaSES(envelope: Envelope): Promise<string | null> {
   // Region is sourced EXCLUSIVELY from AWS_SES_REGION. No fallback to
@@ -345,6 +377,67 @@ async function sendViaSES(envelope: Envelope): Promise<string | null> {
 
   const result = await client.send(command);
   return typeof result?.MessageId === "string" ? result.MessageId : null;
+}
+
+/**
+ * WP3 / L5 — send a `lead_outreach` envelope through SES API v2, with its
+ * List-Unsubscribe headers and the configuration set that routes its delivery,
+ * bounce and complaint events to SNS.
+ *
+ * FAILS CLOSED on a missing configuration set: without it SES publishes no
+ * events for this message, so a bounce or complaint could never become a
+ * suppression. Same credential and region sources as `sendViaSES`.
+ */
+async function sendOutreachViaSESv2(envelope: Envelope): Promise<string | null> {
+  const from             = Deno.env.get("EMAIL_FROM");
+  const region           = Deno.env.get("AWS_SES_REGION")?.trim();
+  const accessKeyId      = Deno.env.get("AWS_ACCESS_KEY_ID");
+  const secretAccessKey  = Deno.env.get("AWS_SECRET_ACCESS_KEY");
+  const configurationSet = Deno.env.get("SES_CONFIGURATION_SET")?.trim();
+
+  if (!region) throw new Error("AWS_SES_REGION is missing or empty");
+  if (!from || !accessKeyId || !secretAccessKey) {
+    throw new Error("SES_NOT_CONFIGURED: EMAIL_FROM, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY all required");
+  }
+  if (!configurationSet) throw new Error("SES_CONFIGURATION_SET_MISSING");
+  if (!envelope.headers || envelope.headers.length === 0 || envelope.text === undefined) {
+    throw new Error("LEAD_OUTREACH_ENVELOPE_INCOMPLETE");
+  }
+
+  const client = new SESv2Client({ region, credentials: { accessKeyId, secretAccessKey } });
+  const command = new SendEmailV2Command({
+    FromEmailAddress: from,
+    Destination: { ToAddresses: [envelope.to] },
+    ConfigurationSetName: configurationSet,
+    Content: {
+      Simple: {
+        Subject: { Charset: "UTF-8", Data: envelope.subject },
+        Body: {
+          Html: { Charset: "UTF-8", Data: envelope.html },
+          Text: { Charset: "UTF-8", Data: envelope.text },
+        },
+        Headers: envelope.headers,
+      },
+    },
+  });
+
+  const result = await client.send(command);
+  return typeof result?.MessageId === "string" ? result.MessageId : null;
+}
+
+/**
+ * WP3 / L5 — refuse a `lead_outreach` payload that is not exactly sendable,
+ * BEFORE render and before SES. Returns an error code, or null when valid; on
+ * success the URL is replaced with its canonical, allow-listed form.
+ */
+function invalidLeadOutreach(t: Record<string, unknown>): string | null {
+  for (const field of ["recipientEmail", "subject", "body"]) {
+    if (typeof t[field] !== "string" || (t[field] as string).trim() === "") return "INVALID_LEAD_OUTREACH_PAYLOAD";
+  }
+  const url = validateUnsubscribeUrl(t.unsubscribeUrl, getAppUrl());
+  if (!url) return "INVALID_UNSUBSCRIBE_URL";
+  t.unsubscribeUrl = url;
+  return null;
 }
 
 Deno.serve(async (req) => {
@@ -417,9 +510,22 @@ Deno.serve(async (req) => {
     );
   }
 
+  if (requestedType === "lead_outreach") {
+    const invalid = invalidLeadOutreach(body as unknown as Record<string, unknown>);
+    if (invalid) {
+      console.error(invalid);
+      return new Response(JSON.stringify({ error: invalid }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
   try {
     const envelope = render(body);
-    const messageId = await sendViaSES(envelope);
+    const messageId = requestedType === "lead_outreach"
+      ? await sendOutreachViaSESv2(envelope)
+      : await sendViaSES(envelope);
     // PI-041-A-O: `messageId` is ADDITIVE. `ok` keeps its meaning and position, so
     // every existing caller — all of which inspect only `ok` — is unaffected.
     return new Response(JSON.stringify({ ok: true, messageId }), {

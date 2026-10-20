@@ -138,14 +138,19 @@ describe('041-A-O — the provider accepts lead_outreach', () => {
     // The subject is the Engine's, verbatim: no template literal, no prefix.
     expect(b).toMatch(/subject: t\.subject,/);
     expect(b).not.toMatch(/subject: `/);
-    // The body is escaped for HTML and carried raw in the text part.
-    expect(b).toMatch(/html: escapeHtmlBlock\(t\.body\),/);
-    expect(b).toMatch(/text: t\.body,/);
+    // The body is escaped for HTML and carried raw in the text part — each
+    // FOLLOWED (WP3) by the unsubscribe footer, never preceded or altered.
+    expect(b).toMatch(/html: escapeHtmlBlock\(t\.body\)\s*\n\s*\+ `<br><br><p/);
+    expect(b).toMatch(/text: t\.body \+ unsubscribeTextFooter\(t\.unsubscribeUrl\),/);
+    expect(b).toMatch(/headers: listUnsubscribeHeaders\(t\.unsubscribeUrl\),/);
   });
 
   it('DOES NOT WRAP OUTREACH IN A LAYOUT — that would add unauthored content', () => {
     const b = branch('lead_outreach');
-    expect(b).not.toMatch(/actionLayout|baseLayout|safeHref/);
+    expect(b).not.toMatch(/actionLayout|baseLayout/);
+    // WP3: the ONLY link is the unsubscribe link, through safeHref.
+    expect((b.match(/safeHref\(/g) || [])).toHaveLength(1);
+    expect(b).toMatch(/const href = safeHref\(t\.unsubscribeUrl\);/);
     // And it invents nothing when a field is absent: no fallback expressions.
     expect(b).not.toMatch(/\?\?|\|\||t\.subject \?/);
   });
@@ -181,7 +186,7 @@ describe('041-A-O — the SES request', () => {
       'credit_alert']) {
       expect(branch(t)).not.toMatch(/text:/);
     }
-    expect(branch('lead_outreach')).toMatch(/text: t\.body,/);
+    expect(branch('lead_outreach')).toMatch(/text: t\.body \+ unsubscribeTextFooter\(t\.unsubscribeUrl\),/);
   });
 
   it('RETURNS THE SES MessageId WITHOUT INVENTING ONE', () => {
@@ -219,7 +224,8 @@ describe('041-A-O — every pre-existing template is unchanged', () => {
   });
 
   it('the pass-through branch is pinned too', () => {
-    expect(branchHash('lead_outreach')).toBe('7e066d3401e98616');
+    // Re-pinned by WP3 / L5: the unsubscribe footer and List-Unsubscribe headers.
+    expect(branchHash('lead_outreach')).toBe('9fa6318d56363852');
   });
 
   it('EXACTLY EIGHT TEMPLATES EXIST — one was added, none replaced', () => {
@@ -233,9 +239,25 @@ describe('041-A-O — every pre-existing template is unchanged', () => {
   });
 
   it('the shared layout helpers are untouched', () => {
+    // Re-pinned by WP3 / L5. In this region WP3 changed only the header comment,
+    // the imports, the `lead_outreach` variant and `Envelope`; the three helpers
+    // are additionally pinned one by one below so a change to any of them is
+    // caught on its own.
     const helpers = indexSrc.slice(0, indexSrc.indexOf('function render(t: Template)'));
     expect(crypto.createHash('sha256').update(helpers).digest('hex').slice(0, 16))
-      .toBe('af40a6ec8842c0ea');
+      .toBe('2ddc9b5d7373092b');
+  });
+
+  it.each([
+    // Computed from the pre-WP3 source (main @ 0abc375d).
+    ['function getAppUrl', '18f58e20764fec22'],
+    ['function actionLayout', '06d765e3871017e0'],
+    ['function mailtoLink', '7289c434952fbc8e'],
+  ])('%s is byte-identical to its pre-WP3 form', (marker, expected) => {
+    const at = indexSrc.indexOf(marker);
+    const end = indexSrc.indexOf('\n}\n', at);
+    const fn = indexSrc.slice(at, end + 2);
+    expect(crypto.createHash('sha256').update(fn).digest('hex').slice(0, 16)).toBe(expected);
   });
 });
 
@@ -262,13 +284,14 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     expect(renderSrc).not.toMatch(/companyId/);
   });
 
-  it('the transport and dispatch side of the contract was NOT modified', () => {
+  it('the transport and dispatch side of the contract is pinned', () => {
     // Only the provider side of PI-041-A-O was adopted. The Email Engine, and the
-    // transport hooks that compose it, depend on tables that are not on main, so
-    // the transport and dispatch stay byte-identical to main.
+    // transport hooks that compose it, depend on tables that are not on main.
+    // WP3 / L5 changed the transport (it now mints the unsubscribe link) and is
+    // re-pinned here; dispatch is unchanged.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
-    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('8eae66392cff86a6');
+    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('eb4963aea1b7a6d2');
     expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('3c366bcc862b7bd4');
   });
 

@@ -231,3 +231,45 @@ describe('WP2 — Path B honours a person-anchored restriction before the transp
     expect(sent).toHaveLength(0);
   });
 });
+
+describe('WP3/L2 — the recipient owner can block at the real dispatch gate', () => {
+  /** The recipient address is claimed by OTHER_PERSON in this tenant. */
+  const ownerClaim = (over: Row = {}): Row => ({
+    organization_id: ORG, person_id: OTHER_PERSON, claim_type: 'email', platform: null,
+    normalized_value: RECIPIENT, revoked_at: null, ...over,
+  });
+
+  it("the anchored person is clear, but the address owner unsubscribed → blocked, transport never called", async () => {
+    configureTenant();
+    (db.tables.identity_claims ??= []).push(ownerClaim());
+    (db.tables.contact_governance_records ??= []).push(personUnsubscribe({ person_id: OTHER_PERSON }));
+
+    const res = await dispatch(await approvedTask());
+
+    expect(res.outcome).toBe('blocked_governance');
+    expect(sent).toHaveLength(0);
+  });
+
+  it('the persisted decision still records the frozen-order anchor (the task person), not the owner', async () => {
+    configureTenant();
+    (db.tables.identity_claims ??= []).push(ownerClaim());
+    (db.tables.contact_governance_records ??= []).push(personUnsubscribe({ person_id: OTHER_PERSON }));
+
+    await dispatch(await approvedTask());
+
+    const decisions = db.tables.outreach_decisions ?? [];
+    expect(decisions.length).toBeGreaterThan(0);
+    const last = decisions[decisions.length - 1];
+    expect(last.identity_anchor).toBe('task');
+    expect(last.person_id).toBe(PERSON);
+  });
+
+  it("an owner claim held only in another tenant does not block here", async () => {
+    configureTenant();
+    (db.tables.identity_claims ??= []).push(ownerClaim({ organization_id: OTHER_ORG }));
+    (db.tables.contact_governance_records ??= []).push(personUnsubscribe({ person_id: OTHER_PERSON, organization_id: OTHER_ORG }));
+
+    await dispatch(await approvedTask());
+    expect(sent).toHaveLength(1);
+  });
+});

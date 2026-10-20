@@ -26,6 +26,17 @@
  */
 
 import type { OutreachTransport, TransportRequest, TransportResult } from './transport';
+import { buildOutreachUnsubscribeUrl, issueOutreachUnsubscribeToken } from '../../security/outreachUnsubscribeToken';
+
+/**
+ * The provider name recorded on every SES outreach evidence row. WP3: the SES
+ * event webhook resolves provider messages under THIS name, so both sides import
+ * it rather than spelling it twice.
+ */
+export const SES_EDGE_PROVIDER_NAME = 'supabase_edge_ses';
+
+/** WP3 / L5 — the public origin unsubscribe links point at. */
+export const UNSUBSCRIBE_BASE_URL_ENV = 'NEXT_PUBLIC_APP_URL';
 
 /** Explicit opt-in. Anything other than `true` keeps this transport inert. */
 export const EMAIL_ENABLED_ENV = 'LEAD_OUTREACH_EMAIL_ENABLED';
@@ -56,6 +67,12 @@ export interface EmailProviderRequest {
   subject: string;
   /** Body. Currently a PLACEHOLDER derived from the plan's explanation. */
   body: string;
+  /**
+   * WP3 / L5 — the signed one-click unsubscribe URL for THIS attempt and
+   * recipient. Every outreach email carries one; the transport refuses to call a
+   * provider without it.
+   */
+  unsubscribeUrl: string;
 }
 
 export interface EmailProviderResponse {
@@ -85,7 +102,7 @@ export interface EmailProviderPort {
  * this transport ships disabled.
  */
 export const supabaseEdgeEmailProvider: EmailProviderPort = {
-  name: 'supabase_edge_ses',
+  name: SES_EDGE_PROVIDER_NAME,
   async send(request: EmailProviderRequest): Promise<EmailProviderResponse> {
     // Imported lazily so the module graph carries no client for a transport
     // that is disabled by default.
@@ -97,6 +114,7 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
         recipientEmail: request.to,
         subject: request.subject,
         body: request.body,
+        unsubscribeUrl: request.unsubscribeUrl,
         idempotencyKey: request.idempotencyKey,
         companyId: request.companyId,
       },
@@ -132,10 +150,11 @@ const looksLikeEmail = (v: string | null): v is string =>
  */
 export function createEmailTransport(
   provider: EmailProviderPort = supabaseEdgeEmailProvider,
-  options: { timeoutMs?: number; enabled?: () => boolean } = {},
+  options: { timeoutMs?: number; enabled?: () => boolean; unsubscribeBaseUrl?: () => string | undefined } = {},
 ): OutreachTransport {
   const timeoutMs = options.timeoutMs ?? EMAIL_TIMEOUT_MS;
   const enabled = options.enabled ?? isEmailTransportEnabled;
+  const unsubscribeBaseUrl = options.unsubscribeBaseUrl ?? (() => process.env[UNSUBSCRIBE_BASE_URL_ENV]);
 
   return {
     channel: 'email',
@@ -165,6 +184,27 @@ export function createEmailTransport(
         };
       }
 
+      // 2a. WP3 / L5 — the unsubscribe link. Minted for THIS attempt and THIS
+      //     address, so the endpoint can record a restriction against exactly
+      //     what was contacted. No attempt, no key, or no usable public origin
+      //     means no working link — and then nothing is sent.
+      let unsubscribeUrl: string;
+      try {
+        if (!request.attemptId) throw new Error('no attempt');
+        const token = issueOutreachUnsubscribeToken({
+          organizationId: request.task.companyId,
+          attemptId: request.attemptId,
+          recipient: request.recipient,
+        });
+        unsubscribeUrl = buildOutreachUnsubscribeUrl(token, unsubscribeBaseUrl());
+      } catch {
+        return {
+          ...base, outcome: 'rejected', deliveryStatus: 'failed',
+          response: { reason: 'unsubscribe_link_unavailable' },
+          error: 'an unsubscribe link could not be produced for this attempt; nothing was sent',
+        };
+      }
+
       const subject = trim(request.task.action, 200) || 'Following up';
       const body = trim(request.task.explanation, 4000) || subject;
       const startedMs = Date.now();
@@ -180,6 +220,7 @@ export function createEmailTransport(
             companyId: request.task.companyId,
             subject,
             body,
+            unsubscribeUrl,
           }),
           new Promise<never>((_, reject) => {
             const timer = setTimeout(() => reject(new Error('__ws3_transport_timeout__')), timeoutMs);
