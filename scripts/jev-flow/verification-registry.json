@@ -42,6 +42,20 @@
       "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/ca003P0"],
       "evidence_kind": "test_run",
       "timeout_ms": 600000
+    },
+    {
+      "id": "rpa-retry.unit",
+      "description": "RPA retry-queue claim protocol unit tests (backend/tests/unit/rpaRetryQueue*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/rpaRetryQueue"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 600000
+    },
+    {
+      "id": "rpa-retry.realschema",
+      "description": "RPA retry-queue claim real-database suite via the hardened W6 harness (scripts/ci/real-schema-suite.js -> real-schema-ci.sh, W6_ONLY = that one file)",
+      "argv": ["node", "scripts/ci/real-schema-suite.js", "backend/tests/realschema/rq_rpa_retry_claim.test.ts"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 3600000
     }
   ]
 }
