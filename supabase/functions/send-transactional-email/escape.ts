@@ -36,6 +36,34 @@ export function escapeHtml(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * PI-041-A-O — render an already-authored plain-text block as safe HTML.
+ *
+ * The Email Engine produces the exact body that must be sent, and the content
+ * evidence it persists before the send is the record of that body. So the only
+ * transformation permitted here is presentational: encode the text, then restore
+ * the line breaks the text carried.
+ *
+ * ─── ESCAPE FIRST, ALWAYS ─────────────────────────────────────────────────
+ * `escapeHtml` runs over the WHOLE body before a single tag is introduced, so
+ * nothing in the authored content can become markup. The `<br>` tags are added
+ * afterwards, to text that is already inert. Doing it the other way round, or
+ * escaping piecewise, is how a body containing `<br>` or a stray `<` ends up
+ * executable — and the ordering is asserted by a test.
+ *
+ * This is NOT a second escaping utility: it is `escapeHtml` plus the line-break
+ * convention, kept in the same module so there remains exactly one place where
+ * authored text becomes HTML. It takes no URL and emits no link, because an
+ * outreach body is prose rather than a layout.
+ *
+ * CRLF collapses to ONE break, so a body authored on Windows does not
+ * double-space in the rendered mail. The plain-text MIME part keeps the original
+ * bytes untouched — only this HTML view is transformed.
+ */
+export function escapeHtmlBlock(value: unknown): string {
+  return escapeHtml(value).replace(/\r\n|\r|\n/g, "<br>");
+}
+
 // C0 controls and DEL. Browsers silently strip some of these (tab, LF, CR)
 // while parsing a URL, which is how "java\tscript:" smuggles a scheme past a
 // naive prefix check; no legitimate link we send contains any of them.

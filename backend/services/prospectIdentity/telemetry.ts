@@ -81,16 +81,23 @@ export type GovernanceGateDecision = 'allowed' | 'suppressed';
 export type GovernanceStore = 'canonical' | 'legacy' | 'none';
 
 /**
- * The four fail-closed paths, kept DISTINCT.
+ * The five fail-closed paths, kept DISTINCT.
  *
  * They are different faults with different owners: a caller that lost the
- * tenant, an unreadable canonical table, an erroring legacy query, and an
- * exception escaping the legacy read. A single `error` label would tell an
- * operator that governance is broken without telling them where, which is the
- * question they actually need answered at 3am.
+ * tenant, an unresolvable person behind a recipient, an unreadable canonical
+ * table, an erroring legacy query, and an exception escaping the legacy read. A
+ * single `error` label would tell an operator that governance is broken without
+ * telling them where, which is the question they actually need answered at 3am.
+ *
+ * W2-B adds `person_resolution`, deliberately NOT folded into `canonical_read`:
+ * an unreadable or ambiguous `identity_claims` means we could not learn WHO the
+ * recipient is, so a person-anchored do-not-contact record may exist and be
+ * invisible to us. That is a different outage, in a different table, with a
+ * different owner from an unreadable governance table.
  */
 export const GOVERNANCE_FAILCLOSED_STAGES = [
   'no_tenant',
+  'person_resolution',
   'canonical_read',
   'legacy_read',
   'legacy_exception',

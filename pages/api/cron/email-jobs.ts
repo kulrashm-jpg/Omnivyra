@@ -163,10 +163,12 @@ async function processOne(job: ClaimedJob): Promise<'sent' | 'failed' | 'dead' |
     if (error) {
       throw new Error(error.message || 'EDGE_FUNCTION_ERROR');
     }
-    const providerMessageId =
-      data && typeof data === 'object' && 'message_id' in (data as Record<string, unknown>)
-        ? String((data as Record<string, unknown>).message_id)
-        : null;
+    // The function responds `{ ok, messageId }`, with `messageId: null` when SES
+    // returned none — so only a real string is recorded, never the text "null".
+    const rawMessageId = data && typeof data === 'object'
+      ? (data as Record<string, unknown>).messageId
+      : undefined;
+    const providerMessageId = typeof rawMessageId === 'string' ? rawMessageId : null;
     await finalize(job.id, 'sent', { providerMessageId });
     return 'sent';
   } catch (err: any) {
