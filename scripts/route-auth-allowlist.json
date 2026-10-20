@@ -662,6 +662,11 @@
       "kind": "auth-flow",
       "reason": "Signup-time company-name validation for a user who has no company yet; returns a validity verdict only."
     },
+    "pages/api/outreach/unsubscribe.ts": {
+      "kind": "machine-token",
+      "verifier": "verifyOutreachUnsubscribeToken",
+      "reason": "Public unsubscribe endpoint for email links and RFC 8058 one-click POSTs (no session). The AES-256-GCM token is verified before any database read or write (only the Redis rate limiter precedes it); GET writes nothing; POST writes canonical governance only via recordContactGovernance."
+    },
     "pages/api/planner/generate-workspace-content.ts": {
       "kind": "inline-binding",
       "reason": "enforceCompanyAccess on companyId, then the campaign's owning company (resolveCampaignCompanyId) must equal it before loading planner state.",
@@ -810,6 +815,11 @@
     "pages/api/webhooks/razorpay-staging.ts": {
       "kind": "retired",
       "reason": "Retired endpoint: answers 410 Gone for every request and performs no reads or writes."
+    },
+    "pages/api/webhooks/ses.ts": {
+      "kind": "webhook-signature",
+      "verifier": "verifySnsSignature",
+      "reason": "AWS SNS delivery of SES events. The body is capped at 1 MiB while reading and a claimed TopicArn outside SES_SNS_TOPIC_ARNS is refused before any certificate fetch; the RSA signature is then verified before any database access, the TopicArn re-checked against the allow-list (empty refuses all) and a 2 h replay window enforced; writes only via ingestFeedback and recordContactGovernance."
     },
     "pages/api/website-analytics/aggregate.ts": {
       "kind": "machine-secret",

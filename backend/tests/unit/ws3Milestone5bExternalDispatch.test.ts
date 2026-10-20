@@ -183,11 +183,27 @@ beforeEach(() => {
   __resetQuotaRedisForTests();
   __clearTransportsForTests();
   process.env[EMAIL_ENABLED_ENV] = 'true'; // explicitly enabled for these tests
+  // WP3 / L5 — every outreach email now carries a signed unsubscribe link, and
+  // the transport refuses to send without one. Test-only key and origin.
+  process.env.OUTREACH_UNSUBSCRIBE_TOKEN_KEYS = `t1:${'t'.repeat(40)}`;
+  process.env.NEXT_PUBLIC_APP_URL = 'https://app.example.test';
   registerDefaultTransports({ emailProvider: testProvider });
 });
 
+// Restored, not deleted: suites share one process.env under --runInBand.
+const priorUnsubscribeEnv = {
+  keys: process.env.OUTREACH_UNSUBSCRIBE_TOKEN_KEYS,
+  appUrl: process.env.NEXT_PUBLIC_APP_URL,
+};
+const restoreEnv = (name: string, value: string | undefined) => {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+};
+
 afterEach(() => {
   delete process.env[EMAIL_ENABLED_ENV];
+  restoreEnv('OUTREACH_UNSUBSCRIBE_TOKEN_KEYS', priorUnsubscribeEnv.keys);
+  restoreEnv('NEXT_PUBLIC_APP_URL', priorUnsubscribeEnv.appUrl);
 });
 
 // ── 1. Transport abstraction ────────────────────────────────────────────────
