@@ -194,10 +194,14 @@ describe('W06 governance — a refusal and an outage are no longer the same even
     expect(labelsFor(IDENTITY_METRICS.governance.failClosed)).toEqual([{ stage: 'legacy_read' }]);
   });
 
-  it('the four fail-closed stages are all distinct — one "error" label would not locate the fault', () => {
-    expect(new Set(GOVERNANCE_FAILCLOSED_STAGES).size).toBe(4);
+  // W2-B added `person_resolution`: an unreadable or ambiguous `identity_claims`
+  // means we could not learn WHO the recipient is, which is a different outage
+  // in a different table from an unreadable governance table. The assertion is
+  // unchanged in strength — the exact list, and all of it distinct.
+  it('the five fail-closed stages are all distinct — one "error" label would not locate the fault', () => {
+    expect(new Set(GOVERNANCE_FAILCLOSED_STAGES).size).toBe(5);
     expect([...GOVERNANCE_FAILCLOSED_STAGES]).toEqual(
-      ['no_tenant', 'canonical_read', 'legacy_read', 'legacy_exception'],
+      ['no_tenant', 'person_resolution', 'canonical_read', 'legacy_read', 'legacy_exception'],
     );
   });
 

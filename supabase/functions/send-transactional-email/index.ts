@@ -29,7 +29,7 @@
 
 import { SESClient, SendEmailCommand } from "npm:@aws-sdk/client-ses@3.658.1";
 import { authorizeServiceCaller } from "./auth.ts";
-import { escapeHtml, safeHref } from "./escape.ts";
+import { escapeHtml, escapeHtmlBlock, safeHref } from "./escape.ts";
 
 type Template =
   | { type: "team_invite"; recipientEmail: string; inviteUrl: string }
@@ -77,9 +77,33 @@ type Template =
       remainingCredits: number;
       projectedRequiredCredits: number;
       ctaUrl: string;
+    }
+  // PI-041-A-O — the first PASS-THROUGH template, and deliberately unlike the
+  // seven above it.
+  //
+  // Every other template takes business FIELDS and composes its own subject and
+  // HTML here. Outreach cannot work that way: the Email Engine renders the exact
+  // subject and body from the authored Workflow step and persists them immutably
+  // as content evidence BEFORE the provider is called. If this function composed
+  // the message, that evidence would describe something the recipient never
+  // received, which inverts the purpose of the table.
+  //
+  // So this variant carries the finished message and this function only encodes it
+  // for transport. It is not a template in the sense the others are, and it must
+  // never grow fields that would let it reinterpret the content.
+  | {
+      type: "lead_outreach";
+      recipientEmail: string;
+      subject: string;
+      body: string;
     };
 
-type Envelope = { to: string; subject: string; html: string };
+/**
+ * `text` is the OPTIONAL plain-text MIME part. Only the pass-through template sets
+ * it: the seven composed templates leave it undefined, so their SES request keeps
+ * exactly the shape it had before PI-041-A-O — a `Body` carrying `Html` alone.
+ */
+type Envelope = { to: string; subject: string; html: string; text?: string };
 
 function getAppUrl(): string {
   return (Deno.env.get("APP_URL") ?? "https://omnivyra.com").replace(/\/$/, "");
@@ -240,10 +264,34 @@ function render(t: Template): Envelope {
         html: actionLayout("Your credits are running low", body, "Review credits", t.ctaUrl),
       };
     }
+    // PI-041-A-O — PASS-THROUGH. The subject is sent exactly as the Email Engine
+    // rendered it: no prefix, no suffix, no fallback, no layout wrapper. The body
+    // is encoded for HTML with its line breaks preserved, and carried verbatim in
+    // the plain-text part, so `persisted body === provider text body` holds
+    // byte-for-byte against the content evidence written before the send.
+    //
+    // Deliberately NOT wrapped in `actionLayout`: that adds a heading and a CTA
+    // button, which would be content nobody authored.
+    case "lead_outreach": {
+      return {
+        to: t.recipientEmail,
+        subject: t.subject,
+        html: escapeHtmlBlock(t.body),
+        text: t.body,
+      };
+    }
   }
 }
 
-async function sendViaSES(envelope: Envelope): Promise<void> {
+/**
+ * Send one envelope, returning the SES `MessageId` when SES supplies one.
+ *
+ * PI-041-A-O: the identifier is RETURNED rather than discarded because the
+ * outreach attempt has a `provider_message_id` column for exactly this, and
+ * without it no later delivery or bounce event could be correlated to a send. It
+ * is never manufactured — when SES returns nothing, this returns null.
+ */
+async function sendViaSES(envelope: Envelope): Promise<string | null> {
   // Region is sourced EXCLUSIVELY from AWS_SES_REGION. No fallback to
   // AWS_REGION, no hardcoded default, no `||` chain. If unset, fail loud.
   // .trim() defends against whitespace pasted into the Supabase secrets UI.
@@ -283,11 +331,20 @@ async function sendViaSES(envelope: Envelope): Promise<void> {
     Destination: { ToAddresses: [envelope.to] },
     Message: {
       Subject: { Charset: "UTF-8", Data: envelope.subject },
-      Body: { Html: { Charset: "UTF-8", Data: envelope.html } },
+      Body: {
+        Html: { Charset: "UTF-8", Data: envelope.html },
+        // PI-041-A-O: ADDITIVE and conditional. Only the pass-through template
+        // sets `text`, so for the seven composed templates this spread
+        // contributes nothing and `Body` is `{ Html }` exactly as before.
+        ...(envelope.text === undefined
+          ? {}
+          : { Text: { Charset: "UTF-8", Data: envelope.text } }),
+      },
     },
   });
 
-  await client.send(command);
+  const result = await client.send(command);
+  return typeof result?.MessageId === "string" ? result.MessageId : null;
 }
 
 Deno.serve(async (req) => {
@@ -346,6 +403,10 @@ Deno.serve(async (req) => {
     "domain_verification_reminder",
     "activation_outreach",
     "credit_alert",
+    // PI-041-A-O — the pass-through outreach message. Added here AND to the
+    // Template union above; the two must stay in sync or an unknown type reaches
+    // `render()` and returns undefined.
+    "lead_outreach",
   ]);
   const requestedType = (body as { type?: string }).type;
   if (!requestedType || !KNOWN_TYPES.has(requestedType)) {
@@ -358,8 +419,10 @@ Deno.serve(async (req) => {
 
   try {
     const envelope = render(body);
-    await sendViaSES(envelope);
-    return new Response(JSON.stringify({ ok: true }), {
+    const messageId = await sendViaSES(envelope);
+    // PI-041-A-O: `messageId` is ADDITIVE. `ok` keeps its meaning and position, so
+    // every existing caller — all of which inspect only `ok` — is unaffected.
+    return new Response(JSON.stringify({ ok: true, messageId }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

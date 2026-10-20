@@ -130,7 +130,16 @@ describe('escape.ts stays importable by both Deno and jest', () => {
 
 describe('index.ts wiring — every caller value goes through the helpers', () => {
   it('imports the helpers with the Deno-required .ts extension', () => {
-    expect(indexSrc).toContain('import { escapeHtml, safeHref } from "./escape.ts";');
+    // PI-041-A-O added `escapeHtmlBlock` to this import. The invariant this pin
+    // protects is unchanged — every HTML-encoding helper comes from escape.ts with
+    // the extension Deno requires — so it is now asserted structurally rather than
+    // as one frozen string, and still fails if a helper is defined locally or
+    // imported from somewhere else.
+    expect(indexSrc).toMatch(
+      /^import \{ escapeHtml, escapeHtmlBlock, safeHref \} from "\.\/escape\.ts";$/m,
+    );
+    expect((indexSrc.match(/from "\.\/escape\.ts"/g) || [])).toHaveLength(1);
+    expect(indexSrc).not.toMatch(/function escapeHtml/);
   });
 
   it('leaves no raw ${t.<field>} interpolation outside plain-text subject lines', () => {
