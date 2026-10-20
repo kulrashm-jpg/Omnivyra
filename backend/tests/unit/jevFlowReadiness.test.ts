@@ -7,8 +7,9 @@ import path from 'node:path';
 import { AC_FIELDS, JIRA_GATEWAY_BASE, STORY_FIELDS } from '../../../scripts/jev-jira/fields';
 import { JiraClientError, type JiraIssue } from '../../../scripts/jev-jira/jiraClient';
 import { GOV_AC_FIELDS, GOV_STORY_FIELDS, STORY_AUTHORIZED_PATHS_FIELD, createJiraQuery, type JiraQuery } from '../../../scripts/jev-flow/jiraQuery';
-import { checkReadiness, evaluateReadiness, pathPatternProblem, registryDigest } from '../../../scripts/jev-flow/readiness';
-import { canonicalHash, type VerificationRegistry } from '../../../scripts/jev-flow/types';
+import { buildReadinessReport, checkReadiness, checkReadinessReport, evaluateReadiness, pathPatternProblem, registryDigest, type ReadinessReport } from '../../../scripts/jev-flow/readiness';
+import { canonicalHash, type ReadinessCode, type VerificationRegistry } from '../../../scripts/jev-flow/types';
+import { canonicalJson } from '../../../scripts/jev-bjc/canonical';
 
 const REPO = path.resolve(__dirname, '../../..');
 const REGISTRY = JSON.parse(fs.readFileSync(path.join(REPO, 'scripts', 'jev-flow', 'verification-registry.json'), 'utf8')) as VerificationRegistry;
@@ -334,5 +335,131 @@ describe('createJiraQuery (fetch stub)', () => {
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'jev-flow', 'jiraQuery.ts'), 'utf8');
     expect(src).not.toMatch(/'(PUT|POST|DELETE|PATCH)'/);
     expect(src).not.toMatch(/updateAdvisoryFields/);
+  });
+});
+
+// ---------------------------------------------------------------- report
+
+describe('buildReadinessReport', () => {
+  const row = (r: ReadinessReport, field: string) => r.story_fields.find((f) => f.field === field) as ReadinessReport['story_fields'][number];
+  const acRow = (r: ReadinessReport, key: string) => r.acceptance_criteria.find((a) => a.key === key) as ReadinessReport['acceptance_criteria'][number];
+
+  it('valid Story → READY, every field valid, every AC listed without findings', () => {
+    const acs = [ac('OMNI-12'), ac('OMNI-11', { [AC_FIELDS.kind]: sel('Judgment'), [AC_FIELDS.evidenceKind]: sel('Manual') })];
+    const r = buildReadinessReport(story(), acs, REGISTRY);
+    expect(r).toMatchObject({ schema: 'gov-readiness-report/1', story_key: 'OMNI-10', ready: true, evaluated: true, findings: [] });
+    expect(r.story_fields.map((f) => f.field)).toEqual([
+      'issuetype', 'status', 'updated', STORY_FIELDS.objective, STORY_FIELDS.architecture, STORY_FIELDS.invariants,
+      STORY_AUTHORIZED_PATHS_FIELD, STORY_FIELDS.prohibitedPaths, STORY_FIELDS.verificationRequirements,
+    ]);
+    for (const f of r.story_fields) expect({ field: f.field, valid: f.valid, findings: f.findings }).toEqual({ field: f.field, valid: true, findings: [] });
+    expect(row(r, STORY_AUTHORIZED_PATHS_FIELD).entries).toBe(2);
+    expect(row(r, STORY_FIELDS.invariants).entries).toBe(2);
+    expect(row(r, STORY_FIELDS.objective).entries).toBeNull();
+    expect(r.acceptance_criteria).toEqual([
+      { key: 'OMNI-11', ac_id: 'AC-11', kind: 'Judgment', evidence_kind: 'Manual', status: 'Open', verification: 'UNVERIFIED', parent: 'OMNI-10', orphan: false, duplicate: false, findings: [] },
+      { key: 'OMNI-12', ac_id: 'AC-12', kind: 'Deterministic', evidence_kind: 'Test', status: 'Open', verification: 'UNVERIFIED', parent: 'OMNI-10', orphan: false, duplicate: false, findings: [] },
+    ]);
+  });
+
+  // Where each code must surface: a Story field row, an AC row, or the report only.
+  type Where = { at: 'field'; field: string } | { at: 'ac'; key: string } | { at: 'report' };
+  const SCENARIOS: Record<ReadinessCode, { key?: string; story: JiraIssue | null; acs?: JiraIssue[]; where: Where; evaluated: boolean }> = {
+    INVALID_STORY_KEY: { key: 'bad', story: null, where: { at: 'report' }, evaluated: false },
+    STORY_NOT_FOUND: { story: null, where: { at: 'report' }, evaluated: false },
+    NOT_A_STORY: { story: story({ issuetype: { id: '10074' } }), where: { at: 'field', field: 'issuetype' }, evaluated: false },
+    STORY_NOT_ACTIVE: { story: story({ status: { id: '10039', name: 'Verified' } }), where: { at: 'field', field: 'status' }, evaluated: true },
+    STORY_FIELD_MISSING: { story: story({ [STORY_FIELDS.objective]: '' }), where: { at: 'field', field: STORY_FIELDS.objective }, evaluated: true },
+    INVALID_PATH_PATTERN: { story: story({ [STORY_FIELDS.prohibitedPaths]: 'supabase/' }), where: { at: 'field', field: STORY_FIELDS.prohibitedPaths }, evaluated: true },
+    INVALID_REGISTRY_REFERENCE: { story: story({ [STORY_FIELDS.verificationRequirements]: 'npm test && rm -rf /' }), where: { at: 'field', field: STORY_FIELDS.verificationRequirements }, evaluated: true },
+    UNKNOWN_REGISTRY_ID: { story: story({ [STORY_FIELDS.verificationRequirements]: 'not.in.registry' }), where: { at: 'field', field: STORY_FIELDS.verificationRequirements }, evaluated: true },
+    NO_ACCEPTANCE_CRITERIA: { story: story(), acs: [], where: { at: 'report' }, evaluated: true },
+    AC_INCOMPLETE: { story: story(), acs: [ac('OMNI-11', { [AC_FIELDS.acId]: 'X-1' })], where: { at: 'ac', key: 'OMNI-11' }, evaluated: true },
+    AC_DUPLICATE_ID: { story: story(), acs: [ac('OMNI-11', { [AC_FIELDS.acId]: 'AC-1' }), ac('OMNI-12', { [AC_FIELDS.acId]: 'AC-1' })], where: { at: 'ac', key: 'OMNI-11' }, evaluated: true },
+    AC_UNSUPPORTED_EVIDENCE_KIND: { story: story(), acs: [ac('OMNI-11', { [AC_FIELDS.evidenceKind]: sel('Lint') })], where: { at: 'ac', key: 'OMNI-11' }, evaluated: true },
+    AC_NO_MATCHING_VERIFICATION: { story: story(), acs: [ac('OMNI-11', { [AC_FIELDS.evidenceKind]: sel('Build') })], where: { at: 'ac', key: 'OMNI-11' }, evaluated: true },
+    JIRA_ERROR: { story: story(), acs: [ac('OMNI-11', {}, 'OMNI-99')], where: { at: 'ac', key: 'OMNI-11' }, evaluated: true },
+  };
+
+  it('covers every ReadinessCode', () => {
+    expect(Object.keys(SCENARIOS)).toHaveLength(14);
+  });
+
+  it.each(Object.entries(SCENARIOS))('%s: same decision and findings as the gate, attributed to its row', (code, s) => {
+    const key = s.key ?? 'OMNI-10';
+    const acs = s.acs ?? [ac('OMNI-11')];
+    const gate = evaluateReadiness(key, s.story, acs, REGISTRY);
+    const r = buildReadinessReport(s.story, acs, REGISTRY, key);
+    expect(r.ready).toBe(false);
+    expect(r.ready).toBe(gate.ready);
+    expect(r.findings).toEqual(gate.findings);
+    expect(codes(r)).toContain(code);
+    expect(r.evaluated).toBe(s.evaluated);
+    if (s.where.at === 'field') {
+      expect(row(r, s.where.field).findings).toContain(code);
+      expect(row(r, s.where.field).valid).toBe(false);
+    } else if (s.where.at === 'ac') {
+      expect(acRow(r, s.where.key).findings).toContain(code);
+    } else {
+      const attributed = [...r.story_fields.flatMap((f) => f.findings), ...r.acceptance_criteria.flatMap((a) => a.findings)];
+      expect(attributed).not.toContain(code);
+    }
+    if (!s.evaluated) {
+      for (const f of r.story_fields.filter((x) => x.field !== 'issuetype')) expect(f.valid).toBeNull();
+    }
+  });
+
+  it('duplicate AC IDs flag every holder', () => {
+    const acs = [ac('OMNI-11', { [AC_FIELDS.acId]: 'AC-1' }), ac('OMNI-12', { [AC_FIELDS.acId]: 'AC-1' }), ac('OMNI-13')];
+    const r = buildReadinessReport(story(), acs, REGISTRY);
+    expect(r.acceptance_criteria.map((a) => [a.key, a.duplicate])).toEqual([['OMNI-11', true], ['OMNI-12', true], ['OMNI-13', false]]);
+    expect(acRow(r, 'OMNI-13').findings).toEqual([]);
+  });
+
+  it('orphan AC (wrong parent or wrong issue type) is listed and flagged', () => {
+    const acs = [ac('OMNI-11', {}, 'OMNI-99'), ac('OMNI-12', { issuetype: { id: '10005' } }), ac('OMNI-13')];
+    const r = buildReadinessReport(story(), acs, REGISTRY);
+    expect(r.acceptance_criteria.map((a) => [a.key, a.orphan, a.parent])).toEqual([['OMNI-11', true, 'OMNI-99'], ['OMNI-12', true, 'OMNI-10'], ['OMNI-13', false, 'OMNI-10']]);
+    expect(acRow(r, 'OMNI-11').findings).toEqual(['JIRA_ERROR']);
+  });
+
+  it('NOT_READY Story still lists every AC, sorted by key, valid ones included', () => {
+    const acs = [ac('OMNI-13'), ac('OMNI-11', { [AC_FIELDS.statement]: '' }), ac('OMNI-12')];
+    const r = buildReadinessReport(story({ [STORY_FIELDS.objective]: '' }), acs, REGISTRY);
+    expect(r.ready).toBe(false);
+    expect(r.acceptance_criteria.map((a) => a.key)).toEqual(['OMNI-11', 'OMNI-12', 'OMNI-13']);
+    expect(acRow(r, 'OMNI-11').findings).toEqual(['AC_INCOMPLETE']);
+    expect(acRow(r, 'OMNI-12').findings).toEqual([]);
+  });
+
+  it('canonical JSON is deterministic regardless of AC input order, and is already canonical', () => {
+    const a = [ac('OMNI-12'), ac('OMNI-11', { [AC_FIELDS.acId]: 'AC-12' })];
+    const one = canonicalJson(buildReadinessReport(story(), a, REGISTRY));
+    const two = canonicalJson(buildReadinessReport(story(), [...a].reverse(), REGISTRY));
+    expect(one).toBe(two);
+    expect(canonicalJson(JSON.parse(one))).toBe(one);
+  });
+
+  it('never reports field values: shell text in Verification Requirements is not echoed', () => {
+    const r = buildReadinessReport(story({ [STORY_FIELDS.verificationRequirements]: 'npm test && rm -rf /' }), [ac('OMNI-11')], REGISTRY);
+    const json = canonicalJson(r);
+    expect(json).not.toContain('rm -rf');
+    expect(json).not.toContain('Harden the health route');
+    expect(json).not.toContain('pages/api/health');
+  });
+
+  it('checkReadinessReport: one set of reads; readiness identical to checkReadiness; Jira failure → JIRA_ERROR, not evaluated', async () => {
+    const q = new FakeQuery(story(), [ac('OMNI-11')]);
+    const { readiness, report } = await checkReadinessReport('OMNI-10', { query: q, registry: REGISTRY });
+    expect(q.calls).toEqual(['story:OMNI-10', 'acs:OMNI-10']);
+    expect(readiness).toEqual(await checkReadiness('OMNI-10', { query: new FakeQuery(story(), [ac('OMNI-11')]), registry: REGISTRY }));
+    expect(report.ready).toBe(true);
+    const failed = await checkReadinessReport('OMNI-10', { query: new FakeQuery(null, [], new JiraClientError('JIRA_AUTH', 'Jira returned HTTP 401')), registry: REGISTRY });
+    expect(codes(failed.readiness)).toEqual(['JIRA_ERROR']);
+    expect(failed.report).toMatchObject({ ready: false, evaluated: false, acceptance_criteria: [] });
+    expect(failed.report.findings).toEqual(failed.readiness.findings);
+    const bad = new FakeQuery(story(), []);
+    expect(codes((await checkReadinessReport('OMNI-10 OR 1=1', { query: bad, registry: REGISTRY })).report)).toEqual(['INVALID_STORY_KEY']);
+    expect(bad.calls).toEqual([]);
   });
 });

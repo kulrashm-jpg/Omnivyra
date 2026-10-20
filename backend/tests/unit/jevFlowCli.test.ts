@@ -485,6 +485,70 @@ describe('gov ready', () => {
     expect(ctx.deps.jiraClient).not.toHaveBeenCalled();
     expectNothingCreated(ctx);
   });
+
+  /** Same Story, with and without --report: exit code and GOV_RESULT must be identical. */
+  async function withAndWithout(ctx: Ctx & { creators: jest.Mock[] }, extra: string[]) {
+    const plain = await gov(ctx, ['ready', '--story', STORY]);
+    const report = await gov(ctx, ['ready', '--story', STORY, '--report', ...extra]);
+    expect(report.code).toBe(plain.code);
+    expect(report.result).toEqual(plain.result);
+    expect(report.out[report.out.length - 1]).toBe(plain.out[plain.out.length - 1]);
+    expect(report.err).toEqual(plain.err);
+    return report;
+  }
+
+  it('--report on a ready Story: tables on stdout, same exit 0 and GOV_RESULT; nothing created', async () => {
+    const ctx = readyCtx();
+    const r = await withAndWithout(ctx, []);
+    expect(r.code).toBe(0);
+    const text = r.out.join('\n');
+    expect(text).toContain(`Readiness report: ${STORY} READY (0 finding(s))`);
+    expect(text).toMatch(/FIELD\s+NAME\s+REQUIRED\s+PRESENT\s+ENTRIES\s+VALID\s+FINDINGS/);
+    expect(text).toMatch(/KEY\s+AC ID\s+KIND\s+EVIDENCE KIND\s+STATUS\s+VERIFICATION\s+FLAGS\s+FINDINGS/);
+    expect(text).toMatch(/OMNI-11\s+AC-1\s+Deterministic\s+Test\s+Open\s+UNVERIFIED/);
+    expect(text).not.toContain('Harden the health route');
+    expectNothingCreated(ctx);
+  });
+
+  it('--report on a NOT_READY Story lists every AC with duplicate flags; same exit 10 and findings', async () => {
+    const ctx = readyCtx();
+    ctx.world.acs = [acIssue('OMNI-11'), acIssue('OMNI-12', { [AC_FIELDS.acId]: 'AC-1' })];
+    const r = await withAndWithout(ctx, []);
+    expect(r.code).toBe(10);
+    expect(r.result.findings).toEqual(['AC_DUPLICATE_ID', 'AC_DUPLICATE_ID']);
+    const text = r.out.join('\n');
+    expect(text).toContain('Acceptance Criteria (2):');
+    expect(text).toMatch(/OMNI-11\s.*duplicate\s+AC_DUPLICATE_ID/);
+    expect(text).toMatch(/OMNI-12\s.*duplicate\s+AC_DUPLICATE_ID/);
+    expectNothingCreated(ctx);
+  });
+
+  it('--report --json: one canonical, deterministic JSON line before GOV_RESULT', async () => {
+    const ctx = readyCtx();
+    ctx.world.story = storyIssue({ [STORY_FIELDS.objective]: '' });
+    const first = await withAndWithout(ctx, ['--json']);
+    const second = await gov(ctx, ['ready', '--story', STORY, '--report', '--json']);
+    expect(first.code).toBe(10);
+    expect(first.out).toHaveLength(2);
+    const [json, result] = first.out;
+    expect(result.startsWith('GOV_RESULT ')).toBe(true);
+    const parsed = JSON.parse(json);
+    expect(JSON.stringify(JSON.parse(json))).toBe(json);
+    expect(parsed).toMatchObject({ schema: 'gov-readiness-report/1', story_key: STORY, ready: false, evaluated: true });
+    expect(parsed.acceptance_criteria.map((a: { key: string }) => a.key)).toEqual(['OMNI-11', 'OMNI-12']);
+    expect(second.out[0]).toBe(json);
+    expectNothingCreated(ctx);
+  });
+
+  it('--json without --report → usage 64; refused identity with --report → 11 before any Jira read', async () => {
+    const ctx = readyCtx();
+    expect((await gov(ctx, ['ready', '--story', STORY, '--json'])).code).toBe(64);
+    const refused = await gov(ctx, ['ready', '--story', STORY, '--report'], { ...ctx.e.env, JEV_JIRA_IDENTITY: undefined });
+    expect(refused.code).toBe(11);
+    expect(refused.out.filter((l) => l.startsWith('Readiness report'))).toEqual([]);
+    expect(ctx.deps.jiraQuery).not.toHaveBeenCalled();
+    expectNothingCreated(ctx);
+  });
 });
 
 // ---------------------------------------------------------------- attach

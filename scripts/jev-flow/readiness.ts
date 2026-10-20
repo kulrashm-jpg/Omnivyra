@@ -276,18 +276,165 @@ export function evaluateReadiness(storyKey: string, story: JiraIssue | null, acs
   };
 }
 
-/** Reads Jira through `query` and evaluates; Jira failures become a JIRA_ERROR finding. */
-export async function checkReadiness(storyKey: string, deps: { query: JiraQuery; registry: VerificationRegistry }): Promise<ReadinessResult> {
-  if (typeof storyKey !== 'string' || !STORY_KEY_RE.test(storyKey)) return evaluateReadiness(storyKey, null, [], deps.registry);
+// ---------------------------------------------------------------- report
+
+export const READINESS_REPORT_SCHEMA = 'gov-readiness-report/1';
+
+/** One Story field row. `valid` is null when evaluation stopped before the field was checked. */
+export interface ReadinessReportField {
+  field: string;
+  name: string;
+  required: boolean;
+  present: boolean;
+  /** Non-empty lines for the one-per-line fields, else null. Values are never reported. */
+  entries: number | null;
+  valid: boolean | null;
+  findings: ReadinessCode[];
+}
+
+/** One row per issue Jira returned as an AC of the Story, valid or not. */
+export interface ReadinessReportAc {
+  key: string;
+  ac_id: string | null;
+  kind: string | null;
+  evidence_kind: string | null;
+  status: string | null;
+  verification: string | null;
+  parent: string | null;
+  /** Not an Acceptance Criterion sub-task of this Story (wrong issue type or parent). */
+  orphan: boolean;
+  /** Its AC ID is also held by another AC of the Story. */
+  duplicate: boolean;
+  findings: ReadinessCode[];
+}
+
+export interface ReadinessReport {
+  schema: typeof READINESS_REPORT_SCHEMA;
+  story_key: string;
+  ready: boolean;
+  /** False when evaluation stopped early (bad key, missing Story, not a Story, Jira failure). */
+  evaluated: boolean;
+  story_fields: ReadinessReportField[];
+  acceptance_criteria: ReadinessReportAc[];
+  /** Exactly the readiness findings, in their sorted order. */
+  findings: ReadinessFinding[];
+}
+
+const REPORT_STORY_FIELDS: ReadonlyArray<{ field: string; name: string; required: boolean; multiLine: boolean }> = [
+  { field: 'issuetype', name: 'Issue type', required: true, multiLine: false },
+  { field: 'status', name: 'Status', required: true, multiLine: false },
+  { field: 'updated', name: 'Updated', required: true, multiLine: false },
+  { field: STORY_FIELDS.objective, name: 'Objective', required: true, multiLine: false },
+  { field: STORY_FIELDS.architecture, name: 'Architecture', required: false, multiLine: false },
+  { field: STORY_FIELDS.invariants, name: 'Invariants', required: false, multiLine: true },
+  { field: STORY_AUTHORIZED_PATHS_FIELD, name: 'Authorized Paths', required: true, multiLine: true },
+  { field: STORY_FIELDS.prohibitedPaths, name: 'Prohibited Paths', required: false, multiLine: true },
+  { field: STORY_FIELDS.verificationRequirements, name: 'Verification Requirements', required: true, multiLine: true },
+];
+
+const uniqueCodes = (findings: ReadinessFinding[]): ReadinessCode[] => [...new Set(findings.map((f) => f.code))].sort(cmp);
+
+function fieldPresent(f: Record<string, unknown>, field: string, multiLine: boolean): boolean {
+  if (field === 'issuetype') return objId(f.issuetype) !== '';
+  if (field === 'status') return objId(f.status) !== '' || objName(f.status) !== '';
+  return multiLine ? lines(f[field]).length > 0 : text(f[field]) !== '';
+}
+
+/** Assembles the report around an already computed readiness result; pure. */
+function assembleReport(storyKey: string, story: JiraIssue | null, acs: JiraIssue[], readiness: ReadinessResult): ReadinessReport {
+  const sf = story?.fields ?? {};
+  const evaluated =
+    typeof storyKey === 'string' &&
+    STORY_KEY_RE.test(storyKey) &&
+    story !== null &&
+    story.key === storyKey &&
+    objId(sf.issuetype) === ISSUE_TYPE.story &&
+    !readiness.findings.some((x) => x.code === 'JIRA_ERROR' && x.issue === storyKey && x.field === undefined);
+  const storyFields: ReadinessReportField[] = REPORT_STORY_FIELDS.map((d) => {
+    const present = story !== null && fieldPresent(sf, d.field, d.multiLine);
+    const own = readiness.findings.filter((x) => x.issue === storyKey && x.field === d.field);
+    const checked = evaluated || (story !== null && d.field === 'issuetype');
+    return {
+      field: d.field,
+      name: d.name,
+      required: d.required,
+      present,
+      entries: d.multiLine && story !== null ? [...new Set(lines(sf[d.field]))].length : null,
+      valid: checked ? (present || !d.required) && own.length === 0 : null,
+      findings: uniqueCodes(own),
+    };
+  });
+  const rows: ReadinessReportAc[] = acs.map((ac) => {
+    const af = ac.fields ?? {};
+    const own = readiness.findings.filter((x) => x.issue === ac.key);
+    const parent = objKey(af.parent);
+    const or = (s: string) => (s === '' ? null : s);
+    return {
+      key: ac.key,
+      ac_id: or(text(af[AC_FIELDS.acId])),
+      kind: or(selectValue(af[AC_FIELDS.kind])),
+      evidence_kind: or(selectValue(af[AC_FIELDS.evidenceKind])),
+      status: or(objName(af.status)),
+      verification: or(selectValue(af[AC_FIELDS.verification])),
+      parent: or(parent),
+      orphan: objId(af.issuetype) !== ISSUE_TYPE.acceptanceCriterion || parent !== storyKey,
+      duplicate: own.some((x) => x.code === 'AC_DUPLICATE_ID'),
+      findings: uniqueCodes(own),
+    };
+  });
+  return {
+    schema: READINESS_REPORT_SCHEMA,
+    story_key: String(storyKey),
+    ready: readiness.ready,
+    evaluated,
+    story_fields: storyFields,
+    acceptance_criteria: rows.sort((a, b) => compareIssueKeys(a.key, b.key) || cmp(a.ac_id ?? '', b.ac_id ?? '')),
+    findings: readiness.findings,
+  };
+}
+
+/**
+ * Field-by-field and AC-by-AC view of the readiness gate; pure. Every decision
+ * and finding comes from `evaluateReadiness`, so a report can never disagree
+ * with the gate. Every AC is listed even when the Story is NOT_READY.
+ */
+export function buildReadinessReport(story: JiraIssue | null, acs: JiraIssue[], registry: VerificationRegistry, storyKey: string = story?.key ?? ''): ReadinessReport {
+  return assembleReport(storyKey, story, acs, evaluateReadiness(storyKey, story, acs, registry));
+}
+
+type ReadinessInputs = { ok: true; story: JiraIssue | null; acs: JiraIssue[] } | { ok: false; result: ReadinessResult };
+
+/** The Story then its ACs; a Jira failure becomes a JIRA_ERROR result. */
+async function readInputs(storyKey: string, query: JiraQuery): Promise<ReadinessInputs> {
   let story: JiraIssue | null;
   let acs: JiraIssue[] = [];
   try {
-    story = await deps.query.getStory(storyKey);
-    if (story) acs = await deps.query.listAcceptanceCriteria(storyKey);
+    story = await query.getStory(storyKey);
+    if (story) acs = await query.listAcceptanceCriteria(storyKey);
   } catch (err) {
     const code = err instanceof JiraClientError ? err.code : 'JIRA_UNKNOWN';
     const detail = err instanceof JiraClientError ? `: ${err.message}` : '';
-    return notReady(storyKey, [{ code: 'JIRA_ERROR', issue: storyKey, message: `Jira read failed (${code})${detail}` }]);
+    return { ok: false, result: notReady(storyKey, [{ code: 'JIRA_ERROR', issue: storyKey, message: `Jira read failed (${code})${detail}` }]) };
   }
-  return evaluateReadiness(storyKey, story, acs, deps.registry);
+  return { ok: true, story, acs };
+}
+
+/** Reads Jira through `query` and evaluates; Jira failures become a JIRA_ERROR finding. */
+export async function checkReadiness(storyKey: string, deps: { query: JiraQuery; registry: VerificationRegistry }): Promise<ReadinessResult> {
+  if (typeof storyKey !== 'string' || !STORY_KEY_RE.test(storyKey)) return evaluateReadiness(storyKey, null, [], deps.registry);
+  const inputs = await readInputs(storyKey, deps.query);
+  if (inputs.ok === false) return inputs.result;
+  return evaluateReadiness(storyKey, inputs.story, inputs.acs, deps.registry);
+}
+
+/** `checkReadiness` plus the report, from one set of Jira reads. */
+export async function checkReadinessReport(storyKey: string, deps: { query: JiraQuery; registry: VerificationRegistry }): Promise<{ readiness: ReadinessResult; report: ReadinessReport }> {
+  if (typeof storyKey !== 'string' || !STORY_KEY_RE.test(storyKey)) {
+    const readiness = evaluateReadiness(storyKey, null, [], deps.registry);
+    return { readiness, report: assembleReport(storyKey, null, [], readiness) };
+  }
+  const inputs = await readInputs(storyKey, deps.query);
+  if (inputs.ok === false) return { readiness: inputs.result, report: assembleReport(storyKey, null, [], inputs.result) };
+  const readiness = evaluateReadiness(storyKey, inputs.story, inputs.acs, deps.registry);
+  return { readiness, report: assembleReport(storyKey, inputs.story, inputs.acs, readiness) };
 }

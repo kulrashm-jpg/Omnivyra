@@ -3,7 +3,7 @@
  *
  *   node node_modules/tsx/dist/cli.mjs scripts/jev-flow/cli.ts <verb> [flags]
  *
- *   ready        --story OMNI-n   (readiness only: GET-only Jira reads; creates nothing)
+ *   ready        --story OMNI-n [--report] [--json]   (readiness only: GET-only Jira reads; creates nothing)
  *   start        --story OMNI-n --slug <slug> --repo <git repo> [--base <ref>] [--worktree-root <dir>]
  *   attach       --story OMNI-n --session <uuid> [--worktree <path>] [--base <ref>] [--fork]
  *                (--worktree defaults to the current directory; without --base and
@@ -41,7 +41,7 @@ import { loadBundle } from './evidence';
 import { createJiraQuery, type JiraQuery } from './jiraQuery';
 import { runJudgeFlow } from './judgeFlow';
 import { buildPacket, detectStale, loadPacket, storePacket } from './packet';
-import { checkReadiness } from './readiness';
+import { checkReadiness, checkReadinessReport, type ReadinessReport } from './readiness';
 import { loadRegistry } from './registry';
 import { createGitProbe } from './scope';
 import { buildResumeInstructions, buildStartCommand, findSessionFile, fingerprintSession, newSessionId } from './session';
@@ -114,7 +114,7 @@ const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/~^@-]*$/;
 
 const USAGE = [
   'usage: cli.ts <verb> [flags]',
-  '  ready       --story OMNI-<n>',
+  '  ready       --story OMNI-<n> [--report] [--json]',
   '  start       --story OMNI-<n> --slug <slug> --repo <git repo> [--base <ref>] [--worktree-root <dir>]',
   '  attach      --story OMNI-<n> --session <uuid> [--worktree <path>] [--base <ref>] [--fork]',
   '  packet      --story OMNI-<n> --worktree <path> [--regenerate]',
@@ -231,6 +231,47 @@ async function readReadiness(run: Run, storyKey: string): Promise<ReadinessResul
   return checkReadiness(storyKey, { query: run.deps.jiraQuery(credentials), registry: run.deps.registry });
 }
 
+/** Readiness plus its report, through the same reader identity and the same Jira reads. */
+async function readReadinessReport(run: Run, storyKey: string): Promise<{ readiness: ReadinessResult; report: ReadinessReport }> {
+  const { credentials } = await preflightIdentity(run, false);
+  return checkReadinessReport(storyKey, { query: run.deps.jiraQuery(credentials), registry: run.deps.registry });
+}
+
+function printTable(run: Run, header: string[], rows: string[][]): void {
+  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
+  const line = (cells: string[]) => `  ${cells.map((c, i) => c.padEnd(widths[i])).join('  ').trimEnd()}`;
+  run.io.out(line(header));
+  for (const r of rows) run.io.out(line(r));
+}
+
+/** Human-readable report on stdout. Field values are never printed, only presence and counts. */
+function printReport(run: Run, report: ReadinessReport): void {
+  const dash = (v: string | null) => v ?? '-';
+  const codes = (c: string[]) => (c.length > 0 ? c.join(',') : '-');
+  run.io.out(`Readiness report: ${report.story_key} ${report.ready ? 'READY' : 'NOT READY'} (${report.findings.length} finding(s))${report.evaluated ? '' : '; evaluation stopped early'}`);
+  run.io.out('Story fields:');
+  printTable(
+    run,
+    ['FIELD', 'NAME', 'REQUIRED', 'PRESENT', 'ENTRIES', 'VALID', 'FINDINGS'],
+    report.story_fields.map((f) => [f.field, f.name, f.required ? 'yes' : 'no', f.present ? 'yes' : 'no', f.entries === null ? '-' : String(f.entries), f.valid === null ? 'unchecked' : f.valid ? 'yes' : 'no', codes(f.findings)]),
+  );
+  run.io.out(`Acceptance Criteria (${report.acceptance_criteria.length}):`);
+  printTable(
+    run,
+    ['KEY', 'AC ID', 'KIND', 'EVIDENCE KIND', 'STATUS', 'VERIFICATION', 'FLAGS', 'FINDINGS'],
+    report.acceptance_criteria.map((a) => [
+      a.key,
+      dash(a.ac_id),
+      dash(a.kind),
+      dash(a.evidence_kind),
+      dash(a.status),
+      dash(a.verification),
+      [a.orphan ? 'orphan' : '', a.duplicate ? 'duplicate' : ''].filter(Boolean).join(',') || '-',
+      codes(a.findings),
+    ]),
+  );
+}
+
 function printFindings(run: Run, readiness: ReadinessResult): void {
   run.io.err(`Story ${readiness.story_key} is NOT READY (${readiness.findings.length} finding(s)):`);
   for (const f of readiness.findings) run.io.err(`  [${f.code}] ${f.issue}${f.field ? ` ${f.field}` : ''}: ${f.message}`);
@@ -327,8 +368,19 @@ async function adoptionBaselineProblem(git: GitProbe, worktree: string, story: s
 async function cmdReady(run: Run, argv: string[]): Promise<number> {
   const story = storyArg(argv);
   if (!story) return usage(run, 'ready needs --story OMNI-<n>');
+  const wantReport = has(argv, '--report');
+  if (has(argv, '--json') && !wantReport) return usage(run, 'ready --json requires --report');
   run.result.story = story;
-  const readiness = await readReadiness(run, story);
+  let readiness: ReadinessResult;
+  if (wantReport) {
+    const r = await readReadinessReport(run, story);
+    readiness = r.readiness;
+    // --json: one canonical JSON line (sorted keys), then the usual GOV_RESULT line.
+    if (has(argv, '--json')) run.io.out(canonicalJson(r.report));
+    else printReport(run, r.report);
+  } else {
+    readiness = await readReadiness(run, story);
+  }
   requireReady(run, readiness);
   return finish(run, 'OK', `Story ${story} is READY; nothing was created`);
 }
