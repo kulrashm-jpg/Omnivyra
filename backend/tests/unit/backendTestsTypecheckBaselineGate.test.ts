@@ -129,3 +129,58 @@ describe('backend-tests typecheck gate — a run must be complete before it is c
     expect([...counts.keys()]).toEqual([K1]);
   });
 });
+
+describe('backend-tests typecheck gate — the CLI delivers its whole output and the verdict exit code', () => {
+  // Regression: `process.stdout.write(big); process.exit(code)` dropped
+  // everything past the 64 KiB pipe buffer on Linux CI, RESULT line included.
+  // The real script runs as a child with stdout PIPED to this test; a preloaded
+  // stub answers only the tsc spawn with a >64 KiB fake result. (On Windows a
+  // pipe is synchronous, so there this checks content and exit code; the
+  // flush behaviour itself is exercised wherever the suite runs on Linux.)
+  /* eslint-disable @typescript-eslint/no-var-requires */
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { spawnSync } = require('child_process');
+  /* eslint-enable @typescript-eslint/no-var-requires */
+  const SCRIPT = path.join(__dirname, '../../../scripts/backend-tests-typecheck-baseline.js');
+  const FILLER = `${'x'.repeat(99)}\n`.repeat(800); // 80,000 bytes of non-diagnostic output
+
+  function runCli(fakeRun: Record<string, unknown>) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bt-gate-'));
+    const runFile = path.join(dir, 'run.json');
+    const stub = path.join(dir, 'stub.js');
+    fs.writeFileSync(runFile, JSON.stringify(fakeRun));
+    fs.writeFileSync(stub, [
+      "const cp = require('child_process');",
+      'const real = cp.spawnSync;',
+      `const fake = JSON.parse(require('fs').readFileSync(${JSON.stringify(runFile)}, 'utf8'));`,
+      "cp.spawnSync = (cmd, args, opts) => (Array.isArray(args) && String(args[0]).includes('typescript') ? fake : real(cmd, args, opts));",
+    ].join('\n'));
+    try {
+      return spawnSync(process.execPath, ['-r', stub, SCRIPT], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('the script never calls process.exit (it sets process.exitCode and lets stdout flush)', () => {
+    const src = fs.readFileSync(SCRIPT, 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    expect(src).not.toMatch(/process\.exit\(/);
+    expect(src).toMatch(/process\.exitCode = result\.exitCode;/);
+  });
+
+  it('a crashed compiler with >64 KiB of output: exit 1, and the FAIL verdict arrives at the end', () => {
+    const child = runCli({ status: 134, signal: null, stdout: FILLER, stderr: 'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n' });
+    expect(child.status).toBe(1);
+    expect(child.stdout.length).toBeGreaterThan(80000);
+    expect(child.stdout.trimEnd()).toMatch(/RESULT: FAIL — the type check did not complete[^\n]*compiler crashed[^\n]*$/);
+  });
+
+  it('a complete run with >64 KiB of output: exit 0, and the PASS verdict arrives at the end', () => {
+    const child = runCli({ status: 0, signal: null, stdout: FILLER, stderr: '' });
+    expect(child.status).toBe(0);
+    expect(child.stdout.length).toBeGreaterThan(80000);
+    expect(child.stdout.trimEnd()).toMatch(/RESULT: PASS[^\n]*$/);
+  });
+});

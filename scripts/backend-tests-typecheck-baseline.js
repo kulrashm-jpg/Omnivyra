@@ -227,7 +227,10 @@ function main() {
   const result = decide(run, baseline, { update });
   if (result.writeBaseline) fs.writeFileSync(baselineFile, `${JSON.stringify(result.writeBaseline, null, 2)}\n`);
   process.stdout.write(result.text);
-  process.exit(result.exitCode);
+  // Not process.exit(): on Linux a piped stdout is asynchronous, and exiting
+  // immediately drops everything past the 64 KiB pipe buffer — including the
+  // RESULT line. Setting exitCode lets Node flush stdout, then exit with it.
+  process.exitCode = result.exitCode;
 }
 
 module.exports = { DIAG, collect, evaluateRun, compare, decide };
