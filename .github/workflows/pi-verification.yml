@@ -113,5 +113,12 @@ jobs:
       # the diagnostic SET against scripts/backend-tests-typecheck-baseline.json
       # and fails only on NET-NEW diagnostics. A count comparison would let a
       # new error in while an old one was fixed; this does not.
+      #
+      # The full check needs ~4.8 GB of heap; Node's default (~4.1 GB here) ran
+      # tsc out of memory on every run. 8 GB fits the measured runner (15,983 MB
+      # total, 14,688 MB available — run 39573012141). The gate itself fails on
+      # a crashed compiler, so a too-small heap can never read as a pass again.
       - name: Backend test typecheck non-regression
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: node scripts/backend-tests-typecheck-baseline.js
