@@ -341,3 +341,127 @@ describe('R1-C defect 8 — a redirected page resolves its links against the URL
     expect(normalizeHost('https://www.site.test/')).not.toBe(host);
   });
 });
+
+// ── #292 MAJOR-1 — a redirect to ANOTHER site is not the customer's website ─────
+//
+// The root redirect used to re-point the whole crawl at whatever host answered.
+// A parked, sold or acquired domain that 301s to an unrelated site then had that
+// site crawled (up to maxPages) and stored as the customer's own pages. Same-site
+// redirects (`example.com` ⇄ `www.example.com`) must keep working exactly as before.
+
+const notFound = (): FakeResponse => ({
+  status: 404,
+  __body: '',
+  headers: { forEach: () => undefined, get: () => null },
+});
+
+/** Crawl a small synthetic site. `pages` is keyed by the URL the crawler requests. */
+const crawlSite = async (
+  pages: Record<string, { html: string; finalUrl?: string }>,
+  rootUrl: string,
+  maxPages = 10,
+) => {
+  upserts.length = 0;
+  inserts.length = 0;
+  safeFetch.mockClear();
+  safeFetch.mockImplementation(async (url: string) => {
+    if (url.endsWith('/robots.txt') || url.endsWith('/sitemap.xml')) return respond('');
+    const page = pages[url];
+    return page ? respond(page.html, page.finalUrl ? { url: page.finalUrl } : {}) : notFound();
+  });
+  await crawlCompanyWebsite({ companyId: 'co-1', rootUrl, maxPages, timeoutMs: 2000 });
+  const requested = safeFetch.mock.calls
+    .map((call) => String(call[0]))
+    .filter((url) => !url.endsWith('/robots.txt') && !url.endsWith('/sitemap.xml'));
+  const contentTexts = inserts
+    .filter((i) => i.table === 'page_content')
+    .flatMap((i) => (i.rows as Array<{ content_text: string }>).map((r) => r.content_text));
+  return { requested, rows: [...upserts], contentTexts };
+};
+
+const FOREIGN_HOME = '<html><head><title>Vendor Marketplace</title></head><body>'
+  + '<h1>Buy domains here</h1>'
+  + '<p><a href="https://other.example/listings">Listings</a> <a href="https://other.example/about">About</a></p>'
+  + '</body></html>';
+
+const metaOf = (row: Record<string, unknown> | undefined) =>
+  (row?.crawl_metadata ?? {}) as {
+    redirect?: { requestedUrl: string; finalUrl: string };
+    reachability?: { outcome: string; status: number | null; reason: string | null };
+  };
+
+describe('#292 MAJOR-1 — a redirect to a different site is never stored as the customer\'s evidence', () => {
+  it('does not crawl the foreign site when the ROOT redirects to another domain', async () => {
+    const { requested } = await crawlSite({
+      'https://site.test/': { html: FOREIGN_HOME, finalUrl: 'https://other.example/' },
+      'https://other.example/listings': { html: FOREIGN_HOME },
+      'https://other.example/about': { html: FOREIGN_HOME },
+    }, 'https://site.test');
+    expect(requested).toEqual(['https://site.test/']);
+  });
+
+  it('does not store the foreign document\'s content under the customer\'s root page', async () => {
+    const { rows, contentTexts } = await crawlSite({
+      'https://site.test/': { html: FOREIGN_HOME, finalUrl: 'https://other.example/' },
+    }, 'https://site.test');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].url).toBe('https://site.test/');
+    expect(rows[0].title ?? null).toBeNull();
+    expect(rows[0].headings ?? []).toEqual([]);
+    expect(rows[0].internal_link_count ?? 0).toBe(0);
+    expect(contentTexts.join(' ')).not.toContain('Buy domains here');
+  });
+
+  it('records the off-site redirect as evidence on the customer\'s row', async () => {
+    const { rows } = await crawlSite({
+      'https://site.test/': { html: FOREIGN_HOME, finalUrl: 'https://other.example/' },
+    }, 'https://site.test');
+    const meta = metaOf(rows[0]);
+    expect(meta.redirect).toEqual({ requestedUrl: 'https://site.test/', finalUrl: 'https://other.example/' });
+    expect(meta.reachability?.outcome).toBe('redirect');
+  });
+
+  it('a different SUBDOMAIN is a different site, matching how links are classified', async () => {
+    const { requested, rows } = await crawlSite({
+      'https://site.test/': { html: FOREIGN_HOME, finalUrl: 'https://app.site.test/' },
+    }, 'https://site.test');
+    expect(requested).toEqual(['https://site.test/']);
+    expect(rows[0].title ?? null).toBeNull();
+  });
+
+  it('a NON-root page that redirects off-site keeps the customer row but not the foreign content', async () => {
+    const home = '<html><head><title>Acme</title></head><body><h1>Acme</h1>'
+      + '<p><a href="https://site.test/shop">Shop</a></p></body></html>';
+    const { rows, contentTexts } = await crawlSite({
+      'https://site.test/': { html: home },
+      'https://site.test/shop': { html: FOREIGN_HOME, finalUrl: 'https://store.vendor.test/' },
+    }, 'https://site.test');
+    const shop = rows.find((r) => r.url === 'https://site.test/shop');
+    expect(shop).toBeDefined();
+    expect(shop?.title ?? null).toBeNull();
+    expect(metaOf(shop).redirect?.finalUrl).toBe('https://store.vendor.test/');
+    expect(contentTexts.join(' ')).not.toContain('Buy domains here');
+  });
+
+  it('SAME-SITE CONTROL — example.com → www.example.com still re-points and crawls the site', async () => {
+    const { requested, rows } = await crawlSite({
+      'https://site.test/': { html: REDIRECTED_PAGE, finalUrl: 'https://www.site.test/' },
+      'https://www.site.test/pricing': { html: '<html><head><title>Pricing</title></head><body><h1>Pricing</h1></body></html>' },
+      'https://www.site.test/contact': { html: '<html><head><title>Contact</title></head><body><h1>Contact</h1></body></html>' },
+    }, 'https://site.test');
+    expect(requested).toEqual(['https://site.test/', 'https://www.site.test/pricing', 'https://www.site.test/contact']);
+    expect(rows[0].title).toBe('Acme');
+    expect(metaOf(rows[0]).redirect?.finalUrl).toBe('https://www.site.test/');
+  });
+
+  it('SAME-SITE CONTROL — www.example.com → example.com is the same site too', async () => {
+    const page = '<html><head><title>Acme</title></head><body><h1>Acme</h1>'
+      + '<p><a href="https://site.test/pricing">Pricing</a></p></body></html>';
+    const { requested, rows } = await crawlSite({
+      'https://www.site.test/': { html: page, finalUrl: 'https://site.test/' },
+      'https://site.test/pricing': { html: '<html><head><title>Pricing</title></head><body><h1>Pricing</h1></body></html>' },
+    }, 'https://www.site.test');
+    expect(requested).toEqual(['https://www.site.test/', 'https://site.test/pricing']);
+    expect(rows[0].title).toBe('Acme');
+  });
+});

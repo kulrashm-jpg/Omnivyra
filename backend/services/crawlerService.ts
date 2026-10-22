@@ -869,6 +869,62 @@ async function persistCrawledPage(companyId: string, domainId: string, page: Cra
   };
 }
 
+/**
+ * #292 MAJOR-1 — one site, for redirect purposes: the same host once a leading `www.`
+ * is folded. Any other host — another domain or another subdomain — is another site,
+ * which matches how links are classified internal/external (exact host).
+ */
+function isSameSite(hostA: string, hostB: string): boolean {
+  const fold = (host: string) => host.replace(/^www\./, '');
+  return fold(hostA) === fold(hostB);
+}
+
+/**
+ * #292 MAJOR-1 — the customer's page answered by redirecting to another site. The row
+ * keeps the customer's URL and the redirect as evidence; every content column is cleared
+ * and the page's stored blocks and links are removed, so neither this crawl nor an
+ * earlier one leaves the other site's document attributed to this company.
+ */
+async function recordOffSiteRedirect(
+  companyId: string,
+  domainId: string,
+  current: QueueItem,
+  status: number,
+  finalUrl: string,
+): Promise<void> {
+  const { data: pageRow, error } = await ownedDbTable('canonical_pages')
+    .upsert(
+      {
+        company_id: companyId,
+        domain_id: domainId,
+        url: current.url,
+        page_type: inferPageType(current.url),
+        title: null,
+        meta_title: null,
+        meta_description: null,
+        headings: [],
+        ctas: [],
+        internal_link_count: 0,
+        http_status: status,
+        crawl_depth: current.depth,
+        last_crawled_at: new Date().toISOString(),
+        crawl_metadata: {
+          reachability: { outcome: 'redirect', status, reason: 'off_site_redirect' },
+          redirect: { requestedUrl: current.url, finalUrl },
+        },
+      },
+      { onConflict: 'company_id,url' }
+    )
+    .select('id')
+    .single();
+  if (error) {
+    throw new Error(`Failed to persist off-site redirect for ${current.url}: ${error.message}`);
+  }
+  const pageId = (pageRow as { id: string }).id;
+  await ownedDbTable('page_content').delete().eq('company_id', companyId).eq('page_id', pageId);
+  await ownedDbTable('page_links').delete().eq('company_id', companyId).eq('from_page_id', pageId);
+}
+
 export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Promise<CrawlCompanyWebsiteResult> {
   const resolvedRootUrl = input.rootUrl ?? (await resolveCompanyWebsite(input.companyId)) ?? null;
   if (!resolvedRootUrl) {
@@ -961,6 +1017,14 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
     let documentBase = current.url;
     try { documentBase = normalizeUrl(fetched.finalUrl); } catch { documentBase = current.url; }
     const redirected = documentBase !== current.url;
+    // #292 MAJOR-1 — a redirect to ANOTHER site is not this company's website. A parked,
+    // sold or acquired domain that 301s elsewhere used to have the destination crawled and
+    // stored as the customer's own pages. Keep the customer's row with the redirect as
+    // evidence, store none of the foreign document, and follow none of its links.
+    if (redirected && !isSameSite(normalizeHost(documentBase), rootHost)) {
+      await recordOffSiteRedirect(input.companyId, domain.id, current, fetched.status, documentBase);
+      continue;
+    }
     // The ROOT page's redirect re-points the whole crawl: a site reached at
     // `example.com` but served from `www.example.com` is one site, not two.
     if (current.depth === 0 && redirected) rootHost = normalizeHost(documentBase);
