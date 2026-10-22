@@ -16,6 +16,7 @@ import type { PageSignals } from '../crawlerService';
 import {
   hasHttpResponse,
   isHttpErrorOutcome,
+  isUnreadRedirect,
   reachabilityForPage,
   type PersistedReachability,
 } from '../crawl/reachabilityOutcome';
@@ -139,27 +140,46 @@ export function scoreTechnicalIntelligence(pages: PageRow[], nowMs: number): Tec
       // belongs in this ratio even though it is excluded from the two above.
       C('crawlability', 'Crawlability', 'pass', pct(responded.filter((o) => o.reach.outcome === 'success').length, n), 'Pages returning 200');
     }
-    C('meta_tags', 'Meta title + description', 'pass', pct(pages.filter((p) => p.title && p.meta_description).length, n), 'Pages with title + description');
-    const titles = pages.map((p) => norm(p.title)).filter(Boolean);
-    const descs = pages.map((p) => norm(p.meta_description)).filter(Boolean);
-    const dup = (arr: string[]) => (arr.length ? (arr.length - new Set(arr).size) : 0);
-    C('duplicate_titles', 'Unique titles', titles.length ? 'pass' : 'not_evaluable', titles.length ? clamp(100 - (dup(titles) / n) * 100) : null, `${dup(titles)} duplicate titles`);
-    C('duplicate_descriptions', 'Unique descriptions', descs.length ? 'pass' : 'not_evaluable', descs.length ? clamp(100 - (dup(descs) / n) * 100) : null, `${dup(descs)} duplicate descriptions`);
-    const oneH1 = pages.filter((p) => (p.headings || []).filter((h) => h.level === 1).length === 1).length;
-    C('heading_structure', 'Heading structure (single H1)', 'pass', pct(oneH1, n), 'Pages with exactly one H1');
-    const avgLinks = pages.reduce((a, p) => a + (p.internal_link_count || 0), 0) / n;
-    C('internal_linking', 'Internal linking', 'pass', clamp((avgLinks / 8) * 100), `${avgLinks.toFixed(1)} avg internal links`);
-    const deepPages = pages.filter((p) => (p.crawl_depth ?? 0) > 3);
-    const deep = deepPages.length;
-    C('page_depth', 'Page depth', 'pass', clamp(100 - (deep / n) * 100), `${deep} pages deeper than 3 clicks`, examplesFrom(deepPages));
-    // Meta-tag derived (captured only when the page exposes <meta>)
-    C('open_graph', 'Open Graph tags', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? pct(pages.filter((p) => Object.keys(metaTags(p)).some((k) => k.startsWith('og:'))).length, n) : null);
-    C('twitter_cards', 'Twitter Cards', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? pct(pages.filter((p) => Object.keys(metaTags(p)).some((k) => k.startsWith('twitter:'))).length, n) : null);
-    const noindexPages = pages.filter((p) => norm(metaTags(p)['robots']).includes('noindex'));
-    const noindex = noindexPages.length;
-    // `anyMeta` false ⇒ the check is not_evaluable, so it carries no examples: a check that could
-    // not be evaluated must never look as though it observed pages.
-    C('indexability', 'Indexability', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? clamp(100 - (noindex / n) * 100) : null, `${noindex} pages marked noindex`, anyMeta ? examplesFrom(noindexPages) : undefined);
+    // #305 — every check below describes what a page CONTAINS. A URL that redirected to
+    // another site (or to a destination whose site could not be checked) was not read,
+    // so it is not a page with no title, no H1 and no links. It still counts above, where
+    // the question is reachability.
+    const contentPages = pages.filter((p) => !isUnreadRedirect(p));
+    const cn = contentPages.length;
+    if (cn === 0) {
+      const unreadNote = 'No page was read — every crawled URL redirected to a different site';
+      C('meta_tags', 'Meta title + description', 'not_evaluable', null, unreadNote);
+      C('duplicate_titles', 'Unique titles', 'not_evaluable', null, unreadNote);
+      C('duplicate_descriptions', 'Unique descriptions', 'not_evaluable', null, unreadNote);
+      C('heading_structure', 'Heading structure (single H1)', 'not_evaluable', null, unreadNote);
+      C('internal_linking', 'Internal linking', 'not_evaluable', null, unreadNote);
+      C('page_depth', 'Page depth', 'not_evaluable', null, unreadNote);
+      C('open_graph', 'Open Graph tags', 'not_evaluable', null, unreadNote);
+      C('twitter_cards', 'Twitter Cards', 'not_evaluable', null, unreadNote);
+      C('indexability', 'Indexability', 'not_evaluable', null, unreadNote);
+    } else {
+      C('meta_tags', 'Meta title + description', 'pass', pct(contentPages.filter((p) => p.title && p.meta_description).length, cn), 'Pages with title + description');
+      const titles = contentPages.map((p) => norm(p.title)).filter(Boolean);
+      const descs = contentPages.map((p) => norm(p.meta_description)).filter(Boolean);
+      const dup = (arr: string[]) => (arr.length ? (arr.length - new Set(arr).size) : 0);
+      C('duplicate_titles', 'Unique titles', titles.length ? 'pass' : 'not_evaluable', titles.length ? clamp(100 - (dup(titles) / cn) * 100) : null, `${dup(titles)} duplicate titles`);
+      C('duplicate_descriptions', 'Unique descriptions', descs.length ? 'pass' : 'not_evaluable', descs.length ? clamp(100 - (dup(descs) / cn) * 100) : null, `${dup(descs)} duplicate descriptions`);
+      const oneH1 = contentPages.filter((p) => (p.headings || []).filter((h) => h.level === 1).length === 1).length;
+      C('heading_structure', 'Heading structure (single H1)', 'pass', pct(oneH1, cn), 'Pages with exactly one H1');
+      const avgLinks = contentPages.reduce((a, p) => a + (p.internal_link_count || 0), 0) / cn;
+      C('internal_linking', 'Internal linking', 'pass', clamp((avgLinks / 8) * 100), `${avgLinks.toFixed(1)} avg internal links`);
+      const deepPages = contentPages.filter((p) => (p.crawl_depth ?? 0) > 3);
+      const deep = deepPages.length;
+      C('page_depth', 'Page depth', 'pass', clamp(100 - (deep / cn) * 100), `${deep} pages deeper than 3 clicks`, examplesFrom(deepPages));
+      // Meta-tag derived (captured only when the page exposes <meta>)
+      C('open_graph', 'Open Graph tags', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? pct(contentPages.filter((p) => Object.keys(metaTags(p)).some((k) => k.startsWith('og:'))).length, cn) : null);
+      C('twitter_cards', 'Twitter Cards', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? pct(contentPages.filter((p) => Object.keys(metaTags(p)).some((k) => k.startsWith('twitter:'))).length, cn) : null);
+      const noindexPages = contentPages.filter((p) => norm(metaTags(p)['robots']).includes('noindex'));
+      const noindex = noindexPages.length;
+      // `anyMeta` false ⇒ the check is not_evaluable, so it carries no examples: a check that could
+      // not be evaluated must never look as though it observed pages.
+      C('indexability', 'Indexability', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? clamp(100 - (noindex / cn) * 100) : null, `${noindex} pages marked noindex`, anyMeta ? examplesFrom(noindexPages) : undefined);
+    }
     // BETA-ROADMAP-EXEC-002 — now recovered by the static parser (crawl_metadata.signals). Evaluated when
     // signal data exists for this crawl; otherwise honestly not_evaluable (older crawls, no regression).
     const sn = withSig.length;

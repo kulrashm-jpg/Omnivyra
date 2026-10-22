@@ -12,6 +12,7 @@ import { CheckResult, Freshness, Provenance, aggregate, clamp, freshnessFrom, no
 import { buildWebsiteEngineEvidence, type Evidence } from '../evidencePlatform';
 // BETA-ROADMAP-EXEC-002: static-parser signals recovered into crawl_metadata (type-only import).
 import type { PageSignals } from '../crawlerService';
+import { isUnreadRedirect } from '../crawl/reachabilityOutcome';
 
 interface PageRow { id: string; url: string; headings: Array<{ level: number; text: string }> | null; last_crawled_at: string | null; crawl_metadata: { meta_tags?: Record<string, string>; signals?: PageSignals } | null }
 interface ContentBlock { page_id: string; block_type: string; heading_level: number | null }
@@ -35,7 +36,10 @@ export interface AccessibilityIntelligence {
 
 const GENERIC_LINK = ['click here', 'read more', 'here', 'more', 'link', 'this', 'learn more', 'click'];
 
-export function scoreAccessibilityIntelligence(pages: PageRow[], blocks: ContentBlock[], links: LinkRow[], nowMs: number): AccessibilityIntelligence {
+export function scoreAccessibilityIntelligence(allPages: PageRow[], blocks: ContentBlock[], links: LinkRow[], nowMs: number): AccessibilityIntelligence {
+  // #305 — a URL that redirected to another site (or to a destination whose site could not
+  // be checked) was not read; its empty columns say nothing about what a page contains.
+  const pages = allPages.filter((p) => !isUnreadRedirect(p));
   const checks: CheckResult[] = [];
   const C = (key: string, label: string, status: CheckResult['status'], score: number | null, detail?: string) => checks.push({ key, label, status, score, detail });
   const pct = (n: number, d: number) => (d > 0 ? clamp((n / d) * 100) : 0);

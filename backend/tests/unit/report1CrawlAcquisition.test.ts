@@ -136,6 +136,7 @@ jest.mock('../../db/supabaseClient', () => ({
       chain.select = (_cols: string, opts?: { head?: boolean }) => { head = Boolean(opts?.head); return chain; };
       chain.eq = (c: string, v: string) => { filters[c] = v; return chain; };
       chain.not = () => chain;
+      chain.or = () => chain;
       chain.order = () => chain;
       chain.limit = () => chain;
       chain.maybeSingle = async () => ({ data: rows()[0] ?? null, error: null });

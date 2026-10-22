@@ -11,6 +11,8 @@ import {
   isHttpErrorOutcome,
   observationFromStatus,
   NO_HTTP_RESPONSE_STATUS,
+  OFF_SITE_REDIRECT_REASON,
+  UNVERIFIABLE_FINAL_URL_REASON,
   type ReachabilityObservation,
 } from './crawl/reachabilityOutcome';
 
@@ -891,6 +893,7 @@ async function recordOffSiteRedirect(
   current: QueueItem,
   status: number,
   finalUrl: string,
+  reason: typeof OFF_SITE_REDIRECT_REASON | typeof UNVERIFIABLE_FINAL_URL_REASON = OFF_SITE_REDIRECT_REASON,
 ): Promise<void> {
   const { data: pageRow, error } = await ownedDbTable('canonical_pages')
     .upsert(
@@ -909,7 +912,7 @@ async function recordOffSiteRedirect(
         crawl_depth: current.depth,
         last_crawled_at: new Date().toISOString(),
         crawl_metadata: {
-          reachability: { outcome: 'redirect', status, reason: 'off_site_redirect' },
+          reachability: { outcome: 'redirect', status, reason },
           redirect: { requestedUrl: current.url, finalUrl },
         },
       },
@@ -1015,7 +1018,22 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
     // R1-C — the document's own base is the URL the response came from, so the page's
     // links resolve and are classified internal/external against the right host.
     let documentBase = current.url;
-    try { documentBase = normalizeUrl(fetched.finalUrl); } catch { documentBase = current.url; }
+    let finalUrlVerified = true;
+    try {
+      documentBase = normalizeUrl(fetched.finalUrl);
+      finalUrlVerified = /^https?:$/.test(new URL(documentBase).protocol);
+    } catch {
+      finalUrlVerified = false;
+    }
+    // #305 follow-up — fail CLOSED. When the response's final URL is not an absolute
+    // http(s) URL, which site served the document cannot be checked, so none of it is
+    // stored under this company and none of its links are followed.
+    if (!finalUrlVerified) {
+      await recordOffSiteRedirect(
+        input.companyId, domain.id, current, fetched.status, String(fetched.finalUrl ?? ''), UNVERIFIABLE_FINAL_URL_REASON,
+      );
+      continue;
+    }
     const redirected = documentBase !== current.url;
     // #292 MAJOR-1 — a redirect to ANOTHER site is not this company's website. A parked,
     // sold or acquired domain that 301s elsewhere used to have the destination crawled and

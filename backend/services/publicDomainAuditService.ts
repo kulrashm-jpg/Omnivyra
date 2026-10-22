@@ -4,7 +4,7 @@ import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { clamp } from './intelligenceEngineUtils';
 import type { CanonicalDeclaredEvidence } from './canonicalReport/canonicalReportTypes';
-import { hasHttpResponse, isHttpErrorOutcome, reachabilityForPage } from './crawl/reachabilityOutcome';
+import { hasHttpResponse, isHttpErrorOutcome, isUnreadRedirect, reachabilityForPage } from './crawl/reachabilityOutcome';
 
 // ── BETA-EVIDENCE-EXEC-003 — declared (non-scored) evidence aggregation ────────
 // Reuses signals already extracted by the crawler (crawl_metadata.signals) + the existing legal-page
@@ -377,7 +377,11 @@ export async function buildPublicDomainAuditDecisions(params: {
 }): Promise<PublicAuditResult> {
   const reportTier = params.reportTier ?? 'snapshot';
   const context = await loadAuditContext(params.companyId, params.domainScope);
-  const { pages, content, links } = context;
+  const { content, links } = context;
+  // #305 — a URL that redirected to another site (or to a destination whose site could
+  // not be checked) was not read. Its empty content columns are not evidence of a page
+  // with no title, no H1 and no links, so it takes no part in any decision below.
+  const pages = context.pages.filter((page) => !isUnreadRedirect(page));
 
   /**
    * R1-C — the home page is IDENTIFIED or it is null.

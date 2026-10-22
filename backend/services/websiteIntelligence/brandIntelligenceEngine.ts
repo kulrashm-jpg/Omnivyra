@@ -7,6 +7,7 @@
  */
 import { supabase } from '../../db/supabaseClient';
 import { scopeExcludesAllPages, withDomainScope, type ReportDomainScope } from '../crawl/reportDomainScope';
+import { isUnreadRedirect } from '../crawl/reachabilityOutcome';
 import { CheckResult, Freshness, Provenance, aggregate, clamp, freshnessFrom, healthFromScore, norm } from './engineCommon';
 import type { IntelHealth } from './engineCommon';
 // BETA-ARCH-001: optional canonical-evidence metadata (read-only mapping of existing output).
@@ -15,7 +16,7 @@ import { buildWebsiteEngineEvidence, type Evidence } from '../evidencePlatform';
 interface BrandIdentity { colors?: unknown; typography?: unknown; logo_assets?: unknown; voice?: unknown; vocabulary?: unknown; compliance?: unknown; design_language?: unknown; tagline?: string | null; completeness?: number | null; status?: string | null; version?: number | null; published_at?: string | null; updated_at?: string | null }
 interface ProfileRow { logo_url?: string | null; favicon_url?: string | null }
 interface CommunityRow { sentiment?: string | null; platform?: string | null; message_count?: number | null; created_at?: string | null }
-interface PageRow { title: string | null; headings: Array<{ level: number; text: string }> | null; ctas: Array<{ text: string }> | null }
+interface PageRow { title: string | null; headings: Array<{ level: number; text: string }> | null; ctas: Array<{ text: string }> | null; http_status?: number | null; crawl_metadata?: unknown }
 
 export interface BrandIntelligence {
   brandScore: number | null;
@@ -43,7 +44,10 @@ const defined = (v: unknown): boolean => {
   return true;
 };
 
-export function scoreBrandIntelligence(identity: BrandIdentity | null, profile: ProfileRow | null, community: CommunityRow[], pages: PageRow[], nowMs: number): BrandIntelligence {
+export function scoreBrandIntelligence(identity: BrandIdentity | null, profile: ProfileRow | null, community: CommunityRow[], allPages: PageRow[], nowMs: number): BrandIntelligence {
+  // #305 — a URL that redirected to another site (or to a destination whose site could not
+  // be checked) was not read; its empty columns say nothing about what a page contains.
+  const pages = allPages.filter((p) => !isUnreadRedirect(p));
   const checks: CheckResult[] = [];
   const C = (key: string, label: string, status: CheckResult['status'], score: number | null, detail?: string) => checks.push({ key, label, status, score, detail });
   const pick = (...c: CheckResult[]) => { const ev = c.filter((x) => typeof x.score === 'number'); return ev.length ? clamp(ev.reduce((a, x) => a + (x.score as number), 0) / ev.length) : null; };
@@ -141,7 +145,7 @@ export async function evaluateBrandIntelligence(companyId: string, nowMs = Date.
       supabase.from('company_profiles').select('logo_url, favicon_url').eq('company_id', companyId).maybeSingle(),
       supabase.from('community_ai_actions').select('sentiment, platform, message_count, created_at').eq('company_id', companyId).gte('created_at', since).limit(2000),
       // R1-OPEN-01: only the page input is domain-scoped; identity/profile/community are company facts.
-      scopeExcludesAllPages(domainScope) ? Promise.resolve({ data: [] }) : withDomainScope(supabase.from('canonical_pages').select('title, headings, ctas').eq('company_id', companyId), domainScope).order('last_crawled_at', { ascending: false }).limit(500),
+      scopeExcludesAllPages(domainScope) ? Promise.resolve({ data: [] }) : withDomainScope(supabase.from('canonical_pages').select('title, headings, ctas, http_status, crawl_metadata').eq('company_id', companyId), domainScope).order('last_crawled_at', { ascending: false }).limit(500),
     ]);
     const rows = (idRes.data || []) as BrandIdentity[];
     const identity = rows.find((r) => norm(r.status) === 'published') ?? rows[0] ?? null;

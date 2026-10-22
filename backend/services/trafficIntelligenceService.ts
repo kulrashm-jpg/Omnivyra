@@ -5,6 +5,7 @@ import {
   type PersistedDecisionObject,
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
+import { isUnreadRedirect } from './crawl/reachabilityOutcome';
 import { clamp, normalizeText } from './intelligenceEngineUtils';
 // BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
 import { deriveDecisionConfidence } from './evidencePlatform';
@@ -41,6 +42,8 @@ type PageRow = {
   page_type: string;
   ctas: unknown[] | null;
   internal_link_count: number | null;
+  http_status?: number | null;
+  crawl_metadata?: unknown;
 };
 
 function recentSince(days: number): string {
@@ -88,7 +91,7 @@ async function loadTrafficContext(companyId: string): Promise<{
 
   const { data: pages, error: pagesError } = await supabase
     .from('canonical_pages')
-    .select('id, url, page_type, ctas, internal_link_count')
+    .select('id, url, page_type, ctas, internal_link_count, http_status, crawl_metadata')
     .eq('company_id', companyId)
     .in('id', pageIds);
 
@@ -99,7 +102,9 @@ async function loadTrafficContext(companyId: string): Promise<{
   return {
     sessions: sessionRows,
     pageViews: (pageViews ?? []) as PageViewRow[],
-    pages: new Map(((pages ?? []) as PageRow[]).map((row) => [row.id, row])),
+    // #305 — a URL that redirected to another site was not read, so its empty CTA and link
+    // columns are not evidence of a dead end; it is left out of the page map.
+    pages: new Map(((pages ?? []) as PageRow[]).filter((row) => !isUnreadRedirect(row)).map((row) => [row.id, row])),
   };
 }
 

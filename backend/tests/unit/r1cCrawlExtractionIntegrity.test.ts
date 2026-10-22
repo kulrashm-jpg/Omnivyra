@@ -38,6 +38,8 @@ type Captured = { table: string; rows: unknown };
 
 const upserts: Array<Record<string, unknown>> = [];
 const inserts: Captured[] = [];
+/** Every delete the crawler issued, with the filters it scoped it by. */
+const deletes: Array<{ table: string; filters: Record<string, unknown> }> = [];
 
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => ({
@@ -45,7 +47,11 @@ jest.mock('../../db/writeOwner', () => ({
       if (table === 'canonical_pages') upserts.push(row);
       return { select: () => ({ single: async () => ({ data: { id: 'page-1' }, error: null }) }) };
     },
-    delete: () => ({ eq: () => ({ eq: async () => ({ error: null }) }) }),
+    delete: () => ({
+      eq: (c1: string, v1: unknown) => ({
+        eq: async (c2: string, v2: unknown) => { deletes.push({ table, filters: { [c1]: v1, [c2]: v2 } }); return { error: null }; },
+      }),
+    }),
     insert: async (rows: unknown) => { inserts.push({ table, rows }); return { error: null }; },
     update: () => ({ eq: () => ({ eq: () => ({ is: async () => ({ error: null }) }) }) }),
   }),
@@ -363,6 +369,7 @@ const crawlSite = async (
 ) => {
   upserts.length = 0;
   inserts.length = 0;
+  deletes.length = 0;
   safeFetch.mockClear();
   safeFetch.mockImplementation(async (url: string) => {
     if (url.endsWith('/robots.txt') || url.endsWith('/sitemap.xml')) return respond('');
@@ -463,5 +470,50 @@ describe('#292 MAJOR-1 — a redirect to a different site is never stored as the
     }, 'https://www.site.test');
     expect(requested).toEqual(['https://www.site.test/', 'https://site.test/pricing']);
     expect(rows[0].title).toBe('Acme');
+  });
+});
+
+// ── #305 follow-up — fail closed, follow nothing foreign, stay inside the tenant ──
+describe('#305 follow-up — the crawler fails closed and stays inside the tenant', () => {
+  it('a RELATIVE final URL fails closed: no content stored, nothing followed', async () => {
+    const { requested, rows, contentTexts } = await crawlSite({
+      'https://site.test/': { html: FOREIGN_HOME, finalUrl: '/somewhere-else' },
+    }, 'https://site.test');
+    expect(requested).toEqual(['https://site.test/']);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title ?? null).toBeNull();
+    expect(metaOf(rows[0]).reachability).toEqual({ outcome: 'redirect', status: 200, reason: 'unverifiable_final_url' });
+    expect(contentTexts.join(' ')).not.toContain('Buy domains here');
+  });
+
+  it('a NON-HTTP final URL fails closed', async () => {
+    const { requested, rows } = await crawlSite({
+      'https://site.test/': { html: FOREIGN_HOME, finalUrl: 'ftp://site.test/' },
+    }, 'https://site.test');
+    expect(requested).toEqual(['https://site.test/']);
+    expect(metaOf(rows[0]).reachability?.reason).toBe('unverifiable_final_url');
+  });
+
+  it('a DEEPER off-site page: no link in the foreign document is followed, even ones back to the customer domain', async () => {
+    const home = '<html><head><title>Acme</title></head><body><h1>Acme</h1>'
+      + '<p><a href="https://site.test/shop">Shop</a></p></body></html>';
+    const foreign = '<html><head><title>Vendor</title></head><body><h1>Vendor</h1>'
+      + '<p><a href="https://store.vendor.test/cart">Cart</a> <a href="https://site.test/planted">Planted</a></p></body></html>';
+    const { requested } = await crawlSite({
+      'https://site.test/': { html: home },
+      'https://site.test/shop': { html: foreign, finalUrl: 'https://store.vendor.test/' },
+      'https://site.test/planted': { html: home },
+    }, 'https://site.test');
+    expect(requested).toEqual(['https://site.test/', 'https://site.test/shop']);
+  });
+
+  it('TENANT SCOPE — clearing the stored blocks and links of the off-site page is scoped to this company', async () => {
+    await crawlSite({
+      'https://site.test/': { html: FOREIGN_HOME, finalUrl: 'https://other.example/' },
+    }, 'https://site.test');
+    const cleared = deletes.filter((d) => d.table === 'page_content' || d.table === 'page_links');
+    expect(cleared.map((d) => d.table).sort()).toEqual(['page_content', 'page_links']);
+    for (const d of cleared) expect(d.filters.company_id).toBe('co-1');
+    expect(upserts.every((row) => row.company_id === 'co-1')).toBe(true);
   });
 });

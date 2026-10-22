@@ -13,7 +13,7 @@
 export {};
 
 type Row = Record<string, unknown>;
-type Filter = { op: 'eq' | 'in' | 'notNull' | 'gte' | 'lt'; column: string; value?: unknown };
+type Filter = { op: 'eq' | 'in' | 'notNull' | 'gte' | 'lt' | 'notUnreadRedirect'; column: string; value?: unknown };
 
 /**
  * R1-C — numeric-aware comparison, so an `http_status` range filter behaves the way
@@ -94,6 +94,10 @@ jest.mock('../../db/supabaseClient', () => {
         if (f.op === 'notNull') rows = rows.filter((r) => r[f.column] != null);
         if (f.op === 'gte') rows = rows.filter((r) => r[f.column] != null && cmp(r[f.column], f.value) >= 0);
         if (f.op === 'lt') rows = rows.filter((r) => r[f.column] != null && cmp(r[f.column], f.value) < 0);
+        if (f.op === 'notUnreadRedirect') rows = rows.filter((r) => {
+          const reason = (r.crawl_metadata as { reachability?: { reason?: unknown } } | null | undefined)?.reachability?.reason;
+          return reason == null || !['off_site_redirect', 'unverifiable_final_url'].includes(String(reason));
+        });
       }
       if (order) {
         const { column, ascending } = order;
@@ -110,6 +114,8 @@ jest.mock('../../db/supabaseClient', () => {
       not: (column: string, _op: string, _v: unknown) => { filters.push({ op: 'notNull', column }); return q; },
       gte: (column: string, value: unknown) => { filters.push({ op: 'gte', column, value }); return q; },
       lt: (column: string, value: unknown) => { filters.push({ op: 'lt', column, value }); return q; },
+      // #305 — the only `.or()` the reader issues excludes unread redirects.
+      or: (expr: string) => { filters.push({ op: 'notUnreadRedirect', column: 'crawl_metadata', value: expr }); return q; },
       order: (column: string, opts?: { ascending?: boolean }) => { order = { column, ascending: opts?.ascending !== false }; return q; },
       limit: (n: number) => { limit = n; return q; },
       maybeSingle: async () => {

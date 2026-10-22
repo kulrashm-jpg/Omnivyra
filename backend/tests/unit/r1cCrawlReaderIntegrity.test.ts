@@ -71,6 +71,14 @@ jest.mock('../../db/supabaseClient', () => {
       not: (c: string, _op: string, _v: unknown) => { filters.push((r) => r[c] != null); return q; },
       gte: (c: string, v: unknown) => { filters.push((r) => r[c] != null && numCmp(r[c], v) >= 0); return q; },
       lt: (c: string, v: unknown) => { filters.push((r) => r[c] != null && numCmp(r[c], v) < 0); return q; },
+      // #305 — the only `.or()` the reader issues: reason IS NULL OR reason NOT IN (unread redirects).
+      or: (_expr: string) => {
+        filters.push((r) => {
+          const reason = (r.crawl_metadata as { reachability?: { reason?: unknown } } | null | undefined)?.reachability?.reason;
+          return reason == null || !['off_site_redirect', 'unverifiable_final_url'].includes(String(reason));
+        });
+        return q;
+      },
       order: (c: string, opts?: { ascending?: boolean }) => { order = { column: c, ascending: opts?.ascending !== false }; return q; },
       limit: (n: number) => { limit = n; return q; },
       maybeSingle: async () => ({ data: run()[0] ?? null, error: null }),

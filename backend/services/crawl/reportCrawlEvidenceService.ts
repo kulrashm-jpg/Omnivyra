@@ -24,6 +24,7 @@
  */
 import { supabase } from '../../db/supabaseClient';
 import { crawlCompanyWebsite } from '../crawlerService';
+import { OFF_SITE_REDIRECT_REASON, UNVERIFIABLE_FINAL_URL_REASON } from './reachabilityOutcome';
 import { cooldownForTier, getRefreshPolicyConfig } from './refreshPolicyConfig';
 import { resolveReportDomainScope } from './reportDomainScope';
 
@@ -67,6 +68,15 @@ export interface ReportCrawlEvidenceResult {
  * successful crawl and permanently suppress re-crawling).
  */
 const MIN_USABLE_PAGES = Math.max(1, Number(process.env.REPORT_CRAWL_MIN_PAGES) || 3);
+
+/**
+ * #305 — a URL that redirected to another site is recorded with the FINAL response's
+ * status (usually 200) but was deliberately not read. It must not count as readable
+ * evidence or as fresh evidence. Rows with no reason (every page that was read, and
+ * every legacy row) stay in; `NOT IN` alone would also drop those NULLs.
+ */
+const NOT_AN_UNREAD_REDIRECT =
+  `crawl_metadata->reachability->>reason.is.null,crawl_metadata->reachability->>reason.not.in.(${OFF_SITE_REDIRECT_REASON},${UNVERIFIABLE_FINAL_URL_REASON})`;
 
 /**
  * Bounded crawl shape for the report path. Deliberately smaller than the ingestion
@@ -115,7 +125,8 @@ async function countPages(companyId: string, targetUrl: string): Promise<{ count
       .eq('company_id', companyId)
       .eq('domain_id', scope.domainId)
       .gte('http_status', 200)
-      .lt('http_status', 300),
+      .lt('http_status', 300)
+      .or(NOT_AN_UNREAD_REDIRECT),
     // Freshness comes off the same readable population: the newest timestamp on a
     // row nobody could read is not evidence that this report's evidence is fresh.
     supabase
@@ -125,6 +136,7 @@ async function countPages(companyId: string, targetUrl: string): Promise<{ count
       .eq('domain_id', scope.domainId)
       .gte('http_status', 200)
       .lt('http_status', 300)
+      .or(NOT_AN_UNREAD_REDIRECT)
       .not('last_crawled_at', 'is', null)
       .order('last_crawled_at', { ascending: false })
       .limit(1),
