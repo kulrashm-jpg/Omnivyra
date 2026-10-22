@@ -1,9 +1,9 @@
-// Self-test for CPG U1 dataset tooling v5 (Protocol-004; CPG-044 execution harness). SYNTHETIC data only (SYNTHETIC-* names,
+// Self-test for CPG U1 dataset tooling v6 (Protocol-004; CPG-044 harness; DEEPTECH-PARALLEL-002 B1–B6). SYNTHETIC data only (SYNTHETIC-* names,
 // *.example domains, identifiers generated here). The DETECTOR section scans the clean
 // clone for company names that CPG history already established as contaminated
 // (CPG-032..035) and asserts nothing about those companies beyond that.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,12 +22,14 @@ import * as B from '../lib/bitcoin.mjs';
 import * as CM from '../lib/commitment.mjs';
 import * as DR from '../lib/drand.mjs';
 import * as RG from '../lib/registration.mjs';
+import * as ID from '../lib/identity.mjs';
 import * as SA from '../lib/sampling.mjs';
 import * as S from './synthchain.mjs';
 import * as FR from '../lib/frame.mjs';
 import * as RO from '../lib/raterOrder.mjs';
 import * as PK from '../lib/packets.mjs';
 import * as PE from '../lib/personnel.mjs';
+import * as EN from '../lib/enumeration.mjs';
 import * as EX from '../lib/execution.mjs';
 import * as HA from '../lib/harness.mjs';
 import * as EL from '../lib/eventlog.mjs';
@@ -35,6 +37,11 @@ import * as AR from '../lib/archive.mjs';
 import * as RP from '../lib/raterPackets.mjs';
 import * as CX from '../lib/cpgExecutor.mjs';
 import * as ET from '../lib/evaluationTree.mjs';
+import * as EV from '../lib/evaluation.mjs';
+import * as AS from '../lib/assignment.mjs';
+import * as RT from '../lib/ratings.mjs';
+import * as AN from '../lib/analysis.mjs';
+import * as EB from '../lib/evidenceBundle.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOOL = join(HERE, '..', 'cpg_u1_data.mjs');
@@ -364,6 +371,13 @@ const fxJson = (f) => JSON.parse(fx(f));
 // ── 8. drand quicknet — archived rounds, BLS known answers and negative vectors ───────────────────
 const DRAND_INFO = fxJson('drand/quicknet_chain_info.json');
 const ROUND = Object.fromEntries([1, 1000000, 12345678].map((r) => [r, fxJson(`drand/quicknet_round_${r}.json`)]));
+// §19.3 (protocol line 961) / §21 step 5 relay floor. The archived KAT fixtures are the raw relay responses and carry no relay
+// name — the name is what the FETCHER records, not what drand serves — so the fixtures stay byte-for-byte as fetched
+// (test/fixtures/PROVENANCE.json) and relay identity is attached here, at the use sites. `relayed` is the BUNDLE form (the
+// sorted set of relays that attested the round, as lib/evidenceBundle.mjs records it); `fetched` is the BUILDER-INPUT form
+// (one beacon as obtained from one named relay: `{ ...ROUND[r], relay }`, built inline at the two builder call sites).
+const RELAY_A = 'synthetic-relay-a'; const RELAY_B = 'synthetic-relay-b'; const RELAY_C = 'synthetic-relay-c';
+const relayed = (r, relays = [RELAY_A, RELAY_B]) => ({ ...ROUND[r], relays: [...relays].sort() });
 {
   ok(DR.QUICKNET.hash === DRAND_INFO.hash && DR.DST === 'BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_', 'pinned chain = archived chain info; RFC 9380 DST');
   for (const r of [1, 1000000, 12345678]) ok(DR.verifyBeacon(DRAND_INFO, ROUND[r], r) === ROUND[r].randomness, `KAT drand round ${r} verifies; randomness = sha256(signature)`);
@@ -510,7 +524,7 @@ function study(opt = {}) {
     headers: c.archive('synthetic-source-A'), headers_crosscheck: c.archive('synthetic-source-B'),
     funding: { development: c.proof(fundDev), 'held-out': c.proof(fundHo) },
     commitments: { development: { payload: payDev, ...c.proof(devTx) }, 'held-out': opt.noHoTx ? null : { payload: payHo, ...c.proof(hoTx) } },
-    drand: { chain_info: DRAND_INFO, beacons: [ROUND[1], ROUND[1000000]] },
+    drand: { chain_info: DRAND_INFO, beacons: [relayed(1), relayed(1000000)] },
   };
   return { c, reg, ev, O, devTx, hoTx, payDev, payHo, devDigest };
 }
@@ -546,15 +560,42 @@ const evErr = (fn, name) => { try { fn(); failures.push(`${name} (no error)`); }
   ok(evalS(st, 'held-out', (x) => { x.commitments.development = null; return x; }).state === 'WAITING_DEVELOPMENT_FINALITY', 'held-out waits for development finality');
 
   // drand availability
-  ok(evalS(st, 'held-out', (x) => { x.drand.beacons = [ROUND[1]]; return x; }).state === 'WAITING_DRAND_ROUND', 'required round absent: WAITING_DRAND_ROUND');
-  ok(evalS(st, 'held-out', (x) => { x.drand.beacons = [ROUND[1], ROUND[12345678]]; return x; }).state === 'WAITING_DRAND_ROUND', 'a different (caller-chosen) round is never used');
-  evErr(() => evalS(st, 'held-out', (x) => { x.drand.beacons = [ROUND[1], { ...ROUND[1000000], signature: ROUND[12345678].signature }]; return x; }), 'wrong drand signature: abort');
+  ok(evalS(st, 'held-out', (x) => { x.drand.beacons = [relayed(1)]; return x; }).state === 'WAITING_DRAND_ROUND', 'required round absent: WAITING_DRAND_ROUND');
+  ok(evalS(st, 'held-out', (x) => { x.drand.beacons = [relayed(1), relayed(12345678)]; return x; }).state === 'WAITING_DRAND_ROUND', 'a different (caller-chosen) round is never used');
+  evErr(() => evalS(st, 'held-out', (x) => { x.drand.beacons = [relayed(1), { ...relayed(1000000), signature: ROUND[12345678].signature }]; return x; }), 'wrong drand signature: abort');
   evErr(() => evalS(st, 'held-out', (x) => { x.drand.chain_info = { ...DRAND_INFO, period: 30 }; return x; }), 'wrong drand chain info: abort');
   const late = study({ tail: Array.from({ length: 11 }, (_, i) => DR.roundTime(1000000) + 30 * 86400 + i * 600) });
-  ok(evalS(late, 'held-out', (x) => { x.drand.beacons = [ROUND[1]]; return x; }).state === 'STUDY_VOID_RANDOMNESS_UNAVAILABLE', 'round absent 30 days after its scheduled time: VOID');
+  ok(evalS(late, 'held-out', (x) => { x.drand.beacons = [relayed(1)]; return x; }).state === 'STUDY_VOID_RANDOMNESS_UNAVAILABLE', 'round absent 30 days after its scheduled time: VOID');
   ok(evalS(late, 'held-out').state === 'FINAL', 'same chain with the round present: FINAL');
   const early = study({ tail: Array.from({ length: 11 }, (_, i) => DR.roundTime(1000000) + 30 * 86400 - 6000 + i * 100) });
-  ok(evalS(early, 'held-out', (x) => { x.drand.beacons = [ROUND[1]]; return x; }).state === 'WAITING_DRAND_ROUND', 'round absent just under 30 days: still WAITING');
+  ok(evalS(early, 'held-out', (x) => { x.drand.beacons = [relayed(1)]; return x; }).state === 'WAITING_DRAND_ROUND', 'round absent just under 30 days: still WAITING');
+
+  // §19.3 (protocol line 961) / §21 step 5 relay floor at the VERIFIER. The round the tooling computes is only usable when the
+  // bundle attributes it to ≥ 2 differently named relays; the FINAL result names them. Absence is unchanged (WAITING / VOID above).
+  ok(SA.MIN_DRAND_RELAYS === 2, 'RELAY FLOOR: the tooling requires ≥ 2 differently named drand relays per round (§19.3)');
+  const relayedBoth = (rs) => (x) => { x.drand.beacons = [relayed(1, rs), relayed(1000000, rs)]; return x; };
+  {
+    const two = evalS(st, 'held-out', relayedBoth([RELAY_A, RELAY_B]));
+    ok(two.state === 'FINAL' && canonicalJson(two.drandRelays) === canonicalJson([RELAY_A, RELAY_B]), 'RELAY FLOOR: two DISTINCT relays are accepted and the verification result distinguishes them (sorted)');
+    const three = evalS(st, 'held-out', relayedBoth([RELAY_C, RELAY_A, RELAY_B]));
+    ok(three.state === 'FINAL' && canonicalJson(three.drandRelays) === canonicalJson([RELAY_A, RELAY_B, RELAY_C]), 'RELAY FLOOR: every attesting relay is named in the result, whatever the order supplied');
+    ok(two.record.record_sha256 === three.record.record_sha256 && two.seed === three.seed && !canonicalJson(two.record).includes('relay'), 'RELAY FLOOR: attribution changes no seed and no sampling record — the §5.7 derivation and record_sha256 are untouched');
+  }
+  evErr(() => evalS(st, 'held-out', relayedBoth([RELAY_A])), 'RELAY FLOOR: ONE relay fails closed — no state, no seed (§19.3)');
+  evErr(() => evalS(st, 'held-out', (x) => { x.drand.beacons = [relayed(1), { ...ROUND[1000000], relays: [RELAY_A, RELAY_A] }]; return x; }), 'RELAY FLOOR: the SAME relay named twice does not satisfy the floor');
+  evErr(() => evalS(st, 'held-out', (x) => { x.drand.beacons = [relayed(1), { ...ROUND[1000000] }]; return x; }), 'RELAY FLOOR: a beacon carrying no relay attribution at all fails closed');
+  for (const [bad, what] of [[null, 'null'], [RELAY_A, 'a bare string instead of a list'], [[], 'an empty list'], [[RELAY_A, 42], 'a non-string entry'], [[RELAY_A, ''], 'an empty name'], [[RELAY_A, ` ${RELAY_B} `], 'an untrimmed name']]) {
+    evErr(() => evalS(st, 'held-out', (x) => { x.drand.beacons = [relayed(1), { ...ROUND[1000000], relays: bad }]; return x; }), `RELAY FLOOR: malformed relay identity (${what}) fails closed`);
+  }
+  {
+    // Requirement 8: relay identity is inside the DETERMINISTIC evidence representation. Before DR-1 a bundle beacon was rebuilt
+    // from exactly {round, randomness, signature}, so a one-relay and a two-relay bundle were byte-identical; they must not be now.
+    const one = clone(st.ev); relayedBoth([RELAY_A])(one);
+    const two = clone(st.ev); relayedBoth([RELAY_A, RELAY_B])(two);
+    const preDr1 = (ev) => ({ ...ev, drand: { ...ev.drand, beacons: ev.drand.beacons.map(({ relays: _r, ...b }) => b) } });
+    ok(sha256(canonicalJson(preDr1(one))) === sha256(canonicalJson(preDr1(two))), 'RELAY FLOOR: under the pre-DR-1 representation the one-relay and two-relay bundles WERE byte-identical (the defect)');
+    ok(sha256(canonicalJson(one)) !== sha256(canonicalJson(two)), 'RELAY FLOOR: a one-relay and a two-relay bundle CANNOT hash to the same evidence representation');
+  }
 
   // commitment validity
   ok(evalS(study({ devStage: 'held-out' }), 'development').state === 'STAGE_VOID_MALFORMED_COMMITMENT', 'wrong stage byte for the spent outpoint: VOID');
@@ -830,6 +871,50 @@ const personnel = () => ({
   { const r = personnel(); r.assignments[1].study_fee_agreement_sha256 = null; ok(chk(r).errors.length === 0, 'no study fee (null) permitted'); }
 }
 
+// ── 12d-2. §4A.2 / §20.18: enumeration attribution bound to the personnel register ─────────
+{
+  const ENUM_A = 'SYN-P0';   // personnel(): INDEPENDENT_ROLES[0] = enumerator
+  const RATER_1 = 'SYN-P4';  // personnel(): INDEPENDENT_ROLES[4] = rater-1
+  const withEnumB = () => { const r = personnel(); r.assignments.push({ ...r.assignments[0], person_id: 'SYN-P-ENUM-B', pseudonym: 'e-b' }); return r; };
+  const rows = (id) => [{ candidate_id: 'SYN-9001', enumerated_by: id }, { candidate_id: 'SYN-9002', enumerated_by: id }];
+  const att = (rs, reg) => EN.checkEnumerationAttribution(rs, { personnel: reg });
+
+  ok(EN.registeredEnumerators(personnel()).join() === ENUM_A && EN.registeredEnumerators(withEnumB()).join() === `${ENUM_A},SYN-P-ENUM-B`, 'attribution: the register holds exactly its enumerator slots');
+  // positive controls
+  ok(att(rows(ENUM_A), personnel()).length === 0, 'POSITIVE CONTROL (Enumerator A): rows attributed to the registered enumerator A are ACCEPTED');
+  ok(att(rows('SYN-P-ENUM-B'), withEnumB()).length === 0, 'POSITIVE CONTROL (Enumerator B): rows attributed to a second registered enumerator B are ACCEPTED');
+  ok(att([...rows(ENUM_A), { candidate_id: 'SYN-9003', enumerated_by: 'SYN-P-ENUM-B' }], withEnumB()).length === 0, 'POSITIVE CONTROL: a frame split between two registered enumerators is ACCEPTED');
+  // forged / unregistered
+  { const e = att(rows('SYN-P-FORGED'), personnel());
+    ok(e.length === 2 && e.every((x) => /not an eligible enumerator/.test(x)), 'FORGED: an enumerator id the register does not hold is refused, per row'); }
+  // wrong role
+  ok(att(rows(RATER_1), personnel()).some((x) => /not an eligible enumerator/.test(x)), 'WRONG ROLE: a registered person who is not an enumerator (rater-1) cannot have enumerated the frame');
+  // inactive / not eligible: present as an enumerator but not in good standing under §4A.1
+  { const r = personnel(); r.assignments[0].declaration.ran_or_saw_cpg_output = 'yes';
+    ok(att(rows(ENUM_A), r).some((x) => /^personnel register: .*ran_or_saw_cpg_output/.test(x)), 'INACTIVE / NOT ELIGIBLE: an enumerator whose §4A.1 declaration is not "no" cannot attribute the frame'); }
+  { const r = personnel(); delete r.assignments[0].organisation_confirmation_sha256;
+    ok(att(rows(ENUM_A), r).some((x) => /^personnel register: .*organisation_confirmation/.test(x)), 'INACTIVE / NOT ELIGIBLE: an enumerator without the developing organisation confirmation cannot attribute the frame'); }
+  // one person in both enumerator slots
+  { const r = withEnumB(); r.assignments[r.assignments.length - 1].person_id = ENUM_A;
+    ok(att(rows(ENUM_A), r).some((x) => /both enumerator slots/.test(x)), 'DUPLICATE PERSON: one person occupying both enumerator slots is refused (Enumerator A is not Enumerator B)'); }
+  // §4A staging: enumeration comes first, so a role appointed for a LATER stage need not be filled yet, while the
+  // enumerator slot must be
+  { const r = personnel(); r.assignments.splice(6, 1);
+    ok(PE.checkPersonnelRegister(r).blockers.some((b) => /rating-adjudicator/.test(b)) && att(rows(ENUM_A), r).length === 0, 'a register whose LATER-stage role is not yet appointed still attributes the frame (§4A: each role before its own stage)'); }
+  { const r = personnel(); r.assignments.splice(0, 1);
+    ok(att(rows(ENUM_A), r).some((x) => /role enumerator is UNFILLED/.test(x)), 'a register with no enumerator cannot attribute any frame'); }
+  // missing identity
+  ok(att([{ candidate_id: 'SYN-9004', enumerated_by: '   ' }], personnel()).some((x) => /enumerated_by is missing/.test(x)), 'MISSING: a row carrying no enumerator identity is refused');
+  ok(att([{ candidate_id: 'SYN-9005' }], personnel()).some((x) => /enumerated_by is missing/.test(x)), 'MISSING: an absent enumerated_by field is refused');
+  // the register is optional exactly as checkRaterAssignment's is: without one, identity presence is still required
+  ok(EN.checkEnumerationAttribution([{ candidate_id: 'SYN-9006', enumerated_by: '' }]).some((x) => /enumerated_by is missing/.test(x)), 'no register supplied: a row without an enumerator identity is still refused');
+  ok(EN.checkEnumerationAttribution(rows('SYN-P-FORGED')).length === 0, 'no register supplied: resolution is not attempted (same guard shape as checkRaterAssignment)');
+  // attribution is already inside the frame deterministic identity - no further hashing is added
+  { const base = [row('fill-expected'), row('fill-expected')];
+    const reattributed = base.map((r, i) => (i === 0 ? { ...r, enumerated_by: 'SYN-P-ENUM-B' } : r));
+    ok(FRAME_COLUMNS.includes('enumerated_by') && hashRecords(base, 'candidate_id') !== hashRecords(reattributed, 'candidate_id'), 'frame_hash already binds enumeration attribution: enumerated_by is a FRAME_COLUMN and re-attribution changes frame_hash'); }
+}
+
 // ── 12e. Protocol-004: execution window and no-preview audit (§6.5) ─────────────────────────────────
 const samplingRecord = (stage, drandRoundTime, tag) => {
   const b = { stage, drand_round_time: drandRoundTime, commitment_txid: H(`txid-${tag}`), payload_digest: H(`digest-${tag}`), commitment_height: 4062, randomness_block_hash: H(`rblock-${tag}`), drand_round: tag === 'dev' ? 1 : 1000000, drand_randomness: H(`drand-${tag}`), seed_fingerprint: H(`fp-${tag}`) };
@@ -934,6 +1019,17 @@ const synthExecution = (facts, extra = {}) => ({
   exchanges: [{ seq: 1, requested_url: 'https://synthetic.example/', options: { allowedHosts: null, maxBytes: null, headers: null }, result: { ok: true, status: 200, url: 'https://synthetic.example/', text: '<html>SYNTHETIC</html>' }, error: null, started_at: '2023-09-01T00:00:01Z', completed_at: '2023-09-01T00:00:02Z' }],
   wikidata_calls: [], http_events: [httpEvent(1, '<html>SYNTHETIC</html>')], ...extra,
 });
+// A response with the full shape lookupGroundedCompanyFacts emits at the frozen treatment (facts + grounding arrays).
+const fullResponse = (candidate_id, o = {}) => {
+  const host = `https://${String(candidate_id).toLowerCase()}.example`;
+  const view = (field, effectiveValue, evidence, status) => ({ field, status, evidenceState: evidence.length ? 'EFFECTIVE' : null, effectiveValue, prefilled: status === 'PUBLICLY_VERIFIED' && effectiveValue !== null, evidence });
+  const ev = (value, sourceUrl) => ({ value, sourceName: 'SYNTHETIC source', sourceUrl, identity: 'DECISIVE', identityReason: 'synthetic', authority: 'authoritative', providerFamily: 'synthetic-family' });
+  return JSON.stringify({ facts: { founded_year: '1999', team_size: null, revenue_range: null, ...o.facts }, matched_label: 'SYNTHETIC-CO', source: 'cpg_grounding',
+    grounding: { domain: `${String(candidate_id).toLowerCase()}.example`, asOf: '2026-09-01T00:00:00Z',
+      facts: { founded_year: view('founded_year', '1999', [ev('1999', `${host}/about`)], 'PUBLICLY_VERIFIED'), team_size: view('employee_count', null, [], 'UNVERIFIED'), revenue_range: view('revenue_range', null, [], 'UNVERIFIED') },
+      wikidata: null, registryIdentities: [], registryUnavailable: o.registryUnavailable ?? [], registryAmbiguity: [], unavailableSources: o.unavailableSources ?? [],
+      message: { basis: null, identityNote: null, notPrefilled: [], nothingPrefilled: 'synthetic' }, ...o.grounding } });
+};
 {
   const input = { companyId: 'CPG-U1-FIXTURE', companyName: 'SYNTHETIC-CO-1', websiteUrl: 'https://synthetic-1.example', linkedinUrl: null, asOf: '2026-09-01T00:00:00Z' };
   const rec = AR.buildArchiveRecord({ study_id: 'CPG-U1-2026-01', registration_id: 'SYNTHETIC-REG', stage: 'development', run_id: 'pilot-1', candidate_id: 'SYN-0001', input, execution: synthExecution({ founded_year: '1999' }) });
@@ -986,12 +1082,18 @@ const synthExecution = (facts, extra = {}) => ({
 }
 
 // ── 12h. CPG-044: deterministic rater packets (§12, §12.1) ─────────────────────────────────────────
+const BIND = { seal_hash: H('seal'), evaluation_sha256: H('evaluation') };
 {
   const rec = REC('rater-packets');
   const refRow = (id, f) => ({ ...Object.fromEntries(REFERENCE_COLUMNS.map((c) => [c, 'x'])), candidate_id: id, field: f });
   const items = ['SYN-0301', 'SYN-0302', 'SYN-0303', 'SYN-0304'].flatMap((id, i) => FIELDS3.map((f, j) => ({ candidate_id: id, field: f, cpg_value: (i + j) % 3 === 0 ? '1999' : null, cpg_source_urls: (i + j) % 3 === 0 ? [`https://synthetic-${i}.example/about`] : [], reference_record: refRow(id, f) })));
-  const inputs = { label: 'rater-1', recordSha: rec.record_sha256, evaluationItems: items };
+  const inputs = { label: 'rater-1', recordSha: rec.record_sha256, evaluationItems: items, binding: BIND };
   const pkt = RP.buildRaterPacket(inputs);
+  ok(pkt.seal_hash === BIND.seal_hash && pkt.evaluation_sha256 === BIND.evaluation_sha256, 'B5: a rater packet names the seal and the evaluation artifact it was built from');
+  throws(() => RP.buildRaterPacket({ ...inputs, binding: undefined }), 'B5: an unbound rater packet (no seal / evaluation binding) is refused');
+  throws(() => RP.buildRaterPacket({ ...inputs, binding: { ...BIND, seal_hash: 'not-a-hash' } }), 'B5: a rater packet with a malformed seal binding is refused');
+  ok(!RP.verifyRaterPacket(RP.raterPacketBytes(pkt), { ...inputs, binding: { ...BIND, seal_hash: H('another seal') } }).identical, 'B5: a packet presented against another seal is refused');
+  ok(!RP.verifyRaterPacket(RP.raterPacketBytes(pkt), { ...inputs, binding: { ...BIND, evaluation_sha256: H('another evaluation') } }).identical, 'B5: a packet presented against another evaluation artifact is refused');
   const bytes = RP.raterPacketBytes(pkt);
   ok(pkt.item_count === 12 && pkt.items.every((it, i) => it.position === i + 1) && pkt.items.map((x) => x.order_key).join() === RO.presentationOrder(rec.record_sha256, 'rater-1', items).map((x) => x.order_key).join(), 'rater packet: all items, ordered by the approved derivation, positions 1..n');
   ok(pkt.items.every((it) => Object.keys(it).sort().join() === ['candidate_id', 'cpg_source_urls', 'cpg_value', 'field', 'order_key', 'position', 'reference_record'].sort().join()), 'rater packet: only permitted information (no class, split, pilot, rater or tally fields)');
@@ -1099,20 +1201,21 @@ const synthExecution = (facts, extra = {}) => ({
     const refRow = (id, f) => ({ ...Object.fromEntries(REFERENCE_COLUMNS.map((c) => [c, 'x'])), candidate_id: id, field: f });
     const r1 = rec(response({ founded_year: view('founded_year', '1999', [ev('1999', 'https://synthetic-j1.example/a'), ev('1999', 'https://synthetic-j1.example/a'), ev('2001', 'https://synthetic-j2.example/b')]), team_size: view('employee_count', '120', [ev('120', 'https://synthetic-j3.example/c')]) }));
     const refs = FIELDS3.map((f) => refRow('SYN-0401', f));
-    const its = RP.evaluationItemsFromArchive([r1], refs);
+    const rr = EV.readResponse(r1);
+    const its = FIELDS3.map((f, i) => ({ candidate_id: 'SYN-0401', field: f, cpg_value: rr.values[f], cpg_source_urls: RP.extractCitedUrls(r1, f), reference_record: refs[i] }));
     ok(its.length === 3 && canonicalJson(its.find((x) => x.field === 'founded_year').cpg_source_urls) === canonicalJson(['https://synthetic-j1.example/a', 'https://synthetic-j2.example/b'])
       && canonicalJson(its.find((x) => x.field === 'employee_count').cpg_source_urls) === canonicalJson(['https://synthetic-j3.example/c'])
       && canonicalJson(its.find((x) => x.field === 'revenue_range').cpg_source_urls) === canonicalJson([]), 'RULE A (J): evaluation items carry the Rule-A set per field — no CITED_URL_RULE_UNDECIDED anywhere');
     ok(its.every((x) => x.cpg_value === AR.cpgValue(r1, x.field)) && its.find((x) => x.field === 'founded_year').cpg_value === '1999', 'evaluation items pair each Rule-A URL set with the prefilled CPG value for the same field');
     // TASK 5: field evidence → Rule-A set → evaluation item → rater packet is lossless and deterministic
     const sealedRec = REC('rule-a');
-    const packet = RP.buildRaterPacket({ label: 'rater-1', recordSha: sealedRec.record_sha256, evaluationItems: its });
+    const packet = RP.buildRaterPacket({ label: 'rater-1', recordSha: sealedRec.record_sha256, evaluationItems: its, binding: BIND });
     const inPacket = packet.items.find((x) => x.field === 'founded_year');
     ok(packet.item_count === 3 && canonicalJson(inPacket.cpg_source_urls) === canonicalJson(RP.extractCitedUrls(r1, 'founded_year'))
       && packet.items.every((x) => canonicalJson(x.cpg_source_urls) === canonicalJson(RP.extractCitedUrls(r1, x.field))), 'CHAIN: field evidence → Rule-A set → evaluation item → rater packet is lossless for every qualifying URL');
-    ok(RP.verifyRaterPacket(RP.raterPacketBytes(packet), { label: 'rater-1', recordSha: sealedRec.record_sha256, evaluationItems: its }).identical, 'CHAIN: the packet rebuilds byte-identically from the same archive-derived items');
+    ok(RP.verifyRaterPacket(RP.raterPacketBytes(packet), { label: 'rater-1', recordSha: sealedRec.record_sha256, evaluationItems: its, binding: BIND }).identical, 'CHAIN: the packet rebuilds byte-identically from the same archive-derived items');
     { const forged = JSON.parse(JSON.stringify(packet)); const i = forged.items.findIndex((x) => x.field === 'founded_year'); forged.items[i].cpg_source_urls = ['https://synthetic-j1.example/a'];
-      ok(!RP.verifyRaterPacket(Buffer.from(canonicalJson(forged), 'utf8'), { label: 'rater-1', recordSha: sealedRec.record_sha256, evaluationItems: its }).identical, 'ANTI-SELECTION: a packet with an unfavourable URL removed by hand is refused by the rebuild'); }
+      ok(!RP.verifyRaterPacket(Buffer.from(canonicalJson(forged), 'utf8'), { label: 'rater-1', recordSha: sealedRec.record_sha256, evaluationItems: its, binding: BIND }).identical, 'ANTI-SELECTION: a packet with an unfavourable URL removed by hand is refused by the rebuild'); }
   }
 }
 
@@ -1204,6 +1307,386 @@ const synthExecution = (facts, extra = {}) => ({
   }
 }
 
+// ── 12k. DEEPTECH-PARALLEL-013 · §14 TARGETED TEST MATRICES: DR-12 (§6), R28 (§3), R15 (§4) ==========
+// Every value below is CONSTRUCTED here. No external identity, PID, custodian or as_of is fabricated:
+// the "plausible" cases are obviously non-real strings whose only role is to be NOT locally refusable,
+// which is exactly the point being tested (surviving a local screen is not evidence of identity).
+// Every negative case pins the EXACT class AND code (and, where the message carries the finding, the
+// message text). A bare "was refused" assertion is not used anywhere here: under a mutant that drops a
+// guard a later, unrelated failure can still refuse the input, so "refused" can pass while the mutant
+// survives.
+{
+  const ZW = String.fromCharCode(0x200b);   // zero-width space, constructed numerically
+  const CLS = ID.IDENTITY_CLASS;
+  const cls = (v, o) => ID.classifyIdentityValue(v, o ?? {});
+  // exact-verdict helper: class AND code must both match, and the message must contain `frag` when given
+  const isVerdict = (v, expectClass, expectCode, frag) => {
+    const c = cls(v);
+    return c.class === expectClass && c.code === expectCode && (frag === undefined || String(c.message).includes(frag));
+  };
+
+  // ── DR-12 (§6): the resolved sentinel-normalisation rule, clause by clause ──
+  ok(ID.isReservedSentinel('UNASSIGNED') && ID.isReservedSentinel(' UNASSIGNED ') && ID.isReservedSentinel('\tUNASSIGNED\n'),
+    'DR-12 a: the UNASSIGNED sentinel is recognised with surrounding whitespace trimmed');
+  ok(ID.isReservedSentinel('unassigned') && ID.isReservedSentinel('UnAssigned') && ID.isReservedSentinel('  unassigned  '),
+    'DR-12 b: the UNASSIGNED sentinel is compared case-insensitively');
+  ok(ID.isEmptyValue('') && ID.isEmptyValue('   ') && ID.isEmptyValue('\t\n') && !ID.assignedValue('') && !ID.assignedValue('   '),
+    'DR-12 c: empty and whitespace-only values stay UNASSIGNED');
+  ok(!ID.isReservedSentinel('UN ASSIGNED') && ID.assignedValue('UN ASSIGNED') && cls('UN ASSIGNED').class === CLS.PLAUSIBLE,
+    'DR-12 d: an INTERNAL space (UN ASSIGNED) stays ASSIGNED — whitespace is trimmed from the ends only');
+  ok(ID.assignedValue('SYN-CONSTRUCTED-VALUE-1') && ID.assignedValue('0') && ID.assignedValue('UNASSIGNEDX') && ID.assignedValue('XUNASSIGNED'),
+    'DR-12 e: legitimate values stay ASSIGNED — the sentinel is matched whole, never as a substring');
+  ok(!ID.assignedValue(undefined) && !ID.assignedValue(null) && !ID.assignedValue(7) && !ID.assignedValue({}),
+    'DR-12 f: a non-string is never ASSIGNED');
+
+  // DR-12 in the registration check itself. The blocker TEXT is pinned, because the DR-12 defect does not
+  // make these records pass outright — it routes them to a DIFFERENT refusal (a format error instead of a
+  // named prerequisite), and only the exact message distinguishes the two.
+  {
+    const t = RG.registrationTemplate({ protocolSha: H('p13'), toolingAggregate: H('t13'), registrySha: H('r13') });
+    const base = filledRegistration(t, { outpoints: { development: `${H('d13')}:0`, 'held-out': `${H('h13')}:1` }, checkpoint: { height: 4143, hash: H('cp13') } });
+    const c13 = (over) => RG.checkRegistration({ ...base, ...over }, { phase: 'registered', allowSynthetic: true });
+    const AS_OF_BLOCKER = 'as_of is UNASSIGNED (§7/§19.1: one frozen ISO timestamp, chosen before registration)';
+    const RID_BLOCKER = 'registration_id is UNASSIGNED (issued by the registry at registration)';
+    for (const [label, v] of [['surrounding whitespace', ' UNASSIGNED '], ['lowercase', 'unassigned'], ['mixed case with whitespace', '  UnAssigned ']]) {
+      const r = c13({ as_of: v });
+      ok(r.blockers.includes(AS_OF_BLOCKER) && !r.errors.some((e) => e.includes('as_of must be ISO-8601')),
+        `DR-12 g: as_of "${label}" is the named as_of prerequisite (exact blocker), not a format error`);
+      const r2 = c13({ registration_id: v });
+      ok(r2.blockers.includes(RID_BLOCKER), `DR-12 h: registration_id "${label}" is the named registry-issued prerequisite (exact blocker)`);
+    }
+    ok(c13({ provider_configuration_sha256: ' unassigned ' }).blockers.some((b) => b.startsWith('provider_configuration_sha256 is UNASSIGNED')),
+      'DR-12 i: a whitespace-padded lowercase sentinel in provider_configuration_sha256 is the named prerequisite');
+    // F1: `checkpoint` was the last field still comparing the sentinel RAW. The exact sentinel reached the
+    // blocker; a padded or mis-cased one fell through to the FORMAT error, so the record was reported
+    // malformed (exit 1) instead of awaiting a named prerequisite (exit 4). Both the blocker text and the
+    // ABSENCE of the format error are pinned: a mutant that drops `.trim()` still refuses the record, just
+    // at a different exit with a different message, so only code + message together kill it.
+    const CP_BLOCKER = 'checkpoint is UNASSIGNED (a block at or after both funding confirmations)';
+    const CP_FORMAT = 'checkpoint must be {height: integer, hash: 64 hex}';
+    for (const [label, v] of [['exact sentinel', 'UNASSIGNED'], ['surrounding whitespace', ' UNASSIGNED '],
+      ['lowercase', 'unassigned'], ['mixed case with whitespace', '  UnAssigned ']]) {
+      const rh = c13({ checkpoint: { height: v, hash: H('cp13') } });
+      ok(rh.blockers.includes(CP_BLOCKER) && !rh.errors.includes(CP_FORMAT),
+        `F1 a: checkpoint.height "${label}" is the named checkpoint prerequisite (exact blocker), not the format error`);
+      const rb = c13({ checkpoint: { height: 4143, hash: v } });
+      ok(rb.blockers.includes(CP_BLOCKER) && !rb.errors.includes(CP_FORMAT),
+        `F1 b: checkpoint.hash "${label}" is the named checkpoint prerequisite (exact blocker), not the format error`);
+    }
+    ok(!c13({}).blockers.includes(CP_BLOCKER) && !c13({}).errors.includes(CP_FORMAT),
+      'F1 control: a legitimate checkpoint is neither a named prerequisite nor a format error');
+    ok(c13({ checkpoint: { height: -1, hash: H('cp13') } }).errors.includes(CP_FORMAT)
+      && !c13({ checkpoint: { height: -1, hash: H('cp13') } }).blockers.includes(CP_BLOCKER),
+    'F1 control: a genuinely malformed checkpoint keeps the format error (exit 1) it already had');
+    ok(c13({ checkpoint: {} }).errors.includes(CP_FORMAT) && !c13({ checkpoint: {} }).blockers.includes(CP_BLOCKER),
+      'F1 control: an ABSENT checkpoint keeps the route it had before (format error), because the sentinel test is false for undefined');
+
+    // F4b: the "|" guard no longer short-circuits the classification, so identity.registration_id exists
+    // for a piped value too. Both findings are asserted: the classification, and the instrument's own rule.
+    const piped = c13({ registration_id: 'SYN-CONSTRUCTED|PIPED-REG' });
+    ok(Object.hasOwn(piped.identity, 'registration_id') && piped.identity.registration_id.class === CLS.MALFORMED
+      && piped.identity.registration_id.code === 'MALFORMED_DELIMITER',
+    'F4b: a piped registration_id is CLASSIFIED (MALFORMED_DELIMITER) instead of being skipped, so identity.registration_id is observable');
+    ok(piped.errors.includes('registration_id must not contain "|"'),
+      'F4b: the "|" refusal is unweakened and still stated in the instrument\'s own words (exact message: the record is still refused without it, which is why the text is pinned)');
+    ok(piped.errors.some((e) => e.startsWith('registration_id is malformed — value contains "|"')),
+      'F4b: the identity finding is reported as well, so both the identity class and the construction rule are visible');
+    ok(c13({ registration_id: 'SYN-CONSTRUCTED-REG-13' }).identity.registration_id.class === CLS.PLAUSIBLE
+      && c13({ registration_id: 'SYNTHETIC-REG-13' }).identity.registration_id.code === 'SYNTHETIC_MARKER',
+    'F4b control: an unpiped registration_id is still classified exactly as before');
+    const kept = c13({ as_of: '2026-09-01T00:00:00Z', registration_id: 'SYN-CONSTRUCTED-REG-13' });
+    ok(!kept.blockers.some((b) => b.startsWith('as_of is UNASSIGNED')) && !kept.blockers.some((b) => b.startsWith('registration_id is UNASSIGNED')),
+      'DR-12 j: legitimate as_of and registration_id values stay ASSIGNED in the registration check');
+    // R28 in the registration check: a malformed or placeholder identity is an ERROR, not a silent pass.
+    ok(c13({ accountable_identity: { value: 'SYN-CONSTRUCTED|PIPE' } }).errors.some((e) => e.startsWith('accountable_identity.value is malformed')),
+      'R28 reg-1: a MALFORMED identity value is a record error, not an accepted identity');
+    ok(c13({ accountable_identity: { value: 'TBD' } }).errors.some((e) => e.includes('is a reserved placeholder, not an identity')),
+      'R28 reg-2: a reserved placeholder identity value is a record error even in test mode');
+    ok(c13({ registration_id: 'PLACEHOLDER' }).errors.some((e) => e.startsWith('registration_id is a reserved placeholder')),
+      'R28 reg-3: registration_id is identity-screened, not merely non-empty');
+    ok(Object.keys(c13({}).identity).length >= 5 && c13({}).identity['persistent_identifier.value'].class === CLS.SYNTHETIC,
+      'R28 reg-4: the check returns a class for every identity leaf it screened');
+  }
+
+  // ── R28 (§3) MATRIX: the eleven required cases ──
+  ok(isVerdict('', CLS.EMPTY, 'EMPTY', 'empty or whitespace only'), 'R28 §14-1  blank -> EMPTY');
+  ok(isVerdict('   ', CLS.EMPTY, 'EMPTY', 'empty or whitespace only') && isVerdict('\t\n ', CLS.EMPTY, 'EMPTY'), 'R28 §14-2  whitespace-only -> EMPTY');
+  ok(isVerdict('UNASSIGNED', CLS.RESERVED, 'RESERVED_UNASSIGNED', 'reserved UNASSIGNED sentinel'), 'R28 §14-3  UNASSIGNED -> RESERVED_UNASSIGNED');
+  ok(isVerdict('unassigned', CLS.RESERVED, 'RESERVED_UNASSIGNED') && isVerdict('UnAssIgNeD', CLS.RESERVED, 'RESERVED_UNASSIGNED'), 'R28 §14-4  case variants of UNASSIGNED -> RESERVED_UNASSIGNED');
+  ok(isVerdict('  UNASSIGNED\t', CLS.RESERVED, 'RESERVED_UNASSIGNED') && isVerdict(' unassigned ', CLS.RESERVED, 'RESERVED_UNASSIGNED'), 'R28 §14-5  surrounding-whitespace variants of UNASSIGNED -> RESERVED_UNASSIGNED');
+  ok(isVerdict('TBD', CLS.SYNTHETIC, 'PLACEHOLDER_TOKEN', 'reserved placeholder') && isVerdict('tbd', CLS.SYNTHETIC, 'PLACEHOLDER_TOKEN') && isVerdict('T.B.D.', CLS.SYNTHETIC, 'PLACEHOLDER_TOKEN'),
+    'R28 §14-6  TBD, in any case or punctuation -> PLACEHOLDER_TOKEN');
+  // F4 narrowed this list to what a document explicitly defines: 'your-id-here' is no longer refused
+  // (no document names it), so the punctuation/case coverage moves to a PLACEHOLDER variant.
+  ok(isVerdict('PLACEHOLDER', CLS.SYNTHETIC, 'PLACEHOLDER_TOKEN') && isVerdict('placeholder', CLS.SYNTHETIC, 'PLACEHOLDER_TOKEN') && isVerdict('Place.Holder', CLS.SYNTHETIC, 'PLACEHOLDER_TOKEN'),
+    'R28 §14-7  PLACEHOLDER -> PLACEHOLDER_TOKEN');
+  ok(isVerdict('0000-0000-0000-0000', CLS.SYNTHETIC, 'ZERO_PATTERN', 'zero-pattern') && isVerdict('0000000000', CLS.SYNTHETIC, 'ZERO_PATTERN') && isVerdict('0000-0000-0000-000X', CLS.SYNTHETIC, 'ZERO_PATTERN'),
+    'R28 §14-8  zero-pattern identifiers, grouped or not -> ZERO_PATTERN');
+  // F4: the FOREIGN marker list (MOCK/FAKE/SPECIMEN/...) is gone — see the F4 block below for why, and for
+  // what happens to those values now. The instrument's OWN fixture marker stays, and stays a SUBSTRING
+  // match in any case, because `--allow-synthetic` and the synthetic fixtures depend on detecting it.
+  ok(isVerdict('SYNTHETIC-CONSTRUCTED-1', CLS.SYNTHETIC, 'SYNTHETIC_MARKER', 'test-fixture marker')
+    && isVerdict('X-SYNTHETIC-1', CLS.SYNTHETIC, 'SYNTHETIC_MARKER', 'test-fixture marker')
+    && isVerdict('x-synthetic-1', CLS.SYNTHETIC, 'SYNTHETIC_MARKER', 'test-fixture marker'),
+  'R28 §14-9  the instrument\'s OWN fixture marker -> SYNTHETIC_PLACEHOLDER (SYNTHETIC_MARKER), matched as a substring, in any case');
+  ok(isVerdict('SYN-CONSTRUCTED-0009-1111-2222-3333', CLS.PLAUSIBLE, 'NO_AUTHORITY_ATTESTATION', 'defines no syntax or checksum')
+    && !ID.isAuthoritative(cls('SYN-CONSTRUCTED-0009-1111-2222-3333')),
+  'R28 §14-10 a plausible value is PLAUSIBLE_BUT_UNVERIFIED and is NOT authoritative');
+  {
+    // §14-11 "valid type-specific value": the protocol defines NO type-specific syntax for any PID type, so
+    // the only mechanism that can make a value VALID/AUTHORITATIVE is an explicit, separately supplied
+    // attestation that binds this exact value to a named authority. Constructed authority, resolver and
+    // method; no real registry or person is named.
+    const value = 'SYN-CONSTRUCTED-PID-0009-1111';
+    const att = { schema: ID.ATTESTATION_SCHEMA, resolved_value: value, authority: 'SYN-CONSTRUCTED-REGISTER-OF-RECORD', resolved_by: 'SYN-CONSTRUCTED-VERIFIER-1', method: 'offline resolution against a constructed test register', resolved_at: '2026-09-01T00:00:00Z' };
+    const good = cls(value, { attestation: att });
+    ok(good.class === CLS.AUTHORITATIVE && good.code === 'ATTESTED' && ID.isAuthoritative(good),
+      'R28 §14-11 an explicitly attested value, bound to that exact value, is VALID_AUTHORITATIVE');
+    const moved = cls('SYN-CONSTRUCTED-PID-9999-0000', { attestation: att });
+    ok(moved.class === CLS.PLAUSIBLE && moved.code === 'ATTESTATION_INSUFFICIENT' && moved.message.includes('resolved_value is not the value under check'),
+      'R28 §14-11a an attestation cannot be moved onto another value (binding is on the exact value)');
+    for (const [label, over, frag] of [
+      ['no authority', { authority: undefined }, 'attestation.authority is not an explicit value (MALFORMED_NOT_A_STRING)'],
+      ['blank authority', { authority: '   ' }, 'attestation.authority is not an explicit value (EMPTY)'],
+      ['placeholder authority', { authority: 'TBD' }, 'attestation.authority is not an explicit value (PLACEHOLDER_TOKEN)'],
+      ['unassigned resolver', { resolved_by: ' unassigned ' }, 'attestation.resolved_by is not an explicit value (RESERVED_UNASSIGNED)'],
+      ['no method', { method: '' }, 'attestation.method is not an explicit value (EMPTY)'],
+      ['non-UTC instant', { resolved_at: '2026-09-01' }, 'attestation.resolved_at must be ISO-8601 UTC'],
+      ['wrong schema', { schema: 'other/v1' }, `attestation.schema must be ${ID.ATTESTATION_SCHEMA}`],
+    ]) {
+      const c = cls(value, { attestation: { ...att, ...over } });
+      ok(c.class === CLS.PLAUSIBLE && c.code === 'ATTESTATION_INSUFFICIENT' && c.message.includes(frag),
+        `R28 §14-11b an attestation with ${label} confers no authority (stays PLAUSIBLE_BUT_UNVERIFIED)`);
+    }
+    ok(cls(value, { attestation: 'yes' }).class === CLS.PLAUSIBLE && cls(value, { attestation: [] }).class === CLS.PLAUSIBLE,
+      'R28 §14-11c a non-object attestation confers no authority');
+  }
+  // the additional MALFORMED cases the six-class distinction requires
+  ok(isVerdict(42, CLS.MALFORMED, 'MALFORMED_NOT_A_STRING', 'not a string') && isVerdict(null, CLS.MALFORMED, 'MALFORMED_NOT_A_STRING') && isVerdict(undefined, CLS.MALFORMED, 'MALFORMED_NOT_A_STRING'),
+    'R28 §14-12 a non-string value -> MALFORMED_NOT_A_STRING');
+  ok(isVerdict(`SYN-CONSTRUCTED${ZW}VALUE`, CLS.MALFORMED, 'MALFORMED_INVISIBLE_CHARACTER', 'zero-width')
+    && isVerdict(`SYN-CONSTRUCTED${String.fromCharCode(0x202e)}VALUE`, CLS.MALFORMED, 'MALFORMED_INVISIBLE_CHARACTER')
+    && isVerdict(`SYN-CONSTRUCTED${String.fromCharCode(0x00ad)}VALUE`, CLS.MALFORMED, 'MALFORMED_INVISIBLE_CHARACTER'),
+  'R28 §14-13 zero-width, bidi-override and soft-hyphen characters -> MALFORMED_INVISIBLE_CHARACTER');
+  ok(isVerdict(' SYN-CONSTRUCTED-VALUE ', CLS.MALFORMED, 'MALFORMED_SURROUNDING_WHITESPACE', 'not silently canonicalised')
+    && isVerdict('SYN-CONSTRUCTED-VALUE ', CLS.MALFORMED, 'MALFORMED_SURROUNDING_WHITESPACE')
+    && isVerdict('\tSYN-CONSTRUCTED-VALUE', CLS.MALFORMED, 'MALFORMED_INVISIBLE_CHARACTER'),
+  'R28 §14-14 a legitimate-looking value with surrounding whitespace -> MALFORMED, never silently trimmed (a tab is refused one screen earlier, as a control character)');
+  ok(isVerdict('SYN-CONSTRUCTED|VALUE', CLS.MALFORMED, 'MALFORMED_DELIMITER', 'field separator'),
+    'R28 §14-15 a value containing the instrument field separator -> MALFORMED_DELIMITER');
+  // THE INVARIANT, asserted directly.
+  ok(['', '   ', 'UNASSIGNED', 'unassigned', ' UNASSIGNED ', 'TBD', 'PLACEHOLDER', '0000-0000-0000-0000',
+    'SYNTHETIC-CONSTRUCTED-1', 'MOCK-CONSTRUCTED-1', 'SYN-CONSTRUCTED-PLAUSIBLE-1', ' SYN-PADDED ', `SYN${ZW}ZW`, 42, null]
+    .every((v) => !ID.isAuthoritative(cls(v))),
+  'R28 INVARIANT: nothing reaches VALID_AUTHORITATIVE without an explicit attestation — "not obviously synthetic" is NOT "authoritative"');
+
+  // ══ F4 (the owner's ruling, as implemented) ══════════════════════════════════════════════════════
+  // WHAT MAY BE HARD-REFUSED: only identity tokens a governing document EXPLICITLY defines as
+  // unauthorised or reserved. There are exactly four such rules and they are the whole of the list:
+  //   UNASSIGNED   — CPG_U1_PROTOCOL_004 §5.5.1 defines it as the reserved not-yet-supplied value, and
+  //                  requires the tooling to refuse while an identity holds it. It is a PROTOCOL_MARKER.
+  //   TBD          — Wave-013 §3, explicitly.
+  //   PLACEHOLDER  — Wave-013 §3, explicitly.
+  //   zero pattern — Wave-013 §3, explicitly.
+  // WHY `TBD` IS REFUSED AND `Test` IS NOT. Refusing a string is a claim about the world: "no identity
+  // can be this". For `TBD` a document makes that claim, so the instrument only repeats it. For `Test`,
+  // `Na`, `None` and `Mock` no document makes it: each is a real surname or a real organisation name, so
+  // refusing them asserted something the instrument cannot know — and, matched as SUBSTRINGS, refused
+  // "Mocksville Chamber of Commerce" and "Fakenham Medical Practice" over four letters of an unrelated
+  // word. Those values are NOT thereby accepted as authoritative: they are not refused HERE, and they
+  // continue through identity resolution, where an unattested value comes out PLAUSIBLE_BUT_UNVERIFIED
+  // and says so. The distinction is REFUSAL versus RESOLUTION, and it is asserted both ways below.
+  for (const [v, why] of [['TBD', 'Wave-013 §3 names TBD'], ['tbd', 'and case does not evade a named token'],
+    ['T.B.D.', 'and punctuation does not evade a named token'], ['PLACEHOLDER', 'Wave-013 §3 names PLACEHOLDER'],
+    ['placeholder', 'and case does not evade a named token']]) {
+    ok(isVerdict(v, CLS.SYNTHETIC, 'PLACEHOLDER_TOKEN', 'reserved placeholder'), `F4 refused: "${v}" — ${why}`);
+  }
+  ok(isVerdict('0000-0000-0000-0000', CLS.SYNTHETIC, 'ZERO_PATTERN', 'zero-pattern') && isVerdict('0000 0000', CLS.SYNTHETIC, 'ZERO_PATTERN'),
+    'F4 refused: a zero-pattern identifier — Wave-013 §3 names it explicitly');
+  ok(isVerdict('UNASSIGNED', CLS.RESERVED, 'RESERVED_UNASSIGNED', 'reserved UNASSIGNED sentinel'),
+    'F4 refused: UNASSIGNED — the protocol §5.5.1 defines it as the reserved value and requires refusal');
+  for (const v of ['Na', 'NA', 'None', 'none', 'Test', 'TEST', 'Mock', 'MOCK', 'Fixture', 'Specimen', 'Sample', 'Dummy',
+    'Example', 'Unknown', 'Anonymous', 'your-id-here', 'Mocksville Chamber of Commerce', 'Fakenham Medical Practice',
+    'Test Valley Borough Council', 'None So Blind Ltd', 'Na Fianna CLG', 'Specimen Ridge Vineyard', 'Mock & Partners LLP']) {
+    const c = cls(v);
+    ok(c.class === CLS.PLAUSIBLE && c.code === 'NO_AUTHORITY_ATTESTATION',
+      `F4 NOT refused: "${v}" is an ordinary lexical collision, not a document-defined token, so it continues to identity resolution as PLAUSIBLE_BUT_UNVERIFIED`);
+  }
+  ok(!ID.isAuthoritative(cls('Test')) && !ID.isAuthoritative(cls('Mocksville Chamber of Commerce')),
+    'F4: not refusing a lexical collision does NOT make it authoritative — the promotion invariant is untouched');
+
+  // F4(a) ZWNJ / ZWJ. U+200C and U+200D are ORTHOGRAPHICALLY REQUIRED (Persian and other Arabic-script
+  // languages use ZWNJ to stop two letters joining into a different word; Indic scripts use both to select
+  // conjunct versus half-form spellings), so a name carrying one is correctly spelled and must not be
+  // MALFORMED. Every character here is built from code points, so this file carries no raw zero-width byte
+  // and no bidirectional text: 0645 06cc / 0631 0648 062f are Arabic-script letters, 0915 094d 0937 Devanagari.
+  const ZWNJ = String.fromCharCode(0x200c);
+  const ZWJ = String.fromCharCode(0x200d);
+  for (const [label, v] of [
+    ['Persian-script name joined with ZWNJ', `${String.fromCodePoint(0x0645, 0x06cc)}${ZWNJ}${String.fromCodePoint(0x0631, 0x0648, 0x062f)}`],
+    ['Devanagari name with ZWJ', `${String.fromCodePoint(0x0915, 0x094d)}${ZWJ}${String.fromCodePoint(0x0937)}`],
+    ['ASCII value carrying ZWNJ', `SYN-CONSTRUCTED${ZWNJ}NAME`],
+    ['ASCII value carrying ZWJ', `SYN-CONSTRUCTED${ZWJ}NAME`],
+  ]) {
+    const c = cls(v);
+    ok(c.class === CLS.PLAUSIBLE && c.code === 'NO_AUTHORITY_ATTESTATION',
+      `F4 ZWNJ/ZWJ: a ${label} is PLAUSIBLE_BUT_UNVERIFIED, NOT MALFORMED_INVISIBLE_CHARACTER — U+200C/U+200D are required orthography, not invisible junk`);
+    ok(!ID.hasInvisibleCharacter(v), `F4 ZWNJ/ZWJ: hasInvisibleCharacter is false for a ${label}`);
+  }
+  for (const [label, cp] of [['U+200B zero-width space', 0x200b], ['U+200E left-to-right mark', 0x200e],
+    ['U+200F right-to-left mark', 0x200f], ['U+202E right-to-left override', 0x202e], ['U+00AD soft hyphen', 0x00ad],
+    ['U+061C Arabic letter mark', 0x061c], ['U+180E Mongolian vowel separator', 0x180e], ['U+2060 word joiner', 0x2060],
+    ['U+206A inhibit symmetric swapping', 0x206a], ['U+FEFF byte order mark', 0xfeff], ['U+FFF9 interlinear anchor', 0xfff9],
+    ['U+0001 C0 control', 0x0001], ['U+0085 C1 control', 0x0085]]) {
+    ok(isVerdict(`SYN-CONSTRUCTED${String.fromCharCode(cp)}VALUE`, CLS.MALFORMED, 'MALFORMED_INVISIBLE_CHARACTER', 'cannot be read'),
+      `F4 ZWNJ/ZWJ: ${label} is STILL MALFORMED_INVISIBLE_CHARACTER — exactly U+200C and U+200D were excluded, nothing else`);
+  }
+
+  // F4(b) PROSE vs IDENTIFIER screening of an attestation. `authority` and `resolved_by` name things, so
+  // they keep the identifier screen. `method` is free prose and is screened only for readability.
+  // NOTE on the originally reported case: "...no mock or specimen records used" was refused because MOCK
+  // was in the foreign-marker list. That list is gone, so that exact sentence now passes BOTH screens and
+  // cannot by itself prove which screen ran. The cases that still DISTINGUISH the two screens are asserted
+  // instead: a method sentence mentioning the instrument's own marker, and one with a trailing space.
+  {
+    const value = 'SYN-CONSTRUCTED-PID-ROR-1';
+    const att = (over) => ({
+      schema: ID.ATTESTATION_SCHEMA, resolved_value: value, authority: 'SYN-CONSTRUCTED-REGISTER-OF-RECORD',
+      resolved_by: 'SYN-CONSTRUCTED-VERIFIER-1', method: 'REST API v2 lookup; no mock or specimen records used',
+      resolved_at: '2026-09-01T00:00:00Z', ...over,
+    });
+    const good = cls(value, { attestation: att({}) });
+    ok(good.class === CLS.AUTHORITATIVE && good.code === 'ATTESTED' && good.message.includes('no mock or specimen records used'),
+      'F4 prose: the originally reported method sentence ("no mock or specimen records used") is accepted and echoed');
+    for (const [label, m] of [
+      ['naming the instrument\'s own SYNTHETIC marker', 'manual lookup in the register of record; no SYNTHETIC or fixture records were consulted'],
+      ['ending in a space, as prose may', 'REST API v2 lookup against the register of record '],
+      ['naming TBD inside a sentence', 'resolved by hand because the register returned no TBD or placeholder entry'],
+      ['containing an all-zero example', 'checked that the value is not 0000-0000-0000-0000 before resolving'],
+    ]) {
+      const c = cls(value, { attestation: att({ method: m }) });
+      ok(c.class === CLS.AUTHORITATIVE && c.code === 'ATTESTED',
+        `F4 prose: a method ${label} confers authority — method is PROSE, and a token inside a sentence is a word`);
+    }
+    for (const [label, m, frag] of [
+      ['empty', '', 'attestation.method is not an explicit value (EMPTY)'],
+      ['whitespace only', '   ', 'attestation.method is not an explicit value (EMPTY)'],
+      ['the reserved sentinel, padded and mis-cased', ' unassigned ', 'attestation.method is not an explicit value (RESERVED_UNASSIGNED)'],
+      ['not a string', 42, 'attestation.method is not an explicit value (MALFORMED_NOT_A_STRING)'],
+      ['carrying a zero-width space', `lookup${ZW}method`, 'attestation.method is not an explicit value (MALFORMED_INVISIBLE_CHARACTER)'],
+    ]) {
+      const c = cls(value, { attestation: att({ method: m }) });
+      ok(c.class === CLS.PLAUSIBLE && c.code === 'ATTESTATION_INSUFFICIENT' && c.message.includes(frag),
+        `F4 prose: a method that is ${label} still confers no authority (${frag}) — prose is screened for readability, just not for tokens`);
+    }
+    for (const [k, v, code] of [['authority', 'TBD', 'PLACEHOLDER_TOKEN'], ['resolved_by', 'PLACEHOLDER', 'PLACEHOLDER_TOKEN'],
+      ['authority', ' unassigned ', 'RESERVED_UNASSIGNED'], ['resolved_by', 'SYN-CONSTRUCTED|PIPE', 'MALFORMED_DELIMITER'],
+      ['authority', '  SYN-PADDED  ', 'MALFORMED_SURROUNDING_WHITESPACE']]) {
+      const c = cls(value, { attestation: att({ [k]: v }) });
+      ok(c.class === CLS.PLAUSIBLE && c.code === 'ATTESTATION_INSUFFICIENT' && c.message.includes(`attestation.${k} is not an explicit value (${code})`),
+        `F4 prose: attestation.${k} keeps the IDENTIFIER screen — "${v}" confers no authority (${code})`);
+    }
+    ok(ID.screenProseValue('a sentence mentioning mock, fake and TBD') === null
+      && ID.screenProseValue('   ')?.code === 'EMPTY' && ID.screenProseValue(null)?.code === 'MALFORMED_NOT_A_STRING',
+    'F4 prose: screenProseValue refuses only unreadable prose, never prose containing a token');
+  }
+
+  // F4 DISPOSITION: the contract lib/identity.mjs now STATES, asserted against what lib/registration.mjs
+  // actually does. The demotion-only contradiction was resolved on the CONTRACT side, so these assertions
+  // are what stops the two drifting apart again.
+  {
+    const tF4 = RG.registrationTemplate({ protocolSha: H('pF4'), toolingAggregate: H('tF4'), registrySha: H('rF4') });
+    const baseF4 = filledRegistration(tF4, { outpoints: { development: `${H('dF4')}:0`, 'held-out': `${H('hF4')}:1` }, checkpoint: { height: 4144, hash: H('cpF4') } });
+    const disp = (v, allowSynthetic = true) => RG.checkRegistration({ ...baseF4, accountable_identity: { value: v } }, { phase: 'registered', allowSynthetic });
+    ok(disp('').blockers.some((b) => b.startsWith('Accountable OSF identity is UNASSIGNED') && b.includes('EMPTY'))
+      && !disp('').errors.some((e) => e.startsWith('accountable_identity.value')),
+    'F4 disposition: EMPTY -> a named human prerequisite (blockers, exit 4), never a record error');
+    ok(disp(' unassigned ').blockers.some((b) => b.includes('RESERVED_UNASSIGNED'))
+      && !disp(' unassigned ').errors.some((e) => e.startsWith('accountable_identity.value')),
+    'F4 disposition: RESERVED_UNASSIGNED -> a named human prerequisite (blockers, exit 4)');
+    ok(disp('SYN-CONSTRUCTED|PIPE').errors.some((e) => e.startsWith('accountable_identity.value is malformed — value contains "|"'))
+      && !disp('SYN-CONSTRUCTED|PIPE').blockers.some((b) => b.includes('Accountable OSF identity')),
+    'F4 disposition: MALFORMED -> a record error (errors, exit 1): an unreadable identity is a defective record, and there is nothing to resolve');
+    ok(disp('TBD').errors.some((e) => e === 'accountable_identity.value is a reserved placeholder, not an identity — value is the reserved placeholder TBD, not an identity'),
+      'F4 disposition: PLACEHOLDER_TOKEN -> a record error (errors, exit 1), which is the rejection Wave-013 §3 requires and the ruling preserves');
+    ok(disp('0000-0000-0000-0000').errors.some((e) => e.startsWith('accountable_identity.value is a reserved placeholder')),
+      'F4 disposition: ZERO_PATTERN -> a record error (errors, exit 1)');
+    ok(disp('SYNTHETIC-ACCOUNTABLE').errors.length === 0 && disp('SYNTHETIC-ACCOUNTABLE', false).errors.some((e) => e.includes('is a SYNTHETIC test value')),
+      'F4 disposition: SYNTHETIC_MARKER is governed by --allow-synthetic, not universally refused');
+    ok(disp('Test Valley Borough Council').errors.length === 0 && disp('Test Valley Borough Council').blockers.length === 0
+      && disp('Test Valley Borough Council').identity['accountable_identity.value'].class === CLS.PLAUSIBLE,
+    'F4 disposition: an ordinary lexical collision is neither a blocker nor an error — it is reported as PLAUSIBLE_BUT_UNVERIFIED and continues');
+  }
+
+  // ── R15 (§4) MATRIX: provider-configuration authority, on a SYNTHETIC pinned tree ──
+  // A throwaway git repository stands in for the evaluation tree, and a protocol stub pins it exactly as
+  // §7.1 does. Nothing here reads the real resolver clone or the real protocol, so the matrix runs
+  // identically inside a mutation workspace (which copies the tooling tree only).
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dt013-r15-'));
+    const g = (repo, ...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=SYNTHETIC', '-c', 'user.email=synthetic@synthetic.example', '-c', 'commit.gpgsign=false', ...a], { encoding: 'utf8' }).trim();
+    const PCF = ['backend/services/companyProfile/grounding/registry/builtins.ts', 'backend/services/companyProfile/grounding/registry/coverageInventory.ts'];
+    const mkTree = (name, tag) => {
+      const repo = join(dir, name); mkdirSync(repo, { recursive: true });
+      execFileSync('git', ['-C', repo, 'init', '--quiet']);
+      for (const f of PCF) { mkdirSync(dirname(join(repo, f)), { recursive: true }); writeFileSync(join(repo, f), `// SYNTHETIC provider configuration ${tag} for ${f}\nexport const synthetic = '${tag}';\n`); }
+      g(repo, 'add', '-A'); g(repo, 'commit', '--quiet', '-m', 'synthetic');
+      return repo;
+    };
+    const pin = (id) => [
+      '## 7. Treatment definition', '', '### 7.1 Evaluated software identity [NORMATIVE]', '',
+      `The evaluated resolver is the repository content at commit \`${id.commit}\`.`, '',
+      `- its git tree object id \`${id.tree}\`;`,
+      `- its content manifest aggregate (domain \`${ET.EVALUATION_TREE_DOMAIN}\`): \`${id.aggregate}\` (${id.files} files).`,
+      '', '## 8. Next section', '',
+    ].join('\n');
+    try {
+      const current = mkTree('current', 'CURRENT');
+      const previous = mkTree('previous', 'PREVIOUS-STATE');
+      const idCur = ET.repoIdentity(current);
+      const protocolText = pin(idCur);
+      const derived = HA.providerConfigurationSha(current);
+      const stale = HA.providerConfigurationSha(previous);           // a REAL hash of a REAL earlier state
+      const wrong = H('a constructed but syntactically valid provider configuration hash');
+      const V = HA.PROVIDER_CONFIG_VERDICT;
+      const pc = (recorded, o) => HA.checkProviderConfiguration({ recorded, cloneDir: current, protocolText, ...(o ?? {}) });
+      ok(/^[0-9a-f]{64}$/.test(derived) && /^[0-9a-f]{64}$/.test(stale) && /^[0-9a-f]{64}$/.test(wrong) && derived !== stale && derived !== wrong && stale !== wrong,
+        'R15 fixtures: three DISTINCT, syntactically valid sha256 values — current, a real earlier state, and a constructed wrong one');
+
+      const missing = pc('UNASSIGNED');
+      ok(missing.verdict === V.BLOCKED && missing.code === 'PROVIDER_CONFIG_MISSING', 'R15 §14-1  missing provider_configuration_sha256 -> BLOCKED (PROVIDER_CONFIG_MISSING)');
+      ok(pc('').code === 'PROVIDER_CONFIG_MISSING' && pc('  unassigned  ').code === 'PROVIDER_CONFIG_MISSING' && pc(null).code === 'PROVIDER_CONFIG_MISSING',
+        'R15 §14-1a empty, whitespace-padded-sentinel and non-string values are MISSING (DR-12 normalisation applies here too)');
+      const malformed = pc('not-a-sha256');
+      ok(malformed.verdict === V.BLOCKED && malformed.code === 'PROVIDER_CONFIG_MALFORMED', 'R15 §14-2  malformed provider_configuration_sha256 -> BLOCKED (PROVIDER_CONFIG_MALFORMED)');
+      ok(pc(derived.toUpperCase()).code === 'PROVIDER_CONFIG_MALFORMED' && pc(`${derived}0`).code === 'PROVIDER_CONFIG_MALFORMED',
+        'R15 §14-2a uppercase hex and over-long hex are MALFORMED, not silently normalised');
+      const bad = pc(wrong);
+      ok(bad.verdict === V.BLOCKED && bad.code === 'PROVIDER_CONFIG_MISMATCH' && bad.derived === derived && bad.message.includes('wrong or stale'),
+        'R15 §14-3  a WRONG but syntactically valid sha256 -> BLOCKED (PROVIDER_CONFIG_MISMATCH); a 64-hex shape is never sufficient');
+      const old = pc(stale);
+      ok(old.verdict === V.BLOCKED && old.code === 'PROVIDER_CONFIG_MISMATCH' && old.derived === derived,
+        'R15 §14-4  a STALE valid sha256 (genuinely correct for an earlier state) -> BLOCKED (PROVIDER_CONFIG_MISMATCH)');
+      const exact = pc(derived);
+      ok(exact.verdict === V.ACCEPTABLE && exact.code === 'PROVIDER_CONFIG_VERIFIED' && exact.derived === derived,
+        'R15 §14-5  exactly the current, independently derived value -> ACCEPTABLE (PROVIDER_CONFIG_VERIFIED)');
+      // the derivation must be independent of the record AND of an unpinned clone
+      ok(HA.checkProviderConfiguration({ recorded: derived, cloneDir: previous, protocolText }).code === 'PROVIDER_CONFIG_TREE_MISMATCH',
+        'R15 §14-6  a clone that is not the §7.1-declared tree yields no independent value -> BLOCKED (PROVIDER_CONFIG_TREE_MISMATCH)');
+      ok(HA.checkProviderConfiguration({ recorded: stale, cloneDir: previous, protocolText }).code === 'PROVIDER_CONFIG_TREE_MISMATCH',
+        'R15 §14-6a a record whose hash matches the SUPPLIED clone is still refused when that clone is not the pinned tree');
+      const noClone = HA.checkProviderConfiguration({ recorded: derived, cloneDir: null, protocolText });
+      ok(noClone.verdict === V.NOT_COMPARED && noClone.code === 'PROVIDER_CONFIG_NOT_COMPARED' && noClone.verdict !== V.ACCEPTABLE && noClone.message.includes('WRONG or STALE'),
+        'R15 §14-7  with no clone the comparison is NOT_COMPARED and says so — never ACCEPTABLE, never silently passed');
+      const noPin = HA.checkProviderConfiguration({ recorded: derived, cloneDir: current, protocolText: '## 1. no evaluation tree here\n' });
+      ok(noPin.verdict === V.NOT_COMPARED && noPin.code === 'PROVIDER_CONFIG_NO_PINNED_TREE' && noPin.verdict !== V.ACCEPTABLE,
+        'R15 §14-8  a protocol text that pins no evaluation tree yields NOT_COMPARED, not a false verification');
+      ok(pc(derived).derived === HA.providerConfigurationSha(current) && pc(wrong).derived === HA.providerConfigurationSha(current),
+        'R15 §14-9  the compared value is derived from the pinned tree, identically, whatever the record says');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+}
+
 // ── 14. end-to-end CLI: registration → complete frame → commitment → chain + drand → draws → seal → authorization ──
 const work = mkdtempSync(join(tmpdir(), 'cpg041-selftest-'));
 try {
@@ -1214,8 +1697,22 @@ try {
   const bigFrame = [...frame, ...Array.from({ length: 72 }, () => row('fill-expected')), ...Array.from({ length: 32 }, () => row('abstention-expected')), ...Array.from({ length: 20 }, () => row('identity-hazard'))];
   writeFileSync(P('frame.csv'), toCsv(FRAME_COLUMNS, bigFrame));
   writeFileSync(P('frame_small.csv'), toCsv(FRAME_COLUMNS, frame));
-  ok(run(['frame', '--frame', P('frame.csv')], { expectCode: 1 }).includes('SYNTHETIC row'), 'CLI frame rejects synthetic without flag');
-  ok(run(['frame', '--frame', P('frame.csv'), '--allow-synthetic']).includes('ADMISSIBLE'), 'CLI frame ok');
+  // §4A.2: `frame` screens a frame only against the personnel register that holds its enumerators.
+  const personnelPath = P('personnel.json');
+  { const reg = personnel();
+    reg.assignments[0].person_id = 'synthetic-enumerator';                                            // Enumerator A: the enumerator of these synthetic rows
+    reg.assignments.push({ ...reg.assignments[0], person_id: 'SYN-P-ENUM-B', pseudonym: 'e-b' });     // Enumerator B: a second, distinct registered enumerator
+    writeFileSync(personnelPath, JSON.stringify(reg, null, 2)); }
+  const PERS = ['--personnel', personnelPath];
+  ok(run(['frame', '--frame', P('frame.csv'), ...PERS], { expectCode: 1 }).includes('SYNTHETIC row'), 'CLI frame rejects synthetic without flag');
+  ok(run(['frame', '--frame', P('frame.csv'), ...PERS, '--allow-synthetic']).includes('enumeration attribution: every row names a registered eligible enumerator'), 'CLI frame ok');
+  ok(run(['frame', '--frame', P('frame.csv'), ...PERS, '--allow-synthetic']).includes('ADMISSIBLE'), 'CLI frame screening unchanged');
+  ok(run(['frame', '--frame', P('frame.csv'), '--allow-synthetic'], { expectCode: 1 }).includes('--personnel is required'), 'CLI frame refuses to screen a frame with no personnel register (§4A.2)');
+  { const forgedReg = P('personnel_forged.json');
+    const reg = JSON.parse(readFileSync(personnelPath, 'utf8'));
+    reg.assignments[0].person_id = 'SYN-P-ENUM-OTHER';
+    writeFileSync(forgedReg, JSON.stringify(reg, null, 2));
+    ok(run(['frame', '--frame', P('frame.csv'), '--personnel', forgedReg, '--allow-synthetic'], { expectCode: 1 }).includes('ENUMERATION_ATTRIBUTION_REFUSED'), 'CLI frame refuses a frame whose enumerator the register does not hold'); }
 
   const regPath = P('registry.json');
   writeFileSync(regPath, JSON.stringify({ entries: [{ id: 'SYN-REG-1', names: ['SYNTHETIC-CO-7'], domains: [], basis: ['synthetic'], evidence: 'synthetic' }] }));
@@ -1248,7 +1745,78 @@ try {
   ok(run(['check-funding-prerequisites', '--registration', P('registration.json')], { expectCode: 1 }).includes('SYNTHETIC'), 'CLI synthetic identities refused outside test mode');
   const regArgs = ['--registration', P('registration.json'), '--identity-registrations', P('identity_regs.json'), '--protocol', PROTOCOL, '--allow-synthetic'];
   const withReg = (args, from, to) => args.map((x) => (x === from ? to : x));
-  ok(run(['verify-registration', ...regArgs, '--registry', regPath]).includes('authoritative'), 'CLI verify-registration: complete and authoritative');
+  // DEEPTECH-PARALLEL-013 · R28: the exit-0 line reports what was ESTABLISHED and, separately, what was NOT.
+  // The previous assertion accepted the bare word "authoritative"; three of the four adjectives that line
+  // carried were never established by this verifier, so the wording and this assertion are both corrected.
+  { const vr = run(['verify-registration', ...regArgs, '--registry', regPath]);
+    ok(vr.includes('ESTABLISHED — the record is complete and well-formed') && vr.includes(`EARLIEST entry for ${CM.STUDY_ID} in the supplied --identity-registrations list`),
+      'R28 CLI-1: verify-registration states exactly what it established (complete record, matching hashes, earliest in the SUPPLIED list)');
+    ok(!/complete, public, unembargoed, authoritative/.test(vr),
+      'R28 CLI-2: verify-registration no longer claims "complete, public, unembargoed, authoritative" — three of those four were not established by it');
+    ok(vr.includes('NOT ESTABLISHED by this verifier:')
+      && vr.includes('PUBLIC / UNEMBARGOED: read from registry.public and registry.embargo INSIDE this record')
+      && vr.includes('REGISTRY AUTHORITY:') && vr.includes('IDENTITY: no persistent identifier was resolved'),
+    'R28 CLI-3: verify-registration names each unestablished claim, and why (self-asserted fields, unenumerated registry, unresolved identity)');
+    ok(vr.includes('identity persistent_identifier.value: SYNTHETIC_PLACEHOLDER (SYNTHETIC_MARKER)') && vr.includes('identity registration_id: SYNTHETIC_PLACEHOLDER (SYNTHETIC_MARKER)'),
+      'R28 CLI-4: verify-registration prints the §3 class of every identity leaf it screened');
+    ok(vr.includes('provider_configuration_sha256: NOT_COMPARED (PROVIDER_CONFIG_NO_PINNED_TREE)'),
+      'R15 CLI-1: with a protocol that pins no evaluation tree the provider hash is reported NOT_COMPARED, never verified'); }
+
+  // R28: a record that attests to its own identities is refused outright (the defect R15 removes, for identity).
+  wj('reg_selfatt.json', { ...reg, identity_attestations: { 'persistent_identifier.value': { schema: ID.ATTESTATION_SCHEMA, resolved_value: reg.persistent_identifier.value, authority: 'SYN-CONSTRUCTED-SELF', resolved_by: 'SYN-CONSTRUCTED-SELF', method: 'self', resolved_at: '2026-09-01T00:00:00Z' } } });
+  ok(run(['verify-registration', ...withReg(regArgs, P('registration.json'), P('reg_selfatt.json')), '--registry', regPath], { expectCode: 1 }).includes('SELF_ATTESTATION_REFUSED'),
+    'R28 CLI-5: identity_attestations carried INSIDE the record is refused (exit 1, SELF_ATTESTATION_REFUSED) — a record cannot attest to itself');
+
+  // R15 at the CLI, on a SYNTHETIC pinned tree: the comparison actually runs and actually blocks.
+  { const r15dir = mkdtempSync(join(tmpdir(), 'dt013-r15cli-'));
+    const gg = (repo, ...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=SYNTHETIC', '-c', 'user.email=synthetic@synthetic.example', '-c', 'commit.gpgsign=false', ...a], { encoding: 'utf8' }).trim();
+    const PCF = ['backend/services/companyProfile/grounding/registry/builtins.ts', 'backend/services/companyProfile/grounding/registry/coverageInventory.ts'];
+    const repo = join(r15dir, 'tree'); mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['-C', repo, 'init', '--quiet']);
+    for (const f of PCF) { mkdirSync(dirname(join(repo, f)), { recursive: true }); writeFileSync(join(repo, f), `// SYNTHETIC provider configuration for ${f}\n`); }
+    gg(repo, 'add', '-A'); gg(repo, 'commit', '--quiet', '-m', 'synthetic');
+    const rid = ET.repoIdentity(repo);
+    writeFileSync(P('protocol_pin13.md'), ['## 7. Treatment definition', '', '### 7.1 Evaluated software identity [NORMATIVE]', '',
+      `The evaluated resolver is the repository content at commit \`${rid.commit}\`.`, '',
+      `- its git tree object id \`${rid.tree}\`;`,
+      `- its content manifest aggregate (domain \`${ET.EVALUATION_TREE_DOMAIN}\`): \`${rid.aggregate}\` (${rid.files} files).`, '', '## 8. Next', ''].join('\n'));
+    const pinSha = sha256(readFileSync(P('protocol_pin13.md')));
+    const derived13 = HA.providerConfigurationSha(repo);
+    const mk = (name, providerSha) => { const r = { ...reg, protocol_sha256: pinSha, provider_configuration_sha256: providerSha }; wj(`${name}.json`, r); wj(`${name}_ids.json`, [r]); return name; };
+    const args13 = (name, extra = []) => ['verify-registration', '--registration', P(`${name}.json`), '--identity-registrations', P(`${name}_ids.json`),
+      '--protocol', P('protocol_pin13.md'), '--registry', regPath, '--allow-synthetic', ...extra];
+    mk('reg13_ok', derived13); mk('reg13_wrong', H('a constructed valid-shaped provider hash'));
+    ok(run(args13('reg13_ok', ['--resolver-clone', repo])).includes('provider_configuration_sha256: ACCEPTABLE (PROVIDER_CONFIG_VERIFIED)'),
+      'R15 CLI-2: the exact independently derived provider hash is ACCEPTABLE and is reported as verified');
+    ok(run(args13('reg13_wrong', ['--resolver-clone', repo]), { expectCode: 1 }).includes('PROVIDER_CONFIG_REFUSED: registered provider_configuration_sha256'),
+      'R15 CLI-3: a wrong but syntactically valid provider hash is REFUSED at exit 1 with the mismatch named');
+    ok(run(args13('reg13_ok', ['--require-provider-config']), { expectCode: 4, env: { CPG_U1_RESOLVER_CLONE: '' } }).includes('no resolver clone was supplied'),
+      'R15 CLI-4: --require-provider-config turns an uncomparable provider hash into a BLOCKER (exit 4), instead of a silent pass');
+    ok(run(args13('reg13_ok'), { env: { CPG_U1_RESOLVER_CLONE: '' } }).includes('provider_configuration_sha256: NOT_COMPARED (PROVIDER_CONFIG_NOT_COMPARED)'),
+      'R15 CLI-5: without a clone the default run reports NOT_COMPARED explicitly and states that a wrong or stale value would not be detected');
+    // F3 (an S1 missed refusal): a SUPPLIED but nonexistent clone was silently converted into "no clone
+    // supplied", so a WRONG or STALE provider hash exited 0 as ESTABLISHED — the outcome R15 exists to
+    // prevent — and the printed reason was factually false. Exit code AND message are pinned, and the old
+    // wording is asserted ABSENT, because a mutant that drops this guard still produces plenty of output.
+    const gone13 = join(r15dir, 'no-such-resolver-clone');
+    ok(!existsSync(gone13), 'F3 fixture: the path used below genuinely does not exist');
+    { const o = run(args13('reg13_wrong', ['--resolver-clone', gone13]), { expectCode: 1 });
+      ok(o.includes(`RESOLVER_CLONE_NOT_FOUND: --resolver-clone names "${gone13}", which does not exist`),
+        'F3 a: a supplied but nonexistent --resolver-clone is REFUSED at exit 1, naming the flag it came from and the exact path');
+      ok(!o.includes('was NOT compared: no resolver clone was supplied'),
+        'F3 b: the factually false NOT_COMPARED verdict ("no resolver clone was supplied") is not reached when one WAS supplied');
+      ok(!o.includes('ESTABLISHED — the record is complete and well-formed'),
+        'F3 c: a wrong provider hash can no longer reach the ESTABLISHED line merely because the clone path was wrong (R15: wrong or stale -> BLOCKED)'); }
+    { const o = run(args13('reg13_wrong'), { expectCode: 1, env: { CPG_U1_RESOLVER_CLONE: gone13 } });
+      ok(o.includes(`RESOLVER_CLONE_NOT_FOUND: CPG_U1_RESOLVER_CLONE names "${gone13}", which does not exist`),
+        'F3 d: a nonexistent CPG_U1_RESOLVER_CLONE is refused too, and the refusal names the ENVIRONMENT VARIABLE it came from, not the flag');
+      ok(!o.includes('ESTABLISHED — the record is complete and well-formed') && !o.includes('was NOT compared: no resolver clone was supplied'),
+        'F3 e: the refusal is the same whichever way the missing clone was supplied'); }
+    ok(run(args13('reg13_ok'), { env: { CPG_U1_RESOLVER_CLONE: '' } }).includes('NOT_COMPARED (PROVIDER_CONFIG_NOT_COMPARED)'),
+      'F3 control: GENUINE absence keeps its honest NOT_COMPARED verdict at exit 0 — only supplied-and-missing is a refusal');
+    ok(run(args13('reg13_ok', ['--resolver-clone', repo])).includes('ACCEPTABLE (PROVIDER_CONFIG_VERIFIED)'),
+      'F3 control: a supplied clone that DOES exist is compared exactly as before');
+    rmSync(r15dir, { recursive: true, force: true }); }
   wj('reg_noid.json', { ...reg, persistent_identifier: { type: 'UNASSIGNED', value: 'UNASSIGNED' } });
   ok(run(['verify-registration', ...withReg(regArgs, P('registration.json'), P('reg_noid.json')), '--registry', regPath], { expectCode: 4 }).includes('Persistent identifier'), 'CLI missing persistent identifier: BLOCKED exit 4');
   wj('reg_othertool.json', { ...reg, tooling_aggregate_sha256: H('other tooling') });
@@ -1262,6 +1830,51 @@ try {
   const base = ['--frame', P('frame.csv'), '--scan', P('scan.json'), '--registry', regPath, ...regArgs];
   ok(run(['check-frame-sufficiency', '--frame', P('frame_small.csv'), '--scan', P('scan_small.json'), '--registry', regPath, '--allow-synthetic'], { expectCode: 1 }).includes('FRAME_INSUFFICIENT'), 'T-3 CLI: 100-row frame (58/24/16 eligible) is INSUFFICIENT');
   ok(run(['check-frame-sufficiency', '--frame', P('frame.csv'), '--scan', P('scan.json'), '--registry', regPath, '--allow-synthetic']).includes('frame sufficient'), 'T-3 CLI: complete frame (130/56/36 eligible) is sufficient');
+
+  // ── DR-11: the scan ARTEFACT must not collapse two results sharing a candidate_id ───────────────────
+  // The same defect as DR-10, one layer out. `contamination()` built `new Map(scan.results.map(...))`, which
+  // keeps only the LAST result for a repeated candidate_id: an occurrence — and every contamination reason it
+  // carried — vanished silently, while scan.frame_hash still attested to the whole frame. DR-10 closed the
+  // collapse on the FRAME inside `scan`; the scan ARTEFACT is a separate input, read by all four sampling
+  // commands, and a hand-edited, concatenated or reordered artefact can repeat an id without any frame doing
+  // so. CONTAMINATED occurrence FIRST, benign one LAST, so the occurrence the old code dropped is the
+  // informative one. `check-frame-sufficiency` is the shortest command that reaches contamination().
+  {
+    const dupId = bigFrame[4].candidate_id;
+    const contaminated11 = { candidate_id: dupId, held_out_ineligible_by_scan: true,
+      repository_hits: [{ kind: 'name', value: bigFrame[4].company_name, line: 7, file: 'backend/tests/dr11.test.ts', scope: 'TEST' }],
+      registry_matches: [{ entry_id: 'SYN-REG-1', matched: 'name', basis: ['synthetic'] }] };
+    const benign11 = { candidate_id: dupId, repository_hits: [], registry_matches: [], held_out_ineligible_by_scan: false };
+    const collapsed11 = new Map([contaminated11, benign11].map((x) => [x.candidate_id, x]));
+    ok(collapsed11.size === 1 && collapsed11.get(dupId).held_out_ineligible_by_scan === false
+      && collapsed11.get(dupId).repository_hits.length === 0 && collapsed11.get(dupId).registry_matches.length === 0,
+    'DR-11 (old behaviour): keying scan results on candidate_id keeps the LAST result and silently drops the first result\'s repository hit and registry match');
+    const s11 = scanFor(bigFrame, 'SYN-0002');
+    s11.results = s11.results.filter((x) => x.candidate_id !== dupId).concat([contaminated11, benign11]);
+    writeFileSync(P('scan_dup11.json'), JSON.stringify(s11));
+    const n11 = s11.results.length;
+    const out11 = run(['check-frame-sufficiency', '--frame', P('frame.csv'), '--scan', P('scan_dup11.json'), '--registry', regPath, '--allow-synthetic'], { expectCode: 1 });
+    ok(out11.includes(`SCAN_RESULT_DUPLICATE_REFUSED: 1 candidate_id(s) occur more than once in the results of ${P('scan_dup11.json')}`),
+      'DR-11: a scan artefact repeating a candidate_id is REFUSED at exit 1 with its own message, naming the scan file');
+    ok(out11.includes(`DUPLICATE scan result candidate_id ${dupId}: 2 occurrences in ${P('scan_dup11.json')}`),
+      'DR-11: the duplicated id, its occurrence count and the scan file are all named');
+    ok(new RegExp(`result ${n11 - 1}: held_out_ineligible_by_scan=true — CPG-C1\\(1\\) repository TEST backend/tests/dr11\\.test\\.ts:7 ; CPG-C1\\(6\\) development-only registry SYN-REG-1 \\(name\\)`).test(out11),
+      'DR-11: the occurrence the old code dropped is reported with its ORDINAL, its own held_out_ineligible_by_scan, its own repository hit (scope file:line) and its own registry match (entry_id (matched))');
+    ok(new RegExp(`result ${n11}: held_out_ineligible_by_scan=false — no contamination recorded in this occurrence`).test(out11),
+      'DR-11: the benign occurrence is reported as benign under its own ordinal, never merged into the other');
+    ok(!/frame_hash mismatch/.test(out11) && !/scan has no result for/.test(out11),
+      'DR-11: the refusal is textually distinct from the frame_hash-mismatch and missing-result guards, so a test can prove which guard fired');
+    // DELIBERATELY NOT ADDED, and asserted ABSENT: a results-vs-frame cardinality check, and refusal of a
+    // result naming an id the frame does not contain. Neither is the DR-11 defect; both would broaden scan
+    // semantics. An extra result therefore still passes, exactly as before.
+    const s11extra = scanFor(bigFrame, 'SYN-0002');
+    s11extra.results = s11extra.results.concat([{ candidate_id: 'SYN-NOT-IN-THIS-FRAME', repository_hits: [], registry_matches: [], held_out_ineligible_by_scan: false }]);
+    writeFileSync(P('scan_extra11.json'), JSON.stringify(s11extra));
+    ok(run(['check-frame-sufficiency', '--frame', P('frame.csv'), '--scan', P('scan_extra11.json'), '--registry', regPath, '--allow-synthetic']).includes('frame sufficient'),
+      'DR-11 scope control: a result for an id the frame does not contain, and more results than frame rows, are still accepted — DR-11 refuses the COLLAPSE, not scan cardinality');
+    ok(run(['check-frame-sufficiency', '--frame', P('frame.csv'), '--scan', P('scan.json'), '--registry', regPath, '--allow-synthetic']).includes('frame sufficient'),
+      'DR-11 control: a scan with exactly one result per candidate_id is unaffected by the new guard');
+  }
   ok(run(['commitment-payload', '--stage', 'development', ...withReg(withReg(base, P('frame.csv'), P('frame_small.csv')), P('scan.json'), P('scan_small.json')), '--out', P('payload_small.json')], { expectCode: 1 }).includes('FRAME_INSUFFICIENT') && !existsSync(P('payload_small.json')), 'T-3: no development commitment payload for an insufficient frame (fail closed)');
   const payOut = run(['commitment-payload', '--stage', 'development', ...base, '--out', P('payload_dev.json')]);
   const payDev = rj('payload_dev.json');
@@ -1281,7 +1894,7 @@ try {
     drand: { chain_info: DRAND_INFO, beacons },
   });
   wj('ev_dev_nodrand.json', evidence(S0 + 40, []));
-  wj('ev_dev.json', evidence(S0 + 40, [ROUND[1]]));
+  wj('ev_dev.json', evidence(S0 + 40, [relayed(1)]));
   const drawDev = (ev, out, extra = []) => ['draw-development', ...base, '--evidence', P(ev), '--screened-by', 'synthetic-screener', '--out', P(out), ...extra];
   ok(run(drawDev('ev_dev_nodrand.json', 'devW'), { expectCode: 5 }).includes('WAITING_DRAND_ROUND') && !existsSync(P('devW')), 'CLI draw refused while the drand round is absent (exit 5), nothing written');
   ok(run(['verify-sampling', ...regArgs, '--evidence', P('ev_dev.json'), '--stage', 'development']).includes('"state": "FINAL"'), 'CLI verify-sampling development FINAL');
@@ -1309,7 +1922,7 @@ try {
     const tx2 = S.buildTx({ label: 'small-dev', witness: true, inputs: [{ txid: O2.development.slice(0, 64), vout: 0 }], outputs: [{ value: 0, script: B.encodeCommitmentScript('development', CM.payloadDigest(smallPayload)) }, { value: 15000, script: S.p2wpkh('small-dev-change') }] });
     for (let h = S0 + 11; h <= S0 + 40; h++) c2.add(timeAt(h), h === S0 + 20 ? [tx2] : [], 'SMALL');
     wj('ev_small.json', { schema: 'cpg-u1-sampling-evidence/v1', network: 'synthetic-test', headers: c2.archive('synthetic-source-A'), headers_crosscheck: c2.archive('synthetic-source-B'),
-      funding: { development: c2.proof(fd), 'held-out': c2.proof(fh) }, commitments: { development: { payload: smallPayload, ...c2.proof(tx2) }, 'held-out': null }, drand: { chain_info: DRAND_INFO, beacons: [ROUND[1]] } });
+      funding: { development: c2.proof(fd), 'held-out': c2.proof(fh) }, commitments: { development: { payload: smallPayload, ...c2.proof(tx2) }, 'held-out': null }, drand: { chain_info: DRAND_INFO, beacons: [relayed(1)] } });
     ok(run(['draw-development', '--frame', P('frame_small.csv'), '--scan', P('scan_small.json'), '--registry', regPath, '--registration', P('reg_small.json'), '--identity-registrations', P('ids_small.json'), '--protocol', PROTOCOL, '--allow-synthetic', '--evidence', P('ev_small.json'), '--screened-by', 'x', '--out', P('devSmall')], { expectCode: 6 }).includes('STAGE_VOID_FRAME_INSUFFICIENT') && !existsSync(P('devSmall')), 'T-3: a committed insufficient frame is VOID at the development draw (exit 6), nothing drawn');
   }
   run(drawDev('ev_dev.json', 'dev'));
@@ -1384,7 +1997,7 @@ try {
   // phase 3: the (synthetic) spend of O_ho after development finality, then K + D blocks
   hoTx = S.buildTx({ label: 'e2e-ho', witness: true, inputs: [{ txid: O['held-out'].slice(0, 64), vout: 0 }], outputs: [{ value: 0, script: B.encodeCommitmentScript('held-out', CM.payloadDigest(payHo)) }, { value: 15000, script: S.p2wpkh('e2e-ho-change') }] });
   for (let h = S0 + 41; h <= S0 + 80; h++) chain.add(timeAt(h), h === S0 + 60 ? [hoTx] : []);
-  wj('ev_full.json', evidence(S0 + 80, [ROUND[1], ROUND[1000000]]));
+  wj('ev_full.json', evidence(S0 + 80, [relayed(1), relayed(1000000)]));
   const drawHo = (sz, out) => ['draw-held-out', ...withReg(hoBase('frame.csv', 'scan.json'), P('sizing.json'), P(sz)), '--evidence', P('ev_full.json'), '--screened-by', 'synthetic-screener', '--out', P(out)];
   ok(run(drawHo('sizing_other.json', 'hoB'), { expectCode: 6 }).includes('STAGE_VOID_BINDING_MISMATCH') && !existsSync(P('hoB')), 'CLI held-out with a sizing file other than the committed one: VOID exit 6');
   ok(run(['draw-held-out', ...withReg(withReg(hoBase('frame.csv', 'scan.json'), P('dev/manifest.json'), P('devT/manifest.json')), P('sizing.json'), P('sizingT.json')), '--evidence', P('ev_full.json'), '--screened-by', 'x', '--out', P('hoT')], { expectCode: 1 }).includes('SEED_MISMATCH') && !existsSync(P('hoT')), 'CLI held-out draw with a substituted development record: abort');
@@ -1434,6 +2047,61 @@ try {
   wj('arch_bad.json', badB);
   ok(run(['verify-archive', ...archArgs, '--crosscheck', P('arch_bad.json')], { expectCode: 1 }).includes('archive refused'), 'CLI verify-archive refuses a tampered source');
 
+  // ── §13.2A sampling-evidence bundle builder: assembles separately obtained files, fetches nothing ──
+  {
+    const parts = { funding_dev: full.funding.development, funding_ho: full.funding['held-out'], payload_dev: full.commitments.development.payload, payload_ho: full.commitments['held-out'].payload,
+      commit_dev: (({ payload: _p, ...x }) => x)(full.commitments.development), commit_ho: (({ payload: _p, ...x }) => x)(full.commitments['held-out']), chain_info: full.drand.chain_info };
+    for (const [k, v] of Object.entries(parts)) wj(`bp_${k}.json`, v);
+    // §19.3: one input file = one relay's response for one round. The bundle beacon's relays[] is the set the BUILDER derived,
+    // so it is decomposed back into per-relay inputs here; the order is reversed to keep proving order-independence.
+    const relayInputs = full.drand.beacons.flatMap((b, i) => {
+      const { relays, ...core } = b;
+      return relays.map((relay, j) => { wj(`bp_beacon_${i}_${j}.json`, { ...core, relay }); return P(`bp_beacon_${i}_${j}.json`); });
+    });
+    ok(relayInputs.length === 4 && full.drand.beacons.every((b) => b.relays.length === 2), 'EVIDENCE BUNDLE: both rounds are supplied by two differently named relays (four input files)');
+    const beaconFiles = relayInputs.reverse().join(',');
+    const bArgs = [...regArgs, '--headers', P('arch_a.json'), '--headers-crosscheck', P('arch_b.json'), '--funding-development', P('bp_funding_dev.json'), '--funding-held-out', P('bp_funding_ho.json'),
+      '--commitment-development', P('bp_commit_dev.json'), '--payload-development', P('bp_payload_dev.json'), '--commitment-held-out', P('bp_commit_ho.json'), '--payload-held-out', P('bp_payload_ho.json'),
+      '--drand-chain-info', P('bp_chain_info.json'), '--drand-beacons', beaconFiles];
+    const bOut = run(['sampling-evidence-bundle', ...bArgs, '--out', P('ev_bundle.json')]);
+    ok(bOut.includes('development FINAL') && bOut.includes('held-out    FINAL') && !/seed[^_ ]/.test(bOut.replace('holds no seed', '')), 'EVIDENCE BUNDLE: assembled from separate files; both stages verify FINAL; no seed printed');
+    ok(canonicalJson(rj('ev_bundle.json')) === canonicalJson(full), 'EVIDENCE BUNDLE: identical to the reference evidence document (beacons ordered by round, each carrying the sorted relays[] that attested it, nothing altered)');
+    ok(run(['verify-sampling', ...regArgs, '--evidence', P('ev_bundle.json'), '--stage', 'held-out']).includes('"state": "FINAL"'), 'EVIDENCE BUNDLE: verify-sampling accepts the built bundle');
+    ok(run(['sampling-evidence-bundle', ...bArgs, '--out', P('ev_bundle.json')], { expectCode: 1 }).includes('write-once'), 'EVIDENCE BUNDLE: write-once');
+    const bRefused = (map, re, name, out) => ok(re.test(run(['sampling-evidence-bundle', ...bArgs.map(map), '--out', P(out)], { expectCode: 1 })) && !existsSync(P(out)), name);
+    bRefused((x) => (x === P('arch_b.json') ? P('arch_a.json') : x), /two differently named sources/, 'EVIDENCE BUNDLE: one header source used twice is refused', 'evb1.json');
+    const beaconCore = (({ relays: _r, ...x }) => x)(full.drand.beacons[0]);
+    wj('bp_beacon_conflict.json', { ...beaconCore, signature: full.drand.beacons[1].signature, relay: RELAY_C });
+    bRefused((x) => (x === beaconFiles ? `${beaconFiles},${P('bp_beacon_conflict.json')}` : x), /disagree for round/, 'EVIDENCE BUNDLE: relays disagreeing on a round are refused (never choose one)', 'evb2.json');
+    wj('bp_commit_ho_bad.json', { ...parts.commit_ho, merkle_pos: parts.commit_ho.merkle_pos ^ 1 });
+    bRefused((x) => (x === P('bp_commit_ho.json') ? P('bp_commit_ho_bad.json') : x), /VERIFY_ABORT_EVIDENCE/, 'EVIDENCE BUNDLE: a bundle that does not verify (bad Merkle proof) is not written', 'evb3.json');
+    bRefused((x) => (x === P('bp_payload_ho.json') ? P('bp_payload_dev.json') : x), /VERIFY_ABORT_EVIDENCE/, 'EVIDENCE BUNDLE: a payload that is not the committed one is refused', 'evb4.json');
+    wj('bp_funding_bad.json', { ...parts.funding_dev, tx_hex: 'XYZ' });
+    bRefused((x) => (x === P('bp_funding_dev.json') ? P('bp_funding_bad.json') : x), /EVIDENCE_BUNDLE_REFUSED/, 'EVIDENCE BUNDLE: malformed transaction hex is refused', 'evb5.json');
+    ok(run(['sampling-evidence-bundle', ...bArgs.filter((x, i, a) => !['--commitment-development', '--payload-development'].includes(x) && !['--commitment-development', '--payload-development'].includes(a[i - 1])), '--out', P('evb6.json')], { expectCode: 1 }).includes('without the development commitment'), 'EVIDENCE BUNDLE: a held-out commitment without the development commitment is refused');
+    const devOnly = bArgs.filter((x, i, a) => !['--commitment-held-out', '--payload-held-out'].includes(x) && !['--commitment-held-out', '--payload-held-out'].includes(a[i - 1]));
+    ok(run(['sampling-evidence-bundle', ...devOnly, '--out', P('evb7.json')]).includes('held-out    NOT_STARTED'), 'EVIDENCE BUNDLE: an intermediate bundle (development only) is written with its WAITING/NOT_STARTED state');
+    ok(run(['sampling-evidence-bundle', ...devOnly.filter((x) => x !== P('bp_payload_dev.json') && x !== '--payload-development'), '--out', P('evb8.json')], { expectCode: 1 }).includes('payload is required'), 'EVIDENCE BUNDLE: a commitment without its payload is refused');
+    // §19.3 / §21 step 5 relay floor at the builder. INVERTED from the pre-DR-1 assertion: relay metadata is no longer
+    // discarded — it is the attribution the bundle exists to carry. Everything else about an input beacon is still dropped.
+    const bFrom = (bs) => EB.buildEvidenceBundle({ network: 'synthetic-test', headers: full.headers, headersCrosscheck: full.headers_crosscheck, funding: full.funding, commitments: { development: null, 'held-out': null }, drandChainInfo: full.drand.chain_info, beacons: bs });
+    const twoRelay = bFrom([{ ...beaconCore, relay: RELAY_B, extra: 'some other metadata' }, { ...beaconCore, relay: RELAY_A }]);
+    ok(twoRelay.drand.beacons.length === 1 && canonicalJson(twoRelay.drand.beacons) === canonicalJson([{ ...beaconCore, relays: [RELAY_A, RELAY_B] }]),
+      'EVIDENCE BUNDLE (lib): identical duplicate beacons collapse to ONE entry that RETAINS both relay names as a sorted relays[] (§19.3); every other extra field is still discarded');
+    ok(canonicalJson(bFrom([{ ...beaconCore, relay: RELAY_C }, { ...beaconCore, relay: RELAY_A }, { ...beaconCore, relay: RELAY_B }]).drand.beacons[0].relays) === canonicalJson([RELAY_A, RELAY_B, RELAY_C]),
+      'EVIDENCE BUNDLE (lib): three relays are all recorded, sorted, for the round they attested');
+    throws(() => bFrom([{ ...beaconCore, relay: RELAY_A }]), 'EVIDENCE BUNDLE (lib): a round attested by ONE relay is refused — the floor fails closed (§19.3)');
+    throws(() => bFrom([{ ...beaconCore, relay: RELAY_A }, { ...beaconCore, relay: RELAY_A }]), 'EVIDENCE BUNDLE (lib): the SAME relay supplied twice does not satisfy the floor');
+    throws(() => bFrom([{ ...beaconCore, relay: RELAY_A }, { ...beaconCore, relay: ` ${RELAY_B} ` }]), 'EVIDENCE BUNDLE (lib): an untrimmed relay name is refused as malformed (no whitespace-padded aliases)');
+    for (const [bad, what] of [[undefined, 'missing'], ['', 'empty'], ['   ', 'whitespace-only'], [7, 'non-string'], [null, 'null']]) {
+      throws(() => bFrom([{ ...beaconCore, relay: bad }, { ...beaconCore, relay: RELAY_B }]), `EVIDENCE BUNDLE (lib): a ${what} relay name is refused`);
+    }
+    // The built bundle is the only representation an outsider replays, so the floor must be visible in the CLI result too.
+    ok(run(['verify-sampling', ...regArgs, '--evidence', P('ev_bundle.json'), '--stage', 'held-out']).includes(`\"${RELAY_A}\"`), 'EVIDENCE BUNDLE: verify-sampling names the attesting relays in its result (§19.3 auditable from the output)');
+    bRefused((x) => (x === beaconFiles ? relayInputs.filter((f) => f.endsWith('_0.json')).join(',') : x), /differently named relays/, 'EVIDENCE BUNDLE: a bundle whose rounds each come from ONE relay is refused, nothing written (§19.3)', 'evb9.json');
+    bRefused((x) => (x === beaconFiles ? `${P('bp_beacon_0_0.json')},${P('bp_beacon_0_0.json')}` : x), /differently named relays/, 'EVIDENCE BUNDLE: the same relay file supplied twice is refused — file count is not relay count', 'evb10.json');
+  }
+
   // blind records for every drawn company
   const drawnAll = [...dev.development, ...ho.held_out];
   const NA = { value_kind: 'NOT_AVAILABLE_FROM_SOURCE', expected_value: '', search_note: 'SYNTHETIC searched' };
@@ -1444,11 +2112,41 @@ try {
   writeFileSync(P('confirmer.csv'), toCsv(BLIND_RECORD_COLUMNS, drawnAll.flatMap((e) => FIELDS3.map((f) => blind(e.candidate_id, f, 'confirmer-1', cOver[`${e.candidate_id}|${f}`])))));
   const rec = ['--dev-manifest', P('dev/manifest.json'), '--held-out-manifest', P('ho/manifest.json'), '--author', P('author.csv'), '--confirmer', P('confirmer.csv')];
   ok(run(['reconcile', ...rec, '--out', P('refX.csv')], { expectCode: 1 }).includes('independent adjudication required'), 'CLI reconcile refuses unadjudicated disagreement');
-  writeFileSync(P('adj.csv'), toCsv(ADJUDICATION_COLUMNS, [{ candidate_id: firstFill, field: 'founded_year', decision: 'AUTHOR', rationale: 'SYNTHETIC', adjudicated_by: 'adjudicator-1', adjudicated_at: '2026-09-12' }]));
+
+  // ── Protocol-004 CLI: blinded reference adjudication BEFORE the seal (§9.2.1; B1) ──
+  const refArgs = ['--held-out-manifest', P('ho/manifest.json'), '--dev-manifest', P('dev/manifest.json'), '--author', P('author.csv'), '--confirmer', P('confirmer.csv')];
+  ok(!existsSync(P('SEAL.json')) && run(['reference-adjudication-packet', ...refArgs, '--out', P('refpacket.json')]).includes('1 disagreeing item'), 'B1: the reference adjudication packet is built BEFORE any seal exists (only the single disagreement)');
+  const refPacket = rj('refpacket.json');
+  ok(JSON.stringify(refPacket).indexOf('author-1') === -1 && JSON.stringify(refPacket).indexOf('stratum') === -1 && JSON.stringify(refPacket).indexOf('held-out') === -1, 'CLI reference packet carries no recorder identity, class or split');
+  ok(!/cpg_value|cpg_source_urls|facts|grounding/.test(JSON.stringify(refPacket)), 'B1: the reference packet carries no CPG output (none exists before the seal)');
+  ok(run(['verify-adjudication-packet', '--type', 'reference', ...refArgs, '--packet', P('refpacket.json')]).includes('verified'), 'CLI verify reference packet (before the seal)');
+  wj('refpacket_leak.json', { ...refPacket, items: refPacket.items.map((it) => ({ ...it, expected_outcome_class: 'fill-expected' })) });
+  ok(run(['verify-adjudication-packet', '--type', 'reference', ...refArgs, '--packet', P('refpacket_leak.json')], { expectCode: 1 }).includes('FORBIDDEN_OR_ALTERED_PACKET'), 'CLI: reference adjudicator packet with forbidden information refused');
+  const blindDecision = RO.authorIsRecord1(libHo.record.record_sha256, firstFill, 'founded_year') ? 'RECORD_1' : 'RECORD_2';
+  writeFileSync(P('blind_adj.csv'), toCsv(ADJUDICATION_COLUMNS, [{ candidate_id: firstFill, field: 'founded_year', decision: blindDecision, rationale: 'SYNTHETIC', adjudicated_by: 'adjudicator-1', adjudicated_at: '2026-09-12' }]));
+  run(['resolve-reference-adjudication', ...refArgs, '--decisions', P('blind_adj.csv'), '--out', P('adj.csv')]);
+  ok(readFileSync(P('adj.csv'), 'utf8') === toCsv(ADJUDICATION_COLUMNS, [{ candidate_id: firstFill, field: 'founded_year', decision: 'AUTHOR', rationale: 'SYNTHETIC', adjudicated_by: 'adjudicator-1', adjudicated_at: '2026-09-12' }]), 'B1: blind RECORD_n decision resolves (before the seal) to exactly the AUTHOR adjudication');
+  ok(!existsSync(P('SEAL.json')), 'B1: reference adjudication completed with no seal in existence');
   run(['reconcile', ...rec, '--adjudication', P('adj.csv'), '--out', P('reference.csv')]);
   ok(parseCsv(readFileSync(P('reference.csv'), 'utf8')).records.length === drawnAll.length * 3, 'CLI reconcile writes one row per drawn company × field');
 
-  const sealArgs = ['--dev-dir', P('dev'), '--held-out-dir', P('ho'), '--sizing', P('sizing.json'), '--author', P('author.csv'), '--confirmer', P('confirmer.csv'), '--adjudication', P('adj.csv')];
+  const sealBase = ['--dev-dir', P('dev'), '--held-out-dir', P('ho'), '--sizing', P('sizing.json'), '--author', P('author.csv'), '--confirmer', P('confirmer.csv'), '--adjudication', P('adj.csv')];
+  const sealArgs = [...sealBase, '--reference-packet', P('refpacket.json'), '--blind-decisions', P('blind_adj.csv')];
+  const sealRefused = (extra, out) => run(['seal', ...extra, '--reference', P('reference.csv'), '--out', P(out)], { expectCode: 1 });
+  ok(sealRefused(sealBase, 'SEAL_noblind.json').includes('--reference-packet is required') && !existsSync(P('SEAL_noblind.json')), 'B1: seal refuses a disagreement adjudicated without the blind packet and decisions');
+  writeFileSync(P('adj_role.csv'), toCsv(ADJUDICATION_COLUMNS, [{ candidate_id: firstFill, field: 'founded_year', decision: 'AUTHOR', rationale: 'SYNTHETIC decided by role name', adjudicated_by: 'adjudicator-1', adjudicated_at: '2026-09-12' }]));
+  ok(sealRefused(sealArgs.map((x) => (x === P('adj.csv') ? P('adj_role.csv') : x)), 'SEAL_role.json').includes('not the mechanical resolution'), 'B1: seal refuses an adjudication that is not the resolution of the blind decisions (decided by role name)');
+  ok(sealRefused(sealArgs.map((x) => (x === P('refpacket.json') ? P('refpacket_leak.json') : x)), 'SEAL_leak.json').includes('BLIND_ADJUDICATION_REFUSED'), 'B1: seal refuses a reference packet carrying forbidden information');
+  let otherRec = null;
+  for (let i = 0; !otherRec; i++) { const r = H(`other-record-${i}`); if (RO.authorIsRecord1(r, firstFill, 'founded_year') !== RO.authorIsRecord1(libHo.record.record_sha256, firstFill, 'founded_year')) otherRec = r; }
+  wj('refpacket_other.json', PK.buildReferenceAdjudicationPacket({ entries: [...dev.development, ...ho.held_out], author: parseCsv(readFileSync(P('author.csv'), 'utf8')).records, confirmer: parseCsv(readFileSync(P('confirmer.csv'), 'utf8')).records, recordSha: otherRec }));
+  ok(sealRefused(sealArgs.map((x) => (x === P('refpacket.json') ? P('refpacket_other.json') : x)), 'SEAL_other.json').includes('BLIND_ADJUDICATION_REFUSED'), 'B1: seal refuses a packet derived from another sampling record (Record 1/2 substitution)');
+  writeFileSync(P('blind_none.csv'), toCsv(ADJUDICATION_COLUMNS, []));
+  ok(sealRefused(sealArgs.map((x) => (x === P('blind_adj.csv') ? P('blind_none.csv') : x)), 'SEAL_none.json').includes('cover exactly the packet items'), 'B1: seal refuses blind decisions missing a packet item');
+  writeFileSync(P('blind_extra.csv'), toCsv(ADJUDICATION_COLUMNS, [...parseCsv(readFileSync(P('blind_adj.csv'), 'utf8')).records, { candidate_id: firstFill, field: 'revenue_range', decision: 'RECORD_1', rationale: 'SYNTHETIC', adjudicated_by: 'adjudicator-1', adjudicated_at: '2026-09-12' }]));
+  ok(sealRefused(sealArgs.map((x) => (x === P('blind_adj.csv') ? P('blind_extra.csv') : x)), 'SEAL_extra.json').includes('cover exactly the packet items'), 'B1: seal refuses a blind decision on an agreeing (non-packet) item');
+  writeFileSync(P('blind_flip.csv'), toCsv(ADJUDICATION_COLUMNS, [{ candidate_id: firstFill, field: 'founded_year', decision: blindDecision === 'RECORD_1' ? 'RECORD_2' : 'RECORD_1', rationale: 'SYNTHETIC', adjudicated_by: 'adjudicator-1', adjudicated_at: '2026-09-12' }]));
+  ok(sealRefused(sealArgs.map((x) => (x === P('blind_adj.csv') ? P('blind_flip.csv') : x)), 'SEAL_flip.json').includes('not the mechanical resolution'), 'B1: seal refuses when the blind decision chose the other record than the adjudication file says');
   const tampered = readFileSync(P('reference.csv'), 'utf8').replace('ADJUDICATED_AUTHOR', 'AGREED');
   writeFileSync(P('reference_tampered.csv'), tampered);
   ok(run(['seal', ...sealArgs, '--reference', P('reference_tampered.csv'), '--out', P('SEALX.json')], { expectCode: 1 }).includes('hand-edited'), 'CLI seal refuses hand-edited reference');
@@ -1456,11 +2154,30 @@ try {
   run(['seal', ...sealArgs, '--reference', P('reference.csv'), '--out', P('SEAL.json')]);
   const seal = JSON.parse(readFileSync(P('SEAL.json'), 'utf8'));
   ok(/^[0-9a-f]{64}$/.test(seal.seal_hash) && seal.resolutions.ADJUDICATED_AUTHOR === 1 && seal.status.includes('NOT EXECUTED') && seal.held_out.sampling_record_sha256 === libHo.record.record_sha256, 'CLI seal written with resolution counts and sampling records');
+  ok(seal.blind_records.reference_adjudication_packet_sha256 === sha256(readFileSync(P('refpacket.json'))) && seal.blind_records.blind_decisions_sha256 === sha256(readFileSync(P('blind_adj.csv'))) && seal.seal_version === 4, 'B1: the seal binds the blind reference packet and the blind decisions');
+  ok(run(['verify-adjudication-packet', '--type', 'reference', ...refArgs, '--seal', P('SEAL.json'), '--packet', P('refpacket.json')]).includes('verified'), 'B1: an outsider verifies the reference packet against the seal that binds it');
+  { const reordered = { ...refPacket, items: [...refPacket.items] }; wj('refpacket_ws.json', reordered); writeFileSync(P('refpacket_ws.json'), JSON.stringify(reordered) + '\n');
+    ok(run(['verify-adjudication-packet', '--type', 'reference', ...refArgs, '--seal', P('SEAL.json'), '--packet', P('refpacket_ws.json')], { expectCode: 1 }).includes('seal binds a different'), 'B1: a packet file other than the sealed one is refused against the seal'); }
   ok(run(['seal', ...sealArgs, '--reference', P('reference.csv'), '--out', P('SEAL.json')], { expectCode: 1 }).includes('write-once'), 'CLI seal write-once');
   ok(run(['seal', ...sealArgs.filter((x, i, a) => !(x === '--adjudication' || a[i - 1] === '--adjudication')), '--reference', P('reference.csv'), '--out', P('SEAL2.json')], { expectCode: 1 }).includes('never sealed with errors'), 'CLI seal refuses when adjudication withheld');
 
+  // ── B1: a dataset with NO author/confirmer disagreement seals without any blind packet ──
+  {
+    writeFileSync(P('confirmer_agree.csv'), toCsv(BLIND_RECORD_COLUMNS, drawnAll.flatMap((e) => FIELDS3.map((f) => blind(e.candidate_id, f, 'confirmer-2', over[`${e.candidate_id}|${f}`])))));
+    const recA = ['--dev-manifest', P('dev/manifest.json'), '--held-out-manifest', P('ho/manifest.json'), '--author', P('author.csv'), '--confirmer', P('confirmer_agree.csv')];
+    run(['reconcile', ...recA, '--out', P('reference_agree.csv')]);
+    ok(run(['reference-adjudication-packet', ...recA, '--out', P('refpacket_none.json')]).includes('0 disagreeing item'), 'B1: with no disagreement the reference packet is empty');
+    const sealA = ['--dev-dir', P('dev'), '--held-out-dir', P('ho'), '--sizing', P('sizing.json'), '--author', P('author.csv'), '--confirmer', P('confirmer_agree.csv'), '--reference', P('reference_agree.csv')];
+    run(['seal', ...sealA, '--out', P('SEAL_agree.json')]);
+    const sA = rj('SEAL_agree.json');
+    ok(sA.blind_records.reference_adjudication_packet_sha256 === null && sA.blind_records.blind_decisions_sha256 === null && sA.resolutions.AGREED === drawnAll.length * 3 && /^[0-9a-f]{64}$/.test(sA.seal_hash), 'B1: no disagreement → seals with no blind packet (bindings null, every row AGREED)');
+    ok(run(['seal', ...sealA, '--reference-packet', P('refpacket_none.json'), '--blind-decisions', P('blind_none.csv'), '--out', P('SEAL_agree2.json')]).includes('seal_hash') && rj('SEAL_agree2.json').blind_records.reference_adjudication_packet_sha256 === sha256(readFileSync(P('refpacket_none.json'))), 'B1: the empty packet and empty decisions may be supplied and are bound');
+    ok(run(['seal', ...sealA, '--reference-packet', P('refpacket.json'), '--blind-decisions', P('blind_adj.csv'), '--out', P('SEAL_agree3.json')], { expectCode: 1 }).includes('BLIND_ADJUDICATION_REFUSED') && !existsSync(P('SEAL_agree3.json')), 'B1: a packet claiming disagreements that do not exist is refused');
+  }
+
   // ── Protocol-004 CLI: rater order (§12.1) ──
   const sealed = ['--held-out-manifest', P('ho/manifest.json'), '--seal', P('SEAL.json')];
+  wj('SEAL_rehash_bad.json', { ...seal, sealed_on: '1999-01-01' });
   const ordOut = run(['rater-order', ...sealed, '--label', 'rater-1', '--out', P('order_r1.json')]);
   const ord = rj('order_r1.json');
   ok(ordOut.includes('order_sha256') && ord.items.length === 51 * 3 && ord.held_out_record_sha256 === libHo.record.record_sha256 && ord.domain === 'cpg-u1-rater-order/v1', 'CLI rater-order: all held-out observations, derived from the sealed held-out record');
@@ -1482,18 +2199,7 @@ try {
   ok(run(['rater-order', '--held-out-manifest', P('hoF/manifest.json'), '--seal', P('SEAL_forged.json'), '--label', 'rater-1', '--out', P('order_forged2.json')], { expectCode: 1 }).includes('differs from the sealed held-out record'), 'RATER-ORDER SEED SUBSTITUTION: forged record + seal re-pointed at it still differs from the sealed sampling record');
   ok(run(['rater-order', ...sealed, '--label', 'operator-choice', '--out', P('order_x.json')], { expectCode: 1 }).includes('--label'), 'rater order label is not a free parameter');
 
-  // ── Protocol-004 CLI: blinded reference adjudication packet (§9.2.1) ──
-  const refArgs = [...sealed, '--dev-manifest', P('dev/manifest.json'), '--author', P('author.csv'), '--confirmer', P('confirmer.csv')];
-  ok(run(['reference-adjudication-packet', ...refArgs, '--out', P('refpacket.json')]).includes('1 disagreeing item'), 'CLI reference adjudication packet: only the single disagreement');
-  const refPacket = rj('refpacket.json');
-  ok(JSON.stringify(refPacket).indexOf('author-1') === -1 && JSON.stringify(refPacket).indexOf('stratum') === -1 && JSON.stringify(refPacket).indexOf('held-out') === -1, 'CLI reference packet carries no recorder identity, class or split');
-  ok(run(['verify-adjudication-packet', '--type', 'reference', ...refArgs, '--packet', P('refpacket.json')]).includes('verified'), 'CLI verify reference packet');
-  wj('refpacket_leak.json', { ...refPacket, items: refPacket.items.map((it) => ({ ...it, expected_outcome_class: 'fill-expected' })) });
-  ok(run(['verify-adjudication-packet', '--type', 'reference', ...refArgs, '--packet', P('refpacket_leak.json')], { expectCode: 1 }).includes('FORBIDDEN_OR_ALTERED_PACKET'), 'CLI: reference adjudicator packet with forbidden information refused');
-  const blindDecision = RO.authorIsRecord1(libHo.record.record_sha256, firstFill, 'founded_year') ? 'RECORD_1' : 'RECORD_2';
-  writeFileSync(P('blind_adj.csv'), toCsv(ADJUDICATION_COLUMNS, [{ candidate_id: firstFill, field: 'founded_year', decision: blindDecision, rationale: 'SYNTHETIC', adjudicated_by: 'adjudicator-1', adjudicated_at: '2026-09-12' }]));
-  run(['resolve-reference-adjudication', ...sealed, '--decisions', P('blind_adj.csv'), '--out', P('adj_resolved.csv')]);
-  ok(readFileSync(P('adj_resolved.csv'), 'utf8') === readFileSync(P('adj.csv'), 'utf8'), 'CLI blind RECORD_n decision resolves to exactly the AUTHOR adjudication used in the seal');
+  ok(run(['rater-order', '--held-out-manifest', P('ho/manifest.json'), '--seal', P('SEAL_rehash_bad.json'), '--label', 'rater-1', '--out', P('order_badseal.json')], { expectCode: 1 }).includes('WRONG_SEAL'), 'a seal whose hash does not recompute is refused by every sealed command');
 
   // ── Protocol-004 CLI: personnel register (§4A) ──
   wj('personnel.json', personnel());
@@ -1597,7 +2303,7 @@ try {
     ok(refusedAs(await ho1({ hoManifest: { ...ho, registry_sha256: H('x') } }), 'VERIFICATION_FAILURE', 'MANIFEST_BINDING_MISMATCH'), 'HARNESS held-out manifest bound to another registry refused');
     ok(refusedAs(await ho1({ hoManifest: { ...ho, scan_sha256: H('x') } }), 'VERIFICATION_FAILURE', 'SCAN_MISMATCH'), 'HARNESS held-out manifest with a replaced scan refused');
     ok(refusedAs(await ho1({ hoManifest: { ...ho, frame_hash: H('x') } }), 'VERIFICATION_FAILURE', 'FRAME_MISMATCH'), 'HARNESS held-out manifest with another frame refused');
-    ok(refusedAs(await ho1({ evidence: { ...evFull, drand: { ...evFull.drand, beacons: [ROUND[1]] } } }), 'VERIFICATION_FAILURE', 'COMMITMENT_NOT_FINAL'), 'HARNESS held-out randomness (drand round) not verifiable → refused');
+    ok(refusedAs(await ho1({ evidence: { ...evFull, drand: { ...evFull.drand, beacons: [relayed(1)] } } }), 'VERIFICATION_FAILURE', 'COMMITMENT_NOT_FINAL'), 'HARNESS held-out randomness (drand round) not verifiable → refused');
     ok(refusedAs(await ho1({ evidence: rj('ev_dev.json') }), 'VERIFICATION_FAILURE', 'COMMITMENT_NOT_FINAL'), 'HARNESS held-out commitment absent → refused');
     ok(refusedAs(await ho1({ evidence: { ...evFull, headers_crosscheck: rj('arch_bad.json') } }), 'VERIFICATION_FAILURE', 'EVIDENCE_INVALID'), 'HARNESS invalid chain evidence (sources disagree) refused');
     ok(refusedAs(await ho1({ hoManifest: { ...ho, sampling: { ...ho.sampling, drand_randomness: H('substituted') } } }), 'VERIFICATION_FAILURE', 'SAMPLING_RECORD_MISMATCH'), 'HARNESS held-out manifest with a substituted randomness record refused');
@@ -1660,6 +2366,104 @@ try {
       const t = await HA.runHeldOut({ ctx: hctx(), request: { run_id: 'ho-4', candidate_ids: hoIds }, executor: synthExec, logPath: P('h_ho_truncated.jsonl'), archiveDir: P('h_arch_trunc'), now: at('2023-10-04T00:00:00Z'), allowSynthetic: true });
       ok(t.status === 'EXECUTED' && executed.length === 51, 'HARNESS LIMITATION (documented): a substituted/empty event log is not detectable by the harness itself — the published head hash is the procedural control');
     }
+
+    // ── B5/B6 (lib): the evaluation artifact is bound, complete, and carries an explicit machine state ──
+    {
+      const evLog = P('h_ev.jsonl'); const evArch = P('h_arch_ev');
+      executed = [];
+      const fullExec = async ({ candidate_id }) => { executed.push(candidate_id); if (candidate_id === hoIds[5]) throw new Error('synthetic executor failure'); return synthExecution({}, { raw_response: fullResponse(candidate_id) }); };
+      const evRun = await HA.runHeldOut({ ctx: hctx(), request: { run_id: 'ev-1', candidate_ids: hoIds }, executor: fullExec, logPath: evLog, archiveDir: evArch, now: at(IN_WINDOW), allowSynthetic: true });
+      const refRows = parseCsv(readFileSync(P('reference.csv'), 'utf8')).records;
+      const recs = () => readdirSync(join(evArch, 'ev-1')).sort().map((f) => ({ file: f, record: JSON.parse(readFileSync(join(evArch, 'ev-1', f), 'utf8')) }));
+      const evIn = (over = {}) => { const log = EL.readEventLog(evLog); return { seal, hoManifest: ho, hoManifestSha: sha256(readFileSync(hoMP)), referenceRows: refRows, referenceSha: sha256(readFileSync(P('reference.csv'))), authorization: authz, events: log.events, eventHead: log.head, runRecords: recs(), ...over }; };
+      const evA = EV.buildEvaluation(evIn());
+      const obsOf = (e, id, f) => e.observations.find((x) => x.candidate_id === id && x.field === f);
+      const itemOf = (e, id, f) => e.items.find((x) => x.candidate_id === id && x.field === f);
+      ok(evRun.status === 'EXECUTED' && evA.observation_count === 153 && evA.invalid_observation_count === 3 && evA.run_closure === 'RUN_COMPLETED', 'B5: evaluation of a completed run covers every held-out company × field (51 × 3)');
+      ok(FIELDS3.every((f) => obsOf(evA, hoIds[5], f).machine_state === 'INVALID' && obsOf(evA, hoIds[5], f).invalid_reason === 'NO_RESPONSE_OR_HARNESS_ERROR' && itemOf(evA, hoIds[5], f).cpg_value === null && itemOf(evA, hoIds[5], f).cpg_source_urls.length === 0), 'B6: an executor failure is an explicit INVALID observation (NO_RESPONSE_OR_HARNESS_ERROR), never an abstention');
+      ok(obsOf(evA, hoIds[0], 'employee_count').machine_state === 'SCORABLE' && itemOf(evA, hoIds[0], 'employee_count').cpg_value === null && obsOf(evA, hoIds[0], 'founded_year').cpg_filled === true, 'B6: a genuine abstention is SCORABLE with a null value; a fill is SCORABLE and filled');
+      ok(canonicalJson(EV.buildEvaluation(evIn())) === canonicalJson(evA) && evA.evaluation_sha256 === sha256(canonicalJson(Object.fromEntries(Object.entries(evA).filter(([k]) => k !== 'evaluation_sha256')))), 'DETERMINISTIC: the evaluation artifact rebuilds identically; evaluation_sha256 over the canonical body');
+      ok(EV.checkEvaluation(evA, { seal, hoManifest: ho, hoManifestSha: sha256(readFileSync(hoMP)) }).length === 0, 'B5: checkEvaluation accepts the built artifact');
+      const evRefused = (over, re, name) => { try { EV.buildEvaluation(evIn(over)); failures.push(`${name} (not refused)`); } catch (e) { ok(re.test(e.message), `${name} [${e.message.slice(0, 90)}]`); } };
+      const rs = recs();
+      evRefused({ runRecords: rs.filter((x) => x.record.candidate_id !== hoIds[0]) }, /INCOMPLETE: executed company/, 'B5: a company whose archived record is removed is refused (silently dropped company)');
+      evRefused({ runRecords: [...rs, { ...rs[0] }] }, /duplicate record/, 'B5: a duplicated record is refused');
+      evRefused({ runRecords: rs.map((x, i) => (i === 0 ? { ...x, file: `${hoIds[1]}.json` } : x)) }, /does not hold the record/, 'B5: a record filed under another company is refused');
+      evRefused({ runRecords: rs.map((x, i) => (i === 0 ? { ...x, record: { ...x.record, candidate_id: hoIds[1] } } : x)) }, /does not hold the record|ARCHIVE_REFUSED/, 'B5: a re-attributed record is refused');
+      { const r0 = rs[0].record; const other = AR.buildArchiveRecord({ study_id: r0.study_id, registration_id: r0.registration_id, stage: 'held-out', run_id: 'ev-1', candidate_id: r0.candidate_id, input: r0.input, execution: synthExecution({}, { raw_response: fullResponse(r0.candidate_id, { facts: { founded_year: '2001' } }) }) });
+        evRefused({ runRecords: rs.map((x, i) => (i === 0 ? { ...x, record: other } : x)) }, /differs from the one logged/, 'B5: a well-formed record substituted after execution (not the logged record) is refused');
+        const dev1 = AR.buildArchiveRecord({ study_id: r0.study_id, registration_id: r0.registration_id, stage: 'development', run_id: 'ev-1', candidate_id: r0.candidate_id, input: r0.input, execution: synthExecution({}, { raw_response: fullResponse(r0.candidate_id) }) });
+        evRefused({ runRecords: rs.map((x, i) => (i === 0 ? { ...x, record: dev1 } : x)) }, /not a record of the authorised held-out run/, 'B5: a record of another stage is refused'); }
+      evRefused({ seal: { ...seal, sealed_on: '1999-01-01' } }, /WRONG_SEAL: seal_hash does not recompute/, 'B5: a seal whose hash does not recompute is refused');
+      { const r0 = rs[0]; const t = { ...r0.record, canonical_response: r0.record.canonical_response.replace('"founded_year":"1999"', '"founded_year":"2001"') };
+        evRefused({ runRecords: rs.map((x, i) => (i === 0 ? { ...x, record: t } : x)) }, /record_sha256 does not recompute/, 'B5: an archive record edited in place (hash kept) is refused'); }
+      { const { seal_hash: _s, ...rest } = { ...seal, sealed_on: '1999-01-01' }; evRefused({ seal: { ...rest, seal_hash: sha256(canonicalJson(rest)) } }, /WRONG_SEAL: the authorisation names a different seal/, 'B5: WRONG SEAL (a different, internally consistent seal) is refused'); }
+      evRefused({ referenceSha: H('other reference') }, /WRONG_REFERENCE/, 'B5: a reference file other than the sealed one is refused');
+      evRefused({ hoManifest: { ...ho, held_out: ho.held_out.slice(1) }, hoManifestSha: sha256(canonicalJson({ ...ho, held_out: ho.held_out.slice(1) })) }, /WRONG_SEAL/, 'B5: a held-out manifest with a company removed is not the sealed manifest');
+      const reAuth = (a) => { const { authorization_sha256: _x, ...b } = a; return { ...b, authorization_sha256: sha256(canonicalJson(b)) }; };
+      evRefused({ authorization: reAuth({ ...authz, frame_hash: H('other frame') }) }, /WRONG_FRAME/, 'B5: WRONG FRAME is refused');
+      evRefused({ authorization: reAuth({ ...authz, held_out_candidate_ids: authz.held_out_candidate_ids.slice(1) }) }, /WRONG_AUTHORIZATION/, 'B5: an authorisation naming fewer companies than the sealed held-out set is refused');
+      evRefused({ authorization: { ...authz, as_of: '2020-01-01T00:00:00Z' } }, /WRONG_AUTHORIZATION/, 'B5: an altered authorisation is refused');
+      const evs = EL.readEventLog(evLog).events;
+      const withStart = (f) => evs.map((e) => (e.type === 'RUN_STARTED' ? { ...e, ...f } : e));
+      evRefused({ events: withStart({ resolver_sha: '0'.repeat(40) }) }, /WRONG_TREATMENT/, 'B5: WRONG TREATMENT (a run at another resolver SHA) is refused');
+      evRefused({ events: withStart({ provider_configuration_sha256: H('other providers') }) }, /WRONG_TREATMENT/, 'B5: a run with another provider configuration is refused');
+      evRefused({ events: withStart({ as_of: '2020-01-01T00:00:00Z' }) }, /WRONG_TREATMENT/, 'B5: a run with another asOf is refused');
+      evRefused({ events: evs.filter((e) => e.type !== 'RUN_COMPLETED') }, /not closed exactly once/, 'B5: an unclosed run is refused');
+      evRefused({ events: [] }, /EXECUTION_AUDIT_NOT_EXECUTED/, 'B5: no authorised execution in the log is refused');
+      try { EV.buildEvaluation(evIn({ events: [...evs, { type: 'RUN_STARTED', run_id: 'shadow', authorization_sha256: authz.authorization_sha256, at: '2023-10-05T00:00:00Z' }, { type: 'AUTHORIZED_EXECUTION', run_id: 'shadow', candidate_id: hoIds[0], at: '2023-10-05T00:00:01Z' }] })); failures.push('B5: VOID audit not refused'); }
+      catch (e) { ok(e.void === true && /EXECUTION_AUDIT_STUDY_VOID/.test(e.message), 'B5: a log the §6.5 audit finds VOID refuses the evaluation as VOID (no endpoint may follow)'); }
+      evRefused({ events: EL.readEventLog(hoLog).events, runRecords: readdirSync(join(hoArch, 'ho-1')).sort().map((f) => ({ file: f, record: JSON.parse(readFileSync(join(hoArch, 'ho-1', f), 'utf8')) })) }, /MALFORMED_RESPONSE/, 'B6: a logged run whose responses lack the protocol shape (grounding arrays) is REFUSED, never read as abstentions');
+      // interrupted run, closed: unexecuted companies are explicit INVALID (NOT_EXECUTED_RUN_INTERRUPTED)
+      const int2Log = P('h_int2.jsonl'); const int2Dir = join(P('h_arch_int2'), 'int-9');
+      mkdirSync(int2Dir, { recursive: true });
+      const r0 = rs.find((x) => x.record.candidate_id === hoIds[0]).record;
+      const intRec = AR.buildArchiveRecord({ study_id: r0.study_id, registration_id: r0.registration_id, stage: 'held-out', run_id: 'int-9', candidate_id: hoIds[0], input: r0.input, execution: synthExecution({}, { raw_response: fullResponse(hoIds[0]) }) });
+      writeFileSync(join(int2Dir, `${hoIds[0]}.json`), JSON.stringify(intRec));
+      EL.appendEvent(int2Log, 'LOG_OPENED', IN_WINDOW, {});
+      EL.appendEvent(int2Log, 'RUN_STARTED', IN_WINDOW, { run_id: 'int-9', authorization_sha256: authz.authorization_sha256, candidate_ids: hoIds, as_of: reg.as_of, resolver_sha: FROZEN_SHA, provider_configuration_sha256: PROVIDER_SHA, seal_hash: seal.seal_hash });
+      EL.appendEvent(int2Log, 'AUTHORIZED_EXECUTION', IN_WINDOW, { run_id: 'int-9', candidate_id: hoIds[0], archive_record_sha256: intRec.record_sha256, executor_error: null, authorization_sha256: authz.authorization_sha256 });
+      HA.closeInterruptedRun({ logPath: int2Log, authorization: authz, now: at('2023-10-02T06:00:00Z') });
+      const i2 = EL.readEventLog(int2Log);
+      evRefused({ events: i2.events, eventHead: i2.head, runRecords: [] }, /INCOMPLETE: executed company/, 'B5: an interrupted run whose executed company has no archive record is refused');
+      const evI = EV.buildEvaluation(evIn({ events: i2.events, eventHead: i2.head, runRecords: [{ file: `${hoIds[0]}.json`, record: intRec }] }));
+      ok(evI.run_closure === 'RUN_INTERRUPTED_CLOSED' && evI.invalid_observation_count === 150 && evI.observations.filter((x) => x.invalid_reason === 'NOT_EXECUTED_RUN_INTERRUPTED').length === 150 && obsOf(evI, hoIds[0], 'founded_year').machine_state === 'SCORABLE', 'B6: an interrupted, closed run: the 50 unexecuted companies are explicit INVALID observations, the executed one is scored');
+      // checkEvaluation (every consumer's guard)
+      const hoSha = sha256(readFileSync(hoMP));
+      const chkE = (e) => EV.checkEvaluation(e, { seal, hoManifest: ho, hoManifestSha: hoSha });
+      const reEv = (e) => { const { evaluation_sha256: _x, ...b } = e; return { ...b, evaluation_sha256: sha256(canonicalJson(b)) }; };
+      const dropId = hoIds[7];
+      ok(chkE(reEv({ ...evA, items: evA.items.filter((x) => x.candidate_id !== dropId), observations: evA.observations.filter((x) => x.candidate_id !== dropId), observation_count: 150 })).some((e) => /evaluation items are not exactly/.test(e)), 'B5: an evaluation with a company removed (re-hashed) is refused — completeness is checked, not trusted');
+      ok(chkE(reEv({ ...evA, observations: evA.observations.filter((x) => x.candidate_id !== dropId) })).some((e) => /evaluation observations are not exactly/.test(e)), 'B5: an evaluation whose observations omit a company is refused');
+      ok(chkE(reEv({ ...evA, items: [...evA.items, evA.items[0]], observations: [...evA.observations, evA.observations[0]], observation_count: 154 })).length > 0, 'B5: an evaluation with a duplicated item is refused');
+      ok(chkE({ ...evA, items: evA.items.map((x, i) => (i === 0 ? { ...x, cpg_value: '2001' } : x)) }).some((e) => /does not recompute/.test(e)), 'B5: an evaluation altered after it was built is refused');
+      ok(chkE(reEv({ ...evA, seal_hash: H('other seal') })).some((e) => /different seal/.test(e)), 'B5: an evaluation bound to another seal is refused');
+      ok(chkE(reEv({ ...evA, resolver_sha: '0'.repeat(40) })).some((e) => /different treatment/.test(e)), 'B5: an evaluation naming another treatment is refused');
+      ok(chkE(reEv({ ...evA, frame_hash: H('frame') })).some((e) => /different frame/.test(e)), 'B5: an evaluation naming another frame is refused');
+      { const i = evA.observations.findIndex((x) => x.machine_state === 'INVALID');
+        ok(chkE(reEv({ ...evA, items: evA.items.map((x, j) => (j === i ? { ...x, cpg_value: '1999' } : x)) })).some((e) => /INVALID observation carries/.test(e)), 'B6: an INVALID observation carrying a CPG value is refused');
+        ok(chkE(reEv({ ...evA, observations: evA.observations.map((x, j) => (j === i ? { ...x, machine_state: 'SCORABLE', invalid_reason: null } : x)) })).length > 0, 'B6: an INVALID observation relabelled SCORABLE is refused (state inconsistent with its item or count)');
+        ok(chkE(reEv({ ...evA, observations: evA.observations.map((x, j) => (j === i ? { ...x, machine_state: 'ABSTAINED' } : x)) })).some((e) => /SCORABLE or INVALID/.test(e)), 'B6: an unknown machine state is refused'); }
+      // strict response reading (B6)
+      const rr = (raw) => EV.readResponse({ candidate_id: 'SYN-X', canonical_response: raw });
+      const good = JSON.parse(fullResponse('SYN-X'));
+      // the specific refusal is asserted: a guard removed must not pass merely because a later TypeError also throws
+      const refusedWith = (fn, re, name) => { try { fn(); failures.push(`${name} (not refused)`); } catch (e) { ok(re.test(e.message), `${name} [${e.message.slice(0, 80)}]`); } };
+      const mut = (f) => { const x = JSON.parse(JSON.stringify(good)); f(x); return JSON.stringify(x); };
+      ok(canonicalJson(rr(JSON.stringify(good)).values) === canonicalJson({ founded_year: '1999', employee_count: null, revenue_range: null }), 'B6: readResponse reads the three protocol fields');
+      refusedWith(() => rr('not json'), /is not JSON/, 'B6: a non-JSON response is refused');
+      refusedWith(() => rr(mut((x) => { delete x.facts; })), /no facts object/, 'B6: a response with no facts object is refused (never read as three abstentions)');
+      refusedWith(() => rr(mut((x) => { delete x.facts.team_size; })), /facts carries no team_size/, 'B6: a response missing a fact key is refused (never read as an abstention)');
+      refusedWith(() => rr(mut((x) => { x.facts.team_size = 120; })), /must be a non-empty string or null/, 'B6: a non-string fact value is refused (never read as an abstention)');
+      refusedWith(() => rr(mut((x) => { x.facts.founded_year = '  '; })), /must be a non-empty string or null/, 'B6: an empty-string fact value is refused');
+      refusedWith(() => rr(mut((x) => { delete x.grounding; })), /no grounding object/, 'B6: a response with no grounding is refused');
+      refusedWith(() => rr(mut((x) => { x.grounding.registryUnavailable = null; })), /registryUnavailable must be an array/, 'B6: missing registryUnavailable array is refused (unavailability is machine-recorded, §10.3)');
+      refusedWith(() => rr(mut((x) => { x.grounding.unavailableSources = {}; })), /unavailableSources must be an array/, 'B6: malformed unavailableSources is refused');
+      refusedWith(() => rr(mut((x) => { x.grounding.registryAmbiguity = 'x'; })), /registryAmbiguity must be an array/, 'B6: malformed registryAmbiguity is refused');
+      refusedWith(() => rr(mut((x) => { x.grounding.registryUnavailable = [{ provider: 'p' }]; })), /registryUnavailable\[0\] must carry/, 'B6: a registryUnavailable entry without identifier/outcome is refused');
+      refusedWith(() => rr(mut((x) => { x.grounding.unavailableSources = [{ state: 'x' }]; })), /unavailableSources\[0\] must carry/, 'B6: an unavailableSources entry without sourceId is refused');
+      ok(canonicalJson(rr(fullResponse('SYN-X', { registryUnavailable: [{ provider: 'p', identifier: 'I', outcome: 'inaccessible', failure: 'timeout', extra: 1 }], unavailableSources: [{ sourceId: 's', state: 'UNAVAILABLE', reason: null }] })).registryUnavailable) === canonicalJson([{ provider: 'p', identifier: 'I', outcome: 'inaccessible', failure: 'timeout' }]), 'B6: registry unavailability is machine-recorded per observation (provider, identifier, outcome, failure)');
+    }
   }
 
   // ── CPG-044: execution harness CLI ──
@@ -1705,30 +2509,336 @@ try {
     const pOut = run(['pilot-result', '--archive-dir', join(P('c_arch'), 'cli-pilot'), '--dev-manifest', P('dev/manifest.json'), '--out', P('pilot_archive.json')]);
     ok(pOut.includes('derived from') && rj('pilot_archive.json').derived_from_archive === true, 'CLI pilot-result derived from the archived pilot run');
     ok(run(['size', '--dev-manifest', P('dev/manifest.json'), '--pilot', P('pilot_archive.json'), '--out', P('sizing_archive.json')]).includes('held-out quotas') && canonicalJson(rj('sizing_archive.json').quotas) === canonicalJson(sizing.quotas), 'CLI size accepts the archive-derived pilot result (same quotas as the equivalent pilot file)');
-    const evOut = run(['evaluation-items', '--archive-dir', join(P('c_arch'), 'cli-ho'), '--reference', P('reference.csv'), '--out', P('eval_from_archive.json')]);
-    const evItems = rj('eval_from_archive.json');
+    // ── B5/B6 CLI: the sealed, complete evaluation artifact ──
+    const runDir = join(P('c_arch'), 'cli-ho');
+    const evArgs = ['--seal', P('SEAL.json'), '--held-out-manifest', P('ho/manifest.json'), '--authorization', P('authorization.json'), '--log', P('c_events.jsonl'), '--reference', P('reference.csv'), '--archive-dir', runDir];
+    const evOut = run(['evaluation-items', ...evArgs, '--out', P('eval_from_archive.json')]);
+    const evalArt = rj('eval_from_archive.json');
+    const evItems = evalArt.items;
     ok(evOut.includes('cpg-u1-cited-urls/field-evidence-union/v1') && evItems.length === 51 * 3 && !evOut.includes('UNDECIDED'), 'CLI evaluation-items derives items from the archive under §12.3 Rule A (no undecided rule)');
+    ok(evalArt.seal_hash === seal.seal_hash && evalArt.authorization_sha256 === authz.authorization_sha256 && evalArt.held_out_record_sha256 === libHo.record.record_sha256 && evalArt.reference_file_sha256 === seal.reference_file_sha256 && evalArt.resolver_sha === FROZEN_SHA && evalArt.run_closure === 'RUN_COMPLETED' && evalArt.event_log_head === EL.readEventLog(P('c_events.jsonl')).head, 'B5: the evaluation binds the seal, authorisation, sampling record, reference file, treatment, closed run and event-log head');
+    ok(evalArt.observations.length === 153 && evalArt.observations.every((x) => x.machine_state === 'SCORABLE') && evalArt.invalid_observation_count === 0, 'B6: every observation carries an explicit machine state');
+    ok(run(['verify-evaluation', ...evArgs, '--evaluation', P('eval_from_archive.json')]).includes('verified by rebuild'), 'DETERMINISTIC REPLAY: the evaluation artifact rebuilds identically from the archive, log, seal and reference');
     ok(evItems.every((it) => Array.isArray(it.cpg_source_urls) && it.cpg_source_urls.every((u) => /^https:\/\//.test(u)) && new Set(it.cpg_source_urls).size === it.cpg_source_urls.length), 'CLI evaluation items: cited URLs are https and duplicate-free');
     { const hoId = authz.held_out_candidate_ids[0]; const host = 'https://' + hoId.toLowerCase() + '.example';
       const byField = (fld) => evItems.find((it) => it.candidate_id === hoId && it.field === fld).cpg_source_urls;
       ok(canonicalJson(byField('founded_year')) === canonicalJson([host + '/about', host + '/history'])
         && canonicalJson(byField('employee_count')) === canonicalJson([host + '/careers'])
         && canonicalJson(byField('revenue_range')) === canonicalJson([]), 'CLI evaluation items: Rule-A set per field from the archived response (duplicate collapsed, disagreeing record kept, empty evidence → empty set)'); }
-    run(['rater-packet', '--held-out-manifest', P('ho/manifest.json'), '--seal', P('SEAL.json'), '--evaluation', P('eval_from_archive.json'), '--label', 'rater-2', '--out', P('packet_from_archive.json')]);
-    ok(run(['verify-rater-packet', '--held-out-manifest', P('ho/manifest.json'), '--seal', P('SEAL.json'), '--evaluation', P('eval_from_archive.json'), '--label', 'rater-2', '--packet', P('packet_from_archive.json')]).includes('byte-identical'), 'CLI: a rater packet built from archive-derived evaluation items verifies byte-identically');
-    ok(rj('packet_from_archive.json').cited_url_rule === 'cpg-u1-cited-urls/field-evidence-union/v1', 'CLI rater packet records the §12.3 rule id');
-    ok(run(['evaluation-items', '--archive-dir', join(P('c_arch'), 'cli-ho'), '--reference', P('reference.csv'), '--out', P('eval_from_archive.json')], { expectCode: 1 }).includes('write-once'), 'CLI evaluation-items write-once');
-    const refRows = parseCsv(readFileSync(P('reference.csv'), 'utf8')).records;
-    const evalItems = authz.held_out_candidate_ids.flatMap((id) => FIELDS3.map((f) => ({ candidate_id: id, field: f, cpg_value: f === 'founded_year' ? '1999' : null, cpg_source_urls: f === 'founded_year' ? ['https://synthetic.example/about'] : [], reference_record: refRows.find((r) => r.candidate_id === id && r.field === f) })));
-    wj('eval_items.json', evalItems);
-    const rpArgs = ['--held-out-manifest', P('ho/manifest.json'), '--seal', P('SEAL.json'), '--evaluation', P('eval_items.json')];
+    ok(run(['evaluation-items', ...evArgs, '--out', P('eval_from_archive.json')], { expectCode: 1 }).includes('write-once'), 'CLI evaluation-items write-once');
+    { const dropDir = P('arch_drop'); mkdirSync(dropDir);
+      readdirSync(runDir).slice(1).forEach((f) => copyFileSync(join(runDir, f), join(dropDir, f)));
+      ok(run(['evaluation-items', ...evArgs.map((x) => (x === runDir ? dropDir : x)), '--out', P('eval_drop.json')], { expectCode: 1 }).includes('INCOMPLETE') && !existsSync(P('eval_drop.json')), 'B5 CLI: an archive with a company removed is refused — a company cannot be silently dropped');
+      const extraDir = P('arch_extra'); mkdirSync(extraDir);
+      readdirSync(runDir).forEach((f) => copyFileSync(join(runDir, f), join(extraDir, f)));
+      writeFileSync(join(extraDir, 'notes.txt'), 'x');
+      ok(run(['evaluation-items', ...evArgs.map((x) => (x === runDir ? extraDir : x)), '--out', P('eval_extra.json')], { expectCode: 1 }).includes('ARCHIVE_REFUSED'), 'B5 CLI: a foreign file in the run archive is refused'); }
+    ok(run(['evaluation-items', ...evArgs.map((x) => (x === P('reference.csv') ? P('reference_tampered.csv') : x)), '--out', P('eval_ref.json')], { expectCode: 1 }).includes('WRONG_REFERENCE'), 'B5 CLI: an unsealed (tampered) reference file is refused');
+    ok(run(['evaluation-items', ...evArgs.map((x) => (x === P('c_events.jsonl') ? P('c_events_edit.jsonl') : x)), '--out', P('eval_log.json')], { expectCode: 1 }).includes('EVENT_LOG_BROKEN'), 'B5 CLI: an edited event log is refused');
+    ok(run(['evaluation-items', ...evArgs.map((x) => (x === P('SEAL.json') ? P('SEAL_rehash_bad.json') : x)), '--out', P('eval_seal.json')], { expectCode: 1 }).includes('WRONG_SEAL'), 'B5 CLI: a seal that does not recompute is refused');
+
+    // ── rater packets from the sealed evaluation (B5) ──
+    const rpArgs = ['--held-out-manifest', P('ho/manifest.json'), '--seal', P('SEAL.json'), '--evaluation', P('eval_from_archive.json')];
+    run(['rater-packet', ...rpArgs, '--label', 'rater-2', '--out', P('packet_from_archive.json')]);
+    ok(run(['verify-rater-packet', ...rpArgs, '--label', 'rater-2', '--packet', P('packet_from_archive.json')]).includes('byte-identical'), 'CLI: a rater packet built from the evaluation verifies byte-identically');
+    ok(rj('packet_from_archive.json').cited_url_rule === 'cpg-u1-cited-urls/field-evidence-union/v1' && rj('packet_from_archive.json').seal_hash === seal.seal_hash && rj('packet_from_archive.json').evaluation_sha256 === evalArt.evaluation_sha256, 'B5: the rater packet records the §12.3 rule id and binds the seal and evaluation');
     ok(run(['rater-packet', ...rpArgs, '--label', 'rater-1', '--out', P('packet_r1.json')]).includes('153 items'), 'CLI rater-packet: 153 items for rater 1');
     ok(run(['rater-packet', ...rpArgs, '--label', 'rater-1', '--out', P('packet_r1b.json')]) && readFileSync(P('packet_r1.json')).equals(readFileSync(P('packet_r1b.json'))), 'CLI rater-packet: independent rebuild is byte-identical');
     ok(run(['verify-rater-packet', ...rpArgs, '--label', 'rater-1', '--packet', P('packet_r1.json')]).includes('byte-identical'), 'CLI verify-rater-packet accepts the deterministic packet');
     ok(run(['verify-rater-packet', ...rpArgs, '--label', 'rater-2', '--packet', P('packet_r1.json')], { expectCode: 1 }).includes('RATER_PACKET_MISMATCH'), 'CLI verify-rater-packet: rater 1 packet presented as rater 2 refused');
     const pk = rj('packet_r1.json'); wj('packet_swapped.json', { ...pk, items: [pk.items[1], pk.items[0], ...pk.items.slice(2)] });
     ok(run(['verify-rater-packet', ...rpArgs, '--label', 'rater-1', '--packet', P('packet_swapped.json')], { expectCode: 1 }).includes('RATER_PACKET_MISMATCH'), 'CLI verify-rater-packet: substituted order refused');
-    ok(run(['rater-packet', '--held-out-manifest', P('hoF/manifest.json'), '--seal', P('SEAL.json'), '--evaluation', P('eval_items.json'), '--label', 'rater-1', '--out', P('packet_forged.json')], { expectCode: 1 }) && !existsSync(P('packet_forged.json')), 'CLI rater-packet refuses a forged held-out record');
+    { const dropId = pk.items[0].candidate_id; const kept = pk.items.filter((x) => x.candidate_id !== dropId).map((x, i) => ({ ...x, position: i + 1 }));
+      const { packet_sha256: _p, ...body } = { ...pk, items: kept, item_count: kept.length };
+      writeFileSync(P('packet_dropped.json'), canonicalJson({ ...body, packet_sha256: sha256(canonicalJson(body)) }));
+      ok(run(['verify-rater-packet', ...rpArgs, '--label', 'rater-1', '--packet', P('packet_dropped.json')], { expectCode: 1 }).includes('RATER_PACKET_MISMATCH'), 'B5: a rater packet with a company removed (re-hashed) FAILS verification'); }
+    { const alt = { ...pk, items: pk.items.map((x, i) => (i === 0 ? { ...x, cpg_value: 'ALTERED' } : x)) }; writeFileSync(P('packet_altered.json'), canonicalJson(alt));
+      ok(run(['verify-rater-packet', ...rpArgs, '--label', 'rater-1', '--packet', P('packet_altered.json')], { expectCode: 1 }).includes('RATER_PACKET_MISMATCH'), 'B5: a packet altered after sealing fails verification'); }
+    ok(run(['rater-packet', '--held-out-manifest', P('hoF/manifest.json'), '--seal', P('SEAL.json'), '--evaluation', P('eval_from_archive.json'), '--label', 'rater-1', '--out', P('packet_forged.json')], { expectCode: 1 }) && !existsSync(P('packet_forged.json')), 'CLI rater-packet refuses a forged held-out record');
+    const refRows = parseCsv(readFileSync(P('reference.csv'), 'utf8')).records;
+    wj('eval_items.json', authz.held_out_candidate_ids.flatMap((id) => FIELDS3.map((f) => ({ candidate_id: id, field: f, cpg_value: null, cpg_source_urls: [], reference_record: refRows.find((r) => r.candidate_id === id && r.field === f) }))));
+    ok(run(['rater-packet', ...rpArgs.map((x) => (x === P('eval_from_archive.json') ? P('eval_items.json') : x)), '--label', 'rater-1', '--out', P('packet_handmade.json')], { expectCode: 1 }).includes('EVALUATION_REFUSED') && !existsSync(P('packet_handmade.json')), 'B5: a hand-made item list (no sealed evaluation) is refused');
+    { const reEv = (e) => { const { evaluation_sha256: _x, ...b } = e; return { ...b, evaluation_sha256: sha256(canonicalJson(b)) }; };
+      const dropId = authz.held_out_candidate_ids[3];
+      wj('eval_dropped.json', reEv({ ...evalArt, items: evalArt.items.filter((x) => x.candidate_id !== dropId), observations: evalArt.observations.filter((x) => x.candidate_id !== dropId), observation_count: 150 }));
+      ok(run(['rater-packet', ...rpArgs.map((x) => (x === P('eval_from_archive.json') ? P('eval_dropped.json') : x)), '--label', 'rater-1', '--out', P('packet_evdrop.json')], { expectCode: 1 }).includes('evaluation items are not exactly'), 'B5: an evaluation with a company removed (re-hashed) is refused by rater-packet');
+      wj('eval_other_seal.json', reEv({ ...evalArt, seal_hash: H('another seal') }));
+      ok(run(['rater-packet', ...rpArgs.map((x) => (x === P('eval_from_archive.json') ? P('eval_other_seal.json') : x)), '--label', 'rater-1', '--out', P('packet_evseal.json')], { expectCode: 1 }).includes('different seal'), 'B5: an evaluation bound to another seal is refused by rater-packet'); }
+
+    // ── §4A.3 rater assignment fingerprint ──
+    const assignment = { schema: 'cpg-u1-rater-assignment/v1', study_id: 'CPG-U1-2026-01', registration_id: reg.registration_id, assignments: { 'rater-1': 'SYN-P4', 'rater-2': 'SYN-P5', 'rating-adjudicator': 'SYN-P6' }, nonce: H('assignment nonce') };
+    wj('assignment.json', assignment);
+    const fpOut = run(['rater-assignment-fingerprint', '--assignment', P('assignment.json'), '--personnel', P('personnel.json')]);
+    const FP = /rater_assignment_fingerprint: ([0-9a-f]{64})/.exec(fpOut)?.[1];
+    ok(FP === sha256(canonicalJson(assignment)) && FP === AS.assignmentFingerprint(assignment), 'RATER FINGERPRINT: sha256 of the canonical assignment, checked against the personnel register');
+    ok(run(['rater-assignment-fingerprint', '--assignment', P('assignment.json'), '--personnel', P('personnel.json')]).includes(FP), 'RATER FINGERPRINT: deterministic');
+    ok(run(['verify-rater-assignment', '--assignment', P('assignment.json'), '--fingerprint', FP]).includes('matches'), 'RATER FINGERPRINT: verify accepts the published fingerprint');
+    ok(run(['verify-rater-assignment', '--assignment', P('assignment.json'), '--fingerprint', H('other')], { expectCode: 1 }).includes('RATER_ASSIGNMENT_REFUSED'), 'RATER FINGERPRINT: another fingerprint refused');
+    wj('assignment_swapped.json', { ...assignment, assignments: { ...assignment.assignments, 'rater-1': 'SYN-P5', 'rater-2': 'SYN-P4' } });
+    ok(run(['rater-assignment-fingerprint', '--assignment', P('assignment_swapped.json'), '--personnel', P('personnel.json')], { expectCode: 1 }).includes('personnel register assigns'), 'RATER FINGERPRINT: an assignment contradicting the personnel register refused');
+    wj('assignment_collision.json', { ...assignment, assignments: { ...assignment.assignments, 'rater-2': 'SYN-P4' } });
+    ok(run(['rater-assignment-fingerprint', '--assignment', P('assignment_collision.json'), '--personnel', P('personnel.json')], { expectCode: 1 }).includes('ROLE COLLISION'), 'RATER FINGERPRINT: one person as two labels refused');
+    wj('assignment_nonce.json', { ...assignment, nonce: 'abc' });
+    ok(run(['rater-assignment-fingerprint', '--assignment', P('assignment_nonce.json'), '--personnel', P('personnel.json')], { expectCode: 1 }).includes('nonce'), 'RATER FINGERPRINT: a missing 256-bit nonce refused');
+    wj('assignment_extra.json', { ...assignment, note: 'x' });
+    ok(run(['rater-assignment-fingerprint', '--assignment', P('assignment_extra.json'), '--personnel', P('personnel.json')], { expectCode: 1 }).includes('keys must be exactly'), 'RATER FINGERPRINT: an extra field refused');
+
+    // ── B2: rater label ingestion ──
+    const refByKey = new Map(refRows.map((r) => [`${r.candidate_id}|${r.field}`, r]));
+    const mech = (it) => { const ref = refByKey.get(`${it.candidate_id}|${it.field}`);
+      if (it.cpg_value === null) return ref.value_kind === 'STATED' ? 'MISSED-FILL' : 'CORRECT-ABSTENTION';
+      return ref.value_kind === 'STATED' ? (ref.expected_value === it.cpg_value ? 'SUPPORTED-FILL' : 'INCORRECT-FILL') : 'UNSUPPORTED-FILL'; };
+    const strat = new Map(ho.held_out.map((e) => [e.candidate_id, e.stratum]));
+    const kA = `${ho.held_out.map((e) => e.candidate_id).sort().find((id) => strat.get(id) === 'fill-expected')}|founded_year`;
+    const kB = `${ho.held_out.map((e) => e.candidate_id).sort().find((id) => strat.get(id) !== 'fill-expected')}|founded_year`;
+    const kC = `${authz.held_out_candidate_ids[2]}|employee_count`;
+    const labelRows = (by, over = {}) => evItems.map((it) => { const key = `${it.candidate_id}|${it.field}`; const l = over[key] ?? mech(it); return { candidate_id: it.candidate_id, field: it.field, label: l, sub_reason: '', rated_by: by, rated_at: l === 'pending' ? '' : '2023-10-20' }; });
+    const r1rows = labelRows('SYN-P4'); const r2rows = labelRows('SYN-P5', { [kA]: 'INCORRECT-FILL', [kB]: 'REFERENCE-AMBIGUOUS', [kC]: 'pending' });
+    writeFileSync(P('labels_r1.csv'), toCsv(RT.RATING_COLUMNS, r1rows)); writeFileSync(P('labels_r2.csv'), toCsv(RT.RATING_COLUMNS, r2rows));
+    const ing = (label, packet, labels, out, extra = []) => ['ingest-ratings', ...rpArgs, '--label', label, '--packet', P(packet), '--assignment', P('assignment.json'), '--assignment-fingerprint', FP, '--labels', P(labels), '--out', P(out), ...extra];
+    const ing1 = run(ing('rater-1', 'packet_r1.json', 'labels_r1.csv', 'sheet_r1.json'));
+    ok(ing1.includes('153 items, 0 pending') && !/SUPPORTED|ABSTENTION/.test(ing1), 'B2: rater-1 labels ingested (no tallies shown)');
+    ok(run(ing('rater-2', 'packet_from_archive.json', 'labels_r2.csv', 'sheet_r2.json')).includes('153 items, 1 pending'), 'B2: rater-2 labels ingested; an explicit pending item is kept as pending');
+    const sheet1 = rj('sheet_r1.json'); const sheet2 = rj('sheet_r2.json');
+    ok(sheet1.packet_sha256 === pk.packet_sha256 && sheet1.evaluation_sha256 === evalArt.evaluation_sha256 && sheet1.seal_hash === seal.seal_hash && sheet1.assignment_fingerprint === FP && sheet1.rated_by === 'SYN-P4' && canonicalJson(sheet1.ratings.map((r) => [r.position, r.candidate_id, r.field])) === canonicalJson(pk.items.map((x) => [x.position, x.candidate_id, x.field])), 'B2: the sheet binds packet, evaluation, seal and assignment fingerprint, in packet order');
+    run(ing('rater-1', 'packet_r1.json', 'labels_r1.csv', 'sheet_r1b.json'));
+    ok(readFileSync(P('sheet_r1.json')).equals(readFileSync(P('sheet_r1b.json'))), 'B2: ingestion is deterministic (byte-identical sheet)');
+    const badLabels = (name, rows, re, testName, label = 'rater-1', packet = 'packet_r1.json') => { writeFileSync(P(name), toCsv(RT.RATING_COLUMNS, rows)); ok(re.test(run(ing(label, packet, name, `${name}.sheet.json`), { expectCode: 1 })) && !existsSync(P(`${name}.sheet.json`)), testName); };
+    badLabels('l_missing.csv', r1rows.slice(1), /no row/, 'B2: a sheet missing an item is refused (never silently missing)');
+    badLabels('l_dup.csv', [...r1rows, r1rows[0]], /duplicate rating/, 'B2: a duplicated item is refused');
+    badLabels('l_unknown.csv', [...r1rows, { ...r1rows[0], candidate_id: dev.development[0].candidate_id }], /unknown or unauthorized item/, 'B2: an item outside the packet (a development company) is refused');
+    badLabels('l_label.csv', r1rows.map((r, i) => (i === 0 ? { ...r, label: 'CORRECT' } : r)), /label must be one of/, 'B2: an unknown label is refused');
+    badLabels('l_rater.csv', r1rows.map((r, i) => (i === 0 ? { ...r, rated_by: 'SYN-P5' } : r)), /not the person assigned/, 'B2: a row rated by someone other than the assigned rater is refused');
+    badLabels('l_sub.csv', r1rows.map((r) => (r.field === 'founded_year' && r.label === 'SUPPORTED-FILL' ? { ...r, sub_reason: 'STALE_VALUE' } : r)), /applies only to/, 'B2: a §10.2 sub-reason on the wrong label/field is refused');
+    badLabels('l_subx.csv', r1rows.map((r, i) => (i === 0 ? { ...r, sub_reason: 'OTHER' } : r)), /sub_reason must be/, 'B2: an unknown sub-reason is refused');
+    badLabels('l_fill_null.csv', r1rows.map((r) => (r.label === 'CORRECT-ABSTENTION' ? { ...r, label: 'SUPPORTED-FILL' } : r)), /CPG returned no value/, 'B2: a fill label where CPG returned no value is refused (§10.1)');
+    badLabels('l_abst_fill.csv', r1rows.map((r) => (r.label === 'SUPPORTED-FILL' ? { ...r, label: 'MISSED-FILL' } : r)), /CPG returned a value/, 'B2: an abstention label where CPG returned a value is refused (§10.1)');
+    badLabels('l_pending_date.csv', r1rows.map((r, i) => (i === 0 ? { ...r, label: 'pending' } : r)), /pending row has no rated_at/, 'B2: a pending row carrying a rating date is refused');
+    badLabels('l_date.csv', r1rows.map((r, i) => (i === 0 ? { ...r, rated_at: '20-10-2023' } : r)), /rated_at must be/, 'B2: a malformed rating date is refused');
+    writeFileSync(P('l_cols.csv'), toCsv([...RT.RATING_COLUMNS, 'notes'], r1rows.map((r) => ({ ...r, notes: 'x' }))));
+    ok(run(ing('rater-1', 'packet_r1.json', 'l_cols.csv', 'l_cols.sheet.json'), { expectCode: 1 }).includes('columns must match'), 'B2: a sheet with extra columns is refused');
+    ok(run(ing('rater-1', 'packet_from_archive.json', 'labels_r1.csv', 'l_otherpacket.json'), { expectCode: 1 }).includes('RATER_PACKET_MISMATCH'), 'B2: labels ingested against another rater\'s packet are refused');
+    ok(run(ing('rater-1', 'packet_r1.json', 'labels_r1.csv', 'l_fp.json').map((x) => (x === FP ? H('other fingerprint') : x)), { expectCode: 1 }).includes('RATER_ASSIGNMENT_REFUSED'), 'B2: an assignment that does not match the published fingerprint is refused');
+    ok(run(ing('rater-2', 'packet_from_archive.json', 'labels_r1.csv', 'l_r1asr2.json'), { expectCode: 1 }).includes('not the person assigned'), 'B2: rater 1\'s labels submitted as rater 2 are refused');
+    ok(run(ing('rater-1', 'packet_r1.json', 'labels_r1.csv', 'sheet_r1.json'), { expectCode: 1 }).includes('write-once'), 'B2: ingest-ratings is write-once');
+
+    // ── B3: rating adjudication ──
+    const rArgs = [...rpArgs, '--assignment', P('assignment.json'), '--assignment-fingerprint', FP, '--sheet-1', P('sheet_r1.json'), '--sheet-2', P('sheet_r2.json')];
+    ok(run(['rating-adjudication-packet', ...rArgs, '--out', P('ratpacket.json')]).includes('2 disagreeing item(s)'), 'B3: only the two completely rated disagreements enter the packet (a pending item never does)');
+    const ratpacket = rj('ratpacket.json');
+    const rpText = JSON.stringify(ratpacket);
+    ok(canonicalJson(ratpacket.items.map((x) => `${x.candidate_id}|${x.field}`).sort()) === canonicalJson([kA, kB].sort()) && ratpacket.items.every((x) => Object.keys(x).sort().join() === [...PK.RATING_ITEM_KEYS].sort().join()), 'B3: the packet holds exactly the disagreements, each exactly the §12 packet + Label A/B');
+    ok(!/SYN-P4|SYN-P5|SYN-P6|rater_1|rater_2|stratum|split|held-out|fill-expected|tall/.test(rpText), 'B3: no rater identity, class, split or tally in the packet');
+    ok(run(['verify-adjudication-packet', '--type', 'rating', ...rArgs, '--packet', P('ratpacket.json')]).includes('verified'), 'B3: the rating packet verifies against its deterministic rebuild');
+    run(['rating-adjudication-packet', ...rArgs, '--out', P('ratpacket_b.json')]);
+    ok(readFileSync(P('ratpacket.json')).equals(readFileSync(P('ratpacket_b.json'))), 'B3: the rating packet is deterministic (byte-identical rebuild)');
+    wj('ratpacket_swapped.json', { ...ratpacket, items: ratpacket.items.map((x) => ({ ...x, label_a: x.label_b, label_b: x.label_a })) });
+    ok(run(['verify-adjudication-packet', '--type', 'rating', ...rArgs, '--packet', P('ratpacket_swapped.json')], { expectCode: 1 }).includes('FORBIDDEN_OR_ALTERED_PACKET'), 'B3: swapped Label A/B refused');
+    ok(run(['rating-adjudication-packet', ...rArgs.map((x) => (x === P('sheet_r1.json') ? P('sheet_r2.json') : x === P('sheet_r2.json') ? P('sheet_r1.json') : x)), '--out', P('ratpacket_x.json')], { expectCode: 1 }).includes('is for rater-2, not rater-1'), 'B3: sheets presented under each other\'s label refused');
+    { const alt = { ...assignment, assignments: { ...assignment.assignments, 'rater-1': 'SYN-P9' } }; wj('assignment_alt.json', alt); const FP2 = AS.assignmentFingerprint(alt);
+      writeFileSync(P('labels_alt.csv'), toCsv(RT.RATING_COLUMNS, r1rows.map((r) => ({ ...r, rated_by: 'SYN-P9' }))));
+      run(ing('rater-1', 'packet_r1.json', 'labels_alt.csv', 'sheet_alt.json').map((x) => (x === P('assignment.json') ? P('assignment_alt.json') : x === FP ? FP2 : x)));
+      ok(existsSync(P('sheet_alt.json')) && run(['rating-adjudication-packet', ...rArgs.map((x) => (x === P('sheet_r1.json') ? P('sheet_alt.json') : x)), '--out', P('ratpacket_alt.json')], { expectCode: 1 }).includes('not rated by the person the published assignment names'), 'B3: a sheet rated under another (unpublished) assignment is refused'); }
+    { const t = { ...sheet2, ratings: sheet2.ratings.map((r) => (`${r.candidate_id}|${r.field}` === kC ? { ...r, label: 'CORRECT-ABSTENTION', rated_at: '2023-10-20' } : r)) }; wj('sheet_r2_edit.json', t);
+      ok(run(['rating-adjudication-packet', ...rArgs.map((x) => (x === P('sheet_r2.json') ? P('sheet_r2_edit.json') : x)), '--out', P('ratpacket_e.json')], { expectCode: 1 }).includes('does not recompute'), 'B3: a sheet edited after ingestion is refused'); }
+    const pickFor = (it) => (it.candidate_id + '|' + it.field === kA ? (it.label_a === 'SUPPORTED-FILL' ? 'LABEL_A' : 'LABEL_B') : 'REFERENCE-AMBIGUOUS');
+    const decRows = (over = () => ({})) => ratpacket.items.map((it) => ({ candidate_id: it.candidate_id, field: it.field, decision: pickFor(it), rationale: 'SYNTHETIC', adjudicated_by: 'SYN-P6', adjudicated_at: '2023-10-22', ...over(it) }));
+    writeFileSync(P('ratdec.csv'), toCsv(ADJUDICATION_COLUMNS, decRows()));
+    const resArgs = (dec, out, packet = 'ratpacket.json') => ['resolve-rating-adjudication', ...rArgs, '--packet', P(packet), '--decisions', P(dec), '--out', P(out)];
+    ok(run(resArgs('ratdec.csv', 'ratres.json')).includes('resolved 2 blind decision'), 'B3: blind LABEL_A/LABEL_B/REFERENCE-AMBIGUOUS decisions resolved');
+    const ratres = rj('ratres.json');
+    const resA = ratres.resolutions.find((x) => `${x.candidate_id}|${x.field}` === kA); const resB = ratres.resolutions.find((x) => `${x.candidate_id}|${x.field}` === kB);
+    ok(resA.label === 'SUPPORTED-FILL' && resB.label === 'REFERENCE-AMBIGUOUS' && ratres.adjudicated_by === 'SYN-P6' && ratres.sheet_1_sha256 === sheet1.sheet_sha256 && ratres.sheet_2_sha256 === sheet2.sheet_sha256, 'B3: the resolution maps each blind decision to the label shown, bound to both sheets');
+    run(resArgs('ratdec.csv', 'ratres_b.json'));
+    ok(readFileSync(P('ratres.json')).equals(readFileSync(P('ratres_b.json'))), 'B3: the resolution is deterministic');
+    const badDec = (name, rows, re, testName) => { writeFileSync(P(name), toCsv(ADJUDICATION_COLUMNS, rows)); ok(re.test(run(resArgs(name, `${name}.json`), { expectCode: 1 })) && !existsSync(P(`${name}.json`)), testName); };
+    badDec('d_new.csv', decRows((it) => (`${it.candidate_id}|${it.field}` === kA ? { decision: 'SUPPORTED-FILL' } : {})), /LABEL_A\|LABEL_B\|REFERENCE-AMBIGUOUS/, 'B3: a decision naming a label (a new value) is refused');
+    badDec('d_agree.csv', [...decRows(), { candidate_id: kC.split('|')[0], field: 'founded_year', decision: 'LABEL_A', rationale: 'SYNTHETIC', adjudicated_by: 'SYN-P6', adjudicated_at: '2023-10-22' }], /not an item of the rating-adjudicator packet/, 'B3: a decision on an agreeing item is refused');
+    badDec('d_missing.csv', decRows().slice(1), /disagreement without a decision/, 'B3: a missing decision is refused');
+    badDec('d_dup.csv', [...decRows(), decRows()[0]], /duplicate decision/, 'B3: a duplicated decision is refused');
+    badDec('d_rater.csv', decRows(() => ({ adjudicated_by: 'SYN-P4' })), /not the assigned rating adjudicator/, 'B3: a decision by a rater is refused');
+    badDec('d_rationale.csv', decRows(() => ({ rationale: '' })), /rationale is required/, 'B3: a decision without rationale is refused');
+    ok(run(resArgs('ratdec.csv', 'ratres_swapped.json', 'ratpacket_swapped.json'), { expectCode: 1 }).includes('FORBIDDEN_OR_ALTERED_PACKET'), 'B3: decisions made on an altered packet are refused');
+
+    // ── B4: analysis ──
+    wj('declarations.json', { schema: 'cpg-u1-analysis-declarations/v1', seal_hash: seal.seal_hash, protocol_violations: [], identity_inadmissible: [] });
+    const aArgs = [...rArgs, '--rating-resolution', P('ratres.json'), '--authorization', P('authorization.json'), '--log', P('c_events.jsonl'), '--seal-publication', P('seal_publication.json'), '--declarations', P('declarations.json')];
+    const DV = Object.fromEntries(Object.entries(AN.DECISIONS).map(([id, opts]) => [id, opts[0]]));
+    const decFile = (values) => ({ schema: AN.DECISIONS_SCHEMA, decisions: Object.fromEntries(Object.entries(AN.DECISIONS).map(([id, opts]) => [id, { options: [...opts], value: values[id] }])) });
+    wj('decisions_undecided.json', decFile(Object.fromEntries(Object.keys(AN.DECISIONS).map((id) => [id, AN.UNDECIDED]))));
+    const blockedOut = run(['analyze', ...aArgs, '--decisions', P('decisions_undecided.json'), '--registration', P('registration.json'), '--allow-synthetic', '--out', P('results_blocked.json')], { expectCode: 4 });
+    ok(blockedOut.includes('ANALYSIS_BLOCKED') && Object.keys(AN.DECISIONS).every((id) => blockedOut.includes(id)) && !existsSync(P('results_blocked.json')), 'B4: an UNDECIDED decision blocks analyze (exit 4), naming every undecided decision');
+    wj('decisions_synth.json', decFile(DV));
+    const synthDec = ['--decisions', P('decisions_synth.json'), '--registration', P('registration.json'), '--allow-synthetic'];
+    ok(run(['analyze', ...aArgs, '--decisions', P('decisions_synth.json'), '--registration', P('registration.json'), '--out', P('results_nosynth.json')], { expectCode: 1 }).includes('refused outside'), 'B4: a decisions override is refused without --allow-synthetic');
+    wj('reg_notsynth.json', { ...reg, network: 'mainnet' });
+    ok(run(['analyze', ...aArgs, ...synthDec.map((x) => (x === P('registration.json') ? P('reg_notsynth.json') : x)), '--out', P('results_mainnet.json')], { expectCode: 1 }).includes('refused outside'), 'B4: a decisions override is refused for a non-synthetic registration');
+    wj('decisions_bad.json', decFile({ ...DV, 'AD-3': 'CASE_INSENSITIVE' }));
+    ok(run(['analyze', ...aArgs, ...synthDec.map((x) => (x === P('decisions_synth.json') ? P('decisions_bad.json') : x)), '--out', P('results_baddec.json')], { expectCode: 1 }).includes('DECISIONS_INVALID'), 'B4: a decision value outside its options is refused');
+    const aOut = run(['analyze', ...aArgs, ...synthDec, '--out', P('results.json')]);
+    const res = rj('results.json');
+    const F = ho.held_out.filter((e) => e.stratum === 'fill-expected').length;
+    const expFills = 51 - 1; const expBad = (51 - F) - 1;
+    const expOutcome = 10 * expBad > expFills ? 'FALSIFIED' : 20 * expBad <= expFills ? 'SUCCESS' : 'FAILURE';
+    ok(aOut.includes(`outcome: ${expOutcome}`) && res.outcome === expOutcome && res.endpoints.G1.fills === expFills && res.endpoints.P1.numerator === expBad && res.endpoints.P3.misattributed === 0 && res.labels['SUPPORTED-FILL'] === F, `B4: synthetic end-to-end analysis: ${expOutcome} from the labelled observations (G1 ${expFills} fills, ${expBad} erroneous)`);
+    ok(res.dispositions.VALID === 151 && res.dispositions['REFERENCE-AMBIGUOUS'] === 1 && res.dispositions.PENDING === 1 && res.completely_rated === 152 && res.exclusion_table.length === 2, 'B4: the rater REFERENCE-AMBIGUOUS decision and the pending item are excluded and listed; nothing is imputed');
+    ok(res.observations.find((x) => `${x.candidate_id}|${x.field}` === kA).adjudicated === true && res.observations.find((x) => `${x.candidate_id}|${x.field}` === kA).label === 'SUPPORTED-FILL', 'B4: adjudicated values are flagged');
+    { const pairs = res.observations.filter((x) => x.rater_1_label !== 'pending' && x.rater_2_label !== 'pending').map((x) => [x.rater_1_label, x.rater_2_label]);
+      const a = AN.alphaNominal(pairs); ok(res.alpha.value === a.value && res.alpha.units === 152 && res.alpha.disagreements === 2, 'B4: α computed over the raters\' own labels (before adjudication)'); }
+    ok(res.decisions.source === 'SYNTHETIC_OVERRIDE' && res.decisions.sha256 === sha256(readFileSync(P('decisions_synth.json'))) && res.evaluation_sha256 === evalArt.evaluation_sha256 && res.rating_resolution_sha256 === ratres.resolution_sha256, 'B4: the results bind the evaluation, sheets, resolution and the decisions used');
+    run(['analyze', ...aArgs, ...synthDec, '--out', P('results_b.json')]);
+    ok(readFileSync(P('results.json')).equals(readFileSync(P('results_b.json'))) && res.results_sha256 === sha256(canonicalJson(Object.fromEntries(Object.entries(res).filter(([k]) => k !== 'results_sha256')))), 'DETERMINISTIC REPLAY: the analysis rebuilds byte-identically; results_sha256 over the canonical body');
+    // the PINNED decisions file (the one the registration freezes) runs the same study end to end
+    run(['analyze', ...aArgs, '--out', P('results_pinned.json')]);
+    const resP = rj('results_pinned.json');
+    ok(resP.decisions.source === 'PINNED' && resP.decisions.sha256 === sha256(readFileSync(join(HERE, '..', 'rules', 'analysis_decisions.json'))) && canonicalJson(resP.decisions.values) === canonicalJson(AN.readDecisions(JSON.parse(readFileSync(join(HERE, '..', 'rules', 'analysis_decisions.json'), 'utf8'))).values), 'B4: analyze runs on the PINNED decisions and records their file hash and values');
+    { const facts = (r) => canonicalJson([r.outcome, r.outcome_basis, r.endpoints, r.labels, r.dispositions, r.completely_rated, r.source_coincident, r.zero_fill_companies, r.exclusion_table, r.observations, r.alpha.value, r.alpha.units, r.alpha.disagreements]);
+      ok(facts(resP) === facts(res) && resP.alpha.population === 'EXCLUDE_INVALID_CONFLICT_AND_STALE' && res.alpha.population === 'ALL_COMPLETELY_RATED_ITEMS', 'B4: on this study the pinned and override runs find the same outcome, endpoints, dispositions and α, and each records the decision set it used'); }
+    ok(run(['analyze', ...aArgs.filter((x, i, arr) => !(x === '--rating-resolution' || arr[i - 1] === '--rating-resolution')), ...synthDec, '--out', P('results_nores.json')], { expectCode: 1 }).includes('RATING_ADJUDICATION_MISSING'), 'B4: disagreements without the rating adjudicator\'s resolution are refused (never resolved by the tooling)');
+    wj('declarations_other.json', { schema: 'cpg-u1-analysis-declarations/v1', seal_hash: H('other'), protocol_violations: [], identity_inadmissible: [] });
+    ok(run(['analyze', ...aArgs.map((x) => (x === P('declarations.json') ? P('declarations_other.json') : x)), ...synthDec, '--out', P('results_decl.json')], { expectCode: 1 }).includes('DECLARATIONS_REFUSED'), 'B4: declarations for another seal are refused');
+    ok(run(['analyze', ...aArgs.map((x) => (x === P('c_events.jsonl') ? P('h_ho_truncated.jsonl') : x)), ...synthDec, '--out', P('results_log.json')], { expectCode: 1 }).includes('ANALYSIS_REFUSED'), 'B4: an event log that does not contain the evaluated head (substituted log) is refused');
+    ok(run(['analyze', ...aArgs.map((x) => (x === P('seal_publication.json') ? P('seal_publication_bad.json') : x)), ...synthDec, '--out', P('results_pub.json')]).includes('outcome: INCONCLUSIVE') && rj('results_pub.json').conditions['6_seal_publication'].triggered, 'B4: a published seal record naming another seal → INCONCLUSIVE (§15.5(6))');
+    wj('declarations_inadm.json', { schema: 'cpg-u1-analysis-declarations/v1', seal_hash: seal.seal_hash, protocol_violations: [], identity_inadmissible: [{ candidate_id: authz.held_out_candidate_ids[10], basis: 'SYNTHETIC identity inadmissible after the draw' }] });
+    run(['analyze', ...aArgs.map((x) => (x === P('declarations.json') ? P('declarations_inadm.json') : x)), ...synthDec, '--out', P('results_inadm.json')]);
+    ok(rj('results_inadm.json').observations.filter((x) => x.candidate_id === authz.held_out_candidate_ids[10]).every((x) => x.disposition === 'INVALID' && x.reason === 'IDENTITY_INADMISSIBLE_AFTER_DRAW'), 'B4: a company declared identity-inadmissible after the draw is INVALID in all its observations (§15.2)');
+
+    // ── B4 (lib): every outcome, every exact threshold boundary and every §15.5 condition on generated studies ──
+    {
+      const allEvents = EL.readEventLog(P('c_events.jsonl')).events;
+      const EVS = H('generated evaluation');
+      const refRowT = (id, f, o = {}) => ({ ...Object.fromEntries(REFERENCE_COLUMNS.map((c) => [c, ''])), candidate_id: id, field: f, value_kind: 'NOT_AVAILABLE_FROM_SOURCE', as_of_date: '2026-09-01', resolution: 'AGREED', ...o });
+      const study = (n, spec, o = {}) => {
+        const ids = Array.from({ length: n }, (_, i) => `SYN-T${String(i).padStart(3, '0')}`);
+        const items = []; const observations = []; const r1 = []; const r2 = [];
+        ids.forEach((id, i) => FIELDS3.forEach((f) => {
+          const s = spec(i, f);
+          const urls = s.urls ?? (s.cpg === null ? [] : [`https://synthetic-t${i}.example/${f}`]);
+          items.push({ candidate_id: id, field: f, cpg_value: s.cpg, cpg_source_urls: urls, reference_record: refRowT(id, f, s.ref) });
+          observations.push({ candidate_id: id, field: f, machine_state: 'SCORABLE', invalid_reason: null, executor_error: null, archive_record_sha256: H(`t${i}`), cpg_filled: s.cpg !== null, cited_url_count: urls.length, evidence_state: 'EFFECTIVE', registry_unavailable: [], unavailable_sources: [], registry_ambiguity_count: 0, latency_ms: 1000 + i, ...s.obs });
+          const l2 = s.l2 ?? s.l1;
+          r1.push({ position: 0, candidate_id: id, field: f, label: s.l1, sub_reason: s.sub ?? '', rated_at: s.l1 === 'pending' ? '' : '2023-10-20' });
+          r2.push({ position: 0, candidate_id: id, field: f, label: l2, sub_reason: s.sub ?? '', rated_at: l2 === 'pending' ? '' : '2023-10-20' });
+        }));
+        const evaluation = { study_id: 'CPG-U1-2026-01', registration_id: reg.registration_id, seal_hash: seal.seal_hash, evaluation_sha256: EVS, items, observations };
+        const s1 = { rated_by: 'SYN-P4', evaluation_sha256: EVS, sheet_sha256: H('s1'), ratings: r1 }; const s2 = { rated_by: 'SYN-P5', evaluation_sha256: EVS, sheet_sha256: H('s2'), ratings: r2 };
+        const rp = PK.buildRatingAdjudicationPacket(RT.ratingPacketInputs(evaluation, s1, s2, libHo.record.record_sha256));
+        const resolution = rp.items.length ? RT.resolveRatingAdjudication({ packet: rp, rows: rp.items.map((it) => ({ candidate_id: it.candidate_id, field: it.field, decision: (o.pick ?? (() => 'LABEL_A'))(it), rationale: 'SYNTHETIC', adjudicated_by: 'SYN-P6', adjudicated_at: '2023-10-21' })), sheet1: s1, sheet2: s2, adjudicator: 'SYN-P6', recordSha: libHo.record.record_sha256 }) : null;
+        return AN.analyze({ evaluation, hoManifest: { held_out: ids.map((id, i) => ({ candidate_id: id, identifier_value: `SYNID${i}`, held_out_ineligible_basis: [] })) }, sheet1: s1, sheet2: s2,
+          resolution: Object.hasOwn(o, 'resolution') ? o.resolution(resolution) : resolution, recordSha: libHo.record.record_sha256, authorization: authz, events: o.events ?? allEvents,
+          sealPublication: o.sealPublication ?? rj('seal_publication.json'), declarations: { schema: AN.DECLARATIONS_SCHEMA, seal_hash: seal.seal_hash, protocol_violations: [], identity_inadmissible: [], ...o.decl },
+          decisions: { ...DV, ...o.D }, decisionsSource: 'SYNTHETIC_OVERRIDE', decisionsSha: H('decisions') });
+      };
+      const SUP = { cpg: '1999', ref: { value_kind: 'STATED', expected_value: '1999', source_url: 'https://registry.example/x' }, l1: 'SUPPORTED-FILL' };
+      const CAB = { cpg: null, ref: {}, l1: 'CORRECT-ABSTENTION' };
+      const base = (i, f) => (f === 'founded_year' ? SUP : CAB);
+      const firstK = (k, label) => (i, f) => (f === 'founded_year' && i < k ? { ...SUP, l1: label } : base(i, f));
+      const trig = (r) => Object.entries(r.conditions).filter(([, c]) => c.triggered).map(([id]) => id);
+      // outcomes
+      const A = study(25, base);
+      ok(A.outcome === 'SUCCESS' && A.endpoints.G1.fills === 25 && A.endpoints.P1.numerator === 0 && A.endpoints.P2.value === 1 && A.endpoints.P3.met && A.endpoints.R1.value === 1 && trig(A).length === 0, 'B4 SUCCESS: G1 holds and P1, P2, P3 all met, no §15.5 condition');
+      ok(study(25, firstK(2, 'INCORRECT-FILL')).outcome === 'FAILURE', 'B4 FAILURE: EFR 2/25 = 0.08 misses P1 but is not above 2·θ');
+      ok(study(25, firstK(3, 'INCORRECT-FILL')).outcome === 'FALSIFIED', 'B4 FALSIFIED: EFR 3/25 = 0.12 > 2·θ_EFR');
+      { const d = study(25, firstK(1, 'MISATTRIBUTED-FILL')); ok(d.outcome === 'FALSIFIED' && d.endpoints.P3.misattributed === 1 && !d.endpoints.P3.met, 'B4 FALSIFIED: any MISATTRIBUTED-FILL (II > 0) falsifies'); }
+      // exact boundaries (integer comparisons, never floating point)
+      { const e = study(20, firstK(1, 'INCORRECT-FILL')); ok(e.outcome === 'SUCCESS' && e.endpoints.G1.holds && e.endpoints.P1.met && e.endpoints.P1.value === 0.05, 'BOUNDARY: exactly 20 fills passes G1 and EFR exactly 0.05 meets P1 (≤)'); }
+      ok(study(20, firstK(2, 'INCORRECT-FILL')).outcome === 'FAILURE', 'BOUNDARY: EFR exactly 0.10 = 2·θ is FAILURE, not FALSIFIED (> is strict)');
+      ok(study(20, firstK(3, 'INCORRECT-FILL')).outcome === 'FALSIFIED', 'BOUNDARY: EFR 0.15 > 2·θ is FALSIFIED');
+      { const f = study(19, base); ok(f.outcome === 'INCONCLUSIVE' && trig(f).includes('1_G1_fills_below_20'), 'BOUNDARY: 19 fills fails G1 → INCONCLUSIVE (checked first)'); }
+      { const f = study(19, firstK(19, 'MISATTRIBUTED-FILL')); ok(f.outcome === 'INCONCLUSIVE', 'INCONCLUSIVE is checked before FALSIFIED (§10.5 order)'); }
+      { const p2 = study(25, (i, f) => (f === 'founded_year' ? SUP : f === 'employee_count' && i < 5 ? { cpg: '10', ref: {}, l1: 'UNSUPPORTED-FILL' } : CAB));
+        ok(p2.endpoints.P2.numerator === 45 && p2.endpoints.P2.denominator === 50 && p2.endpoints.P2.met, 'BOUNDARY: AR exactly 0.90 meets P2 (≥)'); }
+      { const p2 = study(25, (i, f) => (f === 'founded_year' ? SUP : f === 'employee_count' && i < 6 ? { cpg: '10', ref: {}, l1: 'UNSUPPORTED-FILL' } : CAB));
+        ok(!p2.endpoints.P2.met && p2.endpoints.P2.numerator === 44, 'BOUNDARY: AR 44/50 = 0.88 misses P2'); }
+      // B6 at analysis: machine INVALID overrides a rater's abstention label
+      { const g = study(25, (i, f) => (i < 3 ? { cpg: null, ref: {}, l1: 'CORRECT-ABSTENTION', obs: { machine_state: 'INVALID', invalid_reason: 'NO_RESPONSE_OR_HARNESS_ERROR', cpg_filled: false, cited_url_count: 0 } } : base(i, f)));
+        ok(g.dispositions.INVALID === 9 && g.labels['CORRECT-ABSTENTION'] === 44 && g.observations.filter((x) => x.disposition === 'INVALID').every((x) => x.label === null && x.rater_1_label === 'CORRECT-ABSTENTION'), 'B6: machine-INVALID observations never enter abstention, even when both raters labelled them CORRECT-ABSTENTION');
+        ok(g.outcome === 'INCONCLUSIVE' && trig(g).includes('2_valid_below_90pct'), 'B4 §15.5(2): 66/75 VALID (< 90%) → INCONCLUSIVE'); }
+      { const g = study(25, (i, f) => (i < 2 ? { ...base(i, f), obs: { machine_state: 'INVALID', invalid_reason: 'NOT_EXECUTED_RUN_INTERRUPTED' }, cpg: null, l1: 'CORRECT-ABSTENTION' } : base(i, f)));
+        ok(!trig(g).includes('2_valid_below_90pct') && g.dispositions.VALID === 69, 'BOUNDARY §15.5(2): 69/75 = 92% VALID does not trigger'); }
+      // P2 undefined (AD-8)
+      { const spec = (i, f) => (f === 'founded_year' ? SUP : { cpg: null, ref: { value_kind: 'STATED', expected_value: '100', source_url: 'https://registry.example/y' }, l1: 'MISSED-FILL' });
+        ok(study(25, spec, { D: { 'AD-8': 'P2_NOT_MET' } }).outcome === 'FAILURE' && study(25, spec, { D: { 'AD-8': 'INCONCLUSIVE' } }).outcome === 'INCONCLUSIVE', 'AD-8: an undefined AR follows the recorded decision (P2 not met, or INCONCLUSIVE)'); }
+      // α (§15.5(3)) and AD-1 / AD-2
+      { const dis = (k) => study(25, (i, f) => (f === 'founded_year' && i < k ? { ...SUP, l2: 'INCORRECT-FILL' } : base(i, f)), { pick: (it) => (it.label_a === 'SUPPORTED-FILL' ? 'LABEL_A' : 'LABEL_B') });
+        const lo = dis(14); const hi = dis(12);
+        const expect = (k) => 1 - (149 * 2 * k) / (150 ** 2 - ((50 - k) ** 2 + k ** 2 + 100 ** 2)); // n = 150; n_S = 50 − k, n_I = k, n_CA = 100
+        ok(Math.abs(lo.alpha.value - expect(14)) < 1e-12 && Math.abs(hi.alpha.value - expect(12)) < 1e-12, 'α nominal matches the closed form 1 − (n−1)·Σo_ck / Σn_c·n_k');
+        ok(lo.alpha.value < 0.667 && trig(lo).includes('3_rating') && lo.outcome === 'INCONCLUSIVE', 'B4 §15.5(3): α 0.621 < 0.667 → INCONCLUSIVE');
+        ok(hi.alpha.value > 0.667 && !trig(hi).includes('3_rating') && hi.outcome === 'SUCCESS' && hi.labels['SUPPORTED-FILL'] === 25 && hi.observations.filter((x) => x.adjudicated).length === 12, 'B4: α 0.672 ≥ 0.667 does not trigger; the adjudicated labels are used and flagged'); }
+      ok(AN.alphaNominal([['a', 'a'], ['a', 'a'], ['b', 'b'], ['a', 'b']]).value === 1 - 14 / 30 && !AN.alphaNominal([]).defined && !AN.alphaNominal([['a', 'a']]).defined, 'α known answer (0.5333) and undefined cases');
+      { const same = (i, f) => SUP;
+        ok(!study(25, same).alpha.defined && trig(study(25, same, { D: { 'AD-2': 'INCONCLUSIVE' } })).includes('3_rating') && !trig(study(25, same, { D: { 'AD-2': 'NOT_BELOW_THRESHOLD' } })).includes('3_rating'), 'AD-2: an undefined α follows the recorded decision'); }
+      { const spec = (i, f) => (i < 3 ? { cpg: null, ref: {}, l1: 'CORRECT-ABSTENTION', l2: f === 'founded_year' ? 'MISSED-FILL' : 'CORRECT-ABSTENTION', obs: { machine_state: 'INVALID', invalid_reason: 'NO_RESPONSE_OR_HARNESS_ERROR', cpg_filled: false, cited_url_count: 0 } } : base(i, f));
+        const all = study(25, spec, { D: { 'AD-1': 'ALL_COMPLETELY_RATED_ITEMS' } }); const exc = study(25, spec, { D: { 'AD-1': 'EXCLUDE_INVALID_CONFLICT_AND_STALE' } });
+        ok(all.alpha.units === 75 && all.alpha.disagreements === 3 && exc.alpha.units === 66 && exc.alpha.disagreements === 0, 'AD-1: the α population follows the recorded decision'); }
+      { const pend = (k) => study(25, (i, f) => (f === 'employee_count' && i < k ? { ...CAB, l2: 'pending' } : base(i, f)));
+        const p8 = pend(8); const p7 = pend(7);
+        ok(p8.completely_rated === 67 && trig(p8).includes('3_rating') && p8.dispositions.PENDING === 8 && !trig(p7).includes('3_rating'), 'BOUNDARY §15.5(3): 67/75 completely rated (< 90%) triggers, 68/75 does not; pending is never imputed'); }
+      // §15.5(4) registry unavailable, AD-4
+      { const ru = (k, ident) => (i, f) => ({ ...base(i, f), obs: i < k ? { registry_unavailable: [{ provider: 'p', identifier: ident(i), outcome: 'inaccessible', failure: null }] } : {} });
+        ok(trig(study(25, ru(3, (i) => `SYNID${i}`))).includes('4_registry_unavailable_above_10pct') && !trig(study(25, ru(2, (i) => `SYNID${i}`))).includes('4_registry_unavailable_above_10pct'), 'BOUNDARY §15.5(4): 3/25 companies (> 10%) trigger, 2/25 do not');
+        ok(trig(study(25, ru(3, () => 'OTHER'), { D: { 'AD-4': 'ANY_REGISTRY_UNAVAILABLE_ENTRY' } })).includes('4_registry_unavailable_above_10pct') && !trig(study(25, ru(3, () => 'OTHER'), { D: { 'AD-4': 'ENTRY_FOR_DECISIVE_IDENTIFIER' } })).includes('4_registry_unavailable_above_10pct'), 'AD-4: registry unavailability counts per the recorded decision'); }
+      // §15.5(5) SOURCE-COINCIDENT, AD-3
+      { const sc = (k, suffix = '') => (i, f) => ({ ...SUP, ref: { ...SUP.ref, source_url: i < k ? `https://synthetic-t${i}.example/${f}${suffix}` : 'https://registry.example/x' } });
+        const s16 = study(25, sc(16)); const s15 = study(25, sc(15));
+        ok(s16.source_coincident.count === 48 && trig(s16).includes('5_source_coincident_above_60pct') && s15.source_coincident.count === 45 && !trig(s15).includes('5_source_coincident_above_60pct'), 'BOUNDARY §15.5(5): 48/75 (64%) SOURCE-COINCIDENT triggers, 45/75 (60%) does not');
+        ok(study(25, sc(25, '#top'), { D: { 'AD-3': 'EXACT_URL_STRING' } }).source_coincident.count === 0 && study(25, sc(25, '#top'), { D: { 'AD-3': 'URL_WITHOUT_FRAGMENT' } }).source_coincident.count === 75, 'AD-3: "same document" follows the recorded URL-match decision');
+        ok(study(25, sc(25)).observations.every((x) => x.independence === 'SOURCE-COINCIDENT'), 'SOURCE-COINCIDENT is recorded per scored observation (§9.8)'); }
+      // §15.5(6), (7), VOID, AD-7
+      ok(trig(study(25, base, { sealPublication: { ...rj('seal_publication.json'), registry_timestamp: '2023-10-09T00:00:00Z' } })).includes('6_seal_publication'), 'B4 §15.5(6): a seal record other than the one that opened the window → INCONCLUSIVE');
+      { const viol = { protocol_violations: [{ description: 'SYNTHETIC violation', discovered_at: '2023-10-05' }] };
+        const inc = study(25, base, { decl: viol, D: { 'AD-7': 'INCONCLUSIVE' } }); const vd = study(25, base, { decl: viol, D: { 'AD-7': 'VOID' } });
+        ok(inc.outcome === 'INCONCLUSIVE' && trig(inc).includes('7_protocol_violation') && vd.outcome === 'VOID' && vd.endpoints === null, 'AD-7: a declared protocol violation is INCONCLUSIVE or VOID per the recorded decision; VOID reports no endpoint'); }
+      { const v = study(25, base, { events: [...allEvents, { type: 'RUN_STARTED', run_id: 'shadow', authorization_sha256: authz.authorization_sha256, at: '2023-10-05T00:00:00Z' }, { type: 'AUTHORIZED_EXECUTION', run_id: 'shadow', candidate_id: authz.held_out_candidate_ids[0], at: '2023-10-05T00:00:01Z' }] });
+        ok(v.outcome === 'VOID' && v.endpoints === null && v.execution_audit === 'STUDY_VOID_REPEATED_EXECUTION' && !Object.hasOwn(v, 'labels'), 'B4 §15.5(8)/§6.5: a VOID execution audit → VOID, no endpoint reported'); }
+      // dispositions: conflict, stale (AD-5 / AD-6), ambiguous, inadmissible
+      { const c = study(25, (i, f) => (i === 0 && f === 'founded_year' ? { ...SUP, ref: { ...SUP.ref, resolution: 'REFERENCE_CONFLICT' } } : base(i, f)));
+        ok(c.dispositions['REFERENCE-CONFLICT'] === 1 && c.endpoints.G1.fills === 24, 'sealed REFERENCE-CONFLICT is excluded from every denominator'); }
+      { const st = (asOf, kind = 'STATED') => study(25, (i, f) => (i === 0 && f === 'employee_count' ? { cpg: null, ref: { value_kind: kind, expected_value: kind === 'STATED' ? '100' : '', source_url: 'https://registry.example/z', as_of_date: asOf }, l1: kind === 'STATED' ? 'MISSED-FILL' : 'CORRECT-ABSTENTION' } : base(i, f)));
+        ok(st('2024-08-31').dispositions['REFERENCE-STALE'] === 1 && st('2024-09-01').dispositions['REFERENCE-STALE'] === 0, 'BOUNDARY §10.2: a STATED reference exactly 24 months before asOf is current; one day older is REFERENCE-STALE');
+        ok(study(25, (i, f) => (i === 0 && f === 'founded_year' ? { ...SUP, ref: { ...SUP.ref, as_of_date: '1990-01-01' } } : base(i, f))).dispositions['REFERENCE-STALE'] === 0, '§10.2: the temporal rule applies only to employee_count and revenue_range');
+        const na = (D) => study(25, (i, f) => (i === 0 && f === 'revenue_range' ? { ...CAB, ref: { as_of_date: '2020-01-01' } } : base(i, f)), { D });
+        ok(na({ 'AD-6': 'STATED_REFERENCE_VALUES_ONLY' }).dispositions['REFERENCE-STALE'] === 0 && na({ 'AD-6': 'ALL_REFERENCE_RECORDS' }).dispositions['REFERENCE-STALE'] === 1, 'AD-6: REFERENCE-STALE scope follows the recorded decision'); }
+      ok(AN.monthsBefore('2026-09-01T00:00:00Z', 24) === '2024-09-01' && AN.monthsBefore('2026-02-28T12:00:00Z', 24) === '2024-02-28' && AN.monthsBefore('2024-02-29T00:00:00Z', 24) === '2022-02-28' && AN.monthsBefore('2026-03-31T00:00:00Z', 1) === '2026-02-28', 'AD-5 CALENDAR_MONTHS arithmetic (month-end clamped)');
+      { const tz = (D) => study(25, (i, f) => (i === 0 && f === 'employee_count' ? { cpg: null, ref: { value_kind: 'STATED', expected_value: '100', source_url: 'https://registry.example/z', as_of_date: '2024-09-01' }, l1: 'MISSED-FILL' } : base(i, f)), { D });
+        ok(tz({ 'AD-5': 'CALENDAR_MONTHS' }).staleness_cutoff === '2024-09-01' && tz({ 'AD-5': 'DAYS_730' }).staleness_cutoff === '2024-09-01', 'AD-5: both cutoffs recorded in the results'); }
+      { const amb = study(25, (i, f) => (i === 0 && f === 'founded_year' ? { ...SUP, l1: 'REFERENCE-AMBIGUOUS' } : base(i, f)));
+        ok(amb.dispositions['REFERENCE-AMBIGUOUS'] === 1 && amb.endpoints.G1.fills === 24 && amb.exclusion_table.some((x) => x.disposition === 'REFERENCE-AMBIGUOUS'), 'rater REFERENCE-AMBIGUOUS is excluded and published, never converted into a scored label'); }
+      { const inad = study(25, base, { decl: { identity_inadmissible: [{ candidate_id: 'SYN-T003', basis: 'SYNTHETIC' }] } });
+        ok(inad.dispositions.INVALID === 3 && inad.observations.filter((x) => x.candidate_id === 'SYN-T003').every((x) => x.reason === 'IDENTITY_INADMISSIBLE_AFTER_DRAW'), '§15.2: identity inadmissibility after the draw → INVALID for every observation of the company'); }
+      // abstention split (AD-9) and diagnostics
+      { const sp = (D) => study(25, (i, f) => ({ ...base(i, f), obs: i < 2 ? { unavailable_sources: [{ sourceId: 's', state: 'UNAVAILABLE', reason: null }] } : {} }), { D });
+        ok(sp({ 'AD-9': 'ANY_UNAVAILABLE_ENTRY' }).abstention_split.source_unavailable === 4 && sp({ 'AD-9': 'REGISTRY_UNAVAILABLE_ONLY' }).abstention_split.source_unavailable === 0 && sp({}).abstention_split.other + sp({}).abstention_split.source_unavailable === 50, 'AD-9: abstentions are split (never excluded) per the recorded decision'); }
+      ok(A.secondary.S2.value === 1 && A.secondary.S7.fills_per_company_histogram[1] === 25 && A.secondary.S4.value === 1 && A.secondary.S8.companies_timed === 25 && A.secondary.S1.computed === false && A.secondary.S5.computed === false, 'diagnostics S2/S4/S7/S8 computed; S1/S5 explicitly not computed (undefined by the protocol)');
+      ok(canonicalJson(study(25, base)) === canonicalJson(A), 'DETERMINISTIC: the same inputs give byte-identical results');
+      // resolution integrity
+      { const dis = (o) => () => study(25, (i, f) => (f === 'founded_year' && i < 2 ? { ...SUP, l2: 'INCORRECT-FILL' } : base(i, f)), o);
+        throws(dis({ resolution: () => null }), 'B4: disagreements with no resolution are refused (RATING_ADJUDICATION_MISSING)');
+        throws(dis({ resolution: (r) => ({ ...r, resolutions: r.resolutions.map((x) => ({ ...x, label: 'MISSED-FILL' })) }) }), 'B4: an altered resolution is refused');
+        throws(dis({ resolution: (r) => { const { resolution_sha256: _x, ...b } = { ...r, sheet_1_sha256: H('other sheet') }; return { ...b, resolution_sha256: sha256(canonicalJson(b)) }; } }), 'B4: a resolution bound to other sheets (re-hashed) is refused');
+        throws(() => study(25, base, { resolution: () => ({ schema: RT.RATING_RESOLUTION_SCHEMA }) }), 'B4: a resolution where no disagreement exists is refused'); }
+      { const e = { study_id: 'x', seal_hash: seal.seal_hash, evaluation_sha256: H('e'), items: [{ candidate_id: 'SYN-T000', field: 'founded_year', cpg_value: '1999', cpg_source_urls: [], reference_record: refRowT('SYN-T000', 'founded_year') }] };
+        const a1 = { rated_by: 'SYN-P4', evaluation_sha256: H('e'), sheet_sha256: H('a'), ratings: [{ candidate_id: 'SYN-T000', field: 'founded_year', label: 'SUPPORTED-FILL', sub_reason: '', rated_at: '2023-10-20' }] };
+        const a2 = { ...a1, rated_by: 'SYN-P5', sheet_sha256: H('b'), ratings: [{ ...a1.ratings[0], label: 'INCORRECT-FILL' }] };
+        const rp = PK.buildRatingAdjudicationPacket(RT.ratingPacketInputs(e, a1, a2, libHo.record.record_sha256));
+        const row = [{ candidate_id: 'SYN-T000', field: 'founded_year', decision: 'LABEL_A', rationale: 'x', adjudicated_by: 'SYN-P4', adjudicated_at: '2023-10-21' }];
+        throws(() => RT.resolveRatingAdjudication({ packet: rp, rows: row, sheet1: a1, sheet2: a2, adjudicator: 'SYN-P4', recordSha: libHo.record.record_sha256 }), 'B3: a rater cannot be the rating adjudicator');
+        throws(() => RT.resolveRatingAdjudication({ packet: rp, rows: row.map((r) => ({ ...r, adjudicated_by: 'SYN-P6' })), sheet1: a1, sheet2: { ...a2, rated_by: 'SYN-P4' }, adjudicator: 'SYN-P6', recordSha: libHo.record.record_sha256 }), 'B3: two sheets by the same person are refused (≥ 2 independent raters)'); }
+      // decisions file and declarations
+      { const pinned = AN.readDecisions(JSON.parse(readFileSync(join(HERE, '..', 'rules', 'analysis_decisions.json'), 'utf8')));
+        // The owner-approved values (DEEPTECH-PARALLEL-004). Pinned here so any later drift in the decisions file fails the self-test.
+        const APPROVED = { 'AD-1': 'EXCLUDE_INVALID_CONFLICT_AND_STALE', 'AD-2': 'INCONCLUSIVE', 'AD-3': 'URL_WITHOUT_FRAGMENT', 'AD-4': 'ENTRY_FOR_DECISIVE_IDENTIFIER', 'AD-5': 'CALENDAR_MONTHS', 'AD-6': 'STATED_REFERENCE_VALUES_ONLY', 'AD-7': 'VOID', 'AD-8': 'INCONCLUSIVE', 'AD-9': 'ANY_UNAVAILABLE_ENTRY' };
+        ok(pinned.errors.length === 0 && pinned.undecided.length === 0 && canonicalJson(pinned.values) === canonicalJson(APPROVED), 'the PINNED decisions file records exactly the owner-approved AD-1..AD-9 values, none UNDECIDED');
+        ok(AN.readDecisions(decFile({ ...DV, 'AD-1': AN.UNDECIDED })).undecided.length === 1, 'an UNDECIDED value is still recognised as undecided');
+        const f = decFile(DV);
+        ok(AN.readDecisions(f).errors.length === 0 && AN.readDecisions(f).undecided.length === 0, 'a complete decisions file is accepted');
+        ok(AN.readDecisions({ ...f, decisions: { ...f.decisions, 'AD-1': { ...f.decisions['AD-1'], options: ['ANYTHING'] } } }).errors.length > 0, 'a decisions file with altered options is refused');
+        { const d = { ...f.decisions }; delete d['AD-9']; ok(AN.readDecisions({ ...f, decisions: d }).errors.length > 0, 'a decisions file missing a decision is refused'); }
+        ok(AN.readDecisions({ ...f, decisions: { ...f.decisions, 'AD-10': { options: ['X'], value: 'X' } } }).errors.length > 0, 'a decisions file with an unknown decision is refused');
+        const dcl = (o) => AN.checkDeclarations({ schema: AN.DECLARATIONS_SCHEMA, seal_hash: seal.seal_hash, protocol_violations: [], identity_inadmissible: [], ...o }, { sealHash: seal.seal_hash, heldOutIds: authz.held_out_candidate_ids });
+        ok(dcl({}).length === 0 && dcl({ identity_inadmissible: [{ candidate_id: dev.development[0].candidate_id, basis: 'x' }] }).length > 0 && dcl({ identity_inadmissible: [{ candidate_id: authz.held_out_candidate_ids[0], basis: '' }] }).length > 0 && dcl({ protocol_violations: [{ description: 'x' }] }).length > 0 && dcl({ extra: 1 }).length > 0, 'declarations: only held-out companies with a basis; violations dated; no extra fields'); }
+    }
     // close-interrupted over a synthetic interrupted log
     EL.appendEvent(P('c_int.jsonl'), 'LOG_OPENED', '2023-10-02T00:00:00Z', {});
     EL.appendEvent(P('c_int.jsonl'), 'RUN_STARTED', '2023-10-02T00:00:00Z', { run_id: 'cli-int', authorization_sha256: authz.authorization_sha256, candidate_ids: authz.held_out_candidate_ids });
@@ -1792,6 +2902,56 @@ try {
     ok(run(['scan', '--frame', P('probe.csv'), '--repo', CLEAN_CLONE, '--expect-sha', FROZEN_SHA, '--registry', REGISTRY, '--out', P('probe_scan.json')], { expectCode: 1 }).includes('write-once'), 'DETECTOR: scan write-once');
     ok(run(['scan', '--frame', P('probe.csv'), '--repo', CLEAN_CLONE, '--expect-sha', '0'.repeat(40), '--registry', REGISTRY, '--out', P('x.json')], { expectCode: 1 }).includes('FROZEN'), 'DETECTOR: wrong SHA refused');
     console.log(`detector: ${out.split('\n').slice(0, 7).join(' | ')}`);
+
+    // ── 17. DR-10 regression: scan must not collapse two rows sharing a candidate_id ─────────
+    // Historical failure mode: cmdScan reached the frame through loadCsv (no duplicate check) and
+    // built `new Map(frame.map((r) => [r.candidate_id, ...]))`. A repeated candidate_id kept only the
+    // LAST row, so a contaminated occurrence disappeared merely because another occurrence of the
+    // same id followed it — while report.frame_hash still covered the dropped row, making the
+    // artefact attest to a row it never assessed. Contaminated occurrence FIRST, benign one LAST.
+    serial = 6000;
+    const reg16 = JSON.parse(readFileSync(REGISTRY, 'utf8'));
+    const dupContam = { ...row('fill-expected'), candidate_id: 'PROBE-DUP', company_name: 'Omnivyra', canonical_domain: 'UNKNOWN' };
+    const dupBenign = { ...row('fill-expected'), candidate_id: 'PROBE-DUP', company_name: 'SYNTHETIC-ZQXW-NOMATCH-B', canonical_domain: 'synthetic-zqxw-nomatch-b.example' };
+    const collapsed = new Map([dupContam, dupBenign].map((x) => [x.candidate_id, x]));
+    ok(collapsed.size === 1 && collapsed.get('PROBE-DUP').company_name === dupBenign.company_name
+      && registryMatches(collapsed.get('PROBE-DUP'), reg16).length === 0
+      && registryMatches(dupContam, reg16).some((m) => m.entry_id === 'DEV-001'),
+    'DR-10 (old behaviour): keying scan state on candidate_id keeps the LAST row and hides the first row\'s DEV-001 contamination');
+    writeFileSync(P('dup.csv'), toCsv(FRAME_COLUMNS, [dupContam, dupBenign]));
+    const dupOut = run(['scan', '--frame', P('dup.csv'), '--repo', CLEAN_CLONE, '--expect-sha', FROZEN_SHA, '--registry', REGISTRY, '--out', P('dup_scan.json')], { expectCode: 1 });
+    ok(/duplicate candidate_id\(s\)/.test(dupOut) && dupOut.includes('PROBE-DUP'), 'DR-10: scan refuses a frame that repeats a candidate_id, naming the id');
+    ok(!existsSync(P('dup_scan.json')), 'DR-10: no scan artefact is written for a duplicate-bearing frame (fail-closed)');
+    ok(/record 1: name "Omnivyra" domain "UNKNOWN"/.test(dupOut) && new RegExp(`record 2: name "${dupBenign.company_name}" domain "${dupBenign.canonical_domain}"`).test(dupOut),
+      'DR-10: every occurrence is attributable to its source record, name and domain');
+    ok(/record 1:[^\n]*CPG-C1\(6\) development-only registry DEV-001/.test(dupOut), 'DR-10: the occurrence the old code dropped is reported with its CPG-C1(6) reason');
+    ok(/record 1:[^\n]*CPG-C1\(1\) repository CPG_IMPLEMENTATION \S+:\d+/.test(dupOut), 'DR-10: the occurrence the old code dropped is reported with its CPG-C1(1) hit, file and line');
+    ok(/record 2:[^\n]*no contamination found in this occurrence/.test(dupOut), 'DR-10: the benign occurrence is reported as benign, not as contaminated');
+    ok(dupOut.includes(P('dup.csv')), 'DR-10: the refusal names the source frame file');
+
+    // Negative controls: benign duplicate CONTENT under distinct candidate_ids must survive intact,
+    // manufacture no contamination, flag EVERY occurrence when the duplicated content IS contaminated,
+    // and the artefact must be byte-identical across runs.
+    const benign = { ...row('fill-expected'), company_name: 'SYNTHETIC-ZQXW-NOMATCH-C', canonical_domain: 'synthetic-zqxw-nomatch-c.example' };
+    writeFileSync(P('dupcontent.csv'), toCsv(FRAME_COLUMNS, [
+      { ...benign, candidate_id: 'PROBE-BEN-1' }, { ...benign, candidate_id: 'PROBE-BEN-2' },
+      { ...dupContam, candidate_id: 'PROBE-BEN-3' }, { ...dupContam, candidate_id: 'PROBE-BEN-4' },
+    ]));
+    const cArgs = (o) => ['scan', '--frame', P('dupcontent.csv'), '--repo', CLEAN_CLONE, '--expect-sha', FROZEN_SHA, '--registry', REGISTRY, '--out', P(o)];
+    run(cArgs('dupcontent_scan.json'));
+    run(cArgs('dupcontent_scan2.json'));
+    const cs = JSON.parse(readFileSync(P('dupcontent_scan.json'), 'utf8'));
+    const cr = (id) => cs.results.find((x) => x.candidate_id === id);
+    ok(cs.results.length === 4, 'DR-10 control: four rows produce four results — identical content is never collapsed');
+    ok(!cr('PROBE-BEN-1').held_out_ineligible_by_scan && !cr('PROBE-BEN-2').held_out_ineligible_by_scan, 'DR-10 control: benign duplicate content manufactures no contamination');
+    ok(cr('PROBE-BEN-3').held_out_ineligible_by_scan && cr('PROBE-BEN-4').held_out_ineligible_by_scan
+      && canonicalJson(cr('PROBE-BEN-3').repository_hits) === canonicalJson(cr('PROBE-BEN-4').repository_hits)
+      && canonicalJson(cr('PROBE-BEN-3').registry_matches) === canonicalJson(cr('PROBE-BEN-4').registry_matches),
+    'DR-10 control: duplicated CONTAMINATED content flags every occurrence, identically');
+    ok(readFileSync(P('dupcontent_scan.json'), 'utf8') === readFileSync(P('dupcontent_scan2.json'), 'utf8'), 'DR-10 control: the scan artefact is byte-identical across two runs of the same scan');
+    ok(cs.frame_hash === hashRecords(parseCsv(readFileSync(P('dupcontent.csv'), 'utf8')).records, 'candidate_id')
+      && cs.results.length === parseCsv(readFileSync(P('dupcontent.csv'), 'utf8')).records.length,
+    'DR-10 control: the artefact assesses exactly the rows its frame_hash attests to');
   } else failures.push(`DETECTOR skipped: ${CLEAN_CLONE} missing`);
 } catch (e) {
   failures.push(`SELFTEST CRASHED in the end-to-end section: ${String(e?.message ?? e).slice(0, 300)}`);

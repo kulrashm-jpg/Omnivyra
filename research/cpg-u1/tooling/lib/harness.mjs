@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { checkAuthority, checkRegistration } from './registration.mjs';
+import { assignedValue } from './identity.mjs';
+import { declaredIdentity, verifyEvaluationTree } from './evaluationTree.mjs';
 import { EvidenceError, STATE, evaluateStage } from './sampling.mjs';
 import { buildAuthorization, checkAuthorization, LOG_SCHEMA } from './execution.mjs';
 import { appendEvent, readEventLog } from './eventlog.mjs';
@@ -20,6 +22,48 @@ const PROVIDER_CONFIG_FILES = Object.freeze(['backend/services/companyProfile/gr
 export function providerConfigurationSha(cloneDir) {
   const parts = PROVIDER_CONFIG_FILES.map((f) => sha256(readFileSync(join(cloneDir, f))));
   return sha256(['cpg-u1-provider-config/v1', ...PROVIDER_CONFIG_FILES.flatMap((f, i) => [f, parts[i]])].join('|'));
+}
+
+// ── R15 (§13.1 / §19.1): provider-configuration AUTHORITY ────────────────────
+// The registered `provider_configuration_sha256` was previously only screened for presence and 64-hex
+// shape (lib/registration.mjs), never COMPARED with anything. A wrong or stale but well-formed value
+// therefore passed. R15 compares the registered value with one derived INDEPENDENTLY OF THE RECORD.
+//
+// The derivation chain never reads the record except to take the value under test:
+//   registered protocol_sha256 (compared against the protocol file by the caller)
+//     -> protocol text -> §7.1 declared commit/tree/content aggregate (declaredIdentity)
+//     -> the supplied clone verified against that declaration (verifyEvaluationTree)
+//     -> providerConfigurationSha(clone).
+// So the value the comparison is made against is pinned by the protocol, not asserted by the submitter.
+//
+// A syntactically valid 64-hex value is never sufficient: only equality with the derived hash is.
+export const PROVIDER_CONFIG_VERDICT = Object.freeze({ ACCEPTABLE: 'ACCEPTABLE', BLOCKED: 'BLOCKED', NOT_COMPARED: 'NOT_COMPARED' });
+const PROVIDER_HEX64 = /^[0-9a-f]{64}$/;
+
+/**
+ * @param {{recorded: unknown, cloneDir: string|null|undefined, protocolText: string|null|undefined}} input
+ * @returns {{verdict: string, code: string, recorded: unknown, derived: string|null, message: string}}
+ * Outcomes required by R15: missing -> BLOCKED; malformed -> BLOCKED; wrong valid sha256 -> BLOCKED;
+ * stale valid sha256 -> BLOCKED; exactly the derived current value -> ACCEPTABLE.
+ * A stale value and a wrong value are the same finding here (neither equals the derived hash) and both
+ * are BLOCKED; the verifier does not need to tell them apart to refuse them.
+ */
+export function checkProviderConfiguration({ recorded, cloneDir, protocolText }) {
+  const out = (verdict, code, message, derived = null) => ({ verdict, code, recorded, derived, message });
+  if (!assignedValue(recorded)) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_MISSING', 'provider_configuration_sha256 is UNASSIGNED (§13.1/§19.1: derived from the pinned resolver before registration)');
+  if (!PROVIDER_HEX64.test(recorded)) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_MALFORMED', 'provider_configuration_sha256 is not 64 lowercase hex characters');
+  if (!cloneDir) return out(PROVIDER_CONFIG_VERDICT.NOT_COMPARED, 'PROVIDER_CONFIG_NOT_COMPARED', 'provider_configuration_sha256 was NOT compared: no resolver clone was supplied, so no independent value exists. A WRONG or STALE but well-formed value would not be detected here. Supply --resolver-clone (or CPG_U1_RESOLVER_CLONE), or pass --require-provider-config to make this a blocker');
+  // The derived value is only pinned if the protocol declares the §7.1 tree it must be derived from.
+  // A protocol text without §7.1 pins nothing, so there is no independent value to compare against and
+  // the honest answer is NOT COMPARED — never "verified", and never a refusal of the record itself.
+  try { declaredIdentity(protocolText); } catch (e) { return out(PROVIDER_CONFIG_VERDICT.NOT_COMPARED, 'PROVIDER_CONFIG_NO_PINNED_TREE', `provider_configuration_sha256 was NOT compared: the supplied protocol text does not pin an evaluation tree to derive it from (${e.message}). A WRONG or STALE but well-formed value would not be detected here`); }
+  let tree;
+  try { tree = verifyEvaluationTree({ repoDir: cloneDir, protocolText }); } catch (e) { return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_TREE_UNREADABLE', `the supplied clone could not be identified against §7.1, so no independent provider-configuration hash exists: ${e.message}`); }
+  if (!tree.ok) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_TREE_MISMATCH', `the supplied clone is not the §7.1 evaluation tree, so a hash derived from it would not be the pinned provider configuration: ${tree.refusals.map((r) => r.code).join(', ')}`);
+  let derived;
+  try { derived = providerConfigurationSha(cloneDir); } catch (e) { return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_UNDERIVABLE', `the provider configuration files named by §13.1 could not be read from the clone: ${e.message}`); }
+  if (recorded !== derived) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_MISMATCH', `registered provider_configuration_sha256 ${recorded} is not the value derived from the §7.1 evaluation tree (${derived}) — the registered configuration is wrong or stale`, derived);
+  return out(PROVIDER_CONFIG_VERDICT.ACCEPTABLE, 'PROVIDER_CONFIG_VERIFIED', `provider_configuration_sha256 equals the value derived independently from the §7.1 evaluation tree (${derived})`, derived);
 }
 
 class Refusal extends Error {
