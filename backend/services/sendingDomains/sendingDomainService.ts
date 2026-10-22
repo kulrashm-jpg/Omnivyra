@@ -208,7 +208,13 @@ export async function registerSendingDomain(
     } else {
       row = inserted.data as Row;
     }
-  } else if (Array.isArray(row.dkim_tokens) && row.dkim_tokens.length > 0) {
+  } else if (
+    (row.ses_identity_state === 'created' || row.ses_identity_state === 'adopted')
+    && Array.isArray(row.dkim_tokens) && row.dkim_tokens.length > 0
+  ) {
+    // Only an identity Omnivyra still HOLDS is "already registered". A row
+    // whose identity went 'missing' (or was never associated) must be able to
+    // create or adopt it again — otherwise the tenant is stuck for good.
     return outcome('already_registered', null, toRecord(row));
   }
 

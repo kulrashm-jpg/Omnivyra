@@ -767,6 +767,47 @@ describe('W4 SES identity lifecycle — recorded by the service', () => {
     expect(rows()[0]).toMatchObject({ ses_identity_state: 'missing', status: 'failed' });
   });
 
+  describe("re-registering a domain whose identity went 'missing' (it must not be stuck)", () => {
+    async function goneMissing() {
+      const { domain } = await register('acme.com');
+      ses.identities.delete('acme.com');
+      await refreshSendingDomainStatus(ORG_A, domain!.id, deps());
+      expect(rows()[0]).toMatchObject({ ses_identity_state: 'missing', status: 'failed' });
+      expect((rows()[0].dkim_tokens as unknown[]).length).toBeGreaterThan(0); // stale tokens are kept
+      ses.calls.length = 0;
+    }
+
+    it('re-creates the identity: a CreateEmailIdentity is sent and the row is held again', async () => {
+      await goneMissing();
+      const r = await register('acme.com');
+      expect(ses.calls.map((c) => c[0])).toEqual(['create']);
+      expect(r.domain?.identityState).toBe('created');
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toMatchObject({ ses_identity_state: 'created', status: 'pending', last_error_code: null });
+    });
+
+    it("re-adopts an identity that reappeared with EXACTLY this tenant's configuration set", async () => {
+      await goneMissing();
+      ses.identities.set('acme.com', { configurationSetName: CS_A, verifiedForSending: true, dkimStatus: 'SUCCESS', dkimTokens: ['n1', 'n2', 'n3'] });
+      const r = await register('acme.com');
+      expect(r.domain).toMatchObject({ identityState: 'adopted', status: 'verified', dkimTokens: ['n1', 'n2', 'n3'] });
+    });
+
+    it("still refuses an identity that reappeared under ANOTHER configuration set (stays 'missing', never verified)", async () => {
+      await goneMissing();
+      ses.identities.set('acme.com', { configurationSetName: `omnivyra-t-${ORG_B}`, verifiedForSending: true, dkimStatus: 'SUCCESS', dkimTokens: ['f1'] });
+      expect(await register('acme.com')).toMatchObject({ status: 'terminal_failure', reason: 'ses_identity_not_adoptable' });
+      expect(rows()[0]).toMatchObject({ ses_identity_state: 'missing', status: 'failed', verified_at: null });
+    });
+
+    it('a domain whose identity is still HELD keeps the no-SES-call shortcut', async () => {
+      await register('acme.com');
+      ses.calls.length = 0;
+      expect((await register('acme.com')).status).toBe('already_registered');
+      expect(ses.calls).toHaveLength(0);
+    });
+  });
+
   it("a 'none' row whose identity a refresh proves is the tenant's becomes 'adopted'", async () => {
     ses.failCreate = 'unavailable';
     const { domain } = await register('acme.com');
