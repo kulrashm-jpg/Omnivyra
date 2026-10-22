@@ -1,0 +1,21 @@
+-- Rollback for 20261220000000_w4_tenant_sending_domains.sql (DRAFT; not applied).
+--
+-- THIS DOES NOT TOUCH AWS. Dropping the table forgets which domains were
+-- registered and what Omnivyra knew about each SES identity; every identity
+-- that existed (ses_identity_state 'created', 'adopted' or 'delete_pending')
+-- stays live in the SES account, still bound to its tenant's configuration set.
+--
+-- BEFORE running it, export the reconciliation record, e.g.
+--   SELECT organization_id, domain, configuration_set_name, ses_identity_state
+--     FROM public.tenant_sending_domains
+--    WHERE ses_identity_state IN ('created', 'adopted', 'delete_pending');
+-- and keep it. Each listed identity must later be reconciled in AWS by an
+-- authorized operator: re-read it, confirm it is a DOMAIN identity whose
+-- configuration set is exactly the listed `omnivyra-t-<organization_id>`, that
+-- the domain is not reserved (omnivyra.com or any subdomain), and only then
+-- delete it. An identity whose configuration set does not match is NOT ours to
+-- delete. Without the export, orphaned identities can only be found by listing
+-- the account's identities and matching configuration sets.
+-- Dropping the table also drops its trigger; the function goes after it.
+DROP TABLE IF EXISTS public.tenant_sending_domains;
+DROP FUNCTION IF EXISTS public.tenant_sending_domains_identity_guard();
