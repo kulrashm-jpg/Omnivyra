@@ -190,6 +190,31 @@ describe('B4-A2 — a tenant credential governs its OWN discovery, and only its 
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+/**
+ * Every source file under `services/prospectDiscovery`, RECURSIVELY.
+ *
+ * Integration Hub Phase 4 put the Apollo transport in `adapters/`. A flat
+ * `readdirSync` both crashed on that directory and, had it skipped it, would
+ * have passed VACUOUSLY on exactly the files that talk to the vendor. The match
+ * set is asserted non-empty and to include the adapter, so the scan cannot go
+ * quiet again by a file moving.
+ */
+function discoverySources(): string[] {
+  const root = join(__dirname, '../../services/prospectDiscovery');
+  const files: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(entry.name)) files.push(full);
+    }
+  };
+  walk(root);
+  expect(files.length).toBeGreaterThan(0);
+  expect(files.some((f) => /adapters[\\/]apolloDiscovery\.ts$/.test(f))).toBe(true);
+  return files.map((f) => readFileSync(f, 'utf8'));
+}
+
 describe('B4-A2 — no environment, global or platform Apollo credential path', () => {
   const PRIOR = process.env.APOLLO_API_KEY;
   afterEach(() => {
@@ -207,9 +232,7 @@ describe('B4-A2 — no environment, global or platform Apollo credential path', 
   });
 
   it('the discovery layer never reads process.env for a credential', () => {
-    const dir = join(__dirname, '../../services/prospectDiscovery');
-    for (const f of readdirSync(dir)) {
-      const src = readFileSync(join(dir, f), 'utf8');
+    for (const src of discoverySources()) {
       // A READ, not the words. `process.env` followed by `.` or `[` is an access;
       // the contract's prose says an adapter must never read `process.env`, and
       // that sentence must not be what satisfies the assertion.
@@ -219,9 +242,7 @@ describe('B4-A2 — no environment, global or platform Apollo credential path', 
   });
 
   it('the discovery layer has NO tenant-specific branch — Drishiq included', () => {
-    const dir = join(__dirname, '../../services/prospectDiscovery');
-    for (const f of readdirSync(dir)) {
-      const src = readFileSync(join(dir, f), 'utf8');
+    for (const src of discoverySources()) {
       expect(src).not.toMatch(/drishiq/i);
     }
     // And the route that records a search carries no tenant special case either.
@@ -230,9 +251,7 @@ describe('B4-A2 — no environment, global or platform Apollo credential path', 
   });
 
   it('the discovery layer introduces NO second credential store', () => {
-    const dir = join(__dirname, '../../services/prospectDiscovery');
-    for (const f of readdirSync(dir)) {
-      const src = readFileSync(join(dir, f), 'utf8');
+    for (const src of discoverySources()) {
       // It may reference the A3M port; it must never reach the credential table
       // or the encryption primitive itself.
       expect(src).not.toMatch(/integration_credentials/);
@@ -242,6 +261,9 @@ describe('B4-A2 — no environment, global or platform Apollo credential path', 
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Integration Hub Phase 4 later added an Apollo discovery adapter, registered
+// only when a caller (the discovery route) asks. These two still hold: loading
+// the registry registers nothing, so a credential alone reaches no vendor.
 describe('B4-A2 — Apollo remains UNAUTHENTICATED and UNREACHABLE in this gate', () => {
   it('no Apollo discovery provider exists to be registered', () => {
     /* eslint-disable @typescript-eslint/no-var-requires */
