@@ -5,6 +5,7 @@ import {
   listCreatorAssets,
   upsertCreatorAssetRecord,
   deleteCreatorAssetRecord,
+  CreatorAssetIdConflictError,
 } from '@/backend/services/creatorAssetPersistenceService';
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -123,6 +124,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     return res.status(200).json({ asset: row });
   } catch (error) {
+    // F3: an id held by another company is refused, never adopted.
+    if (error instanceof CreatorAssetIdConflictError) {
+      return res.status(409).json({ error: 'asset_id_unavailable' });
+    }
     const message = error instanceof Error ? error.message : 'Failed to persist creator asset';
     return res.status(message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE') ? 503 : 500).json({
       error: message,

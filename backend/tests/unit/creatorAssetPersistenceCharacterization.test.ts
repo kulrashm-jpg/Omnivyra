@@ -3,7 +3,8 @@
  * of creatorAssetPersistenceService before the Asset Library evolution, so
  * every extension can be verified against this baseline:
  *
- *  - stable-id upsert (same identity inputs → same row id; overwrite not fork)
+ *  - stable-id write (same identity inputs → same row id; overwrite not fork)
+ *    — since F3 a company-scoped UPDATE, then INSERT; never an id-only upsert
  *  - list scoping/ordering/limit
  *  - delete cascades attachments and is (id, company) scoped
  *  - attachment upsert conflict key
@@ -30,6 +31,22 @@ jest.mock('../../db/writeOwner', () => ({
     }
     builder.upsert = (payload: unknown, opts: unknown) => {
       record('upsert', payload, opts);
+      return {
+        select: () => ({ single: () => Promise.resolve({ data: payload as Record<string, unknown>, error: null }) }),
+      };
+    };
+    // F3: the asset write is a company-scoped UPDATE (no owned row here, so it
+    // matches nothing) followed by an INSERT.
+    builder.update = (payload: unknown) => {
+      record('update', payload);
+      const upd: any = {};
+      upd.eq = (...args: unknown[]) => { record('eq', ...args); return upd; };
+      upd.select = () => upd;
+      upd.maybeSingle = () => Promise.resolve({ data: null, error: null });
+      return upd;
+    };
+    builder.insert = (payload: unknown) => {
+      record('insert', payload);
       return {
         select: () => ({ single: () => Promise.resolve({ data: payload as Record<string, unknown>, error: null }) }),
       };
@@ -76,9 +93,14 @@ describe('stable-id upsert (the save/overwrite contract)', () => {
     const b = await svc.upsertCreatorAssetRecord({ ...baseInput });
     expect(a.id).toBe(b.id);
     expect(String(a.id)).toHaveLength(32);
-    const upserts = calls.filter((c) => c.table === 'creator_assets' && c.op === 'upsert');
-    expect(upserts).toHaveLength(2);
-    expect(upserts[0].args[1]).toEqual({ onConflict: 'id' });
+    const writes = calls.filter((c) => c.table === 'creator_assets' && ['upsert', 'insert', 'update'].includes(c.op));
+    // F3: never an id-only upsert — each write is a company-scoped update, then an insert.
+    expect(writes.map((c) => c.op)).toEqual(['update', 'insert', 'update', 'insert']);
+    const updateScopes = calls.filter((c) => c.table === 'creator_assets' && c.op === 'eq' && c.args[0] === 'company_id');
+    expect(updateScopes).toHaveLength(2);
+    expect(updateScopes.every((c) => c.args[1] === 'co-1')).toBe(true);
+    const inserted = writes.filter((c) => c.op === 'insert').map((c) => (c.args[0] as Record<string, unknown>).id);
+    expect(inserted).toEqual([a.id, a.id]);
   });
 
   it('different render identity forks a different id', async () => {
@@ -93,8 +115,8 @@ describe('stable-id upsert (the save/overwrite contract)', () => {
 
   it('persists the reconstruction metadata envelope (integrity/reconstruction/parity + recovery)', async () => {
     await svc.upsertCreatorAssetRecord({ ...baseInput });
-    const upsert = calls.find((c) => c.table === 'creator_assets' && c.op === 'upsert')!;
-    const row = upsert.args[0] as Record<string, unknown>;
+    const insert = calls.find((c) => c.table === 'creator_assets' && c.op === 'insert')!;
+    const row = insert.args[0] as Record<string, unknown>;
     const md = row.metadata as Record<string, unknown>;
     expect(md.reconstructionVersion).toBe('creator-asset-reconstruction-v1');
     expect(md.integrity).toBeDefined();
@@ -155,7 +177,7 @@ describe('deleteCreatorAssetRecord (id+company scoped, attachment cascade)', () 
 });
 
 describe('attachCreatorAsset (writer attach lifecycle contract)', () => {
-  it('upserts the asset first, then the attachment with the composite conflict key', async () => {
+  it('writes the asset first, then upserts the attachment with the composite conflict key', async () => {
     await svc.attachCreatorAsset({
       tenantId: 'co-1',
       companyId: 'co-1',
@@ -168,7 +190,7 @@ describe('attachCreatorAsset (writer attach lifecycle contract)', () => {
       metadata: { creatorBrandKit: { rendererIdentityVersion: 'v1', layoutVariantId: 'lv1' }, renderIdentityHash: 'h2' },
       renderIdentityHash: 'h2',
     } as never);
-    const order = calls.filter((c) => c.op === 'upsert').map((c) => c.table);
+    const order = calls.filter((c) => c.op === 'upsert' || c.op === 'insert').map((c) => c.table);
     expect(order).toEqual(['creator_assets', 'creator_asset_attachments']);
     const attachment = calls.filter((c) => c.op === 'upsert' && c.table === 'creator_asset_attachments')[0];
     expect(attachment.args[1]).toEqual({ onConflict: 'company_id,user_id,source_type,source_id,creator_asset_id' });

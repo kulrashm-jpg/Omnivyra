@@ -4,6 +4,7 @@ import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import {
   attachCreatorAsset,
   listCreatorAssetAttachments,
+  CreatorAssetIdConflictError,
 } from '@/backend/services/creatorAssetPersistenceService';
 
 /**
@@ -123,6 +124,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
       return res.status(200).json({ attachment: mapAttachment(row) });
     } catch (error) {
+      // F3: an id held by another company is refused, never adopted.
+      if (error instanceof CreatorAssetIdConflictError) {
+        return res.status(409).json({ error: 'asset_id_unavailable' });
+      }
       const message = error instanceof Error ? error.message : 'Failed to persist creator attachment';
       return res.status(message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE') ? 503 : 500).json({
         error: message,
