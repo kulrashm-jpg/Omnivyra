@@ -43,7 +43,10 @@ function builderFor(table: string) {
 
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => builderFor(t) }));
 jest.mock('../../services/creatorAssetPersistenceService', () => ({
-  libraryReadAsset: async () => (envelope ? { library: envelope } : null),
+  // The REAL LibraryAssetRecord shape — `{ envelope, serverMeta }` — not `{ library }`.
+  libraryReadAsset: async () => (envelope
+    ? { envelope, serverMeta: { archivedAt: null, usageCount: 0, lastUsedAt: null, updatedAt: null, createdAt: null } }
+    : null),
   libraryWriteAsset: async (input: { envelope: Record<string, unknown> }) => {
     written.push(input.envelope);
     envelope = input.envelope;

@@ -49,7 +49,11 @@ class VersionConflict extends Error {
 const mockRead = jest.fn(async () => {
   readsSeen += 1;
   if (readsSeen <= barrierArrivals) await barrier;   // hold until everyone has read
-  return { library: clone(store.library) } as unknown;
+  // The REAL LibraryAssetRecord shape — `{ envelope, serverMeta }` — not `{ library }`.
+  return {
+    envelope: clone(store.library),
+    serverMeta: { archivedAt: null, usageCount: 0, lastUsedAt: null, updatedAt: null, createdAt: null },
+  } as unknown;
 });
 
 /** The faithful default; reinstalled by seed() so per-test overrides can't leak. */

@@ -170,7 +170,8 @@ export async function resolveActivityCreative(input: {
     try {
       const { libraryReadAsset } = await import('../creatorAssetPersistenceService');
       const record = await libraryReadAsset({ companyId, assetId: creatorAssetId });
-      const envelope = asObject((record as unknown as Record<string, unknown> | null)?.library ?? null);
+      // libraryReadAsset returns { envelope, serverMeta } — read the envelope itself.
+      const envelope = asObject(record?.envelope ?? null);
       const versions = Array.isArray(envelope.versions) ? envelope.versions as Record<string, unknown>[] : [];
       const currentVersion = Number(envelope.currentVersion ?? 0);
       if (!versions.length || currentVersion <= 1) return null;

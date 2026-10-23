@@ -114,7 +114,8 @@ async function appendRefinedVersion(input: {
 }): Promise<{ version: number; originalVersion: number } | null> {
   for (let attempt = 0; ; attempt += 1) {
     const record = await libraryReadAsset({ companyId: input.companyId, assetId: input.assetId });
-    const envelope = asObject((record as unknown as Record<string, unknown> | null)?.library ?? record ?? null);
+    // libraryReadAsset returns { envelope, serverMeta } — read the envelope itself.
+    const envelope = asObject(record?.envelope ?? null);
     const versions = Array.isArray(envelope.versions) ? envelope.versions as Record<string, unknown>[] : [];
     if (!envelope.id || versions.length === 0) return null;
 
