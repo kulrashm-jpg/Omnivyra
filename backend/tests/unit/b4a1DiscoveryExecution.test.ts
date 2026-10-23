@@ -1079,6 +1079,8 @@ describe('B4-A1 — the route records a search and cannot call a provider', () =
     expect(src).toMatch(/enforceCompanyAccess\(\{ req, res, companyId \}\)/);
     expect(src).toMatch(/requireCapability\(/);
     expect(src).toMatch(/capability: PROSPECT_INGEST/);
+    // PI-ADR-007: the armed route spends, so spend authority is required too.
+    expect(src).toMatch(/capability: PROSPECT_ENRICH_EXECUTE/);
   });
 
   it('the kill switch is checked BEFORE any membership lookup', () => {

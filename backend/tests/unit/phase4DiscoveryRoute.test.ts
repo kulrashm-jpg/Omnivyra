@@ -160,7 +160,51 @@ describe('Phase 4 — the gates run in order, and before anything happens', () =
 
   it('the capability asked for is the prospect-ingest one, for the query tenant', async () => {
     await call();
-    expect(requireCapability.mock.calls[0][2]).toMatchObject({ organizationId: ORG_A });
+    expect(requireCapability.mock.calls[0][2]).toMatchObject({
+      capability: 'prospect.ingest', organizationId: ORG_A,
+    });
+  });
+
+  // PI-ADR-007: spending is a separate authority from ingesting, and this route
+  // spends once the provider stage is armed.
+  it('spend authority (prospect.enrich.execute) is ALSO required, for the same verified tenant', async () => {
+    await call();
+    expect(requireCapability).toHaveBeenCalledTimes(2);
+    expect(requireCapability.mock.calls[1][2]).toMatchObject({
+      capability: 'prospect.enrich.execute', organizationId: ORG_A,
+    });
+  });
+
+  it('a caller who may ingest but may NOT spend records nothing and calls no provider', async () => {
+    requireCapability
+      .mockResolvedValueOnce({ ok: true })                 // prospect.ingest
+      .mockResolvedValueOnce({ ok: false, sent: true });   // prospect.enrich.execute
+    await call();
+    expect(createDiscoveryExecution).not.toHaveBeenCalled();
+    expect(runDiscoveryExecution).not.toHaveBeenCalled();
+  });
+
+  it('a body cannot steer the spend check to another tenant', async () => {
+    await call({ body: { provider: 'apollo', organizationId: ORG_B, companyId: ORG_B,
+      filters: { titles: ['CTO'] }, bounds: { maxPages: 1, maxResults: 5, maxProviderCalls: 1 } } });
+    for (const c of requireCapability.mock.calls) expect(c[2].organizationId).toBe(ORG_A);
+  });
+});
+
+describe("PI-ADR-007 — adding the spend check removes nobody's access", () => {
+  // The route now requires BOTH capabilities. That is only a no-op for existing
+  // users if every role holding prospect.ingest also holds prospect.enrich.execute.
+  it('every role granted prospect.ingest is also granted prospect.enrich.execute, and vice versa', () => {
+    // Hierarchy-expanded, so an implied grant counts exactly as the guard sees it.
+    const { ROLE_CAPABILITIES, capabilitiesForRole } = jest.requireActual('../../security/capabilityRegistry') as {
+      ROLE_CAPABILITIES: Record<string, readonly string[]>;
+      capabilitiesForRole: (role: string) => readonly string[];
+    };
+    const holders = (cap: string) => Object.keys(ROLE_CAPABILITIES)
+      .filter((r) => capabilitiesForRole(r).includes(cap)).sort();
+    const ingest = holders('prospect.ingest');
+    expect(ingest.length).toBeGreaterThan(0);
+    expect(holders('prospect.enrich.execute')).toEqual(ingest);
   });
 });
 

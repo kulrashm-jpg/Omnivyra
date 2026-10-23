@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { requireCapability } from '../../../backend/security/requireCapability';
-import { PROSPECT_INGEST } from '../../../shared/contracts/security';
+import { PROSPECT_INGEST, PROSPECT_ENRICH_EXECUTE } from '../../../shared/contracts/security';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { isLeadIngestionEnabled } from '../../../backend/services/leadIngestion/orchestrator';
 import { registerBuiltInLeadSources } from '../../../backend/services/leadIngestion';
@@ -39,6 +39,18 @@ import { RATIFIED_STATUS } from '../../../backend/services/prospectIcp/types';
  * gated by `PROSPECT_INGEST`. Reusing it means a tenant's answer to "who may add
  * prospects" is one answer rather than four, and B4-A1 adds no capability and
  * does not touch the registry.
+ *
+ * ─── AND `PROSPECT_ENRICH_EXECUTE`, BECAUSE THIS ROUTE SPENDS ─────────────
+ * Since Phase 4 armed the provider stage, a successful request here is a
+ * billable vendor call funded by the tenant. PI-ADR-007 (OD-A) made spending a
+ * SEPARATE authority from ingesting — "spending was easier than writing" was
+ * the defect it fixed on `/api/prospects/[id]/enrich`. So the caller must hold
+ * BOTH: `PROSPECT_INGEST` because the results become prospects, and
+ * `PROSPECT_ENRICH_EXECUTE` because obtaining them costs money. Both are granted
+ * to exactly COMPANY_ADMIN and SUPER_ADMIN, so nobody loses access; the second
+ * check exists so that the two cannot silently diverge later. It is checked
+ * BEFORE anything is recorded, so a principal who may not spend leaves no
+ * execution row behind.
  *
  * `requireExternalApiAccess` was considered and rejected. It governs
  * `/api/prospect-sources/credentials`, which is about CONFIGURING an outbound
@@ -98,6 +110,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // `ok !== true`, not `!ok`: `{ ok:false, sent:true }` is truthy and the root
   // tsconfig sets `strict: false`, which disables narrowing on a negated boolean.
   if (guard.ok !== true) return;
+
+  // Spend authority, separately (PI-ADR-007): see the header. Bound to the same
+  // VERIFIED tenant, and checked before any execution is recorded.
+  const spendGuard = await requireCapability(req, res, {
+    capability: PROSPECT_ENRICH_EXECUTE,
+    organizationId: companyId,
+    reason: 'execute a billable provider discovery search funded by this tenant',
+  });
+  if (spendGuard.ok !== true) return;
 
   // The translation half must exist for the provider key, and the built-ins are
   // registered idempotently exactly as the sibling ingestion routes do.
