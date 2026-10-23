@@ -30,7 +30,7 @@ const sinks = {
   releaseSuppression: jest.fn(async () => COMPLETE_RELEASE as unknown),
   addSuppression: jest.fn(async () => COMPLETE_ADD as unknown),
   isSuppressed: jest.fn(async () => ({ suppressed: false })),
-  recordExecutionAudit: jest.fn(async () => undefined),
+  recordExecutionAudit: jest.fn(async (..._a: unknown[]) => undefined),
 };
 jest.mock('../../services/execution/suppressionService', () => {
   // DR-3 — the route now validates the operator-supplied reason before calling

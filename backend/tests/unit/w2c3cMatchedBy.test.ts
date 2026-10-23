@@ -110,7 +110,7 @@ const legacyRow = (over: Row = {}): Row => ({
   ...over,
 });
 
-const has = (r: Record<string, unknown>): boolean => 'matchedBy' in r;
+const has = (r: object): boolean => 'matchedBy' in r;
 
 beforeEach(() => {
   db.tables = {
