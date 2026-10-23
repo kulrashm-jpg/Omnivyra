@@ -70,3 +70,40 @@ export const APPEND_ONLY_TARGETS: Set<RetentionTarget> = new Set<RetentionTarget
   'lifecycle_history',
   'moderation_decisions',
 ]);
+
+/**
+ * PI-C1 Phase 1 — children a database append-only guard protects.
+ *
+ * `APPEND_ONLY_TARGETS` above stops a policy from targeting an audit trail
+ * DIRECTLY. It says nothing about reaching the same rows INDIRECTLY: deleting
+ * a parent cascades to the child, the child's guard refuses the cascade, and
+ * because a cascade is one statement the refusal aborts the WHOLE delete —
+ * including rows that were perfectly eligible on their own.
+ *
+ * That was observed, not inferred (PI-C1-ARCHITECTURE-BLOCKER-REVIEW-001 §17):
+ * probe P2 refused the delete of a feed item carrying lifecycle history, and
+ * probe P7 showed a batch holding one protected row and one clean row deleted
+ * NEITHER. A 10 000-row batch is therefore voided by a single protected row,
+ * and the next run selects the same batch — so eligible rows stay blocked
+ * rather than merely deferred.
+ *
+ * Retention consults this map to exclude such parents BEFORE issuing a batch,
+ * instead of discovering the refusal as an opaque failure.
+ *
+ * What this map is NOT:
+ *   • not a retention period, and not a tombstone rule;
+ *   • not a statement that anything here MAY lawfully be deleted — eligibility
+ *     under an approved retention/erasure policy is a separate, unresolved
+ *     question and nothing in this file decides it;
+ *   • not a substitute for the guard. The guard remains the authority; this
+ *     only makes its refusals predictable and reportable.
+ *
+ * `parent_column` is the child's foreign key back to the target's own `id`.
+ */
+export const RETENTION_PROTECTED_CHILDREN: Partial<
+  Record<RetentionTarget, ReadonlyArray<{ table: string; parent_column: string }>>
+> = {
+  opportunity_feed_items: [
+    { table: 'opportunity_lifecycle_states', parent_column: 'opportunity_feed_item_id' },
+  ],
+};

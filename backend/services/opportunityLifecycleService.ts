@@ -36,6 +36,125 @@ export class LifecycleTransitionError extends Error {
 }
 
 /**
+ * PI-C1 Phase 1 — the lifecycle evidence could not be established.
+ *
+ * Distinct from `LifecycleTransitionError`, which means "that move is not
+ * allowed from where you are". This one means "where you are cannot be
+ * determined", which is a different problem with a different remedy, and
+ * conflating them is how a missing-evidence condition came to look like an
+ * ordinary invalid transition.
+ */
+export class LifecycleEvidenceUnavailableError extends Error {
+  constructor(
+    public readonly reason: LifecycleUnreadableReason | 'missing',
+    msg: string,
+  ) {
+    super(msg);
+    this.name = 'LifecycleEvidenceUnavailableError';
+  }
+}
+
+export type LifecycleUnreadableReason = 'read_failed' | 'unknown_state' | 'contradictory';
+
+/**
+ * The result of asking what state an opportunity is in.
+ *
+ * The four cases are kept apart deliberately. The previous reader answered
+ * `null` for "no history" and the caller substituted `detected`, so an
+ * opportunity whose history was never written was indistinguishable from one
+ * genuinely at the start of its life — and FR-A39 requires the opposite: an
+ * unknown state must FAIL CLOSED as non-terminal, never resolve to a valid
+ * state. The substitution was reachable in production because the pipeline's
+ * lifecycle init is best-effort and its failure is swallowed
+ * (`listeningSignalPipeline.ts`), so `missing` is a real condition, not a
+ * theoretical one.
+ *
+ * `present` additionally reports `isInitial`, which is what distinguishes a
+ * valid initial state backed by creation evidence from valid later history.
+ */
+export type LifecycleReadResult =
+  | {
+      kind: 'present';
+      state: LifecycleState;
+      isInitial: boolean;
+      record: OpportunityLifecycleRecord;
+    }
+  /** The opportunity exists but has no lifecycle history at all. */
+  | { kind: 'missing' }
+  /** Evidence exists but cannot be trusted to mean anything. */
+  | { kind: 'unreadable'; reason: LifecycleUnreadableReason; detail: string };
+
+/**
+ * Reads the current state as a typed result, without ever inventing one.
+ *
+ * Nothing here writes, and nothing transitions: reading an opportunity must
+ * not change it, so a `missing` or `unreadable` answer is returned for the
+ * caller to handle rather than repaired by fabricating initial history.
+ */
+export async function readCurrentLifecycleState(
+  organizationId: string,
+  opportunityFeedItemId: string,
+): Promise<LifecycleReadResult> {
+  const { data, error } = await ownedDbTable('opportunity_lifecycle_states')
+    .select('*')
+    .eq('organization_id', organizationId)
+    .eq('opportunity_feed_item_id', opportunityFeedItemId)
+    .order('transitioned_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    // A read failure is NOT absence. Saying "missing" here would convert an
+    // outage into a durable-looking fact about the opportunity.
+    return { kind: 'unreadable', reason: 'read_failed', detail: error.message };
+  }
+
+  const row = (data as OpportunityLifecycleRecord | null) ?? null;
+  if (!row) return { kind: 'missing' };
+
+  if (!isLifecycleState(row.state)) {
+    // Reachable after a vocabulary migration this code predates. Forward
+    // compatibility is exactly the case FR-A39 names as failing closed.
+    return {
+      kind: 'unreadable',
+      reason: 'unknown_state',
+      detail: `state_not_in_vocabulary:${String(row.state)}`,
+    };
+  }
+
+  // Shape contradiction. The database constrains WHICH WORDS may appear in
+  // `state` and that only one row may be initial, but it does not constrain
+  // an initial row to have no predecessor — so this combination is storable
+  // and has to be refused in code rather than assumed away.
+  if (row.is_initial && row.previous_state !== null) {
+    return {
+      kind: 'unreadable',
+      reason: 'contradictory',
+      detail: 'initial_row_has_previous_state',
+    };
+  }
+
+  return { kind: 'present', state: row.state, isInitial: Boolean(row.is_initial), record: row };
+}
+
+/**
+ * Is this opportunity resolved for the purpose of ORDINARY account deletion?
+ *
+ * FR-A38 makes `archived` the sole terminal state, and FR-A39 makes every
+ * other state — including `dismissed`, `converted`, and any unknown or future
+ * value — non-terminal, failing closed. Both halves are expressed here so the
+ * rule has one implementation: anything that is not a readable, present
+ * `archived` answers `false`.
+ *
+ * Deliberately a predicate over the READ RESULT, not over a bare state
+ * string: that is what makes `missing` and `unreadable` fail closed instead
+ * of being coerced into a state first.
+ */
+export function isResolvedForAccountDeletion(read: LifecycleReadResult): boolean {
+  return read.kind === 'present' && read.state === 'archived';
+}
+
+/**
  * Idempotent initial-state insert. Called from the signal pipeline. The
  * partial UNIQUE index makes concurrent initialisation safe.
  */
@@ -128,8 +247,26 @@ export async function transitionLifecycle(
   if (!isLifecycleState(input.to)) {
     throw new LifecycleTransitionError(null, input.to, `unknown_target_state:${input.to}`);
   }
-  const current = await getCurrentLifecycleState(input.organizationId, input.opportunityFeedItemId);
-  const from: LifecycleState = current?.state ?? 'detected';
+  // PI-C1 Phase 1: no default. `?? 'detected'` used to stand in here, which
+  // meant an opportunity with no history was treated as validly at the start
+  // of its life and the full transition graph was opened from it. FR-A39
+  // requires an undetermined state to fail closed, so it is refused instead
+  // — and NOT repaired by writing initial history, which would fabricate
+  // evidence that the transition then cites.
+  const read = await readCurrentLifecycleState(input.organizationId, input.opportunityFeedItemId);
+  if (read.kind === 'missing') {
+    throw new LifecycleEvidenceUnavailableError(
+      'missing',
+      'no lifecycle history for this opportunity — its current state cannot be established, so no transition can be validated',
+    );
+  }
+  if (read.kind === 'unreadable') {
+    throw new LifecycleEvidenceUnavailableError(
+      read.reason,
+      `lifecycle history cannot be interpreted (${read.reason}: ${read.detail})`,
+    );
+  }
+  const from: LifecycleState = read.state;
 
   const decision = canTransitionLifecycle(from, input.to);
   if (!decision.allowed) {

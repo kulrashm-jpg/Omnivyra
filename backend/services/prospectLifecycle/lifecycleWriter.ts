@@ -49,6 +49,7 @@ import {
   type TransitionOrigin,
 } from './stateModel';
 import { readCurrentProspectState, type CurrentProspectState } from './lifecycleReader';
+import { classifyLifecycleGuardError, isAuthorizationRefusal } from '../lifecycleGuardErrors';
 
 /**
  * DECISION B — the debounce. Six hours.
@@ -242,10 +243,31 @@ function translate(error: unknown): ProspectLifecycleWriteError {
       'cross_tenant_reference',
     );
   }
-  if (code === '42501') {
+  // PI-C1 Phase 1 (B21). Two things changed here, both to stop one condition
+  // being read as the other:
+  //
+  //   • The guard on the SIBLING table (`opportunity_lifecycle_states`) raises
+  //     the plpgsql default **P0001**, not 42501, so a bare `code === '42501'`
+  //     test missed it entirely and it fell through to the generic branch
+  //     below as an anonymous "insert failed".
+  //   • **42501 is `insufficient_privilege`**, which this repository also uses
+  //     for real permission denials. Mapping every 42501 to an append-only
+  //     violation would therefore relabel a genuine authorization failure as a
+  //     data-integrity one, and the caller would stop seeing that it was
+  //     denied. So the append-only reading now requires the guard's own marker
+  //     in the message, and an unmarked 42501 is reported AS a permission
+  //     denial rather than silently absorbed here.
+  const guardRefusal = classifyLifecycleGuardError(error);
+  if (guardRefusal) {
     return new ProspectLifecycleWriteError(
-      'prospect_lifecycle_transitions is append-only; the row could not be modified',
+      `lifecycle history is append-only; the row could not be modified (SQLSTATE ${guardRefusal.sqlstate})`,
       'append_only_violation',
+    );
+  }
+  if (isAuthorizationRefusal(error)) {
+    return new ProspectLifecycleWriteError(
+      `permission denied for the lifecycle write (${errMsg(error)})`,
+      'permission_denied',
     );
   }
   if (code === '23514') {
