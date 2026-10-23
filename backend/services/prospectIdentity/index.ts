@@ -205,6 +205,33 @@ export {
 } from './accountResolution';
 
 /**
+ * PI-WP-B3 — the admissibility gate in front of W4. Decides whether evidence
+ * may become a company identity at all: the domain must be a real, routable,
+ * non-free-mail registrable host, and the value must carry acquisition
+ * provenance rather than merely existing in a row we already held. It owns no
+ * table and no insert — it sanitises and delegates to `resolveOrCreateAccount`.
+ */
+export {
+  classifyAccountDomain,
+  classifyProvenance,
+  assessAccountSeed,
+  seedAccountFromEvidence,
+  ACCOUNT_SEEDING_VERSION,
+  ACCOUNT_SEEDING_METRIC,
+  LEGACY_PROVENANCE_PROVIDERS,
+  type DomainRejection,
+  type DomainAdmissibility,
+  type ProvenanceRejection,
+  type ProvenanceVerdict,
+  type EvidenceProvenance,
+  type AccountSeedEvidence,
+  type AccountSeedDecision,
+  type AccountSeedResult,
+  type SeedRefusal,
+  type SeedOutcome,
+} from './accountSeeding';
+
+/**
  * B1 — the social contact identity edge, closed at ingestion. Resolves a
  * freshly-created `contacts` row against the canonical claims store, writes ONE
  * `external_id` claim carrying the verdict, and links `unified_person_id` only
