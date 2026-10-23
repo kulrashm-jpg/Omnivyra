@@ -10,6 +10,7 @@ import { CheckResult, Freshness, Provenance, IntelHealth, Readiness, aggregate, 
 import { buildWebsiteEngineEvidence, type Evidence } from '../evidencePlatform';
 // BETA-ROADMAP-EXEC-008: static-parser signals recovered into crawl_metadata (type-only import).
 import type { PageSignals } from '../crawlerService';
+import { isUnreadRedirect } from '../crawl/reachabilityOutcome';
 
 interface PageRow { id: string; url: string; title: string | null; meta_title: string | null; meta_description: string | null; page_type: string | null; headings: Array<{ level: number; text: string }> | null; ctas: Array<{ text: string; href?: string | null }> | null; internal_link_count: number | null; http_status: number | null; last_crawled_at: string | null; crawl_metadata?: { signals?: PageSignals } | null }
 interface ContentBlock { page_id: string; block_type: string; content_text: string | null; heading_level: number | null }
@@ -54,7 +55,10 @@ const ACTION_VERBS = ['get', 'start', 'try', 'book', 'request', 'buy', 'subscrib
 const PRESENCE = { present: 100, absent: 0 } as const;
 const presence = (found: boolean): number => (found ? PRESENCE.present : PRESENCE.absent);
 
-export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[], nowMs: number): ContentIntelligence {
+export function scoreContentIntelligence(allPages: PageRow[], blocks: ContentBlock[], nowMs: number): ContentIntelligence {
+  // #305 — a URL that redirected to another site (or to a destination whose site could not
+  // be checked) was not read; its empty columns say nothing about what a page contains.
+  const pages = allPages.filter((p) => !isUnreadRedirect(p));
   const byPage = new Map<string, ContentBlock[]>();
   for (const b of blocks) { const a = byPage.get(b.page_id) || []; a.push(b); byPage.set(b.page_id, a); }
   const pageWords = (id: string) => (byPage.get(id) || []).reduce((a, b) => a + wordCount(b.content_text || ''), 0);

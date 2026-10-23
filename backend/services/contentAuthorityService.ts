@@ -7,6 +7,7 @@ import {
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { resolveCompanyWebsite } from './ingestionUtils';
+import { isUnreadRedirect } from './crawl/reachabilityOutcome';
 import {
   resolveReportDomainScope,
   scopeExcludesAllPages,
@@ -25,6 +26,8 @@ type PageRow = {
   headings: string[] | null;
   ctas: unknown[] | null;
   internal_link_count: number | null;
+  http_status?: number | null;
+  crawl_metadata?: unknown;
 };
 
 type PageContentRow = {
@@ -79,7 +82,7 @@ async function loadContentAuthorityContext(companyId: string, domainScope: Repor
   const { data: pages, error: pagesError } = await withDomainScope(
     supabase
       .from('canonical_pages')
-      .select('id, url, page_type, title, headings, ctas, internal_link_count')
+      .select('id, url, page_type, title, headings, ctas, internal_link_count, http_status, crawl_metadata')
       .eq('company_id', companyId),
     domainScope,
   )
@@ -90,7 +93,10 @@ async function loadContentAuthorityContext(companyId: string, domainScope: Repor
     throw new Error(`Failed to load canonical pages for ${companyId}: ${pagesError.message}`);
   }
 
-  const pageIds = ((pages ?? []) as PageRow[]).map((row) => row.id);
+  // #305 — a URL that redirected to another site was not read; it forms no cluster and
+  // is not a thin page of this company.
+  const readPages = ((pages ?? []) as PageRow[]).filter((row) => !isUnreadRedirect(row));
+  const pageIds = readPages.map((row) => row.id);
   if (pageIds.length === 0) {
     return { pages: [], pageContent: [], pageLinks: [] };
   }
@@ -116,7 +122,7 @@ async function loadContentAuthorityContext(companyId: string, domainScope: Repor
   }
 
   return {
-    pages: (pages ?? []) as PageRow[],
+    pages: readPages,
     pageContent: (pageContentRes.data ?? []) as PageContentRow[],
     pageLinks: (pageLinksRes.data ?? []) as PageLinkRow[],
   };

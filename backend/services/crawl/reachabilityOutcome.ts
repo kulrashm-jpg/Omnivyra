@@ -116,6 +116,59 @@ export function isHttpErrorOutcome(outcome: ReachabilityOutcome): boolean {
 export type PersistedReachability = ReachabilityObservation;
 
 /**
+ * #305 — the crawler's reasons for a page it recorded as a redirect but did NOT read.
+ *
+ * `off_site_redirect`      — the page answered from ANOTHER site; none of that site's
+ *                            document is attributed to this company.
+ * `unverifiable_final_url` — the response's final URL was not an absolute http(s) URL,
+ *                            so the destination's site could not be checked.
+ */
+export const OFF_SITE_REDIRECT_REASON = 'off_site_redirect';
+export const UNVERIFIABLE_FINAL_URL_REASON = 'unverifiable_final_url';
+
+/** Any row that may carry a persisted reachability observation. */
+type PageReachabilityInput = { http_status?: number | null; crawl_metadata?: unknown };
+
+function observationOf(page: PageReachabilityInput): ReachabilityObservation {
+  return reachabilityForPage(page as Parameters<typeof reachabilityForPage>[0]);
+}
+
+/**
+ * True when the crawler READ this page: it answered 2xx and its document was parsed.
+ *
+ * Only these rows can support a claim about what a page CONTAINS — title, meta, H1,
+ * CTAs, words, links. A redirect the crawler did not follow (`off_site_redirect`), an
+ * error answer and a page that never answered all have empty content columns because
+ * nobody read them, not because the page lacks them.
+ */
+export function isReadablePage(page: PageReachabilityInput): boolean {
+  return observationOf(page).outcome === 'success';
+}
+
+/** True when the crawler recorded this page as answering from another site. */
+export function isOffSiteRedirect(page: PageReachabilityInput): boolean {
+  const observation = observationOf(page);
+  return observation.outcome === 'redirect' && observation.reason === OFF_SITE_REDIRECT_REASON;
+}
+
+/**
+ * True for a redirect the crawler deliberately did NOT read — another site, or a final
+ * URL whose site could not be checked. Such a row is evidence ABOUT the customer's URL
+ * (it redirects away), never evidence of what a customer page contains.
+ */
+export function isUnreadRedirect(page: PageReachabilityInput): boolean {
+  const observation = observationOf(page);
+  return observation.outcome === 'redirect'
+    && (observation.reason === OFF_SITE_REDIRECT_REASON || observation.reason === UNVERIFIABLE_FINAL_URL_REASON);
+}
+
+/** The destination recorded for an off-site redirect, when the row carries one. */
+export function offSiteRedirectTarget(page: PageReachabilityInput): string | null {
+  const redirect = (page.crawl_metadata as { redirect?: { finalUrl?: unknown } } | null | undefined)?.redirect;
+  return typeof redirect?.finalUrl === 'string' && redirect.finalUrl ? redirect.finalUrl : null;
+}
+
+/**
  * Recover the observation for a persisted page.
  *
  * Rows crawled BEFORE this change carry no `reachability` object, so their

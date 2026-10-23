@@ -30,6 +30,9 @@ import type { PerformanceEvidence, PerformanceVerdict } from './performanceEvide
 import {
   hasHttpResponse,
   isHttpErrorOutcome,
+  isReadablePage,
+  isUnreadRedirect,
+  offSiteRedirectTarget,
   reachabilityForPage,
   type PersistedReachability,
 } from './crawl/reachabilityOutcome';
@@ -70,7 +73,7 @@ export interface PillarAssessment {
 }
 
 export interface EvidenceLimitation {
-  kind: 'client_side_rendering' | 'no_crawl' | 'shallow_crawl' | 'performance_unavailable';
+  kind: 'client_side_rendering' | 'no_crawl' | 'shallow_crawl' | 'performance_unavailable' | 'off_site_redirect';
   message: string;
   affects: ExperiencePillar[];
 }
@@ -180,6 +183,38 @@ export function detectClientSideRendering(pages: readonly ExperiencePage[]): boo
 }
 
 /**
+ * #305 — the one accurate statement an unread redirect supports: this URL sends visitors
+ * to a different site. Stated as such, instead of as an empty page of this company.
+ */
+function offSiteRedirectFinding(unreadRedirects: readonly ExperiencePage[]): ExperienceFinding | null {
+  if (unreadRedirects.length === 0) return null;
+  const isRoot = (p: ExperiencePage) =>
+    String(p.page_type ?? '').toLowerCase() === 'home' || /^https?:\/\/[^/]+\/?$/.test(p.url ?? '');
+  const root = unreadRedirects.find(isRoot);
+  const describe = (p: ExperiencePage) => {
+    const target = offSiteRedirectTarget(p);
+    return target ? `${p.url} → ${target}` : `${p.url} → (destination could not be verified)`;
+  };
+  const examples = (root ? [root] : unreadRedirects.slice(0, 2)).map(describe).join('; ');
+  return {
+    pillar: 'technical_friction',
+    problem: root
+      ? 'The website address redirects to a different site'
+      : 'Some pages redirect to a different site',
+    evidence: `${examples}. The destination was not crawled because it is a different site, so none of its content is attributed to this company.`,
+    whyItMatters: root
+      ? 'Visitors and search engines that use this address land on another site, so this company\'s own pages, messaging and conversion paths cannot be assessed or credited.'
+      : 'Links that leave the site without warning lose visitors and dilute the evidence available about this company\'s own pages.',
+    action: root
+      ? 'Confirm which domain is the company\'s website. If the company has moved, update the configured website; otherwise remove the redirect.'
+      : 'Confirm these redirects are intended; where they are, link to the destination directly.',
+    severity: 'moderate',
+    effort: 'low',
+    measurement: 'Re-crawl and confirm the configured website serves its own pages.',
+  };
+}
+
+/**
  * Assess digital experience from crawl evidence plus optional performance evidence.
  * Pure and deterministic. Never throws; no pages yields honest abstention.
  */
@@ -204,10 +239,23 @@ export function assessDigitalExperience(params: {
   // Classification is delegated to D2's canonical contract, not re-derived here:
   // one crawl observation, one interpretation, several readers.
   const submitted = [...(params.pages ?? [])];
-  const pages = submitted.filter((page) => hasHttpResponse(reachabilityForPage(page).outcome));
-  const unobserved = submitted.length - pages.length;
+  // #305 — a URL that answered by redirecting to ANOTHER site (or to a destination whose
+  // site could not be checked) was deliberately not read. It is evidence that the URL
+  // redirects away, not a page of this company with no H1, no title and no CTAs.
+  const unreadRedirects = submitted.filter((page) => isUnreadRedirect(page));
+  const pages = submitted.filter((page) => !isUnreadRedirect(page) && hasHttpResponse(reachabilityForPage(page).outcome));
+  const unobserved = submitted.length - pages.length - unreadRedirects.length;
   const limitations: EvidenceLimitation[] = [];
   const n = pages.length;
+
+  const redirectFinding = offSiteRedirectFinding(unreadRedirects);
+  if (redirectFinding) {
+    limitations.push({
+      kind: 'off_site_redirect',
+      message: `${unreadRedirects.length} URL${unreadRedirects.length === 1 ? '' : 's'} redirected to a different site and ${unreadRedirects.length === 1 ? 'was' : 'were'} not read — no content from that site is attributed to this company.`,
+      affects: ['information_accessibility', 'value_communication', 'conversion_readiness'],
+    });
+  }
 
   if (n === 0) {
     return {
@@ -216,8 +264,8 @@ export function assessDigitalExperience(params: {
         pillar, label: PILLAR_LABEL[pillar], readiness: 'insufficient_evidence',
         state: 'unavailable', coverage: { evaluated: 0, total: 0 }, findings: [],
       })),
-      findings: [],
-      limitations: [{
+      findings: redirectFinding ? [redirectFinding] : [],
+      limitations: redirectFinding ? limitations : [{
         kind: 'no_crawl',
         message: 'No pages have been crawled for this domain, so the website experience cannot be assessed. Run the website scan and regenerate.',
         affects: ['information_accessibility', 'value_communication', 'conversion_readiness', 'technical_friction'],
@@ -249,6 +297,7 @@ export function assessDigitalExperience(params: {
 
   const findings: ExperienceFinding[] = [];
   const add = (f: ExperienceFinding) => findings.push(f);
+  if (redirectFinding) add(redirectFinding);
 
   // ── Information accessibility ───────────────────────────────────────────────
   let iaEvaluated = 0;
@@ -309,9 +358,11 @@ export function assessDigitalExperience(params: {
   // (the rows arrive newest-crawled first) became "the home page". Preference order
   // now: the page the crawler CLASSIFIED as home, then a root-path URL, and only then
   // the loose match. When none of the three identifies a page, nothing is asserted.
-  const home = pages.find((p) => String(p.page_type ?? '').toLowerCase() === 'home')
-    ?? pages.find((p) => /^https?:\/\/[^/]+\/?$/.test(p.url ?? ''))
-    ?? pages.find((p) => matches(p, ['home']));
+  // #305 — only a page the crawler READ can show what the home page says.
+  const readablePages = pages.filter((p) => isReadablePage(p));
+  const home = readablePages.find((p) => String(p.page_type ?? '').toLowerCase() === 'home')
+    ?? readablePages.find((p) => /^https?:\/\/[^/]+\/?$/.test(p.url ?? ''))
+    ?? readablePages.find((p) => matches(p, ['home']));
   vcEvaluated += 1;
   if (home) {
     // R1-C — three states, not two. A heading element the crawler SAW with no
@@ -363,13 +414,13 @@ export function assessDigitalExperience(params: {
     });
   }
 
-  const noMeta = pages.filter((p) => !p.title || !p.meta_description);
+  const noMeta = readablePages.filter((p) => !p.title || !p.meta_description);
   vcEvaluated += 1;
   if (noMeta.length > 0) {
     add({
       pillar: 'value_communication',
       problem: 'Pages are missing a title or meta description',
-      evidence: `${noMeta.length} of ${n} pages lack a title or meta description`,
+      evidence: `${noMeta.length} of ${readablePages.length} pages lack a title or meta description`,
       whyItMatters: 'These are the words a person reads in search results before deciding whether to click; without them the listing is generated for you.',
       action: 'Write a specific title and description for each affected page.',
       severity: noMeta.length / n > 0.5 ? 'moderate' : 'low', effort: 'low',
