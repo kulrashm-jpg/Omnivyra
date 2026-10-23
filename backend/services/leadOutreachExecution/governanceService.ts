@@ -19,6 +19,66 @@
  * dispatch.
  */
 
+/**
+ * ═══ PATH B UNDER THE TRANSITIONAL CONTRACT (Phase 4C-0) ════════════════════
+ *
+ * The system-wide contract is recorded once, in
+ * `prospectIdentity/contactGovernanceEvaluation`. This note is Path B's part of
+ * it and does not restate the whole.
+ *
+ * WHAT PATH B READS, AND ONLY PATH B. Canonical first through the shared edge,
+ * then `outreach_suppressions` — ALL FOUR scopes, which no other path sees.
+ * `suppression_entries` and its `__global__` sentinel are NOT read here, so a
+ * global suppression does not reach this gate. That asymmetry is recorded and
+ * transitional, not a defect to be "fixed" by converging the readers: this is
+ * the LIVE dispatch gate, and the sentinel is a row no application flow can
+ * write or revoke.
+ *
+ * THE FOUR SCOPES, AND WHAT ALREADY REPLACES THEM.
+ *   recipient — a person or endpoint. Fully expressible canonically, as
+ *               person- or target-anchored records with bands, wildcards,
+ *               effective dates and revocation.
+ *   channel   — a channel for this tenant. ALREADY DUPLICATED by
+ *               `outreach_governance_config.enabled_channels`, which is
+ *               default-deny and is evaluated one branch later in this same
+ *               gate as `suppression.channel_not_enabled`.
+ *   task      — one materialised task. ALREADY DUPLICATED TWICE: by
+ *               `outreach_tasks.status` ('cancelled', 'paused') and by the
+ *               `campaign` scope of `execution_controls`.
+ *   lead      — every task for one lead. NO EQUIVALENT EXISTS anywhere — not
+ *               canonically, not in `execution_controls`, not in task status.
+ *
+ * THIS READ IS LOAD-BEARING EVEN WITH NO ROWS. `loadSuppressionMatches` returns
+ * ALL FOUR scopes true when the store cannot be read, so the read is a
+ * fail-closed input in its own right. Removing it must remove that contribution
+ * DELIBERATELY, with a test asserting the replacement behaviour — never as a
+ * side effect of deleting a query.
+ *
+ * PERMITTED DURING THE TRANSITION: documentation, and observability that logs
+ * no endpoint value.
+ *
+ * PROHIBITED: any new production dependency on `outreach_suppressions`; adding
+ * `suppression_entries` to this path; exposing either store to Paths C or D;
+ * promoting task or lead into canonical contact governance.
+ *
+ * WHAT WOULD END THE TRANSITION, PER SCOPE (none satisfied, none authorized):
+ *   channel / task — equivalence tests showing the existing replacement blocks
+ *                    every case the legacy scope blocks, is itself fail-closed,
+ *                    and that removal turns no blocked case into an allow; plus
+ *                    a consumer inventory, authorized row counts verified by
+ *                    project REF, rollback, and schema authorization.
+ *   recipient      — the same, against canonical governance, after the
+ *                    phone-and-WhatsApp normalisation divergence is either
+ *                    closed or explicitly accepted.
+ *   lead           — an OWNER/LEGAL answer first: is a lead-level restriction
+ *                    legitimate tenant-assertable policy? If it is, its home is
+ *                    the operational control surface, not contact governance.
+ *                    Product intent is NOT inferred from the schema.
+ *
+ * NOT CLAIMED: that this store is empty, that no external consumer exists, or
+ * that task and lead scopes are unnecessary as a matter of product policy.
+ */
+
 import { ownedDbTable } from '../../db/writeOwner';
 import { appendDecision, getOutreachTaskById, listDecisions } from './storage';
 import {
@@ -30,8 +90,10 @@ import {
   type SuppressionMatches,
   type TenantGovernanceConfig,
 } from './governance';
-import { mayContact } from '../prospectIdentity/contactGovernance';
-import { loadGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
+import {
+  evaluateCanonicalGovernance,
+  type GovernanceScopeEvaluated,
+} from '../prospectIdentity/contactGovernanceEvaluation';
 import { resolveRecipientOwner } from '../prospectIdentity/recipientOwner';
 import { resolveLeadPersonId, resolvePersonAnchor, type PersonAnchorResolution } from './personAnchor';
 import { recordFailure, recordGovernanceEvaluation, recordGovernanceFailure, recordGovernanceGate, recordStageOutcome } from './telemetry';
@@ -139,7 +201,10 @@ export async function loadSuppressionMatches(
       .is('revoked_at', null),
   );
   if (res.error) {
-    return { task: true, lead: true, channel: true, recipient: true };
+    // FAIL CLOSED, unchanged. `readCompleted: false` is Phase 4C-2 metadata that
+    // makes this all-true shape distinguishable from four genuine matches; the
+    // four booleans — and therefore the verdict — are exactly as before.
+    return { task: true, lead: true, channel: true, recipient: true, readCompleted: false };
   }
 
   const active = Array.isArray(res.data) ? res.data : [];
@@ -152,6 +217,7 @@ export async function loadSuppressionMatches(
     lead: has('lead', task.leadId),
     channel: has('channel', task.channel),
     recipient: has('recipient', str(recipient)),
+    readCompleted: true,
   };
 }
 
@@ -164,10 +230,11 @@ const NO_ANCHOR: PersonAnchorResolution = {
  * LI-3C / A3 — resolve the CANONICAL contact governance verdict for one task,
  * AND report which identity it was evaluated against.
  *
- * This is the impure edge: it loads tenant-scoped governance records and hands
- * them to `mayContact`, the single evaluator that owns the ADR's rules. No rule
- * is reimplemented here, and `mayContact` stays pure because it receives records
- * rather than a database.
+ * It resolves the IDENTITY here and delegates load-and-evaluate to
+ * `prospectIdentity/contactGovernanceEvaluation` (Phase 4A), the one impure edge
+ * Path A also uses. `mayContact` remains the single evaluator that owns the ADR's
+ * rules: no rule is reimplemented here or there, and it stays pure because it
+ * receives records rather than a database.
  *
  * FAILS CLOSED, matching `loadSuppressionMatches`: an unreadable governance
  * table — or an unreadable `leads` row, which leaves the person UNKNOWN — yields
@@ -192,43 +259,62 @@ export async function resolveCanonicalGovernanceWithAnchor(
   recipient: string | null,
   personId: string | null,
   evaluatedAt: string,
-): Promise<{ verdict: CanonicalGovernanceVerdict | null; anchor: PersonAnchorResolution }> {
+): Promise<{
+  verdict: CanonicalGovernanceVerdict | null;
+  anchor: PersonAnchorResolution;
+  /**
+   * PHASE 4C-2 — the CANONICAL scopes this evaluation actually evaluated.
+   * Additive: existing callers destructure `verdict` and `anchor` and are
+   * unaffected. Empty whenever the canonical read did not complete — the
+   * not-applicable exits, a failed identity read, or a failed governance read.
+   */
+  scopes: readonly GovernanceScopeEvaluated[];
+}> {
   const channel = task.channel;
-  if (!companyId || !channel) return { verdict: null, anchor: NO_ANCHOR };
+  if (!companyId || !channel) return { verdict: null, anchor: NO_ANCHOR, scopes: [] };
 
   const anchor = await resolvePersonAnchor(companyId, task, personId);
   if (!anchor.ok) {
     // Unknown person link — fail closed, same posture as an unreadable
     // governance table. Silently degrading to target-only matching here would
     // reintroduce exactly the P2-1 miss this phase exists to close.
-    return { verdict: failClosed('governance_person_resolution_failed_failclosed'), anchor };
+    return { verdict: failClosed('governance_person_resolution_failed_failclosed'), anchor, scopes: [] };
   }
 
-  if (!recipient && !anchor.personId) return { verdict: null, anchor };
+  if (!recipient && !anchor.personId) return { verdict: null, anchor, scopes: [] };
 
-  let loaded;
-  try {
-    loaded = await loadGovernanceRecords({ organizationId: companyId, personId: anchor.personId, target: recipient, channel });
-  } catch {
-    return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor };
-  }
-
-  if (!loaded.ok) return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor };
-
-  // Normalise explicitly with the SAME function the repository used for its
-  // query. Deriving it from a loaded record would be wrong: a record matched on
-  // person could carry a different target and would silently change what the
-  // evaluator compares against.
-  const normalizedTarget = normalizeGovernanceTarget(channel, recipient);
-
-  const verdict = mayContact({
+  // PHASE 4A — load-and-evaluate is now the one impure edge Path A shares, so
+  // the two seams cannot drift on what is loaded or on what reaches `mayContact`.
+  //
+  // Everything ABOVE stays Path B's own: the Contract 13 anchor order, the
+  // absence-versus-read-failure distinction, and the "canonical layer does not
+  // apply" case. Everything BELOW is unchanged — the same fail-closed verdict
+  // with the same reason string and the same `li3c` version. The shared edge
+  // catches the LOAD only, so `mayContact`'s own throw still propagates to
+  // `evaluateTaskGovernance`'s context-load handler instead of being relabelled
+  // here as a governance lookup failure.
+  const evaluated = await evaluateCanonicalGovernance({
     organizationId: companyId,
     personId: anchor.personId,
-    targetNormalized: normalizedTarget,
+    target: recipient,
     channel,
     now: evaluatedAt,
-    records: loaded.records,
+    // PG-001 — THE EXECUTION BOUNDARY DECLARES ITS PURPOSE. This seam is Path
+    // B's dispatch gate, evaluated immediately before external delivery, and
+    // what it is about to send is prospect outreach.
+    //
+    // Declaring it does NOT relax anything today: every stored scope is NULL,
+    // so `purposeApplies` still returns true for every record and the verdict
+    // is identical. What it buys is that the day a record carries
+    // `purpose_scope = 'account'`, this send is the one that correctly stops
+    // being blocked by it — and no other caller silently inherits that.
+    attemptPurpose: 'outreach',
   });
+  if (evaluated.ok === false) return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor, scopes: [] };
+
+  const verdict = evaluated.verdict;
+  const scopes = evaluated.scopesEvaluated;
+  const normalizedTarget = evaluated.targetNormalized;
 
   // WP3 / L2 — the recipient's OWNER, as a block-only supplement.
   //
@@ -242,31 +328,35 @@ export async function resolveCanonicalGovernanceWithAnchor(
   // before the lookup, so nothing found here can lift it. An unreadable or
   // ambiguous ownership answer fails closed, because we then do not know whose
   // restriction applies.
-  if (verdict.decision !== 'allowed' || !normalizedTarget) return { verdict, anchor };
+  //
+  // CONSOLIDATION NOTE: WP3 (main) evaluated the owner with a direct
+  // loadGovernanceRecords + mayContact pair; Phase 4A routes every canonical
+  // evaluation through the shared edge, so the owner is evaluated there too,
+  // with the same declared PG-001 purpose as the anchored evaluation above.
+  if (verdict.decision !== 'allowed' || !normalizedTarget) return { verdict, anchor, scopes };
 
   const owner = await resolveRecipientOwner(companyId, channel, normalizedTarget);
   if (!owner.ok) {
-    return { verdict: failClosed('governance_person_resolution_failed_failclosed'), anchor };
+    return { verdict: failClosed('governance_person_resolution_failed_failclosed'), anchor, scopes };
   }
-  if (!owner.personId || owner.personId === anchor.personId) return { verdict, anchor };
+  if (!owner.personId || owner.personId === anchor.personId) return { verdict, anchor, scopes };
 
-  let ownerLoaded;
-  try {
-    ownerLoaded = await loadGovernanceRecords({ organizationId: companyId, personId: owner.personId, target: recipient, channel });
-  } catch {
-    return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor };
-  }
-  if (!ownerLoaded.ok) return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor };
-
-  const ownerVerdict = mayContact({
+  const ownerEvaluated = await evaluateCanonicalGovernance({
     organizationId: companyId,
     personId: owner.personId,
-    targetNormalized: normalizedTarget,
+    target: recipient,
     channel,
     now: evaluatedAt,
-    records: ownerLoaded.records,
+    attemptPurpose: 'outreach',
   });
-  return { verdict: ownerVerdict.decision === 'allowed' ? verdict : ownerVerdict, anchor };
+  if (ownerEvaluated.ok === false) return { verdict: failClosed('governance_lookup_failed_failclosed'), anchor, scopes };
+
+  const ownerScopes = [...new Set([...scopes, ...ownerEvaluated.scopesEvaluated])];
+  return {
+    verdict: ownerEvaluated.verdict.decision === 'allowed' ? verdict : ownerEvaluated.verdict,
+    anchor,
+    scopes: ownerScopes,
+  };
 }
 
 /**
@@ -363,6 +453,18 @@ export interface GovernanceServiceResult {
    * that evaluated with `recordDecision: false`.
    */
   identity?: PersonAnchorResolution;
+  /**
+   * PHASE 4C-2 — which governance scopes this evaluation actually evaluated.
+   *
+   * Observability metadata only, following the precedent `identity` set: it is
+   * additive, nothing reads it to decide anything, and it is NOT persisted to
+   * the decision log — that would need a new column, which is a schema change
+   * and is not authorized.
+   *
+   * Omitted entirely when nothing was evaluated, so every existing result shape
+   * for a context-load failure or an unknown task is unchanged.
+   */
+  scopesEvaluated?: readonly GovernanceScopeEvaluated[];
   error?: string;
 }
 
@@ -371,6 +473,18 @@ export interface GovernanceServiceResult {
  * this, so "we could not evaluate" is always a BLOCK and can never be mistaken
  * for an absent verdict.
  */
+/**
+ * PHASE 4C-2 — attach the scope list ONLY when something was actually
+ * evaluated.
+ *
+ * Spread into a result, so an empty list contributes no key at all and every
+ * existing result shape is byte-identical when nothing was evaluated. The
+ * field's PRESENCE is therefore itself the signal that a store was really read,
+ * and a failed read can never be mistaken for a completed evaluation.
+ */
+const withScopes = (scopes: readonly GovernanceScopeEvaluated[]): { scopesEvaluated?: readonly GovernanceScopeEvaluated[] } =>
+  (scopes.length === 0 ? {} : { scopesEvaluated: scopes });
+
 const failClosed = (reason: string): CanonicalGovernanceVerdict => ({
   decision: 'blocked',
   gate: null,
@@ -409,6 +523,9 @@ export async function evaluateTaskGovernance(
   // is persisted: recording WHICH anchor was used is the whole obligation, and
   // it must not be lost to a narrower scope.
   let identity: PersonAnchorResolution = NO_ANCHOR;
+  // PHASE 4C-2 — declared beside `identity`, and for the same reason: the scopes
+  // this evaluation actually evaluated must still be in scope at every exit.
+  let scopesEvaluated: readonly GovernanceScopeEvaluated[] = [];
   try {
     const [config, suppressions, usage, canonical] = await Promise.all([
       loadTenantGovernanceConfig(companyId),
@@ -423,6 +540,26 @@ export async function evaluateTaskGovernance(
     ]);
     identity = canonical.anchor;
     const canonicalGovernance = canonical.verdict;
+    // PHASE 4C-2 — composed from what actually happened on THIS path:
+    //   - the canonical scopes the shared edge reports, which are empty unless
+    //     its read completed;
+    //   - then each `outreach_suppressions` scope, but ONLY when that read
+    //     completed AND the scope had a value to match on. A scope with no value
+    //     could never have matched, so claiming it was evaluated would overstate
+    //     the check. One query derives all four, hence one `readCompleted` flag.
+    // Path A's `suppression_entries` is deliberately absent: Path B does not
+    // read it, and the accepted contract keeps that asymmetry.
+    scopesEvaluated = [
+      ...canonical.scopes,
+      ...(suppressions.readCompleted === true
+        ? ([
+            options.recipient ? 'outreach_suppressions.recipient' : null,
+            task.channel ? 'outreach_suppressions.channel' : null,
+            (task.planTaskId ?? task.id) ? 'outreach_suppressions.task' : null,
+            task.leadId ? 'outreach_suppressions.lead' : null,
+          ].filter((s): s is GovernanceScopeEvaluated => s !== null))
+        : []),
+    ];
     input = {
       task,
       config,
@@ -452,7 +589,7 @@ export async function evaluateTaskGovernance(
   for (const gate of evaluation.gates) recordGovernanceGate(gate.gate, gate.decision);
 
   if (options.recordDecision === false) {
-    return { ok: true, evaluation, recorded: false, identity };
+    return { ok: true, evaluation, recorded: false, identity, ...withScopes(scopesEvaluated) };
   }
 
   // Only the DECIDING gate is recorded — the log answers "why did this task
@@ -476,9 +613,22 @@ export async function evaluateTaskGovernance(
     identityDegraded: identity.degraded,
     decidedAt: evaluatedAt,
   });
-  if (!appended.ok) recordGovernanceFailure('persistence');
+  if (!appended.ok) {
+    recordGovernanceFailure('persistence');
+    // W0-A — FAIL CLOSED. An UNRECORDED verdict is not permission. The decision
+    // log is the only durable evidence that this gate ran, so a send made after
+    // a failed append is unauditable and indistinguishable from an ungoverned
+    // send. Previously this returned `ok: true` and dispatch, which tests only
+    // `!governed.ok`, proceeded.
+    //
+    // `evaluation` is still returned so a caller can see WHAT was decided;
+    // `ok: false` says governance did not COMPLETE. Dispatch reports that as
+    // `failed`, which stays distinct from the `blocked_governance` /
+    // `deferred_governance` outcomes of an ordinary denial.
+    return { ok: false, evaluation, recorded: false, identity, error: appended.error, ...withScopes(scopesEvaluated) };
+  }
 
-  return { ok: true, evaluation, recorded: appended.ok, identity, error: appended.ok ? undefined : appended.error };
+  return { ok: true, evaluation, recorded: true, identity, ...withScopes(scopesEvaluated) };
 }
 
 /**

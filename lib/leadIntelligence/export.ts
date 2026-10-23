@@ -23,13 +23,53 @@ export interface LeadExportRow {
   metadata: string;
 }
 
+/**
+ * W0-B — what this row is permitted to disclose.
+ *
+ * Passed in by the caller, which is the only layer that may perform I/O. The
+ * parameter is OPTIONAL and its absence means DENY, not allow: a caller that
+ * forgets it gets a redacted row rather than a leak. That is the whole point of
+ * defaulting this way round.
+ */
+export interface ExportDisclosure {
+  /** May the email endpoint be disclosed? */
+  readonly email: boolean;
+  /** May the phone endpoint be disclosed? */
+  readonly phone: boolean;
+  /** May an ACTIONABLE recommendation be disclosed? */
+  readonly action: boolean;
+}
+
+/** Fail-closed default: discloses no endpoint and no action. */
+export const DISCLOSE_NOTHING: ExportDisclosure = { email: false, phone: false, action: false };
+
+/** What a reader sees instead of a withheld value. */
+export const EXPORT_WITHHELD = '[withheld: contact governance]';
+
 const s = (v: unknown): string => (v == null ? '' : String(v));
 const intentOf = (v: CanonicalLeadView): number => v.scores.intent ?? v.scores.total ?? 0;
 
-export function toExportRow(view: CanonicalLeadView, extras?: { timelineSummary?: string; contentInterests?: string[] }): LeadExportRow {
+export function toExportRow(
+  view: CanonicalLeadView,
+  extras?: { timelineSummary?: string; contentInterests?: string[] },
+  disclosure: ExportDisclosure = DISCLOSE_NOTHING,
+): LeadExportRow {
   const meta = view.attribution.sourceMetadata ?? {};
+  // W0-B. An endpoint is disclosed only if governance permits THAT endpoint's
+  // channel. A withheld endpoint does not fall through to the next one — the
+  // non-endpoint identifiers (`platform`, `unifiedPersonId`) are not contact
+  // points, so they remain available and the row stays useful.
+  // True when at least one contact endpoint may be disclosed. A lead with no
+  // endpoint at all is not withheld on this basis — there is nothing to leak.
+  const anyEndpoint = (disclosure.email && !!view.identity.email)
+    || (disclosure.phone && !!view.identity.phone)
+    || !(view.identity.email || view.identity.phone);
+  const endpoint = disclosure.email && view.identity.email ? view.identity.email
+    : disclosure.phone && view.identity.phone ? view.identity.phone
+      : (view.identity.email || view.identity.phone) ? EXPORT_WITHHELD
+        : (view.identity.platform ?? view.unifiedPersonId);
   return {
-    identity: s(view.identity.email ?? view.identity.phone ?? view.identity.platform ?? view.unifiedPersonId),
+    identity: s(endpoint),
     company: s(meta.company_name ?? meta.company ?? view.organizationId),
     source: s(view.sourceLabel),
     campaign: s(view.campaign),
@@ -37,10 +77,16 @@ export function toExportRow(view: CanonicalLeadView, extras?: { timelineSummary?
     timeline_summary: s(extras?.timelineSummary ?? view.occurredAt),
     buying_intent: `${Math.round(intentOf(view) * 100)}%`,
     content_interests: s((extras?.contentInterests ?? []).join('; ') || view.content),
-    recommended_next_action: recommendNextAction(view),
-    ai_summary: summarizeLead(view),
+    recommended_next_action: disclosure.action ? recommendNextAction(view) : EXPORT_WITHHELD,
+    // W0-B. Redacting `identity` alone is NOT an egress control: the generated
+    // summary embeds the endpoint verbatim ("a@b.com from Website — ...") and
+    // `metadata` is the RAW source payload, which demonstrably carries the
+    // email too. Both are withheld with the endpoint rather than audited
+    // field-by-field, because the raw payload's shape is source-defined and
+    // cannot be sanitised safely here.
+    ai_summary: anyEndpoint ? summarizeLead(view) : EXPORT_WITHHELD,
     status: s(view.status),
-    metadata: JSON.stringify(meta),
+    metadata: anyEndpoint ? JSON.stringify(meta) : EXPORT_WITHHELD,
   };
 }
 

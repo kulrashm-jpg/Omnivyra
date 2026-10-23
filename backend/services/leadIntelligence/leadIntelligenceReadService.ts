@@ -21,6 +21,8 @@ import {
   toExportRow,
   toCsv,
   toExcelXml,
+  DISCLOSE_NOTHING,
+  type ExportDisclosure,
   computeLeadStats,
   activeLeadsCompatibilityFilter,
   leadKeyFor,
@@ -61,6 +63,10 @@ import {
   type CompanyIntelligenceProfile,
 } from '../../../lib/leadIntelligence';
 import { listCanonicalLeads } from './leadIntelligenceRepository';
+// W0-B — the canonical contact-governance evaluator and a tenant-scoped read of
+// its records. `mayContact` is pure; the read is the only I/O this adds.
+import { mayContact } from '../prospectIdentity/contactGovernance';
+import { loadTenantGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
 
 export interface LeadSourceReaders {
   durable(companyId: string): Promise<CanonicalLeadView[]>;
@@ -323,7 +329,60 @@ export async function exportLeads(
   readers: LeadSourceReaders = defaultLeadSourceReaders,
 ): Promise<LeadExportResult> {
   const all = await searchLeads({ ...query, page: { limit: 5000, offset: 0 } }, readers);
-  const rows = all.rows.map((v) => toExportRow(v));
+
+  // ── W0-B. GOVERNED EGRESS ────────────────────────────────────────────────
+  // An export is a send in every respect that matters to the person in it: it
+  // hands their email, their phone and an instruction to act to whoever
+  // downloaded the file. The dispatch gate never sees this path, so the same
+  // canonical rules are applied here.
+  //
+  // ONE tenant-scoped read, then the PURE `mayContact` per row — anchoring the
+  // existing loader per row would be two queries per lead, up to 10,000.
+  //
+  // FAIL CLOSED, twice over: an unreadable governance store redacts every
+  // sensitive field in every row, and a row that cannot be anchored to a person
+  // or a target is redacted too, because an unanchorable subject is one no
+  // restriction could ever have matched.
+  const governance = await loadTenantGovernanceRecords(query.companyId, ['email', 'phone']);
+  const now = new Date().toISOString();
+
+  const discloseFor = (view: CanonicalLeadView): ExportDisclosure => {
+    if (!governance.ok) return DISCLOSE_NOTHING;
+    const personId = view.identity.unifiedPersonId ?? view.unifiedPersonId ?? null;
+    const permits = (channel: 'email' | 'phone', target: string | null | undefined): boolean => {
+      // R1 — NORMALISE AT THE COMPARISON BOUNDARY, per channel: email through
+      // the email rule, phone through the phone rule, never one with the other.
+      //
+      // THE DEFECT THIS CLOSES (M2). This seam compared the view's raw endpoint
+      // against `record.targetNormalized`, which the canonical writer had
+      // normalised. It happened to agree only because `resolveUnifiedPerson`
+      // normalises before writing the person spine — an upstream coincidence,
+      // not a guarantee: `unified_persons` carries no normalisation constraint
+      // (and none at all on `primary_phone`), so any other writer, backfill or
+      // import could land a value that silently bypassed a real restriction.
+      const targetNormalized = normalizeGovernanceTarget(channel, target ?? null);
+      // Unanchorable → deny, now judged on the value that can actually match.
+      // A raw endpoint that normalises to nothing could never match a record, and
+      // disclosing on that basis would be exactly the fail-open this guard exists
+      // to prevent.
+      if (!targetNormalized && !personId) return false;
+      return mayContact({
+        organizationId: query.companyId,
+        personId,
+        targetNormalized,
+        channel,
+        now,
+        records: governance.records,
+      }).decision === 'allowed';
+    };
+    const email = view.identity.email ? permits('email', view.identity.email) : false;
+    const phone = view.identity.phone ? permits('phone', view.identity.phone) : false;
+    // An actionable recommendation is an instruction to contact. It is withheld
+    // unless at least one channel actually permits contact.
+    return { email, phone, action: email || phone };
+  };
+
+  const rows = all.rows.map((v) => toExportRow(v, undefined, discloseFor(v)));
   if (format === 'excel') {
     return { contentType: 'application/vnd.ms-excel; charset=utf-8', filename: 'lead-intelligence.xls', body: toExcelXml(rows) };
   }

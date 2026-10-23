@@ -62,6 +62,23 @@ export interface RecordGovernanceInput {
   effectiveFrom?: string;
   /** Only `deferred` may carry one (DB CHECK enforces this too). */
   effectiveUntil?: string | null;
+  /**
+   * PG-001 RESTRICTION SCOPE. Omit it — or pass null — and the restriction
+   * applies to every purpose, which is the conservative default and the only
+   * spelling of "all" (DR-10).
+   *
+   * NO PRODUCTION CALLER SETS A NARROW VALUE TODAY. DR-1 forbids narrowing an
+   * unsubscribe until LQ-1 is resolved, and the other scopeable types wait on
+   * LQ-2/LQ-3. The parameter exists so erasure can carry an existing scope
+   * forward without inventing one, and so that the first deliberate narrowing
+   * is a one-line change at a call site rather than a re-architecture.
+   *
+   * Two CHECKs police it in the database: the value must be `outreach` or
+   * `account`, and the type must be one of `unsubscribe`, `consent_withdrawn`,
+   * `complaint`. A violation surfaces as a GovernanceWriteError, not a silently
+   * dropped scope.
+   */
+  purposeScope?: string | null;
 }
 
 export interface RecordGovernanceResult {
@@ -162,6 +179,13 @@ export async function recordContactGovernance(input: RecordGovernanceInput): Pro
   };
   if (input.effectiveFrom) row.effective_from = input.effectiveFrom;
   if (input.effectiveUntil) row.effective_until = input.effectiveUntil;
+  // PG-001 — the key is set ONLY for a narrow scope, following the pattern
+  // above. An unscoped restriction omits the column entirely and takes the
+  // database default of NULL, so the insert payload for every current caller is
+  // byte-identical to what it was before this change.
+  if (typeof input.purposeScope === 'string' && input.purposeScope.trim()) {
+    row.purpose_scope = input.purposeScope.trim();
+  }
 
   const insert = await ownedDbTable('contact_governance_records').insert(row).select('id').single();
   if (!insert.error) {

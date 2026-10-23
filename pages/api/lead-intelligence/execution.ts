@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { dispatchGuarded, previewDispatch } from '../../../backend/services/execution/executionBridge';
-import { addSuppression, releaseSuppression, isSuppressed } from '../../../backend/services/execution/suppressionService';
+import { addSuppression, releaseSuppression, isSuppressed, isSuppressionReason, SUPPRESSION_REASONS } from '../../../backend/services/execution/suppressionService';
 import { setControl, killSwitch, isExecutionEnabled } from '../../../backend/services/execution/executionControlService';
 import { recordApproval, revokeApproval } from '../../../backend/services/execution/executionApprovalService';
 import { recordExecutionAudit } from '../../../backend/services/execution/executionAuditService';
@@ -104,13 +104,78 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           return res.status(200).json({ ok: true });
         }
 
-        case 'suppress': { await addSuppression({ companyId, channel: str(b.channel) ?? '*', target: String(b.target), reason: b.reason ?? 'manual', actor }); return res.status(201).json({ ok: true }); }
+        // W2-B / D-5 — the suppression IS in force once the canonical write
+        // succeeds (`addSuppression` throws if it does not), so this stays 201.
+        // What it no longer does is answer a bare `{ ok: true }` when the legacy
+        // mirror rejected the row: `complete` says whether both stores took it.
+        case 'suppress': {
+          // DR-3 — the reason is CLIENT INPUT and is now validated here, at the
+          // boundary. It used to be forwarded unchecked, so any string became a
+          // do-not-contact via `toGovernanceType`'s `default:` branch. An
+          // omitted reason still defaults to 'manual'; a PRESENT but
+          // unsupported one is a client error, not a silent DNC.
+          if (b.reason !== undefined && b.reason !== null && !isSuppressionReason(b.reason)) {
+            return res.status(400).json({ error: 'unsupported_reason', allowed: [...SUPPRESSION_REASONS] });
+          }
+          const added = await addSuppression({ companyId, channel: str(b.channel) ?? '*', target: String(b.target), reason: isSuppressionReason(b.reason) ? b.reason : 'manual', actor });
+          const complete = added?.complete !== false;
+          return res.status(201).json(complete
+            ? { ok: true, complete: true }
+            : { ok: true, complete: false, canonicalRecorded: added.canonicalId !== null, legacyRecorded: false, legacyError: added.legacyError });
+        }
         // ES-103 — un-suppress (release) is consent-sensitive: capability-gated, tenant-scoped, audited. Fail-closed.
         case 'release': {
           if (!requireCap(capUser, 'campaign.override')) { denyCap(companyId, actor, 'campaign.override', 'release'); return res.status(403).json({ error: 'missing_capability:campaign.override' }); }
-          await releaseSuppression(companyId, str(b.channel) ?? '*', String(b.target));
-          await recordExecutionAudit({ companyId, channel: str(b.channel) ?? '*', stage: 'suppression', decision: 'cancelled', reason: 'suppression_released', actor, evidence: { target: String(b.target) }, correlationId: str(b.correlation_id) });
-          return res.status(200).json({ ok: true });
+          const channel = str(b.channel) ?? '*';
+          const released = await releaseSuppression(companyId, channel, String(b.target));
+          // W2-B / D-5 — a partial release is not a release. The canonical record
+          // is revoked but a legacy row may still be blocking, so the audit must
+          // not assert `cancelled`: the stage outcome is that the target REMAINS
+          // suppressed, which is what `suppressed` means in this vocabulary.
+          //
+          // R2 — THREE outcomes, not two. A zero-row legacy update is neither a
+          // completed release nor a fault: nothing was deactivated and nothing
+          // verified that nothing remains. It must not answer `complete: true`
+          // (that was M3), and it must not answer 500 either — a replayed release
+          // and a channel-exact release that correctly matched a `'*'` row are
+          // both legitimate no-ops, and failing them would turn correct
+          // behaviour into an error.
+          const outcome = released?.legacyOutcome ?? 'failed';
+          const complete = outcome === 'deactivated';
+          await recordExecutionAudit({
+            companyId, channel, stage: 'suppression',
+            decision: complete ? 'cancelled' : 'suppressed',
+            reason: complete
+              ? 'suppression_released'
+              : (outcome === 'no_match' ? 'suppression_release_unconfirmed' : 'suppression_release_incomplete'),
+            actor,
+            evidence: {
+              target: String(b.target),
+              canonical_revoked: released?.canonicalRevoked ?? null,
+              legacy_deactivated: complete,
+              legacy_outcome: outcome,
+              legacy_error: released?.legacyError ?? null,
+            },
+            correlationId: str(b.correlation_id),
+          });
+          if (outcome === 'failed') {
+            return res.status(500).json({
+              error: 'suppression_release_incomplete',
+              canonicalRevoked: released?.canonicalRevoked ?? null,
+              legacyDeactivated: false,
+              legacyOutcome: outcome,
+              legacyError: released?.legacyError ?? null,
+            });
+          }
+          if (outcome === 'no_match') {
+            return res.status(200).json({
+              ok: true,
+              complete: false,
+              legacyOutcome: 'no_match',
+              canonicalRevoked: released.canonicalRevoked,
+            });
+          }
+          return res.status(200).json({ ok: true, complete: true, legacyOutcome: outcome, canonicalRevoked: released.canonicalRevoked });
         }
         case 'check_suppression': return res.status(200).json(await isSuppressed(companyId, str(b.channel) ?? 'email', String(b.target)));
 

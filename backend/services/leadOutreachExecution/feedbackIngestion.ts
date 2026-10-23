@@ -56,6 +56,11 @@ import type {
 } from './types';
 
 /** WS-3 M7 — version of the feedback contract. Bumped when its shape changes. */
+// W1-B — the canonical governance writer. An unsubscribe is a standing
+// instruction, not merely an observation, so it must reach the source of truth.
+import { recordContactGovernance } from '../prospectIdentity/contactGovernanceWriter';
+import { ALL_CHANNELS } from '../prospectIdentity/contactGovernance';
+
 export const FEEDBACK_VERSION = 'fb-1.0.0';
 
 /**
@@ -141,7 +146,24 @@ export interface FeedbackEvent {
    */
   evidence?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  /**
+   * W1-C — the SCOPE an `unsubscribed` signal expresses, when the caller knows
+   * it. OPTIONAL and backward-compatible: omitted means the task's own channel,
+   * exactly as W1-B behaved, so no existing caller silently broadens.
+   *
+   *   'channel' — stop contacting them on THIS channel.
+   *   'all'     — an explicit cross-channel objection.
+   *
+   * Only meaningful for `unsubscribed`; ignored for every other signal.
+   */
+  unsubscribeScope?: UnsubscribeScope;
 }
+
+/** W1-C. Deliberately two values: anything else is malformed, never 'all'. */
+export const UNSUBSCRIBE_SCOPES = ['channel', 'all'] as const;
+export type UnsubscribeScope = (typeof UNSUBSCRIBE_SCOPES)[number];
+export const isUnsubscribeScope = (v: unknown): v is UnsubscribeScope =>
+  typeof v === 'string' && (UNSUBSCRIBE_SCOPES as readonly string[]).includes(v);
 
 export type FeedbackRejection =
   | 'unknown_signal'
@@ -149,7 +171,11 @@ export type FeedbackRejection =
   | 'invalid_timestamp'
   | 'missing_identity'
   | 'task_not_found'
-  | 'write_failed';
+  | 'write_failed'
+  /** W1-B — the outcome was recorded but the standing restriction was not. */
+  | 'governance_write_failed'
+  /** W1-B — nothing on the task says WHO or WHICH CHANNEL to restrict. */
+  | 'governance_unanchorable';
 
 export interface FeedbackResult {
   ok: boolean;
@@ -316,6 +342,69 @@ async function ingestBusinessSignal(task: OutreachTask, event: FeedbackEvent, oc
 
   if (!write.ok) {
     return { ...fail('write_failed', write.error ?? 'outcome write failed'), axis: 'business' };
+  }
+
+  // ── W1-B. AN UNSUBSCRIBE IS A STANDING INSTRUCTION ──────────────────────
+  // Every other business signal is observational. This one is compliance-
+  // bearing: until now it was recorded as an outcome and nothing else, which is
+  // why the manual route refused it outright rather than "record an obligation
+  // the platform will not act on". It now reaches the canonical governance
+  // writer, so the dispatch-time gate observes it.
+  //
+  // SCOPE — the task's own channel, never `*`. A person who unsubscribed from
+  // an email has not asked us to stop calling them, and inferring that would be
+  // broader than the evidence supports. A genuinely cross-channel objection
+  // cannot be expressed through this path today; see the contract note in the
+  // W1 report.
+  //
+  // FAIL CLOSED — a failed restriction is NOT reported as successful
+  // processing. The outcome row survives (it is append-only and true: the
+  // person did unsubscribe), but the caller is told the obligation was not
+  // persisted, so a retry is both safe and necessary. Idempotency is the
+  // writer's own: `uq_contact_governance_identity` makes a replay a no-op.
+  if (outcomeType === 'unsubscribed') {
+    const personId = nonEmpty(task.personId);
+    const taskChannel = nonEmpty(task.channel);
+    // W1-C — SCOPE. `all` records the objection against ALL_CHANNELS ('*').
+    // That is the same canonical `unsubscribe` type with a broader channel, not
+    // a different instruction: `dnc_permanent` would assert a permanence the
+    // recipient did not express, and its CHECK forces '*' for that reason.
+    // Only `dnc_permanent` and `dnc_channel` constrain the channel column, so
+    // `unsubscribe` + '*' is schema-valid and `channelApplies` honours it for
+    // every channel, including channels that do not exist yet.
+    const channel = event.unsubscribeScope === 'all' ? ALL_CHANNELS : taskChannel;
+    if (!personId || !channel) {
+      return {
+        ...fail('governance_unanchorable',
+          'the task names no canonical person, or no channel for a channel-scoped objection, '
+          + 'so no restriction could be anchored'),
+        axis: 'business',
+        recorded: { outcomeType },
+      };
+    }
+    try {
+      await recordContactGovernance({
+        organizationId: task.companyId,       // TENANT from the task, never the event
+        governanceType: 'unsubscribe',
+        channel,
+        personId,
+        source: event.provider ? `webhook:${event.provider}` : event.source,
+        evidence: {
+          feedbackSignal: outcomeType,
+          unsubscribeScope: event.unsubscribeScope ?? 'channel(default)',
+          taskId: String(task.id),
+          providerEventId: nonEmpty(event.providerEventId),
+          occurredAt,
+        },
+        effectiveFrom: occurredAt,
+      });
+    } catch (e) {
+      return {
+        ...fail('governance_write_failed', e instanceof Error ? e.message : String(e)),
+        axis: 'business',
+        recorded: { outcomeType },
+      };
+    }
   }
 
   return {

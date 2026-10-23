@@ -23,6 +23,14 @@ import { checkAndConsume, getBroadcastChunkStrategy } from './whatsappRateLimite
 import { getValidAccessToken } from '../auth/metaAuthService';
 import { requireEncryptionKey } from '../auth/credentialEncryption';
 
+// W0-C — the canonical contact-governance evaluator. `mayContact` is pure; the
+// tenant-scoped read is the only I/O this adds, and it happens once per batch.
+import { mayContact } from './prospectIdentity/contactGovernance';
+import {
+  loadTenantGovernanceRecords,
+  normalizeGovernanceTarget,
+} from './prospectIdentity/contactGovernanceRepository';
+
 const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
@@ -270,11 +278,45 @@ export async function processBatch(
 
   if (!recipients?.length) return;
 
+  // ── W0-C. CONTACT GOVERNANCE, before any external send ───────────────────
+  // This path reaches Meta Graph without ever passing the outreach dispatch
+  // gate, so the same canonical rules are applied here. `whatsapp` is already a
+  // KNOWN_CHANNEL, so restrictions for it can exist and were simply not read.
+  //
+  // One tenant-scoped read per batch, then the PURE evaluator per recipient.
+  // FAIL CLOSED: if the store cannot be read, NOTHING in this batch is sent.
+  const governance = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
+  const governanceNow = new Date().toISOString();
+
   let sentCount = 0;
   let failedCount = 0;
 
   for (const recipient of recipients) {
     const phone = decryptPhone(recipient.encrypted_phone);
+
+    // Evaluated BEFORE the message body is built and before `fetch`, so a
+    // refusal cannot reach the provider.
+    const verdict = governance.ok
+      ? mayContact({
+        organizationId: broadcast.company_id,
+        personId: null,
+        targetNormalized: normalizeGovernanceTarget('whatsapp', phone),
+        channel: 'whatsapp',
+        now: governanceNow,
+        records: governance.records,
+      })
+      : null;
+
+    if (!verdict || verdict.decision !== 'allowed') {
+      const reason = verdict
+        ? `${verdict.governanceType ?? verdict.decision}: ${verdict.reason}`
+        : `governance unreadable: ${governance.error ?? 'unknown'}`;
+      await ownedDbTable('whatsapp_broadcast_recipients')
+        .update({ status: 'blocked_governance', error_code: 'contact_governance', error_message: reason })
+        .eq('id', recipient.id);
+      failedCount++;
+      continue;
+    }
 
     try {
       const messageBody = buildMessageBody(broadcast, phone);

@@ -117,7 +117,7 @@ export function recordGovernanceGateDecision(
  * said no. Recorded IN ADDITION to the decision above, never instead of it: the
  * refusal is real and must still count as a refusal.
  *
- * 4 series. A non-zero rate here is an outage signal, not a compliance signal.
+ * 5 series. A non-zero rate here is an outage signal, not a compliance signal.
  */
 export function recordGovernanceFailClosed(stage: GovernanceFailClosedStage): void {
   counter(IDENTITY_METRICS.governance.failClosed, { stage });

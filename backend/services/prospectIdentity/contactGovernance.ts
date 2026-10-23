@@ -34,6 +34,8 @@
  * evaluated here. Quiet hours and contact fatigue do not exist anywhere yet.
  */
 
+import { isScopeableGovernanceType, purposeApplies, type ContactPurpose } from './contactPurpose';
+
 export const CONTACT_GOVERNANCE_VERSION = 'li3b.1';
 
 /**
@@ -96,6 +98,15 @@ export interface GovernanceRecord {
   effectiveFrom: string;
   effectiveUntil: string | null;
   revokedAt: string | null;
+  /**
+   * PG-001 restriction scope, from `contact_governance_records.purpose_scope`.
+   *
+   * OPTIONAL, and absence is not a gap: `null`, `undefined` and any
+   * unrecognised value all mean "applies to every purpose" (DR-10). A loader
+   * that does not select the column therefore evaluates exactly as it did
+   * before, which is what lets this ship without touching every caller.
+   */
+  purposeScope?: string | null;
 }
 
 export interface MayContactInput {
@@ -107,6 +118,16 @@ export interface MayContactInput {
   now: string;
   /** Records already loaded by the caller. This function performs no I/O. */
   records: GovernanceRecord[];
+  /**
+   * PG-001 ATTEMPT PURPOSE — what this delivery is for.
+   *
+   * OPTIONAL HERE ON PURPOSE. An undeclared attempt is `all`, so it stays
+   * subject to every restriction; omitting it can never widen permission. The
+   * requirement to state a purpose belongs at the EXECUTION BOUNDARY, where a
+   * send actually happens, not on a pure function that planning, readiness,
+   * export and recommendation paths all call without sending anything.
+   */
+  attemptPurpose?: ContactPurpose;
 }
 
 /**
@@ -203,6 +224,28 @@ export function mayContact(input: MayContactInput): MayContactResult {
     .filter((r) => isInForce(r, input.now))
     .map((r) => ({ record: r, matchedBy: anchorMatches(r, input.personId, input.targetNormalized) }))
     .filter((x) => x.matchedBy !== null)
+    // PG-001. Applicability, NOT severity — which is why it sits here, after
+    // tenant, channel and anchor, and BEFORE the band sort. Folding purpose
+    // into a band would make an outreach-scoped record look weaker than it is.
+    //
+    // It can only ever REMOVE a record whose scope explicitly disagrees with an
+    // explicitly declared attempt purpose. An unlabelled record, an undeclared
+    // attempt, and any unrecognised value on either side all collapse to `all`,
+    // so today — with every stored scope NULL and DR-1 forbidding a narrow
+    // write — this filter removes nothing and every verdict is unchanged.
+    //
+    // GATED ON THE TYPE, and that gate is load-bearing. Only the objection
+    // family is scopeable; `bounce_hard` and `invalid_contact` are
+    // endpoint-intrinsic, `deferred` is a temporal state (DR-5),
+    // `campaign_exclusion` is inert and narrower than any purpose (DR-6), and
+    // `dnc_permanent`/`dnc_channel` are all-purpose by their own semantics
+    // (DR-2). The database refuses a scope on those six, but a row written
+    // before that CHECK existed — or by direct database access — could still
+    // carry one, and without this gate such a row would make an endpoint-
+    // intrinsic restriction DODGEABLE by declaring a purpose. Ignoring the
+    // stored value for a non-scopeable type is the only safe reading.
+    .filter((x) => !isScopeableGovernanceType(x.record.governanceType)
+      || purposeApplies(x.record.purposeScope, input.attemptPurpose))
     // Only the bands this evaluator owns. campaign_exclusion (band 9) is
     // deliberately excluded — it is a campaign rule, not a contact restriction.
     .filter((x) => GATE_BAND[x.record.governanceType] >= 3 && GATE_BAND[x.record.governanceType] <= 6)

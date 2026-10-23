@@ -141,6 +141,9 @@ export {
   FEEDBACK_SIGNALS,
   FEEDBACK_SOURCES,
   isFeedbackSignal,
+  // W1-C — the unsubscribe scope vocabulary and its validator.
+  isUnsubscribeScope,
+  UNSUBSCRIBE_SCOPES,
   isFeedbackSource,
   feedbackAxis,
   ingestFeedback,

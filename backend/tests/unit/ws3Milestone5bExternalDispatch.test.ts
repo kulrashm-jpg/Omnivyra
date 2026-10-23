@@ -396,6 +396,62 @@ describe('WS-3 M5B (4) — governance and quota precede transport', () => {
     expect(provider.calls).toHaveLength(0);
   });
 
+  // ── 4C-5B — the two governance shapes the cases above do not cover ───────
+  //
+  // Those use the LEGACY `outreach_suppressions` scopes and the tenant channel
+  // list. These add the CANONICAL store — the authority — in both of its
+  // refusing shapes: a block and a DEFERRAL. A deferral is temporal
+  // backpressure rather than a standing prohibition, which makes it the shape
+  // most easily mistaken for "send anyway".
+  it('never calls the provider when the CANONICAL store blocks', async () => {
+    configureTenant();
+    (db.tables.contact_governance_records ??= []).push({
+      id: 'cg-block', organization_id: 'co-a', person_id: null, target_normalized: RECIPIENT,
+      channel: 'email', governance_type: 'unsubscribe',
+      effective_from: '2020-01-01T00:00:00.000Z', effective_until: null, revoked_at: null,
+    });
+
+    const res = await dispatch(await approvedTask());
+
+    expect(res.outcome).toBe('blocked_governance');
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it('never calls the provider when the canonical store DEFERS', async () => {
+    configureTenant();
+    (db.tables.contact_governance_records ??= []).push({
+      id: 'cg-defer', organization_id: 'co-a', person_id: null, target_normalized: RECIPIENT,
+      channel: 'email', governance_type: 'deferred',
+      effective_from: '2020-01-01T00:00:00.000Z', effective_until: '2099-01-01T00:00:00.000Z', revoked_at: null,
+    });
+
+    const res = await dispatch(await approvedTask());
+
+    // "Not now" is still "do not send now", and the provider is never reached.
+    expect(res.outcome).not.toBe('sent');
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it('the governance verdict is reached BEFORE the provider, not alongside it', async () => {
+    // An allowed send first, so the ordering claim is not vacuous: the same path
+    // that refuses above does reach the provider when governance permits.
+    configureTenant();
+    const allowed = await dispatch(await approvedTask());
+    expect(allowed.outcome).toBe('sent');
+    expect(provider.calls).toHaveLength(1);
+
+    // ...and with a canonical block in place the provider is not reached at all.
+    provider.calls = [];
+    (db.tables.contact_governance_records ??= []).push({
+      id: 'cg-order', organization_id: 'co-a', person_id: null, target_normalized: RECIPIENT,
+      channel: '*', governance_type: 'dnc_permanent',
+      effective_from: '2020-01-01T00:00:00.000Z', effective_until: null, revoked_at: null,
+    });
+    const blocked = await dispatch(await approvedTask({ planTaskId: 'task-4c5b-order' }));
+    expect(blocked.outcome).toBe('blocked_governance');
+    expect(provider.calls).toHaveLength(0);
+  });
+
   it('never calls the provider when quota is exhausted', async () => {
     configureTenant({ daily_limit_tenant: 1 });
     await dispatch(await approvedTask({ planTaskId: 'task-a' }));
@@ -632,5 +688,52 @@ describe('WS-3 M5B (7) — observability, isolation and guards', () => {
     // disabled transport carries no client in its module graph.
     expect(src).not.toMatch(/^import .*supabaseClient/m);
     expect(src).toMatch(/await import\('\.\.\/\.\.\/db\/supabaseClient'\)/);
+  });
+});
+
+// ── W0-A. An unrecorded verdict is not permission ───────────────────────────
+
+describe('W0-A — decision persistence fails CLOSED at the real dispatch caller', () => {
+  it('a decision that cannot be recorded fails the dispatch and sends NOTHING', async () => {
+    configureTenant();
+    const id = await approvedTask();
+
+    // `appendDecision` writes `outreach_decisions`. Before W0-A this failure was
+    // swallowed — `evaluateTaskGovernance` returned `ok: true` and dispatch,
+    // which tests only `!governed.ok`, went on to call the provider. The send
+    // would then have been unauditable: no durable row says the gate ran.
+    db.failTable = 'outreach_decisions';
+    const res = await dispatch(id);
+    db.failTable = null;
+
+    expect(res.outcome).toBe('failed');
+    expect(provider.calls).toHaveLength(0);
+    // The task was never claimed, so a retry is still possible.
+    expect((await getOutreachTaskById('co-a', id))?.status).toBe('approved');
+  });
+
+  it('the failure is distinguishable from an ordinary governance denial', async () => {
+    // Denial: the gate ran, recorded, and refused.
+    configureTenant({ kill_switch: true });
+    const denied = await dispatch(await approvedTask());
+    expect(denied.outcome).toBe('blocked_governance');
+    expect(provider.calls).toHaveLength(0);
+
+    // Unrecordable: the gate could not complete. Different outcome label.
+    db.tables.outreach_governance_config = [];
+    configureTenant();
+    db.failTable = 'outreach_decisions';
+    const unrecorded = await dispatch(await approvedTask({ planTaskId: 'task-2-w0a' }));
+    db.failTable = null;
+    expect(unrecorded.outcome).toBe('failed');
+    expect(unrecorded.outcome).not.toBe(denied.outcome);
+  });
+
+  it('an allowed-and-recorded decision still dispatches normally', async () => {
+    configureTenant();
+    const res = await dispatch(await approvedTask());
+
+    expect(res.outcome).toBe('sent');
+    expect(provider.calls).toHaveLength(1);
   });
 });

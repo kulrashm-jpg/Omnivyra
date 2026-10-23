@@ -70,6 +70,23 @@ jest.mock('../../db/writeOwner', () => ({
           }
         }
 
+        // W1-B — model `uq_contact_governance_identity`:
+        //   (organization_id, channel, governance_type,
+        //    coalesce(person_id::text, target_normalized)) WHERE revoked_at IS NULL
+        // The writer's idempotency IS its 23505 catch, so the double must raise
+        // the 23505 the index would. Without this, a replay silently inserts a
+        // second active instruction and the test proves nothing.
+        if (table === 'contact_governance_records') {
+          const key = (r: Record<string, unknown>) => [
+            r.organization_id, r.channel, r.governance_type,
+            r.person_id ?? r.target_normalized,
+          ].join('|');
+          const clash = rows().some((r) => r.revoked_at == null && key(r) === key(row as Record<string, unknown>));
+          if (clash) {
+            return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "uq_contact_governance_identity"' } };
+          }
+        }
+
         const created = { ...row, id: `${table}-${db.nextId++}`, created_at: '2026-08-05T00:00:00.000Z' };
         rows().push(created);
         return { data: created, error: null };
@@ -343,7 +360,10 @@ describe('business outcome ingestion', () => {
   });
 
   it('accepts every business signal', async () => {
-    const task = await dispatchedTask();
+    // W1-B: `unsubscribed` now writes a person-anchored restriction, so this
+    // case needs the canonical anchor the A3 contract provides. The
+    // unanchorable path has its own case in the W1-B block below.
+    const task = await dispatchedTask({ personId: 'p-1' });
     const signals = ['opened', 'clicked', 'replied', 'unsubscribed', 'meeting_booked', 'converted', 'no_response'] as const;
     for (const [i, signal] of signals.entries()) {
       const res = await ingestFeedback(event({ taskId: String(task.id), signal, occurredAt: `2026-08-05T1${i}:00:00.000Z`, providerEventId: `e-${i}` }));
@@ -1047,5 +1067,118 @@ describe('one-way pipeline guard', () => {
 
     const poisonedReverse = "import { computeFingerprint } from '../leadIntelligenceOrchestration/fingerprint';";
     expect(stripComments(poisonedReverse).includes('leadIntelligenceOrchestration')).toBe(true);
+  });
+});
+
+// ── W1-B. An unsubscribe becomes a standing restriction ────────────────────
+describe('W1-B — unsubscribe reaches the canonical governance writer', () => {
+  const governance = () => (db.tables['contact_governance_records'] ??= []);
+  const unsub = (taskId: string, over: Partial<FeedbackEvent> = {}) =>
+    ingestFeedback(event({ taskId, signal: 'unsubscribed', providerEventId: 'u-1', ...over }));
+
+  it('5a. writes a channel-scoped, person-anchored restriction', async () => {
+    const task = await dispatchedTask({ personId: 'p-1', channel: 'email' });
+    const res = await unsub(String(task.id));
+
+    expect(res.ok).toBe(true);
+    expect(governance()).toHaveLength(1);
+    expect(governance()[0]).toMatchObject({
+      organization_id: 'co-a',
+      governance_type: 'unsubscribe',
+      channel: 'email',
+      person_id: 'p-1',
+    });
+  });
+
+  it('5b. the scope is the task channel — NEVER a cross-channel restriction', async () => {
+    const task = await dispatchedTask({ personId: 'p-1', channel: 'email' });
+    await unsub(String(task.id));
+
+    // An email unsubscribe must not silently stop phone or WhatsApp contact.
+    expect(governance()[0].channel).toBe('email');
+    expect(governance()[0].channel).not.toBe('*');
+    expect(governance()[0].governance_type).not.toBe('dnc_permanent');
+  });
+
+  it('5c. an unanchorable task is reported unresolved, not silently accepted', async () => {
+    // No canonical person: nothing a restriction could be anchored to, and the
+    // endpoint is not persisted anywhere on the task.
+    const task = await dispatchedTask({ personId: null, channel: 'email' });
+    const res = await unsub(String(task.id));
+
+    expect(res.ok).toBe(false);
+    expect(res.rejection).toBe('governance_unanchorable');
+    expect(governance()).toHaveLength(0);
+    // The OUTCOME is still true and still recorded — only the obligation failed.
+    expect(res.recorded).toEqual({ outcomeType: 'unsubscribed' });
+  });
+
+  it('6. a governance write failure is NOT acknowledged as success', async () => {
+    const task = await dispatchedTask({ personId: 'p-1', channel: 'email' });
+    db.failTable = 'contact_governance_records';
+    const res = await unsub(String(task.id));
+    db.failTable = null;
+
+    expect(res.ok).toBe(false);
+    expect(res.rejection).toBe('governance_write_failed');
+    expect(governance()).toHaveLength(0);
+  });
+
+  it('7. replaying the same provider event leaves ONE active restriction', async () => {
+    const task = await dispatchedTask({ personId: 'p-1', channel: 'email' });
+    const first = await unsub(String(task.id));
+    const replay = await unsub(String(task.id));
+
+    expect(first.ok).toBe(true);
+    expect(replay.ok).toBe(true);
+    // Idempotency is the writer's own: uq_contact_governance_identity makes the
+    // second insert a no-op rather than a second active instruction.
+    expect(governance()).toHaveLength(1);
+  });
+
+  it('8. a narrower unsubscribe cannot weaken a broader standing restriction', async () => {
+    const task = await dispatchedTask({ personId: 'p-1', channel: 'email' });
+    // A pre-existing cross-channel objection.
+    governance().push({
+      id: 'g-broad', organization_id: 'co-a', person_id: 'p-1', target_normalized: null,
+      channel: '*', governance_type: 'dnc_permanent',
+      effective_from: '2026-01-01T00:00:00.000Z', effective_until: null, revoked_at: null,
+    });
+
+    await unsub(String(task.id));
+
+    // The broad record is untouched and still active; the narrow one is additive.
+    const broad = governance().find((g) => g.id === 'g-broad')!;
+    expect(broad.revoked_at).toBeNull();
+    expect(broad.channel).toBe('*');
+    expect(governance().filter((g) => g.revoked_at == null)).toHaveLength(2);
+  });
+
+  it('9. an event naming another tenant\'s task writes no restriction', async () => {
+    const task = await dispatchedTask({ personId: 'p-1', channel: 'email' });
+    const res = await ingestFeedback(event({
+      taskId: String(task.id), signal: 'unsubscribed', providerEventId: 'u-x', companyId: 'co-b',
+    }));
+
+    expect(res.ok).toBe(false);
+    expect(res.rejection).toBe('task_not_found');
+    expect(governance()).toHaveLength(0);
+  });
+
+  it('other business signals create NO restriction', async () => {
+    const task = await dispatchedTask({ personId: 'p-1', channel: 'email' });
+    for (const signal of ['replied', 'converted', 'no_response', 'opened'] as const) {
+      await ingestFeedback(event({ taskId: String(task.id), signal, providerEventId: `o-${signal}` }));
+    }
+    // Observation is not instruction.
+    expect(governance()).toHaveLength(0);
+  });
+
+  it('a transient delivery failure creates NO restriction', async () => {
+    const task = await dispatchedTask({ personId: 'p-1', channel: 'email' });
+    await ingestFeedback(event({ taskId: String(task.id), signal: 'bounced', providerEventId: 'b-1' }));
+    // W1-A is BLOCKED: `bounced` is a DELIVERY fact and this repository has no
+    // way to tell a hard bounce from a transient one, so it must not restrict.
+    expect(governance()).toHaveLength(0);
   });
 });

@@ -50,6 +50,14 @@ class PgError extends Error {
 let governance: Row[] = [];
 let claims: Row[] = [];
 let persons: Row[] = [];
+/** D1 — the evidence table the new clearing step targets. */
+let assertions: Row[] = [];
+/** Every `source_assertions` update the step issued, with its predicates. */
+let assertionUpdates: Array<{ patch: Row; filters: Array<[string, unknown]> }> = [];
+/** Set to force the clearing update to fail, for the fail-closed case. */
+let assertionUpdateError: { code?: string; message: string } | null = null;
+/** Ordered record of the steps the double observed, for the ordering case. */
+let observed: string[] = [];
 let nextId = 1;
 
 /**
@@ -123,7 +131,8 @@ jest.mock('../../db/writeOwner', () => ({
     const tableOf = (): Row[] =>
       name === 'contact_governance_records' ? governance
         : name === 'identity_claims' ? claims
-          : name === 'unified_persons' ? persons : [];
+          : name === 'unified_persons' ? persons
+            : name === 'source_assertions' ? assertions : [];
 
     const filters: Array<[string, unknown]> = [];
     const ins: Array<[string, unknown[]]> = [];
@@ -171,12 +180,28 @@ jest.mock('../../db/writeOwner', () => ({
       const u: Record<string, unknown> = {};
       u.eq = (c: string, v: unknown) => { uf.push([c, v]); return u; };
       u.is = (c: string, v: unknown) => { uf.push([c, v]); return u; };
+      // PostgREST's `IS NOT NULL`, as `attributionReportingService` spells it.
+      u.not = (c: string, op: string, v: unknown) => { uf.push([`not:${c}:${op}`, v]); return u; };
       u.select = async () => {
-        const hit = tableOf().filter((r) => uf.every(([c, v]) => (v === null ? r[c] == null : r[c] === v)));
+        if (name === 'source_assertions') {
+          assertionUpdates.push({ patch, filters: uf });
+          observed.push('clear_account_links');
+          if (assertionUpdateError) return { data: null, error: assertionUpdateError };
+        }
+        const hit = tableOf().filter((r) => uf.every(([c, v]) => {
+          // `not:<col>:is` + null  =>  the column must NOT be null.
+          if (typeof c === 'string' && c.startsWith('not:')) {
+            const [, col, op] = c.split(':');
+            if (op === 'is' && v === null) return r[col] != null;
+            return r[col] !== v;
+          }
+          return v === null ? r[c] == null : r[c] === v;
+        }));
         for (const r of hit) {
           const next = { ...r, ...patch };
           try {
             if (name === 'contact_governance_records') {
+              if (patch.revoked_at != null) observed.push('revoke');
               assertAnchorCheck(next);
               assertIdentityIndex(next, tableOf().map((x) => (x === r ? next : x)));
             }
@@ -197,6 +222,7 @@ jest.mock('../../db/writeOwner', () => ({
       d.eq = (c: string, v: unknown) => { df.push([c, v]); return d; };
       d.select = async () => {
         if (name !== 'unified_persons') return { data: [], error: null };
+        observed.push('delete_person');
         const by = Object.fromEntries(df) as { company_id?: string; id?: string };
         try {
           return { data: deletePerson(String(by.company_id), String(by.id)), error: null };
@@ -231,6 +257,10 @@ beforeEach(() => {
   ];
   nextId = 1;
   anchorCheckAdmitsRevoked = true;
+  assertions = [];
+  assertionUpdates = [];
+  assertionUpdateError = null;
+  observed = [];
 });
 
 const seedPerson = (org: string, id: string) => { persons.push({ id, company_id: org }); };
@@ -787,5 +817,201 @@ describe('PI/WS-F — planPersonErasure is pure and total', () => {
   it('refuses to plan without a tenant', () => {
     expect(() => planPersonErasure({ organizationId: '', personId: PERSON_A, records: [], contactPoints: [] }))
       .toThrow(PersonErasureError);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+/**
+ * D1 (Option B / B-1) — erasure drops the historical employer leg from the
+ * person's OWN evidence, before the person row is deleted.
+ *
+ * Pre-O-5 the assertion writer set `account_id` on every row, so a
+ * person-scoped assertion carried its subject AND that person's employer. The
+ * writer is subject-only now, so this is a HISTORICAL cleanup over a finite,
+ * shrinking set. It must run while `person_id` still identifies the rows:
+ * after the delete, `ON DELETE SET NULL (person_id)` has nulled it and nothing
+ * stored on the row says whose it was.
+ *
+ * This suite proves the predicate, the single field, the table boundary, the
+ * ordering and the fail-closed semantics. It does NOT prove database-level
+ * behaviour — the double models the predicate, not PostgREST or the FKs.
+ */
+const seedAssertion = (over: Row = {}): Row => {
+  const row: Row = {
+    id: `sa${assertions.length + 1}`,
+    organization_id: ORG_A,
+    person_id: PERSON_A,
+    entity_type: 'person',
+    account_id: 'account-1',
+    attribute: 'city',
+    normalized_value: 'Leeds',
+    raw_value: null,
+    value_hash: 'f'.repeat(64),
+    provider: 'crm',
+    source_record_id: 'sr-1',
+    superseded_at: null,
+    ...over,
+  };
+  assertions.push(row);
+  return row;
+};
+
+const find = (id: string): Row => assertions.find((r) => r.id === id)!;
+
+describe('D1 — erasure clears the historical account link on person evidence', () => {
+  it('1. a matching person-scoped row with a non-null account_id is cleared', async () => {
+    const row = seedAssertion();
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(row.account_id).toBeNull();
+  });
+
+  it('2. an otherwise matching row already holding NULL is excluded by the predicate', async () => {
+    const row = seedAssertion({ id: 'sa-null', account_id: null });
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(row.account_id).toBeNull();
+    // The predicate carried `IS NOT NULL`, so the row was never a target.
+    expect(assertionUpdates[0].filters).toEqual(expect.arrayContaining([['not:account_id:is', null]]));
+  });
+
+  it('3. another person\'s evidence is not changed', async () => {
+    seedPerson(ORG_A, 'person-other');
+    const other = seedAssertion({ id: 'sa-other-person', person_id: 'person-other' });
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(other.account_id).toBe('account-1');
+  });
+
+  it('4. another organization\'s evidence is not changed, even with a matching person id', async () => {
+    const foreign = seedAssertion({ id: 'sa-other-org', organization_id: ORG_B });
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(foreign.account_id).toBe('account-1');
+    expect(assertionUpdates[0].filters).toEqual(expect.arrayContaining([['organization_id', ORG_A]]));
+  });
+
+  it('5. ACCOUNT-scoped evidence is not changed', async () => {
+    const acct = seedAssertion({ id: 'sa-account', entity_type: 'account', person_id: PERSON_A });
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(acct.account_id).toBe('account-1');
+  });
+
+  it('6. RELATIONSHIP-scoped evidence is not changed', async () => {
+    const rel = seedAssertion({ id: 'sa-rel', entity_type: 'relationship', person_id: PERSON_A });
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(rel.account_id).toBe('account-1');
+  });
+
+  it('7. ONLY account_id is written — no value, hash, subject or source identifier moves', async () => {
+    seedAssertion();
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(assertionUpdates).toHaveLength(1);
+    expect(Object.keys(assertionUpdates[0].patch)).toEqual(['account_id']);
+    expect(assertionUpdates[0].patch.account_id).toBeNull();
+    // ...and the surviving row kept everything else verbatim.
+    expect(find('sa1')).toMatchObject({
+      organization_id: ORG_A, person_id: PERSON_A, entity_type: 'person',
+      attribute: 'city', normalized_value: 'Leeds', value_hash: 'f'.repeat(64),
+      provider: 'crm', source_record_id: 'sr-1',
+    });
+  });
+
+  it('the predicate is exactly the four authorized conditions', async () => {
+    seedAssertion();
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(assertionUpdates[0].filters).toEqual([
+      ['organization_id', ORG_A],
+      ['person_id', PERSON_A],
+      ['entity_type', 'person'],
+      ['not:account_id:is', null],
+    ]);
+  });
+
+  it('8. clearing happens AFTER revocation and BEFORE the person is deleted', async () => {
+    seedClaim(ORG_A, PERSON_A, 'email', 'a@example.com');
+    await recordContactGovernance({
+      organizationId: ORG_A, governanceType: 'unsubscribe', channel: 'email',
+      personId: PERSON_A, target: 'a@example.com', source: 'manual',
+    });
+    seedAssertion();
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(observed).toContain('revoke');
+    expect(observed).toContain('clear_account_links');
+    expect(observed).toContain('delete_person');
+    expect(observed.indexOf('revoke')).toBeLessThan(observed.indexOf('clear_account_links'));
+    expect(observed.indexOf('clear_account_links')).toBeLessThan(observed.indexOf('delete_person'));
+  });
+
+  it('9. a clearing failure propagates and the person is NOT deleted', async () => {
+    seedAssertion();
+    assertionUpdateError = { code: '42501', message: 'permission denied for table source_assertions' };
+
+    await expect(erasePerson({
+      organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW,
+    })).rejects.toThrow(PersonErasureError);
+
+    expect(observed).not.toContain('delete_person');
+    expect(persons.some((p) => p.id === PERSON_A)).toBe(true);   // the person survives
+  });
+
+  it('9b. the failure carries the database code, not an invented one', async () => {
+    seedAssertion();
+    assertionUpdateError = { code: '42501', message: 'permission denied for table source_assertions' };
+
+    await expect(erasePerson({
+      organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW,
+    })).rejects.toMatchObject({ code: '42501' });
+  });
+
+  it('10. a retry after a clearing failure is safe and weakens nothing', async () => {
+    seedClaim(ORG_A, PERSON_A, 'email', 'a@example.com');
+    await recordContactGovernance({
+      organizationId: ORG_A, governanceType: 'unsubscribe', channel: 'email',
+      personId: PERSON_A, target: 'a@example.com', source: 'manual',
+    });
+    const row = seedAssertion();
+
+    assertionUpdateError = { code: '42501', message: 'permission denied' };
+    await expect(erasePerson({
+      organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW,
+    })).rejects.toThrow(PersonErasureError);
+
+    // Suppression survived the failed attempt...
+    expect((await decide(ORG_A, 'email', { target: 'a@example.com' })).decision).toBe('blocked');
+
+    // ...and the retry completes.
+    assertionUpdateError = null;
+    observed = [];
+    const res = await erasePerson({
+      organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW,
+    });
+
+    expect(res.deleted).toBe(true);
+    expect(row.account_id).toBeNull();
+    expect((await decide(ORG_A, 'email', { target: 'a@example.com' })).decision).toBe('blocked');
+  });
+
+  it('clearing a second time matches nothing — the step is idempotent', async () => {
+    seedAssertion({ account_id: null });
+
+    await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'gdpr erasure request', now: NOW });
+
+    expect(assertionUpdates).toHaveLength(1);
+    expect(find('sa1').account_id).toBeNull();
   });
 });

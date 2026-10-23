@@ -23,6 +23,11 @@ jest.mock('../../security/TenantGuard', () => ({
 
 jest.mock('../../services/leadOutreachExecution', () => ({
   ingestFeedback: (...a: unknown[]) => ingestFeedback(...a),
+  // W1-C — the route now validates the unsubscribe scope through the real
+  // vocabulary. Mocking the barrel without these left them `undefined`, so
+  // every request threw before reaching any assertion.
+  UNSUBSCRIBE_SCOPES: ['channel', 'all'],
+  isUnsubscribeScope: (v: unknown) => v === 'channel' || v === 'all',
 }));
 
 jest.mock('../../../lib/platform/routeFactory', () => ({
@@ -217,8 +222,12 @@ describe('W09D — the server owns attribution', () => {
 
 // ════════════════════════════════════════════════════════════════════════════
 describe('W09D — the pilot signal vocabulary', () => {
-  it('is exactly the three a human can honestly observe', () => {
-    expect([...MANUAL_OUTCOME_SIGNALS]).toEqual(['replied', 'converted', 'no_response']);
+  it('is exactly the set a human can honestly observe', () => {
+    // W1-B added `unsubscribed`: an operator genuinely can be told "stop
+    // emailing me", and it now writes the canonical restriction rather than
+    // recording an unhonoured obligation. `opened`/`clicked` stay out because
+    // no transport emits them and nobody can witness them.
+    expect(MANUAL_OUTCOME_SIGNALS).toEqual(['replied', 'converted', 'no_response', 'unsubscribed']);
   });
 
   it('is a SUBSET of the ingestion contract — it invents nothing', () => {
@@ -239,7 +248,7 @@ describe('W09D — the pilot signal vocabulary', () => {
   // `MANUAL_OUTCOME_SIGNALS`, so it silently stopped covering `meeting_booked`
   // when the constant shrank; naming it here is what keeps the refusal asserted
   // instead of merely unexercised.
-  it.each(['meeting_booked', 'unsubscribed', 'rejected', 'delivered', 'bounced', 'opened', 'clicked'])(
+  it.each(['meeting_booked', 'rejected', 'delivered', 'bounced', 'opened', 'clicked'])(
     'refuses %s — out of pilot scope, and never reaches ingestion',
     async (signal) => {
       const res = await call({ signal });
@@ -248,6 +257,16 @@ describe('W09D — the pilot signal vocabulary', () => {
       expect(ingestFeedback).not.toHaveBeenCalled();
     },
   );
+
+  it('W1-B — ACCEPTS unsubscribed and routes it to ingestion', async () => {
+    // The inverse of the refusal this list used to carry. Admitted only because
+    // `ingestFeedback` now writes the canonical restriction before reporting
+    // success; the refusal existed precisely while it did not.
+    const res = await call({ signal: 'unsubscribed' });
+    expect(res._status).not.toBe(400);
+    expect(ingestFeedback).toHaveBeenCalledTimes(1);
+    expect(ingestFeedback.mock.calls[0][0]).toMatchObject({ signal: 'unsubscribed' });
+  });
 
   it('refuses an invented value', async () => {
     const res = await call({ signal: 'became_a_customer_probably' });

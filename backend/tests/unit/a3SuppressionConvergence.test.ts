@@ -270,14 +270,40 @@ describe('A3 — the reason mapping honours the canonical CHECK constraints', ()
 });
 
 describe('A3 — no second governance engine', () => {
-  it('the suppression seam calls mayContact and reimplements no rule', () => {
+  // PHASE 4A adapted this. It used to assert the literal `import { mayContact`
+  // in this module, which stopped being the right proxy once the call moved
+  // behind the shared canonical edge — the invariant held while the grep broke.
+  // The invariant is now asserted BEHAVIOURALLY: the seam reproduces rules it
+  // contains no code for, which it could only do by delegating.
+  it('the governance vocabulary is never re-spelled in the seam', () => {
     const src = require('node:fs').readFileSync(
       require('node:path').join(__dirname, '..', '..', 'services', 'execution', 'suppressionService.ts'), 'utf8',
     );
-    expect(src).toMatch(/import \{ mayContact/);
-    // The governance vocabulary is never re-spelled here; it is imported.
     for (const t of ['dnc_permanent', 'dnc_channel', 'bounce_hard']) {
       expect(src.match(new RegExp(`'${t}'`, 'g'))!.length).toBe(1);
     }
+    // No band number, ordering or gate arithmetic lives here.
+    expect(src).not.toMatch(/GATE_BAND|gate\s*[<>]=?\s*\d/);
+  });
+
+  it('BAND PRECEDENCE is obeyed although the seam implements no bands', async () => {
+    // A deferment (band 6) and a permanent do-not-contact (band 3) both apply.
+    // `mayContact` takes the lowest band; nothing in the seam knows that.
+    db.tables.contact_governance_records = [
+      govRow({ id: 'g-defer', governance_type: 'deferred', effective_until: '2099-01-01T00:00:00.000Z' }),
+      govRow({ id: 'g-dnc', governance_type: 'dnc_permanent' }),
+    ];
+
+    const r = await isSuppressed(ORG_A, 'email', TARGET);
+    expect(r.suppressed).toBe(true);
+    expect(r.reason).toBe('dnc_permanent');
+  });
+
+  it('campaign_exclusion stays INERT although the seam implements no bands', async () => {
+    // Band 9 is deliberately outside the evaluator's range. A seam with its own
+    // engine would almost certainly treat a governance row as a block.
+    db.tables.contact_governance_records = [govRow({ governance_type: 'campaign_exclusion' })];
+
+    expect((await isSuppressed(ORG_A, 'email', TARGET)).suppressed).toBe(false);
   });
 });
