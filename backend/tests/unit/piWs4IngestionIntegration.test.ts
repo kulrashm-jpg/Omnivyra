@@ -139,11 +139,44 @@ describe('WS-4 — the CRM unified_source finding (NOT an application defect)', 
     expect(migration).toContain('ADD COLUMN IF NOT EXISTS unified_source JSONB');
   });
 
-  it('the service is UNCHANGED — no correct code was removed to match a stale database', () => {
-    // Four writes remain: leads, canonical_leads, canonical_revenue_events and
-    // the in-memory adoptLead facade.
+  it('the CANONICAL unified_source writes are unchanged — no correct code was removed', () => {
+    // SUPERSEDED BY PI-INGEST-CONSOLIDATION-003-B-R1, deliberately and narrowly.
+    //
+    // WS-4 originally pinned FOUR writes: `leads`, `canonical_leads`,
+    // `canonical_revenue_events` and the in-memory `adoptLead` facade. Its
+    // reasoning — the code is correct, the database is stale — still holds for
+    // the three CANONICAL ones. They are untouched here, and
+    // `lib/leadIntelligence/adapters.ts` still reads `unified_source` off
+    // `canonical_leads`, so removing them would be exactly the mistake WS-4 was
+    // written to prevent.
+    //
+    // It no longer holds for the `leads` write. The direction taken is to retire
+    // the obsolete CRM writer rather than apply
+    // `20260620_unified_source_columns.sql` so that writer can keep operating —
+    // so the migration stays unapplied and the legacy write is gone. The count
+    // drops to three and is paired with the explicit negatives below, rather
+    // than this assertion simply being deleted.
     const lines = src.split('\n').filter((l: string) => /^\s*unified_source:/.test(l));
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(3);
+  });
+
+  it('003-B-R1: the CRM path no longer writes the legacy `leads` table', () => {
+    const code = src.split('\n').filter((l: string) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    expect(code).not.toContain("ownedDbTable('leads')");
+    expect(code).not.toContain('upsertLegacyLead');
+  });
+
+  it('003-B-R1: the CRM path no longer invokes the lead-intelligence trigger', () => {
+    const code = src.split('\n').filter((l: string) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    expect(code).not.toContain('onLeadEnrichmentChanged');
+    expect(code).not.toContain('IDENTITY_REQUIRED_FOR_LEAD');
+  });
+
+  it('the surviving canonical writes still set unified_source', () => {
+    const code = src.split('\n').filter((l: string) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    expect(code).toContain("ownedDbTable('canonical_leads')");
+    expect(code).toContain("ownedDbTable('canonical_revenue_events')");
+    expect(code).toContain("adoptLead('crm'");
   });
 
   it('WS-4 added no migration of its own for this', () => {

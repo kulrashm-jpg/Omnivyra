@@ -221,6 +221,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { error: updErr } = await supabase
         .from('engagement_messages')
         .update({ direction: 'outgoing', raw_payload: newPayload })
+        // ENG-004-CLOSE/G-04: `organizationId` is authoritative here — it was
+        // validated by enforceCompanyAccess above before any row was touched.
+        .eq('organization_id', organizationId)
         .eq('id', row.id);
       if (updErr) {
         console.warn('[backfill-self-signals] message reclassify failed', row.id, updErr.message);

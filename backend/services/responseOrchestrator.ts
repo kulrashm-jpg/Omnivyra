@@ -105,6 +105,7 @@ export async function orchestrateResponse(
   const { data: message } = await supabase
     .from('engagement_messages')
     .select('id, thread_id, platform_message_id')
+    .eq('organization_id', input.organization_id)
     .eq('id', input.message_id)
     .maybeSingle();
 

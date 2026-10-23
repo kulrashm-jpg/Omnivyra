@@ -84,18 +84,35 @@ async function runReplyIntelligenceAggregationWorkerImpl(startMs: number): Promi
     totalProcessed += rows.length;
 
     const msgIds = rows.map((r) => r.message_id);
+    // ENG-004/G-04. This worker is deliberately cross-tenant — it sweeps
+    // `response_performance_metrics` for every organization and keys its output by
+    // `organization_id` — so the parent lookup is scoped to the tenants PRESENT IN
+    // THIS BATCH rather than to one.
+    //
+    // The map key already carried thread_id, which made a cross-tenant reply fail
+    // to match by accident. `organization_id` is now in the predicate, in the
+    // projection and in the key, so the isolation is stated rather than inferred
+    // from a coincidence that a later refactor could remove.
+    const batchOrgIds = [...new Set(rows.map((r) => r.organization_id).filter(Boolean))];
     const { data: replyMessages } = await supabase
       .from('engagement_messages')
-      .select('id, thread_id, parent_message_id, content')
+      .select('id, thread_id, parent_message_id, content, organization_id')
+      .in('organization_id', batchOrgIds)
       .in('parent_message_id', msgIds);
 
     const replyByParentThread = new Map<string, { content: string | null }>();
     for (const m of replyMessages ?? []) {
-      const msg = m as { parent_message_id?: string; thread_id?: string; content?: string };
+      const msg = m as {
+        parent_message_id?: string;
+        thread_id?: string;
+        content?: string;
+        organization_id?: string;
+      };
       const parent = msg.parent_message_id;
       const tid = msg.thread_id;
-      if (parent && tid) {
-        const key = `${parent}|${tid}`;
+      const org = msg.organization_id;
+      if (parent && tid && org) {
+        const key = `${org}|${parent}|${tid}`;
         if (!replyByParentThread.has(key)) {
           replyByParentThread.set(key, { content: msg.content ?? null });
         }
@@ -103,7 +120,7 @@ async function runReplyIntelligenceAggregationWorkerImpl(startMs: number): Promi
     }
 
     for (const r of rows) {
-      const replyData = replyByParentThread.get(`${r.message_id}|${r.thread_id}`);
+      const replyData = replyByParentThread.get(`${r.organization_id}|${r.message_id}|${r.thread_id}`);
       const content = replyData?.content ?? null;
       const reply_category = classifyReplyCategory(content);
       const reply_pattern = normalizeReplyPattern(content);

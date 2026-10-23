@@ -34,6 +34,18 @@ export type IngestionSourceResult = {
   error?: string;
 };
 
+/**
+ * PI-INGEST-CONSOLIDATION-001-B — the legacy source this scheduler refuses.
+ *
+ * Exported so the fence can be asserted by name rather than by a duplicated
+ * string literal, and so a future re-homing workstream removing the fence has
+ * one symbol to delete.
+ */
+export const FENCED_LEGACY_SOURCE: IngestionSource = 'crm';
+
+/** The `details.reason` a fenced source reports. Distinct from every existing skip reason. */
+export const LEGACY_SOURCE_FENCED_REASON = 'legacy_crm_source_fenced';
+
 export type CompanyIngestionSummary = {
   companyId: string;
   sources: IngestionSourceResult[];
@@ -231,6 +243,41 @@ export async function runIngestionForCompany(params: {
     const results: IngestionSourceResult[] = [];
 
     for (const source of sources) {
+      // PI-INGEST-CONSOLIDATION-001-B — the legacy CRM source fence.
+      //
+      // The legacy CRM importer still owns side effects LI-4D does not
+      // reproduce (`leads`, `canonical_users`, `canonical_revenue_events`,
+      // touchpoints, `adoptLead`, provider governance and this run lifecycle),
+      // so it is NOT retired here. What is removed is its ability to run
+      // SILENTLY: production has no CRM integration, so `runCrmSource` would
+      // hand `ingestCrmData` an empty payload and `ingestCrmRows` would iterate
+      // nothing — while still metering a provider unit and recording a completed
+      // run. A dormant path that reports success is indistinguishable from one
+      // that imported zero rows, and ending that ambiguity is the whole purpose
+      // of this refusal.
+      //
+      // Placed at the TOP of the loop deliberately: before the run-key lookup,
+      // before `hasRunningIngestion` and before `beginIngestionRun`, so no
+      // ingestion run is created for a source that will not execute. Every entry
+      // point — `retryFailedIngestionForCompany` and
+      // `runIngestionForAllCompanies` included — reaches CRM through this one
+      // loop, so this is the entire fence rather than one of several.
+      //
+      // `success: false` is deliberate. The established skip reasons
+      // (`already_running`, `duplicate_idempotency_key`) report `success: true`
+      // because the work genuinely is, or already was, done. A fenced source did
+      // neither, and reporting success would tell the caller that CRM ingestion
+      // happened.
+      if (source === FENCED_LEGACY_SOURCE) {
+        results.push({
+          source,
+          success: false,
+          skipped: true,
+          details: { reason: LEGACY_SOURCE_FENCED_REASON },
+        });
+        continue;
+      }
+
       const integration = integrations.get(source);
       const runKey = buildRunKey(source, companyId, overrides);
       const existingRun = await findIngestionRunByKey({

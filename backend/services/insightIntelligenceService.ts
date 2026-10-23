@@ -132,6 +132,7 @@ export async function generateInsights(organizationId: string): Promise<{
       const { data: messages } = await supabase
         .from('engagement_messages')
         .select('id, thread_id, content, author_id')
+        .eq('organization_id', organizationId)
         .in('id', messageIds);
 
       const authorIds = [...new Set((messages ?? []).map((row: { author_id?: string }) => row.author_id).filter(Boolean))];

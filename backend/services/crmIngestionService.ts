@@ -10,8 +10,6 @@ import {
 import { resolveUnifiedPerson, type IdentityExternalKeys } from './identityResolutionService';
 import { bulkCreateTouchpoints, type TouchpointInput } from './touchpointService';
 import { normalizeSource, type UnifiedSource } from './sourceNormalizationService';
-import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
-import { onLeadEnrichmentChanged } from './leadIntelligenceActivation';
 import { ownedDbTable } from '../db/writeOwner';
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 import { ingestSourceRecord } from './prospectIdentity/ingestionBoundary';
@@ -94,53 +92,39 @@ function buildCrmIdentityExternalKeys(row: CrmLeadRecord): IdentityExternalKeys 
   };
 }
 
-async function upsertLegacyLead(companyId: string, row: CrmLeadRecord, unifiedSource: UnifiedSource): Promise<void> {
-  if (!row.email?.trim()) return;
-  const source = row.source?.trim() || 'crm';
-  const externalLeadKey = row.externalId || hashKey(companyId, row.email, source);
-  const { data: existing } = await ownedDbTable('leads')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('email', row.email)
-    .eq('source', source)
-    .limit(1);
-
-  if (existing && existing.length > 0) {
-    return;
-  }
-
-  const unifiedPersonId = await ensureUnifiedPerson({
-    email: row.email,
-    phone: row.phone,
-    companyId,
-  });
-
-  if (!unifiedPersonId) {
-    throw new Error('IDENTITY_REQUIRED_FOR_LEAD');
-  }
-
-  const { data: inserted } = await ownedDbTable('leads').insert({
-    company_id: companyId,
-    name: row.name || row.email,
-    email: row.email,
-    phone: row.phone ?? null,
-    source,
-    unified_source: unifiedSource,
-    unified_person_id: unifiedPersonId,
-    metadata: {
-      ...(row.metadata ?? {}),
-      external_lead_key: externalLeadKey,
-      lead_status: row.status ?? null,
-      revenue: row.revenue ?? null,
-    },
-    created_at: row.createdAt ?? new Date().toISOString(),
-  }).select('id').single();
-
-  // INT-002 Wave 1: CRM data entering the lead row IS an enrichment change —
-  // fire-and-forget regeneration through the designated enrichment hook.
-  const newLeadId = inserted && typeof (inserted as { id?: unknown }).id === 'string' ? (inserted as { id: string }).id : null;
-  if (newLeadId) onLeadEnrichmentChanged(companyId, newLeadId);
-}
+/**
+ * PI-INGEST-CONSOLIDATION-003-B-R1 — `upsertLegacyLead` was retired here.
+ *
+ * CRM ingestion no longer writes the legacy `leads` table. `leads` itself is NOT
+ * retired: it is the WEB-FORM / visitor-attribution entity, written by
+ * `leadService` from website capture and inbound webhooks and read by
+ * `GET /api/leads` and seven analytics repositories. Only the CRM writer is gone.
+ *
+ * ─── THE DECISION THIS ENCODES ────────────────────────────────────────────
+ * The write named `unified_source`, a column production's `leads` does not have
+ * because `20260620_unified_source_columns.sql` was never applied. WS-4 read
+ * that as "apply the migration". The direction taken instead is to retire the
+ * obsolete CRM writer rather than restore legacy schema so it can keep running —
+ * so that migration stays unapplied, deliberately.
+ *
+ * The same column on the CANONICAL tables is untouched and still required:
+ * `upsertCanonicalLead`, `upsertRevenueEvent` and the `adoptLead` facade all
+ * still set it, and `lib/leadIntelligence/adapters.ts` still reads it off
+ * `canonical_leads`. Only the `leads` write was obsolete.
+ *
+ * ─── WHAT WENT WITH IT, DELIBERATELY ──────────────────────────────────────
+ * The dedupe on (company_id, email, source); a SECOND identity call
+ * (`ensureUnifiedPerson`) made after `resolveUnifiedPerson` had already run; the
+ * `IDENTITY_REQUIRED_FOR_LEAD` throw that gated the counter below; and the
+ * `onLeadEnrichmentChanged` trigger. None is recreated elsewhere.
+ *
+ * ─── THE TRIGGER IS NOT LOST ──────────────────────────────────────────────
+ * `onLeadEnrichmentChanged` and `triggerLeadIntelligence` remain live:
+ * `leadCaptureService`, the three `pages/api/leads` entry points and
+ * `website-events/track` still drive lead and visitor-session intelligence. The
+ * CRM call was the only one whose snapshot would have been empty anyway — it is
+ * rooted on `leads.visitor_session_id`, which a CRM-imported contact never has.
+ */
 
 async function upsertCanonicalUser(
   companyId: string,
@@ -431,8 +415,12 @@ async function ingestCrmRows(
       ...row,
     });
 
-    await upsertLegacyLead(companyId, row, unifiedSource);
-
+    // 003-B-R1: `leadsInserted` now counts CANONICAL CRM records processed. It
+    // previously also depended on the legacy helper not throwing
+    // `IDENTITY_REQUIRED_FOR_LEAD`, so a row failing that legacy identity check
+    // went uncounted; with the helper gone it reflects the canonical work only.
+    // The name is left unchanged deliberately — renaming reaches into
+    // `CrmIngestionResult` and its consumers, which is wider than this slice.
     leadsInserted += 1;
 
     if (options.emitTouchpoints) {

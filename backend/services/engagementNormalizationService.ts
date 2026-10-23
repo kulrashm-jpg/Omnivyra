@@ -266,7 +266,7 @@ export async function syncFromPostComments(
     if (msgId) {
       synced++;
       void import('./engagementConversationIntelligenceService')
-        .then(({ analyzeMessage }) => analyzeMessage(msgId))
+        .then(({ analyzeMessage }) => analyzeMessage(msgId, context.organization_id))
         .catch((err) => console.warn('[engagementNormalization] analyzeMessage async error', err?.message));
 
       if (context.organization_id) {

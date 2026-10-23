@@ -422,6 +422,11 @@ export async function generateReplySuggestions(
   const { data: message, error: msgError } = await supabase
     .from('engagement_messages')
     .select('id, thread_id, content, platform, message_type, parent_message_id')
+    // ENG-004/G-04: the tenant is in the PREDICATE now, not checked afterwards.
+    // Another tenant's message is invisible to this query rather than fetched and
+    // then rejected — the distinction matters because the rejection below is one
+    // edit away from being deleted, while a WHERE clause is not.
+    .eq('organization_id', organization_id)
     .eq('id', message_id)
     .maybeSingle();
 
@@ -478,9 +483,16 @@ export async function generateReplySuggestions(
   let parentCommentText: string | null = null;
   let parentCommentAuthor: string | null = null;
   if (message.parent_message_id) {
+    // ENG-004/G-04 — THE inbound-preparation invariant. `parent_message_id` is a
+    // pointer this process did not necessarily mint: once inbound email exists it
+    // will be derived from `In-Reply-To`/`References`, which an external sender
+    // controls. This content goes straight into an AI prompt, so an unscoped
+    // parent lookup is a cross-tenant content leak with an exfiltration path.
+    // `organization_id` is the authorized caller's, never the message's.
     const { data: parentRow } = await supabase
       .from('engagement_messages')
       .select('content, raw_payload')
+      .eq('organization_id', organization_id)
       .eq('id', message.parent_message_id)
       .maybeSingle();
     parentCommentText = parentRow?.content ?? null;
@@ -518,6 +530,11 @@ export async function generateReplySuggestions(
       supabase
         .from('engagement_messages')
         .select('id, direction, raw_payload, author_id')
+        // ENG-004-CLOSE/G-04: `ids` come from the thread's own messages, so this
+        // was tenant-safe transitively; the predicate makes it so explicitly, and
+        // `organization_id` is the authorized caller's — the same one passed to
+        // getOrgAuthorIds on the line below.
+        .eq('organization_id', organization_id)
         .in('id', ids),
       getOrgAuthorIds(organization_id).catch(() => new Set<string>()),
     ]);

@@ -96,6 +96,9 @@ async function runResponseStrategyLearningWorkerImpl(startMs: number): Promise<{
     const { data: messages } = await supabase
       .from('engagement_messages')
       .select('id, content')
+      // ENG-004-CLOSE/G-04: this worker is deliberately cross-tenant, so the
+      // sweep is bounded to the tenants in THIS batch rather than to one.
+      .in('organization_id', orgIds)
       .in('id', msgIds);
 
     const contentByMsg = new Map<string, string>();

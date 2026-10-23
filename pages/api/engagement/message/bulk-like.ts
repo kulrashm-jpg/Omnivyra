@@ -109,6 +109,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { data: msgs } = await supabase
         .from('engagement_messages')
         .select('id, platform')
+        .eq('organization_id', organizationId)
         .in('id', ids);
       messageIds = (msgs ?? []).map((m: { id: string; platform?: string }) => ({
         id: m.id,
@@ -128,6 +129,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { data: msgs } = await supabase
         .from('engagement_messages')
         .select('id, thread_id, platform')
+        .eq('organization_id', organizationId)
         .in('thread_id', validThreadIds)
         .order('platform_created_at', { ascending: false });
       const seenThreads = new Set<string>();
@@ -151,6 +153,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         ? await supabase
             .from('engagement_messages')
             .select('id, thread_id, platform_message_id, post_comment_id, platform')
+            .eq('organization_id', organizationId)
             .in('id', idList)
         : { data: [] as any[] };
     const messageById = new Map(

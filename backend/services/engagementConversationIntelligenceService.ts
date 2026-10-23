@@ -100,9 +100,19 @@ function ruleBasedAnalysis(content: string, sentimentScore: number | null): Mess
  * Analyze a single message and store intelligence.
  * Updates engagement_thread_intelligence for the thread.
  */
-export async function analyzeMessage(message_id: string): Promise<void> {
+export async function analyzeMessage(message_id: string, organization_id: string): Promise<void> {
+  // ENG-004-CLOSE/G-04: the tenant is a REQUIRED parameter. This function had no
+  // way to know it before, so its lookup could resolve any tenant's message. It
+  // fails closed rather than falling back to an unscoped read — an analytics pass
+  // that is skipped is recoverable, a cross-tenant read is not.
+  if (typeof organization_id !== 'string' || organization_id.trim() === '') {
+    console.warn('[engagementConversationIntelligence] refusing to analyze without a tenant', message_id);
+    return;
+  }
+
   const { data: message, error: msgError } = await ownedDbTable('engagement_messages')
     .select('id, thread_id, content, author_id, platform, sentiment_score')
+    .eq('organization_id', organization_id)
     .eq('id', message_id)
     .maybeSingle();
 

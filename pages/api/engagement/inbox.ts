@@ -169,6 +169,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { data: latestMsgs } = await supabase
         .from('engagement_messages')
         .select('id, thread_id, platform, platform_message_id, message_type, direction, content, author_id, raw_payload')
+        .eq('organization_id', organizationId)
         .in('id', latestMessageIds);
       (latestMsgs ?? []).forEach(
         (m: { id: string; thread_id: string; platform: string | null; platform_message_id: string | null; message_type: string; direction: string | null; content: string | null; author_id: string | null; raw_payload: Record<string, unknown> | null }) => {
