@@ -68,12 +68,12 @@ jest.mock('../../services/gscIngestionService', () => ({
 }));
 
 const lifecycle = {
-  beginIngestionRun: jest.fn(async () => ({ id: 'run-1' })),
-  completeIngestionRun: jest.fn(async () => undefined),
-  findIngestionRunByKey: jest.fn(async () => null),
-  hasRunningIngestion: jest.fn(async () => false),
-  getRetryableFailedRuns: jest.fn(async () => []),
-  setDataSourceStatus: jest.fn(async () => undefined),
+  beginIngestionRun: jest.fn(async (..._a: unknown[]) => ({ id: 'run-1' })),
+  completeIngestionRun: jest.fn(async (..._a: unknown[]) => undefined),
+  findIngestionRunByKey: jest.fn(async (..._a: unknown[]) => null),
+  hasRunningIngestion: jest.fn(async (..._a: unknown[]) => false),
+  getRetryableFailedRuns: jest.fn(async (..._a: unknown[]) => []),
+  setDataSourceStatus: jest.fn(async (..._a: unknown[]) => undefined),
 };
 jest.mock('../../services/ingestionRunService', () => ({
   __esModule: true,

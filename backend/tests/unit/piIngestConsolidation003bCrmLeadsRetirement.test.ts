@@ -18,14 +18,14 @@
 type Op = { table: string; op: string };
 const ops: Op[] = [];
 const calls = {
-  resolveUnifiedPerson: jest.fn(async () => ({ unifiedPersonId: 'person-1' })),
-  ingestSourceRecord: jest.fn(async () => ({ ok: true })),
+  resolveUnifiedPerson: jest.fn(async (..._a: unknown[]) => ({ unifiedPersonId: 'person-1' })),
+  ingestSourceRecord: jest.fn(async (..._a: unknown[]) => ({ ok: true })),
   adoptLead: jest.fn(),
-  bulkCreateTouchpoints: jest.fn(async () => undefined),
-  authorizeProviderCall: jest.fn(() => ({ allowed: true })),
+  bulkCreateTouchpoints: jest.fn(async (..._a: unknown[]) => undefined),
+  authorizeProviderCall: jest.fn((..._a: unknown[]) => ({ allowed: true })),
   recordProviderUsage: jest.fn(),
   onLeadEnrichmentChanged: jest.fn(),
-  ensureUnifiedPerson: jest.fn(async () => 'person-1'),
+  ensureUnifiedPerson: jest.fn(async (..._a: unknown[]) => 'person-1'),
 };
 
 /**

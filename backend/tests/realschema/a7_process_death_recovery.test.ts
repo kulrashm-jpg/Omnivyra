@@ -234,6 +234,12 @@ async function row(id: string): Promise<Record<string, unknown>> {
 /** The ONLY safe reading. `provider_called` is deliberately not consulted. */
 const safeToCall = (r: Record<string, unknown>): boolean => r.provider_call_state === 'not_called';
 
+// One enclosing describe so this file's afterAll runs BEFORE the harness's
+// root-level afterAll(db.end) from ./setup (jest runs nested afterAll hooks
+// before root ones; root ones run in declaration order, and setup's is first).
+// Without it, the cleanup below hits "Client was closed and is not queryable".
+describe('A7 — process-death recovery', () => {
+
 beforeAll(async () => {
   await seedTenants();
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'a7-death-'));
@@ -411,3 +417,5 @@ describe('A7 — a survivor recovers the dead worker\'s attempt', () => {
     expect(rows[0].n).toBe(0);
   });
 });
+
+}); // A7 — process-death recovery
