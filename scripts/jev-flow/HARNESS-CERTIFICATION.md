@@ -54,6 +54,7 @@ deliberate deferrals (N-14 enforcement / B1, N-18 / B2). H-13 is a FAIL.
 | H-12 | T1 / T2 / T3 gates → authority boundaries | human authority | human; Jira roles | Jira Verify (41) conditions; Release (61) Release Approvers | Gate Result, Verified ACs | none (cannot write gate fields or transition) | T1, T2, T3 | `jevJiraIntegration.test.ts: 15. the parent Story (Gate Result) is never written`; `jevFlowIntake.test.ts: 15. a gate field on a create form fails closed and nothing is created`; `jevJiraIntegration.test.ts: 16/17. the integration has no transition path` | PASS | S2:jev.unit; sha256:55df064f31399df81991e09239018c9b91328762d194328371da0ac9c50a9210; sha256:51a65c56511a298ab74cca9cbdc235d9aae65fe82e15cf5914eb3635464f35fe | a39402e8 | Live: PASS (snapshots). Story Verify needs Gate Result PASS and every sub-task Verified; Workstream and Epic Verify need Gate Result PASS. T2/T3 content is human judgment with no deterministic link. Findings F-3 and F-4. |
 | H-13 | integration / release / deployment → human-only authority | human authority | human | merge; Jira Integrate (51) / Release (61); `npm run deploy:prod`; Railway deploy on merge | none tied to a Story | none | integration, release, deployment | `jevFlowCli.test.ts: registers no hooks and has no Jira transition / write path of its own`; `jevJiraIntegration.test.ts: 16/17. the integration has no transition path` | FAIL | sha256:55df064f31399df81991e09239018c9b91328762d194328371da0ac9c50a9210; sha256:51a65c56511a298ab74cca9cbdc235d9aae65fe82e15cf5914eb3635464f35fe | — | Preserved finding F-1: Integrate (51) has no transition condition on any OMNI issue type, so any Engineer can integrate a Verified item. Release (61) is limited to Release Approvers. Deployment is not gated in code (N-18 DEFERRED). JEV and gov hold no integration, release or deploy path, and the service identities see zero transitions (N-12/N-13). The boundary is human by Jira role and convention, not enforced. Not changed here: Jira configuration is out of scope. |
 | H-14 | gov admit → governed session admission | read-only admission in front of the entries | the asking session, identified from agreeing evidence; the user decides | `gov admit [--worktree] [--session] [--base]` | identity only when the injected session id, the registry record, a live pid and the session pipe agree; intake’s own classifier; nothing written | none | an explicit yes before the printed command is run | `jevFlowAdmission.test.ts: one proven live session + a clean branch with no Story → NEW_WORK, prints (never runs) gov intake --intent`; `jevFlowAdmission.test.ts: a real governed binding (gov attach) → GOVERNED_RESUME with the packet step`; `jevFlowAdmission.test.ts: cmdAdmit has no write, bind, store, audit, Jira-write, JEV, git-write or process surface` | PASS | S4:jev.unit | S4 HEAD | OMNI-38. Live: PASS 2026-10-09, read-only, in session 26b18a5f: GOVERNED_RESUME on OMNI-38; `--session` naming another live session and a forged id both refused SESSION_MISMATCH; GOV_HOME and refs byte-identical. The actual process start is not compared on Windows (F-9). |
+| H-15 | gov reconcile → read-only per-AC reconciliation | read-only continuation (dry run) | evidence + Jira read by the reader identity; a human applies every proposal | `gov reconcile [--story OMNI-n]...` | each AC against its own registry item; six freshness dimensions; integrity re-hash of every stored bundle; a deterministic change-set hash; nothing written | none: the JEV verdict is shown as advisory and never changes a state or proposal | a human records or clears every proposed Jira value | `jevFlowCli.test.ts: after verify with nothing recorded in Jira: RECORD_RESULT proposed for the deterministic AC, HUMAN_DECISION for the judgment AC; writes nothing`; `jevFlowCli.test.ts: Jira already matching the computed state → NO_OP, no proposed change`; `jevFlowReconcile.test.ts: two runs over an unchanged world give the same report and change-set hash; GOV_HOME is byte- and mtime-identical` | PASS | S5:jev.unit | S5 HEAD | OMNI-44. Live: NOT RUN. Hermetic tests with injected Jira and git ports; no live Jira read has been recorded. |
 
 ## Negative / bypass certification
 
@@ -81,6 +82,9 @@ deliberate deferrals (N-14 enforcement / B1, N-18 / B2). H-13 is a FAIL.
 | N-20 | admission: forged session id | refusal | gov admit | `gov admit --session <uuid>` | an explicit id must be a live, unique registry session (same strict validation) | none | — | `jevFlowAdmission.test.ts: with no self evidence at all, --session gets the same live-registry validation`; `jevFlowAdmission.test.ts: explicit --session with no self evidence follows the same live-registry validation` | PASS | S4:jev.unit | S4 HEAD | OMNI-38. A forged, stale or reused-pid id is refused. |
 | N-21 | admission: forked session | refusal | gov admit + intake classifier | `gov admit [--session <origin>]` | a session may only admit itself; the origin’s binding refuses the fork (DUPLICATE_SESSION) | none | — | `jevFlowAdmission.test.ts: --session equal to the proven self is accepted; any other session is refused (forks gain no authority)`; `jevFlowAdmission.test.ts: a forked session (its own id) on its origin` | PASS | S4:jev.unit | S4 HEAD | OMNI-38. Owner decision: forks have no admission authority. |
 | N-22 | admission: user declines | zero trace | gov admit | `gov admit` | admission writes nothing and runs nothing; every CLI case byte-compares the repo, GOV_HOME and transcripts | none | the user’s yes or no | `jevFlowAdmission.test.ts: declining is the default: admission leaves zero trace (no ledger, proposal, audit, git or transcript change)` | PASS | S4:jev.unit | S4 HEAD | OMNI-38. Declining is simply not running the printed command. |
+| N-23 | reconcile: automatic application of a proposal | refusal | human (Jira) | `gov reconcile --apply` | no apply mode exists; `--apply` and stray arguments are usage 64 before any Jira read; static scan of reconcile.ts and lifecycle.ts finds no fs write, store, Jira write, JEV or process call | none | the human makes every proposed change | `jevFlowCli.test.ts: --apply does not exist (usage 64); stray arguments are usage 64; no Jira read happens`; `jevFlowReconcile.test.ts: reconcile.ts and lifecycle.ts have no write path: no fs writes, no ledger/evidence/packet store, no Jira write, no JEV, no apply` | PASS | S5:jev.unit | S5 HEAD | OMNI-44. Reconcile proposes; only a human applies. |
+| N-24 | stale evidence presented as current | refusal | gov lifecycle predicates | `gov reconcile` | any moved dimension (bundle hash, HEAD or a dirty tree, packet or Jira drift, registry digest, automation-policy digest, binding) makes the AC STALE whatever its result; Jira citing it gets INVALIDATE_STALE_EVIDENCE | none | a human clears or replaces the recorded values | `jevFlowLifecycle.test.ts: stale beats the item result: a FAILED item on stale evidence is STALE, not FAILED`; `jevFlowCli.test.ts: HEAD moved after Jira recorded the result → STALE, INVALIDATE_STALE_EVIDENCE proposed; stale evidence is never current`; `jevFlowReconcile.test.ts: Jira cites an older bundle at a previous HEAD → STALE on bundle hash + HEAD, INVALIDATE with the newer per-AC values` | PASS | S5:jev.unit | S5 HEAD | OMNI-44. Each of the six dimensions has its own lifecycle test case. |
+| N-25 | bundle-wide result assigned to an AC | refusal | gov submit + lifecycle predicates | `gov submit`, `gov reconcile` | each AC gets only its own registry item; a Judgment AC never receives a deterministic result; one recorded from a bundle is a CONFLICT | none | the human decides every Judgment AC | `jevFlowCli.test.ts: per-AC results: a failing item fails only the AC it proves; the Judgment AC never inherits a bundle-wide result`; `jevFlowLifecycle.test.ts: a Deterministic AC gets its own item; a Judgment AC never gets a bundle-wide PASS`; `jevFlowReconcile.test.ts: CONFLICT: a bundle-wide result was recorded on a Judgment AC (the old submit behaviour) → propose clearing it` | PASS | S5:jev.unit | S5 HEAD | OMNI-44. Before OMNI-44, `gov submit` printed the bundle-wide result for every AC, including Judgment ACs. |
 
 ## Bypass paths
 
@@ -104,6 +108,9 @@ it proves the asking session, classifies the work with intake’s classifier and
 ### Certified continuation paths
 
 `gov verify` (H-05), `gov judge` (H-06, boundary only), `gov submit` (H-07) and `gov check-merge` (H-08).
+`gov reconcile` (H-15, OMNI-44) is a read-only dry run with no apply mode. It evaluates each AC against
+its own registry item and six evidence-freshness dimensions, then proposes Jira changes that only a
+human makes (N-23 to N-25). Its authority boundary is `AUTOMATION-POLICY.md`.
 JEV stays mediated (H-09), write-back is limited to four fields (H-10), and BJC keeps deterministic
 precedence (H-11). `gov audit-branch` is new in S2 and is detection only.
 
@@ -126,6 +133,12 @@ S2 adds:
 - three judgeFlow branches in `jevFlowJudge.test.ts`: malformed item, duplicate ids, no result;
 - the T3 Evidence Reference (10078) refusal in `jevJiraIntegration.test.ts`;
 - this matrix's conformance test.
+
+S5 (OMNI-44) adds:
+
+- `jevFlowLifecycle.test.ts` (per-AC states, every freshness dimension; N-24, N-25);
+- `jevFlowReconcile.test.ts` (dispositions, idempotent change set, no write path; H-15, N-23 to N-25);
+- the `gov reconcile` and per-AC `gov submit` cases in `jevFlowCli.test.ts`.
 
 ### JEV boundary proof
 
@@ -174,7 +187,10 @@ T2 and T3 carry no deterministic link to evidence. They are human decisions reco
   required. The Epic Release requires both.
 - **F-4: Reopen transitions (81, 91) have no condition.**
 - **F-5: `gov submit` prints the bundle's Deterministic Result for Judgment ACs too.** It is a
-  presentation issue only, because the human decides the disposition.
+  presentation issue only, because the human decides the disposition. Addressed by OMNI-44 (N-25):
+  `gov submit` now prints each AC's own registry item and no deterministic result for a Judgment AC.
+  The finding stays listed because ACs recorded before OMNI-44 may still carry a bundle-wide result;
+  `gov reconcile` reports one on a Judgment AC as a CONFLICT for a human to clear.
 - **F-6: the binding does not prove which session did the work.**
   - OMNI-32 is bound to the session `gov start` minted (582b3622…). The implementation was carried out
     by another session, c1fb7752…, after the human handed it the packet.
@@ -198,6 +214,7 @@ T2 and T3 carry no deterministic link to evidence. They are human decisions reco
 - B2 / N-18: deployment is not Jira-gated.
 - B4: user-level plugin configuration is not inspected.
 - H-06: no live JEV run.
+- H-15: no live `gov reconcile` run against Jira; its proposals are applied by a human, and Jira does not enforce them.
 - F-1 to F-9 above.
 
 ### Deliberate deferrals
@@ -205,6 +222,7 @@ T2 and T3 carry no deterministic link to evidence. They are human decisions reco
 - **A1:** enforcement of governed entry (B1). Detection is delivered as `gov audit-branch`.
 - **A2(c):** deployment gating (N-18, B2).
 - **S4:** none. Session admission (H-14, N-19 to N-22) is delivered by OMNI-38; F-9 records its limit.
+- **S5:** none. Read-only reconciliation (H-15, N-23 to N-25) is delivered by OMNI-44. It proposes; it does not apply.
 
 ### Certification SHA
 
@@ -213,3 +231,4 @@ The certification SHA is the HEAD of branch `omni-32/harness-certification` at w
 output that a human copies into Jira Evidence References, and in `GOV_HOME/evidence/harness/PROGRESS.md`.
 It cannot be written into this file, because this file is part of the verified tree.
 `S4:<registry id>` and `S4 HEAD` mean the same for OMNI-38 (session admission): its own `gov verify` bundle and governed commit.
+`S5:<registry id>` and `S5 HEAD` mean the same for OMNI-44 (lifecycle predicates and read-only reconcile): its own `gov verify` bundle and governed commit.

@@ -29,6 +29,10 @@
  *   audit-branch --worktree <path> [--base <ref>]
  *                (read-only detection: classifies every commit in base..HEAD as governed,
  *                adoption baseline, malformed or ungoverned; writes nothing, blocks nothing)
+ *   reconcile    [--story OMNI-n]...
+ *                (read-only dry run: evaluates every AC of each governed Story in the ledger
+ *                against its own registry item and evidence freshness, compares Jira and
+ *                prints the change set only a HUMAN may apply; no apply mode, writes nothing)
  *
  * Explicit and user-invoked only: no background work, no automatic JEV, never
  * launches `claude`, never merges / releases / deploys, never moves a Jira
@@ -93,6 +97,8 @@ import {
 import { NEW_WORK_INPUT_CODES, readStrictSessions, resolveAdmittedSession, type SessionEvidencePort } from './admission';
 import { createSessionEvidencePort, parseNulList, parsePorcelainZ, readLiveSessions, type IntakeProbe, type LiveSession, type WorktreeState } from './intakeProbe';
 import { loadBundle } from './evidence';
+import { acSubmission } from './lifecycle';
+import { RECONCILE_AC_FIELDS, acEvidenceReferenceLine, runReconcile, type ReconcilePorts } from './reconcile';
 import { createJiraQuery, type JiraQuery } from './jiraQuery';
 import { runJudgeFlow } from './judgeFlow';
 import { buildPacket, detectStale, loadPacket, storePacket } from './packet';
@@ -104,6 +110,7 @@ import { buildResumeInstructions, buildStartCommand, findSessionFile, fingerprin
 import { defaultRunner, normalizeWorktree, runVerification, type CommandRunner } from './verify';
 import {
   ADOPTION_CLASSIFICATION,
+  AUTOMATION_POLICY_PATH,
   COMMIT_RE,
   SESSION_ID_RE,
   SHA256_REF_RE,
@@ -112,6 +119,7 @@ import {
   TRAILER_GOV_PACKET,
   govLayout,
   type AdoptionBaseline,
+  type EvidenceKind,
   type GitProbe,
   type GovLayout,
   type GovStatus,
@@ -168,6 +176,10 @@ export interface GovDeps {
   protectedPolicy: (registry: VerificationRegistry) => ProtectedPathPolicy;
   /** admit: read-only session evidence (registry, pid liveness, pipe namespace); every read throws on failure. */
   sessionEvidence: (env: Record<string, string | undefined>) => SessionEvidencePort;
+  /** reconcile: text of a repo file at a commit (read-only `git show`), or null when absent. */
+  readCommitFile: (worktree: string, commit: string, relPath: string) => Promise<string | null>;
+  /** reconcile: the automation policy in force (this tool's AUTOMATION-POLICY.md), or null when unreadable. */
+  automationPolicyText: () => string | null;
 }
 
 /**
@@ -236,6 +248,9 @@ const INTAKE_USAGE = [
 
 /** Read-only detection (kept separate: it governs no Story and needs no binding). */
 const AUDIT_USAGE = '  audit-branch --worktree <path> [--base <ref>]   (read-only: reports commits in base..HEAD that do not carry governance)';
+
+/** Read-only reconciliation (kept separate: it covers every Story in the ledger and writes nothing). */
+const RECONCILE_USAGE = '  reconcile   [--story OMNI-<n>]...   (read-only dry run: per-AC lifecycle vs Jira; prints the change set a human may apply)';
 
 /** Read-only admission (kept separate: it binds nothing and executes nothing it prints). */
 const ADMIT_USAGE = '  admit       [--worktree <path>] [--session <uuid>] [--base <ref>]   (read-only: identifies this session, classifies the work, prints the next gov command)';
@@ -327,6 +342,19 @@ export function defaultGovDeps(): Omit<GovDeps, 'registry'> {
     readUserEnv: readWindowsUserEnv,
     protectedPolicy: (registry) => loadProtectedPathPolicy(registry),
     sessionEvidence: (env) => createSessionEvidencePort(env),
+    readCommitFile: async (worktree, commit, relPath) => {
+      if (!COMMIT_RE.test(commit)) throw new Error('commit must be a full commit id');
+      if (!/^[A-Za-z0-9._/-]+$/.test(relPath) || relPath.split('/').includes('..')) throw new Error('invalid repo path');
+      const r = await runGit(['-C', path.resolve(worktree), 'show', `${commit}:${relPath}`]);
+      return r.code === 0 ? r.stdout : null;
+    },
+    automationPolicyText: () => {
+      try {
+        return fs.readFileSync(path.join(__dirname, path.basename(AUTOMATION_POLICY_PATH)), 'utf8');
+      } catch {
+        return null;
+      }
+    },
   };
 }
 
@@ -856,7 +884,7 @@ async function cmdJudge(run: Run, argv: string[]): Promise<number> {
   return finish(run, res.status, res.error ?? `judged ${res.per_ac.length} AC(s); JEV is advisory only`);
 }
 
-/** The single Evidence References line a human pastes into Jira (pinned format). */
+/** The bundle-wide Evidence References line (pinned format); submit prints the per-AC form (reconcile.ts acEvidenceReferenceLine). */
 export function evidenceReferenceLine(bundle: StoredEvidenceBundle): string {
   const b = bundle.bundle;
   return [`gov-evidence ${bundle.bundle_hash}`, `head ${b.head_commit.slice(0, 12)}`, ...b.items.map((i) => `${i.registry_id}=${i.result}`)].join(' ');
@@ -875,20 +903,101 @@ async function cmdSubmit(run: Run, argv: string[]): Promise<number> {
   }
   const stored = loadPacketOrFail(layout, story, bundle.bundle.packet_hash);
   const b = bundle.bundle;
-  const refs = evidenceReferenceLine(bundle);
   Object.assign(run.result, { packet_hash: stored.packet_hash, bundle_hash: bundle.bundle_hash, deterministic_result: b.deterministic_result });
+  const kinds = registryKinds(run.deps.registry);
+  const perAc: Array<Record<string, string>> = [];
   run.io.out(`gov submit ${story}: values for a HUMAN to record in Jira (gov writes nothing)`);
   run.io.out(`Evidence bundle: ${bundle.bundle_hash} (deterministic ${b.deterministic_result}, head ${b.head_commit}, packet ${stored.packet_hash})`);
   for (const ac of stored.packet.acceptance_criteria) {
+    // Per AC: its own registry item, never the bundle-wide result; a Judgment AC gets no deterministic result.
+    const sub = acSubmission(ac, bundle, stored, kinds);
     run.io.out('');
     run.io.out(`${ac.key} ${ac.ac_id} — Jira transition "Record Result":`);
     run.io.out(`  Kind: ${ac.kind}`);
-    run.io.out(`  Deterministic Result: ${b.deterministic_result}`);
-    run.io.out(`  Evidence Kind: ${ac.evidence_kind}`);
-    run.io.out(`  Evidence References: ${refs}`);
+    if (sub.kind === 'deterministic') {
+      run.io.out(`  Deterministic Result: ${sub.result} (${sub.item_id} ${sub.registry_id})`);
+      run.io.out(`  Evidence Kind: ${ac.evidence_kind}`);
+      run.io.out(`  Evidence References: ${acEvidenceReferenceLine({ ...sub, bundle_hash: bundle.bundle_hash, head_commit: b.head_commit })}`);
+      perAc.push({ ac_key: ac.key, registry_id: sub.registry_id, result: sub.result });
+    } else if (sub.kind === 'human') {
+      run.io.out(`  Deterministic Result: none — a human decides this AC (${sub.reason}); gov records no deterministic result for it`);
+      run.io.out(`  Evidence Kind: ${ac.evidence_kind}`);
+      perAc.push({ ac_key: ac.key, result: 'HUMAN_DECISION', reason: sub.reason });
+    } else {
+      run.io.out(`  Deterministic Result: none — no usable evidence item for this AC (${sub.reason})`);
+      run.io.out(`  Evidence Kind: ${ac.evidence_kind}`);
+      perAc.push({ ac_key: ac.key, result: 'INSUFFICIENT_EVIDENCE', reason: sub.reason });
+    }
   }
+  run.result.per_ac = perAc;
   run.io.out('');
   run.io.out('Verification / Disposition (Jira transition "Record Verification") is the human\'s decision; gov does not record it.');
+  return finish(run, 'OK');
+}
+
+function registryKinds(registry: VerificationRegistry): Record<string, EvidenceKind> {
+  return Object.fromEntries(registry.entries.map((e) => [e.id, e.evidence_kind]));
+}
+
+async function cmdReconcile(run: Run, argv: string[]): Promise<number> {
+  if (has(argv, '--apply')) return usage(run, 'reconcile is a dry run only: there is no --apply; a human makes every Jira change');
+  const only = flagsAll(argv, '--story');
+  if (only === null || only.some((k) => !STORY_KEY_RE.test(k))) return usage(run, 'reconcile takes only [--story OMNI-<n>]...');
+  const unknown = argv.filter((a, i) => a !== '--story' && !(i > 0 && argv[i - 1] === '--story'));
+  if (unknown.length > 0) return usage(run, `reconcile: unexpected argument(s): ${unknown.join(', ')}`);
+  run.result.dry_run = true;
+  const layout = layoutOf(run);
+  let stories: string[];
+  try {
+    stories = [...new Set(readBindings(layout).map((b) => b.story_key))];
+  } catch (err) {
+    throw new Outcome('INTEGRITY_FAILED', (err as Error).message);
+  }
+  if (only.length === 0 && stories.length === 0) {
+    run.result.stories = [];
+    return finish(run, 'OK', 'no governed Story in the ledger; nothing to reconcile');
+  }
+  const { credentials, client } = await preflightIdentity(run, false);
+  const query = run.deps.jiraQuery(credentials);
+  const ports: ReconcilePorts = {
+    layout,
+    registry: run.deps.registry,
+    git: run.deps.git,
+    readCommitFile: run.deps.readCommitFile,
+    currentPolicyText: run.deps.automationPolicyText(),
+    readiness: (key) => checkReadiness(key, { query, registry: run.deps.registry }),
+    readAc: (key) => client.getIssue(key, RECONCILE_AC_FIELDS),
+  };
+  const report = await runReconcile(only.length > 0 ? only : null, ports);
+
+  run.io.out('gov reconcile: DRY RUN — proposals for a HUMAN; gov writes nothing (no Jira, ledger, evidence or git change; no JEV)');
+  const counts: Record<string, number> = { NO_OP: 0, INVALIDATE_STALE_EVIDENCE: 0, CONFLICT: 0, INSUFFICIENT_EVIDENCE: 0, HUMAN_DECISION: 0 };
+  let proposed = 0;
+  for (const st of report.stories) {
+    run.io.out('');
+    run.io.out(`${st.story_key}: packet ${st.packet_hash ?? 'none'} · current evidence ${st.bundle_hash ?? 'none'}`);
+    for (const f of st.integrity_failures) run.io.out(`  INTEGRITY: ${f}`);
+    if (st.error) {
+      run.io.out(`  not reconciled: ${st.error}`);
+      continue;
+    }
+    const moved = st.freshness.filter((c) => !c.fresh).map((c) => c.dimension);
+    if (st.bundle_hash) run.io.out(`  freshness: ${moved.length === 0 ? 'current' : `STALE (${moved.join(', ')})`}`);
+    for (const a of st.per_ac) {
+      counts[a.disposition] += 1;
+      proposed += a.changes.length;
+      run.io.out(`  ${a.ac_key} ${a.ac_id}: ${a.state} → ${a.disposition} (${a.reasons.join(', ')})${a.jev_advisory ? ` · JEV advisory ${a.jev_advisory} (advisory only)` : ''}`);
+      for (const c of a.changes) run.io.out(`    human may set ${c.field}: ${c.current ?? '(empty)'} → ${c.proposed ?? '(clear)'}`);
+    }
+  }
+  run.io.out('');
+  run.io.out(`Change set: ${report.change_set_hash} (${proposed} proposed field change(s); dry run — nothing was written)`);
+  run.result.change_set_hash = report.change_set_hash;
+  run.result.counts = counts;
+  run.result.proposed_changes = proposed;
+  run.result.stories = report.stories.map((st) => ({ story: st.story_key, bundle_hash: st.bundle_hash, error: st.error, per_ac: st.per_ac.map((a) => ({ ac_key: a.ac_key, state: a.state, disposition: a.disposition })) }));
+  if (report.stories.some((st) => st.integrity_failures.length > 0)) return finish(run, 'INTEGRITY_FAILED', 'stored packet or evidence failed its integrity check; see INTEGRITY lines');
+  if (report.stories.some((st) => st.error !== null)) return finish(run, 'ERROR', 'at least one Story could not be reconciled; see "not reconciled" lines');
   return finish(run, 'OK');
 }
 
@@ -1667,6 +1776,7 @@ function usage(run: Run, message?: string): number {
   run.io.err(INTAKE_USAGE);
   run.io.err(AUDIT_USAGE);
   run.io.err(ADMIT_USAGE);
+  run.io.err(RECONCILE_USAGE);
   return GOV_EXIT_USAGE;
 }
 
@@ -1697,6 +1807,7 @@ export async function runGov(argv: string[], env: Record<string, string | undefi
     intake: cmdIntake,
     'audit-branch': cmdAuditBranch,
     admit: cmdAdmit,
+    reconcile: cmdReconcile,
   };
   const handler = verb ? verbs[verb] : undefined;
   if (!handler) return usage(run, verb ? `unknown verb: ${verb}` : undefined);

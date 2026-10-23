@@ -495,7 +495,8 @@ describe('2. no automatic JEV and no hook registration', () => {
 // ---------------------------------------------------------------- 3. no Jira write in the entry path
 
 describe('3. no Jira write in the entry path', () => {
-  const ENTRY = ['jiraQuery.ts', 'readiness.ts', 'packet.ts', 'binding.ts', 'session.ts'];
+  // lifecycle.ts / reconcile.ts (OMNI-44): the read-only reconcile path is held to the same no-write rule.
+  const ENTRY = ['jiraQuery.ts', 'readiness.ts', 'packet.ts', 'binding.ts', 'session.ts', 'lifecycle.ts', 'reconcile.ts'];
 
   it.each(ENTRY)('%s has no PUT/POST/PATCH/DELETE and no advisory/transition write', (f) => {
     const c = code(f);

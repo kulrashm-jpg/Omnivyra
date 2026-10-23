@@ -28,10 +28,10 @@ const PACKET_IDS = ['jev.unit', 'scripts.typecheck', 'backend-tests.typecheck'];
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const EXPECTED_IDS = [
-  ...Array.from({ length: 14 }, (_, i) => `H-${pad(i + 1)}`),
+  ...Array.from({ length: 15 }, (_, i) => `H-${pad(i + 1)}`),
   'H-06b',
   'H-06c',
-  ...Array.from({ length: 22 }, (_, i) => `N-${pad(i + 1)}`),
+  ...Array.from({ length: 25 }, (_, i) => `N-${pad(i + 1)}`),
   'B1',
   'B2',
   'B3',
@@ -86,7 +86,7 @@ describe('matrix structure', () => {
     expect(malformed).toEqual([]);
   });
 
-  it('every H, N and B row is present exactly once (H-01..H-14, H-06b/c, N-01..N-22, B1..B4)', () => {
+  it('every H, N and B row is present exactly once (H-01..H-15, H-06b/c, N-01..N-25, B1..B4)', () => {
     const ids = rows.map((r) => r.ID);
     expect([...ids].sort()).toEqual([...EXPECTED_IDS].sort());
     expect(new Set(ids).size).toBe(ids.length);
@@ -119,13 +119,13 @@ describe('PASS is backed by evidence that exists', () => {
     const refs = r['Evidence Hash'].split(';').map((s) => s.trim()).filter(Boolean);
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) {
-      const ok = /^sha256:[0-9a-f]{64}$/.test(ref) || (/^S[24]:/.test(ref) && PACKET_IDS.includes(ref.slice(3)));
+      const ok = /^sha256:[0-9a-f]{64}$/.test(ref) || (/^S[245]:/.test(ref) && PACKET_IDS.includes(ref.slice(3)));
       expect({ ref, ok }).toEqual({ ref, ok: true });
     }
   });
 
   it.each(pass.map((r) => [r.ID, r] as const))('%s names the commit that carries the boundary', (_id, r) => {
-    expect(r.Commit).toMatch(/^(S2 HEAD|S4 HEAD|[0-9a-f]{8,40})$/);
+    expect(r.Commit).toMatch(/^(S2 HEAD|S4 HEAD|S5 HEAD|[0-9a-f]{8,40})$/);
   });
 
   it('every H row reports live operation separately (Live: …) so PASS never silently means "observed live"', () => {
@@ -198,6 +198,33 @@ describe('preserved findings cannot be quietly upgraded', () => {
     }
     expect(row('H-14').Notes).toMatch(/F-9/);
     expect(DOC).toMatch(/\n- \*\*F-9: `gov admit` does not compare the actual process start/);
+  });
+});
+
+describe('OMNI-44 rows (read-only reconcile)', () => {
+  it('H-15 and N-23..N-25 are PASS only on the OMNI-44 lifecycle / reconcile / CLI tests and S5 evidence', () => {
+    const own = ['jevFlowLifecycle.test.ts', 'jevFlowReconcile.test.ts', 'jevFlowCli.test.ts'];
+    for (const id of ['H-15', 'N-23', 'N-24', 'N-25']) {
+      const r = row(id);
+      expect({ id, result: r.Result, evidence: r['Evidence Hash'], commit: r.Commit }).toEqual({ id, result: 'PASS', evidence: 'S5:jev.unit', commit: 'S5 HEAD' });
+      const cited = citations(r['Negative Test']);
+      expect({ id, own: cited.length > 0 && cited.every((c) => own.includes(c.file)) }).toEqual({ id, own: true });
+      expect(r.Notes).toMatch(/OMNI-44/);
+    }
+  });
+
+  it('H-15 does not claim a live Jira run, and reconcile is never described as applying anything', () => {
+    expect(row('H-15').Notes).toMatch(/Live: NOT RUN/);
+    expect(row('N-23').Notes).toMatch(/only a human applies/);
+  });
+
+  it('the automation policy exists and states the boundaries the rows rely on', () => {
+    const policy = fs.readFileSync(path.join(REPO, 'scripts', 'jev-flow', 'AUTOMATION-POLICY.md'), 'utf8').replace(/\r\n/g, '\n');
+    for (const heading of ['## Permitted automation', '## Prohibited side effects', '## Stale evidence', '## Human decision boundaries', '## Integrate and Release boundaries']) {
+      expect(policy).toContain(`\n${heading}\n`);
+    }
+    expect(policy).toMatch(/has no apply mode/);
+    expect(policy).toMatch(/Jira does not enforce this rule/);
   });
 });
 

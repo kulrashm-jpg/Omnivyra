@@ -52,10 +52,11 @@ gate, merge, release, deploy) to a human.
 | `gov packet --story OMNI-n --worktree <path> [--regenerate]` | Displays the bound packet; reports `STALE` (exit 12) when Jira or the registry changed. `--regenerate` stores a fresh packet for the same base and re-binds the same session. | `GOV_HOME` with `--regenerate` |
 | `gov verify --story OMNI-n --worktree <path>` | Runs the Story's registry commands and the scope check on a clean, committed HEAD; stores the evidence bundle; prints its hash. | `GOV_HOME` |
 | `gov judge --story OMNI-n --worktree <path> --evidence <sha256:…> --invoked-by <human\|claude-code>:<id> [--write-back] [--model <id>]` | BJC + bounded JEV advisory per AC. `--write-back` writes only the four advisory fields (human-run). Never transitions Jira. | `GOV_HOME`; Jira advisory fields with `--write-back` |
-| `gov submit --story OMNI-n --evidence <sha256:…> [--worktree <path>]` | Prints the values a **human** records in Jira. | nothing |
+| `gov submit --story OMNI-n --evidence <sha256:…> [--worktree <path>]` | Prints the values a **human** records in Jira, **per AC**: each Deterministic AC gets its own registry item's result and a per-AC Evidence References line; a Judgment AC gets no deterministic result. | nothing |
 | `gov check-merge --story OMNI-n --worktree <path> --evidence <sha256:…>` | Deterministic merge gate for a human or CI. Fails closed. Never merges. | nothing |
 | `gov audit-branch --worktree <path> [--base <ref>]` | Read-only detection of commits in base..HEAD that do not carry governance (see *Detection*). Blocks nothing. | nothing |
 | `gov admit [--worktree <path>] [--session <uuid>] [--base <ref>]` | Read-only admission: identifies which live Claude Code session is asking from agreeing evidence, classifies the work with the intake classifier and prints the next gov command (see *Session admission*). Runs nothing it prints. | nothing |
+| `gov reconcile [--story OMNI-n]...` | Read-only dry run over every governed Story in the ledger (or the ones named): evaluates each AC against its own registry item and every evidence-freshness dimension, compares Jira (reader identity) and prints the change set only a human may apply (see *Reconcile*). No apply mode. | nothing |
 
 Exit codes: `0` OK · `10` NOT_READY · `11` REFUSED · `12` STALE · `13` INTEGRITY_FAILED ·
 `14` VERIFICATION_FAILED · `15` SCOPE_VIOLATION · `16` JUDGMENT_UNAVAILABLE · `64` usage · `70` ERROR.
@@ -83,7 +84,8 @@ Exit codes: `0` OK · `10` NOT_READY · `11` REFUSED · `12` STALE · `13` INTEG
    ```
 5. `gov verify` → evidence bundle hash (zero commits after the base is allowed: the base itself is verified).
 6. Optional: `gov judge` for JEV advisory per AC (`--write-back` only when a human runs it).
-7. `gov submit` prints values; a human runs Record Result and Record Verification in Jira.
+7. `gov submit` prints per-AC values; a human runs Record Result and Record Verification in Jira.
+   `gov reconcile` (any time, read-only) shows whether what Jira records still matches fresh evidence.
 8. `gov check-merge` (human or CI) → the human merges. Integration, release and deployment stay human.
    An evidence-only Story whose work is already on `main` (a back-fill) has nothing to merge:
    it ends at step 7, and `check-merge` correctly refuses a new-task binding with no governed commit.
@@ -418,6 +420,51 @@ is PASS; scope is ok; every changed protected path is under an exact reviewed au
 
 Any mismatch, ambiguity or git error fails closed (exit 13). check-merge never merges.
 
+## Reconcile: `gov reconcile`
+
+```
+gov reconcile [--story OMNI-n]...     # default: every Story in the binding ledger
+```
+
+A read-only dry run. `scripts/jev-flow/AUTOMATION-POLICY.md` is the authority for what it may and may
+not do. For each governed Story (latest binding in the ledger) it reads the following:
+
+- the bound packet;
+- Jira readiness and each AC (reader identity);
+- the governed worktree's HEAD and cleanliness;
+- every stored evidence bundle, each re-hashed;
+- the automation policy in force, and the one at the evidence's HEAD.
+
+The pure predicates in `lifecycle.ts` then evaluate **each AC on its own**:
+
+- **Mapping:** the AC is mapped to its registry id. The source is the `Registry check <id> passes`
+  statement that `gov intake` writes, or else the unique packet id producing the AC's evidence kind.
+  An ambiguous mapping goes to a human and is never guessed.
+- **State:** one of `VERIFIABLE`, `FAILED`, `STALE`, `INSUFFICIENT_EVIDENCE`, `NEEDS_HUMAN` or `CONFLICT`.
+- **Freshness:** evidence is current only while all six identity dimensions match: bundle hash,
+  governed HEAD with a clean tree, packet hash (the packet must also still match Jira),
+  verification-registry digest, automation-policy digest, and the session/Story binding. Missing
+  evidence never passes, and stale evidence is never current.
+
+`reconcile.ts` compares the result with what Jira records and gives each AC one disposition:
+
+| Disposition | Meaning | Proposed Jira change (human only) |
+|---|---|---|
+| `NO_OP` | Jira already matches the computed state | none |
+| `INVALIDATE_STALE_EVIDENCE` | Jira cites evidence that is no longer current | clear it, or replace it with fresh per-AC values; reset a recorded Verification |
+| `CONFLICT` | Jira and the evidence disagree, or the evidence contradicts itself | none: a human investigates |
+| `INSUFFICIENT_EVIDENCE` | nothing current to record, and Jira claims nothing | none: run `gov verify` |
+| `HUMAN_DECISION` | Judgment AC, an unmappable AC, or a fresh result waiting to be recorded | the Record Result values, if any |
+
+The proposed change set is deterministic. It has no timestamps, and its `change_set_hash` is identical
+for an unchanged world, so re-running reconcile is idempotent. Reconcile writes nothing: no Jira field,
+ledger record, evidence, packet, git or JEV call. The JEV verdict in Jira is shown as advisory and
+never changes a state or a proposal. Exit codes: `0` (report produced), `13` (a stored packet or
+bundle failed its integrity check), `11` (Jira identity refused), `70` (a Story could not be read),
+`64` (usage, including any `--apply`).
+
+Changing `AUTOMATION-POLICY.md` changes its digest, which makes earlier evidence STALE by design.
+
 ## Detection: `gov audit-branch`
 
 ```
@@ -459,6 +506,7 @@ preserved findings cannot be quietly upgraded. The harness is governed for work 
 
 - Hooks, `claude-jev` routing, automatic or background JEV / gov invocation.
 - Invoking JEV other than through `gov judge`; `--write-back` run by Claude.
+- Applying a `gov reconcile` proposal by any automated path (reconcile has no apply mode).
 - Any Jira transition, Record Result or Record Verification by gov or Claude.
 - Merging, releasing or deploying by gov.
 - Shell text in Verification Requirements; unreviewed registry entries.
