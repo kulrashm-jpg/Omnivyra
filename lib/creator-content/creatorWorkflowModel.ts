@@ -116,8 +116,12 @@ export type SavedBlockReference = {
  * Read-only: no write path, storage, or schema is changed.
  */
 export function resolveSavedAssetMedia(row: Record<string, unknown>): string[] {
+  // De-duplicated, first occurrence kept: rows persisted before the
+  // extractMediaUrls fix list a deck's first slide twice (`[url, ...files]`).
   const arr = (v: unknown): string[] =>
-    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : [];
+    Array.isArray(v)
+      ? [...new Set(v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0))]
+      : [];
   const meta = (row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata))
     ? row.metadata as Record<string, unknown>
     : {};

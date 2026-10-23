@@ -112,6 +112,41 @@
       "argv": ["node", "scripts/ci/check-vercel-crons.js"],
       "evidence_kind": "test_run",
       "timeout_ms": 120000
+    },
+    {
+      "id": "creator-sec1.unit",
+      "description": "SEC-1 creator library tenant-write tests (backend/tests/unit/creatorAssetLibrary*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/creatorAssetLibrary"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 600000
+    },
+    {
+      "id": "creator-f3.unit",
+      "description": "F3 deterministic-id takeover and re-home convergence tests (backend/tests/unit/creatorAsset{Takeover,Rehome,Persistence}*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/creatorAssetTakeover", "backend/tests/unit/creatorAssetRehome", "backend/tests/unit/creatorAssetPersistence"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 600000
+    },
+    {
+      "id": "creator-f3b.unit",
+      "description": "F3b BOLT render ownership and BOLT regression tests (backend/tests/unit/bolt*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/boltRenderAssetOwnership", "backend/tests/unit/bolt"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 900000
+    },
+    {
+      "id": "creator-refine.unit",
+      "description": "Creator refinement read-shape and round-trip tests (backend/tests/unit/activity{Creative,Refinement}*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/activityCreative", "backend/tests/unit/activityRefinement"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 600000
+    },
+    {
+      "id": "creator-carousel.unit",
+      "description": "Creator carousel CTA and slide-integrity tests (backend/tests/unit/{carousel,creatorCarousel,creatorWorkflowModel}*)",
+      "argv": ["node", "node_modules/jest/bin/jest.js", "--ci", "backend/tests/unit/carousel", "backend/tests/unit/creatorCarousel", "backend/tests/unit/creatorWorkflowModel"],
+      "evidence_kind": "test_run",
+      "timeout_ms": 600000
     }
   ]
 }

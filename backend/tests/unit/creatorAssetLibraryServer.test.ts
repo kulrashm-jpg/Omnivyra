@@ -16,7 +16,10 @@
 type Row = Record<string, unknown>;
 let tableRows: Row[] = [];
 const updates: Array<{ payload: Row; id: unknown }> = [];
+/** Last row payload written by upsert, insert or a single-row update. */
 let lastUpsert: Row | null = null;
+/** When true, the next non-update maybeSingle read returns null once (simulates a concurrent create). */
+let hideNextRead = false;
 
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => {
@@ -32,6 +35,9 @@ jest.mock('../../db/writeOwner', () => ({
     const applyFilters = (rows: Row[]) =>
       rows.filter((r) =>
         filters.every((f) => {
+          if (f.op === 'eq' && f.col === 'library->>currentVersion') {
+            return String((r.library as { currentVersion?: unknown } | null)?.currentVersion) === f.val;
+          }
           if (f.op === 'eq') return r[f.col!] === f.val;
           if (f.op === 'is') return (r[f.col!] ?? null) === f.val;
           if (f.op === 'in') return (f.val as unknown[]).includes(r[f.col!]);
@@ -43,9 +49,29 @@ jest.mock('../../db/writeOwner', () => ({
         }),
       );
     builder.maybeSingle = () => ({
-      then: (res: any, rej: any) =>
-        Promise.resolve({ data: table === 'creator_assets' ? applyFilters(tableRows)[0] ?? null : null, error: null }).then(res, rej),
+      then: (res: any, rej: any) => {
+        if (hideNextRead) {
+          hideNextRead = false;
+          return Promise.resolve({ data: null, error: null }).then(res, rej);
+        }
+        return Promise.resolve({ data: table === 'creator_assets' ? applyFilters(tableRows)[0] ?? null : null, error: null }).then(res, rej);
+      },
     });
+    // Like Postgres: `id` is a GLOBAL primary key — a duplicate id fails with
+    // 23505 and changes nothing, whichever company owns the existing row.
+    builder.insert = (payload: Row) => {
+      lastUpsert = payload;
+      const clash = tableRows.some((r) => r.id === payload.id);
+      if (!clash) tableRows.push({ created_at: new Date().toISOString(), usage_count: 0, ...payload });
+      const stored = tableRows.find((r) => r.id === payload.id)!;
+      return {
+        select: () => ({
+          single: () => Promise.resolve(clash
+            ? { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "creator_assets_pkey"' } }
+            : { data: stored, error: null }),
+        }),
+      };
+    };
     builder.upsert = (payload: Row) => {
       lastUpsert = payload;
       const idx = tableRows.findIndex((r) => r.id === payload.id);
@@ -60,6 +86,12 @@ jest.mock('../../db/writeOwner', () => ({
       const updBuilder: any = {
         eq: (col: string, val: unknown) => { if (col === 'id') upd.id = val; filters.push({ op: 'eq', col, val }); return updBuilder; },
         select: () => updBuilder,
+        maybeSingle: () => {
+          const hits = applyFilters(tableRows);
+          hits.forEach((r) => Object.assign(r, payload));
+          if (hits.length > 0) lastUpsert = payload;
+          return Promise.resolve({ data: hits[0] ?? null, error: null });
+        },
         then: (res: any, rej: any) => {
           const hits = applyFilters(tableRows);
           hits.forEach((r) => Object.assign(r, payload));
@@ -83,6 +115,8 @@ import {
   archiveLibraryAsset,
   softDeleteLibraryAsset,
   recordLibraryAssetUsage,
+  LibraryAssetIdConflictError,
+  LibraryVersionConflictError,
 } from '../../services/creatorAssetPersistenceService';
 
 const envelope = (id: string, title: string, opts: { versions?: number; tags?: string[] } = {}) => {
@@ -107,6 +141,7 @@ beforeEach(() => {
   tableRows = [];
   updates.length = 0;
   lastUpsert = null;
+  hideNextRead = false;
   jest.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -130,6 +165,60 @@ describe('libraryWriteAsset — envelope + flat sync (one model)', () => {
     expect(lastUpsert!.metadata).toBeUndefined(); // metadata column untouched on existing rows
     const stored = tableRows.find((r) => r.id === 'a1')!;
     expect((stored.metadata as Row).reconstructionVersion).toBe('creator-asset-reconstruction-v1');
+  });
+});
+
+describe('SEC-1 — a library write can never overwrite another company’s asset', () => {
+  const foreignRow = () => ({
+    id: 'shared-id', company_id: 'co-OTHER', tenant_id: 'co-OTHER', user_id: 'u-other',
+    title: 'Their asset', library: envelope('shared-id', 'Their asset'), metadata: { owner: 'co-OTHER' },
+  });
+
+  it('refuses an id owned by another company and leaves that row untouched', async () => {
+    tableRows = [foreignRow()];
+    const before = JSON.stringify(tableRows[0]);
+    await expect(
+      libraryWriteAsset({ companyId: 'co-1', userId: 'u-1', envelope: envelope('shared-id', 'Hijack') }),
+    ).rejects.toBeInstanceOf(LibraryAssetIdConflictError);
+    expect(tableRows).toHaveLength(1);
+    expect(JSON.stringify(tableRows[0])).toBe(before);
+    expect(tableRows[0].company_id).toBe('co-OTHER');
+  });
+
+  it('refuses a foreign id on the CAS path too (company-scoped; no row moves)', async () => {
+    tableRows = [foreignRow()];
+    const before = JSON.stringify(tableRows[0]);
+    await expect(
+      libraryWriteAsset({ companyId: 'co-1', userId: 'u-1', envelope: envelope('shared-id', 'Hijack'), expectedCurrentVersion: 1 }),
+    ).rejects.toBeInstanceOf(LibraryVersionConflictError);
+    expect(JSON.stringify(tableRows[0])).toBe(before);
+  });
+
+  it('a brand-new id is inserted for the caller (creation unchanged)', async () => {
+    const record = await libraryWriteAsset({ companyId: 'co-1', userId: 'u-1', envelope: envelope('fresh', 'New') });
+    expect((record.envelope as { id: string }).id).toBe('fresh');
+    expect(tableRows).toEqual([expect.objectContaining({ id: 'fresh', company_id: 'co-1', title: 'New' })]);
+  });
+
+  it('the caller’s own existing row is updated in place, never duplicated', async () => {
+    tableRows = [{ id: 'mine', company_id: 'co-1', title: 'Old', metadata: { keep: true } }];
+    await libraryWriteAsset({ companyId: 'co-1', userId: 'u-1', envelope: envelope('mine', 'Renamed') });
+    expect(tableRows).toHaveLength(1);
+    expect(tableRows[0]).toMatchObject({ id: 'mine', company_id: 'co-1', title: 'Renamed', metadata: { keep: true } });
+  });
+
+  it('a concurrent same-company create (insert hits 23505) falls back to the scoped update', async () => {
+    tableRows = [{ id: 'race', company_id: 'co-1', title: 'Created concurrently', metadata: { keep: true } }];
+    hideNextRead = true; // the pre-read misses the row a concurrent request just created
+    await libraryWriteAsset({ companyId: 'co-1', userId: 'u-1', envelope: envelope('race', 'Second writer') });
+    expect(tableRows).toHaveLength(1);
+    expect(tableRows[0]).toMatchObject({ id: 'race', company_id: 'co-1', title: 'Second writer', metadata: { keep: true } });
+  });
+
+  it('the CAS path still lands for the owning company on the expected version', async () => {
+    tableRows = [{ id: 'v-own', company_id: 'co-1', title: 'v1', library: envelope('v-own', 'v1') }];
+    await libraryWriteAsset({ companyId: 'co-1', userId: 'u-1', envelope: envelope('v-own', 'v2', { versions: 2 }), expectedCurrentVersion: 1 });
+    expect((tableRows[0].library as { currentVersion: number }).currentVersion).toBe(2);
   });
 });
 

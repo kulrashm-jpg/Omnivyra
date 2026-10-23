@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 import { IMAGE_BUCKET, DOCUMENT_BUCKET } from './creatorAssetRendererContracts';
@@ -406,6 +406,20 @@ export function validateRenderExportParity(metadataInput: unknown): Omit<Creator
   };
 }
 
+/**
+ * Raised only when a creator-asset write cannot be placed at all: its
+ * deterministic id is held by a DIFFERENT company (`creator_assets.id` is a
+ * global primary key and its inputs are not secret) AND the random re-home id
+ * also collides. That other company's row is never modified. The message
+ * carries no id or data.
+ */
+export class CreatorAssetIdConflictError extends Error {
+  constructor() {
+    super('creator asset id is not available to this company');
+    this.name = 'CreatorAssetIdConflictError';
+  }
+}
+
 export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): Promise<Record<string, unknown>> {
   const availability = await checkCreatorPersistenceAvailability();
   if (!availability.available) {
@@ -423,13 +437,16 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
     url: input.url,
     title: input.title,
   });
-  const baseMetadata = {
+  const baseMetadata: Record<string, unknown> = {
     ...safeObject(input.metadata),
     companyId: input.companyId,
     userId: input.userId,
     url: input.url ?? null,
     files,
   };
+  // `rehomedFrom` is server-owned (set only by the re-home path below); a
+  // caller-supplied value must never make a row look like a re-home target.
+  delete baseMetadata.rehomedFrom;
   const metadata = buildReconstructionMetadata({
     metadata: baseMetadata,
     sourceContent: input.sourceContent,
@@ -466,14 +483,78 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
     }, 'warn');
   }
 
-  const { data, error } = await ownedDbTable('creator_assets')
-    .upsert(row, { onConflict: 'id' })
-    .select()
-    .single();
-  if (error) throw new Error(`Failed to persist creator asset: ${error.message}`);
-  const asset = data as Record<string, unknown>;
+  // F3: never upsert on `id` alone. An id-only upsert onto a row another company
+  // created would rewrite its company_id and inherit that row's `library`
+  // envelope and lifecycle state. Update only a row this company owns; else
+  // INSERT. A unique violation on insert means the id appeared since: either
+  // this company created it concurrently (the scoped update now lands) or
+  // another company holds it — and that row is never touched.
+  const updateOwned = async (targetId: string, payload: Record<string, unknown>) => {
+    const { data, error } = await ownedDbTable('creator_assets')
+      .update(payload)
+      .eq('id', targetId)
+      .eq('company_id', input.companyId)
+      .select()
+      .maybeSingle();
+    if (error) throw new Error(`Failed to persist creator asset: ${error.message}`);
+    return (data as Record<string, unknown> | null) ?? null;
+  };
+  /** The inserted row, or null when the id already exists (23505). */
+  const insertRow = async (payload: Record<string, unknown>) => {
+    const { data, error } = await ownedDbTable('creator_assets')
+      .insert(payload)
+      .select()
+      .single();
+    if (!error) return data as Record<string, unknown>;
+    if (String((error as { code?: unknown }).code ?? '') !== '23505') {
+      throw new Error(`Failed to persist creator asset: ${error.message}`);
+    }
+    return null;
+  };
+  // The deterministic id is held by ANOTHER company (pre-created or a
+  // collision). Rather than drop this company's asset, it lives under a fresh
+  // random id that no other tenant can predict, remembered as
+  // `metadata.rehomedFrom` so every later write of the same asset (generation,
+  // the attachments route, a re-render) converges on that same row.
+  //
+  // Canonical rule: the company's OLDEST row with this `rehomedFrom` (ties by
+  // id) is the asset. Concurrent first re-homes are made atomic by a unique
+  // index on (company_id, metadata->>'rehomedFrom'): the losing INSERT gets
+  // 23505 and adopts the winner's row. Without that index the race can leave a
+  // second row; every later write still converges on the same oldest row.
+  const findRehomed = async (): Promise<string> => {
+    const { data, error } = await ownedDbTable('creator_assets')
+      .select('id')
+      .eq('company_id', input.companyId)
+      .eq('metadata->>rehomedFrom', id)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(`Failed to persist creator asset: ${error.message}`);
+    const found = (data as { id?: unknown } | null)?.id;
+    return typeof found === 'string' ? found : '';
+  };
+  const rehome = async () => {
+    const rehomedRow = { ...row, metadata: { ...metadata, rehomedFrom: id } };
+    const updateRehomed = async (targetId: string) =>
+      (targetId ? updateOwned(targetId, { ...rehomedRow, id: targetId }) : null);
+    const existing = await updateRehomed(await findRehomed());
+    if (existing) return existing;
+    const inserted = await insertRow({ ...rehomedRow, id: randomBytes(16).toString('hex') });
+    if (inserted) return inserted;
+    // 23505: another writer of this company re-homed the asset first.
+    const winner = await updateRehomed(await findRehomed());
+    if (!winner) throw new CreatorAssetIdConflictError();
+    return winner;
+  };
+
+  const asset = (await updateOwned(id, row))
+    ?? (await insertRow(row))
+    ?? (await updateOwned(id, row))
+    ?? (await rehome());
   // Adoption telemetry (append-only, fail-soft): an AI-produced creator asset
-  // was persisted. Deduped per asset id (upsert is idempotent).
+  // was persisted. Deduped per asset id (the write is idempotent per id).
   trackEvent({
     type: 'ai.generated',
     organizationId: input.companyId,
@@ -974,8 +1055,8 @@ function envelopeCurrentPayload(envelope: Record<string, unknown>): Record<strin
 /**
  * Raised when a compare-and-set write loses to a concurrent writer.
  *
- * Only reachable by callers that opt into `expectedCurrentVersion` — every
- * existing caller keeps the blind-upsert behaviour and can never see this.
+ * Only reachable by callers that opt into `expectedCurrentVersion` — callers
+ * that omit it take the scoped update/insert path and never see this.
  */
 export class LibraryVersionConflictError extends Error {
   readonly assetId: string;
@@ -986,6 +1067,25 @@ export class LibraryVersionConflictError extends Error {
     this.assetId = assetId;
     this.expectedCurrentVersion = expectedCurrentVersion;
   }
+}
+
+/**
+ * Raised when a library write names an asset id that already exists under a
+ * DIFFERENT company. `creator_assets.id` is a global primary key and the
+ * envelope id comes from the client, so the write must be refused rather than
+ * overwrite (and re-own) another tenant's row.
+ */
+export class LibraryAssetIdConflictError extends Error {
+  readonly assetId: string;
+  constructor(assetId: string) {
+    super(`library asset id ${assetId} is not available to this company`);
+    this.name = 'LibraryAssetIdConflictError';
+    this.assetId = assetId;
+  }
+}
+
+function isUniqueViolation(error: { code?: unknown } | null | undefined): boolean {
+  return String(error?.code ?? '') === '23505';
 }
 
 export async function libraryWriteAsset(input: {
@@ -1047,8 +1147,8 @@ export async function libraryWriteAsset(input: {
   // replaces the row and discards it. Guarding on the version the write was
   // derived from turns that silent loss into a detectable conflict.
   //
-  // Callers that omit `expectedCurrentVersion` keep the original upsert, which
-  // is still what creation and non-versioned writes need.
+  // Callers that omit `expectedCurrentVersion` take the scoped update/insert
+  // path below, which is what creation and non-versioned writes need.
   if (typeof input.expectedCurrentVersion === 'number') {
     const { data, error } = await ownedDbTable('creator_assets')
       .update(row)
@@ -1064,12 +1164,45 @@ export async function libraryWriteAsset(input: {
     return rowToLibraryRecord(data as Record<string, unknown>);
   }
 
+  // SEC-1: never upsert on `id` alone. The id is client-supplied and globally
+  // unique, so an id-only upsert would overwrite another company's row and
+  // reassign its company_id. A row this company owns is updated in place
+  // (scoped by company_id); anything else is a plain INSERT, and a unique
+  // violation on insert means the id already exists — re-check ownership and
+  // either update this company's row (a concurrent create) or refuse.
+  const updateOwned = async () => {
+    const { data, error } = await ownedDbTable('creator_assets')
+      .update(row)
+      .eq('id', id)
+      .eq('company_id', input.companyId)
+      .select()
+      .maybeSingle();
+    if (error) throw new Error(`Failed to persist library asset: ${error.message}`);
+    if (!data) throw new LibraryAssetIdConflictError(id);
+    return rowToLibraryRecord(data as Record<string, unknown>);
+  };
+
+  if (existing) return updateOwned();
+
   const { data, error } = await ownedDbTable('creator_assets')
-    .upsert(row, { onConflict: 'id' })
+    .insert(row)
     .select()
     .single();
-  if (error) throw new Error(`Failed to persist library asset: ${error.message}`);
-  return rowToLibraryRecord(data as Record<string, unknown>);
+  if (!error) return rowToLibraryRecord(data as Record<string, unknown>);
+  if (!isUniqueViolation(error)) throw new Error(`Failed to persist library asset: ${error.message}`);
+
+  const { data: owned } = await ownedDbTable('creator_assets')
+    .select('id')
+    .eq('id', id)
+    .eq('company_id', input.companyId)
+    .maybeSingle();
+  if (!owned) throw new LibraryAssetIdConflictError(id);
+  // Same company created it concurrently: keep that row's metadata/source
+  // columns, exactly as the pre-existing-row path does.
+  delete row.metadata;
+  delete row.source_type;
+  delete row.source_id;
+  return updateOwned();
 }
 
 export async function libraryReadAsset(input: {

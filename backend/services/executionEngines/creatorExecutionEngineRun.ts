@@ -8,6 +8,7 @@ import { assembleBlueprintPrompt } from '../creator/intelligence/blueprintPrompt
 import {
   repurposeCarouselForPlatforms,
   repurposeVideoScriptForPlatforms,
+  trimSlidesPreservingCta,
 } from '../creatorContentRepurposingEngine';
 import { validateCreatorContentQuality } from '../creatorContentValidation';
 import { runCompletionWithOperation } from '../aiGateway';
@@ -649,7 +650,7 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
           slide_count: Number(variant.total_slides ?? baseAssetPayload.slide_count ?? slides.length),
           slides:
             PLATFORM_RULES[normalizedPlatform]?.slideLimit && slides.length > 0
-              ? slides.slice(0, PLATFORM_RULES[normalizedPlatform]!.slideLimit)
+              ? trimSlidesPreservingCta(slides, PLATFORM_RULES[normalizedPlatform]!.slideLimit!)
               : slides,
           platform_metadata: safeObject(variant.platform_metadata),
         };

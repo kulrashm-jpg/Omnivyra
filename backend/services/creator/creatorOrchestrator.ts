@@ -225,12 +225,14 @@ function mergeRenderedMedia(
   };
 }
 
-function extractMediaUrls(output: CanonicalCreatorOutput): string[] {
+export function extractMediaUrls(output: CanonicalCreatorOutput): string[] {
   const payload = safeObject(output.asset_payload);
   const mediaBundle = safeObject(payload.media_bundle);
   const url = typeof mediaBundle.url === 'string' ? mediaBundle.url : '';
   const files = Array.isArray(mediaBundle.files) ? mediaBundle.files.map(String) : [];
-  return [url, ...files].map((s) => s.trim()).filter(Boolean);
+  // A deck's renderer sets `url = files[0]`, so `[url, ...files]` listed slide
+  // 1 twice and every reload showed it twice. Keep first occurrence, in order.
+  return [...new Set([url, ...files].map((s) => s.trim()).filter(Boolean))];
 }
 
 /**
@@ -247,7 +249,7 @@ function extractMediaUrls(output: CanonicalCreatorOutput): string[] {
  *   parallel write path. Falls back to `upsertCreatorAssetRecord`
  *   (creator_assets only) when there is no writer binding.
  */
-async function persistCreatorAssetRow(input: {
+export async function persistCreatorAssetRow(input: {
   origin: CreatorOrchestrationOrigin;
   campaignId: string;
   companyId: string;
@@ -314,8 +316,9 @@ async function persistCreatorAssetRow(input: {
   });
 
   // BOLT branch — preserves legacy `bolt-render-<rowId>-<hash:16>` id so
-  // pre-existing creator_assets rows from the prior runtime are upserted
-  // in place (no orphan creation, no destructive migration).
+  // pre-existing creator_assets rows from the prior runtime are updated
+  // in place (no orphan creation, no destructive migration) — only ever a
+  // row owned by this company.
   if (input.origin === 'bolt') {
     const assetId = `bolt-render-${(sourceId || input.campaignId)}-${assetHashBolt.slice(0, 16)}`;
     const row = {
@@ -336,7 +339,24 @@ async function persistCreatorAssetRow(input: {
       render_identity_hash: renderIdentityHash,
       updated_at: new Date().toISOString(),
     };
-    const { error } = await ownedDbTable('creator_assets').upsert(row, { onConflict: 'id' });
+    // F3b: never upsert on `id` alone — `creator_assets.id` is a global primary
+    // key, and an id-only upsert onto a row another company holds would rewrite
+    // its company_id and inherit its library envelope and lifecycle state.
+    // Update this company's row in place; else INSERT; a unique violation means
+    // the id appeared since — this company's concurrent write (the scoped update
+    // now lands) or another company's row, which is refused and never touched.
+    const updateOwned = () => ownedDbTable('creator_assets')
+      .update(row)
+      .eq('id', assetId)
+      .eq('company_id', input.companyId)
+      .select('id')
+      .maybeSingle();
+    let result: { data: unknown; error: { message: string; code?: unknown } | null } = await updateOwned();
+    if (!result.error && !result.data) {
+      result = await ownedDbTable('creator_assets').insert(row).select('id').single();
+      if (result.error && String(result.error.code ?? '') === '23505') result = await updateOwned();
+    }
+    const error = result.error ?? (result.data ? null : { message: 'creator asset id is not available to this company' });
     if (error) {
       console.warn('[creator-orchestrator][asset-persist-failed]', {
         origin: input.origin,
