@@ -319,7 +319,7 @@ describe('arbitration integration', () => {
     // Evidence for a PERSON-scoped attribute sitting on this relationship must
     // be ignored: it is outside the relationship surface.
     (db.tables['source_assertions'] ??= []).push({
-      id: 'stray', organization_id: ORG_A, relationship_id: REL_A,
+      id: 'stray', organization_id: ORG_A, entity_type: 'relationship', relationship_id: REL_A,
       attribute: 'authority', normalized_value: 'high', provider: 'apollo',
       confidence: null, observed_at: '2030-01-01T00:00:00.000Z',
       recorded_at: '2030-01-01T00:00:00.000Z', superseded_at: null,
@@ -342,12 +342,12 @@ describe('arbitration integration', () => {
     seedRelationship(REL_A, { job_title: 'VP Sales' });
     // An attested incumbent asserted by human earlier...
     (db.tables['source_assertions'] ??= []).push({
-      id: 'human-1', organization_id: ORG_A, relationship_id: REL_A,
+      id: 'human-1', organization_id: ORG_A, entity_type: 'relationship', relationship_id: REL_A,
       attribute: 'job_title', normalized_value: 'Chief Revenue Officer', provider: 'human',
       confidence: null, observed_at: '2026-02-01T00:00:00.000Z',
       recorded_at: '2026-02-01T00:00:00.000Z', superseded_at: null,
     }, {
-      id: 'human-0', organization_id: ORG_A, relationship_id: REL_A,
+      id: 'human-0', organization_id: ORG_A, entity_type: 'relationship', relationship_id: REL_A,
       attribute: 'job_title', normalized_value: 'VP Sales', provider: 'human',
       confidence: null, observed_at: '2026-01-15T00:00:00.000Z',
       recorded_at: '2026-01-15T00:00:00.000Z', superseded_at: null,
@@ -444,7 +444,7 @@ describe('the canonical decision log', () => {
     seedRelationship(REL_A);
     // Evidence for a second attribute that has been waiting to apply.
     (db.tables['source_assertions'] ??= []).push({
-      id: 'dept-1', organization_id: ORG_A, relationship_id: REL_A,
+      id: 'dept-1', organization_id: ORG_A, entity_type: 'relationship', relationship_id: REL_A,
       attribute: 'department', normalized_value: 'Sales', provider: 'apollo',
       confidence: null, observed_at: '2026-02-01T00:00:00.000Z',
       recorded_at: '2026-02-01T00:00:00.000Z', superseded_at: null,
@@ -472,5 +472,120 @@ describe('idempotency', () => {
     seedRelationship(REL_A);
     db.insertError = { table: 'source_assertions', code: '23514', message: 'violates check constraint' };
     await expect(call()).rejects.toThrow(/assertion insert failed \(23514\)/);
+  });
+});
+
+describe('C-1 — the assertion read is SUBJECT-SCOPED', () => {
+  /**
+   * The ARBITRATION read — NOT D2's liveness read. Both select from
+   * `source_assertions`, the liveness pass runs first (via
+   * `reconcileAssertionLiveness`) and already carried `entity_type` before this
+   * change, so a positional `[0]` asserts against the wrong statement and
+   * passes even without the predicate under test. The arbitration read is the
+   * one that does NOT filter `source_record_id`.
+   */
+  const arbitrationRead = () => db.reads.filter((r) => r.table === 'source_assertions'
+    && r.filters.every(([c]) => c !== 'source_record_id'))[0];
+
+  it('sends entity_type = relationship alongside the tenant and relationship predicates', async () => {
+    seedRelationship(REL_A);
+    await call();
+
+    expect(arbitrationRead().filters).toEqual(expect.arrayContaining([
+      ['organization_id', ORG_A],
+      ['entity_type', 'relationship'],
+      ['relationship_id', REL_A],
+    ]));
+  });
+
+  it('a PERSON-scoped row carrying this relationship_id is not relationship evidence', async () => {
+    // Schema-legal and unreachable by any current writer — this module is the
+    // only one that sets `relationship_id` — but no CHECK forbids it and the
+    // detachment trigger guards UPDATE only, so an INSERT of this shape would
+    // be accepted. Before C-1 it would have won arbitration on recency.
+    seedRelationship(REL_A, { job_title: 'VP Sales' });
+    (db.tables['source_assertions'] ??= []).push({
+      id: 'person-leg', organization_id: ORG_A, entity_type: 'person',
+      person_id: PERSON, relationship_id: REL_A,
+      attribute: 'job_title', normalized_value: 'Impostor Title', provider: 'apollo',
+      confidence: null, observed_at: '2099-01-01T00:00:00.000Z',
+      recorded_at: '2099-01-01T00:00:00.000Z', superseded_at: null,
+      applied_to_canonical_at: null, applied_reason: null,
+    });
+
+    await call();
+
+    const patch = db.updates.find((u) => u.table === 'person_account_relationships')?.payload;
+    expect(patch?.job_title).not.toBe('Impostor Title');
+    // ...and it was never stamped as the winning assertion.
+    const stamps = db.updates.filter((u) => u.table === 'source_assertions');
+    for (const s of stamps) expect(s.filters).not.toEqual(expect.arrayContaining([['id', 'person-leg']]));
+  });
+
+  it('an ACCOUNT-scoped row carrying this relationship_id is not relationship evidence', async () => {
+    seedRelationship(REL_A, { job_title: 'VP Sales' });
+    (db.tables['source_assertions'] ??= []).push({
+      id: 'account-leg', organization_id: ORG_A, entity_type: 'account',
+      account_id: 'account-1', relationship_id: REL_A,
+      attribute: 'job_title', normalized_value: 'Account Title', provider: 'apollo',
+      confidence: null, observed_at: '2099-01-01T00:00:00.000Z',
+      recorded_at: '2099-01-01T00:00:00.000Z', superseded_at: null,
+      applied_to_canonical_at: null, applied_reason: null,
+    });
+
+    await call();
+
+    const patch = db.updates.find((u) => u.table === 'person_account_relationships')?.payload;
+    expect(patch?.job_title).not.toBe('Account Title');
+  });
+
+  it('relationship-scoped evidence still arbitrates — the predicate did not over-filter', async () => {
+    seedRelationship(REL_A, { job_title: null });
+    (db.tables['source_assertions'] ??= []).push({
+      id: 'rel-live', organization_id: ORG_A, entity_type: 'relationship',
+      person_id: null, account_id: null, relationship_id: REL_A,
+      attribute: 'department', normalized_value: 'Sales', provider: 'apollo',
+      confidence: null, observed_at: '2026-02-01T00:00:00.000Z',
+      recorded_at: '2026-02-01T00:00:00.000Z', superseded_at: null,
+      applied_to_canonical_at: null, applied_reason: null,
+    });
+
+    const res = await call();
+
+    expect(res.canonicalApplied.map((a: any) => a.attribute).sort()).toEqual(['department', 'job_title']);
+  });
+
+  it('another tenant\'s relationship evidence is still excluded', async () => {
+    seedRelationship(REL_A, { job_title: 'VP Sales' });
+    (db.tables['source_assertions'] ??= []).push({
+      id: 'other-tenant', organization_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      entity_type: 'relationship', person_id: null, account_id: null, relationship_id: REL_A,
+      attribute: 'job_title', normalized_value: 'Other Tenant Title', provider: 'apollo',
+      confidence: null, observed_at: '2099-01-01T00:00:00.000Z',
+      recorded_at: '2099-01-01T00:00:00.000Z', superseded_at: null,
+      applied_to_canonical_at: null, applied_reason: null,
+    });
+
+    await call();
+
+    const patch = db.updates.find((u) => u.table === 'person_account_relationships')?.payload;
+    expect(patch?.job_title).not.toBe('Other Tenant Title');
+  });
+
+  it('another relationship\'s evidence is still excluded', async () => {
+    seedRelationship(REL_A, { job_title: 'VP Sales' });
+    (db.tables['source_assertions'] ??= []).push({
+      id: 'other-rel', organization_id: ORG_A, entity_type: 'relationship',
+      person_id: null, account_id: null, relationship_id: REL_B,
+      attribute: 'job_title', normalized_value: 'Other Relationship Title', provider: 'apollo',
+      confidence: null, observed_at: '2099-01-01T00:00:00.000Z',
+      recorded_at: '2099-01-01T00:00:00.000Z', superseded_at: null,
+      applied_to_canonical_at: null, applied_reason: null,
+    });
+
+    await call();
+
+    const patch = db.updates.find((u) => u.table === 'person_account_relationships')?.payload;
+    expect(patch?.job_title).not.toBe('Other Relationship Title');
   });
 });

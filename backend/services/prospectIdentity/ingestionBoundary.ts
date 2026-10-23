@@ -91,7 +91,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { ownedDbTable } from '../../db/writeOwner';
+import { ownedDbTable, ownedDbRpc } from '../../db/writeOwner';
 import {
   toPersonAttributes, toAccountAttributes,
   PERSON_ATTRIBUTE_COLUMNS, ACCOUNT_ATTRIBUTE_COLUMNS,
@@ -261,7 +261,10 @@ export async function upsertSourceRecord(
   // Another worker created it, or we have seen this record before. Read the
   // existing row — tenant-filtered, always.
   const existing = await ownedDbTable('source_records')
-    .select('id, payload_hash, observation_count')
+    // Both canonical links are selected for the immutability guards below.
+    // Without them a guard cannot tell an absent association from an existing
+    // one, and silently degrades into the overwrite it exists to prevent.
+    .select('id, payload_hash, observation_count, person_id, account_id')
     .eq('organization_id', input.organizationId)
     .eq('provider', input.provider)
     .eq('source_entity_type', input.entityType)
@@ -271,7 +274,10 @@ export async function upsertSourceRecord(
   if (existing.error || !existing.data) {
     throw new Error('ingestionBoundary: source record conflicted but could not be re-read');
   }
-  const found = existing.data as { id: string; payload_hash: string; observation_count: number };
+  const found = existing.data as {
+    id: string; payload_hash: string; observation_count: number;
+    person_id: string | null; account_id: string | null;
+  };
   const changed = found.payload_hash !== payloadHash;
 
   const update: Record<string, unknown> = {
@@ -286,9 +292,33 @@ export async function upsertSourceRecord(
     update.payload_hash = payloadHash;
     update.observed_at = input.observedAt ?? null;
   }
-  // Canonical links are only ever filled in, never re-pointed here.
-  if (input.personId) update.person_id = input.personId;
-  if (input.accountId) update.account_id = input.accountId;
+  // ── CANONICAL LINKS: FILLED ONCE, NEVER RE-POINTED (O-5C, O-5E) ─────────
+  // Both links are filled when absent, and ordinary ingestion never re-points
+  // or clears either one. For a person-shaped record `person_id` is the
+  // original SUBJECT anchor — whose record this was — while `account_id` is
+  // contextual employer association, which `source_records_entity_coherent`
+  // deliberately permits a person-shaped record to carry alongside its own.
+  //
+  // These are guards rather than comments because re-pointing is reachable in
+  // code: a record's identity is the PROVIDER's record id, while the person is
+  // resolved from the payload's email/phone/externalKeys with EMAIL TAKING
+  // PRECEDENCE, and the account from the RECORD's company data rather than
+  // from the person's existing attachment. So the same external id arriving
+  // with a corrected email or a changed company can resolve differently. No
+  // claim is made here about whether that has happened in any environment.
+  //
+  // KNOWN LIMITATION — this row and its children can disagree about the
+  // subject. Child `source_assertions` carry their OWN subject, written once
+  // at insert and never updated afterwards, so if resolution changes across
+  // observations this row keeps the first subject while later assertions carry
+  // the newer one. This code does not detect, report or repair that
+  // divergence, and it does not authorize reassignment: there is deliberately
+  // no merge or reassignment mechanism here, and nothing in the stored data
+  // identifies which subject was the correct one.
+  //
+  // Both guards depend on `person_id` and `account_id` being selected above.
+  if (input.personId && !found.person_id) update.person_id = input.personId;
+  if (input.accountId && !found.account_id) update.account_id = input.accountId;
 
   const upd = await ownedDbTable('source_records')
     .update(update)
@@ -363,8 +393,15 @@ export async function recordAssertions(
       organization_id: input.organizationId,
       source_record_id: sourceRecordId,
       entity_type: input.entityType,
+      // O-5 — ONE SUBJECT PER ROW, and `entity_type` declares which. Both legs
+      // are gated the same way: the caller resolves an employer before it
+      // records provenance, so an ungated `account_id` meant every person
+      // assertion also named that account and read as company evidence. The
+      // employer association is NOT stored here — `attachPersonToAccount` owns
+      // it on `unified_persons.account_id`. Forward-only: historical rows keep
+      // both legs, which is why the readers stay subject-filtered.
       person_id: input.entityType === 'person' ? (input.personId ?? null) : null,
-      account_id: input.accountId ?? null,
+      account_id: input.entityType === 'account' ? (input.accountId ?? null) : null,
       attribute: a.attribute,
       raw_value: a.rawValue,
       normalized_value: a.normalizedValue,
@@ -674,6 +711,51 @@ export function decideCanonicalUpdates(
 }
 
 /**
+ * D2 — the SUBJECT a reconciliation pass is permitted to touch.
+ *
+ * Liveness used to be keyed on (organization_id, source_record_id) alone, which
+ * is SUBJECT-BLIND. One source record can legitimately carry evidence for more
+ * than one subject — the lead orchestrator's account pass falls back to the
+ * person's external id when the provider supplies no account id of its own — and
+ * `currentHash` below is keyed by ATTRIBUTE, so ingesting for one subject could
+ * supersede another subject's live row for the same attribute. The person and
+ * account attribute surfaces overlap on country_code, region and city, so that
+ * was reachable rather than theoretical.
+ *
+ * A discriminated union rather than three nullable ids: a malformed call cannot
+ * compile into an ambiguous predicate, and there is no shape that means "any
+ * subject".
+ */
+export type ReconcileSubject =
+  | { readonly kind: 'person'; readonly personId: string }
+  | { readonly kind: 'account'; readonly accountId: string }
+  | { readonly kind: 'relationship'; readonly relationshipId: string };
+
+/**
+ * The column carrying each subject, and the id to match it against. Equality is
+ * deliberate: a NULL subject reference can never satisfy it, so a fully detached
+ * row is unreachable by reconciliation without a second predicate.
+ */
+function requireSubject(subject: ReconcileSubject): readonly [string, string, string] {
+  const kind = (subject as { kind?: unknown } | null | undefined)?.kind;
+  let column: string;
+  let id: unknown;
+  if (kind === 'person') { column = 'person_id'; id = (subject as { personId?: unknown }).personId; }
+  else if (kind === 'account') { column = 'account_id'; id = (subject as { accountId?: unknown }).accountId; }
+  else if (kind === 'relationship') { column = 'relationship_id'; id = (subject as { relationshipId?: unknown }).relationshipId; }
+  else {
+    throw new Error(
+      `ingestionBoundary: a reconcile subject of kind person|account|relationship is required — `
+      + `liveness is never subject-blind (got ${JSON.stringify(kind ?? null)})`,
+    );
+  }
+  if (typeof id !== 'string' || !id.trim()) {
+    throw new Error(`ingestionBoundary: reconcile subject '${kind}' requires a non-blank id`);
+  }
+  return [column, id, kind];
+}
+
+/**
  * S-1 — ASSERTION LIVENESS, reconciled against what this source record asserts NOW.
  *
  * LI-2's migration promised "A value that later changes at the same source inserts
@@ -717,17 +799,27 @@ export function decideCanonicalUpdates(
 export async function reconcileAssertionLiveness(
   organizationId: string,
   sourceRecordId: string,
+  subject: ReconcileSubject,
   pending: readonly PendingAssertion[],
   now: string = new Date().toISOString(),
 ): Promise<{ superseded: number; revived: number }> {
   requireTenant(organizationId);
+  // Validated BEFORE any query: a bad subject must never degrade into a wide read.
+  const [subjectColumn, subjectId, subjectKind] = requireSubject(subject);
   if (pending.length === 0) return { superseded: 0, revived: 0 };
 
-  // One tenant-filtered read for the whole record, rather than one per attribute.
+  // One tenant-filtered, SUBJECT-CONFINED read for this record.
   const existing = await ownedDbTable('source_assertions')
     .select('id, attribute, value_hash, superseded_at')
     .eq('organization_id', organizationId)
-    .eq('source_record_id', sourceRecordId);
+    .eq('source_record_id', sourceRecordId)
+    // BOTH legs of the confinement. The subject column alone is not enough: a
+    // person-scoped row also carries `account_id` (the ingestion boundary sets it
+    // unconditionally), so an account-subject read would still match a person's
+    // row. `entity_type` is what DECLARES which leg is the subject, so it is the
+    // predicate that makes "belonging to the incoming subject" exact.
+    .eq('entity_type', subjectKind)
+    .eq(subjectColumn, subjectId);
   if (existing.error) {
     throw new Error(`ingestionBoundary: assertion liveness read failed: ${existing.error.message}`);
   }
@@ -756,6 +848,8 @@ export async function reconcileAssertionLiveness(
     const r = await ownedDbTable('source_assertions')
       .update({ superseded_at: now })
       .eq('organization_id', organizationId)
+      .eq('entity_type', subjectKind)
+      .eq(subjectColumn, subjectId)
       .in('id', toSupersede);
     if (r.error) throw new Error(`ingestionBoundary: supersession failed: ${r.error.message}`);
   }
@@ -763,6 +857,8 @@ export async function reconcileAssertionLiveness(
     const r = await ownedDbTable('source_assertions')
       .update({ superseded_at: null, recorded_at: now })
       .eq('organization_id', organizationId)
+      .eq('entity_type', subjectKind)
+      .eq(subjectColumn, subjectId)
       .in('id', toRevive);
     if (r.error) throw new Error(`ingestionBoundary: assertion revival failed: ${r.error.message}`);
   }
@@ -773,11 +869,20 @@ export async function reconcileAssertionLiveness(
 /**
  * S-6/S-7/S-8 — the canonical DECISION history, append-only.
  *
- * `applied_to_canonical_at` and `applied_reason` are tied together by a CHECK, so
- * clearing one clears both and destroys the record that an assertion was ever
- * canonical. They are therefore NEVER cleared and NEVER overwritten: the stamp is
- * written only onto an assertion that does not already carry one (the `.is(...,
- * null)` predicate below makes that a database condition rather than a race).
+ * This used to be `recordCanonicalProvenance`, a module-private helper that ran
+ * AFTER the canonical update had already committed. That is the defect this
+ * change closes, so the helper is gone rather than merely reordered: the
+ * decision insert and the assertion stamp now happen inside
+ * `pi_apply_canonical_decisions`, in the same transaction as the canonical
+ * update. Nothing outside this module ever called it.
+ *
+ * The semantics it carried are unchanged and now live in SQL:
+ *
+ * `applied_to_canonical_at` and `applied_reason` are tied together by a CHECK,
+ * so clearing one clears both and destroys the record that an assertion was ever
+ * canonical. They are therefore NEVER cleared and NEVER overwritten — the
+ * function stamps only an assertion that does not already carry a stamp, as a
+ * database condition rather than a race.
  *
  * That alone cannot express a value winning, losing and winning again: a single
  * timestamptz has room for one event, so a re-win would either overwrite the
@@ -786,41 +891,6 @@ export async function reconcileAssertionLiveness(
  * exists: one append-only row per decision, ordered by `decided_at`, the newest
  * being what we believe now and the rest being why.
  */
-async function recordCanonicalProvenance(
-  input: ProviderSourceRecord,
-  targetId: string,
-  decisions: readonly CanonicalDecision[],
-  now: string,
-): Promise<void> {
-  for (const d of decisions) {
-    // APPEND the decision. This is the history of record.
-    const logged = await ownedDbTable('canonical_attribute_decisions').insert({
-      organization_id: input.organizationId,
-      entity_type: input.entityType,
-      person_id: input.entityType === 'person' ? targetId : null,
-      account_id: input.entityType === 'account' ? targetId : null,
-      attribute: d.attribute,
-      assertion_id: d.assertionId,
-      value: d.value,
-      reason: d.reason,
-      decided_at: now,
-    });
-    if (logged.error) {
-      throw new Error(`ingestionBoundary: canonical decision log failed: ${logged.error.message}`);
-    }
-
-    // STAMP the assertion, only if it is not already stamped. Never cleared,
-    // never overwritten — the log carries any later re-win.
-    const stamped = await ownedDbTable('source_assertions')
-      .update({ applied_to_canonical_at: now, applied_reason: d.reason })
-      .eq('id', d.assertionId)
-      .eq('organization_id', input.organizationId)
-      .is('applied_to_canonical_at', null);
-    if (stamped.error) {
-      throw new Error(`ingestionBoundary: assertion provenance stamp failed: ${stamped.error.message}`);
-    }
-  }
-}
 
 /**
  * The full boundary: evidence first, liveness second, canonical third, provenance
@@ -847,9 +917,28 @@ export async function ingestSourceRecord(
 
   const { recorded, alreadyPresent } = await recordAssertions(input, sourceRecordId, pending, now);
 
+  // 5/6/7 — canonical update only where a rule permits, and only when identity is
+  // resolved. Unresolved evidence is parked, which is a supported state. Resolved
+  // here rather than below because 4b needs it.
+  const targetId = input.entityType === 'person' ? input.personId : input.accountId;
+
   // 4b. RECONCILE LIVENESS before anything arbitrates. A claim this record has
   // withdrawn must not contest the attribute it no longer makes.
-  const liveness = await reconcileAssertionLiveness(input.organizationId, sourceRecordId, pending, now);
+  //
+  // D2: the pass is SUBJECT-CONFINED. One source record can carry evidence for
+  // more than one subject, so liveness is scoped to the subject being ingested.
+  // Parked evidence has no resolved subject to confine to, so it is left alone
+  // rather than reconciled widely — reconciling it would be the subject-blind
+  // behaviour this change exists to remove.
+  const liveness = targetId
+    ? await reconcileAssertionLiveness(
+        input.organizationId, sourceRecordId,
+        input.entityType === 'person'
+          ? { kind: 'person', personId: targetId }
+          : { kind: 'account', accountId: targetId },
+        pending, now,
+      )
+    : { superseded: 0, revived: 0 };
 
   const result: IngestionResult = {
     sourceRecordId, outcome,
@@ -858,9 +947,6 @@ export async function ingestSourceRecord(
     canonicalApplied: [], canonicalWithheld: [], canonicalContested: [],
   };
 
-  // 5/6/7 — canonical update only where a rule permits, and only when identity is
-  // resolved. Unresolved evidence is parked, which is a supported state.
-  const targetId = input.entityType === 'person' ? input.personId : input.accountId;
   if (!targetId) return result;
 
   const table = input.entityType === 'person' ? 'unified_persons' : 'prospect_accounts';
@@ -882,6 +968,16 @@ export async function ingestSourceRecord(
   const live = await ownedDbTable('source_assertions')
     .select('id, attribute, normalized_value, provider, confidence, observed_at, recorded_at, superseded_at')
     .eq('organization_id', input.organizationId)
+    // SUBJECT-CORRECT (E-1). The subject column alone is NOT sufficient: a
+    // person-scoped row can also carry an account leg, which would otherwise be
+    // read as company evidence — DECIDING and ATTESTING an account attribute
+    // from a person's own value. O-5 has since gated the writer, so NEW person
+    // assertions store `account_id = NULL`; HISTORICAL rows still carry both,
+    // and no schema constraint forbids it, so this predicate stays as the
+    // defence. `entity_type` declares which leg is the subject, which is what
+    // makes "evidence about this subject" exact — matching D2's reconciliation
+    // predicate, which confines on both legs.
+    .eq('entity_type', input.entityType)
     .eq(input.entityType === 'person' ? 'person_id' : 'account_id', targetId);
   if (live.error) return result;
 
@@ -901,17 +997,36 @@ export async function ingestSourceRecord(
   result.canonicalContested = decision.contested;
   if (decision.apply.length === 0) return result;
 
-  const patch: Record<string, unknown> = { attributes_source: input.provider, attributes_updated_at: now };
-  for (const a of decision.apply) patch[a.attribute] = a.value;
-
-  const applied = await ownedDbTable(table)
-    .update(patch).eq('id', targetId).eq(tenantColumn, input.organizationId);
+  // 6/7. THE CANONICAL WRITE, ATOMICALLY.
+  //
+  // The canonical update, the decision log and the provenance stamp are one
+  // transaction because they are one fact. Three separate PostgREST statements
+  // could commit the first and fail the second, leaving a canonical value that
+  // no decision row explains — and arbitration would never repair it, because
+  // the next pass skips an attribute whose canonical value already matches and
+  // returns before provenance is reached. So the gap was permanent, which is
+  // why this is a function call and not a retry.
+  //
+  // Winner selection stays HERE, in `decideCanonicalUpdates`. The function
+  // verifies the decisions it is handed against their assertions and refuses
+  // anything outside the authorized attribute surface, but it cannot choose a
+  // winner — there is no ordering or comparison in it at all.
+  const applied = await ownedDbRpc('pi_apply_canonical_decisions', {
+    p_organization_id: input.organizationId,
+    p_entity_type: input.entityType,
+    p_target_id: targetId,
+    p_provider: input.provider,
+    p_now: now,
+    p_decisions: decision.apply.map((a) => ({
+      attribute: a.attribute,
+      value: a.value,
+      assertion_id: a.assertionId,
+      reason: a.reason,
+    })),
+  });
   if (applied.error) {
-    throw new Error(`ingestionBoundary: canonical update failed: ${applied.error.message}`);
+    throw new Error(`ingestionBoundary: canonical write failed: ${applied.error.message}`);
   }
   result.canonicalApplied = decision.apply.map((a) => a.attribute);
-
-  // 7. provenance — append the decision, and stamp the winning assertion.
-  await recordCanonicalProvenance(input, targetId, decision.apply, now);
   return result;
 }

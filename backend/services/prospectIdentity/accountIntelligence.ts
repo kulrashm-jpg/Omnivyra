@@ -372,6 +372,14 @@ export const defaultAccountIntelligencePorts: AccountIntelligencePorts = {
     const { data, error } = await ownedDbTable('source_assertions')
       .select('id, attribute, normalized_value, provider, confidence, observed_at, recorded_at, source_record_id')
       .eq('organization_id', organizationId)      // tenant boundary — never optional
+      // O-2 — COMPANY evidence only. `account_id` alone does NOT establish that
+      // a row describes the company: the ingestion writer sets `account_id`
+      // unconditionally, so every employee's own person-scoped assertion carries
+      // this account's leg too. Company intelligence must read account-scoped
+      // assertions for company evidence. `entity_type` is what declares which
+      // leg is the subject, and `entity_coherent` already keeps `person_id` NULL
+      // on an account row, so no companion predicate is needed.
+      .eq('entity_type', 'account')
       .eq('account_id', accountId)
       // LIVE evidence only, matching LI-2's own canonical-decision query.
       .is('superseded_at', null);

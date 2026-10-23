@@ -149,6 +149,19 @@ const canonical = async (relationshipId: string) => {
   return rows[0];
 };
 
+/** Run a statement and return its SQLSTATE, or 'ok'. */
+const attemptCode = async (sql: string, params: unknown[] = []): Promise<string> => {
+  await db.query('SAVEPOINT ac');
+  try {
+    await db.query(sql, params);
+    await db.query('ROLLBACK TO SAVEPOINT ac');
+    return 'ok';
+  } catch (err: any) {
+    await db.query('ROLLBACK TO SAVEPOINT ac');
+    return err.code ?? 'unknown';
+  }
+};
+
 /** One provider claim. Distinct source keys by default, as real sources are. */
 const assertProvider = (
   org: string, relationshipId: string, attribute: string, value: string,
@@ -795,6 +808,198 @@ describe('REL-ATTR — §27 concurrency and §28 idempotency', () => {
       await assertProvider(ORG_A, rel, 'job_title', 'VP Sales', 'clearbit', T1);
       await assertProvider(ORG_A, rel, 'job_title', 'CTO', 'apollo', T2);
       expect((await canonical(rel)).job_title).toBe('CTO');
+    });
+  });
+});
+
+describe('REL-ATTR — relationship evidence DETACHES on erasure (migration 425)', () => {
+  const employment = async (domain: string) => {
+    await seedTenants();
+    const p = await newPerson(ORG_A);
+    const a = await newAccount(ORG_A, { domain });
+    const rel = await newRelationship(ORG_A, p, a);
+    return { p, a, rel };
+  };
+
+  it('the assertion SURVIVES relationship deletion, with relationship_id NULL', async () => {
+    await inRollback(async () => {
+      const { rel } = await employment('detach-a.test');
+      await assertProvider(ORG_A, rel, 'job_title', 'VP Sales', 'apollo', T1);
+
+      const { rows: before } = await db.query(
+        'SELECT id, relationship_id FROM public.source_assertions WHERE relationship_id=$1', [rel]);
+      expect(before).toHaveLength(1);
+
+      // The only way a relationship is deleted: the cascade from its person.
+      await db.query('DELETE FROM public.person_account_relationships WHERE id=$1', [rel]);
+
+      const { rows: after } = await db.query(
+        `SELECT id, entity_type, relationship_id, person_id, account_id, normalized_value, organization_id
+           FROM public.source_assertions WHERE id=$1`, [before[0].id]);
+      expect(after).toHaveLength(1);                   // it survived
+      expect(after[0].relationship_id).toBeNull();     // detached
+      expect(after[0]).toMatchObject({
+        entity_type: 'relationship', person_id: null, account_id: null,
+        normalized_value: 'VP Sales',
+      });
+      // The tenant leg is NOT nulled: SET NULL names relationship_id only.
+      expect(after[0].organization_id).toBe(ORG_A);
+    });
+  });
+
+  it('§14 detached evidence is UNREACHABLE by relationship arbitration', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const accA = await newAccount(ORG_A, { domain: 'detach-arb-a.test' });
+      const accB = await newAccount(ORG_A, { domain: 'detach-arb-b.test' });
+      const RA = await newRelationship(ORG_A, p, accA);
+      const RB = await newRelationship(ORG_A, p, accB);
+
+      // RA gets a strong, newer claim; then RA is erased, detaching it.
+      await assertProvider(ORG_A, RA, 'job_title', 'Chief Revenue Officer', 'apollo', T3);
+      await db.query('DELETE FROM public.person_account_relationships WHERE id=$1', [RA]);
+      const { rows: detached } = await db.query(
+        `SELECT count(*)::int n FROM public.source_assertions
+          WHERE relationship_id IS NULL AND entity_type='relationship'`);
+      expect(detached[0].n).toBe(1);
+
+      // Now arbitrate RB through the REAL producer. The detached claim is
+      // newer than RB's, so if it were a candidate it would WIN.
+      const res = await assertProvider(ORG_A, RB, 'job_title', 'CTO', 'apollo', T1);
+      expect(res.ok).toBe(true);
+      expect((await canonical(RB)).job_title).toBe('CTO');
+      // It became neither a candidate nor a winner FOR RB. Note the decision
+      // RA made before it was erased legitimately survives, detached — so the
+      // claim to test is that RB's history never acquired it, not that the row
+      // is gone.
+      const { rows: forRb } = await db.query(
+        `SELECT value FROM public.canonical_attribute_decisions
+          WHERE relationship_id=$1 ORDER BY decided_at`, [RB]);
+      expect(forRb.map((r: any) => r.value)).toEqual(['CTO']);
+      // And the detached decision kept its own value while naming no subject.
+      const { rows: orphan } = await db.query(
+        `SELECT value, relationship_id, person_id, account_id
+           FROM public.canonical_attribute_decisions
+          WHERE value='Chief Revenue Officer'`);
+      expect(orphan).toHaveLength(1);
+      expect(orphan[0]).toMatchObject({ relationship_id: null, person_id: null, account_id: null });
+      // Structurally: the producer looks the subject up by equality, and NULL
+      // never matches an equality predicate.
+    });
+  });
+
+  it('§15 a detached assertion can never be RE-POINTED or re-attached', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const accA = await newAccount(ORG_A, { domain: 'repoint-a.test' });
+      const accB = await newAccount(ORG_A, { domain: 'repoint-b.test' });
+      const RA = await newRelationship(ORG_A, p, accA);
+      const RB = await newRelationship(ORG_A, p, accB);
+      await assertProvider(ORG_A, RA, 'job_title', 'VP Sales', 'apollo', T1);
+      const { rows } = await db.query(
+        'SELECT id FROM public.source_assertions WHERE relationship_id=$1', [RA]);
+      const assertionId = rows[0].id;
+
+      await db.query('DELETE FROM public.person_account_relationships WHERE id=$1', [RA]);
+
+      // Re-attaching erased evidence to a LIVE relationship would silently
+      // reassign one person's employment claim to another's employment.
+      expect(await attemptCode(
+        'UPDATE public.source_assertions SET relationship_id=$1 WHERE id=$2', [RB, assertionId]))
+        .toBe('P0001');
+      // And an ATTACHED assertion cannot be moved either.
+      const { rows: live } = await db.query(
+        'SELECT id FROM public.source_assertions WHERE relationship_id=$1', [RB]);
+      if (live.length > 0) {
+        expect(await attemptCode(
+          'UPDATE public.source_assertions SET relationship_id=$1 WHERE id=$2', [RA, live[0].id]))
+          .toBe('P0001');
+      }
+      // Detaching, however, is the one permitted transition.
+      expect(await attemptCode(
+        'UPDATE public.source_assertions SET relationship_id=NULL WHERE id=$1', [assertionId]))
+        .toBe('ok');
+    });
+  });
+
+  it('§16 a relationship assertion can still never be INSERTED without a relationship', async () => {
+    await inRollback(async () => {
+      const { p, rel } = await employment('insert-guard.test');
+      const { rows: rec } = await db.query(
+        `INSERT INTO public.source_records
+           (organization_id, provider, source_entity_type, source_record_id, person_id, raw_payload, payload_hash)
+         VALUES ($1,'apollo','person','guard-rec',$2,'{}'::jsonb,$3) RETURNING id`,
+        [ORG_A, p, 'a'.repeat(64)]);
+      expect(rel).toBeTruthy();
+
+      // The old CHECK was removed so the cascade can detach; the guard replaced
+      // it rather than the protection simply disappearing.
+      expect(await attemptCode(
+        `INSERT INTO public.source_assertions
+           (organization_id, source_record_id, entity_type, relationship_id, attribute,
+            normalized_value, value_hash, provider, recorded_at)
+         VALUES ($1,$2,'relationship',NULL,'job_title','x',$3,'apollo',now())`,
+        [ORG_A, rec[0].id, 'b'.repeat(64)])).toBe('P0001');
+
+      // And a relationship assertion still may not name a person or account.
+      expect(await attemptCode(
+        `INSERT INTO public.source_assertions
+           (organization_id, source_record_id, entity_type, relationship_id, person_id, attribute,
+            normalized_value, value_hash, provider, recorded_at)
+         VALUES ($1,$2,'relationship',$3,$4,'job_title','x',$5,'apollo',now())`,
+        [ORG_A, rec[0].id, rel, p, 'c'.repeat(64)])).toBe('23514');
+    });
+  });
+
+  it('§17 detachment cannot be used to create cross-tenant evidence', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const pa = await newPerson(ORG_A);
+      const aa = await newAccount(ORG_A, { domain: 'xt-detach-a.test' });
+      const RA = await newRelationship(ORG_A, pa, aa);
+      await assertProvider(ORG_A, RA, 'job_title', 'VP Sales', 'apollo', T1);
+      const { rows } = await db.query(
+        'SELECT id FROM public.source_assertions WHERE relationship_id=$1', [RA]);
+
+      const pb = await newPerson(ORG_B);
+      const ab = await newAccount(ORG_B, { domain: 'xt-detach-b.test' });
+      const RB = await newRelationship(ORG_B, pb, ab);
+
+      // Tenant A's assertion pointed at tenant B's relationship: refused by the
+      // composite FK, so the guard is not the only thing standing in the way.
+      // The re-point guard fires first; both are structural.
+      const code = await attemptCode(
+        'UPDATE public.source_assertions SET relationship_id=$1 WHERE id=$2', [RB, rows[0].id]);
+      expect(['P0001', '23503']).toContain(code);
+
+      // Detaching tenant A's relationship leaves tenant B untouched.
+      await db.query('DELETE FROM public.person_account_relationships WHERE id=$1', [RA]);
+      const { rows: bRows } = await db.query(
+        'SELECT count(*)::int n FROM public.source_assertions WHERE relationship_id=$1', [RB]);
+      expect(bRows[0].n).toBe(0);
+      const { rows: detached } = await db.query(
+        `SELECT organization_id FROM public.source_assertions WHERE id=$1`, [rows[0].id]);
+      expect(detached[0].organization_id).toBe(ORG_A);   // tenant preserved
+    });
+  });
+
+  it('the surviving detached assertion keeps its evidence but names no subject', async () => {
+    await inRollback(async () => {
+      const { rel } = await employment('detach-shape.test');
+      await assertProvider(ORG_A, rel, 'job_title', 'VP Sales', 'apollo', T1);
+      await db.query('DELETE FROM public.person_account_relationships WHERE id=$1', [rel]);
+      const { rows } = await db.query(
+        `SELECT person_id, account_id, relationship_id, provider, normalized_value, origin
+           FROM public.source_assertions WHERE entity_type='relationship'`);
+      expect(rows).toHaveLength(1);
+      // No residual subject identifier of any kind.
+      expect(rows[0].person_id).toBeNull();
+      expect(rows[0].account_id).toBeNull();
+      expect(rows[0].relationship_id).toBeNull();
+      // The evidence itself is intact; what it was ABOUT is gone.
+      expect(rows[0]).toMatchObject({ provider: 'apollo', normalized_value: 'VP Sales', origin: 'provider' });
     });
   });
 });

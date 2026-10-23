@@ -91,11 +91,18 @@ export interface ExecuteEnrichmentPorts {
 
   /**
    * The most recent equivalent observation, for duplicate suppression.
-   * Equivalence is (tenant, entity, provider, attribute set) — the identity
-   * `source_records.payload_hash` and `observation_count` already model.
+   * Equivalence is (tenant, SUBJECT, entity, provider, attribute set) — the
+   * identity `source_records.payload_hash` and `observation_count` already
+   * model.
+   *
+   * O-3 — the subject is REQUIRED, and typed as `persistObservation` types it
+   * below. An id alone does not say which subject it names, and a person
+   * assertion carries the account leg too, so a subject-blind lookup let an
+   * employee's evidence suppress company enrichment.
    */
   findRecentObservation(input: {
     organizationId: string;
+    subject: 'person' | 'account';
     entityId: string;
     providerId: string;
     attributes: readonly string[];
@@ -232,7 +239,8 @@ export async function executeEnrichment(
   // observation means the answer is already on file.
   const freshnessDays = options.freshnessDays ?? DEFAULT_FRESHNESS_DAYS;
   const recent = await ports.findRecentObservation({
-    organizationId, entityId: request.entityId, providerId: adapter.id, attributes: supported,
+    organizationId, subject: request.subject, entityId: request.entityId,
+    providerId: adapter.id, attributes: supported,
   });
   if (recent && daysBetween(ports.now(), recent.observedAt) < freshnessDays) {
     return outcomeResult('duplicate_suppressed', request, adapter.id,

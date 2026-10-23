@@ -563,12 +563,26 @@ describe('PAR — human assertion provenance', () => {
          VALUES ($1,$2,'relationship',$3,'job_title','RelTitle',$4,'apollo',now())`,
         [ORG_A, sr, r, hex('relationship-same-tenant')]);
 
-      // entity_type=relationship without a relationship_id: refused
+      // entity_type=relationship without a relationship_id: refused.
+      //
+      // Since migration 20261125000000 this is the TRIGGER's refusal (P0001),
+      // not the CHECK's (23514). The NOT NULL half moved to an INSERT guard so
+      // that the erasure cascade can later detach a recorded assertion, and a
+      // BEFORE INSERT trigger is evaluated ahead of the table's constraints.
+      // The guarantee is unchanged; only which layer speaks first is.
       expect(await attempt(
         `INSERT INTO public.source_assertions
-           (organization_id, source_record_id, entity_type, person_id, attribute, normalized_value, value_hash, provider, recorded_at)
-         VALUES ($1,$2,'relationship',$3,'job_title','Z',$4,'apollo',now())`,
-        [ORG_A, sr, p, hex('relationship-missing-id')])).toBe('23514');
+           (organization_id, source_record_id, entity_type, attribute, normalized_value, value_hash, provider, recorded_at)
+         VALUES ($1,$2,'relationship','job_title','Z',$3,'apollo',now())`,
+        [ORG_A, sr, hex('relationship-missing-id')])).toBe('P0001');
+
+      // ...and the CHECK still refuses a relationship assertion that names a
+      // person, which is the half that did NOT move.
+      expect(await attempt(
+        `INSERT INTO public.source_assertions
+           (organization_id, source_record_id, entity_type, relationship_id, person_id, attribute, normalized_value, value_hash, provider, recorded_at)
+         VALUES ($1,$2,'relationship',$3,$4,'job_title','Z',$5,'apollo',now())`,
+        [ORG_A, sr, r, p, hex('relationship-names-person')])).toBe('23514');
 
       // another tenant naming this relationship: refused by the composite FK
       const pb = await newPerson(ORG_B);

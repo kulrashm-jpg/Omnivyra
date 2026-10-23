@@ -46,6 +46,7 @@
 
 import { ownedDbTable } from '../../../db/writeOwner';
 import type { ExecuteEnrichmentPorts } from './execute';
+import type { EnrichmentSubject } from './contract';
 
 /** The evidence columns this read needs. Nothing else is selected. */
 export interface AssertionObservationRow {
@@ -58,6 +59,12 @@ export interface AssertionObservationRow {
 
 export interface FindRecentObservationInput {
   readonly organizationId: string;
+  /**
+   * O-3 — WHICH subject this lookup is about. Never inferred from the id: an
+   * id alone does not say which table it came from, and a person assertion
+   * carries the account leg as well as its own.
+   */
+  readonly subject: EnrichmentSubject;
   readonly entityId: string;
   readonly providerId: string;
   readonly attributes: readonly string[];
@@ -119,12 +126,37 @@ export function pickRecentObservation(
 /**
  * The real read. Tenant-scoped in the WHERE clause, never after the fact.
  *
- * The port carries no subject, so the entity is matched against either
- * canonical leg. `entityId` is validated as a UUID before it reaches the
- * filter: it is interpolated into a PostgREST `or` expression, and a value
- * that is not an id has no business being there.
+ * O-3 — SUBJECT-AWARE. This used to match the entity against EITHER canonical
+ * leg, because the port carried no subject. That was not a safe default: a
+ * person assertion can carry BOTH legs — the lead orchestrator recorded them
+ * that way until O-5 gated the writer — so an employee's own `city`, `region`
+ * or `country_code` could answer an ACCOUNT request and suppress company
+ * enrichment that had never happened. NEW person assertions now store
+ * `account_id = NULL`, but HISTORICAL rows still carry both and no schema
+ * constraint forbids it, so this filter remains the defence. The subject comes
+ * from the request — the sibling `persistObservation` port already carried it —
+ * and `entity_type` declares which leg is the subject, so the two directions
+ * stay isolated: a person's dual-leg row still suppresses PERSON enrichment,
+ * which is correct, and never account enrichment.
+ *
+ * It must stay SUBJECT-AWARE. A blanket account-only predicate would strip
+ * person suppression and buy a provider call on every person enrichment.
+ *
+ * The subject is validated BEFORE any query and there is no fallback. An
+ * unrecognised subject fails CLOSED, like a read error, because the unsafe
+ * outcome here is a query that answers for the wrong subject.
+ *
+ * `entityId` is still validated as a UUID. That guard was load-bearing while
+ * the id was interpolated into a PostgREST `or` expression; the interpolation
+ * is gone, so it is now plain input validation and kept as such.
  */
 const readAssertions: AssertionReader = async (input) => {
+  if (input.subject !== 'person' && input.subject !== 'account') {
+    throw new Error(
+      'findRecentObservation: subject must be \'person\' or \'account\' — suppression is '
+      + `never subject-blind (got ${JSON.stringify(input.subject ?? null)})`,
+    );
+  }
   if (!UUID.test(input.entityId)) {
     throw new Error('findRecentObservation: entityId must be a canonical uuid');
   }
@@ -134,7 +166,12 @@ const readAssertions: AssertionReader = async (input) => {
     .eq('provider', input.providerId)
     .in('attribute', [...input.attributes])
     .is('superseded_at', null)
-    .or(`person_id.eq.${input.entityId},account_id.eq.${input.entityId}`);
+    // BOTH legs of the confinement, as D2 and Change 1a already do it:
+    // `entity_type` declares which leg is the subject, and the subject column
+    // pins the id. The subject column alone would not be enough — a person row
+    // carries `account_id` too.
+    .eq('entity_type', input.subject)
+    .eq(input.subject === 'person' ? 'person_id' : 'account_id', input.entityId);
 
   // Fail CLOSED. See the header: proceeding would spend the tenant's quota on a
   // question we could not answer.
@@ -154,6 +191,9 @@ export function makeFindRecentObservation(
     if (!input.attributes?.length) return null;
     const rows = await read({
       organizationId,
+      // Passed through verbatim, NOT normalised: a subject is one of two
+      // literals, so anything else must be rejected rather than coerced.
+      subject: input.subject,
       entityId: String(input.entityId ?? '').trim(),
       providerId: String(input.providerId ?? '').trim(),
       attributes: input.attributes,

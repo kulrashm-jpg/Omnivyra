@@ -22,7 +22,7 @@ jest.mock('../../db/writeOwner', () => ({
   __esModule: true,
   ownedDbTable: (table: string) => {
     const { db: client } = require('./setup') as { db: { query: Function } };
-    type Filter = { col: string; op: 'eq' | 'is' | 'in'; val: unknown };
+    type Filter = { col: string; op: 'eq' | 'is' | 'in' | 'not_is_null'; val: unknown };
     const st = {
       op: 'select' as 'select' | 'insert' | 'update' | 'delete',
       cols: '*', payload: null as Record<string, unknown> | null,
@@ -38,6 +38,10 @@ jest.mock('../../db/writeOwner', () => ({
       if (st.filters.length === 0) return '';
       const parts = st.filters.map((f) => {
         if (f.op === 'is' && f.val === null) return `"${f.col}" IS NULL`;
+        // `not.is.null` — the ONE negated form production uses. It binds no
+        // parameter because `IS NOT NULL` takes no value, so the only
+        // interpolation is the column name, quoted exactly as `eq`/`is` above.
+        if (f.op === 'not_is_null') return `"${f.col}" IS NOT NULL`;
         if (f.op === 'in') {
           const list = (f.val as unknown[]).map((v) => { params.push(v); return `$${params.length}`; });
           return `"${f.col}" IN (${list.join(', ')})`;
@@ -89,6 +93,30 @@ jest.mock('../../db/writeOwner', () => ({
       eq: (col: string, val: unknown) => { st.filters.push({ col, op: 'eq', val }); return b; },
       is: (col: string, val: unknown) => { st.filters.push({ col, op: 'is', val }); return b; },
       in: (col: string, val: unknown[]) => { st.filters.push({ col, op: 'in', val }); return b; },
+      /**
+       * NEGATED FILTER, and only the single form production sends.
+       *
+       * `personErasure.clearPersonEvidenceAccountLinks` issues exactly
+       * `.not('account_id', 'is', null)` — PostgREST's `not.is.null`, which is
+       * SQL `"account_id" IS NOT NULL`. It is the only `.not()` reachable from
+       * `erasePerson`, verified by grep over `personErasure.ts` and the four
+       * modules it calls.
+       *
+       * Anything else THROWS rather than being ignored. A permissive `not` that
+       * silently dropped its predicate would make the erasure tests pass while
+       * the production query matched every row — including the ones it exists
+       * to leave alone.
+       */
+      not: (col: string, op: string, val: unknown) => {
+        if (op !== 'is' || val !== null) {
+          throw new Error(
+            `dl adapter: unsupported not() form: not(${col}, ${op}, ${String(val)}). `
+            + 'Only not(col, \'is\', null) is implemented.',
+          );
+        }
+        st.filters.push({ col, op: 'not_is_null', val: null });
+        return b;
+      },
       order: () => b,
       limit: (n: number) => { st.limit = n; return b; },
       single: () => { st.mode = 'one'; return b; },
@@ -102,6 +130,10 @@ jest.mock('../../db/writeOwner', () => ({
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { assertRelationshipAttribute } =
   require('../../services/prospectIdentity/relationshipAttributeIngestion');
+// The REAL WS-F erasure path. Its whole graph (contactGovernanceWriter,
+// erasurePlan) reaches the database only through `ownedDbTable`, which the
+// adapter above provides, so nothing about erasure is stubbed.
+const { erasePerson } = require('../../services/prospectIdentity/personErasure');
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const T1 = '2026-01-01T00:00:00.000Z';
@@ -372,41 +404,39 @@ describe('DL — append-only survives the new subject', () => {
     });
   });
 
-  it('deleting a relationship with a recorded decision is REFUSED by append-only', async () => {
+  it('deleting a relationship with a recorded decision now DETACHES instead of refusing', async () => {
     await inRollback(async () => {
       const { rel } = await recorded();
-      // The chain, and it is worth stating because it is this gate's blocking
-      // finding: deleting the relationship cascade-deletes its assertions
-      // (`source_assertions_relationship_tenant_fk ON DELETE CASCADE`, frozen
-      // in migration 20261122000000), which cascade-deletes the decisions
-      // (`canonical_decisions_assertion_tenant_fk ON DELETE CASCADE`, frozen in
-      // 20261119000000) -- and append-only refuses every DELETE.
-      //
-      // The decision log cannot be both absolutely append-only and deletable
-      // with its evidence. Which of the two gives way is an owner decision, so
-      // this test pins what the schema ACTUALLY does today rather than what
-      // would be convenient.
-      const code = await attemptCode(
-        'DELETE FROM public.person_account_relationships WHERE id=$1', [rel]);
-      expect(code).toBe('P0001');
+      // Before migration 425 this was P0001: the relationship cascade deleted
+      // its assertions, which cascade-deleted the decisions, and append-only
+      // refused. The assertion now DETACHES instead, so the decision is never
+      // offered for deletion at all.
+      await db.query('DELETE FROM public.person_account_relationships WHERE id=$1', [rel]);
+
+      const { rows } = await db.query(
+        `SELECT entity_type, relationship_id, person_id, account_id, attribute, value, assertion_id
+           FROM public.canonical_attribute_decisions WHERE entity_type='relationship'`);
+      expect(rows).toHaveLength(1);                      // the decision survived
+      expect(rows[0].relationship_id).toBeNull();        // via its own SET NULL edge
+      expect(rows[0]).toMatchObject({ attribute: 'job_title', value: 'VP Sales' });
+      // Its evidence survived too, so `assertion_id` still resolves.
+      const { rows: ev } = await db.query(
+        'SELECT id, relationship_id FROM public.source_assertions WHERE id=$1', [rows[0].assertion_id]);
+      expect(ev).toHaveLength(1);
+      expect(ev[0].relationship_id).toBeNull();
     });
   });
 
-  it('and therefore erasing a person with a recorded relationship decision is refused', async () => {
+  it('and erasing a person with a recorded relationship decision now succeeds', async () => {
     await inRollback(async () => {
       await seedTenants();
       const p = await newPerson(ORG_A);
       const a = await newAccount(ORG_A, { domain: 'dl-erase.test' });
       const rel = await newRelationship(ORG_A, p, a);
       await assertProvider(ORG_A, rel, 'job_title', 'VP Sales', 'apollo', T1);
-      expect(rel).toBeTruthy();
 
-      // `deletePersonRow` (WS-F erasure) deletes the person, which cascades to
-      // the relationship and then down the chain above. This is a REGRESSION
-      // introduced by recording relationship decisions, and it is reported
-      // rather than worked around.
       expect(await attemptCode(
-        'DELETE FROM public.unified_persons WHERE id=$1', [p])).toBe('P0001');
+        'DELETE FROM public.unified_persons WHERE id=$1', [p])).toBe('ok');
     });
   });
 
@@ -843,5 +873,305 @@ describe('DL — person and account regression', () => {
       expect(names).toContain('idx_canonical_decisions_relationship_attr');
       expect(names).toContain('idx_canonical_decisions_assertion');
     });
+  });
+});
+
+describe('DL — §11 the COMPLETE erasure path, through the real erasePerson', () => {
+  const employed = async (domain: string) => {
+    await seedTenants();
+    const p = await newPerson(ORG_A);
+    const a = await newAccount(ORG_A, { domain });
+    const rel = await newRelationship(ORG_A, p, a);
+    return { p, a, rel };
+  };
+
+  it('erases a person whose relationship carries evidence AND a decision', async () => {
+    await inRollback(async () => {
+      const { p, rel } = await employed('dl-real-erase.test');
+      await assertProvider(ORG_A, rel, 'job_title', 'VP Sales', 'apollo', T1);
+      const { rows: before } = await db.query(
+        'SELECT id FROM public.canonical_attribute_decisions WHERE relationship_id=$1', [rel]);
+      expect(before).toHaveLength(1);
+
+      // Not a hand-rolled DELETE: the actual service, which re-anchors
+      // governance, revokes the originals and only then deletes the person.
+      const res = await erasePerson({
+        organizationId: ORG_A, personId: p, reason: 'gate-test erasure',
+        now: '2026-10-08T00:00:00.000Z',
+      });
+      expect(res.deleted).toBe(true);
+      expect(res.suppressionsLostToErasure).toEqual([]);
+
+      // The person and the relationship are gone.
+      const { rows: person } = await db.query(
+        'SELECT count(*)::int n FROM public.unified_persons WHERE id=$1', [p]);
+      expect(person[0].n).toBe(0);
+      const { rows: r } = await db.query(
+        'SELECT count(*)::int n FROM public.person_account_relationships WHERE id=$1', [rel]);
+      expect(r[0].n).toBe(0);
+
+      // The evidence and the decision survive, naming nothing.
+      const { rows: ev } = await db.query(
+        `SELECT relationship_id, person_id, account_id FROM public.source_assertions
+          WHERE entity_type='relationship'`);
+      expect(ev).toHaveLength(1);
+      expect(ev[0]).toMatchObject({ relationship_id: null, person_id: null, account_id: null });
+
+      const { rows: dec } = await db.query(
+        `SELECT id, relationship_id, person_id, account_id, assertion_id, value
+           FROM public.canonical_attribute_decisions WHERE id=$1`, [before[0].id]);
+      expect(dec).toHaveLength(1);
+      expect(dec[0]).toMatchObject({ relationship_id: null, person_id: null, account_id: null });
+      expect(dec[0].value).toBe('VP Sales');
+      // `assertion_id` still resolves to a real row — the audit trail is whole.
+      const { rows: resolved } = await db.query(
+        'SELECT count(*)::int n FROM public.source_assertions WHERE id=$1', [dec[0].assertion_id]);
+      expect(resolved[0].n).toBe(1);
+    });
+  });
+
+  it('§12 erases a person with TWO relationships, detaching both histories', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const accA = await newAccount(ORG_A, { domain: 'dl-multi-a.test' });
+      const accB = await newAccount(ORG_A, { domain: 'dl-multi-b.test' });
+      const RA = await newRelationship(ORG_A, p, accA);
+      const RB = await newRelationship(ORG_A, p, accB);
+      await assertProvider(ORG_A, RA, 'job_title', 'VP Sales', 'apollo', T1);
+      await assertProvider(ORG_A, RB, 'job_title', 'CTO', 'apollo', T1);
+
+      const res = await erasePerson({
+        organizationId: ORG_A, personId: p, reason: 'gate-test erasure',
+        now: '2026-10-08T00:00:00.000Z',
+      });
+      expect(res.deleted).toBe(true);
+
+      const { rows: rels } = await db.query(
+        `SELECT count(*)::int n FROM public.person_account_relationships
+          WHERE id = ANY($1::uuid[])`, [[RA, RB]]);
+      expect(rels[0].n).toBe(0);
+
+      // Both decisions survive, both detached, both values intact and distinct.
+      const { rows: dec } = await db.query(
+        `SELECT value, relationship_id, person_id, account_id
+           FROM public.canonical_attribute_decisions
+          WHERE entity_type='relationship' ORDER BY value`);
+      expect(dec.map((r: any) => r.value)).toEqual(['CTO', 'VP Sales']);
+      for (const d of dec as any[]) {
+        expect(d.relationship_id).toBeNull();
+        expect(d.person_id).toBeNull();
+        expect(d.account_id).toBeNull();
+      }
+      const { rows: ev } = await db.query(
+        `SELECT count(*)::int n FROM public.source_assertions
+          WHERE entity_type='relationship' AND relationship_id IS NULL`);
+      expect(ev[0].n).toBe(2);
+    });
+  });
+
+  it('§13 a HISTORICAL relationship creates no separate erasure rule', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const accA = await newAccount(ORG_A, { domain: 'dl-hist-erase-a.test' });
+      const accB = await newAccount(ORG_A, { domain: 'dl-hist-erase-b.test' });
+      const RA = await newRelationship(ORG_A, p, accA, {
+        started_at: '2019-01-01T00:00:00Z', ended_at: '2021-01-01T00:00:00Z',
+      });
+      const RB = await newRelationship(ORG_A, p, accB);
+      await assertProvider(ORG_A, RA, 'job_title', 'VP Sales', 'apollo', T1);
+      await assertProvider(ORG_A, RB, 'job_title', 'CTO', 'apollo', T1);
+      expect(RA).not.toBe(RB);
+
+      const res = await erasePerson({
+        organizationId: ORG_A, personId: p, reason: 'gate-test erasure',
+        now: '2026-10-08T00:00:00.000Z',
+      });
+      expect(res.deleted).toBe(true);
+      const { rows } = await db.query(
+        `SELECT count(*)::int n FROM public.canonical_attribute_decisions
+          WHERE entity_type='relationship' AND relationship_id IS NULL`);
+      expect(rows[0].n).toBe(2);
+    });
+  });
+
+  it('§18 person-level retention is UNCHANGED by this migration', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const ev = await realAssertion(ORG_A, p, 'abc9');
+      await db.query(
+        `INSERT INTO public.canonical_attribute_decisions
+           (organization_id, entity_type, person_id, attribute, assertion_id, value, reason, decided_at)
+         VALUES ($1,'person',$2,'job_title',$3,'VP Sales','newest_observation',now())`,
+        [ORG_A, p, ev]);
+
+      const res = await erasePerson({
+        organizationId: ORG_A, personId: p, reason: 'gate-test erasure',
+        now: '2026-10-08T00:00:00.000Z',
+      });
+      expect(res.deleted).toBe(true);
+
+      // Exactly the pre-425 behaviour: the assertion and the decision survive
+      // with person_id nulled. Option A would have deleted both.
+      const { rows: a } = await db.query(
+        `SELECT person_id FROM public.source_assertions WHERE id=$1`, [ev]);
+      expect(a).toHaveLength(1);
+      expect(a[0].person_id).toBeNull();
+      const { rows: d } = await db.query(
+        `SELECT person_id, relationship_id, value FROM public.canonical_attribute_decisions
+          WHERE entity_type='person'`);
+      expect(d).toHaveLength(1);
+      expect(d[0]).toMatchObject({ person_id: null, relationship_id: null, value: 'VP Sales' });
+    });
+  });
+
+  it('§15 a DETACHED decision can never be re-pointed at another relationship', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const q = await newPerson(ORG_A);
+      const accA = await newAccount(ORG_A, { domain: 'dl-rp-a.test' });
+      const accB = await newAccount(ORG_A, { domain: 'dl-rp-b.test' });
+      const RA = await newRelationship(ORG_A, p, accA);
+      const RC = await newRelationship(ORG_A, q, accB);
+      await assertProvider(ORG_A, RA, 'job_title', 'VP Sales', 'apollo', T1);
+      const { rows } = await db.query(
+        'SELECT id FROM public.canonical_attribute_decisions WHERE relationship_id=$1', [RA]);
+
+      await db.query('DELETE FROM public.person_account_relationships WHERE id=$1', [RA]);
+      // The erased person's audit row must not become another person's.
+      expect(await attemptCode(
+        'UPDATE public.canonical_attribute_decisions SET relationship_id=$1 WHERE id=$2',
+        [RC, rows[0].id])).toBe('P0001');
+    });
+  });
+
+  it('§17 a cross-tenant decision is still refused after detachment exists', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const pb = await newPerson(ORG_B);
+      const ab = await newAccount(ORG_B, { domain: 'dl-xt.test' });
+      const relB = await newRelationship(ORG_B, pb, ab);
+      expect(await attemptCode(
+        `INSERT INTO public.canonical_attribute_decisions
+           (organization_id, entity_type, relationship_id, attribute, assertion_id, value, reason, decided_at)
+         VALUES ($1,'relationship',$2,'job_title',gen_random_uuid(),'x','newest_observation',now())`,
+        [ORG_A, relB])).toBe('23503');
+    });
+  });
+});
+
+/**
+ * WS-2E — the adapter's negated filter, which `erasePerson` depends on.
+ *
+ * `clearPersonEvidenceAccountLinks` is the only step in the erasure path that
+ * issues a negated predicate, and until this batch the adapter above had no
+ * `.not()` at all — so the four erasure tests failed with a TypeError before
+ * reaching any assertion about erasure. These tests pin the translation itself,
+ * so a future permissive rewrite of `not()` fails here rather than silently
+ * widening a production UPDATE.
+ */
+describe('DL — the adapter translates not(col, is, null) faithfully', () => {
+  /* eslint-disable @typescript-eslint/no-var-requires */
+  const { ownedDbTable } = require('../../db/writeOwner');
+  /* eslint-enable @typescript-eslint/no-var-requires */
+
+  it('E1. the predicate EXCLUDES null rows and touches only the linked ones', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const person = await newPerson(ORG_A);
+      const account = await newAccount(ORG_A, { domain: 'e1.test' });
+
+      // Two assertions for the same person: one carrying an account leg, one
+      // with none. Only the first may be cleared.
+      const linked = await realAssertion(ORG_A, person, 'e1a', { person_id: person, account_id: account });
+      const bare = await realAssertion(ORG_A, person, 'e1b', { person_id: person });
+
+      const res = await ownedDbTable('source_assertions')
+        .update({ account_id: null })
+        .eq('organization_id', ORG_A)
+        .eq('person_id', person)
+        .eq('entity_type', 'person')
+        .not('account_id', 'is', null)
+        .select('id');
+
+      expect(res.error).toBeNull();
+      // Exactly the linked row came back. The bare row was never matched —
+      // which is the whole point of the negated filter.
+      expect((res.data as Array<{ id: string }>).map((r) => r.id)).toEqual([linked]);
+
+      const { rows } = await db.query(
+        'SELECT id, account_id FROM public.source_assertions WHERE id = ANY($1::uuid[]) ORDER BY id',
+        [[linked, bare]],
+      );
+      for (const r of rows) expect(r.account_id).toBeNull();
+    });
+  });
+
+  it('E2. it is ANDed with the tenant and subject filters, not substituted for them', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const personA = await newPerson(ORG_A);
+      const personB = await newPerson(ORG_B);
+      const accountA = await newAccount(ORG_A, { domain: 'e2a.test' });
+      const accountB = await newAccount(ORG_B, { domain: 'e2b.test' });
+
+      await realAssertion(ORG_A, personA, 'e2a', { person_id: personA, account_id: accountA });
+      const other = await realAssertion(ORG_B, personB, 'e2b', { person_id: personB, account_id: accountB });
+
+      const res = await ownedDbTable('source_assertions')
+        .update({ account_id: null })
+        .eq('organization_id', ORG_A)
+        .eq('person_id', personA)
+        .eq('entity_type', 'person')
+        .not('account_id', 'is', null)
+        .select('id');
+      expect(res.error).toBeNull();
+      expect((res.data as unknown[])).toHaveLength(1);
+
+      // The other tenant's assertion keeps its account leg.
+      const { rows } = await db.query(
+        'SELECT account_id FROM public.source_assertions WHERE id = $1', [other],
+      );
+      expect(rows[0].account_id).toBe(accountB);
+    });
+  });
+
+  it('E3. filter VALUES stay bound — they cannot alter the statement', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const person = await newPerson(ORG_A);
+      const account = await newAccount(ORG_A, { domain: 'e3.test' });
+      await realAssertion(ORG_A, person, 'e3', { person_id: person, account_id: account });
+
+      // A value carrying SQL metacharacters, on a text column. If it were
+      // interpolated rather than bound this would either error or match
+      // everything; bound, it simply matches nothing.
+      const res = await ownedDbTable('source_assertions')
+        .update({ account_id: null })
+        .eq('organization_id', ORG_A)
+        .eq('entity_type', "person' OR '1'='1")
+        .not('account_id', 'is', null)
+        .select('id');
+
+      expect(res.error).toBeNull();
+      expect(res.data).toEqual([]);
+      // And the real row is untouched.
+      const { rows } = await db.query(
+        'SELECT account_id FROM public.source_assertions WHERE person_id = $1', [person],
+      );
+      expect(rows[0].account_id).toBe(account);
+    });
+  });
+
+  it('E4. every OTHER not() form fails explicitly rather than becoming a no-op', () => {
+    const b = ownedDbTable('source_assertions');
+    expect(() => b.not('account_id', 'eq', 'x')).toThrow(/unsupported not\(\) form/);
+    expect(() => b.not('account_id', 'is', 'null')).toThrow(/unsupported not\(\) form/);
+    expect(() => b.not('account_id', 'in', [1])).toThrow(/unsupported not\(\) form/);
+    // A silently-dropped predicate would widen a production UPDATE.
+    expect(() => b.not('account_id', 'is', null)).not.toThrow();
   });
 });

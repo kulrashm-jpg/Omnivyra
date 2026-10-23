@@ -274,15 +274,24 @@ describe('A4J/B2 — the production observation lookup decides suppression', () 
     )).toBeNull();
   });
 
-  it('scopes the query by tenant, entity, provider, attribute and non-superseded', async () => {
+  it('scopes the query by tenant, SUBJECT, entity, provider, attribute and non-superseded', async () => {
     let seen: Record<string, unknown> | null = null;
     const find = makeFindRecentObservation(async (i) => {
       seen = i as unknown as Record<string, unknown>;
       return [row('employee_count', NOW)];
     });
-    await find({ organizationId: ORG, entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'] });
+    await find({
+      organizationId: ORG, subject: 'account', entityId: ACCOUNT,
+      providerId: 'clearbit', attributes: ['employee_count'],
+    } as never);
+    // O-3 — the SUBJECT now reaches the reader, and is asserted here rather
+    // than dropped: a lookup that cannot say which subject it is about matched
+    // either canonical leg, which is what let person evidence answer for an
+    // account. The predicates it turns into are proven in
+    // `piO3ObservationSubjectScoping.test.ts`, against a database double.
     expect(seen).toEqual({
-      organizationId: ORG, entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'],
+      organizationId: ORG, subject: 'account', entityId: ACCOUNT,
+      providerId: 'clearbit', attributes: ['employee_count'],
     });
   });
 

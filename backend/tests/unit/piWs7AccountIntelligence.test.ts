@@ -99,10 +99,29 @@ const seedProspect = (org: string, id: string, personId: string | null, over: Ro
 };
 const seedAssertion = (org: string, accountId: string, id: string, over: Row = {}) => {
   (db.tables.source_assertions ??= []).push({
-    id, organization_id: org, account_id: accountId, attribute: 'industry',
+    id, organization_id: org, account_id: accountId,
+    // NOT NULL in LI-2, and omitting it meant an `entity_type` predicate could
+    // match nothing. `person_id` is NULL by `entity_coherent` on an account row.
+    entity_type: 'account', person_id: null, attribute: 'industry',
     normalized_value: 'Fintech', provider: 'crm', confidence: 0.9,
     observed_at: '2026-09-02T00:00:00.000Z', source_record_id: 'sr-1',
     superseded_at: null, ...over,
+  });
+};
+/**
+ * The DUAL-LEG shape, and it is SCHEMA-LEGAL: `source_assertions_entity_coherent`
+ * only forbids a person leg on an ACCOUNT row, so a person-scoped assertion may
+ * carry `account_id` — and the ingestion boundary sets it unconditionally, so it
+ * always does. This is the row O-2 excludes from COMPANY evidence.
+ */
+const seedPersonAssertion = (
+  org: string, accountId: string, personId: string, id: string, over: Row = {},
+) => {
+  (db.tables.source_assertions ??= []).push({
+    id, organization_id: org, entity_type: 'person', person_id: personId,
+    account_id: accountId, attribute: 'city', normalized_value: 'Leeds',
+    provider: 'crm', confidence: 0.9, observed_at: '2026-09-02T00:00:00.000Z',
+    source_record_id: 'sr-person', superseded_at: null, ...over,
   });
 };
 const seedThread = (org: string, id: string, personId: string | null, over: Row = {}) => {
@@ -324,9 +343,13 @@ describe('WS-7 — consistency is LI-2\'s verdict, and evidence never becomes fa
     expect(fact.provenance).toHaveLength(2);             // both are retained
   });
 
-  it('ONE Prospect\'s unsupported assertion does not become an Account-wide fact', async () => {
+  it('a single uncontested assertion does not promote a null canonical value', async () => {
     // The canonical column is empty; a single source asserts a value. WS-7
     // reports the evidence but the fact stays null — LI-2 alone promotes it.
+    //
+    // RENAMED (O-2). The old name claimed a Prospect's assertion, but this
+    // fixture is account-scoped and never had a person leg. The case the old
+    // name described is now covered for real in the O-2 block below.
     seedAccount(ORG_A, ACC_A, { industry: null, employee_count: null });
     seedAssertion(ORG_A, ACC_A, 'a-1', { attribute: 'employee_count', normalized_value: '5000' });
     const fact = (await aggregate())!.facts.find((f) => f.attribute === 'employee_count')!;
@@ -372,6 +395,107 @@ describe('WS-7 — consistency is LI-2\'s verdict, and evidence never becomes fa
     seedAccount(ORG_A, ACC_A);
     const intel = await aggregate();
     expect(new Set(intel!.facts.map((f) => f.kind))).toEqual(new Set(['observed']));
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+/**
+ * O-2 — COMPANY evidence is ACCOUNT-SCOPED evidence.
+ *
+ * `loadAssertions` keyed only on `(organization_id, account_id)`. The ingestion
+ * boundary sets `account_id` on EVERY assertion it writes, person-scoped ones
+ * included, so each employee's own `city`, `region` and `country_code` — the
+ * three attributes where the person and account surfaces overlap — came back as
+ * company evidence. `facts[].value` was always read from the canonical column
+ * and so was never wrong; the EVIDENCE around it was: provenance, confidence,
+ * `uncontested` versus `unattested`, and LI-2's contested verdict.
+ *
+ * These run the REAL `loadAssertions` through the same stub database as the rest
+ * of the suite, and case 1 asserts the predicate as SENT — the change lives in a
+ * query, so a doubled port could not detect it.
+ */
+describe('WS-7 (O-2) — person-scoped evidence is never COMPANY evidence', () => {
+  it('1. the assertion read is confined to account-scoped rows, as SENT', async () => {
+    seedAccount(ORG_A, ACC_A);
+    await aggregate();
+
+    expect(db.filters).toContainEqual({
+      table: 'source_assertions', column: 'entity_type', value: 'account',
+    });
+    // ...and the predicates it must not have lost on the way.
+    expect(db.filters).toContainEqual({
+      table: 'source_assertions', column: 'organization_id', value: ORG_A,
+    });
+    expect(db.filters).toContainEqual({
+      table: 'source_assertions', column: 'account_id', value: ACC_A,
+    });
+  });
+
+  it('2. an employee\'s city is not the company\'s provenance', async () => {
+    seedAccount(ORG_A, ACC_A, { city: null });
+    seedPerson(ORG_A, 'p-1', ACC_A);
+    seedPersonAssertion(ORG_A, ACC_A, 'p-1', 'a-person-city');
+
+    const intel = await aggregate();
+    expect(intel!.facts.find((f) => f.attribute === 'city')!.provenance).toEqual([]);
+    expect(intel!.provenance.sourceRecordIds).not.toContain('sr-person');
+    expect(intel!.provenance.providers).toEqual([]);
+  });
+
+  it('3. a company value attested only by an employee reports UNATTESTED', async () => {
+    // The employee's row carries the SAME value as the canonical column, which
+    // is exactly how it used to pass as corroboration.
+    seedAccount(ORG_A, ACC_A, { city: 'Leeds' });
+    seedPerson(ORG_A, 'p-1', ACC_A);
+    seedPersonAssertion(ORG_A, ACC_A, 'p-1', 'a-person-city');
+
+    const intel = await aggregate();
+    expect(intel!.facts.find((f) => f.attribute === 'city')!.consistency).toBe('unattested');
+    expect(intel!.consistency.unattested).toContain('city');
+  });
+
+  it('4. two employees in different cities are not a company disagreement', async () => {
+    seedAccount(ORG_A, ACC_A, { city: null });
+    seedPerson(ORG_A, 'p-1', ACC_A);
+    seedPerson(ORG_A, 'p-2', ACC_A, { job_title: 'CFO' });
+    seedPersonAssertion(ORG_A, ACC_A, 'p-1', 'a-p1-city', { normalized_value: 'Leeds' });
+    seedPersonAssertion(ORG_A, ACC_A, 'p-2', 'a-p2-city', {
+      normalized_value: 'York', source_record_id: 'sr-person-2',
+    });
+
+    const intel = await aggregate();
+    expect(intel!.consistency.contested).not.toContain('city');
+    // No value and no company evidence: absence, reported as absence.
+    expect(intel!.facts.find((f) => f.attribute === 'city')!.consistency).toBe('unknown');
+  });
+
+  it('5. an employee\'s confidence is not the company\'s confidence', async () => {
+    seedAccount(ORG_A, ACC_A, { city: null });
+    seedPerson(ORG_A, 'p-1', ACC_A);
+    seedPersonAssertion(ORG_A, ACC_A, 'p-1', 'a-person-city', { confidence: 0.99 });
+
+    const intel = await aggregate();
+    expect(intel!.confidence.byAttribute.city).toBeNull();
+  });
+
+  it('6. account-scoped evidence still decides, with an employee row present', async () => {
+    seedAccount(ORG_A, ACC_A, { city: 'Manchester' });
+    seedPerson(ORG_A, 'p-1', ACC_A);
+    seedAssertion(ORG_A, ACC_A, 'a-acct-city', {
+      attribute: 'city', normalized_value: 'Manchester', confidence: 0.7,
+    });
+    seedPersonAssertion(ORG_A, ACC_A, 'p-1', 'a-person-city', { confidence: 0.99 });
+
+    const intel = await aggregate();
+    const fact = intel!.facts.find((f) => f.attribute === 'city')!;
+    expect(fact.consistency).toBe('uncontested');
+    expect(fact.value).toBe('Manchester');
+    expect(fact.provenance).toEqual([
+      { provider: 'crm', sourceRecordId: 'sr-1', observedAt: '2026-09-02T00:00:00.000Z', confidence: 0.7 },
+    ]);
+    expect(intel!.confidence.byAttribute.city).toBe(0.7);
+    expect(intel!.consistency.contested).not.toContain('city');
+    expect(intel!.consistency.unattested).not.toContain('city');
   });
 });
 

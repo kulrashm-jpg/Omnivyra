@@ -44,22 +44,24 @@
  * ─── WHY THE SOURCE RECORD KEY IS SCOPED PER RELATIONSHIP ─────────────────
  * This is the load-bearing detail of the whole module, and it is not cosmetic.
  *
- * `reconcileAssertionLiveness` decides liveness per
- * `(organization_id, source_record_id, attribute)` — it does NOT look at
- * `relationship_id`, because relationships did not exist when it was written.
- * So if ONE source record carried `job_title` assertions for TWO relationships,
- * reconciling the second would mark the first SUPERSEDED: the value_hash
- * differs for the same attribute under the same record. Company A's title would
- * silently stop being live because Company B's was asserted.
+ * LIVENESS is no longer the reason. `reconcileAssertionLiveness` has been
+ * SUBJECT-CONFINED since D2: it keys on `(organization_id, source_record_id,
+ * entity_type, <the subject column>)`, and this producer passes
+ * `{ kind: 'relationship', relationshipId }`. So one record carrying
+ * `job_title` for TWO relationships can no longer have the first marked
+ * SUPERSEDED when the second is reconciled — the subject predicate closes that,
+ * and it no longer depends on how the record key happens to be built.
  *
- * The dedupe index has the same shape, so the same record asserting the same
- * attribute and value for two relationships would also collide (23505) and the
- * second relationship would silently record nothing.
+ * DEDUPE still is. `uq_source_assertions_dedupe` is
+ * `(organization_id, source_record_id, attribute, value_hash)` — subject-BLIND.
+ * So the same record asserting the same attribute and value for two
+ * relationships would still collide (23505), and the second relationship would
+ * silently record nothing: the boundary counts that code as already present.
  *
- * Rather than change the boundary, the producer makes a record never span two
- * relationships: the stored `source_record_id` is the caller's key with the
- * relationship appended. Liveness and dedupe then become relationship-scoped
- * for free, by construction, and the caller cannot get it wrong by forgetting.
+ * Rather than change the boundary or the index, the producer makes a record
+ * never span two relationships: the stored `source_record_id` is the caller's
+ * key with the relationship appended. Dedupe then becomes relationship-scoped
+ * by construction, and the caller cannot get it wrong by forgetting.
  *
  * ─── FAIL CLOSED ──────────────────────────────────────────────────────────
  * If the authority declaration cannot be read, NO canonical value is written.
@@ -320,10 +322,12 @@ export async function assertRelationshipAttribute(
 
   // ── 4. Liveness, before anything arbitrates ────────────────────────────
   // A claim this observation has WITHDRAWN must not contest the attribute it no
-  // longer makes. Safe to reuse unchanged because the record is scoped to one
-  // relationship, so it can only ever reconcile this employment's claims.
+  // longer makes. The source-record key is already scoped to one relationship;
+  // D2 makes that confinement STRUCTURAL by naming the subject, so the guarantee
+  // no longer rests on how the key happens to be constructed.
   const liveness = await reconcileAssertionLiveness(
     input.organizationId, recordId,
+    { kind: 'relationship', relationshipId: input.relationshipId },
     [{ attribute: input.attribute, rawValue: assertionRow.raw_value, normalizedValue: claim.normalized }],
     now,
   );
@@ -335,6 +339,13 @@ export async function assertRelationshipAttribute(
   const live = await ownedDbTable('source_assertions')
     .select('id, attribute, normalized_value, provider, confidence, observed_at, recorded_at, superseded_at')
     .eq('organization_id', input.organizationId)
+    // C-1 — SUBJECT-SCOPED, like every sibling assertion reader. `relationship_id`
+    // alone is exact only by writer discipline: this module is its only writer,
+    // but no CHECK forbids a person- or account-scoped row from carrying a
+    // `relationship_id`, and the detachment trigger guards UPDATE only — such a
+    // row would pass every constraint on INSERT. `entity_type` is what declares
+    // which leg is the subject, so this makes the confinement structural.
+    .eq('entity_type', 'relationship')
     .eq('relationship_id', input.relationshipId);
   if (live.error) {
     throw new Error(`relationshipAttributeIngestion: assertion read failed: ${live.error.message}`);

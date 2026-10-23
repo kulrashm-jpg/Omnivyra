@@ -105,6 +105,38 @@ jest.mock('../../db/writeOwner', () => ({
     };
     return b;
   },
+  /**
+   * The RPC leg of the write seam, onto the SAME live connection.
+   *
+   * `pi_apply_canonical_decisions` is where the canonical update, the decision
+   * log and the provenance stamp now happen, so without this the boundary's
+   * final write would not reach the database at all and every canonical
+   * assertion below would be vacuous.
+   *
+   * Named-argument form, so PostgreSQL resolves each parameter's type from the
+   * function signature — which is what lets a JSON string arrive as `jsonb` and
+   * an ISO string as `timestamptz` without a hand-written cast.
+   */
+  ownedDbRpc: async (fn: string, args: Record<string, unknown>) => {
+    const { db: client } = require('./setup') as { db: { query: Function } };
+    const keys = Object.keys(args);
+    const params = keys.map((k) => {
+      const v = args[k];
+      return v !== null && typeof v === 'object' ? JSON.stringify(v) : v;
+    });
+    const named = keys.map((k, i) => `${k} => $${i + 1}`).join(', ');
+    await client.query('SAVEPOINT pg_rpc');
+    try {
+      const res = await client.query(
+        `SELECT public."${fn}"(${named}) AS result`, params,
+      ) as { rows: Array<{ result: unknown }> };
+      await client.query('RELEASE SAVEPOINT pg_rpc');
+      return { data: res.rows[0]?.result ?? null, error: null };
+    } catch (err) {
+      await client.query('ROLLBACK TO SAVEPOINT pg_rpc');
+      return { data: null, error: err };
+    }
+  },
 }));
 
 // Imported AFTER the mock so the boundary picks it up.
@@ -558,8 +590,14 @@ describe('B1b — the real boundary, end to end', () => {
   });
 
   it('reconcileAssertionLiveness refuses to run without a tenant', async () => {
-    await expect(reconcileAssertionLiveness('', 'rec', [{ attribute: 'job_title', rawValue: 'x', normalizedValue: 'x' }]))
-      .rejects.toThrow(/organizationId is required/);
+    // D2 added a required subject argument. The subject here is deliberately
+    // VALID, so the only thing left to fail is the TENANT guard — the test keeps
+    // proving that specific refusal rather than passing on whichever guard
+    // happens to run first.
+    await expect(reconcileAssertionLiveness(
+      '', 'rec', { kind: 'person', personId: 'p' },
+      [{ attribute: 'job_title', rawValue: 'x', normalizedValue: 'x' }],
+    )).rejects.toThrow(/organizationId is required/);
   });
 });
 
