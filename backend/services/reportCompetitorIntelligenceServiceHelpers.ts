@@ -1,7 +1,7 @@
 import type { ScoreState } from './snapshotReport/canonicalScoreState';
 import type { ComparisonMetrics, CompetitorCrawlOutcome, DomainCrawlSignals } from './competitor/competitorMetricsTypes';
 import type { PersistedDecisionObject } from './decisionObjectService';
-import type { ResolvedReportInput } from './reportInputResolver';
+import type { ReportCompanyContext, ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
 import { impactScore } from './reportDecisionUtils';
 import { supabase } from '../db/supabaseClient';
@@ -398,6 +398,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+const EMPTY_COMPANY_CONTEXT: ReportCompanyContext = {
+  marketFocus: null,
+  productServices: [],
+  targetCustomer: null,
+  idealCustomerProfile: null,
+  brandPositioning: null,
+  competitiveAdvantages: null,
+  teamSize: null,
+  foundedYear: null,
+  revenueRange: null,
+};
+
+/**
+ * `companyProfile` reaches extractDiscoveryFields untyped, so having a `resolved` object does not
+ * prove it is a ResolvedReportInput. Only hand the typed extractor an input whose
+ * `resolved.companyContext` really is an object; when it is missing, substitute an all-empty
+ * context. The extractor reads every companyContext field optionally and falls back to
+ * businessType / geography / profile, so an all-empty context behaves exactly like an absent one.
+ */
+function asResolvedReportInput(
+  companyProfile: DiscoveryKeywordInput,
+  resolvedRecord: Record<string, unknown>,
+): ResolvedReportInput {
+  const input = companyProfile as ResolvedReportInput;
+  if (isRecord(resolvedRecord.companyContext)) return input;
+  return { ...input, resolved: { ...input.resolved, companyContext: { ...EMPTY_COMPANY_CONTEXT } } };
+}
+
 function textValue(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.replace(/\s+/g, ' ').trim();
@@ -466,7 +494,7 @@ function extractDiscoveryFields(companyProfile: DiscoveryKeywordInput): {
       : inputRecord;
 
   const context = resolvedRecord
-    ? extractCompanyCompetitiveContext(companyProfile as ResolvedReportInput)
+    ? extractCompanyCompetitiveContext(asResolvedReportInput(companyProfile, resolvedRecord))
     : {
         marketFocus: pickText([companyContextRecord, profileRecord], ['marketFocus', 'market_focus', 'category', 'industry', 'businessType', 'business_type']),
         primaryService: pickText([companyContextRecord, profileRecord], ['primaryService', 'primary_service', 'productServices', 'product_services', 'products_services', 'products_services_list']),

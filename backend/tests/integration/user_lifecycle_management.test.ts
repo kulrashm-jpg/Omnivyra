@@ -56,7 +56,7 @@ const createMockRes = () => {
   return res as NextApiResponse & { statusCode?: number; body?: any };
 };
 
-type RoleRow = { user_id: string; company_id: string; role: string };
+type RoleRow = { user_id: string; company_id: string; role: string; status?: string };
 const roleRows: RoleRow[] = [];
 const authUsers: Record<string, { id: string; email: string }> = {};
 

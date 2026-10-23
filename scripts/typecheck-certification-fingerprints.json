@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-09",
+  "generated": "2026-10-23",
   "typescript": "6.0.3",
   "note": [
     "PB-011 per-error identity baseline for the backend certification surface.",
@@ -21,7 +21,7 @@
       "files": {}
     },
     "tsconfig.backend-tests.json": {
-      "total": 162,
+      "total": 153,
       "files": {
         "backend/tests/integration/campaign_preemption_execution.test.ts": [
           {
@@ -117,13 +117,6 @@
             "count": 3
           }
         ],
-        "backend/tests/integration/external_api_alignment.test.ts": [
-          {
-            "code": "TS2345",
-            "message": "Argument of type '{ recordHealth: boolean; }' is not assignable to parameter of type 'string'.",
-            "count": 2
-          }
-        ],
         "backend/tests/integration/external_api_company_scope.test.ts": [
           {
             "code": "TS2352",
@@ -143,20 +136,6 @@
             "code": "TS2540",
             "message": "Cannot assign to 'NODE_ENV' because it is a read-only property.",
             "count": 2
-          }
-        ],
-        "backend/tests/integration/governance_performance_guard.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type 'Error'.",
-            "count": 1
-          }
-        ],
-        "backend/tests/integration/user_lifecycle_management.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'status' does not exist on type 'RoleRow'.",
-            "count": 3
           }
         ],
         "backend/tests/manual/liveSerpValidation.test.ts": [
@@ -503,13 +482,6 @@
             "count": 2
           }
         ],
-        "backend/tests/unit/publicDomainAuditService.test.ts": [
-          {
-            "code": "TS2741",
-            "message": "Property 'companyContext' is missing in type '{ companyName: null; websiteDomain: string; businessType: string; geography: string; socialLinks: undefined[]; competitors: undefined[]; source: \"manual-entry\"; uploadedFileName: null; manualData: null; }' but required in type '{ companyName: string; websiteDomain: string; businessType: string; geography: string; socialLinks: string[]; competitors: string[]; source: \"unknown\" | \"manual\" | \"upload\" | \"integrations\" | \"manual-entry\"; uploadedFileName: string; manualData: Record<...>; companyContext: ReportCompanyContext; }'.",
-            "count": 2
-          }
-        ],
         "backend/tests/unit/readinessCapability.test.ts": [
           {
             "code": "TS2741",
@@ -521,13 +493,6 @@
           {
             "code": "TS2578",
             "message": "Unused '@ts-expect-error' directive.",
-            "count": 1
-          }
-        ],
-        "backend/tests/unit/reportScoreModelService.test.ts": [
-          {
-            "code": "TS2741",
-            "message": "Property 'companyContext' is missing in type '{ companyName: null; websiteDomain: string; businessType: null; geography: null; socialLinks: string[]; competitors: undefined[]; source: \"manual-entry\"; uploadedFileName: null; manualData: null; }' but required in type '{ companyName: string; websiteDomain: string; businessType: string; geography: string; socialLinks: string[]; competitors: string[]; source: \"unknown\" | \"manual\" | \"upload\" | \"integrations\" | \"manual-entry\"; uploadedFileName: string; manualData: Record<...>; companyContext: ReportCompanyContext; }'.",
             "count": 1
           }
         ],

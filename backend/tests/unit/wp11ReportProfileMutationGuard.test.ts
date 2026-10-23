@@ -23,8 +23,15 @@
  * column that does not exist yet. The same allowlist is enforced at runtime by
  * `assertReportObservationPayload`, so the guarantee does not depend on this suite being run.
  *
- * Scope: Report 1 (snapshot) only. The analytics categories still use the legacy mutating write,
- * and case F pins that so this change is provably scoped.
+ * Scope: Report 1 (snapshot) only. Case F pins that WP-11 left `persistResolvedReportInputs`
+ * itself untouched, so WP-11's change is provably scoped to the snapshot resolver.
+ *
+ * WP-C (pre-T3) UPDATE — every assertion below is unchanged; only this note and case F's title
+ * were edited. `persistResolvedReportInputs` no longer has a production caller: WP-C moved
+ * Reports 2/3 onto `persistReportInputsWithoutProfileMutation` as well
+ * (`analyticsInputResolver.ts`, guarded by `wpcReports23ProfileMutationGuard.test.ts`). The
+ * function survives as the pinned NEGATIVE CONTROL that cases F and G invoke directly, which is
+ * why they still pass and still prove the pre-fix write violates every guard here.
  */
 jest.mock('@/config', () => ({ config: {}, getValidatedConfig: () => ({}) }));
 
@@ -255,7 +262,7 @@ describe('WP-11 — Report 1 generation performs no Company Profile mutation', (
 
   // -- F. the change is scoped to Report 1 ------------------------------------
   describe('F. scope', () => {
-    it('leaves the analytics (performance/growth) persist on the legacy mutating writer', async () => {
+    it('leaves the legacy mutating writer itself untouched (now the pinned negative control)', async () => {
       await persistResolvedReportInputs(snapshotInput({ reportCategory: 'performance' }));
       expect(saveProfileMock).toHaveBeenCalledTimes(1);
       expect(upsertMock).not.toHaveBeenCalled();
