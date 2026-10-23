@@ -1,0 +1,63 @@
+DR-12 — minimum normalisation fix for the UNASSIGNED sentinel bypass
+CPG-U1 tooling, candidate tree C:/tmp/dt009-merge/tooling (read-only for this stream).
+
+STATUS: NOT APPLIED to any candidate tree. Reviewable patch only.
+BASE: the candidate tree whose tooling aggregate is
+        638d68e6085d6894355a6d14ff2628a2e94c657c795a3d795500dbb3fa278fd2
+AFTER (projected, NOT certified):
+        e3109e66eb583b2724caab0ae6444f9b88796284876369be7787fdf4c3783aad
+
+FILES: 2 — lib/registration.mjs (the fix), test/mutate.mjs (M77 anchor repair only).
+  The M77 anchor repair is MANDATORY and part of the minimum: M77's from-string is the
+  verbatim old `assigned` line, so patching lib/registration.mjs without it makes
+  `node test/mutate.mjs --anchors` fail. It changes NO mutant count: 404 -> 404 (verified).
+
+APPLY WITH (git's Windows default core.autocrlf=true is ON in this environment and
+rewrites the whole file to CRLF, which silently moves the aggregate):
+
+    git -c core.autocrlf=false -c core.eol=lf apply -p1 DR12_PATCH.diff
+
+Verified: applied that way the result is byte-identical to the proven scratch copy and
+reproduces aggregate e3109e66... exactly.
+
+TESTS: DR12_TESTS.mjs is deliberately OUTSIDE the tooling tree (run as
+`node DR12_TESTS.mjs <tree>`), so it adds no file to the tree and does not move the
+aggregate. Moving it into test/ would be a second, separate aggregate move.
+
+--- 8< --- patch begins --- 8< ---
+--- a/lib/registration.mjs
++++ b/lib/registration.mjs
+@@ -56,7 +56,13 @@
+   };
+ }
+ 
+-const assigned = (v) => typeof v === 'string' && v.trim() !== '' && v !== UNASSIGNED;
++// The UNASSIGNED sentinel is a marker, not data: it is matched after trimming and case-folding, so that
++// "UNASSIGNED " or "unassigned" cannot be passed off as a supplied value. toUpperCase (not toLowerCase)
++// is the fail-closed direction. `padded` is reported separately: a supplied value is never silently
++// rewritten here, because checkAuthority() compares accountable_identity.value for exact equality.
++const isUnassignedSentinel = (v) => v.trim().toUpperCase() === UNASSIGNED;
++const padded = (v) => v !== v.trim();
++const assigned = (v) => typeof v === 'string' && v.trim() !== '' && !isUnassignedSentinel(v);
+ 
+ /**
+  * phase 'funding'     — may Bitcoin outputs be created? Needs the key custodian (role STUDY_OPERATOR).
+@@ -69,6 +75,7 @@
+   const synthetic = (v) => typeof v === 'string' && v.toUpperCase().includes(SYNTHETIC_PREFIX);
+   const human = (v, name, label) => {
+     if (!assigned(v)) blockers.push(`${label} is UNASSIGNED (${name})`);
++    else if (padded(v)) errors.push(`${name} has leading or trailing whitespace — supply the exact value (it is compared for exact equality at verification)`);
+     else if (synthetic(v) && !allowSynthetic) errors.push(`${name} is a SYNTHETIC test value — refused outside test mode`);
+   };
+ 
+--- a/test/mutate.mjs
++++ b/test/mutate.mjs
+@@ -117,7 +117,7 @@
+ 
+   // ── CPG-041: registration ──
+   ['M76 key custodian role not enforced', REG, "if (kc.role !== 'STUDY_OPERATOR') errors.push", 'if (false) errors.push'],
+-  ['M77 UNASSIGNED treated as assigned', REG, "const assigned = (v) => typeof v === 'string' && v.trim() !== '' && v !== UNASSIGNED;", "const assigned = (v) => typeof v === 'string' && v.trim() !== '';"],
++  ['M77 UNASSIGNED treated as assigned', REG, "const assigned = (v) => typeof v === 'string' && v.trim() !== '' && !isUnassignedSentinel(v);", "const assigned = (v) => typeof v === 'string' && v.trim() !== '';"],
+   ['M78 embargo allowed', REG, 'if (r.embargo !== false) errors.push', 'if (false) errors.push'],
+   ['M79 public registration not required', REG, 'if (r.public !== true) errors.push', 'if (false) errors.push'],
+   ['M80 parameters not pinned', REG, 'for (const [k, v] of Object.entries(PARAMETERS)) if (p[k] !== v) errors.push', 'for (const [k, v] of Object.entries(PARAMETERS)) if (false) errors.push'],

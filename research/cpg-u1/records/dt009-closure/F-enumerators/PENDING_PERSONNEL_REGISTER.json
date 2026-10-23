@@ -1,0 +1,226 @@
+{
+  "$comment_1": "CPG-U1 PENDING PERSONNEL REGISTER - DEEPTECH-PARALLEL-009 / F-enumerators.",
+  "$comment_2": "CLASSIFICATION: PREPARATION. THIS FILE IS DESIGNED TO BE REFUSED BY check-personnel AND MUST NEVER PASS.",
+  "$comment_3": "NO PERSON EXISTS IN THIS FILE. No one has been recruited, approached, engaged, named or pseudonymised. Every person-specific value is a literal <<PENDING_...>> placeholder token and is NOT an identifier.",
+  "$comment_4": "A register that PASSES check-personnel is a register with eight real, declared, organisation-confirmed people in it. This one must not pass. If it ever exits 0, it has been tampered with.",
+  "$comment_5": "Placeholder convention: every person-shaped value is wrapped in << >> and contains ':', ' ' and '-' in combinations the frozen PERSON pattern /^[A-Za-z0-9_-]{1,64}$/ (lib/personnel.mjs:14) rejects. The convention is self-enforcing: no tool can mistake this file for complete, and no reader can mistake a token for a name.",
+  "$baseline": {
+    "protocol": "CPG_U1_PROTOCOL_004.md sha256 c50fc68010fdf29a9439faa3654ef4b6763f0efead99fb6395f2c691df00b719 (verified in this worktree)",
+    "instrument_aggregate_sha256": "<NEW_AGG>",
+    "instrument_file_count": "<NEW_N>",
+    "instrument_read_only_path": "C:/tmp/dt002/research/cpg-u1/tooling",
+    "stale_tree_not_used": "this worktree research/cpg-u1/tooling - 587 files, aggregate 640510782a08a1ef2c1defd998f33b0ab0f14307557f7e70534bb3d8e45b613f",
+    "origin_main": "33bceb1f919113c622587fa7c6403a0d4596bbad"
+  },
+  "schema": "cpg-u1-personnel/v1",
+  "operator": {
+    "person_id": "<<PENDING_PERSONNEL: OPERATOR KEY CUSTODIAN - NO PERSON ASSIGNED>>",
+    "$note": "Section 4A.3: the operator is not independent and holds no independent role. Section 19.3(2) names the Bitcoin wallet-key custodian as a prerequisite before funding."
+  },
+  "assignments": [
+    {
+      "role": "enumerator",
+      "$slot": "ENUMERATOR_A",
+      "$jurisdiction_families": ["US-SEC", "LEI-ONLY"],
+      "$candidate_id_prefix": "<<PENDING_DECISION: prefix for ENUMERATOR_A - proposed A- , see ENUMERATOR_WORK_ALLOCATION.md>>",
+      "$authority": "Section 4A.3 'enumerator (>= 1)'; 'Several enumerators are permitted; each holds no other role.'",
+      "person_id": "<<PENDING_PERSONNEL: ENUMERATOR_A - NO PERSON RECRUITED>>",
+      "pseudonym": "<<PENDING_PERSONNEL: ENUMERATOR_A PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "payment_other_than_study_fee": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "ran_or_saw_cpg_output": "<<PENDING_DECLARATION - NOT SIGNED>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_FEE_AGREEMENT - NOT AGREED; null HERE WOULD ASSERT A DELIBERATE NO-FEE ENGAGEMENT, WHICH NO ONE HAS DECIDED>>",
+      "organisation_confirmation_sha256": "<<PENDING_ORGANISATION_CONFIRMATION - NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_DATE - NOT SIGNED; must be on or after the date the LAST role holder became a role holder (protocol line 145: an unknown answer is not no)>>"
+    },
+    {
+      "role": "enumerator",
+      "$slot": "ENUMERATOR_B",
+      "$jurisdiction_families": ["FR-SIRENE", "BR-CNPJ"],
+      "$candidate_id_prefix": "<<PENDING_DECISION: prefix for ENUMERATOR_B - proposed B- , see ENUMERATOR_WORK_ALLOCATION.md>>",
+      "$authority": "Section 4A.3; lib/personnel.mjs:26 exempts role 'enumerator' from the exactly-one rule; test/selftest.mjs:829 'multiple distinct enumerators permitted'.",
+      "$role_string_note": "The literal role string is 'enumerator'. 'enumerator-2' is REFUSED as 'unknown role' (lib/personnel.mjs:31) - verified by running the frozen check.",
+      "person_id": "<<PENDING_PERSONNEL: ENUMERATOR_B - NO PERSON RECRUITED>>",
+      "pseudonym": "<<PENDING_PERSONNEL: ENUMERATOR_B PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "payment_other_than_study_fee": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "ran_or_saw_cpg_output": "<<PENDING_DECLARATION - NOT SIGNED>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_FEE_AGREEMENT - NOT AGREED; MUST BE A SEPARATE AGREEMENT FROM THE ONE FOR ENUMERATOR_A - see NON_DEPENDENCE_CONDITION.md>>",
+      "organisation_confirmation_sha256": "<<PENDING_ORGANISATION_CONFIRMATION - NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_DATE - NOT SIGNED>>"
+    },
+    {
+      "role": "reference-author",
+      "$slot": "REFERENCE_AUTHOR",
+      "person_id": "<<PENDING_PERSONNEL: REFERENCE_AUTHOR - NO PERSON RECRUITED>>",
+      "pseudonym": "<<PENDING_PERSONNEL: REFERENCE_AUTHOR PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "payment_other_than_study_fee": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "ran_or_saw_cpg_output": "<<PENDING_DECLARATION - NOT SIGNED>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_FEE_AGREEMENT - NOT AGREED>>",
+      "organisation_confirmation_sha256": "<<PENDING_ORGANISATION_CONFIRMATION - NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_DATE - NOT SIGNED>>"
+    },
+    {
+      "role": "reference-confirmer",
+      "$slot": "REFERENCE_CONFIRMER",
+      "person_id": "<<PENDING_PERSONNEL: REFERENCE_CONFIRMER - NO PERSON RECRUITED>>",
+      "pseudonym": "<<PENDING_PERSONNEL: REFERENCE_CONFIRMER PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "payment_other_than_study_fee": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "ran_or_saw_cpg_output": "<<PENDING_DECLARATION - NOT SIGNED>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_FEE_AGREEMENT - NOT AGREED>>",
+      "organisation_confirmation_sha256": "<<PENDING_ORGANISATION_CONFIRMATION - NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_DATE - NOT SIGNED>>"
+    },
+    {
+      "role": "reference-adjudicator",
+      "$slot": "REFERENCE_ADJUDICATOR",
+      "$constraint": "Section 4A.3: 'An enumerator may not be the reference adjudicator.' Applies to BOTH enumerators.",
+      "person_id": "<<PENDING_PERSONNEL: REFERENCE_ADJUDICATOR - NO PERSON RECRUITED>>",
+      "pseudonym": "<<PENDING_PERSONNEL: REFERENCE_ADJUDICATOR PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "payment_other_than_study_fee": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "ran_or_saw_cpg_output": "<<PENDING_DECLARATION - NOT SIGNED>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_FEE_AGREEMENT - NOT AGREED>>",
+      "organisation_confirmation_sha256": "<<PENDING_ORGANISATION_CONFIRMATION - NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_DATE - NOT SIGNED>>"
+    },
+    {
+      "role": "rater-1",
+      "$slot": "RATER_1",
+      "$cohort": "rating cohort - Section 19.3(3) 'before the respective stage'; Section 4A.3 requires the person-to-label assignment fingerprint BEFORE the held-out commitment transaction is broadcast (Section 12.1).",
+      "person_id": "<<PENDING_PERSONNEL: RATER_1 - NO PERSON RECRUITED>>",
+      "pseudonym": "<<PENDING_PERSONNEL: RATER_1 PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "payment_other_than_study_fee": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "ran_or_saw_cpg_output": "<<PENDING_DECLARATION - NOT SIGNED>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_FEE_AGREEMENT - NOT AGREED>>",
+      "organisation_confirmation_sha256": "<<PENDING_ORGANISATION_CONFIRMATION - NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_DATE - NOT SIGNED>>"
+    },
+    {
+      "role": "rater-2",
+      "$slot": "RATER_2",
+      "person_id": "<<PENDING_PERSONNEL: RATER_2 - NO PERSON RECRUITED>>",
+      "pseudonym": "<<PENDING_PERSONNEL: RATER_2 PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "payment_other_than_study_fee": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "ran_or_saw_cpg_output": "<<PENDING_DECLARATION - NOT SIGNED>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_FEE_AGREEMENT - NOT AGREED>>",
+      "organisation_confirmation_sha256": "<<PENDING_ORGANISATION_CONFIRMATION - NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_DATE - NOT SIGNED>>"
+    },
+    {
+      "role": "rating-adjudicator",
+      "$slot": "RATING_ADJUDICATOR",
+      "person_id": "<<PENDING_PERSONNEL: RATING_ADJUDICATOR - NO PERSON RECRUITED>>",
+      "pseudonym": "<<PENDING_PERSONNEL: RATING_ADJUDICATOR PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "payment_other_than_study_fee": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_DECLARATION - NOT SIGNED>>",
+        "ran_or_saw_cpg_output": "<<PENDING_DECLARATION - NOT SIGNED>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_FEE_AGREEMENT - NOT AGREED>>",
+      "organisation_confirmation_sha256": "<<PENDING_ORGANISATION_CONFIRMATION - NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_DATE - NOT SIGNED>>"
+    }
+  ],
+  "pairwise_item6_check": {
+    "$note": "DR-8 Rule A5. checkPersonnelRegister validates schema, operator.person_id and assignments and IGNORES unknown root-level keys (lib/personnel.mjs:16-41) - so this block needs no instrument change and does not move the aggregate.",
+    "performed_by": "<<PENDING_PERSONNEL: OPERATOR - NO PERSON ASSIGNED>>",
+    "performed_on": "<<PENDING_DATE - NOT PERFORMED>>",
+    "pairs_checked": "<<PENDING_COUNT - NOT PERFORMED; 36 unordered pairs over the 8 independent persons plus the operator, plus C(9+d,2)-36 further pairs against a development team of size d>>",
+    "roles_in_scope": ["operator", "enumerator", "reference-author", "reference-confirmer", "reference-adjudicator", "rater-1", "rater-2", "rating-adjudicator", "cpg-developers"],
+    "result": "<<PENDING_RESULT - NOT PERFORMED>>",
+    "method_statement_sha256": "<<PENDING_HASH - NOT WRITTEN>>",
+    "relational_schedules_held": "restricted; not published; not in any study artifact"
+  },
+  "non_dependence_attestation": {
+    "$note": "DEEPTECH-PARALLEL-009 addition; see NON_DEPENDENCE_CONDITION.md. Unknown root key, ignored by the instrument, so it costs no instrument byte.",
+    "between": ["ENUMERATOR_A", "ENUMERATOR_B"],
+    "separate_fee_agreements": "<<PENDING_ATTESTATION - NOT PERFORMED>>",
+    "distinct_fee_agreement_hashes_confirmed": "<<PENDING_ATTESTATION - NOT PERFORMED>>",
+    "no_subcontracting_either_direction": "<<PENDING_ATTESTATION - NOT PERFORMED>>",
+    "neither_employs_nor_pays_the_other": "<<PENDING_ATTESTATION - NOT PERFORMED>>",
+    "no_shared_economic_interest_in_a_common_entity": "<<PENDING_ATTESTATION - NOT PERFORMED>>",
+    "item6_relational_exclusions_applied_between_them": "<<PENDING_ATTESTATION - NOT PERFORMED>>",
+    "performed_by": "<<PENDING_PERSONNEL: OPERATOR - NO PERSON ASSIGNED>>",
+    "performed_on": "<<PENDING_DATE - NOT PERFORMED>>"
+  },
+  "material_release": {
+    "$note": "See MATERIAL_RELEASE_JOINT_GATE.md. Fail-closed: any unchecked box blocks release for BOTH enumerators.",
+    "enumerator_cohort_gate_satisfied": false,
+    "released_to_enumerator_a_on": null,
+    "released_to_enumerator_b_on": null
+  },
+  "$status": "INCOMPLETE BY CONSTRUCTION. check-personnel MUST refuse this file. Observed on the frozen instrument: 9 errors (operator plus 8 assignments, all 'person_id missing or malformed'), 0 blockers, exit code 1.",
+  "$check_personnel_refusal": {
+    "$note": "Real output, pasted verbatim. Unknown root-level key; ignored by checkPersonnelRegister (lib/personnel.mjs:16-41), so adding it does not change the result. Re-run after adding: identical.",
+    "command": "node cpg_u1_data.mjs check-personnel --personnel <this file>",
+    "cwd": "C:/tmp/dt002/research/cpg-u1/tooling",
+    "instrument_aggregate_sha256_before_and_after": "<NEW_AGG>",
+    "stderr": [
+      "  ERROR   operator.person_id missing or malformed",
+      "  ERROR   assignment 0 (enumerator): person_id missing or malformed",
+      "  ERROR   assignment 1 (enumerator): person_id missing or malformed",
+      "  ERROR   assignment 2 (reference-author): person_id missing or malformed",
+      "  ERROR   assignment 3 (reference-confirmer): person_id missing or malformed",
+      "  ERROR   assignment 4 (reference-adjudicator): person_id missing or malformed",
+      "  ERROR   assignment 5 (rater-1): person_id missing or malformed",
+      "  ERROR   assignment 6 (rater-2): person_id missing or malformed",
+      "  ERROR   assignment 7 (rating-adjudicator): person_id missing or malformed",
+      "ERROR: personnel register refused (9 error(s))"
+    ],
+    "exit_code": 1,
+    "exit_code_meaning": "EXIT.REFUSED = 1 (cpg_u1_data.mjs:52). Exit 4 would be EXIT.BLOCKED - an UNFILLED role. This file fills all seven role names, so it refuses rather than blocks.",
+    "$why_no_declaration_errors_are_listed": "lib/personnel.mjs:32 does `continue` after a malformed person_id, so the declaration, fee-agreement and organisation-confirmation markers in each assignment are never reached and never reported. A real property of the check worth recording: a register can be far more incomplete than its error list shows.",
+    "$read_this": "A register that PASSES is a register with eight real, declared, organisation-confirmed people in it. THIS ONE MUST NOT PASS."
+  }
+}
