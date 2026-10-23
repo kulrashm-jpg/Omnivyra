@@ -10,7 +10,8 @@
  * The real guard chain runs; only the database and identity provider are fake.
  */
 import {
-  seed, invoke, writeCalls, sinkCalls, leaksB, rows,
+  seed,
+  upsertAppendsBlindly, invoke, writeCalls, completedWrites, sinkCalls, leaksB, rows,
   CAMPAIGN_A, CAMPAIGN_B, UNKNOWN_ID, CANARY_B, CO_B,
 } from '../helpers/routeAuthHarness';
 
@@ -53,6 +54,27 @@ function world() {
       { id: 'met-b', campaign_id: CAMPAIGN_B, platform: CANARY_B, date: '2026-01-01', impressions: 9 },
     ],
   });
+  // UPSERT MODEL, declared explicitly rather than inherited. The append model
+  // performs no arbiter resolution, so nothing here may be read as evidence
+  // about row identity, uniqueness or tenancy through an upsert.
+  //
+  // What this suite asserts about this table is the PAYLOAD of the statement
+  // the route sends (`every(r => r.campaign_id === CAMPAIGN_A)`), which is
+  // within append's reach. The reason now says so: an earlier version said
+  // "only the caller own campaign data is written", which reads as a claim
+  // about the resulting rows.
+  //
+  // `alsoForNoOptionsCalls` is required because the production statement is
+  // `.from('campaign_performance_metrics').upsert(validatedMetrics.map(...))`
+  // with NO options at all (pages/api/campaigns/metrics.ts:95). What the
+  // server's default conflict resolution does with that is NOT established by
+  // this repository; the acknowledgement records that nothing asserted here
+  // depends on it.
+  upsertAppendsBlindly(
+    'campaign_performance_metrics',
+    'that the metrics statement the route sends carries only the caller’s own campaign id',
+    { alsoForNoOptionsCalls: true },
+  );
 }
 
 beforeEach(world);
@@ -140,7 +162,11 @@ const campaignRoutes: RouteCase[] = [
     sink: ['campaign_performance_metrics', 'weekly_content_plans', 'campaigns'],
     ok: 200,
     okCheck: () => {
-      const written = writeCalls(['campaign_performance_metrics'])[0];
+      // completedWrites(), not writeCalls(): on a grant path a REFUSED or
+      // ERRORED statement is still counted by writeCalls() and its payload is
+      // still readable, so this payload control would pass over a write that
+      // never ran.
+      const written = completedWrites(['campaign_performance_metrics'])[0];
       expect((written.payload as any[]).every((r) => r.campaign_id === CAMPAIGN_A)).toBe(true);
     },
   },
@@ -250,4 +276,21 @@ describe('client-supplied tenant ids are not honoured by campaign-keyed routes',
     expect((ins.payload as any).campaign_id).toBe(CAMPAIGN_A);
     expect(JSON.stringify(ins.payload)).not.toContain(CO_B);
   });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });

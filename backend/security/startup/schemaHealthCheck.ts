@@ -74,6 +74,12 @@ export interface SchemaHealthResult {
 
 let cached: SchemaHealthResult | null = null;
 let inFlight: Promise<SchemaHealthResult> | null = null;
+/**
+ * Incremented by {@link resetSchemaHealthCache}. An attempt captures the value
+ * current when it STARTED and refuses to publish if it has moved on, so a probe
+ * still in flight across a reset cannot write its result into the fresh state.
+ */
+let probeGeneration = 0;
 
 /**
  * Probe `information_schema.columns` to check column existence. Uses the
@@ -138,29 +144,69 @@ async function probeSchema(): Promise<SchemaHealthResult> {
     logger.error('schema_health_check_threw', {
       message: err instanceof Error ? err.message : String(err),
     });
-    return {
-      ok: false,
-      missing: REQUIRED_LIFECYCLE_COLUMNS.map((c) => ({
-        table:     c.table,
-        column:    c.column,
-        migration: c.migration,
-        consumer:  c.consumer,
-      })),
-      checkedAt,
-    };
+    return degradedSchemaResult(checkedAt);
   }
+}
+
+/**
+ * The result that represents "the probe did not establish anything".
+ *
+ * Every required column is reported missing, which is the conservative answer:
+ * a consumer that gates on schema health must treat an unknown schema as drifted,
+ * not as healthy. This is the shape `probeSchema`'s own catch arm has always
+ * returned; it is a named helper now so that arm and the single-flight guard
+ * below cannot drift apart while claiming to produce the same thing.
+ */
+function degradedSchemaResult(checkedAt: string): SchemaHealthResult {
+  return {
+    ok: false,
+    missing: REQUIRED_LIFECYCLE_COLUMNS.map((c) => ({
+      table:     c.table,
+      column:    c.column,
+      migration: c.migration,
+      consumer:  c.consumer,
+    })),
+    checkedAt,
+  };
 }
 
 /**
  * Run (or return cached) schema health check. Logs loudly on first miss
  * so DEV environments fail fast and PROD environments emit a structured
  * alert.
+ *
+ * WHAT WAS WRONG (OD-9), and why it is the same defect as OD-8. `probeSchema`
+ * is internally contained — it catches and returns a degraded result — but the
+ * logging BELOW it was not, and `cached = result` came AFTER that logging. So a
+ * throw from `console.error` or from `logger.error`/`logger.info` rejected this
+ * single-flight IIFE, `cached` stayed null, and `inFlight` retained the REJECTED
+ * promise. The `if (!inFlight)` guard then handed that same rejection to every
+ * later caller for the lifetime of the process.
+ *
+ * `pages/api/health/schema.ts` awaits this with no try/catch and its documented
+ * contract is 200/ok or 503/degraded, so one transient logging failure turned
+ * that endpoint into a permanent 500 — the identical user-visible shape OD-8
+ * produced at `/api/health/readiness`. Callers arriving through
+ * `bootAuthSubsystem` were already shielded by the catch added for OD-8; this
+ * route was not, which is why the fix belongs here too.
+ *
+ * WHAT IS GUARANTEED NOW:
+ *   - The promise RESOLVES in every case, so no caller receives a rejection and
+ *     no unhandled rejection is possible even when nothing awaits it.
+ *   - A failure AFTER the result was published — i.e. in the logging — returns
+ *     the REAL result rather than fabricating a degraded one. A log failure is
+ *     not a probe failure.
+ *   - RETRY POLICY IS UNCHANGED. A degraded result is cached exactly as
+ *     `probeSchema`'s own degraded result always has been, so there is still at
+ *     most one probe per process. No retry is introduced here.
  */
 export async function getSchemaHealth(): Promise<SchemaHealthResult> {
   if (cached) return cached;
   if (!inFlight) {
+    const generation = probeGeneration;
     inFlight = (async () => {
       const result = await probeSchema();
+      if (generation === probeGeneration) cached = result;
       if (!result.ok) {
         const summary = result.missing
           .map((m) => `${m.table}.${m.column} (run ${m.migration})`)
@@ -183,15 +229,39 @@ export async function getSchemaHealth(): Promise<SchemaHealthResult> {
       } else {
         logger.info('schema_health_check_ok', { checkedAt: result.checkedAt });
       }
-      cached = result;
       return result;
-    })();
+    })().catch((error) => {
+      // The result was already published, so only the logging above failed.
+      // Returning a fabricated degraded result here would be a worse answer
+      // than the truth the probe actually established.
+      if (cached) return cached;
+
+      const result = degradedSchemaResult(new Date().toISOString());
+      try {
+        logger.error('schema_health_check_unavailable', {
+          area:    'auth',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // Narrow and deliberate: if the LOGGER is what failed, logging the
+        // failure re-throws and would re-poison the very promise this handler
+        // exists to settle. Scoped to this one call, never around the probe.
+      }
+      if (generation === probeGeneration) cached = result;
+      return result;
+    });
   }
   return inFlight;
 }
 
-/** Reset cache — test-only. */
+/**
+ * Reset cache — test-only.
+ *
+ * Advances the probe generation so an attempt still in flight cannot publish
+ * its result into the state this reset just cleared.
+ */
 export function resetSchemaHealthCache(): void {
   cached = null;
   inFlight = null;
+  probeGeneration += 1;
 }

@@ -12,7 +12,8 @@
  * routeAuth001CampaignBinding2Planner.test.ts.
  */
 import {
-  seed, invoke, rows, writeCalls, sinkCalls, leaksB,
+  seed,
+  upsertAppendsBlindly, invoke, rows, writeCalls, completedWrites, sinkCalls, leaksB,
   CO_A, CO_B, CAMPAIGN_A, CAMPAIGN_B, UNKNOWN_ID, USER_A, USER_B,
 } from '../helpers/routeAuthHarness';
 
@@ -83,6 +84,21 @@ beforeEach(() => {
       { id: 'dcp-b', campaign_id: CAMPAIGN_B, content: B_SECRET, format_notes: 'content_plan_panel:true' },
     ],
   });
+  // UPSERT MODEL, declared explicitly rather than inherited: this suite
+  // not conflict resolution. The append model performs no arbiter
+  // resolution, so nothing here may be read as evidence about row
+  // identity, uniqueness or tenancy through an upsert.
+  //
+  // THE REASON IS NARROWER THAN AN EARLIER VERSION'S, which said this suite
+  // asserts "that the refinement row is written for the bound tenant" — a
+  // TENANCY claim the append model cannot support, and one nothing here
+  // establishes through an upsert. Every stored-state assertion in this file
+  // about this table reads a row written by the route's `.update()`
+  // (pages/api/campaigns/weekly-refinement.ts:323), not by the upsert; the
+  // upsert itself is only ever asserted ABSENT, via
+  // `writeCalls(['weekly_content_refinements']).toHaveLength(0)`. The upsert
+  // path is the route's DEPRECATED branch.
+  upsertAppendsBlindly('weekly_content_refinements', 'only that no upsert statement is issued on the denied paths');
   for (const m of [mockSaveWeekPlans, mockInsertActivity, mockUpdateActivity, mockDeleteActivity, mockGetCampaignMemory,
     mockDetectOverlap, mockAssignWeek, mockUpdateWeekStatus, mockGetUserAssignments, mockGetCampaignTeam, mockAnalytics,
     mockDecisionReport]) m.mockClear();
@@ -147,12 +163,19 @@ describe('campaigns/save', () => {
   it('member of A saves own campaign → 200', async () => {
     const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: CAMPAIGN_A, name: 'Renamed' } });
     expect(r.status).toBe(200);
-    expect(writeCalls(['campaigns'])).toHaveLength(1);
+    // ON completedWrites(), NOT writeCalls(). writeCalls() counts a statement
+    // the harness REFUSED as a configuration defect, and on a GRANT path a
+    // refused statement is indistinguishable from a real write to every
+    // accessor except this one: its payload is readable and call ordering is
+    // preserved, so presence, payload and sequence assertions all pass over a
+    // write that never ran. completedWrites() also excludes a statement the
+    // model ERRORED. See the four outcomes in the harness.
+    expect(completedWrites(['campaigns'])).toHaveLength(1);
   });
   it('a genuinely new id is still created → 200', async () => {
     const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: 'camp-brand-new', name: 'New' } });
     expect(r.status).toBe(200);
-    expect(writeCalls(['campaigns'])[0].payload).toMatchObject({ id: 'camp-brand-new', user_id: USER_A });
+    expect(completedWrites(['campaigns'])[0].payload).toMatchObject({ id: 'camp-brand-new', user_id: USER_A });
   });
 });
 
@@ -499,4 +522,21 @@ describe('campaigns/index content-plan CRUD', () => {
     expect(list.status).toBe(200);
     expect(leaksB(list.body)).toBe(false);
   });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });

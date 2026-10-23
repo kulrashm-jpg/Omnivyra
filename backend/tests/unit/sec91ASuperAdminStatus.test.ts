@@ -70,7 +70,12 @@ describe('rbacService super-admin predicates', () => {
 async function runGuard(fn: (req: any, res: any) => Promise<unknown>, who: Parameters<typeof bearer>[0] | null) {
   let result: unknown;
   const r = await invoke(async (req, res) => { result = await fn(req, res); }, { headers: who ? bearer(who) : {} });
-  return { result, status: r.status, body: r.body };
+  // A guard that ALLOWS sends nothing, so `r.status` is undefined. This helper
+  // reports that as 200, which is what every assertion below means by
+  // "allowed". The harness itself no longer defaults to 200, because a default
+  // made `expect(status).toBe(200)` pass for a route that never responded; the
+  // meaning is kept here, where it is deliberate and local to guard testing.
+  return { result, status: r.responded ? r.status : 200, body: r.body };
 }
 
 describe('tenant guard platform bypass (enforceCompanyAccess → TenantGuard)', () => {
@@ -150,4 +155,21 @@ describe('withRBAC([SUPER_ADMIN]) (e.g. governance/snapshot, recommendations/sim
     expect(r.status).toBe(401);
     expect(sink).not.toHaveBeenCalled();
   });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });

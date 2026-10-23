@@ -14,7 +14,7 @@
  * services are faked. Denials assert the sink was never reached.
  */
 import {
-  seed, invoke, writeCalls, sinkCalls, leaksB,
+  seed, invoke, writeCalls, completedWrites, sinkCalls, leaksB, resolveUpsertConflicts, rows,
   CO_A, CO_B, CAMPAIGN_A, CAMPAIGN_B, UNKNOWN_ID, USER_A,
 } from '../helpers/routeAuthHarness';
 
@@ -109,6 +109,19 @@ const plan = require('../../../pages/api/campaigns/ai/plan').default;
 
 beforeEach(() => {
   seed();
+  // UPSERT MODEL for campaign_plan_jobs, which this suite previously declared
+  // nowhere. pages/api/campaigns/ai/plan-v2.ts:157 upserts it with an EXPLICIT
+  // `{ onConflict: 'id' }`, so there is nothing to guess: the arbiter is stated
+  // by the call itself and resolve is the faithful model.
+  //
+  // WHY THIS MATTERED. With no declaration the harness refused that statement —
+  // the mandatory requireUpsertMode() refusal — and plan-v2's OWN
+  // `try { … } catch { /* advisory — non-fatal */ }` swallowed the throw at the
+  // source. The granted-path test below then passed with the job row never
+  // written, and the only assertion naming this table was a
+  // `writeCalls(...).toHaveLength(0)` on the DENIED paths, where 0 is correct.
+  // So the refusal was invisible in a green suite.
+  resolveUpsertConflicts('campaign_plan_jobs', ['id']);
   for (const m of [mockGetCampaignById, mockSaveStructured, mockCommitDraft, mockSaveAiCampaignPlan, mockGenerateFromManual,
     mockSaveWeekPlans, mockGetLatestCompanyContext, mockSafeEnqueue, mockModerate, mockRunPlan, mockPreview]) m.mockClear();
   jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -217,6 +230,16 @@ describe('campaigns/ai/plan-v2', () => {
     expect(r.status).toBe(202);
     expect(mockSafeEnqueue).toHaveBeenCalledTimes(1);
     expect(mockSafeEnqueue.mock.calls[0][3]).toMatchObject({ campaignId: CAMPAIGN_A, companyId: CO_A, userId: USER_A });
+
+    // THE ADVISORY JOB ROW REALLY LANDED, asserted on completedWrites() and on
+    // the stored row. The route swallows any failure here by design
+    // (`catch { /* advisory — non-fatal */ }`), so a 202 says nothing about the
+    // write — and a refused statement is counted by writeCalls() just like a
+    // real one. Only these two assertions distinguish the three outcomes.
+    expect(completedWrites(['campaign_plan_jobs'])).toHaveLength(1);
+    expect(rows('campaign_plan_jobs')).toEqual([
+      expect.objectContaining({ campaign_id: CAMPAIGN_A, status: 'pending' }),
+    ]);
   });
 });
 
@@ -276,4 +299,21 @@ describe('campaigns/ai/plan', () => {
     expect(own.status).toBe(200);
     expect(mockPreview).toHaveBeenCalledWith(expect.objectContaining({ companyId: CO_A }));
   });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });

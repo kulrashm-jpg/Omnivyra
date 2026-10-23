@@ -12,10 +12,28 @@
  *      and TRACEABLE (status + resolved_at on the row).
  *
  * Uses the shared service-role client (RLS-bypassing) → every query is
- * explicitly company-scoped. Fail-safe: failures log and return a structured
- * result rather than throwing.
+ * explicitly company-scoped.
  *
- * See supabase/migrations/20260718000002_content_quality_collaboration.sql.
+ * ERROR CONTRACT — NOT UNIFORM ACROSS THIS FILE. An earlier version of this
+ * header said "failures log and return a structured result rather than
+ * throwing", which was true when every function swallowed. It is now wrong for
+ * the one function that matters most:
+ *   - upsertBlocks THROWS a status-carrying error on validation, ownership and
+ *     write failure, deliberately, so a denied cross-tenant write can never be
+ *     mistaken for "saved nothing successfully". See its own docblock.
+ *   - listBlocks, listRecommendations, setBlockLocked, saveRecommendations,
+ *     acceptRecommendation,
+ *     rejectRecommendation, acceptAll and restoreOriginal still log and return
+ *     a structured or empty result. setBlockLocked in particular returns null
+ *     on every failure, which its route reports as HTTP 200 — the pattern
+ *     upsertBlocks was changed to stop using. That inconsistency is recorded,
+ *     not resolved: changing it is an owner decision, not a comment fix.
+ *
+ * SCHEMA. The predecessor is
+ * supabase/migrations/20260718000002_content_quality_collaboration.sql; the
+ * OPERATIVE schema for the block-upsert path in this file is
+ * supabase/migrations/20261212000000_content_quality_collaboration_tenant_consistent.sql,
+ * which is NOT APPLIED — see the BLOCK_CONFLICT_TARGET docblock.
  */
 
 import { supabase } from '../../db/supabaseClient';
@@ -145,44 +163,317 @@ export interface BlockUpsertInput {
   locked?: boolean;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The conflict target for the block upsert. It is COMPANY-SCOPED on purpose.
+ *
+ * `content_block.id` is a globally unique primary key, so `onConflict: 'id'`
+ * made a caller-supplied id sufficient to land an `ON CONFLICT (id) DO UPDATE`
+ * on ANOTHER company's row and rewrite its `company_id` — a cross-tenant
+ * destructive write, over an RLS-bypassing service-role client. Scoping the
+ * conflict target to `(company_id, id)` means a foreign id finds no conflict
+ * for this company, so PostgreSQL attempts an INSERT, which the primary key on
+ * `id` then rejects (23505): the other company's row is left untouched and the
+ * error is surfaced rather than swallowed.
+ *
+ * WHAT THAT BACKSTOP DEPENDS ON — stated, because it is CONDITIONAL and not yet
+ * verified against a database. It requires a unique key on exactly
+ * `(company_id, id)` to exist, so that PostgreSQL can infer an arbiter index
+ * from this target at all. That key is created by
+ * supabase/migrations/20261212000000_content_quality_collaboration_tenant_consistent.sql
+ * (STEP 2, `content_block_company_id_key UNIQUE (company_id, id)`), which also
+ * creates `public.content_block` itself. THAT MIGRATION IS NOT APPLIED.
+ *
+ * WHAT ACTUALLY HAPPENS BEFORE IT IS. Two states are visible from this
+ * repository; the exact runtime outcome in each is UNVERIFIED, because nothing
+ * here has been executed against a database:
+ *   - TODAY, as the dump records it. `public.content_block` is ABSENT from
+ *     supabase/_schema/baseline.sql, the production-shaped dump, and so are
+ *     content_recommendation, content_approval_history and content_quality. The
+ *     predecessor migration 20260718000002, which would have created them, is
+ *     not reflected there either. So the write never reaches a conflict-arbiter
+ *     decision; it fails on the missing relation. The expected answer is
+ *     PostgREST's OWN schema-cache error, PGRST205 ("Could not find the table
+ *     in the schema cache"), raised before any SQL is issued — NOT a
+ *     translation of PostgreSQL's 42P01. 42P01 is the alternative, reached only
+ *     if the relation disappears after PostgREST built its cache. An earlier
+ *     version of this comment described PGRST205 as 42P01 "surfaced by
+ *     PostgREST", which is the wrong mechanism: they are alternatives.
+ *   - THE INTERMEDIATE STATE. If 20260718000002 is applied but this file's
+ *     migration is not, the table exists with `id` as its only unique key and
+ *     no `(company_id, id)`, and THEN the target matches no index and the
+ *     statement is expected to be rejected at plan time with 42P10.
+ * A further state exists that neither code path can distinguish: STEP 2 of that
+ * migration REUSES any already-usable unique key on (company_id, id) whatever
+ * its name, so on a target that already carries an equivalent key the upsert
+ * resolves even though the migration has not run.
+ *
+ * AND IT IS NOT "FAIL CLOSED AND COMPLETELY" — an earlier version said so, and
+ * that was wrong in the direction that matters. Generation can and does
+ * succeed with no block seeded, so no part of this path is fail-closed.
+ *
+ * THE CONSUMERS, by what they DO with a thrown error. There are five, not the
+ * four an earlier version of this note listed:
+ *   1. pages/api/content/[id]/blocks.ts — PROPAGATES. The throw reaches
+ *      respondServiceError and the caller sees the status this service chose.
+ *   2. lib/post/runPostGeneration.ts — CATCHES AND LOGS
+ *      (`console.error('… section-block seeding failed (continuing):', …)`),
+ *      then returns success. The user sees a successful generation with no
+ *      blocks; stderr is the only signal.
+ *   3. lib/thread/runThreadGeneration.ts — identical.
+ *   4. scripts/cert/e2e-runtime-cert.ts — RECORDS A FAILURE RESULT. Its step()
+ *      wrapper catches, pushes a FAIL row into the cert table and returns null
+ *      without rethrowing; the run's own exit code still reflects it.
+ *   5. hooks/useContentCollaboration.ts — DISCARDS THE RESULT. Its postBlock()
+ *      awaits fetch() inside a try/catch and never reads `res.ok`. The
+ *      comparison an earlier version drew here — that "the same hook does check
+ *      `.ok` on its reads" — is true per response and misleading as a contrast:
+ *      the read path checks `.ok` only to decide whether to PARSE, and surfaces
+ *      an error to the user only when ALL THREE of its reads fail
+ *      (useContentCollaboration.ts:234). A blocks-only 500 yields an empty
+ *      block list, no setError, and an editor that renders a document with no
+ *      sections indistinguishably from a document that has none. The read path
+ *      has the same "nothing versus failed" ambiguity this bullet criticises in
+ *      the write path; it is not the better-behaved half. Every status — 404 NOT_FOUND,
+ *      500 BLOCK_LOOKUP_FAILED, 500 BLOCK_WRITE_FAILED — is dropped and the
+ *      optimistic local state is kept. So the throw removes the
+ *      "saved-nothing-successfully" ambiguity at THIS boundary and the shipped
+ *      client reintroduces it.
+ *      Note what that client actually sends: its only call site posts
+ *      `{ action: 'lock', blockId, locked }`, which routes to setBlockLocked —
+ *      NOT to this function. No in-repo client posts a `{ blocks: [...] }`
+ *      upsert at all, so the browser never exercises this path today.
+ *
+ * WHICH ERROR A CALLER SEES. An earlier version said BLOCK_WRITE_FAILED was
+ * "reached only on an id-less batch — which is to say only from the callers
+ * that swallow it". The first half is nearly right and the second is wrong:
+ *   - With at least one supplied id, the ownership SELECT is the first database
+ *     touch, so a failure there is BLOCK_LOOKUP_FAILED and the write is never
+ *     reached.
+ *   - With NO supplied id the lookup is skipped entirely and the write is the
+ *     first touch, so the error is BLOCK_WRITE_FAILED.
+ *   - WHO ACTUALLY SENDS AN ID-LESS BATCH, corrected. An earlier version of
+ *     this bullet said an id-less batch is "the ORDINARY FIRST SAVE through the
+ *     route", and therefore that BLOCK_WRITE_FAILED is "plainly user-reachable,
+ *     not confined to the swallowing callers". That contradicted this very
+ *     comment twelve lines above, which says no in-repo client posts a
+ *     `{ blocks: [...] }` body at all — and the second half was wrong.
+ *     `splitIntoBlocks` is called by exactly three places that then upsert:
+ *     lib/post/runPostGeneration.ts, lib/thread/runThreadGeneration.ts and
+ *     scripts/cert/e2e-runtime-cert.ts. The first two CATCH AND LOG and then
+ *     return success; the third records a FAIL row. No client of the ROUTE
+ *     produces an id-less batch, because no client posts this body.
+ *     So on today's code the id-less path is reached only from the callers that
+ *     swallow or record the error, and what a user sees on an ordinary
+ *     generation is a successful generation with no blocks and a line on
+ *     stderr. BLOCK_WRITE_FAILED is reachable THROUGH THE ROUTE only by a
+ *     hand-crafted request, and reachable in PRACTICE only where it is
+ *     swallowed. Neither statement makes it harmless; they make it invisible.
+ *   - And a supplied id does not make the write safe either: if the ownership
+ *     answer goes stale between the two statements, the write fails and the
+ *     route reports BLOCK_WRITE_FAILED. The suite asserts exactly that case.
+ *
+ * RELEASE DEPENDENCY. This application code must not ship before that migration
+ * is applied AND verified — verification being
+ * supabase/migrations/_fix3_tenant_consistent/verification.sql. This comment
+ * RECORDS the dependency; it does not and cannot enforce it.
+ * What does and does not check anything today:
+ *   - scripts/ci/real-schema-ci.sh REPLAYS every migration whose 14-digit
+ *     version sorts above the baseline's ledger position and FAILS the job if
+ *     one does not apply. 20261212000000 is in that set, so there IS an
+ *     automated check that this migration APPLIES cleanly onto the dump. It is
+ *     NOT evidence that the migration is applied in production, and it does not
+ *     run for a change to this file: the workflow's `paths:` filter lists
+ *     supabase/migrations/**, supabase/_schema/**, scripts/ci/**,
+ *     backend/tests/realschema/**, backend/db/** and the PI service paths —
+ *     NOT supabase/** as a whole, and not backend/services/content/**.
+ *   - scripts/verify-schema-parity.js carries two content_block columns at WARN
+ *     only, and its REQUIRED_INDEXES list does not include (company_id, id), so
+ *     nothing anywhere checks for the key this call site needs.
+ *   - No runbook or release checklist references the migration: a repository
+ *     grep for 20261212000000 finds only this comment.
+ *
+ * Nor is the 23505 outcome itself established here: that `(company_id, id)`
+ * infers only the composite index, and that a row landing on the primary key
+ * therefore raises instead of taking the DO UPDATE branch, is reasoned from
+ * PostgreSQL's arbiter-inference rules and has NOT been executed. The unit
+ * tests model it; a mock cannot prove it.
+ *
+ * This is a DEFENCE IN DEPTH backstop, not the primary control, and the
+ * conditionality above is exactly why. The primary control is the ownership
+ * pre-validation below, which needs no schema change and no inference, because
+ * the database cannot distinguish "this id is not yours" from "this id does
+ * not exist" — only the application can.
+ */
+export const BLOCK_CONFLICT_TARGET = 'company_id,id';
+
+function blockError(message: string, status: number, code: string): Error {
+  const err = new Error(message) as Error & { status: number; code: string };
+  err.status = status;
+  err.code = code;
+  return err;
+}
+
 /**
  * Upsert section blocks for a content row (company-scoped). Rows carrying an
- * `id` are updated in place; others are inserted. Returns the persisted blocks,
- * ordered by position. Fail-safe: returns [] on error.
+ * `id` update that block in place; rows without one are inserted.
+ *
+ * MIXED BATCHES ARE AN OPEN QUESTION, not a supported shape. The route accepts
+ * a batch combining id-bearing and id-less elements, and this function forwards
+ * it, but the installed client sends the UNION of all row keys as `columns=`
+ * and omits `Prefer: missing=default` at its default, so an id-less element in
+ * a mixed batch is expected to be written with a NULL id against a uuid PRIMARY
+ * KEY — failing the whole statement and losing the valid elements with it. That
+ * expectation is from the client's own source and documented contract and has
+ * NOT been executed against PostgREST. No in-repo caller sends the shape. The
+ * contract this endpoint should have is an OPEN OWNER DECISION; nothing here
+ * has been changed to pick one.
+ *
+ * OWNERSHIP. A caller-supplied `id` NEVER authorizes an ownership transfer.
+ * Every supplied id must already belong to BOTH `companyId` and `contentId`;
+ * the whole batch is rejected otherwise, before any write, so an unauthorized
+ * element cannot produce a partial write. An id that does not exist at all is
+ * rejected for the same reason — this endpoint updates existing blocks and
+ * inserts new ones without an id; it does not create a block at a
+ * caller-chosen id.
+ *
+ * ERRORS ARE RAISED, NOT SWALLOWED. Unlike the other read paths in this
+ * service, a validation or database failure here throws a status-carrying
+ * error so the route reports it. Returning `[]` on failure would be
+ * indistinguishable from "saved nothing successfully", which is exactly how a
+ * denied cross-tenant write could have looked like a success.
  */
 export async function upsertBlocks(
   companyId: string,
   contentId: string,
   blocks: BlockUpsertInput[],
 ): Promise<CollabBlock[]> {
-  try {
-    if (!companyId || !contentId || !blocks?.length) return [];
-    const rows = blocks.map((b) => {
-      /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-      const row: Record<string, any> = {
-        company_id: companyId,
-        content_id: contentId,
-        block_type: b.blockType,
-        position: b.position,
-        text: b.text ?? null,
-        locked: b.locked ?? false,
-      };
-      if (b.id) row.id = b.id;
-      return row;
-    });
+  if (!companyId) throw blockError('companyId required', 400, 'VALIDATION');
+  if (!contentId) throw blockError('contentId required', 400, 'VALIDATION');
+  if (!Array.isArray(blocks) || blocks.length === 0) return [];
+
+  // ── 1. shape + id validation (no database access yet) ───────────────────
+  //
+  // ID NORMALISATION — WHERE IT HAPPENS, AND WHAT COUPLES THE SITES.
+  //
+  // WHY ANY OF IT. `UUID_RE` is case-insensitive, so `…ABCD` is a valid uuid —
+  // but PostgreSQL's uuid output is always canonical LOWERCASE, and the
+  // ownership comparison below is a JavaScript string compare. Without
+  // normalising, a caller supplying its OWN block id in uppercase would match
+  // no row in the `owned` set and be refused with a spurious 404.
+  //
+  // THE FOUR SITES, each stated as it actually is:
+  //   1. CAPTURE (just below). `b.id` is read, `.trim()`ed and `.toLowerCase()`d
+  //      into a local, validated against UUID_RE, and pushed to `suppliedIds`.
+  //      A non-string id becomes '' and is rejected here, so nothing downstream
+  //      has to re-check the type.
+  //   2. DUPLICATE DETECTION (step 1, below). Runs on `suppliedIds`, i.e. on the
+  //      normalised values, so `…ABCD` and `…abcd` in one batch are correctly
+  //      one block rather than two.
+  //   3. OWNERSHIP COMPARISON (step 2). The query sends `suppliedIds`, and the
+  //      rows that come back are lower-cased again before the set compare, so
+  //      the comparison does not depend on a driver or a fake returning the
+  //      canonical form. Nothing in this repository returns a non-canonical
+  //      uuid, so that second lower-case is defensive, not load-bearing.
+  //   4. WRITE (step 3). `b.id` is read a SECOND time, from the same input
+  //      object, and `.trim()`ed and `.toLowerCase()`d again.
+  //
+  // WHAT IS AND IS NOT GUARANTEED. An earlier version of this comment said the
+  // id is "lower-cased once … so the two can never diverge". That was false:
+  // sites 1 and 4 are two independent reads of `b.id` with two independently
+  // written transformations. They agree today because the transformations are
+  // written identically, NOT because one value is carried from the validation
+  // to the write. Changing either without the other would validate one string
+  // and persist a different one. The tests in
+  // backend/tests/unit/collaborationBlockTenantSafety.test.ts pin each site
+  // separately for exactly that reason.
+  //
+  // SCOPE. This is a normalisation of representation only: a uuid is
+  // case-insensitive by definition, so it neither widens nor narrows which rows
+  // a caller can reach, and the company + content scoping below is untouched.
+  const suppliedIds: string[] = [];
+  for (const b of blocks) {
+    if (!b || typeof b !== 'object') {
+      throw blockError('each block must be an object', 400, 'VALIDATION');
+    }
+    if (b.id !== undefined && b.id !== null) {
+      const id = typeof b.id === 'string' ? b.id.trim().toLowerCase() : '';
+      if (!UUID_RE.test(id)) {
+        throw blockError('block id must be a uuid', 400, 'VALIDATION');
+      }
+      suppliedIds.push(id);
+    }
+  }
+  // Duplicate detection runs on the normalised ids, so `…ABCD` and `…abcd` in
+  // one batch are correctly rejected as the same block rather than slipping
+  // through as two.
+  if (new Set(suppliedIds).size !== suppliedIds.length) {
+    throw blockError('duplicate block id in request', 400, 'VALIDATION');
+  }
+
+  // ── 2. ownership pre-validation ─────────────────────────────────────────
+  // Every supplied id must already be a block of THIS company AND THIS
+  // content. Scoping on both columns is what makes a foreign id — and an id
+  // belonging to this company but to different content — fail closed.
+  if (suppliedIds.length > 0) {
     const { data, error } = await supabase
       .from(BLOCK_TABLE)
-      .upsert(rows, { onConflict: 'id' })
-      .select('*');
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('content_id', contentId)
+      .in('id', suppliedIds);
     if (error) {
-      console.warn('[collaborationService] upsertBlocks failed:', error.message);
-      return [];
+      throw blockError(`block ownership lookup failed: ${error.message}`, 500, 'BLOCK_LOOKUP_FAILED');
     }
-    return (data ?? []).map(mapBlock).sort((a, b) => a.position - b.position);
-  } catch (e) {
-    console.warn('[collaborationService] upsertBlocks threw:', (e as Error)?.message);
-    return [];
+    // Site 3 of the normalisation described above. Both sides are lower-cased:
+    // the supplied ids were normalised at capture, and the database side is
+    // normalised here too rather than relying on PostgreSQL's canonical output,
+    // so the comparison cannot depend on which driver or fake returned the row.
+    // Defensive rather than load-bearing — no producer in this repository
+    // returns a non-canonical uuid — and pinned by its own test so that removing
+    // it is not a silent no-op.
+    const owned = new Set((data ?? []).map((r: { id: string }) => String(r.id).toLowerCase()));
+    const rejected = suppliedIds.filter((id) => !owned.has(id));
+    if (rejected.length > 0) {
+      // Deliberately a 404, not a 403: do not confirm that an id exists in
+      // another company. The rejected ids were supplied by the caller, so
+      // echoing them back discloses nothing it did not already hold.
+      throw blockError(
+        `block not found for this company and content: ${rejected.join(', ')}`,
+        404,
+        'NOT_FOUND',
+      );
+    }
   }
+
+  // ── 3. write ────────────────────────────────────────────────────────────
+  const rows = blocks.map((b) => {
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    const row: Record<string, any> = {
+      company_id: companyId,
+      content_id: contentId,
+      block_type: b.blockType,
+      position: b.position,
+      text: b.text ?? null,
+      locked: b.locked ?? false,
+    };
+    // Site 4 of the normalisation described above: a SECOND read of `b.id`,
+    // transformed the same way as the capture site so that the id validated
+    // against the owned set is the id written. The two are kept in step by
+    // being written identically, not by sharing a value — see the note above,
+    // and the per-site tests that pin each one.
+    if (b.id) row.id = String(b.id).trim().toLowerCase();
+    return row;
+  });
+  const { data, error } = await supabase
+    .from(BLOCK_TABLE)
+    .upsert(rows, { onConflict: BLOCK_CONFLICT_TARGET })
+    .select('*');
+  if (error) {
+    throw blockError(`upsertBlocks failed: ${error.message}`, 500, 'BLOCK_WRITE_FAILED');
+  }
+  return (data ?? []).map(mapBlock).sort((a, b) => a.position - b.position);
 }
 
 /** List a content row's blocks, ordered by position (company-scoped). */

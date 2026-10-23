@@ -23,7 +23,8 @@
  *   - failures return generic errors, never database messages.
  */
 import {
-  seed, invoke, writeCalls, rows, CO_A, CO_B, USER_A,
+  seed,
+  upsertAppendsBlindly, invoke, writeCalls, completedWrites, rows, CO_A, CO_B, USER_A,
 } from '../helpers/routeAuthHarness';
 import { faults, resetFaults } from '../helpers/wsdFaultClient';
 import { as as asPrincipal, roleRows } from '../helpers/sec91W2AHarness';
@@ -117,6 +118,30 @@ function world(campaign: Row | null, versions: Row[]): void {
     platform_strategies: [{ id: 'ps-1', campaign_id: X, platform: 'linkedin', content_frequency: 3 }],
     weekly_content_refinements: [{ id: 'wcr-1', campaign_id: X, refinement_status: 'draft' }],
   });
+  // UPSERT MODEL, declared explicitly rather than inherited. The append model
+  // performs no arbiter resolution, so nothing here may be read as evidence
+  // about row identity, uniqueness or tenancy through an upsert.
+  //
+  // THE REASON IS DELIBERATELY NARROWER THAN AN EARLIER VERSION'S. It used to
+  // say this suite asserts "which tenant a strategy write is attributed to" —
+  // a TENANCY claim, in the same breath as the boilerplate saying the append
+  // model cannot support one. What the suite actually asserts about this table
+  // is the PAYLOAD of the statement the route sends, which is within append's
+  // reach; nothing here reads the resulting row.
+  //
+  // `alsoForNoOptionsCalls` is required because the production statement is
+  // `supabase.from('platform_strategies').upsert(upserts)` with NO options at
+  // all (pages/api/campaigns/[id]/approve-frequency-rebalance.ts:130, and
+  // again at pages/api/campaigns/save-strategy.ts:127). What the server's
+  // default conflict resolution does with that is NOT established by this
+  // repository, so the acknowledgement records that this suite's assertions do
+  // not depend on it — rather than the harness silently appending, which is
+  // what it used to do.
+  upsertAppendsBlindly(
+    'platform_strategies',
+    'that the approve path sends the proposal payload to the strategies sink',
+    { alsoForNoOptionsCalls: true },
+  );
 }
 
 const newVersions = () => rows('campaign_versions').filter((r) => r.campaign_id === X && !VERSIONS_A.some((s) => s.id === r.id) && !String(r.id).startsWith('seed-'));
@@ -286,10 +311,23 @@ describe('rebalance approve / reject select the proposal inside the owner compan
     expect(writeCalls()).toEqual([]);
   });
 
-  it('approve applies the canonical proposal’s changes to platform_strategies', async () => {
+  it('approve SENDS the canonical proposal’s changes to platform_strategies', async () => {
+    // "SENDS", not "applies". This asserts the statement the route issues and
+    // its payload — nothing more. The table is modelled with the APPEND upsert
+    // model (see world()), so the harness does not merge: `ps-1` still carries
+    // its seeded content_frequency afterwards. An earlier title said "applies",
+    // which claimed a resulting row state no assertion here establishes and the
+    // model cannot produce.
     world({ company_id: CO_A }, VERSIONS_A);
     expect((await invoke(approveRebalance as never, { method: 'POST', as: 'A', query: { id: X } })).status).toBe(200);
-    expect(writeCalls(['platform_strategies'])).toEqual([
+    // ON completedWrites(), NOT writeCalls(). writeCalls() counts a statement
+    // the harness REFUSED as a configuration defect, and on a GRANT path a
+    // refused statement is indistinguishable from a real write to every
+    // accessor except this one: its payload is readable and call ordering is
+    // preserved, so presence, payload and sequence assertions all pass over a
+    // write that never ran. completedWrites() also excludes a statement the
+    // model ERRORED. See the four outcomes in the harness.
+    expect(completedWrites(['platform_strategies'])).toEqual([
       expect.objectContaining({ op: 'upsert', payload: [expect.objectContaining({ campaign_id: X, platform: 'linkedin', content_frequency: 5 })] }),
     ]);
   });
@@ -302,4 +340,21 @@ describe('rebalance approve / reject select the proposal inside the owner compan
     expect(r.body).toEqual({ error: 'Failed to apply frequency changes' });
     expect(newVersions()).toEqual([]);
   });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });
