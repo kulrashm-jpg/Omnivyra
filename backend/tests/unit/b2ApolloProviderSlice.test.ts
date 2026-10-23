@@ -400,8 +400,18 @@ describe('B2 — the canonical write path carries the tenant, including where no
   });
 
   it('the canonical WRITE is filtered by tenant as well as by id', () => {
+    // CA (canonical write atomicity) moved the UPDATE into the plpgsql function
+    // `pi_apply_canonical_decisions`, so the pin follows it: the boundary hands
+    // the function the verified tenant and the target together, and the
+    // function's UPDATE (and its row lock) filter on both.
     expect(boundary()).toMatch(
-      /\.update\(patch\)\.eq\('id', targetId\)\.eq\(tenantColumn, input\.organizationId\)/);
+      /ownedDbRpc\('pi_apply_canonical_decisions', \{\s*p_organization_id: input\.organizationId,[\s\S]{0,120}?p_target_id: targetId,/);
+    const fs = require('fs');
+    const path = require('path');
+    const sql = fs.readFileSync(path.join(__dirname, '../../..',
+      'supabase/migrations/20261128000000_pi_canonical_write_atomicity.sql'), 'utf8');
+    expect(sql).toMatch(/UPDATE public\.%I t SET[\s\S]{0,160}?WHERE t\.id = \$2 AND t\.%I = \$3/);
+    expect(sql).toMatch(/SELECT id FROM public\.%I WHERE id = \$1 AND %I = \$2 FOR UPDATE/);
   });
 
   it('every assertion READ and UPDATE in the boundary is filtered by organization_id', () => {

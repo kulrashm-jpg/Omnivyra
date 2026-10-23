@@ -152,7 +152,19 @@ const record = (org: string, email: string, externalId: string, domain = 'employ
   },
 });
 
+// The outer kill switch is read from the environment on every record, so the
+// suite sets it itself instead of inheriting whatever the shell happens to hold
+// (the same save/restore pattern as p2cEmployerFirmographicPropagation).
+const INGESTION_FLAG = 'ENABLE_LEAD_INGESTION';
+let ingestionFlagBefore: string | undefined;
+beforeAll(() => { ingestionFlagBefore = process.env[INGESTION_FLAG]; });
+afterAll(() => {
+  if (ingestionFlagBefore === undefined) delete process.env[INGESTION_FLAG];
+  else process.env[INGESTION_FLAG] = ingestionFlagBefore;
+});
+
 beforeEach(() => {
+  process.env[INGESTION_FLAG] = 'true';
   db.tables = {}; db.writes = []; db.nextId = 1;
   personIds.clear(); attached.clear(); attachCalls.length = 0;
   resolvedAccount = null;
