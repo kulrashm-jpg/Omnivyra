@@ -22,6 +22,7 @@ import {
   libraryListAssets,
   libraryWriteAsset,
   libraryRemoveAsset,
+  LibraryAssetIdConflictError,
 } from '@/backend/services/creatorAssetPersistenceService';
 
 function errStatus(message: string): number {
@@ -77,6 +78,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const removed = await libraryRemoveAsset({ companyId, assetId: id });
     return res.status(200).json({ success: true, removed });
   } catch (error) {
+    // SEC-1: an id held by another company is refused, never overwritten.
+    if (error instanceof LibraryAssetIdConflictError) {
+      return res.status(409).json({ error: 'asset_id_unavailable' });
+    }
     const message = error instanceof Error ? error.message : 'Asset library request failed';
     return res.status(errStatus(message)).json({ error: message });
   }

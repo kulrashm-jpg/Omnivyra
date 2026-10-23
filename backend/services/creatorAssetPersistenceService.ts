@@ -974,8 +974,8 @@ function envelopeCurrentPayload(envelope: Record<string, unknown>): Record<strin
 /**
  * Raised when a compare-and-set write loses to a concurrent writer.
  *
- * Only reachable by callers that opt into `expectedCurrentVersion` — every
- * existing caller keeps the blind-upsert behaviour and can never see this.
+ * Only reachable by callers that opt into `expectedCurrentVersion` — callers
+ * that omit it take the scoped update/insert path and never see this.
  */
 export class LibraryVersionConflictError extends Error {
   readonly assetId: string;
@@ -986,6 +986,25 @@ export class LibraryVersionConflictError extends Error {
     this.assetId = assetId;
     this.expectedCurrentVersion = expectedCurrentVersion;
   }
+}
+
+/**
+ * Raised when a library write names an asset id that already exists under a
+ * DIFFERENT company. `creator_assets.id` is a global primary key and the
+ * envelope id comes from the client, so the write must be refused rather than
+ * overwrite (and re-own) another tenant's row.
+ */
+export class LibraryAssetIdConflictError extends Error {
+  readonly assetId: string;
+  constructor(assetId: string) {
+    super(`library asset id ${assetId} is not available to this company`);
+    this.name = 'LibraryAssetIdConflictError';
+    this.assetId = assetId;
+  }
+}
+
+function isUniqueViolation(error: { code?: unknown } | null | undefined): boolean {
+  return String(error?.code ?? '') === '23505';
 }
 
 export async function libraryWriteAsset(input: {
@@ -1047,8 +1066,8 @@ export async function libraryWriteAsset(input: {
   // replaces the row and discards it. Guarding on the version the write was
   // derived from turns that silent loss into a detectable conflict.
   //
-  // Callers that omit `expectedCurrentVersion` keep the original upsert, which
-  // is still what creation and non-versioned writes need.
+  // Callers that omit `expectedCurrentVersion` take the scoped update/insert
+  // path below, which is what creation and non-versioned writes need.
   if (typeof input.expectedCurrentVersion === 'number') {
     const { data, error } = await ownedDbTable('creator_assets')
       .update(row)
@@ -1064,12 +1083,45 @@ export async function libraryWriteAsset(input: {
     return rowToLibraryRecord(data as Record<string, unknown>);
   }
 
+  // SEC-1: never upsert on `id` alone. The id is client-supplied and globally
+  // unique, so an id-only upsert would overwrite another company's row and
+  // reassign its company_id. A row this company owns is updated in place
+  // (scoped by company_id); anything else is a plain INSERT, and a unique
+  // violation on insert means the id already exists — re-check ownership and
+  // either update this company's row (a concurrent create) or refuse.
+  const updateOwned = async () => {
+    const { data, error } = await ownedDbTable('creator_assets')
+      .update(row)
+      .eq('id', id)
+      .eq('company_id', input.companyId)
+      .select()
+      .maybeSingle();
+    if (error) throw new Error(`Failed to persist library asset: ${error.message}`);
+    if (!data) throw new LibraryAssetIdConflictError(id);
+    return rowToLibraryRecord(data as Record<string, unknown>);
+  };
+
+  if (existing) return updateOwned();
+
   const { data, error } = await ownedDbTable('creator_assets')
-    .upsert(row, { onConflict: 'id' })
+    .insert(row)
     .select()
     .single();
-  if (error) throw new Error(`Failed to persist library asset: ${error.message}`);
-  return rowToLibraryRecord(data as Record<string, unknown>);
+  if (!error) return rowToLibraryRecord(data as Record<string, unknown>);
+  if (!isUniqueViolation(error)) throw new Error(`Failed to persist library asset: ${error.message}`);
+
+  const { data: owned } = await ownedDbTable('creator_assets')
+    .select('id')
+    .eq('id', id)
+    .eq('company_id', input.companyId)
+    .maybeSingle();
+  if (!owned) throw new LibraryAssetIdConflictError(id);
+  // Same company created it concurrently: keep that row's metadata/source
+  // columns, exactly as the pre-existing-row path does.
+  delete row.metadata;
+  delete row.source_type;
+  delete row.source_id;
+  return updateOwned();
 }
 
 export async function libraryReadAsset(input: {
