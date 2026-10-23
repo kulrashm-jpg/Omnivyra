@@ -25,6 +25,15 @@ jest.mock('../../security/TenantGuard', () => ({
   requireTenantAccess: (...args: unknown[]) => tenantOk(...(args as [])),
 }));
 
+// OD-A / PI-ADR-007 — the capability gate. A SECOND fake beside the tenant one,
+// not a replacement: membership and capability answer different questions and
+// the route asks both, so a test that could not fail one independently of the
+// other could not prove the gate exists at all.
+const capabilityOk = jest.fn(async (): Promise<{ ok: boolean }> => ({ ok: true }));
+jest.mock('../../security/requireCapability', () => ({
+  requireCapability: (...args: unknown[]) => capabilityOk(...(args as [])),
+}));
+
 const execute = jest.fn(async () => ({ status: 'not_planned', reason: 'stub' }));
 jest.mock('../../apiHandlers/prospects/prospectIntelligenceRead', () => ({
   executeProspectEnrichment: (...args: unknown[]) => execute(...(args as [])),
@@ -56,7 +65,62 @@ const call = async (over: Record<string, unknown> = {}) => {
 beforeEach(() => {
   jest.clearAllMocks();
   tenantOk.mockImplementation(async () => ({ userId: 'u-1', companyId: 'co-1' }));
+  capabilityOk.mockImplementation(async () => ({ ok: true }));
   execute.mockImplementation(async () => ({ status: 'not_planned', reason: 'stub' }));
+});
+
+describe('A6 / OD-A — spending requires PROSPECT_ENRICH_EXECUTE', () => {
+  // Before OD-A this route was membership-only. `requireTenantAccess` filters by
+  // role only when `requireRoleIn` is supplied and no PI route supplies it, so
+  // every active member at any of the seven canonical roles — VIEW_ONLY included
+  // — could cause a real, billable provider call, while importing one prospect
+  // required admin-tier PROSPECT_INGEST. PI-ADR-007 closes that asymmetry.
+
+  it('demands the capability, bound to the VERIFIED tenant id', async () => {
+    await call();
+    expect(capabilityOk).toHaveBeenCalledTimes(1);
+    const [, , opts] = capabilityOk.mock.calls[0] as unknown as [unknown, unknown, {
+      capability: string; organizationId: string; reason?: string;
+    }];
+    expect(opts.capability).toBe('prospect.enrich.execute');
+    expect(opts.organizationId).toBe('co-1');
+  });
+
+  it('a principal without the capability never reaches the executor', async () => {
+    capabilityOk.mockImplementation(async () => ({ ok: false }));
+    await call();
+    // The property that matters is not the status code — requireCapability
+    // writes that itself — but that NO billable path was entered.
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('membership is evaluated BEFORE the capability', async () => {
+    // Anti-vacuity: with no gate at all this assertion would pass trivially,
+    // because a capability that is never consulted is also never consulted on
+    // the denied path. So prove it IS consulted normally, first.
+    await call();
+    expect(capabilityOk).toHaveBeenCalledTimes(1);
+    capabilityOk.mockClear();
+    execute.mockClear();
+
+    tenantOk.mockImplementation(async () => null as unknown as { userId: string; companyId: string });
+    await call();
+    expect(capabilityOk).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('a body-supplied companyId cannot redirect the capability check', async () => {
+    await call({ body: { attribute: 'employee_count', subject: 'account', companyId: 'co-OTHER' } });
+    const [, , opts] = capabilityOk.mock.calls[0] as unknown as [unknown, unknown, { organizationId: string }];
+    expect(opts.organizationId).toBe('co-1');
+  });
+
+  it('an authorized principal still reaches the executor — the gate is not a block', async () => {
+    const { code } = await call();
+    expect(code).toBe(200);
+    expect(capabilityOk).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('A6 — POST /api/prospects/[id]/enrich', () => {

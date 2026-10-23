@@ -34,19 +34,23 @@
  * opposite: it is proof no egress occurred, so it consumes nothing. A retry is
  * a new attempt row and consumes its own capacity, because it is its own call.
  *
- * ─── ABSENT POLICY IS ABSENT I/O ──────────────────────────────────────────
- * The global switch is checked first and costs nothing — the same shape
- * `isLeadIngestionEnabled` uses, and for the same reason. With no ceiling
- * configured this function permits before reading anything, so a platform that
- * has not opted in behaves EXACTLY as it did before, including making no extra
- * database round trip.
+ * ─── THE CEILING IS REQUIRED (OD-A / PI-ADR-007) ──────────────────────────
+ * This section used to say that an absent policy meant absent I/O: a global
+ * switch was consulted first, and with no ceiling configured the function
+ * permitted before reading anything. That is no longer true, and the change is
+ * the decision rather than an optimisation regression.
  *
- * ─── FAIL CLOSED, BUT ONLY FOR TENANTS WHO OPTED IN ───────────────────────
- * If a ceiling IS configured and usage cannot be counted, we cannot prove we
- * are under it, so the call is refused. That mirrors suppression, which
- * propagates a read error rather than reading it as "nothing found". It cannot
- * affect anyone who has not configured a ceiling, because those callers return
- * above without ever reaching the read.
+ * The owner decided: REQUIRED — no ceiling, no call. So there is no global
+ * switch, and an unconfigured tenant is REFUSED rather than treated as
+ * unlimited. A ceiling read now happens on every call that reaches this gate.
+ *
+ * ─── FAIL CLOSED, FOR EVERYONE ────────────────────────────────────────────
+ * Every uncertainty refuses: no ceiling configured, a ceiling that cannot be
+ * read, a usage count that cannot be obtained, a count that is not a finite
+ * number, and of course a tenant at or over its ceiling. That mirrors
+ * suppression, which propagates a read error rather than reading it as
+ * "nothing found". Unlike before, it now protects tenants who never opted in,
+ * because opting in is no longer what turns the control on.
  *
  * ─── WHAT THIS IS NOT ─────────────────────────────────────────────────────
  * Not a rate limit: this bounds calls per UTC day (the tenant's wallet), not
@@ -68,11 +72,20 @@ import type { TenantFundedPortOptions } from './cost';
  */
 export const SPEND_CEILING_FLAG_KEY = 'enrichment_spend_ceiling';
 
-/** The global switch. Off or absent ⇒ no ceiling is enforced anywhere. */
-export function isSpendCeilingEnabled(): boolean {
-  const raw = String(process.env.ENABLE_ENRICHMENT_SPEND_CEILING ?? '').trim().toLowerCase();
-  return raw === '1' || raw === 'true';
-}
+/**
+ * THERE IS NO GLOBAL SWITCH ANY MORE (OD-A / PI-ADR-007).
+ *
+ * `ENABLE_ENRICHMENT_SPEND_CEILING` and `isSpendCeilingEnabled()` stood here.
+ * Off or absent meant no ceiling was enforced anywhere, and off was the
+ * default — so the control was fully built, correctly wired to the production
+ * singleton, and enforced nothing.
+ *
+ * The owner decided the ceiling is REQUIRED: no ceiling, no call. A switch
+ * whose only function is to disable a required control contradicts that, and
+ * would make the posture depend on an environment variable being remembered.
+ * So enforcement is now unconditional and the switch is gone rather than
+ * defaulted the other way.
+ */
 
 /**
  * The UTC calendar day a timestamp falls in, as `YYYY-MM-DD`.
@@ -176,8 +189,6 @@ export interface DailyCallCeilingOptions {
   readonly countCallsToday?: CountCallsToday;
   /** Injected so the day boundary is testable; defaults to the real clock. */
   readonly now?: () => string;
-  /** Injected so a test need not set an environment variable. */
-  readonly enabled?: () => boolean;
 }
 
 /**
@@ -227,18 +238,25 @@ export const boundedOvershoot = {
 export function makeDailyCallCeilingAllow(
   options: DailyCallCeilingOptions = {},
 ): NonNullable<TenantFundedPortOptions['allow']> {
-  const enabled = options.enabled ?? isSpendCeilingEnabled;
   const resolveCeiling = options.resolveCeiling ?? defaultResolveCeiling;
   const countCallsToday = options.countCallsToday ?? defaultCountCallsToday;
   const now = options.now ?? (() => new Date().toISOString());
 
   return async ({ organizationId, providerId }) => {
-    // Free, leaks nothing, and returns before any I/O — so a platform that has
-    // not opted in is byte-identical to the behaviour before this existed.
-    if (!enabled()) return null;
-
     const ceiling = await resolveCeiling({ organizationId, providerId });
-    if (ceiling === null) return null;              // configured for others, not for this
+
+    // REQUIRED, not optional (OD-A / PI-ADR-007). This line used to read
+    // `if (ceiling === null) return null` — an unconfigured tenant was treated
+    // as unlimited. "Not configured" is not "unlimited": it is the absence of
+    // the one fact that bounds the bill, so it refuses.
+    //
+    // The operational consequence is deliberate and was accepted with the
+    // decision: a tenant with no `enrichment_spend_ceiling` flag row cannot
+    // enrich until an operator provisions one.
+    if (ceiling === null) {
+      return `no daily provider call ceiling is configured for '${providerId}': `
+        + 'enrichment requires one and will not proceed without it';
+    }
 
     const { startIso, endIso } = utcDayBounds(now());
     const used = await countCallsToday({ organizationId, providerId, startIso, endIso });

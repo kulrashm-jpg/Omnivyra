@@ -56,6 +56,7 @@ import {
   CONTENT_ARCHITECT_WRITE,
   PROSPECT_INGEST,
   PROSPECT_ICP_MANAGE,
+  PROSPECT_ENRICH_EXECUTE,
   // Phase: Platform Authority Isolation — platform-tier billing
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
@@ -129,6 +130,10 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     // deliberately NOT implied by PROSPECT_INGEST: importing a person and
     // defining who the tenant wants are separate authorities.
     PROSPECT_ICP_MANAGE,
+    // Prospect enrichment execution (OD-A / PI-ADR-007). No hierarchy entry:
+    // spending on a vendor is not implied by importing a person or by defining
+    // an ICP, and does not imply either.
+    PROSPECT_ENRICH_EXECUTE,
   ],
   COMPANY_ADMIN: [
     ORGANIZATION_MANAGE,        // org settings, member management (NOT delete)
@@ -151,6 +156,11 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     // governs how every prospect in the tenant is scored — a far wider effect
     // than any single ingested record.
     PROSPECT_ICP_MANAGE,
+    // A tenant admin may spend the tenant's own provider credential. No
+    // content-tier or VIEW_ONLY role may: this is egress to a third party that
+    // bills the tenant per call, which is a different kind of act from writing
+    // a row. Bounded by the REQUIRED daily ceiling (PI-ADR-007 §4).
+    PROSPECT_ENRICH_EXECUTE,
   ],
   CONTENT_ARCHITECT: [
     // Platform-level role: read+author across all companies.

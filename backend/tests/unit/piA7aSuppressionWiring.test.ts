@@ -22,6 +22,28 @@
  * SECRETS: all synthetic. No credential, no network, no provider call.
  */
 
+// OD-A / PI-ADR-007 — the production cost port now REQUIRES a daily ceiling, so
+// it reads `feature_flags` and the attempt ledger on every call; before OD-A it
+// permitted before any I/O, which is why this suite needed no database. The
+// ceiling itself is owned by `piM1SpendCeiling`; here it is simply satisfied, so
+// that what these tests assert remains what they are actually testing.
+jest.mock('../../db/writeOwner', () => {
+  const resultFor = (table: string) => (table === 'feature_flags'
+    ? { data: { enabled: true, metadata: { daily_provider_call_ceiling: 1000 } }, error: null }
+    : { count: 0, error: null });
+  const build = (table: string) => {
+    const result = resultFor(table);
+    const chain: Record<string, unknown> = {};
+    for (const m of ['select', 'eq', 'in', 'gte', 'lt', 'order', 'limit']) chain[m] = () => chain;
+    chain.maybeSingle = async () => result;
+    chain.single = async () => result;
+    chain.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+      Promise.resolve(result).then(res, rej);
+    return chain;
+  };
+  return { ownedDbTable: (table: string) => build(table) };
+});
+
 import { makeProductionEnrichmentPorts } from '../../services/enrichment/productionPorts';
 // A7K — the singletons the composition must BE, and the factories it must not
 // call; plus A6's exported name, which is asserted to be the same function.

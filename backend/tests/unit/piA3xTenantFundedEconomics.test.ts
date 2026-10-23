@@ -36,6 +36,32 @@ jest.mock('../../../lib/security/safeFetch', () => ({
   }),
 }));
 
+// OD-A / PI-ADR-007 — the production cost port now REQUIRES a daily ceiling, so
+// it reads `feature_flags` and the attempt ledger on EVERY call. Before OD-A it
+// returned permitting before any I/O, which is why this suite needed no database
+// at all. This suite is about ECONOMICS — that a tenant-funded call reserves
+// nothing of Omnivyra's — not about the ceiling, which `piM1SpendCeiling` owns.
+// So the two reads are satisfied here with a generous configured ceiling and an
+// empty ledger, which is the condition under which the economic assertions below
+// are the thing actually being tested.
+jest.mock('../../db/writeOwner', () => {
+  const resultFor = (table: string) => (table === 'feature_flags'
+    ? { data: { enabled: true, metadata: { daily_provider_call_ceiling: 1000 } }, error: null }
+    : { count: 0, error: null });
+  const build = (table: string) => {
+    const result = resultFor(table);
+    const chain: Record<string, unknown> = {};
+    for (const m of ['select', 'eq', 'in', 'gte', 'lt', 'order', 'limit']) chain[m] = () => chain;
+    chain.maybeSingle = async () => result;
+    chain.single = async () => result;
+    // The ledger count is awaited on the builder itself, so it must be thenable.
+    chain.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+      Promise.resolve(result).then(res, rej);
+    return chain;
+  };
+  return { ownedDbTable: (table: string) => build(table) };
+});
+
 import {
   tenantFundedExecutionPort, makeTenantFundedExecutionPort,
   creditCostPort, PROSPECT_ENRICHMENT_ACTION, FORBIDDEN_BORROWED_ACTION,
