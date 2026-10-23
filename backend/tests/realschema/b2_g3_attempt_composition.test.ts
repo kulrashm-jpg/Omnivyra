@@ -593,7 +593,11 @@ describe('G-3 tenant isolation — every row in the composition belongs to one t
       (rows as Array<{ table_name: string; composite_tenant_fks: number }>)
         .map((r) => [r.table_name, Number(r.composite_tenant_fks)]));
     expect(byTable.source_records).toBe(2);
-    expect(byTable.source_assertions).toBe(3);
+    // 4, not 3: record, person, account + the relationship leg
+    // (source_assertions_relationship_tenant_fk) added on this branch by
+    // 20261122000000_pi_person_account_relationships.sql (re-created with
+    // SET NULL (relationship_id) by 20261125000000_pi_relationship_evidence_detachment.sql).
+    expect(byTable.source_assertions).toBe(4);
     // 4, not 3: assertion, person, account + the relationship leg
     // (canonical_decisions_relationship_tenant_fk) added on this branch by
     // 20261124000000_pi_relationship_canonical_decisions.sql.
