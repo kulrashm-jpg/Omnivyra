@@ -14,6 +14,33 @@ import Link from 'next/link';
  * to an empty page. A nav that offers a destination which cannot do anything is
  * worse than one that says the work has not been done — the operator clicks,
  * finds nothing, and stops trusting the rest of the hub.
+ *
+ * ══════════════════════════════════════════════════════════════════════════
+ * PHASE 1 — THIS IS NOW THE CANONICAL NAVIGATION SPINE
+ * ══════════════════════════════════════════════════════════════════════════
+ * The frozen decision record names five sections beside the pre-existing API
+ * area. Each is a real destination that states its own true state, which is why
+ * they are `ready: true` even where the capability behind them is not
+ * operational: the page tells the operator what is and is not possible, and that
+ * is a destination worth reaching. `ready: false` stays reserved for an area
+ * with no page at all.
+ *
+ * ─── "DATA SOURCES" IS GONE AS A PRODUCT TERM ─────────────────────────────
+ * The canonical term is PROSPECT SOURCE. The old label is removed here; the old
+ * URL is NOT. `/integrations/data-sources` remains valid and redirects to
+ * `/integrations/prospect-sources`, because retiring a word must not break a
+ * bookmark.
+ *
+ * ─── ENRICHMENT IS A REAL DESTINATION NOW ─────────────────────────────────
+ * It was a disabled "Planned" label pointing at `#enrichment`, which was honest
+ * when no enrichment surface existed. The tenant provider-credential surface
+ * does exist — it was only reachable as a tab on `/social-platforms` — so the
+ * nav now links to it rather than denying it.
+ *
+ * ─── SOCIAL PLATFORMS IS LINKED, NOT ABSORBED ─────────────────────────────
+ * `/social-platforms` keeps its route, its OAuth/token architecture and its
+ * tabs. The hub points at it rather than re-hosting it: nothing about that
+ * surface is improved by moving it, and much could break.
  */
 
 export interface IntegrationHubArea {
@@ -33,25 +60,39 @@ export const INTEGRATION_HUB_AREAS: readonly IntegrationHubArea[] = Object.freez
     description: 'Publishing, website and API connections',
   },
   {
-    key: 'data_sources',
-    label: 'Data Sources',
-    href: '/integrations/data-sources',
+    key: 'prospect_sources',
+    label: 'Prospect Sources',
+    href: '/integrations/prospect-sources',
     ready: true,
-    description: 'Prospect discovery and import sources',
+    description: 'Where prospect records come from — import and discovery',
   },
   {
     key: 'enrichment',
     label: 'Enrichment Providers',
-    href: '/integrations/data-sources#enrichment',
-    ready: false,
-    description: 'Attribute enrichment — planned',
+    href: '/integrations/enrichment',
+    ready: true,
+    description: 'Attribute enrichment — your own provider subscriptions',
+  },
+  {
+    key: 'social',
+    label: 'Social Platforms',
+    href: '/social-platforms',
+    ready: true,
+    description: 'Publishing and engagement networks',
   },
   {
     key: 'outreach',
-    label: 'Outreach Connections',
-    href: '#',
-    ready: false,
-    description: 'Email, SMS and social delivery — planned',
+    label: 'Engagement & Outreach',
+    href: '/integrations/outreach',
+    ready: true,
+    description: 'Delivery channels and their current state',
+  },
+  {
+    key: 'intelligence',
+    label: 'Intelligence',
+    href: '/integrations/intelligence',
+    ready: true,
+    description: 'Platform-owned intelligence providers — read only',
   },
 ]);
 

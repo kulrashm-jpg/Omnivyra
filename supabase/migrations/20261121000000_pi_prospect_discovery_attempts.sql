@@ -308,6 +308,43 @@ CREATE INDEX IF NOT EXISTS idx_prospect_discovery_attempts_expired_claims
 CREATE INDEX IF NOT EXISTS idx_prospect_discovery_attempts_tenant_recent
   ON public.prospect_discovery_attempts (organization_id, provider_key, started_at DESC);
 
+-- ── RLS ────────────────────────────────────────────────────────────────────
+-- Supabase grants ALL on every new public table to `authenticated`, and
+-- PostgREST serves it. `20261026000000_close_anon_rls_exposure.sql` revoked the
+-- default privileges for `anon` outright but only TRUNCATE for `authenticated`,
+-- so without RLS this ledger would be SELECT/INSERT/UPDATE/DELETE-able by any
+-- signed-up user of any tenant. The write side is the sharper risk: the live
+-- partial index above IS the concurrency arbiter, so a principal who can mutate
+-- or delete rows breaks the claim fence -- which is precisely what "lets a retry
+-- spend a tenant's provider quota twice".
+--
+-- Same treatment as the sibling `prospect_enrichment_attempts`: enable RLS and
+-- give service_role an explicit policy. No `authenticated` policy, because no
+-- route, page, component or hook reads this table -- every access goes through
+-- `discoveryAttemptStore` on the server credential. Deny-by-default is the
+-- convention, and the real tenant guarantee remains the application's
+-- tenant-first queries plus the composite keys.
+--
+-- ENABLE, never FORCE: FORCE would subject the table OWNER too, which would
+-- break the owner-connection realschema suites and any owner-credentialled
+-- path. Both statements are idempotent -- enabling RLS twice is a no-op, and the
+-- policy is guarded on `pg_policies`.
+ALTER TABLE public.prospect_discovery_attempts ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename  = 'prospect_discovery_attempts'
+      AND policyname = 'service_role_full_access'
+  ) THEN
+    CREATE POLICY service_role_full_access
+      ON public.prospect_discovery_attempts
+      FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
 COMMENT ON TABLE public.prospect_discovery_attempts IS
   'B4-A1: one tenant-owned provider DISCOVERY execution. Its subject is the '
   'SEARCH, not a canonical person or account — that is why it is a sibling of '

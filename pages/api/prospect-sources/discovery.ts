@@ -6,7 +6,11 @@ import { PROSPECT_INGEST } from '../../../shared/contracts/security';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { isLeadIngestionEnabled } from '../../../backend/services/leadIngestion/orchestrator';
 import { registerBuiltInLeadSources } from '../../../backend/services/leadIngestion';
-import { createDiscoveryExecution } from '../../../backend/services/prospectDiscovery/discoveryExecutor';
+import { createDiscoveryExecution, runDiscoveryExecution } from '../../../backend/services/prospectDiscovery/discoveryExecutor';
+import { registerDiscoveryAdapters } from '../../../backend/services/prospectDiscovery/adapters';
+import { translateRatifiedIcpToDiscoveryFilters } from '../../../backend/services/prospectDiscovery/icpTranslation';
+import { getIcpVersionById } from '../../../backend/services/prospectIcp/persistence';
+import { RATIFIED_STATUS } from '../../../backend/services/prospectIcp/types';
 
 /**
  * B4-A1 — the authorized, user-initiated prospect DISCOVERY entry point.
@@ -98,16 +102,127 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // The translation half must exist for the provider key, and the built-ins are
   // registered idempotently exactly as the sibling ingestion routes do.
   registerBuiltInLeadSources();
+  // PHASE 4 — and the discovery providers, with their translators, as one pair.
+  // Caller-driven on purpose: merely loading a module must never be what makes a
+  // provider reachable.
+  //
+  // NOTE ON WORDING, not style: the route-auth gate's dependency parser matches
+  // the bare keyword i-m-p-o-r-t anywhere in a route — comments included — then
+  // scans forward and builds a RegExp from whatever it captures. In a file this
+  // shape that produces an invalid pattern and the gate CRASHES rather than
+  // reporting a violation. So this comment avoids the word. Recorded as a gate
+  // robustness gap; a security gate is not something to adjust so prose fits.
+  registerDiscoveryAdapters();
 
   const body = (req.body ?? {}) as Record<string, unknown>;
   const provider = str(body.provider);
   if (!provider) return res.status(400).json({ error: 'provider is required' });
 
+  // ── MODE SELECTION ──────────────────────────────────────────────────────
+  // Two modes, mutually exclusive. Ambiguity is refused rather than resolved:
+  // picking one silently would run a search the caller did not ask for, and the
+  // broader of the two readings is the expensive one.
+  const icpVersionId = str(body.icpVersionId);
+  const hasFilters = body.filters !== undefined && body.filters !== null;
+  if (icpVersionId && hasFilters) {
+    return res.status(400).json({
+      error: 'icpVersionId and filters are mutually exclusive; ICP-driven discovery derives its own filters',
+      code: 'mode_conflict',
+    });
+  }
+
+  let icpFilters: Readonly<Record<string, unknown>> | null = null;
+  let icpEvidence: Record<string, unknown> | null = null;
+
+  if (icpVersionId) {
+    // 1. TENANT-SCOPED LOAD. `companyId` is the VERIFIED tenant established by
+    //    the guard above; nothing from the body influences it, and the loader
+    //    applies the tenant predicate in the query rather than filtering after.
+    let version;
+    try {
+      version = await getIcpVersionById(companyId, icpVersionId);
+    } catch (e) {
+      return res.status(400).json({
+        error: e instanceof Error ? e.message : 'icpVersionId could not be read',
+        code: 'icp_version_invalid',
+      });
+    }
+
+    // A version that does not exist and a version belonging to another tenant
+    // are the SAME answer to this caller, deliberately: distinguishing them
+    // would confirm the existence of another tenant's record.
+    if (!version) {
+      return res.status(404).json({ error: 'no such ICP version for this company', code: 'icp_version_not_found' });
+    }
+
+    // 2. RATIFICATION, checked against the persistence contract's own status
+    //    and its ratification evidence — not inferred from the status string
+    //    alone, because `contact_governance`-style coherence matters here too:
+    //    a ratified version without a ratifier is not ratified.
+    if (version.status !== RATIFIED_STATUS || !version.ratifiedAt || !version.ratifiedBy) {
+      return res.status(409).json({
+        error: `ICP version ${version.version} is ${version.status}; only a ratified version may drive discovery`,
+        code: 'icp_version_not_ratified',
+      });
+    }
+
+    // 3. TRANSLATE. The route owns no translation logic; the acknowledgement is
+    //    taken ONLY from an explicit strict-true body field and is never
+    //    defaulted, because a default would be consent nobody gave.
+    const translation = translateRatifiedIcpToDiscoveryFilters({
+      organizationId: companyId,
+      ratifiedIcp: {
+        organizationId: version.organizationId,
+        icpId: version.icpId,
+        icpKey: '',
+        version: version.version,
+        criteria: version.criteria,
+        ratifiedAt: version.ratifiedAt,
+        ratifiedBy: version.ratifiedBy,
+      },
+      ...(body.acknowledgeOmissions === true ? { acknowledgeOmissions: true as const } : {}),
+    });
+
+    // `=== false`, not `!translation.ok`: the root tsconfig sets `strict: false`,
+    // which disables discriminated-union narrowing on a negated boolean. The
+    // same trap the backend-tests audit catalogued, and ts-jest being
+    // transpile-only means the suites pass either way — only the typecheck
+    // catches it.
+    if (translation.ok === false) {
+      // REFUSED BEFORE ANYTHING IS SPENT. No credential is resolved, no
+      // execution is created and no adapter is reached, so the ledger records
+      // no search — which is honest, because none began.
+      return res.status(400).json({
+        error: translation.detail,
+        code: translation.refusal,
+        // Criterion ids, attributes, kinds and reasons. Never VALUES, and never
+        // another tenant's identifiers — on a tenant mismatch `blocking` is
+        // empty by construction in the translator.
+        blocking: translation.blocking.map((b) => ({
+          criterionId: b.criterionId, subject: b.subject, attribute: b.attribute,
+          kind: b.kind, reason: b.reason,
+        })),
+      });
+    }
+
+    icpFilters = translation.filters;
+    icpEvidence = {
+      icpId: translation.icp.icpId,
+      version: translation.icp.version,
+      // Said plainly: only mandatory criteria became filters.
+      mandatoryOnly: true,
+      translated: translation.translated,
+      omitted: translation.omitted,
+      omissionsAcknowledged: translation.omissionsAcknowledged,
+    };
+  }
+
   try {
     const result = await createDiscoveryExecution({
       organizationId: companyId,          // the VERIFIED tenant, never the body's
       provider,
-      filters: body.filters,
+      // ICP mode supplies SERVER-DERIVED filters; filter mode is unchanged.
+      filters: icpFilters ?? body.filters,
       bounds: body.bounds,
       correlationId: `discovery:${companyId}:${Date.now()}`,
     });
@@ -127,17 +242,58 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: result.reason, code: result.refusal });
     }
 
+    const execution = {
+      id: result.executionId,
+      attemptNumber: result.attemptNumber,
+      searchDigest: result.searchDigest,
+      bounds: result.bounds,
+      // An execution RECORD exists. That is not a provider call, and a provider
+      // call is not a successful search. The route already reports those three
+      // facts separately and truthfully — `readyForProviderExecution` here, and
+      // `run` (null, or the SETTLED attempt) beside this object — so no
+      // additional flag is added: a hardcoded one would have claimed no provider
+      // was invoked on exactly the requests that then invoke it.
+      readyForProviderExecution: result.readyForProviderExecution,
+      refusal: result.refusal,
+      ...(icpEvidence ? { icp: icpEvidence } : {}),
+    };
+
     // 201 even when `readyForProviderExecution` is false: the execution WAS
     // recorded, and its refusal is evidence an operator needs to see. Answering
     // 400 would discard the record the ledger just wrote.
+    if (result.readyForProviderExecution !== true) {
+      return res.status(201).json({ execution, run: null });
+    }
+
+    // ── PHASE 4: THE PROVIDER STAGE, NOW ARMED ────────────────────────────
+    // B4-A1 deliberately stopped here, because arming a provider call before the
+    // capability existed would have made a later authorization meaningless. The
+    // capability now exists, so the route runs the execution it just claimed.
+    //
+    // Everything that makes this safe happened above or happens inside the
+    // executor, and none of it is re-implemented here: the tenant is the VERIFIED
+    // one, the attempt is claimed under a lease, the credential is the tenant's
+    // own, cost is authorized before egress, pages/results/calls are bounded by
+    // CHECK constraints, results pass through the pure translator into the
+    // existing ingestion boundary, and the attempt is settled truthfully.
+    const run = await runDiscoveryExecution({
+      organizationId: companyId,
+      executionId: result.executionId,
+    });
+
+    // The caller can tell complete success from partial completion from complete
+    // failure, because `status` and `stopReason` are reported verbatim from the
+    // settled attempt rather than flattened into a boolean.
     return res.status(201).json({
-      execution: {
-        id: result.executionId,
-        attemptNumber: result.attemptNumber,
-        searchDigest: result.searchDigest,
-        bounds: result.bounds,
-        readyForProviderExecution: result.readyForProviderExecution,
-        refusal: result.refusal,
+      execution,
+      run: {
+        status: run.status,
+        outcome: run.outcome,
+        stopReason: run.stopReason,
+        providerCalls: run.providerCalls,
+        pagesFetched: run.pagesFetched,
+        resultsObserved: run.resultsObserved,
+        resultsIngested: run.resultsIngested,
       },
     });
   } catch {

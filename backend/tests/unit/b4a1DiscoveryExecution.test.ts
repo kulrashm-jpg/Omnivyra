@@ -401,10 +401,59 @@ describe('B4-A1 — the provider registry ships empty', () => {
       .toThrow(/non-empty key/);
   });
 
-  it('NO Apollo discovery adapter exists anywhere in the repository', () => {
-    const dir = join(__dirname, '../../services/prospectDiscovery');
-    const names = require('fs').readdirSync(dir) as string[];
-    expect(names.some((n) => /apollo/i.test(n))).toBe(false);
+  /**
+   * These two replace an assertion that read:
+   *
+   *   it('NO Apollo discovery adapter exists anywhere in the repository', ...)
+   *
+   * It was obsolete AND vacuous, which is the worse half. Obsolete because
+   * Phase 4 legitimately added the adapter. Vacuous because it listed
+   * `services/prospectDiscovery` NON-recursively and the adapter lives in the
+   * `adapters/` subdirectory, so `readdirSync` returned
+   * ['adapters', 'contract.ts', ...] — no entry matches /apollo/i, and the test
+   * passed while asserting the exact opposite of the truth. A test that is green
+   * because it cannot see the thing it forbids is worse than no test: it reports
+   * safety it never checked.
+   *
+   * The property worth protecting now is narrower and still true: an adapter
+   * EXISTING is not an adapter being REACHABLE. Only an explicit
+   * `registerDiscoveryAdapters()` may make a vendor reachable — the position
+   * `adapters/index.ts` states ("a module import must never be what makes a
+   * provider reachable") and the one the route depends on.
+   */
+  it('the Apollo adapter exists, and importing it registers NOTHING', async () => {
+    const mod = await import('../../services/prospectDiscovery/adapters/apolloDiscovery');
+    expect(mod.apolloDiscoveryAdapter.provider).toBe('apollo');
+    // Imported, and still unreachable.
+    expect(listDiscoveryProviders()).toEqual([]);
+    expect(hasDiscoveryProvider('apollo')).toBe(false);
+    expect(() => getDiscoveryProvider('apollo')).toThrow(UnregisteredDiscoveryProviderError);
+  });
+
+  it('registerDiscoveryAdapters() registers BOTH halves, and is idempotent', async () => {
+    const { registerDiscoveryAdapters } = await import('../../services/prospectDiscovery/adapters');
+    const { hasLeadSourceAdapter, __resetLeadSourceRegistry } =
+      await import('../../services/leadIngestion/registry');
+    try {
+      expect(hasDiscoveryProvider('apollo')).toBe(false);
+      expect(hasLeadSourceAdapter('apollo')).toBe(false);
+
+      registerDiscoveryAdapters();
+
+      // Both halves, keyed identically — a fetcher without a translator is the
+      // combination the executor must never be offered.
+      expect(hasDiscoveryProvider('apollo')).toBe(true);
+      expect(hasLeadSourceAdapter('apollo')).toBe(true);
+
+      // Idempotent: both registries refuse duplicates loudly, so a second
+      // entry point calling this must not crash the process.
+      expect(() => registerDiscoveryAdapters()).not.toThrow();
+    } finally {
+      // This test is the only one here that touches the lead-source registry;
+      // leave no residue for the suites that follow.
+      __resetLeadSourceRegistry();
+      __resetDiscoveryProviderRegistry();
+    }
   });
 });
 
@@ -663,6 +712,53 @@ describe('B4-A1 — runDiscoveryExecution: the fetch → ingest seam', () => {
       }),
     });
     expect(adapter.credentials).toEqual(['TENANT-A-KEY']);
+  });
+
+  /**
+   * PHASE 4A-H — the credential is resolved FOR THE VERIFIED TENANT.
+   *
+   * The test above proves a tenant key reaches the adapter, but its port is
+   * `async () => 'TENANT-A-KEY'` — it ignores the organizationId it is asked
+   * about. So hard-coding a foreign tenant at the executor's resolution site
+   * changed nothing and a mutation probe survived it. The invariant was correct
+   * in the code and simply unguarded.
+   *
+   * This port is tenant-SENSITIVE: it records every tenant it is asked about and
+   * answers a different key per tenant. That turns "which tenant did we look the
+   * credential up for?" into something a test can see, which is the whole point
+   * — a cross-tenant credential read is the failure mode that matters here, and
+   * it is invisible to any port that answers the same thing for everyone.
+   */
+  it('resolves the credential for the VERIFIED tenant, never a foreign one', async () => {
+    const l = makeLedger();
+    const KEYS: Record<string, string> = { [ORG_A]: 'A-TENANT-KEY', [ORG_B]: 'B-TENANT-KEY' };
+    const askedAbout: string[] = [];
+    const credential = {
+      resolveCredential: async ({ organizationId }: { organizationId: string }) => {
+        askedAbout.push(organizationId);
+        return KEYS[organizationId] ?? null;
+      },
+    };
+
+    // The execution is created for, and claimed by, ORG_A.
+    const id = await create(l, { credential } as any);
+    expect(l.rows.map((r) => r.organization_id)).toEqual([ORG_A]);
+
+    const adapter = syntheticProvider([{ records: [{ id: 'p1' }], continuation: null }]);
+    const out = await runDiscoveryExecution({
+      organizationId: ORG_A, executionId: id,
+      ports: okPorts({ ...l.ports, credential, getProvider: () => adapter as any }),
+    });
+
+    expect(out.status).toBe('completed');
+    // Every lookup on this path asked about the verified tenant and no other.
+    expect(askedAbout.length).toBeGreaterThan(0);
+    expect([...new Set(askedAbout)]).toEqual([ORG_A]);
+    expect(askedAbout).not.toContain(ORG_B);
+    // And the key handed to the provider is that tenant's own. ORG_B holds a
+    // perfectly valid credential here; it must never be the one selected.
+    expect(adapter.credentials).toEqual(['A-TENANT-KEY']);
+    expect(adapter.credentials).not.toContain('B-TENANT-KEY');
   });
 
   it('the pre-transport marker is written BEFORE the provider is contacted', async () => {
@@ -1001,16 +1097,26 @@ describe('B4-A1 — the route records a search and cannot call a provider', () =
     expect(src).toMatch(/withIdempotency\(handler, \{[\s\S]*methods: \['POST'\]/);
   });
 
-  it('it never invokes the provider stage', () => {
-    // The structural guarantee: provider invocation is a separately gated step,
-    // so the route's module does not even import the function that performs it.
-    expect(src).toMatch(/import \{ createDiscoveryExecution \}/);
-    // Neither IMPORTED nor CALLED. Matched as import and call forms rather than
-    // as a bare name, because the header explains why the provider stage is kept
-    // out of this route and that prose must not satisfy the assertion.
-    expect(src).not.toMatch(/import[^;]*\brunDiscoveryExecution\b/);
-    expect(src).not.toMatch(/\brunDiscoveryExecution\s*\(/);
-    expect(src).not.toMatch(/\b(getDiscoveryProvider|registerDiscoveryProvider)\s*\(/);
+  it('PHASE 4 — it invokes the provider stage only AFTER a ready execution', () => {
+    // SUPERSEDED BY PHASE 4, and rewritten rather than deleted so the change is
+    // visible in the record.
+    //
+    // B4-A1 asserted the opposite — that the route neither imported nor called
+    // `runDiscoveryExecution` — because arming a provider call before the Apollo
+    // capability existed would have made a later authorization meaningless. The
+    // capability now exists and Phase 4 armed the route, so the property worth
+    // pinning changed: execution must be reached ONLY through a claimed, ready
+    // execution, never unconditionally.
+    expect(src).toMatch(/import \{[\s\S]*createDiscoveryExecution/);
+    expect(src).toMatch(/\brunDiscoveryExecution\s*\(/);
+    // The gate: the early return for a non-ready execution comes BEFORE the call,
+    // so a refused claim can never reach a provider.
+    expect(src.indexOf('result.readyForProviderExecution !== true'))
+      .toBeLessThan(src.indexOf('await runDiscoveryExecution('));
+    // And the executor remains the only way in — the route never reaches an
+    // adapter directly.
+    expect(src).not.toMatch(/\bgetDiscoveryProvider\s*\(/);
+    expect(src).not.toMatch(/\bapolloDiscoveryAdapter\b/);
   });
 
   it('it names no provider, so it cannot be an Apollo endpoint in disguise', () => {
