@@ -77,9 +77,125 @@ interface Token {
   token_type?: string;
 }
 
+// Graph version is pinned here (and only here) so the publish path cannot drift
+// between container creation, status polling and publish. v22.0 is valid until
+// 2027-05-20.
+const GRAPH_VERSION = 'v22.0';
+const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
+
+/**
+ * A container never became publishable. Carries its own publish-result code so
+ * the classifier does not have to re-derive intent from a message string: a
+ * container Instagram REJECTED must not be retried, a container that was still
+ * processing when the budget ran out may be.
+ */
+class InstagramContainerError extends Error {
+  constructor(
+    message: string,
+    readonly publishCode: string,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = 'InstagramContainerError';
+  }
+}
+
+/**
+ * Poll a media container until Instagram reports it is publishable.
+ *
+ * Meta requires `status_code=FINISHED` before `media_publish`, and documents
+ * the full status vocabulary as EXPIRED | ERROR | FINISHED | IN_PROGRESS |
+ * PUBLISHED, recommending a poll rather than an immediate publish. This runs
+ * for BOTH images and videos: an image container is usually ready at once, but
+ * "usually" is not the contract, and publishing an unfinished container is the
+ * failure this guards.
+ *
+ * Status is read BEFORE the first sleep so a ready container costs no delay.
+ */
+async function waitForContainerReady(
+  containerId: string,
+  token: Token,
+  opts: { intervalMs: number; maxWaitMs: number; kind: 'Video' | 'Image' },
+): Promise<void> {
+  const deadline = Date.now() + opts.maxWaitMs;
+  let lastStatus = 'IN_PROGRESS';
+
+  for (;;) {
+    const statusResponse = await axios.get(`${GRAPH_BASE}/${containerId}`, {
+      params: {
+        fields: 'status_code',
+        access_token: token.access_token,
+      },
+    });
+    const raw = statusResponse.data?.status_code;
+    lastStatus = raw === undefined || raw === null || raw === '' ? 'missing' : String(raw);
+
+    // PUBLISHED can only appear on a retry of an already-published container;
+    // treating it as ready keeps a retry idempotent instead of stalling.
+    if (lastStatus === 'FINISHED' || lastStatus === 'PUBLISHED') return;
+    if (lastStatus === 'ERROR') {
+      throw new InstagramContainerError(
+        `${opts.kind} processing failed on Instagram (container status ERROR). ` +
+          'Check the file format, duration and aspect ratio against Instagram’s media specifications.',
+        'INSTAGRAM_MEDIA_REJECTED',
+        false,
+      );
+    }
+    if (lastStatus === 'EXPIRED') {
+      throw new InstagramContainerError(
+        'The Instagram media container expired before it could be published (container status EXPIRED; ' +
+          'containers expire after 24 hours).',
+        'INSTAGRAM_CONTAINER_EXPIRED',
+        false,
+      );
+    }
+    // Only IN_PROGRESS is worth waiting on. A missing or unrecognised
+    // status_code is named as such — never reported as "took too long", which
+    // sends whoever reads it looking for a slow transcode that never happened.
+    if (lastStatus !== 'IN_PROGRESS') {
+      throw new InstagramContainerError(
+        `Instagram stopped processing the media with status_code=${lastStatus}.`,
+        'INSTAGRAM_API_ERROR',
+        true,
+      );
+    }
+    if (Date.now() + opts.intervalMs > deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, opts.intervalMs));
+  }
+
+  throw new InstagramContainerError(
+    `Instagram did not finish processing the media in time (last status: ${lastStatus}).`,
+    'INSTAGRAM_PROCESSING_TIMEOUT',
+    true,
+  );
+}
+
+/**
+ * Best-effort permalink lookup for a just-published media.
+ *
+ * `media_publish` returns a NUMERIC media id, not the shortcode Instagram uses
+ * in `instagram.com/p/<shortcode>/`, so a URL built from that id 404s. The
+ * permalink is only obtainable by asking for it. Non-fatal: the post is already
+ * live, so a failure here returns undefined rather than failing the publish.
+ */
+async function fetchMediaPermalink(mediaId: string, token: Token): Promise<string | undefined> {
+  try {
+    const response = await axios.get(`${GRAPH_BASE}/${mediaId}`, {
+      params: {
+        fields: 'permalink',
+        access_token: token.access_token,
+      },
+    });
+    const permalink = response.data?.permalink;
+    return typeof permalink === 'string' && permalink.trim() ? permalink.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Upload image to Instagram (via Facebook Graph API)
- * 
+ *
  * Returns media container ID that can be published
  */
 async function uploadImageToInstagram(
@@ -88,9 +204,11 @@ async function uploadImageToInstagram(
   instagramAccountId: string,
   token: Token
 ): Promise<{ container_id: string }> {
-  // Step 1: Create media container for image
-  const containerUrl = `https://graph.facebook.com/v22.0/${instagramAccountId}/media`;
-  
+  // Step 1: Create media container for image. `media_type` is deliberately
+  // omitted: Meta's reference defines it only for CAROUSEL / REELS / STORIES —
+  // an image container is the default and there is no `IMAGE` value.
+  const containerUrl = `${GRAPH_BASE}/${instagramAccountId}/media`;
+
   const containerResponse = await axios.post(containerUrl, {
     image_url: imageUrl,
     caption: caption,
@@ -110,11 +228,10 @@ async function uploadImageToInstagram(
 
 /**
  * Upload video to Instagram (via Facebook Graph API)
- * 
- * Instagram video upload requires 3 steps:
- * 1. Create container with video URL
- * 2. Check container status (wait for processing)
- * 3. Publish container
+ *
+ * Returns the container id. The caller polls it to FINISHED before publishing
+ * (see waitForContainerReady) — the async processing wait is NOT optional for
+ * video.
  */
 async function uploadVideoToInstagram(
   videoUrl: string,
@@ -124,10 +241,12 @@ async function uploadVideoToInstagram(
   options: InstagramReelOptions,
 ): Promise<{ container_id: string }> {
   // Step 1: Create media container for video (Reel), with cover + feed options.
-  const containerUrl = `https://graph.facebook.com/v22.0/${instagramAccountId}/media`;
+  const containerUrl = `${GRAPH_BASE}/${instagramAccountId}/media`;
 
   const containerResponse = await axios.post(containerUrl, {
-    media_type: 'REELS', // or 'VIDEO' for regular posts
+    // REELS is the only video media_type Meta's current reference defines for
+    // the feed — the old `VIDEO` value is gone, so do not "restore" it.
+    media_type: 'REELS',
     video_url: videoUrl,
     caption: caption,
     share_to_feed: options.shareToFeed,
@@ -145,51 +264,8 @@ async function uploadVideoToInstagram(
     },
   });
 
-  const containerId = containerResponse.data.id;
-
-  // Step 2: Check container status (wait for video processing)
-  let status = 'IN_PROGRESS';
-  let attempts = 0;
-  const maxAttempts = 30; // Wait up to 5 minutes (10s intervals)
-
-  while (status === 'IN_PROGRESS' && attempts < maxAttempts) {
-    await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
-    
-    const statusUrl = `https://graph.facebook.com/v22.0/${containerId}`;
-    const statusResponse = await axios.get(statusUrl, {
-      params: {
-        fields: 'status_code',
-        access_token: token.access_token,
-      },
-    });
-
-    status = statusResponse.data.status_code;
-    attempts++;
-
-    if (status === 'FINISHED') {
-      break;
-    }
-
-    if (status === 'ERROR') {
-      throw new Error('Video processing failed on Instagram');
-    }
-  }
-
-  if (status !== 'FINISHED') {
-    // Only an exhausted poll budget is a timeout. Graph's status_code is also
-    // EXPIRED / PUBLISHED / an unexpected value, and every one of those used to
-    // be reported as "Instagram took too long to process" — which sent whoever
-    // read the failure looking for a slow transcode that never happened. Name
-    // what Instagram actually said.
-    throw new Error(
-      attempts >= maxAttempts && status === 'IN_PROGRESS'
-        ? `Video processing timeout - Instagram was still processing after ${maxAttempts} status checks`
-        : `Instagram stopped processing the video with status_code=${String(status ?? 'missing')}`,
-    );
-  }
-
   return {
-    container_id: containerId,
+    container_id: containerResponse.data.id,
   };
 }
 
@@ -201,8 +277,8 @@ async function publishInstagramContainer(
   instagramAccountId: string,
   token: Token
 ): Promise<{ id: string }> {
-  const publishUrl = `https://graph.facebook.com/v22.0/${instagramAccountId}/media_publish`;
-  
+  const publishUrl = `${GRAPH_BASE}/${instagramAccountId}/media_publish`;
+
   const response = await axios.post(publishUrl, {
     creation_id: containerId,
   }, {
@@ -239,16 +315,28 @@ export async function publishToInstagram(
   }
 
   try {
-    // Round-3 Phase 3: media-required check removed. Centralized
-    // validatePlatformContentCompatibility (called from publishToPlatform —
-    // the sole entry point to this adapter) rejects no-media payloads
-    // upstream as MEDIA_REQUIRED. The registry is the single authority for
-    // platform-capability rules.
+    // Round-3 Phase 3: the media-required POLICY lives upstream and stays
+    // there. Centralized validatePlatformContentCompatibility (called from
+    // publishToPlatform — the sole entry point to this adapter, and from
+    // publishNowService) rejects no-media payloads as MEDIA_REQUIRED, and the
+    // registry is the single authority for platform-capability rules; the
+    // centralization invariant in
+    // backend/tests/unit/platformCapability.centralization.test.ts forbids a
+    // second copy of the rule here.
+    //
+    // This normalisation is NOT that rule — it only stops `post.media_urls`
+    // being read off `undefined`, which used to throw a TypeError into the
+    // catch-all and be reported as a RETRYABLE INSTAGRAM_API_ERROR. An empty
+    // list now reaches Graph and comes back as a non-retryable validation
+    // error instead of a retry loop.
+    const mediaUrls = Array.isArray(post.media_urls)
+      ? post.media_urls.filter((url): url is string => typeof url === 'string' && url.trim().length > 0)
+      : [];
 
     // Format content automatically for Instagram
     const formatted = formatContentForPlatform(post.content, 'instagram', {
       hashtags: post.hashtags,
-      mediaUrls: post.media_urls,
+      mediaUrls,
     });
 
     // Log warnings
@@ -266,9 +354,7 @@ export async function publishToInstagram(
     const instagramAccountId = account.platform_user_id;
     let containerId: string;
 
-    const requestedMedia = Array.isArray(post.media_urls)
-      ? post.media_urls.filter((u) => typeof u === 'string' && u.trim().length > 0)
-      : [];
+    const requestedMedia = mediaUrls;
 
     // P3-A invariant, applied to the carousel case. The capability registry
     // lists 'carousel' for Instagram, so a multi-image post reaches this
@@ -297,7 +383,7 @@ export async function publishToInstagram(
     }
 
     // Determine media type (assume first media URL determines type)
-    const firstMediaUrl = requestedMedia[0] ?? post.media_urls[0];
+    const firstMediaUrl = mediaUrls[0];
     const isVideo = VIDEO_URL.test(String(firstMediaUrl));
 
     // Upload media and get container ID
@@ -342,6 +428,17 @@ export async function publishToInstagram(
       containerId = result.container_id;
     }
 
+    // Instagram requires status_code=FINISHED before media_publish. Video
+    // containers take the documented minutes; image containers are normally
+    // instant, so they get a short, fast poll rather than the video budget.
+    await waitForContainerReady(
+      containerId,
+      token,
+      isVideo
+        ? { intervalMs: 10_000, maxWaitMs: 300_000, kind: 'Video' }
+        : { intervalMs: 2_000, maxWaitMs: 60_000, kind: 'Image' },
+    );
+
     // Publish the container
     const published = await publishInstagramContainer(
       containerId,
@@ -349,11 +446,13 @@ export async function publishToInstagram(
       token
     );
 
-    // Instagram API returns media ID (not post permalink directly)
-    // Post URL format: https://www.instagram.com/p/{media_id}/
-    const postUrl = `https://www.instagram.com/p/${published.id}/`;
+    // media_publish returns a NUMERIC media id. `instagram.com/p/<id>/` is not
+    // a real permalink — the shortcode is different — so ask Instagram for the
+    // permalink instead of fabricating one. Omitted rather than faked if the
+    // lookup fails; post_url is optional on PublishResult.
+    const postUrl = await fetchMediaPermalink(published.id, token);
 
-    console.log(`✅ Instagram post published: ${postUrl}`);
+    console.log(`✅ Instagram post published: ${postUrl ?? published.id}`);
 
     return {
       success: true,
@@ -363,63 +462,115 @@ export async function publishToInstagram(
     };
   } catch (error: any) {
     console.error('Instagram API error:', error.response?.data || error.message);
+    return classifyInstagramPublishError(error);
+  }
+}
 
-    // Handle specific Instagram/Facebook Graph API errors
-    if (error.response?.status === 401) {
-      return {
-        success: false,
-        error: {
-          code: 'INSTAGRAM_UNAUTHORIZED',
-          message: 'Token expired or invalid. Please reconnect Instagram account.',
-          retryable: false,
-        },
-      };
-    }
+/** Graph auth error codes that mean "the stored credential is dead". */
+const GRAPH_AUTH_CODES = new Set([102, 190]);
+/** Graph subcodes for expired / invalidated sessions under code 190. */
+const GRAPH_EXPIRED_SUBCODES = new Set([458, 459, 460, 463, 464, 467, 492]);
+/** Graph throttling codes, plus 9 = Instagram publishing limit reached. */
+const GRAPH_THROTTLE_CODES = new Set([4, 9, 17, 32, 341, 613, 80007]);
 
-    if (error.response?.status === 403) {
-      // Instagram specific permissions error
-      const errorMessage = error.response?.data?.error?.message || 'Permission denied';
-      return {
-        success: false,
-        error: {
-          code: 'INSTAGRAM_PERMISSION_DENIED',
-          message: `Instagram API error: ${errorMessage}. Check that your account is a Business/Creator account and connected to a Facebook Page.`,
-          retryable: false,
-        },
-      };
-    }
+/**
+ * Map a Graph API failure onto a structured PublishResult error.
+ *
+ * Classification is driven by the Graph ERROR OBJECT first, and only then by
+ * HTTP status. That ordering is the fix for the defect that hid the real cause
+ * of Instagram's failures: Meta returns HTTP **400** with
+ * `{ error: { type: 'OAuthException', code: 190 } }` for an expired token — it
+ * does not return 401 — so a status-first classifier reported an expired
+ * credential as "Invalid post content or media" and never told the operator to
+ * reconnect. Likewise a throttle arrives as 400/code 4|9|17|32|613, not 429,
+ * and was being marked non-retryable. The same 400+OAuthException shape is
+ * already documented in the Instagram reconciliation lookup
+ * (backend/services/providerReconciliation/providers/instagramReconciliation.ts:79).
+ */
+export function classifyInstagramPublishError(error: any): PublishResult {
+  if (error instanceof InstagramContainerError) {
+    return {
+      success: false,
+      error: { code: error.publishCode, message: error.message, retryable: error.retryable },
+    };
+  }
 
-    if (error.response?.status === 429) {
-      return {
-        success: false,
-        error: {
-          code: 'INSTAGRAM_RATE_LIMIT',
-          message: 'Rate limit exceeded. Please try again later.',
-          retryable: true,
-        },
-      };
-    }
+  const status = error?.response?.status;
+  const graphError = error?.response?.data?.error ?? {};
+  const type = String(graphError.type ?? '');
+  const code = Number(graphError.code ?? NaN);
+  const subcode = Number(graphError.error_subcode ?? NaN);
+  const providerMessage = typeof graphError.message === 'string' ? graphError.message : '';
 
-    // Handle validation errors
-    if (error.response?.status === 400) {
-      const errorData = error.response?.data?.error || {};
-      return {
-        success: false,
-        error: {
-          code: 'INSTAGRAM_VALIDATION_ERROR',
-          message: errorData.message || 'Invalid post content or media',
-          retryable: false,
-        },
-      };
-    }
-
+  // 1. Dead credential → reconnect. Non-retryable: no amount of retrying
+  //    revives a revoked or expired token; a human must re-authorise.
+  const expiredSession = GRAPH_AUTH_CODES.has(code) || GRAPH_EXPIRED_SUBCODES.has(subcode);
+  if (expiredSession || (type === 'OAuthException' && status === 401) || status === 401) {
     return {
       success: false,
       error: {
-        code: 'INSTAGRAM_API_ERROR',
-        message: error.response?.data?.error?.message || error.message,
+        code: 'INSTAGRAM_UNAUTHORIZED',
+        message:
+          'Your Instagram connection has expired or been revoked. Reconnect the account in ' +
+          'Settings → Social Accounts (Instagram), approving the instagram_basic, ' +
+          'instagram_content_publish and pages_read_engagement permissions.' +
+          (providerMessage ? ` Instagram said: ${providerMessage}` : ''),
+        retryable: false,
+      },
+    };
+  }
+
+  // 2. Missing permission / wrong account type. Code 10 and the 200-299 band
+  //    are Graph's permission errors; they also arrive as 400, not 403.
+  const permissionError = code === 10 || (code >= 200 && code <= 299);
+  if (permissionError || status === 403) {
+    return {
+      success: false,
+      error: {
+        code: 'INSTAGRAM_PERMISSION_DENIED',
+        message:
+          `Instagram API error: ${providerMessage || 'Permission denied'}. Check that your account is ` +
+          'a Business/Creator account and connected to a Facebook Page.',
+        retryable: false,
+      },
+    };
+  }
+
+  // 3. Throttling and the 100-posts-per-24h publishing limit are transient.
+  if (GRAPH_THROTTLE_CODES.has(code) || status === 429) {
+    return {
+      success: false,
+      error: {
+        code: 'INSTAGRAM_RATE_LIMIT',
+        message:
+          (code === 9
+            ? 'Instagram publishing limit reached (100 API-published posts per 24 hours). '
+            : 'Instagram rate limit exceeded. ') +
+          'Please try again later.' +
+          (providerMessage ? ` Instagram said: ${providerMessage}` : ''),
         retryable: true,
       },
     };
   }
+
+  // 4. Genuine payload rejection (bad media, caption, aspect ratio, …).
+  if (status === 400) {
+    return {
+      success: false,
+      error: {
+        code: 'INSTAGRAM_VALIDATION_ERROR',
+        message: providerMessage || 'Invalid post content or media',
+        retryable: false,
+      },
+    };
+  }
+
+  return {
+    success: false,
+    error: {
+      code: 'INSTAGRAM_API_ERROR',
+      message: providerMessage || error?.message || 'Instagram publish failed',
+      retryable: true,
+    },
+  };
 }
