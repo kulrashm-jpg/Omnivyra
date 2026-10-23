@@ -323,6 +323,15 @@ export interface IcpFitEvaluation {
   abstained: boolean;
   /** Machine-readable abstention/derivation reason. Stable strings. */
   reason: IcpEvaluationReason;
+  /**
+   * PI-WP-C3 — the deterministic "why not".
+   *
+   * PURELY DESCRIPTIVE. It is derived from `results` AFTER the score is
+   * computed and it never feeds back into `value`, `confidence`, `abstained`
+   * or `reason`. Deleting this field would change nothing about the score,
+   * which is the property that makes it safe to add.
+   */
+  rationale: IcpEvaluationRationale;
 }
 
 export type IcpEvaluationReason =
@@ -331,6 +340,139 @@ export type IcpEvaluationReason =
   | 'no_evaluable_criteria'
   | 'mandatory_unsatisfied'
   | 'evaluated';
+
+// ── PI-WP-C3 — negative rationale ───────────────────────────────────────────
+/**
+ * WHY A SCORE IS NOT HIGHER, stated in terms that cannot be confused with each
+ * other. The whole package exists to stop ONE collapse: reading "we hold no
+ * evidence" as "the evidence is negative". Those are different facts about the
+ * WORLD, and a surface that spells them the same way makes the platform
+ * confidently wrong about prospects it simply never enriched.
+ *
+ * Five distinguishable states, plus two that keep the surface total:
+ *
+ *   negative_evidence        we looked, a value was observed and read, and it
+ *                            does not satisfy the criterion. The ONLY state
+ *                            that asserts anything against the prospect.
+ *   no_evidence              we hold nothing for the attribute. Says nothing
+ *                            about the prospect; it is a statement about US.
+ *   uninterpretable          we hold SOMETHING, and it cannot be read as an
+ *                            answer — an unparseable value, or an empty set.
+ *   suppressed               a mandatory criterion was observed-and-failed, so
+ *                            the fit was forced to 0 regardless of what else
+ *                            passed. Not "a low score"; a disqualification.
+ *   insufficient_confidence  real evidence exists, but the verdict rests on
+ *                            too little of the profile to carry weight.
+ *
+ *   satisfied                nothing negative to explain.
+ *   not_applicable           there was no ratified ICP, or none of its criteria
+ *                            address this subject. Nothing was claimed about
+ *                            the prospect at all — which is again not a
+ *                            negative, and not even a data gap on our side.
+ *
+ * ORDER IS PRECEDENCE. `ICP_RATIONALE_STATES` is listed strongest-claim-first
+ * and is the total order used to pick the single `state` when several apply,
+ * so the same evidence always yields the same primary state.
+ *
+ * `insufficient_confidence` deliberately outranks `negative_evidence`: when a
+ * verdict is both thin and unflattering, the honest headline is that it is
+ * thin. `contributing` still carries the negative, so nothing is hidden.
+ */
+export const ICP_RATIONALE_STATES = [
+  'not_applicable',
+  'suppressed',
+  'no_evidence',
+  'uninterpretable',
+  'insufficient_confidence',
+  'negative_evidence',
+  'satisfied',
+] as const;
+export type IcpRationaleState = typeof ICP_RATIONALE_STATES[number];
+
+/** The four states a SINGLE criterion can be in. A criterion cannot be
+ *  `suppressed` (that is an outcome of the evaluation), and it cannot be
+ *  `insufficient_confidence` (confidence is coverage across criteria). */
+export const ICP_CRITERION_RATIONALE_STATES = [
+  'no_evidence', 'uninterpretable', 'negative_evidence', 'satisfied',
+] as const;
+export type IcpCriterionRationaleState = typeof ICP_CRITERION_RATIONALE_STATES[number];
+
+/**
+ * WHAT WE ACTUALLY HELD when the criterion was checked. This is the field that
+ * makes `no_evidence` and `uninterpretable` separable at all, and it is read
+ * from the raw attribute BEFORE any normaliser collapses both to `null`.
+ *
+ *   observed    a value survived normalisation and was compared.
+ *   absent      no key, `null`, `undefined`, or a blank string. NOT a negative.
+ *   empty       a collection with zero members. We looked; there is nothing in
+ *               it to test a membership predicate against. NOT a negative.
+ *   unreadable  a value was present and normalisation refused it (`"many"`
+ *               employees, `"United Kingdom"` as a country code). NOT a
+ *               negative — a value we cannot read is not a value that failed.
+ */
+export const ICP_CRITERION_BASES = ['observed', 'absent', 'empty', 'unreadable'] as const;
+export type IcpCriterionBasis = typeof ICP_CRITERION_BASES[number];
+
+export interface IcpCriterionRationale {
+  id: string;
+  kind: IcpCriterionKind;
+  subject: IcpSubject;
+  attribute: string;
+  predicate: IcpPredicateOp;
+  outcome: IcpCriterionOutcome;
+  basis: IcpCriterionBasis;
+  state: IcpCriterionRationaleState;
+  /** True ONLY for a mandatory criterion that was observed and failed — the
+   *  criterion that forced the score to 0. An UNKNOWN mandatory criterion is
+   *  never suppressing: we did not look, so nothing was disqualified. */
+  suppressing: boolean;
+  /**
+   * A sentence assembled from the fields above and NOTHING ELSE — no adjective
+   * that is not derivable, no cause that was not observed. It is a rendering of
+   * this record, not an interpretation of it.
+   */
+  statement: string;
+}
+
+export interface IcpEvaluationRationale {
+  /** The single strongest applicable state, by `ICP_RATIONALE_STATES` order. */
+  state: IcpRationaleState;
+  /** EVERY applicable state, in that same order. Never empty. */
+  contributing: IcpRationaleState[];
+  /** Derived from the counts and ids below. Never invented. */
+  statement: string;
+  /** One record per criterion evaluated for this subject, in `results` order. */
+  criteria: IcpCriterionRationale[];
+  /** Criteria we looked at and that failed. The only against-the-prospect set. */
+  negativeEvidence: string[];
+  /** Criteria we could not look at because we hold nothing. NOT negatives. */
+  missingEvidence: string[];
+  /** Criteria where we hold something unreadable or empty. NOT negatives. */
+  uninterpretable: string[];
+  /** The mandatory criteria that forced the score to 0. Empty unless suppressed. */
+  suppressedBy: string[];
+  /**
+   * Mandatory criteria that could NOT be evaluated. The gate that decides
+   * disqualification was never run, so a passing verdict is provisional — this
+   * is the primary reason a verdict is reported `insufficient_confidence`.
+   */
+  unevaluableMandatory: string[];
+  /** `evaluable` is the fit denominator; `total` is every criterion for the subject. */
+  coverage: { evaluable: number; total: number };
+}
+
+/**
+ * `insufficient_confidence` by MINORITY COVERAGE: the verdict rests on fewer
+ * than half of the criteria the ratifier declared.
+ *
+ * A majority is the only boundary here that is not a tuning knob — `types.ts`
+ * refuses per-criterion weights for exactly that reason, and a calibrated
+ * threshold would be the same guess wearing a decimal point. It labels only:
+ * the contribution's `confidence` is untouched by it.
+ */
+export function isMinorityCoverage(evaluable: number, total: number): boolean {
+  return total > 0 && evaluable * 2 < total;
+}
 
 /** Raised by the criteria validator and the writers. Never by the evaluator. */
 export class IcpContractError extends Error {

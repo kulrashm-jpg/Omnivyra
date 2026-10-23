@@ -28,6 +28,8 @@ export {
   IcpContractError,
   // ICP-SELECTION-CONTRACT-001 vocabularies. Proposal metadata only.
   ICP_CONFIDENCE_LEVELS, ICP_CONFIDENCE_MULTIPLIER, ICP_ORG_STAGES,
+  // PI-WP-C3 — the negative-rationale vocabulary.
+  ICP_CRITERION_BASES, ICP_CRITERION_RATIONALE_STATES, ICP_RATIONALE_STATES, isMinorityCoverage,
   ICP_TARGET_DERIVATIONS, ICP_TARGET_ROLE_TYPES,
 } from './types';
 
@@ -39,6 +41,9 @@ export type {
   // ICP-SELECTION-CONTRACT-001 §12/§13.
   IcpConfidenceLevel, IcpFactorScore, IcpOrgStage, IcpRejected, IcpStageAssumption,
   IcpTarget, IcpTargetDerivation, IcpTargetFactors, IcpTargetRoleType,
+  // PI-WP-C3.
+  IcpCriterionBasis, IcpCriterionRationale, IcpCriterionRationaleState,
+  IcpEvaluationRationale, IcpRationaleState,
 } from './types';
 
 export { attributeKind, attributesFor, validateCriteria, validateCriterion, MAX_CRITERIA } from './criteria';
