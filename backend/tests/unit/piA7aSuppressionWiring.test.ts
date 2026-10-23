@@ -289,7 +289,7 @@ describe('A7A — the provider stays eligible whenever evidence is inadequate', 
       .makeFindRecentObservation(readsWithNoRows as never);
 
     expect(await finder({
-      organizationId: OTHER_ORG, entityId: ACCOUNT, providerId: 'clearbit',
+      organizationId: OTHER_ORG, subject: 'account', entityId: ACCOUNT, providerId: 'clearbit',
       attributes: ['employee_count'],
     })).toBeNull();
   });
@@ -335,14 +335,14 @@ describe('A7A — a lookup failure never becomes a false suppression', () => {
 
   it('the real finder refuses a tenant-less lookup rather than matching broadly', async () => {
     await expect(defaultFindRecentObservation({
-      organizationId: '   ', entityId: ACCOUNT, providerId: 'clearbit',
+      organizationId: '   ', subject: 'account', entityId: ACCOUNT, providerId: 'clearbit',
       attributes: ['employee_count'],
     })).rejects.toThrow(/organizationId is required/);
   });
 
   it('an empty attribute list yields null without a query', async () => {
     expect(await defaultFindRecentObservation({
-      organizationId: ORG, entityId: ACCOUNT, providerId: 'clearbit', attributes: [],
+      organizationId: ORG, subject: 'account', entityId: ACCOUNT, providerId: 'clearbit', attributes: [],
     })).toBeNull();
   });
 });

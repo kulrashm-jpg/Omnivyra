@@ -299,3 +299,6 @@ describe('D2 — a malformed subject fails before any query', () => {
     expect(db.reads).toEqual([]);
   });
 });
+
+// Module scope: keeps this file's top-level names from colliding with other test files under tsc.
+export {};

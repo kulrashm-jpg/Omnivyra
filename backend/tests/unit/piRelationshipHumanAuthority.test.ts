@@ -74,7 +74,7 @@ const PROVIDER = candidate('p1', 'VP Sales', 'apollo', PROVIDER_AT);
 // ════════════════════════════════════════════════════════════════════════════
 describe('S — with a human authority declaration, the human value holds', () => {
   it('a LATER provider observation does not displace an earlier human one', () => {
-    const { authority, rejected } = buildAttributeAuthority(ORG_A, { job_title: ['human'] }, P);
+    const { authority, rejected } = buildAttributeAuthority('person', { job_title: ['human'] }, P);
     expect(rejected).toEqual([]);
 
     const d = decideCanonicalUpdates({ job_title: null }, [PROVIDER, HUMAN], P, authority);
@@ -87,7 +87,7 @@ describe('S — with a human authority declaration, the human value holds', () =
   });
 
   it('the declaration does not silence the disagreement, it resolves it', () => {
-    const { authority } = buildAttributeAuthority(ORG_A, { job_title: ['human'] }, P);
+    const { authority } = buildAttributeAuthority('person', { job_title: ['human'] }, P);
     const d = decideCanonicalUpdates({ job_title: null }, [PROVIDER, HUMAN], P, authority);
     // `contested` is how an operator can still see that a provider disagrees.
     // Authority narrowing the field must not hide that.
@@ -95,14 +95,14 @@ describe('S — with a human authority declaration, the human value holds', () =
   });
 
   it('it also protects an already-canonical human value from a newer provider', () => {
-    const { authority } = buildAttributeAuthority(ORG_A, { job_title: ['human'] }, P);
+    const { authority } = buildAttributeAuthority('person', { job_title: ['human'] }, P);
     const d = decideCanonicalUpdates(
       { job_title: 'Chief Revenue Officer' }, [PROVIDER, HUMAN], P, authority);
     expect(d.apply.filter((a) => a.value === 'VP Sales')).toEqual([]);
   });
 
   it('the declaration is per ATTRIBUTE — it does not make human authoritative everywhere', () => {
-    const { authority } = buildAttributeAuthority(ORG_A, { job_title: ['human'] }, P);
+    const { authority } = buildAttributeAuthority('person', { job_title: ['human'] }, P);
     expect(authoritativeProvidersFor(authority, 'job_title')).toEqual(['human']);
     expect(authoritativeProvidersFor(authority, 'department')).toEqual([]);
 
@@ -162,7 +162,7 @@ describe('S — no declaration means the OLD behaviour, not a new default', () =
     // 20261122000000) keep the human claim attributable and re-decidable the
     // moment a declaration exists. Losing an arbitration is recoverable;
     // losing the evidence would not be.
-    const { authority } = buildAttributeAuthority(ORG_A, { job_title: ['human'] }, P);
+    const { authority } = buildAttributeAuthority('person', { job_title: ['human'] }, P);
     const withDeclaration = decideCanonicalUpdates({ job_title: 'VP Sales' }, [PROVIDER, HUMAN], P, authority);
     expect(withDeclaration.apply[0]).toMatchObject({ value: 'Chief Revenue Officer' });
   });

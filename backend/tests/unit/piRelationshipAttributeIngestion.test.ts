@@ -114,7 +114,7 @@ jest.mock('../../services/logger', () => ({
 
 import {
   assertRelationshipAttribute, isRelationshipAttribute,
-  RELATIONSHIP_ATTRIBUTE_PRODUCER_VERSION,
+  RELATIONSHIP_ATTRIBUTE_PRODUCER_VERSION, type RelationshipAssertionResult,
 } from '../../services/prospectIdentity/relationshipAttributeIngestion';
 
 const ORG_A = '00000000-0000-4000-8000-00000000000a';
@@ -137,6 +137,14 @@ const call = (over: Record<string, unknown> = {}) => assertRelationshipAttribute
   value: 'VP Sales', provider: 'apollo', sourceRecordKey: 'apollo:batch-1',
   observedAt: '2026-01-01T00:00:00.000Z', ...over,
 } as never, NOW);
+// Narrows to the success branch for tests that inspect its fields; a refusal
+// fails the test loudly with its reason instead of reading undefined fields.
+type OkResult = Extract<RelationshipAssertionResult, { ok: true }>;
+const callOk = async (over: Record<string, unknown> = {}): Promise<OkResult> => {
+  const res = await call(over);
+  if (res.ok === false) throw new Error(`expected ok, got refusal: ${res.reason}`);
+  return res as OkResult;
+};
 
 beforeEach(() => {
   db.tables = {}; db.inserts = []; db.updates = []; db.reads = [];
@@ -366,7 +374,7 @@ describe('arbitration integration', () => {
   it('writes nothing when arbitration applies nothing', async () => {
     // An unattested incumbent: D-4 protects it, so there is no canonical write.
     seedRelationship(REL_A, { job_title: 'Operator Typed This' });
-    const res = await call();
+    const res = await callOk();
     expect(res.ok).toBe(true);
     expect(res.canonicalApplied).toEqual([]);
     expect(res.canonicalWithheld).toEqual([{ attribute: 'job_title', reason: 'unattested_incumbent' }]);
@@ -377,7 +385,7 @@ describe('arbitration integration', () => {
 describe('the canonical decision log', () => {
   it('appends ONE relationship decision per applied attribute, with full content', async () => {
     seedRelationship(REL_A);
-    const res = await call();
+    const res = await callOk();
     expect(res.ok).toBe(true);
 
     const logged = db.inserts.filter((i) => i.table === 'canonical_attribute_decisions');
@@ -415,7 +423,7 @@ describe('the canonical decision log', () => {
     // made, so there is no decision to log. This is also what makes a replay
     // idempotent.
     seedRelationship(REL_A, { job_title: 'Operator Typed This' });
-    const res = await call();
+    const res = await callOk();
     expect(res.canonicalApplied).toEqual([]);
     expect(db.inserts.filter((i) => i.table === 'canonical_attribute_decisions')).toEqual([]);
   });
@@ -450,7 +458,7 @@ describe('the canonical decision log', () => {
       recorded_at: '2026-02-01T00:00:00.000Z', superseded_at: null,
       applied_to_canonical_at: null, applied_reason: null,
     });
-    const res = await call();
+    const res = await callOk();
     expect(res.canonicalApplied.map((a: any) => a.attribute).sort()).toEqual(['department', 'job_title']);
     const logged = db.inserts.filter((i) => i.table === 'canonical_attribute_decisions');
     expect(logged.map((l) => l.payload.attribute).sort()).toEqual(['department', 'job_title']);
@@ -462,7 +470,7 @@ describe('idempotency', () => {
   it('a duplicate claim is reported as already present, not as an error', async () => {
     seedRelationship(REL_A);
     db.insertError = { table: 'source_assertions', code: '23505', message: 'duplicate key value violates uq_source_assertions_dedupe' };
-    const res = await call();
+    const res = await callOk();
     expect(res.ok).toBe(true);
     expect(res.assertionRecorded).toBe(false);
     expect(res.assertionAlreadyPresent).toBe(true);
@@ -550,7 +558,7 @@ describe('C-1 — the assertion read is SUBJECT-SCOPED', () => {
       applied_to_canonical_at: null, applied_reason: null,
     });
 
-    const res = await call();
+    const res = await callOk();
 
     expect(res.canonicalApplied.map((a: any) => a.attribute).sort()).toEqual(['department', 'job_title']);
   });

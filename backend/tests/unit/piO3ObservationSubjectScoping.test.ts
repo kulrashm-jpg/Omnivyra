@@ -237,3 +237,6 @@ describe('O-3 — it fails CLOSED', () => {
     expect(db.calls).toEqual([]);
   });
 });
+
+// Module scope: keeps this file's top-level names from colliding with other test files under tsc.
+export {};

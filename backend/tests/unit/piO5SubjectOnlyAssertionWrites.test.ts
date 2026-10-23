@@ -354,3 +354,6 @@ describe('O-5 — the employer association is untouched', () => {
     expect(db.tables.unified_persons[0].account_id).toBe(ACC);
   });
 });
+
+// Module scope: keeps this file's top-level names from colliding with other test files under tsc.
+export {};

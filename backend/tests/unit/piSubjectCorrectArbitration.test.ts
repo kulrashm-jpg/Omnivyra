@@ -537,3 +537,6 @@ describe('Change 1a — decision-log and winner-stamping provenance', () => {
       .toBeNull();
   });
 });
+
+// Module scope: keeps this file's top-level names from colliding with other test files under tsc.
+export {};

@@ -322,3 +322,6 @@ describe('O-5C — everything else on the conflict path is untouched', () => {
     expect(db.rows.filter((r) => r.organization_id === ORG_B)[0].account_id).toBe(ACC_B);
   });
 });
+
+// Module scope: keeps this file's top-level names from colliding with other test files under tsc.
+export {};
