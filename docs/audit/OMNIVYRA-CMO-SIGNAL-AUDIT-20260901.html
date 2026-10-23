@@ -1,0 +1,901 @@
+<title>Omnivyra Signal Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+  :root {
+    --ground: #FBFCFD;
+    --surface: #FFFFFF;
+    --surface-2: #F3F6F9;
+    --ink: #12181F;
+    --ink-2: #35414D;
+    --muted: #5C6874;
+    --faint: #8894A1;
+    --rule: #E2E7EC;
+    --rule-2: #CFD7DF;
+    --accent: #0B5ED7;
+    --accent-soft: #E7F0FD;
+    --live: #17795E;
+    --live-soft: #E3F3ED;
+    --partial: #A96A00;
+    --partial-soft: #FAF0DC;
+    --broken: #C0362C;
+    --broken-soft: #FBE9E7;
+    --dark: #6B7280;
+    --dark-soft: #EDEFF2;
+    --shadow: 0 1px 2px rgba(18,24,31,.05), 0 8px 24px -12px rgba(18,24,31,.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0E1318;
+      --surface: #151C23;
+      --surface-2: #1B242C;
+      --ink: #E7ECF1;
+      --ink-2: #C2CCD6;
+      --muted: #94A2AF;
+      --faint: #6E7C8A;
+      --rule: #263039;
+      --rule-2: #35434F;
+      --accent: #6BA5F5;
+      --accent-soft: #12283F;
+      --live: #59C9A0;
+      --live-soft: #102C24;
+      --partial: #E0A54B;
+      --partial-soft: #2E2413;
+      --broken: #F08076;
+      --broken-soft: #331B18;
+      --dark: #8B97A3;
+      --dark-soft: #1E262E;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0E1318;
+    --surface: #151C23;
+    --surface-2: #1B242C;
+    --ink: #E7ECF1;
+    --ink-2: #C2CCD6;
+    --muted: #94A2AF;
+    --faint: #6E7C8A;
+    --rule: #263039;
+    --rule-2: #35434F;
+    --accent: #6BA5F5;
+    --accent-soft: #12283F;
+    --live: #59C9A0;
+    --live-soft: #102C24;
+    --partial: #E0A54B;
+    --partial-soft: #2E2413;
+    --broken: #F08076;
+    --broken-soft: #331B18;
+    --dark: #8B97A3;
+    --dark-soft: #1E262E;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px 96px; }
+  .measure { max-width: 68ch; }
+
+  h1, h2, h3, h4, .sans, table, .chip, .eyebrow, nav, .panel-head, figcaption {
+    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .mono, .num, .chip, .kv b, code { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+
+  /* ---- masthead ---- */
+  header.mast { border-bottom: 1px solid var(--rule); padding: 56px 0 30px; margin-bottom: 44px; }
+  .eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 18px;
+  }
+  h1 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: clamp(32px, 5.2vw, 52px); line-height: 1.06; font-weight: 600;
+    letter-spacing: -.022em; margin: 0 0 20px; text-wrap: balance; color: var(--ink);
+  }
+  .standfirst { font-size: 19px; line-height: 1.55; color: var(--ink-2); margin: 0; max-width: 60ch; }
+  .mast-meta {
+    display: flex; flex-wrap: wrap; gap: 8px 26px; margin-top: 26px;
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--faint);
+    text-transform: uppercase; letter-spacing: .06em;
+  }
+
+  /* ---- section scaffolding ---- */
+  section { margin: 0 0 60px; scroll-margin-top: 20px; }
+  h2 {
+    font-size: 13px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink); margin: 0 0 6px; display: flex; align-items: baseline; gap: 12px;
+  }
+  h2 .n {
+    font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--accent);
+    font-weight: 500; letter-spacing: 0;
+  }
+  .h2rule { height: 2px; background: var(--ink); width: 34px; margin: 0 0 26px; }
+  h3 {
+    font-size: 20px; font-weight: 600; letter-spacing: -.012em; margin: 40px 0 12px;
+    color: var(--ink); text-wrap: balance;
+  }
+  h4 {
+    font-size: 12px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--muted); margin: 30px 0 10px;
+  }
+  p { margin: 0 0 17px; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  strong { font-weight: 600; color: var(--ink); }
+  em.term { font-style: italic; color: var(--ink-2); }
+
+  ul, ol { margin: 0 0 18px; padding-left: 22px; }
+  li { margin-bottom: 8px; }
+  ul.tight li, ol.tight li { margin-bottom: 4px; }
+
+  /* ---- nav ---- */
+  nav.toc {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 20px 22px; margin-bottom: 52px;
+  }
+  nav.toc .panel-head { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin-bottom: 14px; }
+  nav.toc ol { list-style: none; padding: 0; margin: 0; columns: 2; column-gap: 36px; }
+  nav.toc li { margin: 0 0 7px; break-inside: avoid; font-family: "IBM Plex Sans", sans-serif; font-size: 13.5px; }
+  nav.toc a { color: var(--ink-2); text-decoration: none; display: flex; gap: 10px; }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc a span { font-family: "IBM Plex Mono", monospace; color: var(--faint); font-size: 12px; min-width: 18px; }
+  @media (max-width: 660px) { nav.toc ol { columns: 1; } }
+
+  /* ---- status chips ---- */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+    font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    padding: 2.5px 7px; border-radius: 2px; border: 1px solid transparent;
+  }
+  .chip b { font-family: "IBM Plex Mono", monospace; font-weight: 600; }
+  .c-a { background: var(--live-soft); color: var(--live); border-color: color-mix(in srgb, var(--live) 28%, transparent); }
+  .c-b { background: var(--partial-soft); color: var(--partial); border-color: color-mix(in srgb, var(--partial) 28%, transparent); }
+  .c-c { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+  .c-d { background: var(--dark-soft); color: var(--dark); border-color: color-mix(in srgb, var(--dark) 30%, transparent); }
+  .c-e { background: var(--broken-soft); color: var(--broken); border-color: color-mix(in srgb, var(--broken) 30%, transparent); }
+  .c-f { background: transparent; color: var(--muted); border-color: var(--rule-2); border-style: dashed; }
+  .c-g { background: transparent; color: var(--faint); border-color: var(--rule); }
+
+  /* ---- legend ---- */
+  .legend {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(212px, 1fr)); gap: 1px;
+    background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden;
+    margin: 0 0 34px;
+  }
+  .legend div { background: var(--surface); padding: 13px 15px; }
+  .legend p { margin: 7px 0 0; font-size: 13px; line-height: 1.45; color: var(--muted); font-family: "IBM Plex Sans", sans-serif; }
+
+  /* ---- panels ---- */
+  .panel {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 22px 24px; margin: 26px 0; box-shadow: var(--shadow);
+  }
+  .panel > .panel-head {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--faint); margin: 0 0 16px; display: flex; justify-content: space-between; gap: 14px; align-items: baseline;
+  }
+  .panel > :last-child { margin-bottom: 0; }
+  .panel.flag { border-left: 3px solid var(--broken); }
+  .panel.good { border-left: 3px solid var(--live); }
+  .panel.note { border-left: 3px solid var(--accent); }
+
+  /* ---- evidence bar ---- */
+  .evbar { display: flex; height: 42px; border-radius: 2px; overflow: hidden; border: 1px solid var(--rule); }
+  .evbar > div { display: flex; align-items: center; justify-content: center; font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 600; color: #fff; }
+  .ev-m { background: var(--live); }
+  .ev-i { background: var(--accent); }
+  .ev-s { background: var(--partial); }
+  .ev-u { background: var(--dark); }
+  .evkey { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 12px; font-family: "IBM Plex Sans", sans-serif; font-size: 12.5px; color: var(--muted); }
+  .evkey span { display: inline-flex; align-items: center; gap: 7px; }
+  .evkey i { width: 9px; height: 9px; border-radius: 1px; display: inline-block; font-style: normal; }
+
+  /* ---- tables ---- */
+  .tablewrap { overflow-x: auto; margin: 22px 0; border: 1px solid var(--rule); border-radius: 3px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 660px; }
+  thead th {
+    text-align: left; font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--faint); padding: 11px 14px; border-bottom: 1px solid var(--rule-2); background: var(--surface-2);
+    white-space: nowrap; vertical-align: bottom;
+  }
+  tbody td { padding: 11px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; color: var(--ink-2); line-height: 1.5; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody td:first-child { color: var(--ink); font-weight: 500; }
+  td.num, th.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.st { white-space: nowrap; }
+
+  /* ---- key-value stat row ---- */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; margin: 26px 0; }
+  .stats .kv { background: var(--surface); padding: 16px 18px; }
+  .stats .kv b { display: block; font-size: 27px; font-weight: 600; letter-spacing: -.02em; color: var(--ink); font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stats .kv span { display: block; margin-top: 6px; font-family: "IBM Plex Sans", sans-serif; font-size: 12px; line-height: 1.4; color: var(--muted); }
+  .stats .kv.bad b { color: var(--broken); }
+  .stats .kv.warn b { color: var(--partial); }
+  .stats .kv.ok b { color: var(--live); }
+
+  /* ---- chain diagram ---- */
+  .chain { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; margin: 24px 0; font-family: "IBM Plex Sans", sans-serif; }
+  .chain .node {
+    flex: 1 1 118px; min-width: 118px; background: var(--surface); border: 1px solid var(--rule);
+    padding: 12px 13px; font-size: 12.5px; color: var(--ink-2); position: relative;
+  }
+  .chain .node + .node { border-left: 0; }
+  .chain .node b { display: block; font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin-bottom: 5px; font-weight: 500; }
+  .chain .node.brk { background: var(--broken-soft); border-color: color-mix(in srgb, var(--broken) 40%, transparent); }
+  .chain .node.brk b { color: var(--broken); }
+  .chain .node.ok { background: var(--live-soft); border-color: color-mix(in srgb, var(--live) 32%, transparent); }
+  .chain .node.ok b { color: var(--live); }
+
+  blockquote {
+    margin: 22px 0; padding: 14px 20px; border-left: 2px solid var(--rule-2);
+    color: var(--muted); font-style: italic; font-size: 15.5px;
+  }
+  blockquote cite { display: block; font-style: normal; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--faint); margin-top: 9px; text-transform: uppercase; letter-spacing: .05em; }
+
+  code {
+    font-size: .88em; background: var(--surface-2); padding: 1.5px 5px; border-radius: 2px;
+    color: var(--ink-2); border: 1px solid var(--rule);
+  }
+
+  /* ---- verdict ---- */
+  .verdict {
+    border: 2px solid var(--ink); border-radius: 3px; padding: 30px 32px; margin: 34px 0;
+    background: var(--surface);
+  }
+  .verdict .call {
+    font-family: "IBM Plex Sans", sans-serif; font-size: clamp(26px, 4.4vw, 38px); font-weight: 700;
+    letter-spacing: -.02em; margin: 0 0 6px; color: var(--ink); line-height: 1.1;
+  }
+  .verdict .sub { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin: 0 0 20px; }
+
+  /* ---- phase card ---- */
+  .phase { border: 1px solid var(--rule); border-radius: 3px; background: var(--surface); margin: 18px 0; overflow: hidden; }
+  .phase > header { background: var(--surface-2); padding: 13px 20px; border-bottom: 1px solid var(--rule); display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+  .phase > header .pn { font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 600; color: var(--accent); letter-spacing: .08em; }
+  .phase > header .pt { font-family: "IBM Plex Sans", sans-serif; font-size: 16px; font-weight: 600; color: var(--ink); letter-spacing: -.01em; }
+  .phase > header .pd { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--faint); margin-left: auto; text-transform: uppercase; letter-spacing: .06em; }
+  .phase .body { padding: 18px 20px 20px; }
+  .phase dl { margin: 0; display: grid; grid-template-columns: 128px 1fr; gap: 10px 18px; }
+  .phase dt { font-family: "IBM Plex Sans", sans-serif; font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); padding-top: 3px; }
+  .phase dd { margin: 0; font-size: 14.5px; line-height: 1.55; color: var(--ink-2); }
+  .phase dd ul { margin: 0; padding-left: 18px; }
+  .phase dd li { margin-bottom: 5px; }
+  @media (max-width: 620px) { .phase dl { grid-template-columns: 1fr; gap: 3px 0; } .phase dt { padding-top: 10px; } }
+
+  footer.end { border-top: 1px solid var(--rule); margin-top: 60px; padding-top: 22px; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--faint); line-height: 1.7; }
+
+  a:focus-visible, nav.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Product Assessment · Baseline</p>
+  <h1>Omnivyra Signal Audit</h1>
+  <p class="standfirst">Omnivyra has built an honest marketing-intelligence engine and starved it of evidence. The engine is not the problem, and finishing it is a small, finite job.</p>
+  <div class="mast-meta">
+    <span>Assessed 2026-09-01</span>
+    <span>Branch feat/creator-canonical-template-pool</span>
+    <span>Evidence: production database, live env, real generated report</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <p class="panel-head">Contents</p>
+  <ol>
+    <li><a href="#s1"><span>01</span> Executive verdict</a></li>
+    <li><a href="#s2"><span>02</span> What we have actually built</a></li>
+    <li><a href="#s3"><span>03</span> What actually works</a></li>
+    <li><a href="#s4"><span>04</span> Partial, broken, disconnected</a></li>
+    <li><a href="#s5"><span>05</span> The CMO product model</a></li>
+    <li><a href="#s6"><span>06</span> Current vs required</a></li>
+    <li><a href="#s7"><span>07</span> The V1 finish line</a></li>
+    <li><a href="#s8"><span>08</span> Gap to V1</a></li>
+    <li><a href="#s9"><span>09</span> Assets to reuse</a></li>
+    <li><a href="#s10"><span>10</span> What to stop</a></li>
+    <li><a href="#s11"><span>11</span> Real company demonstration</a></li>
+    <li><a href="#s12"><span>12</span> Product readiness</a></li>
+    <li><a href="#s13"><span>13</span> Implementation plan</a></li>
+    <li><a href="#s14"><span>14</span> Final decision</a></li>
+  </ol>
+</nav>
+
+<!-- ===================== 1 ===================== -->
+<section id="s1">
+  <h2><span class="n">01</span> Executive verdict</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p><strong>Omnivyra today is a correct, well-governed report engine connected to almost no evidence.</strong> From a CMO's seat, it is a system that will tell you, articulately and at length, that it cannot yet tell you anything.</p>
+
+    <p>That sounds like a condemnation. It is closer to the opposite. The hard part of this product category — the part most competitors get wrong — is refusing to fabricate. Omnivyra's canonical report engine is built around evidence states (<code>measured</code>, <code>inferred</code>, <code>insufficient_signal</code>, <code>unavailable</code>), it abstains rather than inventing a score, and when a provider is missing it says so by name and tells you how to fix it. That discipline is expensive to build and nearly impossible to retrofit. It exists, and it works.</p>
+
+    <p>What does not exist is the evidence supply. I generated the ground truth for this assessment from a report the platform actually produced for <strong>patagonia.com on 2026-09-01</strong>. Here is the entire composition of that 101 KB report:</p>
+  </div>
+
+  <div class="panel">
+    <p class="panel-head"><span>Evidence composition · report 9486ba63 · patagonia.com</span><span class="mono">2026-09-01</span></p>
+    <div class="evbar" role="img" aria-label="7 measured, 17 inferred, 30 insufficient signal, 60 unavailable">
+      <div class="ev-m" style="flex:7">7</div>
+      <div class="ev-i" style="flex:17">17</div>
+      <div class="ev-s" style="flex:30">30</div>
+      <div class="ev-u" style="flex:60">60</div>
+    </div>
+    <div class="evkey">
+      <span><i class="ev-m"></i> 7 measured</span>
+      <span><i class="ev-i"></i> 17 inferred</span>
+      <span><i class="ev-s"></i> 30 insufficient signal</span>
+      <span><i class="ev-u"></i> 60 unavailable</span>
+      <span class="mono" style="color:var(--faint)">528 null fields</span>
+    </div>
+  </div>
+
+  <div class="measure">
+    <p>Six percent of that report was measured. The overall score came back <code>null</code>, labelled "Insufficient signal." The Visibility, Content Strength and Authority sections each returned <strong>0 insights, 0 opportunities, 0 actions</strong>. <code>top_priorities</code> was an empty array. The report's own stated primary problem was:</p>
+
+    <blockquote>The core problem is a lack of usable decision signals, so the first priority is building enough evidence to diagnose the business confidently.<cite>composed_report.primary_problem — production, verbatim</cite></blockquote>
+
+    <p>The report is describing itself. That is the whole finding, and it is worth sitting with: the engine is diagnostically correct about its own starvation.</p>
+
+    <p>Underneath that headline are three specific, fixable breaks — not a thousand. I traced each one to a named file and confirmed it against the production database and the live Vercel environment.</p>
+  </div>
+
+  <div class="panel flag">
+    <p class="panel-head">The three breaks</p>
+    <ol class="tight" style="margin-bottom:0">
+      <li style="margin-bottom:12px"><strong>The provider bootstrap does not survive the serverless bundle.</strong> <code>OPENAI_API_KEY</code> <em class="term">is</em> set in Vercel production (verified, added 103 days ago). Wikidata is default-on and needs no key. Yet the report says <em class="term">"no LLM provider is configured. 20 of 20 cells are unavailable"</em> and <em class="term">"No knowledge-graph adapter is configured."</em> The cause is <code>ensureBootstrapped()</code> in <code>providerRegistry.ts</code>, which loads every adapter through a dynamic <code>require()</code> inside a <code>catch {}</code> that swallows the failure silently. Two evidence sources are paid for, credentialed, and dark.</li>
+      <li style="margin-bottom:12px"><strong>Report generation never crawls the site it is reporting on.</strong> The crawler is only invoked from onboarding, the manual "analyze" button, and company-profile enrichment. There is no crawl cron. Of 40 companies, <strong>3</strong> have any crawled pages; all 3,379 stored content blocks belong to a single company and were last written 2026-03-27. The report path reads whatever happens to be there, which for nearly every company is nothing.</li>
+      <li style="margin-bottom:0"><strong>The narrative layer does not honour the scoring layer's discipline.</strong> While the scores correctly abstained, the same report described Patagonia's market as <em class="term">"emerging"</em>, its position as <em class="term">"ahead"</em>, and its context as <em class="term">"E-commerce in North America"</em> — all generated from a manual-entry form with <code>competitors: []</code> and <code>teamSize: "1-10"</code>. This is the one place where the product currently produces confident prose with nothing underneath it, and it is the highest-credibility risk in the system.</li>
+    </ol>
+  </div>
+
+  <div class="measure">
+    <p>Set against that: the platform carries <strong>867 database tables, 1,320 API routes, 250+ pages</strong> and roughly <strong>350 status-report markdown files at the repository root</strong>. The surface is perhaps ten times wider than the product. The gap to a genuinely useful V1 is not more building. It is reconnecting three wires and switching most of the rest off.</p>
+  </div>
+</section>
+
+<!-- ===================== 2 ===================== -->
+<section id="s2">
+  <h2><span class="n">02</span> What we have actually built</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p>Classification uses the taxonomy you specified. Nothing here is graded on whether code exists or tests pass — only on whether a customer can reach it and get a true answer.</p>
+  </div>
+
+  <div class="legend">
+    <div><span class="chip c-a"><b>A</b> Live</span><p>Customer can use it end to end today.</p></div>
+    <div><span class="chip c-b"><b>B</b> Incomplete</span><p>Real function, important part missing.</p></div>
+    <div><span class="chip c-c"><b>C</b> Disconnected</span><p>Exists, not in the customer journey.</p></div>
+    <div><span class="chip c-d"><b>D</b> Unproven</span><p>Code exists, no real-data evidence.</p></div>
+    <div><span class="chip c-e"><b>E</b> Broken</span><p>Intended workflow currently fails.</p></div>
+    <div><span class="chip c-f"><b>F</b> Absent</span><p>Does not meaningfully exist.</p></div>
+    <div><span class="chip c-g"><b>G</b> Not required</span><p>Not needed for the CMO product.</p></div>
+  </div>
+
+  <h3>The genuine engineering assets</h3>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Asset</th><th>Where</th><th>What it really is</th><th class="st">Status</th></tr></thead>
+      <tbody>
+        <tr><td>Canonical report engine</td><td class="mono">canonicalReport/ · 3,498 lines</td><td>Evidence-typed scoring with confidence bands, provenance, abstention, override transparency. The strongest thing in the repository.</td><td class="st"><span class="chip c-b"><b>B</b></span></td></tr>
+        <tr><td>Provider registry + 8 bridges</td><td class="mono">intelligence/providerRegistry.ts</td><td>One switchboard between the report and every external source. Honest <code>Unavailable*</code> defaults, never synthetic.</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+        <tr><td>AI citation matrix</td><td class="mono">aiCitationMatrixService.ts</td><td>5 engines × 4 query classes = 20 cells. Real adapters for ChatGPT, Claude, Gemini, Perplexity, Copilot.</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+        <tr><td>Provider activation matrix</td><td class="mono">providerActivationMatrix.ts</td><td>Reports configured-vs-awaiting per provider with an activation checklist. Genuinely excellent operator tooling.</td><td class="st"><span class="chip c-c"><b>C</b></span></td></tr>
+        <tr><td>Static site crawler</td><td class="mono">crawlerService.ts</td><td>Canonical tags, JSON-LD, hreflang, robots, sitemap, alt coverage, security headers, forms. No JS rendering.</td><td class="st"><span class="chip c-b"><b>B</b></span></td></tr>
+        <tr><td>Website intelligence engines</td><td class="mono">websiteIntelligence/ · 4 engines</td><td>Technical, content, accessibility, brand — deterministic, reading one canonical snapshot.</td><td class="st"><span class="chip c-b"><b>B</b></span></td></tr>
+        <tr><td>Website Health surface</td><td class="mono">pages/website-health.tsx</td><td>Pure presentation over the canonical repository. Correctly computes nothing itself.</td><td class="st"><span class="chip c-a"><b>A</b></span></td></tr>
+        <tr><td>Visitor session spine</td><td class="mono">canonical_sessions / _page_views</td><td>1,365 sessions, 679 page views, real source/medium/campaign/geo. Working.</td><td class="st"><span class="chip c-b"><b>B</b></span></td></tr>
+        <tr><td>GSC ingestion</td><td class="mono">platform_gsc_*</td><td>22 daily rows, 9 query rows, 1 connected property. The pipeline demonstrably works.</td><td class="st"><span class="chip c-b"><b>B</b></span></td></tr>
+        <tr><td>Content generation + publishing</td><td class="mono">creator/ · bolt · scheduler</td><td>29 scheduled posts, 206 execution runs, 7 connected social accounts. The most operationally proven subsystem.</td><td class="st"><span class="chip c-a"><b>A</b></span></td></tr>
+        <tr><td>Engagement inbox</td><td class="mono">engagement_threads</td><td>126 threads, 125 messages, 124 classified. Real usage.</td><td class="st"><span class="chip c-a"><b>A</b></span></td></tr>
+        <tr><td>Credit / billing ledger</td><td class="mono">unified_transactions</td><td>69,645 rows. Bank-grade, reconciled, audited. Overbuilt for where the product is.</td><td class="st"><span class="chip c-a"><b>A</b></span></td></tr>
+        <tr><td>SERP acquisition service</td><td class="mono">serpAcquisitionService.ts</td><td>Multi-provider, cost-governed, cron-registered at 02:30 daily. <code>SERP_API_KEY</code> is set in production.</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The scale problem, stated plainly</h3>
+  <div class="stats">
+    <div class="kv"><b>867</b><span>database tables</span></div>
+    <div class="kv"><b>1,320</b><span>API routes</span></div>
+    <div class="kv"><b>250+</b><span>pages</span></div>
+    <div class="kv"><b>~350</b><span>status .md files at repo root</span></div>
+    <div class="kv bad"><b>0</b><span>rows in every SEO, competitor, backlink, conversion and attribution table</span></div>
+  </div>
+  <div class="measure">
+    <p>Those zeros are not a sampling artefact. <code>analytics_serp_results</code>, <code>analytics_serp_snapshots</code>, <code>analytics_competitor_domains</code>, <code>canonical_backlink_signals</code>, <code>canonical_conversions</code>, <code>content_performance_metrics</code>, <code>lead_attributions</code>, <code>form_conversions</code>, <code>attribution_handoffs</code>, <code>competitor_analysis</code>, <code>review_sources</code>, <code>message_mentions</code> — every one of them is empty in production. The schema for the CMO product is fully designed and entirely unpopulated.</p>
+  </div>
+</section>
+
+<!-- ===================== 3 ===================== -->
+<section id="s3">
+  <h2><span class="n">03</span> What actually works</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p>Short list, and deliberately so. These are the capabilities where a customer can complete the journey and receive a true answer today.</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Capability</th><th>Proof from production</th></tr></thead>
+      <tbody>
+        <tr><td>Content generation across formats</td><td>63 blogs, 206 bolt runs, 189 creator summaries, 360 creator assets</td></tr>
+        <tr><td>Multi-platform scheduling &amp; publishing</td><td>29 scheduled posts, 12 publishing attempts, 9 publishing jobs, 7 social accounts across 6 platforms</td></tr>
+        <tr><td>Engagement inbox &amp; classification</td><td>126 threads / 125 messages / 124 classifications / 13 authors</td></tr>
+        <tr><td>Credits, billing, subscriptions</td><td>69,645 unified transactions, 963 credit transactions, 31 org credit accounts, 3 invoices</td></tr>
+        <tr><td>Company profile capture</td><td>31 profiles, 35 refinements, 5 setup-progress records</td></tr>
+        <tr><td>Report generation lifecycle</td><td>176 reports, newest 2026-09-01, status <code>completed</code>, persisted, credit-metered, readiness-gated</td></tr>
+        <tr><td>Website Health presentation</td><td>Renders the canonical snapshot with per-signal source and freshness</td></tr>
+        <tr><td>Visitor session capture</td><td>1,365 sessions with source/medium/campaign/geo/engagement across 3 companies</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel good">
+    <p class="panel-head">Worth naming explicitly</p>
+    <p style="margin-bottom:0">The report <em class="term">lifecycle</em> is production-proven — auth, tenant resolution, readiness gate, credit reservation, background execution with keep-alive, persistence, PDF/HTML export, stale-report recovery cron. A report was generated yesterday and completed. Every part of that machine works. It is only the <em class="term">inputs</em> that are missing. This distinction is the reason this assessment ends in GO rather than PAUSE.</p>
+  </div>
+</section>
+
+<!-- ===================== 4 ===================== -->
+<section id="s4">
+  <h2><span class="n">04</span> Partial, broken, disconnected — with exact breakpoints</h2><div class="h2rule"></div>
+
+  <h3>Break 1 — The provider bootstrap dies silently in the bundle</h3>
+  <div class="chain">
+    <div class="node ok"><b>env</b>OPENAI_API_KEY set in Vercel prod, verified 103d ago</div>
+    <div class="node ok"><b>gate</b>isAIVisibilityProviderConfigured() → true</div>
+    <div class="node brk"><b>bootstrap</b>require('./adapters/openaiAdapter') throws in serverless bundle</div>
+    <div class="node brk"><b>catch</b>catch { /* unavailable */ } swallows it</div>
+    <div class="node brk"><b>report</b>"20 of 20 cells unavailable"</div>
+  </div>
+  <div class="measure">
+    <p>Same mechanism kills the Wikidata knowledge-graph adapter, which needs no credential at all (<code>WIKIDATA_ENABLED !== 'false'</code> is the default-on condition, and the variable is unset). The report's <code>scan_metadata</code> confirms the consequence: <code>total_requests: 0, total_cost_usd: 0</code>. No external call was attempted.</p>
+    <p>There is a second, smaller inconsistency worth fixing at the same time: the activation matrix gates entity graph on <code>WIKIDATA_ENABLED === 'true'</code> while the registry gates it on <code>!== 'false'</code>. The two systems disagree about whether Wikidata is on.</p>
+    <p><strong>This is one bug with an outsized payoff.</strong> Fixing it converts AI visibility (ChatGPT) and entity graph (Wikidata) from <code>unavailable</code> to <code>measured</code> with zero new credentials and zero new integrations.</p>
+  </div>
+
+  <h3>Break 2 — Reports do not crawl</h3>
+  <div class="chain">
+    <div class="node ok"><b>request</b>POST /api/reports/generate</div>
+    <div class="node ok"><b>gate</b>readiness: domain + facts confirmed. 0 credits</div>
+    <div class="node brk"><b>missing</b>no crawl trigger anywhere in this path</div>
+    <div class="node ok"><b>build</b>canonicalReportBuilder runs correctly</div>
+    <div class="node brk"><b>result</b>reads empty tables → insufficient_signal</div>
+  </div>
+  <div class="measure">
+    <p>The crawler is reachable only from <code>pages/api/onboarding/setup-company.ts</code>, <code>pages/api/websites/[id]/analyze.ts</code> and company-profile enrichment. <code>vercel.json</code> registers 30+ crons — publishing, analytics ingestion, SERP acquisition, credit expiry, reconciliation — and <strong>no crawl</strong>. The report's own evidence-readiness section names the problem correctly and unprompted:</p>
+    <blockquote>The website has not yet been fully scanned for this report. Next step: run the website scan for this domain, then regenerate the report.<cite>canonical.evidence_readiness.gaps[0] — production, verbatim</cite></blockquote>
+    <p>The product knows. It simply has no way to act on what it knows.</p>
+  </div>
+
+  <h3>Break 3 — Narrative confidence outruns evidence</h3>
+  <div class="measure">
+    <p>The scoring layer abstained perfectly. The prose layer did not. For a domain that was never crawled, with an empty competitor list and a manual-entry form, the report asserted market type, market position, market context, positioning gap and strategy alignment. A CMO reading "Patagonia — emerging market, position: ahead" would immediately and correctly distrust the entire document.</p>
+    <p>This is not a hard fix. The abstention contract already exists in <code>scoringGovernance.ts</code>. It needs to be applied to the narrative builders (<code>executiveInsightEngine</code>, <code>strategicRecommendationEngine</code>, <code>snapshotReportNarrativeHelpers</code>) so prose inherits the confidence of the evidence it describes.</p>
+  </div>
+
+  <h3>Everything else, classified</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Thing</th><th>Exact breakpoint</th><th class="st">Status</th></tr></thead>
+      <tbody>
+        <tr><td>Public free audit</td><td><code>pages/free-audit/report.tsx</code> renders a hardcoded <code>SAMPLE_SCORES</code> array. Honestly labelled "Preview mode" and noindexed, but the top-of-funnel promise — domain in, audit out — is not connected to any engine.</td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+        <tr><td>Performance / Core Web Vitals</td><td>No PageSpeed Insights, no Lighthouse, no CrUX anywhere in the repository. Playwright is present but used only for social RPA and PDF rendering, never for site analysis.</td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+        <tr><td>JS-rendered content</td><td>Crawler is regex/static by design. Any SPA or client-rendered site returns near-empty content signals with no warning to the user.</td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+        <tr><td>SEO keyword visibility</td><td>SERP cron registered and key present, yet <code>analytics_serp_results</code>, <code>_snapshots</code>, <code>_acquisition_runs</code> and <code>_provider_health</code> are all 0 rows. The queue holds 1 entry. Never successfully executed.</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+        <tr><td>Competitor intelligence</td><td>Four dedicated services plus a report section. <code>competitor_intelligence_summary</code> came back <code>null</code>; <code>company_intelligence_competitors</code>, <code>competitor_analysis</code>, <code>competitor_signals</code> all 0 rows. Only <code>competitor_enrichment_cache</code> has 22 rows.</td><td class="st"><span class="chip c-d"><b>D</b></span></td></tr>
+        <tr><td>Backlinks / domain authority</td><td>Bridge implemented; needs Ahrefs, Moz or Majestic. No key in any environment. <code>canonical_backlink_signals</code> empty.</td><td class="st"><span class="chip c-c"><b>C</b></span></td></tr>
+        <tr><td>Authority trajectory</td><td>Requires <code>AUTHORITY_TRAJECTORY_ENABLED</code> (unset) and <code>report_score_history</code> (0 rows). No change intelligence, no forecast, no deltas.</td><td class="st"><span class="chip c-c"><b>C</b></span></td></tr>
+        <tr><td>GA4 / GSC connected data</td><td>Mechanically working. 2 GA4 and 1 GSC connected of 40 companies; the rest never attempted or expired. Root cause is customer re-authorization, not server code.</td><td class="st"><span class="chip c-b"><b>B</b></span></td></tr>
+        <tr><td>Visitor → lead conversion</td><td>Sessions and page views populate. <code>canonical_conversions</code>, <code>form_conversions</code>, <code>attribution_handoffs</code>, <code>lead_attributions</code> all 0. The journey has a start and no end.</td><td class="st"><span class="chip c-b"><b>B</b></span></td></tr>
+        <tr><td>Content effectiveness</td><td><code>content_performance_metrics</code> empty. Content is generated and published but never measured back. The loop is open.</td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+        <tr><td>Channel attribution</td><td>Five attribution services exist. Every attribution table is empty. Cannot answer "where do our best leads come from."</td><td class="st"><span class="chip c-d"><b>D</b></span></td></tr>
+        <tr><td>Social reputation / mentions</td><td><code>message_mentions</code>, <code>review_sources</code> empty; reviews provider needs <code>REVIEWS_API_KEY</code>, absent everywhere.</td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+        <tr><td>Paid acquisition</td><td>No ad-platform integration of any kind. No spend, no creative, no campaign data.</td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+        <tr><td>Brand / message consistency</td><td><code>brandIntelligenceEngine.ts</code> exists as a website engine. No cross-surface comparison of site vs social vs email vs outreach.</td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+        <tr><td>Evidence Platform</td><td>A parallel provider architecture beside the live registry — the activation matrix, ingestion specs, correlation and business-rule registries. Not on the customer path. <code>provider_evidence</code> table does not exist in production.</td><td class="st"><span class="chip c-c"><b>C</b></span></td></tr>
+        <tr><td>MarketPulse</td><td>78 findings for exactly 1 company, newest 2026-07-06. Cron registered. Two months idle.</td><td class="st"><span class="chip c-d"><b>D</b></span></td></tr>
+        <tr><td>Active Leads</td><td><code>active_leads</code> is 0 rows. <code>canonical_leads</code> holds 18 rows whose sources (webinar 4, ads 4, organic 4, cold-list 3, low-intent-form 3) are evenly distributed fixture data, not real acquisition.</td><td class="st"><span class="chip c-d"><b>D</b></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== 5 ===================== -->
+<section id="s5">
+  <h2><span class="n">05</span> The CMO product model</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p>Before deciding what to build, the product has to be defined. A CMO handing over a domain is asking one question with four parts:</p>
+    <blockquote style="font-style:normal;border-left-color:var(--accent);color:var(--ink)">How is my company performing in market? <em class="term">Why</em> is it performing that way? Where are the gaps? What should my team do next — and what should we expect to happen?<cite>The job to be done</cite></blockquote>
+    <p>Everything Omnivyra builds should be judged against whether it moves a marketing leader from <strong>diagnosis to decision to action</strong> without a consultant in between. Three design commitments follow from that, and they are the product's real differentiation:</p>
+    <ul>
+      <li><strong>Evidence discipline is the feature.</strong> Every claim carries OBSERVED / INFERRED / ESTIMATED / UNAVAILABLE. A CMO who has been burned by an agency dashboard will pay for the tool that says "I don't know" — provided it also says exactly what it would need in order to know. Omnivyra already does the first half well and the second half unusually well.</li>
+      <li><strong>Explanation over score.</strong> "Your SEO score is 72" is worthless. Problem → Evidence → Action → Expected impact → Effort → Priority is the only acceptable unit of output. The <code>improvementTodoBuilder</code> and <code>strategicRecommendationEngine</code> are already shaped this way.</li>
+      <li><strong>AI/answer-engine visibility is the wedge.</strong> Every incumbent does SEO. Very few can tell a CMO whether ChatGPT, Claude, Gemini, Perplexity or Copilot will recommend them for their own category. Omnivyra has the adapters for all five already written.</li>
+    </ul>
+  </div>
+
+  <h3>The eighteen dimensions</h3>
+  <div class="measure">
+    <p>Required, supporting, or explicitly deferred. "Required" means V1 is not credible without it.</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Dimension</th><th>What the CMO gets</th><th>Tier</th></tr></thead>
+      <tbody>
+        <tr><td>Company understanding</td><td>Identity, offerings, category, audience, geography, positioning — derived from the site, not a form</td><td>Core</td></tr>
+        <tr><td>Website technical health</td><td>Crawlability, indexability, canonicals, schema, redirects, status codes, internal linking</td><td>Core</td></tr>
+        <tr><td>Website content</td><td>Depth, intent coverage, thin/duplicate pages, missing page archetypes</td><td>Core</td></tr>
+        <tr><td>Search visibility (SEO)</td><td>Where they rank, branded vs non-branded, which topics they own</td><td>Core</td></tr>
+        <tr><td>AI / answer-engine visibility</td><td>Whether AI systems know, mention and recommend them — and who they recommend instead</td><td>Core</td></tr>
+        <tr><td>Competitive position</td><td>Real competitors, where they win, what they publish, what gap that opens</td><td>Core</td></tr>
+        <tr><td>Content gaps</td><td>The specific pages that do not exist and should</td><td>Core</td></tr>
+        <tr><td>Prioritized action plan</td><td>30/60/90 with impact × confidence ÷ effort</td><td>Core</td></tr>
+        <tr><td>Website UX &amp; conversion blockers</td><td>CTA clarity, friction, trust signals, form burden</td><td>Supporting</td></tr>
+        <tr><td>Performance / Core Web Vitals</td><td>Field and lab performance as a ranking and conversion factor</td><td>Supporting</td></tr>
+        <tr><td>Social presence</td><td>Which channels are active, which are strategically warranted</td><td>Supporting</td></tr>
+        <tr><td>Reputation &amp; sentiment</td><td>What people say; what to convert into proof</td><td>Supporting</td></tr>
+        <tr><td>Visitor → lead conversion</td><td>Where visitors stop and why</td><td>Supporting</td></tr>
+        <tr><td>Content effectiveness</td><td>Which assets attract, which convert, which to retire</td><td>Supporting</td></tr>
+        <tr><td>Message consistency</td><td>Whether site, social, email and outreach tell one story</td><td>Supporting</td></tr>
+        <tr><td>Channel attribution</td><td>Which channel actually produces opportunities</td><td>Future</td></tr>
+        <tr><td>Paid acquisition</td><td>Whether paid solves a gap organic cannot</td><td>Future</td></tr>
+        <tr><td>Full funnel instrumentation</td><td>Awareness → conversion, measured at every stage</td><td>Future</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel note">
+    <p class="panel-head">One dimension to add</p>
+    <p style="margin-bottom:0"><strong>Evidence coverage, shown to the customer as a first-class section.</strong> Not an internal diagnostic — a headline. "This report measured 6 of 18 dimensions. Here is what we could not see, why, and what connecting each source would unlock." Omnivyra has already built this (<code>reportEvidenceReadiness.ts</code>) and currently buries it. A CMO needs to know how much to trust the document before reading it, and no competitor offers this. It converts the platform's biggest current weakness into its most distinctive honesty signal.</p>
+  </div>
+</section>
+
+<!-- ===================== 6 ===================== -->
+<section id="s6">
+  <h2><span class="n">06</span> Current vs required</h2><div class="h2rule"></div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>CMO capability</th><th>Req'd</th><th>Maturity</th><th>Evidence</th><th>Missing</th></tr></thead>
+      <tbody>
+        <tr><td>Company understanding</td><td>Core</td><td class="st"><span class="chip c-b"><b>B</b></span></td><td>31 profiles; 4 canonical pages/company for 3 companies</td><td>Derivation from crawl instead of manual form</td></tr>
+        <tr><td>Technical health</td><td>Core</td><td class="st"><span class="chip c-b"><b>B</b></span></td><td>Engine + parser signals present</td><td>Crawl never runs for a report</td></tr>
+        <tr><td>Content analysis</td><td>Core</td><td class="st"><span class="chip c-b"><b>B</b></span></td><td>contentIntelligenceEngine wired</td><td>Same crawl dependency</td></tr>
+        <tr><td>SEO visibility</td><td>Core</td><td class="st"><span class="chip c-e"><b>E</b></span></td><td>SERP cron + key; 0 result rows</td><td>Working SERP execution</td></tr>
+        <tr><td>AI / AEO visibility</td><td>Core</td><td class="st"><span class="chip c-e"><b>E</b></span></td><td>"20 of 20 cells unavailable"</td><td>Bootstrap fix; 4 more keys</td></tr>
+        <tr><td>Competitive position</td><td>Core</td><td class="st"><span class="chip c-d"><b>D</b></span></td><td>summary returned null</td><td>Competitor discovery from SERP</td></tr>
+        <tr><td>Content gaps</td><td>Core</td><td class="st"><span class="chip c-b"><b>B</b></span></td><td>Gap logic in report</td><td>Own-site + competitor corpus</td></tr>
+        <tr><td>Action plan</td><td>Core</td><td class="st"><span class="chip c-b"><b>B</b></span></td><td><code>top_priorities: []</code></td><td>Evidence to prioritise over</td></tr>
+        <tr><td>Evidence coverage</td><td>Core</td><td class="st"><span class="chip c-c"><b>C</b></span></td><td>Built, correct, buried</td><td>Promotion to a headline section</td></tr>
+        <tr><td>UX / conversion blockers</td><td>Supporting</td><td class="st"><span class="chip c-b"><b>B</b></span></td><td>Forms, CTAs, alt coverage parsed</td><td>Friction interpretation layer</td></tr>
+        <tr><td>Performance / CWV</td><td>Supporting</td><td class="st"><span class="chip c-f"><b>F</b></span></td><td>No PSI/Lighthouse/CrUX</td><td>Entire capability</td></tr>
+        <tr><td>Social presence</td><td>Supporting</td><td class="st"><span class="chip c-b"><b>B</b></span></td><td>7 accounts, 6 platforms</td><td>Competitor-relative benchmarking</td></tr>
+        <tr><td>Reputation</td><td>Supporting</td><td class="st"><span class="chip c-f"><b>F</b></span></td><td>All tables empty</td><td>Review/mention source</td></tr>
+        <tr><td>Visitor conversion</td><td>Supporting</td><td class="st"><span class="chip c-b"><b>B</b></span></td><td>1,365 sessions / 0 conversions</td><td>Conversion + form events</td></tr>
+        <tr><td>Content effectiveness</td><td>Supporting</td><td class="st"><span class="chip c-f"><b>F</b></span></td><td>Metrics table empty</td><td>Publish → performance loop</td></tr>
+        <tr><td>Email / outreach alignment</td><td>Supporting</td><td class="st"><span class="chip c-d"><b>D</b></span></td><td>9 email jobs, 4 events</td><td>Alignment scoring vs positioning</td></tr>
+        <tr><td>Message consistency</td><td>Supporting</td><td class="st"><span class="chip c-f"><b>F</b></span></td><td>Single-surface engine only</td><td>Cross-surface comparison</td></tr>
+        <tr><td>Channel attribution</td><td>Future</td><td class="st"><span class="chip c-d"><b>D</b></span></td><td>5 services, 0 rows</td><td>Conversion spine first</td></tr>
+        <tr><td>Paid acquisition</td><td>Future</td><td class="st"><span class="chip c-f"><b>F</b></span></td><td>No ad integrations</td><td>Entire capability</td></tr>
+        <tr><td>Funnel instrumentation</td><td>Future</td><td class="st"><span class="chip c-f"><b>F</b></span></td><td>Awareness + engagement only</td><td>Mid and late funnel</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== 7 ===================== -->
+<section id="s7">
+  <h2><span class="n">07</span> The V1 finish line</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p>This is the section that ends the open-ended backlog. The finish line is defined by a single sentence a customer must be able to say:</p>
+  </div>
+
+  <div class="verdict">
+    <p class="sub">V1 definition of done</p>
+    <p class="call">Domain in. Evidenced diagnosis out.</p>
+    <p style="margin:0;color:var(--ink-2)">A marketing leader enters a domain and receives a report in which <strong>every claim is backed by evidence Omnivyra gathered itself</strong>, every gap is named with the reason it could not be measured, and the document ends in a prioritized 30/60/90 plan. No customer integration required to produce it.</p>
+  </div>
+
+  <div class="measure">
+    <p>The last clause is the important one. V1 must be valuable <em class="term">before</em> the customer connects Google Analytics, Search Console or a CRM — because production shows that connection almost never happens (2 of 40 for GA4, 1 of 40 for GSC), and because a tool that needs a week of setup before it says anything will never survive first contact.</p>
+    <p>That constraint yields exactly four evidence sources, and Omnivyra already owns or can obtain all four with no customer action:</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Source</th><th>Feeds</th><th>Cost</th><th>Status now</th></tr></thead>
+      <tbody>
+        <tr><td>Own-site crawl</td><td>Technical health, content depth, gaps, UX signals, company understanding</td><td class="num">Free</td><td>Built, not triggered</td></tr>
+        <tr><td>SERP</td><td>Keyword visibility, real competitor discovery, share of results</td><td class="num">Key held</td><td>Built, never executed</td></tr>
+        <tr><td>LLM probes</td><td>AI/answer-engine visibility across 5 engines</td><td class="num">Key held (1 of 5)</td><td>Built, bootstrap broken</td></tr>
+        <tr><td>Wikidata + PageSpeed Insights</td><td>Entity clarity, Core Web Vitals</td><td class="num">Free, keyless</td><td>Wikidata broken · PSI absent</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>V1 scope, fixed</h3>
+  <div class="measure">
+    <ol class="tight">
+      <li><strong>Company understanding</strong> derived from the crawl, not a form</li>
+      <li><strong>Website technical health</strong> — crawlability, indexability, schema, canonicals, internal linking, status codes</li>
+      <li><strong>Performance</strong> via PageSpeed Insights (free, keyless)</li>
+      <li><strong>Content analysis</strong> — depth, intent coverage, thin and duplicate pages</li>
+      <li><strong>Search visibility</strong> from SERP for the company's own topic set</li>
+      <li><strong>Competitive position</strong> from competitors discovered in those SERPs</li>
+      <li><strong>AI / answer-engine visibility</strong> across at least three engines</li>
+      <li><strong>Content gap analysis</strong> — own corpus against competitor corpus</li>
+      <li><strong>Evidence coverage</strong> as a headline section</li>
+      <li><strong>30/60/90 plan</strong> with impact × confidence ÷ effort</li>
+    </ol>
+    <p><strong>Everything outside those ten is V1.1 or later.</strong> Reputation, content effectiveness, message consistency, attribution, paid, funnel, backlinks — all deferred, none of them blocking.</p>
+  </div>
+</section>
+
+<!-- ===================== 8 ===================== -->
+<section id="s8">
+  <h2><span class="n">08</span> Gap to V1</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p>Only the work required to reach the finish line above. No unrelated technical debt, no security programme, no refactor.</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Gap</th><th>Nature</th><th class="num">Size</th></tr></thead>
+      <tbody>
+        <tr><td>Provider bootstrap fails in bundle</td><td>Replace dynamic <code>require()</code> with static imports; log instead of swallowing. Reconcile the two Wikidata gates.</td><td class="num">S</td></tr>
+        <tr><td>Report path does not crawl</td><td>Trigger a crawl when the snapshot input resolves with stale or absent pages; add a refresh cron.</td><td class="num">M</td></tr>
+        <tr><td>SERP never executes</td><td>Diagnose the registered cron (0 runs, 0 provider-health rows); seed the query set from the crawl.</td><td class="num">M</td></tr>
+        <tr><td>Competitor discovery has no input</td><td>Derive competitors from SERP overlap rather than profile entry.</td><td class="num">M</td></tr>
+        <tr><td>AI visibility limited to one engine</td><td>Obtain Anthropic, Gemini and Perplexity keys. Adapters already written.</td><td class="num">S</td></tr>
+        <tr><td>No performance measurement</td><td>Add a PageSpeed Insights provider behind the existing provider interface.</td><td class="num">S</td></tr>
+        <tr><td>Narrative outruns evidence</td><td>Apply the abstention contract to the narrative builders.</td><td class="num">M</td></tr>
+        <tr><td>Evidence coverage buried</td><td>Promote <code>reportEvidenceReadiness</code> to a headline report section.</td><td class="num">S</td></tr>
+        <tr><td>Free audit is a mock</td><td>Point <code>/free-audit/report</code> at the real engine, or withdraw the page until it can be.</td><td class="num">S</td></tr>
+        <tr><td>No trajectory</td><td>Set <code>AUTHORITY_TRAJECTORY_ENABLED</code>; history accrues from the second report onward.</td><td class="num">S</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel note">
+    <p class="panel-head">Deliberately excluded from the gap list</p>
+    <p style="margin-bottom:0">Backlink providers (paid, not V1-blocking) · reviews and reputation · paid-media integrations · conversion and attribution spine · message-consistency engine · the Evidence Platform's second provider architecture · headless JS rendering · the 867-table schema · the ~350 root-level status documents. Each is a real gap in the eventual product. None of them stands between here and a report worth paying for.</p>
+  </div>
+</section>
+
+<!-- ===================== 9 ===================== -->
+<section id="s9">
+  <h2><span class="n">09</span> Existing assets to reuse</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p>V1 requires very little new architecture. It is overwhelmingly a reconnection job on top of assets that already exist and are already correct.</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Reuse</th><th>Why it is the right foundation</th></tr></thead>
+      <tbody>
+        <tr><td><code>canonicalReport/</code></td><td>Evidence typing, confidence bands, abstention, provenance, overrides. Do not rebuild — this is the product's moat.</td></tr>
+        <tr><td><code>providerRegistry</code> + 8 bridges</td><td>One switchboard, honest defaults. Every new source (PSI included) plugs in behind the same interface.</td></tr>
+        <tr><td><code>aiCitationMatrixService</code> + 5 adapters</td><td>The AEO wedge is already written. It needs a working bootstrap and four API keys.</td></tr>
+        <tr><td><code>crawlerService</code> + <code>crawl/</code></td><td>Static parsing already extracts canonicals, JSON-LD, hreflang, robots, sitemap, alt coverage, forms, security headers. Plus fingerprinting and refresh policy.</td></tr>
+        <tr><td><code>websiteIntelligence/</code> 4 engines</td><td>Deterministic, single-snapshot, no hidden state. Correct shape.</td></tr>
+        <tr><td>Report lifecycle</td><td>Auth → readiness → credit hold → background execution → persistence → export → stale recovery. Production-proven yesterday.</td></tr>
+        <tr><td><code>reportEvidenceReadiness</code></td><td>Already produces the honest gap narrative V1 needs as a headline.</td></tr>
+        <tr><td><code>improvementTodoBuilder</code> · <code>strategicRecommendationEngine</code></td><td>Already shaped as Problem → Action → Impact → Effort → Priority.</td></tr>
+        <tr><td><code>serpAcquisitionService</code></td><td>Multi-provider with cost governance and provider health. Needs debugging, not rewriting.</td></tr>
+        <tr><td><code>providerActivationMatrix</code></td><td>Ship this to the customer. "Here is what we can and cannot see, and how to change that" is a feature.</td></tr>
+        <tr><td>Website Health page</td><td>The correct presentation pattern: render the canonical snapshot, compute nothing.</td></tr>
+        <tr><td>Credit + billing spine</td><td>Metering already works. No commercial work needed for V1.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== 10 ===================== -->
+<section id="s10">
+  <h2><span class="n">10</span> Components that should not be continued</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p>Not deletions — decisions to stop investing. The single largest risk to this product is not a missing capability; it is that engineering attention keeps flowing into surfaces no customer reaches.</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Component</th><th>Recommendation</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td>Evidence Platform (<code>evidencePlatform/</code>)</td><td>Freeze</td><td>A second provider architecture parallel to the live registry. Its <code>provider_evidence</code> table does not exist in production. Harvest the activation matrix; stop building the rest.</td></tr>
+        <tr><td>Customer-operations phases 12–26</td><td>Freeze</td><td>~60 phase reports and a super-admin console modelling customer health for a customer base of ~5. Internal tooling that outgrew its subject.</td></tr>
+        <tr><td>Credit-economy depth</td><td>Freeze</td><td>Bank-grade ledger, admission control, provisional metering, shadow evaluation. Already far beyond what pre-revenue volume requires.</td></tr>
+        <tr><td>Community AI (11 pages)</td><td>Defer</td><td>Forecast, network, playbooks, auto-rules, discovered users, executive. Deep surface, not on the CMO path.</td></tr>
+        <tr><td>Creator content suite (13 pages)</td><td>Contain</td><td>Real and working, but a content-production product, not marketing intelligence. Keep it; stop expanding it during V1.</td></tr>
+        <tr><td>WhatsApp module (4 pages)</td><td>Defer</td><td>Unrelated to the CMO job to be done.</td></tr>
+        <tr><td>Seven content-type verticals</td><td>Consolidate</td><td>Blogs, articles, guides, case studies, newsletters, whitepapers, stories — each with create/generate/intelligence/suggestions/template/new. Six near-identical page sets.</td></tr>
+        <tr><td>Duplicate report systems</td><td>Consolidate</td><td>Three coexist: <code>canonicalReportBuilder</code> (live), <code>ReportOrchestrator</code>, and Evidence Platform composition. Declare the canonical builder sole owner.</td></tr>
+        <tr><td>~350 root-level status <code>.md</code> files</td><td>Archive</td><td>Their existence encourages mistaking documented activity for delivered product — the precise failure mode this assessment was commissioned to correct.</td></tr>
+        <tr><td><code>/free-audit/report</code> mock</td><td>Fix or withdraw</td><td>A hardcoded sample report on the public acquisition path is a credibility liability even labelled "preview".</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===================== 11 ===================== -->
+<section id="s11">
+  <h2><span class="n">11</span> Real company demonstration</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p>No simulation was needed. Production contains a report the platform generated for a real, well-known company: <strong>patagonia.com</strong>, report <code>9486ba63</code>, completed 2026-09-01. This is the intended journey, stage by stage, with what actually came out.</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Stage</th><th>What Omnivyra produced</th><th class="st">Result</th></tr></thead>
+      <tbody>
+        <tr><td>Domain</td><td>patagonia.com accepted, readiness gate passed, 0 credits</td><td class="st"><span class="chip c-a"><b>A</b></span></td></tr>
+        <tr><td>Company understanding</td><td>Name "Patagonia", type "E-commerce", geography "North America" — all from <code>source: manual-entry</code>. Positioning, offering, tagline, headline, ICP: <code>null</code></td><td class="st"><span class="chip c-b"><b>B</b></span></td></tr>
+        <tr><td>Website analysis</td><td>Never crawled. Evidence trace shows one crawler observation with no timestamp</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+        <tr><td>Search visibility</td><td>No SERP data. Visibility section: 0 insights</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+        <tr><td>AI / AEO visibility</td><td>"AI surface presence cannot be measured — no LLM provider is configured. 20 of 20 cells are unavailable."</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+        <tr><td>Competitor analysis</td><td><code>competitor_intelligence_summary: null</code>; peer discovery fell back to inference</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+        <tr><td>Content analysis</td><td>Content Strength: 0 insights, 0 opportunities, 0 actions</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+        <tr><td>Social analysis</td><td>Not attempted; <code>social_links: []</code></td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+        <tr><td>Lead / funnel</td><td>Not attempted; no commercial provider</td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+        <tr><td>Gap analysis</td><td>Correct and specific: names the missing website scan, the missing backlink source, and what each would unlock</td><td class="st"><span class="chip c-a"><b>A</b></span></td></tr>
+        <tr><td>Recommendations</td><td><code>top_priorities: []</code>; SEO and GEO sections returned generic low-confidence actions</td><td class="st"><span class="chip c-e"><b>E</b></span></td></tr>
+        <tr><td>30/60/90 plan</td><td>Not produced</td><td class="st"><span class="chip c-f"><b>F</b></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel flag">
+    <p class="panel-head">The credibility failure, verbatim</p>
+    <p>With no crawl, no SERP, no AI probe and an empty competitor list, the report nonetheless asserted:</p>
+    <blockquote style="margin-top:14px"><span class="mono" style="font-size:13px">market_type: "emerging" · market_position: "ahead" · market_context: "E-commerce in North America" · market_narrative: "This market is emerging, where early category ownership through clear positioning and coverage determines visibility."</span><cite>composed_report.company_context — production, verbatim</cite></blockquote>
+    <p style="margin-bottom:0">Patagonia is a fifty-year-old brand in a mature category. Every one of those statements is generated language with no evidence beneath it, sitting in the same document as a scoring layer that correctly returned <code>null</code> thirty times over. A CMO would find this in the first minute, and it would cost them their trust in the entire report. <strong>Fixing this is more urgent than adding any new data source</strong> — an under-evidenced report that admits it is a credible product; an under-evidenced report that improvises is not.</p>
+  </div>
+
+  <div class="measure">
+    <p>The demonstration nonetheless proves something valuable: <strong>the pipeline ran end to end without failing</strong>. Auth, tenancy, readiness, execution, composition, persistence and export all worked on a real domain, yesterday. What arrived at the end was empty, not broken.</p>
+  </div>
+</section>
+
+<!-- ===================== 12 ===================== -->
+<section id="s12">
+  <h2><span class="n">12</span> Product readiness</h2><div class="h2rule"></div>
+
+  <div class="verdict">
+    <p class="sub">Assessment</p>
+    <p class="call">Partially ready</p>
+    <p style="margin:0;color:var(--ink-2)">The machine is built and proven. The fuel line is disconnected.</p>
+  </div>
+
+  <div class="measure">
+    <h4>Why not "not ready"</h4>
+    <p>The expensive, hard-to-retrofit parts are done and correct: an evidence-typed report engine that abstains rather than fabricating; a provider abstraction with honest unavailable defaults; a production-proven generation lifecycle; a crawler that already extracts the right signals; AI-visibility adapters for all five major engines; recommendation builders already shaped as problem-evidence-action-impact-effort. A team starting today would need a year to reach this position.</p>
+
+    <h4>Why not "ready"</h4>
+    <p>No customer can currently obtain a useful marketing intelligence report. The single real-world attempt produced a null score, zero actions and zero priorities. Six percent of the flagship report was measured. Every SEO, competitor, backlink, conversion and attribution table in production is empty. Two credentialed evidence sources are silently dark. The public free-audit report is a hardcoded mock.</p>
+
+    <h4>The distance</h4>
+    <p>Small, and unusually well understood. Three named breaks, four evidence sources that need no customer action, and one discipline fix. This is a wiring problem, not an architecture problem — which is the best possible position to be in at this stage.</p>
+  </div>
+</section>
+
+<!-- ===================== 13 ===================== -->
+<section id="s13">
+  <h2><span class="n">13</span> Finite implementation plan</h2><div class="h2rule"></div>
+
+  <div class="measure">
+    <p>Four phases. The plan ends. Phase 1 is deliberately tiny and disproportionately valuable — it is mostly deletion of a silent <code>catch</code>.</p>
+  </div>
+
+  <div class="phase">
+    <header><span class="pn">PHASE 1</span><span class="pt">Turn on what is already paid for</span><span class="pd">smallest · highest leverage</span></header>
+    <div class="body"><dl>
+      <dt>Objective</dt><dd>Every credentialed provider actually runs in production.</dd>
+      <dt>Capabilities</dt><dd>AI visibility via ChatGPT · entity clarity via Wikidata · authority trajectory accrual</dd>
+      <dt>Reuse</dt><dd><code>providerRegistry</code>, all 5 LLM adapters, <code>wikidataAdapter</code>, <code>aiCitationMatrixService</code>, <code>providerActivationMatrix</code></dd>
+      <dt>New work</dt><dd><ul>
+        <li>Replace dynamic <code>require()</code> in <code>ensureBootstrapped()</code> with static imports; log adapter load failures instead of swallowing them</li>
+        <li>Reconcile the two contradictory Wikidata gates</li>
+        <li>Set <code>AUTHORITY_TRAJECTORY_ENABLED</code></li>
+        <li>Expose the activation matrix on an operator page</li>
+      </ul></dd>
+      <dt>Acceptance</dt><dd>A regenerated report for a real domain shows AI surface presence <code>measured</code> for ChatGPT with a non-zero citation rate, entity graph <code>measured</code>, and <code>scan_metadata.total_requests &gt; 0</code>.</dd>
+    </dl></div>
+  </div>
+
+  <div class="phase">
+    <header><span class="pn">PHASE 2</span><span class="pt">Make the report crawl</span><span class="pd">the structural fix</span></header>
+    <div class="body"><dl>
+      <dt>Objective</dt><dd>Every report is grounded in a fresh scan of the domain it describes.</dd>
+      <dt>Capabilities</dt><dd>Technical health · content depth and gaps · UX signals · crawl-derived company understanding · Core Web Vitals</dd>
+      <dt>Reuse</dt><dd><code>crawlerService</code>, <code>crawl/refreshPolicyEngine</code>, all 4 website-intelligence engines, <code>canonical_pages</code>, <code>page_content</code>, <code>page_links</code></dd>
+      <dt>New work</dt><dd><ul>
+        <li>Trigger a crawl from <code>snapshotInputResolver</code> when pages are absent or stale</li>
+        <li>Register a website-refresh cron (none exists)</li>
+        <li>Add a PageSpeed Insights provider behind the existing interface — free and keyless</li>
+        <li>Derive company understanding from the crawl, with the manual form as fallback rather than source</li>
+      </ul></dd>
+      <dt>Acceptance</dt><dd>A cold domain, never seen before, produces a report with Foundation and Content pillars <code>measured</code>, a non-null overall score, and at least ten specific site findings citing real URLs.</dd>
+    </dl></div>
+  </div>
+
+  <div class="phase">
+    <header><span class="pn">PHASE 3</span><span class="pt">Off-site visibility</span><span class="pd">the differentiator</span></header>
+    <div class="body"><dl>
+      <dt>Objective</dt><dd>Answer "where do we appear, where do competitors appear instead" across search and AI.</dd>
+      <dt>Capabilities</dt><dd>SEO visibility · SERP-discovered competitors · competitor content gaps · AI visibility across ≥3 engines</dd>
+      <dt>Reuse</dt><dd><code>serpAcquisitionService</code>, <code>externalCompetitiveIntelligenceService</code>, <code>reportCompetitorIntelligenceService</code>, the remaining 4 LLM adapters</dd>
+      <dt>New work</dt><dd><ul>
+        <li>Diagnose and fix SERP acquisition — cron registered, key present, zero rows ever written</li>
+        <li>Seed the query set from crawl-derived topics instead of manual entry</li>
+        <li>Discover competitors from SERP overlap; drop profile-entered competitors as the primary source</li>
+        <li>Obtain Anthropic, Gemini and Perplexity keys</li>
+      </ul></dd>
+      <dt>Acceptance</dt><dd>A report names at least three competitors discovered from evidence, states where each outranks the company, and reports AI citation rates from at least three engines with per-engine provenance.</dd>
+    </dl></div>
+  </div>
+
+  <div class="phase">
+    <header><span class="pn">PHASE 4</span><span class="pt">Make it a CMO document</span><span class="pd">the deliverable</span></header>
+    <div class="body"><dl>
+      <dt>Objective</dt><dd>Diagnosis → decision → action, with narrative honesty matching scoring honesty.</dd>
+      <dt>Capabilities</dt><dd>Evidence coverage as a headline · abstention-disciplined prose · prioritized 30/60/90 · working public audit</dd>
+      <dt>Reuse</dt><dd><code>reportEvidenceReadiness</code>, <code>improvementTodoBuilder</code>, <code>strategicRecommendationEngine</code>, <code>executiveInsightEngine</code>, the report export renderer</dd>
+      <dt>New work</dt><dd><ul>
+        <li>Apply the abstention contract to narrative builders so prose cannot outrun evidence</li>
+        <li>Promote evidence coverage to a headline section</li>
+        <li>Sequence recommendations into 30/60/90 by impact × confidence ÷ effort</li>
+        <li>Point <code>/free-audit/report</code> at the real engine, or withdraw the page</li>
+      </ul></dd>
+      <dt>Acceptance</dt><dd>A report for a real company is handed to a marketing leader who has not seen the product; they can name their top three actions and the expected result of each without asking a question. No claim in the document lacks an evidence classification.</dd>
+    </dl></div>
+  </div>
+
+  <div class="panel note">
+    <p class="panel-head">Sequencing note</p>
+    <p style="margin-bottom:0">Phase 1 before Phase 2 is deliberate. Phase 1 is close to a one-line change and proves the provider spine works end to end in the serverless runtime before Phase 2 depends on that same mechanism for the crawl. Doing them in the other order risks debugging two failures at once.</p>
+  </div>
+</section>
+
+<!-- ===================== 14 ===================== -->
+<section id="s14">
+  <h2><span class="n">14</span> Final decision</h2><div class="h2rule"></div>
+
+  <div class="verdict">
+    <p class="sub">Decision</p>
+    <p class="call">GO — reduce scope</p>
+    <p style="margin:0;color:var(--ink-2)">The foundation genuinely supports the defined V1. The surface must narrow aggressively for it to be reached.</p>
+  </div>
+
+  <div class="measure">
+    <p><strong>Why GO.</strong> The hardest and most valuable thing in this category has been built correctly: a report engine that refuses to fabricate, types its evidence, abstains under uncertainty, and names its own blind spots. The generation lifecycle is production-proven. The crawler extracts the right signals. Adapters exist for all five major answer engines. The distance to a genuinely useful report is three named breaks and four evidence sources that require no action from the customer.</p>
+
+    <p><strong>Why "reduce scope."</strong> 867 tables, 1,320 routes, 250+ pages and ~350 status documents for a product that cannot yet produce one useful report. The failure mode is legible in the repository itself: enormous documented activity, very little delivered capability. Every phase above will be starved unless Community AI, WhatsApp, the customer-operations console, the credit-economy depth, the Evidence Platform's parallel architecture and the seven duplicated content verticals stop consuming attention.</p>
+
+    <p><strong>The honest risk.</strong> Not technical. It is that this assessment becomes document 351 and the next workstream opens somewhere else. The measure of whether it worked is narrow and testable: <em class="term">can a marketing leader enter a domain and receive a report they would act on?</em> Today the answer is no, and the report itself says so. After four phases it should be yes — and if it is not, the hypothesis, not the backlog, is what needs revisiting.</p>
+
+    <p><strong>What to do first.</strong> Phase 1. It is close to a single change, it needs no new credential, and it will tell you within a day whether the provider spine works in production. Everything else waits behind that answer.</p>
+  </div>
+</section>
+
+<footer class="end">
+  Evidence base — production Supabase (867 tables, read-only counts) · Vercel production environment listing (names and timestamps only) · report <span style="color:var(--ink-2)">9486ba63-bc4f-4136-82ab-ee9af8cec160</span>, patagonia.com, completed 2026-09-01 · repository at <span style="color:var(--ink-2)">feat/creator-canonical-template-pool</span>.<br>
+  No production code, data or configuration was modified in the course of this assessment.
+</footer>
+
+</div>

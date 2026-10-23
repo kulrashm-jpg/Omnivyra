@@ -7,6 +7,9 @@
 kind. Every HTTP status below was observed on that date by a real request. Nothing is recalled.
 **Reads it depends on (read-only):** WP-8 `9d247025` (LinkedIn — UNAVAILABLE), WP-1 `ec8d9027`
 (the `platform` dimension).
+**Reconciled 2026-10-03** against the integrated tree `43b60e89`. Exactly one claim is superseded:
+§5.3's ISO-country "practical ceiling", fixed by WP-2 `cb8e562b` and pinned by `32420883`. See
+**§5.3.1**. The decision (`AVAILABLE`) and every measurement in §§2–4 stand as written.
 
 ---
 
@@ -340,6 +343,11 @@ territory, and WP-16 should not pre-empt it.
 
 ### 5.3 The real ceiling on `MATCHED` is a pre-existing resolver defect, not Microsoft's
 
+> **SUPERSEDED 2026-10-03 — the defect this section measures has since been fixed. The section is
+> kept verbatim because it is the measurement that caused the fix, and because the reasoning
+> ("do not patch this inside a provider") is what produced the right fix rather than a local one.
+> Read §5.3.1 before relying on any sentence below.**
+
 Measured and proven in test case 4. `jurisdictionsAgree` deliberately does not expand ISO codes
 (*"`NL` is NOT expanded"*). But JSON-LD `addressCountry` is normally an ISO code — **hubspot.com's
 measured value is literally `"US"`** — while `AdvertiserCountry` is always a full English name
@@ -359,6 +367,48 @@ full country name. It is flagged here because WP-16 measured it, it is the pract
 `MATCHED` for both platforms, and fixing it belongs to whoever owns the resolver. **Do not fix it
 inside a Microsoft provider**: a per-provider country mapping would be exactly the kind of local
 patch that makes the two platforms disagree.
+
+### 5.3.1 CORRECTION — 2026-10-03: §5.3 is fixed, and it was never a permanent ceiling
+
+**What §5.3 claims:** that an ISO `addressCountry` silently downgrades a correct, verified,
+exactly-name-matching identity to `PROBABLE_MATCH`; that this is "the practical ceiling on
+`MATCHED` for both platforms"; and (§10) that fixing it is "out of scope for the implementation".
+
+**What is now true:** none of that. WP-2 fixed exactly this defect, and the fix is in the
+integrated tree.
+
+- `cb8e562b` — *fix(report1): compare jurisdictions by canonical country, not raw string (WP-2)*.
+  It adds `backend/utils/countryNormalization.ts` and rewrites `jurisdictionsAgree` in
+  `backend/services/ads/advertiserIdentityResolver.ts` to delegate to `countriesEquivalent`.
+  Equivalence is decided on a canonical English region name derived from ICU
+  (`Intl.DisplayNames({ type: 'region' })`), so `IL` and `Israel`, and `US` and `United States`,
+  now agree. There is no country dictionary and no substring, prefix, edit-distance or
+  token-overlap matching; an unplaceable value yields `null`, and `null` never equals anything —
+  absence is still not agreement.
+- `32420883` — *test(ads): WP-16 jurisdiction assertion pins the WP-2 fix, not the defect*. The
+  WP-16 characterization assertion in
+  `backend/tests/unit/wp16MicrosoftAdLibraryMapping.test.ts` was corrected during T2: it had
+  pinned the defect, so it failed once WP-2 was composed in — correctly. It now asserts that the
+  jurisdiction genuinely agrees, rather than that the gate was skipped. **The test was corrected
+  then; this document was not. This note closes that gap.**
+
+**Consequences for the rest of this document:**
+
+| Sentence | Status |
+|---|---|
+| §5.3 "the practical ceiling on `MATCHED` for both platforms" | **False as of `cb8e562b`.** It was a defect, not a property. |
+| §8, `PROBABLE_MATCH` row: "including the ISO-code artefact of §5.3, which is the common case in practice" | **No longer applies.** `PROBABLE_MATCH` on a jurisdiction now means the two jurisdictions genuinely differ, or one side is unplaceable. The hubspot.com `"US"` case now corroborates instead of downgrading. |
+| §10, out of scope: "the ISO-country defect of §5.3 (resolver owner's, affects Google equally)" | **Done.** The resolver owner fixed it centrally, for both platforms at once, which is what §5.3 asked for. |
+
+**What §5.3 still gets right, and must survive into the release record:** the `MATCHED` gate
+itself is unchanged. `advertiserIdentityResolver.ts:214` still refuses `MATCHED` without
+`advertiser.verified`, and `bothJurisdictionsKnown` (`:223`) still abstains rather than agreeing
+when either side is absent. WP-2 changed *how two known countries are compared*; it did not
+weaken any gate, and it did not make `MATCHED` easier to reach for an unverified advertiser.
+
+**Unaffected by this correction:** every HTTP status, limit and field measurement in §§2–4 — and
+§10's own warning that those are undocumented server behaviour and must be re-probed before any
+code is written. That warning still stands and applies in full.
 
 ---
 
@@ -416,7 +466,7 @@ because it is *why* this provider is safe:
 | State | Reachable on Microsoft? | Measured basis |
 | --- | --- | --- |
 | **`MATCHED`** | **YES — proven.** | wix.com `legalName: "Wix.com Ltd"` (HTTP 200) ↔ `4295001869 / "Wix.com Ltd." / Israel / IsVerified: true` (HTTP 200). Test case 2 passes against the unmodified resolver. **The anchor is the website-declared `Organization.legalName` against the provider-verified `AdvertiserName`** — identical to Google's, and backed by a stronger verification programme (§4.2). |
-| `PROBABLE_MATCH` | Yes | Names agree but `IsVerified: false`, or jurisdictions disagree — including the ISO-code artefact of §5.3, which is the common case in practice. |
+| `PROBABLE_MATCH` | Yes | Names agree but `IsVerified: false`, or jurisdictions disagree — ~~including the ISO-code artefact of §5.3, which is the common case in practice~~ **(corrected 2026-10-03: the ISO-code artefact was fixed by WP-2 `cb8e562b`; see §5.3.1. A jurisdiction `PROBABLE_MATCH` now means the countries genuinely differ)**. |
 | `NOT_MATCHED` | Yes | A different **verified** legal name. Measured: `Booking.com Transport Ltd` (UK, verified) against a `Booking.com B.V.` subject. |
 | `UNRESOLVED` | Yes | No declared legal name on the subject side — **measured on hubspot.com, which publishes none** — or an unverified differing name. |
 | `INSUFFICIENT_EVIDENCE` | Rare | Requires an empty `AdvertiserName`; not observed in any response. |
@@ -520,8 +570,9 @@ on a third party's discretion. The whole of it is engineering, and it is small.
 7. **Re-run §2's probes before writing code.** Measured limits (`top` 24, `skip` 999, count ceiling
    1000, ~19 calls) are undocumented server behaviour and can change without notice.
 
-**Out of scope for the implementation, deliberately:** the ISO-country defect of §5.3 (resolver
-owner's, affects Google equally), a per-platform capability descriptor for the `ambiguityFlagged`
+**Out of scope for the implementation, deliberately:** ~~the ISO-country defect of §5.3 (resolver
+owner's, affects Google equally)~~ **— DONE 2026-10-03: fixed centrally by WP-2 `cb8e562b`; see
+§5.3.1** — a per-platform capability descriptor for the `ambiguityFlagged`
 gap of §5.2 (WP-1's), and any use of the impressions fields of §6 (permanently forbidden).
 
 ---

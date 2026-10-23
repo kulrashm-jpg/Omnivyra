@@ -66,7 +66,7 @@ establishes that a route answered. The operator records it in §8 by hand, from 
 - `backend/tests/unit/report1NullBaselineDeltaContract.test.ts` — the WP-12 null-baseline
   scenario, run against the **real** `computeCompanyMetrics`, `resolveCompetitorMetrics` and
   `subtractMetrics` with no stubs. **8 tests, all passing.** It pins the two facts the fix rests
-  on (the baseline is always null; `subtractMetrics` cannot take a null baseline) without
+  on (`computeCompanyMetrics` yields no baseline; `subtractMetrics` cannot take a null baseline) without
   asserting the shape of any call site, so it stays green across WP-12's fix and any later
   refactor, while still failing if a one-sided guard is reintroduced anywhere.
 
@@ -91,7 +91,7 @@ still usable — it just leaves those slices `not_observed`, which the harness w
 | M1 | A real customer tenant with a reachable public website. | Slices 001/004/005 all rest on crawl output. |
 | M2 | The crawl reads ≥ 3 pages (`website_checks.pagesEvaluated ≥ 3`). | Below that the seven presence checks may not be emitted at all. |
 | M3 | A tenant whose report may be regenerated without commercial consequence — internal, sandbox, or one with explicit account-owner consent. | §5 A1. |
-| M4 | `report_type = 'snapshot'`. Growth and performance carry no Report 1 surfaces. | Slice 006 is snapshot-only by construction. |
+| M4 | The **snapshot report category** — growth and performance carry no Report 1 surfaces. **CORRECTED: do not filter on `report_type = 'snapshot'`; no such value is ever written.** `shared/monetization/featureRegistry.ts` maps the `reports.snapshot` feature to `report_type: 'content_readiness'`, so a Report 1 persists as `report_type = 'content_readiness'` with `metadata->>'requested_report_category' = 'snapshot'`. **That metadata key is the only correct predicate**; a query on `report_type = 'snapshot'` returns zero rows and will be misread as "Report 1 has never run". | Slice 006 is snapshot-only by construction. |
 
 **Strongly preferred (each one turns a `not_observed` into a real observation):**
 
@@ -113,6 +113,8 @@ still usable — it just leaves those slices `not_observed`, which the harness w
   the blast radius of a mistake. Treat it as a separate, separately-authorized run.
 
 ## 5. What the later gate must authorize — explicitly
+
+> **The signable form for these authorizations is `docs/WP14_A1_PRODUCTION_AUTHORIZATION_REQUEST.md`.** It names the one tenant and the one report the rule below selects, records **A4 as DENIED / NOT REQUIRED** with its reason, and carries a sequencing recommendation that should be read before anything here is executed. That document is unsigned.
 
 The exercise cannot begin until a named approver records each of these. Each is a separate
 decision; approving A1 does not approve A4.
@@ -140,7 +142,7 @@ connecting an advertising account.
 | Step | Action | Record |
 |---|---|---|
 | 0.1 | Confirm the deployed Report 1 commit is `3d643f5c` or a descendant that has not reverted slices 001–007. | The deployed SHA, and `git log 3d643f5c..<sha> -- backend/services/` reviewed for reverts. |
-| 0.2 | Check out `3d643f5c` (or the deployed SHA) in a clean worktree and run the eight suites in §9. | Pass/fail counts verbatim. |
+| 0.2 | Run the **nine** suites in §9 — but **from two different trees**. Seven exist at `3d643f5c`; `report1ArtifactAssertions.test.ts` and `report1NullBaselineDeltaContract.test.ts` were authored by WP-14 *after* it and are **absent from `3d643f5c`** (verified by `git ls-tree 3d643f5c backend/tests/unit/`). Run the seven from a worktree at the deployed SHA; run the two WP-14 suites from the WP-14 worktree. Checking out `3d643f5c` and running all nine will report two suites as *not found*, which is not a failure of the contract. | Pass/fail counts verbatim, **with the tree each suite was run from.** |
 | 0.3 | Confirm A1–A5 are recorded and signed. | Approver, timestamp, tenant id. |
 | 0.4 | Confirm `ADS_TRANSPARENCY_ACQUISITION_ENABLED` is **absent/off** unless A4 was explicitly granted. | The observed flag state. |
 
@@ -152,8 +154,8 @@ validating something other than the shipped slices. Abort and report.
 | Step | Action | Record |
 |---|---|---|
 | 1.1 | Select a tenant meeting §4 M1–M4. Record which of S1–S6 it meets and which it does not. | The S-list. Each unmet S is a slice that **will** come back `not_observed`; predict them now so the result cannot be rationalised afterwards. |
-| 1.2 | Record the subject domain, `company_id`, and the current latest report id **before** generating. | Enables rollback-by-reference and tells you which report is new. |
-| 1.3 | Record whether an ads evidence row exists for this `company_id` + `domain_id`. | Determines whether slice 006 is observable at all without A4. |
+| 1.2 | Record the subject domain, `company_id`, and the current latest report id **before** generating — selected with `metadata->>'requested_report_category' = 'snapshot'`, **not** `report_type = 'snapshot'` (see M4). | Enables rollback-by-reference and tells you which report is new. |
+| 1.3 | Record whether an ads evidence row exists for this `company_id` + `domain_id`. **The `scope->>'domain_id'` on `report_evidence_history` is a `canonical_domains.id`, not a `company_domains.id`** — the two differ for every subject carrying both. Resolve it through `canonical_domains`, and confirm the subject domain the report is generated for is the same canonical domain the evidence is scoped to, or the read seam finds nothing and slice 006 is `not_observed` despite a row existing. | Determines whether slice 006 is observable at all without A4. |
 
 ### Phase 2 — generate (level: *report generated*) — **requires A1**
 
@@ -189,15 +191,28 @@ quietly lose the thing being inspected.
 
 ### Phase 4 — run the harness (levels: *behaviour observed* → *expected* / *unexpected*)
 
-Offline. No production contact. From a worktree at the subject commit:
+Offline. No production contact. Run from a worktree at the subject commit.
 
-```js
-// scripts/wp14-run.mjs — written at the gate, NOT committed here, since it names a capture path
-const { validateReport1Artifact } = require('./backend/services/report1Validation/report1ArtifactAssertions');
-const artifact = JSON.parse(readFileSync('<C1 path>', 'utf8'));
-const html = readFileSync('<C3 path>', 'utf8');
+Write the driver as **`.ts`**, not `.mjs`, and run it through `tsx`. The harness is TypeScript, so a
+`.mjs` file cannot `require()` it: under ESM `require` is not defined at all, and the extensionless
+specifier would not resolve to a `.ts` file even under CommonJS.
+
+```ts
+// scripts/wp14-run.ts — written at the gate, NOT committed here, since it names a capture path
+import { readFileSync } from 'node:fs';
+import { validateReport1Artifact } from '../backend/services/report1Validation/report1ArtifactAssertions';
+
+const [c1Path, c3Path] = process.argv.slice(2);
+const artifact = JSON.parse(readFileSync(c1Path, 'utf8'));
+const html = c3Path ? readFileSync(c3Path, 'utf8') : undefined;
 const { findings, summary } = validateReport1Artifact(artifact, html);
 console.log(JSON.stringify({ summary, findings }, null, 2));
+```
+
+Invoke it with the repo-local `tsx` CLI — **not** `npx`, which can hang on this host:
+
+```
+node ./node_modules/tsx/dist/cli.mjs scripts/wp14-run.ts <C1 path> <C3 path>
 ```
 
 Run it three times: **C1 + C3**, then **C2 alone**, then **C1 alone**. Differences between the
@@ -213,7 +228,8 @@ production defect** rather than a hypothetical regression.
 
 **The scenario to exercise:**
 
-1. the company baseline is unavailable / null — after slice 003 it **always** is;
+1. the company baseline is unavailable / null.
+   > **CORRECTED (WP-12).** At the deployed SHA `3d643f5c` this is unconditional: `resolveCompanyComparisonBaseline` does not exist there, and `computeCompanyMetrics` returns `null` for every input, so the baseline is **always** null on both paths. In the **integrated tree it is no longer true of the asynchronous production path**: `resolveCompanyComparisonBaseline` crawls the subject's own domain with the same crawler and the same reference keywords used for competitors, so a real, observed baseline is the normal outcome and `null` is the abstention case (no resolved domain, or a failed crawl). The scenario below must therefore be read as **"baseline null OR observed"**, and the gate records which one it got;
 2. a competitor crawl **succeeds**;
 3. that competitor therefore **has** metrics;
 4. competitive delta / comparison processing **executes**;
@@ -223,7 +239,7 @@ production defect** rather than a hypothetical regression.
 
 | Finding | Level | How |
 |---|---|---|
-| `computeCompanyMetrics` returns `null` for every input. | **behaviour observed** | Executed, real function — `report1NullBaselineDeltaContract.test.ts`. |
+| `computeCompanyMetrics` returns `null` for every input. | **behaviour observed** | Executed, real function — `report1NullBaselineDeltaContract.test.ts`. **This remains true, but it is no longer the whole baseline story: in the integrated tree the asynchronous path does not call this function at all** (see the correction under §4b.1). |
 | A successful crawl yields non-null competitor metrics; a failed crawl yields `null` and short-circuits. | **behaviour observed** | Executed, real `resolveCompetitorMetrics`. |
 | `subtractMetrics(metrics, null)` throws a `TypeError`. | **behaviour observed** | Executed, real function. |
 | The one-sided guard, composed from those three real functions, throws on exactly these inputs. | **behaviour observed** | Executed — the defect reproduced with no stubs. |
@@ -233,12 +249,12 @@ production defect** rather than a hypothetical regression.
 
 | # | Site | Behaviour |
 |---|---|---|
-| 1 | `reportCompetitorIntelligenceServiceEngine.ts:459` (sync), `:722` (async) | `resolution.metrics ? subtractMetrics(resolution.metrics, companyMetrics) : null` — competitor guarded, company **not**. |
+| 1 | `reportCompetitorIntelligenceServiceEngine.ts:459` (sync), `:722` (async) — **at `3d643f5c` only** | `resolution.metrics ? subtractMetrics(resolution.metrics, companyMetrics) : null` — competitor guarded, company **not**. **CORRECTED (WP-12): in the integrated tree both sites are two-sided** — `:522` (sync) and `:808` (async) now read `resolution.metrics && companyMetrics ? subtractMetrics(resolution.metrics, companyMetrics) : null`. The row below describes the **deployed** build, which is the one the gate would exercise today. |
 | 2 | same module | No `catch`; the `TypeError` propagates. |
 | 3 | `snapshotReportService.ts` → `composeSnapshotReport` | `try { … } finally { … }` with **no catch**; the `finally` only closes the scan-budget ledger. Its own comment: the return is "Reachable only when the try completed without throwing". |
-| 4 | `reportCardServiceAssembly.ts:440` | `catch (composeError)` → `console.warn('[reportCardService] composed report generation failed:', …)`. |
+| 4 | `reportCardServiceAssembly.ts:441` | `catch (composeError)` → `console.warn('[reportCardService] composed report generation failed:', …)`. |
 | 5 | `reportCardServiceAssembly.ts:442` | Rethrows **only** when `requestedCategory === 'performance'`. Report 1 is `snapshot`, so it is **not** rethrown. |
-| 6 | `reportCardServiceAssembly.ts:207`, `:461` | Returns normally; `enrichComposedReportWithInputContext` returns `undefined` for an undefined input. |
+| 6 | `reportCardServiceAssembly.ts:202` (declaration), `:461` (call) | Returns normally; `enrichComposedReportWithInputContext` returns `undefined` for an undefined input. |
 
 > **CONSEQUENCE — and the reason check R-00 exists.** At this SHA a composition failure produces
 > a report that **completes** and carries **no Report 1 payload at all**: not a crash, not a
@@ -248,11 +264,19 @@ production defect** rather than a hypothetical regression.
 > abstention; every surface absent at once is an incident. `assertReport1PayloadPresent` (R-00)
 > is the check that tells the two apart, and it is read **first**.
 
-**Sync vs async.** The sync site (`:459`) passes `crawlOutcome: 'not_attempted'` with
-`signals: null`, so `resolution.metrics` is always `null` and the expression short-circuits — the
-module's own comment confirms that path observes no competitor. The **async** site (`:722`) is
-the one that crawls, so it is the only site that reached the throw in practice. The gate must
-therefore exercise a real snapshot generation with competitor discovery enabled.
+**Sync vs async.** The sync site (`:459` at `3d643f5c`, `:522` in the integrated tree) passes
+`crawlOutcome: 'not_attempted'` with `signals: null`, so `resolution.metrics` is always `null` and the
+expression short-circuits — the module's own comment confirms that path observes no competitor. The
+**async** site (`:722` at `3d643f5c`, `:808` in the integrated tree) is the one that crawls, so it is
+the only site that reached the throw in practice. The gate must therefore exercise a real snapshot
+generation with competitor discovery enabled.
+
+> **Line numbers in this section are anchored to a tree.** They moved between `3d643f5c` and the
+> integrated tree and will move again. Locate the sites by the expression, not the number:
+> `grep -n 'subtractMetrics(resolution.metrics'`. The `reportCardServiceAssembly.ts` numbers below are
+> also corrected: the `console.warn` is at **`:441`** (was cited as `:440`) and
+> `enrichComposedReportWithInputContext` is declared at **`:202`** (was cited as `:207`); both are
+> identical at `3d643f5c` and in the integrated tree, so those two were simply wrong, not stale.
 
 **Steps at the gate:**
 
@@ -385,15 +409,15 @@ These are the merged contract. They do not validate production, but a failure he
 the exercise before it starts.
 
 ```
-npx jest backend/tests/unit/report1PresenceCheckIntegrity.test.ts        --runInBand --forceExit
-npx jest backend/tests/unit/report1ProvenanceBoundaryOrigin.test.ts      --runInBand --forceExit
-npx jest backend/tests/unit/report1CompetitiveBaselineIntegrity.test.ts  --runInBand --forceExit
-npx jest backend/tests/unit/report1ConversionDecisionIntegrity.test.ts   --runInBand --forceExit
-npx jest backend/tests/unit/report1ConversionContractAndDependency.test.ts --runInBand --forceExit
-npx jest backend/tests/unit/report1AdsIntegration.test.ts                --runInBand --forceExit
-npx jest backend/tests/unit/report1AdvertisingDecision.test.ts           --runInBand --forceExit
-npx jest backend/tests/unit/report1ArtifactAssertions.test.ts            --runInBand --forceExit
-npx jest backend/tests/unit/report1NullBaselineDeltaContract.test.ts     --runInBand --forceExit
+node ./node_modules/jest/bin/jest.js backend/tests/unit/report1PresenceCheckIntegrity.test.ts        --runInBand --forceExit
+node ./node_modules/jest/bin/jest.js backend/tests/unit/report1ProvenanceBoundaryOrigin.test.ts      --runInBand --forceExit
+node ./node_modules/jest/bin/jest.js backend/tests/unit/report1CompetitiveBaselineIntegrity.test.ts  --runInBand --forceExit
+node ./node_modules/jest/bin/jest.js backend/tests/unit/report1ConversionDecisionIntegrity.test.ts   --runInBand --forceExit
+node ./node_modules/jest/bin/jest.js backend/tests/unit/report1ConversionContractAndDependency.test.ts --runInBand --forceExit
+node ./node_modules/jest/bin/jest.js backend/tests/unit/report1AdsIntegration.test.ts                --runInBand --forceExit
+node ./node_modules/jest/bin/jest.js backend/tests/unit/report1AdvertisingDecision.test.ts           --runInBand --forceExit
+node ./node_modules/jest/bin/jest.js backend/tests/unit/report1ArtifactAssertions.test.ts            --runInBand --forceExit
+node ./node_modules/jest/bin/jest.js backend/tests/unit/report1NullBaselineDeltaContract.test.ts     --runInBand --forceExit
 ```
 
 Do **not** run the whole suite: ~98 tests fail on `main` for unrelated pre-existing reasons and
