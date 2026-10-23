@@ -21,6 +21,7 @@
 
 import type { GroundedField } from './types';
 import { applyUserDecision, type ApplyDecisionInput, type UserDecision } from './confirmation';
+import { applyAdministratorAttestation, type AttestationRequest } from './administratorAttestation';
 
 export type GroundingRole = 'viewer' | 'editor' | 'admin';
 
@@ -90,4 +91,43 @@ export function applyUserDecisionGuarded(
   assertCanWrite(ctx, grounded.companyId);
   const input: ApplyDecisionInput = { grounded, decision, actor: ctx.userId, asOf };
   return applyUserDecision(input);
+}
+
+/**
+ * CPG-058 — who is a "company administrator".
+ *
+ * Exactly the canonical tenant role COMPANY_ADMIN (rbacPrimitives `Role`), held
+ * in an ACTIVE `user_company_roles` row FOR THE COMPANY CONCERNED. A caller
+ * building an AccessContext must first normalise the stored role with
+ * rbacPrimitives `normalizeRole` (which maps the legacy 'ADMIN' to
+ * COMPANY_ADMIN) and may grant GroundingRole 'admin' only when this returns
+ * true. Raw, un-normalised input is refused — fail closed.
+ *
+ * SUPER_ADMIN is deliberately NOT a company administrator. It is a platform
+ * operator's role: an attestation made by one would be Omnivyra asserting facts
+ * about a customer, not the customer's administrator attesting them. Content
+ * roles and VIEW_ONLY are not administrators either.
+ */
+export const COMPANY_ADMINISTRATOR_ROLE = 'COMPANY_ADMIN' as const;
+
+export function isCompanyAdministratorRole(canonicalRole: string | null | undefined): boolean {
+  return canonicalRole === COMPANY_ADMINISTRATOR_ROLE;
+}
+
+/**
+ * The ONLY authorized path to record an administrator attestation. Requires
+ * membership in the field's own company (tenant isolation) AND the 'admin'
+ * grounding role there — 'editor' may make user decisions but may NOT attest.
+ * The attester is pinned to the authenticated user, and the company and field
+ * come from the authorized record, never from the request.
+ */
+export function applyAdministratorAttestationGuarded(
+  ctx: AccessContext,
+  grounded: GroundedField,
+  request: AttestationRequest,
+  asOf: string,
+): GroundedField {
+  const role = roleFor(ctx, grounded.companyId);
+  if (role !== 'admin') throw new AuthorizationError('admin', role);
+  return applyAdministratorAttestation({ grounded, request, attestedBy: ctx.userId, asOf });
 }
