@@ -1,0 +1,27 @@
+# DEEPTECH-PARALLEL-013 §10 — local, scoped negation. Nothing here changes global behaviour:
+# a .gitignore is consulted only for paths at or below its own directory, so every pattern
+# below is inert outside research/deeptech-operations/.
+#
+# WHY. The repository root .gitignore carries 51 `*.md` patterns aimed at generated
+# operational prose. Five of them match names this research programme uses as SOURCE:
+#
+#   .gitignore:50  *_CHECKLIST.md     (OPERATOR_CHECKLIST.md)
+#   .gitignore:51  *_READINESS*.md    (REGISTRATION_READINESS_PACKAGE.md, REGISTRATION_READINESS_TABLE.md)
+#   .gitignore:55  *_REPORT.md        (the DEEPTECH_PARALLEL_0NN_REPORT.md series)
+#   .gitignore:58  *_RUNBOOK*.md
+#   .gitignore:77  ROLE_*.md          (ROLE_DESCRIPTIONS.md)
+#
+# A bulk `git add research/deeptech-operations` drops every match SILENTLY and exits 0.
+# That is how a wave's output gets committed, so the loss is the default outcome.
+#
+# One line fixes the whole class. An enumerated five-pattern negation was rejected: it
+# leaves the other ~46 `.md` patterns armed for the next wave, and fails the same silent
+# way. Markdown under this directory is source by construction; nothing generated lives here.
+!*.md
+
+# NOT NEGATED — DELIBERATE. `.gitignore:12 *.log` still hides MUTATION_RUN.log and every
+# other certification log under this tree. Whether mutation-run logs belong in git is a
+# separate and narrower question (size, churn, whether a log is evidence or a by-product)
+# and is recorded as OWNER DECISION REQUIRED, not decided here. Until it is decided, name
+# such a file explicitly on the command line (`git add -f <path>`), which fails loudly
+# rather than silently, or keep it out of git.
