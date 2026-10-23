@@ -101,6 +101,42 @@ export async function constraintDef(name: string): Promise<string | null> {
   return rows.length ? rows[0].d : null;
 }
 
+/**
+ * A canonical prospect (`canonical_leads`) with its required parents.
+ *
+ * PI LISTS-001 (WS-2D P-2). `prospect_list_members` references
+ * `canonical_leads (id, company_id)`, and that table cannot be inserted into on
+ * its own: `canonical_leads_user_fk` is a COMPOSITE key onto
+ * `canonical_users (id, company_id)`, so a `canonical_users` row must exist in
+ * the same tenant first. `source` carries a non-blank CHECK.
+ *
+ * NOTE the tenant column: `canonical_leads` and `canonical_users` key their
+ * tenant as `company_id`, not `organization_id`. Both are `companies.id`.
+ *
+ * `unified_person_id` is left NULL by default. It is NOT required, and leaving
+ * it unset keeps the default fixture honest about the fact — established in
+ * WS-2B — that a `canonical_leads` row and the person spine are joined by a
+ * nullable `ON DELETE SET NULL` edge rather than by identity.
+ */
+export async function newLead(
+  org: string,
+  opts: { source?: string; personId?: string | null } = {},
+): Promise<string> {
+  const { rows: userRows } = await db.query(
+    `INSERT INTO public.canonical_users (company_id, user_type, device)
+     VALUES ($1, 'known', 'unknown') RETURNING id`,
+    [org],
+  );
+  const userId: string = userRows[0].id;
+
+  const { rows } = await db.query(
+    `INSERT INTO public.canonical_leads (company_id, user_id, source, unified_person_id)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [org, userId, opts.source ?? 'w6-lists', opts.personId ?? null],
+  );
+  return rows[0].id;
+}
+
 /** Columns of a unique index, in order, or null when the index is absent. */
 export async function uniqueIndexColumns(name: string): Promise<string[] | null> {
   const { rows } = await db.query(
