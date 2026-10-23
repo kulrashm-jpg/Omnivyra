@@ -147,6 +147,46 @@ export default async function handler(req, res) {
 });
 
 describe('R1-METHOD — shapes that must stay green', () => {
+  // Closure-014 (D) pre-auth rate limit. Written as a ternary of two calls, each
+  // arm is a method branch that reaches no primitive (R1-METHOD); written as ONE
+  // call whose arguments depend on the method, no branch precedes the auth.
+  const RL = "import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';";
+  const CAP = "import { requireCapability } from '../../../backend/security/requireCapability';";
+  it('a pre-auth rate limit as a ternary of two calls is method dispatch (R1-METHOD)', () => {
+    const src = `${RL}
+${CAP}
+${DB}
+async function handler(req, res) {
+  const rl = req.method === 'DELETE'
+    ? await requireAdminRateLimit(req, res, 'rl:x:delete', 10, 60, { sensitive: true })
+    : await requireAdminRateLimit(req, res, 'rl:x:write', 30, 60);
+  if (!rl) return;
+  const guard = await requireCapability(req, res, { capability: 'x.manage', reason: 'x' });
+  if (guard.ok !== true) return;
+  await supabase.from('t').delete().eq('id', 'fixed');
+  return res.status(200).end();
+}
+export default createApiRoute(handler, { route: '/api/fixture' });`;
+    expect(rules(src)).toContain('R1-METHOD');
+  });
+
+  it('a single pre-auth rate-limit call with method-dependent arguments is not dispatch', () => {
+    const src = `${RL}
+${CAP}
+${DB}
+async function handler(req, res) {
+  const isDelete = req.method === 'DELETE';
+  const rl = await requireAdminRateLimit(req, res, isDelete ? 'rl:x:delete' : 'rl:x:write', isDelete ? 10 : 30, 60, isDelete ? { sensitive: true } : {});
+  if (!rl) return;
+  const guard = await requireCapability(req, res, { capability: 'x.manage', reason: 'x' });
+  if (guard.ok !== true) return;
+  await supabase.from('t').delete().eq('id', 'fixed');
+  return res.status(200).end();
+}
+export default createApiRoute(handler, { route: '/api/fixture' });`;
+    expect(rules(src)).toEqual([]);
+  });
+
   it('shared prelude authentication before dispatch covers every branch', () => {
     const src = `${TENANT}\n${DB}
 async function handler(req, res) {

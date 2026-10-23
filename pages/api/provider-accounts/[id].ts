@@ -24,9 +24,16 @@ import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/sec
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Closure-014 (D): per-route write rate limit (before authorization and any business work).
-  const rl = req.method === 'DELETE'
-    ? await requireAdminRateLimit(req, res, 'rl:provider-accounts:delete', 10, 60, { sensitive: true })
-    : await requireAdminRateLimit(req, res, 'rl:provider-accounts:update', 20, 60, { sensitive: true });
+  // One rate-limit call whose arguments depend on the method (same keys, limits and
+  // options as before), so no method branch precedes the authorization below.
+  const isDelete = req.method === 'DELETE';
+  const rl = await requireAdminRateLimit(
+    req, res,
+    isDelete ? 'rl:provider-accounts:delete' : 'rl:provider-accounts:update',
+    isDelete ? 10 : 20,
+    60,
+    { sensitive: true },
+  );
   if (!rl) return;
 
   const { id } = req.query;

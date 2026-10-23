@@ -9,9 +9,16 @@ import { sanitizeHtml, sanitizeContentBlocks } from '../../../../lib/security/ht
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Closure-014 (D): per-route write rate limit (before authorization and any business work).
   if (req.method !== 'GET') {
-    const rl = req.method === 'DELETE'
-      ? await requireAdminRateLimit(req, res, 'rl:admin:blog:delete', 10, 60, { sensitive: true })
-      : await requireAdminRateLimit(req, res, 'rl:admin:blog:write', 30, 60);
+    // One rate-limit call whose arguments depend on the method (same keys, limits and
+    // options as before), so no method branch precedes the authorization below.
+    const isDelete = req.method === 'DELETE';
+    const rl = await requireAdminRateLimit(
+      req, res,
+      isDelete ? 'rl:admin:blog:delete' : 'rl:admin:blog:write',
+      isDelete ? 10 : 30,
+      60,
+      isDelete ? { sensitive: true } : {},
+    );
     if (!rl) return;
   }
 

@@ -92,6 +92,28 @@ describe('R1 — authentication must be invoked', () => {
     expect(rules(src, 'pages/api/community-ai/fixture.ts')).toEqual([]);
   });
 
+  it('requireSuperAdminGaWriteAccess (Closure-009 platform analytics WRITE gate) is a platform primitive', () => {
+    const src = `import { requireSuperAdminGaWriteAccess } from '../../../backend/services/superAdminGaAccess';
+      ${DB_IMPORT}
+      export default async function handler(req, res) {
+        const principal = await requireSuperAdminGaWriteAccess(req, res, 'ga-sync');
+        if (!principal) return;
+        await supabase.from('platform_analytics').insert({ by: principal.userId });
+        res.status(200).json({ ok: true });
+      }`;
+    expect(rules(src)).toEqual([]);
+    expect(gate.PRIMITIVES.requireSuperAdminGaWriteAccess.level).toBe('platform');
+  });
+
+  it('requireSuperAdminGaWriteAccess imported from any other module does not count', () => {
+    const src = `import { requireSuperAdminGaWriteAccess } from '../../../backend/services/somethingElse';
+      export default async function handler(req, res) {
+        const principal = await requireSuperAdminGaWriteAccess(req, res, 'ga-sync');
+        if (!principal) return; res.status(200).end();
+      }`;
+    expect(rules(src)).toContain('R1');
+  });
+
   it('a regex literal containing quotes does not blind the scanner', () => {
     const src = `import { enforceCompanyAccess } from '../../../backend/services/userContextService';
       const titleOf = (s) => s.match(/Content for "([^"]+)"/);
