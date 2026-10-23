@@ -97,6 +97,21 @@ export interface SuppressionMatches {
   lead: boolean;
   channel: boolean;
   recipient: boolean;
+  /**
+   * PHASE 4C-2 — did the `outreach_suppressions` read actually COMPLETE?
+   *
+   * OBSERVABILITY METADATA ONLY. `evaluateGovernance` does not read it and must
+   * not: the four booleans above remain the sole suppression input to the
+   * verdict, and an unreadable store still arrives here as all-four-true, which
+   * is the fail-closed behaviour and is unchanged.
+   *
+   * It exists because that all-true shape is otherwise indistinguishable from
+   * four genuine matches, so without it no caller can tell "every scope was
+   * evaluated and matched" from "we could not ask". Optional, so every existing
+   * construction of this interface — including the ones in the test suites —
+   * remains valid.
+   */
+  readCompleted?: boolean;
 }
 
 /** Usage observed in the limiter window. Read-only — evaluation consumes nothing. */

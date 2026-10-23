@@ -99,6 +99,13 @@ export interface GovernanceErasureAction {
   governanceType: GovernanceType;
   effectiveFrom: string;
   effectiveUntil: string | null;
+  /**
+   * PG-001 — the originating record's restriction scope, carried so the
+   * re-anchored copy means EXACTLY what the original meant. Same reasoning as
+   * `effectiveFrom`: inventing a value here would change the person's own
+   * instruction at the moment they exercised their erasure right.
+   */
+  purposeScope: string | null;
   /** True when the record already carried a target and therefore already survives on its own terms. */
   wasTargetAnchored: boolean;
   /** The normalised addresses the instruction is carried forward onto. */
@@ -198,6 +205,9 @@ function action(
     governanceType: r.governanceType,
     effectiveFrom: r.effectiveFrom,
     effectiveUntil: r.effectiveUntil,
+    // PG-001 — copied verbatim, never defaulted. `?? null` only normalises an
+    // absent field to the explicit null the contract declares.
+    purposeScope: r.purposeScope ?? null,
     wasTargetAnchored,
     reanchorTargets,
     disposition,

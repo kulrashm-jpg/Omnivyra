@@ -59,6 +59,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import {
   ingestFeedback,
+  isUnsubscribeScope,
+  UNSUBSCRIBE_SCOPES,
   type FeedbackSignal,
 } from '../../../backend/services/leadOutreachExecution';
 
@@ -71,8 +73,13 @@ import {
  *   • `opened` / `clicked` are in `UNOBSERVABLE_BUSINESS_OUTCOMES`. No
  *     transport in this platform emits them and an operator cannot honestly
  *     claim to have seen one.
- *   • `unsubscribed` is compliance-bearing and does not yet feed suppression,
- *     so accepting it would record an obligation the platform will not act on.
+ *   • `unsubscribed` IS now admitted (W1-B). It was excluded while it recorded
+ *     an obligation the platform would not act on; `ingestFeedback` now writes
+ *     the canonical `unsubscribe` restriction through `recordContactGovernance`
+ *     before reporting success, so the dispatch-time gate observes it and the
+ *     stated precondition for admitting it is met. Its scope is the task's own
+ *     channel — a cross-channel objection is NOT expressible here, because this
+ *     request carries no scope field. See the W1 report.
  *   • `rejected` is not an ingestible signal at all — WS-3 M7 excluded it
  *     because it is a human judgement, and admitting it here would change the
  *     taxonomy rather than use it.
@@ -92,6 +99,8 @@ export const MANUAL_OUTCOME_SIGNALS = [
   'replied',
   'converted',
   'no_response',
+  // W1-B — admitted once it began feeding suppression, not before.
+  'unsubscribed',
 ] as const;
 export type ManualOutcomeSignal = (typeof MANUAL_OUTCOME_SIGNALS)[number];
 
@@ -153,6 +162,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'unsupported_signal', allowed: [...MANUAL_OUTCOME_SIGNALS] });
   }
 
+  // W1-C — the SCOPE of an unsubscribe, when the operator knows it. Optional:
+  // omitting it keeps the channel-scoped behaviour W1-B shipped, so no existing
+  // caller is silently broadened. Malformed input is REFUSED, never read as
+  // 'all' — guessing a cross-channel objection is the one error this field
+  // exists to prevent.
+  if (body.scope !== undefined) {
+    if (!isUnsubscribeScope(body.scope)) {
+      return res.status(400).json({ error: 'unsupported_scope', allowed: [...UNSUBSCRIBE_SCOPES] });
+    }
+    if (signal !== 'unsubscribed') {
+      return res.status(400).json({ error: 'scope_not_applicable', signal });
+    }
+  }
+  const unsubscribeScope = isUnsubscribeScope(body.scope) ? body.scope : undefined;
+
   const note = str(body.note);
 
   const result = await ingestFeedback({
@@ -167,6 +191,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     provider: null,
     providerEventId: null,
     evidence: note ? { note } : undefined,
+    unsubscribeScope,
     // The actor comes from the guard's authenticated principal, never the body.
     // `outreach_outcomes` has no actor column and does not need one: metadata is
     // jsonb, and the platform logger already stamps user/org/correlation ids.

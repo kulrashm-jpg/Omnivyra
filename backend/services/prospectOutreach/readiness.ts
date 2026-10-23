@@ -62,6 +62,7 @@ import {
 } from '../prospectIdentity/contactGovernance';
 import {
   loadGovernanceRecords,
+  normalizeGovernanceTarget,
   type GovernanceLoadResult,
 } from '../prospectIdentity/contactGovernanceRepository';
 import { assembleLeadUnderstanding } from '../leadUnderstanding/engines/assembly';
@@ -339,7 +340,28 @@ export async function assessOutreachReadiness(
 
   // ── SUPPRESSION — the canonical authority, and it overrides ─────────────
   const target = input.target ?? null;
-  if (!personId && !target) {
+  // R1 — NORMALISE AT THE COMPARISON BOUNDARY, with the channel this target
+  // belongs to.
+  //
+  // THE DEFECT THIS CLOSES (M1). `loadGovernance` normalises its own query, so a
+  // record stored as `+15550100000` IS returned for a caller-supplied
+  // `+1 555 010 0000`. The raw value then reached `mayContact`, whose
+  // `anchorMatches` compares `record.targetNormalized` to the value it was given
+  // — two different strings — so the restriction was fetched and then silently
+  // not applied. The same bit the loader normalises must be the bit the
+  // evaluator compares.
+  //
+  // The LOADER is unchanged: it still receives the raw `target` and normalises
+  // internally, so WHICH records are read is exactly as before. `mayContact`
+  // stays pure and gains no normalisation of its own.
+  const targetNormalized = normalizeGovernanceTarget(channel, target);
+  // The anchor guard now reads the NORMALISED value, which is the one that can
+  // actually match a record. A target that survives `input.target` but
+  // normalises to null — `'abc'` on a phone channel, say — could never match
+  // anything, and letting it through would reach the evaluator with no anchor at
+  // all and read as ALLOWED. That is the one conclusion the comment below says
+  // an unanchored evaluation must never reach, so it is refused here instead.
+  if (!personId && !targetNormalized) {
     // Governance is anchored to a person or a target. With neither, no record
     // could match, and "no match" would read as ALLOWED — which is the one
     // thing an unanchored evaluation must never conclude.
@@ -371,7 +393,7 @@ export async function assessOutreachReadiness(
   }
 
   const suppression = mayContact({
-    organizationId, personId, targetNormalized: target, channel, now: input.now, records: loaded.records,
+    organizationId, personId, targetNormalized, channel, now: input.now, records: loaded.records,
   });
 
   if (suppression.decision !== 'allowed') {

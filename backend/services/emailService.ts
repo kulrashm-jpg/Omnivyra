@@ -16,6 +16,91 @@
  * Function, which holds the SES credentials and renders the HTML. Callers
  * remain best-effort: a delivery failure throws, and the caller decides
  * whether to retry, surface to the user, or swallow it.
+ *
+ * ═══ THE EMAIL / CONTACT-GOVERNANCE BOUNDARY (Phase 4C-5B) ═════════════════
+ *
+ * Every outbound email in this repository leaves through ONE chokepoint — the
+ * `send-transactional-email` Edge Function — and it has FOUR production
+ * invokers. Only one of them evaluates contact governance. This note records
+ * that distinction so it is visible where email is written, rather than only in
+ * an audit report.
+ *
+ * THIS COMMENT ENFORCES NOTHING. It describes the current implementation. The
+ * only runtime enforcement that exists is Path B's, below; the inventory itself
+ * is held by `backend/tests/unit/w2c5bEmailGovernanceBoundary.test.ts`, which
+ * fails when a new invoker appears unclassified.
+ *
+ * ─── 1. PROSPECT OUTREACH — governed ──────────────────────────────────────
+ * `leadOutreachExecution/emailTransport` only, reached through `dispatch.ts`.
+ * Authorization is evaluated at dispatch, IMMEDIATELY BEFORE external delivery,
+ * against canonical `contact_governance_records` (via `mayContact`) and then
+ * `outreach_suppressions`. It FAILS CLOSED: an unreadable store blocks, and the
+ * provider is never called on a block or a deferral.
+ *
+ * ─── 2. ACCOUNT / TRANSACTIONAL — ungoverned, and only PARTLY decided ─────
+ * The helpers in THIS file (team invite, credentials, company referral, inbound
+ * signup notice, credit alert), `domainReminderService`, and the queue drain at
+ * `pages/api/cron/email-jobs.ts`. None consults contact governance.
+ *
+ * 2a. DECIDED — the domain-verification reminder (`domainReminderService`, E4).
+ * The owner has ruled it an account/transactional communication about the
+ * recipient's own platform account and verification status, and therefore
+ * EXEMPT from the current prospect-contact governance restrictions. That is a
+ * decision, not an inference, and it is why this path correctly does not call
+ * `mayContact`.
+ *
+ * THE EXEMPTION IS E4 ONLY. It must not be generalised to the queue drain, to
+ * the helpers in this file, or to any other transactional category. Each of
+ * those remains the UNRESOLVED question described in 2b.
+ *
+ * 2b. UNDECIDED — everything else in this category. There is a real argument
+ * for exempting account mail — a prospect who unsubscribed but is also a
+ * platform admin must still receive credentials and billing notices — but
+ * nobody has decided it, and the code enforces no boundary between the two
+ * categories. Until that decision exists, do not add a marketing-shaped or
+ * prospect-shaped email to this file or to the queue on the assumption that it
+ * is exempt.
+ *
+ * WHY THE DISTINCTION CANNOT CURRENTLY BE RECORDED IN DATA. `mayContact` is
+ * purpose-unaware: no governance type or column says "this restriction applies
+ * to outreach but not to account mail", and the one category-shaped type,
+ * `campaign_exclusion`, is storable but never evaluated. So enforcing
+ * `mayContact` on an account email would apply a prospect-derived restriction
+ * to it — which is precisely why 2a had to be an owner decision rather than a
+ * code change.
+ *
+ * PG-001 (Phase 4C-6B) has since APPROVED purpose-aware governance as the
+ * architectural direction that will eventually let 2b be answered in data
+ * rather than per path: a restriction declares the scope it covers, a delivery
+ * declares the purpose it serves, and an unlabelled restriction or undeclared
+ * delivery defaults to `all`. See `prospectIdentity/contactPurpose`.
+ *
+ * THAT CHANGES NOTHING HERE YET. The model is approved, NOT enforced and NOT
+ * wired; how existing records classify is still an open legal decision; and
+ * 2a/2b above stand exactly as written. Do not treat PG-001 as resolving the
+ * undecided category, and do not add a purpose argument to a send path on the
+ * strength of it.
+ *
+ * ─── 3. ACTIVATION OUTREACH — outreach-shaped, no caller ──────────────────
+ * `sendActivationOutreach` here, orchestrated by
+ * `activationOutreachService.sendGovernedActivationOutreach`. Its gate checks
+ * company classification, an active admin and remaining milestones — NOT
+ * `mayContact`. It currently has NO production caller, which is the only reason
+ * it cannot send ungoverned. Giving it one is a GOVERNANCE DECISION, not a
+ * wiring detail; two tests in the suite above exist as that tripwire.
+ *
+ * ─── 4. DRY RUN — cannot send ─────────────────────────────────────────────
+ * `execution/emailExecutionConnector.dispatchEmail` returns
+ * `{ dispatched: false, dryRun: true }` with no live branch and no invocation
+ * of this Edge Function. It must stay that way.
+ *
+ * ─── KNOWN REACHABILITY LIMIT ─────────────────────────────────────────────
+ * The Edge Function's `KNOWN_TYPES` allow-list does NOT include
+ * `lead_outreach`, the payload type Path B sends, so a prospect email is
+ * rejected template-side with `EMAIL_TEMPLATE_NOT_FOUND` even when the
+ * transport flag is on. Path B is therefore governed AND not currently
+ * deliverable. Adding that template makes the governed path live; it does not
+ * make any of category 2 governed.
  */
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';

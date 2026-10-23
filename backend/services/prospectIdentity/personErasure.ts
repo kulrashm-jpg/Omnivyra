@@ -194,6 +194,11 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
           // new `effective_from` would claim the person consented in between.
           effectiveFrom: a.effectiveFrom,
           effectiveUntil: a.effectiveUntil ?? undefined,
+          // PG-001 / DR-7 — carried forward verbatim, for the same reason as
+          // `effectiveFrom`. Dropping it would WIDEN a narrow restriction, and
+          // inventing one would narrow a broad one; either way the person's own
+          // instruction would change meaning at the moment of erasure.
+          purposeScope: a.purposeScope,
           evidence: {
             // The ORIGINATING RECORD, never the erased person id.
             reanchored_from_record_id: a.recordId,
@@ -230,7 +235,12 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
     if (res.revoked) revoked.push(a.recordId);
   }
 
-  // 5. The erasure itself.
+  // 5. Drop the historical employer leg from this person's own evidence, while
+  //    `person_id` still identifies it. Fail closed: a failure throws and the
+  //    person is not deleted.
+  await clearPersonEvidenceAccountLinks(input.organizationId, input.personId);
+
+  // 6. The erasure itself.
   const deleted = await deletePersonRow(input.organizationId, input.personId);
 
   return {
@@ -289,7 +299,11 @@ async function loadContactPoints(organizationId: string, personId: string): Prom
  */
 async function loadPersonAnchoredGovernance(organizationId: string, personId: string): Promise<GovernanceRecord[]> {
   const res = await ownedDbTable('contact_governance_records')
-    .select('id, organization_id, person_id, target_normalized, channel, governance_type, effective_from, effective_until, revoked_at')
+    // PG-001: `purpose_scope` is selected because erasure must CARRY IT
+    // FORWARD. Re-anchoring without it would silently widen a narrow
+    // restriction — the person's own instruction would change meaning at the
+    // moment they exercised their erasure right.
+    .select('id, organization_id, person_id, target_normalized, channel, governance_type, effective_from, effective_until, revoked_at, purpose_scope')
     .eq('organization_id', organizationId)    // TENANT FIRST, always
     .eq('person_id', personId);
 
@@ -311,8 +325,60 @@ async function loadPersonAnchoredGovernance(organizationId: string, personId: st
       effectiveFrom: String(r.effective_from),
       effectiveUntil: r.effective_until == null ? null : String(r.effective_until),
       revokedAt: r.revoked_at == null ? null : String(r.revoked_at),
+      purposeScope: r.purpose_scope == null ? null : String(r.purpose_scope),
     }))
     .filter((r) => r.organizationId === organizationId);
+}
+
+/**
+ * D1 (Option B) — drop the historical employer leg from the person's OWN evidence.
+ *
+ * Before O-5 the assertion writer set `account_id` on every row it wrote, so a
+ * person-scoped assertion carried its subject AND that person's employer. The
+ * writer is now subject-only, which makes this a HISTORICAL cleanup with a
+ * finite, shrinking scope: rows written before O-5.
+ *
+ * It must run BEFORE the person row is deleted. Afterwards
+ * `ON DELETE SET NULL (person_id)` has already nulled `person_id`, and nothing
+ * stored on the row identifies it as this person's any more.
+ *
+ * SCOPE, deliberately narrow:
+ *   - `source_assertions` only. `source_records.account_id` is contextual
+ *     lineage with a separate role and is NOT in this decision.
+ *   - `entity_type = 'person'` — account- and relationship-scoped evidence is
+ *     untouched (relationship rows already hold NULL by
+ *     `source_assertions_relationship_coherent`).
+ *   - `account_id IS NOT NULL` — post-O-5 rows already satisfy the subject
+ *     model, so they are not rewritten.
+ *   - only `account_id` is set. No value, hash, subject or source identifier
+ *     is rewritten.
+ *
+ * FAIL CLOSED. A failure here throws, so `deletePersonRow` is never reached and
+ * the person survives with their evidence intact — the same direction every
+ * other step in this module fails in. Erasure remains NON-TRANSACTIONAL across
+ * tables (see note 3 in the header): a failure after this step succeeds leaves
+ * the account leg cleared and the person present, which is safe and retryable,
+ * because clearing an already-cleared leg matches nothing.
+ */
+async function clearPersonEvidenceAccountLinks(
+  organizationId: string,
+  personId: string,
+): Promise<number> {
+  const res = await ownedDbTable('source_assertions')
+    .update({ account_id: null })
+    .eq('organization_id', organizationId)    // TENANT FIRST, always
+    .eq('person_id', personId)
+    .eq('entity_type', 'person')
+    .not('account_id', 'is', null)
+    .select('id');
+
+  if (res.error) {
+    throw new PersonErasureError(
+      `could not clear the person's historical account associations: ${res.error.message}`,
+      errCode(res.error) ?? 'evidence_account_link_unclearable',
+    );
+  }
+  return ((res.data ?? []) as Array<unknown>).length;
 }
 
 async function deletePersonRow(organizationId: string, personId: string): Promise<boolean> {

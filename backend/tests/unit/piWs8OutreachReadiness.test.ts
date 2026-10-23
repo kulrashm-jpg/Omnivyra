@@ -363,6 +363,124 @@ describe('WS-8 — suppression is authoritative and overrides', () => {
     expect(out.readiness).toBe('ready');
   });
 
+  // ── R1 (Phase 4C-4D) — the comparison boundary is normalised ─────────────
+  //
+  // 4C-4A/M1: `loadGovernance` normalises its own query, so a record stored
+  // under a normalised endpoint IS returned for an equivalent differently
+  // formatted target. The RAW value then reached `mayContact`, which compares
+  // exactly, so the restriction was fetched and then never applied. These drive
+  // the REAL Path C call path, with the real normaliser and the real evaluator.
+  it('R1: a differently CASED email target is blocked by a target-anchored restriction', async () => {
+    seedEngaged();
+    // Target-anchored and stored normalised, exactly as the canonical writer writes it.
+    seedGovernance(ORG_A, 'g-1', {
+      person_id: null, target_normalized: 'cto@example.test', channel: 'email',
+      governance_type: 'unsubscribe',
+    });
+
+    const out = await assess({ target: 'CTO@Example.Test' });
+
+    expect(out.readiness).toBe('blocked');
+    expect(out.suppression!.governanceType).toBe('unsubscribe');
+    expect(out.suppression!.matchedBy).toBe('target');
+  });
+
+  it('R1: the already-normalised control case is blocked too — no miss was swapped for another', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-1', {
+      person_id: null, target_normalized: 'cto@example.test', channel: 'email',
+      governance_type: 'unsubscribe',
+    });
+
+    const out = await assess({ target: 'cto@example.test' });
+    expect(out.readiness).toBe('blocked');
+  });
+
+  it('R1: a genuinely DIFFERENT endpoint is still allowed', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-1', {
+      person_id: null, target_normalized: 'cto@example.test', channel: 'email',
+    });
+
+    const out = await assess({ target: 'someone.else@example.test' });
+    expect(out.readiness).toBe('ready');
+    expect(out.suppression!.decision).toBe('allowed');
+  });
+
+  it('R1: a PERSON-anchored restriction still blocks, whatever the target spelling', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-1', { governance_type: 'dnc_permanent' });  // person-anchored by default
+
+    const out = await assess({ target: 'CTO@Example.Test' });
+    expect(out.readiness).toBe('blocked');
+    expect(out.suppression!.matchedBy).toBe('person');
+  });
+
+  it('R1: a PHONE target is normalised with the phone rule, not the email rule', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-1', {
+      person_id: null, target_normalized: '+15550100000', channel: 'phone',
+      governance_type: 'dnc_channel',
+    });
+    const built = await buildCtx();
+    // Force the recommendation onto the phone channel, the way the existing
+    // ungovernable-channel test forces `carrier_pigeon`.
+    const ports: OutreachReadinessPorts = {
+      ...defaultOutreachReadinessPorts,
+      assemble(b) {
+        const u = defaultOutreachReadinessPorts.assemble(b);
+        return {
+          ...u,
+          facets: { ...u.facets, recommendations: { ...u.facets.recommendations!, value: { ...u.facets.recommendations!.value!, nextChannel: 'phone' } } },
+        } as typeof u;
+      },
+    };
+
+    const out = await assessOutreachReadiness(
+      { built: built as ProspectContextResult, now: NOW, target: '+1 (555) 010-0000' },
+      ports,
+    );
+
+    expect(out.governanceChannel).toBe('phone');
+    expect(out.readiness).toBe('blocked');
+    expect(out.suppression!.governanceType).toBe('dnc_channel');
+    expect(out.suppression!.matchedBy).toBe('target');
+  });
+
+  it('R1: a target that cannot be normalised, with no person, is UNANCHORABLE rather than allowed', async () => {
+    // `'   '` survives `input.target ?? null` but normalises to null, so no
+    // record could ever match it. Before R1 the guard read the RAW value, so
+    // this reached the evaluator with no anchor at all and read as ALLOWED —
+    // the one conclusion the guard exists to prevent.
+    seedProspect(ORG_A, LEAD, null);                     // no person anchor
+    const built = await buildCtx();
+    const ports: OutreachReadinessPorts = {
+      ...defaultOutreachReadinessPorts,
+      assemble(b) {
+        const u = defaultOutreachReadinessPorts.assemble(b);
+        return {
+          ...u,
+          facets: {
+            ...u.facets,
+            recommendations: {
+              value: { nextAction: 'monitor', nextMessage: 'x', nextChannel: 'email', nextTiming: 'this_month' },
+              confidence: 0.5, evidence: [], abstained: false,
+            } as never,
+          },
+        } as typeof u;
+      },
+    };
+
+    const out = await assessOutreachReadiness(
+      { built: built as ProspectContextResult, now: NOW, target: '   ' },
+      ports,
+    );
+
+    expect(out.readiness).toBe('not_ready');
+    expect(out.requiredMissingFields).toContain('contact_anchor');
+    expect(out.suppression).toBeNull();
+  });
+
   it('unreadable suppression FAILS CLOSED', async () => {
     seedEngaged();
     db.errors.contact_governance_records = { message: 'connection reset' };

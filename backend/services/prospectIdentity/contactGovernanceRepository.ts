@@ -71,6 +71,11 @@ const asRecord = (r: Record<string, unknown>): GovernanceRecord => ({
   effectiveFrom: String(r.effective_from),
   effectiveUntil: r.effective_until === null || r.effective_until === undefined ? null : String(r.effective_until),
   revokedAt: r.revoked_at === null || r.revoked_at === undefined ? null : String(r.revoked_at),
+  // PG-001. NULL stays NULL rather than becoming the string "null": the
+  // evaluator reads absence as "applies to every purpose", and a stringified
+  // null would be an unrecognised value that happens to behave the same way by
+  // luck. Preserving the distinction keeps the column auditable.
+  purposeScope: r.purpose_scope === null || r.purpose_scope === undefined ? null : String(r.purpose_scope),
 });
 
 /**
@@ -85,6 +90,48 @@ const asRecord = (r: Record<string, unknown>): GovernanceRecord => ({
  * change a verdict: `mayContact` matches `channel IN (requested, '*')` and this
  * fetches exactly that set.
  */
+/**
+ * W0-B — every non-revoked record for ONE tenant on the given channels.
+ *
+ * `loadGovernanceRecords` is anchored to a person or a target, which is right
+ * for a single decision but would mean one query per row for a bulk egress
+ * check. This reads the same rows with the same tenant and revocation filters,
+ * unanchored, so a caller can evaluate many subjects in memory with the pure
+ * `mayContact`. It adds no table and no column.
+ *
+ * `ALL_CHANNELS` is always included: a `'*'` record governs every channel.
+ */
+export async function loadTenantGovernanceRecords(
+  organizationId: string,
+  channels: readonly string[],
+): Promise<GovernanceLoadResult> {
+  if (!organizationId || !String(organizationId).trim()) {
+    throw new Error('loadTenantGovernanceRecords: organizationId is required — governance is never read without a tenant');
+  }
+  const wanted = [...new Set([...channels.filter((c) => c && String(c).trim()), ALL_CHANNELS])];
+  if (wanted.length === 1) return { ok: true, records: [] };   // only the wildcard: no channel asked for
+
+  // A THROW is a failure like any other, reported rather than propagated: the
+  // caller's contract is to redact when this is not `ok`, and an exception
+  // escaping here would turn an egress refusal into a crash.
+  let res: { data?: unknown; error?: { message?: string } | null };
+  try {
+    res = await ownedDbTable('contact_governance_records')
+      .select('id, organization_id, person_id, target_normalized, channel, governance_type, effective_from, effective_until, revoked_at, purpose_scope')
+      .eq('organization_id', organizationId)          // TENANT FIRST, always
+      .is('revoked_at', null)
+      .in('channel', wanted);
+  } catch (e) {
+    return { ok: false, records: [], error: e instanceof Error ? e.message : String(e) };
+  }
+  if (res.error) return { ok: false, records: [], error: res.error.message };
+
+  // Same defence in depth as the anchored loader.
+  const safe = ((res.data ?? []) as Array<Record<string, unknown>>)
+    .map(asRecord).filter((r) => r.organizationId === organizationId);
+  return { ok: true, records: safe };
+}
+
 export async function loadGovernanceRecords(lookup: GovernanceLookup): Promise<GovernanceLoadResult> {
   const { organizationId, channel } = lookup;
   if (!organizationId || !String(organizationId).trim()) {
@@ -101,7 +148,7 @@ export async function loadGovernanceRecords(lookup: GovernanceLookup): Promise<G
   if (!personId && !target) return { ok: true, records: [] };
 
   const base = () => ownedDbTable('contact_governance_records')
-    .select('id, organization_id, person_id, target_normalized, channel, governance_type, effective_from, effective_until, revoked_at')
+    .select('id, organization_id, person_id, target_normalized, channel, governance_type, effective_from, effective_until, revoked_at, purpose_scope')
     .eq('organization_id', organizationId)          // TENANT FIRST, always
     .is('revoked_at', null)
     .in('channel', [channel, ALL_CHANNELS]);

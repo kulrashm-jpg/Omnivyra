@@ -21,8 +21,13 @@ jest.mock('../../services/supabaseAuthService', () => require('../helpers/sec91A
 jest.mock('../../security/IdentityResolver', () => require('../helpers/sec91AHarness').identityModule());
 
 const sinks = {
-  releaseSuppression: jest.fn(async () => undefined),
-  addSuppression: jest.fn(async () => undefined),
+  // W2-B — the route now reads `complete` from both results and reports a
+  // partial store write truthfully, so these sinks answer the real shape. A
+  // sink answering `undefined` would make every release look incomplete, and
+  // this suite would then be testing the double rather than the authorization
+  // chain it exists to pin.
+  releaseSuppression: jest.fn(async () => ({ canonicalRevoked: 1, legacyDeactivated: true, legacyOutcome: 'deactivated', legacyError: null, complete: true })),
+  addSuppression: jest.fn(async () => ({ id: 'se-1', canonicalId: 'cg-1', legacyRecorded: true, legacyError: null, complete: true })),
   isSuppressed: jest.fn(async () => ({ suppressed: false })),
   setControl: jest.fn(async () => undefined),
   killSwitch: jest.fn(async () => undefined),

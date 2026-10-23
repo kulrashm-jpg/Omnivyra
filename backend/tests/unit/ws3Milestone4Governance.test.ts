@@ -672,3 +672,27 @@ describe('WS-3 M4 (10) — guards against premature capability', () => {
     expect(db.tables.outreach_tasks[0].status).toBe('approved');
   });
 });
+
+describe('W0-A — an unrecordable decision is not permission', () => {
+  it('returns ok:false when the decision cannot be appended', async () => {
+    configureTenant();
+    const id = await seedApprovedTask();
+    db.failTable = 'outreach_decisions';
+    const res = await evaluateTaskGovernance('co-a', id, { evaluatedAt: NOW });
+    db.failTable = null;
+
+    // The verdict is still visible, but governance did not COMPLETE.
+    expect(res.ok).toBe(false);
+    expect(res.recorded).toBe(false);
+    expect(res.evaluation?.decision).toBe('allowed');
+    expect(String(res.error)).toBeTruthy();
+    expect(await getGovernanceHistory('co-a', id)).toHaveLength(0);
+  });
+
+  it('a recorded decision still reports ok:true and recorded:true', async () => {
+    configureTenant();
+    const id = await seedApprovedTask();
+    const res = await evaluateTaskGovernance('co-a', id, { evaluatedAt: NOW });
+    expect(res).toMatchObject({ ok: true, recorded: true });
+  });
+});
