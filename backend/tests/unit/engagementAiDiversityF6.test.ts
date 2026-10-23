@@ -142,6 +142,10 @@ function setMessages(threadId: string, type: 'comment' | 'dm', msgs: Array<Parti
   db.engagement_messages = [
     ...others,
     ...msgs.map((m, i) => ({
+      // ENG-004/G-04: messages now carry an explicit tenant, always equal to
+      // the thread's. The fixture mirrors the DB invariant so the tenant
+      // predicate the service applies resolves this row.
+      organization_id: ORG,
       id: `m_${threadId}_${i}`, thread_id: threadId, author_id: null, platform: 'linkedin',
       platform_message_id: null, direction: null, raw_payload: null, content: null,
       message_type: type, parent_message_id: null,

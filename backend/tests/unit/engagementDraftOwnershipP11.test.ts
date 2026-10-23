@@ -147,7 +147,10 @@ describe('P1.1 draft ownership', () => {
 
   it('the signal-resolved path is authorized too, not just the direct thread_id', async () => {
     db.campaign_activity_engagement_signals = [{ id: 'sig1', source_id: 'msg1' }];
-    db.engagement_messages = [{ id: 'msg1', thread_id: 'theirs' }];
+    // ENG-004/G-04: the message belongs to the RIVAL org, like its thread. The
+    // tenant-scoped signal lookup therefore cannot see it, and the handler now
+    // fails closed on the unresolved signal — still a 403, by a tighter route.
+    db.engagement_messages = [{ id: 'msg1', thread_id: 'theirs', organization_id: OTHER_ORG }];
     const res = await post({ signal_id: 'sig1' });
     expect(res.statusCode).toBe(403);
     expect(draftCount()).toBe(0);
@@ -155,7 +158,7 @@ describe('P1.1 draft ownership', () => {
 
   it('a signal resolving to an owned thread still creates the draft', async () => {
     db.campaign_activity_engagement_signals = [{ id: 'sig1', source_id: 'msg1' }];
-    db.engagement_messages = [{ id: 'msg1', thread_id: 'mine' }];
+    db.engagement_messages = [{ id: 'msg1', thread_id: 'mine', organization_id: ORG }];
     const res = await post({ signal_id: 'sig1' });
     expect(res.statusCode).toBe(200);
     expect(draftCount()).toBe(1);

@@ -316,9 +316,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (syncRecord.parent_id) {
         parentMessageId = insertedMessageIdByPlatformId.get(syncRecord.parent_id) ?? null;
         if (!parentMessageId) {
+          // ENG-004/G-04: tenant-scoped. `syncRecord.parent_id` is scraped
+          // from the page, so this pointer is externally influenced — exactly the
+          // case §9 of the hardening brief names. Without the predicate a crafted
+          // parent id could attach this tenant's message to another tenant's.
+          // `organizationId` is `session.orgId`, never a request field.
           const { data: parentRow } = await supabase
             .from('engagement_messages')
             .select('id')
+            .eq('organization_id', organizationId)
             .eq('platform', platform)
             .eq('platform_message_id', syncRecord.parent_id)
             .maybeSingle();
@@ -379,9 +385,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .single();
       if (insertErr) {
         if ((insertErr as { code?: string }).code === '23505') {
+          // ENG-004/G-04: explicit tenant predicate on the update path.
           const { data: updatedRow, error: updateErr } = await supabase
             .from('engagement_messages')
             .update(row)
+            .eq('organization_id', organizationId)
             .eq('platform', platform)
             .eq('platform_message_id', syncRecord.platform_message_id)
             .eq('thread_id', threadUuid)

@@ -151,6 +151,7 @@ export async function processMessageForLeads(input: {
     const { data: newest } = await supabase
       .from('engagement_messages')
       .select('content, platform_created_at')
+      .eq('organization_id', input.organization_id)
       .eq('thread_id', input.thread_id)
       .neq('id', input.message_id)
       .order('platform_created_at', { ascending: false })
@@ -182,6 +183,7 @@ export async function processMessageForLeads(input: {
     supabase
       .from('engagement_messages')
       .select('content, platform')
+      .eq('organization_id', input.organization_id)
       .eq('id', input.message_id)
       .maybeSingle(),
     supabase

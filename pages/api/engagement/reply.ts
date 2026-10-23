@@ -247,6 +247,7 @@ async function resolveSignal(
     const { data: message } = await supabase
       .from('engagement_messages')
       .select('thread_id')
+      .eq('organization_id', organizationId)
       .eq('id', sourceId)
       .maybeSingle();
     if (message?.thread_id) {
@@ -385,6 +386,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { data: msg, error: msgError } = await supabase
         .from('engagement_messages')
         .select('id, thread_id, platform_message_id, post_comment_id, platform, message_type, author_id, raw_payload')
+        .eq('organization_id', organizationId)
         .eq('id', messageId)
         .maybeSingle();
 

@@ -94,6 +94,8 @@ import { bulkReplyThreads } from '../../services/bulkEngagementService';
 function seed(threadId: string, messageType: 'dm' | 'comment') {
   db.engagement_threads.push({ id: threadId, organization_id: ORG });
   db.engagement_messages.push({
+    // ENG-004/G-04: explicit tenant, equal to the thread's.
+    organization_id: ORG,
     id: `msg_${threadId}`, thread_id: threadId, platform: 'linkedin',
     platform_message_id: `urn:li:${messageType}:${threadId}`, post_comment_id: null,
     message_type: messageType, platform_created_at: '2026-01-10T00:00:00Z',

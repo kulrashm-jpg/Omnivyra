@@ -28,7 +28,10 @@ import { supabase } from '../../../backend/db/supabaseClient';
  * Walks signal.source_id -> engagement_messages.thread_id. Returns null
  * if the chain can't be resolved.
  */
-async function resolveThreadIdFromSignal(signalId: string): Promise<string | null> {
+async function resolveThreadIdFromSignal(
+  signalId: string,
+  organizationId: string,
+): Promise<string | null> {
   const { data: signal } = await supabase
     .from('campaign_activity_engagement_signals')
     .select('source_id')
@@ -39,6 +42,10 @@ async function resolveThreadIdFromSignal(signalId: string): Promise<string | nul
   const { data: msg } = await supabase
     .from('engagement_messages')
     .select('thread_id')
+    // ENG-004-CLOSE/G-04: the signal's source_id points at a message id; without
+    // the tenant predicate a signal could name another tenant's message and leak
+    // its thread id.
+    .eq('organization_id', organizationId)
     .eq('id', sourceId)
     .maybeSingle();
   return ((msg as { thread_id?: string | null } | null)?.thread_id) ?? null;
@@ -109,10 +116,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (generatedText) {
       let resolvedThreadId: string | null = null;
+      let signalPathTaken = false;
       if (typeof thread_id === 'string' && thread_id.length > 0) {
         resolvedThreadId = thread_id;
       } else if (typeof signal_id === 'string' && signal_id.length > 0) {
-        resolvedThreadId = await resolveThreadIdFromSignal(signal_id);
+        signalPathTaken = true;
+        resolvedThreadId = await resolveThreadIdFromSignal(signal_id, company_id);
+      }
+
+      // ── ENG-004-CLOSE: the signal path must FAIL CLOSED ─────────────────
+      //    Surfaced by making the signal's message lookup tenant-scoped. The
+      //    F5-P1.1 authorization below is wrapped in `if (resolvedThreadId)`, so
+      //    an unresolvable signal SKIPPED the check entirely and the handler
+      //    answered 200. That was harmless only because the resolution was
+      //    previously unscoped and therefore almost always succeeded — the guard
+      //    was load-bearing on an accident.
+      //
+      //    Now that a foreign signal legitimately resolves to nothing, the null
+      //    case has to be a refusal. It applies the guard's own stated principle:
+      //    a thread we cannot resolve is a thread we cannot prove the caller owns.
+      if (signalPathTaken && !resolvedThreadId) {
+        return res.status(403).json({
+          error: 'Thread not found or access denied',
+          code: 'THREAD_ACCESS_DENIED',
+        });
       }
 
       // ── F5-P1.1: tenant authorization for the draft's thread ────────────

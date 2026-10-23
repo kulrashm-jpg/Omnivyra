@@ -93,6 +93,11 @@ export async function sendReply(
   const { data: message } = await supabase
     .from('engagement_messages')
     .select('id, thread_id, platform_message_id, post_comment_id, platform, message_type')
+    // ENG-004/G-04: the caller already holds the authorized tenant, so it goes in
+    // the predicate. Another tenant's message now produces 'Message not found'
+    // rather than being loaded and then used — which is also why the existing
+    // 'skipped_unauthorized' outcome is now literally true.
+    .eq('organization_id', organizationId)
     .eq('id', messageId)
     .maybeSingle();
 

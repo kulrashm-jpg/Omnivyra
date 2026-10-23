@@ -54,6 +54,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { data: msg } = await supabase
     .from('engagement_messages')
     .select('id, thread_id, direction, raw_payload')
+    .eq('organization_id', organizationId)
     .eq('id', messageId)
     .maybeSingle();
 
@@ -83,6 +84,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       direction: 'outgoing',
       raw_payload: newPayload,
     })
+    // ENG-004-CLOSE/G-04: without this, a caller authorized for tenant A could
+    // rewrite tenant B's message by id. The tenant trigger does not catch it —
+    // it fires only on UPDATE OF thread_id, organization_id.
+    .eq('organization_id', organizationId)
     .eq('id', messageId);
 
   if (updateError) {

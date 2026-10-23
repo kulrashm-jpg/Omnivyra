@@ -54,7 +54,7 @@ beforeEach(() => {
       { id: THREAD_B, organization_id: CO_B, platform: 'linkedin', platform_thread_id: 'urn:li:share:b', raw_payload: {} },
     ],
     engagement_messages: [
-      { id: MSG_A, thread_id: THREAD_A, platform_message_id: 'urn:li:comment:1', post_comment_id: null, platform: 'linkedin', message_type: 'comment', author_id: null, raw_payload: {} },
+      { id: MSG_A, thread_id: THREAD_A, organization_id: CO_A, platform_message_id: 'urn:li:comment:1', post_comment_id: null, platform: 'linkedin', message_type: 'comment', author_id: null, raw_payload: {} },
     ],
     ai_message_drafts: [
       { id: DRAFT_A, thread_id: THREAD_A, platform: 'linkedin', status: 'draft', generated_text: 'a' },

@@ -87,6 +87,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { data: message, error: msgError } = await supabase
       .from('engagement_messages')
       .select('id, thread_id, platform_message_id, post_comment_id, platform, raw_payload')
+      .eq('organization_id', organizationId)
       .eq('id', messageId)
       .maybeSingle();
 

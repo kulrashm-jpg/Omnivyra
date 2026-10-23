@@ -95,6 +95,10 @@ import { resolveEngagementCapability } from '../../../lib/engagementCapabilities
 function seed(threadId: string, org = ORG, platform = 'linkedin', messageType = 'comment') {
   db.engagement_threads.push({ id: threadId, organization_id: org });
   db.engagement_messages.push({
+    // ENG-004/G-04: messages now carry an explicit tenant, always equal to the
+    // thread's. The fixture mirrors the invariant the migration enforces, so the
+    // tenant predicate that bulk sendReply now applies resolves this row.
+    organization_id: org,
     id: `msg_${threadId}`, thread_id: threadId, platform,
     platform_message_id: `urn:${platform}:${threadId}`, post_comment_id: null,
     message_type: messageType, platform_created_at: '2026-01-10T00:00:00Z',

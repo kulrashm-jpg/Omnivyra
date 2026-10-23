@@ -125,6 +125,8 @@ const DRAFT = 'draft-1';
 
 function seed() {
   db.engagement_messages = [{
+    // ENG-004/G-04: explicit tenant, equal to the owning thread's.
+    organization_id: ORG,
     id: MESSAGE, thread_id: THREAD, platform_message_id: 'urn:li:comment:1',
     post_comment_id: null, platform: 'linkedin', message_type: 'comment',
     author_id: null, raw_payload: {},
