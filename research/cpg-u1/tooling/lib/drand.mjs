@@ -1,4 +1,4 @@
-// drand quicknet verification (CPG_U1_PROTOCOL_003 §5.6, Model B). Offline and deterministic.
+// drand quicknet verification (CPG_U1_PROTOCOL_004 §5.7.1, Model B). Offline and deterministic.
 // BLS12-381 comes from the vendored, pinned @noble/curves 1.9.7 (with @noble/hashes 1.8.0), the
 // library the official drand JS client builds on; its files are part of the tooling aggregate.
 // The verification equation is the one drand-client uses for bls-unchained-g1-rfc9380.

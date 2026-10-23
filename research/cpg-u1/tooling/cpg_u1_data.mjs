@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// CPG U1 dataset tooling v4 — governed by CPG_U1_PROTOCOL_004.md.
+// CPG U1 dataset tooling (TOOL_VERSION below) — governed by CPG_U1_PROTOCOL_004.md.
 // Pipeline: registration-fields → check-funding-prerequisites → [registration] → frame → scan
-//           → check-frame-sufficiency → commitment-payload(D) → verify-sampling(D) → draw-development → size
+//           → check-frame-sufficiency → commitment-payload(D) → sampling-evidence-bundle → verify-sampling(D) → draw-development → size
+//           → rater-assignment-fingerprint (published before the held-out commitment, §4A.3)
 //           → commitment-payload(H: same frame, scan, registry) → verify-sampling(H) → draw-held-out
-//           → reference-adjudication-packet → reconcile → seal → authorize-execution → rater-order → audit-execution-log.
+//           → reference-adjudication-packet → [blind reference adjudication] → resolve-reference-adjudication → reconcile → seal
+//           → [seal published] → authorize-execution → harness-held-out → evaluation-items → rater-order / rater-packet
+//           → [rating] → ingest-ratings (×2) → rating-adjudication-packet → [blind rating adjudication] → resolve-rating-adjudication
+//           → analyze.
 // Contains no company and no fact. Creates no key, transaction, registration or seed input.
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -26,17 +30,24 @@ import { PROTOCOL_VERSION, checkAuthority, checkRegistration, registrationTempla
 import { D, EvidenceError, STATE, SEED_DOMAIN, evaluateStage } from './lib/sampling.mjs';
 import { FRAME_MINIMUM, frameSufficiency } from './lib/frame.mjs';
 import { orderArtifact, recomputeRecordSha } from './lib/raterOrder.mjs';
-import { buildReferenceAdjudicationPacket, checkRatingAdjudicationPacket, checkReferenceAdjudicationPacket, resolveReferenceDecisions } from './lib/packets.mjs';
+import { buildRatingAdjudicationPacket, buildReferenceAdjudicationPacket, checkRatingAdjudicationPacket, checkReferenceAdjudicationPacket, resolveReferenceDecisions } from './lib/packets.mjs';
 import { checkPersonnelRegister } from './lib/personnel.mjs';
-import { EXECUTION_STATE, auditExecutionLog, buildAuthorization } from './lib/execution.mjs';
-import { closeInterruptedRun, executionLogFromEvents, providerConfigurationSha, runHeldOut, runPilot } from './lib/harness.mjs';
+import { checkEnumerationAttribution } from './lib/enumeration.mjs';
+import { EXECUTION_STATE, auditExecutionLog, buildAuthorization, checkAuthorization, recomputeSealHash } from './lib/execution.mjs';
+import { PROVIDER_CONFIG_VERDICT, checkProviderConfiguration, closeInterruptedRun, executionLogFromEvents, providerConfigurationSha, runHeldOut, runPilot } from './lib/harness.mjs';
+import { IDENTITY_CLASS } from './lib/identity.mjs';
 import { readEventLog } from './lib/eventlog.mjs';
 import { archiveMerkleRoot, compareReplay, pilotResultFromArchive, verifyArchiveRecord } from './lib/archive.mjs';
 import { realExecutor, replayRecord } from './lib/cpgExecutor.mjs';
-import { CITED_URL_RULE, buildRaterPacket, evaluationItemsFromArchive, raterPacketBytes, verifyRaterPacket } from './lib/raterPackets.mjs';
+import { CITED_URL_RULE, buildRaterPacket, raterPacketBytes, verifyRaterPacket } from './lib/raterPackets.mjs';
 import { EVALUATION_TREE_DOMAIN, verifyEvaluationTree } from './lib/evaluationTree.mjs';
+import { buildEvaluation, checkEvaluation, heldOutObservations } from './lib/evaluation.mjs';
+import { assignedPerson, assignmentFingerprint, checkRaterAssignment } from './lib/assignment.mjs';
+import { RATING_COLUMNS, checkSheet, ingestRatings, ratingPacketInputs, resolveRatingAdjudication } from './lib/ratings.mjs';
+import { DECISIONS_SCHEMA, analyze, checkDeclarations, readDecisions } from './lib/analysis.mjs';
+import { buildEvidenceBundle } from './lib/evidenceBundle.mjs';
 
-const TOOL_VERSION = 'cpg-u1-data-tooling-5';
+const TOOL_VERSION = 'cpg-u1-data-tooling-6';
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
 // Exit codes: 0 ok · 1 refused/abort · 2 pool below minimum · 3 HALT · 4 BLOCKED (human prerequisite) · 5 WAITING · 6 VOID/ABANDONED
@@ -101,6 +112,37 @@ function contamination(o, frame, checked, frameHash) {
   const registryPath = need(o, 'registry');
   if (scan.frame_hash !== frameHash) fail('scan was produced for a different frame (frame_hash mismatch) — re-scan the exact frame');
   if (scan.registry_sha256 !== fileSha(registryPath)) fail('scan was produced with a different development-only registry — re-scan');
+  // DR-11 (ADOPTED): one scan result per candidate_id. The `new Map(scan.results.map(...))` on the line
+  // below keeps only the LAST entry for a repeated candidate_id, so an earlier occurrence — and every
+  // contamination reason it carried — vanished silently, while `scan.frame_hash` (checked just above)
+  // still attested to the whole frame. DR-10 closed the same collapse on the FRAME inside `scan`; the
+  // scan ARTEFACT is a separate input, read here by all four sampling commands, and a hand-edited,
+  // concatenated or reordered artefact can repeat an id without any frame ever doing so. Every
+  // occurrence is printed with its own ordinal and its OWN three findings — repository_hits,
+  // registry_matches and held_out_ineligible_by_scan — so the occurrence the old code dropped stays
+  // attributable; then this refuses at exit 1 (EXIT.REFUSED) naming the scan file, and writes no
+  // artefact. One guard covers all four call sites.
+  // DELIBERATELY NOT CHECKED HERE — neither is the DR-11 defect and both would broaden scan semantics:
+  // a `scan.results.length === frame.length` cardinality check, and refusal of ids absent from the frame.
+  const resultOccurrences = new Map();
+  scan.results.forEach((x, i) => {
+    const list = resultOccurrences.get(x.candidate_id);
+    if (list) list.push({ x, ordinal: i + 1 }); else resultOccurrences.set(x.candidate_id, [{ x, ordinal: i + 1 }]);
+  });
+  const repeatedResults = [...resultOccurrences.entries()].filter(([, list]) => list.length !== 1);
+  if (repeatedResults.length) {
+    for (const [id, list] of repeatedResults) {
+      console.error(`  DUPLICATE scan result candidate_id ${id}: ${list.length} occurrences in ${scanPath}`);
+      for (const { x, ordinal } of list) {
+        const why = [
+          ...(x.repository_hits ?? []).map((h) => `CPG-C1(1) repository ${h.scope} ${h.file}:${h.line}`),
+          ...(x.registry_matches ?? []).map((m) => `CPG-C1(6) development-only registry ${m.entry_id} (${m.matched})`),
+        ];
+        console.error(`    result ${ordinal}: held_out_ineligible_by_scan=${x.held_out_ineligible_by_scan} — ${why.length ? why.join(' ; ') : 'no contamination recorded in this occurrence'}`);
+      }
+    }
+    fail(`SCAN_RESULT_DUPLICATE_REFUSED: ${repeatedResults.length} candidate_id(s) occur more than once in the results of ${scanPath} — one result per candidate_id cannot attest to two results sharing an id, and the collapsed occurrence takes its own contamination with it (every occurrence is reported above)`, EXIT.REFUSED);
+  }
   const byId = new Map(scan.results.map((x) => [x.candidate_id, x]));
   const basis = {};
   for (const { r, res } of checked) {
@@ -158,20 +200,68 @@ function reportRegistrationCheck({ errors, blockers }) {
 }
 
 /**
+ * R28 (§3): identity attestations are read ONLY from a file supplied separately on the command line.
+ * An attestation carried inside the registration record is the record vouching for itself, which is
+ * exactly the defect R15 removes for the provider-configuration hash, so it is refused outright.
+ */
+function identityAttestations(o, reg) {
+  if (Object.hasOwn(reg, 'identity_attestations')) fail('SELF_ATTESTATION_REFUSED: the registration record carries identity_attestations. A record cannot attest to its own identities; supply them with --identity-attestations, from outside the record');
+  if (!o['identity-attestations'] || o['identity-attestations'] === true) return {};
+  const a = readJson(o['identity-attestations']);
+  if (!a || typeof a !== 'object' || Array.isArray(a)) fail('--identity-attestations must be a JSON object keyed by registration field path');
+  return a;
+}
+
+/**
+ * The resolver clone R15 derives the current provider configuration from.
+ *
+ * F3 (an S1 missed refusal): `return c && existsSync(c) ? c : null` converted an EXPLICITLY SUPPLIED but
+ * nonexistent path into "no clone supplied". checkProviderConfiguration then returned NOT_COMPARED, so a
+ * WRONG or STALE but well-formed provider_configuration_sha256 exited 0 as ESTABLISHED — the outcome R15
+ * exists to prevent (§13.1/§19.1 require stale -> BLOCKED) — and the printed reason ("no resolver clone
+ * was supplied") was factually false, because one was. The two states are now distinguished:
+ *   supplied and readable  -> compared, as before;
+ *   supplied and missing   -> REFUSED here (exit 1): the caller asked for the comparison and it cannot be made;
+ *   genuinely not supplied -> null, and the existing honest NOT_COMPARED verdict, unchanged.
+ * A valueless `--resolver-clone` (the flag with no path after it) keeps its existing fall-through to the
+ * environment variable: that is an argument-parsing question, not the missed refusal F3 names.
+ */
+const resolverCloneFor = (o) => {
+  const flag = o['resolver-clone'] && o['resolver-clone'] !== true ? o['resolver-clone'] : null;
+  // An empty CPG_U1_RESOLVER_CLONE means "not set", not "set to the empty path", so `||` is deliberate.
+  const fromEnv = process.env.CPG_U1_RESOLVER_CLONE || null;
+  const supplied = flag ?? fromEnv;
+  if (!supplied) return null;
+  if (!existsSync(supplied)) fail(`RESOLVER_CLONE_NOT_FOUND: ${flag ? '--resolver-clone' : 'CPG_U1_RESOLVER_CLONE'} names "${supplied}", which does not exist. A supplied clone that cannot be read is NOT "no resolver clone was supplied": reporting it as absent would make provider_configuration_sha256 NOT_COMPARED and let a WRONG or STALE value exit 0 as ESTABLISHED, which R15 requires to be BLOCKED. Supply the path of a clone at the §7.1 evaluation-tree commit, or supply none at all`, EXIT.REFUSED);
+  return supplied;
+};
+
+/**
  * A complete, authoritative registration whose protocol and tooling hashes match the files in use.
  * Every sampling command passes through here first.
  */
 function registered(o) {
   const allowSynthetic = o['allow-synthetic'] === true;
   const reg = readJson(need(o, 'registration'));
-  reportRegistrationCheck(checkRegistration(reg, { phase: 'registered', allowSynthetic }));
+  const attestations = identityAttestations(o, reg);
+  const check = checkRegistration(reg, { phase: 'registered', allowSynthetic, attestations });
+  reportRegistrationCheck(check);
   if (fileSha(need(o, 'protocol')) !== reg.protocol_sha256) fail('VERIFY_ABORT_HASH_MISMATCH: --protocol does not hash to the registered protocol_sha256');
   const aggregate = toolingManifest(ROOT).aggregate;
   if (aggregate !== reg.tooling_aggregate_sha256) fail(`VERIFY_ABORT_HASH_MISMATCH: this tooling (aggregate ${aggregate}) is not the registered tooling`);
+  // R15 goes HERE, and deliberately: (a) after reportRegistrationCheck, so an UNASSIGNED value is still
+  // the existing exit-4 blocker and a malformed one the existing exit-1 record error — the comparison
+  // owns only what a comparison can see; (b) after the protocol hash comparison, because the derivation
+  // reads §7.1 out of the protocol, and comparing against a clone pinned by an UNVERIFIED protocol would
+  // be a hash of nothing; (c) before checkAuthority, because a record naming the wrong provider
+  // configuration must be refused whether or not it happens to be the earliest one listed.
+  const provider = checkProviderConfiguration({ recorded: reg.provider_configuration_sha256, cloneDir: resolverCloneFor(o), protocolText: readText(o.protocol) });
+  if (provider.verdict === PROVIDER_CONFIG_VERDICT.BLOCKED) fail(`PROVIDER_CONFIG_REFUSED: ${provider.message}`, provider.code === 'PROVIDER_CONFIG_MISSING' ? EXIT.BLOCKED : EXIT.REFUSED);
+  if (provider.verdict === PROVIDER_CONFIG_VERDICT.NOT_COMPARED && o['require-provider-config'] === true) fail(`BLOCKED — ${provider.message}`, EXIT.BLOCKED);
   let voidReason;
   try { voidReason = checkAuthority(reg, readJson(need(o, 'identity-registrations'))); } catch (e) { fail(`identity registration list refused: ${e.message}`); }
   if (voidReason) fail(`STUDY_VOID_REGISTRATION: ${voidReason}`, EXIT.VOID);
-  return { reg, allowSynthetic };
+  return { reg, allowSynthetic, identity: check.identity, provider };
 }
 
 const isVoid = (state) => state.startsWith('STUDY_') || state.startsWith('STAGE_');
@@ -204,6 +294,13 @@ function cmdFrame(o) {
   for (const [k, v] of Object.entries(tally)) console.log(`  ${k.padEnd(32)} ${v}`);
   console.log(`  held-out-ineligible by attestation (before scan/registry): ${attestedIneligible}`);
   console.log(`frame_hash: ${frameHash}`);
+  // §4A.2 / §20.18: the frame is independent only if independent enumerators produced it, so every row's enumerator is
+  // resolved against the restricted personnel register. `enumerated_by` is already one of the FRAME_COLUMNS hashed into
+  // frame_hash above, so the attribution is already inside the frame's deterministic identity.
+  const attribution = checkEnumerationAttribution(frame, { personnel: readJson(need(o, 'personnel')) });
+  for (const e of attribution) console.error(`  ERROR   ${e}`);
+  if (attribution.length) fail(`ENUMERATION_ATTRIBUTION_REFUSED: ${attribution.length} error(s) — the frame is not attributed to eligible registered enumerators`);
+  console.log(`enumeration attribution: every row names a registered eligible enumerator (${FRAME_COLUMNS.length}-column frame_hash binds enumerated_by)`);
   if (malformed) process.exit(1);
 }
 
@@ -218,10 +315,15 @@ function cmdScan(o) {
   if (head !== expectSha) fail(`repo HEAD ${head} != --expect-sha ${expectSha} (contamination is assessed at the FROZEN resolver SHA)`);
   if (git('status', '--porcelain').trim()) fail('repo has working-tree changes — scan a clean clone only');
 
-  const frame = loadCsv(need(o, 'frame'), FRAME_COLUMNS);
+  const framePath = need(o, 'frame');
+  const frame = loadCsv(framePath, FRAME_COLUMNS);
   const registry = readJson(registryPath);
   const files = git('ls-files', '-z').split('\0').filter(Boolean).map((f) => ({ f, scope: scanScope(f) })).filter((x) => x.scope);
-  const state = new Map(frame.map((r) => [r.candidate_id, { r, tokens: tokensFor(r), hits: [] }]));
+  // DR-10: one scan state per FRAME OCCURRENCE. `new Map(frame.map((r) => [r.candidate_id, ...]))` kept only the
+  // LAST value for a repeated candidate_id, so an occurrence — and every hit it would have produced — vanished
+  // merely because another occurrence of the same id was seen. `record` is the 1-based frame record ordinal
+  // (header excluded), carried so every occurrence stays attributable to its source row.
+  const state = frame.map((r, i) => ({ r, record: i + 1, tokens: tokensFor(r), hits: [] }));
   const scopeCount = { TEST: 0, CPG_IMPLEMENTATION: 0 };
   for (const { f, scope } of files) {
     const p = join(repo, f);
@@ -232,6 +334,31 @@ function cmdScan(o) {
     scopeCount[scope]++;
     const text = buf.toString('utf8');
     for (const c of state.values()) for (const h of scanText(text, c.tokens)) c.hits.push({ ...h, file: f, scope });
+  }
+  // DR-10: a scan result is keyed on candidate_id, so a frame that repeats a candidate_id cannot be attested by
+  // one result per id — and report.frame_hash would still cover the rows the results omit, making the artefact
+  // attest to rows it never assessed. Every occurrence has been scanned above; each is reported here with its
+  // source file, record ordinal, identity and contamination reason, and then the scan refuses. No artefact is
+  // written. Ten downstream commands already refuse a duplicate frame (loadFrame + refuseMalformed); this closes
+  // the one command that reached the frame through loadCsv instead.
+  const occurrences = new Map();
+  for (const c of state.values()) {
+    const list = occurrences.get(c.r.candidate_id);
+    if (list) list.push(c); else occurrences.set(c.r.candidate_id, [c]);
+  }
+  const repeated = [...occurrences.entries()].filter(([, list]) => list.length > 1);
+  if (repeated.length) {
+    for (const [id, list] of repeated) {
+      console.error(`  DUPLICATE candidate_id ${id}: ${list.length} occurrences in ${framePath}`);
+      for (const c of list) {
+        const why = [
+          ...c.hits.map((h) => `CPG-C1(1) repository ${h.scope} ${h.file}:${h.line} (${h.kind} "${h.value}")`),
+          ...registryMatches(c.r, registry).map((m) => `CPG-C1(6) development-only registry ${m.entry_id} (${m.matched})`),
+        ];
+        console.error(`    record ${c.record}: name "${c.r.company_name}" domain "${c.r.canonical_domain}" ${c.r.identifier_scheme} ${c.r.identifier_value} — ${why.length ? why.join(' ; ') : 'no contamination found in this occurrence'}`);
+      }
+    }
+    fail(`${repeated.length} duplicate candidate_id(s) in ${framePath} — one scan result per candidate_id cannot attest to two rows sharing an id; de-duplicate the frame and re-scan (each occurrence's contamination, if any, is reported above)`);
   }
   const results = [...state.values()].map((c) => {
     const registry_matches = registryMatches(c.r, registry);
@@ -284,15 +411,37 @@ function cmdVerifyProtocol(o) {
   console.log(`protocol states every pinned parameter; protocol_sha256: ${sha}`);
 }
 
+/**
+ * R28 (§3): what the verifier established, and — separately and explicitly — what it did NOT.
+ * The previous exit-0 line read "complete, public, unembargoed, authoritative". Three of those four
+ * adjectives were not established by this verifier: `public` and `unembargoed` are read off
+ * registry.public / registry.embargo INSIDE the record being checked, and "authoritative" meant only
+ * "earliest in the file the caller supplied". Validating harder would not have made the claim true, so
+ * the claim is corrected here as well as the validation.
+ */
+function reportRegistrationStanding(reg, identity, provider) {
+  console.log(`registration ${reg.registration_id}: ESTABLISHED — the record is complete and well-formed; --protocol, this tooling aggregate and --registry hash to the values the record registers; the record is the EARLIEST entry for ${STUDY_ID} in the supplied --identity-registrations list.`);
+  for (const [field, c] of Object.entries(identity)) console.log(`  identity ${field}: ${c.class} (${c.code})`);
+  console.log(`  provider_configuration_sha256: ${provider.verdict} (${provider.code})`);
+  const unestablished = [
+    'PUBLIC / UNEMBARGOED: read from registry.public and registry.embargo INSIDE this record. They are assertions made by the submitter; this tooling never contacts the registry, so neither is checked.',
+    'REGISTRY AUTHORITY: "earliest" is authority only over the supplied --identity-registrations file. The verifier does not enumerate the registry, so a registration absent from that file is invisible to it (§20.13).',
+    `IDENTITY: no persistent identifier was resolved against any issuing authority. Values classified ${IDENTITY_CLASS.PLAUSIBLE} passed local screens only — surviving a screen is not evidence that a value identifies anyone (§3).`,
+  ];
+  if (provider.verdict === PROVIDER_CONFIG_VERDICT.NOT_COMPARED) unestablished.push(`PROVIDER CONFIGURATION: ${provider.message}`);
+  console.log('NOT ESTABLISHED by this verifier:');
+  for (const u of unestablished) console.log(`  - ${u}`);
+}
+
 function cmdVerifyRegistration(o) {
-  const { reg, allowSynthetic } = registered(o);
+  const { reg, allowSynthetic, identity, provider } = registered(o);
   if (fileSha(need(o, 'registry')) !== reg.registry_sha256) fail('VERIFY_ABORT_HASH_MISMATCH: development-only registry differs from the registered registry_sha256');
   if (o.evidence && o.evidence !== true) {
     const r = evaluate(reg, readJson(o.evidence), 'development', { allowSynthetic });
     if (r.state === STATE.VOID_REGISTRATION || r.state === STATE.VOID_PRE_REGISTRATION_SPEND) fail(`${r.state}: ${r.reason}`, EXIT.VOID);
     console.log('funding outputs verified against the registered checkpoint');
   }
-  console.log(`registration ${reg.registration_id} complete, public, unembargoed, authoritative; protocol, tooling and registry hashes match`);
+  reportRegistrationStanding(reg, identity, provider);
 }
 
 // ── verify-archive ──────────────────────────────────────────────────────────
@@ -357,7 +506,8 @@ function evaluateFromArgs(o) {
 
 function cmdVerifySampling(o) {
   const r = evaluateFromArgs(o);
-  console.log(JSON.stringify({ stage: r.stage, state: r.state, reason: r.reason, record: r.record ?? null }, null, 2));
+  // §19.3: the result names the relays that attested the round, so the ≥ 2-relay claim is readable from the verification output.
+  console.log(JSON.stringify({ stage: r.stage, state: r.state, reason: r.reason, drand_relays: r.drandRelays ?? null, record: r.record ?? null }, null, 2));
   process.exit(stateExit(r.state));
 }
 
@@ -522,7 +672,36 @@ function reconcileFrom(o, devManifest, hoManifest) {
   const author = loadCsv(need(o, 'author'), BLIND_RECORD_COLUMNS);
   const confirmer = loadCsv(need(o, 'confirmer'), BLIND_RECORD_COLUMNS);
   const adjudication = o.adjudication && o.adjudication !== true ? loadCsv(o.adjudication, ADJUDICATION_COLUMNS) : [];
-  return reconcile([...devManifest.development, ...hoManifest.held_out], author, confirmer, adjudication);
+  return { ...reconcile([...devManifest.development, ...hoManifest.held_out], author, confirmer, adjudication), author, confirmer, adjudication };
+}
+
+const rowsKey = (rows) => canonicalJson([...rows].map((r) => canonicalJson(r)).sort());
+
+/**
+ * §9.2.1 (B1): the reference adjudication happens BLIND, on the deterministic packet, after both blind record sets and
+ * BEFORE the seal. The seal therefore requires the packet and the blind RECORD_1/RECORD_2 decisions whenever the blind
+ * records disagree, rebuilds the packet from the held-out record, and requires --adjudication to be exactly the mechanical
+ * resolution of those decisions. An adjudication typed by role name (AUTHOR/CONFIRMER) without a blind packet is refused.
+ */
+function blindReferenceAdjudication(o, dev, ho, author, confirmer, adjudication) {
+  let recordSha;
+  try { recordSha = recomputeRecordSha(ho.sampling); } catch (e) { fail(`BLIND_ADJUDICATION_REFUSED: ${e.message}`); }
+  const inputs = { entries: [...dev.development, ...ho.held_out], author, confirmer, recordSha };
+  let expected;
+  try { expected = buildReferenceAdjudicationPacket(inputs); } catch (e) { fail(`BLIND_ADJUDICATION_REFUSED: ${e.message}`); }
+  const given = (k) => o[k] && o[k] !== true;
+  if (!expected.items.length && !given('reference-packet') && !given('blind-decisions')) return { packetSha: null, decisionsSha: null };
+  const packetPath = need(o, 'reference-packet'); const decisionsPath = need(o, 'blind-decisions');
+  const errors = checkReferenceAdjudicationPacket(readJson(packetPath), inputs);
+  if (errors.length) fail(`BLIND_ADJUDICATION_REFUSED: the reference adjudication packet is not the deterministic packet — ${errors.join('; ')}`);
+  const blind = loadCsv(decisionsPath, ADJUDICATION_COLUMNS);
+  const want = expected.items.map((it) => `${it.candidate_id}|${it.field}`).sort();
+  const got = blind.map((r) => `${r.candidate_id}|${r.field}`).sort();
+  if (canonicalJson(got) !== canonicalJson(want)) fail('BLIND_ADJUDICATION_REFUSED: the blind decisions do not cover exactly the packet items (missing, extra or duplicated decision)');
+  let resolved;
+  try { resolved = resolveReferenceDecisions(blind, recordSha); } catch (e) { fail(`BLIND_ADJUDICATION_REFUSED: ${e.message}`); }
+  if (rowsKey(resolved) !== rowsKey(adjudication)) fail('BLIND_ADJUDICATION_REFUSED: --adjudication is not the mechanical resolution of the blind decisions (resolve-reference-adjudication)');
+  return { packetSha: fileSha(packetPath), decisionsSha: fileSha(decisionsPath) };
 }
 
 function cmdReconcile(o) {
@@ -543,18 +722,20 @@ function cmdSeal(o) {
   if (ho.dev_manifest_sha256 !== fileSha(devPath)) fail('held-out manifest was not drawn after this development manifest');
   const sizingPath = need(o, 'sizing');
   if (ho.sizing_sha256 !== fileSha(sizingPath)) fail('sizing file does not match the one the held-out draw used');
-  const { errors, rows, stratumMismatches } = reconcileFrom(o, dev, ho);
+  const { errors, rows, stratumMismatches, author, confirmer, adjudication } = reconcileFrom(o, dev, ho);
   if (errors.length) fail(`reference truth has ${errors.length} error(s) — a dataset is never sealed with errors`);
+  const blindAdj = blindReferenceAdjudication(o, dev, ho, author, confirmer, adjudication);
   const refPath = need(o, 'reference');
   if (readText(refPath) !== toCsv(REFERENCE_COLUMNS, rows)) fail('--reference is not byte-identical to the reconciliation of the blind records — reference truth must come from reconcile, never be hand-edited');
   const seal = {
-    seal_version: 3, tool: TOOL_VERSION, status: 'DATASET SEALED — NOT EXECUTED',
+    seal_version: 4, tool: TOOL_VERSION, status: 'DATASET SEALED — NOT EXECUTED',
     study_id: STUDY_ID, registration_id: ho.registration_id, protocol_sha256: ho.protocol_sha256, tooling_aggregate_sha256: ho.tooling_aggregate_sha256,
     resolver_sha: ho.resolver_sha, registry_sha256: ho.registry_sha256,
     development: { manifest_sha256: fileSha(devPath), screening_log_sha256: fileSha(join(devDir, 'screening_log.csv')), sampling_record_sha256: dev.sampling.record_sha256, frame_hash: dev.frame_hash },
     held_out: { manifest_sha256: fileSha(hoPath), screening_log_sha256: fileSha(join(hoDir, 'screening_log.csv')), sampling_record_sha256: ho.sampling.record_sha256, frame_hash: ho.frame_hash, quotas: ho.quotas },
     sizing_sha256: fileSha(sizingPath),
-    blind_records: { author_sha256: fileSha(o.author), confirmer_sha256: fileSha(o.confirmer), adjudication_sha256: o.adjudication && o.adjudication !== true ? fileSha(o.adjudication) : null },
+    blind_records: { author_sha256: fileSha(o.author), confirmer_sha256: fileSha(o.confirmer), adjudication_sha256: o.adjudication && o.adjudication !== true ? fileSha(o.adjudication) : null,
+      reference_adjudication_packet_sha256: blindAdj.packetSha, blind_decisions_sha256: blindAdj.decisionsSha },
     reference_file_sha256: fileSha(refPath), reference_hash: hashRecords(rows.map((r) => ({ ...r, _k: `${r.candidate_id}|${r.field}` })), '_k'),
     resolutions: rows.reduce((m, r) => ({ ...m, [r.resolution]: (m[r.resolution] ?? 0) + 1 }), {}),
     stratum_mismatches: stratumMismatches, sealed_on: today(),
@@ -592,9 +773,9 @@ function sealedHeldOut(o) {
   let recordSha;
   try { recordSha = recomputeRecordSha(ho.sampling); } catch (e) { fail(`RATER_ORDER_SUBSTITUTION: ${e.message}`); }
   if (seal.held_out.sampling_record_sha256 !== recordSha) fail('RATER_ORDER_SUBSTITUTION: sampling record differs from the sealed held-out record');
-  return { ho, recordSha };
+  try { recomputeSealHash(seal); } catch (e) { fail(`WRONG_SEAL: ${e.message}`); }
+  return { ho, recordSha, seal };
 }
-const heldOutObservations = (ho) => ho.held_out.flatMap((e) => FIELDS.map((field) => ({ candidate_id: e.candidate_id, field })));
 
 function cmdRaterOrder(o) {
   const label = need(o, 'label');
@@ -615,9 +796,24 @@ function cmdVerifyRaterOrder(o) {
 }
 
 // ── Protocol-004: blinded reference adjudication (§9.2.1) ────────────────────
+/**
+ * B1: the reference adjudication happens after both blind record sets and BEFORE the seal, so its inputs are the drawn
+ * manifests — never a seal. The Record 1/2 assignment and order still derive from the held-out sampling record, which
+ * exists from the held-out draw on; `seal` later rebuilds the packet and binds it (blindReferenceAdjudication).
+ */
+function drawnHeldOut(o) {
+  const hoPath = need(o, 'held-out-manifest'); const devPath = need(o, 'dev-manifest');
+  const ho = readJson(hoPath); const dev = readJson(devPath);
+  if (ho.stage !== 'held-out') fail('--held-out-manifest is not a held-out manifest');
+  if (dev.stage !== 'development') fail('--dev-manifest is not a development manifest');
+  if (ho.dev_manifest_sha256 !== fileSha(devPath)) fail('held-out manifest was not drawn after this development manifest');
+  let recordSha;
+  try { recordSha = recomputeRecordSha(ho.sampling); } catch (e) { fail(`RATER_ORDER_SUBSTITUTION: ${e.message}`); }
+  return { ho, dev, recordSha };
+}
+
 function referenceInputs(o) {
-  const { ho, recordSha } = sealedHeldOut(o);
-  const dev = readJson(need(o, 'dev-manifest'));
+  const { ho, dev, recordSha } = drawnHeldOut(o);
   return { entries: [...dev.development, ...ho.held_out], author: loadCsv(need(o, 'author'), BLIND_RECORD_COLUMNS), confirmer: loadCsv(need(o, 'confirmer'), BLIND_RECORD_COLUMNS), recordSha };
 }
 
@@ -633,18 +829,18 @@ function cmdVerifyAdjudicationPacket(o) {
   const packet = readJson(need(o, 'packet'));
   let errors;
   try {
-    if (type === 'reference') errors = checkReferenceAdjudicationPacket(packet, referenceInputs(o));
-    else if (type === 'rating') {
-      const { recordSha } = sealedHeldOut(o);
-      errors = checkRatingAdjudicationPacket(packet, { evaluationItems: readJson(need(o, 'evaluation')), rater1: readJson(need(o, 'rater-1')), rater2: readJson(need(o, 'rater-2')), recordSha });
-    } else fail('--type must be reference|rating');
+    if (type === 'reference') {
+      errors = checkReferenceAdjudicationPacket(packet, referenceInputs(o));
+      if (o.seal && o.seal !== true && readJson(o.seal).blind_records?.reference_adjudication_packet_sha256 !== fileSha(o.packet)) errors.push('the seal binds a different reference adjudication packet');
+    } else if (type === 'rating') errors = checkRatingAdjudicationPacket(packet, ratingInputs(o).packetInputs);
+    else fail('--type must be reference|rating');
   } catch (e) { fail(e.message); }
   if (errors.length) fail(`FORBIDDEN_OR_ALTERED_PACKET: ${errors.join('; ')}`);
   console.log(`${type} adjudication packet verified against the deterministic build`);
 }
 
 function cmdResolveReferenceAdjudication(o) {
-  const { recordSha } = sealedHeldOut(o);
+  const { recordSha } = drawnHeldOut(o);
   const rows = loadCsv(need(o, 'decisions'), ADJUDICATION_COLUMNS);
   let out;
   try { out = resolveReferenceDecisions(rows, recordSha); } catch (e) { fail(e.message); }
@@ -825,20 +1021,49 @@ function cmdArchiveMerkleRoot(o) {
   console.log(`archive_merkle_root: ${m.archive_merkle_root}  (${m.document_count} documents, ${records.length} records; RFC 6962 tree over body SHA-256)`);
 }
 
+// ── B5/B6: the sealed, complete evaluation artifact ──────────────────────────
+function evaluationInputs(o) {
+  const hoPath = need(o, 'held-out-manifest'); const refPath = need(o, 'reference'); const runDir = need(o, 'archive-dir');
+  let log;
+  try { log = readEventLog(need(o, 'log')); } catch (err) { fail(`EVENT_LOG_BROKEN: ${err.message}`); }
+  if (!existsSync(runDir)) fail(`${runDir} does not exist — name the authorised run's archive directory`);
+  const runRecords = readdirSync(runDir).sort().map((f) => {
+    if (!f.endsWith('.json')) fail(`ARCHIVE_REFUSED: ${f} is not an archive record`);
+    try { return { file: f, record: readJson(join(runDir, f)) }; } catch { return fail(`ARCHIVE_REFUSED: ${f} is not JSON`); }
+  });
+  return { seal: readJson(need(o, 'seal')), hoManifest: readJson(hoPath), hoManifestSha: fileSha(hoPath), referenceRows: loadCsv(refPath, REFERENCE_COLUMNS),
+    referenceSha: fileSha(refPath), authorization: readJson(need(o, 'authorization')), events: log.events, eventHead: log.head, runRecords };
+}
+function builtEvaluation(o) {
+  try { return buildEvaluation(evaluationInputs(o)); } catch (err) { return fail(err.message, err.void ? EXIT.VOID : EXIT.REFUSED); }
+}
+
 function cmdEvaluationItems(o) {
-  const dir = need(o, 'archive-dir');
-  const records = readdirSync(dir).filter((f) => f.endsWith('.json')).sort().map((f) => readJson(join(dir, f)));
-  const refs = loadCsv(need(o, 'reference'), REFERENCE_COLUMNS);
-  let items;
-  try { items = evaluationItemsFromArchive(records, refs); } catch (err) { fail(err.message); }
-  writeOnce(need(o, 'out'), JSON.stringify(items, null, 2) + '\n');
-  const cited = items.reduce((n, it) => n + it.cpg_source_urls.length, 0);
-  console.log(`evaluation items: ${items.length} (${records.length} held-out records × ${FIELDS.length} fields); cited URLs ${cited} by ${CITED_URL_RULE}`);
+  const ev = builtEvaluation(o);
+  writeOnce(need(o, 'out'), JSON.stringify(ev, null, 2) + '\n');
+  const cited = ev.items.reduce((n, it) => n + it.cpg_source_urls.length, 0);
+  console.log(`evaluation: ${ev.observation_count} observations (every held-out company × ${FIELDS.length} fields), ${ev.invalid_observation_count} machine-INVALID; cited URLs ${cited} by ${CITED_URL_RULE}`);
+  console.log(`evaluation_sha256: ${ev.evaluation_sha256}`);
+}
+
+function cmdVerifyEvaluation(o) {
+  const ev = builtEvaluation(o);
+  if (canonicalJson(readJson(need(o, 'evaluation'))) !== canonicalJson(ev)) fail('EVALUATION_MISMATCH: the evaluation artifact differs from its rebuild from the archive, event log, seal, authorisation and reference');
+  console.log(`evaluation verified by rebuild: ${ev.evaluation_sha256}`);
+}
+
+/** Seal + held-out manifest + evaluation artifact, each bound to the others and complete (B5). */
+function sealedEvaluation(o) {
+  const { ho, recordSha, seal } = sealedHeldOut(o);
+  const evaluation = readJson(need(o, 'evaluation'));
+  const errors = checkEvaluation(evaluation, { seal, hoManifest: ho, hoManifestSha: fileSha(o['held-out-manifest']) });
+  if (errors.length) fail(`EVALUATION_REFUSED: ${errors.join('; ')}`);
+  return { ho, recordSha, seal, evaluation };
 }
 
 function raterPacketInputs(o) {
-  const { recordSha } = sealedHeldOut(o);
-  return { label: need(o, 'label'), recordSha, evaluationItems: readJson(need(o, 'evaluation')) };
+  const { recordSha, evaluation } = sealedEvaluation(o);
+  return { label: need(o, 'label'), recordSha, evaluationItems: evaluation.items, binding: { seal_hash: evaluation.seal_hash, evaluation_sha256: evaluation.evaluation_sha256 } };
 }
 
 function cmdRaterPacket(o) {
@@ -855,6 +1080,140 @@ function cmdVerifyRaterPacket(o) {
   console.log(`rater packet byte-identical to the deterministic rebuild: ${r.packet_sha256}`);
 }
 
+// ── §4A.3: person-to-label assignment fingerprint ────────────────────────────
+function cmdRaterAssignmentFingerprint(o) {
+  const a = readJson(need(o, 'assignment'));
+  const errors = checkRaterAssignment(a, { personnel: readJson(need(o, 'personnel')) });
+  if (errors.length) fail(`RATER_ASSIGNMENT_REFUSED: ${errors.join('; ')}`);
+  console.log(`rater_assignment_fingerprint: ${assignmentFingerprint(a)}`);
+  console.log('Publish this fingerprint BEFORE the held-out commitment transaction is broadcast (§4A.3). The assignment itself stays restricted until rating completes.');
+}
+
+function cmdVerifyRaterAssignment(o) {
+  const a = readJson(need(o, 'assignment'));
+  try { assignedPerson(a, need(o, 'fingerprint'), 'rater-1'); } catch (e) { fail(e.message); }
+  console.log(`rater assignment matches the published fingerprint ${o.fingerprint}`);
+}
+
+// ── B2: rater label ingestion ───────────────────────────────────────────────
+function cmdIngestRatings(o) {
+  const inputs = raterPacketInputs(o);
+  const packetBytes = readFileSync(need(o, 'packet'));
+  const v = verifyRaterPacket(packetBytes, inputs);
+  if (!v.identical) fail(`RATER_PACKET_MISMATCH: ${v.reason} — labels are ingested only against the deterministic packet of this label`);
+  const fp = need(o, 'assignment-fingerprint');
+  let person;
+  try { person = assignedPerson(readJson(need(o, 'assignment')), fp, inputs.label); } catch (e) { fail(e.message); }
+  let sheet;
+  try { sheet = ingestRatings({ packet: JSON.parse(packetBytes.toString('utf8')), rows: loadCsv(need(o, 'labels'), RATING_COLUMNS), ratedBy: person, assignmentFingerprint: fp }); } catch (e) { fail(e.message); }
+  writeOnce(need(o, 'out'), JSON.stringify(sheet, null, 2) + '\n');
+  console.log(`rater sheet ${sheet.label}: ${sheet.item_count} items, ${sheet.pending_count} pending; sheet_sha256 ${sheet.sheet_sha256} (no tallies are shown)`);
+}
+
+/** Two sheets verified against the evaluation, each rated by the person the published assignment names for its label. */
+function ratingInputs(o) {
+  const ctx = sealedEvaluation(o);
+  const assignment = readJson(need(o, 'assignment')); const fp = need(o, 'assignment-fingerprint');
+  const sheets = {};
+  for (const [label, key] of [['rater-1', 'sheet-1'], ['rater-2', 'sheet-2']]) {
+    const sheet = readJson(need(o, key));
+    const errs = checkSheet(sheet, { evaluation: ctx.evaluation, recordSha: ctx.recordSha, label });
+    if (errs.length) fail(`RATER_SHEET_REFUSED (${label}): ${errs.slice(0, 20).join('; ')}`);
+    let person;
+    try { person = assignedPerson(assignment, fp, label); } catch (e) { fail(e.message); }
+    if (sheet.rated_by !== person || sheet.assignment_fingerprint !== fp) fail(`RATER_SHEET_REFUSED (${label}): not rated by the person the published assignment names`);
+    sheets[label] = sheet;
+  }
+  const sheet1 = sheets['rater-1']; const sheet2 = sheets['rater-2'];
+  return { ...ctx, assignment, fp, sheet1, sheet2, packetInputs: ratingPacketInputs(ctx.evaluation, sheet1, sheet2, ctx.recordSha) };
+}
+
+// ── B3: rating adjudication ─────────────────────────────────────────────────
+function cmdRatingAdjudicationPacket(o) {
+  const r = ratingInputs(o);
+  let packet;
+  try { packet = buildRatingAdjudicationPacket(r.packetInputs); } catch (e) { fail(e.message); }
+  writeOnce(need(o, 'out'), JSON.stringify(packet, null, 2) + '\n');
+  console.log(`rating adjudication packet: ${packet.items.length} disagreeing item(s); Label A/B unlabelled; no rater identity, class, split or tally`);
+}
+
+function cmdResolveRatingAdjudication(o) {
+  const r = ratingInputs(o);
+  const packet = readJson(need(o, 'packet'));
+  const errors = checkRatingAdjudicationPacket(packet, r.packetInputs);
+  if (errors.length) fail(`FORBIDDEN_OR_ALTERED_PACKET: ${errors.join('; ')}`);
+  let adjudicator;
+  try { adjudicator = assignedPerson(r.assignment, r.fp, 'rating-adjudicator'); } catch (e) { fail(e.message); }
+  let res;
+  try { res = resolveRatingAdjudication({ packet, rows: loadCsv(need(o, 'decisions'), ADJUDICATION_COLUMNS), sheet1: r.sheet1, sheet2: r.sheet2, adjudicator, recordSha: r.recordSha }); } catch (e) { fail(e.message); }
+  writeOnce(need(o, 'out'), JSON.stringify(res, null, 2) + '\n');
+  console.log(`resolved ${res.resolution_count} blind decision(s) to the chosen labels; resolution_sha256 ${res.resolution_sha256}`);
+}
+
+// ── B4: analysis ────────────────────────────────────────────────────────────
+function cmdAnalyze(o) {
+  const r = ratingInputs(o);
+  const auth = readJson(need(o, 'authorization'));
+  let authSha;
+  try { authSha = checkAuthorization(auth); } catch (e) { fail(`ANALYSIS_REFUSED: ${e.message}`); }
+  if (auth.seal_hash !== r.evaluation.seal_hash || authSha !== r.evaluation.authorization_sha256) fail('ANALYSIS_REFUSED: the authorisation is not the one the evaluation was built under');
+  let log;
+  try { log = readEventLog(need(o, 'log')); } catch (e) { fail(`EVENT_LOG_BROKEN: ${e.message}`); }
+  if (!log.events.some((e) => e.event_sha256 === r.evaluation.event_log_head)) fail('ANALYSIS_REFUSED: the event log does not contain the head the evaluation was built from (substituted or truncated log)');
+  const declarations = readJson(need(o, 'declarations'));
+  const dErr = checkDeclarations(declarations, { sealHash: r.evaluation.seal_hash, heldOutIds: r.ho.held_out.map((e) => e.candidate_id) });
+  if (dErr.length) fail(`DECLARATIONS_REFUSED: ${dErr.join('; ')}`);
+  let resolution = null;
+  if (o['rating-resolution'] && o['rating-resolution'] !== true) {
+    resolution = readJson(o['rating-resolution']);
+    let adjudicator;
+    try { adjudicator = assignedPerson(r.assignment, r.fp, 'rating-adjudicator'); } catch (e) { fail(e.message); }
+    if (resolution.adjudicated_by !== adjudicator) fail('ANALYSIS_REFUSED: the rating resolution was not made by the assigned rating adjudicator');
+  }
+  let decPath = join(ROOT, 'rules', 'analysis_decisions.json'); let source = 'PINNED';
+  if (o.decisions && o.decisions !== true) {
+    const reg = o.registration && o.registration !== true ? readJson(o.registration) : null;
+    if (o['allow-synthetic'] !== true || reg?.network !== 'synthetic-test' || reg?.registration_id !== r.seal.registration_id) fail('--decisions (a file other than the pinned rules/analysis_decisions.json) is refused outside this study\'s synthetic-test registration');
+    decPath = o.decisions; source = 'SYNTHETIC_OVERRIDE';
+  }
+  const dec = readDecisions(readJson(decPath));
+  if (dec.errors.length) fail(`DECISIONS_INVALID (${DECISIONS_SCHEMA}): ${dec.errors.join('; ')}`);
+  if (dec.undecided.length) fail(`ANALYSIS_BLOCKED: methodological decision(s) ${dec.undecided.join(', ')} are UNDECIDED — Protocol-004 does not define them and the tooling does not choose them (rules/analysis_decisions.json)`, EXIT.BLOCKED);
+  let results;
+  try {
+    results = analyze({ evaluation: r.evaluation, hoManifest: r.ho, sheet1: r.sheet1, sheet2: r.sheet2, resolution, recordSha: r.recordSha, authorization: auth, events: log.events,
+      sealPublication: readJson(need(o, 'seal-publication')), declarations, decisions: dec.values, decisionsSource: source, decisionsSha: fileSha(decPath) });
+  } catch (e) { fail(e.message); }
+  writeOnce(need(o, 'out'), JSON.stringify(results, null, 2) + '\n');
+  console.log(`outcome: ${results.outcome}${results.outcome_basis.length ? ` (${results.outcome_basis.join('; ')})` : ''}`);
+  console.log(`results_sha256: ${results.results_sha256}`);
+  process.exit(results.outcome === 'VOID' ? EXIT.VOID : 0);
+}
+
+// ── §13.2A: sampling-evidence bundle ────────────────────────────────────────
+function cmdSamplingEvidenceBundle(o) {
+  const { reg, allowSynthetic } = registered(o);
+  const opt = (k) => (o[k] && o[k] !== true ? readJson(o[k]) : null);
+  const commitment = (st) => {
+    const pr = opt(`commitment-${st}`); const pl = opt(`payload-${st}`);
+    if (!pr && pl) fail(`--payload-${st} given without --commitment-${st}`);
+    return pr ? { proof: pr, payload: pl } : null;
+  };
+  let ev;
+  try {
+    ev = buildEvidenceBundle({ network: reg.network, headers: readJson(need(o, 'headers')), headersCrosscheck: readJson(need(o, 'headers-crosscheck')),
+      funding: { development: readJson(need(o, 'funding-development')), 'held-out': readJson(need(o, 'funding-held-out')) },
+      commitments: { development: commitment('development'), 'held-out': commitment('held-out') },
+      drandChainInfo: readJson(need(o, 'drand-chain-info')),
+      beacons: o['drand-beacons'] && o['drand-beacons'] !== true ? String(o['drand-beacons']).split(',').filter(Boolean).flatMap((f) => [].concat(readJson(f))) : [] });
+  } catch (e) { fail(`EVIDENCE_BUNDLE_REFUSED: ${e.message}`); }
+  const prior = opt('prior-final') ?? undefined;
+  const states = ['development', 'held-out'].map((stage) => evaluate(reg, ev, stage, { allowSynthetic, priorFinal: prior }));
+  writeOnce(need(o, 'out'), JSON.stringify(ev, null, 2) + '\n');
+  for (const x of states) console.log(`  ${x.stage.padEnd(11)} ${x.state}: ${x.reason}`);
+  console.log(`evidence bundle written (evidence_sha256 ${fileSha(o.out)}); it holds no seed — verify-sampling recomputes every state from it`);
+}
+
 const COMMANDS = {
   frame: cmdFrame, scan: cmdScan,
   'registration-fields': cmdRegistrationFields, 'check-funding-prerequisites': cmdCheckFundingPrerequisites,
@@ -868,7 +1227,11 @@ const COMMANDS = {
   'authorize-execution': cmdAuthorizeExecution, 'audit-execution-log': cmdAuditExecutionLog,
   'harness-pilot': cmdHarnessPilot, 'harness-held-out': cmdHarnessHeldOut, 'harness-close-interrupted': cmdHarnessCloseInterrupted,
   'verify-event-log': cmdVerifyEventLog, 'verify-archive-record': cmdVerifyArchiveRecord, 'replay-archive': cmdReplayArchive, 'pilot-result': cmdPilotResult,
-  'verify-evaluation-tree': cmdVerifyEvaluationTree, 'archive-merkle-root': cmdArchiveMerkleRoot, 'evaluation-items': cmdEvaluationItems, 'rater-packet': cmdRaterPacket, 'verify-rater-packet': cmdVerifyRaterPacket,
+  'verify-evaluation-tree': cmdVerifyEvaluationTree, 'archive-merkle-root': cmdArchiveMerkleRoot, 'evaluation-items': cmdEvaluationItems, 'verify-evaluation': cmdVerifyEvaluation,
+  'rater-packet': cmdRaterPacket, 'verify-rater-packet': cmdVerifyRaterPacket,
+  'rater-assignment-fingerprint': cmdRaterAssignmentFingerprint, 'verify-rater-assignment': cmdVerifyRaterAssignment, 'ingest-ratings': cmdIngestRatings,
+  'rating-adjudication-packet': cmdRatingAdjudicationPacket, 'resolve-rating-adjudication': cmdResolveRatingAdjudication, analyze: cmdAnalyze,
+  'sampling-evidence-bundle': cmdSamplingEvidenceBundle,
 };
 const o = args(process.argv.slice(2));
 const cmd = o._[0];

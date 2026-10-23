@@ -1,4 +1,4 @@
-// Sampling-event evaluation (CPG_U1_PROTOCOL_003 §5.5–§5.8, §21). Given a registration and an evidence
+// Sampling-event evaluation (CPG_U1_PROTOCOL_004 §5.5–§5.10, §21). Given a registration and an evidence
 // bundle, mechanically decides each stage's state and — only when FINAL — derives its seed.
 // No input selects randomness: the round is computed, the block is H_commit + K, the seed is recomputed.
 import { canonicalJson, sha256 } from './canonical.mjs';
@@ -14,6 +14,8 @@ export const D = 6;
 export const K = 12;
 export const ABANDONMENT_SECONDS = 180 * 24 * 60 * 60;
 export const EVIDENCE_SCHEMA = 'cpg-u1-sampling-evidence/v1';
+// §19.3 / §21 step 5: a drand round is only usable when the bundle attributes it to at least this many differently named relays.
+export const MIN_DRAND_RELAYS = 2;
 export const SEED_DOMAIN = 'cpg-u1-chain-drand-seed/v1';
 const FINGERPRINT_DOMAIN = 'cpg-u1-seed-fingerprint/v1';
 
@@ -83,7 +85,8 @@ function included(chain, item, what) {
 const outcome = (stage, state, reason, extra = {}) => ({ stage, state, reason, ...extra });
 
 /**
- * Evaluate one stage. Returns { stage, state, reason, record?, seed? }; `seed` is present only when FINAL.
+ * Evaluate one stage. Returns { stage, state, reason, record?, seed?, drandRelays? }; `seed` and `drandRelays` (the sorted
+ * distinct relays the bundle says attested the required drand round) are present only when FINAL.
  * Throws EvidenceError when the evidence is wrong or incomplete.
  * opts.priorFinal: { development?: record, 'held-out'?: record } previously recorded FINAL records (reorg check).
  */
@@ -184,6 +187,11 @@ export function evaluateStage(reg, ev, stage, opts = {}) {
     }
     return outcome(stage, STATE.WAITING_DRAND, `drand round ${round} (scheduled ${record.drand_round_time}) not in evidence`, { record });
   }
+  // §19.3 (protocol line 961) / §21 step 5: the round must be attested by ≥ 2 differently named relays, recorded per round by
+  // the bundle builder. Checked only once a beacon IS present, so absence still yields WAITING_DRAND_ROUND and, after the
+  // 30-day expiry, STUDY_VOID_RANDOMNESS_UNAVAILABLE. This is an attribution floor; it does not relax any signature check.
+  const relays = new Set(Array.isArray(beacon.relays) ? beacon.relays.filter((r) => typeof r === 'string' && r !== '' && r.trim() === r) : []);
+  if (relays.size < MIN_DRAND_RELAYS) throw new EvidenceError(`drand round ${round} is attested by ${relays.size} named relay(s); the protocol requires at least ${MIN_DRAND_RELAYS} differently named relays (§19.3)`);
   let randomness;
   try { randomness = verifyBeacon(ev.drand.chain_info, beacon, round); } catch (e) { throw new EvidenceError(e.message); }
   record.drand_randomness = randomness;
@@ -193,5 +201,5 @@ export function evaluateStage(reg, ev, stage, opts = {}) {
   });
   record.seed_fingerprint = seedFingerprint(seed);
   record.record_sha256 = sha256(canonicalJson(record));
-  return { ...outcome(stage, STATE.FINAL, 'sampling event final'), record, payload: p, seed, developmentRecord: dev ? dev.record : record };
+  return { ...outcome(stage, STATE.FINAL, 'sampling event final'), record, payload: p, seed, developmentRecord: dev ? dev.record : record, drandRelays: [...relays].sort() };
 }

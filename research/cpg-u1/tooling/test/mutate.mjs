@@ -1,4 +1,4 @@
-// Mutation check for tooling v5: each mutation disables one protocol guard in a THROWAWAY COPY;
+// Mutation check for the tooling: each mutation disables one protocol guard in a THROWAWAY COPY;
 // the self-test must then fail. Originals are never written. `--anchors` only verifies that every
 // anchor occurs exactly once. `--jobs N` runs N mutants concurrently (default 4).
 import { execFile } from 'node:child_process';
@@ -32,6 +32,8 @@ const FRM = 'lib/frame.mjs'; const RO = 'lib/raterOrder.mjs'; const PKT = 'lib/p
 const ADP = 'harness/cpgAdapter.ts'; const CEX = 'lib/cpgExecutor.mjs';
 const ETR = 'lib/evaluationTree.mjs';
 const EVL = 'lib/eventlog.mjs'; const HAR = 'lib/harness.mjs'; const ARC = 'lib/archive.mjs'; const RPK = 'lib/raterPackets.mjs';
+const EVA = 'lib/evaluation.mjs'; const ASG = 'lib/assignment.mjs'; const RAT = 'lib/ratings.mjs'; const ANA = 'lib/analysis.mjs'; const EBU = 'lib/evidenceBundle.mjs';
+const ENU = 'lib/enumeration.mjs'; const IDN = 'lib/identity.mjs';
 
 const MUTATIONS = [
   // ── retained from CPG-037A (M23 seed stage separation, M24 reveal check, M25 equal seeds, M26 CLI append-only: code removed or moved) ──
@@ -115,7 +117,10 @@ const MUTATIONS = [
 
   // ── CPG-041: registration ──
   ['M76 key custodian role not enforced', REG, "if (kc.role !== 'STUDY_OPERATOR') errors.push", 'if (false) errors.push'],
-  ['M77 UNASSIGNED treated as assigned', REG, "const assigned = (v) => typeof v === 'string' && v.trim() !== '' && v !== UNASSIGNED;", "const assigned = (v) => typeof v === 'string' && v.trim() !== '';"],
+  // M77's anchor was the pre-DR-12 definition of `assigned`. DR-12 replaced that line, so the anchor is
+  // re-pointed at the NEW line and the `to`-string is unchanged: the mutation still deletes the sentinel
+  // check and leaves the emptiness check, so this is the same mutant under the same ID.
+  ['M77 UNASSIGNED treated as assigned', REG, "const assigned = (v) => typeof v === 'string' && v.trim() !== '' && !isReservedSentinel(v);", "const assigned = (v) => typeof v === 'string' && v.trim() !== '';"],
   ['M78 embargo allowed', REG, 'if (r.embargo !== false) errors.push', 'if (false) errors.push'],
   ['M79 public registration not required', REG, 'if (r.public !== true) errors.push', 'if (false) errors.push'],
   ['M80 parameters not pinned', REG, 'for (const [k, v] of Object.entries(PARAMETERS)) if (p[k] !== v) errors.push', 'for (const [k, v] of Object.entries(PARAMETERS)) if (false) errors.push'],
@@ -330,6 +335,228 @@ const MUTATIONS = [
   ["M268 duplicate item cited URLs accepted", RPK, "if (new Set(it.cpg_source_urls).size !== it.cpg_source_urls.length) throw", "if (false) throw"],
   ["M269 packet does not record the cited-URL rule", RPK, "const body = { schema: RATER_PACKET_SCHEMA, label, cited_url_rule: CITED_URL_RULE,", "const body = { schema: RATER_PACKET_SCHEMA, label,"],
   ["M270 protocol need not state the cited-URL rule", CLI, "CITED_URL_RULE, EVALUATION_TREE_DOMAIN];", "EVALUATION_TREE_DOMAIN];"],
+  // ── DEEPTECH-PARALLEL-002: B1 blinded reference adjudication before the seal ──
+  ["M300 seal skips the blind reference adjudication", CLI, "const blindAdj = blindReferenceAdjudication(o, dev, ho, author, confirmer, adjudication);", "const blindAdj = { packetSha: null, decisionsSha: null };"],
+  ["M301 seal accepts a reference packet that is not the deterministic packet", CLI, "if (errors.length) fail(`BLIND_ADJUDICATION_REFUSED: the reference adjudication packet", "if (false) fail(`BLIND_ADJUDICATION_REFUSED: the reference adjudication packet"],
+  ["M302 blind decisions need not cover exactly the packet items", CLI, "if (canonicalJson(got) !== canonicalJson(want)) fail('BLIND_ADJUDICATION_REFUSED", "if (false) fail('BLIND_ADJUDICATION_REFUSED"],
+  ["M303 adjudication need not be the resolution of the blind decisions", CLI, "if (rowsKey(resolved) !== rowsKey(adjudication)) fail(", "if (false) fail("],
+  ["M304 disagreements sealed without any blind packet", CLI, "if (!expected.items.length && !given('reference-packet') && !given('blind-decisions')) return", "if (true) return"],
+  ["M305 seal does not bind the blind packet", CLI, "reference_adjudication_packet_sha256: blindAdj.packetSha,", "reference_adjudication_packet_sha256: null,"],
+  ["M306 reference packet verification ignores the seal binding", CLI, "if (o.seal && o.seal !== true && readJson(o.seal)", "if (false && readJson(o.seal)"],
+  // ── B5 CLI bindings ──
+  ["M307 sealed commands accept a seal whose hash does not recompute", CLI, "try { recomputeSealHash(seal); } catch (e) { fail(`WRONG_SEAL: ${e.message}`); }", ""],
+  ["M308 evaluation artifact not checked before use", CLI, "if (errors.length) fail(`EVALUATION_REFUSED: ${errors.join('; ')}`);", "if (false) fail(`EVALUATION_REFUSED: ${errors.join('; ')}`);"],
+  ["M309 ratings ingested without verifying the packet", CLI, "if (!v.identical) fail(`RATER_PACKET_MISMATCH: ${v.reason} — labels are ingested", "if (false) fail(`RATER_PACKET_MISMATCH: ${v.reason} — labels are ingested"],
+  ["M310 sheet not bound to the published assignment", CLI, "if (sheet.rated_by !== person || sheet.assignment_fingerprint !== fp) fail(", "if (false) fail("],
+  ["M311 decisions override allowed outside a synthetic study", CLI, "if (o['allow-synthetic'] !== true || reg?.network !== 'synthetic-test' || reg?.registration_id !== r.seal.registration_id) fail('--decisions", "if (false) fail('--decisions"],
+  ["M312 undecided decisions do not block the analysis", CLI, "if (dec.undecided.length) fail(", "if (false) fail("],
+  ["M313 invalid decisions file accepted", CLI, "if (dec.errors.length) fail(", "if (false) fail("],
+  ["M314 analysis accepts a substituted event log", CLI, "if (!log.events.some((e) => e.event_sha256 === r.evaluation.event_log_head)) fail(", "if (false) fail("],
+  ["M315 declarations not checked", CLI, "if (dErr.length) fail(", "if (false) fail("],
+  ["M316 evidence bundle written without verification", CLI, "const states = ['development', 'held-out'].map((stage) => evaluate(reg, ev, stage, { allowSynthetic, priorFinal: prior }));", "const states = [];"],
+  // ── B5 rater packet binding ──
+  ["M317 unbound rater packet accepted", RPK, "if (!HEX64.test(binding?.seal_hash ?? '') || !HEX64.test(binding?.evaluation_sha256 ?? '')) throw", "if (false) throw"],
+  ["M318 rater packet omits its seal/evaluation binding", RPK, "seal_hash: binding.seal_hash, evaluation_sha256: binding.evaluation_sha256, item_count", "item_count"],
+  // ── B3 pending never adjudicated ──
+  ["M319 pending rating treated as a disagreement", PKT, "if (l1 === PENDING || l2 === PENDING) continue;", ""],
+  // ── B5/B6 evaluation artifact ──
+  ["M320 evaluation trusts the claimed seal hash", EVA, "try { sealHash = recomputeSealHash(seal); } catch (e) { throw new Error(`WRONG_SEAL: ${e.message}`); }", "sealHash = seal.seal_hash;"],
+  ["M321 evaluation: seal need not bind the manifest", EVA, "if (seal.held_out?.manifest_sha256 !== hoManifestSha) throw new Error('WRONG_SEAL: the seal does not bind this held-out manifest');", ""],
+  ["M322 evaluation: unsealed reference accepted", EVA, "if (referenceSha !== seal.reference_file_sha256) throw", "if (false) throw"],
+  ["M323 evaluation: authorisation of another seal accepted", EVA, "if (authorization.seal_hash !== sealHash) throw new Error('WRONG_SEAL: the authorisation names a different seal');", ""],
+  ["M324 evaluation: wrong frame accepted", EVA, "if (authorization.frame_hash !== hoManifest.frame_hash || seal.held_out.frame_hash !== hoManifest.frame_hash) throw", "if (false) throw"],
+  ["M325 evaluation: authorised set need not equal the sealed set", EVA, "if (!same(authorization.held_out_candidate_ids, hoIds)) throw", "if (false) throw"],
+  ["M326 evaluation ignores the execution audit", EVA, "if (audit.state !== EXECUTION_STATE.CLEAN) {", "if (false) {"],
+  ["M327 evaluation: wrong treatment accepted", EVA, "if (start.resolver_sha !== seal.resolver_sha || hoManifest.resolver_sha !== seal.resolver_sha) throw", "if (false) throw"],
+  ["M328 evaluation: other provider configuration accepted", EVA, "if (start.provider_configuration_sha256 !== authorization.provider_configuration_sha256) throw", "if (false) throw"],
+  ["M329 evaluation: other asOf accepted", EVA, "if (start.as_of !== authorization.as_of) throw", "if (false) throw"],
+  ["M330 evaluation: misnamed record accepted", EVA, "if (file !== `${id}.json`) throw", "if (false) throw"],
+  ["M331 evaluation: altered archive record accepted", EVA, "if (errs.length) throw new Error(`ARCHIVE_REFUSED ${id}: ${errs.join('; ')}`);", ""],
+  ["M332 evaluation: record of another run/stage accepted", EVA, "if (record.stage !== 'held-out' || record.run_id !== start.run_id) throw", "if (false) throw"],
+  ["M333 evaluation: duplicate record accepted", EVA, "if (records.has(id)) throw new Error(`ARCHIVE_REFUSED ${id}: duplicate record`);", ""],
+  ["M334 evaluation: record differing from the logged one accepted", EVA, "if (ev.archive_record_sha256 !== record.record_sha256) throw", "if (false) throw"],
+  ["M335 evaluation: executed company silently dropped", EVA, "for (const id of executed.keys()) if (!records.has(id)) throw", "for (const id of executed.keys()) if (false) throw"],
+  ["M336 no-response observation read as scorable (abstention)", EVA, "obs = { machine_state: 'INVALID', invalid_reason: rec ? 'NO_RESPONSE_OR_HARNESS_ERROR' : 'NOT_EXECUTED_RUN_INTERRUPTED',", "obs = { machine_state: 'SCORABLE', invalid_reason: rec ? 'NO_RESPONSE_OR_HARNESS_ERROR' : 'NOT_EXECUTED_RUN_INTERRUPTED',"],
+  ["M337 missing facts object read as abstentions", EVA, "if (!facts || typeof facts !== 'object' || isArr(facts)) throw", "if (false) throw"],
+  ["M338 missing fact key read as an abstention", EVA, "if (!Object.hasOwn(facts, k)) throw", "if (false) throw"],
+  ["M339 non-string fact value read as an abstention", EVA, "if (v !== null && (typeof v !== 'string' || !v.trim())) throw", "if (false) throw"],
+  ["M340 missing grounding arrays accepted", EVA, "if (!isArr(g[k])) throw", "if (false) throw"],
+  ["M341 checkEvaluation trusts the evaluation hash", EVA, "if (sha256(canonicalJson(body)) !== claimed) errors.push(", "if (false) errors.push("],
+  ["M342 checkEvaluation: other seal accepted", EVA, "if (ev.seal_hash !== sealHash) errors.push(", "if (false) errors.push("],
+  ["M343 checkEvaluation: incomplete item set accepted", EVA, "if (!same(ev.items.map(obsKey), expected)) errors.push(", "if (false) errors.push("],
+  ["M344 checkEvaluation: incomplete observations accepted", EVA, "if (!same(ev.observations.map(obsKey), expected)) errors.push(", "if (false) errors.push("],
+  ["M345 checkEvaluation: INVALID observation with a value accepted", EVA, "else if (o.machine_state === 'INVALID' && (!INVALID_REASONS.includes(o.invalid_reason) || it.cpg_value !== null || it.cpg_source_urls.length)) errors.push(", "else if (false) errors.push("],
+  ["M346 checkEvaluation: unknown machine state accepted", EVA, "else if (!MACHINE_STATES.includes(o.machine_state)) errors.push(", "else if (false) errors.push("],
+  ["M347 checkEvaluation: other treatment accepted", EVA, "if (ev.resolver_sha !== seal?.resolver_sha) errors.push(", "if (false) errors.push("],
+  // ── §4A.3 rater assignment ──
+  ["M348 one person may hold two rating labels", ASG, "if (new Set(ASSIGNED_LABELS.map((l) => m[l])).size !== ASSIGNED_LABELS.length) errors.push(", "if (false) errors.push("],
+  ["M349 assignment not checked against the personnel register", ASG, "if (holders.length !== 1 || holders[0] !== m[l]) errors.push(", "if (false) errors.push("],
+  ["M350 assignment nonce not required", ASG, "if (!HEX64.test(a.nonce ?? '')) errors.push(", "if (false) errors.push("],
+  ["M351 assignment need not match the published fingerprint", ASG, "if (!HEX64.test(publishedFingerprint ?? '') || assignmentFingerprint(a) !== publishedFingerprint) throw", "if (false) throw"],
+  ["M352 assignment extra fields accepted", ASG, "if (Object.keys(a).length !== KEYS.length || !KEYS.every((k) => Object.hasOwn(a, k))) return", "if (false) return"],
+  // ── B2 ingestion ──
+  ["M353 rating for an item outside the packet accepted", RAT, "if (!byKey.has(k(r))) { errors.push(", "if (false) { errors.push("],
+  ["M354 duplicate rating accepted", RAT, "if (seen.has(k(r))) { errors.push(", "if (false) { errors.push("],
+  ["M355 rating by an unassigned person accepted", RAT, "if (r.rated_by !== ratedBy) errors.push(", "if (false) errors.push("],
+  ["M356 missing rating row silently allowed", RAT, "for (const key of byKey.keys()) if (!seen.has(key)) errors.push(", "for (const key of byKey.keys()) if (false) errors.push("],
+  ["M357 fill label accepted where CPG returned no value", RAT, "if (FILL_LABELS.includes(r.label) && item.cpg_value === null) errors.push(", "if (false) errors.push("],
+  ["M358 abstention label accepted where CPG returned a value", RAT, "if (ABSTENTION_LABELS.includes(r.label) && item.cpg_value !== null) errors.push(", "if (false) errors.push("],
+  ["M359 sub-reason on the wrong label/field accepted", RAT, "else if (rule.label !== r.label || !rule.fields.includes(r.field)) errors.push(", "else if (false) errors.push("],
+  ["M360 unknown rating label accepted", RAT, "if (![...RATING_LABELS, PENDING].includes(r.label)) errors.push(", "if (false) errors.push("],
+  ["M361 pending row with a rating date accepted", RAT, "if (r.label === PENDING) { if (r.rated_at !== '') errors.push(", "if (r.label === PENDING) { if (false) errors.push("],
+  ["M362 edited sheet accepted", RAT, "if (sha256(canonicalJson(body(sheet, 'sheet_sha256'))) !== sheet.sheet_sha256) errors.push(", "if (false) errors.push("],
+  ["M363 sheet accepted under another label", RAT, "if (sheet.label !== label) errors.push(", "if (false) errors.push("],
+  // ── B3 rating adjudication ──
+  ["M364 same person may rate both sheets", RAT, "if (sheet1.rated_by === sheet2.rated_by) errors.push(", "if (false) errors.push("],
+  ["M365 a rater may adjudicate", RAT, "if ([sheet1.rated_by, sheet2.rated_by].includes(adjudicator)) errors.push(", "if (false) errors.push("],
+  ["M366 decision on a non-packet item accepted", RAT, "if (!items.has(k(r))) errors.push(", "if (false) errors.push("],
+  ["M367 decision by someone other than the rating adjudicator accepted", RAT, "if (r.adjudicated_by !== adjudicator) errors.push(", "if (false) errors.push("],
+  ["M368 disagreement left undecided", RAT, "for (const key of items.keys()) if (!seen.has(key)) errors.push(", "for (const key of items.keys()) if (false) errors.push("],
+  ["M369 altered resolution accepted", RAT, "if (resolution.schema !== RATING_RESOLUTION_SCHEMA || sha256(canonicalJson(body(resolution, 'resolution_sha256'))) !== resolution.resolution_sha256) errs.push(", "if (false) errs.push("],
+  ["M370 resolution bound to other sheets accepted", RAT, "if (resolution.sheet_1_sha256 !== sheet1.sheet_sha256 || resolution.sheet_2_sha256 !== sheet2.sheet_sha256 || resolution.evaluation_sha256 !== evaluation.evaluation_sha256) errs.push(", "if (false) errs.push("],
+  ["M371 disagreements scored without a resolution", RAT, "if (!resolution) throw new Error(`RATING_ADJUDICATION_MISSING", "if (false) throw new Error(`RATING_ADJUDICATION_MISSING"],
+  ["M372 pending rating scored", RAT, "if (a.label !== PENDING && b.label !== PENDING) {", "if (true) {"],
+  // ── B4 analysis ──
+  ["M373 G1 threshold lowered", ANA, "const G1 = { fills, threshold: 20, holds: fills >= 20 };", "const G1 = { fills, threshold: 20, holds: fills >= 19 };"],
+  ["M374 P1 boundary made strict", ANA, "met: fills > 0 && 20 * bad <= fills", "met: fills > 0 && 20 * bad < fills"],
+  ["M375 P2 boundary made strict", ANA, "10 * CA >= 9 * (CA + U)", "10 * CA > 9 * (CA + U)"],
+  ["M376 falsification boundary made inclusive", ANA, "else if (M > 0 || 10 * bad > fills) outcome = 'FALSIFIED';", "else if (M > 0 || 10 * bad >= fills) outcome = 'FALSIFIED';"],
+  ["M377 misattribution does not falsify", ANA, "else if (M > 0 || 10 * bad > fills) outcome = 'FALSIFIED';", "else if (10 * bad > fills) outcome = 'FALSIFIED';"],
+  ["M378 INCONCLUSIVE not checked first", ANA, "if (inconclusive.length) outcome = 'INCONCLUSIVE';", "if (false) outcome = 'INCONCLUSIVE';"],
+  ["M379 §15.5(2) VALID share ignored", ANA, "triggered: 10 * valid.length < 9 * total", "triggered: false"],
+  ["M380 §15.5(3) α threshold ignored", ANA, "(alphaUndefined ? D['AD-2'] === 'INCONCLUSIVE' : alphaBelow(alpha))", "(alphaUndefined ? D['AD-2'] === 'INCONCLUSIVE' : false)"],
+  ["M381 α threshold changed", ANA, "1000 * (a.expected_den - a.observed_num) < 667 * a.expected_den", "1000 * (a.expected_den - a.observed_num) < 600 * a.expected_den"],
+  ["M382 completely-rated share threshold changed", ANA, "10 * completelyRated < 9 * total", "10 * completelyRated < 8 * total"],
+  ["M383 §15.5(4) registry threshold changed", ANA, "triggered: 10 * registryDown.length > companies.length", "triggered: 10 * registryDown.length > 2 * companies.length"],
+  ["M384 AD-4 decisive-identifier option ignored", ANA, "return o.registry_unavailable.some((x) => x.identifier === heldOut.get(id).identifier_value);", "return o.registry_unavailable.length > 0;"],
+  ["M385 §15.5(5) SOURCE-COINCIDENT boundary made inclusive", ANA, "10 * sc > 6 * valid.length", "10 * sc >= 6 * valid.length"],
+  ["M386 AD-3 exact option ignored", ANA, "return urls.includes(ref.source_url);", "return urls.map(stripFragment).includes(stripFragment(ref.source_url));"],
+  ["M387 §15.5(6) seal publication ignored", ANA, "triggered: sealPublication?.seal_hash !== evaluation.seal_hash ||", "triggered: false ||"],
+  ["M388 §15.5(7) protocol violation ignored", ANA, "'7_protocol_violation': { triggered: declarations.protocol_violations.length > 0,", "'7_protocol_violation': { triggered: false,"],
+  ["M389 VOID execution audit not VOID", ANA, "if (audit.state.startsWith('STUDY_VOID')) voidBasis.push(", "if (false) voidBasis.push("],
+  ["M390 AD-7 VOID option ignored", ANA, "if (declarations.protocol_violations.length && D['AD-7'] === 'VOID') voidBasis.push(", "if (false) voidBasis.push("],
+  ["M391 machine INVALID not applied (enters abstention)", ANA, "else if (o.machine_state === 'INVALID') { disposition = 'INVALID'; reason = o.invalid_reason; }", "else if (false) { disposition = 'INVALID'; reason = o.invalid_reason; }"],
+  ["M392 identity inadmissibility ignored", ANA, "if (inadmissible.has(it.candidate_id)) { disposition = 'INVALID';", "if (false) { disposition = 'INVALID';"],
+  ["M393 sealed REFERENCE-CONFLICT scored", ANA, "else if (ref.resolution === 'REFERENCE_CONFLICT')", "else if (false)"],
+  ["M394 staleness boundary made inclusive", ANA, "ref.as_of_date < cutoff)", "ref.as_of_date <= cutoff)"],
+  ["M395 temporal rule applied to founded_year", ANA, "['employee_count', 'revenue_range'].includes(it.field) &&", "true &&"],
+  ["M396 AD-6 scope ignored", ANA, "(D['AD-6'] === 'ALL_REFERENCE_RECORDS' || ref.value_kind === 'STATED')", "true"],
+  ["M397 rater REFERENCE-AMBIGUOUS scored", ANA, "else if (f.final.label === 'REFERENCE-AMBIGUOUS') disposition = 'REFERENCE-AMBIGUOUS';", "else if (false) disposition = 'REFERENCE-AMBIGUOUS';"],
+  ["M398 α computed on adjudicated labels", ANA, "alphaNominal(alphaPop.map((r) => [r.rater_1_label, r.rater_2_label]))", "alphaNominal(alphaPop.map((r) => [r.label ?? r.rater_1_label, r.label ?? r.rater_2_label]))"],
+  ["M399 AD-1 exclusion option ignored", ANA, "(D['AD-1'] === 'ALL_COMPLETELY_RATED_ITEMS' || !", "(true || !"],
+  ["M400 AD-2 option ignored", ANA, "(alphaUndefined ? D['AD-2'] === 'INCONCLUSIVE' : alphaBelow(alpha))", "(alphaUndefined ? true : alphaBelow(alpha))"],
+  ["M401 AD-8 option ignored", ANA, "const p2Inconclusive = !arDefined && D['AD-8'] === 'INCONCLUSIVE';", "const p2Inconclusive = false;"],
+  ["M402 calendar months not clamped", ANA, "Math.min(d.getUTCDate(), last)", "d.getUTCDate()"],
+  ["M403 AD-9 option ignored", ANA, "(D['AD-9'] === 'ANY_UNAVAILABLE_ENTRY' ? o.registry_unavailable.length + o.unavailable_sources.length > 0 : o.registry_unavailable.length > 0)", "(o.registry_unavailable.length + o.unavailable_sources.length > 0)"],
+  ["M404 UNDECIDED not recognised", ANA, "if (d.value === UNDECIDED) undecided.push(id);", "if (false) undecided.push(id);"],
+  ["M405 decision options not pinned", ANA, "if (canonicalJson(d.options) !== canonicalJson(DECISIONS[id])) errors.push(", "if (false) errors.push("],
+  ["M406 decision value outside options accepted", ANA, "else if (!DECISIONS[id].includes(d.value)) errors.push(", "else if (false) errors.push("],
+  ["M407 decision set not exact", ANA, "if (canonicalJson(ids) !== canonicalJson(Object.keys(DECISIONS).sort())) errors.push(", "if (false) errors.push("],
+  ["M408 declarations of another seal accepted", ANA, "if (d.seal_hash !== sealHash) errors.push(", "if (false) errors.push("],
+  ["M409 inadmissibility of a non-held-out company accepted", ANA, "if (!x || !heldOutIds.includes(x.candidate_id)) errors.push(", "if (false) errors.push("],
+  ["M410 α coincidence weight wrong", ANA, "const num = (n - 1) * 2 * disagreements;", "const num = n * 2 * disagreements;"],
+  // ── §13.2A evidence bundle ──
+  ["M411 one header source accepted twice", EBU, "if (headers.source === crosscheck.source) throw", "if (false) throw"],
+  ["M412 conflicting relay beacons accepted", EBU, "if (prior && (prior.randomness !== v.randomness || prior.signature !== v.signature)) throw", "if (false) throw"],
+  ["M413 held-out commitment bundled without development", EBU, "if (commitments['held-out'] && !commitments.development) throw", "if (false) throw"],
+  ["M414 commitment bundled without its payload", EBU, "if (!c.payload || typeof c.payload !== 'object') throw", "if (false) throw"],
+  ["M415 malformed transaction hex accepted by the builder", EBU, "if (typeof p.tx_hex !== 'string' || !HEX.test(p.tx_hex)) throw", "if (false) throw"],
+  // ── §19.3 / §21 step 5: the ≥ 2 differently named drand relay floor and its per-relay attribution (DR-1) ──
+  ["M416 beacon accepted without a well-formed named relay", EBU, "if (typeof b.relay !== 'string' || !b.relay.trim() || b.relay.trim() !== b.relay) throw", "if (false) throw"],
+  ["M417 single-relay round accepted by the verifier", SAM, "if (relays.size < MIN_DRAND_RELAYS) throw new EvidenceError(", "if (false) throw new EvidenceError("],
+  ["M418 the same relay counted twice towards the floor", EBU, "if (!prior.relays.includes(b.relay)) prior.relays.push(b.relay);", "prior.relays.push(b.relay);"],
+  // ── DR-10 (DEEPTECH-PARALLEL-009): the cmdScan duplicate collapse ──
+  ["M419 scan state keyed on candidate_id (the historical collapse restored)", CLI, 'const state = frame.map((r, i) => ({ r, record: i + 1, tokens: tokensFor(r), hits: [] }));', 'const state = new Map(frame.map((r) => [r.candidate_id, { r, tokens: tokensFor(r), hits: [] }]));'],
+  ["M420 duplicate candidate_id in a scanned frame not refused", CLI, 'if (repeated.length) {', 'if (false) {'],
+  ["M421 a pair of occurrences not counted as a duplicate", CLI, 'filter(([, list]) => list.length > 1)', 'filter(([, list]) => list.length > 2)'],
+  ["M422 duplicate occurrence reported without its contamination reason", CLI, "why.length ? why.join(' ; ') : 'no contamination found in this occurrence'", "''"],
+  ["M423 duplicate occurrence reported without its source record", CLI, 'record ${c.record}:', 'record:'],
+  // ── DEEPTECH-PARALLEL-009: §4A.2 enumeration attribution (the last two are POSITIVE controls: the mutant must break acceptance) ──
+  ["M424 forged/unregistered enumerator accepted", ENU, "if (a.id && !eligible.has(a.id)) errors.push(", "if (false) errors.push("],
+  ["M425 enumerator not eligible under §4A.1 accepted", ENU, "errors.push(...reg.errors.map((e) => `personnel register: ${e}`));", ""],
+  ["M426 any registered role accepted as enumerator", ENU, ".filter((a) => a?.role === ENUMERATOR_ROLE)", ".filter((a) => typeof a?.role === 'string')"],
+  ["M427 row without an enumerator identity accepted", ENU, "for (const a of attributed) if (!a.id) errors.push(", "for (const a of attributed) if (false) errors.push("],
+  ["M428 one person in both enumerator slots accepted", ENU, "if (new Set(enumerators).size !== enumerators.length) errors.push(", "if (false) errors.push("],
+  ["M429 POSITIVE CONTROL: registered enumerator A no longer resolves", ENU, ".filter((a) => a?.role === ENUMERATOR_ROLE)", ".filter((a) => a?.role === 'rater-1')"],
+  ["M430 POSITIVE CONTROL: only the first registered enumerator resolves (B rejected)", ENU, ".map((a) => a.person_id);", ".map((a) => a.person_id).slice(0, 1);"],
+
+  // == DEEPTECH-PARALLEL-013 · DR-12 (§6): normalisation of the reserved UNASSIGNED sentinel. M431-M436.
+  //    M433 and M435 are POSITIVE CONTROLS: the mutant must break ACCEPTANCE of a legitimate case.
+  ["M431 sentinel compared without trimming (surrounding-whitespace variant read as assigned)", IDN, "export const trimmedFor = (v) => (typeof v === 'string' ? v.trim() : '');", "export const trimmedFor = (v) => (typeof v === 'string' ? v : '');"],
+  ["M432 sentinel compared case-sensitively (lowercase unassigned read as assigned)", IDN, "export const isReservedSentinel = (v) => trimmedFor(v).toUpperCase() === UNASSIGNED;", "export const isReservedSentinel = (v) => trimmedFor(v) === UNASSIGNED;"],
+  ["M433 POSITIVE CONTROL: internal whitespace squashed, so UN ASSIGNED stops being ASSIGNED", IDN, "export const isReservedSentinel = (v) => trimmedFor(v).toUpperCase() === UNASSIGNED;", "export const isReservedSentinel = (v) => trimmedFor(v).replace(/\\s+/g, '').toUpperCase() === UNASSIGNED;"],
+  ["M434 empty / whitespace-only value no longer unassigned", IDN, "export const isEmptyValue = (v) => trimmedFor(v) === '';", "export const isEmptyValue = (v) => false;"],
+  ["M435 POSITIVE CONTROL: only empty values count as assigned, so legitimate values stop being assigned", IDN, "export const assignedValue = (v) => typeof v === 'string' && !isEmptyValue(v) && !isReservedSentinel(v);", "export const assignedValue = (v) => typeof v === 'string' && isEmptyValue(v) && !isReservedSentinel(v);"],
+  ["M436 DR-12 defect restored: registration compares the sentinel untrimmed and case-sensitively", REG, "const assigned = (v) => typeof v === 'string' && v.trim() !== '' && !isReservedSentinel(v);", "const assigned = (v) => typeof v === 'string' && v.trim() !== '' && v !== UNASSIGNED;"],
+  // == DEEPTECH-PARALLEL-013 · R28 (§3): identity / authority validation. M437-M459.
+  ["M437 non-string identity value not MALFORMED", IDN, "if (typeof raw !== 'string') return verdict(IDENTITY_CLASS.MALFORMED, 'MALFORMED_NOT_A_STRING'", "if (false) return verdict(IDENTITY_CLASS.MALFORMED, 'MALFORMED_NOT_A_STRING'"],
+  ["M438 EMPTY not distinguished as its own class", IDN, "if (isEmptyValue(raw)) return verdict(IDENTITY_CLASS.EMPTY,", "if (false) return verdict(IDENTITY_CLASS.EMPTY,"],
+  ["M439 RESERVED/UNASSIGNED not distinguished as its own class", IDN, "if (isReservedSentinel(raw)) return verdict(IDENTITY_CLASS.RESERVED,", "if (false) return verdict(IDENTITY_CLASS.RESERVED,"],
+  ["M440 control / zero-width / bidi characters accepted in an identity", IDN, "if (hasInvisibleCharacter(raw)) return verdict(", "if (false) return verdict("],
+  ["M441 surrounding-whitespace identity silently canonicalised instead of refused", IDN, "if (raw !== raw.trim()) return verdict(", "if (false) return verdict("],
+  ["M442 identity containing the field separator pipe accepted", IDN, "if (raw.includes(DELIMITER)) return verdict(", "if (false) return verdict("],
+  ["M443 the instrument's own SYNTHETIC fixture marker no longer detected", IDN, "if (raw.toUpperCase().includes(TEST_FIXTURE_MARKER)) return verdict(", "if (false) return verdict("],
+  // M444 RE-POINTED (F4, same ID, same mutant): its anchor was the FOREIGN synthetic-marker list, which F4
+  // removed because no document defines those words as forbidden identity tokens. Substring matching still
+  // exists, and still matters, for the instrument's OWN fixture marker, so the anchor moves there and the
+  // mutation is unchanged in kind: substring match -> whole-value match.
+  ["M444 synthetic marker matched only as the whole value, not as a substring", IDN, "raw.toUpperCase().includes(TEST_FIXTURE_MARKER)", "raw.toUpperCase() === TEST_FIXTURE_MARKER"],
+  ["M445 reserved placeholder tokens (TBD, PLACEHOLDER) accepted as identities", IDN, "if (PLACEHOLDER_TOKENS.includes(squash(raw))) return verdict(", "if (false) return verdict("],
+  ["M446 placeholder token matched case-sensitively (lowercase tbd evades)", IDN, "const squash = (v) => v.toUpperCase().replace(/[^A-Z0-9]/g, '');", "const squash = (v) => v.replace(/[^A-Z0-9]/g, '');"],
+  ["M447 placeholder token evaded by punctuation (T.B.D. evades)", IDN, "const squash = (v) => v.toUpperCase().replace(/[^A-Z0-9]/g, '');", "const squash = (v) => v.toUpperCase();"],
+  ["M448 zero-pattern identifier accepted", IDN, "if (isZeroPattern(raw)) return verdict(", "if (false) return verdict("],
+  ["M449 zero-pattern evaded by group separators", IDN, "const core = String(v).replace(GROUP_SEPARATORS, '');", "const core = String(v);"],
+  ["M450 INVARIANT BREACH: an unattested value promoted from PLAUSIBLE to AUTHORITATIVE", IDN, "return verdict(IDENTITY_CLASS.PLAUSIBLE, 'NO_AUTHORITY_ATTESTATION',", "return verdict(IDENTITY_CLASS.AUTHORITATIVE, 'NO_AUTHORITY_ATTESTATION',"],
+  ["M451 attestation not bound to the exact value it attests to", IDN, "if (att.resolved_value !== value) e.push(", "if (false) e.push("],
+  ["M452 an insufficient attestation promoted to AUTHORITATIVE", IDN, "if (errs.length) return verdict(IDENTITY_CLASS.PLAUSIBLE, 'ATTESTATION_INSUFFICIENT'", "if (false) return verdict(IDENTITY_CLASS.PLAUSIBLE, 'ATTESTATION_INSUFFICIENT'"],
+  ["M453 attestation accepted without a UTC resolution instant", IDN, "if (!ISO_UTC.test(att.resolved_at ?? '')) e.push(", "if (false) e.push("],
+  ["M454 attestation's authority / resolver / method not themselves screened", IDN, "if (bad) e.push(`attestation.${k} is not an explicit value", "if (false) e.push(`attestation.${k} is not an explicit value"],
+  ["M455 self-attestation inside the registration record accepted", CLI, "if (Object.hasOwn(reg, 'identity_attestations')) fail(", "if (false) fail("],
+  ["M456 the exit-0 line claims public, unembargoed and authoritative again", CLI, "console.log(`registration ${reg.registration_id}: ESTABLISHED", "console.log(`registration ${reg.registration_id} complete, public, unembargoed, authoritative; ESTABLISHED"],
+  // M457 RE-POINTED (F4b, same ID, same mutant): F4b lifted the classification out of the `else if` chain so
+  // that a piped registration_id is classified too, which removed the leading `else `. The anchor follows
+  // the line; the mutation still deletes the classification and nothing else.
+  ["M457 registration_id not identity-screened", REG, "human(reg.registration_id, 'registration_id', 'registration_id');", "if (false) human(reg.registration_id, 'registration_id', 'registration_id');"],
+  ["M458 a MALFORMED identity value accepted by the registration check", REG, "else if (c.class === IDENTITY_CLASS.MALFORMED) errors.push(", "else if (false) errors.push("],
+  ["M459 a reserved-placeholder identity value accepted by the registration check", REG, "else if (c.class === IDENTITY_CLASS.SYNTHETIC && c.code !== 'SYNTHETIC_MARKER') errors.push(", "else if (false) errors.push("],
+  // == DEEPTECH-PARALLEL-013 · R15 (§4): provider-configuration authority. M460-M467.
+  ["M460 R15 defect restored: the registered provider hash is never compared with the derived one", HAR, "if (recorded !== derived) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_MISMATCH'", "if (false) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_MISMATCH'"],
+  ["M461 a malformed provider hash accepted instead of blocked", HAR, "if (!PROVIDER_HEX64.test(recorded)) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_MALFORMED'", "if (false) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_MALFORMED'"],
+  ["M462 the current hash taken from the submitted record instead of derived from the clone", HAR, "try { derived = providerConfigurationSha(cloneDir); }", "try { derived = recorded; }"],
+  ["M463 provider hash derived from a clone that is not the pinned evaluation tree", HAR, "if (!tree.ok) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_TREE_MISMATCH'", "if (false) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_TREE_MISMATCH'"],
+  ["M464 a missing provider hash not blocked", HAR, "if (!assignedValue(recorded)) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_MISSING'", "if (false) return out(PROVIDER_CONFIG_VERDICT.BLOCKED, 'PROVIDER_CONFIG_MISSING'"],
+  ["M465 an uncompared provider hash reported as ACCEPTABLE when no clone is supplied", HAR, "if (!cloneDir) return out(PROVIDER_CONFIG_VERDICT.NOT_COMPARED, 'PROVIDER_CONFIG_NOT_COMPARED'", "if (!cloneDir) return out(PROVIDER_CONFIG_VERDICT.ACCEPTABLE, 'PROVIDER_CONFIG_NOT_COMPARED'"],
+  ["M466 a BLOCKED provider verdict does not stop the command", CLI, "if (provider.verdict === PROVIDER_CONFIG_VERDICT.BLOCKED) fail(", "if (false) fail("],
+  ["M467 --require-provider-config does not block an uncompared provider hash", CLI, "if (provider.verdict === PROVIDER_CONFIG_VERDICT.NOT_COMPARED && o['require-provider-config'] === true) fail(", "if (false) fail("],
+  // == DEEPTECH-PARALLEL-015 - DR-11 (ADOPTED): duplicate `scan.results` refusal in cpg_u1_data.mjs
+  //    `contamination()`. These four land in the block reserved for exactly this fix: nothing is renumbered.
+  ["M468 duplicate scan results not refused (the byId collapse restored)", CLI, 'if (repeatedResults.length) {', 'if (false) {'],
+  ["M469 a pair of scan results not counted as a duplicate", CLI, 'filter(([, list]) => list.length !== 1)', 'filter(([, list]) => list.length > 2)'],
+  ["M470 duplicate scan result reported without its own contamination reasons", CLI, "why.length ? why.join(' ; ') : 'no contamination recorded in this occurrence'", "''"],
+  ["M471 duplicate scan result reported without its own held_out_ineligible_by_scan", CLI, 'held_out_ineligible_by_scan=${x.held_out_ineligible_by_scan}', 'held_out_ineligible_by_scan=(not reported)'],
+
+  // == DEEPTECH-PARALLEL-015 - F3: a supplied but nonexistent resolver clone (an S1 missed refusal).
+  //    M473 and M474 are POSITIVE CONTROLS: the mutant must break the HONEST behaviour, not a refusal.
+  ["M472 F3 defect restored: a supplied but missing resolver clone silently becomes 'no clone supplied'", CLI, 'if (!existsSync(supplied)) fail(', 'if (false) fail('],
+  ["M473 POSITIVE CONTROL: genuine absence of a clone turned into a refusal instead of NOT_COMPARED", CLI, 'if (!supplied) return null;', 'if (false) return null;'],
+  ["M474 the supplied-but-missing refusal does not name where the path came from", CLI, "${flag ? '--resolver-clone' : 'CPG_U1_RESOLVER_CLONE'} names", 'a resolver clone path names'],
+
+  // == DEEPTECH-PARALLEL-015 - F1: `checkpoint` routed through the DR-12 normalised sentinel test.
+  ["M475 F1 defect restored: the checkpoint sentinel compared raw (padded/mis-cased sentinel misrouted to the format error)", REG, 'if (isReservedSentinel(cp.height) || isReservedSentinel(cp.hash)) blockers.push(', 'if (cp.height === UNASSIGNED || cp.hash === UNASSIGNED) blockers.push('],
+  ["M476 the checkpoint prerequisite blocker removed entirely", REG, 'if (isReservedSentinel(cp.height) || isReservedSentinel(cp.hash)) blockers.push(', 'if (false) blockers.push('],
+
+  // == DEEPTECH-PARALLEL-015 - F4b: the registration_id pipe guard no longer short-circuits classification.
+  ["M477 F4b defect restored: the pipe guard short-circuits classification, so identity.registration_id is absent", REG, "human(reg.registration_id, 'registration_id', 'registration_id');", "if (!reg.registration_id.includes('|')) human(reg.registration_id, 'registration_id', 'registration_id');"],
+  ["M478 the registration_id pipe refusal dropped now that classification runs first", REG, "if (reg.registration_id.includes('|')) errors.push(", 'if (false) errors.push('],
+
+  // == DEEPTECH-PARALLEL-015 - F4: ZWNJ/ZWJ, prose screening, and the narrowed forbidden-token list.
+  //    M479 and M484 are POSITIVE CONTROLS: the mutant must break ACCEPTANCE of a legitimate case.
+  ["M479 POSITIVE CONTROL: ZWNJ/ZWJ swallowed again, so legitimate Persian/Indic names are MALFORMED", IDN, '[0x200b, 0x200b], [0x200e, 0x200f]', '[0x200b, 0x200f]'],
+  ["M480 U+200B zero-width space no longer refused (the ZWNJ narrowing over-applied)", IDN, '[0x200b, 0x200b], [0x200e, 0x200f]', '[0x200e, 0x200f]'],
+  ["M481 attestation.method identifier-screened again, so a truthful method sentence is refused for a word it contains", IDN, '...ATTESTATION_PROSE_FIELDS.map((k) => [k, screenProseValue(att[k])]),', '...ATTESTATION_PROSE_FIELDS.map((k) => [k, screenIdentityValue(att[k])]),'],
+  ["M482 attestation prose fields not screened at all, so an empty method confers authority", IDN, '...ATTESTATION_PROSE_FIELDS.map((k) => [k, screenProseValue(att[k])]),', '...ATTESTATION_PROSE_FIELDS.map((k) => [k, null]),'],
+  ["M483 blanket lexical refusal restored (Na/None/Test/Mock forbidden again)", IDN, "const PLACEHOLDER_TOKENS = Object.freeze(['TBD', 'PLACEHOLDER']);", "const PLACEHOLDER_TOKENS = Object.freeze(['TBD', 'PLACEHOLDER', 'NA', 'NONE', 'TEST', 'MOCK']);"],
+  ["M484 POSITIVE CONTROL: authority/resolved_by prose-screened, so a placeholder authority confers authority", IDN, '...ATTESTATION_IDENTIFIER_FIELDS.map((k) => [k, screenIdentityValue(att[k])]),', '...ATTESTATION_IDENTIFIER_FIELDS.map((k) => [k, screenProseValue(att[k])]),'],
 ];
 
 // `--only M176,M204` restricts a run to named mutants (spot checks only; a full run never uses it)

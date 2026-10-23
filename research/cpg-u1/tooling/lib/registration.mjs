@@ -1,13 +1,14 @@
-// Public preregistration record (CPG_U1_PROTOCOL_003 §5.2). The tooling never creates, publishes or
+// Public preregistration record (CPG_U1_PROTOCOL_004 §5.5.1). The tooling never creates, publishes or
 // names anything: it writes a template whose identities are UNASSIGNED and refuses to proceed
 // until a human supplies them. It cannot see the registry; outsiders confirm the record there.
 import { MAINNET, SYNTHETIC, parseOutpoint } from './bitcoin.mjs';
 import { STUDY_ID } from './commitment.mjs';
 import { DELTA_SECONDS, MISSING_ROUND_EXPIRY_SECONDS, QUICKNET } from './drand.mjs';
+import { IDENTITY_CLASS, UNASSIGNED, classifyIdentityValue, isReservedSentinel } from './identity.mjs';
 
 export const REGISTRATION_SCHEMA = 'cpg-u1-registration/v1';
 export const PROTOCOL_VERSION = 'CPG_U1_PROTOCOL_004';
-export const UNASSIGNED = 'UNASSIGNED';
+export { UNASSIGNED };
 export const REGISTRY = Object.freeze({ name: 'OSF Registries', public: true, embargo: false });
 
 /** Pinned sampling parameters (U2, U3 approvals). A registration must reproduce them exactly. */
@@ -56,20 +57,29 @@ export function registrationTemplate({ protocolSha, toolingAggregate, registrySh
   };
 }
 
-const assigned = (v) => typeof v === 'string' && v.trim() !== '' && v !== UNASSIGNED;
+// DR-12: the sentinel is compared TRIMMED and CASE-INSENSITIVELY (lib/identity.mjs). The previous line
+// compared it untrimmed and case-sensitively, so " UNASSIGNED " and "unassigned" were read as assigned.
+const assigned = (v) => typeof v === 'string' && v.trim() !== '' && !isReservedSentinel(v);
 
 /**
  * phase 'funding'     — may Bitcoin outputs be created? Needs the key custodian (role STUDY_OPERATOR).
  * phase 'registered'  — is this a complete registered record? Needs everything.
  * Returns { errors, blockers }: errors = malformed/forbidden; blockers = named human prerequisites missing.
  */
-export function checkRegistration(reg, { phase, allowSynthetic = false }) {
-  const errors = []; const blockers = [];
-  if (!reg || typeof reg !== 'object') return { errors: ['registration record missing'], blockers };
+export function checkRegistration(reg, { phase, allowSynthetic = false, attestations = {} }) {
+  const errors = []; const blockers = []; const identity = {};
+  if (!reg || typeof reg !== 'object') return { errors: ['registration record missing'], blockers, identity };
   const synthetic = (v) => typeof v === 'string' && v.toUpperCase().includes(SYNTHETIC_PREFIX);
+  // R28 (§3): classify, do not merely test for non-emptiness. An attestation is taken ONLY from the
+  // separately supplied `attestations` map, never from `reg` — a record cannot attest to itself.
   const human = (v, name, label) => {
-    if (!assigned(v)) blockers.push(`${label} is UNASSIGNED (${name})`);
+    const c = classifyIdentityValue(v, { attestation: attestations[name] ?? null });
+    identity[name] = c;
+    if (c.class === IDENTITY_CLASS.EMPTY || c.class === IDENTITY_CLASS.RESERVED) blockers.push(`${label} is UNASSIGNED (${name}: ${c.code})`);
+    else if (c.class === IDENTITY_CLASS.MALFORMED) errors.push(`${name} is malformed — ${c.message}`);
+    else if (c.class === IDENTITY_CLASS.SYNTHETIC && c.code !== 'SYNTHETIC_MARKER') errors.push(`${name} is a reserved placeholder, not an identity — ${c.message}`);
     else if (synthetic(v) && !allowSynthetic) errors.push(`${name} is a SYNTHETIC test value — refused outside test mode`);
+    return c;
   };
 
   if (reg.schema !== REGISTRATION_SCHEMA) errors.push(`schema must be ${REGISTRATION_SCHEMA}`);
@@ -94,7 +104,17 @@ export function checkRegistration(reg, { phase, allowSynthetic = false }) {
   human(reg.persistent_identifier?.type, 'persistent_identifier.type', 'Persistent identifier type');
   human(reg.persistent_identifier?.value, 'persistent_identifier.value', 'Persistent identifier');
   if (!assigned(reg.registration_id)) blockers.push('registration_id is UNASSIGNED (issued by the registry at registration)');
-  else if (reg.registration_id.includes('|')) errors.push('registration_id must not contain "|"');
+  else {
+    // F4b: classify FIRST. The pre-existing `else if (... includes('|'))` ran AHEAD of the classification
+    // and short-circuited it, so a piped registration_id was refused without ever being classified and
+    // `identity.registration_id` was simply absent from the output of verify-registration — the one
+    // identity leaf the caller could not see. Classification is now observable for every ASSIGNED value,
+    // and the "|" refusal is unchanged and additional: `human` classifies a piped value
+    // MALFORMED_DELIMITER, and the instrument's own construction rule is still stated in its own words,
+    // because that refusal is about the instrument's hashed/logged field separator, not about identity.
+    human(reg.registration_id, 'registration_id', 'registration_id');
+    if (reg.registration_id.includes('|')) errors.push('registration_id must not contain "|"');
+  }
   if (!assigned(reg.registration_timestamp)) blockers.push('registration_timestamp is UNASSIGNED (issued by the registry at registration)');
   else if (!ISO_UTC.test(reg.registration_timestamp) || Number.isNaN(Date.parse(reg.registration_timestamp))) errors.push('registration_timestamp must be ISO-8601 UTC YYYY-MM-DDTHH:MM:SSZ');
 
@@ -105,13 +125,20 @@ export function checkRegistration(reg, { phase, allowSynthetic = false }) {
     if (o.development === o['held-out']) errors.push('development and held-out outpoints must be distinct');
   }
   const cp = reg.checkpoint ?? {};
-  if (cp.height === UNASSIGNED || cp.hash === UNASSIGNED) blockers.push('checkpoint is UNASSIGNED (a block at or after both funding confirmations)');
+  // F1 (DR-12 consistency): the raw `cp.height === UNASSIGNED || cp.hash === UNASSIGNED` comparison was the
+  // last untrimmed, case-sensitive sentinel test in the tooling. An exact sentinel reached this blocker
+  // (exit 4), but a padded or mis-cased one (" UNASSIGNED ", "unassigned") fell through to the format
+  // error below and became exit 1 "malformed" — precisely the misrouting DR-12 removed everywhere else:
+  // the record was then reported as defective instead of as awaiting a named human prerequisite.
+  // `isReservedSentinel` is false for a numeric height and for `undefined`, so a genuine checkpoint and a
+  // missing or wrongly typed one keep the exact routes they had before.
+  if (isReservedSentinel(cp.height) || isReservedSentinel(cp.hash)) blockers.push('checkpoint is UNASSIGNED (a block at or after both funding confirmations)');
   else if (!Number.isSafeInteger(cp.height) || cp.height < 0 || !HEX64.test(cp.hash ?? '')) errors.push('checkpoint must be {height: integer, hash: 64 hex}');
   if (!assigned(reg.as_of)) blockers.push('as_of is UNASSIGNED (§7/§19.1: one frozen ISO timestamp, chosen before registration)');
   else if (!ISO_UTC.test(reg.as_of) || Number.isNaN(Date.parse(reg.as_of))) errors.push('as_of must be ISO-8601 UTC YYYY-MM-DDTHH:MM:SSZ');
   if (!assigned(reg.provider_configuration_sha256)) blockers.push('provider_configuration_sha256 is UNASSIGNED (§13.1/§19.1: computed from the resolver before registration)');
   else if (!HEX64.test(reg.provider_configuration_sha256)) errors.push('provider_configuration_sha256 must be 64 lowercase hex characters');
-  return { errors, blockers };
+  return { errors, blockers, identity };
 }
 
 export const registrationEpoch = (reg) => Math.floor(Date.parse(reg.registration_timestamp) / 1000);

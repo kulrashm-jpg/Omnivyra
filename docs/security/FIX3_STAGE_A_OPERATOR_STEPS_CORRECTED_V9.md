@@ -1,0 +1,207 @@
+# FIX 3 — STAGE A OPERATOR STEPS
+
+**For the owner, or an operator the owner delegates to.** One page of procedure plus a result
+template. The SQL lives in the approved package and is not reproduced here.
+
+| | |
+|---|---|
+| **Run the queries from** | `docs/security/FIX3_STAGE_A_OWNER_RUN_EVIDENCE_CORRECTED_V9.md` — sha256 `cb19aa345419ee676c3d75ae236592d3da536fab71846d43664b0957e93fc4fd` |
+| **Superseded** | the original `FIX3_PHASE98_STAGE_A_OWNER_RUN_EVIDENCE.md` (`a0327d2ae48ba3be…`), the v1 corrected package (`8e751f5bf9fc5188…`) the v2 corrected package (`c2b9eaf9e14661c4…`) the v3 corrected package (`27680e1e70a24fac…`) the v4 corrected package (`63498ef76eae0d74…`) the v5 corrected package (`2902242859b28912…`) the v6 corrected package (`df9672617e0f2699…`) the v7 corrected package (`78ce050f0d351fc1…`) and the v8 corrected package (`1fe6eae32dd3b2c8…`) are **preserved as audit history and must not be executed** — its read-only gate, Item 1 instrument, Item 5 version handling and Item 9 counts were corrected |
+| **Do not** | copy, retype, substitute or "improve" its SQL. Run the items as published. |
+| **Qualifications** | see section 4 before you start |
+
+Verify that hash before you begin. If it does not match, stop: you are looking at a different
+document from the one reviewed.
+
+---
+
+## 1. BEFORE YOU RUN ANYTHING — six independent confirmations
+
+Confirm all six **yourself**. Do not infer any of them from the fact that a query returned rows.
+**If you cannot independently verify any one of them, stop and do not proceed.**
+
+| # | Confirm | How |
+|---|---|---|
+| 1 | **The intended target** | Project ref `klkiseupptzbecbxwrky`, read from the platform console. Never identify the database by a Studio display name — it can be changed, and it has misled this programme before. |
+| 2 | **The effective role** | `SELECT current_user, session_user;` — know which role you are actually connected as, not which one you intended. |
+| 3 | **The role's real read-only privileges, database-level powers, ownership SET ROLE paths, the server version, and session continuity** | Run **all six** gate queries in the v9 package's section 1, step 3 — 3a attributes incl. `rolcreaterole` and database ownership **plus the `SET ROLE`-to-database-owner test [v6]**, 3b effective write privilege over **seven** relations (the six `public` ones plus `supabase_migrations.schema_migrations`), 3c relation ownership **and `SET ROLE`-to-owner [v6]**, 3d escalation paths, **3e** schema `CREATE`/`USAGE`, schema ownership **and `SET ROLE`-to-schema-owner [v6]** for `public` **and** `supabase_migrations`, **3f** the start backend PID. Being a non-superuser is **not** sufficient, and `USAGE`-false does **not** mean the session cannot become the owner. Any one of the **eight** stop conditions means **stop**; a stop condition overrides any nominal pass elsewhere; `ABSENT`/`UNKNOWN`/`INCONCLUSIVE` are never passes, and UNKNOWN on a PRESENT object is itself a STOP |
+| 4 | **The execution context is safe** | `BEGIN; SET TRANSACTION READ ONLY;` … `ROLLBACK;` around the work, so an accidental write fails instead of succeeding. **A `SELECT` statement alone is not proof the context is read-only** — the access path, permissions and session all have to hold. |
+| 5 | **A non-secret way to name the target** | Capture `current_database()`, `server_version` and the UTC timestamp. That distinguishes the target without disclosing host, port, user or password. |
+| 6 | **A safe way to capture output** | Plain text you can redact before sharing. Decide this before you run, not after. |
+
+Stop immediately, and record why, if the target cannot be confirmed, the role cannot be confirmed
+or holds write or DDL privilege with no read-only alternative available, `SET TRANSACTION READ ONLY`
+is unavailable with no equivalent guarantee, or any statement errors in a way suggesting it did
+something other than read.
+
+**Hard prohibitions for the whole session:** no DDL, no DML, no migrations, no `supabase db push`,
+no generic migration-ledger reconciliation, no `SET ROLE` or impersonation, no writes, no
+authorization probes, and no execution of anything from
+`FIX3_PHASE99_PREFLIGHT_CORRECTION_PROPOSED.md`.
+
+---
+
+## 2. RUN THE ELEVEN ITEMS
+
+All eleven are specified in the approved package, each with its own SQL, expected columns,
+PASS / FAIL / INCONCLUSIVE criteria, minimization rules and limitations. Run them in one session,
+in one window, and record start and end timestamps in UTC.
+
+| # | Evidence | Note |
+|---|---|---|
+| 1 | Relevant table grants | catalog ACL inspection (`relacl` + `aclexplode`, with `acldefault` for the NULL case), **not** `information_schema` — that view is membership-filtered and can look like "no grants exist" |
+| 2 | `user_company_roles` policies and role configuration | **the most consequential item** — it decides whether the Fix 3 policy predicate is satisfiable at all |
+| 3 | RLS enabled and forced status | all five tables |
+| 4 | Actual policy predicates, including `public.content`'s `content_company_rw` | `content`'s policy is **not** owned by Fix 3 and shares the predicate |
+| 5 | Foreign keys: ordered column mappings, delete actions, validation state | decides CREATE path vs RECONCILE path. **Clear the step 5a version gate first**: below PostgreSQL 15 record FAIL and stop — do not drop the `confdelsetcols` column |
+| 6 | Lifecycle CHECK definition and accepted values | see section 4.2 — read this one carefully |
+| 7 | Index definitions and options | name equality is not enough; the options matter |
+| 8 | Trigger definitions and referenced function names | also settles which timestamp function production actually has |
+| 9 | Row counts for the four Fix 3 tables plus `public.content` | **two steps**: 9a existence probe, then 9b counts for present tables only. Record an absent table as `ABSENT`, never as 0 |
+| 10 | Tenant-consistency preflight — the approved Phase 96 §F query, **plus sub-item 10b** | see section 4.1. **10b:** run 10b-1 always; run 10b-2 **only** if 10b-1 returns `0`. A count of `1` is `NOT APPLICABLE` — **not** a pass for Item 6. A NULL count, an error, or an unobtainable result is `INCONCLUSIVE`: stop and escalate, never record it as PASS |
+| 11 | Migration-history evidence | record **separately**; never merge with schema state |
+
+A table that is **absent** is a finding, not an error, and is different from a table that is
+present and empty. Record which.
+
+---
+
+## 3. RESULT TEMPLATE
+
+One block per item, eleven in total.
+
+```
+STAGE A EVIDENCE — FIX 3
+Session window (UTC):   start ______________  end ______________
+Target (project ref):   ______________  (expected klkiseupptzbecbxwrky)
+current_database():     ______________   server_version: ______________
+Effective role:         ______________
+Read-only gate (v9 package, step 3) — ALL must be clear; there is no discipline-only route:
+  3a is_superuser ____  can_create_roles ____  can_create_in_public ____  bypasses_rls ____
+  3a database_owner-inherited ____   can_set_role_to_database_owner ____ [v6]
+  3b any write priv on any of the SEVEN relations (ins/upd/del/trunc/refs/trig): ____
+     incl. supabase_migrations.schema_migrations: present ____  write priv ____
+  3c is_or_inherits_owner on any of the SEVEN ____   can_set_role_to_owner on any ____ [v6]
+  3d escalation rows: ____
+  3e public:              present ____ create_priv ____ owner-inherited ____ can_set_role ____ [v6]
+  3e supabase_migrations: present ____ create_priv ____ owner-inherited ____ can_set_role ____ [v6]
+  Fail-closed: ABSENT / UNKNOWN / INCONCLUSIVE are NOT passes; UNKNOWN on a PRESENT
+  relation or schema is itself a STOP; a stop condition overrides any nominal pass.
+  Version tags date each field's introduction in THIS document: the [v6] rows were
+  added to these operator steps in v6; the package's matching rows are tagged [v7]
+  because the package template gained them in v7. The tags are not aligned across
+  the two documents, deliberately, so that each stays factually accurate. [v9]
+  Aggregate readiness [v7] — fill LAST, not from the last query or field:
+    all eight clear ____  continuity ____  out-of-band ref ____  all items verdicted ____
+    AGGREGATE VERDICT: [ ] READY   [ ] NOT READY
+    NOT APPLICABLE is not a PASS; it is admissible only for Item 10b and never
+    overrides a stop condition. FAIL / INCONCLUSIVE / UNKNOWN-on-present => NOT READY.
+    Where a check is mandatory, or its applicability cannot be established, NOT
+    APPLICABLE is unavailable: record INCONCLUSIVE and ESCALATE. [v8]
+    Rationale — required for either verdict [v8]:
+      ______________________________________________________________
+    Unresolved conditions — every STOP / FAIL / UNKNOWN-on-present /
+    INCONCLUSIVE and every check of unresolved applicability; NONE if none [v8]:
+      ______________________________________________________________
+    Escalated to, and when — required if anything above is unresolved [v8]:
+      ______________________________________________________________
+SC-6 transaction_read_only OBSERVED `on` in THIS session: ____  (session safeguard, not the enforcement)
+Session continuity (L-5): 3f pid_start ____________  post-Item-11 pid_end ____________  match? ____
+  connection mode: [ ] session/direct  [ ] transaction pooler -> INCONCLUSIVE  [ ] unknown -> INCONCLUSIVE
+  PID equality does NOT prove the same target project — the out-of-band ref check still applies.
+Item 9 variant:         [ ] exact count(*)   [ ] reltuples estimate
+Item 5 version gate:    [ ] pg15_or_later true   [ ] FALSE -> record FAIL and stop
+Package hash confirmed: ____  (cb19aa345419ee67…, the CORRECTED v9 package)
+
+--- ITEM <n> ---
+Evidence ID:           <1..11>
+Executed at (UTC):     ______________
+Query version:         package item <n>   [ ] unmodified   [ ] modified (attach)
+Exit status:           [ ] ok   [ ] error (quote it, redacted)
+Result summary:        ________________________________________________
+Verdict:               [ ] PASS   [ ] FAIL   [ ] INCONCLUSIVE
+Limitations/warnings:  ________________________________________________
+```
+
+**Never paste** credentials, connection strings (whole or partial), tokens, API keys, passwords,
+personal data, raw row payloads, or any database content unrelated to these five tables — not into
+the evidence report, not into a ticket, not into chat. If a result cannot be summarised without
+one of those, write `WITHHELD — contains sensitive data` and describe the shape of the finding
+instead.
+
+---
+
+## 4. FOUR QUALIFICATIONS THAT CHANGE HOW YOU READ THE RESULTS
+
+### 4.1 Preflight scope — item 10
+
+The approved Phase 96 §F query is **adequate for the four composite foreign-key relationships**
+under review. Phase 99 confirmed this relationship by relationship: correct NULL handling, no false
+positives, no row multiplication.
+
+It does **not** establish every possible data-dependent failure condition.
+
+**The refinement at the ORIGINAL Phase 98 package's lines 649-662 is unapproved and must not be
+used** — in the v9 package it is the block marked `NEEDS REVIEW` inside Item 10. **[v8]** It is
+already labelled `NEEDS REVIEW` in the package, and Phase 99 found a real defect in it — its second
+join is on the parent's `id` alone, which can multiply output rows. **Do not substitute the Phase 99
+proposed correction into the package either**; it is review-only and has never been executed.
+
+A **zero-row** preflight result excludes one failure class at one moment in time. It is **not**
+proof that the migration is safe to apply, and it is not authorization to apply it.
+
+### 4.2 Lifecycle CHECK — item 6 is not only a definition question
+
+Inspect the **actual** lifecycle CHECK state on `public.content`, because what STEP 6 does depends
+on it:
+
+- **Exactly one CHECK covering `lifecycle_status`, in the nine-value form, validated** → STEP 6
+  changes nothing and scans nothing. The expected case.
+- **Exactly one, in the eight-value predecessor form** → STEP 6 replaces it. This **scans**
+  `public.content` but cannot fail, because nine values is a strict superset of eight.
+- **No CHECK covering `lifecycle_status`** → STEP 6 **adds** it. This scans `public.content` and
+  **will abort with SQLSTATE `23514`** if any row holds a value outside the nine. This is a
+  **separate condition from the foreign-key failures item 10 covers**, and item 10 will not detect
+  it.
+- **More than one** → the migration refuses before touching data.
+
+Record which of the four states you find. Do **not** create a new query or run the Phase 99
+proposed correction to probe this during Stage A; item 6 as published tells you which state you are
+in, and that is enough for the owner to decide the next step.
+
+### 4.3 RLS — configuration is not behavior
+
+Items 1 to 4 establish **configuration**: grants, RLS flags, policy predicates. They do **not** by
+themselves prove the runtime authorization behavior of real production users.
+
+Do **not** attempt role switching, impersonation, writes, or authorization probes against
+production to close that gap. Record the four layers separately — RLS flags, grants and role
+memberships, policy predicates, and runtime behavior (not established) — and do not write
+"RLS verified".
+
+### 4.4 Performance — the existing numbers are synthetic
+
+Phase 96 measured roughly 4,505 ms end-to-end at about 1.5 million synthetic rows, largest single
+statement roughly 1,489 ms, on a four-CPU container with no concurrent load. **These are not
+production performance predictions.**
+
+Material operational risks remain, and none is to be changed: `lock_timeout` is five seconds and
+**ACCESS EXCLUSIVE** locks are taken leaf-first on five tables, so under live traffic the migration
+may simply fail to acquire its locks and abort; because the migration is one transaction, that lock
+window spans the whole apply; and no constraint is added `NOT VALID`, so index builds and
+constraint validation all happen inside that window. Item 9's row counts are one input to judging
+this, not the answer.
+
+---
+
+## 5. WHEN YOU ARE DONE
+
+Return the eleven filled-in blocks and the roll-up. Nothing else is required.
+
+**Completing Stage A does not authorize applying Fix 3.** Even eleven PASS verdicts establish only
+what the production schema currently *is*. Application remains a **separate, explicit owner
+decision**, taken after the evidence and an operational plan are reviewed — including remediation
+for anything item 10 finds, a maintenance window consistent with section 4.4, and re-confirmation
+of the migration hash `581926201d268d5bde34b6a6b7be4ee118bac3ed8d62ef88756e7030b2d445d5` and the
+verification-artifact hash `5c62e0155bf1d4d1d911597549d83bb252cf54b66f89ba0774070371da26601b` at
+the time of application.

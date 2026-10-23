@@ -1,4 +1,4 @@
-// Tooling aggregate (CPG_U1_PROTOCOL_003 §4): sha256 of the UTF-8 text with one line
+// Tooling aggregate (CPG_U1_PROTOCOL_004 §19.1, §24): sha256 of the UTF-8 text with one line
 // "<sha256>  <path>" per file, sorted by path, LF-terminated — the CPG-037A definition,
 // applied to every file of the tooling tree, vendored dependencies included.
 import { readdirSync, readFileSync } from 'node:fs';

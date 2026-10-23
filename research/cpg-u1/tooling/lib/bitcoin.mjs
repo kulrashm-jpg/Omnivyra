@@ -1,4 +1,4 @@
-// Bitcoin verification primitives (CPG_U1_PROTOCOL_003 §5.5). Node crypto only — no Bitcoin
+// Bitcoin verification primitives (CPG_U1_PROTOCOL_004 §5.7.1, §24). Node crypto only — no Bitcoin
 // framework, no wallet, no key, no network. Verifies what an outsider can check offline:
 // header proof of work, linkage, difficulty retargeting, median-time-past, Merkle inclusion,
 // strict transaction parsing and the commitment OP_RETURN.

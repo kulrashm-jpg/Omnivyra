@@ -1,4 +1,4 @@
-// Commitment payload, digest, held-out binding and append-only proof (CPG_U1_PROTOCOL_003 §5.4).
+// Commitment payload, digest, held-out binding and append-only proof (CPG_U1_PROTOCOL_004 §5.5.3).
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { parseOutpoint } from './bitcoin.mjs';
 

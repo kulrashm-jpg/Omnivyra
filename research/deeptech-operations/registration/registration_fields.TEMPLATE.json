@@ -1,0 +1,55 @@
+{
+  "schema": "cpg-u1-registration/v1",
+  "study_id": "CPG-U1-2026-01",
+  "protocol_version": "CPG_U1_PROTOCOL_004",
+  "protocol_sha256": "c50fc68010fdf29a9439faa3654ef4b6763f0efead99fb6395f2c691df00b719",
+  "tooling_aggregate_sha256": "f7699f05495f72379903b00195bf44271bbdc75c66cac3185ed0dbb04e5cc5dd",
+  "registry_sha256": "a1392952627145d049edf82912f410355bc25ce5b087bfdddc30cc91e2a70814",
+  "registry": {
+    "name": "OSF Registries",
+    "public": true,
+    "embargo": false
+  },
+  "registration_id": "UNASSIGNED",
+  "registration_timestamp": "UNASSIGNED",
+  "accountable_identity": {
+    "status": "REQUIRED_AT_REGISTRATION",
+    "value": "UNASSIGNED"
+  },
+  "persistent_identifier": {
+    "type": "UNASSIGNED",
+    "value": "UNASSIGNED"
+  },
+  "bitcoin_key_custodian": {
+    "status": "REQUIRED_BEFORE_FUNDING",
+    "role": "STUDY_OPERATOR",
+    "value": "UNASSIGNED"
+  },
+  "network": "bitcoin-mainnet",
+  "outpoints": {
+    "development": "UNASSIGNED",
+    "held-out": "UNASSIGNED"
+  },
+  "checkpoint": {
+    "height": "UNASSIGNED",
+    "hash": "UNASSIGNED"
+  },
+  "parameters": {
+    "confirmations_D": 6,
+    "randomness_offset_K": 12,
+    "abandonment_days": 180,
+    "randomness_model": "B",
+    "drand_chain_hash": "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
+    "drand_delta_seconds": 10800,
+    "drand_missing_round_expiry_days": 30,
+    "commitment_opreturn": "CPGU1|01|44(D)/48(H)|sha256 digest",
+    "digest_domain": "cpg-u1-commitment-digest/v1",
+    "seed_derivation": "cpg-u1-chain-drand-seed/v1",
+    "rank_key": "sha256(\"<seed>|<scheme>:<identifier>\")",
+    "bls_implementation": "@noble/curves@1.9.7 + @noble/hashes@1.8.0 (vendored)"
+  },
+  "as_of": "UNASSIGNED",
+  "provider_configuration_sha256": "UNASSIGNED",
+  "authority_rule": "The earliest registration under the accountable identity with this study_id is authoritative; a second registration with different sampling fields, or a withdrawal, voids the study.",
+  "verification_procedure": "CPG_U1_PROTOCOL_004 §21 (cpg_u1_data.mjs verify-sampling)"
+}
