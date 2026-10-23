@@ -45,6 +45,9 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * call ceiling is now REQUIRED, so a tenant with no ceiling configured is
  * refused at `authorizeCost` with `cost_denied` and zero transport. This route
  * does not implement that and must not duplicate it — see spendCeiling.ts.
+ * The one exception is a provider whose vendor subscription governs its spend
+ * (Apollo, owner decision 2026-10-23, see billingPolicy.ts). It is not
+ * ceiling-gated, and its own refusals are returned below with their exact code.
  *
  * ─── WHY A DISTINCT ROUTE ─────────────────────────────────────────────────
  * `/api/prospects/[id]` is documented GET-only and answers "everything the
@@ -57,6 +60,7 @@ import { requireTenantAccess } from '../../../../backend/security/TenantGuard';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { PROSPECT_ENRICH_EXECUTE } from '../../../../shared/contracts/security';
 import { executeProspectEnrichment } from '../../../../backend/apiHandlers/prospects/prospectIntelligenceRead';
+import { isProviderErrorView, providerErrorResponse } from '../../../../backend/services/providerErrors/apolloErrors';
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 
@@ -108,7 +112,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       subject,
       now: asOf ?? new Date().toISOString(),
     });
-    // Both shapes are 200. `not_planned` is the planner's verdict and
+    // THE VENDOR'S OWN REFUSAL (owner decision 2026-10-23). When the provider
+    // answered with a typed refusal (bad key, endpoint not in plan, credits,
+    // rate-limit window, outage), the tenant sees that code and the vendor's
+    // own message, with the status mapped from the code. The execution record
+    // is still returned in full beside it.
+    const providerError = result.status === 'executed'
+      ? (result as { execution?: { providerError?: unknown } }).execution?.providerError
+      : null;
+    if (isProviderErrorView(providerError)) {
+      const mapped = providerErrorResponse(providerError);
+      for (const [name, value] of Object.entries(mapped.headers)) res.setHeader(name, value);
+      return res.status(mapped.status).json({ ...mapped.body, ...result });
+    }
+
+    // Otherwise both shapes are 200. `not_planned` is the planner's verdict and
     // `executed` carries the executor's own refusal taxonomy intact — a
     // `duplicate_suppressed` or `credential_missing` outcome is a successful
     // execution that correctly declined to spend, not a transport error.

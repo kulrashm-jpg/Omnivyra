@@ -348,6 +348,13 @@ export interface DiscoveryPage {
     readonly state: 'unknown' | 'free' | 'billed';
     readonly units?: number | null;
   };
+  /**
+   * The provider's request-rate quota as its own response headers state it, so
+   * a caller can warn before a limit is reached. Opaque to the executor, which
+   * passes the latest page's value through. Never a credit balance unless the
+   * provider actually publishes one.
+   */
+  readonly providerUsage?: unknown;
 }
 
 /**

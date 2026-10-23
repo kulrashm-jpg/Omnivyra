@@ -10,8 +10,9 @@
  * attempt claiming, leasing, cost authorization, canonical prospect creation,
  * identity resolution, source arbitration, lifecycle or outreach. Every one of
  * those lives outside, in the frozen B4-A1 architecture, and this file cannot
- * reach any of them: it imports exactly two things — the egress primitive and
- * the frozen contract's types.
+ * reach any of them: it imports exactly three things — the egress primitive,
+ * the frozen contract's types, and the pure shared Apollo error classifier
+ * (`providerErrors/apolloErrors`), which performs no I/O.
  *
  * ─── THE ONE CALL, AND ONLY ONE ───────────────────────────────────────────
  * `POST https://api.apollo.io/api/v1/mixed_people/api_search`, which is the only
@@ -49,11 +50,21 @@
 
 import { safeFetch } from '../../../../lib/security/safeFetch';
 import type { DiscoveryPage, DiscoveryProviderAdapter } from '../contract';
+// The shared Apollo error vocabulary. It is pure: no I/O, no environment, no logging.
+import {
+  classifyApolloHttpError,
+  classifyApolloTransportError,
+  parseApolloUsageHeaders,
+  readApolloErrorBody,
+  type ProviderErrorView,
+} from '../../providerErrors/apolloErrors';
 
 /** Apollo's REST host and the one discovery operation. Host-pinned below. */
 export const APOLLO_HOST = 'api.apollo.io';
 export const APOLLO_DISCOVERY_URL = `https://${APOLLO_HOST}/api/v1/mixed_people/api_search`;
 export const APOLLO_DISCOVERY_TIMEOUT_MS = 15_000;
+/** The endpoint name Apollo uses in its own messages. */
+export const APOLLO_DISCOVERY_ENDPOINT = 'api/v1/mixed_people/api_search';
 
 /**
  * Apollo's own page-size cap for this operation.
@@ -112,7 +123,16 @@ export type ApolloDiscoveryFailure = typeof APOLLO_DISCOVERY_FAILURES[number];
  * itself rather than only in a log.
  */
 export class ApolloDiscoveryError extends Error {
-  constructor(readonly failure: ApolloDiscoveryFailure, detail: string) {
+  constructor(
+    readonly failure: ApolloDiscoveryFailure,
+    detail: string,
+    /**
+     * The typed vendor error, present whenever Apollo (or the transport to it)
+     * answered. Absent for refusals this adapter makes before egress. The
+     * executor passes it through to the route unchanged.
+     */
+    readonly providerError: ProviderErrorView | null = null,
+  ) {
     super(`${failure}: ${detail}`);
     this.name = 'ApolloDiscoveryError';
   }
@@ -316,13 +336,25 @@ export const apolloDiscoveryAdapter: DiscoveryProviderAdapter = {
       const failure: ApolloDiscoveryFailure = /abort|timeout|timed out/i.test(message)
         ? 'apollo_timeout'
         : 'apollo_unavailable';
-      throw new ApolloDiscoveryError(failure, message.slice(0, 200));
+      const view = classifyApolloTransportError({ error, endpoint: APOLLO_DISCOVERY_ENDPOINT, apiKey: key });
+      throw new ApolloDiscoveryError(failure, view.vendorMessage ?? 'transport failure', view);
     }
 
     if (!response.ok) {
+      // Apollo's own status, body and headers are classified into the shared
+      // vocabulary. The detail recorded in the ledger leads with the stable code
+      // and carries no key: `classifyApolloHttpError` redacts it.
+      const view = classifyApolloHttpError({
+        status: response.status,
+        headers: response.headers,
+        body: await readApolloErrorBody(response),
+        endpoint: APOLLO_DISCOVERY_ENDPOINT,
+        apiKey: key,
+      });
       throw new ApolloDiscoveryError(
         classifyApolloStatus(response.status),
-        `HTTP ${response.status}`,
+        `HTTP ${response.status} ${view.code}${view.vendorMessage ? ` — ${view.vendorMessage}` : ''}`,
+        view,
       );
     }
 
@@ -333,6 +365,11 @@ export const apolloDiscoveryAdapter: DiscoveryProviderAdapter = {
       throw new ApolloDiscoveryError('apollo_malformed_response', 'the response body was not JSON');
     }
 
-    return parseApolloSearchResponse(payload);
+    // Request-rate quota left on Apollo's windows, as Apollo's headers state
+    // it, so a caller can warn before the limit is hit. Never a credit balance:
+    // Apollo publishes none.
+    const usage = parseApolloUsageHeaders(response.headers);
+    const page = parseApolloSearchResponse(payload);
+    return usage ? { ...page, providerUsage: usage } : page;
   },
 };

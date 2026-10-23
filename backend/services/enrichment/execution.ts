@@ -123,6 +123,10 @@ export interface PlanFieldExecution {
   readonly reason: string;
   readonly correlationId: string;
   readonly version: string;
+  /** The vendor's typed refusal (e.g. `APOLLO_*`), when the vendor refused. */
+  readonly providerError?: unknown;
+  /** The vendor's request-rate quota from its own headers, when stated. */
+  readonly providerUsage?: unknown;
 }
 
 export interface ExecutePlannedFieldInput {
@@ -396,5 +400,7 @@ export async function executePlannedField(
     reason: result.reason,
     correlationId: result.correlationId,
     version: PLAN_EXECUTION_VERSION,
+    providerError: result.providerError ?? null,
+    providerUsage: result.providerUsage ?? null,
   };
 }

@@ -11,6 +11,7 @@ import { registerDiscoveryAdapters } from '../../../backend/services/prospectDis
 import { translateRatifiedIcpToDiscoveryFilters } from '../../../backend/services/prospectDiscovery/icpTranslation';
 import { getIcpVersionById } from '../../../backend/services/prospectIcp/persistence';
 import { RATIFIED_STATUS } from '../../../backend/services/prospectIcp/types';
+import { providerErrorResponse } from '../../../backend/services/providerErrors/apolloErrors';
 
 /**
  * B4-A1 — the authorized, user-initiated prospect DISCOVERY entry point.
@@ -19,7 +20,10 @@ import { RATIFIED_STATUS } from '../../../backend/services/prospectIcp/types';
  *     headers: Idempotency-Key: <caller-chosen>
  *     body: { provider, filters: {...}, bounds: { maxPages, maxResults, maxProviderCalls } }
  *     → 201 { execution: { id, attemptNumber, searchDigest, bounds,
- *                          readyForProviderExecution, refusal } }
+ *                          readyForProviderExecution, refusal }, run }
+ *     → 402 / 424 / 429 / 422 / 503 / 502 { error, code: 'APOLLO_*', providerError,
+ *                          execution, run } when the vendor refused (see
+ *                          providerErrors/apolloErrors.ts for the table)
  *
  * ─── THIS ENDPOINT DOES NOT CALL A PROVIDER. AT ALL. ──────────────────────
  * It records an authorized search and stops. There is no adapter invocation on
@@ -305,18 +309,34 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // The caller can tell complete success from partial completion from complete
     // failure, because `status` and `stopReason` are reported verbatim from the
     // settled attempt rather than flattened into a boolean.
-    return res.status(201).json({
-      execution,
-      run: {
-        status: run.status,
-        outcome: run.outcome,
-        stopReason: run.stopReason,
-        providerCalls: run.providerCalls,
-        pagesFetched: run.pagesFetched,
-        resultsObserved: run.resultsObserved,
-        resultsIngested: run.resultsIngested,
-      },
-    });
+    const runView = {
+      status: run.status,
+      outcome: run.outcome,
+      stopReason: run.stopReason,
+      providerCalls: run.providerCalls,
+      pagesFetched: run.pagesFetched,
+      resultsObserved: run.resultsObserved,
+      resultsIngested: run.resultsIngested,
+      // Apollo's request-rate quota left on its minute/hour/day windows, from
+      // its own response headers, so the caller can warn before a limit. Null
+      // when the provider stated none. It is never a credit balance.
+      providerUsage: run.providerUsage ?? null,
+    };
+
+    // ── THE VENDOR'S OWN REFUSAL, SHOWN AS-IS (owner decision 2026-10-23) ──
+    // Apollo is billed by the tenant's own subscription, so Omnivyra does not
+    // meter it, but the tenant must see exactly why Apollo refused: bad key,
+    // endpoint not in plan, credits, which rate-limit window, or an outage.
+    // The status comes from the stable code. `Retry-After` is set only when
+    // Apollo stated a horizon. The execution and run are still returned,
+    // because the ledger row exists and is evidence.
+    if (run.status === 'failed' && run.providerError) {
+      const mapped = providerErrorResponse(run.providerError);
+      for (const [name, value] of Object.entries(mapped.headers)) res.setHeader(name, value);
+      return res.status(mapped.status).json({ ...mapped.body, execution, run: runView });
+    }
+
+    return res.status(201).json({ execution, run: runView });
   } catch {
     // Nothing from the failure reaches the caller: a discovery refusal can carry
     // a provider message, and a provider message can echo a request header.

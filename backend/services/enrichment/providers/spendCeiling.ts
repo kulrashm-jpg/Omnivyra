@@ -62,6 +62,7 @@
 
 import { ownedDbTable } from '../../../db/writeOwner';
 import type { TenantFundedPortOptions } from './cost';
+import { isBillingGovernedByVendorSubscription } from './billingPolicy';
 
 /**
  * The tenant-policy flag that carries the ceiling.
@@ -243,6 +244,15 @@ export function makeDailyCallCeilingAllow(
   const now = options.now ?? (() => new Date().toISOString());
 
   return async ({ organizationId, providerId }) => {
+    // VENDOR-GOVERNED PROVIDERS ARE NOT CEILING-GATED (owner decision
+    // 2026-10-23, see billingPolicy.ts). Apollo's spend is governed by the
+    // tenant's Apollo subscription, so it gets no ceiling read, no usage count
+    // and no refusal from here. Apollo's own plan, credit and rate-limit
+    // refusals reach the tenant verbatim through providerErrors/apolloErrors.ts.
+    // Checked before any I/O. Every other provider falls through to the
+    // REQUIRED ceiling below, unchanged.
+    if (isBillingGovernedByVendorSubscription(providerId)) return null;
+
     const ceiling = await resolveCeiling({ organizationId, providerId });
 
     // REQUIRED, not optional (OD-A / PI-ADR-007). This line used to read

@@ -71,6 +71,7 @@ import { tenantCredentialPort, type TenantCredentialPort } from '../enrichment/p
 import { tenantFundedExecutionPort } from '../enrichment/providers/cost';
 import { resolveLeadIngestionGate, ingestLeadBatch } from '../leadIngestion/orchestrator';
 import { hasLeadSourceAdapter } from '../leadIngestion/registry';
+import { isProviderErrorView, type ProviderErrorView } from '../providerErrors/apolloErrors';
 
 /** How long an executor holds the lease before it may be reclaimed. */
 export const DISCOVERY_LEASE_MS = 5 * 60 * 1000;
@@ -311,6 +312,14 @@ export interface RunDiscoveryResult {
   readonly stopReason:
     | 'provider_exhausted' | 'max_pages' | 'max_results' | 'max_provider_calls'
     | 'provider_failed' | 'marker_failed' | null;
+  /**
+   * The provider's typed error, when the run failed because the provider (or
+   * the transport to it) refused. Passed through from the adapter unchanged,
+   * so the route can show the tenant exactly what the vendor said.
+   */
+  readonly providerError?: ProviderErrorView | null;
+  /** The provider's request-rate quota from the LAST page it answered, if it stated one. */
+  readonly providerUsage?: unknown;
 }
 
 /**
@@ -366,6 +375,7 @@ export async function runDiscoveryExecution(input: {
     detail: string | null,
     state: { pages: number; observed: number; ingested: number; calls: number },
     stopReason: RunDiscoveryResult['stopReason'],
+    extra: Pick<RunDiscoveryResult, 'providerError' | 'providerUsage'> = {},
   ): Promise<RunDiscoveryResult> => {
     const at = now();
     await complete({
@@ -387,6 +397,8 @@ export async function runDiscoveryExecution(input: {
       executionId, providerCalls: state.calls, pagesFetched: state.pages,
       resultsObserved: state.observed, resultsIngested: state.ingested,
       status, outcome, stopReason,
+      providerError: extra.providerError ?? null,
+      providerUsage: extra.providerUsage ?? null,
     };
   };
 
@@ -437,6 +449,8 @@ export async function runDiscoveryExecution(input: {
   // lifetime total: a reclaimed execution inherits its predecessor's spend, and
   // "did I contact anyone?" must not be answered with someone else's call.
   let callsThisRun = 0;
+  // The latest quota statement the provider made, passed through to the caller.
+  let providerUsage: unknown = null;
 
   // ── THE BOUNDED LOOP ────────────────────────────────────────────────────
   for (;;) {
@@ -470,7 +484,13 @@ export async function runDiscoveryExecution(input: {
       const message = e instanceof Error ? e.message : String(e);
       state.calls += 1;
       callsThisRun += 1;
-      return close('failed', 'unknown', null, message, state, 'provider_failed');
+      // The adapter's typed vendor error, when it attached one. Duck-typed so
+      // the executor stays provider-neutral.
+      const carried = (e as { providerError?: unknown } | null)?.providerError;
+      return close('failed', 'unknown', null, message, state, 'provider_failed', {
+        providerError: isProviderErrorView(carried) ? carried : null,
+        providerUsage,
+      });
     }
 
     state.calls += 1;
@@ -496,6 +516,7 @@ export async function runDiscoveryExecution(input: {
     state.ingested += ingestedThisPage;
 
     continuation = page.continuation ?? null;
+    if (page.providerUsage !== undefined && page.providerUsage !== null) providerUsage = page.providerUsage;
 
     await recordPage({
       organizationId, id: executionId,
@@ -530,5 +551,5 @@ export async function runDiscoveryExecution(input: {
   // enrichment contract refuses, and it would read downstream as "this search
   // has been answered".
   return close('completed', 'called', state.observed > 0 ? 'discovered' : 'no_results',
-    null, state, stopReason);
+    null, state, stopReason, { providerUsage });
 }
