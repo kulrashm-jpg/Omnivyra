@@ -19,7 +19,11 @@
  */
 
 import { getProviderSyncHealth, type ProviderSyncHealth } from './providerSyncHealth';
-import { runIngestionForCompany } from '../ingestionScheduler';
+import {
+  runIngestionForCompany,
+  FENCED_LEGACY_SOURCE,
+  LEGACY_SOURCE_FENCED_REASON,
+} from '../ingestionScheduler';
 import { getActiveIntegration, deleteIntegration, validateIntegration } from '../integrationService';
 
 /** Canonical CRM provider ids (mirrors outboundCrmSyncService — one source). */
@@ -82,12 +86,31 @@ export interface CrmSyncResult {
 export async function triggerCrmSync(companyId: string, opts?: { manual?: boolean }): Promise<CrmSyncResult> {
   if (!isCrmEnabled()) return { triggered: false, reason: 'crm_disabled' };
   try {
-    await runIngestionForCompany({
+    const summary = await runIngestionForCompany({
       companyId,
-      sources: ['crm'],
+      sources: [FENCED_LEGACY_SOURCE],
       force: opts?.manual === true,
       reason: opts?.manual ? 'crm_manual_sync' : 'crm_scheduled_sync',
     });
+
+    // PI-INGEST-CONSOLIDATION-001-C — do not report a fenced source as triggered.
+    //
+    // 001-B refuses the legacy CRM source inside the scheduler and reports that
+    // as a structured skip; the call still RESOLVES, so the previous
+    // unconditional `{ triggered: true }` would have told the caller a CRM sync
+    // had been triggered while `crmIngestionService` was never reached. This
+    // reads the scheduler's own result rather than assuming one.
+    //
+    // `triggered: false` with a reason is the established idiom here — it is
+    // exactly how `crm_disabled` already reports a refusal that happens BEFORE
+    // any ingestion, which is the same class of outcome. The reason is the
+    // constant 001-B exports, so the fence stays machine-detectable and the
+    // string is never duplicated.
+    const crm = summary.sources.find((source) => source.source === FENCED_LEGACY_SOURCE);
+    if (crm?.details?.reason === LEGACY_SOURCE_FENCED_REASON) {
+      return { triggered: false, reason: LEGACY_SOURCE_FENCED_REASON };
+    }
+
     return { triggered: true };
   } catch (err) {
     return { triggered: false, reason: err instanceof Error ? err.message : 'crm_sync_failed' };
