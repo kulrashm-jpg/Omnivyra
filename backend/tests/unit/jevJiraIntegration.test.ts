@@ -505,6 +505,7 @@ describe('14-17. JEV has no authority over Verification, Gate Result, Integrated
     ['15. Gate Result', STORY_FIELDS.gateResult],
     ['Deterministic Result', AC_FIELDS.deterministicResult],
     ['16/17. status (Integrated / Released)', 'status'],
+    ['T3 Evidence Reference', 'customfield_10078'],
     ['Deployment Authorized By', 'customfield_10079'],
     ['Deployment Authorized At', 'customfield_10080'],
   ])('%s cannot be written: the client refuses it before any request', async (_label, field) => {

@@ -1,0 +1,234 @@
+{
+  "$comment_1": "CPG-U1 PENDING_PERSON_REGISTER - DEEPTECH-PARALLEL-010 / STREAM C / C-recruitment. PREPARATION ONLY.",
+  "$comment_2": "CLASSIFICATION: THIS FILE IS BUILT TO BE REFUSED BY check-personnel AND MUST NEVER PASS. If it ever exits 0 it has been tampered with, because a passing register is one with eight real, declared, organisation-confirmed people in it.",
+  "$comment_3": "NO PERSON EXISTS HERE. No one has been recruited, approached, engaged, named or pseudonymised. No fee figure, no signature, no declaration, no confirmation and no calendar date appears anywhere in this file.",
+  "$comment_4": "Placeholder convention: every person-shaped value is wrapped in << >> and contains \":\", \" \" and \",\" - characters the frozen PERSON pattern /^[A-Za-z0-9_-]{1,64}$/ (lib/personnel.mjs:14) rejects, and longer than 64 bytes besides. The convention is self-enforcing: no tool can mistake this file for complete.",
+  "$comment_5": "Nine of the seven DECLARATION_KEYS checks are NEVER REACHED for any assignment here: lib/personnel.mjs:32 executes `continue` on a malformed person_id, so the declaration, fee-agreement and organisation-confirmation checks at :36-:39 are skipped. The refusal list therefore UNDERSTATES how incomplete this register is. See CHECK_PERSONNEL_EVIDENCE.md.",
+  "$baseline": {
+    "protocol": "CPG_U1_PROTOCOL_004.md sha256 c50fc68010fdf29a9439faa3654ef4b6763f0efead99fb6395f2c691df00b719 (recomputed in this worktree)",
+    "candidate_instrument_path": "C:/tmp/dt009-merge/tooling (READ ONLY)",
+    "candidate_instrument_aggregate_sha256": "638d68e6085d6894355a6d14ff2628a2e94c657c795a3d795500dbb3fa278fd2",
+    "candidate_instrument_file_count": 594,
+    "stale_tree_NOT_used": "any worktree research/cpg-u1/tooling - 587 files, aggregate 640510... - runs fine and lies",
+    "worktree_base_sha": "af2fb6e99ce461894bf16f18c2251f75088eba18"
+  },
+  "schema": "cpg-u1-personnel/v1",
+  "operator": {
+    "person_id": "<<PENDING_PERSON: OPERATOR / BITCOIN WALLET-KEY CUSTODIAN, role STUDY_OPERATOR - NO PERSON ASSIGNED>>",
+    "$authority": "4A.3: the operator is not independent and holds no independent role. 19.1 lists the custodian as UNASSIGNED - required before funding; 19.3(2) names it a prerequisite before funding."
+  },
+  "assignments": [
+    {
+      "role": "enumerator",
+      "$slot": "ENUMERATOR_A",
+      "$jurisdiction_families": [
+        "US-SEC",
+        "LEI-ONLY"
+      ],
+      "$authority": "4A.3 `enumerator (>= 1)`; lib/personnel.mjs:26 exempts the literal role string `enumerator` - and only it - from the exactly-one rule.",
+      "person_id": "<<PENDING_PERSON: ENUMERATOR_A - NOT RECRUITED, NOT APPROACHED, NOT ENGAGED>>",
+      "pseudonym": "<<PENDING_PERSON: ENUMERATOR_A PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "payment_other_than_study_fee": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "ran_or_saw_cpg_output": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_PERSON: FEE AGREEMENT NOT DRAFTED, NOT AGREED, NOT SIGNED, NOT HASHED - and null here would assert a deliberate no-fee engagement nobody has decided>>",
+      "organisation_confirmation_sha256": "<<PENDING_PERSON: DEVELOPING ORGANISATION NO-RELATIONSHIP CONFIRMATION NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_PERSON: NO DATE - nothing has been signed>>",
+      "$deliverables_ref": "DELIVERABLES_AND_ACCEPTANCE_CRITERIA.md",
+      "$confidentiality_ref": "CONFIDENTIALITY_REQUIREMENTS.md",
+      "$replacement_ref": "REPLACEMENT_PROCEDURE.md"
+    },
+    {
+      "role": "enumerator",
+      "$slot": "ENUMERATOR_B",
+      "$jurisdiction_families": [
+        "FR-SIRENE",
+        "BR-CNPJ"
+      ],
+      "$authority": "4A.3 `Several enumerators are permitted; each holds no other role.`",
+      "$role_string_warning": "The literal role string for BOTH enumerators is `enumerator`. A row labelled `enumerator-2` is REFUSED as `unknown role` at lib/personnel.mjs:31 - verified by running the frozen check; see CHECK_PERSONNEL_EVIDENCE.md experiment 3.",
+      "$fee_hash_warning": "This slot`s fee-agreement hash MUST differ from ENUMERATOR_A`s. A SHARED hash in both enumerator assignments PASSES check-personnel with 0 errors and 0 blockers - nothing in lib/personnel.mjs compares the two values. Only the operator`s own hash comparison catches it; see CHECK_PERSONNEL_EVIDENCE.md experiment 2.",
+      "person_id": "<<PENDING_PERSON: ENUMERATOR_B - NOT RECRUITED, NOT APPROACHED, NOT ENGAGED>>",
+      "pseudonym": "<<PENDING_PERSON: ENUMERATOR_B PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "payment_other_than_study_fee": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "ran_or_saw_cpg_output": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_PERSON: FEE AGREEMENT NOT DRAFTED, NOT AGREED, NOT SIGNED, NOT HASHED - and null here would assert a deliberate no-fee engagement nobody has decided>>",
+      "organisation_confirmation_sha256": "<<PENDING_PERSON: DEVELOPING ORGANISATION NO-RELATIONSHIP CONFIRMATION NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_PERSON: NO DATE - nothing has been signed>>",
+      "$deliverables_ref": "DELIVERABLES_AND_ACCEPTANCE_CRITERIA.md",
+      "$confidentiality_ref": "CONFIDENTIALITY_REQUIREMENTS.md",
+      "$replacement_ref": "REPLACEMENT_PROCEDURE.md"
+    },
+    {
+      "role": "reference-author",
+      "$slot": "REFERENCE_AUTHOR",
+      "$authority": "9.1 Author row; 9.2 receive list.",
+      "person_id": "<<PENDING_PERSON: REFERENCE_AUTHOR - NOT RECRUITED, NOT APPROACHED, NOT ENGAGED>>",
+      "pseudonym": "<<PENDING_PERSON: REFERENCE_AUTHOR PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "payment_other_than_study_fee": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "ran_or_saw_cpg_output": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_PERSON: FEE AGREEMENT NOT DRAFTED, NOT AGREED, NOT SIGNED, NOT HASHED - and null here would assert a deliberate no-fee engagement nobody has decided>>",
+      "organisation_confirmation_sha256": "<<PENDING_PERSON: DEVELOPING ORGANISATION NO-RELATIONSHIP CONFIRMATION NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_PERSON: NO DATE - nothing has been signed>>",
+      "$deliverables_ref": "DELIVERABLES_AND_ACCEPTANCE_CRITERIA.md",
+      "$confidentiality_ref": "CONFIDENTIALITY_REQUIREMENTS.md",
+      "$replacement_ref": "REPLACEMENT_PROCEDURE.md"
+    },
+    {
+      "role": "reference-confirmer",
+      "$slot": "REFERENCE_CONFIRMER",
+      "$authority": "9.1 Confirmer row: `Same as Author; see the Author`s record before submitting`.",
+      "person_id": "<<PENDING_PERSON: REFERENCE_CONFIRMER - NOT RECRUITED, NOT APPROACHED, NOT ENGAGED>>",
+      "pseudonym": "<<PENDING_PERSON: REFERENCE_CONFIRMER PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "payment_other_than_study_fee": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "ran_or_saw_cpg_output": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_PERSON: FEE AGREEMENT NOT DRAFTED, NOT AGREED, NOT SIGNED, NOT HASHED - and null here would assert a deliberate no-fee engagement nobody has decided>>",
+      "organisation_confirmation_sha256": "<<PENDING_PERSON: DEVELOPING ORGANISATION NO-RELATIONSHIP CONFIRMATION NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_PERSON: NO DATE - nothing has been signed>>",
+      "$deliverables_ref": "DELIVERABLES_AND_ACCEPTANCE_CRITERIA.md",
+      "$confidentiality_ref": "CONFIDENTIALITY_REQUIREMENTS.md",
+      "$replacement_ref": "REPLACEMENT_PROCEDURE.md"
+    },
+    {
+      "role": "reference-adjudicator",
+      "$slot": "REFERENCE_ADJUDICATOR",
+      "$authority": "9.1 third row; 4A.3 `An enumerator may not be the reference adjudicator` - applies to BOTH enumerator slots.",
+      "person_id": "<<PENDING_PERSON: REFERENCE_ADJUDICATOR - NOT RECRUITED, NOT APPROACHED, NOT ENGAGED>>",
+      "pseudonym": "<<PENDING_PERSON: REFERENCE_ADJUDICATOR PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "payment_other_than_study_fee": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "ran_or_saw_cpg_output": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_PERSON: FEE AGREEMENT NOT DRAFTED, NOT AGREED, NOT SIGNED, NOT HASHED - and null here would assert a deliberate no-fee engagement nobody has decided>>",
+      "organisation_confirmation_sha256": "<<PENDING_PERSON: DEVELOPING ORGANISATION NO-RELATIONSHIP CONFIRMATION NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_PERSON: NO DATE - nothing has been signed>>",
+      "$deliverables_ref": "DELIVERABLES_AND_ACCEPTANCE_CRITERIA.md",
+      "$confidentiality_ref": "CONFIDENTIALITY_REQUIREMENTS.md",
+      "$replacement_ref": "REPLACEMENT_PROCEDURE.md"
+    },
+    {
+      "role": "rater-1",
+      "$slot": "RATER_1",
+      "$authority": "12 Raters >= 2 independent; 4A.3 assignment fingerprint published BEFORE the held-out commitment transaction is broadcast (12.1).",
+      "person_id": "<<PENDING_PERSON: RATER_1 - NOT RECRUITED, NOT APPROACHED, NOT ENGAGED>>",
+      "pseudonym": "<<PENDING_PERSON: RATER_1 PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "payment_other_than_study_fee": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "ran_or_saw_cpg_output": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_PERSON: FEE AGREEMENT NOT DRAFTED, NOT AGREED, NOT SIGNED, NOT HASHED - and null here would assert a deliberate no-fee engagement nobody has decided>>",
+      "organisation_confirmation_sha256": "<<PENDING_PERSON: DEVELOPING ORGANISATION NO-RELATIONSHIP CONFIRMATION NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_PERSON: NO DATE - nothing has been signed>>",
+      "$deliverables_ref": "DELIVERABLES_AND_ACCEPTANCE_CRITERIA.md",
+      "$confidentiality_ref": "CONFIDENTIALITY_REQUIREMENTS.md",
+      "$replacement_ref": "REPLACEMENT_PROCEDURE.md"
+    },
+    {
+      "role": "rater-2",
+      "$slot": "RATER_2",
+      "$authority": "same as rater-1; lib/ratings.mjs:97 refuses two sheets rated by the same person.",
+      "person_id": "<<PENDING_PERSON: RATER_2 - NOT RECRUITED, NOT APPROACHED, NOT ENGAGED>>",
+      "pseudonym": "<<PENDING_PERSON: RATER_2 PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "payment_other_than_study_fee": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "ran_or_saw_cpg_output": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_PERSON: FEE AGREEMENT NOT DRAFTED, NOT AGREED, NOT SIGNED, NOT HASHED - and null here would assert a deliberate no-fee engagement nobody has decided>>",
+      "organisation_confirmation_sha256": "<<PENDING_PERSON: DEVELOPING ORGANISATION NO-RELATIONSHIP CONFIRMATION NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_PERSON: NO DATE - nothing has been signed>>",
+      "$deliverables_ref": "DELIVERABLES_AND_ACCEPTANCE_CRITERIA.md",
+      "$confidentiality_ref": "CONFIDENTIALITY_REQUIREMENTS.md",
+      "$replacement_ref": "REPLACEMENT_PROCEDURE.md"
+    },
+    {
+      "role": "rating-adjudicator",
+      "$slot": "RATING_ADJUDICATOR",
+      "$authority": "12 Rater disagreement row; lib/ratings.mjs:98 refuses an adjudicator who is either rater.",
+      "person_id": "<<PENDING_PERSON: RATING_ADJUDICATOR - NOT RECRUITED, NOT APPROACHED, NOT ENGAGED>>",
+      "pseudonym": "<<PENDING_PERSON: RATING_ADJUDICATOR PSEUDONYM - NOT ASSIGNED>>",
+      "declaration": {
+        "employed_by_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "contract_or_work_for_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "payment_other_than_study_fee": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "financial_interest_in_developing_organisation": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "close_relationship_with_developer_operator_or_role_holder": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "implemented_cpg_protocol_tooling_or_registry": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>",
+        "ran_or_saw_cpg_output": "<<PENDING_PERSON: DECLARATION NOT SIGNED - NO PERSON EXISTS - an unknown answer is not \"no\" (protocol 4A.1)>>"
+      },
+      "study_fee_agreement_sha256": "<<PENDING_PERSON: FEE AGREEMENT NOT DRAFTED, NOT AGREED, NOT SIGNED, NOT HASHED - and null here would assert a deliberate no-fee engagement nobody has decided>>",
+      "organisation_confirmation_sha256": "<<PENDING_PERSON: DEVELOPING ORGANISATION NO-RELATIONSHIP CONFIRMATION NOT ISSUED>>",
+      "$declaration_date": "<<PENDING_PERSON: NO DATE - nothing has been signed>>",
+      "$deliverables_ref": "DELIVERABLES_AND_ACCEPTANCE_CRITERIA.md",
+      "$confidentiality_ref": "CONFIDENTIALITY_REQUIREMENTS.md",
+      "$replacement_ref": "REPLACEMENT_PROCEDURE.md"
+    }
+  ],
+  "$role_count_note": "Eight assignments over seven role names. INDEPENDENT_ROLES (lib/personnel.mjs:6) has seven members; n>1 is permitted for `enumerator` only (:26). 4A.3: minimum 7 independent persons, mutually exclusive; the operator holds none. Eight slots => eight distinct persons required.",
+  "$fingerprint_ordering_gate": {
+    "$note": "4A.3 / 12.1 hard ordering. Not machine-enforced by check-personnel.",
+    "rater_label_assignment_fingerprint_sha256": "<<PENDING_PERSON: NO ASSIGNMENT EXISTS, SO NO FINGERPRINT EXISTS>>",
+    "published_before_held_out_commitment_broadcast": false,
+    "consequence_if_violated": "18.3 protocol violation; 15.5(7) halts the run; 5.10 VOID states report no endpoint. A fingerprint published after the broadcast cannot be repaired by republishing it."
+  },
+  "$confidentiality": {
+    "$note": "NEW in this wave. See CONFIDENTIALITY_REQUIREMENTS.md.",
+    "per_role_undertaking_sha256": "<<PENDING_PERSON: NO UNDERTAKING SIGNED>>"
+  },
+  "$acceptance": {
+    "$note": "NEW in this wave. See DELIVERABLES_AND_ACCEPTANCE_CRITERIA.md. Every acceptance criterion is a rebuild or a refusal in the frozen instrument, never an operator opinion.",
+    "deliverable_accepted": false
+  },
+  "$replacement": {
+    "$note": "NEW in this wave. See REPLACEMENT_PROCEDURE.md.",
+    "replacements_performed": [],
+    "$rule": "A replacement is permitted only where the lost person`s artefact is not yet sealed AND no held-out outcome information exists. After the seal, 9.6 makes substitution detectable on its face and 5.9 forbids replacing drawn companies."
+  },
+  "$material_release": {
+    "$note": "Carried from dt008 MATERIAL_RELEASE_GATE.md and dt009 MATERIAL_RELEASE_JOINT_GATE.md. Fail-closed.",
+    "cohort_gate_satisfied": false,
+    "released_to_any_role_on": null
+  },
+  "$status": "INCOMPLETE BY CONSTRUCTION. check-personnel MUST refuse this file. See CHECK_PERSONNEL_EVIDENCE.md for the verbatim command, output and exit code."
+}

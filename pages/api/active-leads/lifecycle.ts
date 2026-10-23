@@ -16,7 +16,9 @@ import {
   listLifecycleHistory,
   transitionLifecycle,
   LifecycleTransitionError,
+  LifecycleEvidenceUnavailableError,
 } from '../../../backend/services/opportunityLifecycleService';
+import { classifyLifecycleGuardError } from '../../../backend/services/lifecycleGuardErrors';
 import { isLifecycleState } from '../../../backend/types/opportunityLifecycle';
 import { publishRealtime } from '../../../backend/services/realtimePublisherService';
 
@@ -86,6 +88,27 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   } catch (err: any) {
     if (err instanceof LifecycleTransitionError) {
       return res.status(409).json({ ok: false, reason: 'invalid_transition', detail: err.message, from: err.from, to: err.to });
+    }
+    // PI-C1 Phase 1. Both branches below are 409 CONFLICT on purpose, and
+    // neither is 401/403: the request was authenticated and authorized: the
+    // state of the record is what refuses it. Returning an auth status here
+    // would tell the caller to re-authenticate or step up, which can never
+    // resolve an append-only refusal or absent history.
+    if (err instanceof LifecycleEvidenceUnavailableError) {
+      return res.status(409).json({
+        ok: false,
+        reason: err.reason === 'missing' ? 'lifecycle_history_missing' : 'lifecycle_evidence_unreadable',
+        detail: err.message,
+      });
+    }
+    const guardRefusal = classifyLifecycleGuardError(err);
+    if (guardRefusal) {
+      return res.status(409).json({
+        ok: false,
+        reason: 'lifecycle_evidence_immutable',
+        detail: guardRefusal.message,
+        sqlstate: guardRefusal.sqlstate,
+      });
     }
     console.error('[lifecycle POST] failed:', err?.message);
     return res.status(500).json({ error: err?.message ?? 'Lifecycle transition failed' });

@@ -274,15 +274,24 @@ describe('A4J/B2 — the production observation lookup decides suppression', () 
     )).toBeNull();
   });
 
-  it('scopes the query by tenant, entity, provider, attribute and non-superseded', async () => {
+  it('scopes the query by tenant, SUBJECT, entity, provider, attribute and non-superseded', async () => {
     let seen: Record<string, unknown> | null = null;
     const find = makeFindRecentObservation(async (i) => {
       seen = i as unknown as Record<string, unknown>;
       return [row('employee_count', NOW)];
     });
-    await find({ organizationId: ORG, entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'] });
+    await find({
+      organizationId: ORG, subject: 'account', entityId: ACCOUNT,
+      providerId: 'clearbit', attributes: ['employee_count'],
+    } as never);
+    // O-3 — the SUBJECT now reaches the reader, and is asserted here rather
+    // than dropped: a lookup that cannot say which subject it is about matched
+    // either canonical leg, which is what let person evidence answer for an
+    // account. The predicates it turns into are proven in
+    // `piO3ObservationSubjectScoping.test.ts`, against a database double.
     expect(seen).toEqual({
-      organizationId: ORG, entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'],
+      organizationId: ORG, subject: 'account', entityId: ACCOUNT,
+      providerId: 'clearbit', attributes: ['employee_count'],
     });
   });
 
@@ -292,35 +301,35 @@ describe('A4J/B2 — the production observation lookup decides suppression', () 
     // actually reaches the reader, and that a reader honouring it yields null.
     const find = makeFindRecentObservation(async (i) =>
       (i.organizationId === ORG ? [row('employee_count', NOW)] : []));
-    expect(await find({ organizationId: ORG_B, entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'] }))
+    expect(await find({ organizationId: ORG_B, subject: 'account', entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'] }))
       .toBeNull();
-    expect(await find({ organizationId: ORG, entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'] }))
+    expect(await find({ organizationId: ORG, subject: 'account', entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'] }))
       .not.toBeNull();
   });
 
   it('another entity\'s evidence can never satisfy suppression', async () => {
     const find = makeFindRecentObservation(async (i) =>
       (i.entityId === ACCOUNT ? [row('employee_count', NOW)] : []));
-    expect(await find({ organizationId: ORG, entityId: OTHER, providerId: 'clearbit', attributes: ['employee_count'] }))
+    expect(await find({ organizationId: ORG, subject: 'account', entityId: OTHER, providerId: 'clearbit', attributes: ['employee_count'] }))
       .toBeNull();
   });
 
   it('another provider\'s evidence can never satisfy suppression', async () => {
     const find = makeFindRecentObservation(async (i) =>
       (i.providerId === 'clearbit' ? [row('employee_count', NOW)] : []));
-    expect(await find({ organizationId: ORG, entityId: ACCOUNT, providerId: 'apollo', attributes: ['employee_count'] }))
+    expect(await find({ organizationId: ORG, subject: 'account', entityId: ACCOUNT, providerId: 'apollo', attributes: ['employee_count'] }))
       .toBeNull();
   });
 
   it('a tenant-less lookup is refused rather than answered', async () => {
     const find = makeFindRecentObservation(async () => []);
-    await expect(find({ organizationId: '  ', entityId: ACCOUNT, providerId: 'clearbit', attributes: ['x'] }))
+    await expect(find({ organizationId: '  ', subject: 'account', entityId: ACCOUNT, providerId: 'clearbit', attributes: ['x'] }))
       .rejects.toThrow(/organizationId is required/);
   });
 
   it('an unreadable evidence table FAILS CLOSED — it does not answer "proceed"', async () => {
     const find = makeFindRecentObservation(async () => { throw new Error('source_assertions read failed'); });
-    await expect(find({ organizationId: ORG, entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'] }))
+    await expect(find({ organizationId: ORG, subject: 'account', entityId: ACCOUNT, providerId: 'clearbit', attributes: ['employee_count'] }))
       .rejects.toThrow(/source_assertions read failed/);
   });
 

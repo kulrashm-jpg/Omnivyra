@@ -52,8 +52,11 @@ gate, merge, release, deploy) to a human.
 | `gov packet --story OMNI-n --worktree <path> [--regenerate]` | Displays the bound packet; reports `STALE` (exit 12) when Jira or the registry changed. `--regenerate` stores a fresh packet for the same base and re-binds the same session. | `GOV_HOME` with `--regenerate` |
 | `gov verify --story OMNI-n --worktree <path>` | Runs the Story's registry commands and the scope check on a clean, committed HEAD; stores the evidence bundle; prints its hash. | `GOV_HOME` |
 | `gov judge --story OMNI-n --worktree <path> --evidence <sha256:…> --invoked-by <human\|claude-code>:<id> [--write-back] [--model <id>]` | BJC + bounded JEV advisory per AC. `--write-back` writes only the four advisory fields (human-run). Never transitions Jira. | `GOV_HOME`; Jira advisory fields with `--write-back` |
-| `gov submit --story OMNI-n --evidence <sha256:…> [--worktree <path>]` | Prints the values a **human** records in Jira. | nothing |
+| `gov submit --story OMNI-n --evidence <sha256:…> [--worktree <path>]` | Prints the values a **human** records in Jira, **per AC**: each Deterministic AC gets its own registry item's result and a per-AC Evidence References line; a Judgment AC gets no deterministic result. | nothing |
 | `gov check-merge --story OMNI-n --worktree <path> --evidence <sha256:…>` | Deterministic merge gate for a human or CI. Fails closed. Never merges. | nothing |
+| `gov audit-branch --worktree <path> [--base <ref>]` | Read-only detection of commits in base..HEAD that do not carry governance (see *Detection*). Blocks nothing. | nothing |
+| `gov admit [--worktree <path>] [--session <uuid>] [--base <ref>]` | Read-only admission: identifies which live Claude Code session is asking from agreeing evidence, classifies the work with the intake classifier and prints the next gov command (see *Session admission*). Runs nothing it prints. | nothing |
+| `gov reconcile [--story OMNI-n]...` | Read-only dry run over every governed Story in the ledger (or the ones named): evaluates each AC against its own registry item and every evidence-freshness dimension, compares Jira (reader identity) and prints the change set only a human may apply (see *Reconcile*). No apply mode. | nothing |
 
 Exit codes: `0` OK · `10` NOT_READY · `11` REFUSED · `12` STALE · `13` INTEGRITY_FAILED ·
 `14` VERIFICATION_FAILED · `15` SCOPE_VIOLATION · `16` JUDGMENT_UNAVAILABLE · `64` usage · `70` ERROR.
@@ -81,7 +84,8 @@ Exit codes: `0` OK · `10` NOT_READY · `11` REFUSED · `12` STALE · `13` INTEG
    ```
 5. `gov verify` → evidence bundle hash (zero commits after the base is allowed: the base itself is verified).
 6. Optional: `gov judge` for JEV advisory per AC (`--write-back` only when a human runs it).
-7. `gov submit` prints values; a human runs Record Result and Record Verification in Jira.
+7. `gov submit` prints per-AC values; a human runs Record Result and Record Verification in Jira.
+   `gov reconcile` (any time, read-only) shows whether what Jira records still matches fresh evidence.
 8. `gov check-merge` (human or CI) → the human merges. Integration, release and deployment stay human.
    An evidence-only Story whose work is already on `main` (a back-fill) has nothing to merge:
    it ends at step 7, and `check-merge` correctly refuses a new-task binding with no governed commit.
@@ -167,6 +171,132 @@ Semantics:
 - **`--fork` / `--fork-session`:** resumes into a new session id, leaving the original conversation
   unchanged. Use it when the old conversation should stay as it was.
 
+## Governed entry: `gov intake`
+
+`gov intake` is the single front door when you do not yet know the Story, the ACs, the baseline or
+the attach command. It is explicit and user-invoked like every other verb: no hook, no prompt
+router, no JEV, no model selection.
+
+```
+gov intake [--worktree <path>] [--session <uuid>] [--story OMNI-n] [--intent "<text>"]
+           [--authorized <pattern>]... [--prohibited <pattern>]... [--verification <id>]...
+           [--judgment-ac "<text>"]... [--base <ref>] [--bind]
+gov intake --apply sha256:<proposal>          # human only
+gov intake --check-forms                      # human identity, read-only
+```
+
+**Classification (first match wins):**
+
+| Result | When | What intake does |
+|---|---|---|
+| `GOVERNED_RESUME` | the worktree already has one valid binding (packet intact, HEAD descends from its base) | prints how to resume (a running window just types `@<packet.md>`); creates nothing — idempotent |
+| `EXISTING_STORY` | clean tree; exactly one active Story's Authorized Paths cover every changed path, or `--story` names one that does | reuses it; prints the exact `gov attach` / `gov start`; `--bind` runs it |
+| `NEW_WORK` | clean tree; no Story fits | stores a Story + AC proposal (deterministic ACs from the registry / `intake-rules.json`, plus any `--judgment-ac`) and prints its hash |
+| `PRE_GOVERNANCE_ADOPTION` | uncommitted / untracked changes | reports worktree, branch, HEAD, merge-base, every dirty path, subject and candidate Story; proposes a Story if none covers it; prints the exact adoption-baseline commit for the human. Never stashes, resets, rebases or commits |
+
+Changed paths = uncommitted paths + paths changed since `merge-base(HEAD, --base)` (default
+`origin/main`).
+
+**Fail closed (exit 11, nothing created):** two candidate Stories (`AMBIGUOUS_STORY`); a Story that
+covers only part of the changes (`PARTIAL_SCOPE_MATCH`); more than one live session claiming the
+worktree (`DUPLICATE_SESSION`); the session already governs another Story
+(`SESSION_BOUND_ELSEWHERE`); conflicting or invalid bindings (`CONFLICTING_BINDINGS`); uncommitted
+work with no establishable owner (`AMBIGUOUS_OWNERSHIP` — pass `--session`); prohibited paths
+touched (`PROHIBITED_PATH_TOUCHED`; defaults include `supabase/migrations/**`,
+`.claude/settings*.json`, `.env*` and deployment configuration); no derivable Authorized Paths
+(`AUTHORIZED_PATHS_UNKNOWN`); no registry id for the changed paths (`NO_REGISTRY_ID`); no subject
+(`INTENT_REQUIRED`).
+
+**Protected-path authorizations (`--authorize-protected <id>`):** a Story that legitimately owns
+specific protected files — its own migrations, or `vercel.json` for an activation Story — names a
+reviewed entry from `intake-rules.json` `protected_path_authorizations`. Each entry lists **exact
+file paths only** (no wildcards; each must fall under a default prohibited pattern) and the
+`required_verification` registry ids. With the flag, intake lifts the default prohibition for
+exactly those files: they enter Authorized Paths exactly, the default pattern that covered them is
+dropped from that Story's Prohibited Paths (verify still refuses any changed path not authorized),
+any authorized glob that could reach into the dropped area is refused, and the Story Invariants and
+the proposal record the authorization id and digest. Refusals: an unknown id
+(`UNKNOWN_AUTHORIZATION`), a missing required check (`AUTHORIZATION_VERIFICATION_MISSING` — pass it
+with `--verification`), and any other protected path, user `--prohibited` path or Story prohibition
+(`PROHIBITED_PATH_TOUCHED`; those are never lifted). Without the flag nothing changes, including
+proposal hashes. Adding an entry is a reviewed change to `intake-rules.json`.
+
+**Sessions:** a live session's recorded `cwd` is only a claim — Claude often records the main
+checkout while working in another worktree — so pass `--session <uuid>` whenever ownership is not
+unique. Intake locates the transcript by id only; it never reads transcript content.
+
+**`--apply` (human only):** requires an interactive terminal, the full proposal hash typed by the
+human, and the human's own Jira identity in `GOV_INTAKE_EMAIL` / `GOV_INTAKE_TOKEN` (a personal
+scoped token with read:jira-work, write:jira-work, read:jira-user). It refuses a service account,
+the provisioning / reader / advisory tokens, missing Browse + Create, and any create form that lacks
+an intended field or exposes ANY field outside the intake allowlist — in particular a gate field
+(Verification, Deterministic Result, Evidence References, Disposition, Gate Result, JEV fields,
+T3 Evidence Reference, Deployment Authorized By / At). The OMNI Story and Acceptance Criterion
+create screens must therefore be intake-safe (only the allowlisted fields) before the first
+`--apply`; until then `--apply` refuses with CREATE_FORM_INVALID and creates nothing. To check the
+forms without applying anything, the human runs `gov intake --check-forms` (same identity, GET
+only, no prompt): it lists every field on both create forms as allowed / GATE / NOT ALLOWED and
+exits 0 only when both are intake-safe. It then creates only the allowlisted Story
+fields (Summary, Objective, Architecture, Invariants, Authorized Paths, Prohibited Paths,
+Verification Requirements, the `gov-intake-<hash12>` label) and AC fields (parent, Summary, AC ID,
+Statement, Kind, Evidence Kind). It never edits an existing issue, never moves a workflow status and
+never sets gate state. Re-applying the same proposal reuses the labelled Story and existing AC IDs
+and creates only what is missing.
+
+**Credential freshness (Windows only):** before any Jira request, both `--check-forms` and
+`--apply` compare `GOV_INTAKE_EMAIL` / `GOV_INTAKE_TOKEN` in the process with the Windows User
+environment (one read-only `reg query HKCU\Environment /v <name>` per variable, no shell), which is
+the authoritative source. A mismatch refuses with "`<name>` process environment is stale; refresh
+the process environment from the Windows User environment before retrying." A value missing from
+either side, an unreadable User environment, or a non-Windows platform also refuses — there is no
+fallback to the process value. Values are compared in memory only; they are never printed,
+audited or written, and the process environment is never overwritten.
+
+**Records:** proposals are stored under `GOV_HOME/intake/proposals/<hash>.{json,md}`; every
+classify / refuse / apply / bind appends one metadata-only line to `GOV_HOME/intake/audit.jsonl`
+(classification, worktree, branch, HEAD, merge-base, session, candidate Story, proposal hash,
+created / reused keys, approving account, packet hash, adoption classification) — never
+transcripts, prompts, credentials or file contents.
+
+**Typical flows:**
+
+- New work: `gov intake --intent "<what>" [...]` → human `--apply` → `gov intake … --bind` (starts or
+  attaches through the existing verbs).
+- Existing dirty work in a running window: `gov intake --worktree <path> --session <uuid>` → human
+  `--apply` (if no Story fits) → human baseline commit (printed) → `gov intake … --bind` → type
+  `@<packet.md>` in the running window. No restart, no duplicate agent.
+
+
+## Session admission: `gov admit`
+
+```
+gov admit [--worktree <path>] [--session <uuid>] [--base <ref>]     # default worktree: cwd; base: origin/main
+```
+
+The `/gov` skill's step 0. It answers "is this conversation entering governed work, and how?" without
+anyone looking up a session UUID, and it changes nothing.
+
+1. **Who is asking, from agreeing evidence.** Claude Code injects its session id, pid and messaging socket into every
+   tool process. Admission accepts them only when they agree with the session registry record
+   `~/.claude/sessions/<pid>.json`, the pid is alive and the session's named pipe is present (the
+   pipe namespace is listed, never opened). A working directory is never evidence. With no injected
+   identity at all, `--session <uuid>` is validated against the same live registry; with partial or
+   contradictory identity nothing falls back. An explicit `--session` must equal the proven session,
+   so a forked conversation cannot admit itself as its origin.
+2. **Strict liveness.** Unlike intake's live-session list, an unreadable or missing registry, an
+   unreadable or malformed record, a live pid whose pipe is gone (a possibly reused pid) or a pipe whose pid is
+   gone refuses instead of reading as "no sessions". On Windows the actual process start is not
+   compared with the record's `procStart` (that needs a process launch); the pipe check only mitigates
+   PID reuse and does not prove process identity (limitation F-9 in `HARNESS-CERTIFICATION.md`).
+3. **What the work is.** Intake's own input gathering and `classifyIntake`, with nothing stored:
+   GOVERNED_RESUME, EXISTING_STORY, PRE_GOVERNANCE_ADOPTION and NEW_WORK print the next command;
+   CONFLICTING_BINDINGS, SESSION_BOUND_ELSEWHERE, DUPLICATE_SESSION, AMBIGUOUS_OWNERSHIP and the other
+   intake refusals print none (exit 11). Identity and worktree failures are UNSUPPORTED (exit 11).
+
+Admission never stores a proposal, writes the intake audit, binds, writes Jira, commits, invokes JEV
+or executes the command it prints. The user decides: on yes the session runs exactly that command;
+on no nothing has happened.
+
 ## Jira hierarchy (OMNI)
 
 | Tier | Item | Gate |
@@ -231,6 +361,26 @@ producing items `EV-1…` with exit code, timeout flag, `argv_digest` and the ha
 captured log. The bundle (`gov-evidence/1`) is PASS only if scope is ok and every item passed.
 It is stored under `GOV_HOME/evidence/` by `bundle_hash`; logs never leave `GOV_HOME`.
 
+### Protected paths after intake
+
+Intake's default prohibited paths (`supabase/migrations/**`, `.env*`, `.claude/settings*.json`,
+`vercel.json`, `railway.json`, `Dockerfile*`, `.github/workflows/**`) are protected in `gov verify`
+and `gov check-merge` too, not only at intake. A Story created by hand in Jira can name such a path in
+its own Authorized Paths, and that is no longer enough. A changed protected path is accepted only when
+the Story Invariants cite a reviewed `protected_path_authorizations` entry with its exact id and digest
+(the line intake writes: `Protected-path authorization <id> (sha256:…): …`), that entry lists the exact
+file, and the packet carries the entry's `required_verification`.
+
+- `gov verify` refuses with `SCOPE_VIOLATION` (15) before any command runs.
+- `gov check-merge` recomputes the check from git over base..HEAD, so a bundle stored before the check
+  existed gets no pass.
+- A citation of an unknown id, a digest that differs from the reviewed rules, or a missing required
+  check also fails closed.
+- If the rules cannot be read, verify refuses (11) and check-merge fails (13).
+
+The policy is the tool checkout's `intake-rules.json`. Enforcement only refuses; it never widens a
+Story's Authorized Paths.
+
 ## BJC / JEV boundary
 
 `gov judge` builds one bounded BJC request per AC and calls BJC `judge()`; it is the only way gov
@@ -259,7 +409,8 @@ reaches JEV.
 
 `gov check-merge` passes only when: the binding exists; the packet hash matches; the evidence
 bundle hash matches; HEAD equals the bundle's HEAD and the tree is clean; the deterministic result
-is PASS; scope is ok; and the commit rule holds:
+is PASS; scope is ok; every changed protected path is under an exact reviewed authorization
+(`protected-paths`, see *Protected paths after intake*); and the commit rule holds:
 
 - **new task / `--base` attach:** at least one commit base..HEAD, every one carrying
   `Governed-By: OMNI-n` and `Gov-Packet: sha256:…`;
@@ -269,10 +420,93 @@ is PASS; scope is ok; and the commit rule holds:
 
 Any mismatch, ambiguity or git error fails closed (exit 13). check-merge never merges.
 
+## Reconcile: `gov reconcile`
+
+```
+gov reconcile [--story OMNI-n]...     # default: every Story in the binding ledger
+```
+
+A read-only dry run. `scripts/jev-flow/AUTOMATION-POLICY.md` is the authority for what it may and may
+not do. For each governed Story (latest binding in the ledger) it reads the following:
+
+- the bound packet;
+- Jira readiness and each AC (reader identity);
+- the governed worktree's HEAD and cleanliness;
+- every stored evidence bundle, each re-hashed;
+- the automation policy in force, and the one at the evidence's HEAD.
+
+The pure predicates in `lifecycle.ts` then evaluate **each AC on its own**:
+
+- **Mapping:** the AC is mapped to its registry id. The source is the `Registry check <id> passes`
+  statement that `gov intake` writes, or else the unique packet id producing the AC's evidence kind.
+  An ambiguous mapping goes to a human and is never guessed.
+- **State:** one of `VERIFIABLE`, `FAILED`, `STALE`, `INSUFFICIENT_EVIDENCE`, `NEEDS_HUMAN` or `CONFLICT`.
+- **Freshness:** evidence is current only while all six identity dimensions match: bundle hash,
+  governed HEAD with a clean tree, packet hash (the packet must also still match Jira),
+  verification-registry digest, automation-policy digest, and the session/Story binding. Missing
+  evidence never passes, and stale evidence is never current.
+
+`reconcile.ts` compares the result with what Jira records and gives each AC one disposition:
+
+| Disposition | Meaning | Proposed Jira change (human only) |
+|---|---|---|
+| `NO_OP` | Jira already matches the computed state | none |
+| `INVALIDATE_STALE_EVIDENCE` | Jira cites evidence that is no longer current | clear it, or replace it with fresh per-AC values; reset a recorded Verification |
+| `CONFLICT` | Jira and the evidence disagree, or the evidence contradicts itself | none: a human investigates |
+| `INSUFFICIENT_EVIDENCE` | nothing current to record, and Jira claims nothing | none: run `gov verify` |
+| `HUMAN_DECISION` | Judgment AC, an unmappable AC, or a fresh result waiting to be recorded | the Record Result values, if any |
+
+The proposed change set is deterministic. It has no timestamps, and its `change_set_hash` is identical
+for an unchanged world, so re-running reconcile is idempotent. Reconcile writes nothing: no Jira field,
+ledger record, evidence, packet, git or JEV call. The JEV verdict in Jira is shown as advisory and
+never changes a state or a proposal. Exit codes: `0` (report produced), `13` (a stored packet or
+bundle failed its integrity check), `11` (Jira identity refused), `70` (a Story could not be read),
+`64` (usage, including any `--apply`).
+
+Changing `AUTOMATION-POLICY.md` changes its digest, which makes earlier evidence STALE by design.
+
+## Detection: `gov audit-branch`
+
+```
+gov audit-branch --worktree <path> [--base <ref>]      # default base: origin/main
+```
+
+Read-only. It classifies every commit in base..HEAD from its trailers:
+
+| Class | Meaning |
+|---|---|
+| `GOVERNED` | One `Governed-By` Story and one `Gov-Packet` whose packet is stored intact in this `GOV_HOME` for that Story. |
+| `GOVERNED_UNVERIFIED_PACKET` | Well-formed trailers, but the packet is not stored here, so the claim cannot be confirmed. |
+| `ADOPTION_BASELINE` | `Governed-By` alone, and a ledger binding records this commit as the Story's adoption baseline. |
+| `MALFORMED` | The commit claims governance, but its trailers are inconsistent. |
+| `UNGOVERNED` | No governance trailer: plain work. |
+
+Exit status:
+
+- `0` when every commit is `GOVERNED` or `ADOPTION_BASELINE`, or there are none.
+- `13` (`INTEGRITY_FAILED`) otherwise, with verdict `UNGOVERNED_DETECTED` or `UNVERIFIABLE` in
+  `GOV_RESULT`.
+
+`GOVERNED` proves only the trailers and the packet. It does not prove scope, evidence or which session
+wrote the commit; use `gov verify` and `gov check-merge` for those.
+
+It writes nothing: no git history, no GOV_HOME file, no Jira, no JEV. It never blocks a merge. Making
+it a required check would change who can merge, and that is a human authority decision.
+
+## Harness certification
+
+`HARNESS-CERTIFICATION.md` is the Harness Certification Matrix and Report. It covers every entry and
+continuation path (H rows), the negative and bypass tests (N rows) and the known bypasses (B rows), with
+each result marked PASS, FAIL, DEFERRED or INSUFFICIENT_EVIDENCE.
+`backend/tests/unit/jevHarnessCertification.test.ts` keeps it honest: cited tests must exist, and the
+preserved findings cannot be quietly upgraded. The harness is governed for work that enters through
+`gov`. Entry and deployment are not enforced; the document records both as deliberate deferrals.
+
 ## Prohibited
 
 - Hooks, `claude-jev` routing, automatic or background JEV / gov invocation.
 - Invoking JEV other than through `gov judge`; `--write-back` run by Claude.
+- Applying a `gov reconcile` proposal by any automated path (reconcile has no apply mode).
 - Any Jira transition, Record Result or Record Verification by gov or Claude.
 - Merging, releasing or deploying by gov.
 - Shell text in Verification Requirements; unreviewed registry entries.

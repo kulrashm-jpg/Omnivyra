@@ -1,33 +1,80 @@
 /**
- * X (Twitter) media upload.
+ * X (Twitter) media upload — X API **v2**.
  *
- * The v2 tweet-create endpoint only accepts already-uploaded `media_ids`, so
- * images/videos must be uploaded first via the media/upload endpoint. This uses
- * the same OAuth 2.0 user-context Bearer token as the tweet-create call (the
- * connected app needs the `media.write` scope for these calls to succeed).
+ * MIGRATION (API-B): this module previously uploaded through the v1.1 endpoint
+ * `https://upload.twitter.com/1.1/media/upload.json` using the command-style
+ * protocol (`command=INIT|APPEND|FINALIZE|STATUS`, base64 `media_data` in an
+ * x-www-form-urlencoded body). X **sunset the v1.1 media upload endpoints on
+ * 2025-06-09**, so every call that path made returned a provider error. The
+ * supported contract is the v2 media surface on `api.x.com`:
  *
- * Flow:
- *  - images  → single-shot upload (base64 `media_data`)
- *  - video / animated GIF → chunked INIT → APPEND(chunks) → FINALIZE → poll STATUS
+ *   simple  (images / GIFs)  POST /2/media/upload
+ *                            multipart/form-data: `media`, `media_category`
+ *   chunked (video, large)   POST /2/media/upload/initialize
+ *                            application/json: `media_type`, `total_bytes`, `media_category`
+ *                            POST /2/media/upload/{id}/append
+ *                            multipart/form-data: `segment_index`, `media`
+ *                            POST /2/media/upload/{id}/finalize      (no body)
+ *                            GET  /2/media/upload?command=STATUS&media_id={id}
  *
- * Everything is sent as application/x-www-form-urlencoded with base64 payloads,
- * so there is no multipart/form-data dependency.
+ * The v2 chunked quickstart is explicit that the old protocol must NOT be
+ * reused against the new host: "Do not send `command=INIT`, `command=APPEND`,
+ * or `command=FINALIZE` to `POST /2/media/upload`. Those command-style
+ * parameters were the previous upload protocol."
  *
- * CALLER CONTRACT (P3-A): this is NOT best-effort any more. Returning zero
- * media_ids, or throwing, both make xAdapter REFUSE to publish — a post that
- * asked for media is never shipped as text. Nothing here may therefore invent
- * or pass through a media_id it did not actually receive from X.
+ * Sources (contract verified 2026-09-16):
+ *  - https://docs.x.com/x-api/media/introduction
+ *  - https://docs.x.com/x-api/media/quickstart/media-upload-chunked
+ *  - https://docs.x.com/x-api/media/upload-media               (POST /2/media/upload)
+ *  - https://docs.x.com/x-api/media/media-upload-initialize    (POST /2/media/upload/initialize)
+ *  - https://docs.x.com/x-api/media/append-media-upload        (POST /2/media/upload/{id}/append)
+ *  - https://docs.x.com/x-api/media/finalize-media-upload      (POST /2/media/upload/{id}/finalize)
+ *  - https://docs.x.com/x-api/media/get-media-upload-status    (GET  /2/media/upload?command=STATUS)
+ *
+ * RESPONSE SHAPE CHANGED: v1.1 returned a top-level `media_id_string`; every
+ * v2 media endpoint wraps its payload as `{ data: { id, media_key,
+ * processing_info, … } }`. `data.id` is the media id handed to POST /2/tweets
+ * as `media.media_ids`.
+ *
+ * AUTH IS UNCHANGED: the same OAuth 2.0 user-context Bearer token used by the
+ * tweet-create call. v2 media requires the `media.write` scope (the reference
+ * pages list `OAuth2UserToken` + `media.write` on every endpoint above).
  *
  * X composition rules enforced here: up to 4 images, OR exactly 1 video, OR 1
- * GIF per tweet (images and video cannot be mixed). A media set that breaks
- * those rules is REFUSED, never quietly trimmed down to something that fits.
+ * GIF per Post — "A Post may include up to 4 photos, 1 animated GIF, or 1
+ * video" (media introduction). Images and video cannot be mixed. A media set
+ * that breaks those rules is REFUSED, never quietly trimmed down to something
+ * that fits.
+ *
+ * CALLER CONTRACT (P3-A): this is NOT best-effort. Returning zero media_ids, or
+ * throwing, both make xAdapter REFUSE to publish — a post that asked for media
+ * is never shipped as text. Nothing here may therefore invent or pass through a
+ * media_id it did not actually receive from X (see extractMediaId).
  */
 import axios from 'axios';
 
-const UPLOAD_URL = 'https://upload.twitter.com/1.1/media/upload.json';
+/** v2 media surface. All four operations hang off this fixed host + path. */
+const MEDIA_UPLOAD_URL = 'https://api.x.com/2/media/upload';
+
 const MAX_IMAGES = 4;
-const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB — under X's 5MB APPEND cap, with headroom for base64
+/**
+ * APPEND segment cap: "Keep each segment at or below 5 MB"
+ * (docs.x.com/x-api/media/quickstart/media-upload-chunked). v2 APPEND carries
+ * RAW bytes in a multipart part (not base64), so 4 MB is a true 4 MB with
+ * headroom under the cap.
+ */
+const CHUNK_SIZE = 4 * 1024 * 1024;
+/** `segment_index` is documented as an integer 0–999 (append reference). */
+const MAX_SEGMENTS = 1000;
 const MAX_STATUS_POLLS = 20;
+
+/**
+ * Size ceilings from the media introduction: "Images: 5 MB max (JPG, PNG, GIF,
+ * WEBP)" / "Animated GIFs: 15 MB max". Checked before the request so an
+ * oversize asset produces an actionable message instead of an opaque 413.
+ */
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_GIF_BYTES = 15 * 1024 * 1024;
 
 interface XToken {
   access_token: string;
@@ -61,6 +108,41 @@ function resolveMediaMeta(url: string, contentType: string): MediaMeta {
   return { mimeType, category: 'tweet_image', chunked: false };
 }
 
+const EXTENSION_BY_MIME: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/webm': 'webm',
+};
+
+/** Multipart parts need a filename; X infers nothing from it but rejects a bare value. */
+function filenameFor(meta: MediaMeta, segment?: number): string {
+  const ext = EXTENSION_BY_MIME[meta.mimeType] || (meta.category === 'tweet_video' ? 'mp4' : 'bin');
+  return segment === undefined ? `media.${ext}` : `chunk${segment}.${ext}`;
+}
+
+function mediaPart(bytes: Buffer, meta: MediaMeta): Blob {
+  return new Blob([new Uint8Array(bytes)], { type: meta.mimeType });
+}
+
+/** Enforce the documented per-category ceiling before spending an upload. */
+function assertWithinSizeLimit(byteLength: number, meta: MediaMeta): void {
+  if (meta.category === 'tweet_image' && byteLength > MAX_IMAGE_BYTES) {
+    throw new Error(
+      `X image exceeds the 5MB v2 upload limit (${byteLength} bytes); X will reject it with 413.`,
+    );
+  }
+  if (meta.category === 'tweet_gif' && byteLength > MAX_GIF_BYTES) {
+    throw new Error(
+      `X animated GIF exceeds the 15MB v2 upload limit (${byteLength} bytes); X will reject it with 413.`,
+    );
+  }
+}
+
 async function fetchBytes(url: string): Promise<{ buffer: Buffer; contentType: string }> {
   // HARDEN-005: media URL is user-controlled (scheduled_posts.media_urls) —
   // block internal targets before downloading. Keeps the axios download
@@ -80,97 +162,85 @@ async function fetchBytes(url: string): Promise<{ buffer: Buffer; contentType: s
   };
 }
 
-async function postForm(token: XToken, params: Record<string, string>): Promise<any> {
-  const body = new URLSearchParams(params).toString();
-  // ssrf-ok: UPLOAD_URL is a fixed X media-upload host constant
-  const res = await axios.post(UPLOAD_URL, body, {
-    headers: {
-      Authorization: `Bearer ${token.access_token}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
+function authHeader(token: XToken): Record<string, string> {
+  return { Authorization: `Bearer ${token.access_token}` };
+}
+
+/** POST an application/json body to a fixed v2 media endpoint. */
+async function postJson(path: string, token: XToken, body: Record<string, unknown>): Promise<any> {
+  // ssrf-ok: MEDIA_UPLOAD_URL is a fixed api.x.com media-upload host constant
+  const res = await axios.post(`${MEDIA_UPLOAD_URL}${path}`, body, {
+    headers: { ...authHeader(token), 'Content-Type': 'application/json' },
     timeout: 60000,
   });
   return res.data;
 }
 
 /**
- * Read X's `media_id_string` out of an upload response, or throw.
- *
- * `String(data.media_id_string)` was used directly at both call sites. When X
- * answers 200 with a body that has no `media_id_string` — a throttled or
- * partially-degraded upload response — that produces the literal string
- * "undefined", which is truthy and non-empty. The consequences were real:
- *
- *   - single-shot: "undefined" was returned as a media_id, so the caller's
- *     `mediaIds.length > 0` honesty check passed and the tweet-create call was
- *     made with media_ids: ["undefined"]. X rejects that with a 400, which the
- *     adapter classifies as TWITTER_VALIDATION_ERROR, retryable: false — so a
- *     transient upload glitch permanently killed the post, and the reported
- *     cause was "invalid tweet content" rather than a media upload failure.
- *   - chunked: "undefined" was then sent as the media_id for every APPEND and
- *     FINALIZE, uploading the whole file against a nonexistent id.
- *
- * Failing here instead routes both cases into the caller's existing retryable
- * MEDIA_WOULD_BE_STRIPPED failure, which is the truthful classification.
+ * POST a multipart/form-data body. The Content-Type header is deliberately NOT
+ * set — axios derives it from the FormData so the multipart boundary matches.
  */
-function requireMediaId(data: any, step: string): string {
-  const id = data?.media_id_string;
+async function postMultipart(path: string, token: XToken, form: FormData): Promise<any> {
+  // ssrf-ok: MEDIA_UPLOAD_URL is a fixed api.x.com media-upload host constant
+  const res = await axios.post(`${MEDIA_UPLOAD_URL}${path}`, form, {
+    headers: authHeader(token),
+    timeout: 60000,
+  });
+  return res.data;
+}
+
+/** POST with no body (FINALIZE takes none). */
+async function postEmpty(path: string, token: XToken): Promise<any> {
+  // ssrf-ok: MEDIA_UPLOAD_URL is a fixed api.x.com media-upload host constant
+  const res = await axios.post(`${MEDIA_UPLOAD_URL}${path}`, undefined, {
+    headers: authHeader(token),
+    timeout: 60000,
+  });
+  return res.data;
+}
+
+/**
+ * Every v2 media response nests its payload under `data`; the id is `data.id`.
+ *
+ * A 200 whose body carries no id (a throttled or partially-degraded response)
+ * must never become the literal string "undefined": that would pass xAdapter's
+ * `mediaIds.length > 0` honesty check and either create a tweet with
+ * media_ids: ["undefined"] (a non-retryable 400) or APPEND a whole file against
+ * a nonexistent id. Throwing routes it into the caller's retryable
+ * MEDIA_WOULD_BE_STRIPPED failure instead.
+ */
+function extractMediaId(payload: any, step: string): string {
+  const id = payload?.data?.id;
   if (typeof id !== 'string' || id.trim().length === 0) {
-    // `media_id` (the numeric form) is lossy in JS and X documents the string
-    // form as the one to use, so an absent string id is a hard failure.
-    throw new Error(`X media upload (${step}) returned no media_id_string`);
+    throw new Error(`X media ${step} returned no media id`);
   }
   return id;
 }
 
-async function uploadSimple(buffer: Buffer, meta: MediaMeta, token: XToken): Promise<string> {
-  const data = await postForm(token, {
-    media_data: buffer.toString('base64'),
-    media_category: meta.category,
-  });
-  return requireMediaId(data, 'single-shot');
+function processingInfo(payload: any): any {
+  return payload?.data?.processing_info;
 }
 
-async function uploadChunked(buffer: Buffer, meta: MediaMeta, token: XToken): Promise<string> {
-  // INIT
-  const init = await postForm(token, {
-    command: 'INIT',
-    total_bytes: String(buffer.length),
-    media_type: meta.mimeType,
-    media_category: meta.category,
-  });
-  const mediaId = requireMediaId(init, 'INIT');
-
-  // APPEND — one base64 segment per chunk.
-  let segment = 0;
-  for (let offset = 0; offset < buffer.length; offset += CHUNK_SIZE) {
-    const chunk = buffer.subarray(offset, Math.min(offset + CHUNK_SIZE, buffer.length));
-    await postForm(token, {
-      command: 'APPEND',
-      media_id: mediaId,
-      segment_index: String(segment),
-      media_data: chunk.toString('base64'),
-    });
-    segment++;
-  }
-
-  // FINALIZE — may kick off async transcoding (processing_info).
-  const finalize = await postForm(token, { command: 'FINALIZE', media_id: mediaId });
-
-  // Poll STATUS until the transcode succeeds (or fails/times out).
-  let info = finalize.processing_info;
+/**
+ * Poll GET /2/media/upload?command=STATUS until the asset finishes transcoding.
+ * `processing_info.state` moves pending → in_progress → succeeded | failed
+ * (status reference). A response without `processing_info` is already usable.
+ */
+async function awaitProcessing(initialInfo: any, mediaId: string, token: XToken): Promise<void> {
+  let info = initialInfo;
   let polls = 0;
   while (info && (info.state === 'pending' || info.state === 'in_progress') && polls < MAX_STATUS_POLLS) {
     const waitSecs = Math.max(1, Number(info.check_after_secs) || 2);
     await new Promise((resolve) => setTimeout(resolve, waitSecs * 1000));
+    // ssrf-ok: MEDIA_UPLOAD_URL is a fixed api.x.com media-upload host constant
     const status = await axios
-      .get(UPLOAD_URL, {
+      .get(MEDIA_UPLOAD_URL, {
         params: { command: 'STATUS', media_id: mediaId },
-        headers: { Authorization: `Bearer ${token.access_token}` },
+        headers: authHeader(token),
         timeout: 30000,
       })
       .then((r) => r.data);
-    info = status.processing_info;
+    info = processingInfo(status);
     polls++;
   }
 
@@ -180,6 +250,56 @@ async function uploadChunked(buffer: Buffer, meta: MediaMeta, token: XToken): Pr
   if (info && info.state !== 'succeeded') {
     throw new Error('X media processing timed out');
   }
+}
+
+/** POST /2/media/upload — one multipart request, images (and small GIFs). */
+async function uploadSimple(buffer: Buffer, meta: MediaMeta, token: XToken): Promise<string> {
+  assertWithinSizeLimit(buffer.length, meta);
+  const form = new FormData();
+  form.append('media', mediaPart(buffer, meta), filenameFor(meta));
+  form.append('media_category', meta.category);
+
+  const data = await postMultipart('', token, form);
+  const mediaId = extractMediaId(data, 'upload');
+  // Simple uploads can still report processing (the response schema carries
+  // `data.processing_info`), so honour it rather than assuming it is absent.
+  await awaitProcessing(processingInfo(data), mediaId, token);
+  return mediaId;
+}
+
+/** initialize → append(chunks) → finalize → STATUS poll. Video and GIF. */
+async function uploadChunked(buffer: Buffer, meta: MediaMeta, token: XToken): Promise<string> {
+  assertWithinSizeLimit(buffer.length, meta);
+
+  const segments = Math.max(1, Math.ceil(buffer.length / CHUNK_SIZE));
+  if (segments > MAX_SEGMENTS) {
+    throw new Error(
+      `X media is too large to chunk: ${segments} segments exceeds the documented segment_index maximum of ${MAX_SEGMENTS}.`,
+    );
+  }
+
+  // INITIALIZE — JSON body, not the v1.1 `command=INIT` form field.
+  const init = await postJson('/initialize', token, {
+    media_type: meta.mimeType,
+    total_bytes: buffer.length,
+    media_category: meta.category,
+  });
+  const mediaId = extractMediaId(init, 'initialize');
+  const idPath = encodeURIComponent(mediaId);
+
+  // APPEND — one multipart request per raw-byte segment.
+  for (let segment = 0; segment < segments; segment++) {
+    const offset = segment * CHUNK_SIZE;
+    const chunk = buffer.subarray(offset, Math.min(offset + CHUNK_SIZE, buffer.length));
+    const form = new FormData();
+    form.append('segment_index', String(segment));
+    form.append('media', mediaPart(chunk, meta), filenameFor(meta, segment));
+    await postMultipart(`/${idPath}/append`, token, form);
+  }
+
+  // FINALIZE — no body; may kick off async transcoding (processing_info).
+  const finalize = await postEmpty(`/${idPath}/finalize`, token);
+  await awaitProcessing(processingInfo(finalize), mediaId, token);
   return mediaId;
 }
 
@@ -257,7 +377,7 @@ export function planXMediaComposition(mediaUrls: string[] | undefined): XMediaPl
  * MEDIA_WOULD_BE_STRIPPED failure. A composition violation is not transient and
  * is caught by planXMediaComposition before any upload runs.
  *
- * Every id in the returned array is one X actually issued — see requireMediaId.
+ * Every id in the returned array is one X actually issued — see extractMediaId.
  */
 export async function uploadXMedia(mediaUrls: string[] | undefined, token: XToken): Promise<string[]> {
   const plan = planXMediaComposition(mediaUrls);

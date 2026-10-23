@@ -27,6 +27,11 @@
  * cases below now REJECT rather than returning a short list. The guarantee
  * under test is the same one — an id X did not issue never reaches the caller —
  * and the caller-visible outcome is the same MEDIA_WOULD_BE_STRIPPED refusal.
+ *
+ * UPDATED for the X API v2 media migration: v2 responses carry the id at
+ * `data.id` (a string) instead of v1.1's top-level `media_id_string`, and the
+ * chunked flow uses the /initialize, /{id}/append and /{id}/finalize sub-paths.
+ * The invariant is unchanged.
  */
 
 export {};
@@ -50,13 +55,14 @@ jest.mock('axios', () => ({
 }));
 
 const TOKEN = { access_token: 'tok' };
+const BASE = 'https://api.x.com/2/media/upload';
 
 /** The media download (axios.get on the source URL). */
 function stubDownload(contentType: string, bytes = 32) {
   mockGet.mockImplementation(async (url: string) => {
-    if (String(url).includes('upload.json')) {
-      // STATUS poll — only reached by the chunked flow.
-      return { data: { processing_info: { state: 'succeeded' } } };
+    if (String(url).startsWith(BASE)) {
+      // STATUS poll — only reached when X reports processing.
+      return { data: { data: { processing_info: { state: 'succeeded' } } } };
     }
     return { data: new ArrayBuffer(bytes), headers: { 'content-type': contentType } };
   });
@@ -71,67 +77,63 @@ beforeEach(() => {
  * 1. Single-shot image upload
  * ────────────────────────────────────────────────────────────────────────── */
 describe('single-shot image upload', () => {
-  it('CRITICAL: a 200 with no media_id_string yields NO id — never the string "undefined"', async () => {
-    // These three used to assert `toEqual([])`, because the per-image
-    // try/catch swallowed requireMediaId's throw. uploadXMedia is all-or-
-    // nothing now, so the same unusable response surfaces as a rejection
-    // instead of an empty list. Either way xAdapter returns the SAME truthful
-    // MEDIA_WOULD_BE_STRIPPED failure — what is asserted here is unchanged:
-    // the literal "undefined" never becomes a media_id.
+  it('CRITICAL: a 200 with no data.id yields NO id — never the string "undefined"', async () => {
+    // uploadXMedia is all-or-nothing, so an unusable response surfaces as a
+    // rejection. xAdapter turns that into the truthful MEDIA_WOULD_BE_STRIPPED
+    // failure — what is asserted here: "undefined" never becomes a media_id.
     stubDownload('image/jpeg');
-    mockPost.mockResolvedValue({ data: {} }); // 200, but no media_id_string
+    mockPost.mockResolvedValue({ data: { data: {} } }); // 200, but no data.id
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
-    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(
-      /media_id_string/i,
-    );
+    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(/no media id/i);
     // Nothing was handed back at all, so no "undefined" could be.
-    const tweetCreate = mockPost.mock.calls.filter(([url]) => !String(url).includes('upload.json'));
+    const tweetCreate = mockPost.mock.calls.filter(([url]) => !String(url).startsWith(BASE));
     expect(tweetCreate).toHaveLength(0);
   });
 
-  it('CRITICAL: an empty-string media_id_string is rejected too', async () => {
+  it('CRITICAL: a legacy v1.1 media_id_string body is not accepted as an id', async () => {
     stubDownload('image/jpeg');
-    mockPost.mockResolvedValue({ data: { media_id_string: '   ' } });
+    mockPost.mockResolvedValue({ data: { media_id_string: 'legacy-shape' } });
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
-    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(
-      /media_id_string/i,
-    );
+    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(/no media id/i);
   });
 
-  it('CRITICAL: a numeric-only media_id (no string form) is not accepted', async () => {
-    // X documents media_id_string as the field to use; the numeric form is
-    // lossy in JS, so accepting it would silently corrupt large ids.
+  it('CRITICAL: an empty-string data.id is rejected too', async () => {
     stubDownload('image/jpeg');
-    mockPost.mockResolvedValue({ data: { media_id: 1234567890123456789 } });
+    mockPost.mockResolvedValue({ data: { data: { id: '   ' } } });
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
-    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(
-      /media_id_string/i,
-    );
+    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(/no media id/i);
   });
 
-  it('a real media_id_string is still returned unchanged (happy path preserved)', async () => {
+  it('CRITICAL: a numeric data.id is not accepted', async () => {
+    // X documents the media id as a string; a numeric form is lossy in JS, so
+    // accepting it would silently corrupt large ids.
     stubDownload('image/jpeg');
-    mockPost.mockResolvedValue({ data: { media_id_string: '99887766554433221' } });
+    mockPost.mockResolvedValue({ data: { data: { id: 1234567890123456789 } } });
+    const { uploadXMedia } = await import('../../adapters/xMedia');
+
+    await expect(uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).rejects.toThrow(/no media id/i);
+  });
+
+  it('a real data.id is still returned unchanged (happy path preserved)', async () => {
+    stubDownload('image/jpeg');
+    mockPost.mockResolvedValue({ data: { data: { id: '99887766554433221' } } });
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
     expect(await uploadXMedia(['https://cdn.example.com/a.jpg'], TOKEN)).toEqual(['99887766554433221']);
   });
 
   it('a batch with one unusable response rejects — it never returns the partial set', async () => {
-    // Was: `expect(ids).toEqual(['id-1', 'id-3'])`. Handing back the survivors
-    // WAS the silent PARTIAL strip: xAdapter saw two ids, published a
-    // two-image tweet for a three-image post and reported success.
-    // uploadXMedia is all-or-nothing now — see xPartialMediaIntegrity.test.ts
-    // for the adapter-level consequence. The invariant this test exists for is
-    // unchanged and still asserted: no id X did not issue is ever handed back.
+    // Handing back the survivors WAS the silent PARTIAL strip: xAdapter saw two
+    // ids, published a two-image tweet for a three-image post and reported
+    // success. See xPartialMediaIntegrity.test.ts for the adapter consequence.
     stubDownload('image/jpeg');
     let call = 0;
     mockPost.mockImplementation(async () => {
       call += 1;
-      return { data: call === 2 ? {} : { media_id_string: `id-${call}` } };
+      return { data: call === 2 ? { data: {} } : { data: { id: `id-${call}` } } };
     });
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
@@ -140,7 +142,7 @@ describe('single-shot image upload', () => {
         ['https://cdn.example.com/a.jpg', 'https://cdn.example.com/b.jpg', 'https://cdn.example.com/c.jpg'],
         TOKEN,
       ),
-    ).rejects.toThrow(/media_id_string/i);
+    ).rejects.toThrow(/no media id/i);
   });
 });
 
@@ -148,29 +150,30 @@ describe('single-shot image upload', () => {
  * 2. Chunked video upload
  * ────────────────────────────────────────────────────────────────────────── */
 describe('chunked video upload', () => {
-  it('CRITICAL: an INIT with no media_id_string rejects instead of APPENDing to "undefined"', async () => {
+  it('CRITICAL: an initialize with no data.id rejects instead of APPENDing to "undefined"', async () => {
     stubDownload('video/mp4');
-    mockPost.mockResolvedValue({ data: {} }); // INIT returns nothing usable
+    mockPost.mockResolvedValue({ data: { data: {} } }); // initialize returns nothing usable
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
-    await expect(uploadXMedia(['https://cdn.example.com/a.mp4'], TOKEN)).rejects.toThrow(/media_id_string/i);
+    await expect(uploadXMedia(['https://cdn.example.com/a.mp4'], TOKEN)).rejects.toThrow(/no media id/i);
 
     // The whole point: no APPEND was attempted against a nonexistent id.
-    const appends = mockPost.mock.calls.filter(([, body]) => String(body).includes('command=APPEND'));
+    const appends = mockPost.mock.calls.filter(([url]) => String(url).endsWith('/append'));
     expect(appends).toHaveLength(0);
   });
 
-  it('a well-formed INIT still drives APPEND/FINALIZE with the real id (happy path preserved)', async () => {
+  it('a well-formed initialize still drives append/finalize with the real id (happy path preserved)', async () => {
     stubDownload('video/mp4');
-    mockPost.mockResolvedValue({ data: { media_id_string: 'vid-1' } });
+    mockPost.mockResolvedValue({ data: { data: { id: 'vid-1' } } });
     const { uploadXMedia } = await import('../../adapters/xMedia');
 
     expect(await uploadXMedia(['https://cdn.example.com/a.mp4'], TOKEN)).toEqual(['vid-1']);
 
-    const bodies = mockPost.mock.calls.map(([, body]) => String(body));
-    expect(bodies.some((b) => b.includes('command=INIT'))).toBe(true);
-    expect(bodies.some((b) => b.includes('command=APPEND') && b.includes('media_id=vid-1'))).toBe(true);
-    expect(bodies.some((b) => b.includes('command=FINALIZE') && b.includes('media_id=vid-1'))).toBe(true);
+    expect(mockPost.mock.calls.map(([url]) => String(url))).toEqual([
+      `${BASE}/initialize`,
+      `${BASE}/vid-1/append`,
+      `${BASE}/vid-1/finalize`,
+    ]);
   });
 });
 

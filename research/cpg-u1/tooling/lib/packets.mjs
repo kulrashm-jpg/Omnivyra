@@ -6,6 +6,8 @@ import { BLIND_RECORD_COLUMNS, REFERENCE_COLUMNS, agreementKey } from './schema.
 import { authorIsRecord1, presentationOrder, rater1IsLabelA } from './raterOrder.mjs';
 
 export const RATING_LABELS = Object.freeze(['SUPPORTED-FILL', 'UNSUPPORTED-FILL', 'INCORRECT-FILL', 'MISATTRIBUTED-FILL', 'CORRECT-ABSTENTION', 'MISSED-FILL', 'REFERENCE-AMBIGUOUS']);
+/** §12 "Missing ratings: pending — never imputed, never scored". A pending item is not a disagreement and is never adjudicated. */
+export const PENDING = 'pending';
 
 export const REFERENCE_ITEM_KEYS = Object.freeze(['candidate_id', 'field', 'company_name', 'canonical_domain', 'jurisdiction_family', 'identifier_scheme', 'identifier_value', 'record_1', 'record_2']);
 /** Blind-record content only: no candidate/field duplication, no recorder identity, no timestamps. */
@@ -75,7 +77,8 @@ export function buildRatingAdjudicationPacket({ evaluationItems, rater1, rater2,
     if (!exactKeys(ev, EVALUATION_ITEM_KEYS) || !exactKeys(ev.reference_record, REFERENCE_COLUMNS)) throw new Error(`evaluation item ${ev.candidate_id}|${ev.field} is not exactly the §12 rater packet`);
     const k = `${ev.candidate_id}|${ev.field}`;
     const l1 = R1.get(k); const l2 = R2.get(k);
-    if (!RATING_LABELS.includes(l1) || !RATING_LABELS.includes(l2)) throw new Error(`${k}: both raters must supply a valid label`);
+    if (![...RATING_LABELS, PENDING].includes(l1) || ![...RATING_LABELS, PENDING].includes(l2)) throw new Error(`${k}: both raters must supply a valid label or "pending"`);
+    if (l1 === PENDING || l2 === PENDING) continue; // not completely rated: never adjudicated, never scored (§12)
     if (l1 === l2) continue; // agreement is never adjudicated
     const aFirst = rater1IsLabelA(recordSha, ev.candidate_id, ev.field);
     items.push({ ...pick(ev, EVALUATION_ITEM_KEYS), label_a: aFirst ? l1 : l2, label_b: aFirst ? l2 : l1 });

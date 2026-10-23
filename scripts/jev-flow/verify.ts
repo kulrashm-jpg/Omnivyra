@@ -3,14 +3,15 @@
  * governed worktree and store a hash-addressed evidence bundle under GOV_HOME.
  *
  * Fail closed: every precondition (packet integrity, worktree, branch, clean
- * tree, ancestry, registry drift, known ids, scope) is checked before any
- * command runs. Commands are spawned without a shell; argv[0] must be `node`
+ * tree, ancestry, registry drift, known ids, scope, protected paths) is
+ * checked before any command runs. Commands are spawned without a shell; argv[0] must be `node`
  * and is executed as process.execPath. Expected refusals never throw.
  */
 import { execFile, spawn, type SpawnOptions } from 'node:child_process';
 import path from 'node:path';
 import { buildBundle, storeBundle, storeLog } from './evidence';
 import { registryDigest, resolveEntries } from './registry';
+import { describeProtectedViolation, evaluateProtectedPaths, loadProtectedPathPolicy, type ProtectedPathPolicy } from './protectedPaths';
 import { evaluateScope } from './scope';
 import {
   COMMIT_RE,
@@ -128,6 +129,8 @@ export interface VerifyInput {
   layout: GovLayout;
   runner?: CommandRunner;
   now?: () => Date;
+  /** Protected-path policy (B3); absent = the reviewed intake rules of this tool checkout. Never skipped. */
+  protectedPolicy?: ProtectedPathPolicy;
 }
 
 export interface VerifyResult {
@@ -191,6 +194,17 @@ export async function runVerification(input: VerifyInput): Promise<VerifyResult>
       if (scope.outside_authorized.length) parts.push(`outside authorized: ${scope.outside_authorized.join(', ')}`);
       return refuse('SCOPE_VIOLATION', `scope violation (${parts.join('; ')})`, scope);
     }
+
+    // 4b. protected paths (B3) — reviewed exact-path authorizations only; no command runs on a violation
+    let policy: ProtectedPathPolicy;
+    try {
+      policy = input.protectedPolicy ?? loadProtectedPathPolicy(registry);
+    } catch (e) {
+      return refuse('REFUSED', `protected-path policy unavailable: ${(e as Error).message}`);
+    }
+    const guarded = evaluateProtectedPaths(scope.changed_paths, { invariants: packet.story.invariants ?? [], registry_ids: ids }, policy);
+    // The path-pattern scope above was ok, so no ScopeResult is returned: "Scope: ok" must not be printed.
+    if (guarded.ok === false) return refuse('SCOPE_VIOLATION', `protected-path violation (${describeProtectedViolation(guarded)})`);
 
     // 5. run registry commands, in packet order
     const storyKey = packet.story.key;

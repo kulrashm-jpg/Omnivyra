@@ -3,13 +3,16 @@
  * 
  * Publishes posts to X/Twitter using the Twitter API v2.
  * 
- * API Documentation: https://developer.twitter.com/en/docs/twitter-api/tweets/manage-tweets
- * 
+ * API Documentation: https://docs.x.com/x-api/posts/creation-of-a-post
+ *
  * Required OAuth Scopes:
  * - tweet.read
  * - tweet.write
  * - users.read
- * 
+ * - media.write  (REQUIRED for any post with media — the X API v2 media
+ *   endpoints used by xMedia.ts are scoped `media.write`. A connection issued
+ *   before this scope was added uploads nothing and the post is refused below.)
+ *
  * To obtain API credentials:
  * 1. Create Twitter app at https://developer.twitter.com/en/portal/dashboard
  * 2. Enable Twitter API v2 access
@@ -115,7 +118,8 @@ export async function publishToX(
     }
 
     // Upload media first — v2 tweet-create only accepts already-uploaded
-    // media_ids.
+    // media_ids (see xMedia.ts, which speaks the X API v2 media contract after
+    // the v1.1 endpoints were sunset on 2025-06-09).
     if (post.media_urls && post.media_urls.length > 0) {
       // P3-A composition pre-check. X publishes up to 4 images, OR one video,
       // OR one GIF. xMedia used to satisfy those rules by discarding the

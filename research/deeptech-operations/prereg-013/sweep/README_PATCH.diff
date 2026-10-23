@@ -1,0 +1,135 @@
+# README_PATCH.diff — PREPARED, NOT APPLIED
+#
+# DEEPTECH-PARALLEL-013 §9 (identity sweep).  Target: the candidate's `README.md`, i.e.
+#   C:/tmp/dt013-candidate/tooling/README.md
+# which another stream owns exclusively.  NOTHING was written there.  The orchestrator applies this.
+#
+# Base bytes this patch was generated against:
+#   sha256(README.md) = e70e57d5a211773d6952add18879adba44fae31e97c14c70deeb87eddd958691
+#   292 lines, LF only (0 CR bytes)
+# The candidate tree is being actively edited (its cpg_u1_data.mjs grew 594->595 files and the
+# `verify-evaluation-tree` dispatch entry moved :1128 -> :1181 while this wave was measuring), so
+# ALWAYS run `git apply --check` first and regenerate if the base hash no longer matches.
+#
+# HOW TO APPLY (CRLF hazard — the flags are not optional):
+#   cd C:/tmp/dt013-candidate/tooling
+#   git -c core.autocrlf=false -c core.eol=lf apply --check /path/to/README_PATCH.diff
+#   git -c core.autocrlf=false -c core.eol=lf apply        /path/to/README_PATCH.diff
+# Verified in this wave: `git apply --check` passes and applying reproduces
+#   sha256 = d3401cf8f7c983e77045786e91599fe83d5b0dcfd13ac3f4377523438335487f
+#
+# COVERS THE NINE DEFECTS OF D-7 (README_IDENTITY_DEFECTS.md), by original line number:
+#   D1  HIGH    :116  "all set `UNDECIDED`" is FALSE -> "all nine (AD-1...AD-9) are `DECIDED`"
+#                     :110 is descriptive and CORRECT and is NOT TOUCHED (verified: still byte-identical)
+#   D2  HIGH    verify-evaluation-tree had 0 occurrences -> now 2: one command line after :155 and one
+#                     enforcement row.  The row is placed at the END OF THE v6 TABLE (after :206), NOT
+#                     after :214 as D-7 proposed: :214 is inside the *v4* table and the control is a v6
+#                     addition, so D-7's placement would have mis-filed it.  Deliberate deviation.
+#   D3  MEDIUM  :1    "executable end to end" -> canonical TOOL_VERSION label, no aggregate
+#   D4  MED/HI  :11   status line -> REGISTRATION-READY + explicit ENGINEERING REHEARSAL sentence
+#   D5  MEDIUM  :208  v4/v6 heading collision -> note ABOVE the heading; heading text unchanged
+#   D6  MEDIUM  :5-6  `governed_by` parenthetical corrected; protocol-003 -> protocol-004
+#   D7  MEDIUM  :278  CPG041_VERIFICATION_REPORT.md made resolvable: claim now rests on the aggregate
+#   D8  MEDIUM  :191  DR-1 broke the beacon shape; `/v1` deliberately frozen -- written as OPTION A.
+#                     >>> OWNER DECISION REQUIRED.  Under Option B this hunk must be replaced by a
+#                     mechanical /v1 -> /v2 change at :92, :176, :187 plus lib/sampling.mjs and
+#                     test/selftest.mjs.  Do NOT apply this hunk before the A/B choice is recorded.
+#   D9  MEDIUM  :11   provenance of this tree stated, as `<NEW_N>` files + programme ids ONLY
+#
+# THE TWO HARD CONSTRAINTS, MEASURED ON THE PATCHED FILE:
+#   - states no aggregate:  grep -cE 'f7699f05|638d68e6|640510' = 0 ; grep -coE '[0-9a-f]{64}' = 0
+#   - v3-v6 changelog headings all present and NOT renumbered (v6, v4, v3 all intact)
+#   - no provisional digest anywhere; the only placeholder used is `<NEW_N>` (2 occurrences)
+#   - no file-count literal (587/593/594/595) is written into the README
+#
+# PLACEHOLDER STATUS: the patched README carries `<NEW_N>` twice and is therefore NOT YET CONSISTENT.
+# A substitution pass must set `<NEW_N>` AFTER the tree is final.  The README deliberately carries no
+# `<NEW_AGG>`: it is inside its own aggregate and must never state it.
+--- a/README.md
++++ b/README.md
+@@ -1,14 +1,23 @@
+-# CPG U1 dataset tooling — v6 (`cpg-u1-data-tooling-6`: executable end to end, DEEPTECH-PARALLEL-002)
++# CPG U1 dataset tooling — `cpg-u1-data-tooling-6` (README feature generation v6; governance generation "tooling v4" per `CPG_U1_PROTOCOL_004.md`)
+ 
+ Governed by **`CPG_U1_PROTOCOL_004.md`** (supersedes protocol-003). Where the tooling and the protocol disagree, the protocol
+ wins and the tooling is defective. Every constant in `lib/` and `rules/development_only_registry.json`
+-is protocol. (`rules/` and `templates/` carry a historical `governed_by: candidate-002` label; their
+-content is unchanged by protocol-003.)
++is protocol. (`rules/analysis_decisions.json` carries `"governed_by": "CPG_U1_PROTOCOL_004.md"`. Only
++`rules/development_only_registry.json` and `templates/rules.json` carry the historical `governed_by: candidate-002` label; their content is unchanged by protocol-004.)
+ 
+ **No company and no fact about any company appears here**, except the development-only registry,
+ which exists to keep the implementers' own CPG history **out** of held-out.
+ 
+-Status: **IMPLEMENTED · NOT REGISTERED · NOT FUNDED · NOT EXECUTED · NOT EVIDENCE.**
++Status: **REGISTRATION-READY · NOT REGISTERED · NOT FUNDED · NOT EXECUTED · NOT EVIDENCE.** Implemented and self-tested, not registered.
++Every run against this tree to date is an **ENGINEERING REHEARSAL**: no run is, or may be cited as, U1 evidence.
++
++**Provenance of this tree.** `<NEW_N>` files. It descends from the DEEPTECH-PARALLEL-002 tree by one file added
++(`lib/enumeration.mjs`, §4A.2 enumeration attribution) and a small number of files changed (`README.md`,
++`cpg_u1_data.mjs`, `lib/evidenceBundle.mjs`, `lib/sampling.mjs`, `test/mutate.mjs`, `test/selftest.mjs`);
++`rules/analysis_decisions.json` is byte-identical in both. **This README states no aggregate and must not:**
++it is one of the files the aggregate is computed over, so any value printed here would be false as written.
++The aggregate is `toolingManifest()` (`lib/aggregate.mjs`) over every file of this tree, and is recorded and
++registered **outside** it.
+ 
+ The tooling **creates no key, no transaction, no registration and no seed input.** It verifies public
+ evidence and derives each stage's seed internally from a Bitcoin single-use commitment, a block hash
+@@ -113,8 +122,10 @@
+ **Methodological decisions (`rules/analysis_decisions.json`).** Protocol-004 leaves nine values undefined (α population and
+ undefined α; "same document" for SOURCE-COINCIDENT; which registry unavailability counts; 24-month arithmetic and scope of
+ REFERENCE-STALE; INCONCLUSIVE-vs-VOID for a declared protocol violation; undefined AR; basis of the abstention split). They are
+-listed there with their permitted options and all set `UNDECIDED`. The file is part of the tooling aggregate, so the values
+-chosen are frozen by registration; `analyze` refuses to run until every value is decided. A different decisions file
++listed there with their permitted options, and **all nine (AD-1…AD-9) are `DECIDED`**: the file's `status` field records them as
++owner-approved methodological decisions chosen before registration. The file is part of the tooling aggregate, so the values
++chosen are frozen by registration; `analyze` refuses to run **while any value is `UNDECIDED`** (see the exit-4 rule at the `analyze`
++line above) — with this file as shipped it does not refuse. A different decisions file
+ (`--decisions`) is accepted only with `--allow-synthetic` and this study's `synthetic-test` registration.
+ 
+ ## Commands
+@@ -152,6 +163,7 @@
+      --reference-packet ref_packet.json --blind-decisions blind.csv] --reference reference.csv --out SEAL.json
+ EV="--seal SEAL.json --held-out-manifest ho/manifest.json --authorization auth.json --log events.jsonl --reference reference.csv --archive-dir archive/<run_id>"
+ node cpg_u1_data.mjs evaluation-items $EV --out evaluation.json
++node cpg_u1_data.mjs verify-evaluation-tree --repo <resolver clone> --protocol CPG_U1_PROTOCOL_004.md
+ node cpg_u1_data.mjs verify-evaluation $EV --evaluation evaluation.json
+ SEALED="--seal SEAL.json --held-out-manifest ho/manifest.json --evaluation evaluation.json"
+ node cpg_u1_data.mjs rater-packet $SEALED --label rater-1|rater-2 --out packet.json
+@@ -190,6 +202,13 @@
+ a round attested by fewer than two differently named relays is refused, and `verify-sampling` names the relays in its result. The
+ attribution does not enter the seed or the sampling record — the §5.7 derivation and `record_sha256` are unchanged.
+ 
++**DR-1 changed this shape (Option A: `/v1` deliberately frozen).** Before DR-1 a beacon carried no `relays` member.
++DR-1 made `relays` required, with at least two differently named relays per round, and the schema id
++`cpg-u1-sampling-evidence/v1` was **deliberately not advanced to `/v2`**, because the §5.7 seed derivation and
++`record_sha256` are unchanged and no registered artefact depends on the old shape. **Consequence:** a pre-DR-1
++bundle is refused by `verify-sampling` even though it declares the same schema id. Rebuild the bundle with
++`sampling-evidence-bundle`; do not hand-edit it.
++
+ ## What the tooling enforces (additions in v6)
+ 
+ | Rule | Protocol-004 § | Where |
+@@ -204,6 +223,13 @@
+ | Rating adjudication: disagreements only (pending never), Label A/B blind, three decisions, assigned adjudicator ≠ raters | 12.2 | `rating-adjudication-packet`, `resolve-rating-adjudication` |
+ | Endpoints, α, dispositions, §15.5 conditions and outcome computed with exact integer thresholds; undefined values are recorded decisions, never tooling choices | 9.8, 10.2–10.5, 12, 15 | `lib/analysis.mjs`, `rules/analysis_decisions.json`, `analyze` |
+ | Sampling-evidence bundle assembled offline and verified before it is written | 13.2A, 21 | `lib/evidenceBundle.mjs`, `sampling-evidence-bundle` |
++| Evaluated treatment pinned: the resolver clone must be the content declared in protocol §7.1 (CPG-047), the instrument is excluded from it, and a later mainline state can never become the treatment — refusals `CONTENT_MISMATCH` and `INSTRUMENT_IN_TREATMENT` | 7.1, 19.1 | `lib/evaluationTree.mjs`, `verify-evaluation-tree` (domain `cpg-u1-evaluation-tree/v1`, a `PROTOCOL_MARKER`, so `verify-protocol` refuses a protocol that omits it) |
++
++> **Reading the v3–v6 headings.** These number *this package's feature generations*, not the protocol's
++> governance generation. `CPG_U1_PROTOCOL_004.md` (`:18`, `:25`, `:953`, `:1098`) calls the governed tooling
++> **"tooling v4"** and states that the feature generations are "not in this file"; v5 and v6 are additions to
++> this package under that same governance, not ungoverned work. The headings below are history and are
++> **annotated, never renumbered**.
+ 
+ ## What the tooling enforces (additions in v4)
+ 
+@@ -275,7 +301,7 @@
+ | External binary | **git** (`scan` and the self-test detector) |
+ | Line endings | **LF**; preserve bytes exactly |
+ | Resolver clone | **`CPG_U1_RESOLVER_CLONE`** = clean clone at `f01a7eb4199be4e04d4fee7fc0116303949dc553` (required by self-test and mutation run) |
+-| Vendored dependency | `node_modules/@noble/curves` **1.9.7** and `node_modules/@noble/hashes` **1.8.0**, byte-identical to the npm tarballs (integrity recorded in CPG041_VERIFICATION_REPORT.md). No install step; nothing is fetched |
++| Vendored dependency | `node_modules/@noble/curves` **1.9.7** and `node_modules/@noble/hashes` **1.8.0**, byte-identical to the npm tarballs. No install step; nothing is fetched. **The evidence is the aggregate itself:** every vendored byte is one of this tree's `<NEW_N>` files and is therefore covered by the registered tooling aggregate, which an outsider can recompute from the package alone with `tooling-manifest`. (`CPG041_VERIFICATION_REPORT.md` records the original tarball comparison; it is a repository document and is **deliberately outside this package** — do not treat it as a dependency of verification.) |
+ | Fixtures | `test/fixtures/bitcoin` (mainnet blocks 836640, 838655–838656, 839989–840012; block 840000 txids, transactions, Merkle proof) and `test/fixtures/drand` (quicknet chain info, rounds 1, 1000000, 12345678); provenance in `test/fixtures/PROVENANCE.json` |
+ | Aggregate | sha256 of `"<sha256>  <path>\n"` lines over every file of this tree, sorted by path |
+ | Dates | `screened_at` and `sealed_on` are execution metadata (UTC date) |

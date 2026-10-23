@@ -36,12 +36,18 @@
  * (readiness + suppression), and an account aggregator that emitted one would
  * be a second readiness authority. A test asserts its absence.
  *
- * ─── CONSISTENCY IS LI-2'S VERDICT, NOT A SECOND OPINION ──────────────────
- * Disagreement is decided by `decideCanonicalUpdates` — LI-2's own pure
- * function — rather than re-derived here. It is called with an EMPTY canonical
- * row on purpose: RULE C (never overwrite) would otherwise mask RULE B behind
- * `canonical_value_already_set`, and WS-7's question is "do the sources
- * disagree?", which is a different question from "may we write?".
+ * ─── CONSISTENCY IS ARBITRATION'S VERDICT, NOT A SECOND OPINION ───────────
+ * Disagreement is decided by `decideCanonicalUpdates` — the ingestion boundary's
+ * own pure function — rather than re-derived here. It is called with an EMPTY
+ * canonical row on purpose, so that incumbent handling cannot mask the answer,
+ * and it reads `contested` rather than `withhold`.
+ *
+ * B1b made that distinction load-bearing. Under LI-2 a disagreement was always
+ * withheld, so "do the sources disagree?" and "may we write?" had one answer.
+ * Arbitration now RESOLVES most disagreements by recency, so a resolved
+ * disagreement no longer appears in `withhold` — but it is still a disagreement,
+ * and reporting it is exactly WS-7's job. `contested` is raw disagreement and is
+ * therefore the only correct input here.
  *
  * ─── MARKETPULSE STAYS TENANT-LEVEL ───────────────────────────────────────
  * WS-3 established that `market_pulse_*` is intelligence about the TENANT'S
@@ -134,6 +140,12 @@ export interface AssertionRow {
   readonly provider: string | null;
   readonly confidence: number | null;
   readonly observed_at: string | null;
+  /**
+   * D-1's fallback arbitration timestamp. Carried so the assertions WS-7 reads
+   * are the same shape arbitration consumes, rather than a narrower copy that
+   * would silently lose the recency rule.
+   */
+  readonly recorded_at: string | null;
   readonly source_record_id: string | null;
 }
 
@@ -358,8 +370,16 @@ export const defaultAccountIntelligencePorts: AccountIntelligencePorts = {
 
   async loadAssertions(organizationId: string, accountId: string): Promise<readonly AssertionRow[]> {
     const { data, error } = await ownedDbTable('source_assertions')
-      .select('id, attribute, normalized_value, provider, confidence, observed_at, source_record_id')
+      .select('id, attribute, normalized_value, provider, confidence, observed_at, recorded_at, source_record_id')
       .eq('organization_id', organizationId)      // tenant boundary — never optional
+      // O-2 — COMPANY evidence only. `account_id` alone does NOT establish that
+      // a row describes the company: the ingestion writer sets `account_id`
+      // unconditionally, so every employee's own person-scoped assertion carries
+      // this account's leg too. Company intelligence must read account-scoped
+      // assertions for company evidence. `entity_type` is what declares which
+      // leg is the subject, and `entity_coherent` already keeps `person_id` NULL
+      // on an account row, so no companion predicate is needed.
+      .eq('entity_type', 'account')
       .eq('account_id', accountId)
       // LIVE evidence only, matching LI-2's own canonical-decision query.
       .is('superseded_at', null);
@@ -419,20 +439,31 @@ export async function aggregateAccountIntelligence(
     ports.loadEngagement(input.organizationId, personIds),
   ]);
 
-  // ── CONSISTENCY — LI-2's verdict, obtained from LI-2's own function ──────
-  // The canonical row passed in is EMPTY on purpose. With the real row, RULE C
-  // ("never overwrite a value already set") fires first and reports
-  // `canonical_value_already_set`, hiding whether the sources actually agree.
-  // An empty row disables RULE C, leaving RULE B as the only reason anything is
-  // withheld — which is exactly the disagreement question WS-7 is asking.
+  // ── CONSISTENCY — arbitration's verdict, from arbitration's own function ──
+  // The canonical row passed in is EMPTY on purpose: with the real row, incumbent
+  // handling fires first and hides whether the sources actually agree.
+  //
+  // `contested` is RAW disagreement — every attribute with more than one distinct
+  // live value, whether or not recency then picked a winner. That is WS-7's
+  // question. Reading `withhold` would now UNDER-report, because an attribute two
+  // sources disagree about is no longer withheld once one of them is newer.
+  //
+  // No authority declaration is passed: WS-7 reports what the sources said, and
+  // which of them a tenant has declared authoritative does not change that.
   const li2 = decideCanonicalUpdates(
     {},
-    assertions.map((a) => ({ attribute: a.attribute, normalized_value: a.normalized_value, id: a.id })),
+    assertions.map((a) => ({
+      attribute: a.attribute,
+      normalized_value: a.normalized_value,
+      id: a.id,
+      provider: a.provider,
+      confidence: a.confidence,
+      observed_at: a.observed_at,
+      recorded_at: a.recorded_at,
+    })),
     ACCOUNT_ATTRIBUTE_COLUMNS,
   );
-  const contested = new Set(
-    li2.withhold.filter((w) => w.reason === 'sources_disagree').map((w) => w.attribute),
-  );
+  const contested = new Set(li2.contested);
 
   // ── FACTS — canonical values, with the evidence behind each ──────────────
   const assertionsByAttribute = new Map<string, AssertionRow[]>();

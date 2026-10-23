@@ -1,0 +1,97 @@
+{
+  "schema": "cpg-u1-analysis-decisions/v1",
+  "governed_by": "CPG_U1_PROTOCOL_004.md",
+  "status": "DECIDED — the values below are owner-approved methodological decisions, recorded before registration. Protocol-004 does not define them and the tooling does not choose them. This file is part of the tooling aggregate, so these values are frozen by registration; `analyze` refuses to run while any value is UNDECIDED.",
+  "decisions": {
+    "AD-1": {
+      "topic": "Krippendorff's alpha population",
+      "protocol_basis": "§12 'Agreement: Krippendorff's α, nominal, ≥ 0.667' — the set of observations over which α is computed is not stated",
+      "question": "Is α computed over every observation both raters labelled, or only over observations that are not machine-INVALID, sealed REFERENCE-CONFLICT or REFERENCE-STALE?",
+      "options": [
+        "ALL_COMPLETELY_RATED_ITEMS",
+        "EXCLUDE_INVALID_CONFLICT_AND_STALE"
+      ],
+      "value": "EXCLUDE_INVALID_CONFLICT_AND_STALE"
+    },
+    "AD-2": {
+      "topic": "Undefined alpha",
+      "protocol_basis": "§15.5(3) 'Nominal α < 0.667' — α is undefined when the raters used a single label for every item (no expected disagreement) or rated nothing",
+      "question": "When α is undefined, does condition 3 trigger INCONCLUSIVE, or is α treated as not below the threshold?",
+      "options": [
+        "INCONCLUSIVE",
+        "NOT_BELOW_THRESHOLD"
+      ],
+      "value": "INCONCLUSIVE"
+    },
+    "AD-3": {
+      "topic": "SOURCE-COINCIDENT match",
+      "protocol_basis": "§9.8 'reference and CPG cite the same document'; §12.3 performs no URL normalisation for the cited set",
+      "question": "Is 'the same document' the reference source_url being byte-identical to a cited URL, or identical after removing a '#fragment'?",
+      "options": [
+        "EXACT_URL_STRING",
+        "URL_WITHOUT_FRAGMENT"
+      ],
+      "value": "URL_WITHOUT_FRAGMENT"
+    },
+    "AD-4": {
+      "topic": "Decisive registry path unavailable",
+      "protocol_basis": "§15.5(4) 'held-out companies had their decisive registry path unavailable during the run' — the response records registryUnavailable entries per provider/identifier",
+      "question": "Does any registryUnavailable entry count, or only an entry whose identifier equals the company's pre-registered decisive identifier?",
+      "options": [
+        "ANY_REGISTRY_UNAVAILABLE_ENTRY",
+        "ENTRY_FOR_DECISIVE_IDENTIFIER"
+      ],
+      "value": "ENTRY_FOR_DECISIVE_IDENTIFIER"
+    },
+    "AD-5": {
+      "topic": "24-month temporal rule arithmetic",
+      "protocol_basis": "§10.2 'as_of_date no more than 24 months before the run asOf'",
+      "question": "Is the cutoff the same calendar day 24 months before asOf (clamped to month end), or asOf minus 730 days?",
+      "options": [
+        "CALENDAR_MONTHS",
+        "DAYS_730"
+      ],
+      "value": "CALENDAR_MONTHS"
+    },
+    "AD-6": {
+      "topic": "REFERENCE-STALE scope",
+      "protocol_basis": "§10.2 'reference truth is the most recent authoritative value … If none exists that recent, the observation is REFERENCE-STALE' — a NOT_AVAILABLE_FROM_SOURCE record holds no value",
+      "question": "Does the temporal rule apply only to STATED reference values, or to every reference record of employee_count / revenue_range?",
+      "options": [
+        "STATED_REFERENCE_VALUES_ONLY",
+        "ALL_REFERENCE_RECORDS"
+      ],
+      "value": "STATED_REFERENCE_VALUES_ONLY"
+    },
+    "AD-7": {
+      "topic": "Outcome of a declared protocol violation",
+      "protocol_basis": "§15.5(7) lists a mid-run protocol violation as INCONCLUSIVE; §18 halt condition 3 says 'The run is void, not repaired'",
+      "question": "Is a declared protocol violation (other than a §6.5 execution-audit violation, which is always VOID) reported as INCONCLUSIVE or VOID?",
+      "options": [
+        "INCONCLUSIVE",
+        "VOID"
+      ],
+      "value": "VOID"
+    },
+    "AD-8": {
+      "topic": "Undefined abstention recall",
+      "protocol_basis": "§10.3 P2 AR = CORRECT-ABSTENTION ÷ (CORRECT-ABSTENTION + UNSUPPORTED-FILL) — undefined when the denominator is 0",
+      "question": "When AR is undefined, is P2 not met (FAILURE-eligible) or is the run INCONCLUSIVE?",
+      "options": [
+        "P2_NOT_MET",
+        "INCONCLUSIVE"
+      ],
+      "value": "INCONCLUSIVE"
+    },
+    "AD-9": {
+      "topic": "Abstention split basis (diagnostic)",
+      "protocol_basis": "§10.3 'Abstentions are reported split into source unavailable vs other' — unavailability is recorded per response, not per field",
+      "question": "Is an abstention 'source unavailable' when its response records any unavailable source or registry, or only an unavailable registry?",
+      "options": [
+        "ANY_UNAVAILABLE_ENTRY",
+        "REGISTRY_UNAVAILABLE_ONLY"
+      ],
+      "value": "ANY_UNAVAILABLE_ENTRY"
+    }
+  }
+}
