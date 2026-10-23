@@ -10,6 +10,14 @@ import { loadAttachmentSession } from '../../../lib/content/creatorAttachmentSes
 import { readMarketingBrief, MARKETING_BRIEF_SESSION_KEY } from '../../../lib/content/marketingBriefResolver';
 import { readGuidedChoices, GUIDED_CHOICES_SESSION_KEY } from '../../../lib/content/guidedCreativeSession';
 import {
+  creatorRenderPollFailureReason,
+  creatorRenderPollStatus,
+  creatorRenderPollTerminalMessage,
+  fetchCreatorRenderJobStatus,
+  hasCreatorRenderPollExhausted,
+  mergeRenderedCreatorResult,
+} from '../../../lib/creator-content/creatorRenderedResult';
+import {
   buildAssetCompositionIntent, normalizeAttachmentMode, normalizeSourceTextTransform,
   normalizeWriterCreatorAssetType, type AssetCompositionIntent, type AttachmentMode,
 } from '../../../lib/content/writerCreatorAttachmentContracts';
@@ -650,10 +658,23 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
 
     let cancelled = false;
     let attempts = 0;
-    const MAX_ATTEMPTS = 90; // ~3 minutes at 2s/poll
     const POLL_MS = 2000;
+    const REQUEST_TIMEOUT_MS = 15000;
+    const MAX_RUNTIME_MS = 180000;
     const startedAt = Date.now();
     let firstActiveAt: number | null = null;
+    let activeController: AbortController | null = null;
+    const overallTimeoutId = window.setTimeout(() => {
+      cancelled = true;
+      activeController?.abort();
+      setRenderJobProgress({
+        percent: 0,
+        status: 'unknown',
+        attempts,
+        queuedSeconds: Math.round((Date.now() - startedAt) / 1000),
+      });
+      setError(creatorRenderPollTerminalMessage('timed_out'));
+    }, MAX_RUNTIME_MS);
     // Seed the progress state so the banner shows 0% immediately rather
     // than waiting for the first poll response.
     setRenderJobProgress({ percent: 0, status: 'queued', attempts: 0, queuedSeconds: 0 });
@@ -662,105 +683,104 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
       if (cancelled) return;
       attempts += 1;
       try {
-        const response = await fetch(`/api/command-center/creator-content/render-job/${encodeURIComponent(jobId)}`, {
-          credentials: 'include',
-        });
-        if (cancelled) return;
-        if (response.ok) {
-          const payload = await response.json().catch(() => null) as {
-            success?: boolean;
-            render_job?: {
-              status?: string;
-              progress?: number;
-              attemptsMade?: number;
-              result?: { url?: string; files?: string[]; metadata?: Record<string, unknown> };
-            };
-          } | null;
-          const status = payload?.render_job?.status;
-          const rawPercent = Number(payload?.render_job?.progress ?? 0);
-          const safePercent = Number.isFinite(rawPercent)
-            ? Math.max(0, Math.min(100, Math.round(rawPercent)))
-            : 0;
-          const attemptsMade = Number(payload?.render_job?.attemptsMade ?? 0);
-          if (!cancelled) {
-            const normalizedStatus = ((): typeof renderJobProgress extends null ? never : NonNullable<typeof renderJobProgress>['status'] => {
-              switch (status) {
-                case 'completed': return 'completed';
-                case 'active': return 'active';
-                case 'failed': return 'failed';
-                case 'cancelled': return 'cancelled';
-                case 'dead_letter': return 'dead_letter';
-                case 'waiting': return 'waiting';
-                default: return 'queued';
-              }
-            })();
-            // Track when the worker first picked up the job so we can
-            // distinguish "queued (worker may be down)" from "active
-            // (worker rendering but slow)" purely from elapsed time.
-            if (normalizedStatus === 'active' && firstActiveAt === null) {
-              firstActiveAt = Date.now();
-            }
-            const queuedSeconds = normalizedStatus === 'queued' || normalizedStatus === 'waiting'
-              ? Math.round((Date.now() - startedAt) / 1000)
-              : 0;
-            setRenderJobProgress({
-              percent: status === 'completed' ? 100 : safePercent,
-              status: normalizedStatus,
-              attempts: attemptsMade,
-              queuedSeconds,
-            });
-          }
-          if (status === 'completed' && payload?.render_job?.result) {
-            const renderedBundle = payload.render_job.result;
-            const renderedFiles = Array.isArray(renderedBundle.files)
-              ? renderedBundle.files.filter((f): f is string => typeof f === 'string' && Boolean(f))
-              : [];
-            const renderedUrl = typeof renderedBundle.url === 'string' ? renderedBundle.url : '';
-            if (renderedFiles.length > 0 || renderedUrl) {
-              setResult((current) => {
-                if (!current) return current;
-                const payload2 = current.output.asset_payload;
-                const existingBundle = payload2.media_bundle ?? {};
-                const mergedBundle = {
-                  ...existingBundle,
-                  ...(renderedUrl ? { url: renderedUrl } : {}),
-                  ...(renderedFiles.length > 0 ? { files: renderedFiles } : {}),
-                  metadata: {
-                    ...(existingBundle.metadata ?? {}),
-                    ...(renderedBundle.metadata ?? {}),
-                    render_async: false,
-                    render_completed_at: new Date().toISOString(),
-                  },
-                };
-                return {
-                  ...current,
-                  output: {
-                    ...current.output,
-                    asset_payload: {
-                      ...payload2,
-                      media_bundle: mergedBundle,
-                    },
-                  },
-                };
-              });
-            }
-            return; // stop polling
-          }
-          if (status === 'failed' || status === 'cancelled' || status === 'dead_letter') {
-            setError(`Slide rendering ${status}. The structured copy below is preserved; click Generate to retry.`);
-            return; // stop polling
-          }
+        const controller = new AbortController();
+        activeController = controller;
+        const requestTimeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        let payload: Awaited<ReturnType<typeof fetchCreatorRenderJobStatus>>;
+        try {
+          payload = await fetchCreatorRenderJobStatus(jobId, controller.signal);
+        } finally {
+          window.clearTimeout(requestTimeoutId);
+          if (activeController === controller) activeController = null;
         }
-      } catch {
-        // Best-effort — keep polling until MAX_ATTEMPTS.
+        if (cancelled) return;
+        const status = payload?.render_job?.status;
+        const rawPercent = Number(payload?.render_job?.progress ?? 0);
+        const safePercent = Number.isFinite(rawPercent)
+          ? Math.max(0, Math.min(100, Math.round(rawPercent)))
+          : 0;
+        const attemptsMade = Number(payload?.render_job?.attemptsMade ?? 0);
+        if (!cancelled) {
+          const normalizedStatus = creatorRenderPollStatus(status);
+          // Track when the worker first picked up the job so we can
+          // distinguish "queued (worker may be down)" from "active
+          // (worker rendering but slow)" purely from elapsed time.
+          if (normalizedStatus === 'active' && firstActiveAt === null) {
+            firstActiveAt = Date.now();
+          }
+          const queuedSeconds = normalizedStatus === 'queued' || normalizedStatus === 'waiting'
+            ? Math.round((Date.now() - startedAt) / 1000)
+            : 0;
+          setRenderJobProgress({
+            percent: status === 'completed' ? 100 : safePercent,
+            status: normalizedStatus,
+            attempts: attemptsMade,
+            queuedSeconds,
+          });
+        }
+        if (status === 'completed' && payload?.render_job?.result) {
+          const renderedBundle = payload.render_job.result;
+          const renderedFiles = Array.isArray(renderedBundle.files)
+            ? renderedBundle.files.filter((f): f is string => typeof f === 'string' && Boolean(f))
+            : [];
+          const renderedUrl = typeof renderedBundle.url === 'string' ? renderedBundle.url : '';
+          if (renderedFiles.length > 0 || renderedUrl) {
+            setResult((current) => mergeRenderedCreatorResult(current, result, {
+              ...(renderedUrl ? { url: renderedUrl } : {}),
+              ...(renderedFiles.length > 0 ? { files: renderedFiles } : {}),
+              metadata: renderedBundle.metadata,
+            }));
+            return; // stop polling
+          }
+          setRenderJobProgress({
+            percent: 0,
+            status: 'unknown',
+            attempts,
+            queuedSeconds: Math.round((Date.now() - startedAt) / 1000),
+          });
+          setError(
+            'Rendering reported completion without usable images. Your structured copy is preserved; '
+            + 'retry rendering inline without rerunning generation.',
+          );
+          return;
+        }
+        if (status === 'failed' || status === 'cancelled' || status === 'dead_letter') {
+          setError(`Slide rendering ${status.replace('_', ' ')}. Structured copy is preserved; use “Retry rendering inline” to retry without rerunning generation.`);
+          return; // stop polling
+        }
+      } catch (error) {
+        if (cancelled) return;
+        if (hasCreatorRenderPollExhausted(attempts)) {
+          setRenderJobProgress({
+            percent: 0,
+            status: 'unknown',
+            attempts,
+            queuedSeconds: Math.round((Date.now() - startedAt) / 1000),
+          });
+          setError(creatorRenderPollTerminalMessage(creatorRenderPollFailureReason(error)));
+          return;
+        }
       }
-      if (attempts >= MAX_ATTEMPTS) return;
+      if (hasCreatorRenderPollExhausted(attempts)) {
+        setRenderJobProgress({
+          percent: 0,
+          status: 'failed',
+          attempts,
+          queuedSeconds: Math.round((Date.now() - startedAt) / 1000),
+        });
+        setError(creatorRenderPollTerminalMessage('not_completed'));
+        return;
+      }
       window.setTimeout(() => { void poll(); }, POLL_MS);
     };
 
     window.setTimeout(() => { void poll(); }, POLL_MS);
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      window.clearTimeout(overallTimeoutId);
+      activeController?.abort();
+    };
   }, [result]);
 
   // Each source sentence is allocated to AT MOST one field (priority

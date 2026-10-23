@@ -323,6 +323,7 @@ export async function composeSingleVisualAsset(
     prompt: providerPrompt,
     referenceImageUrl,
     referenceImages: conditionRefs?.references.map((r) => ({ bytes: r.bytes, mimeType: r.mimeType })) ?? null,
+    conditionDegradedToText: conditionRefs?.degradedToText === true,
     eventContext: {
       creatorType: fileNamePrefix,
       attachmentMode: attachmentRenderPolicy,

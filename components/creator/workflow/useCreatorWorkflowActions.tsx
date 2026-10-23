@@ -28,6 +28,11 @@ import {
   buildBlockReference, buildCreatorGenerationBody, getMediaPreviewMetadata,
   hasUsableCreatorOutput, isSocialCreativeType, summarizeMediaUrls,
 } from '../../../lib/creator-content/creatorTypeWorkflow';
+import { mergeRenderedCreatorResult } from '../../../lib/creator-content/creatorRenderedResult';
+import {
+  advanceCreatorFieldAssistContext,
+  type CreatorFieldAssistContext,
+} from '../../../lib/creator-content/creatorFieldAssistContext';
 import { useCreatorWorkflowState } from './useCreatorWorkflowState';
 import { useCreatorWorkflowLifecycle } from './useCreatorWorkflowLifecycle';
 
@@ -56,6 +61,20 @@ export function useCreatorWorkflowActions(
     variantFanOutInFlight, variantFanOutSummary, variantPin, variantPlan, writerAssetType,
     writerAttachmentMode, writerCompositionIntent, writerEmbeddedCopy, writerSource, writerSupportingVisual
   } = s;
+  const currentResultRef = React.useRef(result);
+  currentResultRef.current = result;
+  const fieldAssistContext: CreatorFieldAssistContext = {
+    workflowType: type,
+    companyId: selectedCompanyId,
+    activeTemplateId: activeTemplate?.id ?? null,
+    routedTemplateId: typeof router.query.template_id === 'string' ? router.query.template_id : null,
+    answers,
+    templateValues,
+    writerSource,
+  };
+  const fieldAssistContextRef = React.useRef({ revision: 0, context: fieldAssistContext });
+  fieldAssistContextRef.current = advanceCreatorFieldAssistContext(fieldAssistContextRef.current, fieldAssistContext);
+  const fieldAssistRequestRef = React.useRef(0);
   const {
     availablePlatforms, brandContextLines, buildCurrentContext, flagMissingTopic, generationModeLabel,
     handleEditorChange, hasBrandProfile, repurposePaths, selectedAsset, selectedSuggestion, setAnswer,
@@ -63,6 +82,9 @@ export function useCreatorWorkflowActions(
   } = l;
   const handleTemplateAiAssist = React.useCallback(async (ctx: TemplateAiAssistContext) => {
     if (!activeTemplate || ctx.targets.length === 0) return;
+    const requestId = ++fieldAssistRequestRef.current;
+    const requestContextRevision = fieldAssistContextRef.current.revision;
+    const isCurrentContext = () => fieldAssistContextRef.current.revision === requestContextRevision;
     setAiBusyKey(ctx.busyKey);
     setError(null);
     try {
@@ -124,17 +146,19 @@ export function useCreatorWorkflowActions(
       });
       if (!resp.ok) {
         const detail = await resp.json().catch(() => ({}));
+        if (!isCurrentContext()) return;
         throw new Error(detail?.error || `AI assist failed (${resp.status})`);
       }
       const data = await resp.json();
+      if (!isCurrentContext()) return;
       const updates = Array.isArray(data?.updates) ? data.updates : [];
       if (updates.length > 0) {
         setTemplateValues((prev) => applyTemplateFieldUpdates(prev, updates));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'AI assist failed');
+      if (isCurrentContext()) setError(e instanceof Error ? e.message : 'AI assist failed');
     } finally {
-      setAiBusyKey(null);
+      if (fieldAssistRequestRef.current === requestId) setAiBusyKey(null);
     }
   }, [activeTemplate, selectedCompanyId, answers, templateValues, writerSource, type]);
 
@@ -755,7 +779,8 @@ export function useCreatorWorkflowActions(
       const isAbort = generationError instanceof Error && generationError.name === 'AbortError';
       setError(
         isAbort
-          ? 'Generation is taking longer than expected. Please try again in a moment.'
+          ? 'Generation timed out before its outcome could be confirmed. '
+            + 'Check saved assets before retrying; a retry may start another generation.'
           : generationError instanceof Error
             ? generationError.message
             : 'Failed to generate creator content.',
@@ -769,6 +794,7 @@ export function useCreatorWorkflowActions(
 
   const handleRenderInline = async () => {
     if (!result || inlineRenderInFlight) return;
+    const renderSource = result;
     const assetPayload = result.output?.asset_payload as Record<string, unknown> | undefined;
     if (!assetPayload) return;
     setInlineRenderInFlight(true);
@@ -789,6 +815,7 @@ export function useCreatorWorkflowActions(
         error?: string;
         message?: string;
       } | null;
+      if (currentResultRef.current !== renderSource) return;
       if (!response.ok || !payload?.success || !payload.rendered) {
         const msg = payload?.message || payload?.error || `Inline render failed (HTTP ${response.status})`;
         setInlineRenderError(msg);
@@ -802,35 +829,15 @@ export function useCreatorWorkflowActions(
         setInlineRenderError('Inline render returned no images.');
         return;
       }
-      setResult((current) => {
-        if (!current) return current;
-        const payload2 = current.output.asset_payload;
-        const existingBundle = payload2.media_bundle ?? {};
-        const mergedBundle = {
-          ...existingBundle,
-          ...(renderedUrl ? { url: renderedUrl } : {}),
-          ...(renderedFiles.length > 0 ? { files: renderedFiles } : {}),
-          metadata: {
-            ...(existingBundle.metadata ?? {}),
-            ...(payload.rendered!.metadata ?? {}),
-            render_async: false,
-            render_completed_at: new Date().toISOString(),
-            rendered_via: 'inline_fallback',
-          },
-        };
-        return {
-          ...current,
-          output: {
-            ...current.output,
-            asset_payload: {
-              ...payload2,
-              media_bundle: mergedBundle,
-            },
-          },
-        };
-      });
+      setResult((current) => mergeRenderedCreatorResult(current, renderSource, {
+        ...(renderedUrl ? { url: renderedUrl } : {}),
+        ...(renderedFiles.length > 0 ? { files: renderedFiles } : {}),
+        metadata: payload.rendered.metadata,
+      }, 'inline_fallback'));
     } catch (err) {
-      setInlineRenderError(err instanceof Error ? err.message : 'Inline render failed.');
+      if (currentResultRef.current === renderSource) {
+        setInlineRenderError(err instanceof Error ? err.message : 'Inline render failed.');
+      }
     } finally {
       setInlineRenderInFlight(false);
     }

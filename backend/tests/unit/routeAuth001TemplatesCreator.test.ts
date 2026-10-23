@@ -398,7 +398,7 @@ describe('creator-intelligence/campaign-variant-estimate', () => {
 /* ───────────────────────────── render-inline ───────────────────────────── */
 
 describe('command-center/creator-content/render-inline', () => {
-  const payload = (templateId?: string) => ({ kind: 'infographic', media_bundle: { metadata: templateId ? { template_id: templateId } : {} } });
+  const payload = (templateId?: string) => ({ asset_kind: 'infographic', media_bundle: { metadata: templateId ? { template_id: templateId } : {} } });
   const USER_TPL_B = 'utpl-b-0000-0000-0000-00000000000b';
   const USER_TPL_A = 'utpl-a-0000-0000-0000-00000000000a';
   beforeEach(() => {
@@ -447,6 +447,9 @@ describe('command-center/creator-content/render-inline', () => {
     const own = await invoke(renderInline, { method: 'POST', as: 'A', body: { asset_payload: payload(USER_TPL_A), company_id: CO_A } });
     expect(own.status).toBe(200);
     expect(mockEnsureTemplate).toHaveBeenCalledTimes(1);
+    expect(mockRenderAsset).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      skipInfographicCopyEnrichment: true,
+    }));
     const sys = await invoke(renderInline, { method: 'POST', as: 'A', body: { asset_payload: payload('infographic-bold-system') } });
     expect(sys.status).toBe(200);
     expect(mockEnsureTemplate).toHaveBeenCalledTimes(1);

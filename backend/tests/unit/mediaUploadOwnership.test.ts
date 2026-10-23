@@ -32,13 +32,25 @@ let uploadCalls: Array<Record<string, unknown>> = [];
 let authUser: { id: string } | null = { id: AUTH_USER };
 let authError: string | null = null;
 let formFields: Record<string, unknown> = {};
+let parsedFileSize = 5;
+let mockValidationResult = { valid: true, errors: [] as string[], warnings: [] as string[] };
+let mockUploadError: Error | null = null;
+let mockParseError: Error | null = null;
+let mockFileBegin: ((fieldName: string, file: { filepath: string }) => void) | null = null;
 
 jest.mock('formidable', () => {
   return jest.fn(() => ({
-    parse: async () => [
-      formFields,
-      { file: [{ filepath: '/tmp/x.png', originalFilename: 'shapes.png', mimetype: 'image/png' }] },
-    ],
+    on: (event: string, callback: (fieldName: string, file: { filepath: string }) => void) => {
+      if (event === 'fileBegin') mockFileBegin = callback;
+    },
+    parse: async () => {
+      mockFileBegin?.('file', { filepath: '/tmp/x.png' });
+      if (mockParseError) throw mockParseError;
+      return [
+        formFields,
+        { file: [{ filepath: '/tmp/x.png', originalFilename: 'shapes.png', mimetype: 'image/png', size: parsedFileSize }] },
+      ];
+    },
   }));
 });
 
@@ -52,8 +64,10 @@ jest.mock('../../services/supabaseAuthService', () => ({
 }));
 
 jest.mock('../../services/mediaService', () => ({
-  validateMedia: async () => ({ valid: true, errors: [], warnings: [] }),
+  MAX_IMAGE_UPLOAD_BYTES: 10 * 1024 * 1024,
+  validateMedia: async () => mockValidationResult,
   uploadMedia: async (opts: Record<string, unknown>) => {
+    if (mockUploadError) throw mockUploadError;
     uploadCalls.push(opts);
     return { id: 'media-1', user_id: opts.userId, file_name: 'shapes.png' };
   },
@@ -82,6 +96,11 @@ beforeEach(() => {
   authUser = { id: AUTH_USER };
   authError = null;
   formFields = {};
+  parsedFileSize = 5;
+  mockValidationResult = { valid: true, errors: [], warnings: [] };
+  mockUploadError = null;
+  mockParseError = null;
+  mockFileBegin = null;
 });
 
 describe('A — ownership comes from the authenticated identity', () => {
@@ -164,6 +183,53 @@ describe('C — nothing else about the request can steer storage', () => {
     await post({ user_id: [OTHER_USER], bucket: ['secrets'], storage_path: ['../x.png'] });
     expect(Object.keys(uploadCalls[0]).sort())
       .toEqual(['campaignId', 'file', 'fileName', 'metadata', 'mimeType', 'userId']);
+  });
+});
+
+describe('C — image size is rejected before loading the whole file into memory', () => {
+  it('oversized image uploads are rejected and their temporary file is removed', async () => {
+    parsedFileSize = 10 * 1024 * 1024 + 1;
+    (fs.readFileSync as jest.Mock).mockClear();
+    (fs.unlinkSync as jest.Mock).mockClear();
+
+    const res = await post({});
+
+    expect(res.statusCode).toBe(400);
+    expect(uploadCalls).toHaveLength(0);
+    expect(fs.readFileSync).not.toHaveBeenCalled();
+    expect(fs.unlinkSync).toHaveBeenCalledWith('/tmp/x.png');
+    expect(res.body).toMatchObject({ details: [expect.stringContaining('exceeds maximum (10MB)')] });
+  });
+
+  it('invalid media is rejected and its temporary file is removed', async () => {
+    mockValidationResult = { valid: false, errors: ['invalid dimensions'], warnings: [] };
+    (fs.unlinkSync as jest.Mock).mockClear();
+
+    const res = await post({});
+
+    expect(res.statusCode).toBe(400);
+    expect(uploadCalls).toHaveLength(0);
+    expect(fs.unlinkSync).toHaveBeenCalledWith('/tmp/x.png');
+  });
+
+  it('storage failures still remove the parsed temporary file', async () => {
+    mockUploadError = new Error('storage unavailable');
+    (fs.unlinkSync as jest.Mock).mockClear();
+
+    const res = await post({});
+
+    expect(res.statusCode).toBe(500);
+    expect(fs.unlinkSync).toHaveBeenCalledWith('/tmp/x.png');
+  });
+
+  it('parser failures remove temporary files as soon as Formidable creates them', async () => {
+    mockParseError = new Error('multipart parse failed');
+    (fs.unlinkSync as jest.Mock).mockClear();
+
+    const res = await post({});
+
+    expect(res.statusCode).toBe(500);
+    expect(fs.unlinkSync).toHaveBeenCalledWith('/tmp/x.png');
   });
 });
 

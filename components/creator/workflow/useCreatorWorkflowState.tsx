@@ -192,7 +192,7 @@ export function useCreatorWorkflowState() {
   const regenSeenResultRef = React.useRef(false);
   const [renderJobProgress, setRenderJobProgress] = React.useState<{
     percent: number;
-    status: 'queued' | 'active' | 'completed' | 'failed' | 'cancelled' | 'dead_letter' | 'waiting';
+    status: 'queued' | 'active' | 'completed' | 'failed' | 'cancelled' | 'dead_letter' | 'waiting' | 'unknown';
     attempts: number;
     /** Wall-clock seconds the job has spent in queued/waiting (worker
      *  hasn't picked it up). After ~20s this signals that no render

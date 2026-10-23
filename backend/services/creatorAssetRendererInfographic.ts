@@ -217,7 +217,7 @@ export async function renderInfographicAsset(
     mode: composerMode,
     companyContext: composerCompanyContext,
     companyId: options.companyId ?? undefined,
-    staticOnly: options.previewBufferOnly, // CREATOR-110: previews use static copy (no LLM)
+    staticOnly: options.previewBufferOnly || options.skipInfographicCopyEnrichment, // Previews and render retries use static copy (no LLM).
   });
   // Rich-content merge. The composer now returns lead + bullets +
   // stat + example + take per section. The renderer (below) lays
@@ -1688,4 +1688,3 @@ export async function renderInfographicAsset(
   });
   return { url, metadata: { ...rendererMetadata, generated_by: 'infographicRenderer' } };
 }
-

@@ -111,6 +111,9 @@ jest.mock('../../services/mediaService', () => ({
 jest.mock('formidable', () => ({
   __esModule: true,
   default: () => ({
+    on: (event: string, callback: (fieldName: string, file: { filepath: string }) => void) => {
+      if (event === 'fileBegin') callback('file', { filepath: '/tmp/upload-tmp' });
+    },
     parse: async () => [
       (global as any).__fields,
       { file: [{ filepath: '/tmp/upload-tmp', originalFilename: 'a.png', newFilename: 'a.png', mimetype: 'image/png' }] },

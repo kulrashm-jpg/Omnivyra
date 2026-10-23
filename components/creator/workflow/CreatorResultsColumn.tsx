@@ -16,6 +16,7 @@ import { resolveReturnDestination } from '../../../lib/content/creatorAttachment
 import { resolvePurposeStrategy } from '../../../backend/services/creator/purposeStrategyRegistry';
 import { buildGenerationReview, buildCreatorCampaignPackage } from '../../../lib/creator-templates';
 import { getDiagnosticReport, getSavedAssetCreatorType } from '../../../lib/creator-content/creatorTypeWorkflow';
+import { shouldOfferInlineCreatorRender } from '../../../lib/creator-content/creatorRenderedResult';
 import type { CreatorWorkflowCtx } from './creatorWorkflowCtx';
 
 export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx }) {
@@ -323,6 +324,9 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
                     const workerStalled = (status === 'queued' || status === 'waiting') && queuedSeconds >= 25;
                     const isQueued = status === 'queued' || status === 'waiting';
                     const isActive = status === 'active';
+                    const isTerminal = status === 'failed' || status === 'cancelled' || status === 'dead_letter';
+                    const isUnknown = status === 'unknown';
+                    const inlineRetryAvailable = shouldOfferInlineCreatorRender(status, queuedSeconds);
                     // Status label is fully honest: it never says
                     // "rendering" when the job is in fact just sitting
                     // in a queue waiting for a worker.
@@ -334,8 +338,12 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
                           ? 'Rendering slides'
                           : status === 'completed'
                             ? 'Finalizing'
-                            : 'Rendering slides';
-                    const bannerColor = workerStalled ? 'rose' : 'amber';
+                            : isUnknown
+                              ? 'Render status unconfirmed'
+                            : isTerminal
+                              ? `Rendering ${status.replace('_', ' ')}`
+                              : 'Rendering slides';
+                    const bannerColor = workerStalled || isTerminal || isUnknown ? 'rose' : 'amber';
                     // Progress-bar fill: honest. 0 means 0. We never
                     // paint a fake minimum just to make the bar visible.
                     // While queued, the bar is empty and the (indeterminate)
@@ -347,23 +355,24 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
                             <span
                               className={`inline-block h-2 w-2 rounded-full ${
                                 workerStalled
-                                  ? 'bg-rose-500'
-                                  : isActive
-                                    ? 'animate-pulse bg-emerald-500'
-                                    : 'animate-pulse bg-amber-500'
+                                    || isTerminal
+                                    ? 'bg-rose-500'
+                                    : isActive
+                                      ? 'animate-pulse bg-emerald-500'
+                                      : 'animate-pulse bg-amber-500'
                               }`}
                               aria-hidden="true"
                             />
-                            <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${workerStalled ? 'text-rose-900' : 'text-amber-900'}`}>
+                            <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${bannerColor === 'rose' ? 'text-rose-900' : 'text-amber-900'}`}>
                               {statusLabel}
                             </p>
                           </div>
-                          <span className={`text-xs font-semibold tabular-nums ${workerStalled ? 'text-rose-900' : 'text-amber-900'}`}>
+                          <span className={`text-xs font-semibold tabular-nums ${bannerColor === 'rose' ? 'text-rose-900' : 'text-amber-900'}`}>
                             {percent}%
                           </span>
                         </div>
                         <div
-                          className={`mt-3 h-2 w-full overflow-hidden rounded-full ${workerStalled ? 'bg-rose-100' : 'bg-amber-100'}`}
+                          className={`mt-3 h-2 w-full overflow-hidden rounded-full ${bannerColor === 'rose' ? 'bg-rose-100' : 'bg-amber-100'}`}
                           role="progressbar"
                           aria-valuemin={0}
                           aria-valuemax={100}
@@ -377,19 +386,37 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
                             <div className="h-full w-full animate-pulse rounded-full bg-amber-200" />
                           ) : (
                             <div
-                              className={`h-full rounded-full ${workerStalled ? 'bg-rose-400' : 'bg-amber-500'} transition-[width] duration-700 ease-out`}
+                              className={`h-full rounded-full ${bannerColor === 'rose' ? 'bg-rose-400' : 'bg-amber-500'} transition-[width] duration-700 ease-out`}
                               style={{ width: `${percent}%` }}
                             />
                           )}
                         </div>
-                        {workerStalled ? (
+                        {isUnknown ? (
+                          <p className="mt-2 text-sm leading-6 text-rose-900">
+                            The worker may still be running. Check saved assets; inline retry is disabled until a terminal status is confirmed to avoid duplicate rendering.
+                          </p>
+                        ) : null}
+                        {workerStalled && !inlineRetryAvailable ? (
+                          <p className="mt-2 text-sm leading-6 text-rose-900">
+                            The queue has not reported a terminal failure. Inline retry is disabled to avoid rendering the same job twice.
+                          </p>
+                        ) : null}
+                        {inlineRetryAvailable ? (
                           <>
-                            <p className="mt-2 text-sm leading-6 text-rose-900">
-                              The render queue has the job but no worker is consuming it. In local dev this usually means the app was started with <code className="rounded bg-rose-100 px-1 py-0.5 text-[12px] font-mono">npm run dev</code> instead of <code className="rounded bg-rose-100 px-1 py-0.5 text-[12px] font-mono">npm run dev:full</code> — the latter starts the creator-render worker.
-                            </p>
-                            <p className="mt-1 text-[11px] text-rose-700">
-                              Or bypass the queue entirely and render synchronously in this request. Slide structure + copy below are preserved either way.
-                            </p>
+                            {workerStalled ? (
+                              <>
+                                <p className="mt-2 text-sm leading-6 text-rose-900">
+                                  The render queue has the job but no worker is consuming it. In local dev this usually means the app was started with <code className="rounded bg-rose-100 px-1 py-0.5 text-[12px] font-mono">npm run dev</code> instead of <code className="rounded bg-rose-100 px-1 py-0.5 text-[12px] font-mono">npm run dev:full</code> — the latter starts the creator-render worker.
+                                </p>
+                                <p className="mt-1 text-[11px] text-rose-700">
+                                  Or bypass the queue and render synchronously from the preserved slide structure and copy.
+                                </p>
+                              </>
+                            ) : (
+                              <p className="mt-2 text-sm leading-6 text-rose-900">
+                                Rendering {status.replace('_', ' ')}. Your structured copy is preserved. Retry inline without rerunning the content generator or infographic copy model.
+                              </p>
+                            )}
                             <div className="mt-3 flex flex-wrap items-center gap-2">
                               <button
                                 type="button"
@@ -397,7 +424,9 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
                                 disabled={inlineRenderInFlight}
                                 className="rounded-2xl bg-rose-700 px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                {inlineRenderInFlight ? 'Rendering inline… this can take 30–60s' : 'Render inline now'}
+                                {inlineRenderInFlight
+                                  ? 'Rendering inline… this can take 30–60s'
+                                  : isTerminal ? 'Retry rendering inline' : 'Render inline now'}
                               </button>
                               {inlineRenderError ? (
                                 <span className="text-[11px] font-medium text-rose-800">{inlineRenderError}</span>

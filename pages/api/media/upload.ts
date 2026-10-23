@@ -16,7 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
-import { uploadMedia, validateMedia } from '../../../backend/services/mediaService';
+import { MAX_IMAGE_UPLOAD_BYTES, uploadMedia, validateMedia } from '../../../backend/services/mediaService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 import fs from 'fs';
@@ -33,6 +33,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const temporaryFilePaths: string[] = [];
   try {
     const { user, error: authError } = await getSupabaseUserFromRequest(req);
     if (authError || !user?.id) {
@@ -43,6 +44,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const form = formidable({
       maxFileSize: 500 * 1024 * 1024, // 500MB max
       keepExtensions: true,
+    });
+    form.on('fileBegin', (_fieldName, file) => {
+      if (file.filepath) temporaryFilePaths.push(file.filepath);
     });
 
     const [fields, files] = await form.parse(req);
@@ -115,11 +119,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (typeof campaignId === 'string' && campaignId.trim()) {
       const campaignAccess = await requireCampaignTenantAccess(req, res, campaignId.trim());
       if (!campaignAccess) {
-        // The guard already answered. Drop the parsed temp files so a refused
-        // request leaves nothing behind on disk either.
-        for (const parsed of Object.values(files).flat()) {
-          if (parsed?.filepath) { try { fs.unlinkSync(parsed.filepath); } catch { /* best effort */ } }
-        }
         return;
       }
     }
@@ -135,10 +134,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Invalid file' });
     }
 
+    const mimeType = uploadedFile.mimetype || 'application/octet-stream';
+    if (
+      mimeType.toLowerCase().startsWith('image/')
+      && uploadedFile.size > MAX_IMAGE_UPLOAD_BYTES
+    ) {
+      const maximumMb = MAX_IMAGE_UPLOAD_BYTES / 1024 / 1024;
+      const reason = `File size (${(uploadedFile.size / 1024 / 1024).toFixed(2)}MB) exceeds maximum (${maximumMb}MB)`;
+      return res.status(400).json({
+        error: reason,
+        message: reason,
+        details: [reason],
+        warnings: [],
+      });
+    }
+
     // Read file
     const fileBuffer = fs.readFileSync(uploadedFile.filepath);
     const fileName = uploadedFile.originalFilename || uploadedFile.newFilename;
-    const mimeType = uploadedFile.mimetype || 'application/octet-stream';
 
     // Get file metadata (if available)
     const metadata: any = {};
@@ -161,8 +174,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     );
 
     if (!validation.valid) {
-      // Clean up uploaded file
-      fs.unlinkSync(uploadedFile.filepath);
       const reason = validation.errors.join(', ') || 'Media validation failed';
       return res.status(400).json({
         error: reason,
@@ -182,9 +193,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       metadata,
     });
 
-    // Clean up temp file
-    fs.unlinkSync(uploadedFile.filepath);
-
     res.status(200).json({
       success: true,
       data: mediaFile,
@@ -200,6 +208,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       error: reason,
       message: reason,
     });
+  } finally {
+    for (const filepath of temporaryFilePaths) {
+      try {
+        fs.unlinkSync(filepath);
+      } catch (cleanupError) {
+        const code = cleanupError && typeof cleanupError === 'object' && 'code' in cleanupError
+          ? cleanupError.code
+          : undefined;
+        if (code !== 'ENOENT') {
+          console.error('Failed to remove temporary media upload file', {
+            code: typeof code === 'string' ? code : undefined,
+            message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
+      }
+    }
   }
 }
 

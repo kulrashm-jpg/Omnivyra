@@ -279,7 +279,6 @@ export function BlogEditorForm({
         const fd = new FormData();
         fd.append('file', file);
         fd.append('user_id', user.id);
-        if (effectiveCompanyId) fd.append('campaign_id', effectiveCompanyId);
         fd.append('platform', 'blog');
         const res = await fetch('/api/media/upload', { method: 'POST', body: fd });
         const json = await res.json().catch(() => null);

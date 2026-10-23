@@ -148,6 +148,13 @@ describe('B — derivation rules', () => {
     expect(slotPurposes(fake({}))).not.toContain('supporting');
   });
 
+  it('no current canonical template offers supporting without an explicit placement', () => {
+    const supportingOffers = allCanonical()
+      .filter((template) => creatorAssetUsageOptionsForTemplate(template.assetSlots ?? null)
+        .some((option) => option.purpose === 'supporting'));
+    expect(supportingOffers).toEqual([]);
+  });
+
   it('derivation never invents a mode, a capacity, or a placement', () => {
     for (const t of allCanonical()) {
       if (t.id === 'sys-image-logo-only' || t.id === 'sys-image-product-highlight') continue;
