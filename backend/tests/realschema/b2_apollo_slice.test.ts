@@ -102,6 +102,35 @@ jest.mock('../../db/writeOwner', () => ({
     };
     return b;
   },
+  /**
+   * The RPC leg of the write seam, onto the SAME live connection — the same
+   * double b1b_arbitration.test.ts uses. The boundary's final canonical write
+   * goes through `ownedDbRpc('pi_apply_canonical_decisions', ...)`
+   * (20261128000000_pi_canonical_write_atomicity.sql), so without this the
+   * boundary would throw before any canonical write reached the database.
+   * Named-argument form lets PostgreSQL type each parameter from the function
+   * signature (JSON string -> jsonb, ISO string -> timestamptz).
+   */
+  ownedDbRpc: async (fn: string, args: Record<string, unknown>) => {
+    const { db: client } = require('./setup') as { db: { query: Function } };
+    const keys = Object.keys(args);
+    const params = keys.map((k) => {
+      const v = args[k];
+      return v !== null && typeof v === 'object' ? JSON.stringify(v) : v;
+    });
+    const named = keys.map((k, i) => `${k} => $${i + 1}`).join(', ');
+    await client.query('SAVEPOINT pg_rpc');
+    try {
+      const res = await client.query(
+        `SELECT public."${fn}"(${named}) AS result`, params,
+      ) as { rows: Array<{ result: unknown }> };
+      await client.query('RELEASE SAVEPOINT pg_rpc');
+      return { data: res.rows[0]?.result ?? null, error: null };
+    } catch (err) {
+      await client.query('ROLLBACK TO SAVEPOINT pg_rpc');
+      return { data: null, error: err };
+    }
+  },
 }));
 
 // Imported AFTER the mocks so the real code picks them up.

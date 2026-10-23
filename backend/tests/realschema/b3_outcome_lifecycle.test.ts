@@ -340,7 +340,9 @@ describe('B3 — the writer\'s own rules still govern', () => {
 
 // ════════════════════════════════════════════════════════════════════════════
 describe('B3 — non-lifecycle-bearing outcomes, and the delivery axis', () => {
-  for (const type of ['opened', 'clicked', 'complaint']) {
+  // `complaint` is not here: on main it is NOT an outreach outcome at all (see the
+  // next case), so there is no outcome row for the producer to read.
+  for (const type of ['opened', 'clicked']) {
     it(`${type} appends nothing`, async () => {
       await inRollback(async () => {
         const s = await scenario(ORG_A, type);
@@ -353,13 +355,19 @@ describe('B3 — non-lifecycle-bearing outcomes, and the delivery axis', () => {
     });
   }
 
-  it('complaint invents no lifecycle state — the ledger is untouched', async () => {
+  it('complaint cannot even become an outcome — it lives on the governance axis', async () => {
+    // On main a complaint is a CONTACT RESTRICTION, not a business outcome:
+    // WP3's sesEventNormalizer maps an SES Complaint to `delivered` evidence plus
+    // a `complaint` governance restriction, and deliberately invents no outcome
+    // type ("adding one needs a migration"). `outreach_outcomes_type_valid`
+    // (20260915000000_ws3_feedback_ingestion.sql) therefore rejects it, so the
+    // lifecycle producer can never be handed a complaint outcome to interpret.
     await inRollback(async () => {
-      const s = await scenario(ORG_A, 'complaint');
-      await produceLifecycleFromOutcome({ organizationId: ORG_A, outcomeId: s.outcomeId, now: NOW });
-      const rows = await transitionsFor(s.prospectId);
-      expect(rows).toHaveLength(1);
-      expect(rows[0].state).toBe('identified');     // still where it started
+      const personId = await newPerson(ORG_A);
+      const taskId = await newTask(ORG_A, personId);
+      expect(await attempt(
+        `INSERT INTO public.outreach_outcomes (company_id, task_id, outcome_type, occurred_at)
+         VALUES ($1,$2,'complaint',now())`, [ORG_A, taskId])).toBe('23514');
     });
   });
 
@@ -377,7 +385,7 @@ describe('B3 — non-lifecycle-bearing outcomes, and the delivery axis', () => {
     await inRollback(async () => {
       const personId = await newPerson(ORG_A);
       const taskId = await newTask(ORG_A, personId);
-      // `outreach_outcomes_type_valid` admits only the 9 BUSINESS outcome types.
+      // `outreach_outcomes_type_valid` admits only the 8 BUSINESS outcome types.
       // So "delivered means engaged" and "a delivery delay moves the lifecycle"
       // are not merely refused by the producer — they are unrepresentable.
       for (const delivery of ['delivered', 'bounced', 'delivery_delay', 'rejected_by_provider']) {

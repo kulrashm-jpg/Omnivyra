@@ -141,6 +141,35 @@ jest.mock('../../db/writeOwner', () => ({
     };
     return b;
   },
+  /**
+   * The RPC leg of the write seam, onto the SAME live connection — the same
+   * double b1b_arbitration.test.ts uses. The boundary's final canonical write
+   * goes through `ownedDbRpc('pi_apply_canonical_decisions', ...)`
+   * (20261128000000_pi_canonical_write_atomicity.sql), so without this the
+   * boundary would throw before any canonical write reached the database.
+   * Named-argument form lets PostgreSQL type each parameter from the function
+   * signature (JSON string -> jsonb, ISO string -> timestamptz).
+   */
+  ownedDbRpc: async (fn: string, args: Record<string, unknown>) => {
+    const { db: client } = require('./setup') as { db: { query: Function } };
+    const keys = Object.keys(args);
+    const params = keys.map((k) => {
+      const v = args[k];
+      return v !== null && typeof v === 'object' ? JSON.stringify(v) : v;
+    });
+    const named = keys.map((k, i) => `${k} => $${i + 1}`).join(', ');
+    await client.query('SAVEPOINT pg_rpc');
+    try {
+      const res = await client.query(
+        `SELECT public."${fn}"(${named}) AS result`, params,
+      ) as { rows: Array<{ result: unknown }> };
+      await client.query('RELEASE SAVEPOINT pg_rpc');
+      return { data: res.rows[0]?.result ?? null, error: null };
+    } catch (err) {
+      await client.query('ROLLBACK TO SAVEPOINT pg_rpc');
+      return { data: null, error: err };
+    }
+  },
 }));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
@@ -289,7 +318,10 @@ describe('G-6 §8 — structural proof, read from the PostgreSQL catalog', () =>
     expect(byTable.prospect_enrichment_attempts).toBe(2);   // was 0
     expect(byTable.source_records).toBe(2);
     expect(byTable.source_assertions).toBe(3);
-    expect(byTable.canonical_attribute_decisions).toBe(3);
+    // 4, not 3: assertion, person, account + the relationship leg
+    // (canonical_decisions_relationship_tenant_fk) added on this branch by
+    // 20261124000000_pi_relationship_canonical_decisions.sql.
+    expect(byTable.canonical_attribute_decisions).toBe(4);
   });
 });
 
