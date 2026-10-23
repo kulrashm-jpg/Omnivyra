@@ -281,7 +281,7 @@ describe('the operator summary reads the same every time', () => {
 
     const internal = rows.find((r) => r.channel === 'internal');
     expect(internal?.external).toBe(false);
-    expect(internal?.operationallyVerified.sort()).toEqual(['deliveryReceipt', 'send']);
+    expect([...(internal?.operationallyVerified ?? [])].sort()).toEqual(['deliveryReceipt', 'send']);
   });
 
   it('27. reports a status for all four operations on every row', () => {

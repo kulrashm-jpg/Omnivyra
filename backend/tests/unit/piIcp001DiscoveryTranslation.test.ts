@@ -21,6 +21,9 @@ import {
   UNMAPPED_ATTRIBUTE_NOTES,
   SHARED_SENIORITY_VALUES,
 } from '../../services/prospectDiscovery/icpTranslation';
+// The root tsconfig sets `strict: false`, so `ok === false` does not narrow the
+// union; refusal-side assertions read the failure arm through this type.
+import type { IcpTranslationFailure } from '../../services/prospectDiscovery/icpTranslation';
 import { EMPLOYEE_BANDS, SENIORITY_VALUES } from '../../services/prospectIdentity/attributes';
 import { APOLLO_DISCOVERY_FILTERS } from '../../services/prospectDiscovery/adapters/apolloDiscovery';
 import type { IcpCriterion, RatifiedIcp } from '../../services/prospectIcp/types';
@@ -102,7 +105,7 @@ describe('PI-ICP-DISCOVERY-001 — what translates', () => {
     // Unacknowledged this is now a refusal (PI-ICP-DISCOVERY-002).
     const refused = translate(criteria);
     expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.refusal).toBe('omissions_unacknowledged');
+    if (!refused.ok) expect((refused as IcpTranslationFailure).refusal).toBe('omissions_unacknowledged');
 
     const r = translateAck(criteria);
     expect(r.ok).toBe(true);
@@ -136,9 +139,9 @@ describe('PI-ICP-DISCOVERY-001 — what fails closed', () => {
     })]);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('unsupported_mandatory_criterion');
-    expect(r.blocking).toHaveLength(1);
-    expect(r.blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES['account.employee_band']);
+    expect((r as IcpTranslationFailure).refusal).toBe('unsupported_mandatory_criterion');
+    expect((r as IcpTranslationFailure).blocking).toHaveLength(1);
+    expect((r as IcpTranslationFailure).blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES['account.employee_band']);
   });
 
   it('7. a REQUIRED criterion is a SCORING input, never a hard filter', () => {
@@ -162,8 +165,8 @@ describe('PI-ICP-DISCOVERY-001 — what fails closed', () => {
     })]);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('unsupported_predicate');
-    expect(r.blocking[0].reason).toMatch(/can only be translated with the `one_of` predicate/);
+    expect((r as IcpTranslationFailure).refusal).toBe('unsupported_predicate');
+    expect((r as IcpTranslationFailure).blocking[0].reason).toMatch(/can only be translated with the `one_of` predicate/);
   });
 
   it('9. an unsupported predicate on a MANDATORY criterion is blocking', () => {
@@ -175,7 +178,7 @@ describe('PI-ICP-DISCOVERY-001 — what fails closed', () => {
     })]);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('unsupported_predicate');
+    expect((r as IcpTranslationFailure).refusal).toBe('unsupported_predicate');
 
     // A SOFT criterion with the same predicate never reaches that check - it is
     // not a filter at all - so it is an omission, not a block.
@@ -200,8 +203,8 @@ describe('PI-ICP-DISCOVERY-001 — what fails closed', () => {
     const r = translate([]);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('no_translatable_criteria');
-    expect(r.detail).toMatch(/unrestricted search/);
+    expect((r as IcpTranslationFailure).refusal).toBe('no_translatable_criteria');
+    expect((r as IcpTranslationFailure).detail).toMatch(/unrestricted search/);
   });
 
   it('12. an all-OPTIONAL unmappable ICP refuses rather than returning {}', () => {
@@ -212,14 +215,14 @@ describe('PI-ICP-DISCOVERY-001 — what fails closed', () => {
     const r = translate(criteria);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('no_translatable_criteria');
-    expect(r.blocking).toHaveLength(2);
+    expect((r as IcpTranslationFailure).refusal).toBe('no_translatable_criteria');
+    expect((r as IcpTranslationFailure).blocking).toHaveLength(2);
 
     // Acknowledging does NOT make an empty filter set acceptable: the
     // unrestricted-search guard is checked first and is not waivable.
     const acked = translateAck(criteria);
     expect(acked.ok).toBe(false);
-    if (!acked.ok) expect(acked.refusal).toBe('no_translatable_criteria');
+    if (!acked.ok) expect((acked as IcpTranslationFailure).refusal).toBe('no_translatable_criteria');
   });
 
   it('13. a malformed criterion is refused, not skipped', () => {
@@ -237,7 +240,7 @@ describe('PI-ICP-DISCOVERY-001 — ratification and tenant boundaries', () => {
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('tenant_mismatch');
+    expect((r as IcpTranslationFailure).refusal).toBe('tenant_mismatch');
     // Nothing from the foreign ICP leaked into the refusal.
     expect(JSON.stringify(r)).not.toContain('Head of Platform');
     expect(JSON.stringify(r)).not.toContain('icp-1');
@@ -250,8 +253,8 @@ describe('PI-ICP-DISCOVERY-001 — ratification and tenant boundaries', () => {
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('tenant_mismatch');
-    expect(r.blocking).toEqual([]);
+    expect((r as IcpTranslationFailure).refusal).toBe('tenant_mismatch');
+    expect((r as IcpTranslationFailure).blocking).toEqual([]);
   });
 
   it('16. the ratification contract is enforced by the TYPE, not a runtime guess', () => {
@@ -333,7 +336,7 @@ describe('PI-ICP-DISCOVERY-001 — a refusal prevents the discovery execution', 
       expect(seen).toEqual([]);
       expect(adapter.discover).not.toHaveBeenCalled();
       expect(ports.claim).not.toHaveBeenCalled();
-      expect(ports.credential.resolveCredential).not.toHaveBeenCalled();
+      expect((ports.credential as unknown as { resolveCredential: jest.Mock }).resolveCredential).not.toHaveBeenCalled();
       return;
     }
     // Unreachable: a defect in the translator would land here and fail loudly
@@ -461,7 +464,7 @@ describe('PI-ICP-DISCOVERY-002 - hard-filter semantics by criterion kind', () =>
     for (const kind of ['required', 'optional'] as const) {
       const r = translate([criterion({ id: 'c1', kind })]);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.refusal).toBe('no_translatable_criteria');
+      if (!r.ok) expect((r as IcpTranslationFailure).refusal).toBe('no_translatable_criteria');
     }
   });
 
@@ -472,8 +475,8 @@ describe('PI-ICP-DISCOVERY-002 - hard-filter semantics by criterion kind', () =>
     ]);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('unsupported_mandatory_criterion');
-    expect(r.blocking.map((b) => b.criterionId)).toEqual(['c2']);
+    expect((r as IcpTranslationFailure).refusal).toBe('unsupported_mandatory_criterion');
+    expect((r as IcpTranslationFailure).blocking.map((b) => b.criterionId)).toEqual(['c2']);
     // Acknowledgement cannot waive a mandatory block.
     expect(JSON.stringify(r)).not.toContain('titles');
   });
@@ -500,9 +503,9 @@ describe('PI-ICP-DISCOVERY-002 - the omission acknowledgement', () => {
     const r = translate(withSoft());
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('omissions_unacknowledged');
-    expect(r.blocking.map((b) => b.criterionId)).toEqual(['c2']);
-    expect(r.detail).toMatch(/narrower than the ICP/);
+    expect((r as IcpTranslationFailure).refusal).toBe('omissions_unacknowledged');
+    expect((r as IcpTranslationFailure).blocking.map((b) => b.criterionId)).toEqual(['c2']);
+    expect((r as IcpTranslationFailure).detail).toMatch(/narrower than the ICP/);
   });
 
   it('30. acknowledgement permits it, and the omission list survives in full', () => {
@@ -521,7 +524,7 @@ describe('PI-ICP-DISCOVERY-002 - the omission acknowledgement', () => {
     for (const bogus of [false, 'true', 'yes', 1, 0, null, {}, [], 'TRUE']) {
       const r = translate(withSoft(), ORG_A, ORG_A, bogus);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.refusal).toBe('omissions_unacknowledged');
+      if (!r.ok) expect((r as IcpTranslationFailure).refusal).toBe('omissions_unacknowledged');
     }
   });
 
@@ -530,7 +533,7 @@ describe('PI-ICP-DISCOVERY-002 - the omission acknowledgement', () => {
     expect(translateAck([]).ok).toBe(false);
     const r = translateAck([criterion({ id: 'c1', kind: 'optional' })]);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.refusal).toBe('no_translatable_criteria');
+    if (!r.ok) expect((r as IcpTranslationFailure).refusal).toBe('no_translatable_criteria');
   });
 });
 
@@ -546,16 +549,16 @@ describe('PI-ICP-DISCOVERY-002 - location stays UNMAPPED pending provider eviden
       const r = translate([criterion({ id: 'c1', kind: 'mandatory', attribute, predicate: { op: 'one_of', values: ['London'] } })]);
       expect(r.ok).toBe(false);
       if (r.ok === false) {
-        expect(r.refusal).toBe('unsupported_mandatory_criterion');
-        expect(r.blocking).toHaveLength(1);
-        expect(r.blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES[`person.${attribute}`]);
+        expect((r as IcpTranslationFailure).refusal).toBe('unsupported_mandatory_criterion');
+        expect((r as IcpTranslationFailure).blocking).toHaveLength(1);
+        expect((r as IcpTranslationFailure).blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES[`person.${attribute}`]);
         // Substantive, and never the generic fallback.
-        expect(r.blocking[0].reason.length).toBeGreaterThan(10);
-        expect(r.blocking[0].reason).not.toBe('no provider-neutral discovery filter expresses this attribute');
+        expect((r as IcpTranslationFailure).blocking[0].reason.length).toBeGreaterThan(10);
+        expect((r as IcpTranslationFailure).blocking[0].reason).not.toBe('no provider-neutral discovery filter expresses this attribute');
         // The old note embedded a place name. A static example value inside a
         // refusal is echoed back to whichever tenant submitted that very
         // value, so no location note may carry one.
-        expect(r.blocking[0].reason).not.toContain('London');
+        expect((r as IcpTranslationFailure).blocking[0].reason).not.toContain('London');
       }
     }
   });
@@ -657,8 +660,8 @@ describe('PI-ICP-005 - `other` and unknown values refuse the WHOLE criterion', (
     const r = translate([seniority(['director', 'other'])]);
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('unsupported_criterion_value');
-    expect(r.blocking.map((b) => b.criterionId)).toEqual(['c-sen']);
+    expect((r as IcpTranslationFailure).refusal).toBe('unsupported_criterion_value');
+    expect((r as IcpTranslationFailure).blocking.map((b) => b.criterionId)).toEqual(['c-sen']);
     // The decisive assertion: `director` did NOT survive on its own. Dropping an
     // alternative from a disjunction narrows the search.
     expect(JSON.stringify(r)).not.toContain('seniorities');
@@ -667,7 +670,7 @@ describe('PI-ICP-005 - `other` and unknown values refuse the WHOLE criterion', (
   it('42. `other` alone is refused', () => {
     const r = translate([seniority(['other'])]);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.refusal).toBe('unsupported_criterion_value');
+    if (!r.ok) expect((r as IcpTranslationFailure).refusal).toBe('unsupported_criterion_value');
   });
 
   it('43. an UNKNOWN token is refused, with no partial filter emitted', () => {
@@ -679,7 +682,7 @@ describe('PI-ICP-005 - `other` and unknown values refuse the WHOLE criterion', (
         continue;
       }
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.refusal).toBe('unsupported_criterion_value');
+      if (!r.ok) expect((r as IcpTranslationFailure).refusal).toBe('unsupported_criterion_value');
     }
   });
 
@@ -696,7 +699,7 @@ describe('PI-ICP-005 - `other` and unknown values refuse the WHOLE criterion', (
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(JSON.stringify(r)).not.toContain('top_brass_secret');
-    expect(r.blocking[0].reason).toMatch(/does not document/);
+    expect((r as IcpTranslationFailure).blocking[0].reason).toMatch(/does not document/);
   });
 
   it('46. an unsupported PREDICATE on seniority refuses', () => {
@@ -705,7 +708,7 @@ describe('PI-ICP-005 - `other` and unknown values refuse the WHOLE criterion', (
       predicate: { op: 'includes_any', values: ['director'] } as never,
     })]);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.refusal).toBe('unsupported_predicate');
+    if (!r.ok) expect((r as IcpTranslationFailure).refusal).toBe('unsupported_predicate');
   });
 
   it('47. no usable values refuses', () => {
@@ -742,7 +745,7 @@ describe('PI-ICP-005 - soft seniority criteria are still not filters', () => {
   it('51. an all-soft seniority ICP still cannot become an unrestricted search', () => {
     const r = translate([seniority(['director'], 'optional')]);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.refusal).toBe('no_translatable_criteria');
+    if (!r.ok) expect((r as IcpTranslationFailure).refusal).toBe('no_translatable_criteria');
   });
 
   it('52. a mandatory TITLE criterion is unchanged by soft seniority noise', () => {
@@ -778,10 +781,10 @@ describe('PI-ICP-DISCOVERY-006 - a refusal explains the REAL blocker', () => {
       })]);
       expect(r.ok).toBe(false);
       if (r.ok === false) {
-        expect(r.refusal).toBe('unsupported_mandatory_criterion');
-        expect(r.blocking).toHaveLength(1);
-        expect(r.blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES['account.employee_count']);
-        expect(r.blocking[0].reason).not.toBe('no provider-neutral discovery filter expresses this attribute');
+        expect((r as IcpTranslationFailure).refusal).toBe('unsupported_mandatory_criterion');
+        expect((r as IcpTranslationFailure).blocking).toHaveLength(1);
+        expect((r as IcpTranslationFailure).blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES['account.employee_count']);
+        expect((r as IcpTranslationFailure).blocking[0].reason).not.toBe('no provider-neutral discovery filter expresses this attribute');
       }
     }
   });
@@ -815,14 +818,14 @@ describe('PI-ICP-DISCOVERY-006 - a refusal explains the REAL blocker', () => {
       })]);
       expect(r.ok).toBe(false);
       if (r.ok === false) {
-        expect(r.refusal).toBe('unsupported_mandatory_criterion');
-        expect(r.blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES[`account.${attribute}`]);
+        expect((r as IcpTranslationFailure).refusal).toBe('unsupported_mandatory_criterion');
+        expect((r as IcpTranslationFailure).blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES[`account.${attribute}`]);
         // Specifically NOT the generic fallback, which claimed no neutral
         // filter expresses the attribute. One does — it is a person's.
-        expect(r.blocking[0].reason).not.toBe('no provider-neutral discovery filter expresses this attribute');
+        expect((r as IcpTranslationFailure).blocking[0].reason).not.toBe('no provider-neutral discovery filter expresses this attribute');
         // And it is not the person-side reason for the same attribute name.
-        expect(r.blocking[0].reason).not.toBe(UNMAPPED_ATTRIBUTE_NOTES[`person.${attribute}`]);
-        expect(r.blocking[0].reason).not.toContain('Sentinelborough');
+        expect((r as IcpTranslationFailure).blocking[0].reason).not.toBe(UNMAPPED_ATTRIBUTE_NOTES[`person.${attribute}`]);
+        expect((r as IcpTranslationFailure).blocking[0].reason).not.toContain('Sentinelborough');
       }
     }
   });
@@ -879,14 +882,14 @@ describe('PI-ICP-005 - the rest of the contract is untouched', () => {
     for (const attribute of ['employee_band', 'employee_count']) {
       const r = translate([criterion({ id: 'c1', subject: 'account', attribute, predicate: { op: 'one_of', values: ['11-50'] } })]);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.refusal).toBe('unsupported_mandatory_criterion');
+      if (!r.ok) expect((r as IcpTranslationFailure).refusal).toBe('unsupported_mandatory_criterion');
     }
     for (const attribute of ['city', 'region', 'country_code']) {
       const r = translate([criterion({ id: 'c1', attribute, predicate: { op: 'one_of', values: ['London'] } })]);
       expect(r.ok).toBe(false);
       if (r.ok === false) {
-        expect(r.refusal).toBe('unsupported_mandatory_criterion');
-        expect(r.blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES[`person.${attribute}`]);
+        expect((r as IcpTranslationFailure).refusal).toBe('unsupported_mandatory_criterion');
+        expect((r as IcpTranslationFailure).blocking[0].reason).toBe(UNMAPPED_ATTRIBUTE_NOTES[`person.${attribute}`]);
       }
     }
     expect(Object.keys(UNMAPPED_ATTRIBUTE_NOTES)).not.toContain('person.seniority');
@@ -906,7 +909,7 @@ describe('PI-ICP-005 - the rest of the contract is untouched', () => {
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.refusal).toBe('tenant_mismatch');
+    expect((r as IcpTranslationFailure).refusal).toBe('tenant_mismatch');
     expect(JSON.stringify(r)).not.toContain('c_suite');
     expect(JSON.stringify(r)).not.toContain('icp-1');
   });
