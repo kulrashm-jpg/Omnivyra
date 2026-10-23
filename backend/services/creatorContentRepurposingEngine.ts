@@ -273,6 +273,30 @@ function minimizeText(original: string): string {
 }
 
 /**
+ * Trim a slide deck to `limit` WITHOUT losing its call-to-action.
+ *
+ * A plain `.slice(0, limit)` drops the tail, and the CTA is always the tail
+ * (the prompt puts it last, `role: "cta"`), so every platform cut silently
+ * removed the one slide that tells the reader what to do. When the deck is
+ * longer than the limit and has a CTA, keep the first `limit - 1` content
+ * slides plus the CTA. Decks within the limit, and decks without a CTA, are
+ * returned exactly as a plain slice would return them.
+ */
+export function trimSlidesPreservingCta<T>(slides: T[], limit: number): T[] {
+  if (!Array.isArray(slides)) return [];
+  // No usable limit, or nothing to cut: the deck is returned whole.
+  if (!Number.isFinite(limit) || limit < 1 || slides.length <= limit) return slides.slice();
+  let ctaIndex = -1;
+  for (let i = slides.length - 1; i >= 0; i -= 1) {
+    const role = (slides[i] as { role?: unknown } | null)?.role;
+    if (typeof role === 'string' && role.trim().toLowerCase() === 'cta') { ctaIndex = i; break; }
+  }
+  if (ctaIndex < 0 || ctaIndex < limit) return slides.slice(0, limit);
+  const content = slides.filter((_, i) => i !== ctaIndex).slice(0, limit - 1);
+  return [...content, slides[ctaIndex]];
+}
+
+/**
  * Carousel repurposing for different platforms
  * Instagram carousel ≠ Pinterest ≠ LinkedIn carousel
  */
@@ -321,9 +345,8 @@ export async function repurposeCarouselForPlatforms(
     const config = carouselConfigs[platform];
     if (!config) continue;
 
-    // Trim or expand slide count for platform
-    const adaptedSlides = masterCarousel.slides
-      .slice(0, config.optimal_slides)
+    // Trim slide count for platform — the CTA slide always survives the cut.
+    const adaptedSlides = trimSlidesPreservingCta(masterCarousel.slides, config.optimal_slides)
       .map((slide: any) => ({
         ...slide,
         text_adapted: optimizeSlideText(slide, config.text_limit_per_slide),

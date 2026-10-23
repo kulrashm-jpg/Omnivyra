@@ -225,12 +225,14 @@ function mergeRenderedMedia(
   };
 }
 
-function extractMediaUrls(output: CanonicalCreatorOutput): string[] {
+export function extractMediaUrls(output: CanonicalCreatorOutput): string[] {
   const payload = safeObject(output.asset_payload);
   const mediaBundle = safeObject(payload.media_bundle);
   const url = typeof mediaBundle.url === 'string' ? mediaBundle.url : '';
   const files = Array.isArray(mediaBundle.files) ? mediaBundle.files.map(String) : [];
-  return [url, ...files].map((s) => s.trim()).filter(Boolean);
+  // A deck's renderer sets `url = files[0]`, so `[url, ...files]` listed slide
+  // 1 twice and every reload showed it twice. Keep first occurrence, in order.
+  return [...new Set([url, ...files].map((s) => s.trim()).filter(Boolean))];
 }
 
 /**

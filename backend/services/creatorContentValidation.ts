@@ -222,10 +222,18 @@ function validateCarousel(
     });
   }
 
-  // Check CTA slide
-  if (!carousel.cta_slide) {
+  // Check CTA slide. The prompt contract puts the CTA INSIDE `slides[]`
+  // (`role: "cta"`) and forbids a separate `cta_slide`, so an in-deck CTA is
+  // the normal case; a legacy top-level `cta_slide` is still accepted.
+  const inDeckCta = Array.isArray(carousel.slides)
+    ? [...carousel.slides].reverse().find((s: any) => String(s?.role ?? '').trim().toLowerCase() === 'cta')
+    : undefined;
+  // First NON-EMPTY text field: an empty `cta_text` must not hide a body.
+  const ctaText = (s: any): string =>
+    [s?.cta_text, s?.body_text, s?.headline].map((v) => String(v ?? '').trim()).find(Boolean) ?? '';
+  if (!carousel.cta_slide && !inDeckCta) {
     issues.push('Missing call-to-action slide');
-  } else if (!carousel.cta_slide.cta_text) {
+  } else if (!ctaText(carousel.cta_slide) && !ctaText(inDeckCta)) {
     issues.push('CTA slide missing action text');
   }
 
