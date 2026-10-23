@@ -27,6 +27,8 @@ const FIXED = new Date('2026-10-01T12:00:00.000Z');
 const READER_TOKEN = ['reader', 'test', 'value'].join('-');
 const ADVISORY_TOKEN = ['advisory', 'test', 'value'].join('-');
 const CLI_FILE = path.resolve(__dirname, '../../../scripts/jev-flow/cli.ts');
+/** The automation policy "in force" for these hermetic runs (reconcile reads it through injected deps). */
+const POLICY_TEXT = '# policy v1\n';
 
 const REGISTRY: VerificationRegistry = validateRegistry({
   schema: 'gov-registry/1',
@@ -267,6 +269,8 @@ function makeCtx(over: Partial<GovDeps> = {}): Ctx {
     runner: jest.fn(async () => ({ exitCode: 0, output: Buffer.from('ok\n'), timedOut: false })),
     now: () => FIXED,
     newSessionId: () => SID,
+    readCommitFile: jest.fn(async () => POLICY_TEXT),
+    automationPolicyText: () => POLICY_TEXT,
     ...over,
   } as Ctx['deps'];
   return { world, e, transport, audit, deps };
@@ -872,19 +876,38 @@ describe('gov submit', () => {
       '',
       'OMNI-11 AC-1 — Jira transition "Record Result":',
       '  Kind: Deterministic',
-      '  Deterministic Result: PASS',
+      '  Deterministic Result: PASS (EV-1 t.pass)',
       '  Evidence Kind: Test',
-      `  Evidence References: ${refs}`,
+      `  Evidence References: gov-evidence ${f.bundleHash} head ${head12} t.pass=PASS`,
       '',
       'OMNI-12 AC-2 — Jira transition "Record Result":',
       '  Kind: Judgment',
-      '  Deterministic Result: PASS',
+      '  Deterministic Result: none — a human decides this AC (HUMAN_JUDGMENT_REQUIRED); gov records no deterministic result for it',
       '  Evidence Kind: Manual',
-      `  Evidence References: ${refs}`,
       '',
       'Verification / Disposition (Jira transition "Record Verification") is the human\'s decision; gov does not record it.',
     ]);
     expect(r.result).toMatchObject({ status: 'OK', bundle_hash: f.bundleHash, packet_hash: f.packetHash, deterministic_result: 'PASS' });
+    expect(r.result.per_ac).toEqual([
+      { ac_key: 'OMNI-11', registry_id: 't.pass', result: 'PASS' },
+      { ac_key: 'OMNI-12', result: 'HUMAN_DECISION', reason: 'HUMAN_JUDGMENT_REQUIRED' },
+    ]);
+  });
+
+  it('per-AC results: a failing item fails only the AC it proves; the Judgment AC never inherits a bundle-wide result', async () => {
+    const ctx = makeCtx();
+    // t.pass (first command) passes, t.types (second) fails: the bundle is FAIL, AC-1 (t.pass) is still PASS.
+    let call = 0;
+    ctx.deps.runner = jest.fn(async () => ({ exitCode: ++call === 1 ? 0 : 3, output: Buffer.from('x\n'), timedOut: false }));
+    const f = await verifiedFlow(ctx);
+    expect(f.verify.code).toBe(14);
+    const r = await gov(ctx, ['submit', '--story', STORY, '--evidence', f.bundleHash]);
+    expect(r.code).toBe(0);
+    expect(r.result.deterministic_result).toBe('FAIL');
+    expect(r.result.per_ac).toEqual([
+      { ac_key: 'OMNI-11', registry_id: 't.pass', result: 'PASS' },
+      { ac_key: 'OMNI-12', result: 'HUMAN_DECISION', reason: 'HUMAN_JUDGMENT_REQUIRED' },
+    ]);
   });
 
   it('unknown evidence → 11; wrong worktree → 11', async () => {
@@ -892,6 +915,117 @@ describe('gov submit', () => {
     const f = await verifiedFlow(ctx);
     expect((await gov(ctx, ['submit', '--story', STORY, '--evidence', `sha256:${'1'.repeat(64)}`])).code).toBe(11);
     expect((await gov(ctx, ['submit', '--story', STORY, '--evidence', f.bundleHash, '--worktree', tmp('gov-cli-other-')])).code).toBe(11);
+  });
+});
+
+// ---------------------------------------------------------------- reconcile (read-only dry run)
+
+describe('gov reconcile', () => {
+  const gitState = (dir: string) => ({ head: sh(dir, 'rev-parse', 'HEAD'), status: sh(dir, 'status', '--porcelain'), refs: sh(dir, 'for-each-ref', '--format=%(refname) %(objectname)') });
+  const recordedRefs = (bundleHash: string, head: string) => `gov-evidence ${bundleHash} head ${head.slice(0, 12)} t.pass=PASS`;
+
+  it('after verify with nothing recorded in Jira: RECORD_RESULT proposed for the deterministic AC, HUMAN_DECISION for the judgment AC; writes nothing', async () => {
+    const ctx = makeCtx();
+    const f = await verifiedFlow(ctx);
+    const homeBefore = snapshot(ctx.e.home);
+    const gitBefore = gitState(f.worktree);
+    const auditBefore = ctx.audit.records.length;
+    const r = await gov(ctx, ['reconcile']);
+    expect(r.code).toBe(0);
+    expect(r.out[0]).toMatch(/^gov reconcile: DRY RUN/);
+    expect(r.out).toContain('  OMNI-11 AC-1: VERIFIABLE → HUMAN_DECISION (ITEM_PASS, RECORD_RESULT)');
+    expect(r.out).toContain('    human may set Deterministic Result: (empty) → PASS');
+    expect(r.out).toContain(`    human may set Evidence References: (empty) → ${recordedRefs(f.bundleHash, f.head)}`);
+    expect(r.out).toContain('  OMNI-12 AC-2: NEEDS_HUMAN → HUMAN_DECISION (HUMAN_JUDGMENT_REQUIRED)');
+    expect(r.result).toMatchObject({ status: 'OK', dry_run: true, proposed_changes: 2, counts: { HUMAN_DECISION: 2, NO_OP: 0 } });
+    // read-only: GOV_HOME byte- and mtime-identical, git untouched, no Jira write, no JEV
+    expect(snapshot(ctx.e.home)).toEqual(homeBefore);
+    expect(gitState(f.worktree)).toEqual(gitBefore);
+    expect(ctx.world.updates).toEqual([]);
+    expect(ctx.world.otherCalls).toEqual([]);
+    expect(ctx.transport.calls).toBe(0);
+    expect(ctx.audit.records.length).toBe(auditBefore);
+  });
+
+  it('is deterministic and idempotent: two runs give the same change-set hash and output', async () => {
+    const ctx = makeCtx();
+    await verifiedFlow(ctx);
+    const a = await gov(ctx, ['reconcile']);
+    const b = await gov(ctx, ['reconcile', '--story', STORY]);
+    expect(a.result.change_set_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(b.result.change_set_hash).toBe(a.result.change_set_hash);
+    expect(b.out).toEqual(a.out);
+  });
+
+  it('Jira already matching the computed state → NO_OP, no proposed change', async () => {
+    const ctx = makeCtx();
+    const f = await verifiedFlow(ctx);
+    ctx.world.acs = [
+      acIssue('OMNI-11', { [AC_FIELDS.deterministicResult]: sel('PASS'), [AC_FIELDS.evidenceReferences]: recordedRefs(f.bundleHash, f.head) }),
+      acIssue('OMNI-12', { [AC_FIELDS.verification]: sel('VERIFIED') }),
+    ];
+    const r = await gov(ctx, ['reconcile']);
+    expect(r.code).toBe(0);
+    expect(r.result).toMatchObject({ proposed_changes: 0, counts: { NO_OP: 2 } });
+    expect(r.out.filter((l) => l.includes('human may set'))).toEqual([]);
+  });
+
+  it('HEAD moved after Jira recorded the result → STALE, INVALIDATE_STALE_EVIDENCE proposed; stale evidence is never current', async () => {
+    const ctx = makeCtx();
+    const f = await verifiedFlow(ctx);
+    ctx.world.acs = [
+      acIssue('OMNI-11', { [AC_FIELDS.deterministicResult]: sel('PASS'), [AC_FIELDS.evidenceReferences]: recordedRefs(f.bundleHash, f.head), [AC_FIELDS.verification]: sel('VERIFIED') }),
+      acIssue('OMNI-12'),
+    ];
+    commit(f.worktree, { 'src/later.ts': 'y\n' }, ...trailers(f.packetHash));
+    const r = await gov(ctx, ['reconcile']);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('  freshness: STALE (head)');
+    expect(r.out).toContain('  OMNI-11 AC-1: STALE → INVALIDATE_STALE_EVIDENCE (JIRA_CITES_STALE_EVIDENCE, REVERIFY_REQUIRED, STALE_HEAD)');
+    expect(r.out).toContain('    human may set Deterministic Result: PASS → (clear)');
+    expect(r.out).toContain('    human may set Verification: VERIFIED → UNVERIFIED');
+    expect(ctx.world.updates).toEqual([]);
+  });
+
+  it('automation policy changed since verification → STALE on the policy dimension', async () => {
+    const ctx = makeCtx({ automationPolicyText: () => '# policy v2\n' });
+    await verifiedFlow(ctx);
+    const r = await gov(ctx, ['reconcile']);
+    expect(r.out).toContain('  freshness: STALE (automation_policy_digest)');
+    expect(r.out).toContain('  OMNI-11 AC-1: STALE → INSUFFICIENT_EVIDENCE (NO_CURRENT_EVIDENCE, STALE_AUTOMATION_POLICY_DIGEST)');
+  });
+
+  it('tampered stored evidence → INTEGRITY_FAILED 13, reported, still nothing written', async () => {
+    const ctx = makeCtx();
+    const f = await verifiedFlow(ctx);
+    const file = govLayout(ctx.e.env).evidenceFile(STORY, f.bundleHash as `sha256:${string}`);
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('"PASS"', '"FAIL"'));
+    const before = snapshot(ctx.e.home);
+    const r = await gov(ctx, ['reconcile']);
+    expect(r.code).toBe(13);
+    expect(r.out.some((l) => /^ {2}INTEGRITY: sha256:[0-9a-f]{64}: INTEGRITY_FAILED/.test(l))).toBe(true);
+    expect(snapshot(ctx.e.home)).toEqual(before);
+  });
+
+  it('--apply does not exist (usage 64); stray arguments are usage 64; no Jira read happens', async () => {
+    const ctx = makeCtx();
+    await verifiedFlow(ctx);
+    ctx.deps.jiraClient.mockClear();
+    expect((await gov(ctx, ['reconcile', '--apply'])).code).toBe(64);
+    expect((await gov(ctx, ['reconcile', '--story', 'nope'])).code).toBe(64);
+    expect((await gov(ctx, ['reconcile', 'extra'])).code).toBe(64);
+    expect(ctx.deps.jiraClient).not.toHaveBeenCalled();
+  });
+
+  it('reader identity is required (REFUSED 11); an empty ledger is OK with no Jira call', async () => {
+    const ctx = makeCtx();
+    await verifiedFlow(ctx);
+    expect((await gov(ctx, ['reconcile'], { ...ctx.e.env, JEV_JIRA_IDENTITY: '' })).code).toBe(11);
+    const empty = makeCtx();
+    const r = await gov(empty, ['reconcile']);
+    expect(r.code).toBe(0);
+    expect(empty.deps.jiraClient).not.toHaveBeenCalled();
+    expect(fs.existsSync(empty.e.home)).toBe(false);
   });
 });
 
@@ -904,7 +1038,8 @@ describe('gov check-merge', () => {
     const r = await gov(ctx, ['check-merge', '--story', STORY, '--worktree', f.worktree, '--evidence', f.bundleHash]);
     expect(r.code).toBe(0);
     expect(r.out.filter((l) => l.includes('[FAIL]'))).toEqual([]);
-    expect(r.out.filter((l) => l.includes('[PASS]'))).toHaveLength(9);
+    expect(r.out.filter((l) => l.includes('[PASS]'))).toHaveLength(10);
+    expect(r.out).toContain('  [PASS] protected-paths: 0 protected path(s) changed, each under an exact reviewed authorization');
   });
 
   it('commits without trailers → 13', async () => {

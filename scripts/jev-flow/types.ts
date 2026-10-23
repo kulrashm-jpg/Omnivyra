@@ -357,6 +357,212 @@ export interface JudgeFlowResult {
   error: string | null;
 }
 
+// ---------------------------------------------------------------- intake (governed entry)
+
+/**
+ * `gov intake` — the explicit front door into governed work. It classifies a
+ * worktree/session, proposes a Story + ACs when none exists, and hands over to
+ * the existing `start` / `attach`. Proposal mode is read-only (apart from the
+ * proposal and audit records under GOV_HOME); Jira creation happens only on
+ * `--apply`, run by a human under their own Jira identity after typing the
+ * proposal hash. Intake never reaches JEV, never transitions Jira, never edits
+ * an existing issue and never creates a commit.
+ */
+export const INTAKE_PROPOSAL_SCHEMA = 'gov-intake-proposal/1' as const;
+export const INTAKE_AUDIT_SCHEMA = 'gov-intake-audit/1' as const;
+export const INTAKE_RULES_SCHEMA = 'gov-intake-rules/1' as const;
+/** Idempotency label on an intake-created Story: `gov-intake-<first 12 hex of the proposal hash>`. */
+export const INTAKE_LABEL_PREFIX = 'gov-intake-' as const;
+
+/** First-match classification order: GOVERNED_RESUME, EXISTING_STORY, NEW_WORK, PRE_GOVERNANCE_ADOPTION. */
+export type IntakeClassification = 'GOVERNED_RESUME' | 'EXISTING_STORY' | 'NEW_WORK' | 'PRE_GOVERNANCE_ADOPTION';
+
+/** Why intake refused to proceed (fail closed; a human resolves it). */
+export type IntakeRefusalCode =
+  | 'INVALID_INPUT'
+  | 'CONFLICTING_BINDINGS' // the worktree carries bindings for more than one Story, or an invalid binding
+  | 'SESSION_BOUND_ELSEWHERE' // the session already governs a different Story
+  | 'DUPLICATE_SESSION' // more than one live session claims the worktree
+  | 'AMBIGUOUS_OWNERSHIP' // the owning session cannot be established; pass --session
+  | 'PROHIBITED_PATH_TOUCHED'
+  | 'AMBIGUOUS_STORY' // more than one Story's Authorized Paths cover the changes
+  | 'PARTIAL_SCOPE_MATCH' // a Story covers only part of the changes
+  | 'INTENT_REQUIRED' // the subject of new work cannot be established; pass --intent
+  | 'AUTHORIZED_PATHS_UNKNOWN'
+  | 'NO_REGISTRY_ID' // no verification registry id covers the changed paths
+  | 'UNKNOWN_AUTHORIZATION' // --authorize-protected names an id the reviewed rules do not define
+  | 'AUTHORIZATION_VERIFICATION_MISSING'; // an applied authorization's required verification is absent
+
+export interface IntakeProposedStory {
+  summary: string;
+  objective: string;
+  architecture: string | null;
+  invariants: string[];
+  authorized_paths: string[];
+  prohibited_paths: string[];
+  /** Registry ids, one per Verification Requirements line. */
+  verification_requirements: string[];
+}
+
+export interface IntakeProposedAc {
+  /** `AC-<n>`, numbered from 1 in proposal order. */
+  ac_id: string;
+  statement: string;
+  kind: AcKind;
+  /** Jira Evidence Kind label (Test / Typecheck / Build for Deterministic; Manual for Judgment). */
+  evidence_kind: string;
+  /** Registry id a Deterministic AC is proven by; null for Judgment. */
+  registry_id: string | null;
+}
+
+/** What a human approves by typing its hash. Deterministic: same inputs → same hash. */
+export interface IntakeProposal {
+  schema: typeof INTAKE_PROPOSAL_SCHEMA;
+  governance_version: typeof GOVERNANCE_VERSION;
+  classification: 'NEW_WORK' | 'PRE_GOVERNANCE_ADOPTION';
+  worktree: string;
+  branch: string | null;
+  head: string;
+  merge_base: string | null;
+  session_id: string | null;
+  story: IntakeProposedStory;
+  acceptance_criteria: IntakeProposedAc[];
+  /**
+   * Reviewed exact-path protected authorizations applied (`--authorize-protected`), with the
+   * digest of each rules entry. ABSENT when none applies, so such proposals hash as before.
+   */
+  protected_authorizations?: Array<{ id: string; digest: Sha256Ref }>;
+}
+
+export interface StoredIntakeProposal {
+  proposal: IntakeProposal;
+  proposal_hash: Sha256Ref;
+  /** `gov-intake-<hash12>`. */
+  label: string;
+}
+
+// ---------------------------------------------------------------- lifecycle + reconcile (read-only)
+
+/**
+ * `gov reconcile` (OMNI-44) — a dry-run comparison of stored evidence, the
+ * current governed state and Jira. lifecycle.ts evaluates each Acceptance
+ * Criterion independently with pure predicates; reconcile.ts gathers the facts
+ * read-only and proposes a deterministic change set that only a HUMAN may apply.
+ * Nothing here writes Jira, the ledger or evidence, and nothing reaches JEV.
+ */
+export const LIFECYCLE_SCHEMA = 'gov-lifecycle/1' as const;
+export const RECONCILE_SCHEMA = 'gov-reconcile/1' as const;
+
+/** Repo-relative path of the reviewed automation policy whose digest bounds evidence freshness. */
+export const AUTOMATION_POLICY_PATH = 'scripts/jev-flow/AUTOMATION-POLICY.md' as const;
+
+/**
+ * Per-AC lifecycle state. Never collapsed to PASS/FAIL:
+ *  - VERIFIABLE            fresh, intact evidence; the AC's own registry item PASSED
+ *  - FAILED                fresh, intact evidence; the AC's own registry item FAILED
+ *  - STALE                 evidence exists but at least one freshness dimension moved
+ *  - INSUFFICIENT_EVIDENCE no usable evidence for this AC (missing, not intact, no item)
+ *  - NEEDS_HUMAN           a human decides (Judgment AC, unmappable / ambiguous AC)
+ *  - CONFLICT              sources disagree (statement vs packet, duplicate items, result vs exit code)
+ */
+export type AcLifecycleState = 'VERIFIABLE' | 'FAILED' | 'STALE' | 'INSUFFICIENT_EVIDENCE' | 'NEEDS_HUMAN' | 'CONFLICT';
+export const AC_LIFECYCLE_STATES: readonly AcLifecycleState[] = ['VERIFIABLE', 'FAILED', 'STALE', 'INSUFFICIENT_EVIDENCE', 'NEEDS_HUMAN', 'CONFLICT'];
+
+/** Identity dimensions an evidence bundle must still match to be current, in evaluation order. */
+export type FreshnessDimension = 'bundle_hash' | 'head' | 'packet_hash' | 'registry_digest' | 'automation_policy_digest' | 'binding';
+export const FRESHNESS_DIMENSIONS: readonly FreshnessDimension[] = ['bundle_hash', 'head', 'packet_hash', 'registry_digest', 'automation_policy_digest', 'binding'];
+
+export interface FreshnessCheck {
+  dimension: FreshnessDimension;
+  fresh: boolean;
+  /** What the current governed state requires. */
+  expected: string | null;
+  /** What the evidence recorded (or what was observed for it). */
+  observed: string | null;
+}
+
+/** Objective (deterministic) facts for one AC — never mixed with human judgment. */
+export interface AcDeterministicFact {
+  bundle_hash: Sha256Ref;
+  head_commit: string;
+  item_id: string;
+  registry_id: string;
+  result: DeterministicResult;
+}
+
+export interface AcLifecycle {
+  ac_key: string;
+  ac_id: string;
+  kind: string;
+  evidence_kind: string;
+  state: AcLifecycleState;
+  /** Machine-readable reason codes, sorted. */
+  reasons: string[];
+  /** Registry id this AC is proven by, or null when none could be established. */
+  registry_id: string | null;
+  /** How registry_id was established: the gov-intake statement, or the unique id producing the AC's evidence kind. */
+  mapping: 'statement' | 'evidence_kind' | null;
+  /** Present only for VERIFIABLE / FAILED: the AC's own item of fresh, intact evidence. */
+  deterministic: AcDeterministicFact | null;
+  /** True when the AC's outcome is a human decision (Judgment AC or NEEDS_HUMAN); gov never settles it. */
+  human_decision_required: boolean;
+  /** Dimensions that moved (STALE only), in FRESHNESS_DIMENSIONS order. */
+  stale_dimensions: FreshnessDimension[];
+}
+
+export interface LifecycleResult {
+  schema: typeof LIFECYCLE_SCHEMA;
+  story_key: string;
+  packet_hash: Sha256Ref;
+  bundle_hash: Sha256Ref | null;
+  integrity: { ok: boolean; reason: string | null };
+  freshness: FreshnessCheck[];
+  per_ac: AcLifecycle[];
+}
+
+/** What reconcile proposes for one AC. Only a human may act on any of it. */
+export type ReconcileDisposition = 'NO_OP' | 'INVALIDATE_STALE_EVIDENCE' | 'CONFLICT' | 'INSUFFICIENT_EVIDENCE' | 'HUMAN_DECISION';
+export const RECONCILE_DISPOSITIONS: readonly ReconcileDisposition[] = ['NO_OP', 'INVALIDATE_STALE_EVIDENCE', 'CONFLICT', 'INSUFFICIENT_EVIDENCE', 'HUMAN_DECISION'];
+
+/** One proposed Jira field change for a human ("Record Result" / "Record Verification"); null = clear. */
+export interface ProposedFieldChange {
+  field: 'Deterministic Result' | 'Evidence References' | 'Verification';
+  current: string | null;
+  proposed: string | null;
+}
+
+export interface AcReconcile {
+  ac_key: string;
+  ac_id: string;
+  state: AcLifecycleState;
+  disposition: ReconcileDisposition;
+  reasons: string[];
+  /** Empty when Jira already matches the computed state. */
+  changes: ProposedFieldChange[];
+  /** JEV advisory verdict currently in Jira, reported only; it never changes state or disposition. */
+  jev_advisory: string | null;
+}
+
+export interface StoryReconcile {
+  story_key: string;
+  packet_hash: Sha256Ref | null;
+  bundle_hash: Sha256Ref | null;
+  /** Story-level refusal (no packet, unreadable Jira, …); per_ac is empty when set. */
+  error: string | null;
+  integrity_failures: string[];
+  freshness: FreshnessCheck[];
+  per_ac: AcReconcile[];
+}
+
+export interface ReconcileReport {
+  schema: typeof RECONCILE_SCHEMA;
+  governance_version: typeof GOVERNANCE_VERSION;
+  dry_run: true;
+  stories: StoryReconcile[];
+  /** canonicalHash of `stories`: identical inputs give an identical hash (idempotent, no timestamps). */
+  change_set_hash: Sha256Ref;
+}
+
 // ---------------------------------------------------------------- helpers (pure except fs layout guard)
 
 /** SHA-256 over BJC canonical JSON. */

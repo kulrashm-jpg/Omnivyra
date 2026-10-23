@@ -5,7 +5,10 @@
  * existing-work adoption change (PRE_GOVERNANCE_ADOPTION_BASELINE):
  *   1. no gov module writes git history (only `git worktree add`, from `gov start`);
  *   2. no automatic JEV and no Claude Code hook registration;
- *   3. no Jira write anywhere in the entry path (only judgeFlow's Phase 2 write-back);
+ *   3. no Jira write anywhere in the entry path (only judgeFlow's Phase 2 write-back),
+ *      plus exactly one narrowly-allowed write: `gov intake --apply` creating a Story /
+ *      Acceptance Criterion via `POST /rest/api/2/issue` in intakeJira.ts, with only the
+ *      allowlisted creation fields — never an edit, transition, delete or gate/JEV field;
  *   4. existing transcripts are byte-, size- and mtime-identical after discovery,
  *      fingerprinting and attach-binding (with and without an `adoption` field);
  *   5. GOV_HOME is never inside a git work tree and nothing is written under the worktree;
@@ -339,11 +342,45 @@ describe('1. no gov module writes git history', () => {
     for (const chain of sites) expect(chain[chain.length - 1]).toBe('cmdStart');
   });
 
-  it('the only other process launches are taskkill and the node-only verification runner', () => {
-    expect([...new Set(all.otherCommands)]).toEqual(['taskkill']);
+  it('the only other process launches are taskkill, the node-only verification runner and the one read-only intake reg query', () => {
+    expect([...new Set(all.otherCommands)]).toEqual(['reg', 'taskkill']);
+    expect(all.otherCommands.filter((c) => c === 'reg')).toHaveLength(1);
     expect(spawnSpec(['node', 'x.js'], { cwd: os.tmpdir() }).command).toBe(process.execPath);
     expect(spawnSpec(['node', 'x.js'], { cwd: os.tmpdir() }).options.shell).toBe(false);
     expect(() => spawnSpec(['git', 'commit', '-m', 'x'], { cwd: os.tmpdir() })).toThrow();
+  });
+
+  it('the single reg launch is a read-only `reg query HKCU\\Environment /v <name>` in readWindowsUserEnv (cli.ts), execFile, no shell, name-guarded', () => {
+    const sites: ts.CallExpression[] = [];
+    for (const f of FLOW_FILES) {
+      walk(parse(f), (n) => {
+        if (ts.isCallExpression(n) && n.arguments.length > 0 && literalText(n.arguments[0]) === 'reg') sites.push(n);
+      });
+    }
+    expect(sites).toHaveLength(1);
+    const call = sites[0];
+    expect(call.getSourceFile().fileName).toBe('cli.ts');
+    expect(call.expression.getText()).toBe('execFile');
+    expect(functionChain(call)).toEqual(['<anonymous>', 'readWindowsUserEnv']);
+    const argv = call.arguments[1];
+    expect(argv && ts.isArrayLiteralExpression(argv)).toBe(true);
+    const els = (argv as ts.ArrayLiteralExpression).elements;
+    expect(els.slice(0, 3).map((e) => literalText(e))).toEqual(['query', 'HKCU\\Environment', '/v']);
+    expect(els).toHaveLength(4);
+    expect(ts.isIdentifier(els[3]) && els[3].text === 'name').toBe(true);
+    const opts = call.arguments[2];
+    expect(opts && ts.isObjectLiteralExpression(opts)).toBe(true);
+    const shell = (opts as ts.ObjectLiteralExpression).properties.find((p) => ts.isPropertyAssignment(p) && p.name.getText() === 'shell') as ts.PropertyAssignment | undefined;
+    expect(shell?.initializer.kind).toBe(ts.SyntaxKind.FalseKeyword);
+    const reader = parse('cli.ts')
+      .statements.filter(ts.isFunctionDeclaration)
+      .find((d) => d.name?.text === 'readWindowsUserEnv');
+    expect(reader).toBeDefined();
+    const body = reader!.getText();
+    expect(body).toMatch(/process\.platform !== 'win32'/);
+    expect(body).toMatch(/INTAKE_FRESHNESS_VARS as readonly string\[\]\)\.includes\(name\)/);
+    expect(body.indexOf('INTAKE_FRESHNESS_VARS')).toBeLessThan(body.indexOf("'reg'"));
+    expect(body).not.toMatch(/console\.|io\.(out|err)|appendIntakeAudit|writeFile/);
   });
 
   it('no git library is imported by any gov module', () => {
@@ -458,7 +495,8 @@ describe('2. no automatic JEV and no hook registration', () => {
 // ---------------------------------------------------------------- 3. no Jira write in the entry path
 
 describe('3. no Jira write in the entry path', () => {
-  const ENTRY = ['jiraQuery.ts', 'readiness.ts', 'packet.ts', 'binding.ts', 'session.ts'];
+  // lifecycle.ts / reconcile.ts (OMNI-44): the read-only reconcile path is held to the same no-write rule.
+  const ENTRY = ['jiraQuery.ts', 'readiness.ts', 'packet.ts', 'binding.ts', 'session.ts', 'lifecycle.ts', 'reconcile.ts'];
 
   it.each(ENTRY)('%s has no PUT/POST/PATCH/DELETE and no advisory/transition write', (f) => {
     const c = code(f);
@@ -474,14 +512,15 @@ describe('3. no Jira write in the entry path', () => {
     expect(new Set(methods)).toEqual(new Set(['GET']));
   });
 
-  it('the only Jira write in jev-flow is Phase 2 writeAdvisoryFields in judgeFlow.ts', () => {
+  it('the only Jira writes in jev-flow are Phase 2 writeAdvisoryFields in judgeFlow.ts and intake issue creation in intakeJira.ts', () => {
     const writebackImporters = FLOW_FILES.flatMap(importsOf).filter((i) => /jev-jira\/writeback$/.test(i.spec));
     expect(writebackImporters.map((i) => i.file)).toEqual(['judgeFlow.ts']);
     for (const f of FLOW_FILES) {
       const c = code(f);
       expect({ f, direct: /\bupdateAdvisoryFields\b/.test(c) }).toEqual({ f, direct: false });
       if (f !== 'judgeFlow.ts') expect({ f, wb: /\bwriteAdvisoryFields\b/.test(c) }).toEqual({ f, wb: false });
-      expect({ f, verbs: /method\s*:\s*['"`](PUT|POST|PATCH|DELETE)['"`]/.test(c) }).toEqual({ f, verbs: false });
+      // intakeJira.ts is the single, narrowly-checked exception (next tests); every other module stays write-free.
+      if (f !== 'intakeJira.ts') expect({ f, verbs: /method\s*:\s*['"`](PUT|POST|PATCH|DELETE)['"`]/.test(c) }).toEqual({ f, verbs: false });
     }
     const sf = parse('judgeFlow.ts');
     let calls = 0;
@@ -489,6 +528,85 @@ describe('3. no Jira write in the entry path', () => {
       if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'writeAdvisoryFields') calls++;
     });
     expect(calls).toBe(1);
+  });
+
+  it('intakeJira.ts: the only write verb is POST, only to /rest/api/2/issue, from exactly one call site', () => {
+    const c = code('intakeJira.ts');
+    // No other write verb, no edit / transition / delete / comment / link path anywhere in the module.
+    expect([...c.matchAll(/['"`](PUT|PATCH|DELETE)['"`]/g)].map((m) => m[1])).toEqual([]);
+    expect(c).not.toMatch(/\/transitions\b|\/comment\b|issueLink|\/assignee\b|\/watchers\b/);
+    expect(c).not.toMatch(/\b(updateAdvisoryFields|writeAdvisoryFields|buildAdvisoryUpdate|transitionIssue|updateIssue|editIssue|deleteIssue)\b/);
+    expect(importsOf('intakeJira.ts').filter((i) => /jev-jira\/(writeback|orchestrator)$/.test(i.spec))).toEqual([]);
+    // Every 'POST' literal is either the single route-table entry or the single request(...) call to /rest/api/2/issue.
+    const sf = parse('intakeJira.ts');
+    const posts: string[] = [];
+    walk(sf, (n) => {
+      if (!ts.isStringLiteral(n) || n.text !== 'POST') return;
+      const p = n.parent;
+      if (ts.isPropertyAssignment(p) && p.name.getText() === 'method' && ts.isObjectLiteralExpression(p.parent)) {
+        const re = p.parent.properties.find((q) => ts.isPropertyAssignment(q) && q.name.getText() === 're');
+        posts.push(`route ${re && ts.isPropertyAssignment(re) ? re.initializer.getText() : '?'}`);
+      } else if (ts.isCallExpression(p) && ts.isIdentifier(p.expression) && p.expression.text === 'request') {
+        const i = p.arguments.indexOf(n);
+        const target = p.arguments[i + 1];
+        posts.push(`call ${target && ts.isStringLiteral(target) ? target.text : target ? target.getText() : '?'}`);
+      } else if (!(ts.isLiteralTypeNode(p) && ts.isUnionTypeNode(p.parent))) {
+        posts.push(`other ${p.getText().slice(0, 60)}`);
+      }
+    });
+    expect(posts.sort()).toEqual(['call /rest/api/2/issue', 'route /^\\/rest\\/api\\/2\\/issue$/']);
+  });
+
+  it('intakeJira.ts at runtime: route table, create-field allowlists and gate guard keep every protected field out', () => {
+    // Required here (not at the top) so the static scans above never depend on the module loading.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const ij = require('../../../scripts/jev-flow/intakeJira') as typeof import('../../../scripts/jev-flow/intakeJira');
+    const writes = ij.INTAKE_ROUTES.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.re.source}`);
+    expect(writes).toEqual(['POST ^\\/rest\\/api\\/2\\/issue$']);
+    for (const [m, p] of [
+      ['PUT', '/rest/api/2/issue/OMNI-1'],
+      ['PATCH', '/rest/api/2/issue/OMNI-1'],
+      ['DELETE', '/rest/api/2/issue/OMNI-1'],
+      ['POST', '/rest/api/2/issue/OMNI-1/transitions'],
+      ['POST', '/rest/api/3/issue/OMNI-1/transitions'],
+      ['POST', '/rest/api/2/issue/OMNI-1/comment'],
+      ['POST', '/rest/api/2/issueLink'],
+      ['POST', '/rest/api/2/issue/bulk'],
+      ['PUT', '/rest/api/2/issue/OMNI-1/assignee'],
+    ]) {
+      expect({ m, p, allowed: ij.routeAllowed(m, p) }).toEqual({ m, p, allowed: false });
+    }
+    const PROTECTED: Record<string, string> = {
+      Verification: AC_FIELDS.verification,
+      'Deterministic Result': AC_FIELDS.deterministicResult,
+      'Evidence References': AC_FIELDS.evidenceReferences,
+      Disposition: AC_FIELDS.jevAdvisoryDisposition,
+      'Gate Result': STORY_FIELDS.gateResult,
+      'JEV Verdict': AC_FIELDS.jevVerdict,
+      'JEV Confidence': AC_FIELDS.jevConfidence,
+      'JEV Model': AC_FIELDS.jevModel,
+      'JEV Input Hash': AC_FIELDS.jevInputHash,
+      Commit: STORY_FIELDS.commit,
+      'T3 Evidence Reference': 'customfield_10078',
+      'Deployment Authorized By': 'customfield_10079',
+      'Deployment Authorized At': 'customfield_10080',
+    };
+    for (const [name, id] of Object.entries(PROTECTED)) {
+      expect({ name, inStory: ij.STORY_CREATE_FIELDS.includes(id), inAc: ij.AC_CREATE_FIELDS.includes(id) }).toEqual({ name, inStory: false, inAc: false });
+      expect(ij.GATE_FIELD_IDS).toContain(id);
+      expect(ij.isGateField(id, name)).toBe(true);
+      expect(() => ij.assertIntakeFields('story', { summary: 's', [id]: 'x' })).toThrow();
+      expect(() => ij.assertIntakeFields('ac', { summary: 's', [id]: 'x' })).toThrow();
+    }
+    // Deployment fields have no frozen id: they are recognised (and refused on a create form) by name.
+    for (const name of ['Deployment Authorized By', 'Deployment Authorized At', 'Deployed At', 'Deployment Environment', 'T1 Disposition', 'T2 Evidence Reference', 'T3 Approval']) {
+      expect({ name, gate: ij.isGateField('customfield_99999', name) }).toEqual({ name, gate: true });
+    }
+    for (const sys of ['status', 'resolution', 'assignee', 'fixVersions']) {
+      expect(() => ij.assertIntakeFields('story', { [sys]: 'x' })).toThrow();
+      expect(() => ij.assertIntakeFields('ac', { [sys]: 'x' })).toThrow();
+    }
+    expect([...ij.AC_CREATE_FIELDS].sort()).toEqual(['issuetype', 'parent', 'project', 'summary', AC_FIELDS.acId, AC_FIELDS.statement, AC_FIELDS.kind, AC_FIELDS.evidenceKind].sort());
   });
 });
 
