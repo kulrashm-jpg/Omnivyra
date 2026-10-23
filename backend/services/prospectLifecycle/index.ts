@@ -17,3 +17,6 @@ export * from './lifecycleWriter';
 export * from './lifecycleReader';
 export * from './outcomeInterpreter';
 export * from './outcomeProvenance';
+// B3 — the outcome -> lifecycle producer. Exported last because it COMPOSES the
+// four above and adds no vocabulary of its own.
+export * from './outcomeLifecycleProducer';

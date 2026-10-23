@@ -168,14 +168,32 @@ describe('P2B — the boundary rules apply unchanged to the new attributes', () 
     expect(out.withhold[0]).toMatchObject({ attribute: 'funding_stage', reason: 'sources_disagree' });
   });
 
-  it('RULE C — an existing canonical value is never overwritten', () => {
+  it('D-4 — an UNATTESTED canonical value is never overwritten', () => {
+    // This replaces LI-2's RULE C, which refused every overwrite. 2015 is
+    // supported by no assertion, so it came from before or outside this layer.
     const out = decideCanonicalUpdates(
       { founded_year: 2015 },
       [{ attribute: 'founded_year', normalized_value: '1999', id: 'a1' }],
       cols,
     );
     expect(out.apply).toHaveLength(0);
-    expect(out.withhold[0]).toMatchObject({ attribute: 'founded_year', reason: 'canonical_value_already_set' });
+    expect(out.withhold[0]).toMatchObject({ attribute: 'founded_year', reason: 'unattested_incumbent' });
+  });
+
+  it('D-4 — an ATTESTED canonical value IS re-arbitrated, numeric column and all', () => {
+    // The case RULE C made impossible. `founded_year` is numeric in the spine and
+    // text in an assertion, so attestation has to compare through the string form.
+    const out = decideCanonicalUpdates(
+      { founded_year: 2015 },
+      [
+        { attribute: 'founded_year', normalized_value: '2015', id: 'a1', observed_at: '2026-01-01T00:00:00.000Z' },
+        { attribute: 'founded_year', normalized_value: '1999', id: 'a2', observed_at: '2026-06-01T00:00:00.000Z' },
+      ],
+      cols,
+    );
+    expect(out.apply).toEqual([
+      { attribute: 'founded_year', value: '1999', assertionId: 'a2', reason: 'newest_observation' },
+    ]);
   });
 
   it('a column outside the account surface is never written', () => {

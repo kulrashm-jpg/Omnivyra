@@ -119,13 +119,18 @@ export function productionRetryPorts(): RetryConsumerPorts {
       return (res.data ?? null) as Readonly<Record<string, unknown>> | null;
     },
 
-    async freshEvidenceCovers({ organizationId, entityId, providerId, attributes, now }) {
+    async freshEvidenceCovers({ organizationId, subject, entityId, providerId, attributes, now }) {
       // A7A's lookup, and A3's freshness window — the same question the executor
       // enforces, asked with the same threshold so the two cannot diverge. This
       // answer only lets the decision refuse EARLY; suppression is still
       // enforced inside the executor regardless of what is reported here.
+      // O-3 — the SUBJECT is forwarded. It was already on this port's input and
+      // already supplied by `retryConsumer`, but it stopped here: the lookup
+      // then matched EITHER canonical leg, so an employee's own evidence could
+      // report fresh ACCOUNT coverage and the decision would answer NO_ACTION
+      // for a company retry that had never run.
       const recent = await defaultFindRecentObservation({
-        organizationId, entityId, providerId, attributes,
+        organizationId, subject, entityId, providerId, attributes,
       });
       return Boolean(recent && daysBetween(now, recent.observedAt) < DEFAULT_FRESHNESS_DAYS);
     },

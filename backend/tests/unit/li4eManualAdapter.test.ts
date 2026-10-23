@@ -123,14 +123,22 @@ jest.mock('../../db/writeOwner', () => ({
 
     b.update = (patch: Row) => {
       const uf: Array<[string, unknown]> = [];
+      const ufIn: Array<[string, unknown[]]> = [];
       const u: Record<string, unknown> = {};
       const apply = () => {
-        const hit = (db[table] ?? []).filter((r) => uf.every(([k, v]) => (v === null ? r[k] == null : r[k] === v)));
+        const hit = (db[table] ?? []).filter((r) =>
+          uf.every(([k, v]) => (v === null ? r[k] == null : r[k] === v))
+          && ufIn.every(([k, vs]) => vs.includes(r[k] as never)));
         for (const r of hit) Object.assign(r, patch);
         return hit;
       };
       u.eq = (k: string, v: unknown) => { uf.push([k, v]); return u; };
       u.is = (k: string, v: unknown) => { uf.push([k, v]); return u; };
+      // B1b reconciles assertion liveness by updating several rows in ONE
+      // statement, which the real PostgREST builder has always supported. Without
+      // this the boundary throws a TypeError and every ingestion in this file
+      // fails for a reason that has nothing to do with ingestion.
+      u.in = (k: string, vs: unknown[]) => { ufIn.push([k, vs]); return u; };
       u.select = async () => ({ data: apply().map((r) => ({ id: r.id })), error: null });
       (u as { then?: unknown }).then = (res: (v: unknown) => void) => res({ data: apply(), error: null });
       return u;
@@ -141,6 +149,66 @@ jest.mock('../../db/writeOwner', () => ({
       return res({ data: rows(), error: null });
     };
     return b;
+  },
+  /**
+   * `pi_apply_canonical_decisions`, emulated against this file's fake store.
+   *
+   * The canonical update, the decision log and the provenance stamp moved into
+   * one database function so they share a transaction. A fake store has no
+   * transaction, so this double cannot and does not prove atomicity — that is
+   * proven against real PostgreSQL in
+   * `backend/tests/realschema/ca_canonical_write_atomicity.test.ts`. What it
+   * preserves is the observable effect, so the assertions in this file keep
+   * testing what they were written to test.
+   */
+  ownedDbRpc: async (fn: string, args: Record<string, unknown>) => {
+    await Promise.resolve();
+    if (fn !== 'pi_apply_canonical_decisions') {
+      return { data: null, error: new Error(`unexpected rpc ${fn}`) };
+    }
+    const org = args.p_organization_id as string;
+    const entityType = args.p_entity_type as string;
+    const target = args.p_target_id as string;
+    const now = args.p_now as string;
+    const decisions = (args.p_decisions ?? []) as Array<Record<string, string>>;
+    if (decisions.length === 0) return { data: 0, error: null };
+
+    const table = entityType === 'person' ? 'unified_persons' : 'prospect_accounts';
+    const tenantCol = entityType === 'person' ? 'company_id' : 'organization_id';
+    const tbl = (t: string): Row[] => (db[t] = db[t] || []);
+
+    // Fails closed on a missing or wrongly-tenanted subject, as the real
+    // function does with RAISE EXCEPTION.
+    const canonical = tbl(table).filter((r) => r.id === target && r[tenantCol] === org)[0];
+    if (!canonical) {
+      return { data: null, error: new Error(`no ${table} row ${target} in tenant ${org}`) };
+    }
+
+    const patch: Row = { attributes_source: args.p_provider, attributes_updated_at: now };
+    for (const d of decisions) patch[d.attribute] = d.value;
+    Object.assign(canonical, patch);
+
+    for (const d of decisions) {
+      const logged: Row = {
+        organization_id: org,
+        entity_type: entityType,
+        person_id: entityType === 'person' ? target : null,
+        account_id: entityType === 'account' ? target : null,
+        attribute: d.attribute,
+        assertion_id: d.assertion_id,
+        value: d.value,
+        reason: d.reason,
+        decided_at: now,
+      };
+      tbl('canonical_attribute_decisions').push({ id: `cad-${d.attribute}-${d.assertion_id}`, ...logged });
+
+      const stamp: Row = { applied_to_canonical_at: now, applied_reason: d.reason };
+      tbl('source_assertions')
+        .filter((r) => r.id === d.assertion_id && r.organization_id === org
+          && (r.applied_to_canonical_at ?? null) === null)
+        .forEach((r) => Object.assign(r, stamp));
+    }
+    return { data: decisions.length, error: null };
   },
 }));
 
