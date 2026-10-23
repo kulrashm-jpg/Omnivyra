@@ -61,8 +61,8 @@ const basePost = (mediaUrls: string[]) => ({
 /** Media download (axios.get on the source URL) + STATUS polls. */
 function stubDownload(contentType = 'image/jpeg') {
   mockGet.mockImplementation(async (url: string) => {
-    if (String(url).includes('upload.json')) {
-      return { data: { processing_info: { state: 'succeeded' } } };
+    if (String(url).includes('api.x.com/2/media/upload')) {
+      return { data: { data: { processing_info: { state: 'succeeded' } } } };
     }
     return { data: new ArrayBuffer(32), headers: { 'content-type': contentType } };
   });
@@ -90,7 +90,7 @@ describe('partial image upload', () => {
     mockPost.mockImplementation(async () => {
       call += 1;
       if (call === 2) throw new Error('upload 2 exploded');
-      return { data: { media_id_string: `id-${call}` } };
+      return { data: { data: { id: `id-${call}` } } };
     });
     const { uploadXMedia } = await loadMedia();
 
@@ -106,10 +106,10 @@ describe('partial image upload', () => {
     stubDownload();
     let uploads = 0;
     mockPost.mockImplementation(async (url: string) => {
-      if (String(url).includes('upload.json')) {
+      if (String(url).includes('api.x.com/2/media/upload')) {
         uploads += 1;
         if (uploads === 2) throw new Error('transient X media failure');
-        return { data: { media_id_string: `id-${uploads}` } };
+        return { data: { data: { id: `id-${uploads}` } } };
       }
       return { data: { data: { id: 'tweet-1' } } };
     });
@@ -137,9 +137,9 @@ describe('partial image upload', () => {
     stubDownload();
     let uploads = 0;
     mockPost.mockImplementation(async (url: string) => {
-      if (String(url).includes('upload.json')) {
+      if (String(url).includes('api.x.com/2/media/upload')) {
         uploads += 1;
-        return { data: { media_id_string: `id-${uploads}` } };
+        return { data: { data: { id: `id-${uploads}` } } };
       }
       return { data: { data: { id: 'tweet-1' } } };
     });
@@ -207,7 +207,7 @@ describe('composition X cannot accept', () => {
   it('a single video is still a valid single-media post (happy path preserved)', async () => {
     stubDownload('video/mp4');
     mockPost.mockImplementation(async (url: string) => {
-      if (String(url).includes('upload.json')) return { data: { media_id_string: 'vid-1' } };
+      if (String(url).includes('api.x.com/2/media/upload')) return { data: { data: { id: 'vid-1' } } };
       return { data: { data: { id: 'tweet-9' } } };
     });
 
