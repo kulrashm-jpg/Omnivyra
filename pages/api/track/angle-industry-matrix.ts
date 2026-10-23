@@ -134,17 +134,46 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Upsert: increment post_count and score_sum
     // We use a raw RPC or manual read-then-write since Supabase JS doesn't support
     // arithmetic increments natively without a DB function.
-    const { data: existing } = await supabase
+    //
+    // BOTH STATEMENTS' ERRORS ARE READ. Neither used to be, and the two failures
+    // had different consequences:
+    //
+    //   THE READ. `existing` is the accumulated total. A discarded read error
+    //   left it undefined, which is indistinguishable here from "no row yet" —
+    //   so the upsert below OVERWROTE a running aggregate with post_count 1 and
+    //   score_sum = this one request's score. A transient read failure therefore
+    //   destroyed accumulated data and still answered 200. maybeSingle() does
+    //   NOT error on zero rows, so a genuinely absent row still reaches the
+    //   newCount = 1 path exactly as before; only a real failure is caught.
+    //
+    //   THE WRITE. A discarded write error meant the route answered
+    //   200 { ok: true } with nothing persisted. Callers had no way to know.
+    //
+    // 500 with a generic message matches this repository's convention for a
+    // failed write on a POST route (campaigns/save-strategy.ts:84,
+    // campaigns/metrics.ts:121). The GET branch above deliberately degrades to
+    // an empty list on a read error instead; that is a read-only,
+    // non-destructive path and is left exactly as it was.
+    const { data: existing, error: readError } = await supabase
       .from('angle_industry_matrix')
       .select('post_count, score_sum')
       .eq('industry', industry)
       .eq('angle_type', angle_type)
       .maybeSingle();
 
+    if (readError) {
+      // CODE AND MESSAGE ONLY — never the error object and never the payload. A
+      // PostgREST error carries `details` and `hint`, which can echo row values
+      // back, and the payload itself is caller-supplied. Neither belongs in a
+      // log line, and nothing of either reaches the response body.
+      console.error('[angle-industry-matrix] aggregate read failed:', readError.code, readError.message);
+      return res.status(500).json({ error: 'Failed to update angle aggregate' });
+    }
+
     const newCount = (existing?.post_count ?? 0) + 1;
     const newSum   = (Number(existing?.score_sum ?? 0)) + content_score;
 
-    await supabase
+    const { error: writeError } = await supabase
       .from('angle_industry_matrix')
       .upsert({
         industry,
@@ -153,6 +182,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         score_sum:  newSum,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'industry,angle_type' });
+
+    if (writeError) {
+      console.error('[angle-industry-matrix] aggregate write failed:', writeError.code, writeError.message);
+      return res.status(500).json({ error: 'Failed to update angle aggregate' });
+    }
 
     return res.status(200).json({ ok: true });
   }

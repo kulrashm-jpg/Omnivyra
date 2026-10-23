@@ -23,7 +23,7 @@
  * The real service runs against the ROUTE-AUTH-001 harness database.
  */
 import crypto from 'crypto';
-import { seed, invoke, rows, writeCalls, CO_A, CO_B } from '../helpers/routeAuthHarness';
+import { upsertAppendsBlindly, seed, invoke, rows, writeCalls, completedWrites, CO_A, CO_B } from '../helpers/routeAuthHarness';
 import {
   exchangeWordPressPluginToken,
   recordWordPressPluginHeartbeat,
@@ -61,11 +61,33 @@ function world() {
       { id: REG_PENDING, company_id: CO_A, website_id: 'web-p', status: 'pending', access_token_hash: null, auth_nonce_hash: sha(NONCE), revoked_at: null, metadata: {} },
     ],
   });
+  // UPSERT MODEL, declared explicitly rather than inherited: this suite
+  // not conflict resolution. The append model performs no arbiter
+  // resolution, so nothing here may be read as evidence about row
+  // identity, uniqueness or tenancy through an upsert.
+  //
+  // THE REASON IS NARROWER THAN AN EARLIER VERSION'S, which said this suite
+  // asserts "that the registration write happens once per nonce" — a
+  // UNIQUENESS claim, which is exactly what the append model does not model.
+  // The once-per-nonce property is in fact proven through the conditional
+  // `.update()` statements, whose filters carry the nonce hash. The upsert is
+  // exercised once, with a brand-new website_id, so its conflict leg is never
+  // reached — and because the production target is (website_id,
+  // plugin_site_id) rather than anything company-scoped, nothing here would
+  // observe a cross-tenant merge through it either.
+  upsertAppendsBlindly('wordpress_plugin_registrations', 'only that the registration statement is issued; the nonce property is proven through .update() filters');
 }
 beforeEach(world);
 
 const reg = (id: string) => rows('wordpress_plugin_registrations').find((r) => r.id === id)!;
 const regWrites = () => writeCalls(['wordpress_plugin_registrations']);
+// THE GRANT-PATH ACCESSOR, deliberately separate. regWrites() stays on
+// writeCalls() because every no-write assertion below depends on a REFUSED
+// statement being COUNTED there. On a grant path that same property is the
+// hazard: a refused or errored statement is indistinguishable from a real
+// write to presence, payload and ordering assertions. So the two directions
+// use different accessors on purpose.
+const regCompleted = () => completedWrites(['wordpress_plugin_registrations']);
 
 describe('revokeWordPressPlugin — bound to the authorized company', () => {
   it('company A + B\'s registration id → refused, B untouched', async () => {
@@ -78,7 +100,7 @@ describe('revokeWordPressPlugin — bound to the authorized company', () => {
 
   it('the update statement itself carries the company predicate', async () => {
     await revokeWordPressPlugin({ registrationId: REG_A, companyId: CO_A });
-    const update = regWrites().find((c) => c.op === 'update')!;
+    const update = regCompleted().find((c) => c.op === 'update')!;
     expect(update.filters).toMatchObject({ id: REG_A, company_id: CO_A });
   });
 
@@ -126,7 +148,7 @@ describe('recordWordPressPluginHeartbeat — token-bound', () => {
     await recordWordPressPluginHeartbeat({ accessToken: TOKEN_A, metadata: { message: 'ok' }, healthStatus: 'healthy' });
     expect(reg(REG_A).metadata).toEqual({ message: 'ok' });
     expect(reg(REG_B).metadata).toEqual({ site: 'b' });
-    const update = regWrites().find((c) => c.op === 'update')!;
+    const update = regCompleted().find((c) => c.op === 'update')!;
     expect(update.filters).toMatchObject({ id: REG_A, company_id: CO_A, website_id: 'web-a', revoked_at: null });
   });
 
@@ -166,7 +188,7 @@ describe('registration nonce — single use', () => {
 
   it('the consuming update is conditional on the nonce hash (atomic compare-and-clear)', async () => {
     await exchangeWordPressPluginToken({ registrationId: REG_PENDING, nonce: NONCE });
-    const update = regWrites().find((c) => c.op === 'update')!;
+    const update = regCompleted().find((c) => c.op === 'update')!;
     expect(update.filters).toMatchObject({ id: REG_PENDING, auth_nonce_hash: sha(NONCE), revoked_at: null });
     expect((update.payload as Record<string, unknown>).auth_nonce_hash).toBeNull();
   });
@@ -216,7 +238,24 @@ describe('routes on top of the service', () => {
     const r = await invoke(revokeRoute, { method: 'POST', body: { registration_id: REG_A }, headers: { authorization: `Bearer ${TOKEN_A}` } });
     expect(r.status).toBe(200);
     expect(reg(REG_A).status).toBe('revoked');
-    const update = regWrites().find((c) => c.op === 'update')!;
+    const update = regCompleted().find((c) => c.op === 'update')!;
     expect(update.filters).toMatchObject({ id: REG_A, company_id: CO_A, website_id: 'web-a' });
   });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });

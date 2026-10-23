@@ -77,7 +77,10 @@ export function withCreatorTimeout<T>(
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(Object.assign(
-        new Error(`${label} timed out. Please try again in a moment.`),
+        new Error(
+          `${label} timed out before its outcome could be confirmed. `
+          + 'Check saved assets before retrying; a retry may start another generation.',
+        ),
         { statusCode: 504 },
       ));
     }, timeoutMs);

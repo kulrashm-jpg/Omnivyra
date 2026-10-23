@@ -100,7 +100,11 @@ export default function CreatorImageAssetPanel({
     placedExactly: boolean;
   } | null) => void;
 }) {
-  const [items, setItems] = React.useState<AttachedItem[]>([]);
+  const [itemsState, setItemsState] = React.useState<{
+    companyId: string;
+    compositionId: string;
+    items: AttachedItem[];
+  } | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -135,6 +139,8 @@ export default function CreatorImageAssetPanel({
    */
   const [letUsChoose, setLetUsChoose] = React.useState(false);
   const instructionRef = React.useRef<HTMLInputElement | null>(null);
+  const loadRequestRef = React.useRef(0);
+  const loadAbortRef = React.useRef<AbortController | null>(null);
 
   const ready = Boolean(companyId && compositionId);
 
@@ -151,23 +157,55 @@ export default function CreatorImageAssetPanel({
   /* The server is the source of truth. Re-reading on mount is what makes the
    * selection survive a trip to the template gallery — nothing is cached here. */
   const load = React.useCallback(async () => {
-    if (!ready) return;
+    if (!companyId || !compositionId) return;
+    loadAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+    const requestId = ++loadRequestRef.current;
+    const requestedCompanyId = companyId;
+    const requestedCompositionId = compositionId;
     setLoading(true);
     try {
       const res = await fetch(
-        `${ENDPOINT}?company_id=${encodeURIComponent(companyId!)}&composition_id=${encodeURIComponent(compositionId!)}`,
-        { credentials: 'include' },
+        `${ENDPOINT}?company_id=${encodeURIComponent(requestedCompanyId)}&composition_id=${encodeURIComponent(requestedCompositionId)}`,
+        { credentials: 'include', signal: controller.signal },
       );
       const data = await res.json().catch(() => ({}));
-      if (res.ok) setItems(Array.isArray(data?.items) ? data.items : []);
+      if (requestId !== loadRequestRef.current || controller.signal.aborted) return;
+      if (res.ok) {
+        setItemsState({
+          companyId: requestedCompanyId,
+          compositionId: requestedCompositionId,
+          items: Array.isArray(data?.items) ? data.items : [],
+        });
+      }
     } catch {
       /* transient — keep whatever is on screen rather than blanking it */
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) {
+        setLoading(false);
+        if (loadAbortRef.current === controller) loadAbortRef.current = null;
+      }
     }
-  }, [ready, companyId, compositionId]);
+  }, [companyId, compositionId]);
 
-  React.useEffect(() => { void load(); }, [load]);
+  React.useEffect(() => {
+    if (!ready) {
+      loadRequestRef.current += 1;
+      loadAbortRef.current?.abort();
+      loadAbortRef.current = null;
+      setItemsState(null);
+      setLoading(false);
+      return;
+    }
+
+    void load();
+    return () => {
+      loadRequestRef.current += 1;
+      loadAbortRef.current?.abort();
+      loadAbortRef.current = null;
+    };
+  }, [ready, load]);
 
   /** Upload through the existing media path. Returns the media_files id. */
   const uploadFile = async (file: File): Promise<{ id: string; url: string } | null> => {
@@ -280,9 +318,11 @@ export default function CreatorImageAssetPanel({
     } finally { setBusy(null); }
   };
 
-  if (!ready) return null;
-
-  const attached = items[0] ?? null;
+  const attached = ready
+    && itemsState?.companyId === companyId
+    && itemsState.compositionId === compositionId
+    ? itemsState.items[0] ?? null
+    : null;
   const choosing = Boolean(pendingMediaFileId);
   /*
    * The proposal is DERIVED from current state, never stored.
@@ -328,13 +368,15 @@ export default function CreatorImageAssetPanel({
    * composition does not have.
    */
   React.useEffect(() => {
-    if (!onAttachmentChange) return;
+    if (!ready || !onAttachmentChange) return;
     onAttachmentChange(attached ? {
       filename: attached.asset?.originalFilename ?? null,
       purpose: attached.reference.purpose,
       placedExactly: attached.reference.mode === 'compose',
     } : null);
-  }, [onAttachmentChange, attached]);
+  }, [ready, onAttachmentChange, attached]);
+
+  if (!ready) return null;
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-4">

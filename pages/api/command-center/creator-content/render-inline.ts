@@ -157,6 +157,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       companyId: companyId || undefined,
       campaignId: campaignId || undefined,
       userId: user.id ?? null,
+      ...(assetPayload.asset_kind === 'infographic' ? { skipInfographicCopyEnrichment: true } : {}),
     });
     return res.status(200).json({
       success: true,

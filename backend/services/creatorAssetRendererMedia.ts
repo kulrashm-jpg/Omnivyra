@@ -107,6 +107,8 @@ export async function generateProviderImage(input: {
    * whole set; absent → behaviour is exactly as before.
    */
   referenceImages?: Array<{ bytes: Buffer; mimeType: string }> | null;
+  /** The renderer has resolved condition references but the active endpoint cannot accept them. */
+  conditionDegradedToText?: boolean;
   /**
    * Telemetry-only context. Passed through to `creatorEvent` so a
    * dashboard can pivot provider failures by platform / attachment mode /
@@ -184,7 +186,15 @@ export async function generateProviderImage(input: {
    * The copy is fixed here rather than derived from the provider's error: a
    * provider message is an internal diagnostic and must not reach a person.
    */
-  let conditionDegradation: ConditionDegradation | null = null;
+  const degradedBy = (category: ConditionDegradationCategory): ConditionDegradation => ({
+    status: 'not_applied',
+    category,
+    userMessage:
+      'Your reference image could not be applied, so this result was generated without it. Regenerate to try again.',
+  });
+  let conditionDegradation: ConditionDegradation | null = input.conditionDegradedToText
+    ? degradedBy('reference_mode_disabled')
+    : null;
   /*
    * Set on the degraded paths only. The success path returns directly and
    * carries its own value, so this stays null there. Null — never 0 — when no
@@ -192,12 +202,6 @@ export async function generateProviderImage(input: {
    * instantaneous one.
    */
   let conditionLatencyMs: number | null = null;
-  const degradedBy = (category: ConditionDegradationCategory): ConditionDegradation => ({
-    status: 'not_applied',
-    category,
-    userMessage:
-      'Your reference image could not be applied, so this result was generated without it. Regenerate to try again.',
-  });
 
   if (canonicalRefs.length > 0) {
     const editModel = modelCandidates[0];
@@ -650,4 +654,3 @@ export function resolveCanonicalRenderPolicy(input: {
     metadata: input.metadata,
   });
 }
-

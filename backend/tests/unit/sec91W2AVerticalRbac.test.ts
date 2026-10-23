@@ -28,7 +28,7 @@
  *
  * The real guard chain runs; only the database and identity provider are fake.
  */
-import { seed, invoke, rows, writeCalls, CAMPAIGN_A, CO_A, CO_B } from '../helpers/routeAuthHarness';
+import { upsertAppendsBlindly, seed, invoke, rows, writeCalls, completedWrites, CAMPAIGN_A, CO_A, CO_B } from '../helpers/routeAuthHarness';
 import { as, roleRows, USER_VIEWER } from '../helpers/sec91W2AHarness';
 
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
@@ -73,6 +73,12 @@ function world(extraRoles: Array<Record<string, unknown>> = []) {
     ],
     company_settings: [{ company_id: CO_A, autonomous_mode: false, approval_required: true, risk_tolerance: 'balanced' }],
   });
+  // UPSERT MODEL, declared explicitly rather than inherited: this suite
+  // asserts that an admin-only write reaches its sink,
+  // not conflict resolution. The append model performs no arbiter
+  // resolution, so nothing here may be read as evidence about row
+  // identity, uniqueness or tenancy through an upsert.
+  upsertAppendsBlindly('company_settings', 'that an admin-only write reaches its sink');
 }
 beforeEach(() => {
   world();
@@ -192,7 +198,14 @@ describe('/api/admin/autonomous — toggling autonomous mode is an admin action'
     const r = await invoke(autonomous, { method: 'POST', body: { company_id: CO_A, autonomous_mode: true }, headers: as('A') });
     expect(r.status).toBe(200);
     // The harness upsert appends rather than merging, so assert the write itself.
-    const w = writeCalls(['company_settings']);
+    // ON completedWrites(), NOT writeCalls(). writeCalls() counts a statement
+    // the harness REFUSED as a configuration defect, and on a GRANT path a
+    // refused statement is indistinguishable from a real write to every
+    // accessor except this one: its payload is readable and call ordering is
+    // preserved, so presence, payload and sequence assertions all pass over a
+    // write that never ran. completedWrites() also excludes a statement the
+    // model ERRORED. See the four outcomes in the harness.
+    const w = completedWrites(['company_settings']);
     expect(w).toHaveLength(1);
     expect(w[0].payload).toMatchObject({ company_id: CO_A, autonomous_mode: true });
   });
@@ -219,4 +232,21 @@ describe('/api/admin/autonomous — toggling autonomous mode is an admin action'
     expect(r.status).toBe(401);
     expect(writeCalls(['company_settings'])).toEqual([]);
   });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });

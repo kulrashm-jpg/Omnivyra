@@ -39,6 +39,10 @@ export type CreatorResult = {
         url?: string;
         files?: string[];
         metadata?: {
+          render_async?: boolean;
+          render_job?: { id?: string | number };
+          render_completed_at?: string;
+          rendered_via?: string;
           preview_kind?: string;
           provider_model?: string;
           provider_rendered?: boolean;
@@ -58,7 +62,7 @@ export type CreatorResult = {
            * absence is what distinguishes them.
            */
           condition_reference_status?: 'not_applied';
-          condition_reference_fallback_category?: 'edit_failed' | 'edit_no_image';
+          condition_reference_fallback_category?: 'edit_failed' | 'edit_no_image' | 'family_unsupported' | 'reference_mode_disabled';
           condition_reference_user_message?: string;
           width?: number;
           height?: number;

@@ -140,7 +140,11 @@ export type CreatorReviewPreviewInput = {
  * renderer rather than of the attempt. Distinguishing it matters because one
  * kind of not-applied is worth retrying and the other never is.
  */
-export type ConditionDegradationCategory = 'edit_failed' | 'edit_no_image' | 'family_unsupported';
+export type ConditionDegradationCategory =
+  | 'edit_failed'
+  | 'edit_no_image'
+  | 'family_unsupported'
+  | 'reference_mode_disabled';
 
 /**
  * The same three-part shape the document lane already ships
@@ -267,6 +271,8 @@ export type RenderOptions = {
    *  the Sample Gallery preview population so the preview is a REAL output of this
    *  production renderer — one renderer for preview + customer generation. */
   previewBufferOnly?: boolean;
+  /** Avoids repeating model-based infographic copy enrichment during inline render retries. */
+  skipInfographicCopyEnrichment?: boolean;
   /**
    * User-supplied composition references, already resolved and routed.
    *

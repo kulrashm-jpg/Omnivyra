@@ -267,6 +267,9 @@ describe('B — usage selection', () => {
     expect(ref.mode).toBe(defaultModeForPurpose(purpose));
     expect(ref.compositionType).toBe(CREATOR_COMPOSITION_TYPE);
     expect(ref.ordinal).toBe(0);
+    const stored = await listCreatorCompositionAssets(CO_A, COMP);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].purpose).toBe(purpose);
   });
 
   it('offers exactly the six Content Creator purposes, all of them persistable', () => {

@@ -212,3 +212,20 @@ describe('OAuth callbacks never log (or redirect with) provider credentials', ()
     expect(src).not.toMatch(/console\.log\('THREADS_ACCOUNT_RESPONSE',\s*body\)/);
   });
 });
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
+});

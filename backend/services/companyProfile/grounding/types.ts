@@ -47,6 +47,53 @@ export type ClaimStatus =
   | 'UNVERIFIED'         // asserted but unsupported, or entity match failed
   | 'SYNTHESIZED';       // Omnivyra interpretation — never an external fact
 
+/**
+ * CPG-058 — the provenance class shown to users. `ClaimStatus` above is
+ * unchanged and remains the stored state; this adds the one class it cannot
+ * express: a user-side value confirmed by an authenticated COMPANY
+ * ADMINISTRATOR of the tenant. That is a statement about WHO asserted the
+ * value and with what authority. It is never a statement that the value is
+ * true, and it is never independent verification.
+ */
+export type EvidenceClass = ClaimStatus | 'ADMINISTRATOR_ATTESTED';
+
+/** CPG-058 — the only authority that may attest. See `isCompanyAdministratorRole`. */
+export type AdministratorAuthority = 'COMPANY_ADMIN';
+
+/** CPG-058 — what public evidence showed when the administrator attested. */
+export type PublicEvidenceAssessment = 'VERIFIES' | 'BELOW_VERIFIED_BAR' | 'NONE';
+
+/** CPG-058 — how an attestation relates to public evidence that disagrees with it. */
+export type AttestationConflictStatus =
+  | 'NONE'                     // no public claim disagrees
+  | 'UNRESOLVED'               // public disagrees; the administrator has not chosen
+  | 'RESOLVED_ATTESTED_VALUE'; // the administrator chose their value; public evidence retained
+
+/**
+ * CPG-058 — one administrator attestation. Append-only: it rides on the
+ * history entry that records it, so a correction is a NEW entry and the prior
+ * attestation stays on record. `attestedBy` is an opaque user id — never shown
+ * in the provenance UI.
+ */
+export interface AdministratorAttestation {
+  sourceType: 'ADMINISTRATOR';
+  companyId: string;
+  field: string;
+  value: string;
+  normalizedValue: string;
+  attestedBy: string;
+  authority: AdministratorAuthority;
+  attestedAt: string;
+  previousValue: string | null;
+  previousStatus: ClaimStatus;
+  reason: string | null;
+  publicEvidence: PublicEvidenceAssessment;
+  /** The public claims weighed, exactly as they stood. Never altered or relabelled. */
+  publicEvidenceConsidered: { claimId: string; value: string; sourceUrl: string | null }[];
+  conflictStatus: AttestationConflictStatus;
+  verificationStatus: 'NOT_INDEPENDENTLY_VERIFIED' | 'CORROBORATED_BY_PUBLIC_EVIDENCE';
+}
+
 /** §8 — evidentiary class. These must never be displayed as equivalent. */
 export type ClaimKind =
   | 'FACT'                // directly supported by an identifiable source
@@ -383,6 +430,11 @@ export interface GroundingHistoryEntry {
   note: string;
   /** Evidence ids this transition concerned. */
   evidenceIds: string[];
+  /**
+   * CPG-058 — present ONLY on an entry recorded by an authenticated company
+   * administrator's attestation. Carried with history through re-resolution.
+   */
+  attestation?: AdministratorAttestation;
 }
 
 /** What the API/UI needs to ask the user a discrepancy question (§6). */

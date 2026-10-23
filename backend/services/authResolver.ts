@@ -26,6 +26,7 @@ import type { NextApiRequest } from 'next';
 import { supabase as db } from '../db/supabaseClient';
 import { singleFlight } from '../../lib/auth/singleFlightRefresh';
 import { logger } from './logger';
+import { bootAuthSubsystem } from '../security/startup/authSubsystemBoot';
 import {
   getCachedValidation,
   setCachedValidation,
@@ -72,27 +73,95 @@ export type ResolveAuthenticatedUserResult =
 let authBootScheduled = false;
 let authBootInFlight: Promise<unknown> | null = null;
 
+/**
+ * Start the auth subsystem boot probe once per process, WITHOUT making auth
+ * resolution depend on it.
+ *
+ * WHAT THIS REPLACED, AND WHY THE OLD SHAPE WAS WRONG. It used to be
+ *
+ *   setImmediate(() => { authBootInFlight = import('...').then(...).catch(...) })
+ *
+ * which had three defects, all of them consequences of deferring a DYNAMIC
+ * import into a timer callback:
+ *
+ *   1. `import()` is evaluated SYNCHRONOUSLY inside the callback. Under Jest,
+ *      once the test environment is torn down the module registry throws a
+ *      ReferenceError from that call — so no promise was ever created and the
+ *      `.catch` could not apply. The throw escaped a `setImmediate` callback as
+ *      an UNHANDLED EXCEPTION, which is why the broad suite exited nonzero with
+ *      all 2490 assertions passing. The `.catch` only ever covered rejections
+ *      of a promise that had been successfully constructed.
+ *   2. A partially torn-down registry could also hand back a degenerate module
+ *      object, which is the origin of the logged
+ *      `bootAuthSubsystem is not a function` — the same root cause observed at
+ *      a different moment. The export has always existed
+ *      (backend/security/startup/authSubsystemBoot.ts:154).
+ *   3. The promise was assigned INSIDE the timer, so between scheduling and the
+ *      next tick `authBootInFlight` was null and nothing could observe or await
+ *      the boot. It was "tracked" in name only.
+ *
+ * THE CONTRACT THIS NOW HONOURS, read from the boot module rather than invented:
+ * `bootAuthSubsystem()` is the single deterministic entry point, it is
+ * single-flight memoized internally (`cachedReadiness` / `bootInFlight`), and a
+ * concurrent caller awaits the same promise. Run-once therefore belongs to THAT
+ * module; the guard here only stops this resolver scheduling it repeatedly, so
+ * there is one memoization rather than two racing ones.
+ *
+ * STILL FIRE-AND-FORGET, DELIBERATELY. `resolveAuthenticatedUser` does not and
+ * must not block on boot: the probe exists so the boot fingerprint and any
+ * "your migrations are behind" warning land somewhere visible after a deploy.
+ * No caller reads the result, so nothing here can proceed on a false assumption
+ * that boot completed — and a failure is logged, never converted into success.
+ * The timer is gone because it bought nothing: the call is already async, and
+ * with a static import there is no module load to defer.
+ */
 function scheduleAuthSubsystemBoot(): void {
   if (authBootScheduled) return;
   authBootScheduled = true;
 
-  const run = () => {
-    if (!authBootInFlight) {
-      authBootInFlight = import('../security/startup/authSubsystemBoot')
-        .then(({ bootAuthSubsystem }) => bootAuthSubsystem())
-        .catch((error) => {
-          logger.warn('auth_subsystem_boot_deferred_failed', {
-            message: error instanceof Error ? error.message : String(error),
-          });
+  try {
+    authBootInFlight = Promise.resolve(bootAuthSubsystem())
+      .then(() => undefined)
+      .catch((error) => {
+        logger.warn('auth_subsystem_boot_deferred_failed', {
+          message: error instanceof Error ? error.message : String(error),
         });
-    }
-  };
-
-  if (typeof setImmediate === 'function') {
-    setImmediate(run);
-  } else {
-    setTimeout(run, 0);
+      });
+  } catch (error) {
+    // A SYNCHRONOUS throw from the call itself — the failure mode that used to
+    // escape the timer. It is recorded the same way and the resolver carries on;
+    // `authBootInFlight` is still settled so an observer is never left hanging.
+    authBootInFlight = Promise.resolve();
+    logger.warn('auth_subsystem_boot_deferred_failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
+}
+
+/**
+ * The in-flight (or settled) boot promise, or null if boot was never scheduled.
+ *
+ * Exported so the background work has an OBSERVABLE completion path rather than
+ * an assumed one: a shutdown path or a test can await it instead of racing it.
+ * It resolves on both success and handled failure — by design, because no
+ * caller is permitted to treat boot failure as fatal to auth resolution.
+ */
+export function getAuthSubsystemBootPromise(): Promise<unknown> | null {
+  return authBootInFlight;
+}
+
+/**
+ * Clear the once-per-process schedule. TEST AND SHUTDOWN ONLY.
+ *
+ * The module-level guard is process-wide, so without this a suite could not
+ * exercise the scheduling path twice, and a second scenario would silently
+ * assert nothing. It does NOT reset the boot module's own cache — that is
+ * `resetAuthSubsystemBoot()` there, and keeping the two separate is what makes
+ * "who owns run-once" unambiguous.
+ */
+export function resetAuthSubsystemBootSchedule(): void {
+  authBootScheduled = false;
+  authBootInFlight = null;
 }
 
 // ── Token extraction ──────────────────────────────────────────────────────────

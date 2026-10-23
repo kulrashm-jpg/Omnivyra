@@ -1,6 +1,22 @@
+jest.mock('../../services/aiGateway', () => ({ runCompletionWithOperation: jest.fn() }));
+
 import { composeInfographicCopy } from '../../services/creator/infographicCopyComposer';
+import { runCompletionWithOperation } from '../../services/aiGateway';
 
 describe('Infographic copy — rich-field backfill (fills the canvas)', () => {
+  it('does not call the copy model in static-only render retry mode', async () => {
+    await composeInfographicCopy({
+      topic: 'Audience Intelligence',
+      layout: 'framework',
+      sectionTitles: ['Why It Matters', 'Build Trust'],
+      cta: 'Learn more',
+      companyId: null,
+      staticOnly: true,
+    } as any);
+
+    expect(runCompletionWithOperation).not.toHaveBeenCalled();
+  });
+
   it('every section gets bullets + impact + example so cards render full, not blank', async () => {
     const result = await composeInfographicCopy({
       topic: 'Audience Intelligence',

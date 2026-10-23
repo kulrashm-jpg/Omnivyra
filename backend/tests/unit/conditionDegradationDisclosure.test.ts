@@ -54,8 +54,13 @@ describe('A — failure categories are stable and machine-readable', () => {
      */
     const union = /export type ConditionDegradationCategory =([^;]+);/.exec(CONTRACTS);
     expect(union).not.toBeNull();
-    const categories = union![1].split('|').map((s) => s.trim().replace(/'/g, ''));
-    expect(categories.sort()).toEqual(['edit_failed', 'edit_no_image', 'family_unsupported']);
+    const categories = union![1].split('|').map((s) => s.trim().replace(/'/g, '')).filter(Boolean);
+    expect(categories.sort()).toEqual([
+      'edit_failed',
+      'edit_no_image',
+      'family_unsupported',
+      'reference_mode_disabled',
+    ]);
     for (const c of categories) expect(c).toMatch(/^[a-z][a-z_]{2,31}$/);
   });
 
@@ -113,6 +118,11 @@ describe('B — both failure cases are captured, and the fallback is untouched',
     // The property under test is unchanged: the marker rides out on a result
     // that DID produce an image.
     expect(MEDIA).toMatch(/return \{ image: \{ buffer: [^}]+model \}, conditionDegradation, conditionLatencyMs \};/);
+  });
+
+  it('the renderer reports gate-driven text fallback through the same user-visible contract', () => {
+    expect(IMAGE).toContain('conditionDegradedToText: conditionRefs?.degradedToText === true,');
+    expect(MEDIA).toContain("degradedBy('reference_mode_disabled')");
   });
 
   it('CRITICAL: no provider error text is put into the user message', () => {

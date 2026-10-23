@@ -21,7 +21,8 @@
  * Every denial also asserts the SINK (mocked service / table) was not reached.
  */
 import {
-  seed, invoke, sinkCalls, writeCalls, leaksB, rows,
+  seed,
+  upsertAppendsBlindly, invoke, sinkCalls, completedWrites, leaksB, rows,
   CO_A, CO_B, CAMPAIGN_A, CAMPAIGN_B, UNKNOWN_ID, USER_A, USER_B, CANARY_B,
 } from '../helpers/routeAuthHarness';
 
@@ -143,6 +144,15 @@ beforeEach(() => {
       { asset_id: ASSET_B, campaign_id: CAMPAIGN_B, week_number: 1, day: 'mon', platform: 'linkedin' },
     ],
   });
+  // UPSERT MODEL, declared explicitly rather than inherited: this suite
+  // not conflict resolution. The append model performs no arbiter
+  // resolution, so nothing here may be read as evidence about row
+  // identity, uniqueness or tenancy through an upsert.
+  //
+  // The reason now names the PAYLOAD, which is what the real control below
+  // asserts, rather than "the config row is written for the resolved owner" —
+  // a claim about resulting rows that the append model cannot establish.
+  upsertAppendsBlindly('adapter_configs', 'that the statement the route sends carries the resolved owner as user_id');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -241,9 +251,23 @@ describe('GET/POST /api/content-adapter/config (user-owned adapter_configs)', ()
       body: { platform: 'x', config: { autoTruncate: true, autoFormatHashtags: true, preserveLinks: true, customRules: {} } },
     });
     expect(r.status).toBe(200);
-    const writes = writeCalls(['adapter_configs']);
+    // ON completedWrites(), NOT writeCalls(). writeCalls() counts a statement
+    // the harness REFUSED as a configuration defect, and on a GRANT path a
+    // refused statement is indistinguishable from a real write to every
+    // accessor except this one: its payload is readable and call ordering is
+    // preserved, so presence, payload and sequence assertions all pass over a
+    // write that never ran. completedWrites() also excludes a statement the
+    // model ERRORED. See the four outcomes in the harness.
+    const writes = completedWrites(['adapter_configs']);
     expect(writes).toHaveLength(1);
+    // THIS is the control: the statement the route sent names A, not the B
+    // the query string asked for.
     expect((writes[0].payload as any).user_id).toBe(USER_A);
+    // And B's row count is unchanged. NOTE WHAT THIS CAN AND CANNOT CATCH:
+    // this table is modelled with the APPEND upsert model, under which an
+    // appended row can never change B's count, so this line cannot fail in the
+    // unsafe direction. It is kept as a cheap invariant, not as the control;
+    // the payload assertion above is the control.
     expect(rows('adapter_configs').filter((x) => x.user_id === USER_B)).toHaveLength(1);
   });
 });
@@ -459,4 +483,21 @@ describe('GET /api/user/subscription (was: company_id unchecked)', () => {
     expect(r.body.data.tier).toBe('free');
     expect(mockPlanLimits).not.toHaveBeenCalled();
   });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });

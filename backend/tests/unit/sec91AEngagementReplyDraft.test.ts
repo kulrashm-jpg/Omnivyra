@@ -13,7 +13,7 @@
  * Real guard chain (resolveUserContext → enforceCompanyAccess → enforceRole)
  * against the shared harness database; the platform executor is a spy.
  */
-import { seed, invoke, rows, writeCalls, CO_A, CO_B } from '../helpers/routeAuthHarness';
+import { upsertAppendsBlindly, seed, invoke, rows, writeCalls, CO_A, CO_B } from '../helpers/routeAuthHarness';
 import { bearer } from '../helpers/sec91AHarness';
 
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
@@ -62,6 +62,31 @@ beforeEach(() => {
       { id: DRAFT_B_OPEN, thread_id: THREAD_B, platform: 'linkedin', status: 'draft', generated_text: 'b' },
     ],
   });
+  // UPSERT MODEL, declared explicitly rather than inherited: this suite
+  // not conflict resolution. The append model performs no arbiter
+  // resolution, so nothing here may be read as evidence about row
+  // identity, uniqueness or tenancy through an upsert.
+  //
+  // THE REASON NOW SAYS WHAT THIS DECLARATION IS ACTUALLY FOR. An earlier
+  // version said the suite asserts "that the dispatch write is bound to the
+  // authorized organization" — an organization-binding claim, which the append
+  // model cannot support and which NOTHING in this file asserts: the only
+  // references to this table are the seed above and this line. Every assertion
+  // here is about ai_message_drafts or the executeAction spy. The declaration
+  // exists so the 200-path test is not refused for an undeclared model.
+  // NOTE AN ADJACENCY, corrected. An earlier version of this comment said
+  // engagement_messages is also upserted with NO options at
+  // backend/queue/jobProcessors/whatsappWebhookProcessor.ts:128, and that a
+  // suite driving that processor would therefore need `alsoForNoOptionsCalls`.
+  // BOTH HALVES WERE WRONG: that statement passes an explicit
+  // `{ onConflict: 'thread_id,platform_message_id' }` (:149). A suite that
+  // starts driving the webhook processor would need
+  // `resolveUpsertConflicts('engagement_messages', ['thread_id','platform_message_id'])`
+  // — with those two columns present on a seeded row or in the batch, or the
+  // harness answers 42P10 — and NOT the no-options acknowledgement.
+  // This suite drives the reply-draft route, where the table is touched on the
+  // 200 path and no assertion reads it, so append remains the honest model.
+  upsertAppendsBlindly('engagement_messages', 'nothing — the 200 path touches this table and no assertion reads it');
   executeAction.mockClear();
 });
 
@@ -115,4 +140,21 @@ describe('POST /api/engagement/reply — AI draft is bound to the authorized org
     expect(executeAction).toHaveBeenCalledTimes(1);
     expect(draft(DRAFT_B_OPEN).status).toBe('draft');
   });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });

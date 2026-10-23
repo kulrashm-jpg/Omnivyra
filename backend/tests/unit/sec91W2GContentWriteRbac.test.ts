@@ -138,7 +138,13 @@ const WRITES: WriteCase[] = [
   { name: 'POST /api/content/:id/status', handler: route.status, req: { method: 'POST', query: q(), body: { status: 'published' } }, wrote: called('setLifecycleStatus') },
   { name: 'POST /api/content/:id/approval', handler: route.approval, req: { method: 'POST', query: q(), body: { toStatus: 'approved' } }, wrote: called('advanceApproval') },
   { name: 'POST /api/content/:id/assets', handler: route.assets, req: { method: 'POST', query: q(), body: { assetId: 'asset-1' } }, wrote: called('associateAsset') },
-  { name: 'POST /api/content/:id/blocks (upsert)', handler: route.blocks, req: { method: 'POST', query: q(), body: { blocks: [{ id: 'b1' }] } }, wrote: called('upsertBlocks') },
+  // FIX3-B1: the blocks route now validates each element's shape before it
+  // reaches the service, so this fixture carries a well-formed block. It also
+  // carries NO id, because a supplied id must belong to the caller's company
+  // and content — ownership is asserted in collaborationBlockTenantSafety.test.ts.
+  // The RBAC assertion this case makes is unchanged: the role gate runs before
+  // any body parsing, so an unauthorized principal is still refused here.
+  { name: 'POST /api/content/:id/blocks (upsert)', handler: route.blocks, req: { method: 'POST', query: q(), body: { blocks: [{ blockType: 'body', position: 0 }] } }, wrote: called('upsertBlocks') },
   { name: 'POST /api/content/:id/blocks (lock)', handler: route.blocks, req: { method: 'POST', query: q(), body: { action: 'lock', blockId: 'b1' } }, wrote: called('setBlockLocked') },
   { name: 'POST /api/content/:id/lineage', handler: route.lineage, req: { method: 'POST', query: q(), body: { eventType: 'published' } }, wrote: called('recordEvent') },
   { name: 'POST /api/content/:id/performance', handler: route.performance, req: { method: 'POST', query: q(), body: { signals: { views: 1 } } }, wrote: called('ingestSignals') },
@@ -288,4 +294,156 @@ describe('reads are unchanged', () => {
     const r = await call(c, 'B');
     expect(r.status).toBe(403);
   });
+});
+
+/**
+ * FIX3-B1 / gate ordering — authorization precedes body parsing.
+ *
+ * WHY THIS EXISTS. The blocks route gained per-element body validation
+ * (`parseBlockUpserts`), and the WRITES fixture above was changed to a
+ * well-formed block so it still reaches its sink. That change on its own would
+ * have removed the only case that proved the ROLE GATE runs BEFORE the body is
+ * parsed — a 403 on a well-formed body is also what a route that parsed first
+ * and happened to accept the body would return.
+ *
+ * WHAT IS PROVED. For each malformed body: an authorizing principal gets 400
+ * (so the body really is rejected by the parser), while every unauthorized
+ * principal gets the AUTHORIZATION status — 403 for a read-only role, 403 for
+ * an admin of another company, 401 for anonymous — and never 400. A route that
+ * parsed the body first would answer 400 to all of them and leak that the
+ * request shape, not the caller's role, was the problem.
+ */
+describe('FIX3-B1 gate ordering — the role gate runs before body parsing', () => {
+  const MALFORMED: Array<[string, unknown]> = [
+    ['blocks is not an array', { blocks: 'nope' }],
+    ['blocks is absent', {}],
+    ['blocks[0] is not an object', { blocks: ['nope'] }],
+    ['blocks[0].blockType is invalid', { blocks: [{ blockType: 'not-a-type', position: 0 }] }],
+    ['blocks[0].position is missing', { blocks: [{ blockType: 'body' }] }],
+    ['blocks[0].id is blank', { blocks: [{ id: '   ', blockType: 'body', position: 0 }] }],
+    ['blocks[0].locked is not a boolean', { blocks: [{ blockType: 'body', position: 0, locked: 'yes' }] }],
+    ['blocks[0].text is not a string', { blocks: [{ blockType: 'body', position: 0, text: 7 }] }],
+  ];
+  // Note on scope: these are the ROUTE's own shape rules. Whether a supplied id
+  // is a well-formed uuid, and whether it belongs to the caller, is decided in
+  // collaborationService.upsertBlocks — which is mocked in this suite — and is
+  // asserted in collaborationBlockTenantSafety.test.ts instead.
+
+  const post = (body: unknown, who: W2GPrincipal | null) =>
+    invoke(route.blocks, { method: 'POST', query: q(), body, headers: who ? as(who) : {} });
+
+  it.each(MALFORMED)('%s → an authorizing principal gets 400 (the body IS rejected)', async (_n, body) => {
+    const r = await post(body, 'A');
+    expect(r.status).toBe(400);
+    expect(mockSinks.upsertBlocks).not.toHaveBeenCalled();
+  });
+
+  // WHY getContent IS ASSERTED ON THESE THREE AND NOT THE OTHERS. A principal
+  // that fails enforceCompanyAccess — the other-company admin and the anonymous
+  // caller — is refused before the lookup could run under ANY ordering, so
+  // asserting it there would pass against a lookup-first route and prove
+  // nothing. These three are members of CO_A: company access succeeds, and only
+  // the ROLE gate refuses them. They are therefore the only principals that can
+  // distinguish `role gate → getContent` from `getContent → role gate`, and the
+  // assertion below is what makes a lookup-first route fail this suite.
+  it.each(MALFORMED)('%s → VIEW_ONLY gets 403 FORBIDDEN_ROLE, not 400, with no protected read', async (_n, body) => {
+    const r = await post(body, 'VIEWER');
+    expect(r.status).toBe(403);
+    expect(r.body).toMatchObject({ error: 'FORBIDDEN_ROLE' });
+    expect(mockSinks.getContent).not.toHaveBeenCalled();
+    expect(mockSinks.upsertBlocks).not.toHaveBeenCalled();
+  });
+
+  it.each(MALFORMED)('%s → ENGAGER gets 403 FORBIDDEN_ROLE, not 400, with no protected read', async (_n, body) => {
+    const r = await post(body, 'ENGAGER');
+    expect(r.status).toBe(403);
+    expect(r.body).toMatchObject({ error: 'FORBIDDEN_ROLE' });
+    expect(mockSinks.getContent).not.toHaveBeenCalled();
+    expect(mockSinks.upsertBlocks).not.toHaveBeenCalled();
+  });
+
+  it.each(MALFORMED)('%s → LEGACY_VIEWER gets 403 FORBIDDEN_ROLE, not 400, with no protected read', async (_n, body) => {
+    const r = await post(body, 'LEGACY_VIEWER');
+    expect(r.status).toBe(403);
+    expect(r.body).toMatchObject({ error: 'FORBIDDEN_ROLE' });
+    expect(mockSinks.getContent).not.toHaveBeenCalled();
+    expect(mockSinks.upsertBlocks).not.toHaveBeenCalled();
+  });
+
+  it('a WELL-FORMED body from a read-only member is also refused before the lookup', async () => {
+    // The malformed cases prove ordering against the PARSER. This one proves it
+    // against the protected READ with a body the parser would accept, so the
+    // ordering claim does not depend on the body being invalid.
+    const r = await post({ blocks: [{ blockType: 'body', position: 0 }] }, 'VIEWER');
+    expect(r.status).toBe(403);
+    expect(r.body).toMatchObject({ error: 'FORBIDDEN_ROLE' });
+    expect(mockSinks.getContent).not.toHaveBeenCalled();
+    expect(mockSinks.upsertBlocks).not.toHaveBeenCalled();
+  });
+
+  it('an authorizing principal DOES reach the lookup — the assertion is not vacuous', async () => {
+    // Without this, every `getContent` assertion above would also pass against a
+    // route that never calls getContent at all.
+    const r = await post({ blocks: [{ blockType: 'body', position: 0 }] }, 'A');
+    expect(r.status).toBeLessThan(300);
+    expect(mockSinks.getContent).toHaveBeenCalled();
+  });
+
+  it.each(MALFORMED)('%s → an admin of ANOTHER company gets 403, not 400', async (_n, body) => {
+    const r = await post(body, 'B');
+    expect(r.status).toBe(403);
+    expect(mockSinks.upsertBlocks).not.toHaveBeenCalled();
+  });
+
+  it.each(MALFORMED)('%s → anonymous gets 401, not 400', async (_n, body) => {
+    const r = await post(body, null);
+    expect(r.status).toBe(401);
+    expect(mockSinks.upsertBlocks).not.toHaveBeenCalled();
+  });
+
+  it('the lock action is gated the same way, before blockId is read', async () => {
+    // `{ action: 'lock' }` with no blockId is a 400 for an authorized caller.
+    const ok = await post({ action: 'lock' }, 'A');
+    expect(ok.status).toBe(400);
+    expect(mockSinks.setBlockLocked).not.toHaveBeenCalled();
+
+    const denied = await post({ action: 'lock' }, 'VIEWER');
+    expect(denied.status).toBe(403);
+    expect(denied.body).toMatchObject({ error: 'FORBIDDEN_ROLE' });
+    expect(mockSinks.setBlockLocked).not.toHaveBeenCalled();
+  });
+
+  it('a GET is NOT subject to the write gate (reads stay open to VIEW_ONLY)', async () => {
+    // The ordering above is specific to the POST branch; this pins that the
+    // gate was not widened to reads while restoring the proof.
+    const r = await invoke(route.blocks, { method: 'GET', query: q(), headers: as('VIEWER') });
+    expect(r.status).toBe(200);
+    // THE ORIGINAL REASON FOR THESE EXTRA ASSERTIONS IS OBSOLETE, and saying so
+    // matters because the reason is what a future reader would trust: `invoke`
+    // USED TO initialise status to 200, so a route that sent NO response at all
+    // satisfied the line above. It no longer does — status is `undefined` until
+    // the handler sends something and `responded` reports whether it did.
+    // The assertions are kept anyway: asserting the body and the sinks proves
+    // this is a response with content, which a status alone never did.
+    expect(r.body).toMatchObject({ blocks: expect.any(Array) });
+    expect(mockSinks.getContent).toHaveBeenCalled();
+    expect(mockSinks.listBlocks).toHaveBeenCalled();
+  });
+});
+
+// ── OD-6 (Phase 82) ── mechanical adoption of the harness-configuration detector.
+//
+// A refusal means the harness declined to MODEL a statement, so nothing ran.
+// On a DENY path writeCalls() counts it, so the canonical zero-write assertion
+// fails and the refusal surfaces. On a GRANT path it does not: a refused
+// statement is indistinguishable from a real write to presence, payload and
+// ordering assertions, and a route that catches the throw makes it silent.
+//
+// This is the established detector, already proven in three suites. Adopting it
+// here fails the test instead of letting a swallowed refusal read as
+// enforcement. It is additive: no existing hook, assertion or declaration is
+// changed, and the helper is required lazily so no import statement is touched.
+afterEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
 });

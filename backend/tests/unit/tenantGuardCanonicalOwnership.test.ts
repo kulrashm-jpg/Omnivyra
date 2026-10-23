@@ -17,7 +17,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  seed, invoke, failTable, calls, writeCalls, CO_A, CO_B, USER_A, USER_B, USER_SUPER,
+  seed,
+  upsertAppendsBlindly, invoke, failTable, calls, writeCalls, completedWrites, rows,
+  assertNoHarnessConfigurationError, CO_A, CO_B, USER_A, USER_B, USER_SUPER,
 } from '../helpers/routeAuthHarness';
 
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
@@ -44,6 +46,58 @@ function world(campaign: Row | null, versions: Row[]): void {
     campaigns: campaign ? [{ id: X, user_id: USER_A, name: 'X', status: 'planning', ...campaign }] : [],
     campaign_versions: versions.map((v, i) => ({ id: `ver-${i}`, version: i + 1, campaign_snapshot: {}, ...v })),
   });
+  // UPSERT MODEL, declared explicitly rather than inherited. The append model
+  // performs no arbiter resolution, so nothing here may be read as evidence
+  // about row identity, uniqueness or tenancy through an upsert — this suite
+  // asserts ORDER (every ownership read precedes the write) and that the write
+  // happened at all.
+  //
+  // `alsoForNoOptionsCalls` IS REQUIRED, and its absence was a live defect.
+  // pages/api/campaigns/save-strategy.ts:64 upserts campaign_strategies with NO
+  // second argument. Without the acknowledgement the harness REFUSED that
+  // statement; the route's own try/catch (:39-:140) swallowed the throw; and the
+  // granted-path test below — which asserted only `calls()` presence and order —
+  // passed while nothing was written. A test named "the owner writes" was green
+  // over a write that never happened. See the grant-path note on that test.
+  upsertAppendsBlindly(
+    'campaign_strategies',
+    'that the strategy write is issued, and that every ownership read precedes it',
+    { alsoForNoOptionsCalls: true },
+  );
+  // ALL THREE TABLES save-strategy WRITES ARE DECLARED, not just the first.
+  //
+  // THE DEFECT THIS CLOSES. The route has THREE no-options upserts —
+  // campaign_strategies (:64), content_pillars (:102) and platform_strategies
+  // (:127) — the latter two guarded by `strategy.contentPillars.length > 0` and
+  // `strategy.contentFrequency`. Only the first was declared. So adding a
+  // single pillar or one frequency entry to a fixture made the route issue an
+  // UNDECLARED upsert, the harness refused it, the route's own try/catch
+  // swallowed the throw, and the suite stayed GREEN — because every assertion
+  // concerned campaign_strategies, which had already completed before the
+  // refusal, and no test asserted a status. That was the original BLOCKER-1
+  // shape reappearing inside the very test written to close it, one fixture
+  // token away, defended only by a comment that did not even mention
+  // contentFrequency.
+  //
+  // A DECLARATION IN ANOTHER SUITE DOES NOT HELP: declarations are per-suite
+  // state. platform_strategies is declared in wsdVersionWritersOwnership for a
+  // different route, which is irrelevant here.
+  //
+  // Append + the no-options acknowledgement is the honest model for both, for
+  // the same reason as campaign_strategies: the production statements pass no
+  // options, nothing here asserts tenancy or identity through them, and what
+  // the server's default conflict resolution does is not established by this
+  // repository.
+  upsertAppendsBlindly(
+    'content_pillars',
+    'that the pillars write is issued when the caller supplies pillars',
+    { alsoForNoOptionsCalls: true },
+  );
+  upsertAppendsBlindly(
+    'platform_strategies',
+    'that the frequency write is issued when the caller supplies contentFrequency',
+    { alsoForNoOptionsCalls: true },
+  );
 }
 
 /** A minimal caller: guard first, then a write that must only happen when granted. */
@@ -72,7 +126,17 @@ function permutations<T>(items: T[]): T[][] {
 
 let warn: jest.SpyInstance;
 beforeEach(() => { warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined); });
-afterEach(() => { warn.mockRestore(); });
+afterEach(() => {
+  warn.mockRestore();
+  // THE SUITE-LEVEL DETECTOR, adopted deliberately rather than relying on each
+  // test to notice. A refusal means the harness declined to model a statement —
+  // a suite defect, never enforcement — and on a GRANT path a refused call is
+  // indistinguishable from a real write to writeCalls(), to .payload and to
+  // calls() ordering. This route swallows the throw, so without this hook a
+  // refusal is silent. It is what would have caught the content_pillars and
+  // platform_strategies gaps immediately.
+  assertNoHarnessConfigurationError();
+});
 
 // 1 + 7 + 6 ───────────────────────────────────────────────────────────────────
 describe('OWNED: campaign and versions agree', () => {
@@ -296,6 +360,16 @@ describe('the caller can never substitute the owner', () => {
 
 // 12 — a real caller route ────────────────────────────────────────────────────
 describe('authorization precedes the side effect in a real caller (campaigns/save-strategy)', () => {
+  // `contentPillars: []` IS LOAD-BEARING, not incidental. save-strategy.ts has
+  // THREE no-options upserts: campaign_strategies (:64, declared above),
+  // content_pillars (:102) and platform_strategies (:127). The latter two are
+  // reached only when `strategy.contentPillars.length > 0` and
+  // `strategy.contentFrequency` are respectively truthy. content_pillars is
+  // declared in NO suite, so putting a pillar in this fixture would make the
+  // route issue an undeclared-table upsert, the harness would refuse it, and
+  // this route's try/catch would swallow the throw — the same false-pass shape
+  // the declaration above exists to close. Add a pillar only together with a
+  // declaration for content_pillars.
   const strategy = { objective: 'grow', contentPillars: [] };
 
   it('a cross-tenant caller is refused and campaign_strategies is never written', async () => {
@@ -315,7 +389,18 @@ describe('authorization precedes the side effect in a real caller (campaigns/sav
 
   it('the owner writes, and every ownership read happens before the write', async () => {
     world({ company_id: CO_A }, [version(CO_A, '2026-01-01T00:00:00Z')]);
+    const before = rows('campaign_strategies').length;
     await invoke(saveStrategy as never, { method: 'POST', as: 'A', body: { campaignId: X, strategy } });
+
+    // THE WRITE ACTUALLY COMPLETED. This is asserted FIRST and on
+    // completedWrites() deliberately: `calls()` and `writeCalls()` both count a
+    // statement the harness REFUSED, so on a grant path they cannot tell a write
+    // from a refusal — which is exactly how this test used to pass while nothing
+    // was written. completedWrites() excludes refusals and errors, and the row
+    // count is the independent confirmation.
+    expect(completedWrites(['campaign_strategies'])).toHaveLength(1);
+    expect(rows('campaign_strategies').length).toBe(before + 1);
+
     const log = calls().map((c) => `${c.op}:${c.table}`);
     const write = log.indexOf('upsert:campaign_strategies');
     expect(write).toBeGreaterThan(-1);
@@ -364,5 +449,95 @@ describe('existing TenantGuard callers stay on the shared entry point', () => {
     const body = src.slice(start, src.indexOf('\n}\n', start));
     expect(body).toContain('resolveCampaignOwnership(campaignId)');
     expect(body).not.toMatch(/from\('campaigns'\)|from\('campaign_versions'\)|extractTenantId|req\.(body|query)/);
+  });
+});
+
+// ── H1: the two previously-undeclared save-strategy writes ──────────────────
+describe('save-strategy writes ALL THREE of its tables, each proven', () => {
+  // Phase 73 showed the suite above was one fixture token from reinstating the
+  // BLOCKER-1 false pass: `contentPillars: []` and an absent `contentFrequency`
+  // were the only things keeping the route away from two UNDECLARED upserts.
+  // These tests activate each branch deliberately, so the declarations are
+  // exercised rather than merely present, and a regression surfaces here
+  // instead of hiding behind a green suite.
+  const strategyWith = (over: Record<string, unknown> = {}) => ({
+    objective: 'grow',
+    contentPillars: [],
+    ...over,
+  });
+  const post = (strategy: unknown, as: 'A' | 'B' = 'A') =>
+    invoke(saveStrategy as never, { method: 'POST', as, body: { campaignId: X, strategy } });
+
+  it('1. a non-empty contentPillars activates the content_pillars write and it COMPLETES', async () => {
+    world({ company_id: CO_A }, [version(CO_A, '2026-01-01T00:00:00Z')]);
+    const r = await post(strategyWith({
+      contentPillars: [{ name: 'p1', description: 'd', percentage: 50, contentTypes: [], hashtagCategories: [], visualStyle: 'x' }],
+    }));
+    expect(r.status).toBe(200);
+    expect(completedWrites(['content_pillars'])).toHaveLength(1);
+    expect(rows('content_pillars').length).toBeGreaterThan(0);
+    // and the first write still completed — the ordering the suite is about
+    expect(completedWrites(['campaign_strategies'])).toHaveLength(1);
+  });
+
+  it('2. a non-empty contentFrequency activates the platform_strategies write and it COMPLETES', async () => {
+    world({ company_id: CO_A }, [version(CO_A, '2026-01-01T00:00:00Z')]);
+    const r = await post(strategyWith({ contentFrequency: { linkedin: 3 } }));
+    expect(r.status).toBe(200);
+    expect(completedWrites(['platform_strategies'])).toHaveLength(1);
+    expect(rows('platform_strategies').length).toBeGreaterThan(0);
+    expect(completedWrites(['campaign_strategies'])).toHaveLength(1);
+  });
+
+  it('3. all three branches together — three completed writes, 200, state in each table', async () => {
+    world({ company_id: CO_A }, [version(CO_A, '2026-01-01T00:00:00Z')]);
+    const r = await post(strategyWith({
+      contentPillars: [{ name: 'p1', description: 'd', percentage: 50, contentTypes: [], hashtagCategories: [], visualStyle: 'x' }],
+      contentFrequency: { linkedin: 3, instagram: 1 },
+    }));
+    expect(r.status).toBe(200);
+    expect(completedWrites(['campaign_strategies'])).toHaveLength(1);
+    expect(completedWrites(['content_pillars'])).toHaveLength(1);
+    expect(completedWrites(['platform_strategies'])).toHaveLength(1);
+    expect(rows('campaign_strategies').length).toBeGreaterThan(0);
+    expect(rows('content_pillars').length).toBeGreaterThan(0);
+    expect(rows('platform_strategies').length).toBeGreaterThan(0);
+  });
+
+  it('4. a LATER write failing after an earlier one succeeded still returns 200 — the status is NOT evidence', async () => {
+    // The shape that hid the defect, pinned as it actually behaves.
+    // save-strategy only `console.error`s a content_pillars failure (:104-106)
+    // and a platform_strategies failure (:129-131); neither changes the
+    // response. So the route answers 200 with the pillars write having silently
+    // failed, and the first write's completion is NOT evidence that the whole
+    // operation succeeded. This is precisely why the grant-path assertions in
+    // this suite must read completedWrites() per table rather than a status.
+    world({ company_id: CO_A }, [version(CO_A, '2026-01-01T00:00:00Z')]);
+    failTable('content_pillars');
+    const r = await post(strategyWith({
+      contentPillars: [{ name: 'p1', description: 'd', percentage: 50, contentTypes: [], hashtagCategories: [], visualStyle: 'x' }],
+    }));
+    expect(r.status).toBe(200);
+    // the first write did complete…
+    expect(completedWrites(['campaign_strategies'])).toHaveLength(1);
+    // …and the second was ATTEMPTED but did NOT complete, and stored nothing
+    expect(writeCalls(['content_pillars'])).toHaveLength(1);
+    expect(completedWrites(['content_pillars'])).toHaveLength(0);
+    expect(rows('content_pillars')).toHaveLength(0);
+  });
+
+  it('5. the cross-tenant caller still writes NONE of the three', async () => {
+    // The deny-path control for all three tables, not just the first.
+    world({ company_id: CO_A }, [version(CO_A, '2026-01-01T00:00:00Z')]);
+    const r = await post(strategyWith({
+      contentPillars: [{ name: 'p1', description: 'd', percentage: 50, contentTypes: [], hashtagCategories: [], visualStyle: 'x' }],
+      contentFrequency: { linkedin: 3 },
+    }), 'B');
+    expect(r.status).toBe(403);
+    expect(writeCalls(['campaign_strategies'])).toHaveLength(0);
+    expect(writeCalls(['content_pillars'])).toHaveLength(0);
+    expect(writeCalls(['platform_strategies'])).toHaveLength(0);
+    expect(rows('content_pillars')).toHaveLength(0);
+    expect(rows('platform_strategies')).toHaveLength(0);
   });
 });

@@ -50,7 +50,14 @@ export interface AdvanceApprovalInput {
 export interface ApprovalHistoryEntry {
   id: string;
   companyId: string;
-  contentId: string;
+  /**
+   * NULLABLE. The approved Fix 3 retention semantics preserve this audit row
+   * when its content is deleted, nulling ONLY this column
+   * (`ON DELETE SET NULL (content_id)`). `companyId` and every other audit
+   * field survive, so a null here means "the subject content no longer
+   * exists" — never "untenanted" and never "row discarded".
+   */
+  contentId: string | null;
   fromStatus: ContentLifecycleStatus | null;
   toStatus: ContentLifecycleStatus;
   actor: string | null;
@@ -72,12 +79,45 @@ export interface AdvanceApprovalResult {
 
 // ── mappers ─────────────────────────────────────────────────────────────────
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-function mapHistoryRow(row: any): ApprovalHistoryEntry {
+/**
+ * The `content_approval_history` columns this mapper actually reads, in the
+ * snake_case shape PostgREST returns.
+ *
+ * HAND-WRITTEN, NOT GENERATED. This repository has no generated database
+ * types, so this interface is a LOCAL contract mirroring
+ * `supabase/migrations/20260718000002_content_quality_collaboration.sql`. It
+ * asserts no schema-derived guarantee — if the table and this type ever
+ * diverge, the schema is authoritative.
+ *
+ * `content_id` is `string | null` because the approved retention semantics
+ * null it when the referenced content is deleted. `from_status` / `to_status`
+ * are plain `text` in the table with no CHECK, so they are typed as strings
+ * here and cast to the lifecycle union by the mapper exactly as before.
+ */
+interface ApprovalHistoryRow {
+  id: string;
+  company_id: string;
+  content_id: string | null;
+  from_status: string | null;
+  to_status: string;
+  actor: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+/**
+ * Map one database row to its DTO. Exported ONLY so the nullability contract
+ * can be exercised directly by a unit test; it is not part of the service's
+ * public surface and callers should use `getApprovalHistory`.
+ *
+ * `row.content_id ?? null` guarantees the DTO carries a string or `null`,
+ * never `undefined`.
+ */
+export function mapHistoryRow(row: ApprovalHistoryRow): ApprovalHistoryEntry {
   return {
     id: row.id,
     companyId: row.company_id,
-    contentId: row.content_id,
+    contentId: row.content_id ?? null,
     fromStatus: (row.from_status ?? null) as ContentLifecycleStatus | null,
     toStatus: row.to_status as ContentLifecycleStatus,
     actor: row.actor ?? null,
@@ -85,7 +125,6 @@ function mapHistoryRow(row: any): ApprovalHistoryEntry {
     createdAt: row.created_at,
   };
 }
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 // ── history write (best-effort, never throws) ───────────────────────────────
 
@@ -320,4 +359,151 @@ export async function getApprovalHistory(
     });
     return [];
   }
+}
+
+// ── company-scoped audit history (retained / orphaned rows) ─────────────────
+
+/**
+ * WHY THIS EXISTS. `getApprovalHistory` filters `.eq('content_id', …)`, which
+ * can never match NULL. Under the approved retention semantics
+ * (`ON DELETE SET NULL (content_id)`) an audit row survives the deletion of its
+ * content with `content_id = NULL`, so it is unreachable through that function
+ * and through `GET /api/content/:id/approval`, which 404s once the content is
+ * gone. This company-scoped reader is the only path to those retained rows.
+ *
+ * It does NOT change `getApprovalHistory`, which keeps its per-content filter
+ * and its fail-safe empty-array behaviour.
+ */
+
+/** Hard ceiling on page size — a company-wide audit read is never unbounded. */
+const COMPANY_HISTORY_MAX_PAGE_SIZE = 200;
+const COMPANY_HISTORY_DEFAULT_PAGE_SIZE = 50;
+
+export type CompanyApprovalHistoryScope = 'orphaned' | 'all';
+
+export interface CompanyApprovalHistoryQuery {
+  /** Zero-based page index. Default 0. */
+  page?: number;
+  /** Rows per page. Default 50, hard maximum 200. */
+  pageSize?: number;
+  /** Default 'orphaned' — only rows whose content has been deleted. */
+  scope?: CompanyApprovalHistoryScope;
+}
+
+/**
+ * One retained audit row. Extends the shared entry with an EXPLICIT
+ * `contentExists` flag derived solely from `contentId`.
+ *
+ * Deliberately a separate type rather than a new field on
+ * `ApprovalHistoryEntry`: adding it there would also change what
+ * `getApprovalHistory` returns, and that function's behaviour must not change.
+ *
+ * `contentExists: false` means the subject content row is gone. No title,
+ * body, snapshot or placeholder is fabricated — the table stores none, and
+ * inventing one would imply the content still exists.
+ */
+export interface CompanyApprovalHistoryItem extends ApprovalHistoryEntry {
+  contentExists: boolean;
+}
+
+export interface CompanyApprovalHistoryPage {
+  items: CompanyApprovalHistoryItem[];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  scope: CompanyApprovalHistoryScope;
+}
+
+/** Error carrying an explicit HTTP status so `respondServiceError` honours it. */
+function historyError(message: string, status: number, code: string): Error {
+  const err = new Error(message) as Error & { status: number; code: string };
+  err.status = status;
+  err.code = code;
+  return err;
+}
+
+/**
+ * Company-scoped approval history.
+ *
+ * `companyId` MUST be the value the route already authorized via
+ * `enforceCompanyAccess` — never a raw request parameter. This function
+ * performs no authorization of its own; it only scopes the query.
+ *
+ * NOT FAIL-SAFE, BY DESIGN. Unlike `getApprovalHistory`, a read failure throws
+ * with status 500 instead of returning an empty page. An empty page on a
+ * paginated audit endpoint is indistinguishable from "no history", which would
+ * silently misrepresent an audit trail as complete. The thrown message is
+ * generic; the underlying driver message is logged server-side only and never
+ * reaches the client.
+ */
+export async function getCompanyApprovalHistory(
+  companyId: string,
+  query?: CompanyApprovalHistoryQuery,
+): Promise<CompanyApprovalHistoryPage> {
+  if (!companyId || typeof companyId !== 'string' || !companyId.trim()) {
+    throw historyError('companyId required', 400, 'VALIDATION');
+  }
+
+  const rawPage = query?.page ?? 0;
+  const rawPageSize = query?.pageSize ?? COMPANY_HISTORY_DEFAULT_PAGE_SIZE;
+  const scope: CompanyApprovalHistoryScope = query?.scope ?? 'orphaned';
+
+  // Reject invalid pagination rather than silently coercing it: a caller that
+  // asked for page -1 has a bug, and quietly serving page 0 hides it.
+  if (!Number.isInteger(rawPage) || rawPage < 0) {
+    throw historyError('page must be a non-negative integer', 400, 'VALIDATION');
+  }
+  if (!Number.isInteger(rawPageSize) || rawPageSize < 1) {
+    throw historyError('pageSize must be a positive integer', 400, 'VALIDATION');
+  }
+  if (scope !== 'orphaned' && scope !== 'all') {
+    throw historyError("scope must be 'orphaned' or 'all'", 400, 'VALIDATION');
+  }
+
+  // A too-large request is clamped, not rejected — the ceiling is a server
+  // protection, not a caller error.
+  const pageSize = Math.min(rawPageSize, COMPANY_HISTORY_MAX_PAGE_SIZE);
+  const page = rawPage;
+  const from = page * pageSize;
+
+  let request = supabase
+    .from(APPROVAL_HISTORY_TABLE)
+    .select('*')
+    .eq('company_id', companyId);
+
+  // `null` is meaningful here, so IS NULL — never `= null`, which matches
+  // nothing in SQL. Mirrors the convention in
+  // knowledgeGraph/topicReviewService.ts.
+  if (scope === 'orphaned') {
+    request = request.is('content_id', null);
+  }
+
+  // `created_at` defaults to now(), so rows written in one transaction share a
+  // timestamp. Without the `id` tiebreaker, pagination could drop or repeat
+  // rows across pages.
+  const { data, error } = await request
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .range(from, from + pageSize); // inclusive → pageSize + 1 rows
+
+  if (error) {
+    // Driver detail stays server-side; the client gets a generic 500.
+    console.warn('[approvalService][company-history-read-failed]', {
+      companyId,
+      scope,
+      page,
+      pageSize,
+      message: error.message,
+    });
+    throw historyError('Failed to load company approval history', 500, 'HISTORY_QUERY_FAILED');
+  }
+
+  const rows = data ?? [];
+  const hasMore = rows.length > pageSize;
+  const items = rows.slice(0, pageSize).map((row) => {
+    const entry = mapHistoryRow(row);
+    return { ...entry, contentExists: entry.contentId !== null };
+  });
+
+  return { items, page, pageSize, hasMore, scope };
 }

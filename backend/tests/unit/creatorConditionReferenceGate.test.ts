@@ -304,6 +304,20 @@ describe('C — gate OFF: zero calls, zero bytes, zero reads', () => {
     expect(resolved.rejected).toEqual([]);   // refused ≠ degraded
   });
 
+  it('gate OFF carries the text-only delivery status into the generated result', async () => {
+    const result = await generateProviderImage({
+      prompt: 'a prompt with a text-described reference',
+      conditionDegradedToText: true,
+    });
+
+    expect(result.image).not.toBeNull();
+    expect(result.conditionDegradation).toMatchObject({
+      status: 'not_applied',
+      category: 'reference_mode_disabled',
+      userMessage: expect.stringContaining('generated without it'),
+    });
+  });
+
   it('DEFENCE IN DEPTH: bytes handed straight to the provider are still refused', async () => {
     await generateProviderImage({
       prompt: 'p',
@@ -344,6 +358,21 @@ describe('D — gate ON: the unchanged PR #60 path', () => {
     const sent = editCalls[0].image as { bytes: Buffer };
     expect(sent.bytes.equals(SOURCE_PNG)).toBe(true);
   });
+
+  it.each(['subject', 'product', 'background', 'style_reference'] as const)(
+    '%s references deliver their uploaded bytes to images.edit',
+    async (purpose) => {
+      const asset = seedAsset();
+      seedRef(asset, purpose, 'condition');
+      const { renderer } = await resolve([{ purpose }]);
+
+      const resolved = await renderConditionLane(renderer);
+
+      expect(resolved.references).toHaveLength(1);
+      expect(editCalls).toHaveLength(1);
+      expect((editCalls[0].image as { bytes: Buffer }).bytes.equals(SOURCE_PNG)).toBe(true);
+    },
+  );
 
   it('TWO references produce ONE invocation carrying both', async () => {
     const a = seedAsset();

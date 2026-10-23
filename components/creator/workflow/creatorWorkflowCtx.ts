@@ -128,7 +128,7 @@ export interface CreatorWorkflowCtx {
   regenCount: number;
   renderJobProgress: {
     percent: number;
-    status: 'queued' | 'active' | 'completed' | 'failed' | 'cancelled' | 'dead_letter' | 'waiting';
+    status: 'queued' | 'active' | 'completed' | 'failed' | 'cancelled' | 'dead_letter' | 'waiting' | 'unknown';
     attempts: number;
     queuedSeconds: number;
   } | null;

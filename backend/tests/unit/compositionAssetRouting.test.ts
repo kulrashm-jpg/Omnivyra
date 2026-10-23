@@ -176,6 +176,28 @@ describe('B — COMPOSE vs CONDITION routing', () => {
     expect(r.rejected).toEqual([]);
   });
 
+  it('routes each Creator role to its declared provider or compose lane', () => {
+    const purposes = ['subject', 'product', 'background', 'logo', 'supporting', 'style_reference'] as const;
+    const slots: TemplateAssetSlot[] = purposes.map((purpose) => {
+      const mode = defaultModeForPurpose(purpose);
+      return mode === 'compose'
+        ? { purpose, mode, placement: FIXTURE_PLACEMENT }
+        : { purpose, mode };
+    });
+    const routed = routeCompositionReferences({
+      references: purposes.map((purpose) => item(ref(purpose, defaultModeForPurpose(purpose)))),
+      templateSlots: slots,
+      provider: REF_PROVIDER,
+    });
+
+    expect(routed.condition.map((entry) => entry.reference.purpose))
+      .toEqual(['subject', 'product', 'background', 'style_reference']);
+    expect(routed.compose.map((entry) => entry.reference.purpose)).toEqual(['logo', 'supporting']);
+    expect(routed.rejected).toEqual([]);
+    expect(toAdditionalReferences(routed.condition).map((reference) => reference.purpose))
+      .toEqual(['composition_reference', 'composition_reference', 'composition_reference', 'style_reference']);
+  });
+
   it('CRITICAL: a stated mode is never silently converted', () => {
     // overlay is compose-only. Asking for condition must FAIL, not be corrected.
     const r = routeCompositionReferences({

@@ -74,6 +74,8 @@ export interface MediaValidation {
   };
 }
 
+export const MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
+
 function stripMissingColumnFromInsertPayload(payload: Record<string, any>, errorMessage: string) {
   const match = String(errorMessage || '').match(/Could not find the '([^']+)' column/i);
   const missingColumn = match?.[1];
@@ -92,7 +94,7 @@ function stripMissingColumnFromInsertPayload(payload: Record<string, any>, error
 const MEDIA_RULES = {
   image: {
     allowedTypes: ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'],
-    maxSize: 10 * 1024 * 1024, // 10MB
+    maxSize: MAX_IMAGE_UPLOAD_BYTES,
     maxDimensions: { width: 4096, height: 4096 },
     minDimensions: { width: 100, height: 100 },
   },
@@ -490,4 +492,3 @@ export async function getPostMedia(scheduledPostId: string): Promise<MediaFile[]
 
   return (data || []).map((item: any) => item.media_files) as MediaFile[];
 }
-
