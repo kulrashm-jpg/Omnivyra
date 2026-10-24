@@ -364,6 +364,54 @@ function registerAdapterOrRecordFailure(slot: ProviderSlotKey, load: () => void)
   }
 }
 
+/**
+ * Production reports showed "mod.WikidataAdapter is not a constructor": the
+ * module object required at bootstrap had no exports. That is what require()
+ * returns for a module still mid-evaluation (bootstrap reached from inside its
+ * own import chain) or for a bundler async module (a Promise). When the export
+ * is present it is used at once, exactly as before; otherwise resolution is
+ * deferred to the first lookup, by which time the module is fully evaluated (a
+ * Promise is awaited). A require() that THROWS is not handled here — it still
+ * propagates to registerAdapterOrRecordFailure and is recorded at bootstrap.
+ */
+type KnowledgeGraphModule = Record<string, unknown> & { default?: Record<string, unknown> };
+function knowledgeGraphCtor(mod: KnowledgeGraphModule | null | undefined): (new () => KnowledgeGraphProvider) | null {
+  const ctor = mod?.WikidataAdapter ?? mod?.default?.WikidataAdapter;
+  return typeof ctor === 'function' ? (ctor as new () => KnowledgeGraphProvider) : null;
+}
+
+export function createKnowledgeGraphProvider(initial: unknown, load: () => unknown): KnowledgeGraphProvider {
+  const eager = knowledgeGraphCtor(initial as KnowledgeGraphModule);
+  if (eager) return new eager();
+
+  let resolved: Promise<KnowledgeGraphProvider> | null = null;
+  const resolve = (): Promise<KnowledgeGraphProvider> => {
+    resolved ??= (async () => {
+      const mod = (await Promise.resolve(load())) as KnowledgeGraphModule;
+      const Ctor = knowledgeGraphCtor(mod);
+      if (!Ctor) {
+        throw new Error(`WikidataAdapter export missing (module exports: ${Object.keys(mod ?? {}).join(', ') || 'none'})`);
+      }
+      return new Ctor();
+    })().catch((error): KnowledgeGraphProvider => {
+      const failure = recordAdapterLoadFailure('knowledge_graph', PROVIDER_SLOTS.knowledge_graph.module, error);
+      return {
+        id: 'adapter_load_failed',
+        isAvailable: async () => false,
+        lookup: async () => unavailableResult<EntityIntelligenceResult>({
+          entity: null, score: null, reason: loadFailedReason(failure),
+        }),
+      };
+    });
+    return resolved;
+  };
+  return {
+    id: 'wikidata',
+    isAvailable: async () => (await resolve()).isAvailable(),
+    lookup: async (params) => (await resolve()).lookup(params),
+  };
+}
+
 class UnavailableKnowledgeGraphProvider implements KnowledgeGraphProvider {
   public readonly id = 'unavailable';
   async isAvailable(): Promise<boolean> { return false; }
@@ -701,8 +749,8 @@ function ensureBootstrapped(): void {
     // failure instead of the unconfigured provider's text.
     registerAdapterOrRecordFailure('knowledge_graph', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/wikidataAdapter');
-      registerKnowledgeGraphProvider(new mod.WikidataAdapter());
+      const load = () => require('./adapters/wikidataAdapter');
+      registerKnowledgeGraphProvider(createKnowledgeGraphProvider(load(), load));
     });
   } else {
     // E — switched off on purpose. Say that, rather than "not configured".
