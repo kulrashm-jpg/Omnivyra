@@ -12,6 +12,11 @@
  * provider invocations, bytes and storage reads. A test that reads a boolean
  * back would have passed against the broken build too.
  *
+ * OWNER DECISION — PURPOSE-AWARE. A photo the USER attached is delivered via
+ * images.edit when the setting is unset; any explicit value other than 'edit'
+ * is the KILL SWITCH. "Gate OFF" below therefore means the kill switch
+ * (CREATOR_IMAGE_REFERENCE_MODE=off); the unset state has its own section.
+ *
  * WHAT THE GATE MUST NOT DO
  * -------------------------
  * It governs DELIVERY only. Upload, canonical asset persistence, reference
@@ -159,7 +164,8 @@ async function renderConditionLane(renderer: Awaited<ReturnType<typeof resolve>>
     companyId: renderer.conditionPlan.companyId,
     condition: renderer.conditionPlan.condition,
     providerId: 'openai-gpt-image-1',
-    endpoint: resolveCreatorImageEndpoint(),
+    // Exactly what the renderer passes: this lane only exists when the user attached a photo.
+    endpoint: resolveCreatorImageEndpoint({ userReferenceAttached: true }),
   });
   await generateProviderImage({
     prompt: 'a prompt',
@@ -217,7 +223,8 @@ describe('A — one gate, and only the exact value opens it', () => {
       path.resolve(__dirname, '../../services/creator/creatorMultimodalReferences.ts'), 'utf8');
     // No toLowerCase()/trim() smuggled in: widening the accepted spellings would
     // be a behaviour change to a gate whose whole job is to stay shut.
-    expect(src).toMatch(/process\.env\.CREATOR_IMAGE_REFERENCE_MODE === 'edit'/);
+    expect(src).toContain('const raw = process.env.CREATOR_IMAGE_REFERENCE_MODE;');
+    expect(src).toMatch(/if \(raw === 'edit'\) return 'edit';/);
     expect(src).not.toMatch(/CREATOR_IMAGE_REFERENCE_MODE[^\n]*(toLowerCase|trim)\(/);
   });
 });
@@ -278,7 +285,9 @@ describe('B — one environment read, no bypass', () => {
 
 /* ── C. Provider evidence, gate OFF (§7) ─────────────────────────────────── */
 
-describe('C — gate OFF: zero calls, zero bytes, zero reads', () => {
+describe('C — gate OFF (kill switch): zero calls, zero bytes, zero reads', () => {
+  beforeEach(() => { process.env.CREATOR_IMAGE_REFERENCE_MODE = 'off'; });
+
   it('CRITICAL: a condition reference never reaches images.edit', async () => {
     const subject = seedAsset();
     seedRef(subject, 'subject', 'condition');
@@ -390,6 +399,28 @@ describe('D — gate ON: the unchanged PR #60 path', () => {
   });
 });
 
+/* ── D2. Setting unset → purpose-aware delivery (owner decision) ──────────── */
+
+describe('D2 — unset: a USER-attached photo is delivered via images.edit', () => {
+  it('CRITICAL: unset + attached subject → one images.edit carrying the bytes', async () => {
+    const subject = seedAsset();
+    seedRef(subject, 'subject', 'condition');
+    const { renderer } = await resolve([{ purpose: 'subject' }]);
+
+    const resolved = await renderConditionLane(renderer);
+
+    expect(editCalls).toHaveLength(1);
+    expect(generateCalls).toHaveLength(0);
+    expect(resolved.degradedToText).toBe(false);
+  });
+
+  it('unset + no attachment → the text-to-image path (no cost change)', async () => {
+    await generateProviderImage({ prompt: 'p' });
+    expect(editCalls).toHaveLength(0);
+    expect(generateCalls).toHaveLength(1);
+  });
+});
+
 /* ── E. COMPOSE isolation (§9) ───────────────────────────────────────────── */
 
 describe('E — the gate governs CONDITION only', () => {
@@ -411,6 +442,7 @@ describe('E — the gate governs CONDITION only', () => {
   }
 
   it('CRITICAL: gate OFF — the logo still composes while the subject degrades', async () => {
+    process.env.CREATOR_IMAGE_REFERENCE_MODE = 'off';
     const subject = seedAsset();
     const logo = seedAsset();
     seedRef(subject, 'subject', 'condition', 0);
@@ -493,7 +525,8 @@ describe('F — the legacy showcase obeys the same gate', () => {
       path.resolve(__dirname, '../../services/creatorAssetRendererMedia.ts'), 'utf8');
     expect(src.match(/creatorImageReferenceModeEnabled\(\)/g) ?? []).toHaveLength(1);
     // Canonical and legacy both consult that one resolved value.
-    expect(src).toMatch(/referenceModeEnabled \? \(input\.referenceImages \?\? \[\]\) : \[\]/);
+    // User-attached (canonical) references: global flag OR purpose-aware setting.
+    expect(src).toContain('(referenceModeEnabled || userReferenceDeliveryAllowed()) ? (input.referenceImages ?? []) : []');
     expect(src).toMatch(/if \(referenceModeEnabled && typeof referenceUrl/);
   });
 });
@@ -501,7 +534,7 @@ describe('F — the legacy showcase obeys the same gate', () => {
 /* ── G. The gate does not mask real refusals ─────────────────────────────── */
 
 describe('G — invalid references are refused independently of the gate', () => {
-  it.each([undefined, 'edit'])('a purpose the template rejects never reaches the provider (mode=%p)',
+  it.each([undefined, 'off', 'edit'])('a purpose the template rejects never reaches the provider (mode=%p)',
     async (mode) => {
       if (mode === undefined) delete process.env.CREATOR_IMAGE_REFERENCE_MODE;
       else process.env.CREATOR_IMAGE_REFERENCE_MODE = mode;

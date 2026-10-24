@@ -88,7 +88,12 @@ import { type ProviderImageResult, type ConditionDegradation, type ConditionDegr
 import { timeoutAfter, getFirstImageResult, bufferFromRemoteImage, resolveOpenAiImageKey } from './creatorAssetRendererSvg';
 // THE feature gate for reference-conditioned generation — one definition,
 // shared with the renderer that decides which endpoint it may call.
-import { creatorImageReferenceModeEnabled } from './creator/creatorMultimodalReferences';
+import {
+  creatorImageReferenceModeEnabled,
+  referenceEditParams,
+  userReferenceDeliveryAllowed,
+  type ReferenceFidelity,
+} from './creator/creatorMultimodalReferences';
 
 export async function generateProviderImage(input: {
   prompt: string;
@@ -109,6 +114,12 @@ export async function generateProviderImage(input: {
   referenceImages?: Array<{ bytes: Buffer; mimeType: string }> | null;
   /** The renderer has resolved condition references but the active endpoint cannot accept them. */
   conditionDegradedToText?: boolean;
+  /**
+   * How faithfully the canonical references must be reproduced, decided by
+   * their purpose (main subject / product → 'high'; background / style →
+   * 'standard'). Absent → 'standard' (provider defaults, unchanged).
+   */
+  referenceFidelity?: ReferenceFidelity;
   /**
    * Telemetry-only context. Passed through to `creatorEvent` so a
    * dashboard can pivot provider failures by platform / attachment mode /
@@ -174,7 +185,11 @@ export async function generateProviderImage(input: {
   // style sample. What changed is that they no longer bypass the gate.
   const referenceModeEnabled = creatorImageReferenceModeEnabled();
   const referenceUrl = input.referenceImageUrl;
-  const canonicalRefs = referenceModeEnabled ? (input.referenceImages ?? []) : [];
+  // Canonical references are what the USER attached. Owner decision: they are
+  // delivered PURPOSE-AWARE — allowed when the setting is 'edit' OR unset;
+  // any other explicit value is the kill switch. The showcase URL below still
+  // needs the global 'edit' value.
+  const canonicalRefs = (referenceModeEnabled || userReferenceDeliveryAllowed()) ? (input.referenceImages ?? []) : [];
 
   /*
    * Set ONLY when a canonical CONDITION attempt was made and could not be
@@ -226,7 +241,14 @@ export async function generateProviderImage(input: {
             prompt: input.prompt,
             n: 1,
             size: AI_IMAGE_SIZE,
-            quality: (process.env.CREATOR_IMAGE_REFERENCE_QUALITY || 'low'),
+            // Fidelity by purpose: a main subject keeps its likeness
+            // (input_fidelity 'high' + quality above 'low'); a background or
+            // style reference keeps the provider defaults.
+            ...referenceEditParams({
+              fidelity: input.referenceFidelity ?? 'standard',
+              model: editModel,
+              configuredQuality: process.env.CREATOR_IMAGE_REFERENCE_QUALITY,
+            }),
           } as Parameters<typeof client.images.edit>[0],
           { timeout: AI_IMAGE_TIMEOUT_MS, signal: editCall.signal },
         ),

@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { Calendar, Send } from 'lucide-react';
 import { useCompanyContext } from '../../../components/CompanyContext';
 import PageLoader from '../../../components/PageLoader';
+import { creatorAssetUsageLabel } from '../../../lib/content/creatorCompositionAsset';
 import { launchSocialPostingFromContent } from '../../../lib/content/socialPosting';
 import { buildCreatorContentBlocks, launchBlogFromCreator } from '../../../lib/content/creatorContentBridge';
 import { buildCreatorFlowContext, serializeCreatorFlowContext, type CreatorFlowContext } from '../../../lib/content/creatorFlowContext';
@@ -275,6 +276,14 @@ export default function CreatorTypeWorkflowPage() {
   const conditionReferenceFallbackCategory = typeof previewMetadata.condition_reference_fallback_category === 'string'
     ? previewMetadata.condition_reference_fallback_category
     : '';
+  // What the user's photo was actually used as ("Main subject", …). Present
+  // only when a reference was applied; empty otherwise.
+  const conditionReferenceUsedAs = Array.isArray(previewMetadata.condition_reference_purposes)
+    ? (previewMetadata.condition_reference_purposes as unknown[])
+        .filter((p): p is string => typeof p === 'string' && p.length > 0)
+        .map((p) => creatorAssetUsageLabel(p))
+        .join(', ')
+    : '';
   const conditionReferenceUserMessage = typeof previewMetadata.condition_reference_user_message === 'string'
     ? previewMetadata.condition_reference_user_message
     : '';
@@ -384,6 +393,7 @@ export default function CreatorTypeWorkflowPage() {
     conditionReferenceFallbackCategory,
     conditionReferenceStatus,
     conditionReferenceUserMessage,
+    conditionReferenceUsedAs,
     pdfDocumentFallbackCategory,
     pdfDocumentStatus,
     pdfDocumentUserMessage,

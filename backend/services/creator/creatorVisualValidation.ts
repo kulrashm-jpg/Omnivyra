@@ -59,6 +59,56 @@ export interface VisualFailure {
   flag: string;
   /** 1-indexed slide number for carousel failures. */
   slide?: number;
+  /** Human-readable explanation for the person reviewing the asset. */
+  message?: string;
+}
+
+/**
+ * What a flag means, in words a person can act on. Flags are the renderer's
+ * deterministic quality signals; unknown flags fall back to the category.
+ */
+const FLAG_MESSAGES: Readonly<Record<string, string>> = {
+  severe_layout_overflow_risk: 'Text overflows the safe area',
+  headline_truncated_or_tight: 'Headline is cut off or too tight to fit',
+  insight_truncated_or_tight: 'Key insight text is cut off or too tight to fit',
+  headline_likely_unreadable_mobile: 'Headline is too small to read on mobile',
+  platform_dimension_mismatch: "Image size doesn't match the platform's format",
+  too_many_sections: 'Too many sections to fit legibly',
+  text_density_exceeds_infographic_bounds: 'Too much text for the infographic layout',
+  section_body_too_long: "A section's text is too long to fit",
+  missing_insight: 'A slide or section rendered with an empty body',
+  infographic_content_too_thin: 'Infographic is mostly empty',
+};
+
+const CATEGORY_MESSAGES: Readonly<Record<VisualFailureCategory, string>> = {
+  text_fit: 'Text does not fit its area',
+  overlap: 'Text overlaps other elements',
+  safe_margins: 'Text runs outside the safe margins',
+  branding: 'Branding is missing or misplaced',
+  contrast: 'Low contrast between text and background',
+  typography: 'Text is too small or hard to read',
+  dimensions: "Image size doesn't match the platform's format",
+  low_quality: 'Overall layout quality is low',
+  missing_content: 'Content is missing from the layout',
+  thin_content: 'Layout is mostly empty',
+};
+
+/**
+ * Human message for a visual failure, with the slide number when there is one
+ * (e.g. "Headline is too small to read on mobile (slide 3)"). Works for
+ * failures persisted before `message` existed.
+ */
+export function describeVisualFailure(failure: Partial<VisualFailure> | null | undefined): string {
+  const f = failure ?? {};
+  const flag = typeof f.flag === 'string' ? f.flag : '';
+  const category = f.category as VisualFailureCategory | undefined;
+  const base = (typeof f.message === 'string' && f.message.trim())
+    || FLAG_MESSAGES[flag]
+    || (flag.startsWith('contrast_') ? CATEGORY_MESSAGES.contrast : '')
+    || (flag.startsWith('score_') ? CATEGORY_MESSAGES.low_quality : '')
+    || (category && CATEGORY_MESSAGES[category])
+    || 'Visual check failed';
+  return typeof f.slide === 'number' ? `${base} (slide ${f.slide})` : base;
 }
 
 export type VisualRepairHint = 'shorten_text' | null;
@@ -78,10 +128,10 @@ function evaluateReport(report: unknown, slide?: number): VisualFailure[] {
   const out: VisualFailure[] = [];
   for (const f of flags) {
     const cats = FLAG_FAILURES[f];
-    if (cats) for (const category of cats) out.push({ category, flag: f, slide });
+    if (cats) for (const category of cats) out.push({ category, flag: f, slide, message: FLAG_MESSAGES[f] ?? CATEGORY_MESSAGES[category] });
   }
   if (typeof r.score === 'number' && r.score < MIN_QUALITY_SCORE) {
-    out.push({ category: 'low_quality', flag: `score_${Math.round(r.score)}`, slide });
+    out.push({ category: 'low_quality', flag: `score_${Math.round(r.score)}`, slide, message: CATEGORY_MESSAGES.low_quality });
   }
   return out;
 }
@@ -105,7 +155,7 @@ export function validateCreatorVisual(metadata: Rec, _contentType?: string): Vis
   // Contrast (top-level deterministic ratio).
   const contrast = resolveContrast(metadata);
   if (typeof contrast === 'number' && contrast > 0 && contrast < MIN_CONTRAST_RATIO) {
-    failures.push({ category: 'contrast', flag: `contrast_${contrast.toFixed(2)}` });
+    failures.push({ category: 'contrast', flag: `contrast_${contrast.toFixed(2)}`, message: CATEGORY_MESSAGES.contrast });
   }
 
   // Carousel — validate EVERY slide independently.

@@ -9,6 +9,9 @@
  * from data that already exists. No new validation engine, no invented stages.
  */
 
+import { describeVisualFailure, type VisualFailure } from '../../backend/services/creator/creatorVisualValidation';
+import { READINESS_PASS_THRESHOLD } from '../../backend/services/creator/creatorDiagnosticReport';
+
 export type StageStatus = 'done' | 'active' | 'pending' | 'failed' | 'skipped';
 export type AssetReviewStatus = 'completed' | 'generating' | 'rendering' | 'queued' | 'failed';
 export type OverallStatus = 'success' | 'partial' | 'failed' | 'in_progress';
@@ -39,7 +42,10 @@ export interface GenerationSummary {
 export interface QualitySummary {
   readinessPassed: boolean | null;
   templateValidationPassed: boolean | null;
+  /** The asset rendered ("Asset rendered"). */
   renderingCompleted: boolean | null;
+  /** The deterministic post-render visual checks passed ("Visual checks passed"); null = not assessed. */
+  visualChecksPassed: boolean | null;
   warnings: string[];
 }
 export interface GenerationReviewModel {
@@ -235,7 +241,10 @@ export function buildGenerationReview(input: GenerationReviewInput): GenerationR
   const warningsList: string[] = [
     ...arr(contentVal.warnings).map((w) => String(w)),
     ...arr(contentVal.missingRequiredTerms).map((t) => `Missing required term: ${String(t)}`),
-    ...arr(visualVal.failures).map((f) => { const fo = obj(f); return str(fo.message) ?? str(fo.check) ?? 'Visual check warning'; }),
+    // One human message per distinct failure ("Headline is too small to read on
+    // mobile (slide 3)"), not a generic "Visual check warning" per entry. A
+    // single flag can map to several categories, so messages are deduped.
+    ...Array.from(new Set(arr(visualVal.failures).map((f) => describeVisualFailure(obj(f) as Partial<VisualFailure>)))),
   ];
   const successful = generatedAssets.length > 0 ? generatedAssets.filter((a) => obj(a).ok !== false).length : (overall === 'success' ? 1 : 0);
   const failed = generatedAssets.length > 0 ? generatedAssets.filter((a) => obj(a).ok === false).length : (overall === 'failed' ? 1 : 0);
@@ -254,9 +263,16 @@ export function buildGenerationReview(input: GenerationReviewInput): GenerationR
   // Quality (reuse existing validation; no second engine).
   const overallReadinessScore = num(obj(scores.overallReadiness).value);
   const quality: QualitySummary = {
-    readinessPassed: overall === 'failed' ? false : overall === 'in_progress' ? null : (overallReadinessScore != null ? overallReadinessScore >= 60 : true),
+    // Never "passed" when a visual check failed, even for reports written
+    // before the readiness cap was lowered below the threshold.
+    readinessPassed: overall === 'failed' ? false : overall === 'in_progress' ? null
+      : visualVal.passed === false ? false
+      : (overallReadinessScore != null ? overallReadinessScore >= READINESS_PASS_THRESHOLD : true),
     templateValidationPassed: Object.keys(contentVal).length > 0 ? arr(contentVal.missingRequiredTerms).length === 0 : (overall === 'success' ? true : null),
-    renderingCompleted: typeof visualVal.passed === 'boolean' ? (visualVal.passed as boolean) : (hasMedia ? true : overall === 'failed' ? false : null),
+    // Render status ("Asset rendered") is independent of whether the visual
+    // checks passed, which is its own row ("Visual checks passed").
+    renderingCompleted: (hasMedia || typeof visualVal.passed === 'boolean') ? true : overall === 'failed' ? false : null,
+    visualChecksPassed: typeof visualVal.passed === 'boolean' ? (visualVal.passed as boolean) : null,
     warnings: warningsList,
   };
 

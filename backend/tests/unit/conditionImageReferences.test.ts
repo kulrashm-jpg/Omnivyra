@@ -308,7 +308,7 @@ describe('H — one provider invocation', () => {
     // Canonical bytes are now gated too. They were deliberately exempt when the
     // lane had no runtime caller and could not fire; once it had one, that
     // exemption became a way to reach the model in a release meant to be OFF.
-    expect(MEDIA).toContain('referenceModeEnabled ? (input.referenceImages ?? []) : []');
+    expect(MEDIA).toContain('(referenceModeEnabled || userReferenceDeliveryAllowed()) ? (input.referenceImages ?? []) : []');
     expect(MEDIA).toContain('if (canonicalRefs.length > 0) {');
   });
 });

@@ -122,13 +122,22 @@ describe('B/C — both degradation causes still emit, unchanged', () => {
      * provider causes are still the two, and the only other member is the
      * non-provider one, named explicitly so a genuine third provider cause
      * still has to be deliberate.
+     *
+     * 2905cec6 added a second non-provider member, `reference_mode_disabled`
+     * (the provider takes no reference images, so the routed CONDITION
+     * references degraded to text descriptors before any call was made). It is
+     * named explicitly here for the same reason. The union is now written one
+     * member per line with a leading `|`, so the empty leading split is dropped.
      */
     const union = /export type ConditionDegradationCategory =([^;]+);/.exec(CONTRACTS);
     expect(union).not.toBeNull();
-    const categories = union![1].split('|').map((s) => s.trim().replace(/'/g, ''));
+    const categories = union![1].split('|').map((s) => s.trim().replace(/'/g, '')).filter(Boolean);
     const providerCauses = categories.filter((c) => c.startsWith('edit_'));
     expect(providerCauses.sort()).toEqual(['edit_failed', 'edit_no_image']);
-    expect(categories.filter((c) => !c.startsWith('edit_'))).toEqual(['family_unsupported']);
+    expect(categories.filter((c) => !c.startsWith('edit_')).sort()).toEqual([
+      'family_unsupported',
+      'reference_mode_disabled',
+    ]);
   });
 });
 
@@ -353,8 +362,11 @@ describe('Billing, lifecycle and the gate are untouched', () => {
 
   it('the CONDITION gate and its fallback are unchanged', () => {
     const multimodal = strip(read('../../services/creator/creatorMultimodalReferences.ts'));
-    expect(multimodal).toContain("process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit'");
-    expect(multimodal).toContain("? 'edit' : 'generate'");
+    expect(multimodal).toContain('const raw = process.env.CREATOR_IMAGE_REFERENCE_MODE;');
+    expect(multimodal).toContain("if (raw === 'edit') return 'edit';");
+    // Purpose-aware (owner decision): user-attached → edit unless the kill switch is set.
+    expect(multimodal).toContain("if (opts?.userReferenceAttached === true && userReferenceDeliveryAllowed()) return 'edit';");
+    expect(multimodal).toContain("return 'generate';");
   });
 
   it('Phase 74/78 lifecycle deletion is untouched, and events outlive assets', () => {

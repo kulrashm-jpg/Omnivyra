@@ -341,7 +341,7 @@ const INSTRUCTION_SIGNALS: ReadonlyArray<{ purpose: ProposablePurpose; words: re
   { purpose: 'background', words: ['background', 'behind', 'backdrop', 'scene behind', 'wallpaper'] },
   { purpose: 'style_reference', words: ['inspiration', 'inspired', 'style', 'vibe', 'feel like', 'mood', 'reference', "don't copy", 'do not copy', 'not exactly'] },
   { purpose: 'product', words: ['product', 'packaging', 'device', 'bottle', 'box', 'screenshot'] },
-  { purpose: 'subject', words: ['me', 'my face', 'myself', 'person', 'portrait', 'prominent', 'main', 'hero', 'front'] },
+  { purpose: 'subject', words: ['me', 'my face', 'myself', 'person', 'portrait', 'prominent', 'main', 'hero', 'front', 'author', 'face', 'presenter', 'speaker', 'founder', 'host'] },
 ]);
 
 /**
@@ -357,7 +357,14 @@ function acceptablePurposes(slots: readonly TemplateAssetSlot[] | null | undefin
   ) as ProposablePurpose[];
 }
 
-const contains = (haystack: string, words: readonly string[]) => words.some((w) => haystack.includes(w));
+/**
+ * Whole-word match. A plain substring test read "theme", "some" and "home" as
+ * the word "me" and proposed the user's photo as the MAIN SUBJECT of an image
+ * that never asked for a person.
+ */
+const escapeRegExp = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const contains = (haystack: string, words: readonly string[]) =>
+  words.some((w) => new RegExp(`(^|[^a-z0-9])${escapeRegExp(w)}(?=$|[^a-z0-9])`).test(haystack));
 
 /**
  * Choose one treatment for an uploaded image, deterministically.

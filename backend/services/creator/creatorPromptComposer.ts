@@ -60,6 +60,15 @@ export type CreatorPromptInput = {
   audience?: string;
   platform?: string;
   objective?: string;
+  /**
+   * The user's MAIN MESSAGE (the "Key message" answer, sent as body.summary).
+   * Distinct from the objective: the objective says why the campaign exists,
+   * the key message is what this picture must communicate. Shapes the scene;
+   * never rendered as text.
+   */
+  keyMessage?: string;
+  /** What the viewer is asked to do (the CTA), as scene intent only — never rendered as text. */
+  ctaIntent?: string;
   tagline?: string;
   brandMode?: 'brand-aware' | 'neutral' | string | null;
   /** Content type / asset type as known to the renderer (image / banner / brand_card / supporting_image). */
@@ -533,7 +542,22 @@ function compactJoin(values: ReadonlyArray<string | null | undefined>, sep = ', 
 
 function buildCampaignLayer(input: CreatorPromptInput): string[] {
   const out: string[] = [];
-  if (input.objective) out.push(`Campaign objective: ${clean(input.objective)}.`);
+  const supportingVisual = input.attachmentMode === 'supporting_visual';
+  const rawKeyMessage = clean(input.keyMessage);
+  const objective = clean(input.objective);
+  // A supporting_visual (Post + Image) prompt is rejected fail-closed if it
+  // contains CTA/button tokens (supporting_visual_cta_prompt_leak), so they are
+  // scrubbed from the user's key message there.
+  const keyMessage = supportingVisual
+    ? rawKeyMessage.replace(/\b(cta|call to action|buttons?)\b/gi, ' ').replace(/\s+/g, ' ').trim()
+    : rawKeyMessage;
+  // The objective falls back to the key message upstream; do not say it twice.
+  if (objective && objective !== rawKeyMessage) out.push(`Campaign objective: ${objective}.`);
+  if (keyMessage) out.push(`Main message the scene must convey (express it visually; do NOT render it as text): ${keyMessage}.`);
+  // CTA intent only shapes an embedded-copy visual. In Post + Image the post
+  // carries the call to action and the image stays text- and CTA-free.
+  const ctaIntent = clean(input.ctaIntent);
+  if (ctaIntent && !supportingVisual) out.push(`Desired viewer action the scene should invite (do NOT render it as text): ${ctaIntent}.`);
   if (input.audience) out.push(`Target audience: ${clean(input.audience)}.`);
   if (input.platform) out.push(`Platform intent: ${clean(input.platform)} — match its native visual language without imitating its UI.`);
   if (input.tagline) out.push(`Tagline influence (do NOT render as text): ${clean(input.tagline)}.`);

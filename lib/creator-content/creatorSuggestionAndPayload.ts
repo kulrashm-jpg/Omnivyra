@@ -359,6 +359,19 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
      * branch below emitted overlay_text unconditionally, so choosing
      * "Post + Image" changed the form but not the generated image.
      */
+    /*
+     * ATTACHMENT MODE PRECEDENCE. On a standalone image the user's explicit
+     * "Text Inside Image" / "Post + Image" toggle is authoritative; the Writer's
+     * mode is only the fallback when there is no such toggle (writer-launched
+     * sessions). Previously the toggle was written and then overwritten by
+     * writerAttachmentMode (null without a writer), and a selected image
+     * template then re-set it to the template's own mode.
+     */
+    const userChoseAttachmentMode = !writerSource && type === 'image';
+    const resolvedAttachmentMode: AttachmentMode | null = userChoseAttachmentMode
+      ? standaloneAttachmentMode
+      : writerAttachmentMode;
+    const explicitPostPlusImage = userChoseAttachmentMode && standaloneAttachmentMode === 'supporting_visual';
     const imageCopyActive = overlayAllowed
       && (!writerSource ? standaloneEmbeddedCopy : writerEmbeddedCopy);
     const overlayPayload = isSocialCreativeType(type) && overlayAllowed && (!writerSource ? !(type === 'image' && !standaloneEmbeddedCopy) : writerEmbeddedCopy)
@@ -474,10 +487,9 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
         // CREATOR-059 follow-up: carry the wizard-selected visual blueprint so the
         // server can derive style/colour/layout guidance (additive; absent ⇒ no-op).
         ...(blueprintId ? { blueprint_id: blueprintId } : {}),
-        ...(!writerSource && type === 'image' ? { attachment_mode: standaloneAttachmentMode } : {}),
         writer_asset_type: writerAssetType,
         creator_content_asset_type: type,
-        attachment_mode: writerAttachmentMode,
+        attachment_mode: resolvedAttachmentMode,
         asset_composition_intent: writerCompositionIntent,
         /*
          * The user's creative choices ride on the SAME creator_card the
@@ -565,6 +577,12 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
         // infographic_layout / attachment_mode / slide_count). No template →
         // template_id stays null and nothing else changes.
         ...(activeTemplate ? resolveTemplateCreatorCardPatch(activeTemplate) : { template_id: null }),
+        // The template patch carries its own attachment_mode / writer_asset_type
+        // (text templates: embedded_copy + the text-bearing 'banner' lane). The
+        // user's explicit toggle must survive it: "Post + Image" stays a clean,
+        // text-free supporting_image regardless of the selected template.
+        ...(userChoseAttachmentMode ? { attachment_mode: standaloneAttachmentMode } : {}),
+        ...(explicitPostPlusImage ? { writer_asset_type: 'supporting_image' } : {}),
         ...(activeTemplate && activeTemplate.assetFamily === 'carousel'
           ? (v2Runtime
               ? { slides: v2Runtime.payload.slides ?? [], slide_count: (v2Runtime.payload.slides ?? []).length || null }

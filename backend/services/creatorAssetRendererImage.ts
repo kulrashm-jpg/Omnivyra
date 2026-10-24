@@ -22,7 +22,7 @@ import { recordCreatorDuration } from './creatorRuntimeMetrics';
 import { validateProviderImageTextSafety } from './creatorImageTextValidation';
 import { runCreatorOcr, isLightweightSocialEmbeddedCopy } from './creatorOcrProvider';
 import {
-  autoCorrectVisualCopy,
+  governImageOverlayText,
   buildPreviewGovernanceWarnings,
   estimateTextAreaPercent,
   resolveAssetGovernanceProfile,
@@ -95,6 +95,7 @@ import { generateProviderImage, uploadRenderedPng, type AttachmentRenderPolicy, 
 import {
   creatorImageReferenceModeEnabled,
   resolveCreatorImageEndpoint,
+  referenceFidelityForPurposes,
 } from './creator/creatorMultimodalReferences';
 
 export async function composeSingleVisualAsset(
@@ -177,32 +178,16 @@ export async function composeSingleVisualAsset(
   if (writerGoverned && metadata.attachment_mode === 'supporting_visual' && !rawGovernance.ok) {
     throw new Error(`supporting_visual_governance_rejected:${rawGovernance.errors.join(',')}`);
   }
-  const corrected = autoCorrectVisualCopy({
+  // Field-keyed governance: every overlay field is corrected and made
+  // paragraph-safe IN ITS OWN SLOT. The previous code filtered empty fields and
+  // re-mapped by position, so an empty hook shifted every field one slot.
+  const corrected = governImageOverlayText({
     assetType: governanceAssetType,
-    textBlocks: rawTextBlocks,
+    overlay,
     allowCTA: metadata.attachment_mode !== 'supporting_visual',
   });
-  // Image overlays must be paragraph-safe: the render manifest rejects ANY block
-  // that is multi-sentence OR >110 chars (paragraph_overlay_forbidden). Collapse
-  // each governed block to a single sentence and cap under the threshold so a
-  // long AI-written line renders as a clean hero line instead of failing
-  // generation closed. (Applied here at the image render only — generic
-  // autoCorrectVisualCopy must not char-cap other profiles like brand_card.)
-  const paragraphSafeBlock = (block: string): string => {
-    let s = String(block ?? '').replace(/\s+/g, ' ').trim();
-    if (!s) return s;
-    if (/[.!?]\s+\S/.test(s)) s = s.match(/[^.!?]+[.!?]?/)?.[0]?.trim() ?? s;
-    if (s.length > 108) s = s.slice(0, 108).replace(/\s+\S*$/, '').trim();
-    return s;
-  };
-  const safeBlocks = corrected.textBlocks.map(paragraphSafeBlock);
-  const governedOverlay = {
-    hook: safeBlocks[0] ?? '',
-    headline: safeBlocks[1] ?? '',
-    keyInsight: safeBlocks[2] ?? '',
-    cta: safeBlocks[3] ?? '',
-    supportingText: safeBlocks[4] ?? '',
-  };
+  const governedOverlay = corrected.governedOverlay;
+  const safeBlocks = corrected.safeTextBlocks;
   const creatorQuality = scoreCreatorQuality({
     assetType: governanceAssetType,
     platform,
@@ -307,7 +292,12 @@ export async function composeSingleVisualAsset(
       // service returns no bytes, never reads storage for a reference that
       // could not have been sent, and reports degradedToText. The references
       // themselves stay resolved and durable; only DELIVERY is disabled.
-      endpoint: resolveCreatorImageEndpoint(),
+      //
+      // PURPOSE-AWARE (owner decision): a photo the USER attached is delivered via
+      // images.edit for this request unless the kill switch is set; with the
+      // setting unset and no attachment this block is never reached, so
+      // requests without a photo keep the text-to-image path and its cost.
+      endpoint: resolveCreatorImageEndpoint({ userReferenceAttached: true }),
     });
     if (resolved.rejected.length > 0) {
       console.warn('[creator-asset-renderer][condition-rejected]', resolved.rejected);
@@ -319,10 +309,18 @@ export async function composeSingleVisualAsset(
     return resolved;
   })();
 
+  // How the user's photo is used decides how faithfully it is reproduced: a
+  // MAIN SUBJECT / product keeps its likeness (high input fidelity), a
+  // background or style reference only has to blend in.
+  const conditionReferencePurposes = (options.compositionReferences?.conditionPlan?.condition ?? [])
+    .map((r) => (r as { reference?: { purpose?: string } }).reference?.purpose)
+    .filter((p): p is string => typeof p === 'string' && p.length > 0);
+  const conditionReferenceFidelity = referenceFidelityForPurposes(conditionReferencePurposes);
   const providerResult = await generateProviderImage({
     prompt: providerPrompt,
     referenceImageUrl,
     referenceImages: conditionRefs?.references.map((r) => ({ bytes: r.bytes, mimeType: r.mimeType })) ?? null,
+    referenceFidelity: conditionReferenceFidelity,
     conditionDegradedToText: conditionRefs?.degradedToText === true,
     eventContext: {
       creatorType: fileNamePrefix,
@@ -637,6 +635,12 @@ export async function composeSingleVisualAsset(
      * row and every other path unchanged.
      */
     condition_reference_applied: conditionApplied || undefined,
+    // What the user's attached photo(s) were used as ("subject", "background",
+    // …), so the result can say "We used your photo as: Main subject". Only
+    // present when a reference was actually applied.
+    condition_reference_purposes: conditionApplied && conditionReferencePurposes.length > 0
+      ? [...new Set(conditionReferencePurposes)]
+      : undefined,
     image_subtype: subtypeHint?.subtypeId ?? null,
     attachment_mode: metadata.attachment_mode ?? null,
     writer_asset_type: metadata.writer_asset_type ?? null,

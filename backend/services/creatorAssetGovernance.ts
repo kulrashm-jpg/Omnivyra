@@ -215,6 +215,40 @@ export function resolvePlatformVisualProfile(platform: string): PlatformVisualPr
   return PLATFORM_VISUAL_PROFILES[String(platform || '').toLowerCase()] ?? PLATFORM_VISUAL_PROFILES.linkedin;
 }
 
+function correctVisualBlock(
+  block: string,
+  profile: AssetGovernanceProfile,
+  maxWords: number,
+  allowCTA: boolean | undefined,
+  corrections: string[],
+): string {
+  let next = String(block ?? '').replace(/\s+/g, ' ').trim();
+  if (!profile.allowCTA || allowCTA === false) {
+    const stripped = next.replace(/\b(book a demo|learn more|buy now|subscribe|click here)\b/gi, '').trim();
+    if (stripped !== next) corrections.push('removed_cta');
+    next = stripped;
+  }
+  const tokens = words(next);
+  if (tokens.length > maxWords) {
+    corrections.push('reduced_text_density');
+    // Keep complete sentences within the word budget instead of a mid-thought
+    // word-count chop, so overlay/slide copy always reads as finished.
+    next = trimCopyToWordBudget(next, maxWords);
+  }
+  // Profiles that forbid paragraph overlays (single-hero images / banners) must
+  // carry ONE sentence per field — a MULTI-sentence block is flagged as a
+  // paragraph and fails the render manifest CLOSED. Collapse to the first
+  // sentence so legitimate multi-sentence AI copy renders instead of hard-
+  // failing generation. (Word budget above already bounds length; we do NOT
+  // impose a char cap here — that would override profiles like brand_card whose
+  // word budget legitimately exceeds the paragraph char threshold.)
+  if (!profile.allowParagraphs && next && /[.!?]\s+\S/.test(next)) {
+    const firstSentence = next.match(/[^.!?]+[.!?]?/)?.[0]?.trim();
+    if (firstSentence && firstSentence !== next) { next = firstSentence; corrections.push('collapsed_to_single_line'); }
+  }
+  return next;
+}
+
 export function autoCorrectVisualCopy(input: {
   assetType: string;
   textBlocks: string[];
@@ -223,34 +257,87 @@ export function autoCorrectVisualCopy(input: {
   const profile = resolveAssetGovernanceProfile(input.assetType);
   const corrections: string[] = [];
   const maxWords = profile.maxWordsPerSlide ?? 28;
-  const textBlocks = input.textBlocks.map((block) => {
-    let next = block.replace(/\s+/g, ' ').trim();
-    if (!profile.allowCTA || input.allowCTA === false) {
-      const stripped = next.replace(/\b(book a demo|learn more|buy now|subscribe|click here)\b/gi, '').trim();
-      if (stripped !== next) corrections.push('removed_cta');
-      next = stripped;
-    }
-    const tokens = words(next);
-    if (tokens.length > maxWords) {
-      corrections.push('reduced_text_density');
-      // Keep complete sentences within the word budget instead of a mid-thought
-      // word-count chop, so overlay/slide copy always reads as finished.
-      next = trimCopyToWordBudget(next, maxWords);
-    }
-    // Profiles that forbid paragraph overlays (single-hero images / banners) must
-    // carry ONE sentence per field — a MULTI-sentence block is flagged as a
-    // paragraph and fails the render manifest CLOSED. Collapse to the first
-    // sentence so legitimate multi-sentence AI copy renders instead of hard-
-    // failing generation. (Word budget above already bounds length; we do NOT
-    // impose a char cap here — that would override profiles like brand_card whose
-    // word budget legitimately exceeds the paragraph char threshold.)
-    if (!profile.allowParagraphs && next && /[.!?]\s+\S/.test(next)) {
-      const firstSentence = next.match(/[^.!?]+[.!?]?/)?.[0]?.trim();
-      if (firstSentence && firstSentence !== next) { next = firstSentence; corrections.push('collapsed_to_single_line'); }
-    }
-    return next;
-  }).filter(Boolean);
+  const textBlocks = input.textBlocks
+    .map((block) => correctVisualBlock(block, profile, maxWords, input.allowCTA, corrections))
+    .filter(Boolean);
   return { textBlocks, corrections: [...new Set(corrections)] };
+}
+
+/** The five overlay slots, in reading order. */
+export const OVERLAY_TEXT_FIELDS = ['hook', 'headline', 'keyInsight', 'cta', 'supportingText'] as const;
+export type OverlayTextField = (typeof OVERLAY_TEXT_FIELDS)[number];
+export type OverlayTextFields = Record<OverlayTextField, string>;
+
+/**
+ * Field-keyed variant of {@link autoCorrectVisualCopy}. Each overlay slot is
+ * corrected IN PLACE and keeps its name: an empty field (e.g. hook = '') stays
+ * empty in its own slot instead of being filtered out and shifting every later
+ * field one position (the old positional re-mapping put the user's headline in
+ * the never-drawn hook slot, the insight in the headline, the CTA in the
+ * insight and the supporting text in the CTA pill). `textBlocks` lists only the
+ * non-empty corrected fields, so governance counts only what is really drawn.
+ */
+export function autoCorrectOverlayFields(input: {
+  assetType: string;
+  fields: Partial<Record<OverlayTextField, unknown>>;
+  allowCTA?: boolean;
+  /** Optional per-field transform applied after correction (e.g. paragraph-safe collapse). */
+  finalize?: (value: string) => string;
+}): { fields: OverlayTextFields; textBlocks: string[]; corrections: string[] } {
+  const profile = resolveAssetGovernanceProfile(input.assetType);
+  const corrections: string[] = [];
+  const maxWords = profile.maxWordsPerSlide ?? 28;
+  const fields = {} as OverlayTextFields;
+  for (const key of OVERLAY_TEXT_FIELDS) {
+    const raw = input.fields[key];
+    const corrected = correctVisualBlock(typeof raw === 'string' ? raw : '', profile, maxWords, input.allowCTA, corrections);
+    fields[key] = corrected && input.finalize ? input.finalize(corrected) : corrected;
+  }
+  const textBlocks = OVERLAY_TEXT_FIELDS.map((key) => fields[key]).filter(Boolean);
+  return { fields, textBlocks, corrections: [...new Set(corrections)] };
+}
+
+/**
+ * Image overlays must be paragraph-safe: the render manifest rejects ANY block
+ * that is multi-sentence OR >110 chars (paragraph_overlay_forbidden). Collapse a
+ * block to a single sentence and cap it under the threshold so a long
+ * AI-written line renders as a clean hero line instead of failing generation
+ * closed. (Image render only — generic autoCorrectVisualCopy must not char-cap
+ * other profiles like brand_card.)
+ */
+export function paragraphSafeOverlayBlock(block: string): string {
+  let s = String(block ?? '').replace(/\s+/g, ' ').trim();
+  if (!s) return s;
+  if (/[.!?]\s+\S/.test(s)) s = s.match(/[^.!?]+[.!?]?/)?.[0]?.trim() ?? s;
+  if (s.length > 108) s = s.slice(0, 108).replace(/\s+\S*$/, '').trim();
+  return s;
+}
+
+/**
+ * Governs the single-image overlay text, keyed by field name. Returns:
+ *  - `governedOverlay`: each field corrected + paragraph-safe, in its own slot;
+ *  - `textBlocks`: the non-empty corrected fields (pre paragraph-safe), for quality scoring;
+ *  - `safeTextBlocks`: the non-empty governed fields, in reading order, for density checks;
+ *  - `corrections`: the auto-correction codes applied.
+ */
+export function governImageOverlayText(input: {
+  assetType: string;
+  overlay: Partial<Record<OverlayTextField, unknown>>;
+  allowCTA?: boolean;
+}): { governedOverlay: OverlayTextFields; textBlocks: string[]; safeTextBlocks: string[]; corrections: string[] } {
+  const corrected = autoCorrectOverlayFields({
+    assetType: input.assetType,
+    fields: input.overlay,
+    allowCTA: input.allowCTA,
+  });
+  const governedOverlay = {} as OverlayTextFields;
+  for (const key of OVERLAY_TEXT_FIELDS) governedOverlay[key] = paragraphSafeOverlayBlock(corrected.fields[key]);
+  return {
+    governedOverlay,
+    textBlocks: corrected.textBlocks,
+    safeTextBlocks: OVERLAY_TEXT_FIELDS.map((key) => governedOverlay[key]).filter(Boolean),
+    corrections: corrected.corrections,
+  };
 }
 
 export function scoreCreatorQuality(input: {

@@ -135,11 +135,16 @@ describe('D — the denominator now includes all three categories', () => {
     expect(OBS).not.toContain('edit_failed');
   });
 
-  it('all three categories exist and are closed', () => {
+  it('every category exists and the set is closed', () => {
+    // 2905cec6 added `reference_mode_disabled` (CONDITION references degraded to
+    // text because the provider accepts none). It emits the same degraded event,
+    // so it joins the denominator without touching the arithmetic — exactly what
+    // the test above guarantees. The union is now one member per line with a
+    // leading `|`, so the empty leading split is dropped.
     const union = /export type ConditionDegradationCategory =([^;]+);/.exec(CONTRACTS);
     expect(union).not.toBeNull();
-    const cats = union![1].split('|').map((s) => s.trim().replace(/'/g, '')).sort();
-    expect(cats).toEqual(['edit_failed', 'edit_no_image', 'family_unsupported']);
+    const cats = union![1].split('|').map((s) => s.trim().replace(/'/g, '')).filter(Boolean).sort();
+    expect(cats).toEqual(['edit_failed', 'edit_no_image', 'family_unsupported', 'reference_mode_disabled']);
   });
 });
 

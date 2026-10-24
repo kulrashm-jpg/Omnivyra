@@ -1,5 +1,5 @@
 import React from 'react';
-import type { CreatorDiagnosticReport } from '../../backend/services/creator/creatorDiagnosticReport';
+import { READINESS_PASS_THRESHOLD, type CreatorDiagnosticReport } from '../../backend/services/creator/creatorDiagnosticReport';
 
 /**
  * Creator Quality Inspector — READ-ONLY UI for the deterministic
@@ -52,8 +52,11 @@ function scoreStatus(value: number): Status {
 
 function readinessBadge(report: CreatorDiagnosticReport): { label: string; status: Status } {
   const v = report.scores.overallReadiness.value;
-  if (report.visualValidation.passed && v >= 85) return { label: 'Production Ready', status: 'PASS' };
-  if (v >= 60) return { label: 'Needs Review', status: 'WARNING' };
+  // A failed visual check is a hard failure: it never reads as "Needs Review"
+  // (older reports capped readiness at exactly the 60 pass threshold).
+  if (!report.visualValidation.passed) return { label: 'Requires Fixes', status: 'FAILED' };
+  if (v >= 85) return { label: 'Production Ready', status: 'PASS' };
+  if (v >= READINESS_PASS_THRESHOLD) return { label: 'Needs Review', status: 'WARNING' };
   return { label: 'Requires Fixes', status: 'FAILED' };
 }
 

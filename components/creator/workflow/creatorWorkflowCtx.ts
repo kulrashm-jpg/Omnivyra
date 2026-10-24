@@ -166,6 +166,8 @@ export interface CreatorWorkflowCtx {
   conditionReferenceFallbackCategory: string;
   conditionReferenceStatus: string;
   conditionReferenceUserMessage: string;
+  /** User-facing label(s) of what the attached photo was used as; '' when none applied. */
+  conditionReferenceUsedAs: string;
   pdfDocumentFallbackCategory: string;
   pdfDocumentUserMessage: string;
   pdfPreviewPagesAvailable: number;

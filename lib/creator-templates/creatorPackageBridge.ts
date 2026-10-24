@@ -10,6 +10,7 @@
  */
 
 import { buildCampaignPackage, type CampaignPackage, type PackageAsset } from './campaignPackage';
+import { describeVisualFailure, type VisualFailure } from '../../backend/services/creator/creatorVisualValidation';
 
 function obj(v: unknown): Record<string, unknown> { return v && typeof v === 'object' ? (v as Record<string, unknown>) : {}; }
 function arr(v: unknown): unknown[] { return Array.isArray(v) ? v : []; }
@@ -44,6 +45,12 @@ export function creatorResultToPackageAssets(result: unknown, ctx: CreatorPackag
   const caption = str(packaging.caption);
   const platform = str(ctx.selectedPlatform) ?? str(r.primary_platform);
   const generatedAt = str(diag.generatedAt);
+  // The diagnostic report's post-render visual verdict — the publish gate.
+  const visualValidation = obj(diag.visualValidation);
+  const visualPassed: boolean | null = typeof visualValidation.passed === 'boolean' ? visualValidation.passed : null;
+  const visualIssues = visualPassed === false
+    ? Array.from(new Set(arr(visualValidation.failures).map((f) => describeVisualFailure(obj(f) as Partial<VisualFailure>))))
+    : [];
 
   const primary: PackageAsset = {
     id: str(r.persisted_asset_id),
@@ -62,13 +69,24 @@ export function creatorResultToPackageAssets(result: unknown, ctx: CreatorPackag
     generatedAt,
     edited: !!ctx.edited,
     regenerations: ctx.regenerations ?? 0,
+    visualPassed,
+    visualIssues,
   };
 
   const fanout = arr(r.generated_assets);
   if (fanout.length > 0) {
-    return fanout.map((g) => {
+    // The diagnostic report describes the primary (first successful) asset, so
+    // its visual verdict is attached to that asset only; the others are not
+    // assessed here (null — does not block).
+    const primaryId = str(r.persisted_asset_id);
+    const primaryIndex = (() => {
+      const byId = primaryId ? fanout.findIndex((g) => str(obj(g).persisted_asset_id) === primaryId) : -1;
+      return byId >= 0 ? byId : fanout.findIndex((g) => obj(g).ok !== false);
+    })();
+    return fanout.map((g, i) => {
       const ga = obj(g);
       return {
+        ...(i === primaryIndex ? { visualPassed, visualIssues } : {}),
         id: str(ga.persisted_asset_id),
         assetType: str(ga.asset_type) ?? primary.assetType,
         template: str(ga.template_id) ?? primary.template,
