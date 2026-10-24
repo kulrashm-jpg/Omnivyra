@@ -15,6 +15,7 @@ import { readGuidedChoices, GUIDED_CHOICES_SESSION_KEY } from '../../../lib/cont
 import { getTemplateById, familyForCreatorType, creatorIngestPrefillKey, type CreatorTemplate } from '../../../lib/creator-templates';
 import { type TemplateFieldValues, initTemplateValues } from '../../../lib/creator-templates/values';
 import type { CreatorBrief } from '../../../lib/creator-content/creatorBrief';
+import { CREATOR_INTAKE_SESSION_KEY, readCreatorIntake } from '../../../lib/creator-content/creatorIntake';
 import {
   type BrandContextSelections, type BrandPresence, type CreatorBrandMode, type CreatorBrandProfile,
   type CreatorResult, type CreatorTypeId, type SavedBlockReference, type SavedCreatorAsset,
@@ -264,11 +265,17 @@ export function useCreatorWorkflowState() {
           }
         } catch { /* ignore malformed prefill */ }
       }
-      if (tpl.assetFamily === 'image' && tpl.renderingContract.attachmentMode) {
+      // A text-inside / alongside choice the user made on the intake screen outranks the
+      // template's default — otherwise whichever effect ran last decided it.
+      let intakeAttachmentMode: string | null = null;
+      if (router.query.from === 'workspace') {
+        try { intakeAttachmentMode = readCreatorIntake(window.sessionStorage.getItem(CREATOR_INTAKE_SESSION_KEY))?.attachmentMode ?? null; } catch { /* ignore */ }
+      }
+      if (tpl.assetFamily === 'image' && tpl.renderingContract.attachmentMode && !intakeAttachmentMode) {
         setStandaloneAttachmentMode(tpl.renderingContract.attachmentMode);
       }
     }
-  }, [router.isReady, router.query.template_id, router.query.ingest, type]);
+  }, [router.isReady, router.query.template_id, router.query.ingest, router.query.from, type]);
 
   // CREATOR-011 — snapshot values at generation; count regenerations.
   React.useEffect(() => {

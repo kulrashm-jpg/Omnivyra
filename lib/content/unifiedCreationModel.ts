@@ -106,6 +106,8 @@ export interface MarketingBrief {
   files?: string[];
   competitors?: string[];
   freeText?: string;            // the conversational brief
+  /** The ONE sentence the asset must say, when the user stated it explicitly (Creator intake). */
+  mainMessage?: string;
 }
 
 export function emptyMarketingBrief(goalId: string | null = null): MarketingBrief {

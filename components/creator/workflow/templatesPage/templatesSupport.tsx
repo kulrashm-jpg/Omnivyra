@@ -594,6 +594,10 @@ export default function CreatorTemplateGalleryPage() {
       <AssetWorkspace
         onAdvanced={() => setAdvancedMode(true)}
         onNavigate={(url) => router.push(url)}
+        /* Campaign / Writer launch context (source=writer&session=…) must reach the
+         * editor — the workspace previously dropped it, so a Writer "Add asset" never
+         * imported the post. */
+        launchQuery={carryQuery({})}
       />
     );
   }

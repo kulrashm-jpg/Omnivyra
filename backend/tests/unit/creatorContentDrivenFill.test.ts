@@ -266,7 +266,9 @@ describe('field assist carries the whole brief', () => {
     expect(src).toMatch(/company_id: selectedCompanyId \|\| undefined,\s*asset_family: cfg\.family/);
     expect(src).toMatch(/source_content: String\(brief\.freeText/);
     // The draft id travels in the URL so a new tab finds the persisted brief.
-    expect(src).toMatch(/&composition=\$\{encodeURIComponent\(compositionId\)\}/);
+    // (PR3 mints the id when the brief step opens and carries it as `draftId`; the
+    //  behaviour is asserted end-to-end in creatorIntakeConfirmFlow.test.tsx.)
+    expect(src).toMatch(/&composition=\$\{encodeURIComponent\((compositionId|draftId)\)\}/);
   });
 });
 

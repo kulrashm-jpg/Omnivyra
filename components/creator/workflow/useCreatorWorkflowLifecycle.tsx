@@ -8,6 +8,7 @@ import { buildCreatorFlowContext, type CreatorFlowContext } from '../../../lib/c
 import { type WriterOverlayText, type WriterCreatorSourcePayload } from '../../../lib/content/writerCreatorAssetLaunch';
 import { loadAttachmentSession } from '../../../lib/content/creatorAttachmentSession';
 import { readMarketingBrief, MARKETING_BRIEF_SESSION_KEY } from '../../../lib/content/marketingBriefResolver';
+import { CREATOR_INTAKE_SESSION_KEY, intakeToEditorRestore, readCreatorIntake } from '../../../lib/creator-content/creatorIntake';
 import { readGuidedChoices, GUIDED_CHOICES_SESSION_KEY } from '../../../lib/content/guidedCreativeSession';
 import {
   creatorRenderPollFailureReason,
@@ -213,6 +214,11 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
         const wb = readMarketingBrief(window.sessionStorage.getItem(MARKETING_BRIEF_SESSION_KEY));
         if (wb) workspacePrefill = mapBriefToEditorAnswers(wb, config);
       } catch { /* ignore malformed brief */ }
+      // The intake choices made on the first screen (layout, text inside vs alongside the
+      // image, brand mode/presence, logo) restore through the existing draft slot.
+      try {
+        restored = intakeToEditorRestore(readCreatorIntake(window.sessionStorage.getItem(CREATOR_INTAKE_SESSION_KEY)), config);
+      } catch { /* ignore malformed intake */ }
     }
     setAnswers({
       ...defaults,
