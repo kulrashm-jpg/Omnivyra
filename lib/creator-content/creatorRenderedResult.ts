@@ -1,4 +1,5 @@
 import type { CreatorResult } from './creatorWorkflowModel';
+import { refreshDiagnosticReportVisuals } from '../../backend/services/creator/creatorDiagnosticReport';
 
 export function shouldOfferInlineCreatorRender(status: string | undefined, _queuedSeconds: number): boolean {
   if (status === 'failed' || status === 'cancelled' || status === 'dead_letter') return true;
@@ -108,6 +109,16 @@ export function mergeRenderedCreatorResult(
 
   const assetPayload = current.output.asset_payload;
   const existingBundle = assetPayload.media_bundle ?? {};
+  const existingMeta = (existingBundle.metadata ?? {}) as Record<string, unknown>;
+  const renderedMeta = (rendered.metadata ?? {}) as Record<string, unknown>;
+  // The async render carries the FRESH visual verdict. The diagnostic report
+  // was built before the render finished, so its verdict is stale: refresh its
+  // render-derived parts from the merged metadata instead of keeping it.
+  const mergedForReport = { ...existingMeta, ...renderedMeta };
+  const hasFreshVerdict = !!renderedMeta.visual_validation && typeof renderedMeta.visual_validation === 'object';
+  const refreshedReport = hasFreshVerdict && existingMeta.creator_diagnostic_report && !renderedMeta.creator_diagnostic_report
+    ? refreshDiagnosticReportVisuals(existingMeta.creator_diagnostic_report, mergedForReport)
+    : null;
   return {
     ...current,
     output: {
@@ -121,6 +132,7 @@ export function mergeRenderedCreatorResult(
           metadata: {
             ...(existingBundle.metadata ?? {}),
             ...(rendered.metadata ?? {}),
+            ...(refreshedReport ? { creator_diagnostic_report: refreshedReport } : {}),
             render_async: false,
             render_completed_at: new Date().toISOString(),
             ...(renderedVia ? { rendered_via: renderedVia } : {}),

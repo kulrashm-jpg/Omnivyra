@@ -167,9 +167,12 @@ describe('E — nothing else moved', () => {
   });
 
   it('the provider lane is untouched by this change', () => {
-    expect(PROVIDER).toContain('if (conditionDegradation || conditionApplied) {');
+    // PR4: the guard also excludes a fix-loop re-render (reused image, no new attempt).
+    expect(PROVIDER).toContain('if (!reusedProvider && (conditionDegradation || conditionApplied)) {');
     expect(PROVIDER).toContain('emitCreatorEvent(conditionDegradation');
-    expect(IMAGE).toContain('const conditionAttemptId = (conditionDegradation || conditionApplied) ? randomUUID() : null;');
+    // PR4: a fix-loop re-render reuses the original attempt id instead of minting one.
+    expect(IMAGE).toContain('const conditionAttemptId = (conditionDegradation || conditionApplied)');
+    expect(IMAGE).toContain('? (reusedProvider ? (reusedProvider.conditionAttemptId ?? null) : randomUUID())');
   });
 
   it('CRITICAL: no billing call was ADDED, and none sits inside the telemetry branch', () => {

@@ -1,5 +1,6 @@
 import React from 'react';
 import { READINESS_PASS_THRESHOLD, type CreatorDiagnosticReport } from '../../backend/services/creator/creatorDiagnosticReport';
+import { describeVisualFailure } from '../../backend/services/creator/creatorVisualValidation';
 
 /**
  * Creator Quality Inspector — READ-ONLY UI for the deterministic
@@ -116,7 +117,15 @@ export default function CreatorQualityInspector({ report }: { report: CreatorDia
   const contentStatus: Status =
     (cv.forbiddenWordsRepaired + cv.prohibitedClaimsRemoved + cv.ctaNormalized + cv.fabricatedClaimsRemoved) > 0 ? 'REPAIRED'
       : (cv.missingRequiredTerms.length > 0 || cv.warnings.length > 0) ? 'WARNING' : 'PASS';
-  const visualStatus: Status = report.repair.reRendered ? 'REPAIRED' : vv.passed ? 'PASS' : 'FAILED';
+  // A re-render only counts as REPAIRED when the checks now pass — a fix loop
+  // that could not resolve everything still FAILED.
+  const visualStatus: Status = vv.passed ? (report.repair.reRendered ? 'REPAIRED' : 'PASS') : 'FAILED';
+  const fixAttempts = typeof report.repair.attempts === 'number' ? report.repair.attempts : (report.repair.reRendered ? 1 : 0);
+  const autoFixLine = report.repair.reRendered
+    ? (vv.passed
+      ? `Fixed automatically (${fixAttempts} attempt${fixAttempts === 1 ? '' : 's'})`
+      : `Requires fixes: ${Array.from(new Set(vv.failures.map((f) => describeVisualFailure(f)))).join('; ') || 'visual checks failed'}`)
+    : null;
 
   // Per-check deterministic reasons sourced from the report's failures.
   const reasonFor = (category: string): string | null => {
@@ -248,6 +257,7 @@ export default function CreatorQualityInspector({ report }: { report: CreatorDia
           <KV k="Type" v={report.repair.type} />
           <KV k="Count" v={report.repair.count} />
           <KV k="Re-rendered" v={report.repair.reRendered ? 'Yes' : 'No'} />
+          {autoFixLine ? <KV k="Auto-fix" v={autoFixLine} /> : null}
           {report.repair.reasons.length > 0 ? <KV k="Reasons" v={report.repair.reasons.join('; ')} /> : null}
         </Section>
       ) : null}

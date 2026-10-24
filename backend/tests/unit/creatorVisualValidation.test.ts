@@ -27,7 +27,10 @@ describe('Visual validation — pass/fail rules (deterministic, no AI)', () => {
   it('fails on unreadable typography', () => {
     const v = validateCreatorVisual({ overlay_quality: { flags: ['headline_likely_unreadable_mobile'], score: 70 } });
     expect(v.failures.map((f) => f.category)).toContain('typography');
-    expect(v.repairHint).toBe('shorten_text');
+    // PR4: typography is the preset's type size, which shortening copy cannot
+    // change. It used to be marked repairable (shorten_text), so the retry
+    // could never fix it; it is now disclosed as remaining instead.
+    expect(v.repairHint).toBeNull();
   });
 
   it('fails on insufficient contrast (and is NOT text-repairable)', () => {
@@ -72,9 +75,10 @@ describe('Visual validation — carousel validates every slide independently', (
 });
 
 describe('Visual validation — repair hint derivation', () => {
-  it('text/fit/typography → shorten_text; contrast/dimensions → null', () => {
+  it('text/fit → shorten_text; typography/contrast/dimensions → null', () => {
     expect(deriveVisualRepairHint([{ category: 'text_fit', flag: 'x' }])).toBe('shorten_text');
-    expect(deriveVisualRepairHint([{ category: 'typography', flag: 'x' }])).toBe('shorten_text');
+    // PR4: typography is not fixable by shortening (was 'shorten_text').
+    expect(deriveVisualRepairHint([{ category: 'typography', flag: 'x' }])).toBeNull();
     expect(deriveVisualRepairHint([{ category: 'contrast', flag: 'x' }])).toBeNull();
     expect(deriveVisualRepairHint([{ category: 'dimensions', flag: 'x' }])).toBeNull();
   });

@@ -143,7 +143,9 @@ describe('B/C — both degradation causes still emit, unchanged', () => {
 
 describe('D — an ordinary generation emits neither event', () => {
   it('CRITICAL: the guard requires one outcome or the other', () => {
-    expect(IMAGE).toContain('if (conditionDegradation || conditionApplied) {');
+    // PR4: the guard additionally excludes a fix-loop re-render (reused image,
+    // no new provider attempt). It still requires one outcome or the other.
+    expect(IMAGE).toContain('if (!reusedProvider && (conditionDegradation || conditionApplied)) {');
   });
 
   it('CRITICAL: with no attempt, both signals are absent and nothing is emitted', () => {
@@ -190,7 +192,7 @@ describe('I — nothing sensitive enters telemetry', () => {
     // Bounded to the emit block itself — a wider window would sweep in
     // unrelated render code and the assertion would stop meaning anything.
     const block = IMAGE.slice(
-      IMAGE.indexOf('if (conditionDegradation || conditionApplied) {'),
+      IMAGE.indexOf('if (!reusedProvider && (conditionDegradation || conditionApplied)) {'), // PR4: guard excludes fix-loop reuse
       IMAGE.indexOf('CREATOR_EVENTS.CONDITION_REFERENCE_APPLIED') + 200,
     );
     for (const forbidden of [
@@ -257,7 +259,7 @@ describe('K — provider latency is durable and belongs to the edit call', () =>
     // It is per-process and restart-lossy; the durable column is the vehicle.
     // Scoped to the emit block — the metric legitimately exists elsewhere.
     const block = IMAGE.slice(
-      IMAGE.indexOf('if (conditionDegradation || conditionApplied) {'),
+      IMAGE.indexOf('if (!reusedProvider && (conditionDegradation || conditionApplied)) {'), // PR4: guard excludes fix-loop reuse
       IMAGE.indexOf('CREATOR_EVENTS.CONDITION_REFERENCE_APPLIED') + 200,
     );
     expect(block).not.toContain('recordCreatorDuration');
@@ -389,7 +391,7 @@ describe('Billing, lifecycle and the gate are untouched', () => {
     expect(TELEMETRY).toContain('catch (err) {');
     expect(TELEMETRY).not.toContain('export async function emitCreatorEvent');
     const emitBlock = IMAGE.slice(
-      IMAGE.indexOf('if (conditionDegradation || conditionApplied) {'),
+      IMAGE.indexOf('if (!reusedProvider && (conditionDegradation || conditionApplied)) {'), // PR4: guard excludes fix-loop reuse
       IMAGE.indexOf('CREATOR_EVENTS.CONDITION_REFERENCE_APPLIED') + 200,
     );
     expect(emitBlock).not.toContain('await emitCreatorEvent');

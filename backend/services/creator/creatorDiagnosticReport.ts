@@ -74,6 +74,12 @@ export interface CreatorDiagnosticReport {
   };
   visualValidation: {
     passed: boolean;
+    /**
+     * false when the render carried NO visual verdict (async render still
+     * pending, placeholder). `passed` stays true for back-compat, but a
+     * publish gate must treat an unassessed asset as NOT ready.
+     */
+    assessed: boolean;
     checks: Record<string, 'PASS' | 'FAIL' | 'N/A'>;
     slideCount?: number;
     failures: VisualFailure[];
@@ -84,6 +90,10 @@ export interface CreatorDiagnosticReport {
     reasons: string[];
     count: number;
     reRendered: boolean;
+    /** Fix-loop re-renders performed (0 when none). */
+    attempts: number;
+    /** Steps the fix loop applied, in order. */
+    steps: string[];
   };
   scores: {
     contentQuality: DiagnosticScore;
@@ -174,6 +184,7 @@ export function buildCreatorDiagnosticReport(input: DiagnosticReportInput): Crea
   const hasSignals = Array.isArray(vv.failures) || vv.passed != null;
   const visualValidation = {
     passed: vv.passed === true || (!hasSignals ? true : failures.length === 0),
+    assessed: hasSignals,
     slideCount: typeof vv.slideCount === 'number' ? vv.slideCount : undefined,
     failures,
     checks: {
@@ -192,19 +203,28 @@ export function buildCreatorDiagnosticReport(input: DiagnosticReportInput): Crea
   /* ── Repair summary ── */
   const repairCount = contentValidation.forbiddenWordsRepaired + contentValidation.prohibitedClaimsRemoved
     + contentValidation.ctaNormalized + contentValidation.fabricatedClaimsRemoved;
-  const reRendered = meta.visual_repair_applied === true;
+  // PR4: the fix loop discloses its work on the OUTPUT metadata
+  // (visual_validation.repair). `visual_repair_applied` was set on the INPUT
+  // payload only, so it never reached here — kept as a legacy fallback.
+  const loopRepair = obj(vv.repair);
+  const loopAttempts = typeof loopRepair.attempts === 'number' ? Math.max(0, Math.round(loopRepair.attempts)) : 0;
+  const loopSteps = Array.isArray(loopRepair.steps) ? loopRepair.steps.map(String) : [];
+  const reRendered = loopAttempts > 0 || meta.visual_repair_applied === true;
+  const attemptsCount = loopAttempts > 0 ? loopAttempts : (reRendered ? 1 : 0);
   const repair = {
     occurred: repairCount > 0 || reRendered,
-    type: reRendered ? 'visual:shorten_text' : (repairCount > 0 ? 'content:vocabulary' : undefined),
+    type: reRendered ? 'visual:fix_and_rerender' : (repairCount > 0 ? 'content:vocabulary' : undefined),
     reasons: [
       ...(contentValidation.forbiddenWordsRepaired ? ['forbidden words removed'] : []),
       ...(contentValidation.prohibitedClaimsRemoved ? ['prohibited claims removed'] : []),
       ...(contentValidation.ctaNormalized ? ['CTA normalized'] : []),
       ...(contentValidation.fabricatedClaimsRemoved ? ['fabricated claims removed'] : []),
-      ...(reRendered ? ['layout overflow → text shortened + re-render'] : []),
+      ...(reRendered ? [`layout fixed automatically: text shortened + re-rendered (${attemptsCount} attempt${attemptsCount === 1 ? '' : 's'})`] : []),
     ],
-    count: repairCount + (reRendered ? 1 : 0),
+    count: repairCount + attemptsCount,
     reRendered,
+    attempts: attemptsCount,
+    steps: loopSteps,
   };
 
   /* ── Deterministic scores ── */
@@ -273,5 +293,55 @@ export function buildCreatorDiagnosticReport(input: DiagnosticReportInput): Crea
     visualValidation,
     repair,
     scores: { contentQuality, brandCompliance, visualQuality, readability, templateCompliance, overallReadiness },
+  };
+}
+
+/**
+ * Refresh ONLY the render-derived parts of an existing report (visual verdict,
+ * visual repair, visual/readability scores, overall readiness) from a newer
+ * render's metadata. Used when an async render completes after the report was
+ * built — otherwise the report keeps the stale (pre-render) verdict.
+ * Content/brand/template sections are kept as they were. Pure.
+ */
+export function refreshDiagnosticReportVisuals(report: unknown, renderMetadata: Rec): CreatorDiagnosticReport | null {
+  const old = obj(report) as unknown as CreatorDiagnosticReport;
+  if (!old || !old.generation || !old.scores) return null;
+  const fresh = buildCreatorDiagnosticReport({
+    assetType: old.generation.assetType,
+    contentType: old.generation.contentType,
+    platform: old.generation.platform,
+    renderMetadata,
+  });
+  const contentReasons = (old.repair?.reasons ?? []).filter((r) => !/^layout /.test(r));
+  const contentCount = Math.max(0, (old.repair?.count ?? 0) - (old.repair?.attempts ?? (old.repair?.reRendered ? 1 : 0)));
+  const repair = {
+    occurred: contentCount > 0 || fresh.repair.reRendered,
+    type: fresh.repair.reRendered ? fresh.repair.type : old.repair?.type,
+    reasons: [...contentReasons, ...fresh.repair.reasons],
+    count: contentCount + fresh.repair.attempts,
+    reRendered: fresh.repair.reRendered,
+    attempts: fresh.repair.attempts,
+    steps: fresh.repair.steps,
+  };
+  const s = old.scores;
+  const overallBase = Math.round(
+    s.contentQuality.value * 0.25 + s.brandCompliance.value * 0.2 + fresh.scores.visualQuality.value * 0.3
+      + fresh.scores.readability.value * 0.15 + s.templateCompliance.value * 0.1,
+  );
+  const passed = fresh.visualValidation.passed;
+  return {
+    ...old,
+    rendering: { ...old.rendering, ...Object.fromEntries(Object.entries(fresh.rendering).filter(([, v]) => v !== undefined)) },
+    visualValidation: fresh.visualValidation,
+    repair,
+    scores: {
+      ...s,
+      visualQuality: fresh.scores.visualQuality,
+      readability: fresh.scores.readability,
+      overallReadiness: {
+        value: passed ? clamp(overallBase) : clamp(Math.min(overallBase, READINESS_PASS_THRESHOLD - 1)),
+        reason: passed ? 'Asset passed all deterministic gates.' : 'Readiness capped: one or more visual checks failed.',
+      },
+    },
   };
 }
