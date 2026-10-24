@@ -149,7 +149,8 @@ export default function GenerationReviewPanel({ model, onRegenerate, onDownload,
         <div style={secLabel}>Quality</div>
         <QualityRow label="Readiness passed" value={quality.readinessPassed} />
         <QualityRow label="Template validation passed" value={quality.templateValidationPassed} />
-        <QualityRow label="Rendering completed" value={quality.renderingCompleted} />
+        <QualityRow label="Asset rendered" value={quality.renderingCompleted} />
+        <QualityRow label="Visual checks passed" value={quality.visualChecksPassed} />
         {quality.warnings.length > 0 ? (
           <div style={{ marginTop: 6 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#d97706', marginBottom: 2 }}>Warnings</div>

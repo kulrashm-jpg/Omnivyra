@@ -50,6 +50,7 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
     conditionReferenceFallbackCategory,
     conditionReferenceStatus,
     conditionReferenceUserMessage,
+    conditionReferenceUsedAs,
     pdfDocumentFallbackCategory,
     pdfDocumentStatus,
     pdfDocumentUserMessage,
@@ -680,6 +681,14 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
                         >
                           {conditionReferenceUserMessage
                             || 'Your reference image could not be applied, so this result was generated without it. Regenerate to try again.'}
+                        </p>
+                      ) : null}
+                      {conditionReferenceStatus !== 'not_applied' && conditionReferenceUsedAs ? (
+                        <p
+                          className="mt-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800"
+                          data-condition-used-as
+                        >
+                          We used your photo as: <span className="font-semibold">{conditionReferenceUsedAs}</span>
                         </p>
                       ) : null}
                       {overlayQuality?.flags?.length ? (

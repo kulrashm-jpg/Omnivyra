@@ -28,6 +28,14 @@ export interface PackageAsset {
   regenerations?: number;
   published?: boolean;
   scheduledAt?: string | null;
+  /**
+   * Did the asset pass its deterministic post-render visual checks?
+   * true = passed, false = FAILED (blocks publishing/scheduling),
+   * null/undefined = not assessed (does not block — backward-compatible).
+   */
+  visualPassed?: boolean | null;
+  /** Human-readable visual failures, shown as the reason publishing is blocked. */
+  visualIssues?: string[];
 }
 
 export interface CampaignPackageInput {
@@ -68,6 +76,8 @@ export interface CampaignPackage {
   warnings: string[];
   readyForPublishing: boolean;
   readyForScheduling: boolean;
+  /** Why publishing/scheduling is blocked (empty when ready). */
+  publishBlockedReasons: string[];
   consistency: ConsistencyCheck[];
   timeline: PackageTimelineEntry[];
 }
@@ -185,9 +195,31 @@ export function buildCampaignPackage(input: CampaignPackageInput): CampaignPacka
   if (!brandingOk) warnings.push('Branding differs across assets.');
   if (!platformOk) warnings.push('Some assets target platforms outside the campaign.');
   if (!metadata.objective) warnings.push('Campaign objective is not set.');
+  // PUBLISH GATE — an asset that failed its visual checks (text cut off,
+  // overflowing the safe area, low contrast, …) must not be publishable or
+  // schedulable. There is deliberately no override here.
+  const visualFailed = done.filter((a) => a.visualPassed === false);
+  const visualReason = visualFailed.length > 0
+    ? `${visualFailed.length} asset${visualFailed.length === 1 ? '' : 's'} failed visual checks`
+      + (() => {
+        const issues = Array.from(new Set(visualFailed.flatMap((a) => a.visualIssues ?? [])));
+        return issues.length ? `: ${issues.slice(0, 4).join('; ')}.` : '.';
+      })()
+    : null;
+  if (visualReason) warnings.push(`${visualReason} Fix and regenerate before publishing.`);
 
-  const readyForPublishing = done.length > 0 && failed.length === 0 && processing.length === 0 && ctaOk && brandingOk;
+  const readyForPublishing = done.length > 0 && failed.length === 0 && processing.length === 0 && ctaOk && brandingOk
+    && visualFailed.length === 0;
   const readyForScheduling = readyForPublishing && platforms.length > 0;
+
+  const publishBlockedReasons: string[] = [];
+  if (done.length === 0) publishBlockedReasons.push('No completed assets yet.');
+  if (failed.length > 0) publishBlockedReasons.push(`${failed.length} asset${failed.length === 1 ? '' : 's'} failed to generate.`);
+  if (processing.length > 0) publishBlockedReasons.push(`${processing.length} asset${processing.length === 1 ? '' : 's'} still processing.`);
+  if (!ctaOk) publishBlockedReasons.push('CTAs differ across assets.');
+  if (!brandingOk) publishBlockedReasons.push('Branding differs across assets.');
+  if (visualReason) publishBlockedReasons.push(visualReason);
+  if (readyForPublishing && !readyForScheduling) publishBlockedReasons.push('No target platform is set, so it cannot be scheduled.');
 
   const publishingNotes: string[] = [];
   if (platforms.length) publishingNotes.push(`Publish to ${platforms.join(', ')}.`);
@@ -212,6 +244,7 @@ export function buildCampaignPackage(input: CampaignPackageInput): CampaignPacka
     warnings,
     readyForPublishing,
     readyForScheduling,
+    publishBlockedReasons,
     consistency,
     timeline: buildPackageTimeline(assets),
   };

@@ -32,7 +32,7 @@ const kvVal: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: '#0f1
 const TIMELINE_COLOR: Record<string, string> = { generated: '#2563eb', edited: '#16a34a', regenerated: '#7c3aed', published: '#0891b2', scheduled: '#d97706' };
 
 export default function CampaignPackagePanel({ pkg, onOpenAsset, onRegenerate, onDuplicate, onPublish, onSchedule, regenerateBusy }: Props) {
-  const { metadata, slots, caption, cta, publishingNotes, summary, includedAssets, missingAssets, warnings, readyForPublishing, readyForScheduling, consistency, timeline } = pkg;
+  const { metadata, slots, caption, cta, publishingNotes, summary, includedAssets, missingAssets, warnings, readyForPublishing, readyForScheduling, publishBlockedReasons, consistency, timeline } = pkg;
 
   const downloadPackage = () => {
     if (typeof document === 'undefined') return;
@@ -114,6 +114,13 @@ export default function CampaignPackagePanel({ pkg, onOpenAsset, onRegenerate, o
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 700, color: readyForPublishing ? '#16a34a' : '#94a3b8' }}>{readyForPublishing ? '✓' : '–'} Ready for publishing</span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 700, color: readyForScheduling ? '#16a34a' : '#94a3b8' }}>{readyForScheduling ? '✓' : '–'} Ready for scheduling</span>
         </div>
+        {/* Why the Publish / Schedule buttons are disabled — never a silent block. */}
+        {!readyForScheduling && (publishBlockedReasons ?? []).length > 0 ? (
+          <div style={{ marginTop: 6, fontSize: 12, color: '#b91c1c' }} data-publish-blocked>
+            {!readyForPublishing ? 'Not ready to publish: ' : 'Not ready to schedule: '}
+            {(publishBlockedReasons ?? []).join(' ')}
+          </div>
+        ) : null}
       </div>
 
       {/* Consistency */}

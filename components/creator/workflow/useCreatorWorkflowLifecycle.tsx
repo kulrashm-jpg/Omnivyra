@@ -24,6 +24,7 @@ import {
 import { decodeVariantQuery } from '../../../lib/variants/creatorStrategyMapping';
 import { markManual, editorLeadValue, planBriefEditorSync } from '../../../lib/content/creatorBriefEditorSync';
 import type { TemplateFieldValues } from '../../../lib/creator-templates/values';
+import { resolveInitialStandaloneAttachmentMode } from '../../../lib/creator-templates';
 import {
   type BrandContextSelections, type SavedCreatorAsset,
   DEFAULT_BRAND_SELECTIONS, EMPTY_OVERLAY_TEXT,
@@ -125,11 +126,14 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
         ? { ...EMPTY_OVERLAY_TEXT, ...(restored.overlayText as Partial<WriterOverlayText>) }
         : EMPTY_OVERLAY_TEXT,
     );
-    setStandaloneAttachmentMode(
-      restored?.standaloneAttachmentMode === 'embedded_copy' || restored?.standaloneAttachmentMode === 'supporting_visual'
-        ? (restored.standaloneAttachmentMode as AttachmentMode)
-        : 'supporting_visual',
-    );
+    // Same resolution as the template effect (restored → template mode →
+    // clean visual), so this reset can no longer wipe the template's mode
+    // when it happens to run after the template effect.
+    setStandaloneAttachmentMode(resolveInitialStandaloneAttachmentMode({
+      restoredMode: restored?.standaloneAttachmentMode,
+      templateId: router.query.template_id,
+      creatorType: type,
+    }));
     setRecommendedAttachmentMode(
       restored?.recommendedAttachmentMode === 'embedded_copy' || restored?.recommendedAttachmentMode === 'supporting_visual'
         ? (restored.recommendedAttachmentMode as AttachmentMode)

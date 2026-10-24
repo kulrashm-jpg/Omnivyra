@@ -182,6 +182,11 @@ export function buildAiImagePrompt(input: {
     audience: compactText(input.metadata.audience),
     platform: compactText(input.metadata.platform || input.metadata.primary_platform),
     objective: compactText(input.metadata.objective || input.metadata.summary),
+    // The main message gets its own field so it reaches the scene prompt even
+    // when an objective is present (previously summary was only an objective
+    // fallback and was dropped whenever an objective existed).
+    keyMessage: compactText(input.metadata.summary),
+    ctaIntent: compactText(input.metadata.cta || safeObject(input.metadata.creator_card).cta || safeObject(input.metadata.overlay_text).cta),
     tagline: compactText(brandContext.tagline || selectedAssets.tagline),
     brandMode: typeof input.metadata.brand_generation_mode === 'string'
       ? input.metadata.brand_generation_mode

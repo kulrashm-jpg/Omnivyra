@@ -353,8 +353,11 @@ describe('Billing, lifecycle and the gate are untouched', () => {
 
   it('the CONDITION gate and its fallback are unchanged', () => {
     const multimodal = strip(read('../../services/creator/creatorMultimodalReferences.ts'));
-    expect(multimodal).toContain("process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit'");
-    expect(multimodal).toContain("? 'edit' : 'generate'");
+    expect(multimodal).toContain('const raw = process.env.CREATOR_IMAGE_REFERENCE_MODE;');
+    expect(multimodal).toContain("if (raw === 'edit') return 'edit';");
+    // Purpose-aware (owner decision): user-attached → edit unless the kill switch is set.
+    expect(multimodal).toContain("if (opts?.userReferenceAttached === true && userReferenceDeliveryAllowed()) return 'edit';");
+    expect(multimodal).toContain("return 'generate';");
   });
 
   it('Phase 74/78 lifecycle deletion is untouched, and events outlive assets', () => {

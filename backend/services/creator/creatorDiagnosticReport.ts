@@ -11,6 +11,9 @@
 import type { CopyViolation } from './creatorCopyValidation';
 import type { VisualFailure } from './creatorVisualValidation';
 
+/** Readiness at or above this value passes; a visual failure caps readiness below it. */
+export const READINESS_PASS_THRESHOLD = 60;
+
 type Rec = Record<string, unknown>;
 
 function obj(v: unknown): Rec {
@@ -240,7 +243,10 @@ export function buildCreatorDiagnosticReport(input: DiagnosticReportInput): Crea
     contentQuality.value * 0.25 + brandCompliance.value * 0.2 + visualQuality.value * 0.3 + readability.value * 0.15 + templateCompliance.value * 0.1,
   );
   const overallReadiness: DiagnosticScore = {
-    value: visualValidation.passed ? clamp(overallBase) : clamp(Math.min(overallBase, 60)),
+    // A failed visual check caps readiness BELOW the pass threshold. The cap was
+    // 60 while readiness passes at >= 60, so a capped asset still showed
+    // "Readiness passed".
+    value: visualValidation.passed ? clamp(overallBase) : clamp(Math.min(overallBase, READINESS_PASS_THRESHOLD - 1)),
     reason: visualValidation.passed ? 'Asset passed all deterministic gates.' : 'Readiness capped: one or more visual checks failed.',
   };
 

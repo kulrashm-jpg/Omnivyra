@@ -64,6 +64,8 @@ export type CreatorResult = {
           condition_reference_status?: 'not_applied';
           condition_reference_fallback_category?: 'edit_failed' | 'edit_no_image' | 'family_unsupported' | 'reference_mode_disabled';
           condition_reference_user_message?: string;
+          /** Purposes the applied reference(s) were used as (e.g. ['subject']). Absent unless applied. */
+          condition_reference_purposes?: string[];
           width?: number;
           height?: number;
           overlay_quality?: {

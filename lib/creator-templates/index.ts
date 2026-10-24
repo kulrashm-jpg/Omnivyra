@@ -423,6 +423,32 @@ export function resolveTemplateCreatorCardPatch(template: CreatorTemplate): Reco
 }
 
 /**
+ * The standalone image toggle's starting value ("Text Inside Image" =
+ * embedded_copy / "Post + Image" = supporting_visual), resolved in ONE place:
+ * a restored draft value wins, then the selected image template's declared
+ * mode, then the clean-visual default.
+ *
+ * The page's reset effect and its template effect both set this toggle and
+ * ran in a non-deterministic order (the reset re-runs when the router becomes
+ * ready), so the reset could wipe the template's mode. Both now derive the
+ * same value from the same inputs, so whichever runs last agrees.
+ */
+export function resolveInitialStandaloneAttachmentMode(input: {
+  restoredMode?: unknown;
+  templateId?: unknown;
+  creatorType?: string | null;
+}): 'embedded_copy' | 'supporting_visual' {
+  if (input.restoredMode === 'embedded_copy' || input.restoredMode === 'supporting_visual') return input.restoredMode;
+  const family = familyForCreatorType(input.creatorType);
+  const templateId = typeof input.templateId === 'string' ? input.templateId : '';
+  if (family === 'image' && templateId) {
+    const mode = getTemplateById(templateId, family)?.renderingContract.attachmentMode;
+    if (mode === 'embedded_copy' || mode === 'supporting_visual') return mode;
+  }
+  return 'supporting_visual';
+}
+
+/**
  * Gate generated content against the SELECTED template's contract, before
  * rendering. Resolves the template_id carried on the asset payload (same field
  * order as the renderer's templateIdForRender) and validates the generated
