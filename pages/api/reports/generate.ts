@@ -307,7 +307,7 @@ async function handler(
     // background work survives HTTP response flush. Falls back to awaiting
     // when not running on Vercel. The recover-stale-reports cron is the
     // safety net if either path is interrupted (e.g. lambda hard kill).
-    await keepAliveAfterResponse(startAsyncReportGeneration(report));
+    const keepAliveMode = await keepAliveAfterResponse(startAsyncReportGeneration(report));
 
     if (reportCategory === 'snapshot') {
       await ensureAutomationConfig({
@@ -328,6 +328,9 @@ async function handler(
       reportId: report.id,
       status: 202,
       reportCategory,
+      // 'wait_until' = replied immediately, generation continues in the background;
+      // 'awaited' = the response was held until generation finished.
+      keepAliveMode,
     });
 
     return res.status(202).json(withTrace({
