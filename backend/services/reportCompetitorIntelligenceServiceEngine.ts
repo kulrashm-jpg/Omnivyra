@@ -75,6 +75,8 @@ import { type CompetitorClassification, type ComparisonMetrics, type CompetitorC
 import {
   indexQueryOrigins,
   mergeReport1QueryUniverse,
+  rankCommercialQueryCandidates,
+  REPORT1_QUERY_LIMIT,
   queryTexts,
   type Report1QueryCandidate,
   type Report1QueryOrigin,
@@ -636,12 +638,13 @@ export async function buildCompetitorIntelligenceActive(params: {
     });
     return [] as Report1QueryCandidate[];
   });
-  // Public terms first, then declared/template — the order the previous merge used, so only the
-  // removal of the GSC tier changes which queries survive the cap.
-  const queryUniverse = mergeReport1QueryUniverse([...publicCandidates, ...declaredCandidates], {
-    limit: 10,
-    normalize: (value) => normalizeQueryPart(value, 8),
-  });
+  // Declared subject first, then public multi-word phrases, then single public words; interface
+  // words ("get", "login", "help") never become queries. The cap equals what the SERP batch
+  // searches, so the reported query count is the searched count.
+  const queryUniverse = mergeReport1QueryUniverse(
+    rankCommercialQueryCandidates([...publicCandidates, ...declaredCandidates]),
+    { limit: REPORT1_QUERY_LIMIT, normalize: (value) => normalizeQueryPart(value, 8) },
+  );
   const keywords = queryTexts(queryUniverse);
   // Where `businessContext` came from, resolved beside the label itself so the expansion batch
   // can tag its templates honestly rather than assuming a declared category.

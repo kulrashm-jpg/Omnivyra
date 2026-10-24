@@ -152,3 +152,54 @@ export const QUERY_ORIGIN_LABEL: Record<Report1QueryOrigin, string> = {
   derived_template: 'deterministic category template',
   derived_fallback: 'generic fallback',
 };
+
+/**
+ * How many queries Report 1 dispatches. The universe is capped HERE and the SERP batch searches
+ * every query in it, so the count a report states is the count actually searched. (Previously the
+ * universe held 10 but the batch searched the first 8, and the report printed 10.)
+ */
+export const REPORT1_QUERY_LIMIT = 8;
+
+/**
+ * Site furniture, not subject matter. A navigation or interface word repeated in a site's own
+ * link text ("get", "login", "help", "features") is frequent because it is in the menu, not
+ * because a buyer searches it. Applied to single-word candidates only: a phrase that contains one
+ * of these ("help desk software") is still a real query.
+ */
+const INTERFACE_TERMS = new Set([
+  'get', 'login', 'log', 'logout', 'signin', 'signup', 'sign', 'register', 'account', 'accounts',
+  'help', 'support', 'faq', 'faqs', 'features', 'feature', 'credits', 'credit', 'docs',
+  'documentation', 'download', 'dashboard', 'start', 'started', 'try', 'trial', 'menu', 'terms',
+  'privacy', 'policy', 'cookie', 'cookies', 'careers', 'news', 'resources', 'read', 'view', 'click',
+  'submit', 'next', 'back', 'close', 'open', 'new', 'now', 'today', 'join', 'subscribe', 'book',
+  'request', 'apply', 'see', 'explore', 'discover', 'overview', 'settings', 'profile', 'search',
+]);
+
+/**
+ * Order the candidate pool so commercially meaningful queries survive the cap.
+ *
+ *   1. what the company declared (category, product, problem, ICP templates);
+ *   2. multi-word phrases observed on its public pages;
+ *   3. single words observed on its public pages, and placeholder-identity templates.
+ *
+ * Single interface words are dropped outright. Within a rank the incoming order is kept, so the
+ * producers' own ordering still decides ties. Nothing is invented: every surviving query is one
+ * of the candidates, with its recorded origin unchanged.
+ */
+export function rankCommercialQueryCandidates(
+  candidates: readonly Report1QueryCandidate[],
+): Report1QueryCandidate[] {
+  const rankOf = (candidate: Report1QueryCandidate): number | null => {
+    const words = String(candidate.value ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return null;
+    if (words.length === 1 && INTERFACE_TERMS.has(words[0])) return null;
+    if (candidate.origin === 'declared' || candidate.origin === 'derived_template') return 0;
+    if (candidate.origin === 'observed_public' && words.length > 1) return 1;
+    return 2;
+  };
+  return candidates
+    .map((candidate, index) => ({ candidate, index, rank: rankOf(candidate) }))
+    .filter((item): item is { candidate: Report1QueryCandidate; index: number; rank: number } => item.rank !== null)
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((item) => item.candidate);
+}
