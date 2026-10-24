@@ -31,6 +31,7 @@ import { creatorRuntimeMode } from '../../../../lib/creator-templates/creatorRun
 import { shadowFromRequest } from '../../../../lib/creator-templates/creatorRuntimeV2';
 import { getTemplateById } from '../../../../lib/creator-templates/index';
 import { mergeBlueprintIntoCreatorCard } from '../../../../lib/creator-outcomes/blueprintRuntimeBridge';
+import { applyLookPrecedenceToCreatorCard, selectedLookIdFromCreatorCard } from '../../../../lib/creator-outcomes/lookPrecedence';
 
 import { type GenerateCreatorBody, withCreatorTimeout, resolveRequestedContentType, safeObject, normalizeCreatorCardForAttachment, buildBetaCreatorFallback, generateThemeTreatment, resolveGovernanceForLane } from './generatePrep';
 
@@ -245,9 +246,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // CREATOR-059 follow-up: derive blueprint style/colour/layout guidance from the
   // selected blueprint id (rides on creator_card). Additive `blueprint_*` fields;
   // existing creator_card keys always win; no blueprint ⇒ exact no-op. No engine change.
+  // PR5: a picked LOOK is the style. When one is set, every blueprint_* field
+  // is re-derived from it and the curated sample only survives for audit.
+  const topLevelBlueprintId = typeof body.blueprint_id === 'string' && body.blueprint_id.trim() ? body.blueprint_id.trim() : null;
+  const rawCreatorCard = safeObject(body.creator_card);
+  const lookFirstCard = applyLookPrecedenceToCreatorCard(rawCreatorCard, { sampleBlueprintId: topLevelBlueprintId });
+  const selectedLookId = selectedLookIdFromCreatorCard(lookFirstCard);
+  const lookApplied = Boolean(selectedLookId) && lookFirstCard.blueprint_id === selectedLookId;
   const creatorCardInput = mergeBlueprintIntoCreatorCard(
-    safeObject(body.creator_card),
-    typeof body.blueprint_id === 'string' && body.blueprint_id.trim() ? body.blueprint_id.trim() : null,
+    lookFirstCard,
+    lookApplied ? null : topLevelBlueprintId,
   );
   const normalizedAttachment = normalizeCreatorCardForAttachment({
     creatorCard: creatorCardInput,

@@ -260,6 +260,13 @@ export async function composeSingleVisualAsset(
     // before.
     additionalReferences: options.compositionReferences?.additionalReferences,
   });
+  // PR5 — the chosen LOOK's own sample as a style reference (variations, or
+  // every look render when the global mode is 'edit'). Loaded from local disk;
+  // delivered as bytes through the purpose-aware canonical edit path below.
+  const { resolveLookStyleReference, lookStyleReferenceInstruction } =
+    await import('./creator/creatorLookStyleReference');
+  const lookStyleReference = await resolveLookStyleReference(metadata);
+  const lookReferenceAttached = lookStyleReference.status === 'attached' && lookStyleReference.reference !== null;
   // img2img style reference (flag-gated): point at the curated template's showcase
   // image so the provider can condition on it. Null unless the flag is on and a
   // blueprint id is present → plain text-to-image (unchanged).
@@ -267,7 +274,12 @@ export async function composeSingleVisualAsset(
     // Same gate, read through the one function rather than re-testing the
     // environment, so the legacy and canonical lanes cannot drift apart.
     if (!creatorImageReferenceModeEnabled()) return null;
-    const bpId = typeof metadata.blueprint_id === 'string' ? metadata.blueprint_id.trim() : '';
+    // The look's own sample already rides as bytes — never send a second
+    // (sample) style image next to it.
+    if (lookReferenceAttached) return null;
+    // A picked look IS the style: its showcase, not the curated sample's.
+    const bpId = lookStyleReference.lookId
+      ?? (typeof metadata.blueprint_id === 'string' ? metadata.blueprint_id.trim() : '');
     if (!bpId) return null;
     const base = String(process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'https://www.omnivyra.com').replace(/\/$/, '');
     return `${base}/creator-showcases/${bpId}/image.webp`;
@@ -316,12 +328,30 @@ export async function composeSingleVisualAsset(
     .map((r) => (r as { reference?: { purpose?: string } }).reference?.purpose)
     .filter((p): p is string => typeof p === 'string' && p.length > 0);
   const conditionReferenceFidelity = referenceFidelityForPurposes(conditionReferencePurposes);
+  // User photos first, the look's sample LAST — the instruction names it by
+  // position. A style reference never raises fidelity: the user's purposes
+  // alone decide it ('standard' when only the look sample is attached).
+  const userReferenceBytes = conditionRefs?.references.map((r) => ({ bytes: r.bytes, mimeType: r.mimeType })) ?? [];
+  const allReferenceImages = lookReferenceAttached
+    ? [...userReferenceBytes, { bytes: lookStyleReference.reference!.bytes, mimeType: lookStyleReference.reference!.mimeType }]
+    : userReferenceBytes;
+  const referenceKind: 'user' | 'look' | 'user+look' = lookReferenceAttached
+    ? (userReferenceBytes.length > 0 ? 'user+look' : 'look')
+    : (lookStyleReference.status === 'disabled' && userReferenceBytes.length === 0 && !conditionRefs ? 'look' : 'user');
+  const promptForProvider = lookReferenceAttached
+    ? `${providerPrompt}
+${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: userReferenceBytes.length > 0 })}`
+    : providerPrompt;
   const providerResult = await generateProviderImage({
-    prompt: providerPrompt,
+    prompt: promptForProvider,
     referenceImageUrl,
-    referenceImages: conditionRefs?.references.map((r) => ({ bytes: r.bytes, mimeType: r.mimeType })) ?? null,
+    referenceImages: allReferenceImages.length > 0 ? allReferenceImages : (conditionRefs ? [] : null),
     referenceFidelity: conditionReferenceFidelity,
+    referenceKind,
     conditionDegradedToText: conditionRefs?.degradedToText === true,
+    // A requested look reference the kill switch blocked is disclosed like a
+    // blocked user photo (only when no user photo carries its own disclosure).
+    lookReferenceDisabled: lookStyleReference.status === 'disabled' && referenceKind === 'look',
     eventContext: {
       creatorType: fileNamePrefix,
       attachmentMode: attachmentRenderPolicy,
@@ -352,7 +382,7 @@ export async function composeSingleVisualAsset(
         ? 'embedded_copy'
         : 'legacy',
     providerReturnedImage: Boolean(providerResult.image),
-    prompt: providerPrompt,
+    prompt: promptForProvider,
     overlayText: governedOverlay,
     ocrText: providerOcr?.text ?? (typeof metadata.provider_ocr_text === 'string' ? metadata.provider_ocr_text : null),
     regionCount: providerOcr?.regions.length ?? Number(metadata.provider_ocr_region_count ?? 0),
@@ -420,6 +450,9 @@ export async function composeSingleVisualAsset(
       composition_id: conditionPlan?.compositionId ?? null,
       // Carried on the asset too; this is the pair that makes the join work.
       condition_attempt_id: conditionAttemptId,
+      // PR5 — whose image the attempt carried, so a look style reference never
+      // inflates the user-photo CONDITION rate.
+      reference_source: referenceKind,
     };
     /*
      * Latency is the provider edit call, measured at the provider boundary and
@@ -641,6 +674,17 @@ export async function composeSingleVisualAsset(
     condition_reference_purposes: conditionApplied && conditionReferencePurposes.length > 0
       ? [...new Set(conditionReferencePurposes)]
       : undefined,
+    // PR5 — the look's sample as a style reference: what happened to it.
+    // Absent when no look reference was requested.
+    look_style_reference: lookStyleReference.status === 'not_requested'
+      ? undefined
+      : {
+          look_id: lookStyleReference.lookId,
+          status: lookStyleReference.status === 'attached'
+            ? (providerResult.conditionApplied === true ? 'applied' : 'not_applied')
+            : lookStyleReference.status,
+          source: lookStyleReference.reference?.source ?? null,
+        },
     image_subtype: subtypeHint?.subtypeId ?? null,
     attachment_mode: metadata.attachment_mode ?? null,
     writer_asset_type: metadata.writer_asset_type ?? null,

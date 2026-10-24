@@ -193,7 +193,12 @@ export function buildAiImagePrompt(input: {
     tagline: compactText(brandContext.tagline || selectedAssets.tagline),
     brandMode: typeof input.metadata.brand_generation_mode === 'string'
       ? input.metadata.brand_generation_mode
-      : (typeof input.metadata.brand_mode === 'string' ? input.metadata.brand_mode : 'brand-aware'),
+      : (typeof input.metadata.brand_mode === 'string'
+        ? input.metadata.brand_mode
+        // The form's brand mode rides on creator_card (now carried onto render metadata).
+        : (typeof safeObject(input.metadata.creator_card).brand_mode === 'string'
+          ? String(safeObject(input.metadata.creator_card).brand_mode)
+          : 'brand-aware')),
     contentType: typeof input.metadata.content_type === 'string' ? input.metadata.content_type : input.eyebrow,
     // Purpose-driven generation strategy. Resolved by the composer
     // against the PurposeStrategyRegistry — see purposeStrategyRegistry.ts.
@@ -298,7 +303,7 @@ export function buildAiImagePrompt(input: {
   const guidedChoices = (() => {
     const card = safeObject(input.metadata.creator_card);
     const raw = safeObject(input.metadata.guided_creative ?? card.guided_creative);
-    const family = String(input.metadata.asset_family || card.creator_content_asset_type || 'image');
+    const family = String(input.metadata.asset_family || card.creator_content_asset_type || input.metadata.creator_content_asset_type || 'image');
     const assetFamily = (family === 'carousel' || family === 'infographic') ? family : 'image';
     return sanitizeGuidedChoices(
       {
@@ -318,12 +323,33 @@ export function buildAiImagePrompt(input: {
   };
   // The composer receives the registry's OWN prompt fragment — the style
   // vocabulary lives in one place and is quoted here, never restated.
+  // PR5: plus the look's medium / palette / negatives / photographic flag, so
+  // a non-photographic look is composed look-native instead of as a photo.
   composerInput.userVisualDirection = (chosenStyle || guidedChoices.visualInstruction)
     ? {
         title: chosenStyle?.title ?? null,
         stylePrompt: chosenStyle?.stylePrompt ?? null,
         instruction: guidedChoices.visualInstruction ?? null,
+        ...(chosenStyle
+          ? {
+              id: chosenStyle.id,
+              renderingMedium: chosenStyle.renderingMedium || null,
+              palette: chosenStyle.palette,
+              negativePrompt: chosenStyle.negativePrompt || null,
+              photographic: chosenStyle.photographic,
+            }
+          : {}),
       }
+    : null;
+  // PR5 — "More versions in this look": which of N locked-look versions this is.
+  composerInput.lookVariation = chosenStyle
+    ? (() => {
+        const raw = safeObject(input.metadata.look_variation ?? safeObject(input.metadata.creator_card).look_variation);
+        const index = Number(raw.index);
+        const count = Number(raw.count);
+        if (!Number.isFinite(index) || !Number.isFinite(count) || count < 1) return null;
+        return { index, count, focus: typeof raw.focus === 'string' ? raw.focus : null };
+      })()
     : null;
 
   const plan = campaignDNA
@@ -335,6 +361,8 @@ export function buildAiImagePrompt(input: {
         contentType: composerInput.contentType ?? null,
         brandKit: composerInput.brandKit,
         productContext: composerInput.productContext,
+        // PR5 — the DNA path keeps the user's look instead of dropping it.
+        userChoices: userChoicesForPlanner,
       })
     : planCreativeDirection({
         campaignIntent: composerInput.objective ?? null,
@@ -396,6 +424,10 @@ export function buildAiImagePrompt(input: {
     hasBrandGrounding: brandSignalCount >= 3,
     hasProductGrounding: productSignalCount >= 3,
     brandPreference: brandPreference?.preferredTemplate ?? null,
+    // PR5 — the chosen look is locked across every variant.
+    lockedLook: composerInput.userVisualDirection
+      ? { userVisualDirection: composerInput.userVisualDirection, lookVariation: composerInput.lookVariation ?? null }
+      : null,
     // Phase 6 — DNA-constrained exploration. When the campaign has an
     // established DNA, variants are restricted to its approved templates.
     // Phase 9 — cost governance: max 3 variants always; renders driven
@@ -712,6 +744,9 @@ export function buildAiImagePrompt(input: {
     creative_visual_density: plan.visualDensity,
     creative_premium_bias: plan.premiumBias,
     creative_plan_rationale: plan.rationale,
+    // PR5 — the look the user chose and how the composer applied it.
+    creative_look: composed.look ?? null,
+    creative_look_variation: composerInput.lookVariation ?? null,
     // Variant exploration audit
     variant_count: orchestration.count,
     variant_rationale: orchestration.rationale,

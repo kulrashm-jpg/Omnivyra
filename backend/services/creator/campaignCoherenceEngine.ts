@@ -20,6 +20,7 @@
 import type {
   CreativeStrategyId,
   CreativeDirectionPlan,
+  CreativeDirectionInput,
   RealismLevel,
   VisualDensity,
   SubjectEmphasis,
@@ -215,6 +216,12 @@ export function projectAssetPlanFromDNA(input: {
   contentType?: string | null;
   brandKit?: CreatorPromptBrandKit | null;
   productContext?: CreatorPromptProductContext | null;
+  /**
+   * PR5 — the user's own choices (look, subject, words). Carried onto the plan
+   * so an asset in a campaign with DNA keeps the look the user picked instead
+   * of silently dropping it. Absent → identical to before.
+   */
+  userChoices?: CreativeDirectionInput['userChoices'];
 }): CreativeDirectionPlan {
   // Use the director engine but force the strategy via the brandMemory
   // continuity hook so the planner's intent-based selector defers to
@@ -227,6 +234,7 @@ export function projectAssetPlanFromDNA(input: {
     brandKit: input.brandKit ?? null,
     productContext: input.productContext ?? null,
     brandMemory: { preferredStrategy: input.dna.strategyFamily },
+    userChoices: input.userChoices ?? null,
   });
 
   // Reconcile any knob the DNA mandates that the per-asset plan might
@@ -238,7 +246,9 @@ export function projectAssetPlanFromDNA(input: {
     emotionalDirection: input.dna.visualDNA.emotionalTone,
     realismProfile: input.dna.visualDNA.realismProfile,
     compositionStrategy: input.dna.visualDNA.compositionFamily,
-    humanPresenceMode: input.dna.visualDNA.humanPresencePolicy,
+    // A subject the USER chose outranks the campaign's habit, exactly as it
+    // outranks inference in planCreativeDirection.
+    humanPresenceMode: plan.subjectChosenByUser ? plan.humanPresenceMode : input.dna.visualDNA.humanPresencePolicy,
     visualDensity: input.dna.visualDNA.visualDensity,
     rationale: [...plan.rationale, `campaign_dna_projection:${input.dna.campaignId}`],
   };

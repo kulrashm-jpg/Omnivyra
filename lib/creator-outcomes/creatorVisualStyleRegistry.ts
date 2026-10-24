@@ -30,7 +30,98 @@ export interface VisualStyle {
   /** Prompt fragment a future AI image step would prepend (no generation here). */
   stylePrompt: string;
   brandBehavior: BrandBehavior;
+  /**
+   * How the look is physically made: the medium the image generator should
+   * render in ("halftone comic ink", "claymation"). Look-native prompting leads
+   * with this so a chosen look is not quietly rendered as a photograph.
+   */
+  renderingMedium: string;
+  /** The look's own colour palette, as hex. Leads the colour discipline when the look is chosen. */
+  palette: string[];
+  /** What would break this look, as a short comma list ("photorealism, film grain"). */
+  negativePrompt: string;
+  /**
+   * True when the look IS photography (or reads as photographed). Photographic
+   * looks keep the composer's realism directives; every other look replaces
+   * them with a look-native block, because "editorial photography over rendered
+   * illustration" is the opposite of what a comic or clay look asks for.
+   */
+  photographic: boolean;
 }
+
+type LookRendering = Pick<VisualStyle, 'renderingMedium' | 'palette' | 'negativePrompt' | 'photographic'>;
+
+const NOT_PHOTO = 'photorealism, photographic skin texture, film grain, camera lens blur';
+
+function L(renderingMedium: string, palette: string[], negativePrompt: string, photographic = false): LookRendering {
+  return { renderingMedium, palette, negativePrompt, photographic };
+}
+
+/**
+ * Per-look rendering vocabulary (PR5: the selected look drives the image).
+ * Derived from each look's own name, description and tags; one short phrase
+ * per field, so the prompt states the look rather than an essay about it.
+ */
+const LOOK_RENDERING: Record<string, LookRendering> = {
+  // Brand / format
+  corporate: L('clean corporate photography and design', ['#1e3a8a', '#ffffff', '#0b1220', '#94a3b8'], 'clutter, playful cartoon elements, neon colours', true),
+  modern: L('contemporary clean design photography', ['#2563eb', '#ffffff', '#0b1220', '#e2e8f0'], 'busy clutter, dated textures, heavy ornament', true),
+  minimal: L('minimalist photography with vast negative space', ['#0f172a', '#64748b', '#f8fafc'], 'clutter, multiple accent colours, busy backgrounds', true),
+  luxury: L('premium luxury photography, gold on black', ['#0a0a0a', '#a16207', '#facc15', '#f5f5f4'], 'cheap glossy plastic, bright primary colours, clutter', true),
+  editorial: L('magazine editorial photography', ['#111827', '#94a3b8', '#f8fafc'], 'loud saturated colours, cartoon elements, clutter', true),
+  magazine: L('bold magazine-cover photography', ['#dc2626', '#0b1220', '#ffffff'], 'flat clip-art, muddy colours, clutter', true),
+  dark: L('dark-mode digital design with glowing accents', ['#020617', '#22d3ee', '#0ea5e9', '#e2e8f0'], `bright daylight scenes, washed-out pastels, ${NOT_PHOTO}`),
+  bold: L('bold graphic design with flat saturated colour fields', ['#ef4444', '#facc15', '#1a1a1a', '#ffffff'], `muted desaturated tones, timid composition, ${NOT_PHOTO}`),
+  gradient: L('smooth vibrant multi-stop gradient digital art', ['#7c3aed', '#ec4899', '#06b6d4', '#0b1220'], `flat single colour, hard noisy textures, ${NOT_PHOTO}`),
+  abstract: L('abstract organic-shape digital art', ['#f59e0b', '#0f172a', '#f472b6', '#38bdf8'], `literal photographic scenes, ${NOT_PHOTO}`),
+  brutalist: L('brutalist graphic design, raw grid blocks', ['#000000', '#facc15', '#ffffff'], `soft gradients, rounded friendly shapes, ${NOT_PHOTO}`),
+  vintage: L('vintage printed illustration with aged paper texture', ['#b45309', '#1c1917', '#fef3c7', '#78716c'], 'glossy modern digital sheen, neon colours, photorealism'),
+  retro: L('retro 80s/90s pop graphic art', ['#db2777', '#1e1b4b', '#facc15', '#22d3ee'], `muted corporate tones, ${NOT_PHOTO}`),
+  glassmorphism: L('glassmorphism digital render, frosted translucent panels', ['#38bdf8', '#0b1220', '#a78bfa', '#f8fafc'], `opaque flat panels, ${NOT_PHOTO}`),
+  neumorphism: L('neumorphic soft-UI render, extruded surfaces', ['#e2e8f0', '#94a3b8', '#ffffff'], `hard shadows, saturated colours, ${NOT_PHOTO}`),
+  // Photography
+  lifestyle: L('candid lifestyle photography, natural light', ['#0ea5e9', '#f8fafc', '#78716c'], 'illustration, cartoon, 3D render', true),
+  'real-photography': L('authentic high-resolution photography', ['#10b981', '#0b1220', '#f8fafc'], 'illustration, cartoon, 3D render', true),
+  'portrait-photography': L('professional portrait photography, shallow depth of field', ['#f43f5e', '#0b1220', '#f5f5f4'], 'illustration, cartoon, 3D render', true),
+  'product-photography': L('studio product photography', ['#06b6d4', '#0b1220', '#ffffff'], 'illustration, cartoon, cluttered background', true),
+  studio: L('controlled studio photography', ['#a3a3a3', '#0a0a0a', '#ffffff'], 'illustration, cartoon, uncontrolled outdoor light', true),
+  // Industry
+  technology: L('sleek technology photography with device hints', ['#6366f1', '#0b1220', '#22d3ee'], 'cartoon, rustic textures, clutter', true),
+  healthcare: L('calm clean clinical photography', ['#0ea5e9', '#f0f9ff', '#ffffff', '#10b981'], 'gore, harsh red tones, cartoon', true),
+  finance: L('confident data-forward finance photography', ['#1e3a8a', '#0b1220', '#10b981'], 'cartoon, playful clutter, neon colours', true),
+  education: L('friendly approachable education photography', ['#f59e0b', '#1f2937', '#38bdf8'], 'dark gloomy mood, clutter', true),
+  construction: L('rugged industrial construction photography', ['#f97316', '#1c1917', '#facc15', '#78716c'], 'cartoon, pastel tones, pristine sterile sets', true),
+  restaurant: L('warm appetising food photography', ['#dc2626', '#1a1a1a', '#f59e0b'], 'cold blue tones, cartoon, unappetising food', true),
+  travel: L('scenic travel photography', ['#0d9488', '#0b1220', '#f59e0b', '#38bdf8'], 'cartoon, grey overcast gloom, indoor offices', true),
+  retail: L('punchy promotional product photography', ['#e11d48', '#0b1220', '#ffffff'], 'cartoon, muted dull tones, clutter', true),
+  fashion: L('high-fashion editorial photography, dramatic lighting', ['#a21caf', '#0a0a0a', '#f5f5f4'], 'cartoon, flat even lighting, clutter', true),
+  'luxury-brand': L('understated luxury brand photography', ['#a16207', '#0a0a0a', '#f5f5f4'], 'cheap glossy plastic, loud colours, clutter', true),
+  // Illustration / 3D
+  graffiti: L('spray-paint graffiti street art on urban walls', ['#22c55e', '#111827', '#facc15', '#ec4899'], `clean corporate vector, ${NOT_PHOTO}`),
+  street: L('urban street-art mural painting', ['#f59e0b', '#171717', '#ef4444', '#38bdf8'], `clean corporate vector, ${NOT_PHOTO}`),
+  comic: L('comic-book ink illustration with halftone dots and bold outlines', ['#ef4444', '#fef9c3', '#1d4ed8', '#000000'], `soft gradients, ${NOT_PHOTO}`),
+  anime: L('cel-shaded anime illustration', ['#ec4899', '#0b1220', '#38bdf8', '#fef3c7'], `western cartoon proportions, ${NOT_PHOTO}`),
+  clay: L('claymation 3D, hand-sculpted matte clay', ['#fb7185', '#1f2937', '#fde68a', '#93c5fd'], `glossy chrome, hard-edged vector, ${NOT_PHOTO}`),
+  '3d': L('polished 3D render, soft global illumination', ['#8b5cf6', '#0b1220', '#22d3ee', '#f8fafc'], `flat 2D vector, ${NOT_PHOTO}`),
+  watercolor: L('watercolour painting, soft washes on paper', ['#38bdf8', '#f8fafc', '#f9a8d4', '#86efac'], `hard digital edges, neon colours, ${NOT_PHOTO}`),
+  sketch: L('hand-drawn pencil sketch with crosshatching', ['#475569', '#f1f5f9', '#0f172a'], `full colour fills, glossy render, ${NOT_PHOTO}`),
+  illustration: L('custom vector illustration', ['#6366f1', '#0b1220', '#f59e0b', '#f8fafc'], NOT_PHOTO),
+  'flat-illustration': L('flat vector illustration, simple geometric shapes', ['#14b8a6', '#0b1220', '#f59e0b', '#f8fafc'], `gradients, heavy shading, 3D depth, ${NOT_PHOTO}`),
+  isometric: L('isometric 2.5D vector illustration', ['#3b82f6', '#0b1220', '#22d3ee', '#f8fafc'], `perspective distortion, ${NOT_PHOTO}`),
+  'hand-drawn': L('hand-drawn marker doodles', ['#0f766e', '#fffbeb', '#f97316'], `precise vector geometry, glossy render, ${NOT_PHOTO}`),
+  'paper-cut': L('layered paper-cut craft with soft shadows', ['#f59e0b', '#1f2937', '#fb7185', '#fef3c7'], `glossy plastic, ${NOT_PHOTO}`),
+  // Futuristic
+  cyberpunk: L('cyberpunk neon-noir digital art', ['#d946ef', '#020617', '#22d3ee', '#facc15'], 'daylight pastoral scenes, muted beige tones, photorealism'),
+  futuristic: L('sleek sci-fi digital render with clean glow', ['#818cf8', '#020617', '#22d3ee', '#e2e8f0'], `rustic vintage textures, ${NOT_PHOTO}`),
+  neon: L('glowing neon-tube light art on black', ['#a855f7', '#020617', '#22d3ee', '#f472b6'], 'daylight, washed-out pastels, flat even lighting'),
+  // UI / data
+  'ui-mockup': L('clean product UI mockup render in a device frame', ['#2563eb', '#0b1220', '#f8fafc'], 'readable UI text, cluttered screens, photorealistic hands'),
+  dashboard: L('dark SaaS dashboard UI render with abstract charts', ['#0ea5e9', '#0b1220', '#22d3ee', '#a78bfa'], 'readable labels or numbers, photorealism'),
+  infographic: L('clean flat infographic design with icons and charts', ['#2563eb', '#0b1220', '#f59e0b', '#f8fafc'], `photographic scenes, ${NOT_PHOTO}`),
+};
+
+/** Fallback for a style added without a rendering row: non-committal and photographic (today's behaviour). */
+const DEFAULT_LOOK_RENDERING: LookRendering = L('', [], '', true);
 
 const ALL: TemplateAssetFamily[] = ['image', 'carousel', 'infographic'];
 const IMG_CAR: TemplateAssetFamily[] = ['image', 'carousel'];
@@ -47,6 +138,7 @@ function S(id: string, title: string, description: string, accent: string, surfa
     supportedFamilies: p.supportedFamilies ?? ALL,
     stylePrompt: p.stylePrompt ?? '',
     brandBehavior: p.brandBehavior ?? 'accent-led',
+    ...(LOOK_RENDERING[id] ?? DEFAULT_LOOK_RENDERING),
   };
 }
 

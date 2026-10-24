@@ -119,6 +119,30 @@ export type CreatorPromptInput = {
     stylePrompt?: string | null;
     /** The user's free-form words about how the creative should look. */
     instruction?: string | null;
+    /** Registry id of the chosen look (audit + style-reference lookup). */
+    id?: string | null;
+    /** How the look is made ("comic-book ink illustration…"). */
+    renderingMedium?: string | null;
+    /** The look's own palette (hex). */
+    palette?: string[] | null;
+    /** What would break the look. */
+    negativePrompt?: string | null;
+    /**
+     * False for a non-photographic look (comic, clay, neon…): the composer then
+     * replaces its photographic realism directives with a look-native block.
+     * True / absent keeps the photographic path exactly as it was.
+     */
+    photographic?: boolean | null;
+  } | null;
+  /**
+   * One of N versions generated with the look LOCKED ("More versions in this
+   * look"). The look stays fixed; only `focus` (composition / subject / angle)
+   * changes between versions. Absent → a normal single generation.
+   */
+  lookVariation?: {
+    index: number;
+    count: number;
+    focus?: string | null;
   } | null;
 };
 
@@ -146,6 +170,11 @@ export type CreatorPromptLayers = {
    * applies (industry='none') or no governance context was supplied.
    */
   governance: string[];
+  /**
+   * The chosen non-photographic look, stated first (PR5). Present only when a
+   * look-native prompt was composed; absent on every other path.
+   */
+  look?: string[];
 };
 
 export type CreatorComposedPrompt = {
@@ -186,6 +215,13 @@ export type CreatorComposedPrompt = {
    * guidance shaped the asset.
    */
   governance: GovernanceExplainabilityMetadata;
+  /**
+   * The look the user chose, as the composer applied it. `native` is true when
+   * the look-native (non-photographic) path ran, which downstream governance
+   * reads so it does not "correct" a chosen comic look back into a photograph.
+   * Absent when no look was chosen.
+   */
+  look?: { id: string | null; title: string | null; photographic: boolean; native: boolean } | null;
 };
 
 export type ReferenceImagePurpose =
@@ -697,6 +733,114 @@ function userVisualDirectionLines(
   if (instruction) lines.push(`Creative direction from the requester: ${instruction.slice(0, 400)}`);
   return lines;
 }
+
+/* ── Look-native prompting (PR5 — the selected look drives the image) ── */
+
+/**
+ * Is the chosen look non-photographic? Only an explicit `photographic: false`
+ * qualifies, so every caller that does not know about looks keeps the
+ * photographic path byte-for-byte.
+ */
+export function isLookNative(chosen: CreatorPromptInput['userVisualDirection']): boolean {
+  if (!chosen || chosen.photographic !== false) return false;
+  return Boolean(clean(chosen.title) || clean(chosen.stylePrompt) || clean(chosen.renderingMedium));
+}
+
+/** What each locked-look version varies. Rotated by index, so N versions differ on purpose. */
+const LOOK_VARIATION_FOCUS: Record<string, string> = {
+  composition: 'use a clearly different composition and framing from the other versions',
+  subject: 'depict a different subject, moment or metaphor that carries the same message',
+  angle: 'use a different viewpoint, camera angle and scale',
+};
+
+export const LOOK_VARIATION_FOCI: readonly string[] = Object.freeze(Object.keys(LOOK_VARIATION_FOCUS));
+
+function lookVariationLine(
+  variation: CreatorPromptInput['lookVariation'],
+  title: string,
+): string | null {
+  if (!variation) return null;
+  const count = Math.max(1, Math.min(8, Math.floor(Number(variation.count) || 1)));
+  const index = Math.max(1, Math.min(count, Math.floor(Number(variation.index) || 1)));
+  const focusKey = clean(variation.focus).toLowerCase();
+  const focus = LOOK_VARIATION_FOCUS[focusKey]
+    ?? LOOK_VARIATION_FOCUS[LOOK_VARIATION_FOCI[(index - 1) % LOOK_VARIATION_FOCI.length]];
+  const look = title ? `the same ${title} look` : 'the same look';
+  return `Version ${index} of ${count} in ${look}: keep the medium, palette, line work, shading, texture and lighting unchanged; ${focus}.`;
+}
+
+/** The look block that leads a look-native prompt. */
+function buildLookBlock(input: CreatorPromptInput): string[] {
+  const chosen = input.userVisualDirection;
+  if (!chosen) return [];
+  const title = clean(chosen.title);
+  const medium = clean(chosen.renderingMedium);
+  const stylePrompt = clean(chosen.stylePrompt);
+  const palette = (chosen.palette ?? []).map(clean).filter(Boolean).slice(0, 6);
+  const lines: string[] = [];
+  lines.push(`Chosen look${title ? `: ${title}` : ''}. This look defines the whole image; every direction below serves it and none overrides it.`);
+  if (medium) lines.push(`Rendering medium: ${medium}.`);
+  if (stylePrompt) lines.push(`Look style: ${stylePrompt}.`);
+  if (palette.length > 0) lines.push(`Look palette (dominant colours): ${palette.join(', ')}.`);
+  lines.push('Match the look consistently across the frame: medium, palette, line work and shading, texture and lighting.');
+  const variation = lookVariationLine(input.lookVariation, title);
+  if (variation) lines.push(variation);
+  const instruction = clean(chosen.instruction);
+  if (instruction) lines.push(`Creative direction from the requester: ${instruction.slice(0, 400)}`);
+  return lines;
+}
+
+/** Replaces REALISM_DIRECTIVES for a non-photographic look. */
+function buildLookNativeRenderingLayer(input: CreatorPromptInput): string[] {
+  const chosen = input.userVisualDirection!;
+  const title = clean(chosen.title) || 'chosen';
+  const medium = clean(chosen.renderingMedium) || clean(chosen.stylePrompt) || title;
+  return [
+    `Render the entire image as ${medium}: a ${title} image, not a photograph.`,
+    'Keep the subject recognisable and the scene readable at a glance, expressed through the look\'s own stylisation.',
+    'When people appear, give them correct anatomy (hands, fingers, eyes) within the stylisation of the look.',
+  ];
+}
+
+/*
+ * Base negatives that contradict a non-photographic look. A comic or pop look IS
+ * centred and saturated, neon IS neon, and clay IS smooth and plastic — telling
+ * the model to avoid exactly that is how the chosen look got overridden.
+ */
+const LOOK_CONTRADICTING_NEGATIVES: ReadonlySet<string> = new Set([
+  'Strictly avoid centered hero-subject poster compositions and rigid symmetry.',
+  'Strictly avoid oversaturated AI lighting, neon overload, and unrealistic colored fog.',
+  'Strictly avoid plastic skin, uncanny smiles, hyper-symmetrical faces, and identikit faces.',
+]);
+
+function buildLookNativeNegativeLayer(input: CreatorPromptInput): string[] {
+  const chosen = input.userVisualDirection!;
+  const out = NEGATIVE_DIRECTIVES_BASE.filter((line) => !LOOK_CONTRADICTING_NEGATIVES.has(line));
+  const negative = clean(chosen.negativePrompt);
+  if (negative) out.unshift(`Strictly avoid anything that breaks the ${clean(chosen.title) || 'chosen'} look: ${negative}.`);
+  return out;
+}
+
+function buildLookNativeQualityLayer(input: CreatorPromptInput): string[] {
+  const lines = [
+    'Render at production quality with crisp, intentional detail in the chosen medium.',
+    'Colour follows the look palette; brand colours appear as accents within it.',
+  ];
+  if (input.platform) {
+    lines.push(`Compose at production resolution suitable for ${clean(input.platform)} — sharp on phone, sharp on desktop.`);
+  }
+  return lines;
+}
+
+/** Only the medium-neutral parts of a creative-direction profile (no lens, lighting rig or photo realism). */
+function buildLookNativeVisualDirectionLayer(template: CreativeDirectionTemplate): string[] {
+  const profile = TEMPLATE_PROFILES[template];
+  return [
+    `Emotional tone: ${profile.emotionalTone}`,
+    `Visual hierarchy: ${profile.visualHierarchy}`,
+  ];
+}
+
 function buildVisualDirectionLayer(template: CreativeDirectionTemplate): string[] {
   return renderProfile(TEMPLATE_PROFILES[template]);
 }
@@ -735,12 +879,16 @@ function buildQualityLayer(input: CreatorPromptInput): string[] {
 const REQUIRED_REALISM_MARKERS = ['editorial', 'cinematic', 'authentic', 'candid', 'natural', 'believable'];
 const REQUIRED_SUPPRESSION_MARKERS = ['stock-photo', 'plastic skin', 'malformed hands', 'random unrelated people'];
 
-function evaluateQualityHeuristics(prompt: string, brandGrounded: boolean, productGrounded: boolean): string[] {
+function evaluateQualityHeuristics(prompt: string, brandGrounded: boolean, productGrounded: boolean, lookNative = false): string[] {
   const flags: string[] = [];
   const p = prompt.toLowerCase();
-  let realismHits = 0;
-  for (const m of REQUIRED_REALISM_MARKERS) if (p.includes(m)) realismHits++;
-  if (realismHits < 3) flags.push('realism_directives_insufficient');
+  // A chosen non-photographic look is SUPPOSED to lack photographic realism
+  // words; flagging it would push the retry back toward a photograph.
+  if (!lookNative) {
+    let realismHits = 0;
+    for (const m of REQUIRED_REALISM_MARKERS) if (p.includes(m)) realismHits++;
+    if (realismHits < 3) flags.push('realism_directives_insufficient');
+  }
   let suppressionHits = 0;
   for (const m of REQUIRED_SUPPRESSION_MARKERS) if (p.includes(m)) suppressionHits++;
   if (suppressionHits < 2) flags.push('suppression_directives_insufficient');
@@ -899,30 +1047,48 @@ export function composeCreatorImagePrompt(
   // composed prompt is byte-identical to prior behavior.
   const governanceLayer = buildGovernanceLayer(input.governance ?? null);
 
+  // PR5 — a chosen NON-photographic look is THE style. Its block leads the
+  // prompt, and the photographic realism / negatives / quality lines that
+  // contradict it are replaced. Photographic looks (and no look) take the
+  // original path below unchanged.
+  const lookNative = isLookNative(input.userVisualDirection);
+  const photoVariationLine = !lookNative
+    ? lookVariationLine(input.lookVariation, clean(input.userVisualDirection?.title))
+    : null;
+
   const layers: CreatorPromptLayers = {
     campaign: buildCampaignLayer(input),
     asset: buildAssetLayer(input),
     brand: brand.lines,
     product: product.lines,
-    visualDirection: [
-      ...userVisualDirectionLines(input.userVisualDirection),
-      ...buildVisualDirectionLayer(template),
-    ],
-    realism: [...REALISM_DIRECTIVES],
+    visualDirection: lookNative
+      ? buildLookNativeVisualDirectionLayer(template)
+      : [
+          ...userVisualDirectionLines(input.userVisualDirection),
+          ...(photoVariationLine ? [photoVariationLine] : []),
+          ...buildVisualDirectionLayer(template),
+        ],
+    realism: lookNative ? buildLookNativeRenderingLayer(input) : [...REALISM_DIRECTIVES],
     composition: compositionLayer,
-    negative: [...NEGATIVE_DIRECTIVES_BASE],
-    quality: buildQualityLayer(input),
+    negative: lookNative ? buildLookNativeNegativeLayer(input) : [...NEGATIVE_DIRECTIVES_BASE],
+    quality: lookNative ? buildLookNativeQualityLayer(input) : buildQualityLayer(input),
     purpose: purposeLayer,
     governance: governanceLayer,
+    ...(lookNative ? { look: buildLookBlock(input) } : {}),
   };
 
   // Mode-shared header preserved verbatim from the prior implementation so
   // the provider's text-ban contract is unchanged. validateProviderImageTextSafety
   // matches on the substring 'strictly avoid all visible text'.
   const supportingVisual = input.attachmentMode === 'supporting_visual';
-  const header = supportingVisual
-    ? 'Create a production-ready editorial marketing visual that stands on its own as a complete social creative — not an ad poster, text layout, slide, or wireframe.'
-    : 'Create a production-ready editorial marketing visual scene, not an ad poster, text layout, slide, or wireframe.';
+  const lookTitle = clean(input.userVisualDirection?.title) || 'chosen';
+  const header = lookNative
+    ? (supportingVisual
+        ? `Create a production-ready marketing visual in a ${lookTitle} style that stands on its own as a complete social creative — not a text layout, slide, or wireframe.`
+        : `Create a production-ready marketing visual scene in a ${lookTitle} style — not a text layout, slide, or wireframe.`)
+    : supportingVisual
+      ? 'Create a production-ready editorial marketing visual that stands on its own as a complete social creative — not an ad poster, text layout, slide, or wireframe.'
+      : 'Create a production-ready editorial marketing visual scene, not an ad poster, text layout, slide, or wireframe.';
   const textBanFooter = [
     'Strictly avoid all visible text: no words, letters, numbers, captions, signage, fake logos, UI text, action buttons, or tagline text.',
     'Strictly avoid inventing any fictional brand name, company name, app name, product name, or wordmark on any surface — including dashboards, screens, business cards, badges, packaging, or signage.',
@@ -931,6 +1097,8 @@ export function composeCreatorImagePrompt(
 
   const flat = [
     header,
+    // The chosen look leads (look-native only; empty otherwise).
+    ...(layers.look ?? []),
     ...layers.campaign,
     ...layers.asset,
     // Purpose layer fires BEFORE brand/product/visual-direction so the
@@ -953,8 +1121,17 @@ export function composeCreatorImagePrompt(
     ...textBanFooter,
   ].filter(Boolean).join('\n');
 
-  const qualityFlags = evaluateQualityHeuristics(flat, brand.grounded, product.grounded);
+  const qualityFlags = evaluateQualityHeuristics(flat, brand.grounded, product.grounded, lookNative);
   const references = collectReferenceImages(input);
+  const chosenLook = input.userVisualDirection;
+  const lookAudit = chosenLook && (clean(chosenLook.id) || clean(chosenLook.title))
+    ? {
+        id: clean(chosenLook.id) || null,
+        title: clean(chosenLook.title) || null,
+        photographic: chosenLook.photographic !== false,
+        native: lookNative,
+      }
+    : null;
 
   return {
     layers,
@@ -979,6 +1156,7 @@ export function composeCreatorImagePrompt(
         }
       : null,
     governance: buildGovernanceMetadata(input.governance ?? null, governanceLayer.length),
+    ...(lookAudit ? { look: lookAudit } : {}),
   };
 }
 
