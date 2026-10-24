@@ -443,8 +443,20 @@ export function renderDeclaredEvidence(payload: CanonicalExportPayload): string 
     if (observed.length > 0) {
       parts.push(`Publicly observed: ${observed.map((s) => escape(s.name ? `${s.platform} (${s.name})` : s.platform)).join(', ')}.`);
     }
-    if (declared.length > 0) {
-      parts.push(`Declared but not found in public search: ${declared.map((s) => escape(s.platform)).join(', ')}.`);
+    // A declared profile that WAS searched for and one that was never searchable (not a company
+    // profile URL) are different gaps; neither is evidence the profile does not exist.
+    // `searched_at` undefined = written before the distinction existed: say only what is known.
+    const searched = declared.filter((s) => Boolean(s.searched_at));
+    const notSearchable = declared.filter((s) => s.searched_at === null);
+    const legacy = declared.filter((s) => s.searched_at === undefined);
+    if (legacy.length > 0) {
+      parts.push(`Declared, not observed in public search: ${legacy.map((s) => escape(s.platform)).join(', ')}.`);
+    }
+    if (searched.length > 0) {
+      parts.push(`Declared, not among the results of one brand search: ${searched.map((s) => escape(s.platform)).join(', ')}. A single search is weak evidence; it does not show the profile is missing.`);
+    }
+    if (notSearchable.length > 0) {
+      parts.push(`Declared, not checked (the URL is not a recognisable company profile): ${notSearchable.map((s) => escape(s.platform)).join(', ')}.`);
     }
     if (unreachable.length > 0) {
       parts.push(`Not checked (observation unavailable): ${unreachable.map((s) => escape(s.platform)).join(', ')}.`);
@@ -522,10 +534,20 @@ export function renderReportDisclosures(payload: CanonicalExportPayload): string
     const unqueried = (payload.ai_surface_presence?.citation_matrix?.by_provider ?? [])
       .filter((p) => p.state !== 'measured')
       .map((p) => p.provider);
+    // A provider that was configured and broke is not the same gap as one never configured: the
+    // first is a defect to fix, the second a source to connect. The cells carry the reason.
+    const cells = payload.ai_surface_presence?.citation_matrix?.cells ?? [];
+    const reasonFor = (provider: string): string =>
+      cells.filter((c) => c.provider === provider).map((c) => c.reason_unavailable ?? '').join(' ');
+    const failed = unqueried.filter((p) => /failed to load|provider_failed|errored|error/i.test(reasonFor(p)));
+    const notConfigured = unqueried.filter((p) => !failed.includes(p) && /not configured/i.test(reasonFor(p)));
+    const other = unqueried.filter((p) => !failed.includes(p) && !notConfigured.includes(p));
     rows.push([
       'AI answer-engine coverage',
       `${matrixCoverage.measured_cells} of ${matrixCoverage.total_cells} provider × question-type checks returned data.`
-        + `${unqueried.length > 0 ? ` No result from: ${unqueried.join(', ')}.` : ''}`
+        + `${failed.length > 0 ? ` Configured but failed: ${failed.join(', ')}.` : ''}`
+        + `${notConfigured.length > 0 ? ` Not configured: ${notConfigured.join(', ')}.` : ''}`
+        + `${other.length > 0 ? ` No result from: ${other.join(', ')}.` : ''}`
         + `${matrixCoverage.measured_cells === 0 ? ' No AI visibility conclusion is drawn from this run.' : ''}`,
     ]);
   }

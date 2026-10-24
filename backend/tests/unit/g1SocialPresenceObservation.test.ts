@@ -326,8 +326,10 @@ describe('G-1 — public social presence observation', () => {
       expect(html).toContain('Social identity');
       expect(html).toContain('Publicly observed');
       expect(html).toContain('Northwind');
-      expect(html).toContain('Declared but not found in public search');
-      expect(html).toContain('instagram');
+      // Searched for and not among the results — stated as one weak search, not as absence.
+      expect(html).toContain('Declared, not among the results of one brand search: instagram');
+      expect(html).toContain('does not show the profile is missing');
+      expect(html).not.toContain('Declared but not found in public search');
       // The claim is scoped honestly — indexed, not active.
       expect(html).toContain('not a measure of activity or audience');
     });
@@ -427,9 +429,10 @@ describe('DG-011 — the exposed contract carries no metric it did not observe',
       'post_count', 'posts', 'likes', 'subscribers', 'reach', 'impressions', 'verified']) {
       expect(fields).not.toContain(forbidden);
     }
-    // And the fields it DOES declare are exactly the observed set.
+    // And the fields it DOES declare are exactly the observed set, plus `searched_at`: when a
+    // declared profile was searched for and not found (a search time, not an audience metric).
     expect(fields.sort()).toEqual(
-      ['description', 'name', 'observed_at', 'platform', 'source', 'status', 'url'].sort(),
+      ['description', 'name', 'observed_at', 'platform', 'searched_at', 'source', 'status', 'url'].sort(),
     );
   });
 });

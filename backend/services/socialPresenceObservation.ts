@@ -189,7 +189,10 @@ export async function observeSocialPresence(
     if (!hit) {
       // Either the shape disqualified it, or the provider answered and this profile was not in the
       // public result set. Honest state either way: the company declared it, nothing observed it.
-      return declared(candidate);
+      // The two are still told apart: a searched-for profile records WHEN it was searched for
+      // (`searched_at`), so a reader can see "searched, not found" versus "never a searchable
+      // profile". `source` and `observed_at` stay unset — nothing was observed.
+      return candidate.observable ? { ...declared(candidate), searched_at: observedAt } : declared(candidate);
     }
     return {
       platform: candidate.platform,
@@ -213,6 +216,8 @@ function declared(candidate: { platform: string; url: string }): CanonicalSocial
     name: null,
     description: null,
     source: 'unspecified',
+    // null = not searched (overwritten with the search time when it was searched for).
+    searched_at: null,
   };
 }
 

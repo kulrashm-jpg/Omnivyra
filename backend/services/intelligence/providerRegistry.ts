@@ -297,36 +297,36 @@ function registerLLMAdapterOrRecordFailure(
  * `loadFailedReason(...)`. The ScoreState stays `unavailable`, exactly as the
  * default provider's was: nothing becomes measurable, only diagnosable.
  */
-const LOAD_FAILURE_SUBSTITUTES: Partial<Record<ProviderSlotKey, (failure: AdapterLoadFailure) => void>> = {
-  knowledge_graph: (failure) => registerKnowledgeGraphProvider({
+const FAILURE_PROVIDERS = {
+  knowledge_graph: (failure: AdapterLoadFailure): KnowledgeGraphProvider => ({
     id: 'adapter_load_failed',
     isAvailable: async () => false,
     lookup: async () => unavailableResult<EntityIntelligenceResult>({
       entity: null, score: null, reason: loadFailedReason(failure),
     }),
   }),
-  authority_inflow: (failure) => registerAuthorityInflowProvider({
+  authority_inflow: (failure: AdapterLoadFailure): AuthorityInflowProvider => ({
     id: 'adapter_load_failed',
     isAvailable: async () => false,
     lookup: async () => unavailableResult<AuthorityInflowResult>({
       profile: null, score: null, reason: loadFailedReason(failure),
     }),
   }),
-  trust_coherence: (failure) => registerTrustCoherenceProvider({
+  trust_coherence: (failure: AdapterLoadFailure): TrustCoherenceProvider => ({
     id: 'adapter_load_failed',
     isAvailable: async () => false,
     lookup: async () => unavailableResult<TrustCoherenceResult>({
       signals: null, score: null, reason: loadFailedReason(failure),
     }),
   }),
-  benchmark: (failure) => registerBenchmarkProvider({
+  benchmark: (failure: AdapterLoadFailure): BenchmarkProvider => ({
     id: 'adapter_load_failed',
     isAvailable: async () => false,
     lookup: async () => unavailableResult<BenchmarkResult>({
       band: null, percentile: null, reason: loadFailedReason(failure),
     }),
   }),
-  trajectory: (failure) => registerTrajectoryProvider({
+  trajectory: (failure: AdapterLoadFailure): AuthorityTrajectoryProvider => ({
     id: 'adapter_load_failed',
     isAvailable: async () => false,
     lookup: async () => unavailableResult<AuthorityTrajectoryResult>({
@@ -336,13 +336,22 @@ const LOAD_FAILURE_SUBSTITUTES: Partial<Record<ProviderSlotKey, (failure: Adapte
       reason: loadFailedReason(failure),
     }),
   }),
-  commercial: (failure) => registerCommercialProvider({
+  commercial: (failure: AdapterLoadFailure): CommercialProvider => ({
     id: 'adapter_load_failed',
     isAvailable: async () => false,
     lookup: async () => unavailableResult<CommercialResult>({
       quantified: null, measuredRevenue: false, reason: loadFailedReason(failure),
     }),
   }),
+};
+
+const LOAD_FAILURE_SUBSTITUTES: Partial<Record<ProviderSlotKey, (failure: AdapterLoadFailure) => void>> = {
+  knowledge_graph: (failure) => registerKnowledgeGraphProvider(FAILURE_PROVIDERS.knowledge_graph(failure)),
+  authority_inflow: (failure) => registerAuthorityInflowProvider(FAILURE_PROVIDERS.authority_inflow(failure)),
+  trust_coherence: (failure) => registerTrustCoherenceProvider(FAILURE_PROVIDERS.trust_coherence(failure)),
+  benchmark: (failure) => registerBenchmarkProvider(FAILURE_PROVIDERS.benchmark(failure)),
+  trajectory: (failure) => registerTrajectoryProvider(FAILURE_PROVIDERS.trajectory(failure)),
+  commercial: (failure) => registerCommercialProvider(FAILURE_PROVIDERS.commercial(failure)),
   // `historical_store` deliberately has NO substitute: it registers into
   // `historicalPersistence`, not into this registry, and the in-memory store it
   // falls back to is a working (if volatile) implementation rather than an
@@ -362,6 +371,95 @@ function registerAdapterOrRecordFailure(slot: ProviderSlotKey, load: () => void)
     const failure = recordAdapterLoadFailure(slot, PROVIDER_SLOTS[slot].module, error);
     LOAD_FAILURE_SUBSTITUTES[slot]?.(failure);
   }
+}
+
+/**
+ * ADAPTER LOADING. Production reports showed "mod.WikidataAdapter is not a
+ * constructor" and "mod.OpenAIChatGPTAdapter is not a constructor" — every
+ * adapter that was actually configured failed this way, so the slots read as
+ * load-failed while the code and credentials were fine. The module object a
+ * require() returned at bootstrap had no exports: what a require() yields for a
+ * module still mid-evaluation, or for a bundler async module (a Promise).
+ *
+ * When the export is present the adapter is constructed at once, exactly as
+ * before. Otherwise construction is deferred to the first call, when the module
+ * is complete (a Promise is awaited); until then the slot answers with its fixed
+ * properties (`sync`) and forwards every method call. A require() that THROWS is
+ * not handled here — it propagates to the caller's recorder at bootstrap. A
+ * deferred module that still lacks the export is recorded on first use and the
+ * slot answers with the same failure provider a bootstrap failure would.
+ */
+export type AdapterModule = Record<string, unknown> & { default?: Record<string, unknown> };
+
+export function adapterExport<C>(mod: unknown, name: string): C | null {
+  const m = mod as AdapterModule | null | undefined;
+  const value = m?.[name] ?? m?.default?.[name];
+  return typeof value === 'function' ? (value as C) : null;
+}
+
+export function instantiateAdapter<T extends object>(spec: {
+  /** The module object(s) required at bootstrap. */
+  initial: unknown;
+  /** Re-reads the module object(s) on first use. */
+  load: () => unknown;
+  /** Builds the adapter from the module object(s); null when an export is missing. */
+  construct: (mods: unknown) => T | null;
+  /** Properties a caller may read before the first call (id, flags). */
+  sync: Partial<T>;
+  slot: ProviderSlotKey;
+  onFailure: (failure: AdapterLoadFailure) => T;
+}): T {
+  const eager = spec.construct(spec.initial);
+  if (eager) return eager;
+
+  const describe = (mods: unknown): string => {
+    const list = Array.isArray(mods) ? mods : [mods];
+    return list.map((m) => Object.keys((m ?? {}) as object).join(', ') || 'none').join(' | ');
+  };
+  let resolved: Promise<T> | null = null;
+  const resolve = (): Promise<T> => {
+    resolved ??= (async () => {
+      const loaded = spec.load();
+      const mods = Array.isArray(loaded)
+        ? await Promise.all(loaded.map((m) => Promise.resolve(m)))
+        : await Promise.resolve(loaded);
+      const instance = spec.construct(mods);
+      if (!instance) throw new Error(`adapter export missing (module exports: ${describe(mods)})`);
+      return instance;
+    })().catch((error) => spec.onFailure(recordAdapterLoadFailure(spec.slot, PROVIDER_SLOTS[spec.slot].module, error)));
+    return resolved;
+  };
+  return new Proxy(spec.sync as T, {
+    get(target, prop) {
+      if (prop in target) return (target as Record<string | symbol, unknown>)[prop];
+      // Not a thenable: an awaited slot must not be mistaken for a pending Promise.
+      if (prop === 'then') return undefined;
+      return async (...args: unknown[]) => {
+        const instance = (await resolve()) as Record<string | symbol, unknown>;
+        return (instance[prop] as (...a: unknown[]) => unknown).apply(instance, args);
+      };
+    },
+  });
+}
+
+/**
+ * Fixed per-provider property the LLM slots must expose before their module
+ * resolves. Asserted against the adapter classes in tests so the two cannot drift.
+ */
+export const LLM_RETRIEVAL_GROUNDED: Record<AIProviderId, boolean> = {
+  chatgpt: false, claude: false, gemini: false, perplexity: true, copilot: false,
+};
+
+function deferredLLMAdapter(id: AIProviderId, load: () => unknown, exportName: string): LLMVisibilityProvider {
+  return instantiateAdapter<LLMVisibilityProvider>({
+    initial: load(), load, slot: `llm:${id}`,
+    sync: { id, retrieval_grounded: LLM_RETRIEVAL_GROUNDED[id] },
+    construct: (mod) => {
+      const Ctor = adapterExport<new () => LLMVisibilityProvider>(mod, exportName);
+      return Ctor ? new Ctor() : null;
+    },
+    onFailure: (failure) => new AdapterLoadFailedLLMProvider(id, failure),
+  });
 }
 
 class UnavailableKnowledgeGraphProvider implements KnowledgeGraphProvider {
@@ -701,8 +799,15 @@ function ensureBootstrapped(): void {
     // failure instead of the unconfigured provider's text.
     registerAdapterOrRecordFailure('knowledge_graph', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/wikidataAdapter');
-      registerKnowledgeGraphProvider(new mod.WikidataAdapter());
+      const load = () => require('./adapters/wikidataAdapter');
+      registerKnowledgeGraphProvider(instantiateAdapter<KnowledgeGraphProvider>({
+        initial: load(), load, slot: 'knowledge_graph', sync: { id: 'wikidata' },
+        construct: (mod) => {
+          const Ctor = adapterExport<new () => KnowledgeGraphProvider>(mod, 'WikidataAdapter');
+          return Ctor ? new Ctor() : null;
+        },
+        onFailure: FAILURE_PROVIDERS.knowledge_graph,
+      }));
     });
   } else {
     // E — switched off on purpose. Say that, rather than "not configured".
@@ -713,16 +818,22 @@ function ensureBootstrapped(): void {
   if (process.env.AUTHORITY_TRAJECTORY_ENABLED === 'true') {
     registerAdapterOrRecordFailure('trajectory', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/reportScoreHistoryAdapter');
       // BETA-PHASE2-EXEC-001: back the adapter with the canonical historical
       // store (`getHistoricalStore()`) instead of the default NoopHistoryStore,
       // so trajectory reads the SAME persisted snapshots as change-intelligence
       // and forecast. Honest-empty until real snapshots exist; no synthesis.
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const storeMod = require('./adapters/trajectoryHistoryStore');
-      registerTrajectoryProvider(
-        new mod.ReportScoreHistoryAdapter(new storeMod.CanonicalTrajectoryHistoryStore()),
-      );
+      const load = () => [require('./adapters/reportScoreHistoryAdapter'), require('./adapters/trajectoryHistoryStore')];
+      registerTrajectoryProvider(instantiateAdapter<AuthorityTrajectoryProvider>({
+        initial: load(), load, slot: 'trajectory', sync: { id: 'report_score_history' },
+        construct: (mods) => {
+          const [mod, storeMod] = mods as unknown[];
+          const Adapter = adapterExport<new (store: unknown) => AuthorityTrajectoryProvider>(mod, 'ReportScoreHistoryAdapter');
+          const Store = adapterExport<new () => unknown>(storeMod, 'CanonicalTrajectoryHistoryStore');
+          return Adapter && Store ? new Adapter(new Store()) : null;
+        },
+        onFailure: FAILURE_PROVIDERS.trajectory,
+      }));
     });
   }
 
@@ -736,36 +847,36 @@ function ensureBootstrapped(): void {
   if (process.env.OPENAI_API_KEY) {
     registerLLMAdapterOrRecordFailure('chatgpt', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/openaiAdapter');
-      return new mod.OpenAIChatGPTAdapter();
+      const load = () => require('./adapters/openaiAdapter');
+      return deferredLLMAdapter('chatgpt', load, 'OpenAIChatGPTAdapter');
     });
   }
   if (process.env.ANTHROPIC_API_KEY) {
     registerLLMAdapterOrRecordFailure('claude', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/anthropicAdapter');
-      return new mod.AnthropicClaudeAdapter();
+      const load = () => require('./adapters/anthropicAdapter');
+      return deferredLLMAdapter('claude', load, 'AnthropicClaudeAdapter');
     });
   }
   if (process.env.GEMINI_API_KEY) {
     registerLLMAdapterOrRecordFailure('gemini', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/geminiAdapter');
-      return new mod.GeminiAdapter();
+      const load = () => require('./adapters/geminiAdapter');
+      return deferredLLMAdapter('gemini', load, 'GeminiAdapter');
     });
   }
   if (process.env.PERPLEXITY_API_KEY) {
     registerLLMAdapterOrRecordFailure('perplexity', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/perplexityAdapter');
-      return new mod.PerplexityAdapter();
+      const load = () => require('./adapters/perplexityAdapter');
+      return deferredLLMAdapter('perplexity', load, 'PerplexityAdapter');
     });
   }
   if (process.env.AZURE_COPILOT_API_KEY) {
     registerLLMAdapterOrRecordFailure('copilot', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/copilotAdapter');
-      return new mod.CopilotAdapter();
+      const load = () => require('./adapters/copilotAdapter');
+      return deferredLLMAdapter('copilot', load, 'CopilotAdapter');
     });
   }
 
@@ -773,8 +884,15 @@ function ensureBootstrapped(): void {
   if (process.env.AHREFS_API_KEY) {
     registerAdapterOrRecordFailure('authority_inflow', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/ahrefsAdapter');
-      registerAuthorityInflowProvider(new mod.AhrefsAdapter());
+      const load = () => require('./adapters/ahrefsAdapter');
+      registerAuthorityInflowProvider(instantiateAdapter<AuthorityInflowProvider>({
+        initial: load(), load, slot: 'authority_inflow', sync: { id: 'ahrefs' },
+        construct: (mod) => {
+          const Ctor = adapterExport<new () => AuthorityInflowProvider>(mod, 'AhrefsAdapter');
+          return Ctor ? new Ctor() : null;
+        },
+        onFailure: FAILURE_PROVIDERS.authority_inflow,
+      }));
     });
   }
   // NOTE: mozAdapter / majesticAdapter conditional registrations were
@@ -788,21 +906,37 @@ function ensureBootstrapped(): void {
   if (process.env.TRUST_COHERENCE_ENABLED === 'true') {
     registerAdapterOrRecordFailure('trust_coherence', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/trustCoherenceAdapter');
-      registerTrustCoherenceProvider(new mod.TrustCoherenceAdapter());
       // BETA-REPORT-EXEC-002 (Wave 1, Phase 4): wire the canonical reviews provider into the empty
       // ReviewAggregator slot — the one clean Evidence-Platform integration per BETA-REPORT-AUDIT-002.
       // Inert until REVIEWS_API_KEY is set AND a review-source loader is registered by an ingestion layer;
       // otherwise it returns null and trust_coherence falls back to today's behavior (zero regression).
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const agg = require('./adapters/reputationReviewAggregator');
-      mod.registerReviewAggregator(agg.createReputationReviewAggregator());
       // BETA-REPORT-EXEC-003: supply the ReviewAggregator with the canonical review-ingestion loader.
       // Durable/guarded persistence; returns null (trust unchanged) until reviews are ingested + the
       // review_sources migration is applied — zero regression otherwise.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const ing = require('../reviewIngestionService');
-      agg.registerReviewSourceLoader(ing.createCanonicalReviewSourceLoader());
+      const load = () => [
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        require('./adapters/trustCoherenceAdapter'),
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        require('./adapters/reputationReviewAggregator'),
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        require('../reviewIngestionService'),
+      ];
+      registerTrustCoherenceProvider(instantiateAdapter<TrustCoherenceProvider>({
+        initial: load(), load, slot: 'trust_coherence', sync: { id: 'review_aggregator' },
+        construct: (mods) => {
+          const [mod, agg, ing] = mods as Array<Record<string, (...a: unknown[]) => unknown> | undefined>;
+          const Ctor = adapterExport<new () => TrustCoherenceProvider>(mod, 'TrustCoherenceAdapter');
+          if (!Ctor || typeof mod?.registerReviewAggregator !== 'function'
+            || typeof agg?.createReputationReviewAggregator !== 'function'
+            || typeof agg?.registerReviewSourceLoader !== 'function'
+            || typeof ing?.createCanonicalReviewSourceLoader !== 'function') return null;
+          const instance = new Ctor();
+          mod.registerReviewAggregator(agg.createReputationReviewAggregator());
+          agg.registerReviewSourceLoader(ing.createCanonicalReviewSourceLoader());
+          return instance;
+        },
+        onFailure: FAILURE_PROVIDERS.trust_coherence,
+      }));
     });
   }
 
@@ -810,8 +944,15 @@ function ensureBootstrapped(): void {
   if (process.env.BENCHMARK_DATASET_PATH) {
     registerAdapterOrRecordFailure('benchmark', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/benchmarkDatasetAdapter');
-      registerBenchmarkProvider(new mod.BenchmarkDatasetAdapter(process.env.BENCHMARK_DATASET_PATH));
+      const load = () => require('./adapters/benchmarkDatasetAdapter');
+      registerBenchmarkProvider(instantiateAdapter<BenchmarkProvider>({
+        initial: load(), load, slot: 'benchmark', sync: { id: 'curated_vertical' },
+        construct: (mod) => {
+          const Ctor = adapterExport<new (path?: string) => BenchmarkProvider>(mod, 'BenchmarkDatasetAdapter');
+          return Ctor ? new Ctor(process.env.BENCHMARK_DATASET_PATH) : null;
+        },
+        onFailure: FAILURE_PROVIDERS.benchmark,
+      }));
     });
   }
 
@@ -823,9 +964,20 @@ function ensureBootstrapped(): void {
   if (process.env.CRM_ENABLED || process.env.COMMERCIAL_EVIDENCE_ENABLED) {
     registerAdapterOrRecordFailure('commercial', () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/commercialAdapter');
-      registerCommercialProvider(new mod.CommercialAdapter());
-      mod.registerCommercialSourceLoader(mod.createCanonicalRevenueLoader());
+      const load = () => require('./adapters/commercialAdapter');
+      registerCommercialProvider(instantiateAdapter<CommercialProvider>({
+        initial: load(), load, slot: 'commercial', sync: { id: 'commercial' },
+        construct: (mod) => {
+          const m = mod as Record<string, (...a: unknown[]) => unknown> | undefined;
+          const Ctor = adapterExport<new () => CommercialProvider>(mod, 'CommercialAdapter');
+          if (!Ctor || typeof m?.registerCommercialSourceLoader !== 'function'
+            || typeof m?.createCanonicalRevenueLoader !== 'function') return null;
+          const instance = new Ctor();
+          m.registerCommercialSourceLoader(m.createCanonicalRevenueLoader());
+          return instance;
+        },
+        onFailure: FAILURE_PROVIDERS.commercial,
+      }));
     });
   }
 

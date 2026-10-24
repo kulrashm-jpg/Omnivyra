@@ -533,6 +533,12 @@ export type CanonicalSocialPresenceEntry = {
   name: string | null;
   description: string | null;
   source: EvidenceSourceKind;
+  /**
+   * `declared` only: when the profile WAS searched for and was not among the results. Absent when
+   * it was never searchable (not a company-profile URL) or on entries written before this field.
+   * A search that did not find a profile is not an observation of anything.
+   */
+  searched_at?: string | null;
 };
 
 export type CanonicalDeclaredEvidence = {
