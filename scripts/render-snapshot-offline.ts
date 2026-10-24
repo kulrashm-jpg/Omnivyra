@@ -7,7 +7,7 @@
  * provider call. Used to compare report output before and after renderer
  * changes against real stored data.
  *
- *   npx tsx scripts/render-snapshot-offline.ts <report-row.json> <outDir> [--no-pdf] [--v2]
+ *   npx tsx scripts/render-snapshot-offline.ts <report-row.json> <outDir> [--no-pdf] [--v2] [--research <pack.json>]
  */
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
@@ -23,7 +23,10 @@ process.env.OPENAI_API_KEY = 'offline-render-placeholder';
 process.env.ENCRYPTION_KEY ||= '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
 async function main() {
-  const [rowPath, outDir = 'tmp/snapshot-render'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+  const argv = process.argv.slice(2);
+  const researchAt = argv.indexOf('--research');
+  const researchPath = researchAt >= 0 ? argv[researchAt + 1] : null;
+  const [rowPath, outDir = 'tmp/snapshot-render'] = argv.filter((a, i) => !a.startsWith('--') && (researchAt < 0 || i !== researchAt + 1));
   const wantPdf = !process.argv.includes('--no-pdf');
   if (process.argv.includes('--v2')) process.env.REPORT_DOSSIER_LAYOUT = 'v2';
   if (!rowPath) throw new Error('usage: render-snapshot-offline.ts <report-row.json> <outDir> [--no-pdf] [--v2]');
@@ -32,6 +35,7 @@ async function main() {
     id: string; company_id: string; domain: string; created_at: string;
     data?: { composed_report?: unknown; engine_version?: string };
   };
+  const research = researchPath ? JSON.parse(await readFile(researchPath, 'utf8')) : null;
   const composed = row.data?.composed_report;
   if (!composed) throw new Error('row has no data.composed_report');
 
@@ -48,11 +52,11 @@ async function main() {
   const sanitized = sanitizeReportViewPayload(payload as never);
 
   await mkdir(outDir, { recursive: true });
-  const html = renderCanonicalReportHtml(sanitized);
+  const html = renderCanonicalReportHtml(sanitized, { research });
   await writeFile(path.join(outDir, 'report.html'), html);
   console.log('html', path.join(outDir, 'report.html'), html.length, 'chars');
   if (wantPdf) {
-    const pdf = await renderCanonicalReportPdf(sanitized);
+    const pdf = await renderCanonicalReportPdf(sanitized, { research });
     await writeFile(path.join(outDir, 'report.pdf'), pdf);
     console.log('pdf', path.join(outDir, 'report.pdf'), pdf.length, 'bytes');
   }

@@ -82,7 +82,13 @@ function renderInsufficientReportHtml(payload: ReportViewPayload): string {
 
 // ── Canonical pipeline entry points ───────────────────────────────────────
 
-export function renderCanonicalReportHtml(payload: ReportViewPayload): string {
+/**
+ * `research` is an optional analyst-collected public-evidence pack (dossierV2/research.ts). Only
+ * the v2 layout reads it; it is validated against the report's domain and never feeds a score.
+ */
+export type CanonicalRenderOptions = { research?: unknown };
+
+export function renderCanonicalReportHtml(payload: ReportViewPayload, options: CanonicalRenderOptions = {}): string {
   if (!payload.canonical) {
     return renderInsufficientReportHtml(payload);
   }
@@ -132,7 +138,7 @@ export function renderCanonicalReportHtml(payload: ReportViewPayload): string {
       brandName: payload.companyContext?.companyName ?? payload.domain ?? null,
       domain: payload.domain ?? null,
       logoUrl: payload.companyContext?.logoUrl ?? null,
-    });
+    }, options.research ?? null);
   }
   return renderExportHtml(exportPayload, {
     brandName: payload.companyContext?.companyName ?? payload.domain ?? null,
@@ -143,7 +149,7 @@ export function renderCanonicalReportHtml(payload: ReportViewPayload): string {
   });
 }
 
-export async function renderCanonicalReportPdf(payload: ReportViewPayload): Promise<Buffer> {
-  const html = renderCanonicalReportHtml(payload);
+export async function renderCanonicalReportPdf(payload: ReportViewPayload, options: CanonicalRenderOptions = {}): Promise<Buffer> {
+  const html = renderCanonicalReportHtml(payload, options);
   return renderPdfFromHtml(html);
 }
