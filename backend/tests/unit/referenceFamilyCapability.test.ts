@@ -199,7 +199,11 @@ describe('D — one disclosure, correct by construction', () => {
     const contracts = read('backend/services/creatorAssetRendererContracts.ts');
     // One status literal, one category union, one message field.
     expect(contracts).toContain("status: 'not_applied'");
-    expect(contracts).toMatch(/ConditionDegradationCategory =\s*'edit_failed' \| 'edit_no_image' \| 'family_unsupported'/);
+    // One closed category union (2905cec6 added `reference_mode_disabled` and
+    // reformatted it one member per line, so the leading `|` is optional).
+    expect(contracts).toMatch(
+      /ConditionDegradationCategory =\s*(?:\|\s*)?'edit_failed'\s*\|\s*'edit_no_image'\s*\|\s*'family_unsupported'\s*\|\s*'reference_mode_disabled';/,
+    );
     for (const invented of ['infographicReferenceStatus', 'referenceDeliveryStatus', 'assetReferenceStatus']) {
       expect(contracts).not.toContain(invented);
     }
