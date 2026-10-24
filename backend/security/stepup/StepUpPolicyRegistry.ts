@@ -29,6 +29,12 @@ import {
   MFA_REVOKE,
   ORGANIZATION_DELETE,
   ORGANIZATION_TRANSFER,
+  OUTREACH_PLATFORM_MANAGE,
+  PLATFORM_CONTROLS_MANAGE,
+  BLOG_PUBLISH_MANAGE,
+  CRON_CONFIG_MANAGE,
+  INTELLIGENCE_OVERRIDE_MANAGE,
+  PUBLISH_RECOVERY_MANAGE,
   STEP_UP_REQUIRED_CAPABILITIES,
   type Capability,
   type StepUpRequirement,
@@ -82,6 +88,22 @@ const POLICIES: ReadonlyArray<StepUpRequirement> = [
 
   // Platform-wide OAuth credentials.
   { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: INTEGRATION_PLATFORM_OAUTH_MANAGE, reason: 'Confirm with a passkey on a trusted device to change platform OAuth credentials.' },
+
+  // Closure-009 (owner decision) — cross-tenant outreach, publish recovery and
+  // platform kill-switches act on every tenant: trusted-device step-up.
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: OUTREACH_PLATFORM_MANAGE, reason: 'Confirm with a passkey on a trusted device to approve or dispatch outreach.' },
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: PUBLISH_RECOVERY_MANAGE,  reason: 'Confirm with a passkey on a trusted device to recover a publish.' },
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: PLATFORM_CONTROLS_MANAGE, reason: 'Confirm with a passkey on a trusted device to change platform controls.' },
+
+  // Closure-014 (C) — the last three platform-tier write capabilities without a
+  // policy (platformCapabilities recipe step 4). Platform-wide effects: public
+  // blog publishing/deletion, cron/queue runtime config, AI/scheduler overrides
+  // and community-AI kill switches. Reads gated by these capabilities opt out
+  // per route (`requireStepUp: req.method !== 'GET'`); every UI writer goes
+  // through lib/security/superAdminWrite.performSuperAdminWrite.
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: BLOG_PUBLISH_MANAGE,          reason: 'Confirm with a passkey on a trusted device to change the public blog.' },
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: CRON_CONFIG_MANAGE,           reason: 'Confirm with a passkey on a trusted device to change cron or queue configuration.' },
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: INTELLIGENCE_OVERRIDE_MANAGE, reason: 'Confirm with a passkey on a trusted device to change intelligence overrides.' },
 
   // API keys + integration secrets — phishing-resistant.
   { ...PHISHING_RESISTANT_TENMIN,         capability: API_KEY_MANAGE,        reason: 'Confirm with a passkey to manage API keys.' },

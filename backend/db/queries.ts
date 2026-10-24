@@ -12,12 +12,19 @@
  */
 
 import { supabase } from './supabaseClient';
+import { isRetryStateColumnMissing, PUBLISH_OUTCOME_UNCERTAIN } from '../queue/publishRetryState';
+import { PUBLISH_CALL_STARTED, publishClaimCode } from '../queue/publishOutcome';
 
 export interface QueueJob {
   id: string;
   scheduled_post_id: string;
   job_type: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * Present only once migration 20261202000000 is applied (select('*') omits
+   * an absent column). See backend/queue/publishRetryState.ts.
+   */
+  retry_state?: 'awaiting_retry' | 'exhausted' | null;
   attempts: number;
   max_attempts: number;
   scheduled_for: string;
@@ -151,13 +158,300 @@ export async function updateQueueJobStatus(
     updateData.result_data = updates.result_data;
   }
 
-  const { error } = await supabase
+  let query = supabase
     .from('queue_jobs')
     .update(updateData)
     .eq('id', jobId);
 
+  // A 'failed' write only lands on a row that can still fail. It must never
+  // overwrite a cancellation: a cancel that lands while a delivery is in flight
+  // would otherwise be turned back into 'failed', and a 'failed' row is
+  // runnable again on BullMQ's next delivery — the cancelled post would
+  // publish. 'completed' stays unconditional: it records a publish that
+  // actually happened, which is the truth even for a row cancelled meanwhile.
+  if (status === 'failed') {
+    query = query.in('status', QUEUE_JOB_FAILABLE_FROM_STATUSES);
+  }
+
+  const { error } = await query;
+
   if (error) {
     throw new Error(`Failed to update queue job: ${error.message}`);
+  }
+}
+
+/** The statuses a publish delivery can legitimately fail out of. */
+const QUEUE_JOB_FAILABLE_FROM_STATUSES = ['pending', 'processing', 'failed'];
+
+/**
+ * Uncertain publish outcome (duplicate-publication guard).
+ *
+ * No platform adapter here can make post creation idempotent (none sends an
+ * idempotency key or client request id), so a worker that dies AFTER the
+ * platform request is sent leaves an outcome nobody can know from the database:
+ * the post may already be live. Re-delivering and republishing then risks a
+ * public duplicate; marking it plainly failed would hide that it may be live.
+ *
+ * The queue path therefore records, immediately before the platform call, a
+ * per-attempt marker in queue_jobs.metadata (an existing jsonb column — no
+ * migration). A re-delivery that finds the job still 'processing' past the
+ * replay window, with that marker set and the post still 'publishing', does
+ * NOT call the platform again: it records PUBLISH_OUTCOME_UNCERTAIN and stops,
+ * so a person checks the platform before any retry.
+ */
+export { PUBLISH_OUTCOME_UNCERTAIN };
+export const PLATFORM_CALL_MARKER_KEY = 'platform_call';
+
+function metadataObject(metadata: unknown): Record<string, unknown> {
+  return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? { ...(metadata as Record<string, unknown>) }
+    : {};
+}
+
+/** The metadata with the platform-call marker removed (other keys preserved). */
+export function withoutPlatformCallMarker(metadata: unknown): Record<string, unknown> {
+  const next = metadataObject(metadata);
+  delete next[PLATFORM_CALL_MARKER_KEY];
+  return next;
+}
+
+/** The platform-call marker on a queue_jobs row, if a call was started and not resolved. */
+export function readPlatformCallMarker(metadata: unknown): { started_at: string } | null {
+  const marker = metadataObject(metadata)[PLATFORM_CALL_MARKER_KEY];
+  if (!marker || typeof marker !== 'object') return null;
+  const startedAt = (marker as { started_at?: unknown }).started_at;
+  return typeof startedAt === 'string' && startedAt ? { started_at: startedAt } : null;
+}
+
+/**
+ * Record — immediately before the platform call — that this attempt is about
+ * to call the platform. Lands only while the row is still 'processing'; zero
+ * rows (cancelled or taken over meanwhile) means the caller must NOT call the
+ * platform. A write error throws: without the marker, a death during the call
+ * would be indistinguishable from one before it, so the call must not happen.
+ */
+export async function markQueueJobPlatformCallStarted(
+  jobId: string,
+  snapshotMetadata: unknown,
+): Promise<boolean> {
+  const metadata = withoutPlatformCallMarker(snapshotMetadata);
+  metadata[PLATFORM_CALL_MARKER_KEY] = { started_at: new Date().toISOString() };
+  const { data, error } = await supabase
+    .from('queue_jobs')
+    .update({ metadata, updated_at: new Date().toISOString() })
+    .eq('id', jobId)
+    .eq('status', 'processing')
+    .select('id');
+  if (error) throw new Error(`Failed to record platform-call start for queue job ${jobId}: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Terminally record an uncertain outcome on the queue job: failed, never
+ * retried automatically, with an explicit code. Compare-and-set on the exact
+ * stale 'processing' row that was read, so two re-deliveries cannot both act.
+ */
+export async function markQueueJobOutcomeUncertain(
+  jobId: string,
+  snapshot: { status?: string | null; updated_at?: string | null; retry_state?: string | null },
+  message: string,
+): Promise<boolean> {
+  const payload: Record<string, unknown> = {
+    status: 'failed',
+    error_code: PUBLISH_OUTCOME_UNCERTAIN,
+    error_message: message,
+    updated_at: new Date().toISOString(),
+  };
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'retry_state')) payload.retry_state = 'exhausted';
+  // Compare-and-set on the status that was read ('processing' when the
+  // snapshot does not say), pinned by updated_at below.
+  const expectedStatus = snapshot.status ?? 'processing';
+  let query = supabase.from('queue_jobs').update(payload).eq('id', jobId).eq('status', expectedStatus);
+  query = snapshot.updated_at ? query.eq('updated_at', snapshot.updated_at) : query.is('updated_at', null);
+  const { data, error } = await query.select('id');
+  if (error) throw new Error(`Failed to record uncertain outcome for queue job ${jobId}: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Record an uncertain outcome on a queue job THIS delivery holds ('processing',
+ * claimed by it — so no updated_at pin). Failed, never retried automatically:
+ * the processor refuses a failed row carrying the code, and retry_state is set
+ * to 'exhausted' where the column exists. Returns false when the row is no
+ * longer 'processing' (a cancel landed); throws on a write error.
+ */
+export async function recordHeldQueueJobOutcomeUncertain(jobId: string, message: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('queue_jobs')
+    .update({
+      status: 'failed',
+      error_code: PUBLISH_OUTCOME_UNCERTAIN,
+      error_message: message,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', jobId)
+    .eq('status', 'processing')
+    .select('id');
+  if (error) throw new Error(`Failed to record uncertain outcome for queue job ${jobId}: ${error.message}`);
+  const applied = Array.isArray(data) && data.length > 0;
+  if (applied) await recordQueueJobRetryState(jobId, 'exhausted');
+  return applied;
+}
+
+/**
+ * Record — immediately before the platform call — that THIS attempt is calling
+ * the platform for the post (durable per-row marker, see
+ * backend/queue/publishOutcome.ts). Compare-and-set on 'publishing' AND on the
+ * caller's own claim token: if the claim was taken over or swept meanwhile, the
+ * token no longer matches, zero rows change, and the caller must NOT call the
+ * platform. A write error throws for the same reason.
+ */
+export async function markScheduledPostPlatformCallStarted(postId: string, claimToken: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('scheduled_posts')
+    .update({ error_code: PUBLISH_CALL_STARTED, updated_at: new Date().toISOString() })
+    .eq('id', postId)
+    .eq('status', 'publishing')
+    .eq('error_code', publishClaimCode(claimToken))
+    .select('id');
+  if (error) throw new Error(`Failed to record platform-call start for scheduled post ${postId}: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Record that a post's publish outcome is unknown: failed, with
+ * PUBLISH_OUTCOME_UNCERTAIN. Only over a row whose outcome is still unrecorded
+ * — never a 'published' row or one carrying a platform_post_id.
+ */
+export async function markScheduledPostOutcomeUncertain(postId: string, message: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('scheduled_posts')
+    .update({
+      status: 'failed',
+      error_code: PUBLISH_OUTCOME_UNCERTAIN,
+      error_message: message,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', postId)
+    .in('status', ['publishing', 'failed'])
+    .is('platform_post_id', null)
+    .select('id');
+  if (error) throw new Error(`Failed to record uncertain outcome for scheduled post ${postId}: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+export type QueueJobProcessingClaim =
+  | { claimed: true }
+  | { claimed: false; reason: 'not_runnable' | 'changed_since_read' };
+
+/**
+ * Compare-and-set a queue_jobs row into 'processing' for ONE delivery.
+ *
+ * The publish processor used to write 'processing' unconditionally, so a row
+ * cancelled after the job was read (or before it, when job.remove() could not
+ * delete a job BullMQ was already holding) was flipped back to live and
+ * published anyway. The database is the authority: the UPDATE only lands when
+ * the row is still in the exact state the caller read and judged runnable, and
+ * zero affected rows means this delivery must not publish.
+ *
+ * Runnable snapshots:
+ *   pending                       — first delivery.
+ *   failed, retry_state NULL      — unknown; never treated as terminal.
+ *   failed, 'awaiting_retry'      — BullMQ's backoff re-delivery.
+ *   processing (stale)            — the caller has already applied the
+ *                                   replay-suppression window; the CAS pins
+ *                                   updated_at so two stale re-deliveries
+ *                                   cannot both win.
+ * Everything else — cancelled, completed, failed+'exhausted', poisoned, an
+ * unknown status — is refused without a write.
+ *
+ * `retry_state` is only named when the snapshot carries it (the row was read
+ * with select('*')), so this runs unchanged against a database where migration
+ * 20261202000000 has not been applied.
+ */
+export async function claimQueueJobForProcessing(
+  jobId: string,
+  snapshot: {
+    status?: string | null;
+    updated_at?: string | null;
+    retry_state?: string | null;
+    error_code?: string | null;
+    metadata?: unknown;
+  },
+): Promise<QueueJobProcessingClaim> {
+  const status = snapshot.status ?? null;
+  const hasRetryState = Object.prototype.hasOwnProperty.call(snapshot, 'retry_state');
+  const retryState = hasRetryState ? (snapshot.retry_state ?? null) : null;
+
+  const runnable =
+    status === 'pending' ||
+    status === 'processing' ||
+    (status === 'failed' && retryState !== 'exhausted' && snapshot.error_code !== PUBLISH_OUTCOME_UNCERTAIN);
+  if (!runnable) return { claimed: false, reason: 'not_runnable' };
+
+  const payload: Record<string, unknown> = {
+    status: 'processing',
+    updated_at: new Date().toISOString(),
+  };
+  // A claimed row is no longer waiting for a retry — it is running one.
+  if (hasRetryState) payload.retry_state = null;
+  // A new attempt starts with no platform call recorded. A marker left by an
+  // EARLIER attempt (which finished, or failed before calling) must not make
+  // this attempt look like one that died mid-call.
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'metadata')) {
+    payload.metadata = withoutPlatformCallMarker(snapshot.metadata);
+  }
+
+  let query = supabase.from('queue_jobs').update(payload).eq('id', jobId).eq('status', status);
+  if (status === 'processing') {
+    query = snapshot.updated_at
+      ? query.eq('updated_at', snapshot.updated_at)
+      : query.is('updated_at', null);
+  }
+  if (status === 'failed' && hasRetryState) {
+    query = retryState === null ? query.is('retry_state', null) : query.eq('retry_state', retryState);
+  }
+
+  const { data, error } = await query.select('id');
+  if (error) {
+    throw new Error(`Failed to claim queue job ${jobId} for processing: ${error.message}`);
+  }
+  return Array.isArray(data) && data.length > 0
+    ? { claimed: true }
+    : { claimed: false, reason: 'changed_since_read' };
+}
+
+/**
+ * Record whether BullMQ will deliver a failed job again.
+ *
+ * Lands only on a row that is still 'failed': a row cancelled or completed in
+ * the meantime keeps its state. Never throws — it runs on the failure path,
+ * where the original error must be the one that propagates.
+ *
+ *   'written'        — the state is durable.
+ *   'not_failed'     — the row is not 'failed' (or does not exist); nothing
+ *                      written.
+ *   'column_missing' — migration 20261202000000 is not applied; the row stays
+ *                      unknown (NULL semantics).
+ *   'error'          — any other write failure; the row stays unknown.
+ */
+export async function recordQueueJobRetryState(
+  jobId: string,
+  retryState: 'awaiting_retry' | 'exhausted',
+): Promise<'written' | 'not_failed' | 'column_missing' | 'error'> {
+  try {
+    const { data, error } = await supabase
+      .from('queue_jobs')
+      .update({ retry_state: retryState, updated_at: new Date().toISOString() })
+      .eq('id', jobId)
+      .eq('status', 'failed')
+      .select('id');
+    if (error) {
+      return isRetryStateColumnMissing(error) ? 'column_missing' : 'error';
+    }
+    return Array.isArray(data) && data.length > 0 ? 'written' : 'not_failed';
+  } catch {
+    return 'error';
   }
 }
 
@@ -231,6 +525,8 @@ export async function updateScheduledPostOnPublish(
     post_url: postUrl,
     published_at: publishedAt?.toISOString() || new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    // The outcome is now known: clear any attempt marker or earlier failure code.
+    error_code: null,
   };
 
   let applied = true;
@@ -287,12 +583,17 @@ export async function updateScheduledPostOnFailure(
   postId: string,
   errorMessage: string,
   expectedFromStatus?: string,
+  errorCode?: string,
 ): Promise<ScheduledPostTerminalWriteResult> {
-  const updatePayload = {
+  const updatePayload: Record<string, unknown> = {
     status: 'failed',
     error_message: errorMessage,
     updated_at: new Date().toISOString(),
   };
+  // Written in the SAME update as the status when given, so a failed row never
+  // exists without its classification (a code-less failure reads as uncertain
+  // on thread nodes — see backend/queue/publishOutcome.ts).
+  if (errorCode) updatePayload.error_code = errorCode;
 
   if (expectedFromStatus) {
     const { data, error } = await supabase

@@ -102,6 +102,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           cooldownActive: false,
           blueprintImmutable: blockReason === 'IMMUTABLE',
           blueprintFrozen: blockReason === 'FROZEN',
+          // A read failure is NOT a confirmed lock: reported separately, never as IMMUTABLE.
+          blueprintStateUnavailable: blockReason === 'UNAVAILABLE',
           autoOptimizeEnabled: false,
         },
         latestGovernanceEvent: latestEvent
@@ -157,6 +159,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         cooldownActive,
         blueprintImmutable: blockReason === 'IMMUTABLE',
         blueprintFrozen: blockReason === 'FROZEN',
+        // A read failure is NOT a confirmed lock: reported separately, never as IMMUTABLE.
+        blueprintStateUnavailable: blockReason === 'UNAVAILABLE',
         autoOptimizeEnabled: !!(campaign as any).auto_optimize_enabled,
       },
       latestGovernanceEvent: latestEvent

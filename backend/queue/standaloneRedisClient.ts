@@ -1,7 +1,7 @@
 import IORedis from 'ioredis';
 import type { RedisOptions } from 'ioredis';
 import { createInstrumentedClient, type RedisFeature } from '../../lib/redis/instrumentation';
-import { isRedisUrlTLS } from '../../lib/redis/sanitizer';
+import { parseRedisConnectionUrl, RedisUrlConfigError } from '../../lib/redis/redisUrl';
 import {
   circuitBreakerRetryStrategy,
   isNonRecoverableRedisError,
@@ -20,19 +20,13 @@ let authFailures = 0;
 const instrumentedClients = new Map<string, IORedis>();
 
 function parseRedisUrl(url: string): RedisOptions {
-  const match = url.match(/rediss?:\/\/\S+/);
-  if (match) url = match[0];
-
   try {
-    const parsed = new URL(url);
-    const needsTls = isRedisUrlTLS(url);
-    return {
-      host: parsed.hostname,
-      port: parseInt(parsed.port || '6379', 10),
-      password: parsed.password || undefined,
-      tls: needsTls ? {} : undefined,
-    };
-  } catch {
+    return parseRedisConnectionUrl(url);
+  } catch (err) {
+    // Closure-014 (D-1): a configured database index is never silently replaced
+    // by DB 0 — an invalid one fails closed. Any other unusable URL keeps the
+    // long-standing optional-Redis fallback to localhost.
+    if (err instanceof RedisUrlConfigError && err.kind === 'INVALID_DB') throw err;
     return { host: 'localhost', port: 6379 };
   }
 }

@@ -18,6 +18,19 @@
  */
 
 const dbMock = jest.fn();
+// Closure-014 (D): this route now rate-limits writes before authorization. This suite tests
+// authorization/business behaviour, not the limiter (covered by closure014AdminRateLimit and the
+// Closure-013 sibling suite), so the limiter passes through — the established pattern.
+jest.mock('../../services/requestAccessService', () => ({
+  ...jest.requireActual('../../services/requestAccessService'),
+  requireAdminRateLimit: async () => true,
+}));
+// Closure-015M: the route now tries the governed assign_super_admin RPC first; this models the
+// CURRENT deployment (function not deployed → PGRST202), so the ownedDbTable path below is exercised.
+jest.mock('../../db/supabaseClient', () => {
+  const client = { rpc: async () => ({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.assign_super_admin' } }) };
+  return { supabase: client, default: client };
+});
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (...args: unknown[]) => dbMock(...args),
 }));

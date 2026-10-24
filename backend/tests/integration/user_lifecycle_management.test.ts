@@ -25,6 +25,19 @@
  * admins must first add a role allowlist to invite / role update: today the
  * role is written verbatim from the request body, and an active SUPER_ADMIN
  * row in any company is platform super admin.
+ *
+ * Closure-015 (merged onto this suite):
+ *  - POST /api/users/invite is RETIRED (015I, F-3): it stays behind withRBAC,
+ *    answers 410 ENDPOINT_RETIRED and writes nothing. The invite behaviour this
+ *    suite used to prove through the route is proven on inviteUser directly.
+ *  - Role change (015E) and membership removal (015F) additionally require
+ *    IDENTITY_ADMIN_ASSIGN / IDENTITY_ADMIN_DELETE via requireCapability
+ *    (platform write authority + passkey step-up). That one gate is replaced
+ *    by a recording mock here — the harness has no passkey/trusted-device
+ *    model — and its real behaviour is pinned by the closure015e/015f suites.
+ *    Everything before it (withRBAC, rate limit) and after it (service) runs
+ *    for real, and this suite asserts which capability each route asks for and
+ *    that a refusal writes nothing.
  */
 import type { NextApiRequest } from 'next';
 import inviteHandler from '../../../pages/api/users/invite';
@@ -33,6 +46,8 @@ import roleHandler from '../../../pages/api/users/[userId]/role';
 import removeHandler from '../../../pages/api/users/[userId]/index';
 import { logUserManagementAudit } from '../../services/campaignAuditService';
 import { inviteUser } from '../../services/userManagementService';
+import { requireCapability } from '../../security/requireCapability';
+import { IDENTITY_ADMIN_ASSIGN, IDENTITY_ADMIN_DELETE } from '../../../shared/contracts/security';
 import { resolveUserContext } from '../../services/userContextService';
 import {
   seed, invoke, failTable, rows, writeCalls, CO_A, CO_B, USER_A, USER_B, USER_SUPER, TOKENS,
@@ -44,6 +59,9 @@ jest.mock('../../db/writeOwner', () => require('../helpers/routeAuthHarness').wr
 jest.mock('../../services/supabaseAuthService', () => require('../helpers/routeAuthHarness').authModule());
 jest.mock('../../security/IdentityResolver', () => require('../helpers/routeAuthHarness').identityModule());
 jest.mock('../../../lib/auth/rateLimit', () => ({ checkRateLimit: async () => ({ allowed: true }) }));
+jest.mock('../../security/requireCapability', () => ({
+  requireCapability: jest.fn(async () => ({ ok: true, principal: { userId: 'test-actor' } })),
+}));
 jest.mock('../../services/campaignAuditService', () => ({
   ...jest.requireActual('../../services/campaignAuditService'),
   logUserManagementAudit: jest.fn(),
@@ -54,7 +72,12 @@ const TARGET_B = 'trgt-b-00-0000-0000-00000000000b';
 const IDENTITY_TABLES = ['users', 'unified_persons', 'user_company_roles'];
 
 const roleRow = (user_id: string, company_id: string, role: string, status = 'active') =>
-  ({ user_id, company_id, role, status });
+  ({ id: `ucr-${user_id}-${company_id}`, user_id, company_id, role, status });
+
+const requireCapabilityMock = requireCapability as jest.MockedFunction<typeof requireCapability>;
+const superRequester = () => resolveUserContext({
+  headers: { authorization: `Bearer ${TOKENS.SUPER}` },
+} as unknown as NextApiRequest);
 
 describe('User lifecycle management (real authorization chain)', () => {
   beforeEach(() => {
@@ -72,7 +95,7 @@ describe('User lifecycle management (real authorization chain)', () => {
   });
 
   describe('active super admin', () => {
-    it('Super admin can invite user', async () => {
+    it('the retired invite route answers 410 and writes nothing, even for a super admin', async () => {
       const res = await invoke(inviteHandler, {
         method: 'POST',
         as: 'SUPER',
@@ -80,7 +103,16 @@ describe('User lifecycle management (real authorization chain)', () => {
         body: { email: 'New@Example.test', companyId: CO_B, role: 'CONTENT_MANAGER' },
       });
 
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(410);
+      expect(res.body).toEqual({ error: 'ENDPOINT_RETIRED', replacement: '/api/admin/invite-user' });
+      expect(writeCalls(IDENTITY_TABLES)).toEqual([]);
+      expect(logUserManagementAudit).not.toHaveBeenCalled();
+    });
+
+    it('Super admin can invite user (service)', async () => {
+      const result = await inviteUser('New@Example.test', CO_B, 'CONTENT_MANAGER', await superRequester());
+
+      expect(result).toMatchObject({ ok: true, role: 'CONTENT_MANAGER' });
       const person = rows('unified_persons').find((p) => p.primary_email === 'new@example.test');
       expect(person).toMatchObject({ company_id: CO_B });
       const user = rows('users').find((u) => u.email === 'new@example.test');
@@ -100,6 +132,28 @@ describe('User lifecycle management (real authorization chain)', () => {
 
       expect(res.status).toBe(200);
       expect(rows('user_company_roles').find((r) => r.user_id === TARGET_A)?.role).toBe('CONTENT_MANAGER');
+      expect(requireCapabilityMock).toHaveBeenCalledWith(
+        expect.anything(), expect.anything(),
+        expect.objectContaining({ capability: IDENTITY_ADMIN_ASSIGN, organizationId: CO_A, resourceId: TARGET_A }),
+      );
+    });
+
+    it('a refused IDENTITY_ADMIN_ASSIGN gate writes nothing', async () => {
+      requireCapabilityMock.mockImplementationOnce(async (_req, res) => {
+        res.status(403).json({ error: 'STEP_UP_REQUIRED' });
+        return { ok: false } as Awaited<ReturnType<typeof requireCapability>>;
+      });
+
+      const res = await invoke(roleHandler, {
+        method: 'PATCH',
+        as: 'SUPER',
+        query: { userId: TARGET_A },
+        body: { role: 'CONTENT_MANAGER', companyId: CO_A },
+      });
+
+      expect(res.status).toBe(403);
+      expect(writeCalls(IDENTITY_TABLES)).toEqual([]);
+      expect(rows('user_company_roles').find((r) => r.user_id === TARGET_A)?.role).toBe('CONTENT_CREATOR');
     });
 
     it('Remove user works', async () => {
@@ -112,6 +166,10 @@ describe('User lifecycle management (real authorization chain)', () => {
       expect(res.status).toBe(200);
       expect(rows('user_company_roles').some((r) => r.user_id === TARGET_A)).toBe(false);
       expect(rows('user_company_roles').some((r) => r.user_id === TARGET_B)).toBe(true);
+      expect(requireCapabilityMock).toHaveBeenCalledWith(
+        expect.anything(), expect.anything(),
+        expect.objectContaining({ capability: IDENTITY_ADMIN_DELETE, resourceId: `${CO_A}:${TARGET_A}` }),
+      );
     });
 
     it('List users scoped to company', async () => {
@@ -125,12 +183,7 @@ describe('User lifecycle management (real authorization chain)', () => {
     });
 
     it('Audit logs created', async () => {
-      await invoke(inviteHandler, {
-        method: 'POST',
-        as: 'SUPER',
-        query: { companyId: CO_A },
-        body: { email: 'audit@example.test', companyId: CO_A, role: 'CONTENT_MANAGER' },
-      });
+      await inviteUser('audit@example.test', CO_A, 'CONTENT_MANAGER', await superRequester());
 
       expect(logUserManagementAudit).toHaveBeenCalledWith(
         'USER_INVITED',
@@ -209,18 +262,15 @@ describe('User lifecycle management (real authorization chain)', () => {
   describe('identity creation', () => {
     it('fails closed: no user or role row is written when unified_persons fails', async () => {
       failTable('unified_persons');
+      const requester = await superRequester();
 
-      const outcome = await invoke(inviteHandler, {
-        method: 'POST',
-        as: 'SUPER',
-        query: { companyId: CO_A },
-        body: { email: 'identity-fail@example.test', companyId: CO_A, role: 'CONTENT_CREATOR' },
-      }).then(
-        (res) => ({ status: res.status as number | null }),
-        () => ({ status: null as number | null }),
+      // The route is retired (410), so the identity-creation path is exercised on the service.
+      const outcome = await inviteUser('identity-fail@example.test', CO_A, 'CONTENT_CREATOR', requester).then(
+        (result) => ({ ok: result.ok as boolean | null }),
+        () => ({ ok: null as boolean | null }),
       );
 
-      expect(outcome.status).not.toBe(200);
+      expect(outcome.ok).not.toBe(true);
       expect(writeCalls(['users', 'user_company_roles'])).toEqual([]);
       expect(rows('users').some((u) => u.email === 'identity-fail@example.test')).toBe(false);
       expect(logUserManagementAudit).not.toHaveBeenCalled();

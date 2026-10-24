@@ -16,6 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 import {
   registerFeature,
@@ -34,6 +35,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const auth = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'planner_feature_governance',
+    // Closure-009 (owner decision): every POST action except `evaluate` (a
+    // read) writes the platform feature registry and needs platform authority.
+    // Closure-015: enforced (and audited) inside requireCapability.
+    requirePlatformAuthority: req.method === 'POST' && ((req.body ?? {}) as Record<string, unknown>).action !== 'evaluate',
   });
   if (!auth.ok) return;
   const operatorId =
@@ -49,6 +54,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const body = (req.body ?? {}) as Record<string, unknown>;
   const action = body.action;
+  if (action !== 'evaluate') {
+    if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:planner-features', 30, 60))) return;
+  }
 
   try {
     switch (action) {

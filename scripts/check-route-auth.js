@@ -128,6 +128,11 @@ const PRIMITIVES = {
   requireSuperAdmin: { from: /^backend\/middleware\/(authMiddleware|requireSuperAdmin)$/, level: 'platform' },
   requireSuperAdminUser: { from: /^backend\/services\/requestAccessService$/, level: 'platform' },
   requireSuperAdminGaAccess: { from: /^backend\/services\/superAdminGaAccess$/, level: 'platform' },
+  // Closure-009 WRITE gate for the platform's own GA/GSC/SERP integration:
+  // admin rate limit, then requireCapability(INTEGRATION_PLATFORM_OAUTH_MANAGE)
+  // with step-up, then requirePlatformWriteAuthority. Strictly stronger than
+  // requireSuperAdminGaAccess (the READ gate above); returns null on denial.
+  requireSuperAdminGaWriteAccess: { from: /^backend\/services\/superAdminGaAccess$/, level: 'platform' },
   getLegacySuperAdminSession: { from: /^backend\/services\/superAdminSession$/, level: 'platform' },
   // Signed, hard-expiring content-architect bridge session (SEC-001A/C).
   isContentArchitectSession: { from: /^backend\/services\/contentArchitectService$/, level: 'platform' },

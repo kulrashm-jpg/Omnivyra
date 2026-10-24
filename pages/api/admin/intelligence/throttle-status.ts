@@ -19,6 +19,7 @@ import {
   invalidateThrottleCache,
 } from '../../../../backend/services/intelligenceHealthService';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW, INTELLIGENCE_OVERRIDE_MANAGE } from '../../../../shared/contracts/security';
 
 const ALLOWED_FIELDS = new Set([
@@ -30,6 +31,9 @@ const ALLOWED_FIELDS = new Set([
 ]);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:admin:intel:throttle', 10, 60))) return;
+
   // GET = read-only dashboard. PUT = elevated mutation.
   const cap = req.method === 'PUT' ? INTELLIGENCE_OVERRIDE_MANAGE : SUPER_ADMIN_DASHBOARD_VIEW;
   const guard = await requireCapability(req, res, {

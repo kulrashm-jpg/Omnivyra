@@ -402,6 +402,20 @@ describe('PLATFORM-PLAN-SEC-001 — company A operating on A', () => {
     expect(res.body?.plan).toEqual({ platforms: ['x'] });
     expect(cacheReadCalls).toEqual([{ companyId: COMPANY_A, campaignId: CAMPAIGN_A }]);
   });
+
+  it('a genuine active-blueprint read failure is 503 and nothing is written', async () => {
+    const { BlueprintMutabilityReadError } = jest.requireActual('../../services/campaignBlueprintService');
+    const mocked = jest.requireMock('../../services/campaignBlueprintService');
+    mocked.getResolvedCampaignPlanContext.mockRejectedValueOnce(
+      new BlueprintMutabilityReadError('campaigns.blueprint_status', { message: 'connection reset' }),
+    );
+    const res = await call(ADMIN_A, {
+      body: { companyId: COMPANY_A, campaignId: CAMPAIGN_A, weekNumber: 1 },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.body?.code).toBe('BLUEPRINT_STATE_READ_FAILED');
+    expect(saveCalls).toEqual([]);
+  });
 });
 
 describe('PLATFORM-PLAN-SEC-001 — company A operating on B', () => {

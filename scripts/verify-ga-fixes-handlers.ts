@@ -4,6 +4,20 @@
  * and that the cron handler actually reaches the enqueue branch.
  *
  * Run: node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/verify-ga-fixes-handlers.ts
+ *
+ * WARNING: the env file decides which database the summary read (case E)
+ * touches — never point this at a production environment without an
+ * explicitly authorized verification step.
+ *
+ * Closure-010 — the expectations follow the CURRENT contract (pinned by
+ * backend/tests/unit/closure009PrivilegedWriteAuthorization.test.ts):
+ *   - unauthenticated → 401 NOT_AUTHENTICATED from requireCapability (the
+ *     "403 GA_NOT_AUTHENTICATED" shape this script used to expect predates the
+ *     canonical gate);
+ *   - the legacy bridge cookie never authorizes: the bridge hard-expired on
+ *     2026-08-05 (no principal resolves), and since Closure-009 the GA/GSC
+ *     WRITE routes additionally refuse any bridge principal (platform
+ *     integration capability with step-up + active platform SUPER_ADMIN).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -63,46 +77,47 @@ async function call(handler: any, req: NextApiRequest): Promise<MockResult> {
 function box(t: string) { console.log(`\n${'='.repeat(72)}\n${t}\n${'='.repeat(72)}`); }
 
 async function main() {
-  box('A — ga-connect: no auth → standardized 403 with code');
+  const refused = (r: MockResult) => r.status === 401 || r.status === 403;
+
+  box('A — ga-connect: no auth → 401 NOT_AUTHENTICATED');
   const a1 = await call(gaConnect, makeReq({ method: 'POST' }));
   console.log(a1);
-  if (a1.status !== 403 || a1.body?.code !== 'GA_NOT_AUTHENTICATED') {
-    console.log('❌ expected 403/GA_NOT_AUTHENTICATED'); process.exit(1);
+  if (a1.status !== 401 || a1.body?.code !== 'NOT_AUTHENTICATED') {
+    console.log('❌ expected 401/NOT_AUTHENTICATED'); process.exit(1);
   }
-  console.log('✅ ga-connect rejects unauthenticated with standardized shape');
+  console.log('✅ ga-connect rejects unauthenticated');
 
-  box('B — ga-connect: cookie path → reaches connect logic, returns 200 + authorizationUrl');
+  box('B — ga-connect: legacy bridge cookie → refused; no authorization URL is minted');
   const b1 = await call(gaConnect, makeReq({ method: 'POST', cookies: { super_admin_session: bridgeCookieValue() } }));
   console.log({ status: b1.status, hasUrl: typeof b1.body?.authorizationUrl === 'string', code: b1.body?.code });
-  if (b1.status !== 200 || typeof b1.body?.authorizationUrl !== 'string') {
-    console.log('❌ cookie auth path failed'); process.exit(1);
+  if (!refused(b1) || typeof b1.body?.authorizationUrl === 'string') {
+    console.log('❌ the bridge cookie must not reach the GA connect write'); process.exit(1);
   }
-  console.log('✅ ga-connect via cookie OK');
+  console.log('✅ ga-connect refuses the legacy bridge');
 
-  box('C — ga-select-property: cookie + missing propertyId → 400 with code');
+  box('C — ga-select-property: legacy bridge cookie → refused BEFORE body validation');
   const c1 = await call(gaSelectProperty, makeReq({ method: 'POST', cookies: { super_admin_session: bridgeCookieValue() } }));
   console.log(c1);
-  if (c1.status !== 400 || c1.body?.code !== 'GA_MISSING_PROPERTY_ID') {
-    console.log('❌ expected 400/GA_MISSING_PROPERTY_ID'); process.exit(1);
+  if (!refused(c1)) {
+    console.log('❌ expected 401/403 before the missing-propertyId check'); process.exit(1);
   }
-  console.log('✅ ga-select-property missing-id path standardized');
+  console.log('✅ ga-select-property refuses the legacy bridge before reading the body');
 
-  box('D — ga-analytics-summary: no auth → standardized 403 with code (parity with connect)');
+  box('D — ga-analytics-summary: no auth → 401 NOT_AUTHENTICATED');
   const d1 = await call(gaAnalyticsSummary, makeReq({ method: 'GET' }));
   console.log(d1);
-  if (d1.status !== 403 || d1.body?.code !== 'GA_NOT_AUTHENTICATED') {
-    console.log('❌ expected 403/GA_NOT_AUTHENTICATED'); process.exit(1);
+  if (d1.status !== 401 || d1.body?.code !== 'NOT_AUTHENTICATED') {
+    console.log('❌ expected 401/NOT_AUTHENTICATED'); process.exit(1);
   }
-  console.log('✅ ga-analytics-summary auth shape matches ga-connect');
+  console.log('✅ ga-analytics-summary rejects unauthenticated');
 
-  box('E — ga-analytics-summary: cookie path → 200');
+  box('E — ga-analytics-summary: legacy bridge cookie → 401 (the bridge hard-expired 2026-08-05)');
   const e1 = await call(gaAnalyticsSummary, makeReq({ method: 'GET', cookies: { super_admin_session: bridgeCookieValue() } }));
-  console.log({ status: e1.status, has_ga_status: Boolean(e1.body?.ga_status), connected: e1.body?.ga_status?.connected });
-  if (e1.status !== 200 || !e1.body?.ga_status) {
-    console.log('❌ summary cookie path failed:', e1.body); process.exit(1);
+  console.log({ status: e1.status, code: e1.body?.code });
+  if (e1.status !== 401) {
+    console.log('❌ the expired bridge must not resolve a principal:', e1.body); process.exit(1);
   }
-  console.log('✅ ga-analytics-summary returns connected status payload');
-  console.log('   last_sync =', e1.body.ga_status.last_sync);
+  console.log('✅ ga-analytics-summary refuses the expired bridge');
 
   box('F — cron: no secret env → 401 (no Redis dependency on this path)');
   const savedSecret = process.env.CRON_SECRET;

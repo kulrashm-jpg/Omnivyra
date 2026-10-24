@@ -16,16 +16,24 @@ export async function requireAdminRateLimit(
   keyPrefix: string,
   limit = 30,
   windowSecs = 60,
+  options: { sensitive?: boolean } = {},
 ): Promise<boolean> {
   seedRequestContextFromRequest(req);
   // SEC91-W2E: platform-trusted client IP ('unknown' when nothing parses), not the client-written XFF hop.
   const ip = getTrustedClientIp(req);
 
-  const config: RateLimitConfig = { keyPrefix, limit, windowSecs };
+  // Closure-014 (D): `sensitive` (destructive / financial / identity writes)
+  // uses the existing SEC-E2 strict mode when Redis is unavailable — the
+  // route's own budget in-process — instead of the generous 50/window fallback.
+  const config: RateLimitConfig = { keyPrefix, limit, windowSecs, ...(options.sensitive ? { sensitive: true } : {}) };
   const result = await checkRateLimit(ip, config);
   if (!result.allowed) {
     logger.warn('admin_rate_limit_blocked', { keyPrefix, ip });
-    res.status(429).json({ error: 'Too many requests. Try again later.' });
+    // Closure-014 (D): additive contract — a machine-readable code and the
+    // standard Retry-After header (the error text is unchanged).
+    const retryAfter = Math.max(1, Math.ceil(Number(result.resetAt) - Date.now() / 1000));
+    res.setHeader('Retry-After', String(Number.isFinite(retryAfter) ? retryAfter : windowSecs));
+    res.status(429).json({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' });
     return false;
   }
   return true;

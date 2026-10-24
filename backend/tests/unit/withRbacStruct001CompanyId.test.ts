@@ -20,6 +20,11 @@ const enforceCalls: Array<{ companyId: unknown; allowedRoles: Role[] }> = [];
 let enforceResult: { userId: string; role: Role } | null = { userId: 'u1', role: Role.COMPANY_ADMIN };
 let enforceSideEffect: ((res: any) => void) | null = null;
 
+// Closure-015E: withRBAC now refuses tenant principals for a missing / non-active
+// company (companyOperationalState). This suite's fake database models no
+// companies table and tests a different property, so the company is operational
+// here; company status itself is proven in closure015eInvitationAndCompanyStatus.
+jest.mock('../../services/companyOperationalState', () => ({ companyOperationalState: async () => 'operational' }));
 jest.mock('../../services/rbacService', () => {
   const actual = jest.requireActual('../../services/rbacService');
   return {

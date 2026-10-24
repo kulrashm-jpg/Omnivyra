@@ -114,7 +114,11 @@ describe('legitimate unschedules are unchanged', () => {
     expect(post(POST_A).status).toBe('cancelled');
     // The cancel write repeats the campaign it was verified under.
     const postWrites = calls().filter((c) => c.table === 'scheduled_posts' && c.op === 'update');
-    expect(postWrites.map((c) => c.filters)).toEqual([{ id: POST_A, campaign_id: CAMPAIGN_A }]);
+    // ...and (Closure-005) pins the owner and the exact state judged safe,
+    // so a post claimed by a publisher in between is never overwritten.
+    expect(postWrites.map((c) => c.filters)).toEqual([{
+      id: POST_A, campaign_id: CAMPAIGN_A, user_id: USER_A, status: 'scheduled', error_code: null, platform_post_id: null,
+    }]);
     expect(post(POST_B).status).toBe('scheduled');
     const read = mockEvents.indexOf('db:scheduled_posts');
     expect(read).toBeGreaterThan(-1);

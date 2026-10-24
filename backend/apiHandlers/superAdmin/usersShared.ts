@@ -158,20 +158,39 @@ export const findOrCreateUserByEmail = async (email: string): Promise<{ id: stri
 // If PostgREST rejects them (PGRST204) we retry without them.
 export const optionalRoleColumns = (extra: Record<string, unknown> = {}) => extra;
 
+/**
+ * Closure-015J (R-13) — re-inviting must never reset an ACTIVE member (this used
+ * to "always reset status to 'invited'", which removed an active member's access).
+ * Every membership row of the user in this company is read; an active row refuses
+ * the invite (ALREADY_ACTIVE_MEMBER — role changes of active members go through the
+ * governed PATCH). A non-active row (invited, expired, inactive) is re-invited as
+ * before, by a conditional write on id + role + status as read: a concurrent
+ * activation / role change in between makes it STALE_MEMBERSHIP. A SUPER_ADMIN row
+ * is never rewritten (backstop for the route-level Closure-015I R-3 check).
+ */
 export const upsertUserCompanyRole = async (userId: string, companyId: string, role: string) => {
-  const { data: existing } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from('user_company_roles')
     .select('id, role, status')
     .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .limit(1);
+    .eq('company_id', companyId);
+  if (existingError) {
+    return { ok: false, error: existingError.message };
+  }
 
   const now = new Date().toISOString();
+  const rows = ((existing ?? []) as Array<{ id: string; role: string | null; status: string | null }>)
+    .map((r) => ({ id: r.id, role: r.role, status: r.status }));
+  if (rows.some((r) => String(r.role ?? '').trim().toUpperCase() === 'SUPER_ADMIN')) {
+    return { ok: false, error: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE' };
+  }
+  if (rows.some((r) => r.status === 'active')) {
+    return { ok: false, error: 'ALREADY_ACTIVE_MEMBER' };
+  }
 
-  if (existing && existing.length > 0) {
-    const row = existing[0];
-    // Always reset status to 'invited' — covers re-inviting a deactivated user
-    // as well as changing role on an already-active user.
+  if (rows.length > 0) {
+    const row = rows[0];
+    // Re-invite a non-active (invited / expired / inactive) membership.
     const updatePayload = optionalRoleColumns({
       role,
       status:         'invited',
@@ -180,23 +199,26 @@ export const upsertUserCompanyRole = async (userId: string, companyId: string, r
       invited_at:     now,
       deactivated_at: null,
     });
+    const conditional = (payload: Record<string, unknown>) => {
+      let write = supabase.from('user_company_roles').update(payload).eq('id', row.id);
+      write = row.role === null ? write.is('role', null) : write.eq('role', row.role);
+      write = row.status === null ? write.is('status', null) : write.eq('status', row.status);
+      return write.select('id');
+    };
 
-    const { error } = await supabase
-      .from('user_company_roles')
-      .update(updatePayload)
-      .eq('id', row.id);
+    let { data: written, error } = await conditional(updatePayload);
 
     if (error) {
       // PGRST204: a column in the payload doesn't exist yet — retry with minimal payload
       if (error.code === 'PGRST204' || error.message?.includes('invited_at') || error.message?.includes('deactivated_at')) {
-        const { error: retryErr } = await supabase
-          .from('user_company_roles')
-          .update({ role, status: 'invited', updated_at: now })
-          .eq('id', row.id);
-        if (retryErr) return { ok: false, error: retryErr.message };
-        return { ok: true };
+        ({ data: written, error } = await conditional({ role, status: 'invited', updated_at: now }));
+        if (error) return { ok: false, error: error.message };
+      } else {
+        return { ok: false, error: error.message };
       }
-      return { ok: false, error: error.message };
+    }
+    if (!written || written.length === 0) {
+      return { ok: false, error: 'STALE_MEMBERSHIP' };
     }
     return { ok: true };
   }

@@ -198,6 +198,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
 
       const result = outcome.result;
+      // Another execution holds this post's publish claim and owns its
+      // outcome. Writing 'failed' here would overwrite the holder's live
+      // 'publishing' row (or its 'published'), so nothing is written.
+      if (result.suppressed) {
+        results.skipped++;
+        continue;
+      }
       await updatePostPublishStatus({
         post_id:          post.id,
         status:           result.status,

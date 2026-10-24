@@ -25,6 +25,8 @@ import {
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 async function requireAnalyticsProviderRead(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
@@ -53,6 +55,9 @@ async function requireAnalyticsProviderRead(req: NextApiRequest, res: NextApiRes
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:analytics-provider-config', 10, 60, { sensitive: true }))) return;
+
   if (req.method === 'GET') {
     if (!(await requireAnalyticsProviderRead(req, res))) return;
     try {
@@ -73,6 +78,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       reason: 'analytics provider OAuth credentials mutation',
     });
     if (guard.ok !== true) return;
+    // Closure-013 (D-3): GA/GSC credential writes also need an active platform SUPER_ADMIN.
+    if (!(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'analytics_provider_config.write'))) return;
 
     try {
       const enabled = Boolean(req.body?.enabled);

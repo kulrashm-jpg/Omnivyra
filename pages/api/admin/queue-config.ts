@@ -36,6 +36,7 @@ import { requireAdminRateLimit } from '../../../backend/services/requestAccessSe
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { mayAttemptCapability } from '../../../backend/security/preAuthorization';
 import { CRON_CONFIG_MANAGE } from '../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -43,6 +44,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
     capability: CRON_CONFIG_MANAGE,
     reason: 'queue config admin',
+    // Closure-014 (C): the GET is a read (polled every 60s by the Redis panel) —
+    // only the write requires the registered passkey step-up.
+    requireStepUp: req.method !== 'GET',
   });
   if (guard.ok !== true) return;
   const admin = { id: guard.principal.userId };
@@ -78,4 +82,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default __createApiRoute(withIdempotency(handler, { scope: 'admin-queue-config', methods: ['POST'] }), { route: '/api/admin/queue-config' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-queue-config', methods: ['POST'], authorize: mayAttemptCapability(CRON_CONFIG_MANAGE) }), { route: '/api/admin/queue-config' });

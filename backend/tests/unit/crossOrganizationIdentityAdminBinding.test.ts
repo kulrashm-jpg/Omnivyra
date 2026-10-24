@@ -62,7 +62,8 @@ jest.mock('../../db/supabaseClient', () => ({
     from: (table: string) => {
       const op: RecordedOp = { table, kind: 'select', filters: {} };
       const builder: Record<string, unknown> = {
-        select: () => { op.kind = 'select'; ops.push(op); return builder; },
+        // `.select()` after `.update()` is a RETURNING clause, not a new read.
+        select: () => { if (op.kind !== 'update') { op.kind = 'select'; ops.push(op); } return builder; },
         update: (payload: Record<string, unknown>) => {
           op.kind = 'update'; op.payload = payload; ops.push(op); return builder;
         },
@@ -73,9 +74,13 @@ jest.mock('../../db/supabaseClient', () => ({
         eq: (column: string, value: unknown) => { op.filters[column] = value; return builder; },
         limit: () => Promise.resolve(nextRead),
         maybeSingle: () => Promise.resolve(nextRead),
-        // Update chains terminate on `.eq(...)`, which is awaited directly.
+        // Awaited chains: a read resolves the scripted rows (Closure-015J: the
+        // membership read no longer ends in `.limit(1)`); an update resolves the
+        // matched row (conditional updates read back what they changed).
         then: (resolve: (v: unknown) => unknown) =>
-          Promise.resolve({ error: null }).then(resolve),
+          Promise.resolve(op.kind === 'select'
+            ? nextRead
+            : { data: op.filters.id ? [{ id: op.filters.id }] : [], error: null }).then(resolve),
       };
       return builder;
     },
@@ -223,15 +228,25 @@ describe('Test 6 — membership isolation', () => {
     expect(mentions).not.toContain(OTHER_ORG);
   });
 
-  it('an existing row for the SAME pair is updated by its primary key only', async () => {
-    nextRead = { data: [{ id: 'role-row-1', role: 'VIEW_ONLY', status: 'active' }], error: null };
+  it('an existing (non-active) row for the SAME pair is updated by its primary key only', async () => {
+    // Closure-015J (R-13): an ACTIVE row is no longer re-invited (next test); a
+    // non-active one is, by its primary key plus the role + status read (CAS).
+    nextRead = { data: [{ id: 'role-row-1', role: 'VIEW_ONLY', status: 'inactive' }], error: null };
     const result = await upsertUserCompanyRole(TARGET_USER, TARGET_ORG, 'COMPANY_ADMIN');
 
     expect(result).toEqual({ ok: true });
     const update = ops.find((o) => o.table === 'user_company_roles' && o.kind === 'update');
     // Bounded to one row id — it cannot fan out across a user's other tenants.
-    expect(update?.filters).toEqual({ id: 'role-row-1' });
+    expect(update?.filters).toEqual({ id: 'role-row-1', role: 'VIEW_ONLY', status: 'inactive' });
     expect(update?.payload).toMatchObject({ role: 'COMPANY_ADMIN' });
+  });
+
+  it('Closure-015J (R-13): an ACTIVE row for the pair is not re-invited — no write', async () => {
+    nextRead = { data: [{ id: 'role-row-1', role: 'VIEW_ONLY', status: 'active' }], error: null };
+    const result = await upsertUserCompanyRole(TARGET_USER, TARGET_ORG, 'COMPANY_ADMIN');
+
+    expect(result).toEqual({ ok: false, error: 'ALREADY_ACTIVE_MEMBER' });
+    expect(ops.filter((o) => o.table === 'user_company_roles' && o.kind !== 'select')).toEqual([]);
   });
 
   it('no delete is ever issued against user_company_roles', async () => {

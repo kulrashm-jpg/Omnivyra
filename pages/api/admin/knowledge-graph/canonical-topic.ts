@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '@/lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { INTELLIGENCE_OVERRIDE_MANAGE } from '@/shared/contracts/security';
 import {
   confirmCanonicalTopic,
@@ -47,6 +48,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Allow', 'POST, DELETE');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:admin:kg:canonical-topic', 30, 60))) return;
 
   const guard = await requireCapability(req, res, {
     capability: INTELLIGENCE_OVERRIDE_MANAGE,

@@ -14,7 +14,10 @@ import {
   getScheduledPost,
   updateScheduledPostOnPublish,
   updateScheduledPostOnFailure,
+  markScheduledPostOutcomeUncertain,
+  markScheduledPostPlatformCallStarted,
 } from '../db/queries';
+import { randomUUID } from 'crypto';
 import { publishToPlatform } from '../adapters/platformAdapter';
 import { categorizeError } from './errorRecoveryService';
 import { recordPostAnalytics } from './analyticsService';
@@ -40,6 +43,15 @@ import { recordAuditEntry } from './creatorAuditTrailService';
 import { recordPublishFailure } from './creatorQueueReliabilityService';
 import { validateCreatorPublishSemanticsLive } from './creatorPublishValidation';
 import { publishThread } from './threadRuntime/threadPublishOrchestrator';
+import {
+  classifyPublishAttempt,
+  isPreCallClaim,
+  hasUncertainOutcome,
+  publishClaimCode,
+  PUBLISH_CALL_STARTED,
+  PUBLISH_OUTCOME_UNCERTAIN,
+  PUBLISH_OUTCOME_UNCERTAIN_MESSAGE,
+} from '../queue/publishOutcome';
 
 /**
  * Publish-time re-validation for attachment-required posts. The
@@ -176,6 +188,25 @@ export type PublishNowInput = {
 
 export type PublishNowResult = {
   status: 'PUBLISHED' | 'FAILED';
+  /**
+   * Set ONLY when the post's status is owned by someone else and a caller
+   * must NOT write any status for this result:
+   *   - another execution holds the post-level claim. The holder writes the
+   *     terminal status; writing 'failed' here would flip its live
+   *     'publishing' row (making it claimable and republishable mid-flight) or
+   *     overwrite its 'published'.
+   *   - a thread run stopped at a node whose outcome is uncertain or in
+   *     flight. The orchestrator recorded each node's state itself.
+   *   - the claim was refused for any other reason (see `refusal`).
+   */
+  suppressed?: true;
+  /**
+   * Why the post-level claim was refused (set with `suppressed`). Distinguishes
+   * "another operation owns the post" ('held_by_another_execution',
+   * 'call_in_flight') from "this post is unsafe to publish until reconciled"
+   * ('outcome_uncertain') and "not a publishable status" ('not_claimable').
+   */
+  refusal?: PublishClaimRefusalReason;
   external_post_id?: string;
   post_url?: string;
   published_at?: string;
@@ -276,7 +307,20 @@ export const PUBLISH_CLAIM_STALE_WINDOW_MS = 5 * 60 * 1000;
  */
 const CLAIMABLE_FROM_STATUSES: ReadonlySet<string> = new Set(['scheduled', 'failed']);
 
-export type PublishClaimRefusalReason = 'held_by_another_execution' | 'already_published';
+/**
+ * Why a claim was refused. The first two mean ANOTHER OPERATION OWNS the post
+ * right now (it holds a claim, or it started a platform call): the caller
+ * stops and writes nothing. 'outcome_uncertain' means THE POST ITSELF IS
+ * UNSAFE to publish — a previous attempt may have published it — until a
+ * person reconciles it. 'not_claimable': the status is not one a publish may
+ * start from (published / cancelled / draft / blocked / unknown).
+ */
+export type PublishClaimRefusalReason =
+  | 'held_by_another_execution'
+  | 'call_in_flight'
+  | 'already_published'
+  | 'outcome_uncertain'
+  | 'not_claimable';
 
 /**
  * Deliberately ONE shape rather than a discriminated union: this repo compiles
@@ -284,63 +328,93 @@ export type PublishClaimRefusalReason = 'held_by_another_execution' | 'already_p
  * discriminant does not narrow, so a union here fails typecheck at every
  * consumer.
  *
- * `fromStatus` is set iff `claimed`; `reason` is set iff `!claimed`.
+ * `fromStatus`, `fromErrorCode` and `token` are set iff `claimed`; `reason`
+ * is set iff `!claimed`.
  */
 export interface PublishClaimResult {
   claimed: boolean;
   /** The status this execution claimed FROM. Null when the claim was refused. */
   fromStatus: string | null;
+  /** The error_code the row carried before the claim (restored on release). */
+  fromErrorCode: string | null;
+  /**
+   * The claim's fencing token, stored as `PUBLISH_CLAIMED:<token>`. The holder
+   * passes it to the pre-call marker write and to the release; once another
+   * execution or the sweeper replaces it, neither can land.
+   */
+  token: string | null;
   /** Why the claim was refused. Null when it was granted. */
   reason: PublishClaimRefusalReason | null;
 }
 
-const claimGranted = (fromStatus: string): PublishClaimResult =>
-  ({ claimed: true, fromStatus, reason: null });
+const claimGranted = (fromStatus: string, fromErrorCode: string | null, token: string): PublishClaimResult =>
+  ({ claimed: true, fromStatus, fromErrorCode, token, reason: null });
 
 const claimRefused = (reason: PublishClaimRefusalReason): PublishClaimResult =>
-  ({ claimed: false, fromStatus: null, reason });
+  ({ claimed: false, fromStatus: null, fromErrorCode: null, token: null, reason });
 
 /**
- * Take the post-level publish claim. Returns `claimed:false` when another
- * execution holds it — the caller must then NOT call the platform.
+ * Take the post-level publish claim. Returns `claimed:false` when the caller
+ * must NOT call the platform; `reason` says why.
  *
- * `snapshotStatus` / `snapshotUpdatedAt` come from the row the caller already
- * read; they only select WHICH conditional update to issue. They never decide
- * the outcome — the affected-row count does.
+ * `snapshotStatus` / `snapshotErrorCode` / `snapshotUpdatedAt` come from the
+ * row the caller already read; they select WHICH conditional update to issue
+ * and are part of its predicate. They never decide the outcome — the
+ * affected-row count does.
+ *
+ * Claimable:
+ *   scheduled / failed — unless failed with an uncertain outcome
+ *       (PUBLISH_OUTCOME_UNCERTAIN / PUBLISH_CALL_STARTED): refused
+ *       'outcome_uncertain' until a person reconciles it. The predicate pins
+ *       the error_code read, so a row that became uncertain since is not taken.
+ *   publishing — ONLY a pre-call claim (PUBLISH_CLAIMED:<token>, no platform
+ *       call started) that has looked dead for PUBLISH_CLAIM_STALE_WINDOW_MS.
+ *       The window is a liveness heuristic, never the safety argument: the
+ *       safety is the fence. The takeover replaces the token, so the previous
+ *       holder's marker write (which requires its own token) can no longer land
+ *       and it can never start a call. A 'publishing' row whose call STARTED
+ *       (PUBLISH_CALL_STARTED) is never taken over, however old — the call may
+ *       still be in flight; the sweeper labels it uncertain. Nor is a legacy
+ *       'publishing' row with no token: nothing shows its call did not start.
  */
 export async function claimScheduledPostForPublish(input: {
   scheduledPostId: string;
   snapshotStatus: string | null | undefined;
   snapshotUpdatedAt: string | null | undefined;
+  snapshotErrorCode: string | null | undefined;
 }): Promise<PublishClaimResult> {
   const { scheduledPostId } = input;
   const status = String(input.snapshotStatus ?? '').trim().toLowerCase();
+  const errorCode = input.snapshotErrorCode ?? null;
   const staleBefore = Date.now() - PUBLISH_CLAIM_STALE_WINDOW_MS;
+  const token = randomUUID();
 
   let query = ownedDbTable('scheduled_posts')
-    .update({ status: 'publishing', updated_at: new Date().toISOString() })
+    .update({ status: 'publishing', error_code: publishClaimCode(token), updated_at: new Date().toISOString() })
     .eq('id', scheduledPostId);
 
   if (CLAIMABLE_FROM_STATUSES.has(status)) {
+    if (hasUncertainOutcome({ status, error_code: errorCode })) {
+      return claimRefused('outcome_uncertain');
+    }
     query = query.eq('status', status);
+    query = errorCode === null ? query.is('error_code', null) : query.eq('error_code', errorCode);
   } else if (status === 'publishing') {
-    // Another execution already claimed. Refuse while the claim looks live.
+    if (errorCode === PUBLISH_CALL_STARTED) return claimRefused('call_in_flight');
+    if (!isPreCallClaim({ status, error_code: errorCode })) return claimRefused('held_by_another_execution');
+    // A pre-call claim: refuse while it looks live (heuristic only).
     const heldSince = input.snapshotUpdatedAt ? new Date(input.snapshotUpdatedAt).getTime() : NaN;
     if (!Number.isFinite(heldSince) || heldSince > staleBefore) {
       return claimRefused('held_by_another_execution');
     }
-    // Stale claim (worker hard-killed mid-publish). Reclaim — but still let
-    // the database pick the winner: `updated_at` is part of the predicate AND
-    // part of the SET, so a racing reclaimer re-reads a fresh updated_at and
-    // matches zero rows.
+    // Fenced takeover: the predicate pins the old token, so exactly one
+    // taker (or the sweeper, or the holder's own marker write) wins.
     query = query
       .eq('status', 'publishing')
+      .eq('error_code', errorCode as string)
       .lt('updated_at', new Date(staleBefore).toISOString());
   } else {
-    // Not a claimable state (published / cancelled / draft / blocked /
-    // unknown). The authorization gate on each surface should already have
-    // rejected these.
-    return claimRefused('held_by_another_execution');
+    return claimRefused('not_claimable');
   }
 
   const { data, error } = await query.select('id');
@@ -348,14 +422,16 @@ export async function claimScheduledPostForPublish(input: {
     throw new Error(`Failed to claim scheduled post ${scheduledPostId} for publish: ${error.message}`);
   }
   if (Array.isArray(data) && data.length > 0) {
-    return claimGranted(status);
+    return claimGranted(status, status === 'publishing' ? null : errorCode, token);
   }
 
-  // Lost the race. Re-read to report the reason accurately: a post that landed
-  // on the platform in the meantime is 'already published', not 'contended'.
+  // Lost the race. Re-read to report the reason accurately.
   try {
     const current = await getScheduledPost(scheduledPostId);
     if (current?.platform_post_id) return claimRefused('already_published');
+    const currentRow = current as { status?: string | null; error_code?: string | null } | null;
+    if (currentRow && hasUncertainOutcome(currentRow)) return claimRefused('outcome_uncertain');
+    if (currentRow?.error_code === PUBLISH_CALL_STARTED) return claimRefused('call_in_flight');
   } catch {
     /* fall through — the claim was still refused either way */
   }
@@ -363,25 +439,29 @@ export async function claimScheduledPostForPublish(input: {
 }
 
 /**
- * Give the claim back, restoring the status this execution claimed FROM.
+ * Give the claim back, restoring the status (and error_code) this execution
+ * claimed FROM.
  *
- * Used only on the unexpected-throw path. Restoring (rather than forcing
- * 'failed') means an unhandled error leaves the row exactly as it was before
- * the claim, so the claim can never remove a post from a retry surface it was
- * already on — the requirement that a retryable failure stays retryable.
+ * Used only on the unexpected-throw path BEFORE any platform call started.
+ * Restoring (rather than forcing 'failed') means an unhandled error leaves the
+ * row exactly as it was before the claim, so the claim can never remove a post
+ * from a retry surface it was already on.
  *
- * Compare-and-set on 'publishing' makes it a no-op whenever a terminal write
- * already happened: the success path wrote 'published', the handled-failure
- * path wrote 'failed', or another execution reclaimed a stale hold.
+ * Compare-and-set on 'publishing' AND this execution's own claim token: a
+ * no-op whenever a terminal write already happened, the call started
+ * (PUBLISH_CALL_STARTED — never released: the outcome is unknown), or another
+ * execution / the sweeper replaced the claim.
  */
 export async function releaseScheduledPostPublishClaim(
   scheduledPostId: string,
   restoreStatus: string,
+  claim: { token: string; restoreErrorCode: string | null },
 ): Promise<'released' | 'not_held'> {
   const { data, error } = await ownedDbTable('scheduled_posts')
-    .update({ status: restoreStatus, updated_at: new Date().toISOString() })
+    .update({ status: restoreStatus, error_code: claim.restoreErrorCode, updated_at: new Date().toISOString() })
     .eq('id', scheduledPostId)
     .eq('status', 'publishing')
+    .eq('error_code', publishClaimCode(claim.token))
     .select('id');
   if (error) {
     console.warn('[publishClaim] release failed (non-fatal):', error.message);
@@ -479,6 +559,10 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       published_at: threadResult.status === 'PUBLISHED' ? threadResult.timestamp : undefined,
       message: threadResult.message,
       timestamp: threadResult.timestamp,
+      // Stopped at a node whose outcome is unknown or in flight: the
+      // orchestrator recorded the per-node state, and a caller's status write
+      // on the root would only overwrite it.
+      ...(threadResult.uncertain ? { suppressed: true as const } : {}),
     };
   }
 
@@ -491,6 +575,25 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       post_url: scheduledPost.post_url,
       published_at: scheduledPost.published_at,
       timestamp,
+    };
+  }
+
+  // A thread CHILD is only ever published by its thread's orchestrator: as a
+  // reply to its predecessor, under the root's claim protocol, once. Published
+  // on its own it would go out out of order (not as a reply), outside the
+  // thread's node bookkeeping — and the thread run would publish it again.
+  if ((scheduledPost as { parent_post_id?: string | null }).parent_post_id) {
+    logger.warn('publishNow.thread_child_refused', {
+      surface: 'publishNow',
+      publishSource: input.publish_source ?? 'unknown',
+      scheduledPostId: scheduled_post_id,
+    });
+    return {
+      status: 'FAILED',
+      message: 'Publish refused: this post is part of a thread and is published only with its thread (publish or resume the thread root).',
+      timestamp,
+      suppressed: true,
+      refusal: 'not_claimable',
     };
   }
 
@@ -522,6 +625,7 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     scheduledPostId:   scheduled_post_id,
     snapshotStatus:    (scheduledPost as { status?: string | null }).status ?? null,
     snapshotUpdatedAt: (scheduledPost as { updated_at?: string | null }).updated_at ?? null,
+    snapshotErrorCode: (scheduledPost as { error_code?: string | null }).error_code ?? null,
   });
 
   if (!claim.claimed) {
@@ -539,30 +643,65 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
         timestamp,
       };
     }
-    // Contended. Do NOT call the platform — that is exactly the duplicate
-    // publish this boundary exists to prevent. FAILED (not PUBLISHED) because
+    // Refused. Do NOT call the platform. FAILED (not PUBLISHED) because
     // reporting a publish that did not happen here would let a caller stamp
-    // `published`/`published_at` onto a row with no platform_post_id and hide
-    // a genuine failure if the holder later fails. The holder owns the
-    // outcome and writes the terminal status.
-    const message = 'Duplicate publish suppressed (post-level claim held by another execution)';
+    // `published`/`published_at` onto a row with no platform_post_id. In
+    // every case the row's state belongs to someone else — the holder, or the
+    // uncertain record awaiting reconciliation — so `suppressed` tells the
+    // caller to write no status; `refusal` says which case it is.
+    const refusal = claim.reason ?? 'held_by_another_execution';
+    const message =
+      refusal === 'outcome_uncertain'
+        ? 'Publish refused: the previous attempt may already have published this post. ' +
+          'Check the platform and reconcile the outcome before publishing again.'
+        : refusal === 'not_claimable'
+          ? `Publish refused: a post in status '${String((scheduledPost as { status?: string | null }).status ?? 'unknown')}' cannot be published.`
+          : refusal === 'call_in_flight'
+            ? 'Duplicate publish suppressed (another execution has started the platform call)'
+            : 'Duplicate publish suppressed (post-level claim held by another execution)';
     logger.warn('publishNow.duplicate_suppressed', {
       surface: 'publishNow',
       publishSource: input.publish_source ?? 'unknown',
       scheduledPostId: scheduled_post_id,
-      reason: claim.reason,
+      reason: refusal,
     });
-    return { status: 'FAILED', message, timestamp };
+    return { status: 'FAILED', message, timestamp, suppressed: true, refusal };
   }
 
+  const attempt: SingleRowAttempt = {
+    platformCallInFlight: false,
+    claimToken: claim.token as string,
+  };
   try {
-    return await runSingleRowPublish(input, scheduledPost, timestamp);
+    return await runSingleRowPublish(input, scheduledPost, timestamp, attempt);
   } catch (error) {
-    // Unexpected throw. CAS-restore the exact status claimed from, so the row
-    // is left exactly as retryable as it was before the claim — never more
-    // blocked. A no-op when a terminal status was already written.
+    // A throw while the platform call's outcome was unsaved (the adapter threw,
+    // or the success/failure write failed): the post may be live. Restoring
+    // the claimed-from status would put a 'scheduled' row back in front of the
+    // cron — an automatic duplicate. Record the uncertainty instead.
+    if (attempt.platformCallInFlight) {
+      try {
+        await markScheduledPostOutcomeUncertain(
+          scheduled_post_id,
+          `${PUBLISH_OUTCOME_UNCERTAIN_MESSAGE} (${error instanceof Error ? error.message : String(error)})`,
+        );
+      } catch (markError) {
+        console.error(
+          '[publishNow] uncertain-outcome write failed; the row stays publishing for the sweeper:',
+          markError instanceof Error ? markError.message : String(markError),
+        );
+      }
+      throw error;
+    }
+    // Unexpected throw BEFORE the platform call. CAS-restore the exact status
+    // claimed from, so the row is left exactly as retryable as it was before
+    // the claim — never more blocked. A no-op when a terminal status was
+    // already written.
     try {
-      await releaseScheduledPostPublishClaim(scheduled_post_id, claim.fromStatus);
+      await releaseScheduledPostPublishClaim(scheduled_post_id, claim.fromStatus as string, {
+        token: attempt.claimToken,
+        restoreErrorCode: claim.fromErrorCode,
+      });
     } catch (releaseError) {
       console.warn(
         '[publishNow] publish-claim release threw (non-fatal):',
@@ -581,10 +720,17 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
  * from here either writes a terminal status ('published' / 'failed') — which
  * releases the claim by definition — or throws, which the caller CAS-restores.
  */
+/**
+ * `platformCallInFlight`: the platform call has started and its outcome is not
+ * yet saved. `claimToken`: this execution's claim fence (PUBLISH_CLAIMED:<token>).
+ */
+type SingleRowAttempt = { platformCallInFlight: boolean; claimToken: string };
+
 async function runSingleRowPublish(
   input: PublishNowInput,
   scheduledPost: Awaited<ReturnType<typeof getScheduledPost>>,
   timestamp: string,
+  attempt: SingleRowAttempt,
 ): Promise<PublishNowResult> {
   const { scheduled_post_id, social_account_id, user_id } = input;
 
@@ -777,6 +923,30 @@ async function runSingleRowPublish(
   // publishes non-expired media without any adapter change.
   await refreshDurableMediaBeforePublish(scheduled_post_id);
 
+  // Record — compare-and-set from THIS execution's own claim token,
+  // immediately before the call — that the platform call is starting. The
+  // queue worker and the sweeper read it: a row carrying it is never taken
+  // over and, if it is left behind, becomes PUBLISH_OUTCOME_UNCERTAIN. Zero
+  // rows means the claim was taken over or swept while this execution was
+  // preparing: it no longer owns the post and must not call the platform or
+  // write any status. A write error throws (the claim is then released).
+  const callRecorded = await markScheduledPostPlatformCallStarted(scheduled_post_id, attempt.claimToken);
+  if (!callRecorded) {
+    logger.warn('publishNow.duplicate_suppressed', {
+      surface: 'publishNow',
+      publishSource: input.publish_source ?? 'unknown',
+      scheduledPostId: scheduled_post_id,
+      reason: 'claim_superseded_before_call',
+    });
+    return {
+      status: 'FAILED',
+      message: 'Duplicate publish suppressed (this execution\'s claim was superseded before the platform call)',
+      timestamp,
+      suppressed: true,
+      refusal: 'held_by_another_execution',
+    };
+  }
+  attempt.platformCallInFlight = true;
   const result = await publishToPlatform(scheduled_post_id, social_account_id);
 
   if (result.success && result.platform_post_id) {
@@ -786,6 +956,7 @@ async function runSingleRowPublish(
       result.post_url || '',
       result.published_at
     );
+    attempt.platformCallInFlight = false;
     // P3-1 — advance the variant experiment tracker for any variant
     // that ships with this scheduled_post. Best-effort; failures
     // never block publish.
@@ -855,16 +1026,27 @@ async function runSingleRowPublish(
     };
   }
 
-  const platformError = categorizeError(
+  const categorized = categorizeError(
     scheduledPost.platform,
     result.error || { message: 'Unknown error' }
   );
   // Use the raw message (actual error) so callers can surface it; fall back to user_message
-  const errorDetail = platformError.message && platformError.message !== 'Unknown error'
-    ? platformError.message
-    : platformError.user_message;
+  const categorizedDetail = categorized.message && categorized.message !== 'Unknown error'
+    ? categorized.message
+    : categorized.user_message;
+  // A failure that does not PROVE the platform created nothing (5xx, network
+  // loss, timeout, an escaped throw, a success with no id) is recorded as an
+  // uncertain outcome, not as an ordinary failure: the post may be live, and
+  // the queue worker and thread orchestrator refuse to publish it again until
+  // a person reconciles it (backend/queue/publishOutcome.ts).
+  const uncertain = classifyPublishAttempt(result) !== 'not_created';
+  const platformError = uncertain ? { ...categorized, code: PUBLISH_OUTCOME_UNCERTAIN } : categorized;
+  const errorDetail = uncertain
+    ? `${PUBLISH_OUTCOME_UNCERTAIN_MESSAGE} Adapter said: ${categorizedDetail}`
+    : categorizedDetail;
 
-  await updateScheduledPostOnFailure(scheduled_post_id, errorDetail);
+  await updateScheduledPostOnFailure(scheduled_post_id, errorDetail, undefined, platformError.code);
+  attempt.platformCallInFlight = false;
   await ownedDbTable('scheduled_posts')
     .update({
       error_code: platformError.code,

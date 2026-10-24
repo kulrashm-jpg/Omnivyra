@@ -19,6 +19,7 @@ import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
+import { isInvitationExpired } from '../../../backend/services/invitationExpiry';
 
 type SuccessResponse = { ok: true; email: string };
 type ErrorResponse   = { error: string; code?: string };
@@ -71,8 +72,8 @@ async function handler(
     return res.status(400).json({ error: 'This invitation link has already been used', code: 'ALREADY_USED' });
   }
 
-  const expiresAt = new Date((invitation as any).expires_at);
-  if (expiresAt < new Date()) {
+  // Closure-015E: RPC semantics (expired AT expires_at); missing / malformed ⇒ expired.
+  if (isInvitationExpired((invitation as any).expires_at)) {
     await supabase.from('invitations').update({ revoked_at: new Date().toISOString() }).eq('id', (invitation as any).id);
     return res.status(400).json({ error: 'This invitation has expired', code: 'EXPIRED' });
   }

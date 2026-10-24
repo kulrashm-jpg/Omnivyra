@@ -17,6 +17,8 @@ export interface GovernanceStatusData {
   blueprintImmutable?: boolean;
   /** Stage 16: Blueprint frozen within execution window */
   blueprintFrozen?: boolean;
+  /** Lock state could not be evaluated (read failure) — not a confirmed lock. */
+  blueprintStateUnavailable?: boolean;
 }
 
 export interface LatestGovernanceEvent {

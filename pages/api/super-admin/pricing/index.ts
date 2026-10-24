@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { BILLING_PLAN_MANAGE } from '@/shared/contracts/security';
 import {
   getFxConfig, getPlanPricing, setFxRate, setPriceOverride, setPlanPricing,
@@ -15,6 +16,9 @@ import {
 import type { Currency } from '@/lib/billing/currency';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:pricing', 20, 60, { sensitive: true }))) return;
+
   const guard = await requireCapability(req, res, {
     capability: BILLING_PLAN_MANAGE,
     reason: 'manage pricing configuration',

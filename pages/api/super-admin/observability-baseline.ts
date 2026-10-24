@@ -30,6 +30,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'operator manages performance baselines',
+    // Closure-009 (owner decision): capturing a baseline is a platform WRITE
+    // needing platform authority. Closure-015: enforced (and audited) here.
+    requirePlatformAuthority: req.method === 'POST',
   });
   if (guard.ok !== true) return;
 

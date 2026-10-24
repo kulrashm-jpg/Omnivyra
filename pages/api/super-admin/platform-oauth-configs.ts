@@ -23,6 +23,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { encryptCredential, decryptCredential } from '../../../backend/auth/credentialEncryption';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenUrl: string; scopes: string[] }> = {
@@ -50,6 +52,9 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
 };
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:platform-oauth-configs', 20, 60, { sensitive: true }))) return;
+
   // Split the gate by method. GET returns metadata only (which platforms
   // are configured, the enabled flag, the 6-char client_id preview, and
   // updated_at) — no secret material is decrypted into the response, so
@@ -67,8 +72,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       ? 'platform OAuth credential admin (read)'
       : 'platform OAuth credential admin',
     requireStepUp,
+    // Closure-015: the GET lists platform OAuth configuration metadata
+    // (configured/enabled flags, client-id previews). Like the writes, it is for
+    // platform operators only: a direct grant does not unlock it. Step-up stays
+    // GET-exempt.
+    requirePlatformAuthority: true,
   });
   if (guard.ok !== true) return;
+  // Closure-013 (D-3): a direct capability grant plus step-up is not platform
+  // authority — every non-GET (POST, DELETE, and any other mutating method)
+  // also needs an active platform SUPER_ADMIN, before any read or write.
+  if (req.method !== 'GET'
+    && !(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'platform_oauth_configs.write'))) return;
 
   if (req.method === 'GET') {
     const { data: configs } = await supabase

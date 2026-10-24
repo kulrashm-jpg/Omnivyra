@@ -135,7 +135,11 @@ jest.mock('../../adapters/platformAdapter', () => ({
     // Latency is what opens the TOCTOU window a naive guard leaves open.
     await new Promise((r) => setTimeout(r, 15));
     if (platformOutcome === 'failure') {
-      return { success: false, error: { code: 'RATE_LIMITED', message: 'slow down', retryable: true } };
+      // A real adapter code for an explicit 429 rejection (linkedinAdapter): a
+      // CONFIRMED "nothing was created" failure, which retries. (Was the
+      // made-up 'RATE_LIMITED', which no adapter emits — an unknown code is now
+      // an uncertain outcome; see backend/queue/publishOutcome.ts.)
+      return { success: false, error: { code: 'LINKEDIN_RATE_LIMIT', message: 'slow down', retryable: true } };
     }
     return {
       success: true,
@@ -375,8 +379,12 @@ describe('publishProcessor — post-level publish claim', () => {
     seedPost('sp-1');
     seedJob('qj-1', 'sp-1');
 
-    const adapter = require('../../adapters/platformAdapter');
-    adapter.publishToPlatform.mockImplementationOnce(async () => { throw new Error('socket hang up'); });
+    // Thrown after the claim but BEFORE the platform call (nothing was sent),
+    // where giving the claim back is correct. A throw from the platform call
+    // itself is an uncertain outcome instead — covered in
+    // publishRetryStateReliability.test.ts (Closure-002 R5).
+    const media = require('../../services/mediaReferenceResolver');
+    media.refreshDurableMediaBeforePublish.mockImplementationOnce(async () => { throw new Error('socket hang up'); });
 
     await expect(processPublishJob(job('qj-1', 'sp-1'))).rejects.toThrow('socket hang up');
 
@@ -387,9 +395,14 @@ describe('publishProcessor — post-level publish claim', () => {
     expect(post('sp-1').status).toBe('published');
   });
 
-  test('a stale claim from a hard-killed worker can be reclaimed', async () => {
+  test('a stale PRE-CALL claim from a hard-killed worker can be reclaimed', async () => {
     seedPost('sp-1', {
       status: 'publishing',
+      // A claim taken under the fenced protocol that never reached its
+      // platform call (PUBLISH_CLAIMED:<token>, no PUBLISH_CALL_STARTED). Only
+      // such a claim may be taken over; an old 'publishing' row with no token,
+      // or one whose call started, never is (Closure-003 tests below).
+      error_code: 'PUBLISH_CLAIMED:dead-runtime',
       platform_post_id: null,
       updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // > 5min window
     });

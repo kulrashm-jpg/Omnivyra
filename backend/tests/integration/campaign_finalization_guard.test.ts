@@ -9,6 +9,18 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn().mockResolvedValue({ userId: 'user-1' }),
+  // requireCampaignAccess (schedule-structured-plan, since #156) authenticates
+  // through resolveUserContext: user-1, an active member of the owning company.
+  resolveUserContext: jest.fn().mockResolvedValue({ userId: 'user-1', companyIds: ['company-final-123'] }),
+}));
+// schedule-structured-plan is wrapped in the REAL withIdempotency (Group A),
+// which resolves the caller before the handler runs. The caller is user-1 —
+// the same user enforceCompanyAccess authorizes above.
+jest.mock('../../security/IdentityResolver', () => ({
+  resolvePrincipal: jest.fn(async () => ({
+    ok: true,
+    principal: { userId: 'user-1', supabaseUid: 'user-1', email: 'u1@example.test', legacyCookieSuperAdmin: false },
+  })),
 }));
 const mockRecordGovernanceEvent = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../services/GovernanceEventService', () => {
@@ -85,6 +97,7 @@ function chain(result: ChainResult) {
     eq: jest.fn().mockReturnThis(),
     in: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
+    order: jest.fn().mockReturnThis(),
     maybeSingle: jest.fn().mockResolvedValue(result),
     update: jest.fn().mockReturnValue(updateChain),
     insert: jest.fn().mockReturnValue(insertChain),
@@ -110,8 +123,39 @@ const CANONICAL_STATUS_FOR: Record<'COMPLETED' | 'PREEMPTED', string> = {
   PREEMPTED: 'archived',
 };
 
+/**
+ * A minimal stateful `api_idempotency_keys` table, so the real withIdempotency
+ * can create, read and complete its record (the stateless `chain` above
+ * cannot: its insert never lands, so the middleware answered 500).
+ */
+function idempotencyTable(store: Array<Record<string, unknown>>) {
+  const filters: Array<[string, unknown]> = [];
+  let op: 'select' | 'insert' | 'update' = 'select';
+  let payload: Record<string, unknown> = {};
+  const matching = () => store.filter((r) => filters.every(([k, v]) => (r[k] ?? null) === v));
+  const run = () => {
+    if (op === 'insert') { store.push({ id: `idem-${store.length + 1}`, ...payload }); return { data: null, error: null }; }
+    if (op === 'update') { const hit = matching(); hit.forEach((r) => Object.assign(r, payload)); return { data: hit, error: null }; }
+    return { data: matching(), error: null };
+  };
+  const b: any = {
+    select: () => b,
+    eq: (k: string, v: unknown) => { filters.push([k, v]); return b; },
+    is: (k: string, v: unknown) => { filters.push([k, v]); return b; },
+    lt: () => b,
+    or: () => b,
+    insert: (p: Record<string, unknown>) => { op = 'insert'; payload = p; return b; },
+    update: (p: Record<string, unknown>) => { op = 'update'; payload = p; return b; },
+    maybeSingle: async () => { const r = run(); return { data: Array.isArray(r.data) ? r.data[0] ?? null : r.data, error: null }; },
+    then: (ok: (v: unknown) => unknown, err: (e: unknown) => unknown) => Promise.resolve(run()).then(ok, err),
+  };
+  return b;
+}
+
 function setupCampaign(executionStatus: 'COMPLETED' | 'PREEMPTED') {
+  const idempotencyRows: Array<Record<string, unknown>> = [];
   (supabase.from as jest.Mock).mockImplementation((table: string) => {
+    if (table === 'api_idempotency_keys') return idempotencyTable(idempotencyRows);
     if (table === 'campaigns') {
       return chain({
         data: {
@@ -127,6 +171,9 @@ function setupCampaign(executionStatus: 'COMPLETED' | 'PREEMPTED') {
     }
     if (table === 'campaign_versions') {
       return chain({ data: { company_id: COMPANY_ID }, error: null });
+    }
+    if (table === 'companies') {
+      return chain({ data: { id: COMPANY_ID, status: 'active' }, error: null });
     }
     return chain({ data: null, error: null });
   });
@@ -188,11 +235,16 @@ describe('Campaign Finalization Guard (Stage 20)', () => {
       });
     });
 
+    // The route has been wrapped in withIdempotency since Group A adoption
+    // (WS1-E6-T006): a POST without an Idempotency-Key is refused 400 before
+    // the handler runs. This request now carries one, as every real client
+    // must; the finalization assertions are unchanged.
     it('COMPLETED → schedule → 409', async () => {
       setupCampaign('COMPLETED');
       const req = createApiRequestMock({
         method: 'POST',
         query: { id: CAMPAIGN_ID },
+        headers: { 'idempotency-key': 'finalization-guard-schedule-1' },
         body: {
           plan: {
             weeks: [{ week: 1, theme: 'W1', daily: [{ day: 'Monday', platforms: { linkedin: 'Post' } }] }],
@@ -208,6 +260,26 @@ describe('Campaign Finalization Guard (Stage 20)', () => {
         code: 'CAMPAIGN_FINALIZED',
         message: 'Campaign is finalized and cannot be modified',
       });
+    });
+
+    it('COMPLETED → schedule WITHOUT an Idempotency-Key → 400 before the handler reads the campaign', async () => {
+      setupCampaign('COMPLETED');
+      const req = createApiRequestMock({
+        method: 'POST',
+        query: { id: CAMPAIGN_ID },
+        body: {
+          plan: {
+            weeks: [{ week: 1, theme: 'W1', daily: [{ day: 'Monday', platforms: { linkedin: 'Post' } }] }],
+          },
+        },
+      });
+      const res = createMockRes();
+
+      await scheduleStructuredPlanHandler(req, res);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
+      expect((supabase.from as jest.Mock).mock.calls.map(([t]) => t)).not.toContain('campaigns');
     });
   });
 

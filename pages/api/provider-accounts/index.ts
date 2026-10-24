@@ -18,6 +18,8 @@ import {
 // Remediation: server-side env-var-name validation (no secrets in a name field).
 import { describeRejectedEnvVarName, isEnvVarName } from '../../../backend/security/credentialSafety';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 // ── Auth guards ────────────────────────────────────────────────────────────────
@@ -47,6 +49,9 @@ async function requireSuperAdminRead(
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:provider-accounts:create', 20, 60, { sensitive: true }))) return;
+
   // ── GET: list accounts for a provider ──────────────────────────────────────
   if (req.method === 'GET') {
     const session = await requireSuperAdminRead(req, res);
@@ -75,6 +80,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       reason: 'provider-account credential creation',
     });
     if (guard.ok !== true) return;
+    // Closure-013 (D-3): platform credential writes also need an active platform SUPER_ADMIN.
+    if (!(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'provider_accounts.create'))) return;
     const session = { userId: guard.principal.userId };
 
     const {

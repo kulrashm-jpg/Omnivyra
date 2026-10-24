@@ -45,7 +45,10 @@ jest.mock('../../queue/contentGenerationQueues', () => ({
   getContentQueue: () => ({ add: mockAdd }),
 }));
 
-import { replayDeadLetterEntry, replayableQueueNames } from '../../services/jobInspection';
+import {
+  replayDeadLetterEntry, replayableQueueNames, PUBLISH_REDRIVE_UNSUPPORTED,
+  REDRIVE_QUEUE_OVERRIDE_NOT_PERMITTED, REDRIVE_JOB_NAME_NOT_PERMITTED,
+} from '../../services/jobInspection';
 
 function seed(id: string, workerName: string, payload: Record<string, unknown> = { x: 1 }) {
   mockRows[id] = {
@@ -70,15 +73,31 @@ describe('DLQ re-drive — replayDeadLetterEntry', () => {
     expect(mockAdd).not.toHaveBeenCalled();
   });
 
+  // Closure-008 B2: this contract used to be pinned on a 'publish' entry —
+  // which can never be re-driven (see the publish tests below). It is pinned
+  // on a queue whose worker re-runs a re-driven payload as-is.
   test('re-enqueues original payload onto the worker_name queue with a stable jobId, then removes the row', async () => {
-    seed('e1', 'publish', { postId: 'p-9' });
+    seed('e1', 'lead-thread-recompute', { leadId: 'l-9' });
     const r = await replayDeadLetterEntry('e1');
     expect(r).toEqual({
-      id: 'e1', workerName: 'publish', targetQueue: 'publish', jobName: 'publish',
-      jobId: 'jobid:replay:publish', enqueued: true, removed: true,
+      id: 'e1', workerName: 'lead-thread-recompute', targetQueue: 'lead-thread-recompute', jobName: 'lead-thread-recompute',
+      jobId: 'jobid:replay:lead-thread-recompute', enqueued: true, removed: true,
     });
-    expect(mockAdd).toHaveBeenCalledWith('publish', { postId: 'p-9' }, { jobId: 'jobid:replay:publish' });
+    expect(mockAdd).toHaveBeenCalledWith('lead-thread-recompute', { leadId: 'l-9' }, { jobId: 'jobid:replay:lead-thread-recompute' });
     expect(mockRows.e1).toBeUndefined(); // block cleared
+  });
+
+  // ── Closure-008 B2: publish jobs are refused, never "redriven" ────────────
+  test.each([
+    ['a dead letter of the publish worker', 'publish', {}],
+    ['a re-drive redirected onto the publish queue', 'some-worker-label', { queueName: 'publish', jobName: 'publish' }],
+    ['a re-drive under the publish job name', 'some-worker-label', { queueName: 'ai-heavy', jobName: 'publish' }],
+    ['a publish dead letter redirected to another queue', 'publish', { queueName: 'ai-heavy', jobName: 'ai-heavy' }],
+  ] as const)('%s: refused before any enqueue, row kept', async (_n, worker, opts) => {
+    seed('p1', worker, { scheduled_post_id: 'sp-1', social_account_id: 'sa-1', user_id: 'u-1' });
+    await expect(replayDeadLetterEntry('p1', opts)).rejects.toThrow(PUBLISH_REDRIVE_UNSUPPORTED);
+    expect(mockAdd).not.toHaveBeenCalled();
+    expect(mockRows.p1).toBeDefined(); // the dead letter stays visible
   });
 
   test('resolves content queues via the existing content-queue getter', async () => {
@@ -103,6 +122,28 @@ describe('DLQ re-drive — replayDeadLetterEntry', () => {
     expect(mockRows.e4).toBeDefined(); // not removed on failure
   });
 
+  // ── Closure-009: the override contract ─────────────────────────────────
+  test('a payload whose worker IS a queue cannot be moved onto another queue', async () => {
+    seed('o1', 'ai-heavy', { a: 1 });
+    await expect(replayDeadLetterEntry('o1', { queueName: 'posting', jobName: 'posting' })).rejects.toThrow(REDRIVE_QUEUE_OVERRIDE_NOT_PERMITTED);
+    expect(mockAdd).not.toHaveBeenCalled();
+    expect(mockRows.o1).toBeDefined();
+  });
+
+  test('naming the payload own queue explicitly is not an override', async () => {
+    seed('o2', 'ai-heavy', { a: 1 });
+    const r = await replayDeadLetterEntry('o2', { queueName: 'ai-heavy' });
+    expect(r.targetQueue).toBe('ai-heavy');
+    expect(mockAdd).toHaveBeenCalledTimes(1);
+  });
+
+  test('a job name that is neither the target queue nor the original worker is refused', async () => {
+    seed('o3', 'ai-heavy', { a: 1 });
+    await expect(replayDeadLetterEntry('o3', { jobName: 'lead-thread-recompute' })).rejects.toThrow(REDRIVE_JOB_NAME_NOT_PERMITTED);
+    expect(mockAdd).not.toHaveBeenCalled();
+    expect(mockRows.o3).toBeDefined();
+  });
+
   test('bolt-execution resolves to the bolt queue getter', async () => {
     seed('e5', 'bolt-execution');
     const r = await replayDeadLetterEntry('e5');
@@ -115,7 +156,8 @@ describe('DLQ re-drive — replayableQueueNames', () => {
   test('advertises the existing consumed queues, including content queues', async () => {
     const names = await replayableQueueNames();
     expect(names).toEqual(expect.arrayContaining([
-      'publish', 'posting', 'ai-heavy', 'bolt-execution', 'content-blog',
+      'posting', 'ai-heavy', 'bolt-execution', 'content-blog',
     ]));
+    expect(names).not.toContain('publish'); // Closure-008 B2: refused, not advertised
   });
 });

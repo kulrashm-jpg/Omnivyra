@@ -33,6 +33,10 @@ const AUTHORIZED: Array<[string, string]> = [
   ['pages/api/activity-workspace/[id]/unschedule.ts', 'activity-workspace-unschedule'],
   ['pages/api/campaigns/[id]/repurpose-and-schedule.ts', 'campaigns-repurpose-and-schedule'],
   ['pages/api/campaigns/[id]/schedule-structured-plan.ts', 'campaigns-schedule-structured-plan'],
+  // OWNER DECISION 2026-10-11 (Closure-007 F3): the Strategic Mix release seam
+  // (456afd41) schedules through the same pipeline as Group A and adopted
+  // replay protection by design; sanctioned here rather than stripped.
+  ['pages/api/campaigns/[id]/release.ts', 'campaign-release'],
 ];
 
 /** Blocked by OR-08 (Group B dormant) and ED-01 (billing held pending telemetry). */
@@ -65,8 +69,8 @@ describe('adoption gate — authorized endpoints', () => {
     expect(new Set(scopes).size).toBe(scopes.length);
   });
 
-  it('the authorized list is exactly the seven Group A endpoints', () => {
-    expect(AUTHORIZED).toHaveLength(7);
+  it('the authorized list is exactly the seven Group A endpoints plus the release seam', () => {
+    expect(AUTHORIZED).toHaveLength(8);
     AUTHORIZED.forEach(([rel]) => expect(exists(rel)).toBe(true));
   });
 });

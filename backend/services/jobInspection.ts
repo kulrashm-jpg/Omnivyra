@@ -205,14 +205,31 @@ async function resolveReplayQueue(name: string): Promise<import('bullmq').Queue 
   return null;
 }
 
-/** Queue names this re-drive can target (existing consumed queues only). */
+/**
+ * Queue names this re-drive can target (existing consumed queues only).
+ * 'publish' is deliberately absent (Closure-008 B2): see replayDeadLetterEntry.
+ */
 export async function replayableQueueNames(): Promise<string[]> {
   const content = await import('../queue/contentGenerationQueues');
   return [
-    'publish', 'posting', 'ai-heavy', 'engagement-polling',
+    'posting', 'ai-heavy', 'engagement-polling',
     'lead-thread-recompute', 'conversation-memory-rebuild', 'bolt-execution',
     ...Object.keys(content.CONTENT_QUEUE_CONFIG),
   ];
+}
+
+/** A queueName override onto a queue other than the dead letter's own (Closure-009). */
+export const REDRIVE_QUEUE_OVERRIDE_NOT_PERMITTED = 'redrive_queue_override_not_permitted';
+/** A jobName that is neither the target queue nor the original worker (Closure-009). */
+export const REDRIVE_JOB_NAME_NOT_PERMITTED = 'redrive_job_name_not_permitted';
+
+/** Error message for a refused publish re-drive (see replayDeadLetterEntry). */
+export const PUBLISH_REDRIVE_UNSUPPORTED =
+  'publish_redrive_unsupported: re-publish the post through POST /api/scheduler/retry';
+
+/** A dead letter of the publish worker, or a re-drive aimed at the publish queue / job name. */
+function isPublishDeadLetter(workerName: string | null | undefined, targetQueue: string, jobName: string): boolean {
+  return String(workerName ?? '').trim() === 'publish' || targetQueue === 'publish' || jobName === 'publish';
 }
 
 export interface ReplayDeadLetterResult {
@@ -242,6 +259,35 @@ export async function replayDeadLetterEntry(
   const targetQueue = (opts.queueName ?? entry.workerName ?? '').trim();
   const jobName = (opts.jobName ?? entry.workerName ?? '').trim();
   if (!targetQueue) throw new Error('missing_target_queue');
+
+  // Closure-008 B2 — a publish job cannot be re-driven from here. The publish
+  // worker uses the BullMQ job id AS the queue_jobs row id
+  // (publishProcessor.processPublishJob → getQueueJob(job.id)); a replay job
+  // id ('replay:publish-<hash>') names no row, so the worker fails it before
+  // any claim — the re-drive could never publish, yet this used to report
+  // 'redriven' and delete the dead-letter row. Re-publishing a post belongs to
+  // the canonical path, POST /api/scheduler/retry, which creates a real
+  // queue_jobs row under the post's owner and keeps the uncertain-outcome
+  // refusal and the claim fencing. Refused BEFORE any enqueue, so the
+  // dead-letter row stays and nothing is reported as re-driven.
+  if (isPublishDeadLetter(entry.workerName, targetQueue, jobName)) {
+    throw new Error(PUBLISH_REDRIVE_UNSUPPORTED);
+  }
+
+  // Closure-009 (owner decision) — the override contract. A payload is
+  // re-driven onto the queue it came from. `queueName` may only be overridden
+  // when the dead letter's worker name is NOT itself a re-drivable queue (a
+  // worker label that differs from its queue name); `jobName` must name the
+  // target queue or the original worker. Anything else would move one
+  // worker's payload onto an unrelated queue or job.
+  const workerName = String(entry.workerName ?? '').trim();
+  const replayable = await replayableQueueNames();
+  if (opts.queueName !== undefined && replayable.includes(workerName) && targetQueue !== workerName) {
+    throw new Error(`${REDRIVE_QUEUE_OVERRIDE_NOT_PERMITTED}: ${workerName} -> ${targetQueue}`);
+  }
+  if (jobName !== targetQueue && jobName !== workerName) {
+    throw new Error(`${REDRIVE_JOB_NAME_NOT_PERMITTED}: ${jobName}`);
+  }
 
   const queue = await resolveReplayQueue(targetQueue);
   if (!queue) throw new Error(`unknown_target_queue: ${targetQueue}`);

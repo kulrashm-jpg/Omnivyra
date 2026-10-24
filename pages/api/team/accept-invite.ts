@@ -30,6 +30,9 @@ import { createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { insertAuditLogStrict, SYSTEM_USER_ID } from '../../../backend/services/auditActorService';
+import { isInvitationExpired } from '../../../backend/services/invitationExpiry';
+import { INVITATION_ACCEPTANCE_ROLES } from '../../../backend/services/onboardingInvitationAcceptance';
+import { normalizeRole } from '../../../backend/services/rbacPrimitives';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -72,12 +75,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (invitation.accepted_at) {
     return res.status(404).json({ error: 'This invitation has already been used.' });
   }
-  if (new Date(invitation.expires_at) < new Date()) {
+  // Closure-015E: RPC semantics (expired AT expires_at); missing / malformed ⇒ expired.
+  if (isInvitationExpired(invitation.expires_at)) {
     return res.status(404).json({ error: 'This invitation has expired. Ask your admin to send a new one.' });
   }
 
   // Confirm the authenticated user's email matches the invitation
   // (prevents account takeover via shared invite links)
+  // Closure-015M (R-14): an invitation activates only an invitation role. The
+  // invitations_role_check constraint already excludes SUPER_ADMIN; this is the
+  // application-side guarantee, checked before the invitation is claimed.
+  const invitedRole = normalizeRole(String(invitation.role ?? '')) as string | null;
+  if (!invitedRole || !INVITATION_ACCEPTANCE_ROLES.includes(invitedRole)) {
+    return res.status(403).json({ error: 'INVITED_ROLE_REQUIRES_GOVERNED_GRANT' });
+  }
+
   if (callerEmail.toLowerCase() !== invitation.email.toLowerCase()) {
     return res.status(403).json({
       error: `This invitation was sent to a different email address. Sign in as ${invitation.email} to accept it.`,

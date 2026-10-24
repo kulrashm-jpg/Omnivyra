@@ -39,6 +39,14 @@ export const normalizeRole = (value?: string | null): Role | null => {
   return (Role as Record<string, Role>)[upper] || null;
 };
 
+/**
+ * Closure-015E — despite its name, this now resolves ACTIVE memberships only.
+ * An invited membership confers no authority before acceptance: acceptance
+ * (team/accept-invite, activate_invitation_membership) is what activates it.
+ * Its ~20 callers use it as a fallback after getUserRole; they included invited
+ * COMPANY_ADMIN / ADMIN / SUPER_ADMIN rows and, at several call sites, invited
+ * rows of ANY role. The name is kept so those callers are unchanged.
+ */
 export const getCompanyRoleIncludingInvited = async (
   userId: string,
   companyId: string
@@ -48,7 +56,7 @@ export const getCompanyRoleIncludingInvited = async (
     .select('role, status')
     .eq('user_id', userId)
     .eq('company_id', companyId)
-    .in('status', ['active', 'invited'])
+    .eq('status', 'active')
     .limit(1);
   if (error || !data || data.length === 0) return null;
   const row = data[0] as { role: string };

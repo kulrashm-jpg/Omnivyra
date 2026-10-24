@@ -37,11 +37,26 @@ import { supabase } from '../../db/supabaseClient';
 import {
   getQueueJob,
   updateQueueJobStatus,
+  claimQueueJobForProcessing,
+  recordQueueJobRetryState,
+  markQueueJobPlatformCallStarted,
+  markQueueJobOutcomeUncertain,
+  readPlatformCallMarker,
+  PUBLISH_OUTCOME_UNCERTAIN,
   createQueueJobLog,
   getScheduledPost,
   updateScheduledPostOnPublish,
   updateScheduledPostOnFailure,
+  markScheduledPostPlatformCallStarted,
+  markScheduledPostOutcomeUncertain,
+  recordHeldQueueJobOutcomeUncertain,
 } from '../../db/queries';
+import {
+  classifyPublishAttempt,
+  publishOutcomeBlocksAttempt,
+  PUBLISH_CALL_STARTED,
+  PUBLISH_OUTCOME_UNCERTAIN_MESSAGE,
+} from '../publishOutcome';
 import { publishToPlatform } from '../../adapters/platformAdapter';
 import { publishThread } from '../../services/threadRuntime/threadPublishOrchestrator';
 import { validatePublishReadiness } from '../../services/publishReadinessValidator';
@@ -68,6 +83,7 @@ import { createUserNotification } from '../../services/userNotificationService';
 import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
 import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
 import { runJob } from '../../services/jobRunner';
+import { RETRY_STATE_EXHAUSTED, retryStateAfterFailedDelivery } from '../publishRetryState';
 
 interface PublishJobData {
   scheduled_post_id: string;
@@ -145,55 +161,95 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
 
   if (outcome.status === 'completed') return;
 
-  if (outcome.status === 'tenant_invalid') {
-    // The owning org is gone or suspended. Mark the job failed with a
-    // terminal classification so BullMQ doesn't retry — the underlying
-    // tenant cannot accept the publish.
-    try {
-      await updateQueueJobStatus(jobId as string, 'failed', {
-        error_message: `Tenant invalid: ${outcome.reason}`,
-        error_code:    'PUBLISH_BLOCKED_TENANT_INVALID',
-      });
-      await createQueueJobLog(
-        jobId as string,
-        'warn',
-        `Publish blocked: tenant invalid (${outcome.reason})`,
-        { social_account_id, scheduled_post_id, executionId: outcome.ctx.executionId }
+  // Every branch below ends this delivery with a throw, which BullMQ records
+  // as a failed attempt. Record whether that attempt leaves a retry pending
+  // BEFORE the throw reaches BullMQ (see recordRetryStateForFailedDelivery).
+  try {
+    if (outcome.status === 'tenant_invalid') {
+      // The owning org is gone or suspended. Mark the job failed with a
+      // terminal classification so BullMQ doesn't retry — the underlying
+      // tenant cannot accept the publish.
+      try {
+        await updateQueueJobStatus(jobId as string, 'failed', {
+          error_message: `Tenant invalid: ${outcome.reason}`,
+          error_code:    'PUBLISH_BLOCKED_TENANT_INVALID',
+        });
+        await createQueueJobLog(
+          jobId as string,
+          'warn',
+          `Publish blocked: tenant invalid (${outcome.reason})`,
+          { social_account_id, scheduled_post_id, executionId: outcome.ctx.executionId }
+        );
+      } catch {
+        /* fail-soft */
+      }
+      const blockedError: Error & { skipQueueStatusUpdate?: true } = new Error(
+        `PUBLISH_BLOCKED_TENANT_INVALID:${outcome.reason}`,
       );
-    } catch {
-      /* fail-soft */
+      blockedError.skipQueueStatusUpdate = true;
+      throw blockedError;
     }
-    const blockedError: Error & { skipQueueStatusUpdate?: true } = new Error(
-      `PUBLISH_BLOCKED_TENANT_INVALID:${outcome.reason}`,
-    );
-    blockedError.skipQueueStatusUpdate = true;
-    throw blockedError;
-  }
 
-  if (outcome.status === 'dead_letter_skip') {
-    // Operator must explicitly replay. Don't re-execute or re-retry.
-    const skipError: Error & { skipQueueStatusUpdate?: true } = new Error(
-      `PUBLISH_DEAD_LETTER_SKIP:${outcome.reason}`,
-    );
-    skipError.skipQueueStatusUpdate = true;
-    throw skipError;
-  }
+    if (outcome.status === 'dead_letter_skip') {
+      // Operator must explicitly replay. Don't re-execute or re-retry.
+      const skipError: Error & { skipQueueStatusUpdate?: true } = new Error(
+        `PUBLISH_DEAD_LETTER_SKIP:${outcome.reason}`,
+      );
+      skipError.skipQueueStatusUpdate = true;
+      throw skipError;
+    }
 
-  if (outcome.status === 'pressure_rejected') {
-    // Governor refused — back off and let BullMQ's broker-level retry
-    // handle this delivery again. Throw a real Error so BullMQ records
-    // the failure and applies its retry/backoff. We do NOT mark the
-    // queue_job 'failed' because the next delivery attempt is still
-    // valid work; pressure is transient.
-    throw new Error(`PUBLISH_PRESSURE_REJECTED:${outcome.reason}:key=${outcome.key}`);
-  }
+    if (outcome.status === 'pressure_rejected') {
+      // Governor refused — back off and let BullMQ's broker-level retry
+      // handle this delivery again. Throw a real Error so BullMQ records
+      // the failure and applies its retry/backoff. We do NOT mark the
+      // queue_job 'failed' because the next delivery attempt is still
+      // valid work; pressure is transient.
+      throw new Error(`PUBLISH_PRESSURE_REJECTED:${outcome.reason}:key=${outcome.key}`);
+    }
 
-  // outcome.status === 'failed' — re-throw so BullMQ records the failure
-  // and applies its own retry policy. The DLQ entry was already enriched
-  // by the runner.
-  if (outcome.status === 'failed') {
-    if (outcome.error instanceof Error) throw outcome.error;
-    throw new Error(String(outcome.error));
+    // outcome.status === 'failed' — re-throw so BullMQ records the failure
+    // and applies its own retry policy. The DLQ entry was already enriched
+    // by the runner.
+    if (outcome.status === 'failed') {
+      if (outcome.error instanceof Error) throw outcome.error;
+      throw new Error(String(outcome.error));
+    }
+  } catch (deliveryError) {
+    await recordRetryStateForFailedDelivery(jobId as string, job);
+    throw deliveryError;
+  }
+}
+
+/**
+ * Durable retry state for a delivery that is about to fail (Step 2).
+ *
+ * `queue_jobs.status = 'failed'` is written on every failed delivery, final or
+ * not; whether BullMQ will deliver the job again lives only in Redis. This
+ * writes that fact next to the status, from the same numbers BullMQ itself
+ * uses (attemptsMade before this delivery, opts.attempts), so cancellation and
+ * the duplicate guards can see a job waiting in backoff.
+ *
+ * Lands only while the row is 'failed' — a path that did not mark the row
+ * failed (pressure rejection leaves it 'pending'), or a row cancelled
+ * meanwhile, is left alone. Best-effort by design: a lost write leaves the row
+ * NULL (unknown), which is never treated as terminal, and the original error
+ * still propagates.
+ */
+async function recordRetryStateForFailedDelivery(
+  jobId: string,
+  job: Pick<Job<PublishJobData>, 'attemptsMade' | 'opts'>,
+): Promise<void> {
+  const retryState = retryStateAfterFailedDelivery(job.attemptsMade, job.opts?.attempts);
+  let outcome: Awaited<ReturnType<typeof recordQueueJobRetryState>>;
+  try {
+    outcome = await recordQueueJobRetryState(jobId, retryState);
+  } catch {
+    // Must never replace the delivery's own error with its own.
+    outcome = 'error';
+  }
+  if (outcome === 'error') {
+    console.warn(`[publishProcessor] retry_state '${retryState}' not recorded for job ${jobId}; row stays unknown`);
   }
 }
 
@@ -212,6 +268,15 @@ async function processPublishJobInner(params: {
   // Set once this execution owns the post-level claim, so the catch block
   // knows whether it has anything to give back.
   let heldClaimFromStatus: string | null = null;
+  // The claim's fence and the error_code it replaced (restored on release).
+  let heldClaimToken: string | null = null;
+  let heldClaimFromErrorCode: string | null = null;
+  // Set once this execution has recorded that it is calling the platform. From
+  // then on an unexpected throw must NOT give the claim back for a retry: the
+  // request may have created the post (see backend/queue/publishOutcome.ts).
+  let platformCallStarted = false;
+  // The id the platform returned, kept so an uncertain record can carry it.
+  let confirmedPlatformPostId: string | null = null;
 
   try {
     // Step 1: Idempotency check - verify job not already processed
@@ -223,6 +288,24 @@ async function processPublishJobInner(params: {
 
     if (queueJob.status === 'completed') {
       console.log(`✅ Job ${jobId} already completed, skipping (idempotency)`);
+      return;
+    }
+
+    // Cancellation is decided by the DATABASE, not by whether job.remove()
+    // managed to delete the BullMQ job. remove() cannot delete a job BullMQ is
+    // already holding (active/locked), and a Redis hiccup can defeat it too —
+    // either way the job is still delivered. A row the cancel helper (or the
+    // reliability sweeps) marked 'cancelled' is never published.
+    if (queueJob.status === 'cancelled') {
+      console.log(`⏹️ Job ${jobId} was cancelled, skipping (database cancellation is authoritative)`);
+      return;
+    }
+
+    // The final delivery already failed and was recorded as such. A delivery
+    // arriving after that (a stalled re-delivery after a crash between the
+    // state write and BullMQ's own failure record) must not publish.
+    if (queueJob.status === 'failed' && queueJob.retry_state === RETRY_STATE_EXHAUSTED) {
+      console.log(`⏹️ Job ${jobId} exhausted its retries, skipping`);
       return;
     }
 
@@ -268,6 +351,111 @@ async function processPublishJobInner(params: {
         result_data: { message: 'Already published (idempotency check)' },
       });
       return;
+    }
+
+    // Uncertain outcome — a previous attempt of THIS job died after it started
+    // the platform call. Reaching here means the job is 'processing' and older
+    // than the replay window (a fresh one returned above), the attempt recorded
+    // that it was calling the platform, and no platform_post_id was saved (the
+    // short-circuit above returned otherwise). The post may already be live. No
+    // adapter can make the call idempotent, so calling again risks a public
+    // duplicate: record the uncertainty, stop, and leave the retry to a person
+    // who has checked the platform. A death BEFORE the marker (no call started)
+    // still retries normally below.
+    //
+    // The post is usually NOT 'publishing' any more by the time BullMQ
+    // re-delivers a stalled job (30–60 min): /api/cron/sweep-stuck-publishing
+    // turns rows stuck in 'publishing' for >10 min into 'failed' — older sweeper
+    // builds without any error_code, newer ones with PUBLISH_OUTCOME_UNCERTAIN.
+    // A handled platform failure always records its own error_code, so a
+    // 'failed' post with no code (or the uncertain code) is the swept, unknown
+    // case — never a known failure.
+    const postStatus = (scheduledPost as { status?: string | null }).status ?? null;
+    const postErrorCode = (scheduledPost as { error_code?: string | null }).error_code ?? null;
+    const outcomeUnresolvedPost =
+      postStatus === 'publishing' ||
+      (postStatus === 'failed' && (!postErrorCode || postErrorCode === PUBLISH_OUTCOME_UNCERTAIN));
+    if (
+      queueJob.status === 'processing' &&
+      scheduledPost.is_thread_start !== true &&
+      outcomeUnresolvedPost &&
+      readPlatformCallMarker(queueJob.metadata)
+    ) {
+      const uncertainMessage =
+        'Publish outcome unknown: the worker stopped after sending this post to the platform and before ' +
+        'the result was saved. It may already be live — check the platform before retrying.';
+      const marked = await markQueueJobOutcomeUncertain(jobId as string, queueJob, uncertainMessage);
+      if (!marked) {
+        console.warn(`⚠️ Job ${jobId}: uncertain-outcome transition lost to a concurrent change — not publishing`);
+        return;
+      }
+      const { error: postUncertainError } = await supabase
+        .from('scheduled_posts')
+        .update({
+          status: 'failed',
+          error_code: PUBLISH_OUTCOME_UNCERTAIN,
+          error_message: uncertainMessage,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', scheduled_post_id)
+        // Only a row whose outcome is still unrecorded: never over a
+        // 'published' row or one carrying a platform_post_id.
+        .in('status', ['publishing', 'failed'])
+        .is('platform_post_id', null);
+      if (postUncertainError) {
+        console.error(`[publishProcessor] uncertain-outcome post write failed for ${scheduled_post_id}:`, postUncertainError.message);
+      }
+      await createQueueJobLog(jobId as string, 'warn', 'Publish outcome uncertain — not republishing', {
+        scheduled_post_id,
+        platform_call: readPlatformCallMarker(queueJob.metadata),
+      });
+      console.warn(`⚠️ Job ${jobId}: ${PUBLISH_OUTCOME_UNCERTAIN} for scheduled_post ${scheduled_post_id} — not republishing`);
+      return;
+    }
+
+    // Uncertain outcome recorded ON THE POST — by any execution, not just this
+    // job: an ambiguous adapter failure, a sweep, a publish-now attempt, or the
+    // previous sweeper leaving PUBLISH_CALL_STARTED behind. Whatever queue job
+    // is delivering now (fresh, in backoff, or a stale re-delivery without its
+    // own marker), it must not call the platform for this post. Thread roots
+    // are checked per node by the orchestrator instead.
+    //
+    // A thread CHILD is never published by its own job: only its thread's
+    // orchestrator publishes it (as a reply, once). A job for a child (e.g. a
+    // direct retry of a failed child) ends here, failed and never retried.
+    if ((scheduledPost as { parent_post_id?: string | null }).parent_post_id) {
+      const message = 'Thread child not published on its own: publish or resume its thread root instead.';
+      await updateQueueJobStatus(jobId as string, 'failed', { error_message: message, error_code: 'THREAD_CHILD_NOT_STANDALONE' });
+      await recordQueueJobRetryState(jobId as string, RETRY_STATE_EXHAUSTED);
+      await createQueueJobLog(jobId as string, 'warn', message, { scheduled_post_id });
+      return;
+    }
+    if (scheduledPost.is_thread_start !== true) {
+      const postEvidence = scheduledPost as { status?: string | null; error_code?: string | null; platform_post_id?: string | null };
+      const blockedBy = publishOutcomeBlocksAttempt(postEvidence);
+      if (blockedBy === 'uncertain') {
+        const marked = await markQueueJobOutcomeUncertain(jobId as string, queueJob, PUBLISH_OUTCOME_UNCERTAIN_MESSAGE);
+        if (postEvidence.error_code === PUBLISH_CALL_STARTED) {
+          await markScheduledPostOutcomeUncertain(scheduled_post_id, PUBLISH_OUTCOME_UNCERTAIN_MESSAGE);
+        }
+        await createQueueJobLog(jobId as string, 'warn', 'Post publish outcome uncertain — not publishing', {
+          scheduled_post_id, post_error_code: postEvidence.error_code, job_marked: marked,
+        });
+        console.warn(`⚠️ Job ${jobId}: scheduled_post ${scheduled_post_id} has an uncertain outcome — not publishing`);
+        return;
+      }
+      if (blockedBy === 'in_flight' && postEvidence.error_code === PUBLISH_CALL_STARTED) {
+        // Another execution is calling (or died calling) the platform for this
+        // post. The post-level stale-claim takeover below would let this job
+        // call it again; stop here instead. The sweeper labels a dead hold.
+        const message = 'Duplicate publish suppressed (another execution started the platform call)';
+        await updateQueueJobStatus(jobId as string, 'completed', {
+          result_data: { message, suppressed: true, reason: 'platform_call_started' },
+        });
+        await createQueueJobLog(jobId as string, 'warn', message, { scheduled_post_id });
+        console.warn(`⚠️ Job ${jobId}: ${message} — scheduled_post ${scheduled_post_id}`);
+        return;
+      }
     }
 
     // ── Step 3: PER-POST publish authorization (R2-IMPL B1) ────────────────
@@ -330,8 +518,20 @@ async function processPublishJobInner(params: {
       }
     }
 
-    // Step 4: Update job status to 'processing'
-    await updateQueueJobStatus(jobId as string, 'processing');
+    // Step 4: Claim the job row — compare-and-set into 'processing'.
+    //
+    // Was an unconditional write, which re-animated a row cancelled after the
+    // Step-1 read: 'cancelled' became 'processing' and the post published. The
+    // claim only lands while the row is still in the state read at Step 1, so a
+    // cancellation (or a competing delivery) in between leaves zero affected
+    // rows and this delivery stops here without touching the platform.
+    const jobClaim = await claimQueueJobForProcessing(jobId as string, queueJob);
+    if (jobClaim.claimed === false) {
+      console.warn(
+        `⚠️ Job ${jobId}: queue_job claim refused (${jobClaim.reason}, read status '${queueJob.status}') — not publishing`,
+      );
+      return;
+    }
     await createQueueJobLog(jobId as string, 'info', `Started processing scheduled_post ${scheduled_post_id}`);
 
     // ── Step 4a: POST-LEVEL PUBLISH CLAIM ────────────────────────────────
@@ -364,16 +564,32 @@ async function processPublishJobInner(params: {
         scheduledPostId:   scheduled_post_id,
         snapshotStatus:    (scheduledPost as { status?: string | null }).status ?? null,
         snapshotUpdatedAt: (scheduledPost as { updated_at?: string | null }).updated_at ?? null,
+        snapshotErrorCode: (scheduledPost as { error_code?: string | null }).error_code ?? null,
       });
 
+      if (!claim.claimed && claim.reason === 'outcome_uncertain') {
+        // The post itself became unsafe (its outcome is uncertain) between
+        // the read above and the claim. Same answer as the gate above: no
+        // call, and this job ends failed with the uncertain code, no retry.
+        await recordHeldQueueJobOutcomeUncertain(jobId as string, PUBLISH_OUTCOME_UNCERTAIN_MESSAGE);
+        await createQueueJobLog(jobId as string, 'warn', 'Post publish outcome uncertain — not publishing', {
+          scheduled_post_id, reason: claim.reason,
+        });
+        return;
+      }
+
       if (!claim.claimed) {
-        // Another execution owns this post. Do NOT call the platform: that is
-        // exactly the duplicate publish this boundary exists to prevent.
-        // Complete this job rather than throwing — the holder owns the retry,
-        // so a BullMQ retry here would only re-contend.
+        // Another execution owns this post (or it is not publishable). Do NOT
+        // call the platform: that is exactly the duplicate publish this
+        // boundary exists to prevent. Complete this job rather than throwing —
+        // the holder owns the retry, so a BullMQ retry would only re-contend.
         const message = claim.reason === 'already_published'
           ? 'Already published (post-level claim: another execution completed it)'
-          : 'Duplicate publish suppressed (post-level claim held by another execution)';
+          : claim.reason === 'call_in_flight'
+            ? 'Duplicate publish suppressed (another execution has started the platform call)'
+            : claim.reason === 'not_claimable'
+              ? 'Publish skipped (post is not in a publishable status)'
+              : 'Duplicate publish suppressed (post-level claim held by another execution)';
         console.warn(`⚠️ Job ${jobId}: ${message} — scheduled_post ${scheduled_post_id}`);
         await updateQueueJobStatus(jobId as string, 'completed', {
           result_data: { message, suppressed: true, reason: claim.reason },
@@ -385,6 +601,8 @@ async function processPublishJobInner(params: {
       }
 
       heldClaimFromStatus = claim.fromStatus;
+      heldClaimToken = claim.token;
+      heldClaimFromErrorCode = claim.fromErrorCode;
     }
 
     // Step 4b: Centralized publish-readiness gate (Round-4 item 1) — the
@@ -408,7 +626,9 @@ async function processPublishJobInner(params: {
         error_message: pubReadiness.message,
         error_code: pubReadiness.code,
       });
-      await updateScheduledPostOnFailure(scheduled_post_id, pubReadiness.message).catch(() => {});
+      // With its code in the same update, replacing this execution's claim
+      // token: a pre-call failure, retryable as before.
+      await updateScheduledPostOnFailure(scheduled_post_id, pubReadiness.message, undefined, pubReadiness.code).catch(() => {});
       await createQueueJobLog(jobId as string, 'warn', 'Publish blocked: readiness validation failed', {
         code: pubReadiness.code, platform: scheduledPost.platform,
       });
@@ -477,6 +697,24 @@ async function processPublishJobInner(params: {
         return;
       }
 
+      // Stopped at a node whose outcome is unknown or still in flight. A
+      // BullMQ retry would only reach the same node again — or, worse, an
+      // older build would republish it — so this job ends here, failed with
+      // the uncertain code and no retry. A person reconciles the node, then
+      // resumes the thread.
+      if (threadResult.uncertain) {
+        const uncertainMessage = threadResult.message || PUBLISH_OUTCOME_UNCERTAIN_MESSAGE;
+        await recordHeldQueueJobOutcomeUncertain(jobId as string, uncertainMessage);
+        await createQueueJobLog(
+          jobId as string,
+          'warn',
+          `Thread stopped at position ${threadResult.failed_at_position ?? '?'}: outcome uncertain — not retrying`,
+          { root_id: threadResult.root_id, failed_at_position: threadResult.failed_at_position },
+        );
+        console.warn(`⚠️ Thread ${threadResult.root_id}: ${uncertainMessage}`);
+        return;
+      }
+
       // FAILED — orchestrator already set the failed row to status='failed'
       // and marked downstream rows as 'blocked'. Bridge into the queue's
       // retry semantics: mark queue_job 'failed' with the same exponential
@@ -509,17 +747,63 @@ async function processPublishJobInner(params: {
       throw new Error(threadErrorMessage);
     }
 
-    console.log(`🚀 Publishing to platform via adapter...`);
-    const result = await publishToPlatform(scheduled_post_id, social_account_id);
+    // Record that THIS attempt is about to call the platform (see the
+    // uncertain-outcome check above). If the row is no longer 'processing' — a
+    // cancel landed after the claim — do not call the platform; the throw
+    // releases the post claim in the catch below.
+    const platformCallRecorded = await markQueueJobPlatformCallStarted(jobId as string, queueJob.metadata);
+    if (!platformCallRecorded) {
+      const abortError: Error & { skipQueueStatusUpdate?: true } = new Error('PUBLISH_ABORTED_JOB_NOT_PROCESSING');
+      abortError.skipQueueStatusUpdate = true;
+      throw abortError;
+    }
 
-    if (result.success && result.platform_post_id) {
+    // The same evidence ON THE POST, which every path reads (the queue marker
+    // is this job's alone). Compare-and-set from THIS execution's own claim
+    // token: zero rows means the claim was taken over or swept meanwhile, so
+    // this execution no longer holds the post and must not call the platform.
+    const postCallRecorded = await markScheduledPostPlatformCallStarted(scheduled_post_id, heldClaimToken as string);
+    if (!postCallRecorded) {
+      const abortError: Error & { skipQueueStatusUpdate?: true } = new Error('PUBLISH_ABORTED_POST_NOT_HELD');
+      abortError.skipQueueStatusUpdate = true;
+      throw abortError;
+    }
+
+    console.log(`🚀 Publishing to platform via adapter...`);
+    platformCallStarted = true;
+    const result = await publishToPlatform(scheduled_post_id, social_account_id);
+    const attemptOutcome = classifyPublishAttempt(result);
+
+    // The request may have created the post (5xx, network loss, timeout, an
+    // escaped throw, a success with no id). `retryable: true` is not evidence
+    // that a retry is safe. Record the uncertainty and end the job WITHOUT a
+    // BullMQ retry; a person checks the platform and reconciles.
+    if (attemptOutcome === 'ambiguous') {
+      const detail = result.error?.message
+        ? ` Adapter said: ${result.error.message}`
+        : result.success ? ' The platform reported success without a post id.' : '';
+      const uncertainMessage = `${PUBLISH_OUTCOME_UNCERTAIN_MESSAGE}${detail}`;
+      heldClaimFromStatus = null; // never give this claim back for a retry
+      await markScheduledPostOutcomeUncertain(scheduled_post_id, uncertainMessage);
+      await recordHeldQueueJobOutcomeUncertain(jobId as string, uncertainMessage);
+      await createQueueJobLog(jobId as string, 'warn', 'Publish outcome uncertain after the platform call — not retrying', {
+        scheduled_post_id, adapter_error: result.error ?? null,
+      });
+      console.warn(`⚠️ Job ${jobId}: ${PUBLISH_OUTCOME_UNCERTAIN} for scheduled_post ${scheduled_post_id} — not retrying`);
+      return;
+    }
+
+    if (attemptOutcome === 'published' && result.platform_post_id) {
       // Step 6: Success - update scheduled_posts
+      confirmedPlatformPostId = result.platform_post_id;
       await updateScheduledPostOnPublish(
         scheduled_post_id,
         result.platform_post_id,
         result.post_url || '',
         result.published_at
       );
+      // The outcome is durable now; a later throw is an ordinary one.
+      platformCallStarted = false;
       // P1-B — advance variant experiment tracker. Mirrors the pattern
       // used in publishNowService. Best-effort; failures never block
       // publish success.
@@ -606,13 +890,20 @@ async function processPublishJobInner(params: {
         void checkAndCompleteCampaignIfEligible(scheduledPost.campaign_id).catch(() => {});
       }
     } else {
-      // Step 8: Failure - categorize error and update scheduled_posts status
+      // Step 8: Failure - categorize error and update scheduled_posts status.
+      // Only reached for a CONFIRMED rejection or pre-send failure
+      // (classifyPublishAttempt === 'not_created'): the platform created
+      // nothing, so the ordinary retry policy applies and the deliberate throw
+      // below is not an uncertain outcome.
+      platformCallStarted = false;
       const platformError = categorizeError(
         scheduledPost.platform,
         result.error || { message: 'Unknown error' }
       );
 
-      await updateScheduledPostOnFailure(scheduled_post_id, platformError.user_message);
+      // The code lands in the same update as the status (and replaces the
+      // PUBLISH_CALL_STARTED marker), so the row is never failed-without-code.
+      await updateScheduledPostOnFailure(scheduled_post_id, platformError.user_message, undefined, platformError.code);
       
       // Update scheduled_post with error code
       await supabase
@@ -647,17 +938,52 @@ async function processPublishJobInner(params: {
   } catch (error: any) {
     console.error(`❌ Error processing job ${jobId}:`, error.message);
 
+    // A throw AFTER the platform call started and before its outcome was saved
+    // (the adapter threw, the success write failed, ...): the post may be live.
+    // Giving the claim back and letting BullMQ retry is exactly the duplicate
+    // this must prevent. Record the uncertainty and end the job — no rethrow,
+    // so no retry. Never inferred as success from the marker; only a saved
+    // platform_post_id is success.
+    if (platformCallStarted) {
+      platformCallStarted = false;
+      heldClaimFromStatus = null;
+      const known = confirmedPlatformPostId
+        ? ` The platform returned post id ${confirmedPlatformPostId} but saving it failed.`
+        : '';
+      const uncertainMessage = `${PUBLISH_OUTCOME_UNCERTAIN_MESSAGE}${known} (${error?.message ?? 'unexpected error'})`;
+      try {
+        await markScheduledPostOutcomeUncertain(scheduled_post_id, uncertainMessage);
+      } catch (writeError) {
+        // The post keeps PUBLISH_CALL_STARTED, which every reader treats as uncertain.
+        console.error('[publishProcessor] uncertain-outcome post write failed:', writeError instanceof Error ? writeError.message : String(writeError));
+      }
+      try {
+        await recordHeldQueueJobOutcomeUncertain(jobId as string, uncertainMessage);
+      } catch (writeError) {
+        console.error('[publishProcessor] uncertain-outcome job write failed:', writeError instanceof Error ? writeError.message : String(writeError));
+      }
+      await createQueueJobLog(jobId as string, 'warn', 'Publish outcome uncertain (error after the platform call) — not retrying', {
+        scheduled_post_id, error: error?.message ?? null, platform_post_id: confirmedPlatformPostId,
+      });
+      return;
+    }
+
     // Give the post-level claim back before anything else. A compare-and-set
     // on 'publishing', so it is a no-op when a terminal status was already
     // written (success wrote 'published'; the handled-failure and readiness
     // paths wrote 'failed'). It only fires on an UNEXPECTED throw, where it
     // restores the exact status this execution claimed from — leaving the row
     // as retryable as it was before, never more blocked.
-    if (heldClaimFromStatus) {
+    if (heldClaimFromStatus && heldClaimToken) {
       const restoreStatus = heldClaimFromStatus;
+      const token = heldClaimToken;
       heldClaimFromStatus = null;
+      heldClaimToken = null;
       try {
-        await releaseScheduledPostPublishClaim(scheduled_post_id, restoreStatus);
+        await releaseScheduledPostPublishClaim(scheduled_post_id, restoreStatus, {
+          token,
+          restoreErrorCode: heldClaimFromErrorCode,
+        });
       } catch (releaseError) {
         console.warn(
           '[publishProcessor] publish-claim release threw (non-fatal):',

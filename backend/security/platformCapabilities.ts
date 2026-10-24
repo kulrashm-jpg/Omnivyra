@@ -40,6 +40,9 @@ import {
   INTELLIGENCE_OVERRIDE_MANAGE,
   INTEGRATION_PLATFORM_OAUTH_MANAGE,
   ORGANIZATION_DELETE,
+  OUTREACH_PLATFORM_MANAGE,
+  PLATFORM_CONTROLS_MANAGE,
+  PUBLISH_RECOVERY_MANAGE,
   STEP_UP_REQUIRED_CAPABILITIES,
   SUPER_ADMIN_DASHBOARD_VIEW,
   type AuthenticatedPrincipal,
@@ -76,6 +79,10 @@ export const PLATFORM_TIER_CAPABILITIES: ReadonlyArray<Capability> = [
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
   BILLING_GRANT_FREE_CREDITS,
+  // Closure-009 — platform-tier writes (owner decision)
+  OUTREACH_PLATFORM_MANAGE,
+  PUBLISH_RECOVERY_MANAGE,
+  PLATFORM_CONTROLS_MANAGE,
 ];
 
 /**
@@ -211,7 +218,7 @@ export const CROSS_ORGANIZATION_IDENTITY_CAPABILITIES: ReadonlyArray<Capability>
  *
  * Pure — reads only the resolved principal, no I/O.
  */
-export function isPlatformSuperAdminPrincipal(principal: AuthenticatedPrincipal): boolean {
+export function isPlatformSuperAdminPrincipal(principal: Pick<AuthenticatedPrincipal, 'organizations'>): boolean {
   return principal.organizations.some(
     (m) => m.role === 'SUPER_ADMIN' && m.status === 'active',
   );

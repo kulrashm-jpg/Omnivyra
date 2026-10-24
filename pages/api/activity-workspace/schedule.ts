@@ -14,6 +14,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { requireCampaignTenantAccess } from '@/backend/security/TenantGuard';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
+import { hasUncertainOutcome, PUBLISH_OUTCOME_UNCERTAIN } from '@/backend/queue/publishOutcome';
 import { grantEarnCredit } from '@/backend/services/earnCreditsService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 // Step-16: automatic pre-enqueue shared-media finalization. OUTSIDE
@@ -29,9 +30,9 @@ import {
 import { parseThreadNodesPayload } from '@/lib/thread/threadNodeContract';
 import {
   insertThreadAtomic,
-  replaceThreadChildren,
   ThreadInsertError,
 } from '@/lib/thread/threadNodePersistence';
+import { rescheduleExistingThread } from '@/backend/services/threadRuntime/threadReschedule';
 import {
   canonicalizePlatformForDb,
   canonicalizeContentTypeForDb,
@@ -323,9 +324,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       let existingRootId: string | null = null;
       if (campaignIdUuid && titleNormForRoot) {
         try {
+          // Scoped to the AUTHENTICATED owner, as the single-row dedup below
+          // has been since ACTIVITY-SEC-001. campaign + platform + title are all
+          // caller-supplied, and the campaign check is company-level: without
+          // this filter the match could be another user's thread in the same
+          // company, which the re-schedule would then rewrite and re-own.
           const { data: existing } = await supabase
             .from('scheduled_posts')
             .select('id')
+            .eq('user_id', userId)
             .eq('campaign_id', campaignIdUuid)
             .eq('platform', platformNorm)
             .eq('title', titleNormForRoot)
@@ -341,8 +348,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       let rootId: string;
       if (existingRootId) {
+        // Re-scheduling an existing thread rewrites its root and REPLACES its
+        // children. That is only allowed while no node has an identity to lose
+        // (published, in flight, or uncertain) — see
+        // backend/services/threadRuntime/threadReschedule.ts for the rules and
+        // the fence that makes the replace safe against a concurrent publisher.
         const rootUpdate: Record<string, unknown> = {
-          user_id: userId,
           social_account_id: socialAccountId,
           campaign_id: campaignIdUuid,
           platform: platformNorm,
@@ -353,12 +364,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           status: rootStatus, // Phase 1B.1A: 'draft' in shadow, 'scheduled' in enforce.
           updated_at: new Date().toISOString(),
         };
-        const { error: rootUpdateErr } = await supabase
-          .from('scheduled_posts')
-          .update(rootUpdate)
-          .eq('id', existingRootId);
-        if (rootUpdateErr) throw new ThreadInsertError(rootUpdateErr.message, rootUpdateErr.code ?? null);
-        await replaceThreadChildren(supabase, existingRootId, parsedNodes.slice(1));
+        const outcome = await rescheduleExistingThread(supabase, {
+          rootId: existingRootId,
+          userId,
+          rootUpdate,
+          children: parsedNodes.slice(1),
+        });
+        if (outcome.ok === false) {
+          if (outcome.code === 'PUBLISH_OUTCOME_UNCERTAIN') {
+            return respondOutcomeUncertain(res, outcome.nodeIds[0] ?? existingRootId);
+          }
+          return res.status(409).json({
+            error: outcome.message,
+            code: outcome.code,
+            scheduled_post_id: existingRootId,
+            node_ids: outcome.nodeIds,
+          });
+        }
         rootId = existingRootId;
       } else {
         const result = await insertThreadAtomic(supabase, {
@@ -386,7 +408,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             repurpose_total: Number.isFinite(Number(repurposeTotal)) ? Number(repurposeTotal) : 1,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', rootId);
+          .eq('id', rootId)
+          .eq('user_id', userId);
       } catch (repurposeErr: any) {
         console.warn('[schedule] repurpose extras update failed on thread root (non-fatal):', repurposeErr?.message);
       }
@@ -455,7 +478,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // ownership IS user_id — the same model MEDIA-SEC-001 established.
         const { data: existing } = await supabase
           .from('scheduled_posts')
-          .select('id')
+          .select('id, status, error_code, platform_post_id')
           .eq('user_id', userId)
           .eq('campaign_id', campaignIdUuid)
           .eq('platform', platformNorm)
@@ -464,6 +487,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           .limit(1)
           .maybeSingle();
 
+        if (existing?.id && hasUncertainOutcome(existing)) {
+          return respondOutcomeUncertain(res, existing.id);
+        }
         if (existing?.id) {
           console.log('[schedule] dedup match (campaign+platform+title), updating:', existing.id);
           const { error: updateErr } = await tryUpdate(existing.id, fullRow);
@@ -496,12 +522,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // supplied, so this lookup was likewise able to select another user's row.
         const { data: existing } = await supabase
           .from('scheduled_posts')
-          .select('id')
+          .select('id, status, error_code, platform_post_id')
           .eq('user_id', userId)
           .eq('repurpose_parent_execution_id', executionIdStr)
           .eq('platform', platformNorm)
           .maybeSingle();
 
+        if (existing?.id && hasUncertainOutcome(existing)) {
+          return respondOutcomeUncertain(res, existing.id);
+        }
         if (existing?.id) {
           console.log('[schedule] dedup match (repurpose_id+platform), updating:', existing.id);
           const { error: updateErr } = await tryUpdate(existing.id, fullRow);
@@ -584,6 +613,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.error('[activity-workspace/schedule]', err);
     return res.status(500).json({ error: err?.message || 'Failed to schedule post' });
   }
+}
+
+/**
+ * 409 for a re-schedule that would overwrite a post (or thread node) whose
+ * last publish attempt may already have published it. The durable backstop is
+ * that every publish path refuses a row carrying the uncertain code whatever
+ * its status (backend/queue/publishOutcome.ts).
+ */
+function respondOutcomeUncertain(res: NextApiResponse, scheduledPostId: string) {
+  return res.status(409).json({
+    error:
+      'This post may already have been published: its last attempt reached the platform but the result was not ' +
+      'saved. Check the platform and have the outcome reconciled before scheduling it again.',
+    code: PUBLISH_OUTCOME_UNCERTAIN,
+    requires: 'reconciliation',
+    scheduled_post_id: scheduledPostId,
+  });
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.

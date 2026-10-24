@@ -33,6 +33,7 @@ import {
 } from './super-admin.types';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import { classifyAuthFailure, isRecoverableAuthFailure } from '../lib/security/superAdminAuthFailure';
+import { performSuperAdminWrite } from '../lib/security/superAdminWrite';
 
 const SuperAdminTabLoader = () => (
   <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-8 flex items-center justify-center">
@@ -311,7 +312,8 @@ export default function SuperAdminPanel() {
     if (!pendingPolicy) return;
     setIsSavingPolicy(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/community-ai-policy', {
+      // Platform write: may need a passkey step-up; fire() builds a fresh request per attempt.
+      const r = await performSuperAdminWrite(() => fetchWithAuth('/api/super-admin/community-ai-policy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -319,11 +321,14 @@ export default function SuperAdminPanel() {
           auto_rules_enabled: pendingPolicy.auto_rules_enabled,
           require_human_approval: pendingPolicy.require_human_approval,
         }),
-      });
-      const parsed = await parseJsonResponse<{ policy?: any; updated_by_email?: string }>(response, '/api/super-admin/community-ai-policy');
-      if (parsed.ok !== true) throw new Error(parsed.message || 'Failed to update policy');
-      setCommunityPolicy(parsed.data?.policy || null);
-      setCommunityPolicyUpdatedBy(parsed.data?.updated_by_email || null);
+      }));
+      if (!r.ok) {
+        alert(r.message);
+        return;
+      }
+      const data = (r.body ?? {}) as { policy?: CommunityAiPolicy | null; updated_by_email?: string | null };
+      setCommunityPolicy(data.policy || null);
+      setCommunityPolicyUpdatedBy(data.updated_by_email || null);
       alert('Community-AI platform policy updated.');
     } catch (error: unknown) {
       console.error('Error updating platform policy:', error);

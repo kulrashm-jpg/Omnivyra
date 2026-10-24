@@ -24,12 +24,16 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
-import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 import { logSecurityEvent } from '../security/audit/SecurityAuditService';
+import { cascadeDisableCompany } from './lifecycleGovernance';
 
 const ADMIN_ROLES = new Set(['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN']);
 const DEFAULT_DEMOTED_ROLE = 'CONTENT_CREATOR';
+/** Closure-015J (R-7): non-admin tenant roles a transfer may demote the from-user to. */
+const DEMOTABLE_ROLES = new Set(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY']);
+const isSuperAdminRole = (role: string | null | undefined): boolean =>
+  String(role ?? '').trim().toUpperCase() === 'SUPER_ADMIN';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +47,9 @@ export type RecoveryReason =
   | 'NO_FROM_ROLE'            // transfer requires from-user to have an active admin role
   | 'NOT_ABANDONED'           // archive requires zero active members
   | 'ALREADY_ARCHIVED'        // archive is idempotent — second call is a no-op
+  | 'CONFLICT'                // Closure-015J: the row changed between the read and the write
+  | 'SUPER_ADMIN_MEMBERSHIP'  // Closure-015J: a SUPER_ADMIN membership is never changed by recovery flows
+  | 'INVALID_DEMOTE_ROLE'     // Closure-015J: demoteToRole must be a non-admin tenant role
   | 'DB_ERROR';
 
 export type PromoteResult =
@@ -88,12 +95,28 @@ async function fetchRole(orgId: string, userId: string): Promise<RoleRow | null>
   return (data as RoleRow | null) ?? null;
 }
 
-async function countActiveMembers(orgId: string): Promise<number> {
-  const { count } = await ownedDbTable('user_company_roles')
+/**
+ * Closure-015J (R-4): a lookup error is NOT zero members. It used to be
+ * (`count ?? 0`), which made a populated org look abandoned and archivable.
+ * Returns null on error so the caller fails closed.
+ */
+async function countActiveMembers(orgId: string): Promise<number | null> {
+  const { count, error } = await ownedDbTable('user_company_roles')
     .select('user_id', { count: 'exact', head: true })
     .eq('company_id', orgId)
     .eq('status', 'active');
+  if (error) return null;
   return count ?? 0;
+}
+
+/** Closure-015M (R-15): active SUPER_ADMIN memberships of the org; null on error (fail closed). */
+async function countActiveSuperAdmins(orgId: string): Promise<number | null> {
+  const { data, error } = await ownedDbTable('user_company_roles')
+    .select('role')
+    .eq('company_id', orgId)
+    .eq('status', 'active');
+  if (error) return null;
+  return ((data ?? []) as Array<{ role: string | null }>).filter((r) => isSuperAdminRole(r.role)).length;
 }
 
 // ── Promote: HEADLESS / DELETED_OWNER repair ────────────────────────────────
@@ -215,9 +238,23 @@ export async function transferOwnership(input: {
     return { ok: false, reason: 'NO_FROM_ROLE' };
   }
 
-  const targetDemotedRole = input.demoteToRole && input.demoteToRole.trim().length > 0
-    ? input.demoteToRole
+  // Closure-015J (R-7): ownership transfer never demotes or overwrites platform
+  // super-admin authority — on either side. A SUPER_ADMIN membership is changed only
+  // by the governed revoke / downgrade flow (identity.admin.revoke); revoke first,
+  // then transfer.
+  if (isSuperAdminRole(fromRole.role) || isSuperAdminRole(toRole.role)) {
+    return { ok: false, reason: 'SUPER_ADMIN_MEMBERSHIP', detail: 'revoke platform super-admin authority through the governed flow first' };
+  }
+
+  // Closure-015J (R-7): the documented contract is a demotion to a NON-admin role;
+  // demoteToRole was taken from the request unvalidated (it could even be SUPER_ADMIN).
+  const requestedDemote = input.demoteToRole && input.demoteToRole.trim().length > 0
+    ? input.demoteToRole.trim().toUpperCase()
     : DEFAULT_DEMOTED_ROLE;
+  if (!DEMOTABLE_ROLES.has(requestedDemote)) {
+    return { ok: false, reason: 'INVALID_DEMOTE_ROLE', detail: `demoteToRole must be one of ${[...DEMOTABLE_ROLES].join(', ')}` };
+  }
+  const targetDemotedRole = requestedDemote;
 
   const toIsAdmin = !!toRole.role && ADMIN_ROLES.has(toRole.role);
   const fromIsTargetDemoted = fromRole.role === targetDemotedRole;
@@ -240,11 +277,19 @@ export async function transferOwnership(input: {
 
   // Promote target first; if anything fails afterwards, the org never
   // becomes admin-less. Then demote the from-user.
+  // Closure-015J (R-7): both writes are conditional on the role + active status
+  // read above (snapshotted), so a concurrent change — e.g. a governed promotion
+  // to SUPER_ADMIN in between — is never overwritten: it surfaces as CONFLICT.
+  const fromRoleAtRead: string = fromRole.role;
+  const toRoleAtRead: string = toRole.role ?? '';
   const promotedAt = new Date().toISOString();
-  const { error: promoteErr } = await ownedDbTable('user_company_roles')
+  let promote = ownedDbTable('user_company_roles')
     .update({ role: 'COMPANY_ADMIN', updated_at: promotedAt })
     .eq('user_id', input.toUserId)
-    .eq('company_id', input.orgId);
+    .eq('company_id', input.orgId)
+    .eq('status', 'active');
+  promote = toRole.role === null ? promote.is('role', null) : promote.eq('role', toRoleAtRead);
+  const { data: promoted, error: promoteErr } = await promote.select('user_id');
 
   if (promoteErr) {
     logger.error('org_recovery_transfer_promote_failed', {
@@ -252,11 +297,17 @@ export async function transferOwnership(input: {
     });
     return { ok: false, reason: 'DB_ERROR', detail: promoteErr.message };
   }
+  if (!promoted || (promoted as unknown[]).length === 0) {
+    return { ok: false, reason: 'CONFLICT', detail: 'target membership changed concurrently; nothing was changed' };
+  }
 
-  const { error: demoteErr } = await ownedDbTable('user_company_roles')
+  const { data: demoted, error: demoteErr } = await ownedDbTable('user_company_roles')
     .update({ role: targetDemotedRole, updated_at: promotedAt })
     .eq('user_id', input.fromUserId)
-    .eq('company_id', input.orgId);
+    .eq('company_id', input.orgId)
+    .eq('status', 'active')
+    .eq('role', fromRoleAtRead)
+    .select('user_id');
 
   if (demoteErr) {
     // Promotion succeeded; demotion failed. The org now has at least
@@ -267,6 +318,11 @@ export async function transferOwnership(input: {
     });
     return { ok: false, reason: 'DB_ERROR', detail: demoteErr.message };
   }
+  if (!demoted || (demoted as unknown[]).length === 0) {
+    // Promotion succeeded; the from-user's row changed in between and was left
+    // as is — the safe two-admin state, as with a demotion failure.
+    return { ok: false, reason: 'CONFLICT', detail: 'from-user membership changed concurrently; target was promoted, from-user unchanged' };
+  }
 
   void logSecurityEvent({
     capability:      'identity_admin.assign',
@@ -274,12 +330,12 @@ export async function transferOwnership(input: {
     actorUserId:     input.performedBy,
     principalUserId: input.toUserId,
     resourceId:      input.orgId,
-    reason:          `transfer_ownership from=${input.fromUserId}:${fromRole.role} to=${input.toUserId}:COMPANY_ADMIN demoted_to=${targetDemotedRole} reason=${input.reason}`,
+    reason:          `transfer_ownership from=${input.fromUserId}:${fromRoleAtRead} to=${input.toUserId}:COMPANY_ADMIN demoted_to=${targetDemotedRole} reason=${input.reason}`,
   });
 
   return {
     ok: true,
-    demotedFromRole: fromRole.role,
+    demotedFromRole: fromRoleAtRead,
     promotedToRole: 'COMPANY_ADMIN',
     idempotent: false,
   };
@@ -302,7 +358,15 @@ export async function archiveAbandonedOrg(input: {
   const org = await fetchOrg(input.orgId);
   if (!org) return { ok: false, reason: 'NO_ORG' };
 
-  if (org.status === 'archived') {
+  // Closure-015M (R-15): 'archived' is not a company lifecycle state. The schema
+  // (companies_status_check: active | inactive | suspended; migrations
+  // 20260640 / 20260642) defines companies.status as the reversible operational
+  // flag and deleted_at as the soft-delete tombstone, so the former
+  // UPDATE … status = 'archived' failed the CHECK on every call (verified on a
+  // throwaway Postgres). Archiving an abandoned org is now the established,
+  // reversible DISABLE: status 'inactive' through disable_company_cascade (the
+  // same atomic path as PATCH /api/super-admin/companies; restore = re-enable).
+  if (org.status === 'inactive') {
     void logSecurityEvent({
       capability:      'organization.delete',
       decision:        'allowed',
@@ -316,18 +380,36 @@ export async function archiveAbandonedOrg(input: {
 
   if (!input.force) {
     const activeCount = await countActiveMembers(input.orgId);
+    if (activeCount === null) {
+      return { ok: false, reason: 'DB_ERROR', detail: 'active member count unavailable' };
+    }
     if (activeCount > 0) {
       return { ok: false, reason: 'NOT_ABANDONED', detail: `active_members=${activeCount}` };
     }
   }
 
-  const { error } = await ownedDbTable('companies')
-    .update({ status: 'archived', updated_at: new Date().toISOString() })
-    .eq('id', input.orgId);
+  // Closure-015M (R-15): the disable cascade deactivates every active membership,
+  // so — exactly like the disable route (Closure-015L) — an ACTIVE SUPER_ADMIN
+  // membership refuses the archive (force included). Application check; the
+  // database guard (proposal 01) is the concurrency boundary inside the RPC.
+  const superAdmins = await countActiveSuperAdmins(input.orgId);
+  if (superAdmins === null) {
+    return { ok: false, reason: 'DB_ERROR', detail: 'super-admin membership lookup unavailable' };
+  }
+  if (superAdmins > 0) {
+    return { ok: false, reason: 'SUPER_ADMIN_MEMBERSHIP', detail: 'revoke platform super-admin authority through the governed flow first' };
+  }
 
-  if (error) {
-    logger.error('org_recovery_archive_failed', { orgId: input.orgId, message: error.message });
-    return { ok: false, reason: 'DB_ERROR', detail: error.message };
+  const statusAtRead = org.status;
+  try {
+    await cascadeDisableCompany(input.orgId, input.performedBy, `archive_abandoned:${input.reason}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP')) {
+      return { ok: false, reason: 'SUPER_ADMIN_MEMBERSHIP', detail: 'refused by the database guard' };
+    }
+    logger.error('org_recovery_archive_failed', { orgId: input.orgId, message });
+    return { ok: false, reason: 'DB_ERROR', detail: message };
   }
 
   void logSecurityEvent({
@@ -336,12 +418,8 @@ export async function archiveAbandonedOrg(input: {
     actorUserId:     input.performedBy,
     principalUserId: null,
     resourceId:      input.orgId,
-    reason:          `archive_abandoned_org from=${org.status} to=archived force=${!!input.force} reason=${input.reason}`,
+    reason:          `archive_abandoned_org from=${statusAtRead} to=inactive force=${!!input.force} reason=${input.reason}`,
   });
 
-  // Use generic supabase client to avoid the writeOwner SELECT-after-update
-  // double-check requirement; we already validated the row exists.
-  void supabase.from('companies').select('id').eq('id', input.orgId).limit(1);
-
-  return { ok: true, previousStatus: org.status, idempotent: false };
+  return { ok: true, previousStatus: statusAtRead, idempotent: false };
 }

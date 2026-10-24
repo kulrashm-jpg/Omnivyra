@@ -1043,17 +1043,48 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 
 
+export type IntelControlAccess = 'checking' | 'allowed' | 'denied' | 'error';
+
 export function useIntelControl() {
   const { userRole } = useCompanyContext();
   const [tab, setTab] = useState<Tab>('global');
 
-  const isSuperAdmin = userRole === 'SUPER_ADMIN';
+  // Closure-014C — the SERVER decides who may open this page: its own data read
+  // (GET scheduler-config, super_admin.dashboard.view). The client role cannot:
+  // CompanyContext deliberately downgrades a SUPER_ADMIN membership to
+  // COMPANY_ADMIN under a normal session, which left a real platform super
+  // admin on the loader forever. Rendering grants nothing — every write here
+  // is still authorized server-side (intelligence.override.manage, the central
+  // platform guard and passkey step-up).
+  const [access, setAccess] = useState<IntelControlAccess>('checking');
+  const [accessDetail, setAccessDetail] = useState<string | null>(null);
+  const checkAccess = useCallback(async () => {
+    setAccess('checking');
+    setAccessDetail(null);
+    try {
+      const r = await fetch('/api/admin/intelligence/scheduler-config', { credentials: 'include' });
+      if (r.ok) { setAccess('allowed'); return; }
+      if (r.status === 401) { setAccess('denied'); setAccessDetail('Sign in again to open intelligence control.'); return; }
+      if (r.status === 403) { setAccess('denied'); setAccessDetail('Your account does not have access to intelligence control.'); return; }
+      setAccess('error');
+      setAccessDetail(`Could not load intelligence control (HTTP ${r.status}).`);
+    } catch {
+      setAccess('error');
+      setAccessDetail('Network error while loading intelligence control.');
+    }
+  }, []);
+  useEffect(() => { void checkAccess(); }, [checkAccess]);
 
-  const _ef1 = !isSuperAdmin;
+  const isSuperAdmin = access === 'allowed';
+
+  const _ef1 = access === 'checking';
 
 
   return {
     _ef1,
+    access,
+    accessDetail,
+    checkAccess,
     isSuperAdmin,
     setTab,
     tab,

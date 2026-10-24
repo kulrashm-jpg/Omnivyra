@@ -17,10 +17,15 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { IDENTITY_ADMIN_REVOKE } from '@/shared/contracts/security';
+import { insertAuditLogStrict } from '@/backend/services/auditActorService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:admin:revoke-super-admin', 5, 60, { sensitive: true }))) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {});
   const { userId } = body as { userId?: string };
@@ -50,11 +55,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // 2. Downgrade any SUPER_ADMIN company roles to COMPANY_ADMIN
-    await supabase
+    // Closure-015J (R-10): read back what changed, and fail truthfully on error
+    // (the downgrade result was previously ignored).
+    const { data: downgraded, error: rolesErr } = await supabase
       .from('user_company_roles')
       .update({ role: 'COMPANY_ADMIN', updated_at: now })
       .eq('user_id', userId)
-      .eq('role', 'SUPER_ADMIN');
+      .eq('role', 'SUPER_ADMIN')
+      .select('id, company_id');
+    if (rolesErr) {
+      console.error('[revoke-super-admin] membership downgrade failed:', rolesErr.message);
+      return res.status(500).json({ error: 'Internal server error', code: 'MEMBERSHIP_DOWNGRADE_FAILED', partial: true, completed: ['users_role_downgraded'] });
+    }
+    const downgradedMemberships = ((downgraded ?? []) as Array<{ company_id: string }>).map((r) => r.company_id);
+
+    // Closure-015J (R-10): the governed revoke now writes its own business audit
+    // row (it had only the requireCapability security event). The revocation has
+    // already taken effect; an audit-write failure is reported truthfully, not as
+    // a failed revocation.
+    const audit = await insertAuditLogStrict({
+      actorUserId: guard.principal.userId,
+      action: 'SUPER_ADMIN_REVOKE',
+      targetUserId: userId,
+      metadata: { downgraded_memberships: downgradedMemberships, downgraded_count: downgradedMemberships.length },
+    });
+    if (!audit.ok) {
+      return res.status(500).json({ error: 'REVOKED_AUDIT_FAILED', revoked: true, downgraded_count: downgradedMemberships.length });
+    }
 
     return res.status(200).json({
       success:    true,

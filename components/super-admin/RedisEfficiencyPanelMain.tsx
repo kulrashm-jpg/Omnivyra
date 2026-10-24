@@ -24,6 +24,7 @@ import {
 
 // ── API types ─────────────────────────────────────────────────────────────────
 
+import { performSuperAdminWrite, freshIdempotencyHeaders, type SuperAdminWriteOutcome } from '../../lib/security/superAdminWrite';
 import { type RedisLiveReport, type QueueApiResponse, type CycleRecord, type CronApiResponse, type RateLimitAdminConfig, type QueueJobOverride, type QueueAdminConfig, type CronJobOverride, type CronAdminConfig, KNOWN_ENDPOINTS, CRON_JOBS, type ImpactLevel, impactBadge, queueImpact, fmt, msToSec, relTime, StatCard, InsightBox, SaveButton, buildAutoOptimizeProposals, AutoOptimizeDialog, type IssueSummaryItem, RootCauseSummary, RateLimiterTab } from './RedisEfficiencyPanelTabs';
 
 function QueueTab({
@@ -31,7 +32,7 @@ function QueueTab({
 }: {
   queue:             QueueApiResponse | null;
   queueConfig:       QueueAdminConfig | null;
-  onQueueConfigSave: (cfg: QueueAdminConfig) => Promise<void>;
+  onQueueConfigSave: (cfg: QueueAdminConfig) => Promise<SuperAdminWriteOutcome>;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [drafts,   setDrafts]   = useState<Record<string, QueueJobOverride>>({});
@@ -58,8 +59,9 @@ function QueueTab({
         v: 1, updatedAt: new Date().toISOString(),
         queues: { ...(queueConfig?.queues ?? {}), [name]: getDraft(name) },
       };
-      await onQueueConfigSave(next);
-      setSaved(name); setTimeout(() => setSaved(null), 2500);
+      const r = await onQueueConfigSave(next);
+      // Only show the saved tick when the server confirmed it (failure message is shown by the panel).
+      if (r.ok) { setSaved(name); setTimeout(() => setSaved(null), 2500); }
     } finally { setSaving(null); }
   };
 
@@ -213,7 +215,7 @@ function CronTab({
 }: {
   cron:             CronApiResponse | null;
   cronConfig:       CronAdminConfig | null;
-  onCronConfigSave: (cfg: CronAdminConfig) => Promise<void>;
+  onCronConfigSave: (cfg: CronAdminConfig) => Promise<SuperAdminWriteOutcome>;
 }) {
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
   const [showCycles,  setShowCycles]  = useState(false);
@@ -231,8 +233,9 @@ function CronTab({
         v: 1, updatedAt: new Date().toISOString(),
         jobs: { ...(cronConfig?.jobs ?? {}), [key]: override },
       };
-      await onCronConfigSave(next);
-      setSaved(key); setTimeout(() => setSaved(null), 2500);
+      const r = await onCronConfigSave(next);
+      // Only show the saved tick when the server confirmed it (failure message is shown by the panel).
+      if (r.ok) { setSaved(key); setTimeout(() => setSaved(null), 2500); }
     } finally { setSaving(null); }
   };
 
@@ -507,6 +510,7 @@ export default function RedisEfficiencyPanel() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [showOptimize,  setShowOptimize]  = useState(false);
   const [applyingOpt,   setApplyingOpt]   = useState(false);
+  const [saveError,     setSaveError]     = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Fetch all metrics + configs in parallel ─────────────────────────────────
@@ -569,31 +573,48 @@ export default function RedisEfficiencyPanel() {
 
   // ── Config save handlers ─────────────────────────────────────────────────────
 
-  const saveRlConfig = async (cfg: RateLimitAdminConfig) => {
-    await fetch('/api/admin/rate-limit-config', {
+  // Closure-014C — the route is wrapped by withIdempotency, so a write without
+  // an Idempotency-Key was ALWAYS refused (400) while this replaced local config
+  // and the tab showed "saved". Same contract as the queue/cron saves below:
+  // fresh key per attempt, local config only changes on a confirmed 2xx, every
+  // refusal (429 with its Retry-After, 4xx, 5xx, network) reaches the
+  // "Not saved" banner. Transport only — the route's authorization is unchanged.
+  const saveRlConfig = async (cfg: RateLimitAdminConfig): Promise<SuperAdminWriteOutcome> => {
+    setSaveError(null);
+    const r = await performSuperAdminWrite(() => fetch('/api/admin/rate-limit-config', {
       method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: freshIdempotencyHeaders(),
       body: JSON.stringify(cfg),
-    });
-    setRlConfig(cfg);
+    }));
+    if (r.ok) setRlConfig(cfg);
+    else setSaveError(r.message);
+    return r;
   };
 
-  const saveQueueConfig = async (cfg: QueueAdminConfig) => {
-    await fetch('/api/admin/queue-config', {
+  // cron.config.manage writes: fresh Idempotency-Key per attempt (the step-up retry is a
+  // second request); local config only changes when the server confirmed the save.
+  const saveQueueConfig = async (cfg: QueueAdminConfig): Promise<SuperAdminWriteOutcome> => {
+    setSaveError(null);
+    const r = await performSuperAdminWrite(() => fetch('/api/admin/queue-config', {
       method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: freshIdempotencyHeaders(),
       body: JSON.stringify(cfg),
-    });
-    setQueueConfig(cfg);
+    }));
+    if (r.ok) setQueueConfig(cfg);
+    else setSaveError(r.message);
+    return r;
   };
 
-  const saveCronConfig = async (cfg: CronAdminConfig) => {
-    await fetch('/api/admin/cron-config', {
+  const saveCronConfig = async (cfg: CronAdminConfig): Promise<SuperAdminWriteOutcome> => {
+    setSaveError(null);
+    const r = await performSuperAdminWrite(() => fetch('/api/admin/cron-config', {
       method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: freshIdempotencyHeaders(),
       body: JSON.stringify(cfg),
-    });
-    setCronConfig(cfg);
+    }));
+    if (r.ok) setCronConfig(cfg);
+    else setSaveError(r.message);
+    return r;
   };
 
   // ── Auto-optimize ─────────────────────────────────────────────────────────────
@@ -610,7 +631,9 @@ export default function RedisEfficiencyPanel() {
         for (const p of cronProposals) {
           newJobs[p.key] = { enabled: true, intervalMultiplier: 2 };
         }
-        await saveCronConfig({ v: 1, updatedAt: new Date().toISOString(), jobs: newJobs });
+        const r = await saveCronConfig({ v: 1, updatedAt: new Date().toISOString(), jobs: newJobs });
+        // Stop at the first refused write; the panel banner shows why.
+        if (!r.ok) { setShowOptimize(false); return; }
       }
       // Queue proposals
       const queueProposals = proposals.filter(p => p.type === 'queue');
@@ -620,7 +643,8 @@ export default function RedisEfficiencyPanel() {
           const cur = newQueues[p.key] ?? { maxJobsPerCycle: 500, attempts: 3, concurrency: 5 };
           newQueues[p.key] = { ...cur, maxJobsPerCycle: Math.ceil(cur.maxJobsPerCycle / 2) };
         }
-        await saveQueueConfig({ v: 1, updatedAt: new Date().toISOString(), queues: newQueues });
+        const r = await saveQueueConfig({ v: 1, updatedAt: new Date().toISOString(), queues: newQueues });
+        if (!r.ok) { setShowOptimize(false); return; }
       }
       // Rate limit proposals
       const rlProposals = proposals.filter(p => p.type === 'rate_limit');
@@ -631,7 +655,8 @@ export default function RedisEfficiencyPanel() {
           const cur = newEndpoints[p.key] ?? { limit: defaults?.defaultLimit ?? 10, windowSecs: defaults?.defaultWindowSecs ?? 900 };
           newEndpoints[p.key] = { ...cur, limit: Math.max(1, Math.ceil(cur.limit * 0.8)) };
         }
-        await saveRlConfig({ v: 1, updatedAt: new Date().toISOString(), endpoints: newEndpoints });
+        const r = await saveRlConfig({ v: 1, updatedAt: new Date().toISOString(), endpoints: newEndpoints });
+        if (!r.ok) { setShowOptimize(false); return; }
       }
       setShowOptimize(false);
     } finally { setApplyingOpt(false); }
@@ -719,6 +744,16 @@ export default function RedisEfficiencyPanel() {
         <div className="mb-4 flex items-center gap-2 bg-red-950/30 border border-red-700/30 rounded-lg px-4 py-3 text-sm text-red-300">
           <AlertCircle className="w-4 h-4 shrink-0" />
           Failed to load: {errors[subTab]}
+        </div>
+      )}
+
+      {saveError && (
+        <div className="mb-4 flex items-center gap-2 bg-red-950/30 border border-red-700/30 rounded-lg px-4 py-3 text-sm text-red-300">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span className="flex-1">Not saved: {saveError}</span>
+          <button onClick={() => setSaveError(null)} className="text-red-300 hover:text-white" title="Dismiss">
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 

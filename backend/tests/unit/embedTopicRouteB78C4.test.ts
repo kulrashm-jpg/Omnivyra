@@ -7,6 +7,13 @@
  */
 
 const mockRequireCapability = jest.fn();
+// Closure-014 (D): this route now rate-limits writes before authorization. This suite tests
+// authorization/business behaviour, not the limiter (covered by closure014AdminRateLimit and the
+// Closure-013 sibling suite), so the limiter passes through — the established pattern.
+jest.mock('../../services/requestAccessService', () => ({
+  ...jest.requireActual('../../services/requestAccessService'),
+  requireAdminRateLimit: async () => true,
+}));
 jest.mock('../../security/requireCapability', () => ({
   requireCapability: (...a: unknown[]) => mockRequireCapability(...a),
 }));
@@ -197,14 +204,16 @@ describe('B7.8-C.4 · the route is a pure delegator (source proof)', () => {
     }
   });
 
-  it('imports exactly the route factory, the guard, the capability and the trigger', () => {
+  it('imports exactly the route factory, the guard, the rate limit, the capability and the trigger', () => {
     const imports = (code.match(/^import .*$/gm) ?? []).join('\n');
     expect(imports).toMatch(/routeFactory/);
     expect(imports).toMatch(/requireCapability/);
+    // Closure-014 (D): the per-route write rate limit (Redis-backed counter only — no provider, ledger or table).
+    expect(imports).toMatch(/import \{ requireAdminRateLimit \} from '@\/backend\/services\/requestAccessService'/);
     expect(imports).toMatch(/INTELLIGENCE_OVERRIDE_MANAGE/);
     expect(imports).toMatch(/topicEmbeddingTrigger/);
     // Nothing else that could reach a provider, ledger or table.
-    expect(imports.split('\n').filter((l) => l.trim()).length).toBeLessThanOrEqual(5);
+    expect(imports.split('\n').filter((l) => l.trim()).length).toBeLessThanOrEqual(6);
   });
 
   it('never references canonical_topic_id, parent_topic_id or coverage', () => {

@@ -13,6 +13,7 @@ import {
 import { revokeForUser as revokeStepUpForUser } from '../../../backend/security/stepup/StepUpSessionService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { validatePassword } from '../../../lib/auth/passwordPolicy';
+import { isInvitationExpired } from '../../../backend/services/invitationExpiry';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse = { error: string; code?: string };
@@ -84,7 +85,8 @@ async function handler(
 
     if (invitation) {
       const now = new Date().toISOString();
-      if (new Date((invitation as any).expires_at) <= new Date()) {
+      // Closure-015E: shared predicate (same <= semantics); missing / malformed ⇒ expired.
+      if (isInvitationExpired((invitation as any).expires_at)) {
         await supabase.from('invitations').update({ revoked_at: now }).eq('id', (invitation as any).id);
         return res.status(400).json({ error: 'Invitation has expired', code: 'EXPIRED_INVITATION' });
       }

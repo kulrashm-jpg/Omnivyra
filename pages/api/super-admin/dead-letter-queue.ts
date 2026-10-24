@@ -117,6 +117,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: req.method === 'POST' ? 'super-admin dead-letter-queue re-drive' : 'super-admin dead-letter-queue inspection',
+    // Closure-009 (owner decision): re-drive is a platform-wide WRITE needing
+    // platform authority. Closure-015: enforced (and audited) in requireCapability.
+    requirePlatformAuthority: req.method === 'POST',
   });
   if (guard.ok !== true) return;
 

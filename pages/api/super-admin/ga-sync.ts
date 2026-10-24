@@ -4,7 +4,7 @@ import { getActiveProperty } from '../../../backend/services/analyticsIntegratio
 import { runIngestionForCompany } from '../../../backend/services/ingestionScheduler';
 import { getLatestCompletedRun } from '../../../backend/services/ingestionRunService';
 import { resolveOmnivyraWebsiteCompany } from '../../../backend/services/omnivyraWebsiteCompanyService';
-import { requireSuperAdminGaAccess } from '../../../backend/services/superAdminGaAccess';
+import { requireSuperAdminGaWriteAccess } from '../../../backend/services/superAdminGaAccess';
 
 const MAX_WAIT_MS = 15_000;
 const POLL_INTERVAL_MS = 1_000;
@@ -21,7 +21,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  if (!(await requireSuperAdminGaAccess(req, res))) return;
+  if (!(await requireSuperAdminGaWriteAccess(req, res, 'analytics.ga.sync'))) return;
 
   const company = await resolveOmnivyraWebsiteCompany();
   if (!company) {

@@ -13,6 +13,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 
 const VALID_CATEGORIES = [
@@ -22,6 +23,9 @@ const VALID_CATEGORIES = [
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:free-credits:grant', 20, 60, { sensitive: true }))) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { organizationId, userId, creditsAmount, category = 'manual', reason, referenceId, note } = body as {
@@ -113,11 +117,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         role:       'COMPANY_ADMIN',
         status:     'active',
       });
-    } else if (existingRole.role === 'SUPER_ADMIN') {
-      await sb.from('user_company_roles')
-        .update({ role: 'COMPANY_ADMIN' })
-        .eq('id', existingRole.id);
     }
+    // Closure-015J (R-6): an existing SUPER_ADMIN membership is left untouched — it
+    // already exceeds COMPANY_ADMIN, and platform super-admin authority changes only
+    // through identity.admin.assign / identity.admin.revoke. (This formerly
+    // "downgraded accidental SUPER_ADMIN to COMPANY_ADMIN", a legacy cleanup that
+    // silently removed governed platform authority.) Any other existing role is
+    // likewise left as is.
   }
 
   return res.status(200).json({ success: true, grantId: grant.id });

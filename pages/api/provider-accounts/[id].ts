@@ -16,11 +16,26 @@ import {
 import { describeRejectedEnvVarName, isEnvVarName } from '../../../backend/security/credentialSafety';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  // One rate-limit call whose arguments depend on the method (same keys, limits and
+  // options as before), so no method branch precedes the authorization below.
+  const isDelete = req.method === 'DELETE';
+  const rl = await requireAdminRateLimit(
+    req, res,
+    isDelete ? 'rl:provider-accounts:delete' : 'rl:provider-accounts:update',
+    isDelete ? 10 : 20,
+    60,
+    { sensitive: true },
+  );
+  if (!rl) return;
+
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Account ID required' });
@@ -35,6 +50,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     resourceId: id,
   });
   if (guard.ok !== true) return;
+  // Closure-013 (D-3): this route only mutates (PUT/DELETE); platform authority
+  // is checked before the account lookup so a refused caller learns nothing.
+  if (!(await enforcePlatformWriteAuthority(req, res, guard.principal, INTEGRATION_PLATFORM_OAUTH_MANAGE, 'provider_accounts.update'))) return;
   const session = { userId: guard.principal.userId };
   void session; // reserved for future audit linkage
 

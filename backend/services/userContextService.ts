@@ -139,10 +139,12 @@ export function isExternalMemberForCompany(
  *      principal has userId='content_architect', is NOT in user_company_roles,
  *      and would otherwise be rejected by the canonical guard.
  *
- *   2. invited admin — a user with role IN (COMPANY_ADMIN, ADMIN, SUPER_ADMIN)
- *      and status='invited' may administer the company before accepting the
- *      invite. Existing behavior; preserved here so admin tooling that
- *      depends on it does not regress.
+ *   2. invited admin — formerly a user with role IN (COMPANY_ADMIN, ADMIN,
+ *      SUPER_ADMIN) and status='invited' could administer the company before
+ *      accepting the invite. Closure-015D removed SUPER_ADMIN; Closure-015E
+ *      removed the invited fallback (getCompanyRoleIncludingInvited resolves
+ *      ACTIVE memberships only): invited memberships confer nothing before
+ *      acceptance.
  *
  * Tightenings inherited from the canonical guard:
  *   - soft-deleted / suspended companies are now rejected even for
@@ -298,10 +300,12 @@ export const enforceCompanyAccess = async (input: {
 
   // Legacy fallback (b): invited admin role.
   const fallbackRole = await getCompanyRoleIncludingInvited(user.userId, input.companyId);
+  // Closure-015D removed SUPER_ADMIN here; Closure-015E: getCompanyRoleIncludingInvited
+  // now resolves ACTIVE memberships only, so an INVITED membership of any role no
+  // longer reaches this branch — invited memberships confer nothing before acceptance.
   const allowedViaInvited =
     fallbackRole === Role.COMPANY_ADMIN ||
-    fallbackRole === Role.ADMIN ||
-    fallbackRole === Role.SUPER_ADMIN;
+    fallbackRole === Role.ADMIN;
   if (allowedViaInvited) {
     // SEC-91 W2-G (STEP 3AH-91, W2G-4) — the invited fallback must honour the
     // company's state. The header promises "suspended companies are rejected

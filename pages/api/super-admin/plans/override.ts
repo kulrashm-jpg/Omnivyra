@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { BILLING_PLAN_MANAGE } from '../../../../shared/contracts/security';
 
 const RESOURCE_KEYS = ['llm_tokens', 'external_api_calls', 'automation_executions'];
@@ -10,6 +11,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:plans:override', 10, 60, { sensitive: true }))) return;
 
   // Phase 2 mutation gate. Plan-limit overrides change a tenant's
   // monthly resource budget — equivalent in blast radius to plan

@@ -167,3 +167,43 @@ export async function softDeleteCompanyWithCascade(
     revokedSessions: Number((row as any)?.revoked_sessions ?? 0),
   };
 }
+
+/**
+ * Closure-015L — hard_delete_company RPC (supabase/proposals/closure015l/01_…,
+ * NOT yet a migration). One transaction: lock the company row, refuse while an
+ * active SUPER_ADMIN membership exists, delete memberships + profile + company.
+ * Returns { ok: false, code: 'FUNCTION_MISSING' } while the function is not
+ * deployed (PostgREST PGRST202 / Postgres 42883) so the caller can keep its
+ * interim path; any other failure throws (nothing was changed — the function
+ * is atomic).
+ */
+export type HardDeleteCompanyResult =
+  | { ok: true; deletedMemberships: number; deletedProfiles: number }
+  | { ok: false; code: 'FUNCTION_MISSING' };
+
+export async function hardDeleteCompany(
+  companyId: string,
+  actorUserId: string,
+  reason: string,
+): Promise<HardDeleteCompanyResult> {
+  if (!companyId) throw new Error('HARD_DELETE_COMPANY_MISSING_COMPANY_ID');
+  if (!actorUserId) throw new Error('HARD_DELETE_COMPANY_MISSING_ACTOR');
+  if (!reason?.trim()) throw new Error('HARD_DELETE_COMPANY_MISSING_REASON');
+
+  const { data, error } = await supabase.rpc('hard_delete_company', {
+    p_company_id: companyId,
+    p_actor: actorUserId,
+    p_reason: reason,
+  });
+  if (error) {
+    const code = (error as { code?: string }).code;
+    if (code === 'PGRST202' || code === '42883') return { ok: false, code: 'FUNCTION_MISSING' };
+    throw new Error(`HARD_DELETE_COMPANY_RPC_FAILED:${error.message}`);
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    ok: true,
+    deletedMemberships: Number((row as any)?.deleted_memberships ?? 0),
+    deletedProfiles: Number((row as any)?.deleted_profiles ?? 0),
+  };
+}

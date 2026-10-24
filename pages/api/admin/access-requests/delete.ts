@@ -11,10 +11,14 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { IDENTITY_ADMIN_DELETE } from '../../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'DELETE') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:admin:access-requests:delete', 10, 60, { sensitive: true }))) return;
 
   const guard = await requireCapability(req, res, {
     capability: IDENTITY_ADMIN_DELETE,

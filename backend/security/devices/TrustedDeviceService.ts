@@ -21,6 +21,7 @@ import {
   findByIdForUser,
   insertTrustedDevice,
   listForUser,
+  reviveDormantTrustedDevice,
   revokeDevice,
   touchLastSeen,
 } from './DeviceSessionRepository';
@@ -93,12 +94,24 @@ export async function register(
     return { ok: false, reason: 'ALREADY_TRUSTED' };
   }
 
-  const device = await insertTrustedDevice({
+  const insert = {
     userId:      input.userId,
     fingerprint: input.fingerprint,
     label:       input.label ?? null,
     ttlSeconds:  input.ttlSeconds ?? DEFAULT_TRUST_TTL_SECONDS,
-  });
+  };
+  // Closure-011: an EXPIRED or REVOKED row for this (user, fingerprint) is
+  // revived — an INSERT would violate UNIQUE (user_id, fingerprint) and the
+  // browser could never be trusted again. Re-trusting still needs a fresh
+  // step-up (the route checks it), exactly like trusting a new device.
+  let device = await reviveDormantTrustedDevice(insert);
+  if (!device) {
+    // A concurrent caller may have revived (or created) it in between.
+    if (await findActiveByFingerprint(input.userId, input.fingerprint)) {
+      return { ok: false, reason: 'ALREADY_TRUSTED' };
+    }
+    device = await insertTrustedDevice(insert);
+  }
 
   await logSecurityEvent({
     capability: 'mfa.enroll',

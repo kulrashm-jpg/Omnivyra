@@ -442,6 +442,16 @@ import PageLoader from '../../components/PageLoader';
 export default function IntelControlPage() {
   const d = useIntelControl();
   if (d._ef1) return <PageLoader message="Loading intelligence control…" />;
+  if (d.access !== 'allowed') {
+    return (
+      <div role="alert" className="mx-auto mt-16 max-w-lg rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700">
+        <p>{d.accessDetail}</p>
+        {d.access === 'error' && (
+          <button onClick={() => void d.checkAccess()} className="mt-3 rounded bg-red-600 px-3 py-1.5 text-white hover:bg-red-700">Retry</button>
+        )}
+      </div>
+    );
+  }
   return <IntelControlView d={d} />;
 }
 

@@ -21,6 +21,7 @@ import { supabase } from '../db/supabaseClient';
 import { getToken, isTokenExpiringSoon, markSocialAccountNeedsReauth } from '../auth/tokenStore';
 import { refreshPlatformToken, refreshTwitterTokenIfNeeded } from '../auth/tokenRefresh';
 import { getScheduledPost, getSocialAccount } from '../db/queries';
+import { resolveCertFakePublisher } from './certFakePublisher';
 import { publishToLinkedIn } from './linkedinAdapter';
 import { publishToX } from './xAdapter';
 import { publishToInstagram } from './instagramAdapter';
@@ -68,6 +69,10 @@ export async function publishToPlatform(
 ): Promise<PublishResult> {
   console.log(`🚀 Publishing post ${scheduledPostId} via account ${socialAccountId}`);
 
+  // Set immediately before control passes to a platform adapter. A throw that
+  // lands in the catch below before then provably sent nothing; one after it
+  // may have escaped an adapter after its create-post request went out.
+  let dispatched = false;
   try {
     // Step 1: Fetch scheduled post
     const scheduledPost = await getScheduledPost(scheduledPostId);
@@ -108,8 +113,20 @@ export async function publishToPlatform(
           code: failure.code,
           message: failure.message,
           retryable: false,
+          delivery: 'not_sent',
         },
       };
+    }
+
+    // Closure-014 (G): certification-only fake provider. Consulted BEFORE the
+    // social account, token read/decrypt and OAuth refresh, so while it is
+    // active no real adapter or refresh can run. Inert unless
+    // CERT_FAKE_PUBLISHER=1; throws (→ 'not_sent' below) if that flag is set in
+    // an environment that is not provably certification-only.
+    const certFake = resolveCertFakePublisher();
+    if (certFake) {
+      dispatched = true;
+      return await certFake.publish(scheduledPost);
     }
 
     // Step 2: Fetch social account
@@ -197,6 +214,7 @@ export async function publishToPlatform(
     // Step 5: Route to platform-specific adapter
     let result: PublishResult;
 
+    dispatched = true;
     switch (platform) {
       case 'linkedin':
         result = await publishToLinkedIn(scheduledPost, socialAccount, token);
@@ -245,6 +263,7 @@ export async function publishToPlatform(
         code: 'PUBLISH_ERROR',
         message: error.message,
         retryable: true, // Most errors are retryable
+        ...(dispatched ? {} : { delivery: 'not_sent' as const }),
       },
     };
   }

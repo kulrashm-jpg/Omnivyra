@@ -30,6 +30,7 @@ import { supabase as sb } from '@/backend/db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { mayAttemptCapability } from '@/backend/security/preAuthorization';
 import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 import { recordAdminAudit } from '@/backend/services/adminAuditService';
 import { logger } from '@/backend/services/logger';
@@ -221,4 +222,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-credits-grant' }), { route: '/api/super-admin/credits/grant' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-credits-grant', authorize: mayAttemptCapability(BILLING_GRANT_FREE_CREDITS) }), { route: '/api/super-admin/credits/grant' });

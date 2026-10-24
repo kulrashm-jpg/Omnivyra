@@ -24,6 +24,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 import { revokeCredit, type RevocableCategory } from '@/backend/services/creditRevoke';
 
@@ -32,6 +33,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:free-credits:revoke', 10, 60, { sensitive: true }))) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const {

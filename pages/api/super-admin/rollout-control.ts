@@ -17,13 +17,16 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *     tenants?: string[],                     // set-tenants (canary allowlist)
  *     reason?: string }
  *
- * Auth: SUPER_ADMIN_DASHBOARD_VIEW (same gate as planner-control/force-mode).
+ * Auth (Closure-009, owner decision): PLATFORM_CONTROLS_MANAGE with its
+ * passkey + trusted-device step-up, plus platform write authority (an ACTIVE
+ * platform SUPER_ADMIN role on a canonical principal).
  * Every mutation is recorded via recordAdminAudit (existing framework).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
-import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
+import { PLATFORM_CONTROLS_MANAGE } from '../../../shared/contracts/security';
+import { requirePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import {
   getRolloutFlag,
@@ -45,11 +48,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:rollout-control', 30, 60))) return;
 
+  // Closure-009 (owner decision): rollout overrides and kill-switches —
+  // including outbound moderation and the security gates — are critical
+  // platform controls. PLATFORM_CONTROLS_MANAGE carries the registered
+  // passkey + trusted-device step-up; platform write authority refuses a
+  // direct capability grant. Every action needs both: a set-mode 'off' on a
+  // moderation flag is as much a kill-switch as `kill`, and flags carry no
+  // metadata that would let the route tell security flags apart.
   const auth = await requireCapability(req, res, {
-    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    capability: PLATFORM_CONTROLS_MANAGE,
     reason: 'rollout_override_mutation',
   });
   if (!auth.ok) return;
+  if (!requirePlatformWriteAuthority(res, auth.principal, 'rollout.override')) return;
   const operatorId =
     (auth.principal as { userId?: string }).userId ??
     (auth.principal as { id?: string }).id ??

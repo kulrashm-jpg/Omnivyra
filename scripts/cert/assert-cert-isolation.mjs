@@ -16,20 +16,24 @@
 
 // The production Supabase project ref (from NEXT_PUBLIC_SUPABASE_URL) and prod
 // pooler host. Anything containing these is PRODUCTION and is forbidden in cert.
-const PROD_MARKERS = [
-  'klkiseupptzbecbxwrky',                 // prod Supabase project ref
-  'aws-1-ap-southeast-1.pooler.supabase', // prod pooler host
-];
+import { createRequire } from 'node:module';
+// Closure-014 (F): ONE source of truth with the in-process guard
+// (scripts/lib/certAwareEnv.cjs) — its markers include the production Upstash
+// host this file used to miss, and its loopback allow-list.
+const certEnv = createRequire(import.meta.url)('../lib/certAwareEnv.cjs');
+const PROD_MARKERS = certEnv.PROD_MARKERS;
 
 // Env vars that carry a connection target and must be cert-safe.
-const CONNECTION_VARS = [
-  'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY',
-  'SUPABASE_POOLER_DB_URL', 'DATABASE_URL', 'DIRECT_URL', 'MIGRATION_DATABASE_URL',
-  'REDIS_URL', 'UPSTASH_REDIS_REST_URL', 'STORAGE_URL', 'SUPABASE_STORAGE_URL',
-  'WEBHOOK_URL', 'PUBLISH_WEBHOOK_URL',
-];
+const CONNECTION_VARS = [...new Set([
+  ...certEnv.CONNECTION_VARS,
+  'MIGRATION_DATABASE_URL', 'STORAGE_URL', 'SUPABASE_STORAGE_URL', 'WEBHOOK_URL', 'PUBLISH_WEBHOOK_URL',
+])];
 
-/** @returns {{ok:boolean, violations:Array<{var:string,marker:string}>}} */
+/**
+ * @returns {{ok:boolean, violations:Array<{var:string,marker:string}>}}
+ * Production markers in any connection var, plus (Closure-014) every
+ * certAwareEnv loopback rule — certification targets must be loopback.
+ */
 export function scanForProduction(env = process.env) {
   const violations = [];
   for (const key of CONNECTION_VARS) {
@@ -38,6 +42,9 @@ export function scanForProduction(env = process.env) {
     for (const marker of PROD_MARKERS) {
       if (val.includes(marker)) violations.push({ var: key, marker });
     }
+  }
+  for (const v of certEnv.scanCertEnv(env)) {
+    if (!v.includes('→ "')) violations.push({ var: v.split(' ')[0], marker: v.slice(v.indexOf('→') + 2) });
   }
   return { ok: violations.length === 0, violations };
 }

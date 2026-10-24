@@ -14,6 +14,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { loadCustomerActivationInputs } from '../../../backend/services/customerActivationWorkbenchService';
@@ -38,8 +39,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'super-admin customer-activation-operations',
+    // Closure-009 (owner decision): POST is a platform-wide WRITE needing
+    // platform authority. Closure-015: enforced (and audited) in requireCapability.
+    requirePlatformAuthority: req.method === 'POST',
   });
   if (!guard.ok) return;
+  if (req.method === 'POST') {
+    if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:customer-activation-ops', 30, 60))) return;
+  }
 
   try {
     if (req.method === 'GET') {
@@ -57,7 +64,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .from('customer_activation_outreach').select('company_id').eq('company_id', companyId).maybeSingle();
       if (!existing) return res.status(404).json({ error: 'company is not a tracked customer' });
 
-      const owner = String(body.owner ?? guard.principal?.userId ?? 'operator');
+      // Attribution is the AUTHENTICATED principal — never a body field.
+      const owner = guard.principal.userId;
       const nowIso = new Date().toISOString();
 
       if (action === 'set_state') {

@@ -12,7 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
-import { getUnifiedCampaignBlueprint, assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../backend/services/campaignBlueprintService';
+import { getUnifiedCampaignBlueprint, assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError, BlueprintMutabilityReadError } from '../../../backend/services/campaignBlueprintService';
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { generatePrePlanningExplanation } from '../../../backend/services/aiGateway';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
@@ -117,6 +117,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       try {
         await assertBlueprintMutable(campaignId);
       } catch (err: any) {
+        // The guard could not READ the blueprint state. That is not a policy
+        // verdict (409) and not a server bug (500): it is retryable, and nothing
+        // was mutated.
+        if (err instanceof BlueprintMutabilityReadError) {
+          return res.status(503).json({
+            code: 'BLUEPRINT_STATE_READ_FAILED',
+            message: 'Blueprint state could not be read. Try again shortly.',
+          });
+        }
         if (err instanceof BlueprintExecutionFreezeError) {
           await recordGovernanceEvent({
             companyId,

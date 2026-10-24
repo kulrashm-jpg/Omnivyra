@@ -14,7 +14,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockdownService';
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
-import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../../backend/services/campaignBlueprintService';
+import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError, BlueprintMutabilityReadError } from '../../../../backend/services/campaignBlueprintService';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 
@@ -91,6 +91,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       await assertBlueprintMutable(id);
     } catch (err: any) {
+      if (err instanceof BlueprintMutabilityReadError) {
+        return res.status(503).json({
+          code: 'BLUEPRINT_STATE_READ_FAILED',
+          message: 'Blueprint state could not be read. Try again shortly.',
+        });
+      }
       if (err instanceof BlueprintExecutionFreezeError) {
         return res.status(409).json({
           code: 'EXECUTION_WINDOW_FROZEN',

@@ -6,6 +6,13 @@
  */
 
 const mockRequireCapability = jest.fn();
+// Closure-014 (D): this route now rate-limits writes before authorization. This suite tests
+// authorization/business behaviour, not the limiter (covered by closure014AdminRateLimit and the
+// Closure-013 sibling suite), so the limiter passes through — the established pattern.
+jest.mock('../../services/requestAccessService', () => ({
+  ...jest.requireActual('../../services/requestAccessService'),
+  requireAdminRateLimit: async () => true,
+}));
 jest.mock('../../security/requireCapability', () => ({
   requireCapability: (...a: unknown[]) => mockRequireCapability(...a),
 }));

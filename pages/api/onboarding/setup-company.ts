@@ -16,6 +16,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { randomUUID } from 'crypto';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { acceptInvitationViaOnboarding } from '../../../backend/services/onboardingInvitationAcceptance';
 import {
   findMatchingCompany,
   extractDomain,
@@ -278,11 +279,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
       const now = new Date().toISOString();
 
       if (invite) {
-        // Accept the team invite: move 'invited' → 'active'
-        await supabase
-          .from('user_company_roles')
-          .update({ status: 'active', accepted_at: now, updated_at: now })
-          .eq('id', invite.id);
+        // Closure-015M (R-14): accept the team invite with the token flow's rules
+        // (pending, unexpired, unrevoked, single-use invitation for this email +
+        // company; the INVITATION's role; never SUPER_ADMIN) instead of flipping
+        // the invited row to 'active' by id. Refused before any mutation.
+        const accepted = await acceptInvitationViaOnboarding({
+          userId: user.id,
+          email: user.email,
+          membership: { id: invite.id, company_id: invite.company_id, role: (invite as { role: string | null }).role, status: 'invited' },
+        });
+        if (accepted.ok !== true) {
+          return res.status(accepted.status).json({ error: accepted.error });
+        }
 
         // Stamp users.active_company_id only — users.company_id is deprecated.
         await supabase
@@ -329,12 +337,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
   }
 
   try {
-    // ── 1. Fix any SUPER_ADMIN role — company users must be COMPANY_ADMIN ─────
-    await supabase
-      .from('user_company_roles')
-      .update({ role: 'COMPANY_ADMIN', updated_at: new Date().toISOString() })
-      .eq('user_id', user.id)
-      .eq('role', 'SUPER_ADMIN');
+    // ── 1. (Closure-015J, R-5) The former step here demoted EVERY SUPER_ADMIN
+    //    membership of the caller to COMPANY_ADMIN ("fix any SUPER_ADMIN role"), a
+    //    legacy cleanup that predates the governed super-admin model and silently
+    //    removed governed platform authority. Removed: platform super-admin
+    //    authority changes only through identity.admin.assign / identity.admin.revoke.
+    //    The new company's own membership is created below as COMPANY_ADMIN.
 
     // ── 2. Check for existing company membership (idempotent) ────────────────
     const { data: existingRows } = await supabase
@@ -455,20 +463,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
         // Check if this user is already a member — if so, just return the company.
         const { data: existingRole } = await supabase
           .from('user_company_roles')
-          .select('id, status')
+          .select('id, status, role')
           .eq('user_id', user.id)
           .eq('company_id', domainCompany.id)
           .maybeSingle();
 
         if (existingRole) {
           // If the user was invited (by super admin or company admin), activate them now.
-          const role = existingRole as { id: string; status: string };
+          const role = existingRole as { id: string; status: string; role: string | null };
           if (role.status === 'invited') {
-            const now = new Date().toISOString();
-            await supabase
-              .from('user_company_roles')
-              .update({ status: 'active', accepted_at: now, updated_at: now })
-              .eq('id', role.id);
+            // Closure-015M (R-14): governed acceptance (see Path A), not a blind flip.
+            const accepted = await acceptInvitationViaOnboarding({
+              userId: user.id,
+              email: user.email ?? '',
+              membership: { id: role.id, company_id: domainCompany.id, role: role.role, status: 'invited' },
+            });
+            if (accepted.ok !== true) {
+              return res.status(accepted.status).json({ error: accepted.error });
+            }
           }
           await supabase
             .from('users')

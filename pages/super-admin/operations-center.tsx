@@ -9,6 +9,7 @@
 import React, { useEffect, useState } from 'react';
 import Head from 'next/head';
 import { apiFetch } from '../../lib/apiFetch';
+import { submitSuperAdminWrite } from '../../lib/security/superAdminStepUp';
 
 type RolloutFlagView = { key: string; description: string; envPrefix: string; mode: string; source: string; killed: boolean };
 type Snapshot = {
@@ -195,13 +196,21 @@ export default function OperationsCenter() {
     setRolloutBusy(flagKey);
     setRolloutMsg(null);
     try {
-      const r = await apiFetch('/api/super-admin/rollout-control', {
+      // Closure-011: rollout overrides need platform.controls.manage with a
+      // passkey step-up — through the established super-admin step-up flow
+      // (passkey ceremony, then ONE retry; nothing reported as done unless 2xx).
+      const fire = () => apiFetch('/api/super-admin/rollout-control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ flagKey, ...body }),
       });
+      const result = await submitSuperAdminWrite(fire, {
+        onChallengeStart: () => setRolloutMsg(`${flagKey}: confirm with your passkey…`),
+      });
+      if (result.status === 'blocked') throw new Error(result.message);
+      const r = result.response;
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      if (result.status === 'failed') throw new Error(j?.error || `HTTP ${r.status}`);
       setRolloutMsg(`${flagKey}: ${label} → ${j?.resolved?.mode ?? 'ok'} (${j?.resolved?.source ?? ''})`);
       await load();
     } catch (e) {

@@ -28,6 +28,7 @@ import { recordScheduler } from '../observability/metrics';
 // out by several suites, and a guard that disappears when a neighbouring module
 // is mocked is not a guard.
 import { isLiveQueueJobDuplicateViolation } from '../services/boltScheduleIdempotency';
+import { RETRY_STATE_AWAITING, isRetryStateColumnMissing } from '../queue/publishRetryState';
 
 export {
   enqueueScheduledPostAt,
@@ -124,10 +125,30 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
   // indistinguishable from "everything was already queued" and would lose the
   // failure signal. Refusing to act on unknown queue state is the only
   // behaviour that cannot double-publish.
-  const { data: existingJobs, error: existingJobsError } = await ownedDbTable('queue_jobs')
-    .select('scheduled_post_id, status')
-    .in('scheduled_post_id', duePosts.map(p => p.id))
-    .in('status', ['pending', 'processing']);
+  //
+  // LIVE includes a job waiting in BullMQ backoff: status 'failed' with
+  // retry_state 'awaiting_retry' (migration 20261202000000). It will be
+  // delivered again and claim the post, so enqueueing beside it is a second
+  // live job. It is read in the SAME round trip as pending/processing — failed
+  // rows come back and are filtered here — so the cycle's query budget is
+  // unchanged. Before the migration the column is absent (42703 naming
+  // retry_state): no row can be awaiting a recorded retry, and the lookup
+  // falls back to exactly the pre-migration query.
+  const duePostIds = duePosts.map(p => p.id);
+  const withState = await ownedDbTable('queue_jobs')
+    .select('scheduled_post_id, status, retry_state')
+    .in('scheduled_post_id', duePostIds)
+    .in('status', ['pending', 'processing', 'failed']);
+  const existingLookup: {
+    data: Array<{ scheduled_post_id: string; status: string; retry_state?: string | null }> | null;
+    error: { message: string } | null;
+  } = withState.error && isRetryStateColumnMissing(withState.error)
+    ? await ownedDbTable('queue_jobs')
+      .select('scheduled_post_id, status')
+      .in('scheduled_post_id', duePostIds)
+      .in('status', ['pending', 'processing'])
+    : withState;
+  const { data: existingJobs, error: existingJobsError } = existingLookup;
 
   if (existingJobsError || !existingJobs) {
     const reason = existingJobsError?.message ?? 'no rows returned';
@@ -139,7 +160,9 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
   }
 
   const existingPostIds = new Set(
-    existingJobs.map(j => j.scheduled_post_id)
+    existingJobs
+      .filter(j => j.status !== 'failed' || j.retry_state === RETRY_STATE_AWAITING)
+      .map(j => j.scheduled_post_id)
   );
 
   // ── HARDEN-004: batch the per-post campaign lookup ──────────────────────────

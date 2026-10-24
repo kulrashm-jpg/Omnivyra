@@ -1,6 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireSuperAdminGaAccess } from '../../../backend/services/superAdminGaAccess';
+import { requireSuperAdminGaWriteAccess } from '../../../backend/services/superAdminGaAccess';
 import { resolveOmnivyraWebsiteCompany } from '../../../backend/services/omnivyraWebsiteCompanyService';
 import { getAnalyticsEnterpriseSnapshot, refreshAnalyticsEnterpriseSnapshot } from '../../../backend/services/analyticsEnterpriseSnapshotService';
 import {
@@ -12,6 +12,7 @@ import {
   getConfiguredSerpProviderHealth,
   type SerpProviderResult,
 } from '../../../backend/services/serpAcquisitionService';
+import { validateManualSerpResults } from '../../../backend/services/serp/manualSerpResultsValidation';
 import { bootstrapCompetitorDataset } from '../../../backend/services/competitiveDatasetBootstrapService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -20,16 +21,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
   }
 
-  const access = await requireSuperAdminGaAccess(req, res);
+  const access = await requireSuperAdminGaWriteAccess(req, res, 'analytics.serp.acquire');
   if (!access) return;
+
+  const body = req.body ?? {};
+  // Closure-009: caller-supplied SERP rows are validated against the
+  // established contract before any read or write (they used to be cast
+  // straight to SerpProviderResult[] and persisted as observations).
+  const manual = validateManualSerpResults(body.manual_results);
+  if (manual.ok === false) {
+    return res.status(400).json({ error: manual.error, code: 'INVALID_MANUAL_RESULTS' });
+  }
+  const manualRows: SerpProviderResult[] = manual.rows;
 
   const company = await resolveOmnivyraWebsiteCompany();
   if (!company) {
     return res.status(404).json({ error: 'Omnivyra website company not found', code: 'COMPANY_NOT_FOUND' });
   }
 
-  const body = req.body ?? {};
-  const manualRows = Array.isArray(body.manual_results) ? body.manual_results as SerpProviderResult[] : [];
   const provider = manualRows.length ? createManualSerpProvider(manualRows) : await createConfiguredSerpApiProvider();
   if (!provider) {
     return res.status(400).json({

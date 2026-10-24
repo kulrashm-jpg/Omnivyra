@@ -19,6 +19,7 @@ import { requireAdminRateLimit } from '../../../../backend/services/requestAcces
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { mayAttemptCapability } from '../../../../backend/security/preAuthorization';
 import { BILLING_PLATFORM_MANAGE } from '../../../../shared/contracts/security';
 
 type UpdateEntry = {
@@ -99,4 +100,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-credit-cost-config', methods: ['POST'] }), { route: '/api/super-admin/credit-cost-config/update' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-credit-cost-config', methods: ['POST'], authorize: mayAttemptCapability(BILLING_PLATFORM_MANAGE) }), { route: '/api/super-admin/credit-cost-config/update' });

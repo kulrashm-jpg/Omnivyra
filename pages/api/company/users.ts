@@ -16,7 +16,7 @@ import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
 import { isNonWorkEmailDomain } from '../../../backend/services/domainEligibilityService';
 
-import { ensureCompanyAccess, ensureCompanyAdminAccess, findOrCreateUserByEmail, insertAuditLog, mapAppRoleToRbac, normalizeInviteRole, upsertUserCompanyRole } from '../../../backend/apiHandlers/company/usersShared';
+import { ensureCompanyAccess, ensureCompanyAdminAccess, findOrCreateUserByEmail, insertAuditLog, mapAppRoleToRbac, normalizeInviteRole, readTargetMembership, upsertUserCompanyRole } from '../../../backend/apiHandlers/company/usersShared';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const rawCompanyId =
@@ -176,17 +176,44 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'FAILED_TO_SAVE_USER', details: userErr } as any);
       }
 
+      // Closure-015I (review R-2) — an existing SUPER_ADMIN membership of the
+      // invitee in this company (any status) is platform authority: this
+      // company-scoped invite must not rewrite its role or reset it to 'invited'.
+      // Refused before the upsert and before any invitation is created or sent.
+      const existingMembership = await readTargetMembership(invitedUserId, companyId);
+      if (existingMembership.ok !== true && existingMembership.status === 503) {
+        return res.status(503).json({ error: existingMembership.error });
+      }
+      if (existingMembership.ok === true && existingMembership.privileged) {
+        await insertAuditLog({
+          actorUserId: access.userId,
+          action: 'PRIVILEGED_MEMBERSHIP_MUTATION_DENIED',
+          targetUserId: invitedUserId,
+          companyId,
+          metadata: { operation: 'INVITE_USER', requested_role: desiredRole },
+        });
+        return res.status(403).json({ error: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE' });
+      }
+
       // 3. Upsert role to invited + send invitation. Existing-user fast-path
       //    (auto-add without invite) was removed: it depended on firebase_uid
       //    which was dropped in 20260407_drop_firebase_uid.sql, so the gate was
       //    permanently false. All adds now flow through the invite.
 
-      const { error: upsertError } = await upsertUserCompanyRole(
+      const { error: upsertError, code: upsertCode } = await upsertUserCompanyRole(
         invitedUserId,
         companyId,
         desiredRole,
         displayName
       );
+      // Closure-015J (R-13): an active member is not re-invited (no reset, no
+      // invitation); a membership that changed since it was read is not overwritten.
+      if (upsertCode === 'ALREADY_ACTIVE_MEMBER' || upsertCode === 'STALE_MEMBERSHIP') {
+        return res.status(409).json({ error: upsertCode });
+      }
+      if (upsertCode === 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE') {
+        return res.status(403).json({ error: upsertCode });
+      }
       if (upsertError) {
         return res.status(500).json({ error: 'FAILED_TO_ASSIGN_ROLE', details: upsertError });
       }
@@ -237,6 +264,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!(allowedRoles as readonly string[]).includes(desiredRole)) {
       return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
     }
+    // Closure-015I (H-2) — status, when given, must be one of the values the
+    // user_company_roles_status_check constraint accepts. Anything else (e.g. the
+    // former 'deactivated', a non-string, an empty string) is a client error,
+    // answered before any read or write instead of surfacing as a 500 from the DB.
+    const MEMBERSHIP_STATUSES = ['invited', 'active', 'inactive', 'expired'] as const;
+    if (status !== undefined && status !== null && (typeof status !== 'string' || !(MEMBERSHIP_STATUSES as readonly string[]).includes(status))) {
+      return res.status(400).json({ error: 'INVALID_STATUS', allowed: MEMBERSHIP_STATUSES });
+    }
 
     if (!(await hasPermission(access.role, 'ASSIGN_ROLE'))) {
       await insertAuditLog({
@@ -247,6 +282,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         metadata: { action: 'ASSIGN_ROLE' },
       });
       return res.status(403).json({ error: 'PERMISSION_DENIED' });
+    }
+
+    // Closure-015G — read the target membership BEFORE any write. A SUPER_ADMIN
+    // row (any status) is never changed here — not demoted, not deactivated, not
+    // re-activated — whoever calls; platform authority stays on the governed
+    // identity paths (identity.admin.assign / identity.admin.revoke, step-up).
+    const target = await readTargetMembership(String(userId), companyId);
+    if (target.ok !== true) return res.status(target.status).json({ error: target.error });
+    if (target.privileged) {
+      await insertAuditLog({
+        actorUserId: access.userId,
+        action: 'PRIVILEGED_MEMBERSHIP_MUTATION_DENIED',
+        targetUserId: String(userId),
+        companyId,
+        metadata: { operation: 'UPDATE_USER_ROLE', requested_role: desiredRole, requested_status: status || null },
+      });
+      return res.status(403).json({ error: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE' });
+    }
+
+    // Closure-015H (G-5) + Closure-015I (H-1) — a company-scoped PUT never
+    // ACTIVATES a membership: an INVITED membership becomes active only by
+    // accepting its invitation (team/accept-invite, activate_invitation_membership),
+    // an EXPIRED one only through a new invitation (reinvite), and an INACTIVE one
+    // only through a governed path (a new invitation, or the platform super-admin
+    // PATCH /api/super-admin/users with identity.admin.assign + step-up). Role
+    // changes, deactivation and status: 'active' on an already-active membership
+    // (a no-op) are unaffected.
+    if (status === 'active' && target.row.status !== 'active') {
+      if (target.row.status === 'invited' || target.row.status === 'expired') {
+        return res.status(409).json({ error: 'INVITATION_ACCEPTANCE_REQUIRED' });
+      }
+      return res.status(409).json({ error: 'REACTIVATION_REQUIRES_GOVERNED_PATH' });
     }
 
     const updates: Record<string, any> = {
@@ -274,22 +341,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     if (status) {
       updates.status = status;
-      if (status === 'inactive' || status === 'deactivated') {
+      if (status === 'inactive') {
         updates.deactivated_at = new Date().toISOString();
       }
-      if (status === 'active') {
-        updates.accepted_at = new Date().toISOString();
-      }
+      // Closure-015I (H-1): no accepted_at stamp — this route never activates a
+      // membership (above), so status 'active' only reaches an already-active row,
+      // whose real acceptance time must not be overwritten.
     }
 
-    const { error } = await supabase
+    // Closure-015G — compare-and-set on the membership read above (id, role,
+    // status): a concurrent promotion to SUPER_ADMIN (or any other concurrent
+    // change) makes this match nothing → 409, never an overwrite.
+    let update = supabase
       .from('user_company_roles')
       .update(updates)
-      .eq('user_id', userId)
-      .eq('company_id', companyId);
+      .eq('id', target.row.id)
+      .eq('role', target.row.role);
+    update = target.row.status === null ? update.is('status', null) : update.eq('status', target.row.status);
+    const { data: updatedRows, error } = await update.select('id');
 
     if (error) {
       return res.status(500).json({ error: 'FAILED_TO_UPDATE_ROLE', details: error.message });
+    }
+    if (!updatedRows || updatedRows.length === 0) {
+      return res.status(409).json({ error: 'STALE_MEMBERSHIP' });
     }
 
     await insertAuditLog({
@@ -322,14 +397,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(403).json({ error: 'PERMISSION_DENIED' });
     }
 
-    const { error } = await supabase
+    // Closure-015G — read the target membership BEFORE deleting. A SUPER_ADMIN
+    // row (any status) is never removed here, whoever calls; revocation is the
+    // governed identity.admin.revoke path.
+    const target = await readTargetMembership(String(userId), companyId);
+    if (target.ok !== true) return res.status(target.status).json({ error: target.error });
+    if (target.privileged) {
+      await insertAuditLog({
+        actorUserId: access.userId,
+        action: 'PRIVILEGED_MEMBERSHIP_MUTATION_DENIED',
+        targetUserId: String(userId),
+        companyId,
+        metadata: { operation: 'REMOVE_USER' },
+      });
+      return res.status(403).json({ error: 'SUPER_ADMIN_MEMBERSHIP_NOT_REMOVABLE_HERE' });
+    }
+
+    // Conditional on the row read (id, role, status — Closure-015H G-3): a
+    // concurrent promotion to SUPER_ADMIN or a concurrent status change makes
+    // this delete nothing → 409.
+    let removal = supabase
       .from('user_company_roles')
       .delete()
-      .eq('user_id', userId)
-      .eq('company_id', companyId);
+      .eq('id', target.row.id)
+      .eq('role', target.row.role);
+    removal = target.row.status === null ? removal.is('status', null) : removal.eq('status', target.row.status);
+    const { data: deletedRows, error } = await removal.select('id');
 
     if (error) {
       return res.status(500).json({ error: 'FAILED_TO_REMOVE_USER', details: error.message });
+    }
+    if (!deletedRows || deletedRows.length === 0) {
+      return res.status(409).json({ error: 'STALE_MEMBERSHIP' });
     }
 
     await insertAuditLog({

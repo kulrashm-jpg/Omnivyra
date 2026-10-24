@@ -7,6 +7,8 @@ import { ownedDbTable } from '../../db/writeOwner';
  *                              non-revoked + non-expired.
  *   - listForUser:             enumerate active rows.
  *   - insertTrustedDevice:     create a new row with TTL.
+ *   - reviveDormantTrustedDevice: re-trust the EXPIRED or REVOKED row for the
+ *                              same (user_id, fingerprint) (Closure-011).
  *   - touchLastSeen:           bump last_seen_at.
  *   - revokeDevice:            soft-delete with reason.
  */
@@ -116,6 +118,50 @@ export async function insertTrustedDevice(
     throw new Error(`trusted_device_insert_failed: ${error?.message ?? 'unknown'}`);
   }
   return rowToStored(data as DeviceRow);
+}
+
+/**
+ * Closure-011 — `trusted_devices` carries UNIQUE (user_id, fingerprint) with no
+ * partial predicate (migration 20260507; the same in the baseline schema), so
+ * once a device's trust EXPIRES (30 days by default) or is REVOKED, a fresh
+ * INSERT for that browser violates the constraint and trusting it again fails
+ * for ever — every step-up write that needs a trusted device becomes
+ * unreachable from that browser. The one row per (user, fingerprint) is
+ * therefore revived instead: compare-and-set on the dormant state that was
+ * read (its revoked_at and expires_at), so a concurrent re-trust or revoke is
+ * never overwritten. Returns null when there is no dormant row to revive, or
+ * when the row changed since it was read.
+ */
+export async function reviveDormantTrustedDevice(input: InsertTrustedDeviceInput): Promise<StoredTrustedDevice | null> {
+  const { data: found } = await ownedDbTable('trusted_devices')
+    .select('*')
+    .eq('user_id', input.userId)
+    .eq('fingerprint', input.fingerprint)
+    .maybeSingle();
+  if (!found) return null;
+  const row = found as DeviceRow;
+  if (isLive(rowToStored(row))) return null; // live: not dormant (the caller reports ALREADY_TRUSTED)
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + input.ttlSeconds * 1000);
+  let revive = ownedDbTable('trusted_devices')
+    .update({
+      label:             input.label ?? null,
+      last_seen_at:      now.toISOString(),
+      expires_at:        expiresAt.toISOString(),
+      revoked_at:        null,
+      revocation_reason: null,
+    })
+    .eq('id', row.id)
+    .eq('user_id', input.userId)
+    .eq('expires_at', row.expires_at);
+  revive = row.revoked_at == null ? revive.is('revoked_at', null) : revive.eq('revoked_at', row.revoked_at);
+  const { data, error } = await revive.select('*');
+  if (error) {
+    logger.error('trusted_device_revive_failed', { userId: input.userId, message: error.message });
+    throw new Error(`trusted_device_revive_failed: ${error.message}`);
+  }
+  const updated = Array.isArray(data) && data.length > 0 ? (data[0] as DeviceRow) : null;
+  return updated ? rowToStored(updated) : null;
 }
 
 export async function touchLastSeen(id: string): Promise<void> {

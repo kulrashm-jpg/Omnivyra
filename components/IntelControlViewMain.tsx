@@ -16,6 +16,7 @@ import {
   TrendingUp, Activity, Shield, BarChart2,
 } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
+import { performSuperAdminWrite } from '../lib/security/superAdminWrite';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -40,12 +41,11 @@ function BoostTab() {
     if (!selectedId) return;
     setLoading(true);
     try {
-      const r = await fetch('/api/admin/intelligence/scheduler-boost', {
+      const r = await performSuperAdminWrite(() => fetch('/api/admin/intelligence/scheduler-boost', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ company_id: selectedId, action, duration_hours: duration }),
-      });
-      const d = await r.json();
+      }));
       if (r.ok) {
         setMsg({
           type: 'ok',
@@ -54,7 +54,7 @@ function BoostTab() {
             : `Boost removed for ${selectedCompany?.name}. Jobs return to normal priority.`,
         });
       } else {
-        setMsg({ type: 'err', text: d.error ?? 'Operation failed' });
+        setMsg({ type: 'err', text: r.message });
       }
     } finally { setLoading(false); }
   }

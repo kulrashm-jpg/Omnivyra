@@ -458,13 +458,28 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(confirmMsg)) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/users', {
+      // Closure-015H (F-5): the route is wrapped in withIdempotency and gated on
+      // identity.admin.delete (phishing-resistant + trusted device). A FRESH key
+      // per attempt — see handleUserStatusChange — and the same step-up flow as
+      // the tab's other governed mutations. Without the key every delete failed
+      // with 400 IDEMPOTENCY_KEY_REQUIRED before reaching authorization.
+      const fire = () => fetchWithAuth('/api/super-admin/users', {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({ userId, companyId }),
       });
+      const outcome = await runStepUpFlowIfNeeded(await fire(), fire);
+      if (outcome.kind === 'step_up_user_cancelled' || outcome.kind === 'step_up_unavailable') {
+        alert(describeStepUpOutcome(outcome));
+        return;
+      }
+      if (outcome.kind === 'session_lost') {
+        alert(describeAuthFailure(outcome.failure));
+        return;
+      }
+      const response = outcome.response;
       if (!response.ok) {
-        const r = await response.json();
+        const r = await response.json().catch(() => ({} as Record<string, string>));
         console.error('Delete error response:', r);
         alert(`Error: ${r.details || r.error || 'Failed to delete user'}`);
         return;

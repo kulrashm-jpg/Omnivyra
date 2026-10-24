@@ -23,6 +23,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 import {
   promote,
@@ -43,9 +44,13 @@ type Body = {
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:planner-rollout', 20, 60))) return;
   const auth = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'planner_rollout_operation',
+    // Closure-009 (owner decision): a platform-wide WRITE needing platform
+    // authority. Closure-015: enforced (and audited) inside requireCapability.
+    requirePlatformAuthority: true,
   });
   if (!auth.ok) return;
   // The principal carries the operator id used in audit logs.

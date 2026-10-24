@@ -60,6 +60,8 @@ type QueueJobRow = {
   next_retry_at?: string | null;
   error_message?: string | null;
   error_code?: string | null;
+  retry_state?: string | null;
+  metadata?: Record<string, unknown> | null;
   updated_at?: string;
   created_at?: string;
 };
@@ -76,11 +78,24 @@ let liveUniqueIndexActive = true;
 let failQueueAdd = false;
 /** Fires once, after a SELECT resolves and before the following UPDATE. */
 let afterSelect: (() => void) | null = null;
+/** BullMQ job ids whose remove() throws (an active/locked job, a Redis error): the job survives. */
+const failRemoveFor = new Set<string>();
+/** BullMQ state per job id (default 'delayed', i.e. a scheduled job not yet due). */
+const bullStates: Record<string, string> = {};
+/** Runs on EVERY getJob (reset per test) — lets a test act in the gap before a restore. */
+let onGetJob: ((id: string) => void) | null = null;
 
 function matches(row: QueueJobRow, filters: Record<string, any>): boolean {
   for (const [key, value] of Object.entries(filters)) {
-    const actual = (row as any)[key];
-    if (Array.isArray(value)) {
+    // PostgREST JSON path (`metadata->platform_call`): a missing key or a
+    // NULL column both read as NULL.
+    const actual = key.includes('->')
+      ? key.split('->').slice(1).reduce((v: any, k) => (v && typeof v === 'object' ? v[k] : undefined), (row as any)[key.split('->')[0]])
+      : (row as any)[key];
+    if (value === null) {
+      // `.is(col, null)` — IS NULL.
+      if (actual !== null && actual !== undefined) return false;
+    } else if (Array.isArray(value)) {
       if (!value.includes(actual)) return false;
     } else if (actual !== value) {
       return false;
@@ -136,6 +151,7 @@ jest.mock('../../db/writeOwner', () => ({
       select: jest.fn(() => api),
       eq: jest.fn((k: string, v: any) => { filters[k] = v; return api; }),
       in: jest.fn((k: string, v: any[]) => { filters[k] = v; return api; }),
+      is: jest.fn((k: string, v: null) => { filters[k] = v; return api; }),
       order: jest.fn(() => api),
       limit: jest.fn(() => api),
       update: jest.fn((payload: Record<string, unknown>) => { pendingUpdate = payload; return api; }),
@@ -171,9 +187,21 @@ jest.mock('../../queue/bullmqClient', () => ({
       queueOps.add.push(args);
       return { id: args?.[2]?.jobId ?? 'bull-1' };
     }),
-    getJob: jest.fn(async (id: string) => ({
-      remove: async () => { queueOps.removed.push(id); },
-    })),
+    // Faithful to BullMQ (Closure-008): a removed job is GONE — getJob then
+    // resolves to undefined — and a job reports its state. The previous double
+    // returned a job for every id even after remove(), which is how a restore
+    // of a row whose job had been deleted looked like a working rollback.
+    getJob: jest.fn(async (id: string) => {
+      if (onGetJob) onGetJob(id);
+      if (queueOps.removed.includes(id)) return undefined;
+      return {
+        remove: async () => {
+          if (failRemoveFor.has(id)) throw new Error('job is locked');
+          queueOps.removed.push(id);
+        },
+        getState: async () => bullStates[id] ?? 'delayed',
+      };
+    }),
   })),
   getEngagementPollingQueue: jest.fn(() => ({ add: jest.fn() })),
 }));
@@ -222,6 +250,9 @@ function reset() {
   updatePayloads.length = 0;
   queueOps.add.length = 0;
   queueOps.removed.length = 0;
+  failRemoveFor.clear();
+  Object.keys(bullStates).forEach((k) => delete bullStates[k]);
+  onGetJob = null;
   Object.keys(rpcResponses).forEach((k) => delete rpcResponses[k]);
   forcedUpdateError = null;
   liveUniqueIndexActive = true;
@@ -360,9 +391,13 @@ describe('queue_jobs cancellation — deployed schema', () => {
     }
   });
 
+  // Closure-008 B1: a restore now happens ONLY when the prior BullMQ job
+  // survived the cancel (here: its removal failed) — so this test makes it
+  // survive, and still checks the restore UPDATE's columns.
   test('the rollback UPDATE also names only columns that exist', async () => {
     rpcResponses['try_scheduled_post_lock'] = true;
     rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'pending' });
+    failRemoveFor.add('qj-1');
     const { atomicCancelAndReEnqueueScheduledPost } = await control();
 
     // Force the enqueue to fail so the rollback branch runs. An INSERT clash is
@@ -379,13 +414,200 @@ describe('queue_jobs cancellation — deployed schema', () => {
     });
 
     expect(result.enqueue).toBe('failed');
-    expect(result.rollback).toBe('attempted');
+    expect(result.rollback).toBe('restored');
     for (const payload of updatePayloads) {
       const offending = Object.keys(payload).filter((k) => !DEPLOYED_QUEUE_JOBS_COLUMNS.includes(k));
       expect(offending).toEqual([]);
     }
-    // The prior job is live again so the safety-net cron still publishes it.
+    // The prior job is live again AND its BullMQ job still exists to run it.
     expect(rows.find((r) => r.id === 'qj-1')!.status).toBe('pending');
+    expect(queueOps.removed).not.toContain('qj-1');
+  });
+
+  // ── Closure-008 B1: the rollback never fabricates a live row ─────────────
+  describe('guarded rollback (Closure-008 B1)', () => {
+    const reschedule = async () => {
+      const { atomicCancelAndReEnqueueScheduledPost } = await control();
+      return atomicCancelAndReEnqueueScheduledPost({
+        scheduledPostId: 'sp-1', userId: 'u-1', socialAccountId: 'sa-1', newScheduledFor: FUTURE(), reason: 'atomic_reschedule',
+      });
+    };
+    const live = () => rows.filter((r) => r.scheduled_post_id === 'sp-1' && LIVE_STATUSES.includes(r.status));
+
+    beforeEach(() => {
+      rpcResponses['try_scheduled_post_lock'] = true;
+      failQueueAdd = true;
+    });
+
+    test('the cancel removed the BullMQ job: NOT restored — no live row is left with nothing to run it', async () => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'pending' });
+      const result = await reschedule();
+      expect(result).toMatchObject({ ok: false, enqueue: 'failed', rollback: 'skipped', rollback_reason: 'bullmq_job_removed' });
+      expect(rows.find((r) => r.id === 'qj-1')!.status).toBe('cancelled');
+      expect(queueOps.removed).toContain('qj-1');
+      // Nothing live blocks the safety-net cron from enqueueing the post at its new time.
+      expect(live()).toEqual([]);
+    });
+
+    test('the failed enqueue\'s own new row is retired, not left pending without a job', async () => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'pending' });
+      await reschedule();
+      const created = rows.filter((r) => r.id.startsWith('qj-new-'));
+      expect(created).toHaveLength(1);
+      expect(created[0].status).toBe('cancelled');
+      expect(String(created[0].error_message)).toMatch(/^enqueue_failed:/);
+    });
+
+    test('a row that was PROCESSING is never restored (a worker owned it; the call may have started)', async () => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'processing' });
+      failRemoveFor.add('qj-1'); // an active job cannot be removed — it survives
+      bullStates['qj-1'] = 'active';
+      const result = await reschedule();
+      expect(result).toMatchObject({ rollback: 'skipped', rollback_reason: 'prior_job_was_processing' });
+      expect(rows.find((r) => r.id === 'qj-1')!.status).toBe('cancelled');
+    });
+
+    test.each(['completed', 'failed', 'active'])('a surviving BullMQ job in state %s is not runnable: NOT restored', async (state) => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'pending' });
+      failRemoveFor.add('qj-1');
+      bullStates['qj-1'] = state;
+      const result = await reschedule();
+      expect(result).toMatchObject({ rollback: 'skipped', rollback_reason: `bullmq_job_not_runnable:${state}` });
+      expect(rows.find((r) => r.id === 'qj-1')!.status).toBe('cancelled');
+      expect(live()).toEqual([]);
+    });
+
+    /** Fires `act` on the restore's getJob(qj-1) — the second one; the cancel's removal is the first. */
+    const onRestoreLookup = (act: () => void) => {
+      let seen = 0;
+      onGetJob = (id) => { if (id === 'qj-1' && ++seen === 2) act(); };
+    };
+
+    test('the row moved on (a worker completed it) before the restore: the newer state is NOT overwritten', async () => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'pending' });
+      failRemoveFor.add('qj-1');
+      onRestoreLookup(() => { rows.find((r) => r.id === 'qj-1')!.status = 'completed'; });
+      const result = await reschedule();
+      expect(result).toMatchObject({ rollback: 'skipped', rollback_reason: 'queue_job_state_changed' });
+      expect(rows.find((r) => r.id === 'qj-1')!.status).toBe('completed');
+    });
+
+    test('a job captured while awaiting a BullMQ retry is restored to failed, not pending', async () => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'failed', retry_state: 'awaiting_retry' });
+      failRemoveFor.add('qj-1');
+      const result = await reschedule();
+      expect(result.rollback).toBe('restored');
+      expect(rows.find((r) => r.id === 'qj-1')!.status).toBe('failed');
+    });
+
+    test('a restore write that errors is reported as failed, never as restored', async () => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'pending' });
+      failRemoveFor.add('qj-1');
+      onRestoreLookup(() => { forcedUpdateError = { message: 'connection reset' }; });
+      const result = await reschedule();
+      expect(result.rollback).toBe('failed');
+      expect(result.rollback_reason).toContain('connection reset');
+      expect(rows.find((r) => r.id === 'qj-1')!.status).toBe('cancelled');
+    });
+
+    test('an enqueue that fails with NO prior job reports rollback not_needed, never "attempted"', async () => {
+      const result = await reschedule();
+      expect(result).toMatchObject({ ok: false, enqueue: 'failed', rollback: 'not_needed' });
+    });
+  });
+
+  // ── Closure-008 B3: a 'duplicate' after our cancel is success only at OUR time ─
+  describe('duplicate after cancel (Closure-008 B3)', () => {
+    const NEW_FOR = '2031-05-05T05:00:00.000Z';
+    const OTHER_FOR = '2031-06-06T06:00:00.000Z';
+    const run = async () => {
+      const { atomicCancelAndReEnqueueScheduledPost } = await control();
+      return atomicCancelAndReEnqueueScheduledPost({
+        scheduledPostId: 'sp-1', userId: 'u-1', socialAccountId: 'sa-1', newScheduledFor: NEW_FOR, reason: 'atomic_reschedule',
+      });
+    };
+    /** A concurrent reschedule inserts its live row in the gap after our cancel (the lock is no exclusion). */
+    const concurrentInsertAt = (scheduledFor: string) => {
+      onGetJob = (id) => {
+        if (id === 'qj-old' && !rows.some((r) => r.id === 'qj-concurrent')) {
+          rows.push({ id: 'qj-concurrent', scheduled_post_id: 'sp-1', status: 'pending', scheduled_for: scheduledFor });
+        }
+      };
+    };
+
+    beforeEach(() => {
+      rpcResponses['try_scheduled_post_lock'] = true;
+      rows.push({ id: 'qj-old', scheduled_post_id: 'sp-1', status: 'pending', scheduled_for: '2030-01-01T00:00:00.000Z' });
+    });
+
+    test('the surviving live job is for ANOTHER time: ok:false (was ok:true — a false success)', async () => {
+      concurrentInsertAt(OTHER_FOR);
+      const result = await run();
+      expect(result).toMatchObject({ ok: false, enqueue: 'duplicate', duplicate_conflict: 'live_job_for_another_time' });
+      expect(queueOps.add).toEqual([]);
+    });
+
+    test('an identical concurrent reschedule (same time) is still success', async () => {
+      concurrentInsertAt(NEW_FOR);
+      const result = await run();
+      expect(result).toMatchObject({ ok: true, enqueue: 'duplicate' });
+      expect(result.duplicate_conflict).toBeUndefined();
+    });
+  });
+
+  // ── Closure-008 B4: a processing row whose platform call started is not "cancelled" ─
+  describe('cancelling processing rows (Closure-008 B4)', () => {
+    const cancel = async () => (await control()).cancelScheduledPostQueueEntry('sp-1', { reason: 'user_unscheduled' });
+
+    test('a job cancelled before execution (pending): cancelled, BullMQ job removed', async () => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'pending' });
+      const result = await cancel();
+      expect(result).toMatchObject({ db_cancelled: 1, queue_removed: 1 });
+      expect(result.call_started_not_cancelled).toBeUndefined();
+      expect(rows[0].status).toBe('cancelled');
+    });
+
+    test('a job already processing, platform call NOT started: cancelled (the worker aborts before any call)', async () => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'processing', metadata: { other: 1 } });
+      const result = await cancel();
+      expect(result.db_cancelled).toBe(1);
+      expect(rows[0].status).toBe('cancelled');
+    });
+
+    test('a processing job whose platform call STARTED is left to its worker: not cancelled, not removed, reported', async () => {
+      rows.push({
+        id: 'qj-1', scheduled_post_id: 'sp-1', status: 'processing',
+        metadata: { platform_call: { started_at: '2030-01-01T00:00:00.000Z' } },
+      });
+      const result = await cancel();
+      expect(result.db_cancelled).toBe(0);
+      expect(result.queue_removed).toBe(0);
+      expect(result.call_started_not_cancelled).toEqual(['qj-1']);
+      expect(rows[0].status).toBe('processing');
+      expect(queueOps.removed).toEqual([]);
+    });
+
+    test('a reschedule meeting a call-started job does NOT enqueue a replacement (ok:false)', async () => {
+      rpcResponses['try_scheduled_post_lock'] = true;
+      rows.push({
+        id: 'qj-1', scheduled_post_id: 'sp-1', status: 'processing',
+        metadata: { platform_call: { started_at: '2030-01-01T00:00:00.000Z' } },
+      });
+      const { atomicCancelAndReEnqueueScheduledPost } = await control();
+      const result = await atomicCancelAndReEnqueueScheduledPost({
+        scheduledPostId: 'sp-1', userId: 'u-1', socialAccountId: 'sa-1', newScheduledFor: FUTURE(), reason: 'atomic_reschedule',
+      });
+      expect(result).toMatchObject({ ok: false, enqueue: 'failed' });
+      expect(queueOps.add).toEqual([]);
+      expect(rows.find((r) => r.id === 'qj-1')!.status).toBe('processing');
+    });
+
+    test('a stale job whose row already reached a terminal state is untouched', async () => {
+      rows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'completed', metadata: { platform_call: { started_at: 'x' } } });
+      const result = await cancel();
+      expect(result).toMatchObject({ db_cancelled: 0, queue_removed: 0 });
+      expect(rows[0].status).toBe('completed');
+    });
   });
 
   test('the module-exported column list matches the deployed schema', async () => {

@@ -234,7 +234,9 @@ describe.each(WRITES.map((w) => [w.name, w] as const))('%s', (_name, w) => {
 describe('principals whose membership shape matters (current access preserved)', () => {
   const subset = WRITES.filter((w) => /^(POST \/api\/content|PATCH|POST \/api\/content\/:id\/status|POST \/api\/content\/:id\/approval|POST \/api\/content\/mark-used)/.test(w.name));
   const cases: Array<[string, W2GPrincipal, WriteCase]> = [];
-  for (const w of subset) for (const who of ['INVITED_ADMIN', 'LEGACY_ADMIN', 'LEGACY_MANAGER', 'ARCHITECT'] as const) cases.push([w.name, who, w]);
+  // Closure-015E: INVITED_ADMIN moved to the refused set below — an invited
+  // membership (any role) confers nothing before acceptance.
+  for (const w of subset) for (const who of ['LEGACY_ADMIN', 'LEGACY_MANAGER', 'ARCHITECT'] as const) cases.push([w.name, who, w]);
   it.each(cases)('%s as %s → allowed', async (_n, who, w) => {
     const r = await call(w, who);
     expect(r.status).toBeLessThan(300);
@@ -243,6 +245,12 @@ describe('principals whose membership shape matters (current access preserved)',
 
   it.each(subset.map((w) => [w.name, w] as const))('%s as an INVITED (not accepted) CONTENT_CREATOR → 403, nothing written', async (_n, w) => {
     const r = await call(w, 'INVITED_CREATOR');
+    expect(r.status).toBe(403);
+    expect(w.wrote()).toBe(false);
+  });
+
+  it.each(subset.map((w) => [w.name, w] as const))('%s as an INVITED (not accepted) COMPANY_ADMIN → 403, nothing written (Closure-015E)', async (_n, w) => {
+    const r = await call(w, 'INVITED_ADMIN');
     expect(r.status).toBe(403);
     expect(w.wrote()).toBe(false);
   });

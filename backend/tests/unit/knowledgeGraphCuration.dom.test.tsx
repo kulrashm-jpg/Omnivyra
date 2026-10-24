@@ -12,6 +12,9 @@
 
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+// Closure-014 (C): the component's writes go through performSuperAdminWrite; the ESM-only
+// WebAuthn client is not loadable by Jest and no step-up is exercised in these suites.
+jest.mock('../../../lib/security/stepUpClient', () => ({ triggerWebAuthnStepUp: jest.fn() }));
 import KnowledgeGraphCuration from '../../../components/admin/knowledgeGraphCuration';
 
 const TOPICS_API = '/api/admin/knowledge-graph/topics';
@@ -31,7 +34,7 @@ function mockFetch(handler: (url: string, init?: RequestInit) => { ok: boolean; 
   (global as unknown as { fetch: unknown }).fetch = jest.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null });
     const r = handler(url, init);
-    return { ok: r.ok, status: r.status ?? (r.ok ? 200 : 500), json: async () => r.json } as never;
+    return { ok: r.ok, status: r.status ?? (r.ok ? 200 : 500), headers: new Headers(), clone() { return this; }, json: async () => r.json } as never;
   });
 }
 

@@ -74,13 +74,18 @@ describe('A2 — invited memberships (requireCampaignAccess aligned with enforce
     expect(r.status).toBe(403);
   });
 
-  it('an invited COMPANY_ADMIN keeps the documented legacy fallback in BOTH guards → allowed', async () => {
+  // Closure-015E (owner-authorized policy change): the documented legacy invited-
+  // admin fallback is removed — an invited membership of ANY role confers nothing
+  // before acceptance. Both guards still agree; they now agree on "refused".
+  it('an invited COMPANY_ADMIN is refused in BOTH guards (Closure-015E: no invited-admin fallback) → 403', async () => {
     world('COMPANY_ADMIN');
     const g = await access(CAMPAIGN_B, 'INVITED');
-    expect(g.result).toMatchObject({ userId: USER_INVITED, companyId: CO_B, campaignId: CAMPAIGN_B });
+    expect(g.status).toBe(403);
+    expect(g.result ?? null).toBeNull();
     let ec: unknown;
-    await invoke(async (req, res) => { ec = await enforceCompanyAccess({ req, res, companyId: CO_B, campaignId: CAMPAIGN_B }); }, { headers: bearer('INVITED') });
-    expect(ec).not.toBeNull();
+    const r = await invoke(async (req, res) => { ec = await enforceCompanyAccess({ req, res, companyId: CO_B, campaignId: CAMPAIGN_B }); }, { headers: bearer('INVITED') });
+    expect(r.status).toBe(403);
+    expect(ec).toBeNull();
   });
 
   it('an active member is unaffected → allowed', async () => {

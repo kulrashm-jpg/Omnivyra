@@ -15,9 +15,13 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { invalidateDomainCache } from '@/backend/services/domainEligibilityService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:free-credits:requests', 30, 60))) return;
+
   // Phase: Platform Authority Isolation. billing.grant_free_credits is a
   // SUPER_ADMIN-only platform-tier capability; replaces the previous
   // BILLING_MANAGE gate which is per-tenant.
@@ -114,12 +118,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             role:       'COMPANY_ADMIN',
             status:     'active',
           });
-        } else if (existingRole.role === 'SUPER_ADMIN') {
-          // Downgrade accidental SUPER_ADMIN to COMPANY_ADMIN
-          await sb.from('user_company_roles')
-            .update({ role: 'COMPANY_ADMIN' })
-            .eq('id', existingRole.id);
         }
+        // Closure-015J (R-6): an existing SUPER_ADMIN membership is left untouched — it
+        // already exceeds COMPANY_ADMIN, and platform super-admin authority changes only
+        // through identity.admin.assign / identity.admin.revoke. (This formerly
+        // "downgraded accidental SUPER_ADMIN to COMPANY_ADMIN", a legacy cleanup that
+        // silently removed governed platform authority.) Any other existing role is
+        // likewise left as is.
         // Any other role (COMPANY_ADMIN, CONTENT_CREATOR, etc.) — leave untouched
       }
 

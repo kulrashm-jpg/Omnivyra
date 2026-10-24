@@ -2,11 +2,15 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { BLOG_PUBLISH_MANAGE } from '../../../../shared/contracts/security';
 
 const VALID_TYPES = new Set(['related', 'prerequisite', 'continuation']);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (!(await requireAdminRateLimit(req, res, 'rl:admin:blog:relationships', 30, 60))) return;
+
   // All methods on this route are mutations — gate on BLOG_PUBLISH_MANAGE.
   const guard = await requireCapability(req, res, {
     capability: BLOG_PUBLISH_MANAGE,

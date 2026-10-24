@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '@/backend/security/requireCapability';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { BILLING_PLATFORM_MANAGE } from '@/shared/contracts/security';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 import {
@@ -88,6 +89,9 @@ async function loadOperationalSnapshot(limit: number) {
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Closure-014 (D): per-route write rate limit (before authorization and any business work).
+  if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:monetization-ops', 20, 60, { sensitive: true }))) return;
+
   const guard = await requireCapability(req, res, {
     capability: BILLING_PLATFORM_MANAGE,
     reason: `super-admin monetization operations ${req.method}`,

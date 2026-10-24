@@ -62,9 +62,13 @@ jest.mock('../../db/writeOwner', () => ({
     const api: any = {
       update: jest.fn((p: Record<string, any>) => { updatePayload = p; return api; }),
       eq: jest.fn(() => api),
+      is: jest.fn(() => api),
+      select: jest.fn(() => api),
       then(resolve: any) {
         if (updatePayload) ownedUpdates.push({ table, payload: updatePayload });
-        return Promise.resolve({ data: null, error: null }).then(resolve);
+      // A compare-and-set update reports the row it matched (the post is in the
+      // state the route judged safe in these fixtures).
+        return Promise.resolve({ data: updatePayload ? [{ id: 'matched' }] : null, error: null }).then(resolve);
       },
     };
     return api;
@@ -112,7 +116,8 @@ function setRow(opts: {
     },
     'campaigns:single': { company_id: 'company-1' },
     // The linked post belongs to the row's campaign (3AH-92 binding check).
-    'scheduled_posts:single': { id: 'sp-1', campaign_id: 'campaign-1' },
+    // ...and is owned by the authenticated caller, still unpublished (Closure-005).
+    'scheduled_posts:single': { id: 'sp-1', campaign_id: 'campaign-1', user_id: 'user-1', status: 'scheduled', error_code: null, platform_post_id: null },
   };
 }
 

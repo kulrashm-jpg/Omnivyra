@@ -20,12 +20,18 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * the request body. An approval attributed to a caller-supplied string is not an
  * audit record, and this table is append-only precisely so that it is one.
  *
- * Auth: requireAdminRateLimit + requireCapability(SUPER_ADMIN_DASHBOARD_VIEW).
+ * Auth (Closure-009, owner decision): requireAdminRateLimit +
+ * requireCapability(OUTREACH_PLATFORM_MANAGE) — the dedicated outreach write
+ * capability, with its passkey + trusted-device step-up — + platform write
+ * authority (an ACTIVE platform SUPER_ADMIN role on a canonical principal, so a
+ * direct capability_assignments grant alone is refused). All of it runs before
+ * the task is read or anything is written.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
-import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security/SecurityCapabilities';
+import { requirePlatformWriteAuthority } from '../../../../backend/security/platformWriteAuthority';
+import { OUTREACH_PLATFORM_MANAGE } from '../../../../shared/contracts/security/SecurityCapabilities';
 import { approveOutreachTaskForOperator } from '../../../../backend/services/leadOutreachActivation';
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -35,12 +41,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:outreach-approve', 60, 60))) return;
 
   const guard = await requireCapability(req, res, {
-    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    capability: OUTREACH_PLATFORM_MANAGE,
     reason: 'operator approves a lead outreach task',
   });
   // { ok: false, sent: true } is TRUTHY — a falsy check here would let a denied
   // request continue into execution. Compare the discriminant explicitly.
   if (guard.ok !== true) return;
+  if (!requirePlatformWriteAuthority(res, guard.principal, 'outreach.approve')) return;
 
   const body = (req.body ?? {}) as Record<string, unknown>;
   const companyId = str(body.companyId);

@@ -3,7 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getBaseUrl } from '../../../backend/auth/getBaseUrl';
 import { connectGoogleSearchConsole } from '../../../backend/services/analyticsIntegrationService';
 import { resolveOmnivyraWebsiteCompany } from '../../../backend/services/omnivyraWebsiteCompanyService';
-import { requireSuperAdminGaAccess } from '../../../backend/services/superAdminGaAccess';
+import { requireSuperAdminGaWriteAccess } from '../../../backend/services/superAdminGaAccess';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -15,7 +15,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  const access = await requireSuperAdminGaAccess(req, res);
+  const access = await requireSuperAdminGaWriteAccess(req, res, 'analytics.gsc.connect');
   if (!access) return;
 
   const company = await resolveOmnivyraWebsiteCompany();

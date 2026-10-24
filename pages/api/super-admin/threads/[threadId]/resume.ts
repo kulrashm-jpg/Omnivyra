@@ -10,7 +10,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { logger } from '../../../../../backend/services/logger';
 import { requireAdminRateLimit } from '../../../../../backend/services/requestAccessService';
 import { requireCapability } from '../../../../../backend/security/requireCapability';
-import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../../shared/contracts/security/SecurityCapabilities';
+import { requirePlatformWriteAuthority } from '../../../../../backend/security/platformWriteAuthority';
+import { PUBLISH_RECOVERY_MANAGE } from '../../../../../shared/contracts/security/SecurityCapabilities';
 import {
   insertAuditLogStrict,
   SYSTEM_USER_ID,
@@ -29,11 +30,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const guard = await requireCapability(req, res, {
-    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    capability: PUBLISH_RECOVERY_MANAGE,
     reason: `operator resumes thread ${rootId}`,
     resourceId: rootId,
   });
   if (guard.ok !== true) return;
+  // A WRITE: the dashboard-view capability alone (also held by bridge
+  // principals and by direct view grants) is not enough — see
+  // backend/security/platformWriteAuthority.ts. Nothing below runs otherwise.
+  if (!requirePlatformWriteAuthority(res, guard.principal, 'threads.resume')) return;
   const actorUserId = guard.principal.userId || SYSTEM_USER_ID;
 
   const body = (typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {}) as {
@@ -63,7 +68,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     targetUserId: null,
     companyId: null,
     metadata: {
-      capability: SUPER_ADMIN_DASHBOARD_VIEW,
+      capability: PUBLISH_RECOVERY_MANAGE,
       reason,
       root_id: rootId,
       outcome: result.status,

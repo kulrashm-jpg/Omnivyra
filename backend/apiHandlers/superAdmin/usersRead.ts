@@ -2,6 +2,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../db/supabaseClient';
 import { Role, ALL_ROLES } from '../../services/rbacService';
+import { normalizeRole } from '../../services/rbacPrimitives';
 import { createAndSendInvitation } from '../../services/invitationService';
 import { requireAdminRateLimit } from '../../services/requestAccessService';
 import { withIdempotency } from '../../middleware/withIdempotency';
@@ -184,11 +185,51 @@ export async function handleUsersPatch(req: NextApiRequest, res: NextApiResponse
       updatePayload.role = normalizedRole;
     }
 
-    const { data, error } = await supabase
+    // Closure-015I (review R-1) — read the target membership BEFORE writing. A
+    // SUPER_ADMIN membership (any status) is never deactivated, re-activated or
+    // re-roled here: platform authority is granted through identity.admin.assign's
+    // governed SUPER_ADMIN path and removed only by the governed revoke /
+    // downgrade flow (identity.admin.revoke). The update is conditional on the row
+    // read (id, role, status) — a concurrent change makes it match nothing (409).
+    const { data: current, error: readError } = await supabase
       .from('user_company_roles')
-      .update(updatePayload)
+      .select('id, role, status')
       .eq('user_id', userId)
       .eq('company_id', companyId)
+      .limit(1);
+    if (readError) {
+      logger.error('super_admin_users_patch_lookup_failed', { userId, companyId, message: readError.message });
+      return res.status(503).json({ error: 'MEMBERSHIP_LOOKUP_FAILED' });
+    }
+    const found = (current ?? [])[0] as { id: string; role: string; status?: string | null } | undefined;
+    if (!found) {
+      return res.status(404).json({ error: 'USER_NOT_FOUND', details: `No role record found for user ${userId} in company ${companyId}` });
+    }
+    // Snapshot the values the conditional update compares against, at read time.
+    const readId = found.id;
+    const readRole = found.role;
+    const readStatus = found.status ?? null;
+    if (normalizeRole(readRole) === Role.SUPER_ADMIN) {
+      await insertAuditLog({
+        actorUserId: patchGuard.principal.userId,
+        action: 'PRIVILEGED_MEMBERSHIP_MUTATION_DENIED',
+        targetUserId: userId,
+        companyId,
+        metadata: { route: 'super-admin/users', operation: 'PATCH', requested_status: normalizedStatus, requested_role: updatePayload.role ?? null },
+      });
+      return res.status(403).json({
+        error: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE',
+        details: 'Platform super-admin authority is changed only through the governed assign / revoke flows.',
+      });
+    }
+
+    let update = supabase
+      .from('user_company_roles')
+      .update(updatePayload)
+      .eq('id', readId)
+      .eq('role', readRole);
+    update = readStatus === null ? update.is('status', null) : update.eq('status', readStatus);
+    const { data, error } = await update
       .select('user_id, company_id, status, role')
       .maybeSingle();
 
@@ -197,11 +238,11 @@ export async function handleUsersPatch(req: NextApiRequest, res: NextApiResponse
       return res.status(500).json({ error: 'FAILED_TO_UPDATE_USER', details: error.message });
     }
     if (!data) {
-      return res.status(404).json({ error: 'USER_NOT_FOUND', details: `No role record found for user ${userId} in company ${companyId}` });
+      return res.status(409).json({ error: 'STALE_MEMBERSHIP', details: 'The membership changed after it was read; reload and try again.' });
     }
 
     await insertAuditLog({
-      actorUserId: null,
+      actorUserId: patchGuard.principal.userId,
       action: 'SUPER_ADMIN_USER_UPDATE',
       targetUserId: userId,
       companyId,
