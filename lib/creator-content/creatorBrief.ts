@@ -56,26 +56,43 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.replace(/\s+/g, '
 const bodyStr = (v: unknown): string => (typeof v === 'string' ? v.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim() : '');
 
 /**
+ * Shorten text to at most `max` characters WITHOUT cutting a word in half. Text that
+ * already fits is returned unchanged (line breaks included). A longer text is cut at
+ * the last whitespace inside the limit and loses any dangling separator (`,` `;` `:` `—`),
+ * so copy that reaches an image, a slide or a card never ends mid-word ("…Marketi").
+ * Only a single word longer than the limit is cut inside the word.
+ */
+export function clipWords(text: string, max: number): string {
+  const value = String(text ?? '').trim();
+  if (!value || value.length <= max) return value;
+  const head = value.slice(0, max + 1);
+  const lastSpace = head.search(/\s\S*$/);
+  const cut = lastSpace > 0 ? head.slice(0, lastSpace) : value.slice(0, max);
+  return cut.replace(/[\s,;:—–-]+$/u, '').trim();
+}
+
+/**
  * The first sentence of a piece of writing, as the main message.
- * Splits on sentence punctuation or a line break; URLs are dropped first so a
- * link never becomes the headline.
+ * Splits on sentence punctuation, a semicolon or a line break — a run-on
+ * `a; b; c` paragraph is not one message — and drops URLs first so a link
+ * never becomes the headline. Always shortened on a word boundary.
  */
 export function deriveMainMessage(text: string, max: number = CREATOR_BRIEF_LIMITS.mainMessage): string {
   const cleaned = String(text || '').replace(/https?:\/\/\S+/gi, '').trim();
   if (!cleaned) return '';
-  const first = cleaned.split(/(?<=[.!?])\s+|\n+/u).map((s) => s.trim()).find((s) => /[A-Za-z0-9]/.test(s)) ?? '';
-  return str(first).slice(0, max).trim();
+  const first = cleaned.split(/(?<=[.!?])\s+|;\s+|\n+/u).map((s) => s.trim()).find((s) => /[A-Za-z0-9]/.test(s)) ?? '';
+  return clipWords(str(first), max);
 }
 
 function capped(b: CreatorBrief): CreatorBrief {
   return {
-    mainMessage: b.mainMessage.slice(0, CREATOR_BRIEF_LIMITS.mainMessage).trim(),
-    body: b.body.slice(0, CREATOR_BRIEF_LIMITS.body).trim(),
-    audience: b.audience.slice(0, CREATOR_BRIEF_LIMITS.audience).trim(),
-    tone: b.tone.slice(0, CREATOR_BRIEF_LIMITS.tone).trim(),
-    cta: b.cta.slice(0, CREATOR_BRIEF_LIMITS.cta).trim(),
-    offer: b.offer.slice(0, CREATOR_BRIEF_LIMITS.offer).trim(),
-    objective: b.objective.slice(0, CREATOR_BRIEF_LIMITS.objective).trim(),
+    mainMessage: clipWords(b.mainMessage, CREATOR_BRIEF_LIMITS.mainMessage),
+    body: clipWords(b.body, CREATOR_BRIEF_LIMITS.body),
+    audience: clipWords(b.audience, CREATOR_BRIEF_LIMITS.audience),
+    tone: clipWords(b.tone, CREATOR_BRIEF_LIMITS.tone),
+    cta: clipWords(b.cta, CREATOR_BRIEF_LIMITS.cta),
+    offer: clipWords(b.offer, CREATOR_BRIEF_LIMITS.offer),
+    objective: clipWords(b.objective, CREATOR_BRIEF_LIMITS.objective),
     source: b.source,
   };
 }

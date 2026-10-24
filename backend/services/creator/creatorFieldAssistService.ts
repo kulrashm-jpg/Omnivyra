@@ -168,7 +168,7 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
     objective: str(rawContext.objective).slice(0, 300),
     tone: str(rawContext.tone).slice(0, 120),
     brand: str(rawContext.brand).slice(0, 120),
-    mainMessage: str(rawContext.main_message ?? rawContext.mainMessage).slice(0, 300) || undefined,
+    mainMessage: clamp(str(rawContext.main_message ?? rawContext.mainMessage), 300) || undefined,
     cta: str(rawContext.cta).slice(0, 120) || undefined,
     offer: str(rawContext.offer).slice(0, 300) || undefined,
     sourceContent: str(rawContext.source_content ?? rawContext.sourceContent).slice(0, 6000) || undefined,
@@ -260,7 +260,9 @@ export function buildFieldAssistMessages(
       ? ['A MAIN MESSAGE is given below. It is the key of this asset: the headline/title/lead field EXPRESSES it (condensed to fit when needed, never replaced by a different idea), and every other field SUPPORTS it — adding proof, context, benefit or the next step for that same message. Never contradict it, drift to another topic, or ignore it.']
       : []),
     // Strength: a generic goal/category label is an ANGLE, not the message.
-    'If the Topic is a generic goal or category label (e.g. "Explain a Process or How-To", "Promote an Event"), treat it ONLY as the angle/intent — write specific, benefit-led copy about the company\'s actual product, positioning, or differentiator from the context below. NEVER output the goal/category label, a bare restatement of it, or a generic template phrase ("the detail that makes it land", "worth stopping for") as the value. Every line must say something concrete a competitor could not copy-paste.',
+    // Owner decision (2026-10-24): the text the asset is made FOR drives the copy.
+    'SOURCE ORDER: the user\'s own words come first — the main message (when given), the current value of the field, and the source content (the post, blog or brief this asset is made for). Build every value FROM that material. The company context only shapes tone, angle, audience and vocabulary: never copy positioning, differentiator or messaging-pillar text verbatim, never output analysis labels such as "trust model:", "audience distinction:" or "Differentiate through", and never replace the user\'s message with a company description. When source content or a current value is given for a brief/description field, refine and extend THAT text — do not replace it with a different idea.',
+    'If the Topic is a generic goal or category label (e.g. "Explain a Process or How-To", "Promote an Event"), treat it ONLY as the angle/intent — when the user gave no message or source content, write specific, benefit-led copy about what the company actually offers, informed by (not copied from) the context below. NEVER output the goal/category label, a bare restatement of it, or a generic template phrase ("the detail that makes it land", "worth stopping for") as the value. Every line must say something concrete a competitor could not copy-paste.',
   ].join(' ');
 
   const fieldLines = resolved.map(({ target, field }) => {
@@ -367,27 +369,34 @@ export function deterministicTransform(
     if (key.includes('metric')) return '100%';
     if (key.includes('year') || key.includes('date')) return '2024';
     if (key.includes('step')) return topic ? `${capitalize(topic)} step` : 'Key step';
-    // Every MESSAGE-bearing field (body/brief, hook, key insight, headline) grounds
-    // in a real business fact first. The goal label is only ever an ANGLE of last
-    // resort — never the copy itself. Each field prefers a DIFFERENT fact so a
-    // multi-field fallback stays distinct rather than repeating one positioning line.
+    // Every MESSAGE-bearing field (body/brief, hook, key insight, headline) is built from
+    // the USER'S material first — the main message, then the source content the asset is
+    // made for. A company fact is only a fallback, and only as ONE short clause with the
+    // profile's internal analysis labels removed: the profile informs the angle, it is
+    // never pasted in as the message (a run-on "trust model: …; audience distinction: …"
+    // paragraph had become the image's main message). The goal label is only ever an
+    // ANGLE of last resort. Each field prefers a DIFFERENT fact so a multi-field fallback
+    // stays distinct rather than repeating one positioning line.
+    const userLine = firstOf(mainMessage, firstSentence(str(context.sourceContent)));
+    const fact = (...xs: string[]): string => profileClause(firstOf(...xs));
     if (key.includes('freetext') || key.includes('brief') || key.includes('description') || key.includes('body')) {
-      const s = firstOf(positioning, differentiator, pillar);
+      const s = firstOf(userLine, fact(positioning, differentiator, pillar));
       if (s) return clamp(capitalize(s), field.maxLength);
       return topic ? `${capitalize(topic)} — the detail that makes it land for your audience.` : field.label;
     }
     if (key.includes('hook')) {
-      const s = firstOf(pillar, differentiator, positioning);
+      const s = firstOf(userLine, fact(pillar, differentiator, positioning));
       if (s) return clamp(capitalize(s), field.maxLength);
       return topic ? clamp(`${capitalize(topic)}: the part most people scroll right past.`, field.maxLength) : field.label;
     }
     if (key.includes('insight') || key.includes('takeaway')) {
-      const s = firstOf(differentiator, positioning, pillar);
+      const s = firstOf(userLine, fact(differentiator, positioning, pillar));
       if (s) return clamp(capitalize(s), field.maxLength);
       return topic ? clamp(`The takeaway on ${collapseWhitespace(topic).toLowerCase()} that changes how your audience decides.`, field.maxLength) : field.label;
     }
-    // Headline / offer / generic — a real product or positioning line beats the goal label.
-    const lead = firstOf(product, positioning, differentiator, pillar);
+    // Headline / offer / generic — the user's line, then a real product name, then one
+    // short positioning clause, before the goal label.
+    const lead = firstOf(userLine, product, fact(positioning, differentiator, pillar));
     if (lead) return clamp(capitalize(lead), field.maxLength);
     if (topic) return capitalize(topic);
     return field.label;
@@ -448,7 +457,7 @@ export function parseAssistAlternatives(
     const list: string[] = [];
     for (const a of raw) {
       if (typeof a !== 'string') continue;
-      const v = clamp(str(a), field.maxLength);
+      const v = clamp(withoutProfileLabels(str(a)), field.maxLength);
       const n = v.toLowerCase();
       if (!v || seen.has(n)) continue;
       seen.add(n);
@@ -482,7 +491,7 @@ export function parseAssistResponse(
   const out = new Map<string, string>();
   for (const { target, field } of resolved) {
     const k = targetKey(target.scope, target.fieldKey, target.index);
-    if (byKey.has(k)) out.set(k, clamp(str(byKey.get(k)!), field.maxLength));
+    if (byKey.has(k)) out.set(k, clamp(withoutProfileLabels(str(byKey.get(k)!)), field.maxLength));
   }
   return out;
 }
@@ -618,9 +627,30 @@ function firstSentence(s: string): string {
   const m = collapseWhitespace(s).match(/^[^.!?]*[.!?]?/);
   return (m ? m[0] : s).trim();
 }
+/** Cap at `max` characters on a WORD boundary — copy never ends mid-word. */
 function clamp(s: string, max?: number): string {
   const t = s.trim();
-  return typeof max === 'number' && max > 0 && t.length > max ? t.slice(0, max).trim() : t;
+  if (typeof max !== 'number' || max <= 0 || t.length <= max) return t;
+  const head = t.slice(0, max + 1);
+  const lastSpace = head.search(/\s\S*$/);
+  const cut = lastSpace > 0 ? head.slice(0, lastSpace).replace(/[\s,;:—–-]+$/u, '').trim() : '';
+  return cut || t.slice(0, max).trim();
+}
+
+/**
+ * Company-profile analysis text is written for the strategy engine, not for an audience:
+ * `trust model: …; audience distinction: …`, `Differentiate through …`. Reduce it to ONE
+ * readable clause with those labels removed before it can seed any creative copy.
+ */
+export const PROFILE_ANALYSIS_LABEL = /\b(?:differentiate through|trust model|audience distinction|ecosystem role|narrative territory|monetization distinction|positioning distinction)\s*:?\s*/gi;
+/** Last guard on AI output: a value never carries the profile's analysis labels. */
+function withoutProfileLabels(text: string): string {
+  return collapseWhitespace(String(text ?? '').replace(PROFILE_ANALYSIS_LABEL, ' '));
+}
+export function profileClause(text: string): string {
+  const cleaned = collapseWhitespace(String(text ?? '').replace(PROFILE_ANALYSIS_LABEL, ' '));
+  const first = cleaned.split(/(?<=[.!?])\s+|;\s+/u).map((s) => s.trim()).find((s) => /[A-Za-z0-9]/.test(s)) ?? '';
+  return clamp(first.replace(/[.;,:]+$/, ''), 140);
 }
 /** Clamp at a word boundary (a fitted main message must not end mid-word). */
 function clampWords(s: string, max?: number): string {

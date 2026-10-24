@@ -253,6 +253,45 @@ export function unsupportedFamilyConditionDegradation(
   };
 }
 
+/**
+ * Why the AI image provider produced no image. Configuration-type failures
+ * (`model_unavailable`, `auth`, `quota`) will not succeed on retry and must reach the
+ * user as such; `transient` / `unknown` keep the existing gradient fallback.
+ */
+export type ProviderFailureKind = 'model_unavailable' | 'auth' | 'quota' | 'content_policy' | 'transient' | 'unknown';
+
+/** Failure kinds a render must NOT silently paper over with a fallback background. */
+export const BLOCKING_PROVIDER_FAILURES: ReadonlySet<ProviderFailureKind> = new Set(['model_unavailable', 'auth', 'quota']);
+
+const PROVIDER_FAILURE_RANK: Record<ProviderFailureKind, number> = {
+  model_unavailable: 6, auth: 5, quota: 4, content_policy: 3, unknown: 2, transient: 1,
+};
+
+/** The more serious of two failure kinds (null-safe). */
+export function worseProviderFailure(a: ProviderFailureKind | null | undefined, b: ProviderFailureKind): ProviderFailureKind {
+  return a && PROVIDER_FAILURE_RANK[a] >= PROVIDER_FAILURE_RANK[b] ? a : b;
+}
+
+/**
+ * Classify an image-provider error from its HTTP status, provider code and message.
+ * Pure. "The model 'gpt-image-1' does not exist" (HTTP 400 / 404, code model_not_found)
+ * means the configured model is not available to this account — not a transient fault.
+ */
+export function classifyProviderImageError(error: unknown): ProviderFailureKind {
+  const e = (error && typeof error === 'object' ? error : {}) as { status?: unknown; code?: unknown; message?: unknown };
+  const status = typeof e.status === 'number' ? e.status : null;
+  const code = typeof e.code === 'string' ? e.code.toLowerCase() : '';
+  const message = String(e.message ?? error ?? '').toLowerCase();
+  if (code === 'model_not_found' || /model\b.*\b(does not exist|not found|not available|do(?:es)? not have access)|must be verified to use the model/.test(message)) {
+    return 'model_unavailable';
+  }
+  if (status === 401 || status === 403 || code === 'invalid_api_key' || /invalid api key|incorrect api key|unauthori[sz]ed/.test(message)) return 'auth';
+  if (code === 'insufficient_quota' || code === 'billing_hard_limit_reached' || /insufficient_quota|exceeded your current quota|billing hard limit/.test(message)) return 'quota';
+  if (code === 'content_policy_violation' || /content policy|safety system|moderation/.test(message)) return 'content_policy';
+  if (status === 429 || (status !== null && status >= 500) || /timeout|timed out|etimedout|econnreset|aborted|rate limit/.test(message)) return 'transient';
+  return 'unknown';
+}
+
 export type ProviderImageResult =
   | ({
       image: { buffer: Buffer; model: string };
@@ -260,8 +299,13 @@ export type ProviderImageResult =
       /** Present ONLY when conditioning was attempted and could not be applied. */
       conditionDegradation?: ConditionDegradation | null;
     } & ConditionAttemptTelemetry)
-  | ({ image: null; fallbackReason: string; conditionDegradation?: ConditionDegradation | null }
-      & ConditionAttemptTelemetry);
+  | ({
+      image: null;
+      fallbackReason: string;
+      conditionDegradation?: ConditionDegradation | null;
+      /** The most serious classified provider failure, when a provider call was made. */
+      providerFailureKind?: ProviderFailureKind;
+    } & ConditionAttemptTelemetry);
 
 export type RenderOptions = {
   campaignId?: string | null;
@@ -510,8 +554,9 @@ export function balanceTextLines(value: string, maxChars: number, maxLines: numb
     // never severed mid-surrogate. Generation is now budgeted to fit the
     // composition, so this should rarely trigger.
     const cut = graphemeSlice(line, 0, maxChars).trimEnd();
+    // Any word boundary wins; only a single word longer than the line is cut inside it.
     const lastSpace = cut.lastIndexOf(' ');
-    return (lastSpace > maxChars * 0.5 ? cut.slice(0, lastSpace).trimEnd() : cut) || line;
+    return (lastSpace > 0 ? cut.slice(0, lastSpace).replace(/[\s,;:—–-]+$/u, '').trimEnd() : cut) || line;
   });
 }
 

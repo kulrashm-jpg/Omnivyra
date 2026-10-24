@@ -374,7 +374,7 @@ function buildRoleSystemPrompt(input: InfographicCopyInput, slotCount: number): 
     'BE SPECIFIC: name concrete mechanisms, tradeoffs, numbers, timeframes, and real scenarios. BANNED vague filler — do NOT write lines like "clarifies key concepts", "encourages collaboration", "enhances understanding", "a structured approach", "better communication", "drives engagement". Replace any such line with a substantive point a practitioner would find useful.',
     'Each slot HEADING/title must be a specific, insight- or benefit-led phrase — never the asset type, a step number alone, or a bare restatement of the topic.',
     input.mode === 'company-context' && input.companyContext
-      ? 'Ground the copy in the supplied company context; reference the company by name at most once.'
+      ? 'The slot_content supplied by the user (when given) is the source for that slot: keep its meaning and facts, tighten it — never replace it with a different idea. The company context only shapes tone and angle; reference the company by name at most once and never paste its positioning text.'
       : 'Independent mode — do not invent or use any company name; address a generic operator-level reader in second person.',
   ].join('\n');
 }
@@ -385,6 +385,9 @@ function buildRoleUserPayload(input: InfographicCopyInput, slotCount: number): s
     topic: input.topic,
     cta: input.cta || '(generate one)',
     slot_hints: (input.sectionTitles ?? []).slice(0, slotCount),
+    // The user's own section text (from the writer content / template). The copy must
+    // build on it — it was previously never sent, so the composer wrote over it blind.
+    slot_content: (input.sectionBodies ?? []).slice(0, slotCount),
     company: input.mode === 'company-context' ? (input.companyContext ?? null) : null,
   });
 }

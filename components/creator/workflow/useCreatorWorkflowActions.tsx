@@ -33,6 +33,7 @@ import {
   hasUsableCreatorOutput, isSocialCreativeType, summarizeMediaUrls,
 } from '../../../lib/creator-content/creatorTypeWorkflow';
 import { mergeRenderedCreatorResult } from '../../../lib/creator-content/creatorRenderedResult';
+import { describeCreatorGenerationError } from '../../../lib/creator-content/creatorErrorMessages';
 import {
   advanceCreatorFieldAssistContext,
   type CreatorFieldAssistContext,
@@ -887,7 +888,7 @@ export function useCreatorWorkflowActions(
           ? 'Generation timed out before its outcome could be confirmed. '
             + 'Check saved assets before retrying; a retry may start another generation.'
           : generationError instanceof Error
-            ? generationError.message
+            ? describeCreatorGenerationError(generationError.message)
             : 'Failed to generate creator content.',
       );
     } finally {

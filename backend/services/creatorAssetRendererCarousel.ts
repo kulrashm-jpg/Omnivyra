@@ -22,6 +22,7 @@ import { validateProviderImageTextSafety } from './creatorImageTextValidation';
 import { runCreatorOcr, isLightweightSocialEmbeddedCopy } from './creatorOcrProvider';
 import {
   autoCorrectVisualCopy,
+  fitSlideCopy,
   buildPreviewGovernanceWarnings,
   estimateTextAreaPercent,
   resolveAssetGovernanceProfile,
@@ -224,6 +225,9 @@ function distinctHeadlineForRole(original: string, role: string, metadata: Recor
   return compactText(derived) || `${original} — ${String(role).replace(/_/g, ' ')}`;
 }
 
+/** What a slide body's 2–3 line block (~40 chars per line) can show without clipping. */
+export const CAROUSEL_BODY_MAX_CHARS = 112;
+
 export function normalizeStructuredItems(
   items: Array<Record<string, unknown>>,
   fallbackLabel: string,
@@ -298,6 +302,14 @@ export function normalizeStructuredItems(
     // slide whose headline repeats an earlier one, using its distinct role.
     const seenHeadlines = new Set<string>();
     const normKey = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    // Each slide is fitted to its budget BEFORE it is drawn — headline + body within the
+    // profile's per-slide words, the body within what its 2–3 line block shows (~112
+    // chars), whole sentences first, never mid-word. Nothing corrected slides before:
+    // a long body was clipped on the canvas or failed the whole deck closed.
+    const slideLimits = {
+      maxWords: resolveAssetGovernanceProfile(fileNamePrefix).maxWordsPerSlide ?? 34,
+      maxBodyChars: CAROUSEL_BODY_MAX_CHARS,
+    };
     return sliced.map((item, index) => {
       const role = fittedRoles[index] || item.role || `slide_${index + 1}`;
       let headline = item.headline;
@@ -305,7 +317,8 @@ export function normalizeStructuredItems(
         headline = distinctHeadlineForRole(headline, role, metadata);
       }
       seenHeadlines.add(normKey(headline));
-      return { role, headline, body: item.body, designNote: item.designNote };
+      const fitted = fitSlideCopy({ headline, body: item.body }, slideLimits);
+      return { role, headline: fitted.headline, body: fitted.body, designNote: item.designNote };
     });
   }
 
@@ -476,7 +489,10 @@ async function renderStructuredSlidePng(input: {
     // Only the FINAL slide carries a CTA pill. Middle slides previously painted a
     // "Keep reading" button on every frame — an amateur tell that diluted the real
     // CTA; the swipe chevron already signals continuation.
-    cta: input.index === input.total - 1 ? compactText(input.metadata.cta || 'Take the next step') : '',
+    // The user's own CTA (carried in overlay_text) before the generic label.
+    cta: input.index === input.total - 1
+      ? compactText(input.metadata.cta || safeObject(input.metadata.overlay_text).cta || 'Take the next step')
+      : '',
     supportingText: '',
   };
   /* The user's picture is the base layer when one was accepted; otherwise the

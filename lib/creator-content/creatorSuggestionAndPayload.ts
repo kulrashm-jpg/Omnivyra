@@ -18,8 +18,8 @@ import {
   projectInfographicSections,
 } from '../creator-templates/values';
 import { creatorRuntimeV2Live } from '../creator-templates/creatorRuntimeFlag';
-import { type CreatorBrief, hasCreatorBriefContent } from './creatorBrief';
-import { buildBriefOverlayChips } from './creatorContentFill';
+import { type CreatorBrief, clipWords, hasCreatorBriefContent } from './creatorBrief';
+import { buildBriefOverlayChips, OVERLAY_LIMITS } from './creatorContentFill';
 import { runCreatorRuntimeV2 } from '../creator-templates/creatorRuntimeV2';
 import {
   type CreatorTypeId,
@@ -413,7 +413,7 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
     const overlayPayload = isSocialCreativeType(type) && overlayAllowed && (!writerSource ? !(type === 'image' && !standaloneEmbeddedCopy) : writerEmbeddedCopy)
       ? {
           hook: String(overlayText.hook || '').trim(),
-          headline: String(overlayText.headline || mainMessage.slice(0, 84) || answers.headline || answers.topic || '').trim(),
+          headline: String(overlayText.headline || clipWords(mainMessage, OVERLAY_LIMITS.headline) || answers.headline || answers.topic || '').trim(),
           keyInsight: String(overlayText.keyInsight || '').trim(),
           cta: (writerCopyPolicy?.allowCTA || (!writerSource && standaloneEmbeddedCopy)) ? String(overlayText.cta || answers.cta || brief?.cta || '').trim() : '',
           supportingText: String(overlayText.supportingText || '').trim(),
@@ -583,12 +583,18 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
                   // in Text Inside Image and was previously ignored on templates),
                   // then to the main message for the headline.
                   const ov = (k: keyof WriterOverlayText) => String(overlayText[k] || '').trim();
+                  // The key insight is NOT backfilled from the main message: the main
+                  // message is already the headline, so painting it again as the insight
+                  // doubled the copy and pushed a single image over its word budget
+                  // (text_density_exceeds_profile). An image carries an insight only when
+                  // the template or the overlay panel supplies one (overlayFillRoles).
+                  // Every slot is shortened on a word boundary, never mid-word.
                   return {
                     hook: '',
-                    headline: (String(tv.headline || '').trim() || ov('headline') || mainMessage || String(answers.topic || '').trim()).slice(0, 84),
-                    keyInsight: (String(tv.keyInsight || '').trim() || ov('keyInsight') || String(answers.keyMessage || '').trim()).slice(0, 190),
-                    cta: (String(tv.cta || '').trim() || ov('cta') || String(answers.cta || '').trim()).slice(0, 42),
-                    supportingText: (String(tv.supportingText || '').trim() || ov('supportingText')).slice(0, 96),
+                    headline: clipWords(String(tv.headline || '').trim() || ov('headline') || mainMessage || String(answers.topic || '').trim(), OVERLAY_LIMITS.headline),
+                    keyInsight: clipWords(String(tv.keyInsight || '').trim() || ov('keyInsight'), OVERLAY_LIMITS.keyInsight),
+                    cta: clipWords(String(tv.cta || '').trim() || ov('cta') || String(answers.cta || '').trim(), OVERLAY_LIMITS.cta),
+                    supportingText: clipWords(String(tv.supportingText || '').trim() || ov('supportingText'), OVERLAY_LIMITS.supportingText),
                     __template_authoritative: true,
                   } as Record<string, unknown>;
                 })())

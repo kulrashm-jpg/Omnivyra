@@ -23,6 +23,7 @@ import { validateProviderImageTextSafety } from './creatorImageTextValidation';
 import { runCreatorOcr, isLightweightSocialEmbeddedCopy } from './creatorOcrProvider';
 import {
   governImageOverlayText,
+  type OverlayTextField,
   buildPreviewGovernanceWarnings,
   estimateTextAreaPercent,
   resolveAssetGovernanceProfile,
@@ -85,7 +86,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
-import { sharp, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, safeObject, resolveImageRenderStyle, resolveImageComposition, resolveImageStyleId, renderBackgroundPng, compactText, buildAccessibleAltText, normalizeOverlayText, resolveRenderSize } from './creatorAssetRendererContracts';
+import { sharp, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, safeObject, resolveImageRenderStyle, resolveImageComposition, resolveImageStyleId, renderBackgroundPng, compactText, buildAccessibleAltText, normalizeOverlayText, resolveRenderSize, BLOCKING_PROVIDER_FAILURES } from './creatorAssetRendererContracts';
 import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg, buildTwoColumnCardSvg, buildListCardSvg } from './creatorAssetRendererText';
 import { buildStyleCardSvg, buildOverlaySvg, loadBrandMark, normalizeBackgroundBuffer } from './creatorAssetRendererOverlay';
 import { buildAiImagePrompt } from './creatorAssetRendererSvg';
@@ -181,10 +182,29 @@ export async function composeSingleVisualAsset(
   // Field-keyed governance: every overlay field is corrected and made
   // paragraph-safe IN ITS OWN SLOT. The previous code filtered empty fields and
   // re-mapped by position, so an empty hook shifted every field one slot.
+  //
+  // Only the fields the chosen layout PAINTS are governed (and kept): specialized
+  // compositions (stat/quote/split/two-column/list/style) draw headline + one support
+  // field + CTA; the generic stacked overlay draws headline + insight + supporting + CTA
+  // and never the hook. The total word budget is then fitted across exactly those, so
+  // copy that is individually valid can no longer fail the render closed together.
+  const govComposition = resolveImageComposition(metadata);
+  const govStyleId = govComposition ? null : resolveImageStyleId(metadata);
+  const hasText = (value: unknown) => String(value ?? '').trim().length > 0;
+  // Mirrors each builder's own read: quote = keyInsight || supportingText;
+  // stat/split/two-column = supportingText || keyInsight; style/list = supportingText.
+  const paintedFields: OverlayTextField[] = govComposition === 'quote'
+    ? ['headline', hasText(overlay.keyInsight) ? 'keyInsight' : 'supportingText', 'cta']
+    : (govComposition === 'stat' || govComposition === 'split' || govComposition === 'two-column')
+      ? ['headline', hasText(overlay.supportingText) ? 'supportingText' : 'keyInsight', 'cta']
+      : (govComposition || govStyleId)
+        ? ['headline', 'supportingText', 'cta']
+        : ['headline', 'keyInsight', 'supportingText', 'cta'];
   const corrected = governImageOverlayText({
     assetType: governanceAssetType,
     overlay,
     allowCTA: metadata.attachment_mode !== 'supporting_visual',
+    paintedFields,
   });
   const governedOverlay = corrected.governedOverlay;
   const safeBlocks = corrected.safeTextBlocks;
@@ -197,20 +217,9 @@ export async function composeSingleVisualAsset(
     overlapRisk: corrected.textBlocks.join(' ').length > 360,
     tinyTextRisk: corrected.textBlocks.length > 4,
   });
-  // Density counts only the fields the chosen composition ACTUALLY paints. Specialized image
-  // compositions (stat/quote/split/two-column/list/style) render a SUBSET — headline + one support
-  // field + CTA — not all five overlay fields, so counting the unrendered hook/keyInsight falsely
-  // tripped text_density_exceeds_profile for legitimate before/after + promo copy. The generic
-  // stacked overlay (no composition) still counts every field — unchanged.
-  const govComposition = resolveImageComposition(metadata);
-  const govStyleId = govComposition ? null : resolveImageStyleId(metadata);
-  const governanceTextBlocks = (
-    govComposition === 'quote'
-      ? [governedOverlay.headline, governedOverlay.keyInsight || governedOverlay.supportingText, governedOverlay.cta]
-      : (govComposition || govStyleId)
-        ? [governedOverlay.headline, governedOverlay.supportingText, governedOverlay.cta]
-        : safeBlocks
-  ).filter(Boolean);
+  // Density counts only the fields the chosen composition ACTUALLY paints — the governed
+  // overlay above carries nothing else.
+  const governanceTextBlocks = safeBlocks;
   const visualGovernance = validateVisualGovernance({
     assetType: governanceAssetType,
     platform,
@@ -394,6 +403,16 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
     provider: providerOcr?.provider,
   });
   const providerImage = providerResult.image;
+  // A configuration-type provider failure (the image model is not available to this
+  // account, the key is rejected, the quota is exhausted) will fail every retry. Rendering
+  // on a fallback gradient instead produced an asset that ignored the chosen look, the
+  // user's photo and the brand, and the only error the user ever saw was a downstream
+  // copy-governance code. Stop here with the real reason; transient failures keep the
+  // existing fallback.
+  const providerFailureKind = providerImage ? null : (providerResult.providerFailureKind ?? null);
+  if (providerFailureKind && BLOCKING_PROVIDER_FAILURES.has(providerFailureKind)) {
+    throw new Error(`provider_image_unavailable:${providerFailureKind}`);
+  }
 
   /*
    * A CONDITION attempt that could not be applied is reported ONCE, here.
@@ -624,7 +643,9 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
 
   const composed = sharp(background.buffer);
   const fileBuffer = await (composites.length ? composed.composite(composites) : composed).png().toBuffer();
-  const effectiveFallbackReason = background.fallbackReason || (providerImage ? undefined : providerResult.fallbackReason);
+  // The provider's own reason is the specific one (which model, which error); the
+  // background's generic 'provider_image_unavailable' must not overwrite it.
+  const effectiveFallbackReason = (providerImage ? undefined : providerResult.fallbackReason) || background.fallbackReason;
 
   // Mode-aware metadata. Composition mode omits the overlay quality
   // block + flags entirely — those signals are nonsensical when no

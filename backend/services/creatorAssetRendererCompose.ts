@@ -14,6 +14,7 @@ import { captureImageProviderCost } from './billing/blackHoleCostCapture';
 import { recordAssetCredits } from './aiUsageCollector';
 import { resolveCostProfile } from './creator/costProfiles';
 import { fitSlideArcToCount } from './creator/purposeStrategyRegistry';
+import { clipCopyToChars } from './creatorAssetGovernance';
 import { resolveTemplateStyle } from '../../lib/creator-outcomes/creatorVisualStyleRegistry';
 import { isBetaAiRenderMode, createBetaMockImage, BETA_MOCK_MODEL } from './creator/rendering/providers/betaMockRenderProvider';
 import { creatorEvent } from './creatorObservation';
@@ -192,8 +193,9 @@ export function resolveInfographicSections(assetPayload: Record<string, unknown>
     // (the previous behavior rendered the same sentence twice per card).
     const hasColon = item.includes(':');
     return {
-      title: compactText(hasColon ? item.split(':')[0] : item, `Section ${index + 1}`).slice(0, 52),
-      body: hasColon ? compactText(item.split(':').slice(1).join(':'), '').slice(0, 120) : '',
+      // Word-safe: a section title or body never ends mid-word.
+      title: clipCopyToChars(compactText(hasColon ? item.split(':')[0] : item, `Section ${index + 1}`), 52),
+      body: hasColon ? clipCopyToChars(compactText(item.split(':').slice(1).join(':'), ''), 120) : '',
       icon: ['01', '02', '03', '04', '05', '06'][index] ?? String(index + 1).padStart(2, '0'),
     };
   });

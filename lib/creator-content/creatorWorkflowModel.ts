@@ -10,6 +10,7 @@ import {
 import type { MarketingBrief } from '../content/unifiedCreationModel';
 import { getCreationGoal } from '../content/unifiedCreationModel';
 import type { AttachmentMode } from '../content/writerCreatorAttachmentContracts';
+import { clipWords, deriveMainMessage } from './creatorBrief';
 import type { CreatorDiagnosticReport } from '../../backend/services/creator/creatorDiagnosticReport';
 import {
   type CreatorTypeId,
@@ -306,12 +307,16 @@ export function mapBriefToEditorAnswers(brief: MarketingBrief, config: WorkflowC
   const out: Record<string, string> = {};
   const set = (id: string, v: string | null | undefined) => { const t = (v ?? '').trim(); if (t && ids.has(id)) out[id] = t; };
   const message = (brief.freeText ?? '').trim();
-  const firstSentence = message ? message.split(/[.!?\n]/)[0].slice(0, 90).trim() : '';
+  // The brief is a paragraph; the MAIN MESSAGE is its first sentence or clause. Seeding
+  // every core-message field with the whole paragraph made a run-on description the
+  // image's headline and key insight (and the copy the generator painted twice).
+  const mainMessage = deriveMainMessage(message);
+  const firstSentence = clipWords(mainMessage, 90);
 
   set('audience', brief.audience);
   set('topic', (brief.offer ?? '').trim() || firstSentence);
   // Core-message style fields across asset types.
-  for (const id of ['keyMessage', 'message', 'coreMessage', 'mainMessage', 'headline']) set(id, message);
+  for (const id of ['keyMessage', 'message', 'coreMessage', 'mainMessage', 'headline']) set(id, mainMessage);
   set('cta', brief.cta);
   set('offer', brief.offer);
   // Objective Preservation (Wave 0): seed `objective` from the brief's
@@ -431,9 +436,7 @@ export function buildCreatorAnswersFromWriterSource(
   const sourceLabel = source.sourceType === 'thread' ? 'Thread' : 'Post';
   const attachmentMode = source.compositionIntent.attachmentMode;
   const transform = source.compositionIntent.copyPolicy?.sourceTextTransform ?? 'none';
-  const snippet = isSocialCreativeType(creatorType)
-    ? source.body.slice(0, 360)
-    : source.body.slice(0, 700);
+  const snippet = clipWords(source.body, isSocialCreativeType(creatorType) ? 360 : 700);
   const platform = source.platform || config.primaryPlatforms[0] || 'linkedin';
   const visualPersonality = source.tone || (source.sourceType === 'thread' ? 'editorial' : 'premium');
   const structureGuidance = buildWriterStructureGuidance(source, creatorType);
@@ -708,7 +711,12 @@ export function buildSuggestionOptions(
     getOptionLabel(config, 'hierarchy', answers.hierarchy) ||
     'clear visual continuity';
   const audience = String(answers.audience || 'your target audience').trim();
-  const message = String(answers.keyMessage || answers.headline || answers.topic || config.title).trim();
+  // The direction quotes the MAIN MESSAGE — one sentence, shortened on a word boundary —
+  // never a whole paragraph cut mid-word.
+  const message = clipWords(
+    deriveMainMessage(String(answers.keyMessage || answers.headline || answers.topic || config.title)) || config.title,
+    120,
+  );
   // Platform-aware copy ONLY when a real target platform is supplied (writer
   // route). Direct creator route → platform-agnostic so the asset can be
   // reused anywhere without LinkedIn (or any single platform) bias.
@@ -723,12 +731,6 @@ export function buildSuggestionOptions(
   const brandAware = context.brandMode === 'brand-aware';
   const companyName = brandAware ? (context.brandProfile?.companyName || '').trim() : '';
   const brandClause = companyName ? `for ${companyName} ` : '';
-  const companySignal = brandAware
-    ? (companyName
-        ? `${companyName}'s ${context.brandPresence} brand presence`
-        : `${context.brandPresence} brand presence`)
-    : 'independent creative territory';
-  const industrySignal = context.brandProfile?.industry ? `${context.brandProfile.industry} positioning` : 'category positioning';
   const assetSignal = answers.assetSubtype && answers.assetSubtype !== 'none'
     ? ` with ${humanizeValue(answers.assetSubtype)} support`
     : '';
@@ -749,7 +751,7 @@ export function buildSuggestionOptions(
       id: 'safe-fit',
       label: 'Authority Direction',
       summary: capFirst(
-        `${platformPrefix}${subtypeLabel.toLowerCase()} ${config.title.toLowerCase()} ${brandClause}for ${objective.toLowerCase()} that frames "${message}" through ${companySignal}, ${industrySignal}, and ${objectiveSignal}${assetSignal}.`,
+        `${platformPrefix}${subtypeLabel.toLowerCase()} ${config.title.toLowerCase()} ${brandClause}for ${objective.toLowerCase()} that frames "${message}" for ${objectiveSignal}${assetSignal}.`,
       ),
       rationale: `Use this when ${audience} needs a polished, credible direction with strong retention and low execution risk.`,
       badges: platformLabel
