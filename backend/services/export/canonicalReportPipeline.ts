@@ -18,6 +18,7 @@
 import type { ReportViewPayload } from '../../../pages/api/reports/reportViewPayloadTypes';
 import { buildCanonicalExport } from '../intelligence/canonicalExport';
 import { renderExportHtml } from '../intelligence/exportRenderer';
+import { renderDossierV2Html } from '../intelligence/dossierV2/render';
 import { renderPdfFromHtml } from './htmlToPdfRenderer';
 
 function escape(text: string | null | undefined): string {
@@ -124,6 +125,15 @@ export function renderCanonicalReportHtml(payload: ReportViewPayload): string {
   // from the sanitised view payload's companyContext into the renderer.
   // The renderer falls back to companyId / payload.domain when these
   // are absent, so logo-less reports still render correctly.
+  // Dossier v2 (six sections, one action register, visual layout) is opt-in until approved:
+  // REPORT_DOSSIER_LAYOUT=v2. v1 stays the default and is unchanged.
+  if (process.env.REPORT_DOSSIER_LAYOUT === 'v2') {
+    return renderDossierV2Html(exportPayload, {
+      brandName: payload.companyContext?.companyName ?? payload.domain ?? null,
+      domain: payload.domain ?? null,
+      logoUrl: payload.companyContext?.logoUrl ?? null,
+    });
+  }
   return renderExportHtml(exportPayload, {
     brandName: payload.companyContext?.companyName ?? payload.domain ?? null,
     domain: payload.domain ?? null,

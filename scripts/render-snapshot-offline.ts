@@ -7,7 +7,7 @@
  * provider call. Used to compare report output before and after renderer
  * changes against real stored data.
  *
- *   npx tsx scripts/render-snapshot-offline.ts <report-row.json> <outDir> [--no-pdf]
+ *   npx tsx scripts/render-snapshot-offline.ts <report-row.json> <outDir> [--no-pdf] [--v2]
  */
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
@@ -25,7 +25,8 @@ process.env.ENCRYPTION_KEY ||= '0123456789abcdef0123456789abcdef0123456789abcdef
 async function main() {
   const [rowPath, outDir = 'tmp/snapshot-render'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
   const wantPdf = !process.argv.includes('--no-pdf');
-  if (!rowPath) throw new Error('usage: render-snapshot-offline.ts <report-row.json> <outDir> [--no-pdf]');
+  if (process.argv.includes('--v2')) process.env.REPORT_DOSSIER_LAYOUT = 'v2';
+  if (!rowPath) throw new Error('usage: render-snapshot-offline.ts <report-row.json> <outDir> [--no-pdf] [--v2]');
 
   const row = JSON.parse(await readFile(rowPath, 'utf8')) as {
     id: string; company_id: string; domain: string; created_at: string;
