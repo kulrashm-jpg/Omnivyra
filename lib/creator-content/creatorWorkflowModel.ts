@@ -310,7 +310,7 @@ export function mapBriefToEditorAnswers(brief: MarketingBrief, config: WorkflowC
   // The brief is a paragraph; the MAIN MESSAGE is its first sentence or clause. Seeding
   // every core-message field with the whole paragraph made a run-on description the
   // image's headline and key insight (and the copy the generator painted twice).
-  const mainMessage = deriveMainMessage(message);
+  const mainMessage = clipWords((brief.mainMessage ?? '').trim(), 300) || deriveMainMessage(message);
   const firstSentence = clipWords(mainMessage, 90);
 
   set('audience', brief.audience);

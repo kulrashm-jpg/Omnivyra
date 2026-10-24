@@ -47,6 +47,15 @@ export interface CreativeSummaryProps {
   /** Rendered dimensions, when the platform resolves to a known size. */
   dimensions?: string | null;
   brandAware?: boolean;
+  /** The ONE sentence the asset must say (owner decision: the key of the asset). */
+  mainMessage?: string | null;
+  /** Image: whether the copy is designed into the image or travels with the post. */
+  textPlacement?: 'inside' | 'alongside' | null;
+  /** The chosen layout / structure, as its label. */
+  layoutLabel?: string | null;
+  /** How strongly the brand shows, when it is applied. */
+  brandPresence?: 'minimal' | 'balanced' | 'strong' | null;
+  includeLogo?: boolean | null;
 }
 
 interface Row { label: string; value: string; chosenByUser: boolean }
@@ -62,6 +71,15 @@ export function buildCreativeSummaryRows(props: CreativeSummaryProps): Row[] {
   const rows: Row[] = [];
   if (props.goalLabel) rows.push({ label: 'Goal', value: props.goalLabel, chosenByUser: true });
   if (props.templateName) rows.push({ label: 'Design', value: props.templateName, chosenByUser: true });
+  if (props.mainMessage) rows.push({ label: 'Main message', value: `“${props.mainMessage}”`, chosenByUser: true });
+  if (props.textPlacement) {
+    rows.push({
+      label: 'Text',
+      value: props.textPlacement === 'inside' ? 'Designed into the image' : 'With the post — the image has no words',
+      chosenByUser: true,
+    });
+  }
+  if (props.layoutLabel) rows.push({ label: 'Layout', value: props.layoutLabel, chosenByUser: true });
 
   const direction = getVisualDirection(props.choices.visualDirectionId ?? null);
   rows.push(direction
@@ -100,11 +118,20 @@ export function buildCreativeSummaryRows(props: CreativeSummaryProps): Row[] {
 
   const size = [props.platform, props.dimensions].filter(Boolean).join(' · ');
   if (size) rows.push({ label: 'Size', value: size, chosenByUser: true });
-  if (props.brandAware) rows.push({ label: 'Brand', value: 'Your brand colours and logo', chosenByUser: true });
+  if (props.brandAware) {
+    const presence = props.brandPresence === 'minimal' ? 'subtle' : props.brandPresence === 'strong' ? 'strong' : null;
+    const parts = [
+      props.includeLogo === false ? 'Your brand colours (no logo)' : 'Your brand colours and logo',
+      presence ? `${presence} presence` : null,
+    ].filter(Boolean);
+    rows.push({ label: 'Brand', value: parts.join(', '), chosenByUser: true });
+  } else if (props.brandAware === false) {
+    rows.push({ label: 'Brand', value: 'Not applied', chosenByUser: true });
+  }
   return rows;
 }
 
-export default function CreativeSummaryCard(props: CreativeSummaryProps & { previewUrl?: string | null }) {
+export default function CreativeSummaryCard(props: CreativeSummaryProps & { previewUrl?: string | null; editHint?: string | null }) {
   const rows = buildCreativeSummaryRows(props);
   const direction = getVisualDirection(props.choices.visualDirectionId ?? null);
   const preview = props.previewUrl ?? direction?.previewUrl ?? null;
@@ -135,7 +162,7 @@ export default function CreativeSummaryCard(props: CreativeSummaryProps & { prev
       </div>
       <p className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-slate-400">
         <Sparkles className="h-3 w-3" />
-        Anything not chosen above is decided by AI from your brief. Scroll up to change any of it.
+        Anything not chosen above is decided by AI from your brief. {props.editHint ?? 'Scroll up to change any of it.'}
       </p>
     </div>
   );

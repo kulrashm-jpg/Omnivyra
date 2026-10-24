@@ -32,7 +32,15 @@ import { creatorCompositionKey, mintCreatorCompositionId } from '../../lib/conte
 import { useCompanyContext } from '../CompanyContext';
 import ChatVoiceButton from '../ChatVoiceButton';
 import CreateWithAIChat from './CreateWithAIChat';
+import CreatorImageAssetPanel from './CreatorImageAssetPanel';
 import { color, radius, shadow, space, fontSize, fontWeight } from '../../lib/platform/ui';
+import { WORKFLOW_CONFIG } from '../../lib/creator-content/creatorWorkflowConfig';
+import { deriveMainMessage } from '../../lib/creator-content/creatorBrief';
+import {
+  CREATOR_INTAKE_SESSION_KEY, intakeLayoutOptions, serializeCreatorIntake,
+  type IntakeBrandMode, type IntakeBrandPresence,
+} from '../../lib/creator-content/creatorIntake';
+import type { AttachmentMode } from '../../lib/content/writerCreatorAttachmentContracts';
 
 type Asset = 'image' | 'carousel' | 'infographic';
 const CUSTOM = 'brand-awareness';
@@ -48,21 +56,21 @@ const ASSET_CONFIG: Record<Asset, AssetConfig> = {
     heroTitle: 'What should your image achieve?',
     heroSub: 'Pick a goal, choose an image example you like, and we generate a finished image from your brief.',
     goalKicker: 'New image', briefSub: 'A few details, then you review everything before we generate.',
-    briefCta: 'Continue to customize', family: 'image', editorRoute: '/command-center/creator-content/image',
+    briefCta: 'Review what we’ll make', family: 'image', editorRoute: '/command-center/creator-content/image',
   },
   carousel: {
     rootName: 'CarouselCreationWorkspace', label: 'carousel',
     heroTitle: 'What should your carousel achieve?',
     heroSub: 'Pick a goal, choose a carousel example you like, and we build a multi-slide carousel from your brief.',
     goalKicker: 'New carousel', briefSub: 'A few details, then you review everything before we generate.',
-    briefCta: 'Continue to customize', family: 'carousel', editorRoute: '/command-center/creator-content/carousel',
+    briefCta: 'Review what we’ll make', family: 'carousel', editorRoute: '/command-center/creator-content/carousel',
   },
   infographic: {
     rootName: 'InfographicCreationWorkspace', label: 'infographic',
     heroTitle: 'What should your infographic achieve?',
     heroSub: 'Pick a goal, choose an infographic example you like, and we generate a clear infographic from your brief.',
     goalKicker: 'New infographic', briefSub: 'A few details, then you review everything before we generate.',
-    briefCta: 'Continue to customize', family: 'infographic', editorRoute: '/command-center/creator-content/infographic',
+    briefCta: 'Review what we’ll make', family: 'infographic', editorRoute: '/command-center/creator-content/infographic',
   },
 };
 
@@ -73,10 +81,40 @@ const linkBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'cent
 const primaryBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: space.sm, background: color.primary[600], color: color.onPrimary, border: 'none', borderRadius: radius.md, padding: `${space.md}px ${space.xl}px`, cursor: 'pointer', fontWeight: fontWeight.bold, fontSize: fontSize.sm };
 const label: React.CSSProperties = { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: color.textSubtle, textTransform: 'uppercase', letterSpacing: 0.4 };
 const input: React.CSSProperties = { width: '100%', borderRadius: radius.md, border: `1px solid ${color.border}`, padding: `${space.sm}px ${space.md}px`, fontSize: fontSize.sm, color: color.text };
+const chip = (selected: boolean): React.CSSProperties => ({
+  borderRadius: radius.md, padding: `${space.xs}px ${space.md}px`, fontSize: fontSize.sm, cursor: 'pointer',
+  border: `1px solid ${selected ? color.primary[600] : color.border}`,
+  background: selected ? color.primary[600] : color.surface,
+  color: selected ? color.onPrimary : color.text, fontWeight: fontWeight.semibold,
+});
+const choiceCard = (selected: boolean): React.CSSProperties => ({
+  ...card, padding: `${space.md}px`, cursor: 'pointer',
+  border: `${selected ? 2 : 1}px solid ${selected ? color.primary[600] : color.border}`,
+});
 
-interface WorkspaceProps { onNavigate: (url: string) => void; onAdvanced?: () => void }
+/**
+ * The main message is the asset's key. When AI drafts the brief and the user has not
+ * written a main message yet, propose the brief's first sentence — never overwrite one
+ * the user typed.
+ */
+function withMainMessage(brief: MarketingBrief): MarketingBrief {
+  if ((brief.mainMessage ?? '').trim()) return brief;
+  const derived = deriveMainMessage(String(brief.freeText ?? ''));
+  return derived ? { ...brief, mainMessage: derived } : brief;
+}
 
-function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProps & { asset: Asset }) {
+interface WorkspaceProps {
+  onNavigate: (url: string) => void;
+  onAdvanced?: () => void;
+  /**
+   * Context the page was launched with (campaign, or a Writer "Add asset" launch:
+   * source=writer&session=…). It is carried through to the editor unchanged — a
+   * writer launch previously lost its session here and never imported the post.
+   */
+  launchQuery?: Record<string, string>;
+}
+
+function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: WorkspaceProps & { asset: Asset }) {
   const cfg = ASSET_CONFIG[asset];
   // The ACTIVE company, so "Suggest with AI" is grounded in the company the
   // user is working in (field-assist resolves its canonical context server-
@@ -96,6 +134,38 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
   const [chatOpen, setChatOpen] = React.useState(false);
   // CREATOR-106: typed-text base preserved so spoken brief APPENDS to (not replaces) it.
   const voiceBaseRef = React.useRef('');
+  /* Owner decision (2026-10-24): every input lives on THIS screen; the editor opens as a
+   * "here's what we'll make" confirmation. These are the choices beyond the brief. */
+  const [attachmentMode, setAttachmentMode] = React.useState<AttachmentMode | null>(null);
+  const [brandMode, setBrandMode] = React.useState<IntakeBrandMode>(selectedCompanyId ? 'brand-aware' : 'independent');
+  const [brandPresence, setBrandPresence] = React.useState<IntakeBrandPresence>('balanced');
+  const [includeLogo, setIncludeLogo] = React.useState(true);
+  const [layout, setLayout] = React.useState<string | null>(null);
+  const [compositionId, setCompositionId] = React.useState('');
+  const layoutOptions = React.useMemo(() => intakeLayoutOptions(WORKFLOW_CONFIG[asset] ?? null), [asset]);
+  /* A Writer "Add asset" launch already carries the content AND the text-inside vs
+   * alongside decision, so it goes from the look straight to the editor. */
+  const writerMode = launchQuery?.source === 'writer' && Boolean(launchQuery?.session);
+
+  // The chosen design's own text treatment is the default answer to "where does the text go".
+  React.useEffect(() => {
+    setAttachmentMode(asset === 'image' ? (selectedSample?.renderingContract?.attachmentMode ?? null) : null);
+  }, [asset, selectedSample]);
+
+  // The draft identity exists BEFORE the brief step renders, so an image the user attaches
+  // here belongs to the same draft the editor opens (the image panel is server-backed by it).
+  React.useEffect(() => {
+    if (step !== 'brief' || compositionId || writerMode) return;
+    try {
+      const key = creatorCompositionKey(asset);
+      let id = (sessionStorage.getItem(key) || '').trim();
+      if (!id) {
+        id = mintCreatorCompositionId(asset, Date.now(), Math.random().toString(36).slice(2, 8));
+        sessionStorage.setItem(key, id);
+      }
+      setCompositionId(id);
+    } catch { /* storage unavailable — the editor mints its own */ }
+  }, [step, compositionId, writerMode, asset]);
 
   // "Suggest with AI" — draft the whole brief (free text + audience / tone / CTA / offer) from the
   // chosen goal + the company's canonical context, so the operator reviews-and-goes instead of
@@ -141,7 +211,7 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
         if (allowed.has(key) && value.trim()) patch[key] = value;
       }
       if (patch.freeText) voiceBaseRef.current = patch.freeText;
-      if (Object.keys(patch).length) setBrief((b) => mergeBrief(b, patch as Partial<MarketingBrief>));
+      if (Object.keys(patch).length) setBrief((b) => withMainMessage(mergeBrief(b, patch as Partial<MarketingBrief>)));
     } catch (e) {
       setAiError(e instanceof Error ? e.message : 'Suggestion failed');
     } finally {
@@ -160,6 +230,69 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
       {sub ? <p style={{ color: color.textMuted, fontSize: 15, marginBottom: 22 }}>{sub}</p> : null}
     </>
   );
+
+  // ── Continue to the editor ────────────────────────────────────────────────
+  /** Launch context (campaign, or a Writer session) carried to the editor unchanged. */
+  const launchParams = (): string => Object.entries(launchQuery ?? {})
+    .filter(([k, v]) => typeof v === 'string' && v.trim() && !['goal', 'template_id', 'blueprint', 'composition', 'from', 'skip_templates'].includes(k))
+    .map(([k, v]) => `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('');
+  const continueToEditor = () => {
+    /* The creative answers travel the same way the brief does — session storage
+     * keyed to this draft — so the editor can restore them without a second
+     * transport and without putting a style id in the URL. */
+    try {
+      sessionStorage.setItem(
+        GUIDED_CHOICES_SESSION_KEY,
+        serializeGuidedChoices({ visualDirectionId, subject, visualInstruction: null }),
+      );
+    } catch { /* noop */ }
+    // CREATOR-125: the gallery now selects a SYSTEM CreatorTemplate — store its
+    // template_id as the canonical selection identity. The downstream editor +
+    // generate runtime still consume blueprint_id, so we project the template's
+    // provenance (metadata.sourceBlueprintId) back to &blueprint= HERE, at the
+    // gallery boundary ONLY (the single temporary compatibility projection — RULE
+    // 9). No deeper runtime changes.
+    const tid = selectedSample ? `&template_id=${encodeURIComponent(selectedSample.id)}` : '';
+    const sourceBlueprintId = selectedSample ? String(selectedSample.metadata?.sourceBlueprintId ?? '') : '';
+    const bp = sourceBlueprintId ? `&blueprint=${encodeURIComponent(sourceBlueprintId)}` : '';
+    // A Writer launch: the post is the brief and its session token is the draft identity,
+    // so carry the session through instead of starting a workspace draft that drops it.
+    if (writerMode) {
+      onNavigate(`${cfg.editorRoute}?goal=${encodeURIComponent(goalId ?? '')}${tid}${bp}${launchParams()}&skip_templates=1`);
+      return;
+    }
+    try { sessionStorage.setItem(MARKETING_BRIEF_SESSION_KEY, serializeMarketingBrief({ ...withMainMessage(brief), goalId })); } catch { /* noop */ }
+    // The first-screen choices beyond the brief (owner decision 2026-10-24).
+    try {
+      sessionStorage.setItem(CREATOR_INTAKE_SESSION_KEY, serializeCreatorIntake({
+        attachmentMode: asset === 'image' ? attachmentMode : null,
+        brandMode,
+        brandPresence: brandMode === 'brand-aware' ? brandPresence : null,
+        includeLogo: brandMode === 'brand-aware' ? includeLogo : null,
+        layout,
+      }));
+    } catch { /* noop */ }
+    /* The draft identity travels in the URL (not just this tab's storage), so a
+     * reload OR a new tab reaches the same draft — and the editor restores the
+     * brief it persisted server-side under this id. Reuses the id minted when the
+     * brief step opened (an image attached there already belongs to it). */
+    let draftId = compositionId;
+    if (!draftId) {
+      try {
+        const key = creatorCompositionKey(asset);
+        draftId = (sessionStorage.getItem(key) || '').trim();
+        if (!draftId) {
+          draftId = mintCreatorCompositionId(asset, Date.now(), Math.random().toString(36).slice(2, 8));
+          sessionStorage.setItem(key, draftId);
+        }
+      } catch { draftId = ''; }
+    }
+    const comp = draftId ? `&composition=${encodeURIComponent(draftId)}` : '';
+    // CREATOR-106: the sample IS the chosen template, so skip the editor's own template
+    // gallery (skip_templates=1) — otherwise [type].tsx bounces back to /templates.
+    onNavigate(`${cfg.editorRoute}?goal=${encodeURIComponent(goalId ?? '')}${tid}${bp}${comp}${launchParams()}&from=workspace&skip_templates=1`);
+  };
 
   // ── Goal ─────────────────────────────────────────────────────────────────
   if (step === 'goal') {
@@ -216,52 +349,13 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
           value={visualDirectionId}
           onChange={setVisualDirectionId}
           onBack={() => setStep('samples')}
-          onContinue={() => setStep('brief')}
+          onContinue={() => (writerMode ? continueToEditor() : setStep('brief'))}
         />
         <SubjectStep value={subject} onChange={setSubject} />
       </div>
     );
   }
 
-  // ── Brief → continue to the editor ───────────────────────────────────────
-  const continueToEditor = () => {
-    try { sessionStorage.setItem(MARKETING_BRIEF_SESSION_KEY, serializeMarketingBrief({ ...brief, goalId })); } catch { /* noop */ }
-    /* The creative answers travel the same way the brief does — session storage
-     * keyed to this draft — so the editor can restore them without a second
-     * transport and without putting a style id in the URL. */
-    try {
-      sessionStorage.setItem(
-        GUIDED_CHOICES_SESSION_KEY,
-        serializeGuidedChoices({ visualDirectionId, subject, visualInstruction: null }),
-      );
-    } catch { /* noop */ }
-    // CREATOR-125: the gallery now selects a SYSTEM CreatorTemplate — store its
-    // template_id as the canonical selection identity. The downstream editor +
-    // generate runtime still consume blueprint_id, so we project the template's
-    // provenance (metadata.sourceBlueprintId) back to &blueprint= HERE, at the
-    // gallery boundary ONLY (the single temporary compatibility projection — RULE
-    // 9). No deeper runtime changes.
-    const tid = selectedSample ? `&template_id=${encodeURIComponent(selectedSample.id)}` : '';
-    const sourceBlueprintId = selectedSample ? String(selectedSample.metadata?.sourceBlueprintId ?? '') : '';
-    const bp = sourceBlueprintId ? `&blueprint=${encodeURIComponent(sourceBlueprintId)}` : '';
-    /* The draft identity travels in the URL (not just this tab's storage), so a
-     * reload OR a new tab reaches the same draft — and the editor restores the
-     * brief it persisted server-side under this id. Reuses the tab's existing
-     * draft id when there is one, exactly as the editor would. */
-    let compositionId = '';
-    try {
-      const key = creatorCompositionKey(asset);
-      compositionId = (sessionStorage.getItem(key) || '').trim();
-      if (!compositionId) {
-        compositionId = mintCreatorCompositionId(asset, Date.now(), Math.random().toString(36).slice(2, 8));
-        sessionStorage.setItem(key, compositionId);
-      }
-    } catch { compositionId = ''; }
-    const comp = compositionId ? `&composition=${encodeURIComponent(compositionId)}` : '';
-    // CREATOR-106: the sample IS the chosen template, so skip the editor's own template
-    // gallery (skip_templates=1) — otherwise [type].tsx bounces back to /templates.
-    onNavigate(`${cfg.editorRoute}?goal=${encodeURIComponent(goalId ?? '')}${tid}${bp}${comp}&from=workspace&skip_templates=1`);
-  };
   return (
     <div style={wrap}>
       {header('Tell us once', cfg.briefSub, () => setStep('look'))}
@@ -307,19 +401,103 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
               if (b[k] && b[k].trim()) patch[k] = b[k];
             });
             if (patch.freeText) voiceBaseRef.current = patch.freeText;
-            if (Object.keys(patch).length) setBrief((prev) => mergeBrief(prev, patch as Partial<MarketingBrief>));
+            if (Object.keys(patch).length) setBrief((prev) => withMainMessage(mergeBrief(prev, patch as Partial<MarketingBrief>)));
             setChatOpen(false);
           }}
           onClose={() => setChatOpen(false)}
         />
       ) : null}
       {aiError ? <div style={{ fontSize: 12, color: color.danger, marginBottom: 12 }}>{aiError}</div> : null}
+      {/* The main message is the asset's key: the headline expresses it, everything else supports it. */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ ...label, marginBottom: 6 }}>Main message — the one thing your {cfg.label} must say</div>
+        <input
+          type="text"
+          data-testid="intake-main-message"
+          value={brief.mainMessage ?? ''}
+          onChange={(e) => setField('mainMessage', e.target.value)}
+          placeholder={deriveMainMessage(String(brief.freeText ?? '')) || 'e.g. Plan a month of on-brand posts in under an hour'}
+          style={input}
+        />
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
         {([['audience', 'Audience'], ['tone', 'Tone'], ['cta', 'Call to action'], ['offer', 'Offer / product']] as [keyof MarketingBrief, string][]).map(([k, lbl]) => (
           <div key={k}><div style={{ ...label, marginBottom: 6 }}>{lbl}</div>
             <input type="text" value={(brief[k] as string) ?? ''} onChange={(e) => setField(k, e.target.value)} style={input} /></div>
         ))}
       </div>
+
+      {asset === 'image' ? (
+        <section style={{ marginTop: 20 }}>
+          <div style={{ ...label, marginBottom: 8 }}>Where should the text go?</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
+            {([
+              ['embedded_copy', 'Text inside the image', 'Your headline, supporting line and button are designed into the image.'],
+              ['supporting_visual', 'Post + image', 'A clean image with no words; your text goes with the post.'],
+            ] as [AttachmentMode, string, string][]).map(([mode, title, desc]) => (
+              <button key={mode} type="button" data-testid={`intake-attachment-${mode}`} onClick={() => setAttachmentMode(mode)}
+                style={choiceCard(attachmentMode === mode)}>
+                <div style={{ fontWeight: fontWeight.bold, fontSize: fontSize.sm }}>{attachmentMode === mode ? <Check size={14} /> : null} {title}</div>
+                <div style={{ fontSize: 12, color: color.textMuted, marginTop: 4 }}>{desc}</div>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {layoutOptions.length > 0 ? (
+        <section style={{ marginTop: 20 }}>
+          <div style={{ ...label, marginBottom: 8 }}>{asset === 'infographic' ? 'How should it be organised?' : 'Layout'}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {layoutOptions.map((o) => (
+              <button key={o.value} type="button" data-testid={`intake-layout-${o.value}`} title={o.description}
+                onClick={() => setLayout(layout === o.value ? null : o.value)} style={chip(layout === o.value)}>
+                {o.label}
+              </button>
+            ))}
+            {!layout ? <span style={{ fontSize: 12, color: color.textSubtle, alignSelf: 'center' }}>Not chosen — the design decides.</span> : null}
+          </div>
+        </section>
+      ) : null}
+
+      <section style={{ marginTop: 20 }}>
+        <div style={{ ...label, marginBottom: 8 }}>Brand</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <button type="button" data-testid="intake-brand-aware" disabled={!selectedCompanyId} onClick={() => setBrandMode('brand-aware')} style={chip(brandMode === 'brand-aware')}>Use my brand</button>
+          <button type="button" data-testid="intake-brand-independent" onClick={() => setBrandMode('independent')} style={chip(brandMode === 'independent')}>Don&apos;t apply my brand</button>
+        </div>
+        {brandMode === 'brand-aware' ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10 }}>
+            <span style={{ fontSize: 12, color: color.textMuted }}>How visible:</span>
+            {([['minimal', 'Subtle'], ['balanced', 'Balanced'], ['strong', 'Strong']] as [IntakeBrandPresence, string][]).map(([v, l]) => (
+              <button key={v} type="button" data-testid={`intake-presence-${v}`} onClick={() => setBrandPresence(v)} style={chip(brandPresence === v)}>{l}</button>
+            ))}
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, marginLeft: 8 }}>
+              <input type="checkbox" data-testid="intake-include-logo" checked={includeLogo} onChange={(e) => setIncludeLogo(e.target.checked)} /> Include my logo
+            </label>
+          </div>
+        ) : null}
+        {!selectedCompanyId ? <div style={{ fontSize: 12, color: color.textSubtle, marginTop: 6 }}>Select a company to apply its brand.</div> : null}
+      </section>
+
+      {selectedCompanyId && compositionId ? (
+        <section style={{ marginTop: 20 }}>
+          <div style={{ ...label, marginBottom: 8 }}>Your own image (optional)</div>
+          <CreatorImageAssetPanel
+            companyId={selectedCompanyId}
+            compositionId={compositionId}
+            creatorTypeLabel={cfg.label}
+            templateSlots={selectedSample?.assetSlots ?? null}
+            templateName={selectedSample?.name ?? null}
+            templateCategory={selectedSample?.category ?? null}
+            assetFamily={cfg.family}
+            templatePurposeKey={selectedSample?.renderingContract?.purposeKey ?? null}
+            guidedChoices={{ visualDirectionId, subject, visualInstruction: null }}
+            brief={String(brief.mainMessage || brief.freeText || '')}
+          />
+        </section>
+      ) : null}
+
       <button type="button" style={{ ...primaryBtn, marginTop: 22 }} onClick={continueToEditor}><ArrowRight size={16} /> {cfg.briefCta}</button>
     </div>
   );
