@@ -474,42 +474,32 @@ async function renderAssetDispatch(
 
 /**
  * Public render entry — composes the asset, then applies the canonical
- * deterministic POST-RENDER visual validation. On a repairable failure it
- * deterministically shortens copy and RE-RENDERS once, re-validates, and keeps
- * the better result. The final `visual_validation` verdict is attached to the
- * returned metadata. Universal: image renders here inline (orchestrator) and
- * carousel/infographic render here in the durable worker, so every asset is
- * validated. Placeholder/fallback assets carry no quality signals → they pass
- * (we never fail assets we cannot deterministically assess).
+ * deterministic POST-RENDER visual validation. On a fixable failure the PR4
+ * bounded fix-and-re-render loop (creatorVisualFixLoop) shortens / drops copy
+ * and RE-RENDERS up to 3 times, reusing the first attempt's AI image (never a
+ * second paid image) and keeping the best attempt. The final
+ * `visual_validation` verdict — with a `repair` disclosure whenever the loop
+ * engaged — is attached to the returned OUTPUT metadata. Universal: image
+ * renders here inline (orchestrator) and carousel/infographic render here in
+ * the durable worker, so every asset is validated. Placeholder/fallback assets
+ * carry no quality signals and pass (we never fail assets we cannot assess).
  */
 export async function renderAsset(
   assetPayload: Record<string, unknown>,
   options: RenderOptions = {},
 ): Promise<RenderedMediaBundle> {
-  const { validateCreatorVisual, applyVisualRepair } =
+  const validation =
     require('./creator/creatorVisualValidation') as typeof import('./creator/creatorVisualValidation');
+  const { runVisualFixLoop } =
+    require('./creator/creatorVisualFixLoop') as typeof import('./creator/creatorVisualFixLoop');
   const contentType = String(
     safeObject(safeObject(assetPayload.media_bundle).metadata).content_type || assetPayload.asset_kind || '',
   );
-
-  let bundle = await renderAssetDispatch(assetPayload, options);
-  let verdict = validateCreatorVisual(safeObject(bundle.metadata), contentType);
-
-  if (!verdict.passed && verdict.repairHint && !safeObject(bundle.metadata).placeholder) {
-    const repairedPayload = applyVisualRepair(assetPayload, verdict.repairHint);
-    const retryBundle = await renderAssetDispatch(repairedPayload, options);
-    const retryVerdict = validateCreatorVisual(safeObject(retryBundle.metadata), contentType);
-    // Keep the retry when it passes or strictly reduces the failure count.
-    if (retryVerdict.passed || retryVerdict.failures.length < verdict.failures.length) {
-      bundle = retryBundle;
-      verdict = retryVerdict;
-    }
-  }
-
-  return {
-    ...bundle,
-    metadata: { ...safeObject(bundle.metadata), visual_validation: verdict },
-  };
+  return runVisualFixLoop(assetPayload, options, contentType, {
+    dispatch: renderAssetDispatch,
+    // Read through the module object at call time (keeps it spy-able in tests).
+    validate: (metadata, ct) => validation.validateCreatorVisual(metadata, ct),
+  });
 }
 
 // ── Test-only internal exports ───────────────────────────────────────────────

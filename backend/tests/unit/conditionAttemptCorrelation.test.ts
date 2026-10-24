@@ -50,9 +50,11 @@ const ASSET_META = IMAGE.slice(
 
 describe('A — the join key exists on both sides', () => {
   it('CRITICAL: one id is minted per attempt', () => {
-    expect(IMAGE).toContain(
-      'const conditionAttemptId = (conditionDegradation || conditionApplied) ? randomUUID() : null;',
-    );
+    // PR4: one id per PROVIDER attempt. A fix-loop re-render reuses the first
+    // attempt's image, so it reuses that attempt's id (the kept asset still
+    // joins to the single emitted event) instead of minting a new one.
+    expect(IMAGE).toContain('const conditionAttemptId = (conditionDegradation || conditionApplied)');
+    expect(IMAGE).toContain('? (reusedProvider ? (reusedProvider.conditionAttemptId ?? null) : randomUUID())');
     expect((IMAGE.match(/randomUUID\(\)/g) ?? [])).toHaveLength(1);
   });
 
@@ -73,7 +75,8 @@ describe('A — the join key exists on both sides', () => {
   it('an ordinary generation carries no key on either side', () => {
     // Null on the event side, absent on the asset side — an unattempted render
     // must not look like an attempt that produced nothing.
-    expect(IMAGE).toContain('? randomUUID() : null;');
+    // PR4: the ternary now has a reuse branch, but an unattempted render still yields null.
+    expect(IMAGE).toMatch(/\? \(reusedProvider \? \(reusedProvider\.conditionAttemptId \?\? null\) : randomUUID\(\)\)\s*: null;/);
     expect(ASSET_META).toContain('conditionAttemptId ?? undefined,');
   });
 });

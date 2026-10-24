@@ -59,6 +59,12 @@ export interface VisualFailure {
   flag: string;
   /** 1-indexed slide number for carousel failures. */
   slide?: number;
+  /**
+   * The overflowing field for a `text_fit` failure, exactly as the renderer's
+   * text_fit contract names it (`headline`, `keyInsight`, `slide_2:headline`,
+   * `section_3`, `header_title`). Lets the fix loop shorten ONLY that field.
+   */
+  field?: string;
   /** Human-readable explanation for the person reviewing the asset. */
   message?: string;
 }
@@ -78,7 +84,34 @@ const FLAG_MESSAGES: Readonly<Record<string, string>> = {
   section_body_too_long: "A section's text is too long to fit",
   missing_insight: 'A slide or section rendered with an empty body',
   infographic_content_too_thin: 'Infographic is mostly empty',
+  text_fit_overflow: 'Text does not fit its area',
 };
+
+/** Readable names for the renderer's text_fit field ids. */
+const FIELD_LABELS: Readonly<Record<string, string>> = {
+  headline: 'Headline',
+  keyInsight: 'Key insight',
+  supportingText: 'Supporting text',
+  hook: 'Hook',
+  cta: 'Call to action',
+  header_title: 'Title',
+};
+
+function describeField(field: string): string {
+  const bare = field.replace(/^slide_\d+:/, '');
+  const section = /^section_(\d+)$/.exec(bare);
+  if (section) return `Section ${section[1]}`;
+  return FIELD_LABELS[bare] ?? bare;
+}
+
+/**
+ * Failure categories the fix loop can resolve by re-laying-out the SAME image
+ * with less copy. Typography (preset type size), contrast, dimensions, branding
+ * and missing/thin content cannot be fixed by shortening text.
+ */
+export const SHORTENABLE_CATEGORIES: ReadonlySet<VisualFailureCategory> = new Set<VisualFailureCategory>([
+  'text_fit', 'overlap', 'safe_margins', 'low_quality',
+]);
 
 const CATEGORY_MESSAGES: Readonly<Record<VisualFailureCategory, string>> = {
   text_fit: 'Text does not fit its area',
@@ -102,7 +135,11 @@ export function describeVisualFailure(failure: Partial<VisualFailure> | null | u
   const f = failure ?? {};
   const flag = typeof f.flag === 'string' ? f.flag : '';
   const category = f.category as VisualFailureCategory | undefined;
+  const fieldText = flag === 'text_fit_overflow' && typeof f.field === 'string' && f.field
+    ? `${describeField(f.field)} does not fit its area`
+    : '';
   const base = (typeof f.message === 'string' && f.message.trim())
+    || fieldText
     || FLAG_MESSAGES[flag]
     || (flag.startsWith('contrast_') ? CATEGORY_MESSAGES.contrast : '')
     || (flag.startsWith('score_') ? CATEGORY_MESSAGES.low_quality : '')
@@ -140,7 +177,36 @@ function resolveContrast(metadata: Rec): number | undefined {
   if (typeof metadata.contrastRatio === 'number') return metadata.contrastRatio;
   const geo = obj(metadata.geometry);
   if (typeof geo.contrastRatio === 'number') return geo.contrastRatio;
+  // The renderers record the measured geometry (incl. contrast) on the
+  // validation manifest, not at the top level.
+  const manifestGeo = obj(obj(metadata.validation_manifest).geometry);
+  if (typeof manifestGeo.contrastRatio === 'number') return manifestGeo.contrastRatio;
   return undefined;
+}
+
+/**
+ * The renderer's WS3 text_fit contract: ok=false + overflowFields lists every
+ * field that could not be shown completely at/above the minimum legible font.
+ * Carousel fields carry a `slide_N:` prefix, kept verbatim in `field`.
+ */
+function evaluateTextFit(metadata: Rec): VisualFailure[] {
+  const tf = obj(metadata.text_fit);
+  if (tf.ok !== false) return [];
+  const fields = Array.isArray(tf.overflowFields)
+    ? Array.from(new Set(tf.overflowFields.filter((f): f is string => typeof f === 'string' && f.length > 0)))
+    : [];
+  const list = fields.length > 0 ? fields : [''];
+  return list.map((field) => {
+    const slideMatch = /^slide_(\d+):/.exec(field);
+    const failure: VisualFailure = {
+      category: 'text_fit',
+      flag: 'text_fit_overflow',
+      message: field ? `${describeField(field)} does not fit its area` : CATEGORY_MESSAGES.text_fit,
+    };
+    if (field) failure.field = field;
+    if (slideMatch) failure.slide = Number(slideMatch[1]);
+    return failure;
+  });
 }
 
 /**
@@ -168,6 +234,9 @@ export function validateCreatorVisual(metadata: Rec, _contentType?: string): Vis
     failures.push(...evaluateReport(metadata.overlay_quality));
   }
 
+  // Text fit (WS3 contract) — previously ignored, so a clipped field passed.
+  failures.push(...evaluateTextFit(metadata));
+
   const passed = failures.length === 0;
   return {
     passed,
@@ -178,11 +247,11 @@ export function validateCreatorVisual(metadata: Rec, _contentType?: string): Vis
   };
 }
 
-/** Derive the deterministic repair to attempt. Text-density / fit / typography
- *  failures are repairable by shortening copy; contrast / dimensions are not. */
+/** Derive the deterministic repair to attempt. Text-density / fit failures are
+ *  repairable by shortening copy; typography (the preset's type size), contrast
+ *  and dimensions are not — shortening cannot change them. */
 export function deriveVisualRepairHint(failures: VisualFailure[]): VisualRepairHint {
-  const repairable = new Set<VisualFailureCategory>(['text_fit', 'overlap', 'safe_margins', 'typography', 'low_quality']);
-  return failures.some((f) => repairable.has(f.category)) ? 'shorten_text' : null;
+  return failures.some((f) => SHORTENABLE_CATEGORIES.has(f.category)) ? 'shorten_text' : null;
 }
 
 /* ── Deterministic layout repair ─────────────────────────────────────── */

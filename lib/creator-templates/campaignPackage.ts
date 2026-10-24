@@ -36,6 +36,12 @@ export interface PackageAsset {
   visualPassed?: boolean | null;
   /** Human-readable visual failures, shown as the reason publishing is blocked. */
   visualIssues?: string[];
+  /**
+   * false = the asset HAS media but was never visually checked (no verdict),
+   * which blocks publishing — an unchecked asset is not "ready".
+   * undefined = unknown / legacy caller (does not block, backward-compatible).
+   */
+  visualAssessed?: boolean;
 }
 
 export interface CampaignPackageInput {
@@ -207,9 +213,15 @@ export function buildCampaignPackage(input: CampaignPackageInput): CampaignPacka
       })()
     : null;
   if (visualReason) warnings.push(`${visualReason} Fix and regenerate before publishing.`);
+  // An asset with media but no visual verdict was never checked: not ready.
+  const visualUnassessed = done.filter((a) => a.visualAssessed === false && a.visualPassed !== false);
+  const unassessedReason = visualUnassessed.length > 0
+    ? `${visualUnassessed.length} asset${visualUnassessed.length === 1 ? '' : 's'} not visually checked yet.`
+    : null;
+  if (unassessedReason) warnings.push(`${unassessedReason} Re-render to run the quality checks before publishing.`);
 
   const readyForPublishing = done.length > 0 && failed.length === 0 && processing.length === 0 && ctaOk && brandingOk
-    && visualFailed.length === 0;
+    && visualFailed.length === 0 && visualUnassessed.length === 0;
   const readyForScheduling = readyForPublishing && platforms.length > 0;
 
   const publishBlockedReasons: string[] = [];
@@ -219,11 +231,18 @@ export function buildCampaignPackage(input: CampaignPackageInput): CampaignPacka
   if (!ctaOk) publishBlockedReasons.push('CTAs differ across assets.');
   if (!brandingOk) publishBlockedReasons.push('Branding differs across assets.');
   if (visualReason) publishBlockedReasons.push(visualReason);
+  if (unassessedReason) publishBlockedReasons.push(unassessedReason);
   if (readyForPublishing && !readyForScheduling) publishBlockedReasons.push('No target platform is set, so it cannot be scheduled.');
 
   const publishingNotes: string[] = [];
   if (platforms.length) publishingNotes.push(`Publish to ${platforms.join(', ')}.`);
-  publishingNotes.push(`${done.length} asset${done.length === 1 ? '' : 's'} ready${missingAssets.length ? `; ${missingAssets.join(', ')} not generated` : ''}.`);
+  // Only assets that passed (or carry no gate signal) count as ready — a
+  // completed asset that failed or skipped its visual checks is not.
+  const readyCount = done.filter((a) => a.visualPassed !== false && a.visualAssessed !== false).length;
+  const notReadyCount = done.length - readyCount;
+  publishingNotes.push(`${readyCount} asset${readyCount === 1 ? '' : 's'} ready`
+    + (notReadyCount > 0 ? `; ${notReadyCount} need${notReadyCount === 1 ? 's' : ''} fixes` : '')
+    + `${missingAssets.length ? `; ${missingAssets.join(', ')} not generated` : ''}.`);
   if (cta) publishingNotes.push(`Shared CTA: “${cta}”.`);
   if (!readyForPublishing) publishingNotes.push('Resolve the warnings above before publishing.');
 

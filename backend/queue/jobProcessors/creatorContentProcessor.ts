@@ -16,6 +16,7 @@
  * - Feedback tracks visual engagement metrics (hook passthrough, completion, shares)
  */
 
+import { fanOutAssetVisualVerdict } from '../../services/creator/fanOutVisualVerdict';
 import { Job } from 'bullmq';
 import { unifiedEngine } from '../../services/unifiedContentGenerationEngine';
 import { CREATOR_VALIDATION_RULES } from '../../prompts/creatorContentPromptsV1';
@@ -543,6 +544,8 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
           persisted_asset_id: a.result?.persistedAssetId ?? null,
           ok: a.ok,
           ...(a.error ? { error: a.error } : {}),
+          // PR4: each fan-out asset carries its OWN visual verdict for the publish gate.
+          ...((v) => (v ? { visual_validation: v } : {}))(fanOutAssetVisualVerdict(a)),
         })),
         variant_mode: fanOutResult.mode,
         variant_strategy_id: fanOutResult.strategy_id,

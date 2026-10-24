@@ -86,7 +86,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
-import { sharp, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, safeObject, resolveImageRenderStyle, resolveImageComposition, resolveImageStyleId, renderBackgroundPng, compactText, buildAccessibleAltText, normalizeOverlayText, resolveRenderSize, BLOCKING_PROVIDER_FAILURES } from './creatorAssetRendererContracts';
+import { sharp, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, type ProviderImageResult, safeObject, resolveImageRenderStyle, resolveImageComposition, resolveImageStyleId, renderBackgroundPng, compactText, buildAccessibleAltText, normalizeOverlayText, resolveRenderSize, BLOCKING_PROVIDER_FAILURES } from './creatorAssetRendererContracts';
 import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg, buildTwoColumnCardSvg, buildListCardSvg } from './creatorAssetRendererText';
 import { buildStyleCardSvg, buildOverlaySvg, loadBrandMark, normalizeBackgroundBuffer } from './creatorAssetRendererOverlay';
 import { buildAiImagePrompt } from './creatorAssetRendererSvg';
@@ -351,7 +351,18 @@ export async function composeSingleVisualAsset(
     ? `${providerPrompt}
 ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: userReferenceBytes.length > 0 })}`
     : providerPrompt;
-  const providerResult = await generateProviderImage({
+  // PR4 fix loop: a re-render reuses the first attempt's AI image (and its OCR).
+  // NEVER generate a second paid image just to re-lay-out the overlay copy.
+  const reusedProvider = options.reuseProviderImage && Buffer.isBuffer(options.reuseProviderImage.buffer)
+    ? options.reuseProviderImage
+    : null;
+  const providerResult: ProviderImageResult = reusedProvider
+    ? (reusedProvider.providerResult?.image
+        ? reusedProvider.providerResult
+        : { image: { buffer: reusedProvider.buffer, model: reusedProvider.model ?? 'reused' } })
+    : options.noProviderImage
+    ? { image: null, fallbackReason: 'provider_image_unavailable' }
+    : await generateProviderImage({
     prompt: promptForProvider,
     referenceImageUrl,
     referenceImages: allReferenceImages.length > 0 ? allReferenceImages : (conditionRefs ? [] : null),
@@ -373,7 +384,10 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
       userId:         options.userId ?? null,
     },
   });
-  const providerOcr = providerResult.image
+  type ProviderOcr = Awaited<ReturnType<typeof runCreatorOcr>> | null;
+  const providerOcr: ProviderOcr = reusedProvider && reusedProvider.providerOcr !== undefined
+    ? (reusedProvider.providerOcr as ProviderOcr)
+    : providerResult.image
     ? await runCreatorOcr({
         image: providerResult.image.buffer,
         assetType: enforcedAssetType ?? fileNamePrefix,
@@ -448,8 +462,13 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
    * Null when no CONDITION attempt was made, so an ordinary generation carries
    * no key and cannot be mistaken for one.
    */
-  const conditionAttemptId = (conditionDegradation || conditionApplied) ? randomUUID() : null;
-  if (conditionDegradation || conditionApplied) {
+  // A fix-loop re-render reuses the original attempt's id and does NOT emit a
+  // second CONDITION event: it made no new provider attempt, and the kept asset
+  // must still join to the one event that was emitted.
+  const conditionAttemptId = (conditionDegradation || conditionApplied)
+    ? (reusedProvider ? (reusedProvider.conditionAttemptId ?? null) : randomUUID())
+    : null;
+  if (!reusedProvider && (conditionDegradation || conditionApplied)) {
     const conditionPlan = options.compositionReferences?.conditionPlan;
     const routed = conditionPlan?.condition ?? [];
     /*
@@ -502,6 +521,20 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
         latencyMs,
         metadata,
       });
+  }
+
+  // PR4: hand the provider image to the fix loop (separate channel — never
+  // stored on metadata) so a re-render never pays for a second image.
+  if (!reusedProvider && providerResult.image && typeof options.captureProviderImage === 'function') {
+    try {
+      options.captureProviderImage({
+        buffer: providerResult.image.buffer,
+        model: providerResult.image.model,
+        providerResult,
+        providerOcr,
+        conditionAttemptId,
+      });
+    } catch { /* capture is best-effort; it never fails a render */ }
   }
 
   const { width, height } = resolveRenderSize(platform, fileNamePrefix);

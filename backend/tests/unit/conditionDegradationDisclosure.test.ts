@@ -172,7 +172,10 @@ describe('D — one event per failed attempt', () => {
     // event is still emitted from exactly one place, and still only when a
     // degradation is present — the ternary is what enforces the "only when"
     // half now that the outer guard admits both outcomes.
-    expect(IMAGE).toContain('if (conditionDegradation || conditionApplied) {');
+    // PR4: a fix-loop re-render reuses the original provider image and makes
+    // NO new provider attempt, so it must not emit a second event — the guard
+    // now also excludes the reuse path (still exactly one emission site).
+    expect(IMAGE).toContain('if (!reusedProvider && (conditionDegradation || conditionApplied)) {');
     expect(IMAGE).toContain('emitCreatorEvent(conditionDegradation');
     expect((IMAGE.match(/CREATOR_EVENTS\.CONDITION_REFERENCE_DEGRADED/g) ?? [])).toHaveLength(1);
   });

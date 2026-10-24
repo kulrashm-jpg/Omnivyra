@@ -331,6 +331,36 @@ export type RenderOptions = {
    * identical to before.
    */
   compositionReferences?: import('./compositionAssetResolutionService').ResolvedCompositionReferences | null;
+  /**
+   * PR4 fix-and-re-render loop: re-use the FIRST attempt's AI image instead of
+   * generating a new one. A re-render only changes the deterministic overlay
+   * (shorter copy, dropped optional fields), so the paid provider image and its
+   * OCR are reused as-is. Never persisted in metadata.
+   */
+  reuseProviderImage?: ProviderImageReuse | null;
+  /**
+   * PR4: receives the provider image the moment it is generated, so the fix
+   * loop can hand it to later attempts. A separate return channel on purpose:
+   * the buffer must never ride on (and be persisted with) bundle metadata.
+   */
+  captureProviderImage?: ((capture: ProviderImageReuse) => void) | null;
+  /**
+   * PR4: a fix-loop re-render whose first attempt got NO provider image renders
+   * on the deterministic background instead of paying for a new image.
+   */
+  noProviderImage?: boolean;
+};
+
+/** A provider image captured from one render attempt for re-use by the next. */
+export type ProviderImageReuse = {
+  buffer: Buffer;
+  model?: string;
+  /** The full provider result of the original call (disclosure/telemetry parity). */
+  providerResult?: ProviderImageResult;
+  /** OCR of the provider image. It depends only on the image, so it is reused too. */
+  providerOcr?: unknown;
+  /** The original CONDITION attempt id, so a re-rendered asset still joins to its one event. */
+  conditionAttemptId?: string | null;
 };
 
 /**
