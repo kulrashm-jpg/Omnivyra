@@ -271,6 +271,40 @@ export async function getIcpVersion(
 }
 
 /**
+ * One version by its own row id, TENANT-SCOPED.
+ *
+ * PI-ICP-DISCOVERY-003. `getIcpVersion` above can only answer about a version
+ * whose `(icpId, version)` pair the caller already knows, and the discovery API
+ * identifies an ICP by the version's own id — so without this there is no way
+ * to honour `icpVersionId` except by trusting a caller-supplied `icpId`, which
+ * would make tenant ownership depend on request data.
+ *
+ * The tenant predicate is NOT optional and is applied in the query, not after
+ * it: a row belonging to another tenant must never be read, let alone filtered
+ * out in application code. Ratification is deliberately NOT checked here — this
+ * returns the record and its `status`, and the caller decides. Collapsing "does
+ * not exist", "belongs to someone else" and "is not ratified" into one null
+ * would make the three indistinguishable to a route that must answer them
+ * differently.
+ */
+export async function getIcpVersionById(
+  organizationId: string, id: string,
+): Promise<IcpVersionRecord | null> {
+  assertTenant(organizationId);
+  const versionId = String(id ?? '').trim();
+  if (!UUID.test(versionId)) fail('icpVersionId must be a uuid', 'icp_version_id_invalid');
+
+  const res = await ownedDbTable(VERSIONS)
+    .select(VERSION_COLUMNS)
+    .eq('organization_id', organizationId)     // tenant boundary — never optional
+    .eq('id', versionId)
+    .limit(1);
+  if (res.error) translate(res.error, 'version read failed');
+  const rows = asRows(res.data);
+  return rows.length ? toVersionRecord(rows[0]) : null;
+}
+
+/**
  * Every version of one ICP, newest first. Read-only.
  *
  * A2 needs enumeration because the reviewer has to see WHICH version they are

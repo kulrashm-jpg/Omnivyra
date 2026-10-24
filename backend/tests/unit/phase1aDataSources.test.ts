@@ -80,14 +80,72 @@ describe('PHASE-1A — the catalogue tells the truth', () => {
   });
 
   it('only the genuinely released sources are marked available', () => {
+    // PHASE 2 — `csv` joins the list. It was released as PI-P1-W02 and has had a
+    // registered adapter and a governed route ever since; only this file's
+    // hand-written boolean said otherwise, which is the drift Phase 2 removed by
+    // DERIVING `available` from the capability model.
     const available = DATA_SOURCE_CATALOGUE.filter((d) => d.available).map((d) => d.key).sort();
-    expect(available).toEqual(['crm', 'manual']);
+    expect(available).toEqual(['crm', 'csv', 'manual']);
   });
 
   it('the declared-only providers are present but NOT available', () => {
-    for (const k of ['linkedin_sales_navigator', 'apollo', 'zoominfo', 'crunchbase', 'rapidapi', 'csv']) {
+    // `csv` is deliberately absent from this list now — see above. Every entry
+    // here lacks an operationally verified capability, which is what
+    // `available: false` has always meant.
+    for (const k of [
+      'linkedin_sales_navigator', 'apollo', 'zoominfo', 'crunchbase', 'rapidapi',
+      'apollo_enrichment', 'zoominfo_enrichment', 'clearbit_enrichment',
+    ]) {
       expect(getDataSourceDefinition(k)?.available).toBe(false);
     }
+  });
+
+  it('`available` is DERIVED, so it cannot contradict the capability model', () => {
+    /* eslint-disable @typescript-eslint/no-var-requires */
+    const { derivePresentationStatus } = require('../../services/integrations/providerCapabilityModel');
+    /* eslint-enable @typescript-eslint/no-var-requires */
+    for (const d of DATA_SOURCE_CATALOGUE) {
+      expect(d.available).toBe(derivePresentationStatus(d.providerId, d.capability) === 'operational');
+    }
+  });
+
+  it('one vendor is one provider — the duplicate labels share a providerId', () => {
+    // The `*_enrichment` KEYS survive because a key reaches URLs and rows; the
+    // duplicate provider IDENTITY does not.
+    expect(getDataSourceDefinition('apollo')?.providerId).toBe('apollo');
+    expect(getDataSourceDefinition('apollo_enrichment')?.providerId).toBe('apollo');
+    expect(getDataSourceDefinition('apollo')?.capability).toBe('discovery');
+    expect(getDataSourceDefinition('apollo_enrichment')?.capability).toBe('enrichment');
+    expect(getDataSourceDefinition('zoominfo')?.providerId).toBe('zoominfo');
+    expect(getDataSourceDefinition('zoominfo_enrichment')?.providerId).toBe('zoominfo');
+  });
+
+  it('presentation cannot INVENT a provider or a capability', () => {
+    // The guard that makes the catalogue powerless: every row must name a
+    // provider the capability model already declares, and a capability that
+    // provider actually claims. Adding a row for something the model does not
+    // know — MarketPulse, say — fails here rather than quietly appearing in the
+    // hub as a connectable source.
+    /* eslint-disable @typescript-eslint/no-var-requires */
+    const { getProviderCapabilities, getCapability } =
+      require('../../services/integrations/providerCapabilityModel');
+    /* eslint-enable @typescript-eslint/no-var-requires */
+    for (const d of DATA_SOURCE_CATALOGUE) {
+      expect(getProviderCapabilities(d.providerId)).not.toBeNull();
+      expect(getCapability(d.providerId, d.capability)).not.toBeNull();
+    }
+  });
+
+  it('the Apollo note tracks the capability — it is never stale', () => {
+    const note = getDataSourceDefinition('apollo')!.note;
+    // Phase 2 corrected the original "No adapter and no credential configuration
+    // exist", which was false on both counts. Phase 4 then implemented discovery,
+    // so "Discovery is not implemented" became false in its turn. The note now
+    // states what is true: callable, and never verified against the provider.
+    expect(note).not.toMatch(/No adapter and no credential configuration exist/);
+    expect(note).not.toMatch(/Discovery is not implemented/);
+    expect(note).toMatch(/Implemented and callable/);
+    expect(note).toMatch(/[Nn]ot yet verified against the provider/);
   });
 
   it('an unimplemented provider is not_available, never not_connected', () => {

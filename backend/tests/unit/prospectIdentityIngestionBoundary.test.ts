@@ -238,6 +238,15 @@ describe('LI-2 — provider code cannot bypass the boundary', () => {
     // including against a future gate that attaches storage to the resolver seam,
     // which must therefore put that storage in its own module.
     join('services', 'prospectIdentity', 'attributeAuthority.ts'),
+    // B4-A's ICP-to-discovery translator, on exactly the same grounds and held
+    // to exactly the same stricter check. It is flagged for the same unlucky
+    // reason as `criteria.ts`: it names the spine tables ONLY in a prose comment
+    // saying where ICP attributes live, and its `'person.job_title': { filterKey
+    // ... }` entries are MAPPING KEYS in a lookup table, not an update payload.
+    // It imports `prospectIcp/types` and nothing else, so it has no way to reach
+    // a database — `translate` is pure by contract. The no-database assertion
+    // below is what keeps that true.
+    join('services', 'prospectDiscovery', 'icpTranslation.ts'),
   ];
 
   /** Files exempted from the name scan above, each of which must touch no database. */
@@ -245,6 +254,7 @@ describe('LI-2 — provider code cannot bypass the boundary', () => {
     'services/prospectIdentity/attributes.ts',
     'services/prospectIcp/criteria.ts',
     'services/prospectIdentity/attributeAuthority.ts',
+    'services/prospectDiscovery/icpTranslation.ts',
   ];
   const ATTRS = [...PERSON_ATTRIBUTE_COLUMNS, ...ACCOUNT_ATTRIBUTE_COLUMNS]
     .filter((c) => c !== 'attributes_source' && c !== 'attributes_updated_at' && c !== 'region' && c !== 'city');

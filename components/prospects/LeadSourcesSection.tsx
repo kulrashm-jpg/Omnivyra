@@ -25,7 +25,18 @@ import { Building2 } from 'lucide-react';
 import { useCompanyContext } from '../CompanyContext';
 import LeadSourcesPanel from './LeadSourcesPanel';
 
-export default function LeadSourcesSection() {
+/**
+ * PHASE 1 — `providerIds` is forwarded to the panel untouched.
+ *
+ * This component's job is unchanged and remains the only one it has: decide
+ * WHICH TENANT is being configured, and refuse to render the panel until the
+ * user has said. The allowlist is presentation detail belonging to the panel, so
+ * it passes straight through rather than being interpreted here — the tenant
+ * gate must not acquire a second responsibility.
+ */
+export default function LeadSourcesSection(
+  { providerIds }: { providerIds?: readonly string[] } = {},
+) {
   const {
     companies,
     selectedCompanyId,
@@ -123,6 +134,7 @@ export default function LeadSourcesSection() {
         key={selectedCompanyId}
         companyId={selectedCompanyId}
         companyName={selectedCompanyName}
+        providerIds={providerIds}
       />
     </div>
   );

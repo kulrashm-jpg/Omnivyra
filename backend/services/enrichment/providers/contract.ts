@@ -132,6 +132,17 @@ export interface ProviderResponse {
    * future consumer must treat as "no opinion" rather than "retry now".
    */
   readonly retryAfterAt?: string | null;
+  /**
+   * The vendor's typed refusal (for example Apollo's `APOLLO_*` codes), with the
+   * vendor's own status and message. Present only when the vendor or the
+   * transport to it refused. Never contains a credential.
+   */
+  readonly providerError?: unknown;
+  /**
+   * The vendor's request-rate quota from its own response headers, when it
+   * states one. Never a credit balance unless the vendor publishes one.
+   */
+  readonly providerUsage?: unknown;
   /** The raw payload, for `source_records.raw_payload`. Adapter-shaped. */
   readonly rawPayload?: unknown;
 }

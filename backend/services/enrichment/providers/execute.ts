@@ -159,6 +159,10 @@ export interface ExecuteEnrichmentResult {
    * synthesised: no backoff, no fixed duration, nothing from the attempt number.
    */
   readonly retryAfterAt: string | null;
+  /** The vendor's typed refusal, passed through from the adapter. Null otherwise. */
+  readonly providerError?: unknown;
+  /** The vendor's request-rate quota from its own headers. Null when it stated none. */
+  readonly providerUsage?: unknown;
 }
 
 const outcomeResult = (
@@ -176,6 +180,8 @@ const outcomeResult = (
   reason,
   correlationId: request.correlationId,
   retryAfterAt: null,          // A6A: only a provider response can supply one
+  providerError: null,
+  providerUsage: null,
 });
 
 const daysBetween = (a: string, b: string): number =>
@@ -284,6 +290,9 @@ export async function executeEnrichment(
       // A6A: a rate-limited or unavailable provider answers HERE, and this is
       // the only branch that can carry a horizon.
       retryAfterAt: response.retryAfterAt ?? null,
+      // The vendor's exact refusal and quota, passed through unchanged.
+      providerError: response.providerError ?? null,
+      providerUsage: response.providerUsage ?? null,
     };
   }
 
@@ -318,6 +327,8 @@ export async function executeEnrichment(
   return {
     outcome: 'enriched',
     retryAfterAt: null,          // A6A: a successful call imposes no wait
+    providerError: null,
+    providerUsage: response.providerUsage ?? null,
     providerId: adapter.id,
     providerCalled: true,
     attributesReturned: normalized.returnedAttributes,

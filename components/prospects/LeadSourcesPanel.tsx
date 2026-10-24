@@ -77,8 +77,29 @@ function messageFor(status: number, body: unknown): string {
   return 'The request could not be completed. Please try again.';
 }
 
+/**
+ * PHASE 1 — `providerIds` is a PRESENTATION allowlist, and nothing more.
+ *
+ * The server still decides which providers exist and what their state is; this
+ * only narrows which of them one surface renders, so the hub's Enrichment
+ * section can show the two providers that have an implemented adapter without
+ * offering a key form for the three that have none. Owner decision O-2: a
+ * provider whose credential can technically be stored but which no execution
+ * path can use must not be presented as connectable.
+ *
+ * It is OPTIONAL and omitting it keeps the previous behaviour exactly — every
+ * provider the server returns is rendered — so the existing compatibility
+ * surface on `/social-platforms` is unchanged.
+ *
+ * It is a filter, never a source of truth: it cannot add a provider, cannot
+ * change one's status, and cannot make anything operational.
+ */
 export default function LeadSourcesPanel(
-  { companyId, companyName }: { companyId: string | null; companyName?: string | null },
+  { companyId, companyName, providerIds }: {
+    companyId: string | null;
+    companyName?: string | null;
+    providerIds?: readonly string[];
+  },
 ) {
   const [providers, setProviders] = useState<LeadSourceStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -229,7 +250,13 @@ export default function LeadSourcesPanel(
     );
   }
 
-  if (!providers.length) {
+  // The allowlist narrows what THIS surface renders. Applied after the server's
+  // answer, so it can hide a provider but never invent or re-state one.
+  const visible = providerIds
+    ? providers.filter((p) => providerIds.includes(p.providerId))
+    : providers;
+
+  if (!visible.length) {
     return (
       <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500">
         No lead sources are available for configuration.
@@ -270,7 +297,7 @@ export default function LeadSourcesPanel(
         </p>
       </div>
 
-      {providers.map((p) => {
+      {visible.map((p) => {
         const typedKeyProvider = ACCEPTS_TYPED_KEY.includes(p.authMode);
         const isEditing = editing === p.providerId;
         const isBusy = busy === p.providerId;

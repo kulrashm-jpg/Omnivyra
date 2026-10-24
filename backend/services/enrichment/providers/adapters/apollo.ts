@@ -54,6 +54,14 @@ import {
   type ProviderField,
   type ProviderResponse,
 } from '../contract';
+// The shared Apollo error vocabulary, the same one the discovery adapter uses. Pure.
+import {
+  classifyApolloHttpError,
+  classifyApolloTransportError,
+  parseApolloUsageHeaders,
+  readApolloErrorBody,
+  type ApolloErrorCode,
+} from '../../../providerErrors/apolloErrors';
 
 /** The one attribute this adapter claims. See the header for what is excluded. */
 export const APOLLO_SUPPORTED_ATTRIBUTES: readonly string[] = ['employee_count'];
@@ -62,6 +70,8 @@ export const APOLLO_SUPPORTED_ATTRIBUTES: readonly string[] = ['employee_count']
 const APOLLO_HOST = 'api.apollo.io';
 const APOLLO_ENRICH_URL = `https://${APOLLO_HOST}/api/v1/organizations/enrich`;
 const APOLLO_TIMEOUT_MS = 10_000;
+/** The endpoint name Apollo uses in its own messages. */
+export const APOLLO_ENRICH_ENDPOINT = 'api/v1/organizations/enrich';
 
 /**
  * The domain, and nothing else.
@@ -78,10 +88,17 @@ function domainFor(request: EnrichmentRequest): string | null {
   return normalizeCompanyDomain(raw) || null;
 }
 
-/** Classify a transport failure into the PI outcome vocabulary. */
-function classifyStatus(status: number): 'no_match' | 'rate_limited' | 'provider_unavailable' {
-  if (status === 404) return 'no_match';
-  if (status === 429) return 'rate_limited';
+/**
+ * Map Apollo's typed error onto the PI outcome vocabulary.
+ *
+ * Deliberately coarse, and never `provider_declined`: the attempt ledger treats
+ * that outcome as NON-CALLING, while every one of these is a call Apollo
+ * actually answered. The precise reason travels separately as `providerError`.
+ */
+export function enrichmentOutcomeForApollo(code: ApolloErrorCode):
+  'rate_limited' | 'quota_exceeded' | 'provider_unavailable' {
+  if (code === 'APOLLO_RATE_LIMITED') return 'rate_limited';
+  if (code === 'APOLLO_CREDITS_EXHAUSTED') return 'quota_exceeded';
   return 'provider_unavailable';
 }
 
@@ -194,8 +211,11 @@ export const apolloEnrichmentAdapter: EnrichmentProviderAdapter = {
       // timeout, rate limit, quota and auth refusal from an unreachable host,
       // and is conservative — anything unrecognised becomes
       // `provider_unavailable`, never `no_match`.
-      const message = error instanceof Error ? error.message : String(error);
-      return refuse(classifyEnrichmentError(error), notReturned, message.slice(0, 200));
+      const view = classifyApolloTransportError({ error, endpoint: APOLLO_ENRICH_ENDPOINT, apiKey: credential });
+      return {
+        ...refuse(classifyEnrichmentError(error), notReturned, view.vendorMessage ?? 'transport failure'),
+        providerError: view,
+      };
     }
 
     if (!response.ok) {
@@ -206,8 +226,30 @@ export const apolloEnrichmentAdapter: EnrichmentProviderAdapter = {
       // not throw here, because that would land in the outer catch and
       // reclassify a precise rate limit as a vague `provider_unavailable`.
       const retryAfterAt = parseRetryAfter(response.headers?.get?.('retry-after') ?? null, new Date());
-      return refuse(classifyStatus(response.status), notReturned, `HTTP ${response.status}`, retryAfterAt);
+      // 404 is Apollo's "no such organization": a miss, not an error.
+      if (response.status === 404) {
+        return refuse('no_match', notReturned, `HTTP ${response.status}`, retryAfterAt);
+      }
+      // Everything else is Apollo's refusal, classified with the vocabulary the
+      // discovery adapter shares. The vendor message is redacted of the key.
+      const view = classifyApolloHttpError({
+        status: response.status,
+        headers: response.headers,
+        body: await readApolloErrorBody(response),
+        endpoint: APOLLO_ENRICH_ENDPOINT,
+        apiKey: credential,
+      });
+      return {
+        ...refuse(enrichmentOutcomeForApollo(view.code), notReturned,
+          `HTTP ${response.status} ${view.code}${view.vendorMessage ? ` — ${view.vendorMessage}` : ''}`,
+          retryAfterAt),
+        providerError: view,
+      };
     }
+
+    // Request-rate quota Apollo states on a successful answer, so a caller can
+    // warn before a limit. Not a credit balance: Apollo publishes none.
+    const providerUsage = parseApolloUsageHeaders(response.headers);
 
     let payload: unknown;
     try {
@@ -224,8 +266,11 @@ export const apolloEnrichmentAdapter: EnrichmentProviderAdapter = {
     if (!fields.length) {
       // Matched, but held none of what was asked for. NOT `enriched` with an
       // empty list — a failure must never be reported as a successful nothing.
-      return refuse('field_not_found', notReturned,
-        'the organization was found but returned no representable employee count');
+      return {
+        ...refuse('field_not_found', notReturned,
+          'the organization was found but returned no representable employee count'),
+        ...(providerUsage ? { providerUsage } : {}),
+      };
     }
 
     const returned = fields.map((f) => f.attribute);
@@ -234,6 +279,7 @@ export const apolloEnrichmentAdapter: EnrichmentProviderAdapter = {
       fields,
       notReturned: request.attributes.filter((a) => !returned.includes(a)),
       detail: null,
+      ...(providerUsage ? { providerUsage } : {}),
     };
   },
 };
