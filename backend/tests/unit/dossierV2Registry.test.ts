@@ -199,4 +199,55 @@ describe('dossier v2 rendered report', () => {
     expect(html).toContain('#4');
     expect(html).toContain('not in top 8');
   });
+
+  it('names all six evidence sources and how "measured" is decided', () => {
+    for (const s of ['Website crawl', 'Content &amp; structure', 'Backlinks', 'AI answers', 'Competitors', 'Reviews &amp; reputation']) expect(html).toContain(s);
+    expect(html).toContain('Counts as measured when');
+  });
+
+  it('never calls a domain from search results a competitor', () => {
+    expect(html).not.toMatch(/>\s*(Direct|Confirmed) competitor/i);
+    expect(html).toContain('Not yet classified');
+  });
+
+  it('gives every section a plain-English summary and defines jargon', () => {
+    expect(html.match(/class="v2-plain"/g)).toHaveLength(6);
+    expect(html).toContain('Search engine results page');
+    expect(html).toContain('Grounded AI answer');
+  });
+
+  it('uses calibrated wording, not dramatic certainty', () => {
+    expect(html).not.toMatch(/most dangerous|dominant drag/i);
+  });
+});
+
+describe('dossier v2 states', () => {
+  const p = payload();
+  p.ai_surface_presence.citation_matrix.cells = [
+    { provider: 'chatgpt', query_class: 'branded', state: 'insufficient_signal', reason_unavailable: 'Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility.' },
+    { provider: 'chatgpt', query_class: 'competitive', state: 'unavailable', reason_unavailable: 'No queries derived for competitive.' },
+  ];
+  p.knowledge_graph.rationale.text = 'No Wikidata entity was found for this brand, so its knowledge-graph presence could not be established.';
+  p.report1.digital_experience.findings[0].evidence = '7 of 14 pages have under 150 words (e.g. https://acme.test/terms, https://acme.test/privacy)';
+  p.report1.search_visibility.observations[0].competitorDomains = ['capterra.in', 'medium.com', 'rival.io'];
+  const html = renderDossierV2Html(p, { brandName: 'Acme', domain: 'acme.test' });
+
+  it('separates an answer from model memory and a check that was not run from a measurement', () => {
+    expect(html).toContain('answered, not grounded');
+    expect(html).toContain('not run');
+  });
+
+  it('reports a knowledge-graph lookup that found nothing as looked for, not as a failure', () => {
+    expect(html).toContain('Looked for, not found');
+  });
+
+  it('flags thin-page examples that are all legal pages', () => {
+    expect(html).toContain('legal or policy pages');
+  });
+
+  it('classifies directories and platforms by name, and nothing else', () => {
+    expect(html).toMatch(/capterra\.in<\/strong><\/td><td><span class="v2-pill v2-pill-info">Software directory/);
+    expect(html).toMatch(/rival\.io<\/strong><\/td><td><span class="v2-pill v2-pill-warn">Not yet classified/);
+    expect(html).not.toMatch(/medium\.com<\/strong><\/td>/);
+  });
 });

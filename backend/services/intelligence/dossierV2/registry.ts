@@ -44,6 +44,13 @@ export type DossierAction = {
   horizonBasis: 'stated' | 'effort' | null;
   /** 'improvement' changes the site; 'measurement' connects or establishes evidence. */
   kind: 'improvement' | 'measurement';
+  /**
+   * Expected business impact tier, from the source's own rating: playbook expected_impact,
+   * snapshot impact (≥60 high, ≥35 medium), or a lever's projected index gain (≥5 high, ≥2
+   * medium). Null when no source rated it; never guessed.
+   */
+  impact: Level | null;
+  impactBasis: string | null;
   /** 0–100, from the source that scored it; null when no source did. */
   priority: number | null;
   priorityBasis: string | null;
@@ -147,7 +154,7 @@ type Candidate = Omit<DossierAction, 'id' | 'sources' | 'mergedTitles' | 'findin
 
 const blank = (source: ActionSource, title: string): Candidate => ({
   source, sourceId: null, title, action: title, pillar: null, effort: null, confidence: null,
-  horizon: null, priority: null, priorityBasis: null, why: null, steps: [], verification: null,
+  horizon: null, impact: null, impactBasis: null, priority: null, priorityBasis: null, why: null, steps: [], verification: null,
   owner: null, dependsOnSourceIds: [], evidence: [], lever: null,
 });
 
@@ -174,6 +181,11 @@ function snapshotCandidates(payload: CanonicalExportPayload): Candidate[] {
     c.horizon = horizonOf(p.horizon) ?? planned.get(title) ?? null;
     const score = num(p.priorityScore);
     c.priority = score == null ? null : Math.round(score);
+    const impact = num(p.impact);
+    if (impact != null) {
+      c.impact = impact >= 60 ? 'high' : impact >= 35 ? 'medium' : 'low';
+      c.impactBasis = `snapshot impact ${impact}/100`;
+    }
     c.priorityBasis = score == null ? null : 'impact × confidence ÷ effort (digital snapshot)';
     c.why = str(p.businessImplication) ?? str(p.problem);
     c.verification = str(p.measurement);
@@ -197,6 +209,8 @@ function playbookCandidates(payload: CanonicalExportPayload, source: 'action_pla
     c.effort = level(a.effort);
     c.confidence = level(a.confidence);
     const leverage = num(a.leverage_score);
+    c.impact = level(a.expected_impact);
+    c.impactBasis = c.impact ? 'playbook expected impact' : null;
     c.priority = leverage;
     c.priorityBasis = leverage == null ? null : 'leverage score (strategic playbook)';
     c.why = str(a.reasoning);
@@ -253,6 +267,8 @@ function leverCandidates(payload: CanonicalExportPayload): Candidate[] {
     const pillarGain = num(t.projected_pillar_gain);
     if (now != null && target != null && overall != null && pillarGain != null) {
       c.lever = { dimension, now, target, overallGain: overall, pillarGain };
+      c.impact = overall >= 5 ? 'high' : overall >= 2 ? 'medium' : 'low';
+      c.impactBasis = `projected +${overall} Authority Index points`;
       c.why = `${dimension} reads ${now}/100; raising it to ${target} lifts the Authority Index by ${overall} points.`;
       c.verification = `Re-run the report and confirm ${dimension} reaches ${target}/100.`;
     }
@@ -370,6 +386,8 @@ export function buildActions(payload: CanonicalExportPayload): { actions: Dossie
       horizon: pick('horizon') ?? horizonFromEffort(pick('effort')),
       horizonBasis: pick('horizon') ? 'stated' : pick('effort') ? 'effort' : null,
       kind: lead.source === 'evidence_coverage' ? 'measurement' : 'improvement',
+      impact: pick('impact'),
+      impactBasis: pick('impact') ? (members.find((m) => m.impact)?.impactBasis ?? null) : null,
       priority: lead.priority ?? pick('priority'),
       priorityBasis: lead.priority != null ? lead.priorityBasis : pick('priorityBasis'),
       why: pick('why'),

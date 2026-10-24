@@ -119,7 +119,8 @@ const TONE: Record<HeatCell['tone'], { fill: string; ink: string }> = {
 
 /** Matrix heatmap: rows × columns of labelled cells. Rendered as a table for reliable text. */
 export function heatmap(columns: string[], rows: Array<{ label: string; sub?: string; cells: HeatCell[] }>): string {
-  const head = columns.map((c) => `<th><span>${escape(c)}</span></th>`).join('');
+  // Domains break only after a dot, never mid-word.
+  const head = columns.map((c) => `<th><span>${escape(c).replace(/\./g, '.<wbr>')}</span></th>`).join('');
   const body = rows.map((r) => `<tr><th scope="row">${escape(r.label)}${r.sub ? `<small>${escape(r.sub)}</small>` : ''}</th>${
     r.cells.map((c) => `<td style="background:${TONE[c.tone].fill};color:${TONE[c.tone].ink}"${c.title ? ` title="${escape(c.title)}"` : ''}>${escape(c.text)}</td>`).join('')
   }</tr>`).join('');
@@ -191,4 +192,110 @@ export function roadmap(items: RoadmapItem[], windows: [string, string, string],
 /** Inline status pill. Text always states the status; colour only reinforces it. */
 export function pill(text: string, tone: 'good' | 'warn' | 'bad' | 'neutral' | 'info'): string {
   return `<span class="v2-pill v2-pill-${tone}">${escape(text)}</span>`;
+}
+
+export type FunnelStage = { label: string; value: number; note?: string };
+
+/** Horizontal funnel: each stage is a bar proportional to the first; the drop is labelled. */
+export function funnel(stages: FunnelStage[], width = 640): string {
+  const max = Math.max(1, ...stages.map((s) => s.value));
+  const labelW = 190;
+  const plotW = width - labelW - 170;
+  const rowH = 30;
+  const h = stages.length * rowH + 6;
+  const body = stages.map((s, i) => {
+    const y = 4 + i * rowH;
+    const w = Math.max(3, (plotW * s.value) / max);
+    const prev = i > 0 ? stages[i - 1].value : null;
+    const drop = prev != null && prev > s.value ? ` (−${prev - s.value})` : '';
+    return `<text x="0" y="${y + 14}" font-size="10.5" font-weight="600" fill="${PALETTE.ink}">${escape(s.label)}</text>
+      <rect x="${labelW}" y="${y + 3}" width="${w.toFixed(1)}" height="16" rx="3" fill="${i === stages.length - 1 ? PALETTE.blue : PALETTE.navy}" opacity="${(1 - i * 0.12).toFixed(2)}"/>
+      <text x="${(labelW + w + 6).toFixed(1)}" y="${y + 15}" font-size="10.5" font-weight="700" fill="${PALETTE.ink}">${s.value}<tspan font-weight="400" fill="${PALETTE.grey}">${escape(drop)}${s.note ? ` · ${escape(s.note)}` : ''}</tspan></text>`;
+  }).join('');
+  return `<svg class="v2-chart" viewBox="0 0 ${width} ${h}" width="100%" role="img" aria-label="Crawl funnel">${body}</svg>`;
+}
+
+export type MatrixPoint = { id: string; label: string; x: 0 | 1 | 2; y: 0 | 1 | 2; tone: string };
+
+/**
+ * 3×3 impact (y) × effort (x) matrix. Points sit by tier, so position encodes only the tiers the
+ * sources stated — no false precision. Points sharing a cell are listed, never overlapped.
+ */
+export function impactEffortMatrix(points: MatrixPoint[], width = 640): string {
+  const left = 70;
+  const top = 10;
+  const cellW = (width - left - 10) / 3;
+  const cellH = 92;
+  const h = top + cellH * 3 + 34;
+  const cells: string[] = [];
+  for (let y = 0; y < 3; y += 1) {
+    for (let x = 0; x < 3; x += 1) {
+      const quick = y === 2 && x === 0;
+      cells.push(`<rect x="${(left + x * cellW).toFixed(1)}" y="${top + (2 - y) * cellH}" width="${(cellW - 3).toFixed(1)}" height="${cellH - 3}" rx="4" fill="${quick ? PALETTE.greenSoft : PALETTE.wash}"/>`);
+      const inCell = points.filter((p) => p.x === x && p.y === y);
+      inCell.slice(0, 5).forEach((p, i) => {
+        const cx = left + x * cellW + 10;
+        const cy = top + (2 - y) * cellH + 16 + i * 15;
+        const label = p.label.length > 34 ? `${p.label.slice(0, 32)}…` : p.label;
+        cells.push(`<circle cx="${(cx + 4).toFixed(1)}" cy="${cy - 3}" r="4" fill="${p.tone}"/><text x="${(cx + 12).toFixed(1)}" y="${cy}" font-size="8.6" fill="${PALETTE.ink}">${escape(label)}</text>`);
+      });
+      if (inCell.length > 5) cells.push(`<text x="${(left + x * cellW + 10).toFixed(1)}" y="${top + (2 - y) * cellH + cellH - 10}" font-size="8" fill="${PALETTE.grey}">+${inCell.length - 5} more</text>`);
+    }
+  }
+  const yLabels = ['Low', 'Medium', 'High'].map((t, i) => `<text x="${left - 8}" y="${top + (2 - i) * cellH + cellH / 2}" text-anchor="end" font-size="9.5" fill="${PALETTE.grey}">${t}</text>`).join('');
+  const xLabels = ['Low effort', 'Medium effort', 'High effort'].map((t, i) => `<text x="${(left + i * cellW + cellW / 2).toFixed(1)}" y="${top + cellH * 3 + 14}" text-anchor="middle" font-size="9.5" fill="${PALETTE.grey}">${t}</text>`).join('');
+  return `<svg class="v2-chart" viewBox="0 0 ${width} ${h}" width="100%" role="img" aria-label="Impact versus effort">
+  <text x="12" y="${top + cellH * 1.5}" font-size="9.5" font-weight="700" fill="${PALETTE.navy}" transform="rotate(-90 12 ${top + cellH * 1.5})" text-anchor="middle">Impact</text>
+  ${cells.join('')}${yLabels}${xLabels}
+  <text x="${left + 6}" y="${top + cellH - 10}" font-size="8" fill="${PALETTE.green}" font-weight="700">QUICK WINS · high impact, low effort</text></svg>`;
+}
+
+export type GraphNode = { id: string; label: string; sub?: string; kind: 'center' | 'observed' | 'declared' | 'absent' };
+
+/** Radial entity graph. Solid edge = observed; dashed = declared, unverified; dotted grey = looked for, not found. */
+export function entityGraph(center: GraphNode, nodes: GraphNode[], width = 640): string {
+  const h = 270;
+  const cx = width / 2;
+  const cy = h / 2;
+  const rx = width / 2 - 80;
+  const ry = h / 2 - 30;
+  const style = (k: GraphNode['kind']) => (k === 'observed'
+    ? { stroke: PALETTE.green, dash: '', fill: PALETTE.greenSoft }
+    : k === 'declared' ? { stroke: PALETTE.blue, dash: '5 4', fill: '#fff' } : { stroke: PALETTE.greyMid, dash: '2 4', fill: PALETTE.wash });
+  const parts = nodes.map((n, i) => {
+    const a = (2 * Math.PI * i) / Math.max(1, nodes.length) - Math.PI / 2;
+    const x = cx + rx * Math.cos(a);
+    const y = cy + ry * Math.sin(a);
+    const st = style(n.kind);
+    return `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${st.stroke}" stroke-width="1.4" stroke-dasharray="${st.dash}"/>
+      <rect x="${(x - 66).toFixed(1)}" y="${(y - 17).toFixed(1)}" width="132" height="34" rx="6" fill="${st.fill}" stroke="${st.stroke}" stroke-dasharray="${st.dash}"/>
+      <text x="${x.toFixed(1)}" y="${(y - 3).toFixed(1)}" text-anchor="middle" font-size="9.4" font-weight="650" fill="${PALETTE.ink}">${escape(n.label)}</text>
+      ${n.sub ? `<text x="${x.toFixed(1)}" y="${(y + 10).toFixed(1)}" text-anchor="middle" font-size="7.8" fill="${PALETTE.grey}">${escape(n.sub)}</text>` : ''}`;
+  }).join('');
+  return `<svg class="v2-chart" viewBox="0 0 ${width} ${h}" width="100%" role="img" aria-label="Entity relationships">${parts}
+    <circle cx="${cx}" cy="${cy}" r="42" fill="${PALETTE.navy}"/>
+    <text x="${cx}" y="${cy - 2}" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">${escape(center.label)}</text>
+    ${center.sub ? `<text x="${cx}" y="${cy + 12}" text-anchor="middle" font-size="8" fill="#B9CBE4">${escape(center.sub)}</text>` : ''}</svg>`;
+}
+
+/** Conceptual three-layer diagram: which evidence feeds which product. Rendered under a "conceptual" label. */
+export function evidenceArchitecture(width = 640): string {
+  const box = (x: number, y: number, w: number, title: string, sub: string, fill: string, ink: string = PALETTE.ink) =>
+    `<rect x="${x.toFixed(1)}" y="${y}" width="${w.toFixed(1)}" height="44" rx="6" fill="${fill}" stroke="${PALETTE.line}"/>
+     <text x="${(x + w / 2).toFixed(1)}" y="${y + 18}" text-anchor="middle" font-size="10" font-weight="700" fill="${ink}">${escape(title)}</text>
+     <text x="${(x + w / 2).toFixed(1)}" y="${y + 32}" text-anchor="middle" font-size="8.2" fill="${ink === '#fff' ? '#C9D7EA' : PALETTE.grey}">${escape(sub)}</text>`;
+  const arrow = (x1: number, y1: number, x2: number, y2: number) =>
+    `<line x1="${x1.toFixed(1)}" y1="${y1}" x2="${x2.toFixed(1)}" y2="${y2}" stroke="${PALETTE.greyMid}" stroke-width="1.3" marker-end="url(#v2-arch)"/>`;
+  const third = (width - 40) / 3;
+  return `<svg class="v2-chart" viewBox="0 0 ${width} 216" width="100%" role="img" aria-label="Evidence architecture (conceptual)">
+  <defs><marker id="v2-arch" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="${PALETTE.greyMid}"/></marker></defs>
+  ${box(0, 0, third, 'Public evidence', 'crawl · search results · public profiles', PALETTE.blueSoft)}
+  ${box(third + 20, 0, third, 'Company-declared', 'profile set up by the company', PALETTE.wash)}
+  ${box(2 * third + 40, 0, third, 'Private / owned data', 'analytics · CRM · ad accounts', PALETTE.wash)}
+  ${arrow(third / 2, 44, width / 2 - 60, 80)}${arrow(third * 1.5 + 20, 44, width / 2, 80)}${arrow(2.5 * third + 40, 44, width / 2 + 60, 80)}
+  ${box(width / 2 - 170, 82, 340, 'Shared evidence layer → company intelligence', 'every observation keeps its source, date and status', PALETTE.navy, '#fff')}
+  ${arrow(width / 2 - 90, 126, third / 2 + 20, 166)}${arrow(width / 2 + 90, 126, 2.5 * third + 20, 166)}
+  ${box(0, 168, third + 40, 'This Digital Snapshot', 'public + company-declared evidence only', PALETTE.greenSoft)}
+  ${box(2 * third, 168, third + 40, 'Marketing Intelligence', 'adds private, owned performance data', PALETTE.wash)}
+</svg>`;
 }
