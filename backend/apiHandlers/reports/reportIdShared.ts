@@ -243,10 +243,7 @@ export function renderCurrentPerformanceHtml(composed: {
   );
 }
 
-// PDF export spawns a serverless Chromium (@sparticuz/chromium): allow cold-start +
-// render time, and don't cap the binary PDF response at the default 4MB.
-export const config = {
-  maxDuration: 60,
-  api: { responseLimit: false },
-};
+// The route `config` (maxDuration / responseLimit for the serverless-Chromium PDF
+// export) is declared in pages/api/reports/[reportId].ts itself: Next/Vercel only
+// read it as a static export of the route file, never from an imported module.
 
