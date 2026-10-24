@@ -82,7 +82,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 ${goal ? `The user's goal: ${goal}\n` : ''}${companyBlock ? `${companyBlock}\n` : ''}
 Rules:
-- Ground everything in the company context above (never generic filler); reflect the brand voice.
+- The USER'S words are the message: build the brief from what they tell you. The company context above only informs tone, angle, audience and vocabulary (never generic filler) — never paste positioning, differentiator or messaging-pillar text into the brief, never use analysis labels such as "trust model:" or "audience distinction:", and reflect the brand voice.
+- The FIRST sentence of freeText is the asset's main message: one clear, complete sentence in plain language that the image or slides will carry.
 - Keep replies short and conversational: confirm what you heard, then ask ONE focused question at a time to fill gaps (audience, tone, call-to-action, the offer/product). When the brief is solid, say so and invite them to use it.
 - EVERY turn, also return a running best-draft brief reflecting the whole conversation so far — the user may push it to their fields at any point.
 

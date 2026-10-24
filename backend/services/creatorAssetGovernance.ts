@@ -298,6 +298,48 @@ export function autoCorrectOverlayFields(input: {
 }
 
 /**
+ * Shorten text to at most `maxChars` keeping WHOLE sentences when any fit, otherwise
+ * cutting on a word boundary — never mid-word, never a dangling separator.
+ */
+export function clipCopyToChars(value: string, maxChars: number): string {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length <= maxChars) return text;
+  const sentences = text.match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g)?.map((s) => s.trim()).filter(Boolean) ?? [text];
+  let kept = '';
+  for (const sentence of sentences) {
+    const next = kept ? `${kept} ${sentence}` : sentence;
+    if (next.length > maxChars) break;
+    kept = next;
+  }
+  if (kept) return kept;
+  const head = text.slice(0, maxChars + 1);
+  const lastSpace = head.search(/\s\S*$/);
+  const cut = lastSpace > 0 ? head.slice(0, lastSpace).replace(/[\s,;:—–-]+$/u, '').trim() : '';
+  return cut || text.slice(0, maxChars).trim();
+}
+
+/**
+ * Fit ONE carousel slide / infographic section to its budget BEFORE it is drawn:
+ * headline + body within `maxWords`, the body within `maxBodyChars` (what the layout's
+ * line caps can actually show). The body yields first, sentence by sentence; the headline
+ * is shortened only when it alone exceeds the budget. Previously nothing corrected slides
+ * at all, so a long body was clipped on the canvas or failed the deck closed.
+ */
+export function fitSlideCopy(
+  slide: { headline: string; body: string },
+  limits: { maxWords: number; maxBodyChars: number },
+): { headline: string; body: string; changed: boolean } {
+  let headline = String(slide.headline ?? '').replace(/\s+/g, ' ').trim();
+  let body = String(slide.body ?? '').replace(/\s+/g, ' ').trim();
+  const before = `${headline}\u0000${body}`;
+  if (words(headline).length > limits.maxWords) headline = trimCopyToWordBudget(headline, limits.maxWords);
+  const bodyBudget = limits.maxWords - words(headline).length;
+  if (words(body).length > bodyBudget) body = bodyBudget > 3 ? trimCopyToWordBudget(body, bodyBudget) : '';
+  body = clipCopyToChars(body, limits.maxBodyChars);
+  return { headline, body, changed: `${headline}\u0000${body}` !== before };
+}
+
+/**
  * Image overlays must be paragraph-safe: the render manifest rejects ANY block
  * that is multi-sentence OR >110 chars (paragraph_overlay_forbidden). Collapse a
  * block to a single sentence and cap it under the threshold so a long
@@ -324,20 +366,64 @@ export function governImageOverlayText(input: {
   assetType: string;
   overlay: Partial<Record<OverlayTextField, unknown>>;
   allowCTA?: boolean;
+  /**
+   * The fields the chosen layout actually paints. Every other field is blanked, so
+   * governance never counts — and the image never carries — text nobody will see.
+   * Defaults to every field (the previous behaviour).
+   */
+  paintedFields?: readonly OverlayTextField[];
 }): { governedOverlay: OverlayTextFields; textBlocks: string[]; safeTextBlocks: string[]; corrections: string[] } {
   const corrected = autoCorrectOverlayFields({
     assetType: input.assetType,
     fields: input.overlay,
     allowCTA: input.allowCTA,
   });
+  const painted = new Set<OverlayTextField>(input.paintedFields ?? OVERLAY_TEXT_FIELDS);
   const governedOverlay = {} as OverlayTextFields;
-  for (const key of OVERLAY_TEXT_FIELDS) governedOverlay[key] = paragraphSafeOverlayBlock(corrected.fields[key]);
+  for (const key of OVERLAY_TEXT_FIELDS) {
+    governedOverlay[key] = painted.has(key) ? paragraphSafeOverlayBlock(corrected.fields[key]) : '';
+  }
+  const corrections = [...corrected.corrections];
+  const profile = resolveAssetGovernanceProfile(input.assetType);
+  if (fitOverlayToTotalBudget(governedOverlay, profile.maxWordsPerSlide ?? 28)) corrections.push('fitted_total_word_budget');
   return {
     governedOverlay,
-    textBlocks: corrected.textBlocks,
+    // Pre paragraph-safe values, but only for the fields that are still painted.
+    textBlocks: OVERLAY_TEXT_FIELDS.filter((key) => governedOverlay[key]).map((key) => corrected.fields[key]).filter(Boolean),
     safeTextBlocks: OVERLAY_TEXT_FIELDS.map((key) => governedOverlay[key]).filter(Boolean),
-    corrections: corrected.corrections,
+    corrections: [...new Set(corrections)],
   };
+}
+
+/**
+ * The per-field correction bounds each field to the profile's word budget, but the
+ * profile's budget is for ALL the copy on the image — headline + insight + supporting
+ * line + CTA together. Several individually-valid fields could therefore exceed it and
+ * fail the render closed (`text_density_exceeds_profile`).
+ *
+ * Fit the TOTAL instead, shortening the least essential field first: key insight, then
+ * hook, then supporting line. The headline (the main message) and the CTA (the viewer's
+ * next step) are never removed; if they alone exceed the budget the headline is
+ * shortened on a sentence/word boundary. Mutates `overlay`; returns true when it changed it.
+ */
+export function fitOverlayToTotalBudget(overlay: OverlayTextFields, maxWords: number): boolean {
+  const count = (value: string) => words(value).length;
+  const total = () => OVERLAY_TEXT_FIELDS.reduce((sum, key) => sum + count(overlay[key]), 0);
+  if (total() <= maxWords) return false;
+  for (const key of ['keyInsight', 'hook', 'supportingText'] as const) {
+    const excess = total() - maxWords;
+    if (excess <= 0) break;
+    const current = count(overlay[key]);
+    if (current === 0) continue;
+    const keep = current - excess;
+    // A fragment of three words or fewer reads as noise rather than a line of copy.
+    overlay[key] = keep > 3 ? trimCopyToWordBudget(overlay[key], keep) : '';
+  }
+  const excess = total() - maxWords;
+  if (excess > 0 && overlay.headline) {
+    overlay.headline = trimCopyToWordBudget(overlay.headline, Math.max(3, count(overlay.headline) - excess));
+  }
+  return true;
 }
 
 export function scoreCreatorQuality(input: {

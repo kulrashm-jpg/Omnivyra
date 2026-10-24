@@ -84,7 +84,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
-import { type ProviderImageResult, type ConditionDegradation, type ConditionDegradationCategory, IMAGE_BUCKET, DOCUMENT_BUCKET, AI_IMAGE_TIMEOUT_MS, AI_IMAGE_SIZE, bucketReadyByName, safeObject, getOverlayPreset } from './creatorAssetRendererContracts';
+import { type ProviderImageResult, type ProviderFailureKind, classifyProviderImageError, worseProviderFailure, type ConditionDegradation, type ConditionDegradationCategory, IMAGE_BUCKET, DOCUMENT_BUCKET, AI_IMAGE_TIMEOUT_MS, AI_IMAGE_SIZE, bucketReadyByName, safeObject, getOverlayPreset } from './creatorAssetRendererContracts';
 import { timeoutAfter, getFirstImageResult, bufferFromRemoteImage, resolveOpenAiImageKey } from './creatorAssetRendererSvg';
 // THE feature gate for reference-conditioned generation — one definition,
 // shared with the renderer that decides which endpoint it may call.
@@ -179,6 +179,10 @@ export async function generateProviderImage(input: {
     [process.env.OPENAI_IMAGE_MODEL, 'gpt-image-1'].filter((m): m is string => Boolean(m && m.trim())),
   ));
   const failures: string[] = [];
+  // The most serious classified failure across every provider call below, so a
+  // configuration problem (model not available to this account, bad key, no quota)
+  // reaches the renderer as such instead of only as free text in a log line.
+  let providerFailureKind: ProviderFailureKind | undefined;
 
   // ── img2img style reference (flag-gated) ──────────────────────────────────
   // When a curated-template reference image is supplied AND CREATOR_IMAGE_
@@ -323,6 +327,7 @@ export async function generateProviderImage(input: {
       // as durable metadata rather than only as a log line.
       conditionDegradation = degradedBy('edit_failed');
       conditionLatencyMs = Date.now() - editStartedAt;
+      providerFailureKind = worseProviderFailure(providerFailureKind, classifyProviderImageError(err));
       console.warn('[creator-asset-renderer][canonical-reference-edit-failed]',
         (err as Error)?.message?.slice(0, 200));
     }
@@ -393,6 +398,7 @@ export async function generateProviderImage(input: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       failures.push(`${editModel}:edit: ${message}`);
+      providerFailureKind = worseProviderFailure(providerFailureKind, classifyProviderImageError(error));
       console.warn('[creator-asset-renderer][provider-image-edit-failed]', { model: editModel, message });
       // fall through to the plain generation loop below
     }
@@ -476,14 +482,18 @@ export async function generateProviderImage(input: {
         creatorType: input.eventContext?.creatorType ?? null,
       });
       failures.push(`${model}: ${message}`);
+      const failureKind = classifyProviderImageError(error);
+      providerFailureKind = worseProviderFailure(providerFailureKind, failureKind);
       console.warn('[creator-asset-renderer][provider-image-failed]', {
         model,
         message,
+        failureKind,
       });
       creatorEvent('provider', 'error', {
         category: 'provider_image_failed',
         message,
         model,
+        failureKind,
         creatorType: input.eventContext?.creatorType ?? null,
         attachmentMode: input.eventContext?.attachmentMode ?? null,
         subtype:     input.eventContext?.subtype     ?? null,
@@ -497,6 +507,7 @@ export async function generateProviderImage(input: {
     conditionDegradation,
     conditionLatencyMs,
     fallbackReason: failures.join(' | ') || 'Provider image generation failed',
+    ...(providerFailureKind ? { providerFailureKind } : {}),
   };
 }
 

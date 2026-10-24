@@ -22,6 +22,7 @@ import { validateProviderImageTextSafety } from './creatorImageTextValidation';
 import { runCreatorOcr, isLightweightSocialEmbeddedCopy } from './creatorOcrProvider';
 import {
   autoCorrectVisualCopy,
+  clipCopyToChars,
   buildPreviewGovernanceWarnings,
   estimateTextAreaPercent,
   resolveAssetGovernanceProfile,
@@ -29,6 +30,9 @@ import {
   scoreCreatorQuality,
   validateVisualGovernance,
 } from './creatorAssetGovernance';
+
+/** The render manifest treats a section body over 110 chars as a paragraph (fails closed). */
+const INFOGRAPHIC_BODY_MAX_CHARS = 108;
 import { estimateTextBox, validateLayoutGeometry } from './creatorRenderGeometry';
 import {
   assertRenderManifestExportable,
@@ -230,7 +234,10 @@ export async function renderInfographicAsset(
     const copy = composedCopy.sections[index];
     return {
       ...section,
-      body: copy?.lead || section.body,
+      // The user's authored section text wins; the composer's lead only fills an empty
+      // section. Either way the body is fitted sentence-safe under the 110-char
+      // paragraph rule so it renders whole instead of failing closed or clipping.
+      body: clipCopyToChars(section.body || copy?.lead || '', INFOGRAPHIC_BODY_MAX_CHARS),
       bullets: copy?.bullets ?? [],
       stat: copy?.stat ?? null,
       example: copy?.example ?? null,

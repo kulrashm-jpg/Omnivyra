@@ -17,7 +17,13 @@ export type CompetitorStrategicDimensions = {
 function cleanText(value: unknown, max = 180): string | null {
   if (typeof value !== 'string') return null;
   const cleaned = value.replace(/\s+/g, ' ').trim();
-  return cleaned ? cleaned.slice(0, max).trim() : null;
+  if (!cleaned) return null;
+  if (cleaned.length <= max) return cleaned;
+  // Shorten on a word boundary — a mid-word cut ("…Marketi") reached Creator copy.
+  const head = cleaned.slice(0, max + 1);
+  const lastSpace = head.search(/\s\S*$/);
+  const cut = lastSpace > 0 ? head.slice(0, lastSpace).replace(/[\s,;:]+$/, '').trim() : '';
+  return cut || cleaned.slice(0, max).trim();
 }
 
 function pushUnique(target: string[], value: unknown) {

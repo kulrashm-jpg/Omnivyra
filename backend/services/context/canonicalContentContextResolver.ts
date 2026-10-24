@@ -303,6 +303,13 @@ export function buildAdaptationContextBlock(profile: CompanyProfile | null): Ada
  * per-request objective is folded in — it only carries the standing
  * businessObjectives / growth priorities).
  */
+const PROFILE_ANALYSIS_LABEL = /\b(?:differentiate through|trust model|audience distinction|ecosystem role|narrative territory|monetization distinction|positioning distinction)\s*:?\s*/gi;
+function withoutAnalysisLabels(value: string | undefined): string | undefined {
+  if (!value) return value;
+  const cleaned = value.replace(PROFILE_ANALYSIS_LABEL, ' ').replace(/\s+/g, ' ').replace(/\s+([;,.])/g, '$1').trim();
+  return cleaned || undefined;
+}
+
 export function mapCreatorCompanyContext(profile: CompanyProfile | null): CreatorCompanyContext {
   if (!profile) return {};
   const p = profile as unknown as Record<string, unknown>;
@@ -310,8 +317,10 @@ export function mapCreatorCompanyContext(profile: CompanyProfile | null): Creato
     description: str(p.description),
     products: list(p.products_services_list, p.products_services),
     audience: list(p.target_audience_list, p.target_audience),
-    positioning: str(p.brand_positioning) ?? str(p.product_positioning),
-    differentiators: str(p.biggest_advantage) ?? str(p.competitive_advantages),
+    // Profile ANALYSIS text ("Differentiate through trust model: …; audience distinction: …")
+    // is written for the strategy engine; Creator receives it without those labels.
+    positioning: withoutAnalysisLabels(str(p.brand_positioning) ?? str(p.product_positioning)),
+    differentiators: withoutAnalysisLabels(str(p.biggest_advantage) ?? str(p.competitive_advantages)),
     industries: list(p.industry_list, p.industry),
     categories: list(p.category_list, p.category),
     businessObjectives: list(p.growth_priorities),
