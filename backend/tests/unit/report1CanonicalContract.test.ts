@@ -367,6 +367,29 @@ describe('GAP-01 · customer output — the intelligence reaches the rendered do
   });
 });
 
+// Response-size guard (2026-10-24 view regression): the snapshot HTML is sent
+// as one serverless response, which Vercel caps at 4.5 MB. The document must
+// reference assets by URL, never inline them, in either dossier layout.
+describe('snapshot HTML stays a small, URL-referencing document', () => {
+  const VERCEL_RESPONSE_LIMIT_BYTES = 4.5 * 1024 * 1024;
+  const prevLayout = process.env.REPORT_DOSSIER_LAYOUT;
+  afterAll(() => {
+    if (prevLayout === undefined) delete process.env.REPORT_DOSSIER_LAYOUT;
+    else process.env.REPORT_DOSSIER_LAYOUT = prevLayout;
+  });
+
+  for (const layout of ['v1', 'v2'] as const) {
+    it(`${layout}: no inline data: URIs and far below the response limit`, () => {
+      if (layout === 'v2') process.env.REPORT_DOSSIER_LAYOUT = 'v2';
+      else delete process.env.REPORT_DOSSIER_LAYOUT;
+      const html = renderCanonicalReportHtml(map());
+      expect(html).not.toMatch(/data:(image|font|application)\//i);
+      expect(html).not.toMatch(/;base64,/i);
+      expect(Buffer.byteLength(html, 'utf8')).toBeLessThan(VERCEL_RESPONSE_LIMIT_BYTES / 4);
+    });
+  }
+});
+
 describe('GAP-01 · evidence integrity survives the mapping and the render', () => {
   let html: string;
   beforeAll(() => { html = renderCanonicalReportHtml(map()); });

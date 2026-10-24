@@ -59,9 +59,10 @@ import { attachProgressComparison } from './reportComparisonAttachment';
 import { mapComposedReport } from './reportComposedMapper';
 import type { ComposedReportData } from './reportComposedTypes';
 import type { ReportViewPayload } from './reportViewPayloadTypes';
+import { loadSnapshotTimelineRows } from '../../../backend/apiHandlers/reports/reportTimelineRows';
 
 // ── Task 6: canonical type derived from the intelligence engine ───────────────
-import { ReportApiRow, ReportIntelligenceData, STALE_THRESHOLD_MS, buildGeneratingPayload, buildPdfDownloadFilename, config, isPerformanceIntelligenceComposedReport, renderCurrentPerformanceHtml, requeueIncompleteReport, sanitizeFilenamePart } from '../../../backend/apiHandlers/reports/reportIdShared';
+import { ReportApiRow, ReportIntelligenceData, STALE_THRESHOLD_MS, buildGeneratingPayload, buildPdfDownloadFilename, isPerformanceIntelligenceComposedReport, renderCurrentPerformanceHtml, requeueIncompleteReport, sanitizeFilenamePart } from '../../../backend/apiHandlers/reports/reportIdShared';
 
 async function handler(
   req: NextApiRequest,
@@ -365,21 +366,19 @@ async function handler(
     return null;
   };
 
+  const timelineParams = {
+    companyId: report.company_id,
+    domain: report.domain,
+    createdAt: report.created_at,
+    currentReportId: report.id,
+  };
+
   if (composedPayload) {
-    const { data: timelineReports } = await supabase
-      .from('reports')
-      .select('id, company_id, domain, report_type, status, created_at, data, metadata')
-      .eq('company_id', report.company_id)
-      .eq('domain', report.domain)
-      .in('report_type', ['snapshot', 'content_readiness'])
-      .eq('status', 'completed')
-      .lte('created_at', report.created_at)
-      .order('created_at', { ascending: false })
-      .limit(18);
+    const timelineReports = await loadSnapshotTimelineRows(supabase, timelineParams);
     const withComparison = attachProgressComparison({
       currentPayload: composedPayload,
       type,
-      timelineReports: timelineReports ?? [],
+      timelineReports,
       mapStoredReportToPayload,
     });
     applyLogoFallback(withComparison);
@@ -421,20 +420,11 @@ async function handler(
       : type === 'growth'
         ? mapGrowth(intel, reportId, report.company_id, report.domain, generatedDate, generated_at, is_stale, engine_version)
         : mapSnapshot(intel, reportId, report.company_id, report.domain, generatedDate, generated_at, is_stale, engine_version);
-  const { data: timelineReports } = await supabase
-    .from('reports')
-    .select('id, company_id, domain, report_type, status, created_at, data, metadata')
-    .eq('company_id', report.company_id)
-    .eq('domain', report.domain)
-    .in('report_type', ['snapshot', 'content_readiness'])
-    .eq('status', 'completed')
-    .lte('created_at', report.created_at)
-    .order('created_at', { ascending: false })
-    .limit(18);
+  const timelineReports = await loadSnapshotTimelineRows(supabase, timelineParams);
   const payloadWithComparison = attachProgressComparison({
     currentPayload: payload,
     type,
-    timelineReports: timelineReports ?? [],
+    timelineReports,
     mapStoredReportToPayload,
   });
   applyLogoFallback(payloadWithComparison);
@@ -465,6 +455,17 @@ async function handler(
 
   return res.status(200).json(sanitizedPayloadWithComparison);
 }
+
+// PDF export spawns a serverless Chromium (@sparticuz/chromium): allow cold-start +
+// render time, and do not cap the binary PDF response at the default 4MB.
+// Next/Vercel read `config` only as a static export of the route file itself.
+// It lived here until the 3fdab936 route-shell split (2026-07-09) moved it into
+// reportIdShared, where it was imported but never exported, so maxDuration and
+// responseLimit were silently dropped. Keep it in this file.
+export const config = {
+  maxDuration: 60,
+  api: { responseLimit: false },
+};
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
 export default __createApiRoute(handler, { route: '/api/reports/:reportId' });

@@ -1,5 +1,5 @@
 import Head from 'next/head';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { apiFetch } from '@/lib/apiFetch';
 import {
@@ -9,6 +9,7 @@ import {
 import ReportPageContent from '@/components/reports/view/ReportPageContent';
 import PublicAdvertisingSection from '@/components/reports/advertising/PublicAdvertisingSection';
 import { sanitizeHtml } from '@/lib/security/htmlSanitizer';
+import { fetchSnapshotHtml, resolveRegenerateOutcome } from '@/lib/reports/snapshotViewClient';
 
 export default function ReportViewPage() {
   const router = useRouter();
@@ -25,7 +26,34 @@ export default function ReportViewPage() {
   const [generationMessage, setGenerationMessage] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  // Regenerate failures are shown inline: routing them through `fetchError`
+  // replaced the whole loaded report with the full-page "Report Unavailable".
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState('summary');
+  const regenerateInFlight = useRef(false);
+  const htmlLoadSeq = useRef(0);
+
+  // The snapshot HTML is a second request after the JSON payload. It is retried
+  // on transient failures (fetchSnapshotHtml) and can be retried by hand from
+  // the "unavailable" panel without reloading the page.
+  const loadSnapshotHtml = useCallback(async (id: string, reportType: string) => {
+    const seq = ++htmlLoadSeq.current;
+    const stale = () => seq !== htmlLoadSeq.current;
+    setSnapshotHtmlLoading(true);
+    setSnapshotHtmlMarkup(null);
+    setSnapshotHtmlStyles('');
+    const result = await fetchSnapshotHtml(
+      (url) => apiFetch(url),
+      `/api/reports/${id}?type=${reportType}&format=html`,
+      { isCancelled: stale },
+    );
+    if (stale()) return;
+    if (result.ok) {
+      setSnapshotHtmlStyles(result.html.styles);
+      setSnapshotHtmlMarkup(result.html.markup);
+    }
+    setSnapshotHtmlLoading(false);
+  }, []);
 
   useEffect(() => {
     if (!router.isReady || !reportId) return;
@@ -72,32 +100,9 @@ export default function ReportViewPage() {
         setReportData(data);
 
         if (data.reportType === 'snapshot') {
-          setSnapshotHtmlLoading(true);
-          setSnapshotHtmlMarkup(null);
-          setSnapshotHtmlStyles('');
           setPerformanceHtmlDocument(null);
           setPerformanceHtmlLoading(false);
-          try {
-            const htmlRes = await apiFetch(
-              `/api/reports/${reportId}?type=${data.reportType}&format=html`,
-            );
-            if (!cancelled && htmlRes.ok) {
-              const rawHtml = await htmlRes.text();
-              const styleMatch = rawHtml.match(/<style>([\s\S]*?)<\/style>/i);
-              const pageMatch = rawHtml.match(/<div class="report-page">([\s\S]*?)<\/div>\s*<\/body>/i);
-              setSnapshotHtmlStyles(styleMatch?.[1] ?? '');
-              setSnapshotHtmlMarkup(pageMatch?.[1] ?? rawHtml);
-            }
-          } catch {
-            if (!cancelled) {
-              setSnapshotHtmlMarkup(null);
-              setSnapshotHtmlStyles('');
-            }
-          } finally {
-            if (!cancelled) {
-              setSnapshotHtmlLoading(false);
-            }
-          }
+          await loadSnapshotHtml(String(reportId), data.reportType);
         } else if (data.reportType === 'performance') {
           setPerformanceHtmlLoading(true);
           setPerformanceHtmlDocument(null);
@@ -140,9 +145,10 @@ export default function ReportViewPage() {
     fetchReport();
     return () => {
       cancelled = true;
+      htmlLoadSeq.current += 1; // drop any in-flight snapshot HTML load
       clearTimeout(pollTimer);
     };
-  }, [router.isReady, reportId, type]);
+  }, [router.isReady, reportId, type, loadSnapshotHtml]);
 
   const handleDownloadPDF = async () => {
     if (typeof window === 'undefined' || !reportData) return;
@@ -187,9 +193,13 @@ export default function ReportViewPage() {
 
   const handleRegenerate = async () => {
     if (!reportData) return;
+    // Synchronous guard: `isRegenerating` only disables the button after a
+    // re-render, so a fast double click could send two generate requests.
+    if (regenerateInFlight.current) return;
+    regenerateInFlight.current = true;
 
     setIsRegenerating(true);
-    setFetchError(null);
+    setRegenerateError(null);
 
     try {
       const reportCategory =
@@ -215,15 +225,24 @@ export default function ReportViewPage() {
         }),
       });
 
-      const data = (await res.json().catch(() => ({}))) as { reportId?: string; error?: string };
-      if (!res.ok || !data.reportId) {
-        throw new Error(data.error || 'Failed to regenerate report');
+      const data = (await res.json().catch(() => ({}))) as {
+        reportId?: string;
+        error?: string;
+        code?: string;
+      };
+      // A 409 REPORT_IN_PROGRESS names the report already running for this
+      // domain: open it (its view polls and shows progress) instead of
+      // dead-ending on "Report already in progress".
+      const outcome = resolveRegenerateOutcome(res, data, reportData.reportId);
+      if (outcome.kind === 'error') {
+        throw new Error(outcome.message);
       }
 
-      await router.push(`/reports/view/${data.reportId}?type=${reportData.reportType}`);
+      await router.push(`/reports/view/${outcome.reportId}?type=${reportData.reportType}`);
     } catch (error) {
-      setFetchError(error instanceof Error ? error.message : 'Failed to regenerate report.');
+      setRegenerateError(error instanceof Error ? error.message : 'Failed to regenerate report.');
     } finally {
+      regenerateInFlight.current = false;
       setIsRegenerating(false);
     }
   };
@@ -337,9 +356,9 @@ export default function ReportViewPage() {
               </div>
             </div>
 
-            {fetchError ? (
+            {regenerateError ? (
               <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {fetchError}
+                {regenerateError}
               </div>
             ) : null}
 
@@ -364,10 +383,25 @@ export default function ReportViewPage() {
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800 shadow-sm">
                   <div className="font-semibold text-amber-900">Snapshot HTML unavailable</div>
                   <p className="mt-1">
-                    The new snapshot report could not be rendered right now, so the page is not
-                    falling back to the old template. Please regenerate the report or refresh after a
-                    moment.
+                    The report is saved, but its page could not be loaded just now (the connection
+                    dropped or the server did not answer in time). Try again; regenerating is not
+                    needed.
                   </p>
+                  <div className="mt-3 flex flex-wrap gap-3">
+                    <button
+                      onClick={() => void loadSnapshotHtml(reportData.reportId, reportData.reportType)}
+                      className="inline-flex items-center rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-amber-700"
+                    >
+                      Try again
+                    </button>
+                    <button
+                      onClick={handleDownloadPDF}
+                      disabled={isDownloading}
+                      className="inline-flex items-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isDownloading ? 'Preparing PDF…' : 'Download PDF instead'}
+                    </button>
+                  </div>
                 </div>
                 {/* WP-9 — the Report 1 snapshot is normally shown as the server-rendered export
                     embedded above, which already carries the public-advertising section. It is
@@ -429,9 +463,9 @@ export default function ReportViewPage() {
               </div>
             </div>
 
-            {fetchError ? (
+            {regenerateError ? (
               <div className="mb-4 rounded-lg border border-red-900/70 bg-red-950 px-4 py-3 text-sm text-red-100">
-                {fetchError}
+                {regenerateError}
               </div>
             ) : null}
 
@@ -481,7 +515,7 @@ export default function ReportViewPage() {
 
       <ReportPageContent
         reportData={reportData}
-        fetchError={fetchError}
+        fetchError={regenerateError}
         isDownloading={isDownloading}
         isRegenerating={isRegenerating}
         activeSection={activeSection}
