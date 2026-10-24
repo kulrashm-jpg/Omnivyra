@@ -186,6 +186,9 @@ export function buildAiImagePrompt(input: {
     // when an objective is present (previously summary was only an objective
     // fallback and was dropped whenever an objective existed).
     keyMessage: compactText(input.metadata.summary),
+    // The writer content itself (post body / brief), so the scene — above all
+    // a text-free Post + Image — is visually about what the content says.
+    contentExcerpt: compactText(input.metadata.content_excerpt || safeObject(input.metadata.source_content).snippet),
     ctaIntent: compactText(input.metadata.cta || safeObject(input.metadata.creator_card).cta || safeObject(input.metadata.overlay_text).cta),
     tagline: compactText(brandContext.tagline || selectedAssets.tagline),
     brandMode: typeof input.metadata.brand_generation_mode === 'string'

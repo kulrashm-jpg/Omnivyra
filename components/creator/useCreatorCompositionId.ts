@@ -39,6 +39,15 @@ export function useCreatorCompositionId(creatorType: string | null | undefined):
   const sessionToken = typeof router.query.session === 'string' && router.query.session.trim()
     ? router.query.session.trim()
     : null;
+  /*
+   * An explicit draft id in the URL (`?composition=`, set by the workspace
+   * hand-off) — what lets a NEW TAB find the same draft, and so the same
+   * server-persisted brief and attachments. Opaque token, shape-checked.
+   */
+  const urlComposition = typeof router.query.composition === 'string'
+    && /^[A-Za-z0-9_.:-]{1,160}$/.test(router.query.composition.trim())
+    ? router.query.composition.trim()
+    : null;
 
   React.useEffect(() => {
     if (!router.isReady || !creatorType) return;
@@ -47,6 +56,11 @@ export function useCreatorCompositionId(creatorType: string | null | undefined):
     if (sessionToken) { setCompositionId(sessionToken); return; }
 
     const key = creatorCompositionKey(creatorType);
+    if (urlComposition) {
+      try { window.sessionStorage.setItem(key, urlComposition); } catch { /* id still usable for this view */ }
+      setCompositionId(urlComposition);
+      return;
+    }
     try {
       const existing = window.sessionStorage.getItem(key);
       if (existing && existing.trim()) { setCompositionId(existing.trim()); return; }
@@ -63,7 +77,7 @@ export function useCreatorCompositionId(creatorType: string | null | undefined):
       // would strand references the user could never see again.
       setCompositionId(null);
     }
-  }, [router.isReady, creatorType, sessionToken]);
+  }, [router.isReady, creatorType, sessionToken, urlComposition]);
 
   return compositionId;
 }

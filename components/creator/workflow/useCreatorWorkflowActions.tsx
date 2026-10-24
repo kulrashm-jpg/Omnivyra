@@ -21,7 +21,11 @@ import type { TemplateAiAssistContext, TemplateAiAssistTarget } from '../Templat
 // only mints when absent, so both callers resolve to ONE draft identity rather
 // than minting a second one.
 import { useCreatorCompositionId } from '../useCreatorCompositionId';
-import { applyTemplateFieldUpdates } from '../../../lib/creator-templates/values';
+import { applyTemplateFieldUpdates, type TemplateFieldValues } from '../../../lib/creator-templates/values';
+import {
+  OVERLAY_LIMITS, fieldEditKey, planOverlayFillTargets, planTemplateFillTargets,
+  seedOverlayFromBrief, seedTemplateFromBrief, type FillScope,
+} from '../../../lib/creator-content/creatorContentFill';
 import {
   type CreatorResult, type RepurposePath, type SavedCreatorAsset,
   CREATOR_GENERATION_TIMEOUT_MS, OVERLAY_FIELD_LABELS,
@@ -80,146 +84,197 @@ export function useCreatorWorkflowActions(
     handleEditorChange, hasBrandProfile, repurposePaths, selectedAsset, selectedSuggestion, setAnswer,
     setAnswerSilent, setBrandOverride, setBrandSelection, setOverlayField, suggestionOptions
   } = l;
+  // ── The brief as field-assist context ──────────────────────────────────────
+  // ONE builder for every field-assist call on this page (template fields,
+  // overlay roles, slides, sections, Generate pre-fill). When writer content
+  // exists the WHOLE brief travels — main message (the key), body, audience,
+  // tone, viewer action, offer, objective — and the company context is added
+  // server-side from company_id. Without a brief the legacy topic / answers /
+  // key-message grounding is unchanged.
+  const effectiveBrief = l.effectiveBrief;
+  const userEditedRef = React.useRef(s.userEditedKeys);
+  userEditedRef.current = s.userEditedKeys;
+  const buildAssistContext = React.useCallback((fallbackSource: string): Record<string, unknown> => {
+    const b = effectiveBrief;
+    return {
+      topic: String(answers.topic || '').trim(),
+      audience: String(b?.audience || answers.audience || '').trim(),
+      objective: String(b?.objective || answers.objective || '').trim(),
+      tone: String(b?.tone || answers.styleDirection || '').trim(),
+      ...(b?.mainMessage ? { main_message: b.mainMessage } : {}),
+      ...(b?.cta || answers.cta ? { cta: String(b?.cta || answers.cta || '').trim() } : {}),
+      ...(b?.offer ? { offer: b.offer } : {}),
+      source_content: String(b?.body || fallbackSource || '').trim().slice(0, 6000) || undefined,
+    };
+  }, [effectiveBrief, answers.topic, answers.audience, answers.objective, answers.styleDirection, answers.cta]);
+
+  /** Arc roles for carousel slide targets (hook → build → proof → CTA). */
+  const slideRolesFor = React.useCallback((targets: Array<{ scope: string; index?: number }>, slideCountHint: number) => {
+    if (!activeTemplate || activeTemplate.assetFamily !== 'carousel' || !targets.some((t) => t.scope === 'slide')) return [];
+    const strategy = resolvePurposeStrategy(type, String(answers.subtype || ''));
+    const arc = strategy?.slideArc ?? [];
+    const slideCount = Math.max(
+      slideCountHint,
+      ...targets.filter((t) => t.scope === 'slide').map((t) => (t.index ?? 0) + 1),
+      1,
+    );
+    const sizedRoles = fitSlideArcToCount(arc.map((a) => a.role), slideCount);
+    const intentByRole = new Map(arc.map((a) => [a.role, a.intent] as const));
+    return sizedRoles.map((role) => ({
+      role,
+      intent: intentByRole.get(role) ?? 'Advance the narrative with a distinct supporting point — do not repeat an earlier slide.',
+    }));
+  }, [activeTemplate, type, answers.subtype]);
+
+  /** POST field-assist for template targets; returns the raw updates (or throws). */
+  const requestTemplateAssist = React.useCallback(async (
+    action: string,
+    targets: Array<{ scope: string; fieldKey: string; index?: number; currentValue?: string }>,
+    values: TemplateFieldValues,
+  ): Promise<Array<{ scope: string; field_key: string; index?: number; value: string }>> => {
+    if (!activeTemplate) return [];
+    const slideRoles = slideRolesFor(targets, (values.slides ?? []).length);
+    const resp = await fetch('/api/creator-templates/field-assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        company_id: selectedCompanyId || undefined,
+        asset_family: activeTemplate.assetFamily,
+        template_id: activeTemplate.id,
+        action,
+        targets: targets.map((t) => ({
+          scope: t.scope, field_key: t.fieldKey, index: t.index, current_value: t.currentValue,
+          ...(t.scope === 'slide' && typeof t.index === 'number' && slideRoles[t.index]
+            ? { role: slideRoles[t.index].role, role_intent: slideRoles[t.index].intent }
+            : {}),
+        })),
+        context: {
+          // The content the asset is built FROM: the resolved brief body when
+          // there is one, else the Writer post body / the operator's key message
+          // + data points. Carousel generation turns this into the slide sequence
+          // instead of inventing from the short topic.
+          ...buildAssistContext(
+            writerSource?.body
+            || [answers.keyMessage, answers.dataPoints].map((v) => String(v || '').trim()).filter(Boolean).join('\n\n')
+            || '',
+          ),
+          // Already-filled fields on this asset, so AI-generated copy stays DISTINCT
+          // (e.g. the subheadline won't restate the headline). The API drops the field
+          // being written and instructs the model not to duplicate the rest.
+          siblings: (activeTemplate.formDefinition.fields ?? [])
+            .map((f) => ({ label: f.label, value: String(values.fields?.[f.key] ?? '').trim() }))
+            .filter((s) => s.value),
+        },
+      }),
+    });
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      throw new Error(detail?.error || `AI assist failed (${resp.status})`);
+    }
+    const data = await resp.json();
+    return Array.isArray(data?.updates) ? data.updates : [];
+  }, [activeTemplate, selectedCompanyId, answers.keyMessage, answers.dataPoints, writerSource?.body, buildAssistContext, slideRolesFor]);
+
   const handleTemplateAiAssist = React.useCallback(async (ctx: TemplateAiAssistContext) => {
     if (!activeTemplate || ctx.targets.length === 0) return;
     const requestId = ++fieldAssistRequestRef.current;
     const requestContextRevision = fieldAssistContextRef.current.revision;
-    const isCurrentContext = () => fieldAssistContextRef.current.revision === requestContextRevision;
+    const startedFor = fieldAssistContextRef.current.context;
+    // An AUTOMATIC content fill runs while the page is still settling (the main
+    // message seed, a restored brief and the user's typing all change the
+    // values), so it is not discarded on any change: it stays valid while the
+    // draft (type / company / template) is the same, and it never lands on a
+    // field the user edited meanwhile. An explicit "+AI" click keeps the strict
+    // whole-context check.
+    const auto = String(ctx.busyKey).endsWith(':auto-fill');
+    const isCurrentContext = () => {
+      const now = fieldAssistContextRef.current;
+      if (!auto) return now.revision === requestContextRevision;
+      return now.context.workflowType === startedFor.workflowType
+        && now.context.companyId === startedFor.companyId
+        && now.context.activeTemplateId === startedFor.activeTemplateId;
+    };
     setAiBusyKey(ctx.busyKey);
     setError(null);
     try {
-      // Carousel slides play distinct roles in a narrative arc — attach each slide's role +
-      // intent so the AI writes arc-aware titles/bodies (hook → build → proof → CTA) that
-      // advance the story instead of repeating. Derived from the purpose strategy's slideArc,
-      // sized to the actual slide count (the same arc the renderer/preview uses).
-      let slideRoles: Array<{ role: string; intent: string }> = [];
-      if (activeTemplate.assetFamily === 'carousel' && ctx.targets.some((t) => t.scope === 'slide')) {
-        const strategy = resolvePurposeStrategy(type, String(answers.subtype || ''));
-        const arc = strategy?.slideArc ?? [];
-        const slideCount = Math.max(
-          (templateValues.slides ?? []).length,
-          ...ctx.targets.filter((t) => t.scope === 'slide').map((t) => (t.index ?? 0) + 1),
-          1,
-        );
-        const sizedRoles = fitSlideArcToCount(arc.map((a) => a.role), slideCount);
-        const intentByRole = new Map(arc.map((a) => [a.role, a.intent] as const));
-        slideRoles = sizedRoles.map((role) => ({
-          role,
-          intent: intentByRole.get(role) ?? 'Advance the narrative with a distinct supporting point — do not repeat an earlier slide.',
-        }));
-      }
-      const resp = await fetch('/api/creator-templates/field-assist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: selectedCompanyId || undefined,
-          asset_family: activeTemplate.assetFamily,
-          template_id: activeTemplate.id,
-          action: ctx.action,
-          targets: ctx.targets.map((t) => ({
-            scope: t.scope, field_key: t.fieldKey, index: t.index, current_value: t.currentValue,
-            ...(t.scope === 'slide' && typeof t.index === 'number' && slideRoles[t.index]
-              ? { role: slideRoles[t.index].role, role_intent: slideRoles[t.index].intent }
-              : {}),
-          })),
-          context: {
-            topic: String(answers.topic || '').trim(),
-            audience: String(answers.audience || '').trim(),
-            objective: String(answers.objective || '').trim(),
-            tone: String(answers.styleDirection || '').trim(),
-            // The content the asset is built FROM: the Writer post body / campaign card when this
-            // flow carried one, else the operator's key message / data points. Carousel generation
-            // turns this into the slide sequence instead of inventing from the short topic.
-            source_content: String(
-              writerSource?.body
-              || [answers.keyMessage, answers.dataPoints].map((v) => String(v || '').trim()).filter(Boolean).join('\n\n')
-              || '',
-            ).trim().slice(0, 6000) || undefined,
-            // Already-filled fields on this asset, so AI-generated copy stays DISTINCT
-            // (e.g. the subheadline won't restate the headline). The API drops the field
-            // being written and instructs the model not to duplicate the rest.
-            siblings: (activeTemplate.formDefinition.fields ?? [])
-              .map((f) => ({ label: f.label, value: String(templateValues.fields?.[f.key] ?? '').trim() }))
-              .filter((s) => s.value),
-          },
-        }),
-      });
-      if (!resp.ok) {
-        const detail = await resp.json().catch(() => ({}));
-        if (!isCurrentContext()) return;
-        throw new Error(detail?.error || `AI assist failed (${resp.status})`);
-      }
-      const data = await resp.json();
+      const updates = await requestTemplateAssist(ctx.action, ctx.targets, templateValues);
       if (!isCurrentContext()) return;
-      const updates = Array.isArray(data?.updates) ? data.updates : [];
-      if (updates.length > 0) {
-        setTemplateValues((prev) => applyTemplateFieldUpdates(prev, updates));
+      const kept = auto
+        ? updates.filter((u) => !userEditedRef.current.has(fieldEditKey(u.scope as FillScope, u.field_key, u.index)))
+        : updates;
+      if (kept.length > 0) {
+        setTemplateValues((prev) => applyTemplateFieldUpdates(prev, kept));
       }
     } catch (e) {
       if (isCurrentContext()) setError(e instanceof Error ? e.message : 'AI assist failed');
     } finally {
       if (fieldAssistRequestRef.current === requestId) setAiBusyKey(null);
     }
-  }, [activeTemplate, selectedCompanyId, answers, templateValues, writerSource, type]);
+  }, [activeTemplate, templateValues, requestTemplateAssist]);
 
-  // ── Auto-fill / de-duplicate the draft on create ─────────────────────────
-  // Two problems this fixes, once per template, only when we have something to
-  // write from (the operator's topic, or the Writer post / campaign strategic
-  // card that flows in as source_content):
-  //   1. A carousel/infographic editor LANDS with every repeated slide/section
-  //      row empty, so required "Slide title" fields immediately error. We fill
-  //      the EMPTY fields of ENTIRELY-empty rows (authored copy untouched).
-  //   2. A flat image draft can land with a SUPPORTING field (e.g. subheadline)
-  //      seeded identical to the lead (headline). A supporting line must ENHANCE
-  //      the headline, never copy it — so we regenerate any non-lead field that
-  //      duplicates the lead, plus any empty REQUIRED flat field. field-assist
-  //      is sibling-aware (it's told not to duplicate the other fields), so the
-  //      regenerated value is distinct.
-  // The user can still edit or regenerate any field afterwards.
+  // ── Auto-fill the template from content on create ─────────────────────────
+  // Once per template, only when there is content to write from.
+  //   WITH a writer brief (owner decision: content drives every field): every
+  //   empty, AI-capable, not-user-edited field — flat fields (subheadline, CTA
+  //   …), EVERY slide field (arc-aware), EVERY section field — plus a
+  //   supporting field that merely duplicates the lead. The lead itself holds
+  //   the main message (seeded deterministically); it is only sent to AI when
+  //   the message had to be cut to fit, to be condensed.
+  //   WITHOUT a brief (legacy): empty fields of entirely-empty slide/section
+  //   rows + empty REQUIRED / lead-duplicating flat fields, from the topic.
   const autoFilledTemplateRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (!activeTemplate) return;
     if (autoFilledTemplateRef.current === activeTemplate.id) return; // once per template
     if (aiBusyKey) return;                                    // an AI op is already running
-    // Need real context — never auto-write generic copy from nothing.
-    const hasContext =
-      String(answers.topic || '').trim().length > 0 || !!String(writerSource?.body || '').trim();
-    if (!hasContext) return;
-
     const fd = activeTemplate.formDefinition;
-    const targets: TemplateAiAssistTarget[] = [];
+    const repeatScope = fd.slides ? 'slide' : fd.sections ? 'section' : null;
 
-    // (1) Carousel slides / infographic sections — fill empty fields of empty rows.
-    const repeat = fd.slides
-      ? { scope: 'slide' as const, fields: fd.slides.fields, rows: templateValues.slides ?? [] }
-      : fd.sections
-        ? { scope: 'section' as const, fields: fd.sections.fields, rows: templateValues.sections ?? [] }
-        : null;
-    if (repeat) {
-      repeat.rows.forEach((row, index) => {
-        const rowEmpty = repeat.fields.every((f) => !String(row?.[f.key] || '').trim());
-        if (!rowEmpty) return;
-        for (const f of repeat.fields) {
-          if (!f.aiAssist?.generate) continue;
-          targets.push({ scope: repeat.scope, fieldKey: f.key, index, currentValue: '' });
-        }
+    let targets: TemplateAiAssistTarget[] = [];
+    if (effectiveBrief) {
+      // Plan against the values AS SEEDED (main message in the lead) so the
+      // lead is never planned as empty while the seed is still in flight.
+      const seeded = seedTemplateFromBrief({
+        template: activeTemplate, values: templateValues, brief: effectiveBrief,
+        edited: s.userEditedKeys, imageCopyActive: l.imageCopyActive,
+      }).values;
+      targets = planTemplateFillTargets({
+        template: activeTemplate, values: seeded, edited: s.userEditedKeys,
+        imageCopyActive: l.imageCopyActive, includeLead: l.condenseLeadRef.current,
       });
-    }
-
-    // (2) Flat fields — regenerate a supporting field that DUPLICATES the lead,
-    //     and fill any empty REQUIRED flat field.
-    const flatFields = fd.fields ?? [];
-    if (flatFields.length > 0) {
-      const leadKey = flatFields.find((f) => ['headline', 'title', 'quote'].includes(f.key))?.key
-        ?? flatFields[0]?.key ?? null;
-      const leadVal = leadKey ? String(templateValues.fields?.[leadKey] ?? '').trim() : '';
-      for (const f of flatFields) {
-        if (!f.aiAssist?.generate) continue;
-        const val = String(templateValues.fields?.[f.key] ?? '').trim();
-        const duplicatesLead = f.key !== leadKey && !!leadVal && val.toLowerCase() === leadVal.toLowerCase();
-        const emptyRequired = f.required && !val;
-        if (duplicatesLead || emptyRequired) {
-          targets.push({ scope: 'flat', fieldKey: f.key, currentValue: val });
+    } else {
+      // Need real context — never auto-write generic copy from nothing.
+      const hasContext =
+        String(answers.topic || '').trim().length > 0 || !!String(writerSource?.body || '').trim();
+      if (!hasContext) return;
+      const repeat = fd.slides
+        ? { scope: 'slide' as const, fields: fd.slides.fields, rows: templateValues.slides ?? [] }
+        : fd.sections
+          ? { scope: 'section' as const, fields: fd.sections.fields, rows: templateValues.sections ?? [] }
+          : null;
+      if (repeat) {
+        repeat.rows.forEach((row, index) => {
+          const rowEmpty = repeat.fields.every((f) => !String(row?.[f.key] || '').trim());
+          if (!rowEmpty) return;
+          for (const f of repeat.fields) {
+            if (!f.aiAssist?.generate) continue;
+            targets.push({ scope: repeat.scope, fieldKey: f.key, index, currentValue: '' });
+          }
+        });
+      }
+      const flatFields = fd.fields ?? [];
+      if (flatFields.length > 0) {
+        const leadKey = flatFields.find((f) => ['headline', 'title', 'quote'].includes(f.key))?.key
+          ?? flatFields[0]?.key ?? null;
+        const leadVal = leadKey ? String(templateValues.fields?.[leadKey] ?? '').trim() : '';
+        for (const f of flatFields) {
+          if (!f.aiAssist?.generate) continue;
+          const val = String(templateValues.fields?.[f.key] ?? '').trim();
+          const duplicatesLead = f.key !== leadKey && !!leadVal && val.toLowerCase() === leadVal.toLowerCase();
+          const emptyRequired = f.required && !val;
+          if (duplicatesLead || emptyRequired) {
+            targets.push({ scope: 'flat', fieldKey: f.key, currentValue: val });
+          }
         }
       }
     }
@@ -229,11 +284,69 @@ export function useCreatorWorkflowActions(
     void handleTemplateAiAssist({
       template: activeTemplate,
       action: 'generate',
-      busyKey: `batch:${repeat ? repeat.scope : 'flat'}:auto-fill`,
-      label: repeat ? `Generating ${repeat.scope === 'slide' ? 'slides' : 'sections'}…` : 'Refining copy…',
+      busyKey: `batch:${repeatScope ?? 'flat'}:auto-fill`,
+      label: repeatScope ? `Generating ${repeatScope === 'slide' ? 'slides' : 'sections'}…` : 'Writing copy from your content…',
       targets,
     });
-  }, [activeTemplate, templateValues.slides, templateValues.sections, templateValues.fields, answers.topic, writerSource?.body, aiBusyKey, handleTemplateAiAssist]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTemplate, templateValues.slides, templateValues.sections, templateValues.fields, answers.topic, writerSource?.body, aiBusyKey, handleTemplateAiAssist, effectiveBrief, l.imageCopyActive]);
+
+  /** POST field-assist for overlay roles; returns the raw updates (with alternatives when asked). */
+  const requestOverlayAssist = React.useCallback(async (
+    action: 'generate' | 'rewrite',
+    fields: Array<keyof WriterOverlayText>,
+    overlay: WriterOverlayText,
+    alternatives: number,
+  ): Promise<Array<{ field_key?: string; fieldKey?: string; value?: string; alternatives?: string[] }>> => {
+    if (!activeTemplate) return [];
+    const siblings = (Object.keys(OVERLAY_FIELD_LABELS) as Array<keyof WriterOverlayText>)
+      .filter((k) => !fields.includes(k))
+      .map((k) => ({ label: OVERLAY_FIELD_LABELS[k], value: String(overlay[k] || '').trim() }))
+      .filter((sib) => sib.value);
+    // Ground the overlay copy in the content: the brief when present, else the
+    // Template Content (Headline / Subheadline the user set) / key message /
+    // data points, so each role EXPANDS that material instead of echoing topic.
+    const templateContentSource = [
+      String(templateValues.fields?.headline || '').trim(),
+      String(templateValues.fields?.subheadline || '').trim(),
+      String(answers.keyMessage || '').trim(),
+      String(answers.dataPoints || '').trim(),
+    ].filter(Boolean).join('\n');
+    const resp = await fetch('/api/creator-templates/field-assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        company_id: selectedCompanyId || undefined,
+        asset_family: activeTemplate.assetFamily,
+        template_id: activeTemplate.id,
+        action,
+        ...(alternatives > 0 ? { alternatives } : {}),
+        targets: fields.map((k) => ({ scope: 'overlay', field_key: k, current_value: String(overlay[k] || '') })),
+        context: {
+          ...buildAssistContext(String(writerSource?.body || templateContentSource || answers.topic || '')),
+          siblings,
+        },
+      }),
+    });
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      throw new Error(detail?.error || `AI assist failed (${resp.status})`);
+    }
+    const data = await resp.json();
+    return Array.isArray(data?.updates) ? data.updates : [];
+  }, [activeTemplate, selectedCompanyId, templateValues.fields, answers.keyMessage, answers.dataPoints, answers.topic, writerSource?.body, buildAssistContext]);
+
+  /** Keep the AI alternatives for chips (content-grounded, per overlay role). */
+  const rememberOverlayAlternatives = React.useCallback((updates: Array<{ field_key?: string; fieldKey?: string; alternatives?: string[] }>) => {
+    const patch: Partial<Record<keyof WriterOverlayText, string[]>> = {};
+    for (const u of updates) {
+      const key = String(u?.field_key ?? u?.fieldKey ?? '') as keyof WriterOverlayText;
+      if (key && Array.isArray(u?.alternatives) && u.alternatives.length) {
+        patch[key] = u.alternatives.filter((a) => typeof a === 'string' && a.trim());
+      }
+    }
+    if (Object.keys(patch).length) s.setOverlayAiAlternatives((prev) => ({ ...prev, ...patch }));
+  }, [s.setOverlayAiAlternatives]);
 
   // AI-generate a single OVERLAY field (hook / headline / supporting text / key insight).
   // Overlay copy isn't a template field, so we call field-assist with the 'overlay' scope
@@ -245,48 +358,9 @@ export function useCreatorWorkflowActions(
     setAiBusyKey(busyKey);
     setError(null);
     try {
-      const siblings = (Object.keys(OVERLAY_FIELD_LABELS) as Array<keyof WriterOverlayText>)
-        .filter((k) => k !== fieldId)
-        .map((k) => ({ label: OVERLAY_FIELD_LABELS[k], value: String(overlayText[k] || '').trim() }))
-        .filter((s) => s.value);
-      // Ground the overlay copy in the actual Template Content (the Headline /
-      // Image Text + Subheadline the user set at the top) so each role EXPANDS
-      // that material into a distinct line, instead of echoing the short topic.
-      // Falls back to the Writer post body / key message when present.
-      const templateContentSource = [
-        String(templateValues.fields?.headline || '').trim(),
-        String(templateValues.fields?.subheadline || '').trim(),
-        String(answers.keyMessage || '').trim(),
-        String(answers.dataPoints || '').trim(),
-      ].filter(Boolean).join('\n');
-      const sourceContent = String(writerSource?.body || templateContentSource || '')
-        .trim().slice(0, 6000) || undefined;
-      const resp = await fetch('/api/creator-templates/field-assist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: selectedCompanyId || undefined,
-          asset_family: activeTemplate.assetFamily,
-          template_id: activeTemplate.id,
-          action,
-          targets: [{ scope: 'overlay', field_key: fieldId, current_value: String(overlayText[fieldId] || '') }],
-          context: {
-            topic: String(answers.topic || '').trim(),
-            audience: String(answers.audience || '').trim(),
-            objective: String(answers.objective || '').trim(),
-            tone: String(answers.styleDirection || '').trim(),
-            source_content: sourceContent,
-            siblings,
-          },
-        }),
-      });
-      if (!resp.ok) {
-        const detail = await resp.json().catch(() => ({}));
-        throw new Error(detail?.error || `AI assist failed (${resp.status})`);
-      }
-      const data = await resp.json();
-      const updates = Array.isArray(data?.updates) ? data.updates : [];
-      const match = updates.find((u: { field_key?: string; fieldKey?: string; value?: string }) => (u.field_key ?? u.fieldKey) === fieldId);
+      const updates = await requestOverlayAssist(action, [fieldId], overlayText, effectiveBrief ? 3 : 0);
+      rememberOverlayAlternatives(updates);
+      const match = updates.find((u) => (u.field_key ?? u.fieldKey) === fieldId);
       if (match && typeof match.value === 'string' && match.value.trim()) {
         setOverlayField(fieldId, match.value);
       }
@@ -296,40 +370,32 @@ export function useCreatorWorkflowActions(
       setAiBusyKey(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTemplate, selectedCompanyId, answers, overlayText, templateValues.fields, writerSource?.body]);
+  }, [activeTemplate, overlayText, requestOverlayAssist, rememberOverlayAlternatives, effectiveBrief]);
 
   // ── Auto-fill the OVERLAY copy on create (image / carousel / infographic) ──
   // The overlay panel (Hook / Headline / Supporting text / Key insight = the copy
-  // rendered ON the asset) otherwise lands mostly empty — only the hook is seeded
-  // from source content. Generate the empty overlay fields ONCE per template in a
-  // single SIBLING-AWARE field-assist pass, so each field is filled appropriately
-  // for its ROLE and stays distinct (a key insight won't restate the headline),
-  // grounded in the Template Content / Writer source / topic. Authored copy is
-  // never overwritten; the user can still regenerate any field with its "+AI".
-  const OVERLAY_AUTOFILL_FIELDS = React.useMemo(
-    () =>
-      // A single IMAGE is a hero — filling hook + headline + supporting + key
-      // insight exceeds the image render's text-density profile (the render fails
-      // closed with paragraph_overlay_forbidden / text_density_exceeds_profile).
-      // Fill only the headline + one supporting line for images; carousels and
-      // infographics render per slide/section and can carry the fuller set.
-      (activeTemplate?.assetFamily === 'image'
-        ? ['headline', 'supportingText']
-        : ['hook', 'headline', 'supportingText', 'keyInsight']) as Array<keyof WriterOverlayText>,
-    [activeTemplate?.assetFamily],
-  );
+  // rendered ON the asset) otherwise lands mostly empty. Generate the empty,
+  // not-user-edited roles ONCE per template in a single SIBLING-AWARE pass so
+  // each is right for its ROLE and distinct. With a writer brief the headline
+  // already holds the main message (seeded) and the pass also returns 3 AI
+  // alternatives per role — the content-grounded suggestion chips.
   const autoFilledOverlayRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (!activeTemplate) return;
     if (!['image', 'carousel', 'infographic'].includes(activeTemplate.assetFamily)) return;
     if (autoFilledOverlayRef.current === activeTemplate.id) return;
     if (aiBusyKey) return;
-    const hasContext =
+    // "Post + Image": no on-image copy belongs to this composition.
+    if (activeTemplate.assetFamily === 'image' && !l.imageCopyActive) return;
+    const hasContext = !!effectiveBrief ||
       String(answers.topic || '').trim().length > 0 ||
       String(writerSource?.body || '').trim().length > 0 ||
       String(overlayText.hook || '').trim().length > 0;
     if (!hasContext) return;
-    const emptyFields = OVERLAY_AUTOFILL_FIELDS.filter((k) => !String(overlayText[k] || '').trim());
+    const seededOverlay = effectiveBrief
+      ? seedOverlayFromBrief({ overlay: overlayText, brief: effectiveBrief, edited: s.userEditedKeys })
+      : overlayText;
+    const emptyFields = planOverlayFillTargets({ overlay: seededOverlay, edited: s.userEditedKeys, family: activeTemplate.assetFamily });
     if (emptyFields.length === 0) return;
     autoFilledOverlayRef.current = activeTemplate.id; // mark BEFORE firing (block re-entry)
 
@@ -337,65 +403,36 @@ export function useCreatorWorkflowActions(
       setAiBusyKey('overlay:auto-fill');
       setError(null);
       try {
-        const siblings = (Object.keys(OVERLAY_FIELD_LABELS) as Array<keyof WriterOverlayText>)
-          .filter((k) => !emptyFields.includes(k))
-          .map((k) => ({ label: OVERLAY_FIELD_LABELS[k], value: String(overlayText[k] || '').trim() }))
-          .filter((s) => s.value);
-        // Ground the overlay in the actual Template Content (or Writer body / topic).
-        const templateContentSource = [
-          String(templateValues.fields?.headline || '').trim(),
-          String(templateValues.fields?.subheadline || '').trim(),
-          String(answers.keyMessage || '').trim(),
-          String(answers.dataPoints || '').trim(),
-        ].filter(Boolean).join('\n');
-        const sourceContent = String(writerSource?.body || templateContentSource || answers.topic || '')
-          .trim().slice(0, 6000) || undefined;
-        const resp = await fetch('/api/creator-templates/field-assist', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            company_id: selectedCompanyId || undefined,
-            asset_family: activeTemplate.assetFamily,
-            template_id: activeTemplate.id,
-            action: 'generate',
-            targets: emptyFields.map((k) => ({ scope: 'overlay', field_key: k, current_value: '' })),
-            context: {
-              topic: String(answers.topic || '').trim(),
-              audience: String(answers.audience || '').trim(),
-              objective: String(answers.objective || '').trim(),
-              tone: String(answers.styleDirection || '').trim(),
-              source_content: sourceContent,
-              siblings,
-            },
-          }),
-        });
-        if (!resp.ok) return;
-        const data = await resp.json();
-        const updates = Array.isArray(data?.updates) ? data.updates : [];
+        const updates = await requestOverlayAssist('generate', emptyFields, seededOverlay, effectiveBrief ? 3 : 0);
+        rememberOverlayAlternatives(updates);
         for (const u of updates) {
           const key = String(u?.field_key ?? u?.fieldKey ?? '') as keyof WriterOverlayText;
           const value = typeof u?.value === 'string' ? u.value : '';
-          if (emptyFields.includes(key) && value.trim()) setOverlayField(key, value);
+          if (emptyFields.includes(key) && value.trim()) {
+            // Never land on a role the user typed into while this was in flight.
+            setOverlayText((prev) => (String(prev[key] || '').trim() ? prev : { ...prev, [key]: value.slice(0, OVERLAY_LIMITS[key]) }));
+          }
         }
       } catch { /* best-effort — the user can still use per-field +AI */ }
       finally { setAiBusyKey(null); }
     })();
-  }, [activeTemplate, answers.topic, writerSource?.body, overlayText, aiBusyKey, selectedCompanyId, templateValues.fields, OVERLAY_AUTOFILL_FIELDS, setOverlayField, setAiBusyKey, setError, answers]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTemplate, answers.topic, writerSource?.body, overlayText, aiBusyKey, effectiveBrief, l.imageCopyActive, requestOverlayAssist, rememberOverlayAlternatives]);
 
-  // Text-inside-image prepopulation: mirror the template-content fields the operator already
-  // filled on the previous step into the overlay panel so it isn't blank — hook ← the image
-  // text (headline), overlay headline ← the subtext (subheadline). Only fills EMPTY overlay
-  // fields (never overrides edits), and only for the standalone flow (writer imports derive
-  // their overlay from the source post instead).
+  // Text-inside-image prepopulation (NO brief only): mirror the template-content
+  // fields the operator already filled into the overlay panel so it isn't blank —
+  // hook ← the image text (headline), overlay headline ← the subtext. With a
+  // writer brief the overlay is seeded from the brief instead (headline = main
+  // message), and mirroring the template headline into the hook would duplicate it.
   React.useEffect(() => {
-    if (!activeTemplate || writerSource) return;
+    if (!activeTemplate || writerSource || effectiveBrief) return;
     const imageText = String(templateValues.fields?.headline ?? '').trim();
     const subText = String(templateValues.fields?.subheadline ?? '').trim();
     if (!imageText && !subText) return;
     // Never mirror a template field that is merely the goal-label default (it
     // equals the topic) into the hook — that made Hook duplicate "What is this
     // about". Only seed the hook from image text the operator actually authored.
-    const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+    const norm = (v: string) => v.replace(/\s+/g, ' ').trim().toLowerCase();
     const topicNorm = norm(String(answers.topic || ''));
     setOverlayText((prev) => {
       const next = { ...prev };
@@ -403,7 +440,52 @@ export function useCreatorWorkflowActions(
       if (!String(prev.headline || '').trim() && subText && norm(subText) !== topicNorm) next.headline = subText.slice(0, 84);
       return next.hook === prev.hook && next.headline === prev.headline ? prev : next;
     });
-  }, [activeTemplate, writerSource, templateValues.fields?.headline, templateValues.fields?.subheadline, answers.topic]);
+  }, [activeTemplate, writerSource, effectiveBrief, templateValues.fields?.headline, templateValues.fields?.subheadline, answers.topic]);
+
+  /**
+   * "Generate" fills from content first. With a writer brief, every template
+   * field / slide / section / overlay role that is still empty and was not
+   * edited by the user is written from the brief BEFORE the render request,
+   * and the request is built from those filled values (not the stale state).
+   * Best-effort: a failed fill generates with what is already on screen.
+   */
+  const fillFromContentForGenerate = async (): Promise<{ templateValues: TemplateFieldValues; overlayText: WriterOverlayText } | null> => {
+    if (!effectiveBrief || !activeTemplate) return null;
+    let nextValues = seedTemplateFromBrief({
+      template: activeTemplate, values: templateValues, brief: effectiveBrief,
+      edited: s.userEditedKeys, imageCopyActive: l.imageCopyActive,
+    }).values;
+    let nextOverlay = l.imageCopyActive
+      ? seedOverlayFromBrief({ overlay: overlayText, brief: effectiveBrief, edited: s.userEditedKeys })
+      : overlayText;
+    const templateTargets = planTemplateFillTargets({
+      template: activeTemplate, values: nextValues, edited: s.userEditedKeys, imageCopyActive: l.imageCopyActive,
+    }).filter((t) => t.currentValue === '');
+    const overlayTargets = (activeTemplate.assetFamily !== 'image' || l.imageCopyActive)
+      ? planOverlayFillTargets({ overlay: nextOverlay, edited: s.userEditedKeys, family: activeTemplate.assetFamily })
+      : [];
+    if (templateTargets.length === 0 && overlayTargets.length === 0) {
+      return { templateValues: nextValues, overlayText: nextOverlay };
+    }
+    setAiBusyKey('batch:generate:auto-fill');
+    try {
+      const [tUpdates, oUpdates] = await Promise.all([
+        templateTargets.length ? requestTemplateAssist('generate', templateTargets, nextValues).catch(() => []) : Promise.resolve([]),
+        overlayTargets.length ? requestOverlayAssist('generate', overlayTargets, nextOverlay, 0).catch(() => []) : Promise.resolve([]),
+      ]);
+      if (tUpdates.length) nextValues = applyTemplateFieldUpdates(nextValues, tUpdates);
+      for (const u of oUpdates) {
+        const key = String(u?.field_key ?? u?.fieldKey ?? '') as keyof WriterOverlayText;
+        const value = typeof u?.value === 'string' ? u.value.trim() : '';
+        if (overlayTargets.includes(key) && value) nextOverlay = { ...nextOverlay, [key]: value.slice(0, OVERLAY_LIMITS[key]) };
+      }
+    } finally {
+      setAiBusyKey(null);
+    }
+    setTemplateValues(nextValues);
+    setOverlayText(nextOverlay);
+    return { templateValues: nextValues, overlayText: nextOverlay };
+  };
   const handleUseExistingAsset = (asset: SavedCreatorAsset) => {
     if (isGenerating || actionInProgress) return;
     setSelectedAssetId(asset.id);
@@ -565,14 +647,20 @@ export function useCreatorWorkflowActions(
   // baseline Generate and variant fan-out both use it, so fan-out works on first click.
   const compositionIdForGeneration = useCreatorCompositionId(type);
 
-  const buildGenerationBody = React.useCallback((variantPinOverride: VariantFamily | null): Record<string, unknown> | null =>
+  const buildGenerationBody = React.useCallback((
+    variantPinOverride: VariantFamily | null,
+    // Values just filled from content by Generate (state updates are async, so
+    // the request is built from what the fill returned, not the stale state).
+    filled?: { templateValues: TemplateFieldValues; overlayText: WriterOverlayText; answers?: Record<string, string> } | null,
+  ): Record<string, unknown> | null =>
     buildCreatorGenerationBody({
-      type, config, answers, selectedAsset, selectedSuggestion, refinedSuggestion, refinePrompt,
+      type, config, answers: filled?.answers ?? answers, selectedAsset, selectedSuggestion, refinedSuggestion, refinePrompt,
       writerSource, writerSupportingVisual, writerEmbeddedCopy, writerCompositionIntent,
       writerAssetType, writerAttachmentMode, standaloneAttachmentMode,
-      overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
+      overlayText: filled?.overlayText ?? overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
       brandContextLines, selectedPlatform, selectedCompanyId,
-      activeTemplate, templateValues,
+      activeTemplate, templateValues: filled?.templateValues ?? templateValues,
+      creatorBrief: effectiveBrief,
       compositionId: compositionIdForGeneration,
       // The user's own creative answers. Absent → inference, exactly as before.
       guidedChoices: s.guidedChoices ?? null,
@@ -587,12 +675,19 @@ export function useCreatorWorkflowActions(
     overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
     brandContextLines, selectedPlatform, selectedCompanyId,
     activeTemplate, templateValues, router.query.blueprint, compositionIdForGeneration,
-    s.guidedChoices,
+    s.guidedChoices, effectiveBrief,
   ]);
 
   const handleGenerate = async () => {
     if (generationInFlightRef.current || isGenerating) return;
-    if (!String(answers.topic || '').trim()) {
+    // With writer content the main message stands in for an empty topic — the
+    // content IS the subject, so the user is not stopped to retype it.
+    let answersForGeneration: Record<string, string> = answers;
+    if (!String(answers.topic || '').trim() && effectiveBrief?.mainMessage) {
+      answersForGeneration = { ...answers, topic: (effectiveBrief.offer || effectiveBrief.mainMessage).slice(0, 120) };
+      setAnswerSilent('topic', answersForGeneration.topic);
+    }
+    if (!String(answersForGeneration.topic || '').trim()) {
       setError('Please answer the main topic question first.');
       flagMissingTopic();
       return;
@@ -605,6 +700,12 @@ export function useCreatorWorkflowActions(
     setSavedBlock(null);
     setResult(null);
 
+    // Fill every still-empty, not-user-edited field from the content first
+    // (before the generation timeout starts). Best-effort: null = no content
+    // or a failed fill, and generation proceeds with what is on screen.
+    const filled = await fillFromContentForGenerate().catch(() => null);
+    const overlayForGeneration = filled?.overlayText ?? overlayText;
+
     // Local computations needed by the validation gate AND by the
     // downstream metadata echo (where the saved asset's record
     // mirrors the operator's intent). The full request body is
@@ -614,11 +715,11 @@ export function useCreatorWorkflowActions(
     const overlayAllowed = !writerSource || writerEmbeddedCopy;
     const overlayPayload = isSocialCreativeType(type) && overlayAllowed && (!writerSource ? !(type === 'image' && !standaloneEmbeddedCopy) : writerEmbeddedCopy)
       ? {
-          hook: String(overlayText.hook || '').trim(),
-          headline: String(overlayText.headline || answers.headline || answers.topic || '').trim(),
-          keyInsight: String(overlayText.keyInsight || '').trim(),
-          cta: (writerCopyPolicy?.allowCTA || (!writerSource && standaloneEmbeddedCopy)) ? String(overlayText.cta || answers.cta || '').trim() : '',
-          supportingText: String(overlayText.supportingText || '').trim(),
+          hook: String(overlayForGeneration.hook || '').trim(),
+          headline: String(overlayForGeneration.headline || answers.headline || answersForGeneration.topic || '').trim(),
+          keyInsight: String(overlayForGeneration.keyInsight || '').trim(),
+          cta: (writerCopyPolicy?.allowCTA || (!writerSource && standaloneEmbeddedCopy)) ? String(overlayForGeneration.cta || answers.cta || '').trim() : '',
+          supportingText: String(overlayForGeneration.supportingText || '').trim(),
         }
       : null;
     if (writerSource && writerCompositionIntent) {
@@ -645,7 +746,11 @@ export function useCreatorWorkflowActions(
       // Build via the shared payload builder (P1-1 fix). The same
       // helper feeds the variant fan-out path so fan-out works on
       // first click without needing a prior baseline Generate.
-      const generationBody = buildGenerationBody(variantPin);
+      // Built from the values the content fill just produced (state updates
+      // are asynchronous, so the stale state would miss them).
+      const generationBody = buildGenerationBody(variantPin, filled
+        ? { ...filled, answers: answersForGeneration }
+        : (answersForGeneration !== answers ? { templateValues, overlayText, answers: answersForGeneration } : null));
       if (!generationBody) {
         generationInFlightRef.current = false;
         setIsGenerating(false);

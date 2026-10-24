@@ -64,7 +64,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // returns one short field (title ≤70 / body ≤220 chars) plus JSON overhead
   // ≈ ~150 tokens; we budget generously and clamp so a single-field rewrite
   // stays cheap while a 10-slide deck (20 fields) gets ~2400 tokens of headroom.
-  const outputTokenBudget = Math.min(2600, Math.max(700, 260 + request.targets.length * 150));
+  // Alternatives (suggestion chips) multiply each field's output.
+  const perTarget = 150 * (1 + (request.alternatives ?? 0));
+  const outputTokenBudget = Math.min(2600, Math.max(700, 260 + request.targets.length * perTarget));
 
   // Billed LLM injector — graceful: errors are caught inside runCreatorFieldAssist
   // and fall back to a deterministic transform.
@@ -118,7 +120,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       } catch { /* fail-safe */ }
     }
     return res.status(200).json({
-      updates: updates.map((u) => ({ scope: u.scope, field_key: u.fieldKey, index: u.index, value: u.value })),
+      updates: updates.map((u) => ({
+        scope: u.scope, field_key: u.fieldKey, index: u.index, value: u.value,
+        ...(u.alternatives && u.alternatives.length ? { alternatives: u.alternatives } : {}),
+      })),
       used_fallback: usedFallback,
       ...(fallbackReason ? { fallback_reason: fallbackReason } : {}),
       ...(violations.length > 0 ? { violations } : {}),

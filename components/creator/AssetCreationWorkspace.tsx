@@ -28,6 +28,8 @@ import {
 import type { CreatorTemplate } from '../../lib/creator-templates/types';
 import type { TemplateAssetFamily } from '../../lib/creator-templates/types';
 import { MARKETING_BRIEF_SESSION_KEY, serializeMarketingBrief } from '../../lib/content/marketingBriefResolver';
+import { creatorCompositionKey, mintCreatorCompositionId } from '../../lib/content/creatorCompositionAsset';
+import { useCompanyContext } from '../CompanyContext';
 import ChatVoiceButton from '../ChatVoiceButton';
 import CreateWithAIChat from './CreateWithAIChat';
 import { color, radius, shadow, space, fontSize, fontWeight } from '../../lib/platform/ui';
@@ -76,6 +78,10 @@ interface WorkspaceProps { onNavigate: (url: string) => void; onAdvanced?: () =>
 
 function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProps & { asset: Asset }) {
   const cfg = ASSET_CONFIG[asset];
+  // The ACTIVE company, so "Suggest with AI" is grounded in the company the
+  // user is working in (field-assist resolves its canonical context server-
+  // side) rather than whatever the account's default company happens to be.
+  const { selectedCompanyId } = useCompanyContext();
   const [step, setStep] = React.useState<'goal' | 'samples' | 'look' | 'brief'>('goal');
   const [goalId, setGoalId] = React.useState<string | null>(null);
   const [customLabel, setCustomLabel] = React.useState<string | null>(null);
@@ -104,13 +110,24 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          company_id: selectedCompanyId || undefined,
           asset_family: cfg.family,
           template_id: selectedSample.id,
           action: 'generate',
           targets: (['freeText', 'audience', 'tone', 'cta', 'offer'] as const).map((k) => ({
             scope: 'brief', field_key: k, current_value: String((brief[k as keyof MarketingBrief] as string) ?? ''),
           })),
-          context: { topic: goalLabel, objective: goalLabel },
+          // Whatever the user already typed grounds the suggestion too, so the
+          // AI completes THEIR brief instead of drafting an unrelated one.
+          context: {
+            topic: goalLabel,
+            objective: goalLabel,
+            audience: String(brief.audience ?? ''),
+            tone: String(brief.tone ?? ''),
+            cta: String(brief.cta ?? ''),
+            offer: String(brief.offer ?? ''),
+            source_content: String(brief.freeText ?? ''),
+          },
         }),
       });
       if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d?.error || `Suggestion failed (${resp.status})`); }
@@ -227,9 +244,23 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
     const tid = selectedSample ? `&template_id=${encodeURIComponent(selectedSample.id)}` : '';
     const sourceBlueprintId = selectedSample ? String(selectedSample.metadata?.sourceBlueprintId ?? '') : '';
     const bp = sourceBlueprintId ? `&blueprint=${encodeURIComponent(sourceBlueprintId)}` : '';
+    /* The draft identity travels in the URL (not just this tab's storage), so a
+     * reload OR a new tab reaches the same draft — and the editor restores the
+     * brief it persisted server-side under this id. Reuses the tab's existing
+     * draft id when there is one, exactly as the editor would. */
+    let compositionId = '';
+    try {
+      const key = creatorCompositionKey(asset);
+      compositionId = (sessionStorage.getItem(key) || '').trim();
+      if (!compositionId) {
+        compositionId = mintCreatorCompositionId(asset, Date.now(), Math.random().toString(36).slice(2, 8));
+        sessionStorage.setItem(key, compositionId);
+      }
+    } catch { compositionId = ''; }
+    const comp = compositionId ? `&composition=${encodeURIComponent(compositionId)}` : '';
     // CREATOR-106: the sample IS the chosen template, so skip the editor's own template
     // gallery (skip_templates=1) — otherwise [type].tsx bounces back to /templates.
-    onNavigate(`${cfg.editorRoute}?goal=${encodeURIComponent(goalId ?? '')}${tid}${bp}&from=workspace&skip_templates=1`);
+    onNavigate(`${cfg.editorRoute}?goal=${encodeURIComponent(goalId ?? '')}${tid}${bp}${comp}&from=workspace&skip_templates=1`);
   };
   return (
     <div style={wrap}>

@@ -33,6 +33,13 @@ import {
   getRepurposePaths, mapBriefToEditorAnswers, mapCreatorBrandProfile, resolveSavedAssetMedia,
 } from '../../../lib/creator-content/creatorTypeWorkflow';
 import { useCreatorWorkflowState } from './useCreatorWorkflowState';
+import { useCreatorCompositionId } from '../useCreatorCompositionId';
+import {
+  creatorBriefToEditorAnswers, effectiveCreatorBrief, resolveCreatorBrief, type CreatorBrief,
+} from '../../../lib/creator-content/creatorBrief';
+import {
+  diffTemplateEdits, fieldEditKey, seedOverlayFromBrief, seedTemplateFromBrief,
+} from '../../../lib/creator-content/creatorContentFill';
 
 export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkflowState>) {
   const {
@@ -56,6 +63,116 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
     variantFanOutInFlight, variantFanOutSummary, variantPin, variantPlan, writerAssetType,
     writerAttachmentMode, writerCompositionIntent, writerEmbeddedCopy, writerSource, writerSupportingVisual
   } = s;
+  const { creatorBrief, setCreatorBrief, userEditedKeys, setUserEditedKeys } = s;
+  const compositionId = useCreatorCompositionId(type);
+  const markUserEdited = React.useCallback((keys: string[]) => {
+    if (keys.length === 0) return;
+    setUserEditedKeys((prev) => {
+      if (keys.every((k) => prev.has(k))) return prev;
+      const next = new Set(prev);
+      for (const k of keys) next.add(k);
+      return next;
+    });
+  }, [setUserEditedKeys]);
+  const editedAnswerIds = React.useMemo(
+    () => new Set([...userEditedKeys].filter((k) => k.startsWith('answer::')).map((k) => k.slice('answer::'.length))),
+    [userEditedKeys],
+  );
+  /** The brief with the user's own main-message / viewer-action / audience edits applied. */
+  const effectiveBrief: CreatorBrief | null = React.useMemo(
+    () => effectiveCreatorBrief(creatorBrief, answers, editedAnswerIds),
+    [creatorBrief, answers, editedAnswerIds],
+  );
+  /** Same predicate as the form + payload gate: does on-image copy belong to this composition? */
+  const imageCopyActive = !writerSupportingVisual
+    && (!writerSource ? !(type === 'image' && standaloneAttachmentMode === 'supporting_visual') : writerEmbeddedCopy);
+
+  // ── ONE content source: resolve the creator brief, persist it, restore it ──
+  // Local first (an explicit Writer launch, else the workspace hand-off); the
+  // resolved brief is saved server-side under this draft's composition id so a
+  // new tab — which has neither session copy — restores the SAME content. A
+  // restore only happens when the URL names the draft (?composition= / ?session=),
+  // so opening the editor fresh from the header still starts clean.
+  const savedBriefRef = React.useRef<string>('');
+  const restoredBriefRef = React.useRef<string>('');
+  React.useEffect(() => {
+    if (!router.isReady || !config || !type || typeof window === 'undefined') return;
+    let workspaceBrief: ReturnType<typeof readMarketingBrief> = null;
+    if (router.query.from === 'workspace') {
+      try { workspaceBrief = readMarketingBrief(window.sessionStorage.getItem(MARKETING_BRIEF_SESSION_KEY)); } catch { /* ignore */ }
+    }
+    const local = resolveCreatorBrief({ writerSource, workspaceBrief });
+    if (local) {
+      setCreatorBrief(local);
+      if (!compositionId || !selectedCompanyId) return;
+      const signature = `${selectedCompanyId}|${compositionId}|${JSON.stringify(local)}`;
+      if (savedBriefRef.current === signature) return;
+      savedBriefRef.current = signature;
+      void fetch('/api/creator-assets/composition-brief', {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: selectedCompanyId, composition_id: compositionId, brief: local }),
+      }).catch(() => { /* best-effort: the session copy still drives this tab */ });
+      return;
+    }
+    const urlNamesDraft = typeof router.query.composition === 'string' || typeof router.query.session === 'string';
+    if (!urlNamesDraft || !compositionId || !selectedCompanyId) return;
+    const key = `${selectedCompanyId}|${compositionId}`;
+    if (restoredBriefRef.current === key) return;
+    restoredBriefRef.current = key;
+    let cancelled = false;
+    fetch(`/api/creator-assets/composition-brief?company_id=${encodeURIComponent(selectedCompanyId)}&composition_id=${encodeURIComponent(compositionId)}`, {
+      credentials: 'include',
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.brief) return;
+        const restored = data.brief as CreatorBrief;
+        setCreatorBrief(restored);
+        const ids = new Set<string>(config.fields.map((f) => f.id));
+        const seeded = creatorBriefToEditorAnswers(restored, ids);
+        setAnswers((current) => {
+          const next = { ...current };
+          for (const [id, v] of Object.entries(seeded)) {
+            if (!editedAnswerIds.has(id)) next[id] = v;
+          }
+          return next;
+        });
+      })
+      .catch(() => { /* no stored brief: the editor behaves as before */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady, config, type, writerSource, router.query.from, router.query.composition, router.query.session, compositionId, selectedCompanyId]);
+
+  // ── MAIN MESSAGE IS THE KEY ────────────────────────────────────────────────
+  // On Text Inside Image the template lead (headline/title/quote) and the
+  // overlay headline ARE the main message; the template CTA / overlay CTA are
+  // the viewer action. Applied whenever the main message changes (or the
+  // template / mode does), never into a field the user edited. `condenseLeadRef`
+  // tells the content fill to have AI condense a message that had to be cut.
+  const condenseLeadRef = React.useRef(false);
+  const seededSignatureRef = React.useRef('');
+  React.useEffect(() => {
+    if (!effectiveBrief) return;
+    const signature = [activeTemplate?.id ?? '', effectiveBrief.mainMessage, effectiveBrief.cta, imageCopyActive ? '1' : '0'].join('|');
+    if (seededSignatureRef.current === signature) return;
+    seededSignatureRef.current = signature;
+    if (activeTemplate) {
+      const seed = seedTemplateFromBrief({
+        template: activeTemplate, values: templateValues, brief: effectiveBrief, edited: userEditedKeys, imageCopyActive,
+      });
+      condenseLeadRef.current = seed.condenseLead;
+      if (seed.changed) setTemplateValues((prev) => seedTemplateFromBrief({
+        template: activeTemplate, values: prev, brief: effectiveBrief, edited: userEditedKeys, imageCopyActive,
+      }).values);
+    }
+    if (imageCopyActive) {
+      setOverlayText((prev) => seedOverlayFromBrief({ overlay: prev, brief: effectiveBrief, edited: userEditedKeys }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveBrief, activeTemplate, imageCopyActive, templateValues.fields]);
+
   React.useEffect(() => {
     if (authChecked && !isLoading && !user?.userId) {
       router.replace('/login');
@@ -470,6 +587,7 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
   // Programmatic restores use `setAnswerSilent` instead (no manual mark).
   const setAnswer = (id: string, value: string) => {
     setAnswers((current) => ({ ...current, [id]: value }));
+    markUserEdited([`answer::${id}`]);
     if (id === 'topic') {
       if (value.trim()) setTopicMissing(false);
       setSyncState((s) => markManual(s, 'topic'));
@@ -490,6 +608,9 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
       const nextLead = editorLeadValue(activeTemplate, next);
       if (nextLead !== prevLead) setSyncState((s) => markManual(s, 'lead'));
     }
+    // Every field whose value the user changed is now theirs: content filling
+    // (main message, auto-fill, Generate pre-fill) never writes it again.
+    markUserEdited(diffTemplateEdits(templateValues, next));
     setTemplateValues(next);
   };
 
@@ -507,15 +628,19 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
       state: syncState,
       hasTopicField,
     });
+    // The main message owns the image lead field (seeded above): the topic
+    // mirror must not race it with the shorter topic.
+    const mainMessageOwnsLead = !!effectiveBrief?.mainMessage && activeTemplate.assetFamily === 'image' && imageCopyActive;
     if (plan.topicWrite !== undefined) {
       setAnswers((current) => ({ ...current, topic: plan.topicWrite! }));
       if (plan.topicWrite.trim()) setTopicMissing(false);
       setSyncState(plan.nextState);
-    } else if (plan.editorWrite) {
+    } else if (plan.editorWrite && !mainMessageOwnsLead) {
       setTemplateValues(plan.editorWrite);
       setSyncState(plan.nextState);
     }
-  }, [answers.topic, templateValues, activeTemplate, config, syncState]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answers.topic, templateValues, activeTemplate, config, syncState, effectiveBrief?.mainMessage, imageCopyActive]);
 
   // Surface the empty required topic field: highlight it, scroll it into view,
   // and focus its input so the operator immediately sees what's missing.
@@ -573,6 +698,11 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
       supportingText: 96,
     };
     setOverlayText((current) => ({ ...current, [id]: value.slice(0, limits[id]) }));
+  };
+  /** USER writes to an overlay field (typing, picking a chip): marks it edited. */
+  const setOverlayFieldByUser = (id: keyof WriterOverlayText, value: string) => {
+    markUserEdited([fieldEditKey('overlay', id)]);
+    setOverlayField(id, value);
   };
 
   // Derive overlay-field suggestion chips from the actual Writer post
@@ -796,6 +926,7 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
   return {
     availablePlatforms, brandContextLines, buildCurrentContext, flagMissingTopic, generationModeLabel,
     handleEditorChange, hasBrandProfile, repurposePaths, selectedAsset, selectedSuggestion, setAnswer,
-    setAnswerSilent, setBrandOverride, setBrandSelection, setOverlayField, suggestionOptions
+    setAnswerSilent, setBrandOverride, setBrandSelection, setOverlayField, suggestionOptions,
+    effectiveBrief, imageCopyActive, setOverlayFieldByUser, condenseLeadRef, markUserEdited,
   };
 }

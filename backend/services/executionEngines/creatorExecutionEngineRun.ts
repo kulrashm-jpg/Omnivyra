@@ -563,6 +563,14 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
               topic: intent.topic,
               summary: intent.summary ?? null,
               objective: intent.objective ?? null,
+              // The writer content the asset is built from (resolved creator
+              // brief body), capped. Grounds the image scene prompt in the
+              // content — notably the text-free Post + Image.
+              content_excerpt: (() => {
+                const b = safeObject(intent.creatorCard?.creator_brief);
+                const text = String(b.body || b.mainMessage || '').replace(/\s+/g, ' ').trim();
+                return text ? text.slice(0, 600) : null;
+              })(),
               content_type: intent.contentType,
               platform: intent.targetPlatforms[0] ?? null,
               tenant_id: intent.companyId ?? null,
