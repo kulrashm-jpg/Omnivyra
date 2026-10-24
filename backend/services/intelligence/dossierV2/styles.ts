@@ -67,7 +67,7 @@ table { border-collapse: collapse; width: 100%; }
 /* Heatmap */
 .v2-heat th, .v2-heat td { border: 1.5px solid #fff; padding: 1.6mm 1.8mm; font-size: 8.2pt; text-align: center; }
 .v2-heat thead th { font-size: 7.4pt; color: ${P.grey}; font-weight: 600; vertical-align: bottom; }
-.v2-heat thead th span { display: inline-block; max-width: 24mm; overflow-wrap: anywhere; }
+.v2-heat thead th span { display: inline-block; max-width: 24mm; overflow-wrap: normal; word-break: keep-all; }
 .v2-heat tbody th { text-align: left; font-weight: 600; background: ${P.wash}; max-width: 48mm; }
 .v2-heat tbody th small { display: block; font-weight: 400; font-size: 7pt; }
 .v2-legend { display: flex; flex-wrap: wrap; gap: 4mm; margin-top: 2.5mm; font-size: 7.8pt; color: ${P.grey}; }
@@ -103,5 +103,29 @@ table { border-collapse: collapse; width: 100%; }
 .v2-list { margin: 0; padding-left: 4.5mm; }
 .v2-list li { margin-bottom: 1.2mm; }
 .v2-chart { display: block; max-width: 100%; }
+
+/* Plain-English layer */
+.v2-plain { background: ${P.blueSoft}; border-left: 3px solid ${P.blue}; border-radius: 1.5mm; padding: 3mm 4mm; margin: 0 0 6mm; font-size: 9.6pt; color: ${P.navy}; }
+.v2-kpi-meaning { font-size: 7.8pt; color: ${P.grey}; margin-top: 1.5mm; border-top: 1px solid ${P.line}; padding-top: 1.5mm; line-height: 1.35; }
+.v2-card-plain { font-size: 8.8pt; color: ${P.navy}; background: ${P.wash}; border-radius: 1.5mm; padding: 1.8mm 2.5mm; margin: 0 0 2mm; }
+.v2-compact td { padding: 1.4mm 2mm; }
+
+/* Decision cards */
+.v2-decisions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3.5mm; }
+.v2-decision-card { background: ${P.navy}; color: #E3ECF8; border-radius: 2.5mm; padding: 4mm; break-inside: avoid; }
+.v2-decision-card h4 { color: #fff; font-size: 9.8pt; margin: 1.5mm 0 2mm; line-height: 1.3; }
+.v2-decision-card dl { margin: 0; font-size: 8.2pt; }
+.v2-decision-card dt { color: #9FB6D6; font-weight: 700; font-size: 7.2pt; text-transform: uppercase; letter-spacing: .08em; margin-top: 1.5mm; }
+.v2-decision-card dd { margin: .5mm 0 0; }
+.v2-decision-card .v2-id { color: #9FB6D6; margin-top: 2.5mm; }
+.v2-decision-num { width: 6mm; height: 6mm; border-radius: 50%; background: ${P.blue}; color: #fff; font-weight: 800; font-size: 9pt; display: flex; align-items: center; justify-content: center; }
+
+/* Reading lenses */
+.v2-lenses { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3mm; }
+.v2-lens { border: 1px solid ${P.line}; border-radius: 2mm; padding: 3mm; break-inside: avoid; }
+.v2-lens h4 { font-size: 9pt; margin-bottom: 1.2mm; }
+.v2-lens p { font-size: 8pt; color: ${P.grey}; margin-bottom: 2mm; }
+.v2-lens small { display: block; margin-top: 1.5mm; font-size: 7.4pt; }
+.v2-lens .v2-pill { white-space: normal; line-height: 1.3; }
 .v2-ring { display: block; }
 `;
