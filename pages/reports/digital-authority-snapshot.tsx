@@ -144,6 +144,7 @@ export default function DigitalAuthoritySnapshotPage() {
   const [step, setStep] = useState<Step>('form');
   const [apiError, setApiError] = useState<string | null>(null);
   const submittingStartedAt = useRef<number>(0);
+  const submitInFlight = useRef(false);
 
   // Pre-fill company name when context loads
   useEffect(() => {
@@ -230,8 +231,12 @@ export default function DigitalAuthoritySnapshotPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Synchronous guard: `step` only disables the button after a re-render, so
+    // a fast double-click could otherwise send two generate requests.
+    if (submitInFlight.current) return;
     if (!validate()) return;
 
+    submitInFlight.current = true;
     setStep('submitting');
     submittingStartedAt.current = Date.now();
     setApiError(null);
@@ -261,7 +266,14 @@ export default function DigitalAuthoritySnapshotPage() {
       });
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({})) as { error?: string };
+        const data = await res.json().catch(() => ({})) as { error?: string; code?: string; reportId?: string };
+        // A report for this domain is already running (or just finished):
+        // open it rather than leaving the user on a dead-end error.
+        if (data.code === 'REPORT_IN_PROGRESS' && data.reportId) {
+          try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+          await router.push(`/reports/view/${data.reportId}?type=snapshot`);
+          return;
+        }
         throw new Error(data.error || `Server error ${res.status}`);
       }
 
@@ -278,6 +290,8 @@ export default function DigitalAuthoritySnapshotPage() {
     } catch (err) {
       setApiError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
       setStep('form');
+    } finally {
+      submitInFlight.current = false;
     }
   };
 

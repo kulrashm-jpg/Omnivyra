@@ -295,6 +295,8 @@ export function mapReportTypeToCategory(reportType: ReportType): ReportCategory 
 export class ReportRequestError extends Error {
   code: string;
   httpStatus: number;
+  /** For REPORT_IN_PROGRESS: the caller's own in-flight report, so the UI can open it. */
+  reportId?: string;
 
   constructor(message: string, code: string, httpStatus = 400) {
     super(message);
@@ -591,6 +593,37 @@ function mapInsertConflict(errorMessage: string): ReportRequestError {
   );
 }
 
+/** How far back an in-progress 409 may look for the report that caused it. */
+const IN_PROGRESS_LOOKBACK_MINUTES = 15;
+
+/**
+ * Build the REPORT_IN_PROGRESS error and attach the id of the report that
+ * blocked this request (same company + domain), so the UI can open it instead
+ * of dead-ending. A just-completed row also qualifies: on a double submit the
+ * first request's report may finish before this lookup runs. The lookup is
+ * best-effort — any failure still yields the plain 409.
+ */
+async function reportInProgressError(companyId: string, domain: string): Promise<ReportRequestError> {
+  const error = new ReportRequestError('Report already in progress', 'REPORT_IN_PROGRESS', 409);
+  try {
+    const since = new Date(Date.now() - IN_PROGRESS_LOOKBACK_MINUTES * 60_000).toISOString();
+    const { data } = await ownedDbTable('reports')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('domain', domain)
+      .in('status', ['generating', 'completed'])
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const id = (data as { id?: string } | null)?.id;
+    if (id) error.reportId = id;
+  } catch {
+    // Best-effort enrichment only.
+  }
+  return error;
+}
+
 /**
  * LIFECYCLE OWNER — sole entry point for INSERTing a report into the
  * `generating` state.
@@ -623,7 +656,7 @@ async function createReport(
   const state = await getDomainReportState(domain, companyId);
 
   if (state.hasGeneratingReport) {
-    throw new ReportRequestError('Report already in progress', 'REPORT_IN_PROGRESS', 409);
+    throw await reportInProgressError(companyId, domain);
   }
 
   // Phase 4: retry containment. If the previous attempt for this
@@ -673,7 +706,12 @@ async function createReport(
     .single();
 
   if (error || !data) {
-    throw error ? mapInsertConflict(error.message) : new ReportRequestError(
+    const conflict = error ? mapInsertConflict(error.message) : null;
+    if (conflict?.code === 'REPORT_IN_PROGRESS') {
+      // Lost the race to a concurrent submit: point at the winner's report.
+      throw await reportInProgressError(companyId, domain);
+    }
+    throw conflict ?? new ReportRequestError(
       process.env.NODE_ENV !== 'production'
         ? 'Failed to create report: insert returned no report row'
         : 'Failed to create report',

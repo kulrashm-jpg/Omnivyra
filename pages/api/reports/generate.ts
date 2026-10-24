@@ -358,6 +358,7 @@ async function handler(
       return res.status(error.httpStatus).json(withTrace({
         error: error.message,
         code: error.code,
+        ...(error.reportId ? { reportId: error.reportId } : {}),
       }));
     }
 
