@@ -197,6 +197,37 @@ export function orchestrateCreativeVariants(input: {
   hasProductGrounding: boolean;
   brandPreference?: CreativeDirectionTemplate | null;
   config?: VariantOrchestrationConfig;
+  /**
+   * PR5 — the look the user chose, LOCKED across every variant. Each variant
+   * explores composition / emotion / framing, never the look: the locked look
+   * is written onto every variant's input so no variant (or retry built from
+   * one) can compose without it. Absent → variants exactly as before.
+   */
+  lockedLook?: {
+    userVisualDirection: CreatorPromptInput['userVisualDirection'];
+    lookVariation?: CreatorPromptInput['lookVariation'];
+  } | null;
+}): VariantOrchestrationResult {
+  const result = orchestrateVariantsUnlocked(input);
+  const look = input.lockedLook?.userVisualDirection;
+  if (!look) return result;
+  const lockMutations: Partial<CreatorPromptInput> = {
+    userVisualDirection: look,
+    ...(input.lockedLook?.lookVariation ? { lookVariation: input.lockedLook.lookVariation } : {}),
+  };
+  return {
+    ...result,
+    variants: result.variants.map((v) => ({ ...v, inputMutations: { ...v.inputMutations, ...lockMutations } })),
+    rationale: [...result.rationale, `look_locked:${look.id || look.title || 'user_choice'}`],
+  };
+}
+
+function orchestrateVariantsUnlocked(input: {
+  plan: CreativeDirectionPlan;
+  hasBrandGrounding: boolean;
+  hasProductGrounding: boolean;
+  brandPreference?: CreativeDirectionTemplate | null;
+  config?: VariantOrchestrationConfig;
 }): VariantOrchestrationResult {
   const profile = CREATIVE_STRATEGY_PROFILES[input.plan.strategyProfile];
   const { depth, rationale } = decideExplorationDepth({

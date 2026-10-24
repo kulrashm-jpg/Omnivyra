@@ -373,16 +373,20 @@ export type GovernanceEvaluationInput = {
 
 export function evaluateBrandGovernance(input: GovernanceEvaluationInput): GovernanceResult {
   const prompt = input.composed.prompt;
+  // PR5 — a non-photographic look the USER chose (comic, anime, clay…) is not a
+  // realism failure or a forbidden style: it is the brief. Those two checks
+  // would otherwise reject or "re-realise" exactly what was asked for.
+  const userChoseNonPhotoLook = input.composed.look?.native === true;
 
   const checks: Array<GovernanceViolation | null> = [
     checkPaletteDiscipline({ prompt, brandKit: input.brandKit, dna: input.dna }),
     checkLogoUsage({ prompt, brandKit: input.brandKit }),
-    checkRealismConsistency({ rank: input.rank, dna: input.dna }),
+    userChoseNonPhotoLook ? null : checkRealismConsistency({ rank: input.rank, dna: input.dna }),
     checkEmotionalToneConsistency({ plan: input.plan, dna: input.dna, rank: input.rank }),
     checkVisualDensityConsistency({ plan: input.plan, dna: input.dna }),
     checkTypographyPhilosophy({ prompt, dna: input.dna }),
     checkProductAuthenticity({ composed: input.composed, rank: input.rank }),
-    checkForbiddenStyle({ prompt }),
+    userChoseNonPhotoLook ? null : checkForbiddenStyle({ prompt }),
     checkStockPhotoBias({ prompt, rank: input.rank }),
     checkCompositionFamilyConsistency({ plan: input.plan, dna: input.dna }),
     checkHumanPresenceConsistency({ plan: input.plan, dna: input.dna }),

@@ -9,6 +9,7 @@ import React from 'react';
 import TemplateFieldsPanel from '../TemplateFieldsPanel';
 import { IMAGE_COPY_FIELD_KEYS } from '../../../lib/creator-templates/types';
 import CreatorVariantExperienceSection from '../CreatorVariantExperienceSection';
+import LookVariationsButton from '../LookVariationsButton';
 import { runVariantFanOut } from '../../../lib/variants/fanOutRunner';
 import { resolvePurposeStrategy } from '../../../backend/services/creator/purposeStrategyRegistry';
 import type { AttachmentMode } from '../../../lib/content/writerCreatorAttachmentContracts';
@@ -1062,6 +1063,15 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                 }
               }}
             />
+
+            {/* PR5 — "More versions in this look": only for an image with a chosen look. */}
+            {type === 'image' ? (
+              <LookVariationsButton
+                lookId={guidedChoices?.visualDirectionId ?? null}
+                disabled={isGenerating || variantFanOutInFlight}
+                buildPayload={() => buildGenerationBody(null)}
+              />
+            ) : null}
 
             {/* The last thing before a generation is spent. Every value is read
               * from the state about to be submitted — see CreativeSummaryCard. */}

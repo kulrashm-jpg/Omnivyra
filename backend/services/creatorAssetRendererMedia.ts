@@ -121,6 +121,18 @@ export async function generateProviderImage(input: {
    */
   referenceFidelity?: ReferenceFidelity;
   /**
+   * Whose image `referenceImages` carries: the USER's photo, the chosen LOOK's
+   * sample (PR5 style reference), or both. Only changes the disclosure copy
+   * when the reference could not be applied. Absent → 'user' (unchanged).
+   */
+  referenceKind?: 'user' | 'look' | 'user+look';
+  /**
+   * A look style reference was requested but the kill switch blocked it. Only
+   * sets the disclosure (category 'reference_mode_disabled', look copy); no
+   * reference is sent either way.
+   */
+  lookReferenceDisabled?: boolean;
+  /**
    * Telemetry-only context. Passed through to `creatorEvent` so a
    * dashboard can pivot provider failures by platform / attachment mode /
    * subtype / creator type. Does NOT affect the prompt or the API call.
@@ -204,12 +216,21 @@ export async function generateProviderImage(input: {
   const degradedBy = (category: ConditionDegradationCategory): ConditionDegradation => ({
     status: 'not_applied',
     category,
-    userMessage:
-      'Your reference image could not be applied, so this result was generated without it. Regenerate to try again.',
+    userMessage: input.referenceKind === 'look'
+      ? (category === 'reference_mode_disabled'
+          ? 'Style references are switched off, so this version follows the look from its description only.'
+          : "The look's sample could not be applied as a style reference, so this version was generated from the description only. Regenerate to try again.")
+      : 'Your reference image could not be applied, so this result was generated without it. Regenerate to try again.',
   });
   let conditionDegradation: ConditionDegradation | null = input.conditionDegradedToText
     ? degradedBy('reference_mode_disabled')
-    : null;
+    : input.lookReferenceDisabled === true
+      ? {
+          status: 'not_applied',
+          category: 'reference_mode_disabled',
+          userMessage: 'Style references are switched off, so this version follows the look from its description only.',
+        }
+      : null;
   /*
    * Set on the degraded paths only. The success path returns directly and
    * carries its own value, so this stays null there. Null — never 0 — when no

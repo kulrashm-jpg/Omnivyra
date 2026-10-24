@@ -5,6 +5,7 @@ import { createHash } from 'crypto';
 import { config } from '@/config';
 import { buildCreatorBlueprintPromptSpecification } from '../creator/creatorPromptSpecification';
 import { assembleBlueprintPrompt } from '../creator/intelligence/blueprintPromptAssembler';
+import { buildCreatorLookRenderMetadata, effectiveBlueprintIdForCreatorCard } from '../creator/creatorLookRenderMetadata';
 import {
   repurposeCarouselForPlatforms,
   repurposeVideoScriptForPlatforms,
@@ -242,7 +243,8 @@ async function generateBlueprint(
   // BlueprintPromptAssembler (CREATOR-060) translates it to visual directives that
   // reach the final prompt builder. Single source, additive: no blueprint ⇒ null
   // ⇒ byte-identical legacy prompt.
-  const blueprintId = typeof context.creatorCard?.blueprint_id === 'string' ? context.creatorCard.blueprint_id : null;
+  // PR5: a picked look IS the style, so its directives (not the sample's) feed the prompt.
+  const blueprintId = effectiveBlueprintIdForCreatorCard(context.creatorCard ?? null);
   const blueprintDirectives = assembleBlueprintPrompt(blueprintId)?.directives ?? null;
   const promptSpec = buildCreatorBlueprintPromptSpecification({
     assetType,
@@ -606,6 +608,11 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
               overlay_text: safeObject(intent.creatorCard?.overlay_text),
               selected_brand_assets: safeObject(safeObject(intent.creatorCard?.brand_context).overrides),
               brand_context: safeObject(intent.creatorCard?.brand_context),
+              // PR5 — the user's look (guided_creative + the creator_card keys
+              // the renderer reads) was dropped here, so the renderer never saw
+              // it. Spread last: when a look is set its blueprint_id /
+              // blueprint_color_primary replace the curated sample's above.
+              ...buildCreatorLookRenderMetadata(intent.creatorCard ?? null),
             },
           },
         },
