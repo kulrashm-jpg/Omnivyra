@@ -3,6 +3,7 @@
  * so the snapshot page can open it instead of dead-ending on
  * "Report already in progress" (double submit, 2026-10-24).
  */
+export {}; // module scope: keeps `builder` from colliding with other script-style test files
 type Scenario = {
   stateRows: Array<{ is_free: boolean; status: string }>;
   insertError: { message: string } | null;
