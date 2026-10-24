@@ -26,7 +26,7 @@
 --
 -- APPLY via the controlled process (Supabase SQL editor / single targeted
 -- migration) — NOT `supabase db push` (prod ledger is hand-managed).
--- Rollback: supabase/migrations/rollbacks/20261222000000_creator_composition_briefs_rollback.sql
+-- Rollback: supabase/migrations/rollbacks/creator_composition_briefs_rollback.sql
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS public.creator_composition_briefs (
