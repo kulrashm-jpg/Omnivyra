@@ -72,6 +72,13 @@ export interface FieldAssistContext {
   objective?: string;
   tone?: string;
   brand?: string;
+  /** THE MAIN MESSAGE (owner decision: the key). The primary on-image text; every
+   *  generated field supports it — never contradicts, replaces or ignores it. */
+  mainMessage?: string;
+  /** What the viewer is asked to do (the brief's call to action). */
+  cta?: string;
+  /** The offer / product being promoted. */
+  offer?: string;
   /** Source content the asset is being BUILT FROM — the Writer post body, a campaign theme /
    *  weekly / daily card, or a longer brief. When present, generated copy (esp. carousel slides)
    *  must be derived from this content, preserving its facts and sequence — not invented from the
@@ -92,6 +99,9 @@ export interface FieldAssistRequest {
   action: TemplateFieldAssistAction;
   targets: FieldAssistTarget[];
   context?: FieldAssistContext;
+  /** 0 (default) or up to MAX_ALTERNATIVES extra distinct candidates per field,
+   *  returned as `alternatives` — the content-grounded suggestion chips. */
+  alternatives?: number;
 }
 
 export interface FieldAssistUpdate {
@@ -99,12 +109,15 @@ export interface FieldAssistUpdate {
   fieldKey: string;
   index?: number;
   value: string;
+  /** Extra candidates for this field (only when the request asked for them). */
+  alternatives?: string[];
 }
 
 export type AssistLlm = (messages: Array<{ role: 'system' | 'user'; content: string }>) => Promise<string>;
 
 const SCOPES: ReadonlySet<FieldAssistScope> = new Set(['flat', 'slide', 'section', 'overlay', 'brief']);
 const MAX_TARGETS = 60;
+export const MAX_ALTERNATIVES = 3;
 
 /* ── Validation ─────────────────────────────────────────────────────── */
 
@@ -155,6 +168,9 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
     objective: str(rawContext.objective).slice(0, 300),
     tone: str(rawContext.tone).slice(0, 120),
     brand: str(rawContext.brand).slice(0, 120),
+    mainMessage: str(rawContext.main_message ?? rawContext.mainMessage).slice(0, 300) || undefined,
+    cta: str(rawContext.cta).slice(0, 120) || undefined,
+    offer: str(rawContext.offer).slice(0, 300) || undefined,
     sourceContent: str(rawContext.source_content ?? rawContext.sourceContent).slice(0, 6000) || undefined,
     siblings: Array.isArray(rawContext.siblings)
       ? (rawContext.siblings as unknown[])
@@ -165,10 +181,16 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
       : undefined,
   };
 
+  const altRaw = Number(body.alternatives ?? 0);
+  const alternatives = Number.isFinite(altRaw) ? Math.max(0, Math.min(MAX_ALTERNATIVES, Math.floor(altRaw))) : 0;
+
   return {
     ok: true,
     errors: [],
-    request: { assetFamily: assetFamily as TemplateAssetFamily, templateId, action: action as TemplateFieldAssistAction, targets, context },
+    request: {
+      assetFamily: assetFamily as TemplateAssetFamily, templateId, action: action as TemplateFieldAssistAction, targets, context,
+      ...(alternatives > 0 ? { alternatives } : {}),
+    },
   };
 }
 
@@ -222,7 +244,9 @@ export function buildFieldAssistMessages(
   const system = [
     `You are a marketing copy assistant for a ${template.assetFamily} asset ("${template.name}").`,
     'You ONLY produce text for the specific fields requested. You NEVER return a whole asset, extra fields, commentary, or markdown.',
-    'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section|overlay|brief","field_key":"...","index":<number|optional>,"value":"..."}]}.',
+    request.alternatives
+      ? `Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section|overlay|brief","field_key":"...","index":<number|optional>,"value":"...","alternatives":["..."]}]} where "alternatives" holds EXACTLY ${request.alternatives} further distinct candidates for that same field (same role, same max length, each a genuinely different wording or angle grounded in the same content).`
+      : 'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section|overlay|brief","field_key":"...","index":<number|optional>,"value":"..."}]}.',
     'Produce EXACTLY ONE update object per requested field, and echo back that field\'s EXACT scope, field_key, and index as shown in the list. The index is 0-BASED — copy the `index=` value verbatim; do NOT renumber, start at 1, or skip any index.',
     'Keep each value within its max length. Match the platform-native, concise tone of social creative copy.',
     'Every field on an asset must be DISTINCT: never repeat or lightly reword another field. A subheadline must ADD new information or angle, not restate the headline; a CTA is an action, not a headline. If a value would duplicate a sibling field shown below, write something genuinely different.',
@@ -231,6 +255,10 @@ export function buildFieldAssistMessages(
     ...(brandVoiceLines.length ? ['Write in the brand voice:', ...brandVoiceLines] : []),
     // Ground copy in the company's ACTUAL business — never invent company facts.
     'Ground the copy in the company context provided below; do not invent products, claims, or company facts that are not given.',
+    // Owner decision (2026-10-24): the main message is THE key of the asset.
+    ...(ctx.mainMessage
+      ? ['A MAIN MESSAGE is given below. It is the key of this asset: the headline/title/lead field EXPRESSES it (condensed to fit when needed, never replaced by a different idea), and every other field SUPPORTS it — adding proof, context, benefit or the next step for that same message. Never contradict it, drift to another topic, or ignore it.']
+      : []),
     // Strength: a generic goal/category label is an ANGLE, not the message.
     'If the Topic is a generic goal or category label (e.g. "Explain a Process or How-To", "Promote an Event"), treat it ONLY as the angle/intent — write specific, benefit-led copy about the company\'s actual product, positioning, or differentiator from the context below. NEVER output the goal/category label, a bare restatement of it, or a generic template phrase ("the detail that makes it land", "worth stopping for") as the value. Every line must say something concrete a competitor could not copy-paste.',
   ].join(' ');
@@ -261,6 +289,9 @@ export function buildFieldAssistMessages(
     ctx.audience ? `Audience (this asset): ${ctx.audience}` : '',
     ctx.objective ? `Objective: ${ctx.objective}` : '',
     ctx.tone ? `Requested tone: ${ctx.tone}` : '',
+    ctx.mainMessage ? `MAIN MESSAGE (the key): ${ctx.mainMessage}` : '',
+    ctx.offer ? `Offer / product: ${ctx.offer}` : '',
+    ctx.cta ? `Viewer action (use it for any CTA field, keep it short): ${ctx.cta}` : '',
     // Canonical company context (business understanding) — shared grounding.
     ...companyLines,
   ].filter(Boolean).join('\n');
@@ -316,8 +347,15 @@ export function deterministicTransform(
   const pillar = str(company?.messagingPillars?.[0]);
   const firstOf = (...xs: Array<string | undefined>): string => xs.find((x) => !!x && x.trim().length > 0) ?? '';
 
+  // The brief's own words outrank every derived fact: the main message IS the
+  // lead line and the viewer action IS the CTA (owner decision 2026-10-24).
+  const mainMessage = str(context.mainMessage);
+  const briefCta = str(context.cta);
   const generateSeed = (): string => {
-    if (key.includes('cta')) return 'Learn more';
+    if (key.includes('cta')) return briefCta ? clamp(briefCta, field.maxLength) : 'Learn more';
+    if (mainMessage && (key === 'headline' || key === 'title' || key === 'quote')) {
+      return clampWords(mainMessage, field.maxLength);
+    }
     if (key.includes('author')) return '';
     // "Audience"/"tone" describe WHO/HOW — ground audience in the ICP when known,
     // never the goal label.
@@ -376,6 +414,51 @@ export function deterministicTransform(
 }
 
 /* ── Response parsing (pure, tolerant) ──────────────────────────────── */
+
+/**
+ * Per-field `alternatives` from the same LLM JSON (only read when the request
+ * asked for them). Each list is clamped to the field's max length, de-duplicated
+ * and capped at `max`.
+ */
+export function parseAssistAlternatives(
+  text: string,
+  resolved: Array<{ target: FieldAssistTarget; field: TemplateField }>,
+  max: number,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  if (!max) return out;
+  const parsed = tryParseJson(text);
+  const updates = parsed && Array.isArray((parsed as Record<string, unknown>).updates)
+    ? ((parsed as Record<string, unknown>).updates as unknown[])
+    : [];
+  const byKey = new Map<string, unknown[]>();
+  for (const u of updates) {
+    const obj = (u && typeof u === 'object' ? u : {}) as Record<string, unknown>;
+    const scope = String(obj.scope ?? '');
+    const fieldKey = String(obj.field_key ?? obj.fieldKey ?? '');
+    const index = typeof obj.index === 'number' ? obj.index : undefined;
+    if (!scope || !fieldKey || !Array.isArray(obj.alternatives)) continue;
+    byKey.set(targetKey(scope as FieldAssistScope, fieldKey, index), obj.alternatives as unknown[]);
+  }
+  for (const { target, field } of resolved) {
+    const k = targetKey(target.scope, target.fieldKey, target.index);
+    const raw = byKey.get(k);
+    if (!raw) continue;
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const a of raw) {
+      if (typeof a !== 'string') continue;
+      const v = clamp(str(a), field.maxLength);
+      const n = v.toLowerCase();
+      if (!v || seen.has(n)) continue;
+      seen.add(n);
+      list.push(v);
+      if (list.length >= max) break;
+    }
+    if (list.length) out.set(k, list);
+  }
+  return out;
+}
 
 export function parseAssistResponse(
   text: string,
@@ -448,6 +531,7 @@ export async function runCreatorFieldAssist(input: {
   }
 
   let llmValues = new Map<string, string>();
+  let llmAlternatives = new Map<string, string[]>();
   let usedFallback = false;
   let fallbackReason: string | undefined;
   if (input.llm) {
@@ -455,6 +539,7 @@ export async function runCreatorFieldAssist(input: {
       const messages = buildFieldAssistMessages(template, request, resolved);
       const text = await input.llm(messages);
       llmValues = parseAssistResponse(text, resolved);
+      llmAlternatives = parseAssistAlternatives(text, resolved, request.alternatives ?? 0);
       if (llmValues.size === 0) {
         // The call succeeded but produced no mappable values (wrong shape / empty).
         usedFallback = true;
@@ -497,7 +582,16 @@ export async function runCreatorFieldAssist(input: {
     // empty field — so the value is always returned when non-empty.
     const finalValue = v.value;
     violations.push(...v.violations);
-    updates.push({ scope: target.scope, fieldKey: target.fieldKey, index: target.index, value: finalValue });
+    // Alternatives pass the SAME brand-voice validation; a rejected or
+    // duplicate candidate is dropped rather than repaired (they are optional).
+    const alternatives = (llmAlternatives.get(k) ?? [])
+      .map((a) => validateCreatorCopyValue(a, target.fieldKey, brandVoice))
+      .filter((r) => r.ok && !r.repaired && r.value && r.value.toLowerCase() !== finalValue.toLowerCase())
+      .map((r) => r.value);
+    updates.push({
+      scope: target.scope, fieldKey: target.fieldKey, index: target.index, value: finalValue,
+      ...(alternatives.length ? { alternatives } : {}),
+    });
   }
 
   return { updates, usedFallback, invalidTargets, violations, fallbackReason };
@@ -527,6 +621,13 @@ function firstSentence(s: string): string {
 function clamp(s: string, max?: number): string {
   const t = s.trim();
   return typeof max === 'number' && max > 0 && t.length > max ? t.slice(0, max).trim() : t;
+}
+/** Clamp at a word boundary (a fitted main message must not end mid-word). */
+function clampWords(s: string, max?: number): string {
+  const t = collapseWhitespace(s).replace(/[.!]+$/, '');
+  if (typeof max !== 'number' || max <= 0 || t.length <= max) return t;
+  const cut = t.slice(0, max + 1).replace(/\s+\S*$/, '').trim();
+  return cut || t.slice(0, max).trim();
 }
 function targetKey(scope: FieldAssistScope, fieldKey: string, index?: number): string {
   return `${scope}:${index ?? ''}:${fieldKey}`;

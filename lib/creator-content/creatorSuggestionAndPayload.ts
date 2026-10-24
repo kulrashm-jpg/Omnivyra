@@ -18,6 +18,8 @@ import {
   projectInfographicSections,
 } from '../creator-templates/values';
 import { creatorRuntimeV2Live } from '../creator-templates/creatorRuntimeFlag';
+import { type CreatorBrief, hasCreatorBriefContent } from './creatorBrief';
+import { buildBriefOverlayChips } from './creatorContentFill';
 import { runCreatorRuntimeV2 } from '../creator-templates/creatorRuntimeV2';
 import {
   type CreatorTypeId,
@@ -44,8 +46,17 @@ export function buildOverlayFieldSuggestions(input: {
   topic: string;
   keyMessage: string;
   currentHook: string;
+  /**
+   * The resolved writer content. When it carries content, chips are ONLY
+   * content-grounded alternatives (AI alternatives from the fill pass, then
+   * variants of the main message / lines of the body) — never the generic
+   * starter phrases, which are reserved for a draft with no content at all.
+   */
+  brief?: CreatorBrief | null;
+  aiAlternatives?: Partial<Record<keyof WriterOverlayText, string[]>>;
 }): { hook: string[]; headline: string[]; supportingText: string[]; keyInsight: string[] } {
   const { type } = input;
+  if (hasCreatorBriefContent(input.brief)) return buildBriefOverlayChips(input.brief, input.aiAlternatives ?? {});
   const limits: Record<keyof WriterOverlayText, number> = {
     hook: 76, headline: 84, keyInsight: 132, cta: 42, supportingText: 96,
   };
@@ -188,8 +199,11 @@ export function buildFreeformFieldSuggestions(input: {
   overlayHook: string;
   overlayKeyInsight: string;
   overlayCta: string;
+  /** Resolved writer content — when present, no generic starter chips are added. */
+  brief?: CreatorBrief | null;
 }): { audience: string[]; keyMessage: string[]; cta: string[]; topic: string[]; dataPoints: string[]; refinement: string[]; objective: string[] } {
   const { type } = input;
+  const brief = hasCreatorBriefContent(input.brief) ? input.brief : null;
   const MAX_CHIPS = 3;
   const compact = (raw: string, max: number): string => {
     const single = String(raw || '').replace(/\s+/g, ' ').trim();
@@ -211,6 +225,7 @@ export function buildFreeformFieldSuggestions(input: {
   // Audience candidates — priority: writer audience, brand override,
   // brand profile audience. Stops at 3 unique chips.
   const audience: string[] = [];
+  pushUnique(audience, brief?.audience, 80);
   pushUnique(audience, input.writerAudience, 80);
   pushUnique(audience, input.brandOverrideAudience, 80);
   pushUnique(audience, input.brandProfileAudience, 80);
@@ -218,7 +233,8 @@ export function buildFreeformFieldSuggestions(input: {
   // Key-message candidates — most specific content first (writer first
   // sentence > typed insight > typed hook > topic > writer title).
   const keyMessage: string[] = [];
-  const writerBody = String(input.writerBody || '').trim();
+  pushUnique(keyMessage, brief?.mainMessage, 200);
+  const writerBody = String(input.writerBody || brief?.body || '').trim();
   const writerFirstSentence = writerBody
     .split(/(?<=[.!?])\s+|\n+/u)[0]
     ?.trim() || '';
@@ -242,8 +258,9 @@ export function buildFreeformFieldSuggestions(input: {
     if (cta.length >= ctaCap) return;
     cta.push(compacted);
   };
-  // Operator's typed overlay CTA is offered first if present.
+  // Operator's typed overlay CTA is offered first if present, then the brief's.
   pushUniqueCta(input.overlayCta);
+  pushUniqueCta(brief?.cta);
   if (ctaStrategy?.ctaSuggestions?.length) {
     for (const suggestion of ctaStrategy.ctaSuggestions) {
       pushUniqueCta(suggestion);
@@ -259,6 +276,8 @@ export function buildFreeformFieldSuggestions(input: {
 
   const buildStarterList = (fieldId: string, max: number, alreadyPicked: string[] = []): string[] => {
     const list: string[] = [...alreadyPicked];
+    // Content exists → content-grounded chips only, never generic starters.
+    if (brief) return list;
     const starters = getStarterChips(type ?? undefined, fieldId);
     for (const starter of starters) {
       if (list.length >= MAX_CHIPS) break;
@@ -275,8 +294,17 @@ export function buildFreeformFieldSuggestions(input: {
   // writer signals stay in front.
   const audienceWithStarters = buildStarterList('audience', 80, audience);
   const keyMessageWithStarters = buildStarterList('keyMessage', 200, keyMessage);
-  const topic = buildStarterList('topic', 120);
-  const dataPoints = buildStarterList('dataPoints', 200);
+  const topicFromBrief: string[] = [];
+  if (brief) {
+    pushUnique(topicFromBrief, brief.offer, 120);
+    pushUnique(topicFromBrief, brief.mainMessage, 120);
+  }
+  const dataFromBrief: string[] = [];
+  if (brief) {
+    for (const s of brief.body.split(/(?<=[.!?])\s+|\n+/u)) if (/\d/.test(s)) pushUnique(dataFromBrief, s.trim(), 200);
+  }
+  const topic = buildStarterList('topic', 120, topicFromBrief);
+  const dataPoints = buildStarterList('dataPoints', 200, dataFromBrief);
   const refinement = buildStarterList('refinement', 200);
   const objective = buildStarterList('objective', 200);
 
@@ -330,6 +358,12 @@ export interface BuildGenerationBodyInput {
   compositionId?: string | null;
   /** The user's own answers to "how should it look?" and "what's featured?". */
   guidedChoices?: import('../content/guidedCreativeDirection').GuidedCreativeChoices | null;
+  /**
+   * The resolved writer content (effective — user edits to the main message /
+   * viewer action already applied). Its main message is the key: it is the
+   * summary the scene prompt conveys and the on-image headline fallback.
+   */
+  creatorBrief?: CreatorBrief | null;
   variantPinOverride: string | null;
 }
 
@@ -342,6 +376,8 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
     brandContextLines, selectedPlatform, selectedCompanyId,
     activeTemplate, templateValues, lightweightContext, blueprintId, compositionId, guidedChoices, variantPinOverride,
   } = input;
+    const brief = hasCreatorBriefContent(input.creatorBrief) ? input.creatorBrief : null;
+    const mainMessage = String(brief?.mainMessage || '').trim();
     if (!String(answers.topic || '').trim()) return null;
     const writerStructureGuidance = writerSource && isDeterministicStructuredType(type)
       ? buildWriterStructureGuidance(writerSource, type as CreatorTypeId)
@@ -377,9 +413,9 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
     const overlayPayload = isSocialCreativeType(type) && overlayAllowed && (!writerSource ? !(type === 'image' && !standaloneEmbeddedCopy) : writerEmbeddedCopy)
       ? {
           hook: String(overlayText.hook || '').trim(),
-          headline: String(overlayText.headline || answers.headline || answers.topic || '').trim(),
+          headline: String(overlayText.headline || mainMessage.slice(0, 84) || answers.headline || answers.topic || '').trim(),
           keyInsight: String(overlayText.keyInsight || '').trim(),
-          cta: (writerCopyPolicy?.allowCTA || (!writerSource && standaloneEmbeddedCopy)) ? String(overlayText.cta || answers.cta || '').trim() : '',
+          cta: (writerCopyPolicy?.allowCTA || (!writerSource && standaloneEmbeddedCopy)) ? String(overlayText.cta || answers.cta || brief?.cta || '').trim() : '',
           supportingText: String(overlayText.supportingText || '').trim(),
         }
       : null;
@@ -468,8 +504,10 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
       topic: String(answers.topic || '').trim(),
       objective: String(answers.objective || '').trim(),
       audience: String(answers.audience || '').trim(),
+      // The MAIN MESSAGE is the key (owner decision): it is what the scene
+      // prompt conveys (summary → keyMessage), ahead of the raw answers.
       summary: String(
-        answers.keyMessage || answers.headline || answers.sectionDirection || answers.slideDirection || '',
+        mainMessage || answers.keyMessage || answers.headline || answers.sectionDirection || answers.slideDirection || '',
       ).trim(),
       creator_card: {
         objective: String(answers.objective || '').trim(),
@@ -505,6 +543,9 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
               },
             }
           : {}),
+        // The resolved writer content, so the server can ground the image scene
+        // in it (content_excerpt). Body capped: it is grounding, not copy.
+        ...(brief ? { creator_brief: { ...brief, body: brief.body.slice(0, 1500) } } : {}),
         copy_policy: writerCopyPolicy,
         source_text_transform: writerCopyPolicy?.sourceTextTransform ?? null,
         infographic_layout: type === 'infographic' ? String(answers.structureMode || 'framework') : null,
@@ -537,12 +578,17 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
                    * the field labelled as the image's text.
                    */
                   const tv = projectImageOverlayText(activeTemplate, templateValues);
+                  // A template slot the user left blank falls back to what the
+                  // overlay panel shows for that SAME slot (the panel is on screen
+                  // in Text Inside Image and was previously ignored on templates),
+                  // then to the main message for the headline.
+                  const ov = (k: keyof WriterOverlayText) => String(overlayText[k] || '').trim();
                   return {
                     hook: '',
-                    headline: (String(tv.headline || '').trim() || String(answers.topic || '').trim()).slice(0, 84),
-                    keyInsight: (String(tv.keyInsight || '').trim() || String(answers.keyMessage || '').trim()).slice(0, 190),
-                    cta: (String(tv.cta || '').trim() || String(answers.cta || '').trim()).slice(0, 42),
-                    supportingText: String(tv.supportingText || '').trim().slice(0, 96),
+                    headline: (String(tv.headline || '').trim() || ov('headline') || mainMessage || String(answers.topic || '').trim()).slice(0, 84),
+                    keyInsight: (String(tv.keyInsight || '').trim() || ov('keyInsight') || String(answers.keyMessage || '').trim()).slice(0, 190),
+                    cta: (String(tv.cta || '').trim() || ov('cta') || String(answers.cta || '').trim()).slice(0, 42),
+                    supportingText: (String(tv.supportingText || '').trim() || ov('supportingText')).slice(0, 96),
                     __template_authoritative: true,
                   } as Record<string, unknown>;
                 })())

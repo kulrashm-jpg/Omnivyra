@@ -14,6 +14,7 @@ import { EMPTY_GUIDED_CHOICES, sanitizeGuidedChoices } from '../../../lib/conten
 import { readGuidedChoices, GUIDED_CHOICES_SESSION_KEY } from '../../../lib/content/guidedCreativeSession';
 import { getTemplateById, familyForCreatorType, creatorIngestPrefillKey, type CreatorTemplate } from '../../../lib/creator-templates';
 import { type TemplateFieldValues, initTemplateValues } from '../../../lib/creator-templates/values';
+import type { CreatorBrief } from '../../../lib/creator-content/creatorBrief';
 import {
   type BrandContextSelections, type BrandPresence, type CreatorBrandMode, type CreatorBrandProfile,
   type CreatorResult, type CreatorTypeId, type SavedBlockReference, type SavedCreatorAsset,
@@ -152,7 +153,28 @@ export function useCreatorWorkflowState() {
   // genuinely new context (manual locks belong to the asset that was being edited).
   React.useEffect(() => {
     setSyncState(freshSyncState());
+    // Template-field / overlay edit marks belong to the asset being edited.
+    // Answer marks (`answer::…`) are kept: the intake answers survive a
+    // template change, and so does the fact that the user typed them.
+    setUserEditedKeys((prev) => {
+      const kept = [...prev].filter((k) => k.startsWith('answer::'));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
   }, [activeTemplate?.id, type, router.query.template_id, router.query.ingest, router.query.session, router.query.prefill]);
+  /*
+   * The resolved writer content (Writer launch or workspace brief, or the copy
+   * persisted server-side for this draft) — the ONE content source every
+   * template field, overlay line, slide and section is filled from.
+   */
+  const [creatorBrief, setCreatorBrief] = React.useState<CreatorBrief | null>(null);
+  /*
+   * Fields the USER changed (fieldEditKey: `flat::headline`, `slide:2:title`,
+   * `overlay::cta`, `answer::keyMessage`). Content filling never writes one.
+   */
+  const [userEditedKeys, setUserEditedKeys] = React.useState<ReadonlySet<string>>(() => new Set());
+  /** AI alternatives returned by the overlay fill pass — the content-grounded chips. */
+  const [overlayAiAlternatives, setOverlayAiAlternatives] =
+    React.useState<Partial<Record<keyof WriterOverlayText, string[]>>>({});
   // Field-level AI assist — the busyKey of the in-flight assist action (per
   // field / batch); the panel disables that single control while it runs.
   const [aiBusyKey, setAiBusyKey] = React.useState<string | null>(null);
@@ -272,6 +294,7 @@ export function useCreatorWorkflowState() {
     refinedSuggestion, regenCount, regenSeenResultRef, renderJobProgress, result, resultPanelRef, router,
     saveInFlightRef, savedAssets, savedBlock, selectNewestAssetRef, selectedAssetId, selectedCompanyId,
     guidedChoices, setGuidedChoices,
+    creatorBrief, setCreatorBrief, userEditedKeys, setUserEditedKeys, overlayAiAlternatives, setOverlayAiAlternatives,
     selectedCompanyName, selectedPlatform, selectedSuggestionId, setActionInProgress, setActiveTemplate,
     setAiBusyKey, setAnswers, setAssetReloadNonce, setBrandMode, setBrandOverrides, setBrandPanelOpen,
     setBrandPresence, setBrandProfile, setBrandSelections, setConnectedPlatforms, setError,

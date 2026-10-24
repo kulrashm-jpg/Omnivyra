@@ -69,6 +69,13 @@ export type CreatorPromptInput = {
   keyMessage?: string;
   /** What the viewer is asked to do (the CTA), as scene intent only — never rendered as text. */
   ctaIntent?: string;
+  /**
+   * An excerpt of the writer content the image is built from (the post body /
+   * creative brief). Grounds the scene in the actual content — essential for
+   * "Post + Image", where the image carries no text and must still be
+   * visually about the post. Never rendered as text.
+   */
+  contentExcerpt?: string;
   tagline?: string;
   brandMode?: 'brand-aware' | 'neutral' | string | null;
   /** Content type / asset type as known to the renderer (image / banner / brand_card / supporting_image). */
@@ -554,6 +561,15 @@ function buildCampaignLayer(input: CreatorPromptInput): string[] {
   // The objective falls back to the key message upstream; do not say it twice.
   if (objective && objective !== rawKeyMessage) out.push(`Campaign objective: ${objective}.`);
   if (keyMessage) out.push(`Main message the scene must convey (express it visually; do NOT render it as text): ${keyMessage}.`);
+  // The content itself, so the visual is about what the post actually says
+  // (owner decision: Post + Image is a text-free image influenced by the content).
+  const rawExcerpt = clean(input.contentExcerpt).slice(0, 600);
+  const excerpt = supportingVisual
+    ? rawExcerpt.replace(/\b(cta|call to action|buttons?)\b/gi, ' ').replace(/\s+/g, ' ').trim()
+    : rawExcerpt;
+  if (excerpt && excerpt !== keyMessage) {
+    out.push(`Content this image accompanies — depict its subject, setting and mood (do NOT render any of these words as text): ${excerpt}`);
+  }
   // CTA intent only shapes an embedded-copy visual. In Post + Image the post
   // carries the call to action and the image stays text- and CTA-free.
   const ctaIntent = clean(input.ctaIntent);

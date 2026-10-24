@@ -193,7 +193,10 @@ export default function CreatorTypeWorkflowPage() {
     topic: String(answers.topic || ''),
     keyMessage: String(answers.keyMessage || ''),
     currentHook: String(overlayText.hook || ''),
-  }), [writerSource?.body, writerSource?.title, answers.topic, answers.keyMessage, overlayText.hook, type]);
+    // Content exists → chips are content-grounded alternatives only.
+    brief: l.effectiveBrief,
+    aiAlternatives: s.overlayAiAlternatives,
+  }), [writerSource?.body, writerSource?.title, answers.topic, answers.keyMessage, overlayText.hook, type, l.effectiveBrief, s.overlayAiAlternatives]);
 
   // Freeform-question chips (audience / keyMessage / cta / topic / dataPoints /
   // refinement / objective) — pure builder, same dependency array as before.
@@ -209,7 +212,9 @@ export default function CreatorTypeWorkflowPage() {
     overlayHook: String(overlayText.hook || ''),
     overlayKeyInsight: String(overlayText.keyInsight || ''),
     overlayCta: String(overlayText.cta || ''),
+    brief: l.effectiveBrief,
   }), [
+    l.effectiveBrief,
     writerSource?.audience,
     writerSource?.body,
     writerSource?.title,
@@ -424,7 +429,9 @@ export default function CreatorTypeWorkflowPage() {
     setBrandSelection,
     setError,
     setNotice,
-    setOverlayField,
+    // The form's overlay inputs + chips are USER writes: they mark the field
+    // edited so content filling never overwrites it.
+    setOverlayField: l.setOverlayFieldByUser,
     setRefinePrompt,
     setRefinedSuggestion,
     setSelectedAssetId,
