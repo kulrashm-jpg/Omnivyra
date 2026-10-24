@@ -409,8 +409,11 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
   // user's photo and the brand, and the only error the user ever saw was a downstream
   // copy-governance code. Stop here with the real reason; transient failures keep the
   // existing fallback.
-  // Narrow on the union's own discriminant (`image === null`), not the alias above.
-  const providerFailureKind = providerResult.image === null ? (providerResult.providerFailureKind ?? null) : null;
+  // `in` narrows the union under this repo's non-strict tsconfig too
+  // (a `=== null` check does not discriminate without strictNullChecks).
+  const providerFailureKind = providerResult.image === null && 'providerFailureKind' in providerResult
+    ? (providerResult.providerFailureKind ?? null)
+    : null;
   if (providerFailureKind && BLOCKING_PROVIDER_FAILURES.has(providerFailureKind)) {
     throw new Error(`provider_image_unavailable:${providerFailureKind}`);
   }
