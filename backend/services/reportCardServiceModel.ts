@@ -265,6 +265,8 @@ export type ReportGenerationPayload = {
   intelligence: Record<string, unknown>;
   /** Category-specific composed report output for downstream use */
   composed_report?: Record<string, unknown>;
+  /** Public research collected during generation (dossierV2/research.ts ResearchPack); absent when off or failed. */
+  public_research?: Record<string, unknown>;
 };
 
 function mapCategoryToReportType(category: ReportCategory): ReportType {

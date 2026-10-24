@@ -268,6 +268,8 @@ describe('dossier v2 summary pages and public research', () => {
       r('E-GEN-01', { kind: 'ai_overview', surface: 'Google AI Overview', query: 'widget platform', mentioned: false, cited: false, citedDomains: ['a', 'b'] }),
       r('E-GEN-02', { kind: 'ai_overview', surface: 'Google AI Overview', query: 'fix widgets', status: 'failed_source' }),
       r('E-GEN-03', { kind: 'model_recall', surface: 'ChatGPT', status: 'not_measured' }),
+      r('E-GEN-04', { kind: 'chatgpt_search', surface: 'ChatGPT search', intent: 'category', query: 'widget platform', mentioned: false, brandsNamed: ['HubSpot'], citedDomains: ['x.io'] }),
+      r('E-GEN-05', { kind: 'chatgpt_search', surface: 'ChatGPT search', intent: 'branded', query: 'What is Acme?', mentioned: false, accuracy: 'misidentified' }),
     ],
     competitors: [
       r('E-CMP-01', { kind: 'competitor', name: 'Rival', domain: 'rival.io', classification: 'direct', confidence: 'medium' }),
@@ -279,6 +281,9 @@ describe('dossier v2 summary pages and public research', () => {
       r('E-IND-02', { kind: 'name_collision' }),
     ],
     gaps: [r('E-GAP-01', { kind: 'gap', status: 'not_measured', claim: 'Reviews', method: 'Create listings and re-check.' })],
+    site: [r('E-SIT-01', { kind: 'site_basics', claim: 'robots.txt returns HTTP 404', recommends: { id: 'A-site-crawl-basics', title: 'Fix the crawl basics', action: 'Publish robots.txt.', effort: 'low', impact: 'high', verification: 'robots.txt returns 200.' } })],
+    benchmark: [r('E-BEN-01', { kind: 'benchmark', dimension: 'customer_proof', claim: 'Customer proof on site', gap: 'Competitors show customers.',
+      values: { 'acme.test': { value: 'none found', status: 'looked_for_not_found', url: '' }, 'rival.io': { value: '12 case studies', status: 'company_declared', url: '' } } })],
   });
   const html = renderDossierV2Html(payload(), { brandName: 'Acme', domain: 'acme.test' }, pack());
   const plain = renderDossierV2Html(payload(), { brandName: 'Acme', domain: 'acme.test' });
@@ -311,8 +316,8 @@ describe('dossier v2 summary pages and public research', () => {
   it('keeps search, generative-search and readiness visibility separate, counting only grounded answers', () => {
     const now = summary(html, 'summary-now');
     expect(now).toContain('Found for 1 of 3 buyer searches');
-    expect(now).toContain('Mentioned in 0 of 1 grounded AI answer read');
-    expect(now).toContain('1 AI Overview could not be retrieved');
+    expect(now).toContain('Named in 0 of 2 AI answers to buyer questions');
+    expect(now).toContain('confused in 1');
     expect(now).toContain('Website readiness');
   });
 
@@ -350,5 +355,24 @@ describe('dossier v2 summary pages and public research', () => {
     for (const rec of all) expect(appendix).toContain(rec.id);
     const known = new Set(all.map((x) => x.id));
     for (const a of buildDossierRegistry(payload(), pack() as never).actions) for (const id of a.evidenceIds) expect(known.has(id)).toBe(true);
+  });
+
+  it('puts a high-impact, low-effort move first on page 3, and it comes from the evidence', () => {
+    const next = summary(html, 'summary-next');
+    expect(next.indexOf('A-site-crawl-basics')).toBeGreaterThan(-1);
+    expect(next.indexOf('A-site-crawl-basics')).toBeLessThan(next.indexOf('class="v2-next"', next.indexOf('class="v2-next"') + 1));
+    const reg = buildDossierRegistry(payload(), pack() as never);
+    expect(reg.actions.find((a) => a.id === 'A-site-crawl-basics')?.evidenceIds).toEqual(['E-SIT-01']);
+  });
+
+  it('benchmarks competitors side by side and marks where the company has nothing comparable', () => {
+    expect(html).toContain('How the competitors market themselves');
+    expect(html).toMatch(/<td class="v2-gapcell"><small>none found/);
+    expect(html).toContain('12 case studies <em>(claimed)</em>');
+  });
+
+  it('shows an AI answer that confuses the brand as confused, not as a mention', () => {
+    expect(html).toContain('confused with another');
+    expect(html).toContain('Who AI answers recommend instead');
   });
 });

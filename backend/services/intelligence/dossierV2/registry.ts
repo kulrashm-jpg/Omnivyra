@@ -16,7 +16,7 @@
  * findings they address.
  */
 import type { CanonicalExportPayload } from '../canonicalExport';
-import type { ResearchPack } from './research';
+import { isBrandQuestion, isMarketingBasic, summariseVisibility, type ResearchPack, type ResearchRecord } from './research';
 
 export type EvidenceState = 'measured' | 'inferred' | 'declared' | 'unavailable' | 'not_measured';
 export type Effort = 'low' | 'medium' | 'high';
@@ -694,6 +694,63 @@ export function addResearch(pack: ResearchPack, findings: DossierFinding[], acti
     });
   }
 
+  // What AI search tools say: buyer questions (is the brand named?) and brand-name questions (is it right?).
+  const vis = summariseVisibility(pack).generative;
+  if (vis && vis.buyerAnswers) {
+    const ids = pack.generative.filter((r) => r.status === 'observed' && r.query && !isBrandQuestion(r, pack.subject.brand)).map((r) => r.id);
+    findings.push({
+      id: 'F-research-ai-answers', title: `Named in ${vis.buyerNamed} of ${vis.buyerAnswers} AI answers to buyer questions`, pillar: 'discoverability', kind: 'search', state: 'measured',
+      metric: `${vis.buyerNamed} of ${vis.buyerAnswers}`,
+      observation: `${vis.surfaces.join(', ')} answered buyer questions from live web sources; ${pack.subject.brand} was named in ${vis.buyerNamed}.${vis.brandAnswers ? ` Asked by name, ${vis.brandCorrect} of ${vis.brandAnswers} answers described the company correctly and ${vis.brandMisidentified} confused it with something else.` : ''}`,
+      implication: 'A buyer who asks an AI tool a category question is shown the brands its sources discuss; this company is not among them yet.',
+      source: `Public research ${pack.collectedAt} (${ids.slice(0, 3).join(', ')}…)`, actionIds: [],
+    });
+  }
+
+  // Own-site basics and competitor benchmark: findings, and the actions their evidence supports.
+  const site = pack.site ?? [];
+  const benchmark = pack.benchmark ?? [];
+  const siteIssues = site.filter((r) => r.recommends);
+  if (siteIssues.length) {
+    findings.push({
+      id: 'F-research-site-basics', title: 'Basic crawl and entity signals are missing', pillar: 'foundation', kind: 'search', state: 'measured',
+      metric: `${siteIssues.length} gaps`, observation: siteIssues.map((r) => r.claim).join('. ') + '.',
+      implication: 'Search engines and AI crawlers read these files and tags first; without them the site is harder to crawl completely and to recognise as one company.',
+      source: `Direct fetch ${pack.collectedAt} (${siteIssues.map((r) => r.id).join(', ')})`, actionIds: [],
+    });
+  }
+  const stale = site.find((r) => r.kind === 'content_cadence');
+  const velocity = actions.find((a) => a.id === 'A-authority-velocity');
+  if (stale && velocity && !velocity.evidenceIds.includes(stale.id)) velocity.evidenceIds.push(stale.id);
+  const basics = benchmark.filter(isMarketingBasic);
+  const behind = basics.filter((r) => r.values && Object.entries(r.values)[0]?.[1].status === 'looked_for_not_found');
+  if (basics.length) {
+    findings.push({
+      id: 'F-research-competitor-benchmark', title: `Behind the validated competitors on ${behind.length} of ${basics.length} marketing basics`,
+      pillar: 'authority', kind: 'competitive', state: 'measured', metric: null,
+      observation: behind.map((r) => `${r.claim}: ${Object.values(r.values ?? {})[0]?.value}`).join('; ') + '.',
+      implication: 'Competitors give buyers, review sites and AI tools more to find, cite and trust.',
+      source: `Public research ${pack.collectedAt} (${benchmark.map((r) => r.id).join(', ')})`, actionIds: [],
+    });
+  }
+  const recs = new Map<string, { rec: NonNullable<ResearchRecord['recommends']>; ids: string[] }>();
+  for (const r of [...site, ...benchmark]) {
+    if (!r.recommends) continue;
+    const entry = recs.get(r.recommends.id) ?? { rec: r.recommends, ids: [] };
+    entry.ids.push(r.id);
+    recs.set(r.recommends.id, entry);
+  }
+  for (const { rec, ids } of recs.values()) {
+    add(base({
+      id: rec.id, kind: 'improvement', title: rec.title, action: rec.action, effort: rec.effort, impact: rec.impact ?? null,
+      impactBasis: rec.impact ? 'analyst rating from public research' : null, pillar: rec.pillar ?? null, confidence: 'medium',
+      horizon: horizonFromEffort(rec.effort), horizonBasis: 'effort', verification: rec.verification,
+      why: [...site, ...benchmark].filter((r) => ids.includes(r.id)).map((r) => r.claim).slice(0, 2).join('; '),
+      evidenceIds: ids,
+      findingIds: rec.id === 'A-site-crawl-basics' ? ['F-research-site-basics'] : rec.id === 'A-ai-cited-sources' ? ['F-research-ai-answers'] : ['F-research-competitor-benchmark'],
+    }));
+  }
+
   for (const g of pack.gaps) {
     const route = GAP_ROUTES.find(([re]) => re.test(g.claim));
     const target = route ? actions.find((a) => a.id === route[1]) : null;
@@ -717,6 +774,8 @@ export function addResearch(pack: ResearchPack, findings: DossierFinding[], acti
     ['F-research-no-independent-proof', ['A-proof-unified-driven-platform', 'A-gap-trust-reputation']],
     ['F-competitors-unresolved', ['A-gap-competitor-pricing-feature-matrix']],
     ['F-search-not-found', ['A-content-search-foundation']],
+    ['F-research-ai-answers', ['A-gap-ai-visibility']],
+    ['F-research-competitor-benchmark', ['A-gap-trust-reputation', 'A-authority-velocity']],
   ];
   for (const [fid, aids] of LINKS) {
     for (const aid of aids) {

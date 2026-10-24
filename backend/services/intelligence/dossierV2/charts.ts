@@ -47,7 +47,7 @@ export function scoreRing(value: number | null, label: string, size = 150): stri
 </svg>`;
 }
 
-export type BarRow = { label: string; value: number | null; note?: string; tag?: string };
+export type BarRow = { label: string; value: number | null; note?: string; tag?: string; /** Overrides the score-band colour, for counts that are not scores. */ color?: string };
 
 /** Horizontal bars, 0–100 axis. Null rows render as an explicit "not measured" row, never zero. */
 export function barChart(rows: BarRow[], opts: { width?: number; labelWidth?: number } = {}): string {
@@ -72,7 +72,7 @@ export function barChart(rows: BarRow[], opts: { width?: number; labelWidth?: nu
         <text x="${labelW + 8}" y="${y + 13.5}" font-size="9.5" font-weight="600" fill="${PALETTE.grey}">${escape(row.note ?? 'not measured')} — no value</text>`;
     }
     const w = Math.max(2, (plotW * Math.max(0, Math.min(100, row.value))) / 100);
-    return `${label}<rect x="${labelW}" y="${y + 3}" width="${w.toFixed(1)}" height="14" rx="3" fill="${scoreColor(row.value)}"/>
+    return `${label}<rect x="${labelW}" y="${y + 3}" width="${w.toFixed(1)}" height="14" rx="3" fill="${row.color ?? scoreColor(row.value)}"/>
       <text x="${labelW + w + 6}" y="${y + 14}" font-size="11" font-weight="700" fill="${PALETTE.ink}">${row.value}</text>`;
   }).join('');
   return `<svg class="v2-chart" viewBox="0 0 ${width} ${h}" width="100%" role="img" aria-label="Score bars">

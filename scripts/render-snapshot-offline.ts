@@ -33,9 +33,10 @@ async function main() {
 
   const row = JSON.parse(await readFile(rowPath, 'utf8')) as {
     id: string; company_id: string; domain: string; created_at: string;
-    data?: { composed_report?: unknown; engine_version?: string };
+    data?: { composed_report?: unknown; engine_version?: string; public_research?: unknown };
   };
-  const research = researchPath ? JSON.parse(await readFile(researchPath, 'utf8')) : null;
+  const researchFile = researchPath ? JSON.parse(await readFile(researchPath, 'utf8')) : null;
+  const research = researchFile ?? row.data?.public_research ?? null;
   const composed = row.data?.composed_report;
   if (!composed) throw new Error('row has no data.composed_report');
 

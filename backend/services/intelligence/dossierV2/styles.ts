@@ -200,4 +200,10 @@ table { border-collapse: collapse; width: 100%; }
 .v2-role { background: ${P.wash}; border-radius: 1.5mm; padding: 2.5mm 3mm; }
 .v2-role b { display: block; font-size: 8.8pt; color: ${P.navy}; }
 .v2-role small { font-family: Consolas, monospace; font-size: 7.4pt; }
+.v2-bench td { vertical-align: top; }
+.v2-bench td small { font-size: 7.6pt; line-height: 1.35; display: block; }
+.v2-src { font-size: 6.6pt; color: ${P.greyMid}; }
+.v2-gapcell { background: ${P.crimsonSoft}; }
+.v2-register td { padding: .9mm 1.6mm; font-size: 7.2pt; line-height: 1.3; vertical-align: top; }
+.v2-register .v2-group td { background: ${P.wash}; font-weight: 700; color: ${P.navy}; font-size: 7.6pt; padding-top: 1.6mm; }
 `;
