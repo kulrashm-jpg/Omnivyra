@@ -87,3 +87,32 @@ export function pickFittingCta(candidates: ReadonlyArray<string | null | undefin
   }
   return '';
 }
+
+const DUP_STOPWORDS = new Set(['the', 'and', 'for', 'with', 'your', 'our', 'you', 'that', 'this', 'from', 'into', 'are', 'its', 'of', 'to', 'a', 'an', 'in', 'on', 'is']);
+function copyTokens(text: string): string[] {
+  return String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w && !DUP_STOPWORDS.has(w));
+}
+
+/**
+ * Whether two copy lines say the SAME thing — equal, one a cut/extension of the
+ * other ("…chaos of disjointed marketing" vs "…chaos of disjointed marketing
+ * tools"), or mostly the same words. A subheadline must describe the headline,
+ * not repeat it (owner 2026-10-25).
+ */
+export function isNearDuplicateCopy(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ta = copyTokens(String(a ?? ''));
+  const tb = copyTokens(String(b ?? ''));
+  if (!ta.length || !tb.length) return false;
+  const ja = ` ${ta.join(' ')} `;
+  const jb = ` ${tb.join(' ')} `;
+  if (ja === jb) return true;
+  // Short lines (a button, a label) only match exactly — "Get the offer" is not
+  // a repeat of a headline that happens to contain "offer".
+  if (Math.min(ta.length, tb.length) < 3) return false;
+  if (ja.includes(jb) || jb.includes(ja)) return true;
+  const sa = new Set(ta);
+  const sb = new Set(tb);
+  let shared = 0;
+  sa.forEach((w) => { if (sb.has(w)) shared += 1; });
+  return shared / Math.min(sa.size, sb.size) >= 0.75;
+}

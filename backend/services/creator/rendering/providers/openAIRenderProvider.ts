@@ -55,7 +55,7 @@ export interface OpenAIProviderConfig {
 export function createOpenAIRenderProvider(
   cfg: OpenAIProviderConfig = {},
 ): RenderProvider {
-  const model = cfg.model || 'gpt-image-1';
+  const model = cfg.model || 'gpt-image-1.5';
 
   const capabilities = (): RenderCapabilityMatrix => ({
     modalities: ['image'],

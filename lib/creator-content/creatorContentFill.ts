@@ -20,7 +20,7 @@ import { IMAGE_COPY_FIELD_KEYS } from '../creator-templates/types';
 import type { TemplateFieldValues } from '../creator-templates/values';
 import type { WriterOverlayText } from '../content/writerCreatorAssetLaunch';
 import { type CreatorBrief, clipWords, fitMainMessage, hasCreatorBriefContent } from './creatorBrief';
-import { isFittingCta, isInstructionLikeCopy } from './creatorCopyPurpose';
+import { isFittingCta, isInstructionLikeCopy, isNearDuplicateCopy } from './creatorCopyPurpose';
 
 /* ── Edit identity ─────────────────────────────────────────────────────── */
 
@@ -117,8 +117,8 @@ export interface FillTarget {
 /**
  * Every template field that should be written from content: empty, AI-capable
  * and not user-edited — flat fields, every slide field, every section field.
- * A supporting flat field that merely duplicates the lead is rewritten too (a
- * subheadline must add to the headline, not repeat it). In "Post + Image" the
+ * A supporting flat field that repeats the lead — even a cut or lightly reworded
+ * copy of it — is rewritten too (a subheadline must add to the headline). In "Post + Image" the
  * image-copy fields are not part of the composition and are skipped. The lead
  * is included only when `includeLead` (its main-message fit was inexact). A
  * field holding an INSTRUCTION ("Create a post for …", e.g. restored from an
@@ -146,7 +146,7 @@ export function planTemplateFillTargets(input: {
       if (!val || input.includeLead || isInstructionLikeCopy(val)) targets.push({ scope: 'flat', fieldKey: f.key, currentValue: val });
       continue;
     }
-    const duplicatesLead = !!leadVal && val.toLowerCase() === leadVal.toLowerCase();
+    const duplicatesLead = !!leadVal && isNearDuplicateCopy(val, leadVal);
     if (!val || duplicatesLead || isInstructionLikeCopy(val)) targets.push({ scope: 'flat', fieldKey: f.key, currentValue: val });
   }
   const repeat = (scope: 'slide' | 'section', fields: readonly TemplateField[] | undefined, rows: Array<Record<string, string>> | undefined) => {
