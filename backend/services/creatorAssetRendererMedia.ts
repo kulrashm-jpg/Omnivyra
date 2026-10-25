@@ -99,7 +99,11 @@ export async function generateProviderImage(input: {
   prompt: string;
   /** Optional img2img style-reference image URL (curated template showcase).
    *  Used only when CREATOR_IMAGE_REFERENCE_MODE='edit'; conditions generation
-   *  via images.edit. Absent/flag-off → plain text-to-image (unchanged). */
+   *  via images.edit. Absent/flag-off → plain text-to-image (unchanged).
+   *  NO LONGER SUPPLIED by the image renderer (owner 2026-10-25): the curated
+   *  sample now rides as bytes through the style-reference path WITH its
+   *  "inspired, not copied" instruction, so it is never an instruction-less
+   *  edit base. This branch is unreachable from production. */
   referenceImageUrl?: string | null;
   /**
    * Canonical CONDITION references, already resolved to bytes by
@@ -205,7 +209,14 @@ export async function generateProviderImage(input: {
   // delivered PURPOSE-AWARE — allowed when the setting is 'edit' OR unset;
   // any other explicit value is the kill switch. The showcase URL below still
   // needs the global 'edit' value.
-  const canonicalRefs = (referenceModeEnabled || userReferenceDeliveryAllowed()) ? (input.referenceImages ?? []) : [];
+  let canonicalRefs = (referenceModeEnabled || userReferenceDeliveryAllowed()) ? (input.referenceImages ?? []) : [];
+  // "Inspired, never copied" defence in depth (owner 2026-10-25): a selected
+  // style reference (the look's / curated sample, always LAST) never rides on
+  // an input_fidelity 'high' call — that is reserved for the user's own
+  // subject/product photo, which then goes alone. The renderer already
+  // enforces this; the seam holds even for a caller that does not.
+  if (input.referenceKind === 'user+look' && input.referenceFidelity === 'high') canonicalRefs = canonicalRefs.slice(0, -1);
+  const styleOnlyReference = input.referenceKind === 'look';
 
   /*
    * Set ONLY when a canonical CONDITION attempt was made and could not be
@@ -270,7 +281,8 @@ export async function generateProviderImage(input: {
             // (input_fidelity 'high' + quality above 'low'); a background or
             // style reference keeps the provider defaults.
             ...referenceEditParams({
-              fidelity: input.referenceFidelity ?? 'standard',
+              // A style reference alone is ALWAYS standard fidelity.
+              fidelity: styleOnlyReference ? 'standard' : (input.referenceFidelity ?? 'standard'),
               model: editModel,
               configuredQuality: process.env.CREATOR_IMAGE_REFERENCE_QUALITY,
             }),

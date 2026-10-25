@@ -514,10 +514,14 @@ describe('F — the legacy showcase obeys the same gate', () => {
     expect(generateCalls).toHaveLength(1);
   });
 
-  it('gate OFF — the renderer does not even build a showcase URL', () => {
+  it('the renderer never builds a showcase URL — gate on or off', () => {
+    // Owner requirement 2026-10-25 ("looks inspire, every generation is new"):
+    // a curated / look showcase is never an edit base, so the renderer no
+    // longer builds or passes the showcase URL at all (stronger than gating it).
     const src = fs.readFileSync(
       path.resolve(__dirname, '../../services/creatorAssetRendererImage.ts'), 'utf8');
-    expect(src).toContain('if (!creatorImageReferenceModeEnabled()) return null;');
+    expect(src).not.toMatch(/creator-showcases\/\$\{/);
+    expect(src).not.toMatch(/^\s*referenceImageUrl,/m);
   });
 
   it('both sources read the SAME gate — no separate legacy switch to drift', () => {

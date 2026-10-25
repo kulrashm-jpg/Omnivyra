@@ -123,10 +123,13 @@ describe('A — no references: existing behaviour is untouched', () => {
     // The gate moved behind ONE function so the canonical and legacy lanes
     // cannot drift apart. The showcase is governed by exactly that gate, and by
     // nothing else — which is the invariant this guard was always protecting.
-    expect(strip(IMAGE)).toContain('!creatorImageReferenceModeEnabled()');
+    // Owner requirement 2026-10-25 ("looks inspire, every generation is new"):
+    // the instruction-less showcase edit base is RETIRED in the renderer — it
+    // no longer builds or passes a showcase URL at all. The gate invariant
+    // still holds (no direct env read in the renderer).
     expect(strip(IMAGE)).not.toMatch(/process\.env\.CREATOR_IMAGE_REFERENCE_MODE/);
-    expect(strip(IMAGE)).toContain('creator-showcases/');
-    expect(strip(IMAGE)).toContain('referenceImageUrl,');
+    expect(strip(IMAGE)).not.toContain('creator-showcases/');
+    expect(strip(IMAGE)).not.toMatch(/referenceImageUrl,/);
   });
 
   it('MUTATION GUARD: no second provider invocation was introduced', () => {

@@ -153,7 +153,9 @@ describe('legacy byte-identical; selected template differentiated (TEMPLATE-013)
         metadata: {
           platform: 'linkedin', content_type: 'infographic', creator_content_asset_type: 'infographic',
           topic: 'Topic', summary: 'A subtitle line.', infographic_layout: 'framework',
-          overlay_text: overlay, ...metadataExtra,
+          // Owner requirement 2026-10-25 ("every generation is new"): renders
+          // are deterministic per novelty SEED, so the byte-identity proof pins one.
+          overlay_text: overlay, novelty_seed: 'infographic-foundation-pinned-seed', ...metadataExtra,
         },
       },
     };

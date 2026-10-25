@@ -17,12 +17,16 @@ jest.mock('../../services/creator/infographicCopyComposer', () => ({ composeInfo
 
 import { resolveTemplate, IMAGE_VARIANTS, CAROUSEL_VARIANTS, INFOGRAPHIC_VARIANTS, DEFAULT_IMAGE_STYLE, DEFAULT_CAROUSEL_STYLE, variantKeyForTemplate } from '../../../lib/creator-templates';
 
+// Owner requirement 2026-10-25 ("every generation is new"): each render now
+// gets its own novelty seed, so identical input no longer yields identical
+// bytes. Determinism is proven per SEED — the same seed reproduces the bytes.
+const PINNED_NOVELTY_SEED = 'template-style-pinned-seed';
 const ovl = { hook: 'Capture intent', headline: 'Qualify the lead', keyInsight: 'Route the play', cta: 'Learn more', supportingText: 'Close it' };
 async function hash(extra: Record<string, unknown> = {}): Promise<string> {
   captured = [];
   const { renderAsset } = await import('../../services/creatorAssetRenderer');
   const payload = { asset_kind: 'image', color_palette: ['#0F172A', '#2F80ED', '#14B8A6'], visual_descriptor: { headline: 'T', visual_description: 'S' }, overlay_text: ovl,
-    media_bundle: { metadata: { platform: 'linkedin', content_type: 'infographic', creator_content_asset_type: 'infographic', topic: 'Topic here', summary: 'Sub.', infographic_layout: 'framework', overlay_text: ovl, ...extra } } };
+    media_bundle: { metadata: { platform: 'linkedin', content_type: 'infographic', creator_content_asset_type: 'infographic', topic: 'Topic here', summary: 'Sub.', infographic_layout: 'framework', overlay_text: ovl, novelty_seed: PINNED_NOVELTY_SEED, ...extra } } };
   await renderAsset(payload, { companyId: 'co', userId: 'u', campaignId: 'c' });
   return captured.map((b) => createHash('sha256').update(b).digest('hex')).join(',');
 }
@@ -36,7 +40,7 @@ async function carouselHash(extra: Record<string, unknown> = {}): Promise<{ join
     { slide_number: 3, role: 'cta', headline: 'Take action', body_text: 'Final slide body copy.' },
   ];
   const payload = { asset_kind: 'carousel', color_palette: ['#0F172A', '#2F80ED', '#14B8A6'], slides, slide_count: 3,
-    media_bundle: { metadata: { platform: 'linkedin', content_type: 'carousel', creator_content_asset_type: 'carousel', topic: 'Topic', summary: 'S', cta: 'Get started', overlay_text: ovl, ...extra } } };
+    media_bundle: { metadata: { platform: 'linkedin', content_type: 'carousel', creator_content_asset_type: 'carousel', topic: 'Topic', summary: 'S', cta: 'Get started', overlay_text: ovl, novelty_seed: PINNED_NOVELTY_SEED, ...extra } } };
   await renderAsset(payload, { companyId: 'co', userId: 'u', campaignId: 'c' });
   return { joined: captured.map((b) => createHash('sha256').update(b).digest('hex')).join(','), slides: captured.length };
 }

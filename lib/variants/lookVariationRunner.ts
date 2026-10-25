@@ -3,21 +3,26 @@
  *
  * N generations of the SAME brief with the chosen look LOCKED. Each request is
  * the normal generation payload plus `creator_card.look_variation`
- * ({ index, count, focus }); the renderer keeps the look identical and varies
- * only the focus (composition, subject, angle), and sends the look's own sample
- * image as a style reference (images.edit, normal fidelity) unless the
- * reference kill switch is set.
+ * ({ index, count, focus, base_seed }) and its own `creator_card.novelty_seed`.
+ * The renderer keeps the look identical and gives every version its own seeded
+ * novelty plan; versions share `base_seed`, so their primary picks (setting and
+ * composition) are guaranteed distinct across the N versions.
+ *
+ * Owner 2026-10-25 ("new but inspired by the reference selected"): each version
+ * sends the look's sample as a standard-fidelity style reference (images.edit)
+ * with the "do not copy" instruction, unless CREATOR_LOOK_SAMPLE_REFERENCE=off
+ * or the reference kill switch is set.
  *
  * Same endpoint and same governance as a single generation — this runner never
  * bypasses the pipeline, it only calls it N times, like the variant fan-out
- * runner (but sequentially; see runLookVariations). Cost: each version is one
- * generation, and a version that carries the style reference uses images.edit,
- * which costs more than text-to-image.
+ * runner (but sequentially; see runLookVariations). Billing / idempotency are
+ * unchanged: the route derives the credit reference from the brief, not from
+ * the seed.
  */
 
 import { apiFetch } from '../apiFetch';
 
-/** Rotated per version so the versions differ on purpose, not by chance. */
+/** Kept on the payload for older renderers; the novelty plan now carries the concrete per-version picks. */
 export const LOOK_VARIATION_FOCI = ['composition', 'subject', 'angle'] as const;
 export type LookVariationFocus = typeof LOOK_VARIATION_FOCI[number];
 
@@ -30,11 +35,22 @@ function obj(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-/** The payloads for N locked-look versions. Pure. */
+/** A fresh base seed for one "More versions" run (browser or node). */
+export function newLookVariationBaseSeed(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `lv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/**
+ * The payloads for N locked-look versions. Pure given `baseSeed` (one is
+ * minted when omitted). Version i carries `novelty_seed = <baseSeed>:v<i>`.
+ */
 export function buildLookVariationPayloads(
   basePayload: Record<string, unknown>,
   lookId: string,
   count: number = DEFAULT_LOOK_VARIATION_COUNT,
+  baseSeed: string = newLookVariationBaseSeed(),
 ): Record<string, unknown>[] {
   const n = Math.max(1, Math.min(MAX_LOOK_VARIATION_COUNT, Math.floor(count) || DEFAULT_LOOK_VARIATION_COUNT));
   const card = obj(basePayload.creator_card);
@@ -49,7 +65,10 @@ export function buildLookVariationPayloads(
         index: i + 1,
         count: n,
         focus: LOOK_VARIATION_FOCI[i % LOOK_VARIATION_FOCI.length],
+        base_seed: baseSeed,
       },
+      // Each version is its own generation with its own seed.
+      novelty_seed: `${baseSeed}:v${i + 1}`,
     },
   }));
 }

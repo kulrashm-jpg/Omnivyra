@@ -91,10 +91,9 @@ import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg, buildTwoColumnC
 import { buildStyleCardSvg, buildOverlaySvg, loadBrandMark, normalizeBackgroundBuffer } from './creatorAssetRendererOverlay';
 import { buildAiImagePrompt } from './creatorAssetRendererSvg';
 import { generateProviderImage, uploadRenderedPng, type AttachmentRenderPolicy, resolveImageSubtype, resolveCanonicalRenderPolicy } from './creatorAssetRendererMedia';
-// THE feature gate for reference-conditioned generation — one definition,
-// shared with the provider seam.
+// Purpose-aware endpoint + fidelity for the user's own photos — one
+// definition, shared with the provider seam.
 import {
-  creatorImageReferenceModeEnabled,
   resolveCreatorImageEndpoint,
   referenceFidelityForPurposes,
 } from './creator/creatorMultimodalReferences';
@@ -269,30 +268,6 @@ export async function composeSingleVisualAsset(
     // before.
     additionalReferences: options.compositionReferences?.additionalReferences,
   });
-  // PR5 — the chosen LOOK's own sample as a style reference (variations, or
-  // every look render when the global mode is 'edit'). Loaded from local disk;
-  // delivered as bytes through the purpose-aware canonical edit path below.
-  const { resolveLookStyleReference, lookStyleReferenceInstruction } =
-    await import('./creator/creatorLookStyleReference');
-  const lookStyleReference = await resolveLookStyleReference(metadata);
-  const lookReferenceAttached = lookStyleReference.status === 'attached' && lookStyleReference.reference !== null;
-  // img2img style reference (flag-gated): point at the curated template's showcase
-  // image so the provider can condition on it. Null unless the flag is on and a
-  // blueprint id is present → plain text-to-image (unchanged).
-  const referenceImageUrl = (() => {
-    // Same gate, read through the one function rather than re-testing the
-    // environment, so the legacy and canonical lanes cannot drift apart.
-    if (!creatorImageReferenceModeEnabled()) return null;
-    // The look's own sample already rides as bytes — never send a second
-    // (sample) style image next to it.
-    if (lookReferenceAttached) return null;
-    // A picked look IS the style: its showcase, not the curated sample's.
-    const bpId = lookStyleReference.lookId
-      ?? (typeof metadata.blueprint_id === 'string' ? metadata.blueprint_id.trim() : '');
-    if (!bpId) return null;
-    const base = String(process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'https://www.omnivyra.com').replace(/\/$/, '');
-    return `${base}/creator-showcases/${bpId}/image.webp`;
-  })();
   // Canonical CONDITION references as real image input. Resolved here because
   // only the renderer knows which endpoint is about to run, and capability is a
   // property of (model, endpoint) rather than of the model alone.
@@ -337,13 +312,35 @@ export async function composeSingleVisualAsset(
     .map((r) => (r as { reference?: { purpose?: string } }).reference?.purpose)
     .filter((p): p is string => typeof p === 'string' && p.length > 0);
   const conditionReferenceFidelity = referenceFidelityForPurposes(conditionReferencePurposes);
-  // User photos first, the look's sample LAST — the instruction names it by
-  // position. A style reference never raises fidelity: the user's purposes
-  // alone decide it ('standard' when only the look sample is attached).
+  // "Generation is new but inspired by the reference selected" (owner
+  // 2026-10-25): the selected reference — the chosen LOOK's sample, else the
+  // curated SAMPLE picked in the gallery — rides BY DEFAULT as a standard-
+  // fidelity STYLE image (LAST, after any user photo; alone when there is
+  // none), always with its positional "style only, do not copy" instruction.
+  // The main prompt body already carries the "original scene" instruction and
+  // the seeded "This version:" layer. Never on an input_fidelity:'high' call:
+  // a subject/product photo that needs it goes alone. There is no
+  // instruction-less showcase edit base any more (the URL path is retired).
+  const noveltyAuditForRender = (() => {
+    const n = safeObject(safeObject(assetPayload.media_bundle).metadata).novelty;
+    return n && typeof n === 'object' ? n as Record<string, unknown> : null;
+  })();
+  const noveltySeedForRender = typeof noveltyAuditForRender?.seed === 'string' ? noveltyAuditForRender.seed : null;
+  const { resolveLookStyleReference, lookStyleReferenceInstruction } =
+    await import('./creator/creatorLookStyleReference');
   const userReferenceBytes = conditionRefs?.references.map((r) => ({ bytes: r.bytes, mimeType: r.mimeType })) ?? [];
+  const lookStyleReference = await resolveLookStyleReference(metadata, undefined, {
+    userReferenceCount: userReferenceBytes.length,
+    userReferenceFidelity: conditionReferenceFidelity,
+  });
+  const lookReferenceAttached = lookStyleReference.status === 'attached'
+    && lookStyleReference.reference !== null
+    && !(userReferenceBytes.length > 0 && conditionReferenceFidelity === 'high');
   const allReferenceImages = lookReferenceAttached
     ? [...userReferenceBytes, { bytes: lookStyleReference.reference!.bytes, mimeType: lookStyleReference.reference!.mimeType }]
     : userReferenceBytes;
+  // A style reference never raises fidelity: the user's purposes alone decide
+  // it, and with the style reference attached it is 'standard' by construction.
   const referenceKind: 'user' | 'look' | 'user+look' = lookReferenceAttached
     ? (userReferenceBytes.length > 0 ? 'user+look' : 'look')
     : (lookStyleReference.status === 'disabled' && userReferenceBytes.length === 0 && !conditionRefs ? 'look' : 'user');
@@ -364,13 +361,12 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
     ? { image: null, fallbackReason: 'provider_image_unavailable' }
     : await generateProviderImage({
     prompt: promptForProvider,
-    referenceImageUrl,
     referenceImages: allReferenceImages.length > 0 ? allReferenceImages : (conditionRefs ? [] : null),
     referenceFidelity: conditionReferenceFidelity,
     referenceKind,
     conditionDegradedToText: conditionRefs?.degradedToText === true,
-    // A requested look reference the kill switch blocked is disclosed like a
-    // blocked user photo (only when no user photo carries its own disclosure).
+    // A style reference the kill switch blocked is disclosed like a blocked
+    // user photo (only when no user photo carries its own disclosure).
     lookReferenceDisabled: lookStyleReference.status === 'disabled' && referenceKind === 'look',
     eventContext: {
       creatorType: fileNamePrefix,
@@ -543,7 +539,9 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
     width,
     height,
     colors: brandColors,
-    variantId: brandKit.layoutVariantId,
+    // The novelty seed varies the fallback gradient per generation (same
+    // palette); absent seed → the brand's variant exactly as before.
+    variantId: noveltySeedForRender ? `${brandKit.layoutVariantId}:n:${noveltySeedForRender}` : brandKit.layoutVariantId,
   });
 
   // ── Mode branch ───────────────────────────────────────────────────────
@@ -734,6 +732,8 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
       : undefined,
     // PR5 — the look's sample as a style reference: what happened to it.
     // Absent when no look reference was requested.
+    // "Looks inspire, every generation is new": this generation's seed + picks.
+    novelty: noveltyAuditForRender ?? undefined,
     look_style_reference: lookStyleReference.status === 'not_requested'
       ? undefined
       : {
@@ -742,6 +742,8 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
             ? (providerResult.conditionApplied === true ? 'applied' : 'not_applied')
             : lookStyleReference.status,
           source: lookStyleReference.reference?.source ?? null,
+          // 'look' (the chosen look's sample) or 'sample' (the gallery's curated sample).
+          kind: lookStyleReference.kind,
         },
     image_subtype: subtypeHint?.subtypeId ?? null,
     attachment_mode: metadata.attachment_mode ?? null,
