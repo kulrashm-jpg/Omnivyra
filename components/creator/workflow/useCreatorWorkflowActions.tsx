@@ -24,7 +24,7 @@ import { useCreatorCompositionId } from '../useCreatorCompositionId';
 import { applyTemplateFieldUpdates, type TemplateFieldValues } from '../../../lib/creator-templates/values';
 import {
   OVERLAY_LIMITS, fieldEditKey, planOverlayFillTargets, planTemplateFillTargets,
-  seedOverlayFromBrief, seedTemplateFromBrief, type FillScope,
+  clipCopy, seedOverlayFromBrief, seedTemplateFromBrief, type FillScope,
 } from '../../../lib/creator-content/creatorContentFill';
 import {
   type CreatorResult, type RepurposePath, type SavedCreatorAsset,
@@ -106,8 +106,11 @@ export function useCreatorWorkflowActions(
       ...(b?.cta || answers.cta ? { cta: String(b?.cta || answers.cta || '').trim() } : {}),
       ...(b?.offer ? { offer: b.offer } : {}),
       source_content: String(b?.body || fallbackSource || '').trim().slice(0, 6000) || undefined,
+      // The chosen purpose (e.g. "promotional-image") — the server derives the
+      // goal-specific CTA suggestions from it for purpose-driven copy.
+      ...(String(answers.subtype || '').trim() ? { purpose_key: String(answers.subtype).trim() } : {}),
     };
-  }, [effectiveBrief, answers.topic, answers.audience, answers.objective, answers.styleDirection, answers.cta]);
+  }, [effectiveBrief, answers.topic, answers.audience, answers.objective, answers.styleDirection, answers.cta, answers.subtype]);
 
   /** Arc roles for carousel slide targets (hook → build → proof → CTA). */
   const slideRolesFor = React.useCallback((targets: Array<{ scope: string; index?: number }>, slideCountHint: number) => {
@@ -411,7 +414,7 @@ export function useCreatorWorkflowActions(
           const value = typeof u?.value === 'string' ? u.value : '';
           if (emptyFields.includes(key) && value.trim()) {
             // Never land on a role the user typed into while this was in flight.
-            setOverlayText((prev) => (String(prev[key] || '').trim() ? prev : { ...prev, [key]: value.slice(0, OVERLAY_LIMITS[key]) }));
+            setOverlayText((prev) => (String(prev[key] || '').trim() ? prev : { ...prev, [key]: clipCopy(value, OVERLAY_LIMITS[key]) }));
           }
         }
       } catch { /* best-effort — the user can still use per-field +AI */ }
@@ -478,7 +481,7 @@ export function useCreatorWorkflowActions(
       for (const u of oUpdates) {
         const key = String(u?.field_key ?? u?.fieldKey ?? '') as keyof WriterOverlayText;
         const value = typeof u?.value === 'string' ? u.value.trim() : '';
-        if (overlayTargets.includes(key) && value) nextOverlay = { ...nextOverlay, [key]: value.slice(0, OVERLAY_LIMITS[key]) };
+        if (overlayTargets.includes(key) && value) nextOverlay = { ...nextOverlay, [key]: clipCopy(value, OVERLAY_LIMITS[key]) };
       }
     } finally {
       setAiBusyKey(null);

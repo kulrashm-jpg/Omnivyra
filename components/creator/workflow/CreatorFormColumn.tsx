@@ -8,6 +8,8 @@
 import { INDEPENDENT_PALETTE_OPTIONS, paletteModeFor } from '../../../lib/creator-content/creatorPaletteMode';
 import React from 'react';
 import TemplateFieldsPanel from '../TemplateFieldsPanel';
+import CreatorCopyEditor from '../CreatorCopyEditor';
+import { isInstructionLikeCopy } from '../../../lib/creator-content/creatorCopyPurpose';
 import { IMAGE_COPY_FIELD_KEYS } from '../../../lib/creator-templates/types';
 import CreatorVariantExperienceSection from '../CreatorVariantExperienceSection';
 import LookVariationsButton from '../LookVariationsButton';
@@ -32,6 +34,8 @@ import CreativeSummaryCard, { type CreativeSummaryProps } from '../CreativeSumma
 import { EMPTY_GUIDED_CHOICES } from '../../../lib/content/guidedCreativeDirection';
 import { getOutcome } from '../../../lib/creator-outcomes/outcomeRegistry';
 import { intakeLayoutFieldId, intakeLayoutOptions } from '../../../lib/creator-content/creatorIntake';
+
+const EMPTY_EDITED_KEYS: ReadonlySet<string> = new Set<string>();
 
 /**
  * Global AI-activity indicator. EVERY AI operation on this screen sets `aiBusyKey`
@@ -144,6 +148,7 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
     showProgress,
     standaloneAttachmentMode,
     templateValues,
+    userEditedKeys,
     topicFieldRef,
     topicMissing,
     type,
@@ -1132,6 +1137,23 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
               />
             ) : null}
 
+            {/* Owner request (2026-10-25): refine the copy HERE, before generating.
+              * Bound to the same template values + handlers as the (hidden) full
+              * form, so the summary below and the payload read what is shown. */}
+            {confirmMode && effectiveTemplate ? (
+              <div className="mt-6">
+                <CreatorCopyEditor
+                  template={effectiveTemplate}
+                  values={templateValues}
+                  onChange={handleEditorChange}
+                  onAiAssist={handleTemplateAiAssist}
+                  aiBusyKey={aiBusyKey}
+                  editedKeys={userEditedKeys ?? EMPTY_EDITED_KEYS}
+                  imageCopyActive={imageCopyActiveForUi}
+                />
+              </div>
+            ) : null}
+
             {/* The last thing before a generation is spent. Every value is read
               * from the state about to be submitted — see CreativeSummaryCard. */}
             {(isSocialCreativeType(type) || type === 'carousel') && activeTemplate ? (
@@ -1152,7 +1174,10 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                   editHint={confirmMode ? 'Use “Edit details” to change any of it.' : null}
                   choices={guidedChoices ?? EMPTY_GUIDED_CHOICES}
                   attachment={imageAttachment}
-                  headline={String(templateValues?.fields?.headline || answers.topic || '').trim() || null}
+                  /* An instruction-like topic ("Create a promotion for …") is the
+                   * brief, never shown as the headline (owner 2026-10-25). */
+                  headline={String(templateValues?.fields?.headline
+                    || (isInstructionLikeCopy(answers.topic) ? '' : answers.topic) || '').trim() || null}
                   subheadline={String(templateValues?.fields?.subheadline || '').trim() || null}
                   cta={String(templateValues?.fields?.cta || answers.cta || '').trim() || null}
                   platform={selectedPlatform ?? null}

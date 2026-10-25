@@ -226,7 +226,9 @@ describe('field assist carries the whole brief', () => {
     expect(system.content).toMatch(/MAIN MESSAGE is given below\. It is the key of this asset/);
     expect(user.content).toContain(`MAIN MESSAGE (the key): ${BRIEF.mainMessage}`);
     expect(user.content).toContain('Offer / product: Omnivyra Scheduler');
-    expect(user.content).toContain('Viewer action (use it for any CTA field, keep it short): Start free');
+    // Updated deliberately (owner 2026-10-25): the viewer action is the CTA's intent,
+    // rewritten to 2–4 words that fit — never cut ("Discover your marketing clar").
+    expect(user.content).toContain('Viewer action (the intent for any CTA field — rewrite it to 2–4 words that fit the max length; never cut it): Start free');
     expect(user.content).toContain('Requested tone: Confident and friendly');
     expect(user.content).toContain('8 hours back');
   });
