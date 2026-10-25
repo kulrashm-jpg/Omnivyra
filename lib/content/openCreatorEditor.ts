@@ -13,6 +13,12 @@
  * environments / jsdom) so it can never throw.
  */
 export const CREATOR_EDITOR_ELEMENT_ID = 'creator-template-editor';
+/**
+ * Asks the page to show the full form first. On the confirmation ("here's what
+ * we'll make") screen the form is mounted but hidden, so scrolling to it did
+ * nothing (owner 2026-10-25: "Open editor" buttons did not work).
+ */
+export const CREATOR_EDITOR_OPEN_EVENT = 'creator:open-editor';
 
 export type OpenCreatorEditorStatus = 'opened' | 'editor_not_ready' | 'no_document';
 
@@ -60,15 +66,23 @@ export function openCreatorEditor(
     return { status: 'no_document', errorId: 'no_document' };
   }
 
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+    window.dispatchEvent(new CustomEvent(CREATOR_EDITOR_OPEN_EVENT));
+  }
   const el = document.getElementById(CREATOR_EDITOR_ELEMENT_ID);
   if (!el) {
     log('editor_not_ready', { ...fields, status: 'editor_not_ready', error_id: 'editor_not_ready' });
     return { status: 'editor_not_ready', errorId: 'editor_not_ready' };
   }
 
-  if (typeof (el as HTMLElement).scrollIntoView === 'function') {
-    (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+  const scroll = () => {
+    if (typeof (el as HTMLElement).scrollIntoView === 'function') {
+      (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+  // A hidden form becomes visible on the next render — scroll once it has.
+  if ((el as HTMLElement).closest?.('[hidden]')) setTimeout(scroll, 60);
+  else scroll();
   log('opened', { ...fields, status: 'opened' });
   return { status: 'opened' };
 }

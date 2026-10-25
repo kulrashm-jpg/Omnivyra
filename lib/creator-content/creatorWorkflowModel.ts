@@ -345,9 +345,26 @@ export function mapBriefToEditorAnswers(brief: MarketingBrief, config: WorkflowC
 export const CREATOR_DRAFT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7;
 export const CREATOR_GENERATION_TIMEOUT_MS = 1000 * 90;
 
+/**
+ * The server's text-only stand-in when generation failed (generatePrep
+ * buildBetaCreatorFallback): no rendered file, nothing saved. It must never be
+ * shown as "completed" or offered for download / duplicate (owner 2026-10-25:
+ * "none of these buttons work" — they were acting on this placeholder).
+ * Returns the failure reason, or null for a real output.
+ */
+export function creatorPlaceholderFailure(result: CreatorResult | null): { reason: string } | null {
+  const output = result?.output as (CreatorResult['output'] & { metadata?: Record<string, unknown> }) | undefined;
+  if (!output) return null;
+  const bundleMeta = (output.asset_payload?.media_bundle?.metadata ?? {}) as Record<string, unknown>;
+  const outputMeta = (output.metadata ?? {}) as Record<string, unknown>;
+  if (outputMeta.beta_fallback !== true && bundleMeta.placeholder !== true) return null;
+  return { reason: String(outputMeta.fallback_reason ?? bundleMeta.fallback_reason ?? '').trim() };
+}
+
 export function hasUsableCreatorOutput(result: CreatorResult | null): result is CreatorResult {
   return Boolean(
     result?.output &&
+    !creatorPlaceholderFailure(result) &&
     result.output.asset_payload &&
     result.output.packaging &&
     (

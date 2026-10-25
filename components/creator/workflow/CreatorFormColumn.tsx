@@ -8,6 +8,7 @@
 import { INDEPENDENT_PALETTE_OPTIONS, paletteModeFor } from '../../../lib/creator-content/creatorPaletteMode';
 import React from 'react';
 import TemplateFieldsPanel from '../TemplateFieldsPanel';
+import { CREATOR_EDITOR_OPEN_EVENT } from '../../../lib/content/openCreatorEditor';
 import CreatorCopyEditor from '../CreatorCopyEditor';
 import { isInstructionLikeCopy } from '../../../lib/creator-content/creatorCopyPurpose';
 import { IMAGE_COPY_FIELD_KEYS } from '../../../lib/creator-templates/types';
@@ -174,6 +175,12 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
   const [editingDetails, setEditingDetails] = React.useState(false);
   const confirmMode = router.query.from === 'workspace' && Boolean(activeTemplate) && !editingDetails;
   React.useEffect(() => { if (topicMissing) setEditingDetails(true); }, [topicMissing]);
+  // "Open editor" on the results column shows the full form (see openCreatorEditor).
+  React.useEffect(() => {
+    const open = () => setEditingDetails(true);
+    window.addEventListener(CREATOR_EDITOR_OPEN_EVENT, open);
+    return () => window.removeEventListener(CREATOR_EDITOR_OPEN_EVENT, open);
+  }, []);
   const summaryLayoutLabel = (() => {
     const id = intakeLayoutFieldId(config);
     const value = id ? String(answers[id] || '') : '';
