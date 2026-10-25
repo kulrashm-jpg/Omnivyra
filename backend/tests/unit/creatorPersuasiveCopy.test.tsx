@@ -21,7 +21,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { getTemplateById } from '../../../lib/creator-templates';
 import { initTemplateValues, type TemplateFieldValues } from '../../../lib/creator-templates/values';
 import {
-  goalCtaSuggestions, instructionSubject, isFittingCta, isInstructionLikeCopy, pickFittingCta,
+  goalCtaSuggestions, instructionSubject, isFittingCta, isInstructionLikeCopy, isNearDuplicateCopy, pickFittingCta,
 } from '../../../lib/creator-content/creatorCopyPurpose';
 import {
   buildBriefOverlayChips, copyEditorEntries, diffTemplateEdits, planCopyRewriteTargets,
@@ -303,5 +303,57 @@ describe('confirmation page — "Your copy" editor', () => {
     expect(src.indexOf('<CreatorCopyEditor')).toBeLessThan(src.indexOf('<CreativeSummaryCard'));
     expect(src.match(/<TemplateFieldsPanel\b/g)?.length).toBe(1);
     expect(src).toContain('onAiAssist={handleTemplateAiAssist}');
+  });
+});
+
+/* Owner 2026-10-25 (live screenshot): the headline was the main message cut short
+ * ("…chaos of disjointed marketing") and the subheadline was the same sentence in
+ * full. A subheadline must DESCRIBE the headline, never repeat it. */
+describe('subheadline describes the headline — never repeats it', () => {
+  const MAIN = 'A unified AI-driven platform that addresses the chaos of disjointed marketing tools';
+  const CUT = 'A unified AI-driven platform that addresses the chaos of disjointed marketing';
+
+  it('near-duplicate detection: cut, extension and rewording count; short lines only match exactly', () => {
+    expect(isNearDuplicateCopy(CUT, MAIN)).toBe(true);
+    expect(isNearDuplicateCopy(MAIN, MAIN.toUpperCase())).toBe(true);
+    expect(isNearDuplicateCopy('The unified AI platform for the chaos of disjointed marketing tools', MAIN)).toBe(true);
+    expect(isNearDuplicateCopy('Plan, publish and measure every channel from one place', MAIN)).toBe(false);
+    expect(isNearDuplicateCopy('Get the offer', 'Get the best offer on marketing tools this week')).toBe(false);
+    expect(isNearDuplicateCopy('', MAIN)).toBe(false);
+  });
+
+  it('a subheadline holding a cut/full copy of the headline is queued for rewrite', () => {
+    const values: TemplateFieldValues = { ...initTemplateValues(imageTpl), fields: { ...initTemplateValues(imageTpl).fields, headline: CUT, subheadline: MAIN, cta: 'Get the offer' } };
+    const targets = planTemplateFillTargets({ template: imageTpl, values, edited: new Set(), imageCopyActive: true });
+    expect(targets.map((t) => t.fieldKey)).toEqual(['subheadline']);
+  });
+
+  it('the fallback subheadline is a different line about the offer, not the main message', () => {
+    const sub = resolveTemplateField(imageTpl, 'flat', 'subheadline')!;
+    const v = deterministicTransform('generate', sub, '', {
+      mainMessage: MAIN, offer: 'AI-Driven Digital Marketing System', audience: 'Marketing teams',
+      siblings: [{ label: 'Headline', value: CUT }],
+    });
+    expect(isNearDuplicateCopy(v, MAIN)).toBe(false);
+    expect(v).toBe('AI-Driven Digital Marketing System, built for marketing teams');
+  });
+
+  it('an LLM subheadline that restates the headline is replaced', async () => {
+    const llm = async () => JSON.stringify({ updates: [
+      { scope: 'flat', field_key: 'headline', value: CUT },
+      { scope: 'flat', field_key: 'subheadline', value: MAIN },
+    ] });
+    const out = await runCreatorFieldAssist({
+      template: imageTpl,
+      request: {
+        assetFamily: 'image', templateId: imageTpl.id, action: 'generate',
+        targets: [{ scope: 'flat', fieldKey: 'headline' }, { scope: 'flat', fieldKey: 'subheadline' }],
+        context: { objective: 'Promote an Offer', mainMessage: MAIN, offer: 'AI-Driven Digital Marketing System', audience: 'Marketing teams' },
+      },
+      llm,
+    });
+    const byKey = Object.fromEntries(out.updates.map((u) => [u.fieldKey, u.value]));
+    expect(byKey.headline).toBe(CUT);
+    expect(isNearDuplicateCopy(byKey.subheadline, byKey.headline)).toBe(false);
   });
 });

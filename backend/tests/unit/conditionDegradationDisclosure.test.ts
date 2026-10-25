@@ -262,7 +262,8 @@ describe('F — untouched behaviour', () => {
 
   it('the endpoint gate and provider selection are unchanged', () => {
     expect(MEDIA).toContain('creatorImageReferenceModeEnabled()');
-    expect(MEDIA).toContain("[process.env.OPENAI_IMAGE_MODEL, 'gpt-image-1']");
+    // 2026-10-25: gpt-image-1.5 leads the fallback (gpt-image-1 is unavailable to the prod account).
+    expect(MEDIA).toContain("[process.env.OPENAI_IMAGE_MODEL, 'gpt-image-1.5', 'gpt-image-1']");
     const refs = read('../../services/creator/creatorMultimodalReferences.ts');
     expect((refs.match(/process\.env\.CREATOR_IMAGE_REFERENCE_MODE/g) ?? [])).toHaveLength(1);
     expect(refs).toContain('maxReferenceImages: 16');

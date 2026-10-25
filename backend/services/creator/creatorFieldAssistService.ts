@@ -25,7 +25,7 @@ import { buildCreatorGroundingBlock, type CreatorCompanyContext, type CreatorBra
 import { validateCreatorCopyValue, type CopyViolation } from './creatorCopyValidation';
 import { resolvePurposeStrategy } from './purposeStrategyRegistry';
 import {
-  goalCtaSuggestions, instructionSubject, isInstructionLikeCopy, pickFittingCta,
+  goalCtaSuggestions, instructionSubject, isInstructionLikeCopy, isNearDuplicateCopy, pickFittingCta,
 } from '../../../lib/creator-content/creatorCopyPurpose';
 
 export type FieldAssistScope = 'flat' | 'slide' | 'section' | 'overlay' | 'brief';
@@ -265,7 +265,7 @@ export function buildFieldAssistMessages(
       : 'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section|overlay|brief","field_key":"...","index":<number|optional>,"value":"..."}]}.',
     'Produce EXACTLY ONE update object per requested field, and echo back that field\'s EXACT scope, field_key, and index as shown in the list. The index is 0-BASED — copy the `index=` value verbatim; do NOT renumber, start at 1, or skip any index.',
     'Keep each value within its max length. Match the platform-native, concise tone of social creative copy.',
-    'Every field on an asset must be DISTINCT: never repeat or lightly reword another field. A subheadline must ADD new information or angle, not restate the headline; a CTA is an action, not a headline. If a value would duplicate a sibling field shown below, write something genuinely different.',
+    'Every field on an asset must be DISTINCT: never repeat or lightly reword another field. A subheadline must DESCRIBE the headline (how it works, the proof, or who it is for) in different words, never restate or shorten it; a CTA is an action, not a headline. If a value would duplicate a sibling field shown below, write something genuinely different.',
     'On a carousel/infographic slide, the title/headline is the ONE scroll-stopping claim of that slide; the body/description must ADVANCE it with a concrete detail, proof point, benefit, or example — it must NEVER restate or lightly reword the title.',
     // Brand voice (communication style) — canonical, server-resolved.
     ...(brandVoiceLines.length ? ['Write in the brand voice:', ...brandVoiceLines] : []),
@@ -428,6 +428,23 @@ export function deterministicTransform(
       const s = firstOf(userLine, fact(differentiator, positioning, pillar));
       if (s) return clamp(capitalize(s), field.maxLength);
       return topic ? clamp(`The takeaway on ${collapseWhitespace(topic).toLowerCase()} that changes how your audience decides.`, field.maxLength) : field.label;
+    }
+    // A supporting line (subheadline / subtitle / tagline) DESCRIBES the headline — the
+    // proof, the how, or who it is for — and never repeats the main message or any other
+    // field already on the asset (owner 2026-10-25: headline and subheadline were the same).
+    if (isSupportingLineKey(key)) {
+      const taken = [rawMain, ...(context.siblings ?? []).map((s) => str(s.value))].filter(Boolean);
+      const fresh = (x: string): boolean => !!x && !isInstructionLikeCopy(x) && !taken.some((t) => isNearDuplicateCopy(x, t));
+      const audience = firstOf(str(context.audience), str(company?.icp));
+      const offerName = firstOf(str(context.offer), subject, product);
+      const candidates = [
+        secondSentence(str(context.sourceContent)),
+        fact(differentiator), fact(pillar), fact(positioning),
+        offerName && audience ? `${capitalize(offerName)}, built for ${lowerFirst(audience)}` : '',
+        offerName ? `See how ${offerName} works` : '',
+      ].map((c) => clamp(capitalize(c), field.maxLength));
+      const pick = candidates.find(fresh);
+      if (pick) return pick;
     }
     // Headline / offer / generic — the user's line, then a real product name, then one
     // short positioning clause, before the goal label.
@@ -609,8 +626,17 @@ export async function runCreatorFieldAssist(input: {
     // Owner 2026-10-25: an instruction is never shipped as copy (brief fields
     // — the intake's own "what to create" text — are exempt).
     if (value && target.scope !== 'brief' && isInstructionLikeCopy(value)) value = '';
+    // A supporting line that repeats a field already on the asset (or one written
+    // earlier in this batch) is rewritten from the fallback, which avoids them.
+    const siblingsNow = [
+      ...(request.context?.siblings ?? []),
+      ...updates.filter((u) => u.scope === target.scope && u.index === target.index).map((u) => ({ label: u.fieldKey, value: u.value })),
+    ];
+    if (value && isSupportingLineKey(target.fieldKey.toLowerCase())
+      && [str(request.context?.mainMessage), ...siblingsNow.map((s) => str(s.value))].some((t) => isNearDuplicateCopy(value, t))) value = '';
+    const fallbackContext = { ...(request.context ?? {}), siblings: siblingsNow, assetFamilyHint: request.assetFamily };
     if (value == null || value.length === 0) {
-      value = deterministicTransform(request.action, field, target.currentValue ?? '', { ...(request.context ?? {}), assetFamilyHint: request.assetFamily });
+      value = deterministicTransform(request.action, field, target.currentValue ?? '', fallbackContext);
       usedFallback = true;
     }
     // Canonical deterministic validation — repair forbidden words / prohibited
@@ -618,7 +644,7 @@ export async function runCreatorFieldAssist(input: {
     let v = validateCreatorCopyValue(value, target.fieldKey, brandVoice);
     if (!v.ok) {
       // Repair emptied the value → deterministic fallback, then re-validate.
-      value = deterministicTransform(request.action, field, target.currentValue ?? '', { ...(request.context ?? {}), assetFamilyHint: request.assetFamily });
+      value = deterministicTransform(request.action, field, target.currentValue ?? '', fallbackContext);
       usedFallback = true;
       v = validateCreatorCopyValue(value, target.fieldKey, brandVoice);
     }
@@ -675,6 +701,19 @@ function collapseWhitespace(s: string): string {
 function capitalize(s: string): string {
   const t = collapseWhitespace(s);
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+}
+/** Subheadline / subtitle / supporting text / tagline — a line that supports the lead. */
+function isSupportingLineKey(key: string): boolean {
+  return /sub(?:headline|title|head)|supporting|tagline|strapline/.test(key);
+}
+function lowerFirst(s: string): string {
+  const t = collapseWhitespace(s);
+  return /^[A-Z][a-z]/.test(t) ? t.charAt(0).toLowerCase() + t.slice(1) : t;
+}
+/** The sentence after the first — supporting detail in source content. */
+function secondSentence(s: string): string {
+  const parts = collapseWhitespace(s).match(/[^.!?]+[.!?]?/g) ?? [];
+  return (parts[1] ?? '').trim();
 }
 function firstSentence(s: string): string {
   const m = collapseWhitespace(s).match(/^[^.!?]*[.!?]?/);

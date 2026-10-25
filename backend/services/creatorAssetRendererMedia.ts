@@ -177,10 +177,12 @@ export async function generateProviderImage(input: {
   // AbortSignal that is aborted as soon as the race settles, which also stops
   // any pending SDK retry. In-budget 429/5xx retries are unaffected.
   const client = new OpenAI({ apiKey });
-  // Env-selectable model, gpt-image-1 as the known-good fallback. Set
-  // OPENAI_IMAGE_MODEL=gpt-image-2 to prefer the newer model (falls back on error).
+  // Env-selectable model (OPENAI_IMAGE_MODEL), then gpt-image-1.5, then gpt-image-1.
+  // 2026-10-25: the production OpenAI account answers "The model 'gpt-image-1' does
+  // not exist" on generation while gpt-image-1.5 works and also accepts
+  // input_fidelity 'high' (gpt-image-2 rejects that parameter), so 1.5 leads.
   const modelCandidates = Array.from(new Set(
-    [process.env.OPENAI_IMAGE_MODEL, 'gpt-image-1'].filter((m): m is string => Boolean(m && m.trim())),
+    [process.env.OPENAI_IMAGE_MODEL, 'gpt-image-1.5', 'gpt-image-1'].filter((m): m is string => Boolean(m && m.trim())),
   ));
   const failures: string[] = [];
   // The most serious classified failure across every provider call below, so a
@@ -511,6 +513,10 @@ export async function generateProviderImage(input: {
         subtype:     input.eventContext?.subtype     ?? null,
         platform:    input.eventContext?.platform    ?? null,
       });
+      // Only an unavailable MODEL is a reason to try the next one. A timeout, quota,
+      // auth or policy failure would fail (or wait) the same way again — and a second
+      // full timeout budget doubles the user's wait for nothing.
+      if (failureKind !== 'model_unavailable') break;
     }
   }
 
