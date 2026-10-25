@@ -17,6 +17,7 @@ import type { MarketView, OfferingRegister } from '../publicResearch/offeringReg
 import type { Candidate } from '../publicResearch/competitorDiscovery';
 import type { ProviderCheck } from '../publicResearch/providerChecks';
 import type { ErrorClass, ProviderErrorEvidence } from '../publicResearch/providerErrors';
+import type { ProfileFact, ProfileStatus } from '../publicResearch/profileEvidence';
 
 export type ResearchStatus =
   | 'observed'
@@ -106,6 +107,12 @@ export type ResearchPack = {
   proposedQueries?: Array<{ query: string; basis: string; status: 'proposed' | 'run' }> | null;
   /** How many candidates the evidence produced and how many were read on their own sites. */
   candidateDiscovery?: { found: number; checked: number } | null;
+  /** The optional company profile: lookup status and the company-declared facts it supplied. */
+  profileEvidence?: { status: ProfileStatus; detail: string | null; checkedAt: string; facts: ProfileFact[] } | null;
+  /** Where the brand name came from: declared by the company, or the domain label when none existed. */
+  brandSource?: 'declared' | 'domain';
+  /** True when competitor classes rest on an offering not yet verified on the website. */
+  candidatesProvisional?: boolean;
 };
 
 export type Footprint = {
@@ -212,6 +219,9 @@ export function parseResearchPack(input: unknown, domain: string | null | undefi
     providerChecks: Array.isArray(p.providerChecks) ? p.providerChecks : null,
     proposedQueries: Array.isArray(p.proposedQueries) ? p.proposedQueries : null,
     candidateDiscovery: p.candidateDiscovery && typeof p.candidateDiscovery.found === 'number' ? p.candidateDiscovery : null,
+    profileEvidence: p.profileEvidence && typeof p.profileEvidence.status === 'string' && Array.isArray(p.profileEvidence.facts) ? p.profileEvidence : null,
+    brandSource: p.brandSource === 'domain' ? 'domain' : 'declared',
+    candidatesProvisional: Boolean(p.candidatesProvisional),
     offering: p.offering && typeof p.offering === 'object' && Array.isArray(p.offering.pages) && Array.isArray(p.offering.capabilities)
       ? { ...p.offering, selfDescription: p.offering.selfDescription ?? null, offering: p.offering.offering ?? null, pricing: p.offering.pricing ?? null, freePlan: p.offering.freePlan ?? null }
       : null,

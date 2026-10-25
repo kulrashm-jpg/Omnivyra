@@ -275,6 +275,19 @@ export function validateReport(ledger: Ledger, registry: DossierRegistry, html: 
     if (m[2].trim().toLowerCase() !== DIAG_LABEL[d.state].toLowerCase()) fail('summary-diagnostics', `${d.source}: the summary says “${m[2].trim()}”, the diagnostics say “${DIAG_LABEL[d.state]}”.`);
   }
 
+  // 30. Company profile: declared stays declared, missing stays unknown, conflicts stay visible.
+  checks.push('Company profile: a declared fact is never shown as verified, a missing value never as zero, a conflict never silently resolved.');
+  const reg = pack?.register;
+  for (const x of reg?.entries ?? []) {
+    if (x.provenance && x.status === 'official_website_verified') fail('profile', `“${x.value}” comes from the company profile but is marked website-verified.`);
+    if (x.status === 'official_website_verified' && !x.url) fail('profile', `“${x.value}” is marked website-verified without a website page.`);
+    if (x.status === 'conflicting' && !x.conflictsWith) fail('profile', `“${x.value}” is marked conflicting without the claim it conflicts with.`);
+  }
+  if (reg && !(reg.entries.some((x) => x.field === 'revenue')) && /\brevenue\b[^.]{0,30}\b(0|zero|none)\b/i.test(body)) fail('missing-key', 'No revenue was declared or observed, but the report states a zero.');
+  const pe = pack?.profileEvidence;
+  if (pe && pe.status !== 'profile_not_found' && /No company profile was available/.test(body)) fail('profile', `The profile status is “${pe.status}” but the report says none was available.`);
+  if (pe?.status === 'profile_access_error' && /\bno company profile\b/i.test(body.replace(/could not be read[^.]*\./g, ''))) fail('profile', 'The profile could not be read, but the report calls it missing.');
+
   // 22. One register: no two actions with the same title.
   checks.push('Actions: no duplicate recommendations (one title, one action).');
   const titles = registry.actions.map((a) => a.title.toLowerCase().replace(/\W+/g, ' ').trim());

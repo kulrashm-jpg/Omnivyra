@@ -402,6 +402,7 @@ export async function generateReportPayload(
   let researchPromise: Promise<Record<string, unknown> | null> | null = null;
   if (requestedCategory === 'snapshot') {
     const { publicResearchEnabled, collectPublicResearch, researchInputFromNarrative } = await import('./intelligence/publicResearch/collect');
+    const { profileEvidence } = await import('./intelligence/publicResearch/profileEvidence');
     if (publicResearchEnabled()) {
       const { extractCompanyNarrativeContext } = await import('./snapshotReport/narrativeHelpers');
       const input = researchInputFromNarrative({
@@ -411,6 +412,8 @@ export async function generateReportPayload(
         foundedYear: resolvedInput.resolved.companyContext?.foundedYear ?? null,
         revenueRange: resolvedInput.resolved.companyContext?.revenueRange ?? null,
         socialLinks: resolvedInput.resolved.socialLinks ?? [],
+        // Optional enrichment: the profile's own fields as company-declared facts with provenance.
+        profile: profileEvidence(resolvedInput.profile, resolvedInput.profileLookup ?? { status: resolvedInput.profile ? 'profile_available' : 'profile_not_found', detail: null }, report.company_id),
       });
       const deadlineMs = Number(process.env.PUBLIC_RESEARCH_DEADLINE_MS ?? 180_000);
       researchPromise = input

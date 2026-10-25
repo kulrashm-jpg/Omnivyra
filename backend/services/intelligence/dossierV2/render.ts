@@ -995,7 +995,24 @@ function renderBrand(ctx: Context): string {
 const REG_LABEL: Record<string, string> = {
   product_line: 'Product line', customer_problem: 'Customer problem', value_proposition: 'Value proposition', buyer: 'Buyer / segment', use_case: 'Declared capability',
   pricing: 'Pricing', business_model: 'Business model', free_offer: 'Free offer', geography: 'Geography',
+  industry: 'Industry', differentiator: 'Differentiator', revenue: 'Revenue (as declared)', team_size: 'Team size (as declared)', founded: 'Founded',
 };
+
+/** One line on the company profile: what it contributed, or — without one — that nothing is implied. */
+function profileNote(ctx: Context): string {
+  const pe = ctx.research?.profileEvidence;
+  if (!pe) return '';
+  const n = pe.facts.length;
+  switch (pe.status) {
+    case 'profile_available': case 'profile_partial':
+      return `<p class="v2-note">Company profile (${pe.status === 'profile_partial' ? 'partly filled' : 'filled'}): ${n} fact${n === 1 ? '' : 's'} imported as company-declared, each with its profile field and date; facts the website states in the same words are marked website-verified. Fields the profile leaves empty were researched from the website instead.</p>`;
+    case 'profile_empty': return '<p class="v2-note">A company profile exists but holds no usable facts; everything below comes from the website and public sources.</p>';
+    case 'profile_not_found': return '<p class="v2-note">No company profile was available; everything below comes from the website and public sources. A fact missing here is unknown — not evidence that it does not exist.</p>';
+    case 'profile_access_error': return '<p class="v2-note">The company profile could not be read for this report (a lookup error, not a missing profile); everything below comes from the website and public sources.</p>';
+    case 'profile_identity_mismatch': return '<p class="v2-note">A company profile was found but belongs to a different company, so it was not used; everything below comes from the website and public sources.</p>';
+    default: return '';
+  }
+}
 const REG_STATE: Record<string, [string, Tone]> = {
   official_website_verified: ['Website-verified', 'good'], company_declared: ['Company-declared', 'info'], independently_corroborated: ['Corroborated', 'good'], unknown: ['Unknown', 'neutral'], conflicting: ['Conflicting', 'bad'],
 };
@@ -1004,12 +1021,14 @@ const REG_STATE: Record<string, [string, Tone]> = {
 function registerTable(ctx: Context): string {
   const reg = ctx.research?.register;
   if (!reg) return '';
-  const order = ['product_line', 'customer_problem', 'value_proposition', 'buyer', 'pricing', 'business_model', 'free_offer', 'geography'];
+  const order = ['product_line', 'customer_problem', 'value_proposition', 'differentiator', 'buyer', 'industry', 'pricing', 'business_model', 'free_offer', 'geography', 'revenue', 'team_size', 'founded'];
   const rows = reg.entries.filter((x) => x.field !== 'use_case').sort((a, b) => order.indexOf(a.field) - order.indexOf(b.field));
   const short = (u: string | null) => (u ?? '').replace(/^https?:\/\/(www\.)?/, '');
   return `<table class="v2-table v2-compact"><thead><tr><th style="width:15%">Field</th><th style="width:26%">Entry</th><th style="width:14%">Status</th><th>Evidence (verbatim) · source · date</th></tr></thead><tbody>${
-    rows.map((x) => { const [t, tone] = REG_STATE[x.status]; return `<tr><td><small>${e(REG_LABEL[x.field] ?? x.field)}</small></td><td><strong>${e(x.value)}</strong></td><td>${pill(t, tone)}<br/><small>${e(x.confidence)}</small></td><td><small>${x.excerpt ? `“${e(x.excerpt.slice(0, 200))}”` : 'Company profile only.'}${x.url ? `<br/><span class="v2-src">${e(short(x.url))} · ${e(fmtDate(x.observedAt) ?? '')}</span>` : ''}</small></td></tr>`; }).join('')
-  }</tbody></table>${reg.missing.length ? `<p class="v2-note">Not stated on the official pages read: <b>${e(reg.missing.map((m) => REG_LABEL[m]?.toLowerCase() ?? m).join(', '))}</b>. Conclusions that depend on ${reg.missing.length === 1 ? 'it' : 'them'} stay provisional.</p>` : ''}`;
+    rows.map((x) => { const [t, tone] = REG_STATE[x.status]; const prov = x.provenance ?? x.alsoDeclared;
+      const from = prov ? `Company profile · ${prov.profileField}${prov.capturedAt ? ` · ${fmtDate(prov.capturedAt)}` : ''} · ${prov.attribution}${x.stale ? ' · older than a year' : ''}` : null;
+      return `<tr><td><small>${e(REG_LABEL[x.field] ?? x.field)}</small></td><td><strong>${e(x.value)}</strong></td><td>${pill(t, tone)}<br/><small>${e(x.confidence)}</small></td><td><small>${x.excerpt ? `“${e(x.excerpt.slice(0, 200))}”` : x.provenance ? '' : 'Company profile only.'}${x.url ? `<br/><span class="v2-src">${e(short(x.url))} · ${e(fmtDate(x.observedAt) ?? '')}</span>` : ''}${from ? `${x.excerpt || x.url ? '<br/>' : ''}<span class="v2-src">${x.alsoDeclared ? 'Also declared in the company profile · ' : ''}${e(from)}</span>` : ''}${x.conflictsWith ? `<br/><b>Conflicts with:</b> ${e(x.conflictsWith)} — both kept; not resolved.` : ''}</small></td></tr>`; }).join('')
+  }</tbody></table>${profileNote(ctx)}${reg.missing.length ? `<p class="v2-note">Not stated on the official pages read: <b>${e(reg.missing.map((m) => REG_LABEL[m]?.toLowerCase() ?? m).join(', '))}</b>. Conclusions that depend on ${reg.missing.length === 1 ? 'it' : 'them'} stay provisional.</p>` : ''}`;
 }
 
 /** Stage 2: market items, verified vs assumption. */
@@ -1041,7 +1060,8 @@ function discoveryBlock(ctx: Context): string {
   }</tbody></table>`;
   const excluded = cands.filter((c) => c.classification === 'excluded');
   const exNote = excluded.length ? `<p class="v2-note">Excluded (${excluded.length}): publishers, platforms and directories — sources buyers read, not competitors (${e(excluded.filter((c) => /publisher/.test(c.rationale)).map((c) => c.domain).slice(0, 8).join(', '))}); and companies whose own pages state none of ${e(ctx.brand)}’s capabilities (${e(excluded.filter((c) => /Irrelevant/.test(c.rationale)).map((c) => c.domain).slice(0, 8).join(', ') || 'none')}).${disc && disc.found > disc.checked ? ` ${disc.found - disc.checked} further candidates with less evidence were not checked.` : ''}</p>` : '';
-  return pipeline + table + exNote + '<p class="v2-note">Rule-based from each company’s own pages (identity, product or service wording, and the same capability definitions as below); not an analyst’s review. Analyst notes on companies profiled earlier are listed as a source.</p>';
+  const provisional = ctx.research?.candidatesProvisional ? `<p class="v2-note"><b>Provisional:</b> ${e(ctx.brand)}’s product lines or buyers are not yet established from its own website, so these classes may change once they are.</p>` : '';
+  return pipeline + table + exNote + provisional + '<p class="v2-note">Rule-based from each company’s own pages (identity, product or service wording, and the same capability definitions as below); not an analyst’s review. Analyst notes on companies profiled earlier are listed as a source.</p>';
 }
 
 /** Stage 4: one capability definition per row, applied to every company. */

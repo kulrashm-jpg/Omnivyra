@@ -19,7 +19,8 @@ import { canonicalProfile, checkProfiles, findIndependentMentions, type ProfileC
 import { aiCapabilities, configCapabilities } from './runtime';
 import { discoverAndProfile, type CompetitorProfile, type FieldKey } from './competitors';
 import { checkOffering, type OfferingEvidence } from './offering';
-import { buildOfferingRegister, deriveMarket, proposeQueries } from './offeringRegister';
+import { applyProfileEvidence, buildOfferingRegister, deriveMarket, proposeQueries } from './offeringRegister';
+import type { ProfileEvidence } from './profileEvidence';
 import { candidatesFromEvidence, CAPABILITIES, capabilityState, validateCandidates } from './competitorDiscovery';
 import { runProviderChecks } from './providerChecks';
 
@@ -34,11 +35,18 @@ export function researchInputFromNarrative(c: {
   revenueRange?: string | null;
   /** Official profiles the company declared (profile social links). */
   socialLinks?: string[];
+  /** The optional company profile, read as company-declared evidence (profileEvidence.ts). */
+  profile?: ProfileEvidence | null;
 }): ResearchInput | null {
-  if (!c.companyName || !c.domain) return null;
+  // Only the website is required. With no profile name, the brand is the domain's own label —
+  // an identifier, recorded as such, never an invented company fact.
+  if (!c.domain) return null;
   const domainLike = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
+  const fromDomain = c.domain.replace(/^www\./, '').split('.')[0];
   return {
-    brand: c.companyName, domain: c.domain,
+    brand: c.companyName ?? fromDomain.charAt(0).toUpperCase() + fromDomain.slice(1), domain: c.domain,
+    brandSource: c.companyName ? 'declared' : 'domain',
+    profile: c.profile ?? null,
     siteText: [c.homepageHeadline, c.tagline, c.positioning, c.primaryOffering].filter(Boolean).join(' — '),
     category: c.marketContext ?? c.primaryOffering, offering: c.primaryOffering, buyers: c.targetCustomer ?? c.marketFocus, market: c.geography,
     competitors: (c.declaredCompetitors ?? []).map((n) => n.trim()).filter(Boolean).slice(0, 4)
@@ -78,6 +86,10 @@ export type ResearchInput = CompanyBrief & {
   declared?: { teamSize?: string | null; foundedYear?: string | null; revenueRange?: string | null };
   /** Official social profiles the company declared. */
   socialLinks?: string[];
+  /** Where the brand name came from: the company's declaration, or the domain label when none exists. */
+  brandSource?: 'declared' | 'domain';
+  /** The optional company profile (company-declared facts with provenance). */
+  profile?: ProfileEvidence | null;
 };
 
 /** Profile rows shown side by side, in this order; a row appears only if some company has a value. */
@@ -267,7 +279,12 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
   }
 
   // Stage 1–4: offering → market → candidates (from this report's own evidence) → validation on their pages.
-  const register = offering ? buildOfferingRegister(offering, { offering: input.offering, targetCustomer: input.buyers, geography: input.market }) : null;
+  // Profile facts, when there are any, enter the register as company-declared with provenance; the
+  // narrative fallbacks are passed only when no profile evidence covers them (no double counting).
+  const fromProfile = Boolean(input.profile?.facts.length);
+  const register = offering ? applyProfileEvidence(buildOfferingRegister(offering, fromProfile
+    ? { brand: input.brand }
+    : { offering: input.offering, targetCustomer: input.buyers, geography: input.market, brand: input.brand }), input.profile ?? null, offering) : null;
   const market = register ? deriveMarket(register) : null;
   const ownPages = (offering?.pages ?? []).filter((p) => p.read && p.text).map((p) => ({ url: p.url, text: p.text! }));
   const ownConfirmed = CAPABILITIES.filter((d) => capabilityState(d, ownPages).state === 'confirmed').map((d) => d.key);
@@ -293,6 +310,10 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     footprint: { checkedAt: new Date().toISOString(), profiles: profileChecks, mentions: mentionResult.mentions, socialPosts: mentionResult.socialPosts, platforms: mentionResult.platforms, mentionSearch: mentionResult.provider, mentionQueries: mentionResult.searches, profilesFound: mentionResult.profiles },
     runtime: { checkedAt: new Date().toISOString(), capabilities: [...aiCapabilities(answers), ...configCapabilities()] },
     offering, register, market, candidates, providerChecks,
+    profileEvidence: input.profile ? { status: input.profile.status, detail: input.profile.detail, checkedAt: input.profile.checkedAt, facts: input.profile.facts } : null,
+    brandSource: input.brandSource ?? 'declared',
+    // Competitor classes rest on the offering: without a website-verified product line and buyer they are provisional.
+    candidatesProvisional: register ? register.provisional : true,
     proposedQueries: register && market ? proposeQueries(register, market) : null,
   };
 }
