@@ -38,8 +38,11 @@ import { WORKFLOW_CONFIG } from '../../lib/creator-content/creatorWorkflowConfig
 import { deriveMainMessage } from '../../lib/creator-content/creatorBrief';
 import {
   CREATOR_INTAKE_SESSION_KEY, intakeLayoutOptions, serializeCreatorIntake,
-  type IntakeBrandMode, type IntakeBrandPresence,
+  type IntakeBrandMark, type IntakeBrandMode, type IntakeBrandPresence,
 } from '../../lib/creator-content/creatorIntake';
+import {
+  BRAND_ASSET_SIZE_PRESETS, DEFAULT_BRAND_ASSET_SIZE, type BrandAssetSize,
+} from '../../lib/creator-content/creatorWorkflowModel';
 import {
   DEFAULT_INDEPENDENT_PALETTE, INDEPENDENT_PALETTE_OPTIONS, type IndependentPaletteChoice,
 } from '../../lib/creator-content/creatorPaletteMode';
@@ -200,7 +203,9 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
   const [attachmentMode, setAttachmentMode] = React.useState<AttachmentMode | null>(null);
   const [brandMode, setBrandMode] = React.useState<IntakeBrandMode>(selectedCompanyId ? 'brand-aware' : 'independent');
   const [brandPresence, setBrandPresence] = React.useState<IntakeBrandPresence>('balanced');
-  const [includeLogo, setIncludeLogo] = React.useState(true);
+  // Which brand mark is drawn (logo, site icon, or none) and how big — 'auto' fits the design.
+  const [brandMark, setBrandMark] = React.useState<IntakeBrandMark>('logo');
+  const [brandMarkSize, setBrandMarkSize] = React.useState<BrandAssetSize>(DEFAULT_BRAND_ASSET_SIZE);
   // Independent mode: the look's own colours (default) or an AI-chosen fresh palette.
   const [paletteMode, setPaletteMode] = React.useState<IndependentPaletteChoice>(DEFAULT_INDEPENDENT_PALETTE);
   const [layout, setLayout] = React.useState<string | null>(null);
@@ -332,7 +337,9 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
         attachmentMode: asset === 'image' ? attachmentMode : null,
         brandMode,
         brandPresence: brandMode === 'brand-aware' ? brandPresence : null,
-        includeLogo: brandMode === 'brand-aware' ? includeLogo : null,
+        includeLogo: brandMode === 'brand-aware' ? brandMark !== 'none' : null,
+        brandMark: brandMode === 'brand-aware' ? brandMark : null,
+        brandMarkSize: brandMode === 'brand-aware' && brandMark !== 'none' ? brandMarkSize : null,
         layout,
         paletteMode: brandMode === 'independent' ? paletteMode : null,
       }));
@@ -427,7 +434,7 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
     ['Message', mainMessagePreview || 'Not written yet'],
     ...(asset === 'image' ? [['Text', attachmentMode === 'supporting_visual' ? 'With the post' : attachmentMode === 'embedded_copy' ? 'In the image' : 'Design decides'] as [string, string]] : []),
     ...(layoutOptions.length > 0 ? [['Layout', layoutLabel ?? 'Design decides'] as [string, string]] : []),
-    ['Brand', brandMode === 'brand-aware' ? `My brand · ${brandPresence === 'minimal' ? 'subtle' : brandPresence}` : (INDEPENDENT_PALETTE_OPTIONS.find((o) => o.id === paletteMode)?.label ?? 'Independent')],
+    ['Brand', brandMode === 'brand-aware' ? `My brand · ${brandPresence === 'minimal' ? 'subtle' : brandPresence} · ${brandMark === 'none' ? 'no mark' : brandMark === 'favicon' ? 'site icon' : 'logo'}` : (INDEPENDENT_PALETTE_OPTIONS.find((o) => o.id === paletteMode)?.label ?? 'Independent')],
   ];
   let cardNo = 0;
 
@@ -575,18 +582,35 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
             {([['minimal', 'Subtle'], ['balanced', 'Balanced'], ['strong', 'Strong']] as [IntakeBrandPresence, string][]).map(([v, l]) => (
               <button key={v} type="button" data-testid={`intake-presence-${v}`} onClick={() => setBrandPresence(v)} style={chip(brandPresence === v)}>{l}</button>
             ))}
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, marginLeft: 8 }}>
-              <input type="checkbox" data-testid="intake-include-logo" checked={includeLogo} onChange={(e) => setIncludeLogo(e.target.checked)} /> Include my logo
-            </label>
           </div>
-        ) : (
+        ) : null}
+        {brandMode === 'brand-aware' ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: space.sm }}>
+            <span style={{ fontSize: 12, color: color.textMuted }}>Brand mark:</span>
+            {([['logo', 'Logo'], ['favicon', 'Site icon (favicon)'], ['none', 'No mark']] as [IntakeBrandMark, string][]).map(([v, l]) => (
+              <button key={v} type="button" data-testid={`intake-mark-${v}`} onClick={() => setBrandMark(v)} style={chip(brandMark === v)}>{l}</button>
+            ))}
+          </div>
+        ) : null}
+        {brandMode === 'brand-aware' && brandMark !== 'none' ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: space.sm }}>
+            <span style={{ fontSize: 12, color: color.textMuted }}>Mark size:</span>
+            {BRAND_ASSET_SIZE_PRESETS.map((o) => (
+              <button key={o.value} type="button" data-testid={`intake-mark-size-${o.value}`} onClick={() => setBrandMarkSize(o.value)} style={chip(brandMarkSize === o.value)}
+                title={o.value === 'auto' ? 'Sized to fit the design' : `${o.scale}× the design's size`}>
+                {o.value === 'auto' ? 'Auto (fits the design)' : o.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {brandMode !== 'brand-aware' ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: space.md }}>
             <span style={{ fontSize: 12, color: color.textMuted }}>Colours:</span>
             {INDEPENDENT_PALETTE_OPTIONS.map((o) => (
               <button key={o.id} type="button" data-testid={`intake-palette-${o.id}`} title={o.body} onClick={() => setPaletteMode(o.id)} style={chip(paletteMode === o.id)}>{o.label}</button>
             ))}
           </div>
-        )}
+        ) : null}
         {!selectedCompanyId ? <div style={{ fontSize: 12, color: color.textSubtle, marginTop: 6 }}>Select a company to apply its brand.</div> : null}
       </IntakeCard>
 

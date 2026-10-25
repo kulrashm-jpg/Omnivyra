@@ -57,6 +57,8 @@ export interface CreativeSummaryProps {
   /** How strongly the brand shows, when it is applied. */
   brandPresence?: 'minimal' | 'balanced' | 'strong' | null;
   includeLogo?: boolean | null;
+  /** The brand mark as it will be drawn, e.g. "logo", "site icon, large". */
+  brandMarkLabel?: string | null;
   /** Whose colours the render uses — shown when the brand is not applied. */
   paletteMode?: import('../../lib/creator-content/creatorPaletteMode').CreatorPaletteMode | null;
 }
@@ -124,7 +126,7 @@ export function buildCreativeSummaryRows(props: CreativeSummaryProps): Row[] {
   if (props.brandAware) {
     const presence = props.brandPresence === 'minimal' ? 'subtle' : props.brandPresence === 'strong' ? 'strong' : null;
     const parts = [
-      props.includeLogo === false ? 'Your brand colours (no logo)' : 'Your brand colours and logo',
+      props.includeLogo === false ? 'Your brand colours (no logo)' : `Your brand colours and ${props.brandMarkLabel || 'logo'}`,
       presence ? `${presence} presence` : null,
     ].filter(Boolean);
     rows.push({ label: 'Brand', value: parts.join(', '), chosenByUser: true });
