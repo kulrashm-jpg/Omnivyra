@@ -29,6 +29,8 @@ import CreatorImageAssetPanel from '../CreatorImageAssetPanel';
 import { useCreatorCompositionId } from '../useCreatorCompositionId';
 import CreativeSummaryCard, { type CreativeSummaryProps } from '../CreativeSummaryCard';
 import { EMPTY_GUIDED_CHOICES } from '../../../lib/content/guidedCreativeDirection';
+import { getOutcome } from '../../../lib/creator-outcomes/outcomeRegistry';
+import { intakeLayoutFieldId, intakeLayoutOptions } from '../../../lib/creator-content/creatorIntake';
 
 /**
  * Global AI-activity indicator. EVERY AI operation on this screen sets `aiBusyKey`
@@ -156,6 +158,21 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
   // be attached to it and survive the trip to the template gallery.
   const compositionId = useCreatorCompositionId(type);
   /*
+   * Owner decision (2026-10-24): every input is asked on the intake screen, so an
+   * editor reached from it opens as a "here's what we'll make" confirmation. The full
+   * form stays MOUNTED (its state, uploads and live attachment reporting keep working)
+   * but hidden until the user chooses to edit. A generation blocked on a missing field
+   * switches to editing so the form can point at it.
+   */
+  const [editingDetails, setEditingDetails] = React.useState(false);
+  const confirmMode = router.query.from === 'workspace' && Boolean(activeTemplate) && !editingDetails;
+  React.useEffect(() => { if (topicMissing) setEditingDetails(true); }, [topicMissing]);
+  const summaryLayoutLabel = (() => {
+    const id = intakeLayoutFieldId(config);
+    const value = id ? String(answers[id] || '') : '';
+    return intakeLayoutOptions(config).find((o) => o.value === value)?.label ?? null;
+  })();
+  /*
    * What is actually attached, as the image panel reports it.
    *
    * Held here rather than fetched, because the panel has already loaded the
@@ -218,7 +235,22 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
               screen and the generated image cannot disagree: embedded_copy =
               "Text Inside Image", supporting_visual = "Post + Image".
             */}
-            <div className="space-y-5">
+            {confirmMode ? (
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3" data-testid="creator-confirm-banner">
+                <p className="text-sm text-blue-900">
+                  Here&rsquo;s what we inferred from what you told us. Check it below, then generate &mdash; or edit any detail first.
+                </p>
+                <button
+                  type="button"
+                  data-testid="creator-confirm-edit"
+                  onClick={() => setEditingDetails(true)}
+                  className="rounded-xl border border-blue-300 bg-white px-3 py-1.5 text-sm font-semibold text-blue-800 hover:bg-blue-100"
+                >
+                  Edit details
+                </button>
+              </div>
+            ) : null}
+            <div className="space-y-5" hidden={confirmMode} data-testid="creator-edit-form">
               <AiActivityIndicator aiBusyKey={aiBusyKey} />
               {activeTemplate ? (
                 <div>
@@ -1075,11 +1107,22 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
 
             {/* The last thing before a generation is spent. Every value is read
               * from the state about to be submitted — see CreativeSummaryCard. */}
-            {isSocialCreativeType(type) && activeTemplate ? (
+            {(isSocialCreativeType(type) || type === 'carousel') && activeTemplate ? (
               <div className="mt-6">
                 <CreativeSummaryCard
                   templateName={activeTemplate.name ?? null}
-                  goalLabel={typeof router.query.goal === 'string' && router.query.goal ? String(router.query.goal) : null}
+                  /* The goal's LABEL, not its id ("brand-awareness"). */
+                  goalLabel={typeof router.query.goal === 'string' && router.query.goal
+                    ? (getOutcome(router.query.goal)?.label ?? String(router.query.goal))
+                    : null}
+                  mainMessage={String(answers.keyMessage || '').trim() || null}
+                  textPlacement={type === 'image' && !writerSource
+                    ? (standaloneAttachmentMode === 'supporting_visual' ? 'alongside' : standaloneAttachmentMode === 'embedded_copy' ? 'inside' : null)
+                    : null}
+                  layoutLabel={summaryLayoutLabel}
+                  brandPresence={brandMode === 'brand-aware' ? brandPresence : null}
+                  includeLogo={brandMode === 'brand-aware' ? Boolean(brandSelections?.logo) : null}
+                  editHint={confirmMode ? 'Use “Edit details” to change any of it.' : null}
                   choices={guidedChoices ?? EMPTY_GUIDED_CHOICES}
                   attachment={imageAttachment}
                   headline={String(templateValues?.fields?.headline || answers.topic || '').trim() || null}

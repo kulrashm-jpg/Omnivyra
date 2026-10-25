@@ -17,6 +17,9 @@ const okResult = {
     packaging: { caption: 'A caption', cta: 'Learn more' },
     asset_payload: { media_bundle: { url: 'https://cdn/x.png', files: ['https://cdn/x.png'], metadata: {
       brand_mode: 'brand-aware', applied_variant: { variant_family: 'mvp' },
+      // PR4: a rendered asset now needs a visual verdict to be publish-ready
+      // (media without a verdict is "not assessed" and blocks publishing).
+      visual_validation: { passed: true, severity: 'pass', failures: [], repairHint: null },
       creator_diagnostic_report: { generatedAt: '2026-06-26T10:00:00Z', template: { id: 'sys-infographic-statistics', name: 'Statistics', version: 2 }, rendering: { brandingProfile: 'balanced' } },
     } } },
   },

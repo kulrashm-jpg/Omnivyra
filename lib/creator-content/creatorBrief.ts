@@ -104,7 +104,8 @@ export function resolveCreatorBriefFromWorkspace(brief: MarketingBrief | null | 
   const offer = str(brief.offer);
   const goalLabel = brief.goalId ? (getCreationGoal(brief.goalId)?.label ?? '') : '';
   const resolved = capped({
-    mainMessage: deriveMainMessage(body) || offer,
+    // An explicitly stated main message (Creator intake) wins over one derived from the brief.
+    mainMessage: str(brief.mainMessage) || deriveMainMessage(body) || offer,
     body,
     audience: str(brief.audience),
     tone: str(brief.tone),

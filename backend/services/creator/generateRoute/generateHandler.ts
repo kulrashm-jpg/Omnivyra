@@ -1,4 +1,5 @@
 /** Part 2/2 of generate.ts — verbatim split (barrel preserved; importers unchanged). */
+import { fanOutAssetVisualVerdict } from '../fanOutVisualVerdict';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
 import { measureCreatorDuration } from '../../../../backend/services/creatorRuntimeMetrics';
@@ -609,6 +610,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           persisted_asset_id: a.result?.persistedAssetId ?? null,
           ok: a.ok,
           ...(a.error ? { error: a.error } : {}),
+          // PR4: each fan-out asset carries its OWN visual verdict for the publish gate.
+          ...((v) => (v ? { visual_validation: v } : {}))(fanOutAssetVisualVerdict(a)),
         }));
         for (const a of fanOutResult.generated_assets) {
           if (a.ok && a.result) {

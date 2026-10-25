@@ -45,12 +45,19 @@ export function creatorResultToPackageAssets(result: unknown, ctx: CreatorPackag
   const caption = str(packaging.caption);
   const platform = str(ctx.selectedPlatform) ?? str(r.primary_platform);
   const generatedAt = str(diag.generatedAt);
-  // The diagnostic report's post-render visual verdict — the publish gate.
-  const visualValidation = obj(diag.visualValidation);
-  const visualPassed: boolean | null = typeof visualValidation.passed === 'boolean' ? visualValidation.passed : null;
-  const visualIssues = visualPassed === false
-    ? Array.from(new Set(arr(visualValidation.failures).map((f) => describeVisualFailure(obj(f) as Partial<VisualFailure>))))
-    : [];
+  // The post-render visual verdict — the publish gate. The render's OWN
+  // verdict (media_bundle.metadata.visual_validation) is the fresh one: an
+  // async render completes after the diagnostic report was built, so the
+  // report's copy can be stale. The report is only a fallback, and only when
+  // it actually assessed something.
+  const verdict = resolveVisualVerdict(meta.visual_validation, diag.visualValidation);
+  const previewUrl = str(bundle.url) ?? str(arr(bundle.files)[0]);
+  const hasMedia = !!previewUrl || strList(bundle.files).length > 0;
+  // An asset WITH media but NO verdict was never checked → not assessed, which
+  // blocks publishing (it must not read as "ready").
+  const visualPassed: boolean | null = verdict ? verdict.passed : null;
+  const visualAssessed = verdict ? true : (hasMedia && !ctx.inProgress ? false : undefined);
+  const visualIssues = verdict?.issues ?? [];
 
   const primary: PackageAsset = {
     id: str(r.persisted_asset_id),
@@ -62,7 +69,7 @@ export function creatorResultToPackageAssets(result: unknown, ctx: CreatorPackag
     cta,
     branding,
     status: ctx.inProgress ? 'processing' : 'completed',
-    previewUrl: str(bundle.url) ?? str(arr(bundle.files)[0]),
+    previewUrl,
     url: str(bundle.url),
     files: strList(bundle.files),
     caption,
@@ -71,13 +78,15 @@ export function creatorResultToPackageAssets(result: unknown, ctx: CreatorPackag
     regenerations: ctx.regenerations ?? 0,
     visualPassed,
     visualIssues,
+    ...(visualAssessed !== undefined ? { visualAssessed } : {}),
   };
 
   const fanout = arr(r.generated_assets);
   if (fanout.length > 0) {
-    // The diagnostic report describes the primary (first successful) asset, so
-    // its visual verdict is attached to that asset only; the others are not
-    // assessed here (null — does not block).
+    // The primary verdict describes the primary (first successful) asset only.
+    // Every other asset carries its OWN verdict when the fan-out projection
+    // has one; a successful asset without one is NOT assessed and blocks
+    // publishing (it was never checked, so it cannot be called ready).
     const primaryId = str(r.persisted_asset_id);
     const primaryIndex = (() => {
       const byId = primaryId ? fanout.findIndex((g) => str(obj(g).persisted_asset_id) === primaryId) : -1;
@@ -85,8 +94,14 @@ export function creatorResultToPackageAssets(result: unknown, ctx: CreatorPackag
     })();
     return fanout.map((g, i) => {
       const ga = obj(g);
+      const own = resolveVisualVerdict(ga.visual_validation, null);
+      const gate = i === primaryIndex
+        ? { visualPassed, visualIssues, ...(visualAssessed !== undefined ? { visualAssessed } : {}) }
+        : own
+          ? { visualPassed: own.passed, visualIssues: own.issues, visualAssessed: true }
+          : (ga.ok === false ? {} : { visualPassed: null, visualIssues: [], visualAssessed: false });
       return {
-        ...(i === primaryIndex ? { visualPassed, visualIssues } : {}),
+        ...gate,
         id: str(ga.persisted_asset_id),
         assetType: str(ga.asset_type) ?? primary.assetType,
         template: str(ga.template_id) ?? primary.template,
@@ -105,6 +120,24 @@ export function creatorResultToPackageAssets(result: unknown, ctx: CreatorPackag
     });
   }
   return [primary];
+}
+
+/**
+ * The first usable visual verdict: `fresh` (the render's own
+ * metadata.visual_validation) wins over `fallback` (the diagnostic report's
+ * copy). A report that never assessed anything (`assessed: false`) is ignored.
+ */
+function resolveVisualVerdict(fresh: unknown, fallback: unknown): { passed: boolean; issues: string[] } | null {
+  for (const candidate of [fresh, fallback]) {
+    const v = obj(candidate);
+    if (typeof v.passed !== 'boolean') continue;
+    if (v.assessed === false) continue;
+    const issues = v.passed === false
+      ? Array.from(new Set(arr(v.failures).map((f) => describeVisualFailure(obj(f) as Partial<VisualFailure>))))
+      : [];
+    return { passed: v.passed, issues };
+  }
+  return null;
 }
 
 /** Build the canonical CampaignPackage directly from a creator generation result. */
