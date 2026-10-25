@@ -408,6 +408,7 @@ export async function generateReportPayload(
         teamSize: resolvedInput.resolved.companyContext?.teamSize ?? null,
         foundedYear: resolvedInput.resolved.companyContext?.foundedYear ?? null,
         revenueRange: resolvedInput.resolved.companyContext?.revenueRange ?? null,
+        socialLinks: resolvedInput.resolved.socialLinks ?? [],
       });
       const deadlineMs = Number(process.env.PUBLIC_RESEARCH_DEADLINE_MS ?? 180_000);
       researchPromise = input

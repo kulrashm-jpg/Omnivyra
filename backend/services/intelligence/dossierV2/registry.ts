@@ -705,6 +705,26 @@ export function addResearch(pack: ResearchPack, findings: DossierFinding[], acti
       implication: 'A buyer who asks an AI tool a category question is shown the brands its sources discuss; this company is not among them yet.',
       source: `Public research ${pack.collectedAt} (${ids.slice(0, 3).join(', ')}…)`, actionIds: [],
     });
+    // The scoring run's "AI visibility cannot be measured" gap is stale once tools were measured here:
+    // re-scope it to the tools that are still missing, never to all AI visibility.
+    const missing = pack.runtime?.capabilities.filter((c) => c.family === 'ai_answers' && c.reason !== 'measured' && c.reason !== 'partial').map((c) => c.label)
+      ?? vis.notMeasuredSurfaces;
+    const short = (l: string) => l.replace(/ \(.*\)$/, '');
+    const gapFinding = findings.find((f) => f.id === 'F-gap-ai-visibility');
+    if (gapFinding) {
+      gapFinding.title = missing.length ? 'Not every AI search tool could be measured' : 'Every AI search tool was measured';
+      gapFinding.observation = `This report measured ${vis.surfaces.join(', ')} from live web search${missing.length ? `; ${missing.map(short).join(', ')} could not be measured (see the access matrix for why)` : ''}. The score's AI Surface Presence input still comes from the scoring run, which did not use these answers.`;
+      gapFinding.implication = missing.length ? 'Visibility in the tools that were not measured is unknown — not zero.' : null;
+      gapFinding.source = `Public research ${pack.collectedAt}; scoring-run evidence coverage`;
+    }
+    const gapAction = actions.find((a) => a.id === 'A-gap-ai-visibility');
+    if (gapAction) {
+      gapAction.title = missing.length ? `Measure the remaining AI search tools: ${missing.map(short).join(', ')}` : 'Feed the measured AI answers into the score';
+      gapAction.action = missing.length
+        ? `Connect or enable ${missing.map(short).join(', ')} (see the access matrix for each one's reason and cheapest route), then regenerate the report.`
+        : 'Use the grounded AI answers already collected as the AI Surface Presence input.';
+      gapAction.verification = 'The next report shows every AI search tool in the access matrix as measured.';
+    }
   }
 
   // Own-site basics and competitor benchmark: findings, and the actions their evidence supports.

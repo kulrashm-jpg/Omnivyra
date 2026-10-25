@@ -10,6 +10,8 @@
  * confidence. The report renders a pack only when one is supplied, labels it with its
  * collection date and method, and never mixes it into the scores.
  */
+import type { Mention, PlatformCheck, ProfileCheck, SocialPost } from '../publicResearch/footprint';
+import type { RuntimeSnapshot } from '../publicResearch/runtime';
 
 export type ResearchStatus =
   | 'observed'
@@ -80,6 +82,23 @@ export type ResearchPack = {
   site: ResearchRecord[];
   /** Like-for-like digital-marketing comparison with the validated competitors. */
   benchmark: ResearchRecord[];
+  /** Official social profiles, independent mentions and review listings (publicResearch/footprint.ts). */
+  footprint?: Footprint | null;
+  /** What this run could reach and why not when it could not (publicResearch/runtime.ts). */
+  runtime?: RuntimeSnapshot | null;
+};
+
+export type Footprint = {
+  checkedAt: string;
+  profiles: ProfileCheck[];
+  mentions: Mention[];
+  /** Social posts naming the brand: never independent coverage. */
+  socialPosts?: SocialPost[];
+  platforms: PlatformCheck[];
+  /** Which model searched for mentions; null when no search ran. */
+  mentionSearch: string | null;
+  /** The web-search queries that search ran, as the provider reported them. */
+  mentionQueries?: string[];
 };
 
 const SECTIONS = ['company', 'search', 'generative', 'competitors', 'independent', 'gaps'] as const;
@@ -110,6 +129,14 @@ export function parseResearchPack(input: unknown, domain: string | null | undefi
     gaps: (p.gaps ?? []).filter(valid),
     site: (Array.isArray(p.site) ? p.site : []).filter(valid),
     benchmark: (Array.isArray(p.benchmark) ? p.benchmark : []).filter(valid),
+    footprint: p.footprint && typeof p.footprint === 'object' && Array.isArray(p.footprint.profiles)
+      ? { checkedAt: String(p.footprint.checkedAt ?? ''), profiles: p.footprint.profiles, mentions: Array.isArray(p.footprint.mentions) ? p.footprint.mentions : [],
+        socialPosts: Array.isArray(p.footprint.socialPosts) ? p.footprint.socialPosts : [],
+        platforms: Array.isArray(p.footprint.platforms) ? p.footprint.platforms : [], mentionSearch: p.footprint.mentionSearch ?? null,
+        mentionQueries: Array.isArray(p.footprint.mentionQueries) ? p.footprint.mentionQueries : [] }
+      : null,
+    runtime: p.runtime && typeof p.runtime === 'object' && Array.isArray(p.runtime.capabilities)
+      ? { checkedAt: String(p.runtime.checkedAt ?? ''), capabilities: p.runtime.capabilities } : null,
   };
 }
 

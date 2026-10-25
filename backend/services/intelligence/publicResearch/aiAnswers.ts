@@ -86,6 +86,8 @@ export const SURFACES: Surface[] = [
       const j = await postJson('https://api.anthropic.com/v1/messages', {
         model: process.env.PUBLIC_RESEARCH_ANTHROPIC_MODEL ?? 'claude-haiku-5-5', max_tokens: ANSWER_TOKENS(),
         tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }],
+        // Like a buyer's search assistant, it must look the question up: an answer from memory is not counted.
+        tool_choice: { type: 'any' },
         messages: [{ role: 'user', content: query }],
       }, { 'x-api-key': key, 'anthropic-version': '2023-06-01' }, signal);
       const blocks: any[] = Array.isArray(j.content) ? j.content : [];
@@ -120,8 +122,8 @@ export const SURFACES: Surface[] = [
       if (!res.ok || j.error) throw new Error(String(j.error ?? `HTTP ${res.status}`).slice(0, 160));
       const text = String(j.reconstructed_markdown ?? (j.text_blocks ?? []).map((b: any) => b?.snippet ?? '').join('\n'));
       const sources = (j.references ?? []).map((r: any) => r?.link).filter((u: unknown): u is string => typeof u === 'string');
-      // AI Mode answers are generated from Google Search by design; references are not always returned.
-      return { text, sources, grounded: text.trim().length > 0 };
+      // An answer counts only with checkable sources; AI Mode does not always return them.
+      return { text, sources, grounded: sources.length > 0 };
     },
   },
   {
@@ -182,7 +184,10 @@ export async function askAiSurfaces(
         logProviderCall({ providerId: `research:${sf.id}`, operation: 'probe', status: 'ok', duration_ms: Date.now() - startedAt });
         if (!r.grounded || !r.text.trim()) {
           return { ...base, query, status: 'failed_source', text: r.text.slice(0, 6000), sources: r.sources, observedAt,
-            reason: r.text.trim() ? 'The tool answered without searching the web, so the answer is not counted.' : 'The tool returned no answer.' };
+            reason: !r.text.trim() ? 'The tool returned no answer.'
+              // Tools that report a search step are judged by it; the others only by the sources they return.
+              : sf.id === 'chatgpt_search' || sf.id === 'claude_search' ? 'The tool answered without searching the web, so the answer is not counted.'
+                : 'The answer came back without checkable source links, so it is not counted.' };
         }
         return { ...base, query, status: 'observed', text: r.text.slice(0, 6000), sources: r.sources, reason: null, observedAt };
       } catch (error) {

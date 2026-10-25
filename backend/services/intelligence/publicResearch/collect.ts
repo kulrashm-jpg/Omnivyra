@@ -14,7 +14,9 @@
 import { isBrandQuestion, type ResearchPack, type ResearchRecord } from '../dossierV2/research';
 import { askAiSurfaces, SURFACES, type SurfaceAnswer } from './aiAnswers';
 import { buyerQuestions, readAnswers, type BuyerQuestion, type CompanyBrief } from './aiQuestions';
-import { checkSiteBasics, type SiteCheck } from './siteBasics';
+import { checkSiteBasicsWithLinks, type SiteCheck } from './siteBasics';
+import { checkProfiles, findIndependentMentions, type ProfileCheck } from './footprint';
+import { aiCapabilities, configCapabilities } from './runtime';
 import { discoverAndProfile, type CompetitorProfile, type FieldKey } from './competitors';
 
 /** Build the research input from the company context the report already resolved. */
@@ -26,6 +28,8 @@ export function researchInputFromNarrative(c: {
   teamSize?: string | null;
   foundedYear?: string | null;
   revenueRange?: string | null;
+  /** Official profiles the company declared (profile social links). */
+  socialLinks?: string[];
 }): ResearchInput | null {
   if (!c.companyName || !c.domain) return null;
   const domainLike = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
@@ -37,6 +41,7 @@ export function researchInputFromNarrative(c: {
       .map((n) => (domainLike.test(n) ? { name: n.replace(/\.[a-z.]+$/i, ''), domain: n.toLowerCase() } : { name: n, domain: '' })),
     capabilities: distinctCapabilities(c.productServices, 8),
     declared: { teamSize: c.teamSize ?? null, foundedYear: c.foundedYear ?? null, revenueRange: c.revenueRange ?? null },
+    socialLinks: (c.socialLinks ?? []).filter((u) => /^https?:\/\//i.test(u)),
   };
 }
 
@@ -67,6 +72,8 @@ export type ResearchInput = CompanyBrief & {
   capabilities?: string[];
   /** Company-declared profile facts, shown in the company's own column as "(claimed)". */
   declared?: { teamSize?: string | null; foundedYear?: string | null; revenueRange?: string | null };
+  /** Official social profiles the company declared. */
+  socialLinks?: string[];
 };
 
 /** Profile rows shown side by side, in this order; a row appears only if some company has a value. */
@@ -105,12 +112,20 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     return profiles.map((p) => ({ p, origin: declared.some((d) => d.name === p.name) ? 'declared by the company' : 'found by web research' }));
   })().catch(() => null) : Promise.resolve(null);
 
-  const [site, q] = await Promise.all([
-    checkSiteBasics(input.domain).catch((): SiteCheck[] => []),
+  const [siteResult, q] = await Promise.all([
+    checkSiteBasicsWithLinks(input.domain).catch(() => ({ checks: [] as SiteCheck[], homepageProfiles: [] as string[], sameAs: [] as string[] })),
     buyerQuestions(input),
+  ]);
+  const site = siteResult.checks;
+  // External footprint runs alongside the AI questions: owned profiles first, then third-party mentions.
+  const declaredProfiles = input.socialLinks ?? [];
+  const footprintTask = Promise.all([
+    checkProfiles(input.brand, input.domain, { declared: declaredProfiles, homepage: siteResult.homepageProfiles, sameAs: siteResult.sameAs }).catch((): ProfileCheck[] => []),
+    findIndependentMentions(subjectBrief, [...declaredProfiles, ...siteResult.homepageProfiles, ...siteResult.sameAs]).catch(() => ({ mentions: [], socialPosts: [], platforms: [], provider: null, searches: [] as string[] })),
   ]);
   const questions: BuyerQuestion[] = q.questions;
   const answers: SurfaceAnswer[] = await askAiSurfaces(questions.map((x) => x.query), { timeoutMs: opts.timeoutMs });
+  const [profileChecks, mentionResult] = await footprintTask;
 
   const intentOf = new Map(questions.map((x) => [x.query, x.intent]));
   const observed = answers.filter((a) => a.status === 'observed');
@@ -138,7 +153,8 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
       mentioned, cited: cited && accuracy !== 'misidentified', accuracy, brandsNamed: a.status === 'observed' ? r?.brands ?? [] : undefined,
       citedDomains, geography: a.geography, observedAt: a.observedAt,
       sourceUrl: a.sources[0] ?? '', method: 'Answer built by the tool from live web search, with the sources it returned', scope: 'One question, one time',
-      excerpt: a.text.slice(0, 400),
+      // Enough of the answer to re-check a mention or a misidentification afterwards.
+      excerpt: a.text.slice(0, 4000),
     });
   });
 
@@ -244,5 +260,7 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
       competitors: 'Declared competitors and the brands AI answers recommend, each profiled by an AI analyst with live web search. Every value carries its source URL and is re-opened and checked; values the page did not confirm are labelled. Revenue appears only when a public source states it.',
     },
     company: [], search: [], generative, competitors: competitorRecords, independent: [], gaps, site: siteRecords, benchmark,
+    footprint: { checkedAt: new Date().toISOString(), profiles: profileChecks, mentions: mentionResult.mentions, socialPosts: mentionResult.socialPosts, platforms: mentionResult.platforms, mentionSearch: mentionResult.provider, mentionQueries: mentionResult.searches },
+    runtime: { checkedAt: new Date().toISOString(), capabilities: [...aiCapabilities(answers), ...configCapabilities()] },
   };
 }

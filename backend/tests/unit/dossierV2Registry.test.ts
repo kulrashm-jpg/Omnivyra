@@ -302,28 +302,31 @@ describe('dossier v2 summary pages and public research', () => {
     }
   });
 
-  it('page 3 carries three decisions, each with a register id, an owner (or Unassigned), a prerequisite and a success test', () => {
+  it('page 3 shows the three decision lanes, each with owner class, dependency, success measure and timing — and no internal ids', () => {
     const next = summary(html, 'summary-next');
-    expect(next.match(/class="v2-next"/g)).toHaveLength(3);
-    const reg = buildDossierRegistry(payload(), pack() as never);
-    const ids = new Set(reg.actions.map((a) => a.id));
-    for (const m of next.matchAll(/<span>(A-[a-z0-9-]+)<\/span>/g)) expect(ids.has(m[1])).toBe(true);
-    expect(next.match(/Owner: /g)).toHaveLength(3);
-    expect(next.match(/Prerequisite: /g)).toHaveLength(3);
-    expect(next.match(/Success test/g)).toHaveLength(3);
+    for (const title of ['Fix the foundation', 'Improve buyer-intent discoverability', 'Build independent proof and measure again']) expect(next).toContain(title);
+    expect(next.match(/class="v2-lane v2-lane-/g)).toHaveLength(3);
+    expect(next.match(/<dt>Who<\/dt>/g)).toHaveLength(3);
+    expect(next.match(/<dt>Depends on<\/dt>/g)).toHaveLength(3);
+    expect(next.match(/<dt>Success<\/dt>/g)).toHaveLength(3);
+    expect(next.match(/class="v2-lane-time"/g)).toHaveLength(3);
+    const text = next.replace(/<[^>]+>/g, ' ');
+    expect(text).not.toMatch(/\bA-[a-z0-9-]{3,}|E-[A-Z]{3}-\d{2}|[A-Z]{3,}_[A-Z_]*KEY/);
   });
 
-  it('keeps search, generative-search and readiness visibility separate, counting only grounded answers', () => {
+  it('page 2 shows separate search, AI-answer and website indicators from one ledger, plus the discovery path', () => {
     const now = summary(html, 'summary-now');
-    expect(now).toContain('Found for 1 of 3 buyer searches');
-    expect(now).toContain('Named in 0 of 2 AI answers to buyer questions');
-    expect(now).toContain('confused in 1');
-    expect(now).toContain('Website readiness');
+    expect(now).toMatch(/Search<\/div><div class="v2-ind-value">0<small> of 2<\/small>/);
+    expect(now).toMatch(/AI answers<\/div><div class="v2-ind-value">0<small> of 1<\/small>/);
+    expect(now).toContain('Website evidence');
+    expect(now).toContain('How a buyer looks — and what they find');
+    expect(now).toContain('v2-headline');
   });
 
   it('never shows missing evidence as zero on the summary', () => {
-    expect(summary(plain, 'summary-now')).toContain('Insufficient evidence — not zero');
-    expect(summary(plain, 'summary-now')).toContain('Not measured — no grounded AI answer was read');
+    const now = summary(plain, 'summary-now');
+    expect(now.match(/Not measured/g)!.length).toBeGreaterThanOrEqual(2);
+    expect(now).not.toMatch(/>0<small> of 0</);
   });
 
   it('compares only validated competitors, and keeps rejected and unvalidated ones out of the search matrix', () => {
@@ -357,10 +360,10 @@ describe('dossier v2 summary pages and public research', () => {
     for (const a of buildDossierRegistry(payload(), pack() as never).actions) for (const id of a.evidenceIds) expect(known.has(id)).toBe(true);
   });
 
-  it('puts a high-impact, low-effort move first on page 3, and it comes from the evidence', () => {
+  it('places the evidence-backed crawl fix in the foundation lane', () => {
     const next = summary(html, 'summary-next');
-    expect(next.indexOf('A-site-crawl-basics')).toBeGreaterThan(-1);
-    expect(next.indexOf('A-site-crawl-basics')).toBeLessThan(next.indexOf('class="v2-next"', next.indexOf('class="v2-next"') + 1));
+    const lane = next.slice(next.indexOf('v2-lane-foundation'), next.indexOf('v2-lane-discover'));
+    expect(lane).toContain('Fix the crawl basics');
     const reg = buildDossierRegistry(payload(), pack() as never);
     expect(reg.actions.find((a) => a.id === 'A-site-crawl-basics')?.evidenceIds).toEqual(['E-SIT-01']);
   });
@@ -374,5 +377,109 @@ describe('dossier v2 summary pages and public research', () => {
   it('shows an AI answer that confuses the brand as confused, not as a mention', () => {
     expect(html).toContain('confused with another');
     expect(html).toContain('Who AI answers recommend instead');
+  });
+});
+
+describe('dossier v2 evidence ledger, footprint and consistency check', () => {
+  // Imported lazily so the module-level render cache does not leak between suites.
+  const load = () => require('../../services/intelligence/dossierV2/render') as typeof import('../../services/intelligence/dossierV2/render');
+  const { buildLedger } = require('../../services/intelligence/dossierV2/ledger') as typeof import('../../services/intelligence/dossierV2/ledger');
+  const { validateReport } = require('../../services/intelligence/dossierV2/validate') as typeof import('../../services/intelligence/dossierV2/validate');
+  const T = '2026-10-25T01:00:00Z';
+  const rec = (id: string, extra: Record<string, unknown>) => ({ id, claim: id, status: 'observed', confidence: 'high', sourceUrl: '', observedAt: T, method: 'm', scope: 's', ...extra });
+  const pack = () => ({
+    subject: { brand: 'Acme', domain: 'acme.test' }, collectedAt: T, collector: 'pipeline', method: {},
+    company: [], search: [], competitors: [], independent: [], gaps: [], site: [], benchmark: [],
+    generative: [
+      rec('E-GEN-01', { kind: 'claude_search', surface: 'Claude (web search)', intent: 'category', query: 'best widget tools', mentioned: false, brandsNamed: ['Rival'], citedDomains: ['x.io'] }),
+      rec('E-GEN-02', { kind: 'claude_search', surface: 'Claude (web search)', intent: 'branded', query: 'What is Acme?', mentioned: true, cited: true, accuracy: 'correct' }),
+      rec('E-GEN-03', { kind: 'perplexity', surface: 'Perplexity', intent: 'category', query: 'best widget tools', status: 'not_measured' }),
+    ],
+    footprint: {
+      checkedAt: T, mentionSearch: 'anthropic',
+      profiles: [
+        { platform: 'LinkedIn', url: 'https://www.linkedin.com/company/acme', declared: true, onHomepage: false, inSameAs: false, attempted: true, httpStatus: 999, outcome: 'login_wall', namesBrand: null, linksDomain: null, state: 'inaccessible', reason: 'The platform requires sign-in (HTTP 999).', checkedAt: T },
+        { platform: 'YouTube', url: 'https://www.youtube.com/@acme', declared: true, onHomepage: true, inSameAs: false, attempted: true, httpStatus: 200, outcome: 'responded', namesBrand: true, linksDomain: true, state: 'identity_confirmed', reason: null, checkedAt: T },
+      ],
+      mentions: [{ url: 'https://dir.test/acme', title: 'Acme on Dir', type: 'directory', check: 'confirmed' }],
+      platforms: [{ platform: 'G2', state: 'claimed_unconfirmed', url: 'https://g2.com/acme' }, { platform: 'Capterra', state: 'not_found_in_search', url: '' }],
+    },
+    runtime: { checkedAt: T, capabilities: [
+      { id: 'ai:claude_search', label: 'Claude (web search)', family: 'ai_answers', adapter: true, credential: true, attempted: true, reason: 'measured', outcome: '2 of 2 answered.', nextStep: null },
+      { id: 'ai:perplexity', label: 'Perplexity', family: 'ai_answers', adapter: true, credential: false, attempted: false, reason: 'missing_credential', outcome: 'No credential is configured.', nextStep: 'Add an API key for Perplexity.' },
+      { id: 'backlinks', label: 'Backlinks', family: 'backlinks', adapter: true, credential: false, attempted: false, reason: 'missing_credential', outcome: '', nextStep: '' },
+    ] },
+  });
+  const run = () => {
+    const p = payload();
+    // The scoring run (older) says Claude is not configured; the research measured it.
+    p.ai_surface_presence.citation_matrix.cells.push({ provider: 'claude', query_class: 'branded', state: 'unavailable', reason_unavailable: 'claude adapter is not configured' });
+    return p;
+  };
+
+  it('passes the consistency check on every fixture render', () => {
+    const { renderDossierV2Html } = load();
+    for (const research of [null, pack()]) {
+      renderDossierV2Html(run(), { brandName: 'Acme', domain: 'acme.test' }, research);
+      const v = load().lastValidation!;
+      expect(v.issues.filter((i) => i.blocking)).toEqual([]);
+    }
+  });
+
+  it('lets newer research evidence replace a stale "not configured" from the scoring run', () => {
+    const l = buildLedger(run() as never, pack() as never);
+    const claude = l.ai.filter((a) => a.label === 'Claude (web search)');
+    expect(claude).toHaveLength(1);
+    expect(claude[0]).toMatchObject({ source: 'research', reason: 'measured' });
+    const html = load().renderDossierV2Html(run(), { brandName: 'Acme', domain: 'acme.test' }, pack());
+    expect(html).toContain('Claude is not shown here');
+  });
+
+  it('classifies every access gap: sign-in wall, not configured, reported-not-confirmable, searched-not-found', () => {
+    const l = buildLedger(run() as never, pack() as never);
+    expect(l.access.find((a) => a.capability === 'LinkedIn profile')?.reason).toBe('restricted');
+    expect(l.access.find((a) => a.capability === 'YouTube profile')?.reason).toBe('measured');
+    expect(l.access.find((a) => a.capability === 'Perplexity')?.reason).toBe('missing_credential');
+    expect(l.access.find((a) => a.capability === 'Review and directory listings')?.reason).toBe('partial');
+    expect(l.access.every((a) => Boolean(a.reason))).toBe(true);
+    const html = load().renderDossierV2Html(run(), { brandName: 'Acme', domain: 'acme.test' }, pack());
+    expect(html).toContain('Access reconciliation');
+    expect(html).toContain('Sign-in wall');
+    expect(html).toContain('reported, not confirmable');
+    expect(html).toContain('not found in search');
+    expect(html).toContain('External digital footprint');
+  });
+
+  it('calls unobserved crawl addresses "not observed", never failures, and the validator would catch it', () => {
+    const html = load().renderDossierV2Html(run(), { brandName: 'Acme', domain: 'acme.test' }, pack());
+    expect(html).not.toMatch(/no HTTP response/);
+    const l = buildLedger(run() as never, pack() as never);
+    const reg = buildDossierRegistry(run(), pack() as never);
+    const bad = validateReport(l, reg, '<p>76 addresses gave no HTTP response</p>'.replace('76', String(l.crawl.notObserved)), []);
+    expect(bad.issues.map((i) => i.rule)).toContain('crawl-wording');
+    const broken = { ...l, crawl: { ...l.crawl, notObserved: 5 } };
+    expect(validateReport(broken, reg, '', []).passed).toBe(false);
+  });
+
+  it('re-scopes a stale "AI visibility cannot be measured" gap to the tools still missing', () => {
+    const p = run();
+    p.report1.evidence_coverage.gaps.push({ area: 'AI visibility', why: 'No answer engine that retrieves from the live web is connected, so AI visibility cannot be measured at all.', impact: 'Unknown.', next_step: 'Connect a retrieval-grounded answer engine, then regenerate the report.' });
+    const reg = buildDossierRegistry(p, pack() as never);
+    const f = reg.findings.find((x) => x.id === 'F-gap-ai-visibility')!;
+    expect(f.title).toBe('Not every AI search tool could be measured');
+    expect(f.observation).toContain('Claude (web search)');
+    expect(f.observation).toContain('Perplexity');
+    expect(reg.actions.find((a) => a.id === 'A-gap-ai-visibility')?.title).toBe('Measure the remaining AI search tools: Perplexity');
+    const html = load().renderDossierV2Html(p, { brandName: 'Acme', domain: 'acme.test' }, pack());
+    expect(html).not.toMatch(/cannot be measured at all/);
+    expect(load().lastValidation!.passed).toBe(true);
+  });
+
+  it('never calls unobserved addresses "unreachable"', () => {
+    const { notObservedWording } = load();
+    expect(notObservedWording('0 pages returned 4xx/5xx (of 14 that responded; 76 unreachable)')).toBe('0 pages returned 4xx/5xx (of 14 that responded; 76 not observed)');
+    const l = buildLedger(run() as never, pack() as never);
+    const reg = buildDossierRegistry(run(), pack() as never);
+    expect(validateReport(l, reg, `<p>${l.crawl.notObserved} unreachable</p>`, []).issues.map((i) => i.rule)).toContain('crawl-wording');
   });
 });

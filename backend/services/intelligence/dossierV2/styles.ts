@@ -206,4 +206,70 @@ table { border-collapse: collapse; width: 100%; }
 .v2-gapcell { background: ${P.crimsonSoft}; }
 .v2-register td { padding: .9mm 1.6mm; font-size: 7.2pt; line-height: 1.3; vertical-align: top; }
 .v2-register .v2-group td { background: ${P.wash}; font-weight: 700; color: ${P.navy}; font-size: 7.6pt; padding-top: 1.6mm; }
+
+/* Summary page 2 — indicators, discovery path, strongest finding / uncertainty, coverage strip */
+.v2-headline { font-size: 13pt; font-weight: 700; color: ${P.navy}; line-height: 1.3; margin: 0 0 1.2mm; }
+.v2-confnote { font-size: 8.2pt; color: ${P.grey}; margin: 0 0 3.5mm; }
+.v2-inds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2.6mm; }
+.v2-ind { border: 1px solid ${P.line}; border-top: 3px solid ${P.greyMid}; border-radius: 2mm; padding: 2.4mm 3mm; break-inside: avoid; }
+.v2-ind-good { border-top-color: ${P.green}; } .v2-ind-warn { border-top-color: ${P.amber}; } .v2-ind-bad { border-top-color: ${P.crimson}; } .v2-ind-neutral { border-top-color: ${P.greyMid}; }
+.v2-ind-title { font-size: 7.4pt; text-transform: uppercase; letter-spacing: .1em; color: ${P.grey}; font-weight: 700; }
+.v2-ind-value { font-size: 17pt; font-weight: 800; color: ${P.navy}; line-height: 1.15; margin-top: .6mm; }
+.v2-ind-value small { font-size: 9pt; color: ${P.grey}; font-weight: 600; }
+.v2-ind-sub { font-size: 7.5pt; color: ${P.grey}; line-height: 1.3; margin-top: .4mm; }
+.v2-ind-list { list-style: none; margin: 1.2mm 0 0; padding: 0; font-size: 7pt; columns: 2; column-gap: 3mm; }
+.v2-ind-list li { display: flex; justify-content: space-between; gap: 1mm; border-top: 1px dotted ${P.line}; padding-top: .3mm; break-inside: avoid; }
+.v2-ind-list b { color: ${P.navy}; white-space: nowrap; }
+.v2-ind-list span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-nm { font-size: 11pt; color: ${P.greyMid}; font-weight: 700; }
+.v2-path { display: flex; align-items: stretch; gap: 1.5mm; }
+.v2-path > i { align-self: center; color: ${P.blue}; font-style: normal; font-size: 13pt; font-weight: 700; }
+.v2-path-step { flex: 1; background: ${P.wash}; border-radius: 2mm; padding: 2.2mm 2.6mm; font-size: 7.6pt; line-height: 1.35; }
+.v2-path-step b { display: block; color: ${P.navy}; font-size: 8pt; margin-bottom: .8mm; }
+.v2-path-step ul { margin: 0; padding-left: 3.5mm; }
+.v2-path-step em { font-style: normal; color: ${P.grey}; }
+.v2-sf { margin-top: 3.5mm; }
+.v2-sf .v2-panel h4 { font-size: 8.8pt; margin-bottom: 1.6mm; }
+.v2-mbar { display: grid; grid-template-columns: 28mm 1fr 6mm; align-items: center; gap: 1.5mm; font-size: 7.6pt; margin-bottom: .9mm; }
+.v2-mbar i { display: block; height: 3mm; border-radius: 1mm; }
+.v2-mbar b { color: ${P.navy}; text-align: right; }
+.v2-unk { list-style: none; margin: 0 0 1.2mm; padding: 0; font-size: 7.6pt; }
+.v2-unk li { display: flex; justify-content: space-between; gap: 2mm; border-bottom: 1px dotted ${P.line}; padding: .6mm 0; }
+.v2-unk span { color: ${P.amber}; font-weight: 600; text-align: right; }
+.v2-covstrip { display: flex; flex-wrap: wrap; gap: 1.5mm; }
+.v2-cov { border-radius: 1.5mm; padding: 1mm 2.2mm; font-size: 7.6pt; font-weight: 700; color: ${P.navy}; border: 1px solid ${P.line}; }
+.v2-cov em { font-style: normal; font-weight: 500; color: ${P.grey}; margin-left: 1.2mm; }
+.v2-cov-good { background: ${P.greenSoft}; } .v2-cov-info { background: ${P.blueSoft}; } .v2-cov-neutral { background: #fff; }
+.v2-fresh { font-size: 7.4pt; color: ${P.grey}; margin: 1.5mm 0 0; }
+
+/* Summary page 3 — decision lanes */
+.v2-lanes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3mm; }
+.v2-lane { border: 1px solid ${P.line}; border-top: 4px solid ${P.blue}; border-radius: 2mm; padding: 3mm; display: flex; flex-direction: column; break-inside: avoid; }
+.v2-lane-foundation { border-top-color: ${P.blue}; } .v2-lane-discover { border-top-color: ${P.green}; } .v2-lane-proof { border-top-color: ${P.amber}; }
+.v2-lane-head { display: flex; gap: 2mm; margin-bottom: 2mm; }
+.v2-lane-head > span { flex: none; width: 6.5mm; height: 6.5mm; border-radius: 50%; background: ${P.navy}; color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: 9pt; }
+.v2-lane h4 { font-size: 10pt; margin: 0 0 .8mm; line-height: 1.2; }
+.v2-lane-head p { font-size: 8pt; color: ${P.navy}; margin: 0; line-height: 1.35; }
+.v2-lane ul { margin: 0 0 2mm; padding-left: 4mm; font-size: 8pt; line-height: 1.4; }
+.v2-lane li { margin-bottom: .8mm; }
+.v2-lane li.v2-more { color: ${P.grey}; list-style: none; margin-left: -4mm; font-size: 7.4pt; }
+.v2-lane dl { margin: auto 0 0; font-size: 7.6pt; }
+.v2-lane dt { color: ${P.grey}; font-weight: 700; font-size: 6.8pt; text-transform: uppercase; letter-spacing: .08em; margin-top: 1.2mm; }
+.v2-lane dd { margin: .2mm 0 0; line-height: 1.35; }
+.v2-lane-time { display: flex; gap: 1mm; margin-top: 2mm; }
+.v2-lane-time span { flex: 1; text-align: center; font-size: 6.8pt; border: 1px solid ${P.line}; border-radius: 1mm; padding: .6mm 0; color: ${P.greyMid}; }
+.v2-lane-time span.on { background: ${P.navy}; border-color: ${P.navy}; color: #fff; font-weight: 700; }
+.v2-blocked { margin-top: 3.5mm; border: 1px dashed ${P.amber}; border-radius: 2mm; padding: 2.5mm 3.5mm; background: ${P.amberSoft}; }
+.v2-blocked h4 { font-size: 9pt; margin-bottom: 1.2mm; }
+.v2-blocked ul { margin: 0; padding-left: 4mm; font-size: 7.8pt; line-height: 1.45; }
+
+/* Footprint */
+.v2-keep > .v2-subsection { break-after: avoid; page-break-after: avoid; }
+.v2-keep > .v2-subsection + .v2-block { break-before: avoid; page-break-before: avoid; }
+.v2-subsection { font-size: 13pt; margin: 2mm 0 3mm; padding-bottom: 1.5mm; border-bottom: 1px solid ${P.line}; }
+.v2-chips { display: flex; flex-wrap: wrap; gap: 1.5mm; }
+.v2-chip { border: 1px solid ${P.line}; border-radius: 1.5mm; padding: 1mm 2.2mm; font-size: 7.8pt; font-weight: 700; color: ${P.navy}; }
+.v2-chip em { font-style: normal; font-weight: 500; color: ${P.grey}; margin-left: 1.2mm; }
+.v2-chip-good { background: ${P.greenSoft}; } .v2-chip-info { background: ${P.blueSoft}; } .v2-chip-neutral { background: #fff; }
+.v2-access td { vertical-align: top; }
 `;

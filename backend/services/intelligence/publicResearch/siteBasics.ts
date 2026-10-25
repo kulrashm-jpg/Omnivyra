@@ -28,7 +28,8 @@ async function get(url: string, timeoutMs: number): Promise<{ status: number; ty
   }
 }
 
-export async function checkSiteBasics(domain: string, timeoutMs = 20_000): Promise<SiteCheck[]> {
+export async function checkSiteBasicsWithLinks(domain: string, timeoutMs = 20_000): Promise<{ checks: SiteCheck[]; homepageProfiles: string[]; sameAs: string[] }> {
+  const links = { homepage: [] as string[], sameAs: [] as string[] };
   const origin = `https://${domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}`;
   const [robots, llms, home] = await Promise.all([get(`${origin}/robots.txt`, timeoutMs), get(`${origin}/llms.txt`, timeoutMs), get(`${origin}/`, timeoutMs)]);
   const checks: SiteCheck[] = [];
@@ -71,9 +72,18 @@ export async function checkSiteBasics(domain: string, timeoutMs = 20_000): Promi
     checks.push({ key: 'organization_schema', ok: org && sameAs, url: `${origin}/`, excerpt: types.length ? `@type: ${types.join(', ')}` : 'no JSON-LD',
       claim: org ? `Homepage structured data includes ${types.filter((t) => /Organization|Corporation|LocalBusiness|SoftwareApplication|WebSite/.test(t)).join(', ')}${sameAs ? ' with sameAs profile links' : ' but no sameAs profile links'}`
         : `Homepage structured data has no Organization entity${types.length ? ` (only ${types.join(', ')})` : ''}` });
+    const profileUrls = [...new Set([...home.body.matchAll(SOCIAL)].map((m) => m[0]))];
+    links.homepage.push(...profileUrls);
+    const sameAsBlock = /"sameAs"\s*:\s*\[([^\]]*)\]/.exec(home.body)?.[1] ?? '';
+    links.sameAs.push(...[...sameAsBlock.matchAll(/"(https?:\/\/[^"]+)"/g)].map((m) => m[1]));
     const profiles = [...new Set([...home.body.matchAll(SOCIAL)].map((m) => m[1].replace('twitter.com', 'x.com')))];
-    checks.push({ key: 'profile_links', ok: profiles.length > 0, url: `${origin}/`, excerpt: profiles.length ? profiles.join(', ') : 'no links to social profiles',
-      claim: profiles.length ? `Homepage links to official profiles on ${profiles.join(', ')}` : 'Homepage links to no social profiles' });
+    // A homepage-link observation only: profiles may exist without being linked (see the footprint checks).
+    checks.push({ key: 'profile_links', ok: profiles.length > 0, url: `${origin}/`, excerpt: profiles.length ? profiles.join(', ') : 'no links to social profiles on the homepage',
+      claim: profiles.length ? `Homepage links to official profiles on ${profiles.join(', ')}` : 'The homepage does not link to any social profile (whether profiles exist is checked separately)' });
   }
-  return checks;
+  return { checks, homepageProfiles: [...new Set(links.homepage)], sameAs: [...new Set(links.sameAs)] };
+}
+
+export async function checkSiteBasics(domain: string, timeoutMs = 20_000): Promise<SiteCheck[]> {
+  return (await checkSiteBasicsWithLinks(domain, timeoutMs)).checks;
 }

@@ -27,6 +27,8 @@ import {
 import { buildDossierRegistry, type DossierAction, type DossierFinding, type DossierRegistry } from './registry';
 import { isBrandQuestion, isMarketingBasic, parseResearchPack, summariseVisibility, type ResearchPack, type ResearchRecord } from './research';
 import { DOSSIER_V2_CSS } from './styles';
+import { buildLedger, PROVIDER_LABEL, type AccessRow, type Ledger } from './ledger';
+import { validateReport, type ValidationResult } from './validate';
 
 export type DossierV2Branding = {
   brandName?: string | null;
@@ -130,6 +132,7 @@ type Context = {
   crawl: { known: number | null; read: number | null; unread: number | null; lastCrawled: string | null; lastCrawledIso: string | null; reused: boolean };
   pillars: Array<{ key: string; label: string; value: number | null; state: string; dims: Array<{ key: string; label: string; value: number | null; state: string }> }>;
   sources: SourceRow[];
+  ledger: Ledger;
 };
 
 /**
@@ -190,6 +193,7 @@ function buildContext(payload: CanonicalExportPayload, branding: DossierV2Brandi
     crawl: { known, read, unread: known != null && read != null ? Math.max(0, known - read) : null, lastCrawled: fmtDate(lastIso), lastCrawledIso: lastIso, reused: crawl?.action === 'reused' },
     pillars,
     sources: evidenceSources(pillars, competitorCount),
+    ledger: buildLedger(payload, research),
   };
 }
 
@@ -258,81 +262,138 @@ function renderCover(ctx: Context, branding: DossierV2Branding): string {
   <div class="v2-cover-meta">
     <div>Authority Index<strong>${index ?? '—'} / 100</strong></div>
     <div>Stage<strong>${e(stage ?? '—')}</strong></div>
-    <div>Evidence sources measured<strong>${connected} of ${ctx.sources.length}</strong></div>
+    <div>Evidence sources measured<strong>${ctx.ledger.coverage.measured} of ${ctx.ledger.access.length}</strong>${ctx.ledger.coverage.partial ? `<em>${ctx.ledger.coverage.partial} partly</em>` : ''}</div>
     <div>Generated<strong>${e(ctx.generated)}</strong>${ctx.research ? `<em>Public research ${e(fmtDate(ctx.research.collectedAt) ?? ctx.research.collectedAt)}</em>` : ''}</div>
   </div>
 </section>`;
 }
 
-// ── Summary page 1 — What is happening ──────────────────────────────────────
+// ── Summary page 1 — What is happening? ─────────────────────────────────────
+
+const REASON_TEXT: Record<string, string> = {
+  measured: 'measured', partial: 'partly measured', not_searched: 'not attempted', restricted: 'blocked by sign-in or bot protection',
+  no_adapter: 'no supported access', missing_credential: 'not connected', request_failed: 'request failed', quota_restricted: 'plan or quota limit',
+  searched_not_found: 'searched, not found', ungrounded: 'answered from memory only',
+};
+
+/** Two-word states for tight lists. */
+const SHORT_REASON: Record<string, string> = {
+  measured: 'measured', partial: 'partial', not_searched: 'not run', restricted: 'blocked', no_adapter: 'no access',
+  missing_credential: 'not connected', request_failed: 'failed', quota_restricted: 'quota limit', searched_not_found: 'not found', ungrounded: 'memory only',
+};
+
+/** Confidence from how much of the evidence was actually measured. */
+function confidenceOf(l: Ledger): { level: 'Low' | 'Moderate' | 'High'; note: string } {
+  const total = l.access.length || 1;
+  const share = (l.coverage.measured + l.coverage.partial / 2) / total;
+  return { level: share >= 0.7 ? 'High' : share >= 0.4 ? 'Moderate' : 'Low', note: `${l.coverage.measured} of ${l.access.length} evidence sources measured, ${l.coverage.partial} partly` };
+}
+
+/** The one-sentence situation, chosen from the evidence. */
+function headlineOf(ctx: Context): string {
+  const l = ctx.ledger;
+  const searchMiss = l.search ? l.search.found - l.search.brandedFound === 0 : null;
+  const aiMiss = l.aiTotals.buyerAnswers ? l.aiTotals.buyerNamed === 0 : null;
+  if (searchMiss && aiMiss) return `Buyers who search for what ${ctx.brand} sells — rather than its name — do not find it yet, in search or in AI answers.`;
+  if (aiMiss) return `AI answers to buyers' questions do not name ${ctx.brand} yet; other tools are recommended instead.`;
+  if (searchMiss) return `Buyers searching for the problem ${ctx.brand} solves do not find it in the results checked.`;
+  return `${ctx.brand} is visible for some buyer questions; the gaps below show where it is not.`;
+}
 
 function renderSummaryNow(ctx: Context): string {
-  const overall = obj(obj(ctx.payload.authority_overview)?.overall_score) ?? {};
-  const index = num(overall.value);
-  const disc = pillarOf(ctx, 'discoverability');
-  const mom = pillarOf(ctx, 'momentum');
-  const trust = pillarOf(ctx, 'trust');
-  const kpi = (value: string, label: string, note: string, color: string) =>
-    `<div class="v2-tile" style="border-top-color:${color}"><div class="v2-tile-value" style="color:${color}">${value}</div><div class="v2-tile-label">${e(label)}</div><div class="v2-tile-note">${e(note)}</div></div>`;
-  const tiles = `<div class="v2-tiles4">
-    ${kpi(`${index ?? '—'}<small> / 100</small>`, 'Authority Index', `A summary of ${scored(ctx).length} of ${ctx.pillars.length} areas; partial inputs`, PALETTE.blue)}
-    ${kpi(`${disc?.value ?? '—'}${disc?.state === 'measured' ? '' : '*'}<small> / 100</small>`, 'Discoverability', '*Inferred from the website: readiness, not rankings', PALETTE.green)}
-    ${kpi(`${mom?.value ?? '—'}<small> / 100</small>`, 'Momentum', 'Measured: how recently the site was updated', PALETTE.amber)}
-    ${kpi(trust?.value != null ? `${trust.value}<small> / 100</small>` : '—', 'Trust', trust?.value != null ? 'Measured' : 'Insufficient evidence — not zero', PALETTE.greyMid)}
-  </div>`;
-
-  const search = searchView(ctx);
-  const gen = generativeView(ctx);
+  const l = ctx.ledger;
+  const conf = confidenceOf(l);
   const extraction = ctx.pillars.flatMap((p) => p.dims).find((d) => d.key === 'extraction_readiness');
-  const visTile = (n: string, title: string, value: string, sub: string, tone: Tone) =>
-    `<div class="v2-vis v2-vis-${tone}"><div class="v2-vis-n">${n}</div><div><h4>${e(title)}</h4><div class="v2-vis-value">${e(value)}</div><small>${e(sub)}</small></div></div>`;
-  const visibility = `<div class="v2-vis3">
-    ${visTile('1', 'Search visibility', search ? search.line : 'Not measured', search ? search.source : 'No search observations', search && search.found < search.checked / 2 ? 'warn' : 'good')}
-    ${visTile('2', 'Generative-search visibility', gen.line, gen.note || 'Retrieval-grounded answers only', gen.grounded && gen.mentioned ? 'good' : 'warn')}
-    ${visTile('3', 'Website readiness', `Answers hard to lift: extraction readiness ${extraction?.value ?? '—'}/100`, 'How well engines can read and quote the site', (extraction?.value ?? 0) < 25 ? 'bad' : 'warn')}
-  </div>`;
+  const tile = (title: string, value: string, sub: string, tone: Tone, extra = '') =>
+    `<div class="v2-ind v2-ind-${tone}"><div class="v2-ind-title">${e(title)}</div><div class="v2-ind-value">${value}</div><div class="v2-ind-sub">${e(sub)}</div>${extra}</div>`;
+  const nm = '<span class="v2-nm">Not measured</span>';
 
-  const connected = ctx.sources.filter((s) => s.status === 'connected').length;
-  const chips = ctx.sources.map((s) => pill(s.label, s.status === 'connected' ? 'good' : s.status === 'partial' ? 'info' : 'neutral')).join(' ');
-  const funnelLine = ctx.crawl.known != null
-    ? `<div class="v2-mini-funnel"><span><b>${ctx.crawl.known}</b> known pages</span><i>›</i><span><b>?</b> attempted <em>not recorded</em></span><i>›</i><span><b>${ctx.crawl.read ?? '—'}</b> answered</span><i>›</i><span><b>${ctx.crawl.read ?? '—'}</b> evaluated</span></div>`
-    : '';
-  const coverage = `<div class="v2-cols v2-tight">
-    <div class="v2-panel"><h4>Evidence measured: ${connected} of ${ctx.sources.length} sources</h4><p>${chips}</p><small>Green = measured; blue = partly (inferred); grey = not measured. Grey is unknown, not poor.</small></div>
-    <div class="v2-panel"><h4>Website pages read</h4>${funnelLine}<small>${ctx.crawl.unread ? `${ctx.crawl.unread} known pages gave no response. ` : ''}Findings about pages describe the ${ctx.crawl.read ?? ''} that answered.</small></div>
-  </div>`;
+  const s = l.search;
+  const buyerSearches = s ? s.checked - (s.source === 'research' ? (ctx.research?.search.filter((r) => r.status === 'observed' && r.intent === 'branded').length ?? 0) : 0) : 0;
+  const searchTile = s
+    ? tile('Search', `${s.found - s.brandedFound}<small> of ${buyerSearches}</small>`,
+      s.source === 'research'
+        ? `buyer searches that returned the website${s.brandedFound ? '; found when the name is searched' : ''}`
+        : 'category searches by the report run that returned the website (location and language not recorded)',
+      s.found - s.brandedFound === 0 ? 'bad' : 'warn')
+    : tile('Search', nm, 'No search results were observed in this run.', 'neutral');
+  const aiList = l.ai.filter((a) => a.source === 'research' || a.reason !== 'missing_credential').slice(0, 7)
+    .map((a) => `<li><span>${e(a.label.replace(/ \(.*\)$/, ''))}</span><b>${a.reason === 'measured' || a.reason === 'partial' ? `${a.buyerNamed}/${a.buyerAnswers}` : e(SHORT_REASON[a.reason] ?? a.reason)}</b></li>`).join('');
+  const aiTile = l.aiTotals.buyerAnswers
+    ? tile('AI answers', `${l.aiTotals.buyerNamed}<small> of ${l.aiTotals.buyerAnswers}</small>`, 'answers to buyer questions that name the company', l.aiTotals.buyerNamed ? 'warn' : 'bad', `<ul class="v2-ind-list">${aiList}</ul>`)
+    : tile('AI answers', nm, 'No AI answer built from live web search was read.', 'neutral', aiList ? `<ul class="v2-ind-list">${aiList}</ul>` : '');
+  const webTile = l.crawl.known != null
+    ? tile('Website evidence', `${l.crawl.evaluated ?? 0}<small> of ${l.crawl.known}</small>`, `known pages read; ${l.crawl.notObserved ?? 0} not observed. Answers easy to quote: ${extraction?.value ?? '—'}/100`, (extraction?.value ?? 0) < 25 ? 'bad' : 'warn')
+    : tile('Website evidence', nm, 'No crawl was recorded.', 'neutral');
+  const f = l.footprint;
+  const fpTile = f
+    ? tile('External footprint', `${f.profiles.confirmed + f.profiles.domainLinked}<small> of ${f.profiles.total}</small>`, `official profiles confirmed to link to the website; ${f.mentions.confirmed} independent mention${f.mentions.confirmed === 1 ? '' : 's'} confirmed${f.profiles.inaccessible ? `; ${f.profiles.inaccessible} profile${f.profiles.inaccessible === 1 ? '' : 's'} behind a sign-in wall` : ''}`, f.mentions.confirmed ? 'warn' : 'bad')
+    : tile('External footprint', nm, 'Profiles and mentions were not checked in this run.', 'neutral');
+  const revTile = f && f.reviews.searched
+    ? tile('Reviews & listings', `${f.reviews.listed}<small> of ${f.reviews.checked}</small>`, `review and directory sites with a confirmed listing${f.reviews.claimed ? `; ${f.reviews.claimed} reported but not confirmable` : ''}. Not found in search is not proof of absence.`, f.reviews.listed ? 'warn' : 'bad')
+    : tile('Reviews & listings', nm, 'No review source was checked.', 'neutral');
+  const confTile = tile('How sure is this?', `${conf.level}`, conf.note, conf.level === 'High' ? 'good' : conf.level === 'Moderate' ? 'warn' : 'bad');
+  const indicators = `<div class="v2-inds">${searchTile}${aiTile}${webTile}${fpTile}${revTile}${confTile}</div>`;
 
-  const know: Array<[string, string, string]> = [];
-  const gv = summariseVisibility(ctx.research).generative;
-  if (search) know.push(['Buyers who do not already know the name are unlikely to find it — in search or in AI answers.', `${search.found === 0 ? `In search it did not appear for any of the ${search.checked} searches checked` : search.found <= (summariseVisibility(ctx.research).search?.brandedFound ?? 0) ? 'In search it appeared only when the brand name was typed' : `In search it appeared for ${search.found} of ${search.checked} searches`}${gv?.buyerAnswers ? `; AI tools named it in ${gv.buyerNamed} of ${gv.buyerAnswers} answers to buyer questions${gv.brandMisidentified ? `, and ${gv.brandMisidentified} answers to "what is ${ctx.brand}?" described something else` : ''}` : ''}.`, 'Section 4']);
-  const bench = ctx.research?.benchmark.filter(isMarketingBasic) ?? [];
-  const behind = bench.filter((r) => Object.values(r.values ?? {})[0]?.status === 'looked_for_not_found');
-  if (behind.length) know.push([`Competitors out-market it on ${behind.length} of ${bench.length} basics compared.`, `The validated competitors have these and ${ctx.brand} does not yet: ${behind.map((r) => r.claim.replace(/\s*\(.*\)$/, '')).join('; ')}.`, 'Section 1']);
-  const nameCollision = ctx.research?.independent.find((r) => r.kind === 'name_collision');
-  const noProof = ctx.research?.independent.some((r) => r.status === 'looked_for_not_found');
-  const rivals = ctx.research?.competitors.filter((c) => c.classification === 'direct' && c.status === 'observed') ?? [];
-  const capRows = ctx.research?.benchmark.filter((r) => r.kind === 'capability' && r.values) ?? [];
-  if (!behind.length && rivals.length) {
-    const broad = rivals.filter((c) => {
-      const yes = capRows.filter((r) => r.values?.[String(c.domain)]?.value === 'yes').length;
-      return capRows.length && yes / capRows.length >= 0.5;
-    });
-    know.push([`${rivals.length} direct competitor${rivals.length === 1 ? '' : 's'} sell${rivals.length === 1 ? 's' : ''} the same kind of product to the same buyers.`,
-      `${rivals.map((c) => c.name).join(', ')}${capRows.length ? `; ${broad.length} of them cover at least half of ${ctx.brand}'s declared capabilities` : ''}. ${aiNamedRivals(ctx, rivals.map((c) => String(c.name)))}`, 'Section 1']);
-  }
-  if ((nameCollision || noProof) && know.length < 2) know.push(['Little outside the website vouches for the brand yet.', `${noProof ? 'No review site, directory or press mention was found. ' : ''}${nameCollision ? 'A plain search for the name returns unrelated results with similar spellings.' : ''}`, 'Section 3']);
-  const siteGaps = ctx.research?.site.filter((r) => r.recommends).length ?? 0;
-  know.push(['The website is hard for engines to read and quote, and rarely updated.', `Extraction readiness ${extraction?.value ?? '—'}/100 and content freshness ${mom?.value ?? '—'}/100 are the weakest measured areas${siteGaps ? `; ${siteGaps} quick crawl and entity fixes are missing (listed in section 2)` : ''}.`, 'Section 2']);
+  // The discovery path: only routes this run actually tested.
+  const surfaces = [
+    ...(s ? [{ name: 'Google search', res: `found ${s.found - s.brandedFound}/${buyerSearches}` }] : []),
+    ...l.ai.filter((a) => a.reason === 'measured' || a.reason === 'partial').map((a) => ({ name: a.label.replace(/ \(.*\)$/, ''), res: `named ${a.buyerNamed}/${a.buyerAnswers}` })),
+  ];
+  const cited = ctx.research?.benchmark.find((r) => r.kind === 'ai_cited_sources');
+  const topSources = cited?.values ? Object.keys(cited.values).slice(0, 4) : [];
+  const citedAnswers = ctx.research?.generative.filter((g) => g.status === 'observed' && g.cited && g.query) ?? [];
+  const ownCited = citedAnswers.length;
+  const buyerCited = citedAnswers.filter((g) => !isBrandQuestion(g, ctx.brand)).length;
+  const citedScope = !ownCited ? '' : buyerCited ? ` (${buyerCited} to buyer questions)` : ' (all to questions naming the company)';
+  const path = surfaces.length ? `<div class="v2-path">
+    <div class="v2-path-step"><b>1 · The buyer asks</b><span>${e(String(buyerSearches || '—'))} searches and ${e(String(new Set(ctx.research?.generative.filter((g) => g.query && !isBrandQuestion(g, ctx.brand)).map((g) => g.query)).size || 0))} questions a buyer would type, without the company name</span></div><i>›</i>
+    <div class="v2-path-step"><b>2 · Where they ask</b><ul>${surfaces.map((x) => `<li>${e(x.name)} <em>${e(x.res)}</em></li>`).join('')}</ul></div><i>›</i>
+    <div class="v2-path-step"><b>3 · What they are shown</b><span>${topSources.length ? `Answers draw on ${e(topSources.join(', '))}` : 'Sources were not recorded'}</span></div><i>›</i>
+    <div class="v2-path-step"><b>4 · What they find about ${e(ctx.brand)}</b><span>Website cited in ${ownCited} answer${ownCited === 1 ? '' : 's'}${citedScope}${f ? `; ${f.profiles.confirmed + f.profiles.domainLinked} profile${f.profiles.confirmed + f.profiles.domainLinked === 1 ? '' : 's'} linked; ${f.mentions.confirmed} third-party mention${f.mentions.confirmed === 1 ? '' : 's'}` : ''}</span></div>
+  </div>` : '';
+
+  // Strongest finding and largest uncertainty.
+  const answers = ctx.research?.generative.filter((r) => r.status === 'observed' && r.brandsNamed && r.query && !isBrandQuestion(r, ctx.brand)) ?? [];
+  const counts = new Map<string, number>();
+  for (const r of answers) for (const b of r.brandsNamed ?? []) counts.set(b, (counts.get(b) ?? 0) + 1);
+  const leaders = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const max = Math.max(1, ...leaders.map(([, n]) => n));
+  const bars = [...leaders, [ctx.brand, answers.filter((r) => r.mentioned).length] as [string, number]]
+    .map(([name, n]) => `<div class="v2-mbar"><span>${e(name)}</span><i style="width:${Math.max(2, (100 * n) / max)}%;background:${name === ctx.brand ? PALETTE.navy : PALETTE.blue}"></i><b>${n}</b></div>`).join('');
+  const strongest = leaders.length
+    ? `<div class="v2-panel"><h4>Strongest finding: AI answers recommend other tools</h4>${bars}<small>Times each brand is named across ${answers.length} AI answers to buyer questions.</small></div>`
+    : (() => {
+      // Without AI brand data, the strongest finding is the weakest measured area of the site itself.
+      const weakest = ctx.pillars.flatMap((p) => p.dims).filter((d) => d.value != null && d.state === 'measured').sort((a, b) => a.value! - b.value!).slice(0, 4);
+      return weakest.length
+        ? `<div class="v2-panel"><h4>Strongest finding: the weakest measured areas</h4>${weakest.map((d) => `<div class="v2-mbar"><span>${e(d.label)}</span><i style="width:${Math.max(2, d.value!)}%;background:${scoreColor(d.value)}"></i><b>${d.value}</b></div>`).join('')}<small>Scores out of 100, measured from the website crawl.</small></div>`
+        : '<div class="v2-panel"><h4>Strongest finding</h4><p class="v2-note">No measured area is available to rank.</p></div>';
+    })();
+  const gaps = l.access.filter((a) => ['missing_credential', 'restricted', 'no_adapter', 'quota_restricted', 'request_failed'].includes(a.reason)).slice(0, 5);
+  const uncertainty = `<div class="v2-panel"><h4>Largest uncertainty: what this run could not see</h4><ul class="v2-unk">${gaps.map((a) => `<li><b>${e(a.capability)}</b><span>${e(REASON_TEXT[a.reason] ?? a.reason)}</span></li>`).join('') || '<li><span>Every planned source was reached.</span></li>'}</ul><small>Unknown is not zero: these are gaps in what was observed, not evidence of weakness.</small></div>`;
+
+  const families: Array<[string, AccessRow['family'][]]> = [['Website', ['website']], ['Search', ['search']], ['AI answers', ['ai_answers']], ['Social', ['social']], ['Mentions', ['mentions']], ['Reviews', ['reviews']], ['Backlinks', ['backlinks']], ['Knowledge graph', ['knowledge_graph']], ['Page speed', ['page_speed']]];
+  const chip = ([name, fams]: [string, AccessRow['family'][]]) => {
+    const rows = l.access.filter((a) => fams.includes(a.family));
+    if (!rows.length) return '';
+    const m = rows.filter((a) => a.reason === 'measured').length;
+    const p = rows.filter((a) => a.reason === 'partial' || a.reason === 'searched_not_found').length;
+    const state = m === rows.length ? 'good' : m || p ? 'info' : 'neutral';
+    return `<span class="v2-cov v2-cov-${state}">${e(name)}<em>${state === 'good' ? 'measured' : state === 'info' ? 'partial' : 'not measured'}</em></span>`;
+  };
+  const fresh = [ctx.research ? `public research ${fmtDate(ctx.research.collectedAt)}` : null, l.crawl.lastCrawledIso ? `website crawl ${fmtDate(l.crawl.lastCrawledIso)}` : null, `report ${ctx.generated}`].filter(Boolean).join(' · ');
+  const strip = `<div class="v2-covstrip">${families.map(chip).join('')}</div><p class="v2-fresh">Evidence dates: ${e(fresh)}</p>`;
 
   return `<section class="v2-summary" id="summary-now">
-  <header class="v2-summary-head"><span>Summary 1 of 2</span><h2>What is happening</h2><p>For leaders who are not marketing specialists: where the brand stands today, in plain English.</p></header>
-  ${tiles}
-  <h3 class="v2-summary-h">Three kinds of visibility — measured separately</h3>
-  ${visibility}
-  <h3 class="v2-summary-h">How much of this is measured</h3>
-  ${coverage}
-  <h3 class="v2-summary-h">Three things to know</h3>
-  <ol class="v2-know">${know.slice(0, 3).map(([t, d, where]) => `<li><strong>${e(t)}</strong> ${e(d)} <span class="v2-where">${e(where)}</span></li>`).join('')}</ol>
+  <header class="v2-summary-head"><span>Summary 1 of 2</span><h2>What is happening?</h2></header>
+  <p class="v2-headline">${e(headlineOf(ctx))}</p>
+  <p class="v2-confnote">Confidence: <b>${conf.level}</b> — ${e(conf.note)}. Missing evidence is shown as "not measured", never as zero.</p>
+  ${indicators}
+  ${path ? `<h3 class="v2-summary-h">How a buyer looks — and what they find</h3>${path}` : ''}
+  <div class="v2-cols v2-tight v2-sf">${strongest}${uncertainty}</div>
+  <h3 class="v2-summary-h">How much was measured</h3>
+  ${strip}
 </section>`;
 }
 
@@ -348,47 +409,61 @@ function aiNamedRivals(ctx: Context, names: string[]): string {
     : `None of them is named in the ${answers.length} AI answers to buyer questions either; those answers name larger, established tools.`;
 }
 
-// ── Summary page 2 — What to do next ────────────────────────────────────────
+// ── Summary page 2 — What should happen next? ──────────────────────────────
 
 const ownerOf = (a: DossierAction): string => (a.owner ? `${proper(a.owner)} team (person unassigned)` : 'Unassigned');
 
+type Lane = { key: 'foundation' | 'discover' | 'proof'; title: string; outcome: string; actions: DossierAction[] };
+
+/** Every action belongs to exactly one lane, from its pillar and kind. */
+export function laneOf(a: DossierAction): Lane['key'] {
+  if (a.kind === 'measurement') return 'proof';
+  if (a.pillar === 'foundation') return 'foundation';
+  if (a.pillar === 'trust' || a.pillar === 'authority') return 'proof';
+  return 'discover';
+}
+
 function renderSummaryNext(ctx: Context): string {
   const actions = ctx.registry.actions;
-  const improvements = actions.filter((a) => a.kind === 'improvement');
-  // A high-impact, low-effort move goes first; the rest follow the register's order.
-  const quick = improvements.find((a) => a.impact === 'high' && a.effort === 'low');
-  const top = (quick ? [quick, ...improvements.filter((a) => a !== quick)] : improvements).slice(0, 3);
-  const card = (a: DossierAction, i: number) => `<div class="v2-next">
-    <div class="v2-next-n">${i + 1}</div>
-    <div class="v2-next-body"><h4>${e(a.title)}</h4>
-      <dl><dt>Why</dt><dd>${e(a.why ?? a.action)}</dd>
-      <dt>Success test</dt><dd>${e(a.verification ?? 'Not defined by the source — see the action register.')}</dd></dl>
-      <div class="v2-next-meta"><span>${e(a.id)}</span><span>Owner: ${e(ownerOf(a))}</span><span>Prerequisite: ${e(a.dependsOn.length ? a.dependsOn.join(', ') : 'none')}</span><span>Impact: ${e(a.impact ?? 'not rated')} · Effort: ${e(a.effort ?? '—')}</span></div>
-    </div></div>`;
-
-  const windows: Array<[string, string, string]> = [['0-30', 'Days 0–30', 'Measure what is missing'], ['31-60', 'Days 31–60', 'Fix and strengthen'], ['61-90', 'Days 61–90', 'Re-measure and adjust']];
-  const strip = `<div class="v2-strip">${windows.map(([h, label, theme]) => {
-    const inWin = actions.filter((a) => a.horizon === h);
-    return `<div class="v2-strip-col"><div class="v2-strip-head">${e(label)}</div><div class="v2-strip-theme">${e(theme)}</div><div class="v2-strip-count">${inWin.length} action${inWin.length === 1 ? '' : 's'}</div><small>${inWin.length ? inWin.slice(0, 4).map((a) => e(a.id)).join('<br/>') + (inWin.length > 4 ? `<br/>+${inWin.length - 4} more` : '') : 'Nothing scheduled — no action fell here.'}</small></div>`;
-  }).join('')}</div>`;
-
-  const gaps = actions.filter((a) => a.kind === 'measurement').slice(0, 5);
-  const missing = (a: DossierAction): string => {
-    const t = a.title.replace(/^Measure: /, '');
-    if (t !== a.action) return t;
-    return (a.why ?? t).split(/(?<=\.)\s/)[0];
+  const lanes: Lane[] = [
+    { key: 'foundation', title: 'Fix the foundation', outcome: 'Search engines and AI tools can read, understand and quote every important page.', actions: [] },
+    { key: 'discover', title: 'Improve buyer-intent discoverability', outcome: `Buyers who search for the problem — not the name — start to find ${ctx.brand}.`, actions: [] },
+    { key: 'proof', title: 'Build independent proof and measure again', outcome: `Others vouch for ${ctx.brand}, and the next report can show what changed.`, actions: [] },
+  ];
+  for (const a of actions) lanes.find((l) => l.key === laneOf(a))!.actions.push(a);
+  const windows: Array<[string, string]> = [['0-30', '0–30'], ['31-60', '31–60'], ['61-90', '61–90']];
+  const owners = (as: DossierAction[]) => {
+    const t = [...new Set(as.map((a) => a.owner).filter(Boolean).map((o) => proper(String(o))))];
+    return t.length ? `${t.join(', ')} team${t.length > 1 ? 's' : ''}; people not yet named` : 'Not assigned yet';
   };
-  const gapList = `<table class="v2-table v2-compact"><thead><tr><th style="width:42%">Not measured</th><th>How to close it</th></tr></thead><tbody>${gaps.map((a) => `<tr><td><strong>${e(missing(a))}</strong></td><td><small>${e(a.action)}</small></td></tr>`).join('')}</tbody></table>`;
+  const laneCard = (lane: Lane, i: number) => {
+    const shown = lane.actions.slice(0, 4);
+    // The plainest success test in the lane: the shortest one without technical shorthand.
+    const tests = lane.actions.map((a) => a.verification).filter((v): v is string => Boolean(v));
+    const plain = tests.filter((v) => !/\b(SERP|credential|API|schema|JSON|HTTP|llms\.txt|robots\.txt)\b/i.test(v));
+    const success = [...(plain.length ? plain : tests)].sort((a, b) => a.length - b.length)[0] ?? 'Defined per action in the detailed plan.';
+    const placed = new Set<string>(lane.actions.map((a) => (a.horizon === 'later' ? '61-90' : a.horizon ?? '')));
+    const deps = lane.actions.flatMap((a) => a.dependsOn).filter((d) => !lane.actions.some((x) => x.id === d));
+    const depLane = [...new Set(deps.map((d) => actions.find((x) => x.id === d)).filter(Boolean).map((x) => lanes.find((l) => l.key === laneOf(x!))!.title))];
+    return `<div class="v2-lane v2-lane-${lane.key}">
+      <div class="v2-lane-head"><span>${i + 1}</span><div><h4>${e(lane.title)}</h4><p>${e(lane.outcome)}</p></div></div>
+      ${shown.length ? `<ul>${shown.map((a) => `<li>${e(a.title.replace(/^Measure: /, 'Measure '))}</li>`).join('')}${lane.actions.length > 4 ? `<li class="v2-more">and ${lane.actions.length - 4} more in the detailed plan</li>` : ''}</ul>` : '<p class="v2-note">No action fell in this lane.</p>'}
+      <dl><dt>Who</dt><dd>${e(owners(lane.actions))}</dd>
+      <dt>Depends on</dt><dd>${e(depLane.length ? depLane.join(', ') : 'Nothing outside this lane')}</dd>
+      <dt>Success</dt><dd>${e(success)}</dd></dl>
+      <div class="v2-lane-time">${windows.map(([h, label]) => `<span class="${placed.has(h) ? 'on' : ''}">${label} days</span>`).join('')}</div>
+    </div>`;
+  };
+
+  const blocked = ctx.ledger.access.filter((a) => ['missing_credential', 'restricted', 'no_adapter', 'quota_restricted'].includes(a.reason));
+  const blockedStrip = blocked.length ? `<div class="v2-blocked"><h4>Blocked until access is in place</h4><ul>${blocked.slice(0, 6).map((a) => `<li><b>${e(a.capability)}</b> — ${e(REASON_TEXT[a.reason])}${a.nextStep ? `: ${e(a.nextStep.replace(/\s*\([^)]*_[A-Z_]+[^)]*\)/g, ''))}` : ''}</li>`).join('')}</ul></div>` : '';
 
   return `<section class="v2-summary" id="summary-next">
-  <header class="v2-summary-head"><span>Summary 2 of 2</span><h2>What to do next</h2><p>Three decisions, when to make them, and how to tell whether they worked.</p></header>
-  <h3 class="v2-summary-h">Three decisions</h3>
-  <div class="v2-next-list">${top.map(card).join('')}</div>
-  <h3 class="v2-summary-h">The next 90 days</h3>
-  ${strip}
-  <h3 class="v2-summary-h">What we could not measure — and how to close it</h3>
-  ${gapList}
-  <p class="v2-note">Every decision and gap above has one id in the action register (section 5), where effort, confidence, dependencies and evidence are listed. Owners are not recorded anywhere yet, so none is assigned.</p>
+  <header class="v2-summary-head"><span>Summary 2 of 2</span><h2>What should happen next?</h2></header>
+  <p class="v2-headline">Three lanes of work that can run side by side. Where one lane waits on another, the lane says so.</p>
+  <div class="v2-lanes">${lanes.map(laneCard).join('')}</div>
+  ${blockedStrip}
+  <p class="v2-note">Each action, with its effort, confidence, evidence and success test, is in the action register (section 5). Placement in the 30/60/90-day windows comes from each action's stated timing or, where none was stated, its effort.</p>
 </section>`;
 }
 
@@ -496,7 +571,7 @@ function renderMarket(ctx: Context): string {
 
   const verifiedNames = pack?.competitors.filter((c) => ['direct', 'adjacent'].includes(String(c.classification))).map((c) => c.name) ?? [];
   return section(1, 'Market and competitors', 'What does the company sell, to whom, and who else competes for that buyer?',
-    `${verifiedNames.length ? `Checked against their own websites, ${verifiedNames.join(', ')} compete for the same buyer. ` : 'No competitor set has been validated yet. '}Companies that only share a label such as "decision intelligence", or a similar name, were ruled out rather than compared.`, `
+    marketPlainEnglish(verifiedNames, pack?.competitors.filter((c) => c.classification === 'not_competitor').length ?? 0), `
     ${definition ? block('What the company offers — from its own pages', 'The starting point for everything else: buyer problems, search queries and competitor criteria come from this.', definition) : ''}
     ${identity ? block('Company profile versus website', 'What was entered in the company profile next to what the website says. A difference is shown, not resolved.', identity) : ''}
     ${landscape}
@@ -585,11 +660,11 @@ function renderWebsite(ctx: Context): string {
   const funnelStages: FunnelStage[] = [];
   if (ctx.crawl.known != null) funnelStages.push({ label: 'Known web addresses', value: ctx.crawl.known });
   if (ctx.crawl.read != null) {
-    funnelStages.push({ label: 'Answered the crawler', value: ctx.crawl.read, note: ctx.crawl.unread ? 'the rest gave no HTTP response' : undefined });
+    funnelStages.push({ label: 'Answered the crawler', value: ctx.crawl.read, note: ctx.crawl.unread ? 'the rest were not observed in this run' : undefined });
     funnelStages.push({ label: 'Pages read and evaluated', value: ctx.crawl.read });
   }
   const crawlBody = funnelStages.length
-    ? funnel(funnelStages) + `<p class="v2-note">Attempted in this run: <strong>not recorded</strong> — the crawl stores known addresses and the pages that answered, not how many were tried, so the ${ctx.crawl.unread ?? ''} without a response are not counted as failures. Crawl of ${e(ctx.crawl.lastCrawled ?? '—')}${ctx.crawl.reused ? ', reused for this report' : ''}${ageDays(ctx.crawl.lastCrawledIso, ctx.generatedIso) != null ? ` (${ageDays(ctx.crawl.lastCrawledIso, ctx.generatedIso)} days before the report)` : ''}. ${evaluated ?? '—'} of ${total ?? '—'} website checks could be evaluated.</p>`
+    ? funnel(funnelStages) + `<p class="v2-note">Attempted in this run: <strong>not recorded</strong> — the crawl stores known addresses and the pages that answered, not how many were tried, so the ${ctx.crawl.unread ?? ''} not observed are not counted as failures: whether they were tried, timed out or returned an error is unknown. Crawl of ${e(ctx.crawl.lastCrawled ?? '—')}${ctx.crawl.reused ? ', reused for this report' : ''}${ageDays(ctx.crawl.lastCrawledIso, ctx.generatedIso) != null ? ` (${ageDays(ctx.crawl.lastCrawledIso, ctx.generatedIso)} days before the report)` : ''}. ${evaluated ?? '—'} of ${total ?? '—'} website checks could be evaluated.</p>`
     : '<p class="v2-note">Crawl scope was not recorded.</p>';
 
   // Page purpose map — from the site's own navigation (research) when available.
@@ -614,7 +689,7 @@ function renderWebsite(ctx: Context): string {
   const extraction = ctx.pillars.flatMap((p) => p.dims).find((d) => d.key === 'extraction_readiness');
 
   return section(2, 'Website and content', 'Can a buyer — and a search or AI engine — read, understand and act on the site?',
-    `The crawler read ${ctx.crawl.read ?? 'some'} of ${ctx.crawl.known ?? 'the'} known pages. They are technically sound in most respects, but answers are hard to lift from them${extraction?.value != null ? ` (extraction readiness ${extraction.value}/100)` : ''} and the site shows little sign of regular updates. Short pages are judged by their purpose: a short legal page is normal.`, `
+    websitePlainEnglish(ctx, groups, extraction?.value ?? null), `
     ${block('Crawl coverage', 'From every address the crawler knew to the pages it could actually read.', crawlBody)}
     ${ctx.research?.site.length ? block('Crawl and entity basics', 'Checked directly on the live site.', `<table class="v2-table v2-compact"><tbody>${ctx.research.site.map((r) => `<tr><td>${e(r.claim)}<br/><span class="v2-id">${e(r.id)}</span></td><td style="width:30%"><small>${e(r.sourceUrl.replace(/^https?:\/\/(www\.)?/, ''))}<br/>${e(r.excerpt ?? '')}</small></td></tr>`).join('')}</tbody></table>`) : ''}
     ${perf ? block('Page speed', null, `<p class="v2-note">${e(str(perf.reasonUnavailable) ?? `Performance state: ${perf.state}`)}</p>`) : ''}
@@ -646,20 +721,61 @@ function renderBrand(ctx: Context): string {
   const social = objs(de?.social_presence);
   const kgState = sourceState(kg.score, kg.text);
   const pack = ctx.research;
+  const fp = pack?.footprint ?? null;
+  const PROFILE_SUB: Record<string, string> = {
+    identity_confirmed: 'confirmed: names brand, links site', domain_linked: 'links to the website', fetched: 'opened; link not shown',
+    inaccessible: 'sign-in or bot wall', declared_unverified: 'declared, not checked',
+  };
   const nodes: GraphNode[] = [
-    ...social.map((s): GraphNode => ({
-      id: String(s.platform), label: proper(String(s.platform)),
-      sub: s.status === 'observed' ? 'found in search' : s.status === 'unreachable' ? 'not checked' : 'declared, unverified',
-      kind: s.status === 'observed' ? 'observed' : 'declared',
-    })),
+    ...(fp && fp.profiles.length
+      ? fp.profiles.map((p): GraphNode => ({ id: p.url, label: p.platform, sub: PROFILE_SUB[p.state], kind: p.state === 'identity_confirmed' || p.state === 'domain_linked' ? 'observed' : 'declared' }))
+      : social.map((s): GraphNode => ({
+        id: String(s.platform), label: proper(String(s.platform)),
+        sub: s.status === 'observed' ? 'found in search' : s.status === 'unreachable' ? 'not checked' : 'declared, unverified',
+        kind: s.status === 'observed' ? 'observed' : 'declared',
+      }))),
     { id: 'wikidata', label: 'Wikidata', sub: kgState === 'failed' ? 'lookup failed' : kgState === 'not_found' ? 'no entity found' : 'entity record', kind: kgState === 'measured' ? 'observed' : 'absent' },
   ];
-  if (pack) {
+  if (fp) {
+    const confirmed = fp.mentions.filter((m) => m.check === 'confirmed').length;
+    const listed = fp.platforms.filter((x) => x.state === 'listed').length;
+    nodes.push({ id: 'mentions', label: 'Third-party mentions', sub: confirmed ? `${confirmed} confirmed` : 'none confirmed', kind: confirmed ? 'observed' : 'absent' });
+    nodes.push({ id: 'reviews', label: 'Review sites', sub: listed ? `${listed} listed` : `none of ${fp.platforms.length} confirmed`, kind: listed ? 'observed' : 'absent' });
+    nodes.push({ id: 'backlinks', label: 'Backlinks', sub: 'not measured', kind: 'absent' });
+  } else if (pack) {
     if (pack.independent.some((r) => r.kind === 'directory_listing' && r.status === 'looked_for_not_found')) nodes.push({ id: 'reviews', label: 'Review sites', sub: 'G2 / Capterra: not found', kind: 'absent' });
     if (pack.independent.some((r) => r.kind === 'third_party_mention' && r.status === 'looked_for_not_found')) nodes.push({ id: 'press', label: 'Press & mentions', sub: 'none found', kind: 'absent' });
   }
   const graph = entityGraph({ id: 'brand', label: ctx.brand, sub: ctx.domain, kind: 'center' }, nodes)
-    + swatchLegend([[PALETTE.green, 'Observed in public sources'], [PALETTE.blue, 'Declared by the company, not verified'], [PALETTE.greyMid, 'Looked for, not found']]);
+    + swatchLegend([[PALETTE.green, 'Observed in public sources'], [PALETTE.blue, 'Declared or found, not verified'], [PALETTE.greyMid, 'Not found, or not measured (see label)']]);
+
+  // External digital footprint: owned, independent, reviews and backlinks kept apart.
+  const footprint = fp ? (() => {
+    const where = (p: typeof fp.profiles[number]) => [p.declared && 'declared by the company', p.onHomepage && 'homepage link', p.inSameAs && 'structured data'].filter(Boolean).join(', ');
+    const pState = (p: typeof fp.profiles[number]) => (p.state === 'identity_confirmed' ? pill('Identity confirmed', 'good') : p.state === 'domain_linked' ? pill('Links to the website', 'good')
+      : p.state === 'fetched' ? pill('Opened, not confirmed', 'info') : p.state === 'inaccessible' ? pill(p.outcome === 'login_wall' ? 'Sign-in wall' : 'Could not open', 'warn') : pill('Declared, not checked', 'neutral'));
+    const profiles = fp.profiles.length ? `<table class="v2-table v2-compact"><thead><tr><th style="width:14%">Platform</th><th>Profile</th><th style="width:20%">Where it was found</th><th style="width:18%">State</th><th style="width:26%">Detail</th></tr></thead><tbody>${
+      fp.profiles.map((p) => `<tr><td><strong>${e(p.platform)}</strong></td><td><small>${e(p.url.replace(/^https?:\/\/(www\.)?/, ''))}</small></td><td><small>${e(where(p) || '—')}</small></td><td>${pState(p)}</td><td><small>${e(p.reason ?? (p.state === 'identity_confirmed' ? 'Names the brand and links to the website.' : 'Links to the website.'))}${p.outcome === 'responded' ? ` ${p.posts ? `Posts visible signed out: ${p.posts.count} (${fmtDate(p.posts.oldest)} – ${fmtDate(p.posts.newest)}).` : 'No dated posts visible signed out.'}` : ''}</small></td></tr>`).join('')
+    }</tbody></table><p class="v2-note">Owned profiles show the company exists on a platform; they are not independent endorsement. Each was opened once, signed out, on ${e(fmtDate(fp.checkedAt) ?? '')}. Posts are counted only where the signed-out page publishes them with dates; that is a sample of recent activity, not the platform's full history, and a platform that shows none is not evidence of inactivity.</p>` : '<p class="v2-note">No official profile was declared, linked from the homepage or listed in structured data.</p>';
+    const confirmed = fp.mentions.filter((m) => m.check === 'confirmed');
+    const unconfirmed = fp.mentions.filter((m) => m.check !== 'confirmed');
+    const mentions = fp.mentionSearch
+      ? (fp.mentions.length ? `<table class="v2-table v2-compact"><thead><tr><th>Third-party page</th><th style="width:16%">Type</th><th style="width:20%">State</th></tr></thead><tbody>${
+        [...confirmed, ...unconfirmed].map((m) => `<tr><td>${e(m.title || m.url)}<br/><small>${e(m.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 70))}</small></td><td><small>${e(cap(m.type.replace(/_/g, ' ')))}</small></td><td>${m.check === 'confirmed' ? pill('Names the brand', 'good') : pill('Not confirmed on the page', 'neutral')}</td></tr>`).join('')
+      }</tbody></table>` : '<p class="v2-note">A web search for third-party pages about the company found none that could be confirmed. That is a finding about this search, not proof that none exist.</p>')
+      : '<p class="v2-note">The mention search did not run, so independent mentions are not measured.</p>';
+    const reviews = fp.platforms.length ? `<div class="v2-chips">${fp.platforms.map((x) => `<span class="v2-chip v2-chip-${x.state === 'listed' ? 'good' : x.state === 'claimed_unconfirmed' ? 'info' : 'neutral'}">${e(x.platform)}<em>${x.state === 'listed' ? 'listed' : x.state === 'claimed_unconfirmed' ? 'reported, not confirmable' : 'not found in search'}</em></span>`).join('')}</div>
+      <p class="v2-note">"Not found in search" means a web search did not surface a listing; it is not proof of absence. "Reported, not confirmable" means search pointed to a listing whose page could not be opened or did not name the company.</p>` : '';
+    const bl = ctx.ledger.access.find((a) => a.family === 'backlinks');
+    const posts = fp.socialPosts ?? [];
+    const ownPosts = posts.filter((x) => x.fromOwnAccount).length;
+    const postsNote = posts.length ? `<p class="v2-note">Also found: ${posts.length} social post${posts.length === 1 ? '' : 's'} naming the company (${ownPosts} from its own accounts${posts.length - ownPosts ? `, ${posts.length - ownPosts} from other accounts whose link to the company cannot be checked signed out` : ''}). Social posts are not counted as independent mentions.</p>` : '';
+    const queries = fp.mentionQueries ?? [];
+    const how = fp.mentionSearch
+      ? `<p class="v2-note">Method: web search by ${e(fp.mentionSearch === 'openai' ? 'OpenAI (web search tool)' : 'Claude (web search tool)')} on ${e(fmtDate(fp.checkedAt) ?? '')}, then each page re-opened to confirm it names the company. ${queries.length ? `Queries the search ran: ${queries.slice(0, 6).map((q) => `“${e(q)}”`).join('; ')}.` : 'The exact queries were not recorded for this run.'} A model-directed web search is a sample, not an exhaustive index of the web.</p>`
+      : '';
+    return `${block('Owned profiles', null, profiles)}${block('Independent mentions', 'Pages on other sites that discuss the company. A mention is not necessarily a link.', mentions + postsNote + how)}${reviews ? block('Review and directory listings', null, reviews) : ''}${block('Backlinks', null, `<p class="v2-note">${e(bl?.outcome ?? 'Not measured.')} ${e(bl?.nextStep ?? '')}</p>`)}`;
+  })() : '';
 
   const independent = pack?.independent.length ? `<table class="v2-table"><thead><tr><th>What was looked for</th><th style="width:20%">State</th><th style="width:22%">Method</th></tr></thead><tbody>${
     pack.independent.map((r) => { const st = stateLabel(r.status); return `<tr><td>${e(r.claim)}<br/><span class="v2-id">${e(r.id)}</span></td><td>${pill(st.text, st.tone)}</td><td><small>${e(r.method)} · ${e(r.scope)}</small></td></tr>`; }).join('')
@@ -688,14 +804,53 @@ function renderBrand(ctx: Context): string {
   }</tbody></table><p class="v2-note">Types of authority worth building — not a list of sites, and not links the company already has.</p>` : '';
 
   return section(3, 'Brand, entity and trust', 'Does the wider web recognise and vouch for the brand?',
-    'Outside the company’s own website, little was found that confirms the brand: no review-site listing, no press mention, no knowledge-graph entry, and the name is easily confused in search. The company has declared social profiles, which have not yet been confirmed in public search.', `
+    brandPlainEnglish(ctx, kgState), `
     ${block('Brand ecosystem', 'An entity is an organisation that search engines and AI tools can recognise across sources. Each line shows how the link to the brand was established.', graph)}
+    ${footprint ? `<div class="v2-keep"><h3 class="v2-subsection">External digital footprint</h3>${footprint}</div>` : ''}
     ${independent ? block('Independent evidence', 'Third-party confirmation, looked for in public sources.', independent) : ''}
     ${block('External signal status', '"Unavailable" means a source is missing, not that the result is weak.', status)}
     ${proof ? block('Proof inventory', null, proof) : ''}
     ${cards.length ? block('Findings', null, `<div class="v2-cards">${cards.map((f) => findingCard(f, ctx.registry.actions)).join('')}</div>`, 'v2-allow-break') : ''}
     ${strategy ? block('External authority worth building', null, strategy, 'v2-allow-break') : ''}
   `);
+}
+
+/** Section 1's plain-English line: names and rejections only as this run established them. */
+function marketPlainEnglish(verified: string[], rejected: number): string {
+  const who = verified.length
+    ? `Checked against their own websites, ${verified.join(', ')} ${verified.length === 1 ? 'competes' : 'compete'} for the same buyer.`
+    : 'No competitor set has been validated yet.';
+  const out = rejected ? ` ${rejected} candidate${rejected === 1 ? ' that only shared' : 's that only shared'} a label or a similar name ${rejected === 1 ? 'was' : 'were'} ruled out rather than compared.` : '';
+  return `${who}${out}`;
+}
+
+/** Section 2's plain-English line: each judgement only when the run's own checks support it. */
+function websitePlainEnglish(ctx: Context, groups: Obj[], extraction: number | null): string {
+  const checks = groups.flatMap((g) => objs(g.checks)).filter((c) => c.status !== 'not_evaluable');
+  const pass = checks.filter((c) => c.status === 'pass').length;
+  const freshness = ctx.pillars.flatMap((p) => p.dims).find((d) => d.key === 'authority_velocity')?.value ?? null;
+  const parts = [`The crawler read ${ctx.ledger.crawl.evaluated ?? 'none'} of ${ctx.ledger.crawl.known ?? 'the'} known pages`];
+  if (checks.length) parts.push(`${pass} of ${checks.length} technical checks that could be evaluated passed`);
+  if (extraction != null) parts.push(`answers are ${extraction < 40 ? 'hard' : 'reasonably easy'} for engines to lift from them (extraction readiness ${extraction}/100)`);
+  if (freshness != null) parts.push(freshness < 40 ? `the site shows little sign of regular updates (content freshness ${freshness}/100)` : `content is updated regularly (content freshness ${freshness}/100)`);
+  return `${parts.join('; ')}. Short pages are judged by their purpose: a short legal page is normal.`;
+}
+
+/** The section's plain-English line, built only from what this run observed. */
+function brandPlainEnglish(ctx: Context, kgState: string): string {
+  const f = ctx.ledger.footprint;
+  const parts: string[] = [];
+  if (f) {
+    const linked = f.profiles.confirmed + f.profiles.domainLinked;
+    parts.push(f.profiles.total
+      ? `${linked} of ${f.profiles.total} official profiles could be confirmed to link to the website${f.profiles.inaccessible ? ` (${f.profiles.inaccessible} could not be opened without signing in)` : ''}`
+      : 'No official profile was found to check');
+    parts.push(f.mentions.searched ? `${f.mentions.confirmed} independent mention${f.mentions.confirmed === 1 ? ' was' : 's were'} confirmed` : 'independent mentions were not searched');
+    parts.push(f.reviews.searched ? `${f.reviews.listed} of ${f.reviews.checked} review and directory sites showed a confirmed listing` : 'review sites were not checked');
+  }
+  parts.push(kgState === 'measured' ? 'a knowledge-graph entry exists' : kgState === 'not_found' ? 'no knowledge-graph entry was found' : 'the knowledge-graph check did not complete');
+  if (ctx.research?.independent.some((r) => r.kind === 'name_collision' && r.status === 'observed')) parts.push('and the name is easily confused with others in search');
+  return `${cap(parts.join('; '))}. Backlinks were ${ctx.ledger.access.find((a) => a.family === 'backlinks')?.reason === 'measured' ? 'measured' : 'not measured'}.`;
 }
 
 // ── 4. Search & AI visibility ───────────────────────────────────────────────
@@ -801,7 +956,11 @@ function generativeMatrix(ctx: Context): string {
     const aio = pack.generative.filter((r) => r.kind === 'ai_overview');
     const read = aio.filter((r) => r.status === 'observed');
     const failed = aio.filter((r) => r.status === 'failed_source');
-    rows.push(`<tr><td><strong>Google AI Overview</strong><br/><small>retrieval-grounded, cites sources</small></td><td>${pill('Measured', 'good')}</td><td>${read.length} read · ${failed.length} not retrievable</td><td>${read.map((r) => `${e(r.query)}: ${r.mentioned ? 'mentioned' : 'not mentioned'}, ${r.cited ? 'cited' : 'not cited'} (${(r.citedDomains ?? []).length} sources)`).join('<br/>') || '—'}</td></tr>`);
+    // Only when overviews were actually requested: one denominator, retrieved + not retrieved.
+    if (aio.length) {
+      const [label, tone] = read.length === aio.length ? ['Measured', 'good' as Tone] : read.length ? ['Partly measured', 'info' as Tone] : ['Source failed', 'bad' as Tone];
+      rows.push(`<tr><td><strong>Google AI Overview</strong><br/><small>retrieval-grounded, cites sources</small></td><td>${pill(label, tone)}</td><td>${read.length} of ${aio.length} retrieved · ${failed.length} not retrievable</td><td>${read.map((r) => `${e(r.query)}: ${r.mentioned ? 'mentioned' : 'not mentioned'}, ${r.cited ? 'cited' : 'not cited'} (${(r.citedDomains ?? []).length} sources)`).join('<br/>') || '—'}</td></tr>`);
+    }
     // Surfaces the report run also checked are shown once, from the run's own cells.
     const covered = new Set(cells.map((c) => String(c.provider).toLowerCase()));
     const asked = new Set(pack.generative.filter((x) => x.query).map((x) => String(x.kind)));
@@ -811,8 +970,13 @@ function generativeMatrix(ctx: Context): string {
       const buyerQs = ok.filter((x) => !isBrandQuestion(x, ctx.brand));
       const brandQs = ok.filter((x) => x.accuracy);
       const said = `${ctx.brand} named in ${buyerQs.filter((x) => x.mentioned).length} of ${buyerQs.length} buyer questions${brandQs.length ? `; asked by name: ${brandQs.filter((x) => x.accuracy === 'correct').length} correct, ${brandQs.filter((x) => x.accuracy === 'partly').length} partly, ${brandQs.filter((x) => x.accuracy === 'misidentified').length} confused` : ''}`;
-      const notMeasured = rs.every((x) => x.status === 'not_measured');
-      rows.push(`<tr><td><strong>${e(rs[0].surface)}</strong><br/><small>retrieval-grounded, cites sources</small></td><td>${notMeasured ? pill('Not measured', 'neutral') : pill(ok.length ? 'Measured' : 'Source failed', ok.length ? 'good' : 'bad')}</td><td>${ok.length} of ${rs.length} answered</td><td>${e(said)}<br/><small>${e(rs[0].geography ?? '')}</small></td></tr>`);
+      // State and wording come from the ledger, so this table and the access matrix cannot disagree.
+      const row = ctx.ledger.ai.find((a) => a.label === rs[0].surface);
+      const access = ctx.ledger.access.find((a) => a.capability === rs[0].surface);
+      const reason = row?.reason ?? (ok.length ? 'measured' : 'request_failed');
+      const [label, tone] = REASON_PILL[reason] ?? ['Unavailable', 'neutral' as Tone];
+      const grounded = reason === 'measured' || reason === 'partial';
+      rows.push(`<tr><td><strong>${e(rs[0].surface)}</strong><br/><small>${reason === 'no_adapter' ? 'no web-grounded access' : 'answers from live web search, cites sources'}</small></td><td>${pill(label, tone)}</td><td>${grounded ? `${ok.length} of ${rs.length} answered` : '—'}</td><td>${grounded ? `${e(said)}<br/><small>${e(rs[0].geography ?? '')}</small>` : `<small>${e(access?.outcome ?? '')}</small>`}</td></tr>`);
     }
     for (const r of pack.generative.filter((x) => !x.query && x.kind !== 'ai_overview' && !covered.has(String(x.kind).toLowerCase()) && !(x.kind === 'model_recall' && covered.size))) {
       const st = stateLabel(r.status);
@@ -827,9 +991,16 @@ function aiGrid(ctx: Context): string {
   const cm = obj(obj(ctx.payload.ai_surface_presence)?.citation_matrix);
   const cells = objs(cm?.cells);
   if (!cells.length) return '';
-  const providers = [...new Set(cells.map((c) => String(c.provider)))];
+  // Providers this report's research measured are shown there; the scoring run's older state is
+  // superseded. The choice is the ledger's, so the grid and the access matrix cannot disagree.
+  const all = [...new Set(cells.map((c) => String(c.provider)))];
+  const runLabels = new Set(ctx.ledger.ai.filter((a) => a.source === 'report_run').map((a) => a.label));
+  const providers = all.filter((p) => runLabels.has(PROVIDER_LABEL[p] ?? p));
+  const dropped = all.filter((p) => !providers.includes(p)).map((p) => (PROVIDER_LABEL[p] ?? proper(p)).replace(/ \(.*\)$/, ''));
+  const note = dropped.length ? `<p class="v2-note">Scoring run of ${e(ctx.generated)}. ${e(dropped.join(', '))} ${dropped.length === 1 ? 'is' : 'are'} not shown here: the public research in this report measured ${dropped.length === 1 ? 'it' : 'them'} more recently (see above and the access matrix in the appendix).</p>` : '';
+  if (!providers.length) return note;
   const classes = [...new Set(cells.map((c) => String(c.query_class)))];
-  return heatmap(classes.map((c) => cap(c.replace(/_/g, ' '))), providers.map((prov) => ({
+  return note + heatmap(classes.map((c) => cap(c.replace(/_/g, ' '))), providers.map((prov) => ({
     label: proper(prov),
     cells: classes.map((q): HeatCell => {
       const c = cells.find((x) => x.provider === prov && x.query_class === q);
@@ -987,37 +1158,16 @@ const LADDER: Array<[string, string, string]> = [
   ['failed_source', 'Source failed', 'A source errored; the result is unknown, not negative.'],
 ];
 
+/**
+ * Upstream check details count unobserved crawl addresses as "unreachable"; the crawl does not record
+ * attempts, so the honest word is "not observed".
+ */
+export const notObservedWording = (text: string): string => text.replace(/\b(\d+) unreachable\b/gi, '$1 not observed');
+
 function renderAppendix(ctx: Context): string {
   const p = ctx.payload;
   const r1 = p.report1;
   const pack = ctx.research;
-  const sv = obj(r1?.search_visibility) ?? {};
-  const cm = obj(obj(p.ai_surface_presence)?.citation_matrix);
-  const cov = obj(cm?.coverage);
-  const perf = obj(r1?.performance);
-  const ct = obj(r1?.competitive_tables);
-  const age = (iso: string | null) => { const d = ageDays(iso, ctx.generatedIso); return d == null ? '' : d === 0 ? 'same day' : d === 1 ? '1 day' : `${d} days`; };
-  const fam = (name: string, state: string, coverage: string, observedIso: string | null, limitation: string, next: string) => {
-    const st = stateLabel(state);
-    return `<tr><td><strong>${e(name)}</strong></td><td>${pill(st.text, st.tone)}</td><td>${e(coverage)}</td><td>${e(fmtDate(observedIso) ?? '—')}<br/><small>${e(age(observedIso))}</small></td><td><small>${e(limitation)}</small></td><td><small>${e(next)}</small></td></tr>`;
-  };
-  const vis = summariseVisibility(pack);
-  const cellsFailed = objs(cm?.cells).some((c) => /failed to load/i.test(String(c.reason_unavailable ?? '')));
-  const sources = `<table class="v2-table"><thead><tr><th style="width:15%">Evidence family</th><th style="width:13%">State</th><th style="width:14%">Coverage</th><th style="width:11%">Observed · age</th><th>Limitation</th><th style="width:19%">Next step</th></tr></thead><tbody>
-    ${fam('Website crawl', ctx.crawl.read ? 'observed' : 'unavailable', `${ctx.crawl.read ?? '—'} of ${ctx.crawl.known ?? '—'} addresses read`, ctx.crawl.lastCrawledIso, `${ctx.crawl.unread ?? 0} gave no HTTP response; attempted count not recorded.`, 'Re-crawl after content changes; record attempts.')}
-    ${pack ? fam('Official pages (research)', 'company_declared', `${pack.company.length} facts`, pack.collectedAt, 'What the company says about itself.', '—') : ''}
-    ${vis.search ? fam('Google search (research)', 'observed', `${vis.search.checked} buyer queries`, pack?.collectedAt ?? null, `One geography (${vis.search.geography}) and one day; not market-wide coverage.`, 'Repeat per target market; add queries from public related searches.') : ''}
-    ${fam('Google search (report run)', objs(sv.observations).length ? 'observed' : 'not_measured', `${num(sv.queriesRun) ?? 0} queries`, str(sv.observedAt), 'Template queries; location and language not recorded.', 'Send location/language as search parameters (now implemented).')}
-    ${vis.generative ? fam('Google AI Overview (research)', vis.generative.grounded ? 'observed' : 'failed_source', `${vis.generative.grounded} read, ${vis.generative.failed} not retrievable`, pack?.collectedAt ?? null, 'Overview content needs a prompt follow-up request; most tokens returned no content.', 'Retry promptly; record citations.') : ''}
-    ${fam('AI answer engines (report run)', (num(cov?.measured_cells) ?? 0) > 0 ? 'observed' : cellsFailed ? 'failed_source' : 'not_measured', `${num(cov?.measured_cells) ?? 0} of ${num(cov?.total_cells) ?? 0} checks grounded`, null, 'Model-memory answers are excluded; Perplexity is not configured.', 'Configure a retrieval-grounded engine (Perplexity).')}
-    ${pack ? fam('Competitor validation (research)', 'observed', `${pack.competitors.length} candidates checked`, pack.collectedAt, 'Homepages only; pricing and features not yet compared in depth.', 'Fetch pricing and feature pages of validated competitors.') : fam('Competitor discovery', ct?.empty ? 'not_measured' : 'observed', ct?.empty ? 'no validated competitors' : 'classified', null, str(ct?.emptyReason) ?? '—', 'Validate candidates against their own sites.')}
-    ${pack ? fam('Independent mentions (research)', 'looked_for_not_found', `${pack.independent.length} checks`, pack.collectedAt, 'A few web searches; review sites not queried one by one.', 'Search each directory directly; create listings.') : ''}
-    ${fam('Backlinks', String(obj(obj(p.authority_inflow)?.score)?.state ?? 'unavailable'), '—', null, str(obj(obj(p.authority_inflow)?.rationale)?.text) ?? '—', 'Connect a backlink source.')}
-    ${fam('Reviews and reputation', String(obj(obj(p.trust_coherence)?.score)?.state ?? 'unavailable'), '—', null, str(obj(obj(p.trust_coherence)?.rationale)?.text) ?? '—', 'Connect a review source.')}
-    ${fam('Knowledge graph', sourceState(obj(obj(p.knowledge_graph)?.score), str(obj(obj(p.knowledge_graph)?.rationale)?.text)), '—', null, str(obj(obj(p.knowledge_graph)?.rationale)?.text) ?? '—', 'Create a Wikidata entry; add Organization structured data.')}
-    ${fam('Advertising libraries', r1?.advertising ? 'observed' : 'not_measured', r1?.advertising ? 'observed' : 'not queried', null, r1?.advertising ? '—' : 'No ad-library observation was made.', 'Run a public ad-library observation.')}
-    ${fam('Page speed', String(perf?.state ?? 'unavailable'), `${num(obj(perf?.coverage)?.measured) ?? 0} of ${num(obj(perf?.coverage)?.eligible) ?? 0} pages`, null, str(perf?.reasonUnavailable) ?? '—', 'Enable PageSpeed Insights.')}
-  </tbody></table>`;
 
   const ladder = `<table class="v2-table v2-compact"><tbody>${LADDER.map(([k, t, d]) => { const st = stateLabel(k); return `<tr><td style="width:24%">${pill(t, st.tone)}</td><td><small>${e(d)}</small></td></tr>`; }).join('')}</tbody></table>`;
 
@@ -1049,7 +1199,7 @@ function renderAppendix(ctx: Context): string {
     const s = String(c.status);
     const tone: Tone = s === 'pass' ? 'good' : s === 'warn' || s === 'fail' ? 'warn' : 'neutral';
     const text = s === 'pass' ? 'Observed' : s === 'warn' ? 'Needs attention' : s === 'fail' ? 'Problem' : 'Not evaluated';
-    return `<tr><td><small>${e(g.label)}</small></td><td>${e(c.label)}</td><td>${pill(text, tone)}</td><td><small>${e(c.detail ?? '')}</small></td></tr>`;
+    return `<tr><td><small>${e(g.label)}</small></td><td>${e(c.label)}</td><td>${pill(text, tone)}</td><td><small>${e(notObservedWording(String(c.detail ?? '')))}</small></td></tr>`;
   })).join('');
 
   const audit = ctx.registry.audit;
@@ -1074,8 +1224,9 @@ function renderAppendix(ctx: Context): string {
 
   return section(6, 'Evidence appendix', 'What was observed, where it came from, and how the numbers are calculated.',
     'Everything needed to check a conclusion: each source and its age, every research observation with its id and link, the open gaps and how to close them, each finding, every website check, and how scores are calculated.', `
-    ${block('Public-evidence coverage', 'Every evidence family, whether it was measured, how old it is, and what it would take to measure it.', sources, 'v2-allow-break')}
-    ${block('The six evidence sources', 'What the summary’s “sources measured” count is made of.', `<table class="v2-table v2-compact"><tbody>${ctx.sources.map((src) => {
+    ${block('Access reconciliation', 'Every source this report depends on: is there an adapter, is a credential present (yes / no only), was it attempted, what happened, and the cheapest compliant way to measure it.', accessMatrix(ctx), 'v2-allow-break')}
+    <!--V2-VALIDATION-->
+    ${block('Scoring inputs', 'The six inputs the Authority Index rests on, and whether each was measured. This is narrower than the access matrix above, which covers every source the report uses.', `<table class="v2-table v2-compact"><tbody>${ctx.sources.map((src) => {
       const tone: Tone = src.status === 'connected' ? 'good' : src.status === 'partial' ? 'info' : 'neutral';
       const label = src.status === 'connected' ? 'Measured' : src.status === 'partial' ? 'Partly (inferred)' : 'Not measured';
       return `<tr><td style="width:24%"><strong>${e(src.label)}</strong></td><td style="width:20%">${pill(label, tone)}</td><td><small>${e(cap(src.meaning))}. Counts as measured when ${e(src.feeds)} has a measured value.</small></td></tr>`;
@@ -1092,13 +1243,37 @@ function renderAppendix(ctx: Context): string {
   `);
 }
 
+const REASON_PILL: Record<string, [string, Tone]> = {
+  measured: ['Measured', 'good'], partial: ['Partly measured', 'info'], searched_not_found: ['Searched, not found', 'neutral'], not_searched: ['Not attempted', 'neutral'],
+  missing_credential: ['Not configured', 'warn'], no_adapter: ['No supported access', 'neutral'], restricted: ['Sign-in / bot wall', 'warn'],
+  request_failed: ['Configured, failed', 'bad'], quota_restricted: ['Quota / plan limit', 'bad'], ungrounded: ['Memory only', 'neutral'],
+};
+
+function accessMatrix(ctx: Context): string {
+  const yn = (v: boolean | null) => (v === true ? 'yes' : v === false ? 'no' : '—');
+  return `<table class="v2-table v2-compact v2-access"><thead><tr><th style="width:17%">Source</th><th style="width:7%">Adapter</th><th style="width:8%">Credential</th><th style="width:8%">Attempted</th><th style="width:14%">State</th><th>What happened</th><th style="width:20%">Cheapest compliant next step</th></tr></thead><tbody>${
+    ctx.ledger.access.map((a) => {
+      const [label, tone] = REASON_PILL[a.reason] ?? [a.reason, 'neutral' as Tone];
+      return `<tr><td><strong>${e(a.capability)}</strong><br/><small>${a.source === 'research' ? 'public research' : 'report run'}</small></td><td>${yn(a.adapter)}</td><td>${yn(a.credential)}</td><td>${yn(a.attempted)}</td><td>${pill(label, tone)}</td><td><small>${e(a.outcome)}</small></td><td><small>${e(a.nextStep ?? '—')}</small></td></tr>`;
+    }).join('')
+  }</tbody></table><p class="v2-note">"Not configured" is a configuration fact; "searched, not found" needs a search that ran; "sign-in / bot wall" means the platform refused a signed-out visitor. Credentials are recorded as present or absent only.${ctx.research?.runtime ? ` Configuration checked ${e(fmtDate(ctx.research.runtime.checkedAt) ?? '')}.` : ' This report has no runtime configuration record, so configuration states come from the report run.'}</p>`;
+}
+
+function validationBlock(v: ValidationResult): string {
+  const rows = v.issues.length
+    ? `<table class="v2-table v2-compact"><thead><tr><th style="width:16%">Rule</th><th style="width:14%">Severity</th><th>Detail</th></tr></thead><tbody>${v.issues.map((i) => `<tr><td>${e(i.rule)}</td><td>${i.blocking ? pill('Blocking', 'bad') : pill('Advisory', 'warn')}</td><td><small>${e(i.detail)}</small></td></tr>`).join('')}</tbody></table>`
+    : '';
+  return block('Consistency check', v.passed ? 'Passed: no material contradiction found in counts, sources, scores or actions.' : 'Contradictions found — the conclusions below them should be read with care.',
+    `<ul class="v2-list">${v.checks.map((c) => `<li><small>${e(c)}</small></li>`).join('')}</ul>${rows}`);
+}
+
 // ── Assembly ────────────────────────────────────────────────────────────────
 
 export function renderDossierV2Html(payload: CanonicalExportPayload, branding: DossierV2Branding = {}, research: unknown = null): string {
   const pack = parseResearchPack(research, branding.domain ?? null);
   const ctx = buildContext(payload, branding, pack);
   const footer = `${ctx.brand} · ${ctx.domain} · Digital intelligence dossier · ${ctx.generated}`;
-  return `<!doctype html>
+  const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><title>${e(ctx.brand)} — Digital intelligence dossier</title>
 <style>${DOSSIER_V2_CSS.replace('var(--v2-footer, "")', JSON.stringify(footer.replace(/[\n\\]/g, ' ')))}</style></head>
 <body data-dossier="v2">
@@ -1112,6 +1287,14 @@ ${renderSearch(ctx)}
 ${renderPlan(ctx)}
 ${renderAppendix(ctx)}
 </body></html>`;
+  // Validate the finished report against its own ledger; results are printed and logged.
+  const validation = validateReport(ctx.ledger, ctx.registry, html, ctx.pillars, ctx.research);
+  if (!validation.passed) console.warn('[dossier-v2] consistency check failed', { domain: ctx.domain, issues: validation.issues.filter((i) => i.blocking).map((i) => `${i.rule}: ${i.detail}`) });
+  lastValidation = validation;
+  return html.replace('<!--V2-VALIDATION-->', validationBlock(validation));
 }
+
+/** The consistency result of the most recent render in this process (for tests and diagnostics). */
+export let lastValidation: ValidationResult | null = null;
 
 export { buildDossierRegistry };

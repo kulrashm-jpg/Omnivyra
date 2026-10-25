@@ -7,7 +7,8 @@
 const OPENAI_MODEL = () => process.env.PUBLIC_RESEARCH_OPENAI_MODEL ?? 'gpt-4.1-mini';
 const CLAUDE_MODEL = () => process.env.PUBLIC_RESEARCH_ANTHROPIC_MODEL ?? 'claude-haiku-5-5';
 
-export type LlmResult = { json: any; provider: 'openai' | 'anthropic' } | null;
+/** `searches`: the web-search queries the model actually ran, as each provider reports them. */
+export type LlmResult = { json: any; provider: 'openai' | 'anthropic'; searches?: string[] } | null;
 
 /** The first {...} block of a model's text, parsed; tolerates prose or ``` fences around it. */
 export function parseJsonBlock(text: string): any | null {
@@ -31,7 +32,7 @@ async function openaiChatJson(prompt: string, signal: AbortSignal, maxTokens: nu
   return parseJsonBlock(j?.choices?.[0]?.message?.content ?? '');
 }
 
-async function openaiWebJson(prompt: string, signal: AbortSignal, schema: { name: string; schema: unknown }): Promise<any | null> {
+async function openaiWebJson(prompt: string, signal: AbortSignal, schema: { name: string; schema: unknown }, searches: string[] = []): Promise<any | null> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return null;
   const res = await fetch('https://api.openai.com/v1/responses', {
@@ -43,11 +44,12 @@ async function openaiWebJson(prompt: string, signal: AbortSignal, schema: { name
   });
   if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}`);
   const j: any = await res.json();
+  for (const o of j.output ?? []) if (o?.type === 'web_search_call' && typeof o.action?.query === 'string') searches.push(o.action.query);
   const text = (j.output ?? []).find((o: any) => o.type === 'message')?.content?.find((c: any) => c.type === 'output_text')?.text ?? '';
   return parseJsonBlock(text);
 }
 
-async function claudeJson(prompt: string, signal: AbortSignal, maxTokens: number, webSearches = 0): Promise<any | null> {
+async function claudeJson(prompt: string, signal: AbortSignal, maxTokens: number, webSearches = 0, searches: string[] = []): Promise<any | null> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return null;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -60,7 +62,9 @@ async function claudeJson(prompt: string, signal: AbortSignal, maxTokens: number
   });
   if (!res.ok) throw new Error(`Anthropic HTTP ${res.status}`);
   const j: any = await res.json();
-  const text = (Array.isArray(j.content) ? j.content : []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+  const blocks: any[] = Array.isArray(j.content) ? j.content : [];
+  for (const b of blocks) if (b?.type === 'server_tool_use' && typeof b.input?.query === 'string') searches.push(b.input.query);
+  const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
   return parseJsonBlock(text);
 }
 
@@ -98,7 +102,10 @@ export function jsonCompletion(step: string, prompt: string, opts: { timeoutMs?:
 export function webJsonCompletion(step: string, prompt: string, schema: { name: string; schema: unknown }, opts: { timeoutMs?: number; maxTokens?: number } = {}): Promise<LlmResult> {
   const timeoutMs = opts.timeoutMs ?? 150_000;
   const maxTokens = opts.maxTokens ?? 6000;
+  const openaiSearches: string[] = [];
+  const claudeSearches: string[] = [];
   return withFallback(step,
-    () => openaiWebJson(prompt, AbortSignal.timeout(timeoutMs), schema),
-    () => claudeJson(`${prompt}\n\nReturn JSON matching this JSON Schema exactly:\n${JSON.stringify(schema.schema)}`, AbortSignal.timeout(timeoutMs), maxTokens, 5));
+    () => openaiWebJson(prompt, AbortSignal.timeout(timeoutMs), schema, openaiSearches),
+    () => claudeJson(`${prompt}\n\nReturn JSON matching this JSON Schema exactly:\n${JSON.stringify(schema.schema)}`, AbortSignal.timeout(timeoutMs), maxTokens, 5, claudeSearches))
+    .then((r) => (r ? { ...r, searches: r.provider === 'openai' ? openaiSearches : claudeSearches } : r));
 }
