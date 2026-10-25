@@ -95,6 +95,64 @@ const choiceCard = (selected: boolean): React.CSSProperties => ({
   border: `${selected ? 2 : 1}px solid ${selected ? color.primary[600] : color.border}`,
 });
 
+const contextPill: React.CSSProperties = {
+  display: 'inline-block', borderRadius: radius.full, background: color.surface2, border: `1px solid ${color.border}`,
+  padding: `2px ${space.md}px`, fontSize: 12, color: color.text,
+};
+const stickyBar: React.CSSProperties = {
+  position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 20,
+  background: color.surface, borderTop: `1px solid ${color.border}`, boxShadow: shadow.md,
+};
+
+const INTAKE_STEPS = ['Goal', 'Design', 'Look', 'Details', 'Review'] as const;
+
+/** Where the user is in the flow; earlier steps are clickable to go back. */
+function IntakeSteps({ current, onPick }: { current: number; onPick: (index: number) => void }) {
+  return (
+    <ol aria-label="Progress" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm, listStyle: 'none', padding: 0, margin: `0 0 ${space.lg}px` }}>
+      {INTAKE_STEPS.map((name, i) => {
+        const done = i < current;
+        const active = i === current;
+        const dot: React.CSSProperties = {
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: radius.full,
+          fontSize: 11, fontWeight: fontWeight.bold,
+          background: active || done ? color.primary[600] : color.surface,
+          color: active || done ? color.onPrimary : color.textSubtle,
+          border: `1px solid ${active || done ? color.primary[600] : color.border}`,
+        };
+        const body = (
+          <>
+            <span style={dot}>{done ? <Check size={12} /> : i + 1}</span>
+            <span style={{ fontSize: fontSize.sm, fontWeight: active ? fontWeight.bold : fontWeight.semibold, color: active ? color.text : color.textMuted }}>{name}</span>
+          </>
+        );
+        return (
+          <li key={name} aria-current={active ? 'step' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: space.sm }}>
+            {done
+              ? <button type="button" onClick={() => onPick(i)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>{body}</button>
+              : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{body}</span>}
+            {i < INTAKE_STEPS.length - 1 ? <span aria-hidden style={{ width: 18, height: 1, background: color.border }} /> : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** One numbered group of intake questions. */
+function IntakeCard({ n, title, hint, children }: { n: number; title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <section style={{ ...card, padding: `${space.lg}px ${space.xl}px`, marginBottom: space.lg }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: space.sm, marginBottom: hint ? 2 : space.md }}>
+        <span style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: color.primary[600] }}>{n}</span>
+        <h2 style={{ fontSize: 17, fontWeight: 800, margin: 0 }}>{title}</h2>
+      </div>
+      {hint ? <p style={{ fontSize: 12.5, color: color.textMuted, margin: `0 0 ${space.md}px` }}>{hint}</p> : null}
+      {children}
+    </section>
+  );
+}
+
 /**
  * The main message is the asset's key. When AI drafts the brief and the user has not
  * written a main message yet, propose the brief's first sentence — never overwrite one
@@ -362,118 +420,157 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
     );
   }
 
+  const goalLabel = customLabel ?? getOutcome(goalId ?? '')?.label ?? null;
+  const mainMessagePreview = String(brief.mainMessage || deriveMainMessage(String(brief.freeText ?? '')) || '').trim();
+  const layoutLabel = layoutOptions.find((o) => o.value === layout)?.label ?? null;
+  const summaryItems: [string, string][] = [
+    ['Message', mainMessagePreview || 'Not written yet'],
+    ...(asset === 'image' ? [['Text', attachmentMode === 'supporting_visual' ? 'With the post' : attachmentMode === 'embedded_copy' ? 'In the image' : 'Design decides'] as [string, string]] : []),
+    ...(layoutOptions.length > 0 ? [['Layout', layoutLabel ?? 'Design decides'] as [string, string]] : []),
+    ['Brand', brandMode === 'brand-aware' ? `My brand · ${brandPresence === 'minimal' ? 'subtle' : brandPresence}` : (INDEPENDENT_PALETTE_OPTIONS.find((o) => o.id === paletteMode)?.label ?? 'Independent')],
+  ];
+  let cardNo = 0;
+
   return (
-    <div style={wrap}>
+    <div style={{ ...wrap, paddingBottom: space['4xl'] + 72 }}>
+      <IntakeSteps
+        current={3}
+        onPick={(i) => setStep((['goal', 'samples', 'look'] as const)[i])}
+      />
       {header('Tell us once', cfg.briefSub, () => setStep('look'))}
-      <div style={{ position: 'relative', marginBottom: 6 }}>
-        <textarea value={brief.freeText ?? ''} onChange={(e) => { voiceBaseRef.current = e.target.value; setField('freeText', e.target.value); }} rows={5}
-          placeholder={`Type or speak — e.g. ${customLabel ?? cfg.label} for our SaaS — audience busy founders, confident friendly tone, CTA "Start free".`}
-          style={{ ...input, resize: 'vertical', paddingRight: 56 }} />
-        <div style={{ position: 'absolute', right: 10, bottom: 12 }}>
-          <ChatVoiceButton
-            onTranscription={(t) => setField('freeText', `${voiceBaseRef.current.trim() ? `${voiceBaseRef.current.trim()} ` : ''}${t}`)}
-            title="Speak your brief"
+      {goalLabel || selectedSample ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, marginTop: -10, marginBottom: space.lg }}>
+          {goalLabel ? <span style={contextPill}>Goal: {goalLabel}</span> : null}
+          {selectedSample ? <span style={contextPill}>Design: {selectedSample.name}</span> : null}
+        </div>
+      ) : null}
+
+      <IntakeCard n={++cardNo} title="What’s it about?" hint="Write it, speak it, or let AI draft it. The main message is what the headline will say.">
+        <div style={{ position: 'relative', marginBottom: space.sm }}>
+          <textarea value={brief.freeText ?? ''} onChange={(e) => { voiceBaseRef.current = e.target.value; setField('freeText', e.target.value); }} rows={5}
+            placeholder={`Type or speak — e.g. ${customLabel ?? cfg.label} for our SaaS — audience busy founders, confident friendly tone, CTA "Start free".`}
+            style={{ ...input, resize: 'vertical', paddingRight: 56, lineHeight: 1.5 }} />
+          <div style={{ position: 'absolute', right: 10, bottom: 12 }}>
+            <ChatVoiceButton
+              onTranscription={(t) => setField('freeText', `${voiceBaseRef.current.trim() ? `${voiceBaseRef.current.trim()} ` : ''}${t}`)}
+              title="Speak your brief"
+            />
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm, marginBottom: space.lg }}>
+          <button type="button" onClick={suggestBrief} disabled={aiBusy || !selectedSample}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, background: color.surface, color: color.primary[600], border: `1px solid ${color.primary[600]}`, borderRadius: radius.md, padding: `${space.xs}px ${space.md}px`, cursor: aiBusy ? 'default' : 'pointer', fontWeight: fontWeight.semibold, fontSize: fontSize.sm, opacity: aiBusy ? 0.6 : 1 }}>
+            <Sparkles size={14} /> {aiBusy ? 'Drafting your brief…' : 'Suggest with AI'}
+          </button>
+          <button type="button" onClick={() => setChatOpen(true)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, background: color.primary[600], color: color.onPrimary, border: `1px solid ${color.primary[600]}`, borderRadius: radius.md, padding: `${space.xs}px ${space.md}px`, cursor: 'pointer', fontWeight: fontWeight.semibold, fontSize: fontSize.sm }}>
+            <Wand2 size={14} /> Create with AI
+          </button>
+          <span style={{ fontSize: 12, color: color.textSubtle }}>You can edit everything on the next screen too.</span>
+        </div>
+        {chatOpen ? (
+          <CreateWithAIChat
+            assetFamily={cfg.family}
+            assetLabel={cfg.label}
+            goal={customLabel ?? getOutcome(goalId ?? '')?.label ?? cfg.label}
+            initialBrief={{
+              freeText: String(brief.freeText ?? ''),
+              audience: String((brief.audience as string) ?? ''),
+              tone: String((brief.tone as string) ?? ''),
+              cta: String((brief.cta as string) ?? ''),
+              offer: String((brief.offer as string) ?? ''),
+            }}
+            onApply={(b) => {
+              const patch: Record<string, string> = {};
+              (['freeText', 'audience', 'tone', 'cta', 'offer'] as const).forEach((k) => {
+                if (b[k] && b[k].trim()) patch[k] = b[k];
+              });
+              if (patch.freeText) voiceBaseRef.current = patch.freeText;
+              if (Object.keys(patch).length) setBrief((prev) => withMainMessage(mergeBrief(prev, patch as Partial<MarketingBrief>)));
+              setChatOpen(false);
+            }}
+            onClose={() => setChatOpen(false)}
+          />
+        ) : null}
+        {aiError ? <div style={{ fontSize: 12, color: color.danger, marginBottom: 12 }}>{aiError}</div> : null}
+        {/* The main message is the asset's key: the headline expresses it, everything else supports it. */}
+        <div>
+          <div style={{ ...label, marginBottom: 6 }}>Main message — the one thing your {cfg.label} must say</div>
+          <input
+            type="text"
+            data-testid="intake-main-message"
+            value={brief.mainMessage ?? ''}
+            onChange={(e) => setField('mainMessage', e.target.value)}
+            placeholder={deriveMainMessage(String(brief.freeText ?? '')) || 'e.g. Plan a month of on-brand posts in under an hour'}
+            style={{ ...input, fontSize: fontSize.base, fontWeight: fontWeight.semibold, padding: `${space.md}px ${space.md}px` }}
           />
         </div>
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 14 }}>
-        <button type="button" onClick={suggestBrief} disabled={aiBusy || !selectedSample}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, background: color.surface, color: color.primary[600], border: `1px solid ${color.primary[600]}`, borderRadius: radius.md, padding: `${space.xs}px ${space.md}px`, cursor: aiBusy ? 'default' : 'pointer', fontWeight: fontWeight.semibold, fontSize: fontSize.sm, opacity: aiBusy ? 0.6 : 1 }}>
-          <Sparkles size={14} /> {aiBusy ? 'Drafting your brief…' : 'Suggest with AI'}
-        </button>
-        <button type="button" onClick={() => setChatOpen(true)}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, background: color.primary[600], color: color.onPrimary, border: `1px solid ${color.primary[600]}`, borderRadius: radius.md, padding: `${space.xs}px ${space.md}px`, cursor: 'pointer', fontWeight: fontWeight.semibold, fontSize: fontSize.sm }}>
-          <Wand2 size={14} /> Create with AI
-        </button>
-        <span style={{ fontSize: 12, color: color.textSubtle, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          Let AI draft the brief from your goal, chat it out with “Create with AI”, or tap the mic. You can edit everything before generating.
-        </span>
-      </div>
-      {chatOpen ? (
-        <CreateWithAIChat
-          assetFamily={cfg.family}
-          assetLabel={cfg.label}
-          goal={customLabel ?? getOutcome(goalId ?? '')?.label ?? cfg.label}
-          initialBrief={{
-            freeText: String(brief.freeText ?? ''),
-            audience: String((brief.audience as string) ?? ''),
-            tone: String((brief.tone as string) ?? ''),
-            cta: String((brief.cta as string) ?? ''),
-            offer: String((brief.offer as string) ?? ''),
-          }}
-          onApply={(b) => {
-            const patch: Record<string, string> = {};
-            (['freeText', 'audience', 'tone', 'cta', 'offer'] as const).forEach((k) => {
-              if (b[k] && b[k].trim()) patch[k] = b[k];
-            });
-            if (patch.freeText) voiceBaseRef.current = patch.freeText;
-            if (Object.keys(patch).length) setBrief((prev) => withMainMessage(mergeBrief(prev, patch as Partial<MarketingBrief>)));
-            setChatOpen(false);
-          }}
-          onClose={() => setChatOpen(false)}
-        />
-      ) : null}
-      {aiError ? <div style={{ fontSize: 12, color: color.danger, marginBottom: 12 }}>{aiError}</div> : null}
-      {/* The main message is the asset's key: the headline expresses it, everything else supports it. */}
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ ...label, marginBottom: 6 }}>Main message — the one thing your {cfg.label} must say</div>
-        <input
-          type="text"
-          data-testid="intake-main-message"
-          value={brief.mainMessage ?? ''}
-          onChange={(e) => setField('mainMessage', e.target.value)}
-          placeholder={deriveMainMessage(String(brief.freeText ?? '')) || 'e.g. Plan a month of on-brand posts in under an hour'}
-          style={input}
-        />
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-        {([['audience', 'Audience'], ['tone', 'Tone'], ['cta', 'Call to action'], ['offer', 'Offer / product']] as [keyof MarketingBrief, string][]).map(([k, lbl]) => (
-          <div key={k}><div style={{ ...label, marginBottom: 6 }}>{lbl}</div>
-            <input type="text" value={(brief[k] as string) ?? ''} onChange={(e) => setField(k, e.target.value)} style={input} /></div>
-        ))}
-      </div>
+      </IntakeCard>
 
-      {asset === 'image' ? (
-        <section style={{ marginTop: 20 }}>
-          <div style={{ ...label, marginBottom: 8 }}>Where should the text go?</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
-            {([
-              ['embedded_copy', 'Text inside the image', 'Your headline, supporting line and button are designed into the image.'],
-              ['supporting_visual', 'Post + image', 'A clean image with no words; your text goes with the post.'],
-            ] as [AttachmentMode, string, string][]).map(([mode, title, desc]) => (
-              <button key={mode} type="button" data-testid={`intake-attachment-${mode}`} onClick={() => setAttachmentMode(mode)}
-                style={choiceCard(attachmentMode === mode)}>
-                <div style={{ fontWeight: fontWeight.bold, fontSize: fontSize.sm }}>{attachmentMode === mode ? <Check size={14} /> : null} {title}</div>
-                <div style={{ fontSize: 12, color: color.textMuted, marginTop: 4 }}>{desc}</div>
-              </button>
-            ))}
-          </div>
-        </section>
+      <IntakeCard n={++cardNo} title="Who it’s for" hint="Optional — blanks are filled from your goal and company profile.">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+          {([
+            ['audience', 'Audience', 'e.g. Busy founders'],
+            ['tone', 'Tone', 'e.g. Confident, friendly'],
+            ['cta', 'Call to action', 'e.g. Start free'],
+            ['offer', 'Offer / product', 'e.g. 14-day free trial'],
+          ] as [keyof MarketingBrief, string, string][]).map(([k, lbl, ph]) => (
+            <div key={k}><div style={{ ...label, marginBottom: 6 }}>{lbl}</div>
+              <input type="text" value={(brief[k] as string) ?? ''} placeholder={ph} onChange={(e) => setField(k, e.target.value)} style={input} /></div>
+          ))}
+        </div>
+      </IntakeCard>
+
+      {asset === 'image' || layoutOptions.length > 0 ? (
+        <IntakeCard n={++cardNo} title={asset === 'image' ? 'Text & layout' : 'Layout'}>
+          {asset === 'image' ? (
+            <div style={{ marginBottom: layoutOptions.length > 0 ? space.lg : 0 }}>
+              <div style={{ ...label, marginBottom: 8 }}>Where should the text go?</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
+                {([
+                  ['embedded_copy', 'Text inside the image', 'Your headline, supporting line and button are designed into the image.'],
+                  ['supporting_visual', 'Post + image', 'A clean image with no words; your text goes with the post.'],
+                ] as [AttachmentMode, string, string][]).map(([mode, title, desc]) => (
+                  <button key={mode} type="button" data-testid={`intake-attachment-${mode}`} onClick={() => setAttachmentMode(mode)}
+                    style={choiceCard(attachmentMode === mode)}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: fontWeight.bold, fontSize: fontSize.sm }}>{attachmentMode === mode ? <Check size={14} color={color.primary[600]} /> : null}{title}</div>
+                    <div style={{ fontSize: 12, color: color.textMuted, marginTop: 4, lineHeight: 1.45 }}>{desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {layoutOptions.length > 0 ? (
+            <div>
+              <div style={{ ...label, marginBottom: 8 }}>{asset === 'infographic' ? 'How should it be organised?' : 'Layout'}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {layoutOptions.map((o) => (
+                  <button key={o.value} type="button" data-testid={`intake-layout-${o.value}`} title={o.description}
+                    onClick={() => setLayout(layout === o.value ? null : o.value)} style={chip(layout === o.value)}>
+                    {o.label}
+                  </button>
+                ))}
+                {!layout ? <span style={{ fontSize: 12, color: color.textSubtle, alignSelf: 'center' }}>Not chosen — the design decides.</span> : null}
+              </div>
+            </div>
+          ) : null}
+        </IntakeCard>
       ) : null}
 
-      {layoutOptions.length > 0 ? (
-        <section style={{ marginTop: 20 }}>
-          <div style={{ ...label, marginBottom: 8 }}>{asset === 'infographic' ? 'How should it be organised?' : 'Layout'}</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {layoutOptions.map((o) => (
-              <button key={o.value} type="button" data-testid={`intake-layout-${o.value}`} title={o.description}
-                onClick={() => setLayout(layout === o.value ? null : o.value)} style={chip(layout === o.value)}>
-                {o.label}
-              </button>
-            ))}
-            {!layout ? <span style={{ fontSize: 12, color: color.textSubtle, alignSelf: 'center' }}>Not chosen — the design decides.</span> : null}
-          </div>
-        </section>
-      ) : null}
-
-      <section style={{ marginTop: 20 }}>
-        <div style={{ ...label, marginBottom: 8 }}>Brand</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          <button type="button" data-testid="intake-brand-aware" disabled={!selectedCompanyId} onClick={() => setBrandMode('brand-aware')} style={chip(brandMode === 'brand-aware')}>Use my brand</button>
-          <button type="button" data-testid="intake-brand-independent" onClick={() => setBrandMode('independent')} style={chip(brandMode === 'independent')}>Don&apos;t apply my brand</button>
+      <IntakeCard n={++cardNo} title="Brand & colours">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
+          <button type="button" data-testid="intake-brand-aware" disabled={!selectedCompanyId} onClick={() => setBrandMode('brand-aware')}
+            style={{ ...choiceCard(brandMode === 'brand-aware'), opacity: selectedCompanyId ? 1 : 0.55, cursor: selectedCompanyId ? 'pointer' : 'not-allowed' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: fontWeight.bold, fontSize: fontSize.sm }}>{brandMode === 'brand-aware' ? <Check size={14} color={color.primary[600]} /> : null}Use my brand</div>
+            <div style={{ fontSize: 12, color: color.textMuted, marginTop: 4, lineHeight: 1.45 }}>Your colours, fonts and logo from the company profile.</div>
+          </button>
+          <button type="button" data-testid="intake-brand-independent" onClick={() => setBrandMode('independent')} style={choiceCard(brandMode === 'independent')}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: fontWeight.bold, fontSize: fontSize.sm }}>{brandMode === 'independent' ? <Check size={14} color={color.primary[600]} /> : null}Don&apos;t apply my brand</div>
+            <div style={{ fontSize: 12, color: color.textMuted, marginTop: 4, lineHeight: 1.45 }}>An independent creative, free of your brand styling.</div>
+          </button>
         </div>
         {brandMode === 'brand-aware' ? (
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: space.md }}>
             <span style={{ fontSize: 12, color: color.textMuted }}>How visible:</span>
             {([['minimal', 'Subtle'], ['balanced', 'Balanced'], ['strong', 'Strong']] as [IntakeBrandPresence, string][]).map(([v, l]) => (
               <button key={v} type="button" data-testid={`intake-presence-${v}`} onClick={() => setBrandPresence(v)} style={chip(brandPresence === v)}>{l}</button>
@@ -483,7 +580,7 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
             </label>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: space.md }}>
             <span style={{ fontSize: 12, color: color.textMuted }}>Colours:</span>
             {INDEPENDENT_PALETTE_OPTIONS.map((o) => (
               <button key={o.id} type="button" data-testid={`intake-palette-${o.id}`} title={o.body} onClick={() => setPaletteMode(o.id)} style={chip(paletteMode === o.id)}>{o.label}</button>
@@ -491,11 +588,10 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
           </div>
         )}
         {!selectedCompanyId ? <div style={{ fontSize: 12, color: color.textSubtle, marginTop: 6 }}>Select a company to apply its brand.</div> : null}
-      </section>
+      </IntakeCard>
 
       {selectedCompanyId && compositionId ? (
-        <section style={{ marginTop: 20 }}>
-          <div style={{ ...label, marginBottom: 8 }}>Your own image (optional)</div>
+        <IntakeCard n={++cardNo} title="Your own image" hint="Optional — a product shot, photo or logo to feature.">
           <CreatorImageAssetPanel
             companyId={selectedCompanyId}
             compositionId={compositionId}
@@ -508,10 +604,22 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
             guidedChoices={{ visualDirectionId, subject, visualInstruction: null }}
             brief={String(brief.mainMessage || brief.freeText || '')}
           />
-        </section>
+        </IntakeCard>
       ) : null}
 
-      <button type="button" style={{ ...primaryBtn, marginTop: 22 }} onClick={continueToEditor}><ArrowRight size={16} /> {cfg.briefCta}</button>
+      {/* Sticky summary: what the review screen will show, and the one way forward. */}
+      <div style={stickyBar}>
+        <div style={{ maxWidth: 1080, margin: '0 auto', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.md, padding: `${space.sm}px ${space.xl}px` }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, flex: '1 1 320px', minWidth: 0 }}>
+            {summaryItems.map(([k, v]) => (
+              <span key={k} style={{ ...contextPill, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v}>
+                <strong style={{ color: color.textSubtle, fontWeight: fontWeight.bold }}>{k}:</strong> {v}
+              </span>
+            ))}
+          </div>
+          <button type="button" style={primaryBtn} onClick={continueToEditor}><ArrowRight size={16} /> {cfg.briefCta}</button>
+        </div>
+      </div>
     </div>
   );
 }
