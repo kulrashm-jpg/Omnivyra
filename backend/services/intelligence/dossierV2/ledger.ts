@@ -49,7 +49,9 @@ export function aiStateOf(reason: ReasonClass | 'ungrounded'): AiState {
     case 'request_failed': case 'quota_restricted': return 'source_failed';
     case 'missing_credential': return 'not_configured';
     case 'not_searched': return 'not_tested';
-    case 'no_adapter': case 'restricted': return 'inaccessible';
+    // No adapter: the provider may offer access (Meta's Model API does), this system has not built it.
+    case 'no_adapter': return 'not_tested';
+    case 'restricted': return 'inaccessible';
     default: return 'unknown';
   }
 }
@@ -59,14 +61,14 @@ export function aiCellState(r: { status: string; kind?: string; surface?: string
   if (r.status === 'observed') return 'measured_grounded';
   if (r.status === 'failed_source') return 'source_failed';
   if (r.status === 'insufficient_evidence' || r.status === 'inferred') return 'answered_not_grounded';
-  if (r.status === 'not_measured') return /meta/i.test(String(r.surface ?? r.kind ?? '')) ? 'inaccessible' : 'not_configured';
+  if (r.status === 'not_measured') return /meta/i.test(String(r.surface ?? r.kind ?? '')) ? 'not_tested' : 'not_configured';
   return 'unknown';
 }
 
 /** What kind of observation a tool's answers are: never an observation of the consumer app unless it says so. */
 export function surfaceTypeOf(label: string, source: 'research' | 'report_run'): string {
   if (source === 'report_run') return 'scoring-run API check';
-  if (/meta ai/i.test(label)) return 'consumer app only (not accessible)';
+  if (/meta ai/i.test(label)) return 'no adapter (Meta Model API not integrated; consumer app not used)';
   if (/ai mode|copilot/i.test(label)) return 'results page captured via SerpAPI';
   return 'API answer with live web search (not the consumer app)';
 }
@@ -359,12 +361,12 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
       reason: a.reason === 'ungrounded' ? 'partial' : a.reason,
       outcome: cap?.outcome ?? (a.reason === 'ungrounded' ? 'Answered from model memory without searching the web; not counted.'
         : a.reason === 'missing_credential' ? 'No credential is configured, so it was not asked.'
-          : a.reason === 'no_adapter' ? 'No web-grounded access exists (the consumer app requires a signed-in account), so it was not asked.'
+          : a.reason === 'no_adapter' ? 'No adapter is implemented for the provider’s grounded API, so it was not asked; the consumer app is not used.'
             : a.reason === 'request_failed' ? `Asked ${a.asked} questions; every request failed, so the result is unknown.`
               : `${a.answered} of ${a.asked} questions answered from live web search${a.answered < a.asked ? `; ${a.asked - a.answered} failed` : ''}.`),
       nextStep: cap?.nextStep ?? (a.reason === 'measured' ? null : a.reason === 'partial' ? 'Retry the questions that failed.'
         : a.reason === 'missing_credential' ? `Add an API key for ${a.label.replace(/ \(.*\)$/, '')}.`
-          : a.reason === 'no_adapter' ? 'A licensed AI-visibility data provider, or a manual check recorded as evidence.'
+          : a.reason === 'no_adapter' ? 'Implement an adapter for the provider’s grounded API (paid usage).'
             : a.reason === 'request_failed' ? 'Check the provider error (key, quota or billing) in the research register, then retry.' : 'Run it with live web search enabled.'), source: a.source });
   }
   if (aio) access.push({ capability: 'Google AI Overview', family: 'ai_answers', adapter: true, credential: null, attempted: true, reason: aio.retrieved === aio.total ? 'measured' : aio.retrieved ? 'partial' : 'request_failed',

@@ -19,6 +19,9 @@ import { canonicalProfile, checkProfiles, findIndependentMentions, type ProfileC
 import { aiCapabilities, configCapabilities } from './runtime';
 import { discoverAndProfile, type CompetitorProfile, type FieldKey } from './competitors';
 import { checkOffering, type OfferingEvidence } from './offering';
+import { buildOfferingRegister, deriveMarket, proposeQueries } from './offeringRegister';
+import { candidatesFromEvidence, CAPABILITIES, capabilityState, validateCandidates } from './competitorDiscovery';
+import { runProviderChecks } from './providerChecks';
 
 /** Build the research input from the company context the report already resolved. */
 export function researchInputFromNarrative(c: {
@@ -163,6 +166,7 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
       mentioned, cited: cited && accuracy !== 'misidentified', accuracy, brandsNamed: a.status === 'observed' ? r?.brands ?? [] : undefined,
       citedDomains, geography: a.geography, observedAt: a.observedAt,
       sourceUrl: a.sources[0] ?? '', method: 'Answer built by the tool from live web search, with the sources it returned', scope: 'One question, one time',
+      ...(a.error ? { providerError: a.error } : {}),
       // Enough of the answer to re-check a mention or a misidentification afterwards.
       excerpt: a.text.slice(0, 4000),
     });
@@ -262,6 +266,17 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     }
   }
 
+  // Stage 1–4: offering → market → candidates (from this report's own evidence) → validation on their pages.
+  const register = offering ? buildOfferingRegister(offering, { offering: input.offering, targetCustomer: input.buyers, geography: input.market }) : null;
+  const market = register ? deriveMarket(register) : null;
+  const ownPages = (offering?.pages ?? []).filter((p) => p.read && p.text).map((p) => ({ url: p.url, text: p.text! }));
+  const ownConfirmed = CAPABILITIES.filter((d) => capabilityState(d, ownPages).state === 'confirmed').map((d) => d.key);
+  const [candidates, providerChecks] = await Promise.all([
+    validateCandidates(candidatesFromEvidence({ subject: { domain: ownHost, brand: input.brand }, search: [], competitors: competitorRecords, generative },
+      (q) => isBrandQuestion({ query: q }, input.brand)).slice(0, Number(process.env.PUBLIC_RESEARCH_MAX_CANDIDATES ?? 15)), ownConfirmed).catch(() => null),
+    runProviderChecks(input.domain).catch(() => null),
+  ]);
+
   const surfacesRun = [...new Set(observed.map((a) => a.label))];
   return {
     subject: { brand: input.brand, domain: ownHost },
@@ -277,6 +292,7 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     company: [], search: [], generative, competitors: competitorRecords, independent: [], gaps, site: siteRecords, benchmark,
     footprint: { checkedAt: new Date().toISOString(), profiles: profileChecks, mentions: mentionResult.mentions, socialPosts: mentionResult.socialPosts, platforms: mentionResult.platforms, mentionSearch: mentionResult.provider, mentionQueries: mentionResult.searches, profilesFound: mentionResult.profiles },
     runtime: { checkedAt: new Date().toISOString(), capabilities: [...aiCapabilities(answers), ...configCapabilities()] },
-    offering,
+    offering, register, market, candidates, providerChecks,
+    proposedQueries: register && market ? proposeQueries(register, market) : null,
   };
 }

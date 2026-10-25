@@ -17,7 +17,23 @@ import { readCapped, safeFetch } from '../../../../lib/security/safeFetch';
 export type OfferingState = 'website_verified' | 'independently_corroborated' | 'contradictory' | 'company_declared' | 'unknown';
 export type PagePurpose = 'home' | 'product' | 'features' | 'pricing' | 'solutions' | 'faq' | 'help' | 'about';
 
-export type PageRead = { url: string; purpose: PagePurpose; status: number | null; read: boolean; fetchedAt: string };
+export type PageRead = {
+  url: string; purpose: PagePurpose; status: number | null; read: boolean; fetchedAt: string;
+  /** The page's own h1–h3 headings, verbatim: what the company says it offers, in its own words. */
+  headings?: string[];
+  /** Visible text (capped), kept so register entries can quote the page. */
+  text?: string;
+};
+
+/** h1–h3 headings, in page order, de-duplicated; each 3–140 characters. */
+export function headingsOf(html: string): string[] {
+  const out: string[] = [];
+  for (const m of html.matchAll(/<h([1-3])[^>]*>([\s\S]*?)<\/h\1>/gi)) {
+    const t = pageText(m[2]).replace(/\s+/g, ' ').trim();
+    if (t.length >= 3 && t.length <= 140 && !out.includes(t)) out.push(t);
+  }
+  return out.slice(0, 40);
+}
 export type ClaimEvidence = {
   claim: string;
   state: OfferingState;
@@ -148,7 +164,8 @@ export async function checkOffering(
   const origin = `https://${domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}`;
   const checkedAt = new Date().toISOString();
   const home = await get(`${origin}/`, timeoutMs);
-  const pages: PageRead[] = [{ url: `${origin}/`, purpose: 'home', status: home?.status ?? null, read: Boolean(home && home.status === 200), fetchedAt: checkedAt }];
+  const pages: PageRead[] = [{ url: `${origin}/`, purpose: 'home', status: home?.status ?? null, read: Boolean(home && home.status === 200), fetchedAt: checkedAt,
+    headings: home && home.status === 200 ? headingsOf(home.html) : [], text: home && home.status === 200 ? pageText(home.html).slice(0, 15_000) : undefined }];
   const texts: Array<{ url: string; text: string; purpose: PagePurpose }> = home && home.status === 200 ? [{ url: `${origin}/`, text: pageText(home.html), purpose: 'home' }] : [];
 
   // Only pages the homepage itself links to: nothing is guessed.
@@ -157,7 +174,8 @@ export async function checkOffering(
   const fetched = await Promise.all(targets.map(async (t) => ({ t, r: await get(`${origin}${t.path}`, timeoutMs) })));
   for (const { t, r } of fetched) {
     const url = `${origin}${t.path}`;
-    pages.push({ url, purpose: t.purpose, status: r?.status ?? null, read: Boolean(r && r.status === 200), fetchedAt: new Date().toISOString() });
+    pages.push({ url, purpose: t.purpose, status: r?.status ?? null, read: Boolean(r && r.status === 200), fetchedAt: new Date().toISOString(),
+      headings: r && r.status === 200 ? headingsOf(r.html) : [], text: r && r.status === 200 ? pageText(r.html).slice(0, 15_000) : undefined });
     if (r && r.status === 200) texts.push({ url, text: pageText(r.html), purpose: t.purpose });
   }
 

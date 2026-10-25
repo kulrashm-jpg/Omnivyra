@@ -224,8 +224,9 @@ describe('dossier v2 evidence models', () => {
     expect(aiStateOf('quota_restricted')).toBe('source_failed');
     expect(aiStateOf('missing_credential')).toBe('not_configured');
     expect(aiStateOf('not_searched')).toBe('not_tested');
-    expect(aiStateOf('no_adapter')).toBe('inaccessible');
-    expect(aiCellState({ status: 'not_measured', surface: 'Meta AI' })).toBe('inaccessible');
+    expect(aiStateOf('no_adapter')).toBe('not_tested');
+    expect(aiStateOf('restricted')).toBe('inaccessible');
+    expect(aiCellState({ status: 'not_measured', surface: 'Meta AI' })).toBe('not_tested');
     expect(aiCellState({ status: 'not_measured', surface: 'Perplexity' })).toBe('not_configured');
     expect(aiCellState({ status: 'failed_source' })).toBe('source_failed');
     const l = buildLedger(payload(), pack());

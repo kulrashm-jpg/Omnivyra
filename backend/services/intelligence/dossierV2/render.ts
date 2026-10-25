@@ -29,6 +29,8 @@ import { isBrandQuestion, isMarketingBasic, parseResearchPack, summariseVisibili
 import { DOSSIER_V2_CSS } from './styles';
 import { AI_STATE_LABEL, aiCellState, aiStateOf, buildLedger, PROVIDER_LABEL, urlPurpose, type AccessRow, type AiState, type Ledger } from './ledger';
 import { validateReport, type ValidationResult } from './validate';
+import { buildDiagnostics, DIAG_LABEL, type DiagState, type SourceDiagnostic } from './diagnostics';
+import { CAPABILITIES, capabilityState, type Candidate } from '../publicResearch/competitorDiscovery';
 
 export type DossierV2Branding = {
   brandName?: string | null;
@@ -140,6 +142,8 @@ type Context = {
   pillars: Array<{ key: string; label: string; value: number | null; state: string; dims: Array<{ key: string; label: string; value: number | null; state: string }> }>;
   sources: SourceRow[];
   ledger: Ledger;
+  /** One row per evidence source: state, cause, impact, next step (diagnostics.ts). */
+  diagnostics: SourceDiagnostic[];
 };
 
 /**
@@ -201,6 +205,7 @@ function buildContext(payload: CanonicalExportPayload, branding: DossierV2Brandi
     pillars,
     sources: evidenceSources(pillars, competitorCount),
     ledger,
+    diagnostics: buildDiagnostics(ledger, research),
   };
 }
 
@@ -297,6 +302,15 @@ const REASON_TEXT: Record<string, string> = {
 };
 
 const firstSentence = (t: string): string => (t.split(/(?<=\.)\s/)[0] ?? t).replace(/\.$/, '');
+
+/** A diagnostic row's state in words, flagged when its cause is not established. */
+const diagText = (d: SourceDiagnostic): string => `${DIAG_LABEL[d.state].toLowerCase()}${d.causeConfirmed ? '' : ' (cause unconfirmed)'}`;
+
+/** The gaps that matter most to the conclusions: AI tools and search first, then backlinks and reviews. */
+function topGaps(ctx: Context, n: number): SourceDiagnostic[] {
+  const rank = (d: SourceDiagnostic) => (d.family === 'AI answers' ? 0 : d.key === 'search' ? 1 : d.key === 'family:inbound_links' ? 2 : 3);
+  return ctx.diagnostics.filter((d) => !['measured', 'partial', 'searched_not_found'].includes(d.state)).sort((a, b) => rank(a) - rank(b)).slice(0, n);
+}
 
 /** An access row's state in words; AI tools use the AI vocabulary. */
 const reasonText = (a: AccessRow): string => (a.family === 'ai_answers' ? AI_STATE_LABEL[aiStateOf(a.reason)] : REASON_TEXT[a.reason] ?? a.reason);
@@ -415,7 +429,8 @@ function renderSummaryNow(ctx: Context): string {
         : '<div class="v2-panel"><h4>Strongest finding</h4><p class="v2-note">No measured area is available to rank.</p></div>';
     })();
   const gaps = l.access.filter((a) => ['missing_credential', 'restricted', 'no_adapter', 'quota_restricted', 'request_failed'].includes(a.reason)).slice(0, 5);
-  const uncertainty = `<div class="v2-panel"><h4>Largest uncertainty: what this run could not see</h4><ul class="v2-unk">${gaps.map((a) => `<li><b>${e(a.capability.replace(/ \(.*\)$/, ''))}</b><span>${e(reasonText(a))}</span></li>`).join('') || '<li><span>Every planned source was reached.</span></li>'}</ul><small>Unknown is not zero: these are gaps in what was observed, not evidence of weakness.</small></div>`;
+  const gapRows = topGaps(ctx, 5);
+  const uncertainty = `<div class="v2-panel"><h4>Largest uncertainty: what this run could not see</h4><ul class="v2-unk">${gapRows.map((d) => `<li data-diag="${e(d.key)}"><b>${e(d.source.replace(/ \(.*\)$/, ''))}</b><span>${e(diagText(d))}</span></li>`).join('') || (gaps.length ? '' : '<li><span>Every planned source was reached.</span></li>')}</ul><small>Unknown is not zero. Causes and next steps: source diagnostics (appendix).</small></div>`;
 
   const families: Array<[string, AccessRow['family'][]]> = [['Website', ['website']], ['Search', ['search']], ['AI answers', ['ai_answers']], ['Social', ['social']], ['Mentions', ['mentions']], ['Reviews', ['reviews']], ['Backlinks', ['backlinks']], ['Knowledge graph', ['knowledge_graph']], ['Registry', ['registry']], ['Page speed', ['page_speed']]];
   const chip = ([name, fams]: [string, AccessRow['family'][]]) => {
@@ -507,8 +522,8 @@ function renderSummaryNext(ctx: Context): string {
     </div>`;
   };
 
-  const blocked = ctx.ledger.access.filter((a) => ['missing_credential', 'restricted', 'no_adapter', 'quota_restricted'].includes(a.reason));
-  const blockedStrip = blocked.length ? `<div class="v2-blocked"><h4>Blocked until access is in place</h4><ul>${blocked.slice(0, 6).map((a) => `<li><b>${e(a.capability.replace(/ \(.*\)$/, ''))}</b> — ${e(reasonText(a))}${a.nextStep ? `. <span>${e(firstSentence(a.nextStep.replace(/\s*\([^)]*\)/g, '')))}</span>` : ''}</li>`).join('')}</ul></div>` : '';
+  const blocked = ctx.diagnostics.filter((d) => d.needs.length && !['measured', 'partial', 'searched_not_found'].includes(d.state));
+  const blockedStrip = blocked.length ? `<div class="v2-blocked"><h4>Blocked until access is in place</h4><ul>${blocked.slice(0, 6).map((d) => `<li data-diag="${e(d.key)}"><b>${e(d.source.replace(/ \(.*\)$/, ''))}</b> — ${e(diagText(d))}. <span>Needs ${e(d.needs.join(', '))}.</span></li>`).join('')}</ul><small>Cause, evidence and the cheapest next step for each: source diagnostics (appendix).</small></div>` : '';
 
   return `<section class="v2-summary" id="summary-next">
   <header class="v2-summary-head"><span>Summary 2 of 2</span><h2>What should happen next?</h2></header>
@@ -689,17 +704,26 @@ function renderMarket(ctx: Context): string {
     attrs.map((a) => { const st = stateLabel(a.status === 'unavailable' ? 'unavailable' : String(a.status)); return `<tr><td>${e(a.label)}</td><td>${pill(st.text, st.tone)}</td><td><small>${e(a.value ?? a.unlock ?? '—')}</small></td></tr>`; }).join('')
   }</tbody></table>` : '';
 
-  const verifiedNames = pack?.competitors.filter((c) => ['direct', 'adjacent'].includes(String(c.classification))).map((c) => c.name) ?? [];
+  const cands = pack?.candidates ?? [];
+  const included = cands.filter((c) => ['direct', 'adjacent', 'substitute'].includes(c.classification));
+  const verifiedNames = cands.length ? included.filter((c) => c.classification !== 'substitute').map((c) => c.name)
+    : pack?.competitors.filter((c) => ['direct', 'adjacent'].includes(String(c.classification))).map((c) => c.name) ?? [];
+  const register = registerTable(ctx);
+  const marketView = marketTable(ctx);
+  const discovery = discoveryBlock(ctx);
+  const capMatrix = capabilityMatrix(ctx);
   return section(1, 'Market and competitors', 'What does the company sell, to whom, and who else competes for that buyer?',
-    marketPlainEnglish(verifiedNames, pack?.competitors.filter((c) => c.classification === 'not_competitor').length ?? 0), `
+    cands.length ? discoveryPlainEnglish(ctx) : marketPlainEnglish(verifiedNames, pack?.competitors.filter((c) => c.classification === 'not_competitor').length ?? 0), `
     ${definition ? block('What the company offers — from its own pages', 'The starting point for everything else: buyer problems, search queries and competitor criteria come from this.', definition) : ''}
+    ${register ? block('Stage 1 · What it offers: the offering register', 'Each entry quotes the official page it came from. Profile-only entries are labelled company-declared.', register, 'v2-allow-break') : ''}
     ${identity ? block('Company profile versus website', 'What was entered in the company profile next to what the website says. A difference is shown, not resolved.', identity) : ''}
     ${capabilityTable ? block('What it offers: declared versus shown on its website', 'Each claim from the company profile, checked against the product, feature, pricing, solutions and help pages the homepage links to.', capabilityTable) : ''}
-    ${landscape}
-    ${profile ? block('Competitor profiles', 'What each company sells, to whom, where, and how big it is — from public sources.', profile, 'v2-allow-break') : ''}
-    ${overlap ? block('Offering overlap', 'Which of the company\'s own capabilities each competitor also offers.', overlap) : ''}
+    ${marketView ? block('Stage 2 · The market this places it in', 'Derived only from the offering register. Anything resting on the company profile alone is an assumption.', marketView) : ''}
+    ${discovery ? block('Stage 3 · Who competes: candidates found and checked', 'Candidates come from this report’s own evidence; each was read on its own website.', discovery, 'v2-allow-break') : landscape}
+    ${capMatrix ? block('Stage 4 · Capabilities, same definitions for every company', 'A capability counts only where the company’s own pages state it within one short passage. “Not found in checked pages” is not “does not offer”.', capMatrix) : overlap ? block('Offering overlap', 'Which of the company\'s own capabilities each competitor also offers.', overlap) : ''}
+    ${profile ? block('Competitor profiles (analyst, sourced)', 'What each company sells, to whom, where, and how big it is — from public sources.', profile, 'v2-allow-break') : ''}
     ${benchmark ? block('How the competitors market themselves', 'The same public checks for each company, side by side, and what closing each gap would take.', benchmark, 'v2-allow-break') : ''}
-    ${icpTable ? block('Market facts the public record does not yet establish', str(icp?.headline), icpTable + (profile ? `<p class="v2-note">The competitor profiles above are the nearest public evidence for segment, buyer and market: they show who the validated competitors sell to and where. They describe the competitors, so these attributes stay unresolved for ${e(ctx.brand)} itself.</p>` : '') + (pack?.company.length ? `<p class="v2-note">The company’s own pages state its intended buyers and prices (${e(pack.company.filter((r) => /^(buyers|pricing)/i.test(r.claim)).map((r) => r.id).join(', '))}). That is company-declared intent, not independent market evidence, so these attributes stay unresolved here.</p>` : '')) : ''}
+    ${icpTable && !marketView ? block('Market facts the public record does not yet establish', str(icp?.headline), icpTable + (profile ? `<p class="v2-note">The competitor profiles above are the nearest public evidence for segment, buyer and market: they show who the validated competitors sell to and where. They describe the competitors, so these attributes stay unresolved for ${e(ctx.brand)} itself.</p>` : '') + (pack?.company.length ? `<p class="v2-note">The company’s own pages state its intended buyers and prices (${e(pack.company.filter((r) => /^(buyers|pricing)/i.test(r.claim)).map((r) => r.id).join(', '))}). That is company-declared intent, not independent market evidence, so these attributes stay unresolved here.</p>` : '')) : ''}
   `);
 }
 
@@ -968,6 +992,82 @@ function renderBrand(ctx: Context): string {
   `);
 }
 
+const REG_LABEL: Record<string, string> = {
+  product_line: 'Product line', customer_problem: 'Customer problem', value_proposition: 'Value proposition', buyer: 'Buyer / segment', use_case: 'Declared capability',
+  pricing: 'Pricing', business_model: 'Business model', free_offer: 'Free offer', geography: 'Geography',
+};
+const REG_STATE: Record<string, [string, Tone]> = {
+  official_website_verified: ['Website-verified', 'good'], company_declared: ['Company-declared', 'info'], independently_corroborated: ['Corroborated', 'good'], unknown: ['Unknown', 'neutral'], conflicting: ['Conflicting', 'bad'],
+};
+
+/** Stage 1: the offering register (capabilities have their own table above it). */
+function registerTable(ctx: Context): string {
+  const reg = ctx.research?.register;
+  if (!reg) return '';
+  const order = ['product_line', 'customer_problem', 'value_proposition', 'buyer', 'pricing', 'business_model', 'free_offer', 'geography'];
+  const rows = reg.entries.filter((x) => x.field !== 'use_case').sort((a, b) => order.indexOf(a.field) - order.indexOf(b.field));
+  const short = (u: string | null) => (u ?? '').replace(/^https?:\/\/(www\.)?/, '');
+  return `<table class="v2-table v2-compact"><thead><tr><th style="width:15%">Field</th><th style="width:26%">Entry</th><th style="width:14%">Status</th><th>Evidence (verbatim) · source · date</th></tr></thead><tbody>${
+    rows.map((x) => { const [t, tone] = REG_STATE[x.status]; return `<tr><td><small>${e(REG_LABEL[x.field] ?? x.field)}</small></td><td><strong>${e(x.value)}</strong></td><td>${pill(t, tone)}<br/><small>${e(x.confidence)}</small></td><td><small>${x.excerpt ? `“${e(x.excerpt.slice(0, 200))}”` : 'Company profile only.'}${x.url ? `<br/><span class="v2-src">${e(short(x.url))} · ${e(fmtDate(x.observedAt) ?? '')}</span>` : ''}</small></td></tr>`; }).join('')
+  }</tbody></table>${reg.missing.length ? `<p class="v2-note">Not stated on the official pages read: <b>${e(reg.missing.map((m) => REG_LABEL[m]?.toLowerCase() ?? m).join(', '))}</b>. Conclusions that depend on ${reg.missing.length === 1 ? 'it' : 'them'} stay provisional.</p>` : ''}`;
+}
+
+/** Stage 2: market items, verified vs assumption. */
+function marketTable(ctx: Context): string {
+  const m = ctx.research?.market;
+  if (!m?.items.length) return '';
+  const KIND: Record<string, string> = { category: 'Category', segment: 'Segment', problem: 'Problem', geography: 'Geography' };
+  return `<table class="v2-table v2-compact"><thead><tr><th style="width:13%">Kind</th><th style="width:34%">Market</th><th style="width:13%">Basis</th><th>Evidence</th></tr></thead><tbody>${
+    m.items.map((i) => `<tr><td><small>${e(KIND[i.kind])}</small></td><td>${e(i.value)}</td><td>${i.basis === 'verified' ? pill('From the website', 'good') : pill('Assumption', 'warn')}</td><td><small>${e(i.evidence.slice(0, 160))}</small></td></tr>`).join('')
+  }</tbody></table>${m.assumptions.length ? `<p class="v2-note">${m.assumptions.map(e).join(' ')}</p>` : ''}`;
+}
+
+const CLASS_TONE: Record<string, [string, Tone]> = {
+  direct: ['Direct competitor', 'bad'], adjacent: ['Adjacent competitor', 'warn'], substitute: ['Substitute / alternative', 'info'], unverified: ['Unverified candidate', 'neutral'], excluded: ['Excluded', 'neutral'],
+};
+
+/** Stage 3: the discovery pipeline and the candidate register. */
+function discoveryBlock(ctx: Context): string {
+  const cands = ctx.research?.candidates ?? [];
+  if (!cands.length) return '';
+  const disc = ctx.research?.candidateDiscovery;
+  const n = (k: string) => cands.filter((c) => c.classification === k).length;
+  const stage = (v: number, label: string, sub: string, tone: string) => `<div class="v2-pipe-stage" style="border-color:${tone}"><b>${v}</b><span>${e(label)}</span><small>${e(sub)}</small></div>`;
+  const pipeline = `<div class="v2-pipe">${stage(disc?.found ?? cands.length, 'Found', 'in this report’s search results, AI answers and profiles', PALETTE.greyMid)}<i>›</i>${stage(cands.length, 'Checked', 'own website read', PALETTE.blue)}<i>›</i>${stage(n('direct') + n('adjacent'), 'Competitors', `${n('direct')} direct · ${n('adjacent')} adjacent`, PALETTE.red)}<i>›</i>${stage(n('substitute'), 'Substitutes', 'agencies / alternatives', PALETTE.teal)}<i>›</i>${stage(n('unverified') + n('excluded'), 'Not compared', `${n('unverified')} unverified · ${n('excluded')} excluded`, PALETTE.greyMid)}</div>`;
+  const srcText = (c: Candidate) => [...new Set(c.sources.map((x) => x.detail))].slice(0, 2).join('; ');
+  const shown = cands.filter((c) => c.classification !== 'excluded');
+  const table = `<table class="v2-table v2-compact"><thead><tr><th style="width:18%">Company</th><th style="width:15%">Class</th><th>Why (from its own pages)</th><th style="width:25%">Found via · identity</th><th style="width:8%">Conf.</th></tr></thead><tbody>${
+    shown.map((c) => { const [t, tone] = CLASS_TONE[c.classification]; return `<tr><td><strong>${e(c.name)}</strong>${c.domain && c.domain !== c.name ? `<br/><small>${e(c.domain)}</small>` : ''}</td><td>${pill(t, tone)}</td><td><small>${e(c.rationale)}</small></td><td><small>${e(srcText(c).slice(0, 140))}<br/><em>Identity: ${e(c.identityVerified ? 'confirmed — ' + c.identityBasis : c.identityBasis)}</em></small></td><td><small>${e(c.confidence)}</small></td></tr>`; }).join('')
+  }</tbody></table>`;
+  const excluded = cands.filter((c) => c.classification === 'excluded');
+  const exNote = excluded.length ? `<p class="v2-note">Excluded (${excluded.length}): publishers, platforms and directories — sources buyers read, not competitors (${e(excluded.filter((c) => /publisher/.test(c.rationale)).map((c) => c.domain).slice(0, 8).join(', '))}); and companies whose own pages state none of ${e(ctx.brand)}’s capabilities (${e(excluded.filter((c) => /Irrelevant/.test(c.rationale)).map((c) => c.domain).slice(0, 8).join(', ') || 'none')}).${disc && disc.found > disc.checked ? ` ${disc.found - disc.checked} further candidates with less evidence were not checked.` : ''}</p>` : '';
+  return pipeline + table + exNote + '<p class="v2-note">Rule-based from each company’s own pages (identity, product or service wording, and the same capability definitions as below); not an analyst’s review. Analyst notes on companies profiled earlier are listed as a source.</p>';
+}
+
+/** Stage 4: one capability definition per row, applied to every company. */
+function capabilityMatrix(ctx: Context): string {
+  const cands = (ctx.research?.candidates ?? []).filter((c) => ['direct', 'adjacent', 'substitute'].includes(c.classification));
+  const ownPages = (ctx.research?.offering?.pages ?? []).filter((p) => p.read && p.text).map((p) => ({ url: p.url, text: p.text! }));
+  if (!cands.length || !ownPages.length) return '';
+  const cell = (st: { state: string } | undefined): HeatCell => (st?.state === 'confirmed' ? { text: 'stated on own site', tone: 'top' } : st?.state === 'not_found_in_checked_pages' ? { text: 'not found in checked pages', tone: 'absent' } : { text: 'not checked', tone: 'unmeasured' });
+  return heatmap([ctx.brand, ...cands.map((c) => c.name)], CAPABILITIES.map((d) => ({
+    label: d.label, sub: 'same definition for every company',
+    cells: [cell(capabilityState(d, ownPages)), ...cands.map((c) => cell(c.capabilities[d.key]))],
+  }))) + heatLegend([{ tone: 'top', label: 'Stated on the company’s own pages' }, { tone: 'absent', label: 'Not found in checked pages (not proof it is absent)' }, { tone: 'unmeasured', label: 'Not checked' }])
+    + `<p class="v2-note">${e(ctx.brand)}’s column uses its own website, not its profile: profile-only claims are not compared as facts.</p>`;
+}
+
+/** Section 1's plain-English line from the validated discovery. */
+function discoveryPlainEnglish(ctx: Context): string {
+  const c = ctx.research?.candidates ?? [];
+  const names = (k: string) => c.filter((x) => x.classification === k).map((x) => x.name);
+  const own = CAPABILITIES.length;
+  const parts = [names('direct').length ? `${names('direct').join(', ')} each state at least 3 of the ${own} capabilities ${ctx.brand}’s own website states` : `No direct competitor was confirmed on its own website`];
+  if (names('adjacent').length) parts.push(`${names('adjacent').join(', ')} cover part of it`);
+  if (names('substitute').length) parts.push(`${names('substitute').join(', ')} offer${names('substitute').length === 1 ? 's' : ''} similar work as a service`);
+  return `${parts.join('; ')}. Classified from each company’s own pages by rule, not reviewed by an analyst.`;
+}
+
 /** Section 1's plain-English line: names and rejections only as this run established them. */
 function marketPlainEnglish(verified: string[], rejected: number): string {
   const who = verified.length
@@ -1194,6 +1294,14 @@ function aiGrid(ctx: Context): string {
   ]);
 }
 
+function proposedQueries(ctx: Context): string {
+  const q = ctx.research?.proposedQueries ?? [];
+  if (!q.length) return '';
+  return `<table class="v2-table v2-compact"><thead><tr><th style="width:44%">Query</th><th>Basis</th><th style="width:12%">Status</th></tr></thead><tbody>${
+    q.map((x) => `<tr><td>${e(x.query)}</td><td><small>${e(x.basis)}</small></td><td>${pill(x.status === 'run' ? 'Run' : 'Proposed', x.status === 'run' ? 'good' : 'neutral')}</td></tr>`).join('')
+  }</tbody></table><p class="v2-note">Not run: the search plan has no searches left this period (source diagnostics). Results above come from ${e(String((ctx.research?.search ?? []).filter((r) => r.status === 'observed').length))} stored searches of ${e(fmtDate(ctx.ledger.search?.date) ?? 'an earlier date')}.</p>`;
+}
+
 function renderSearch(ctx: Context): string {
   const r1 = ctx.payload.report1;
   const search = searchView(ctx);
@@ -1254,7 +1362,8 @@ function renderSearch(ctx: Context): string {
     ${aiCitedSources(ctx) ? block('Where AI answers get their information', null, aiCitedSources(ctx)) : ''}
     ${generativeMatrix(ctx) ? block('AI search tools checked', 'Only answers retrieved from the live web, with checkable sources, count as visibility. Answers from a model’s memory are excluded.', generativeMatrix(ctx)) : ''}
     ${aiGrid(ctx) ? block('AI answer engines checked by the report run', 'By provider and question type. Only a grounded answer counts; every other outcome is shown by its reason.', aiGrid(ctx)) : ''}
-    ${runTable ? block('Queries checked by the report run', null, runTable, 'v2-allow-break') : ''}
+    ${proposedQueries(ctx) ? block('Buyer-intent queries proposed from the validated offering — not yet run', 'Derived from the offering register and market (section 1). They replace the generic category queries once a search can run.', proposedQueries(ctx)) : ''}
+    ${runTable ? block('Queries checked by the report run (generic)', 'Built from the declared category label, not from buyer questions: shown for completeness, not as buyer-intent evidence.', runTable, 'v2-allow-break') : ''}
     ${domainTable ? block('Domains seen in the report run’s results', null, domainTable) : ''}
   `);
 }
@@ -1410,7 +1519,7 @@ function renderAppendix(ctx: Context): string {
 
   return section(6, 'Evidence appendix', 'What was observed, where it came from, and how the numbers are calculated.',
     'Everything needed to check a conclusion: each source and its age, every research observation with its id and link, the open gaps and how to close them, each finding, every website check, and how scores are calculated.', `
-    ${block('Access reconciliation', 'Every source this report depends on: is there an adapter, is a credential present (yes / no only), was it attempted, what happened, and the cheapest compliant way to measure it.', accessMatrix(ctx), 'v2-allow-break')}
+    ${block('Source diagnostics', 'Every source: what was sought, what happened (with the provider’s own words where it refused), why — or “cause unconfirmed” — what it costs the conclusions, and the cheapest compliant next step.', diagnosticsTable(ctx), 'v2-allow-break')}
     <!--V2-VALIDATION-->
     ${block('Scoring inputs', 'The six inputs the Authority Index rests on, and whether each was measured. This is narrower than the access matrix above, which covers every source the report uses.', `<table class="v2-table v2-compact"><tbody>${ctx.sources.map((src) => {
       const tone: Tone = src.status === 'connected' ? 'good' : src.status === 'partial' ? 'info' : 'neutral';
@@ -1476,6 +1585,17 @@ const REASON_PILL: Record<string, [string, Tone]> = {
   missing_credential: ['Not configured', 'warn'], no_adapter: ['No supported access', 'neutral'], restricted: ['Sign-in / bot wall', 'warn'],
   request_failed: ['Configured, failed', 'bad'], quota_restricted: ['Quota / plan limit', 'bad'], ungrounded: ['Memory only', 'neutral'],
 };
+
+const DIAG_TONE = (s: DiagState): Tone => (s === 'measured' ? 'good' : s === 'partial' ? 'info' : ['searched_not_found', 'not_attempted', 'unsupported_capability'].includes(s) ? 'neutral' : ['not_configured', 'login_restricted', 'permission_denied'].includes(s) ? 'warn' : 'bad');
+
+function diagnosticsTable(ctx: Context): string {
+  return `<table class="v2-table v2-compact v2-access"><thead><tr><th style="width:17%">Source</th><th style="width:20%">State · cause</th><th style="width:22%">What happened</th><th style="width:15%">Impact</th><th>Next step · cost · needs</th></tr></thead><tbody>${
+    ctx.diagnostics.map((d) => `<tr data-diag="${e(d.key)}"><td><strong>${e(d.source)}</strong><br/><small>${e(d.family)} · integration ${e(d.integration)} · credential ${e(d.credential)}</small></td>
+      <td>${pill(DIAG_LABEL[d.state], DIAG_TONE(d.state))}${d.causeConfirmed ? '' : ' <em class="v2-unconf">cause unconfirmed</em>'}<br/><small>${e(d.cause)}</small></td>
+      <td><small>${e(d.attempt)}</small></td><td><small>${e(d.impact)}</small></td>
+      <td><small>${e(d.next)}<br/><b>Cost:</b> ${e(d.cost)}${d.needs.length ? ` · <b>needs:</b> ${e(d.needs.join(', '))}` : ''}${d.unlocks && d.unlocks !== '—' ? `<br/><b>Unlocks:</b> ${e(d.unlocks)}` : ''}${d.docUrl ? `<br/><span class="v2-src">${e(d.docUrl.replace(/^https?:\/\//, ''))}</span>` : ''}</small></td></tr>`).join('')
+  }</tbody></table><p class="v2-note">Credentials are recorded as present, absent or rejected only — never their values. Provider facts and prices are from the official pages linked, read on 25 Oct 2026; where a page did not state a price, the cost is “unknown”. Checks marked local ran from the analyst’s workstation and may differ from production.</p>`;
+}
 
 function accessMatrix(ctx: Context): string {
   const yn = (v: boolean | null) => (v === true ? 'yes' : v === false ? 'no' : '—');

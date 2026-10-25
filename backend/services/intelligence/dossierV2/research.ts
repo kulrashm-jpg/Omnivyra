@@ -13,6 +13,10 @@
 import type { Mention, PlatformCheck, ProfileCheck, SocialPost } from '../publicResearch/footprint';
 import type { RuntimeSnapshot } from '../publicResearch/runtime';
 import type { OfferingEvidence } from '../publicResearch/offering';
+import type { MarketView, OfferingRegister } from '../publicResearch/offeringRegister';
+import type { Candidate } from '../publicResearch/competitorDiscovery';
+import type { ProviderCheck } from '../publicResearch/providerChecks';
+import type { ErrorClass, ProviderErrorEvidence } from '../publicResearch/providerErrors';
 
 export type ResearchStatus =
   | 'observed'
@@ -62,6 +66,8 @@ export type ResearchRecord = {
   gap?: string;
   /** An action the evidence supports, authored at research time; records sharing an id are one action. */
   recommends?: { id: string; title: string; action: string; effort: 'low' | 'medium' | 'high'; impact?: 'low' | 'medium' | 'high'; pillar?: string; verification: string };
+  /** Failed requests: the provider's sanitised error fields and the class they support. */
+  providerError?: ProviderErrorEvidence & { errorClass: ErrorClass; causeConfirmed: boolean };
   // competitors
   name?: string;
   domain?: string;
@@ -89,6 +95,17 @@ export type ResearchPack = {
   runtime?: RuntimeSnapshot | null;
   /** Declared offering and capabilities checked against the live site's own pages (publicResearch/offering.ts). */
   offering?: OfferingEvidence | null;
+  /** Stage 1–2: what the company offers and the market that places it in (publicResearch/offeringRegister.ts). */
+  register?: OfferingRegister | null;
+  market?: MarketView | null;
+  /** Stage 3–4: candidates from this report's evidence, validated on their own pages (publicResearch/competitorDiscovery.ts). */
+  candidates?: Candidate[] | null;
+  /** Free provider checks (credential, quota, model access, keyless PageSpeed) — publicResearch/providerChecks.ts. */
+  providerChecks?: ProviderCheck[] | null;
+  /** Buyer-intent queries derived from the validated offering and market; "proposed" until a search runs them. */
+  proposedQueries?: Array<{ query: string; basis: string; status: 'proposed' | 'run' }> | null;
+  /** How many candidates the evidence produced and how many were read on their own sites. */
+  candidateDiscovery?: { found: number; checked: number } | null;
 };
 
 export type Footprint = {
@@ -114,6 +131,11 @@ export type Footprint = {
  * source at all; those are re-classified here (answered, not grounded) and never counted.
  */
 export function withoutUnsourcedAnswers(r: ResearchRecord): ResearchRecord {
+  // The reason recorded for Meta AI was a code constant, not an observation, and Meta's Model API does
+  // offer search grounding (dev.meta.ai/docs/search-grounding): restate it as what it was — no adapter.
+  if (r.status === 'not_measured' && /^Meta AI:/.test(r.claim) && /no public API/i.test(r.claim)) {
+    return { ...r, claim: 'Meta AI: no adapter is implemented for the Meta Model API’s search grounding, so it was not asked; the consumer app is not used.' };
+  }
   if (r.status !== 'observed' || !r.query || r.kind === 'ai_overview' || r.kind === 'model_recall') return r;
   if ((r.citedDomains ?? []).length || r.sourceUrl) return r;
   return { ...r, status: 'insufficient_evidence', mentioned: false, cited: false,
@@ -184,6 +206,12 @@ export function parseResearchPack(input: unknown, domain: string | null | undefi
       : null,
     runtime: p.runtime && typeof p.runtime === 'object' && Array.isArray(p.runtime.capabilities)
       ? { checkedAt: String(p.runtime.checkedAt ?? ''), capabilities: p.runtime.capabilities } : null,
+    register: p.register && Array.isArray(p.register.entries) ? p.register : null,
+    market: p.market && Array.isArray(p.market.items) ? p.market : null,
+    candidates: Array.isArray(p.candidates) ? p.candidates : null,
+    providerChecks: Array.isArray(p.providerChecks) ? p.providerChecks : null,
+    proposedQueries: Array.isArray(p.proposedQueries) ? p.proposedQueries : null,
+    candidateDiscovery: p.candidateDiscovery && typeof p.candidateDiscovery.found === 'number' ? p.candidateDiscovery : null,
     offering: p.offering && typeof p.offering === 'object' && Array.isArray(p.offering.pages) && Array.isArray(p.offering.capabilities)
       ? { ...p.offering, selfDescription: p.offering.selfDescription ?? null, offering: p.offering.offering ?? null, pricing: p.offering.pricing ?? null, freePlan: p.offering.freePlan ?? null }
       : null,

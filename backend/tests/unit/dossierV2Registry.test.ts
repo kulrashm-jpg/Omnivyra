@@ -450,7 +450,7 @@ describe('dossier v2 evidence ledger, footprint and consistency check', () => {
     expect(l.access.find((a) => a.capability === 'Review and directory listings')?.reason).toBe('partial');
     expect(l.access.every((a) => Boolean(a.reason))).toBe(true);
     const html = load().renderDossierV2Html(run(), { brandName: 'Acme', domain: 'acme.test' }, pack());
-    expect(html).toContain('Access reconciliation');
+    expect(html).toContain('Source diagnostics');
     // The identity ladder: a sign-in wall is a limitation on a step, not a "no".
     expect(html).toContain('Official profiles: identity, step by step');
     expect(html).toMatch(/requires sign-in|Sign-in wall/);

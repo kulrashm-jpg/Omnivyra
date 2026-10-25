@@ -59,7 +59,7 @@ describe('AI search answers', () => {
     const out = await askAiSurfaces(['best campaign tools?']);
     expect(out.find((a) => a.surface === 'perplexity')).toMatchObject({ status: 'not_measured' });
     expect(out.find((a) => a.surface === 'perplexity')?.reason).toContain('PERPLEXITY_API_KEY');
-    expect(out.find((a) => a.surface === 'meta_ai')?.reason).toContain('no public API');
+    expect(out.find((a) => a.surface === 'meta_ai')?.reason).toContain('No adapter');
     expect(out.every((a) => a.status === 'not_measured')).toBe(true);
     expect(SURFACES.map((s) => s.id)).toEqual(expect.arrayContaining(['chatgpt_search', 'perplexity', 'claude_search', 'gemini_search', 'google_ai_mode', 'bing_copilot', 'meta_ai']));
   });
@@ -234,7 +234,8 @@ describe('collected pack', () => {
     expect(vis.generative?.notMeasuredSurfaces).toEqual(expect.arrayContaining(['Perplexity', 'Meta AI']));
     expect(parsed!.site.find((r) => /robots\.txt is missing/.test(r.claim))?.recommends?.id).toBe('A-site-crawl-basics');
     expect(parsed!.gaps.map((g) => g.claim)).toEqual(expect.arrayContaining(['Perplexity answers']));
-    const ids = Object.values(parsed!).filter(Array.isArray).flat().map((r: any) => r.id);
+    // Evidence records carry ids; candidate and provider-check rows are keyed by domain / provider instead.
+    const ids = Object.values(parsed!).filter(Array.isArray).flat().map((r: any) => r.id).filter(Boolean);
     expect(new Set(ids).size).toBe(ids.length);
     const html = renderDossierV2Html({ generated_at: '2026-10-24T00:00:00Z', pillars: [], report1: {} } as never, { brandName: 'Acme', domain: 'acme.test' }, pack);
     expect(html).toContain('What AI search tools say, question by question');

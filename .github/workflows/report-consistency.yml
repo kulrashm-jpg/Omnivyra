@@ -60,12 +60,13 @@ jobs:
       - name: Verify the gated suite inventory (no silent skips)
         run: |
           set -euo pipefail
-          EXPECTED=3
-          for s in dossierV2Contradictions dossierV2Registry publicResearchCollect; do
+          EXPECTED=4
+          for s in dossierV2Contradictions dossierV2SourceDiagnostics dossierV2Registry publicResearchCollect; do
             test -f "backend/tests/unit/$s.test.ts" || { echo "Gated suite missing: $s"; exit 1; }
           done
           FOUND=$(npx jest --listTests \
             backend/tests/unit/dossierV2Contradictions.test.ts \
+            backend/tests/unit/dossierV2SourceDiagnostics.test.ts \
             backend/tests/unit/dossierV2Registry.test.ts \
             backend/tests/unit/publicResearchCollect.test.ts \
             2>/dev/null | grep -c 'test\.ts')
@@ -73,4 +74,4 @@ jobs:
           test "$FOUND" -eq "$EXPECTED"
 
       - name: Contradiction checks, evidence ledger and rendered dossier
-        run: npx jest backend/tests/unit/dossierV2Contradictions.test.ts backend/tests/unit/dossierV2Registry.test.ts backend/tests/unit/publicResearchCollect.test.ts --no-coverage --colors --ci
+        run: npx jest backend/tests/unit/dossierV2Contradictions.test.ts backend/tests/unit/dossierV2SourceDiagnostics.test.ts backend/tests/unit/dossierV2Registry.test.ts backend/tests/unit/publicResearchCollect.test.ts --no-coverage --colors --ci

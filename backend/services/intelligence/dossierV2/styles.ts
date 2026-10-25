@@ -304,6 +304,7 @@ table { border-collapse: collapse; width: 100%; }
 .v2-timeline li::before { content: ""; position: absolute; top: -2.4mm; left: 0; width: 3.4mm; height: 3.4mm; border-radius: 50%; background: ${P.teal}; }
 .v2-timeline li.is-report::before { background: ${P.navy}; } .v2-timeline li.is-after::before { background: ${P.orange}; }
 .v2-timeline b { display: block; color: ${P.navy}; } .v2-timeline span { display: block; } .v2-timeline em { display: block; font-style: normal; color: ${P.grey}; }
+.v2-unconf { font-style: normal; font-size: 7pt; color: ${P.orange}; font-weight: 700; }
 /* One claim, three layers */
 .v2-layer { border-radius: 1.5mm; padding: 1.6mm 2.4mm; margin-top: 1.4mm; font-size: 8pt; line-height: 1.38; }
 .v2-layer b { display: block; font-size: 6.8pt; letter-spacing: .08em; text-transform: uppercase; margin-bottom: .4mm; }

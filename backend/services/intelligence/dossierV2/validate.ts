@@ -10,6 +10,9 @@
 import type { DossierRegistry } from './registry';
 import type { Ledger } from './ledger';
 import { isBrandQuestion, type ResearchPack } from './research';
+import { buildDiagnostics, DIAG_LABEL } from './diagnostics';
+import { classifyProviderError } from '../publicResearch/providerErrors';
+import { CAPABILITIES, capabilityState } from '../publicResearch/competitorDiscovery';
 
 export type ValidationIssue = { rule: string; blocking: boolean; detail: string };
 export type ValidationResult = { passed: boolean; issues: ValidationIssue[]; checks: string[] };
@@ -220,6 +223,56 @@ export function validateReport(ledger: Ledger, registry: DossierRegistry, html: 
   checks.push('AI denominator: every answer counted as grounded has at least one checkable source.');
   for (const g of pack?.generative ?? []) {
     if (g.status === 'observed' && g.query && g.kind !== 'ai_overview' && !(g.citedDomains ?? []).length && !g.sourceUrl) fail('grounding', `${g.id} (${g.surface}) is counted as a grounded answer but returned no source.`);
+  }
+
+  // 24. A provider error's cause must be reproducible from its own evidence (never from the status alone).
+  checks.push('Provider errors: each recorded cause is reproduced from the provider’s own error fields.');
+  for (const g of pack?.generative ?? []) {
+    const pe = g.providerError;
+    if (!pe) continue;
+    const again = classifyProviderError(pe);
+    if (again.errorClass !== pe.errorClass || (pe.causeConfirmed && !again.causeConfirmed)) fail('error-cause', `${g.id} records “${pe.errorClass}” but its evidence supports “${again.errorClass}${again.causeConfirmed ? '' : ' (unconfirmed)'}”.`);
+  }
+
+  // 25. "Not found" only after a search that ran.
+  checks.push('Footprint: "searched, not found" only where the search actually ran.');
+  for (const f of ledger.families) {
+    if (f.state === 'searched_not_found' && !f.attempted) fail('not-found-scope', `${f.label} is “searched, not found” but no search ran.`);
+  }
+  if (pack?.footprint && !pack.footprint.mentionSearch && /not found in search/i.test(body)) fail('not-found-scope', 'The report says “not found in search” but the mention search did not run.');
+
+  // 26. Competitor candidates: identity and a recorded reason before any comparison.
+  checks.push('Competitors: every compared candidate has a confirmed identity, its own pages read and a recorded rationale; overlap counts only the company’s website-stated capabilities.');
+  const ownPages = (pack?.offering?.pages ?? []).filter((p) => p.read && p.text).map((p) => ({ url: p.url, text: p.text! }));
+  const ownConfirmed = new Set(CAPABILITIES.filter((d) => capabilityState(d, ownPages).state === 'confirmed').map((d) => d.key));
+  for (const c of pack?.candidates ?? []) {
+    if (!['direct', 'adjacent', 'substitute'].includes(c.classification)) continue;
+    if (!c.identityVerified || !c.domain || !c.pagesRead.length) fail('competitors', `${c.name} is compared but its identity or pages were not confirmed.`);
+    if (!c.rationale.trim() || !c.sources.length) fail('competitors', `${c.name} is compared without a recorded rationale or source.`);
+    const unverified = c.overlap.filter((k) => !ownConfirmed.has(k));
+    if (unverified.length) fail('provenance', `${c.name}'s overlap counts capabilities not stated on the company's own site: ${unverified.join(', ')}.`);
+  }
+
+  // 27. Generic queries are never presented as buyer-intent searches.
+  checks.push('Search: generic category-label queries are never presented as buyer-intent searches.');
+  if (ledger.search?.source === 'report_run' && /\d+ of \d+ buyer(-intent)? searches/i.test(body)) fail('unsupported', 'Only generic category queries ran, but the report counts them as buyer searches.');
+  if ((pack?.proposedQueries ?? []).some((q) => q.status === 'proposed') && /proposed[^.]{0,40}\b(found|ranked|returned)\b/i.test(body)) fail('unsupported', 'A proposed (not run) query is reported with a result.');
+
+  // 28. Remediation claims rest on provider evidence.
+  checks.push('Remediation: every price or provider capability named in a next step cites its official page.');
+  const diags = buildDiagnostics(ledger, pack);
+  for (const d of diags) {
+    if (/\$\d/.test(`${d.next} ${d.unlocks} ${d.capability}`) && !d.docUrl) fail('remediation', `${d.source}: a price is named without the provider page it comes from.`);
+    if (d.cost === 'paid usage' && !d.docUrl) fail('remediation', `${d.source}: “paid usage” is stated without the provider page that establishes it.`);
+  }
+
+  // 29. Summaries say what the diagnostic matrix says.
+  checks.push('Summaries: every source state shown on pages 2–3 equals its state in the source diagnostics.');
+  const summaries = section(html, 'summary-now') + section(html, 'summary-next');
+  for (const m of summaries.matchAll(/data-diag="([^"]+)"[^>]*>[\s\S]*?<\/b>(?:<span>| — )([^<.(]+)/g)) {
+    const d = diags.find((x) => x.key === m[1]);
+    if (!d) { fail('summary-diagnostics', `A summary names an unknown source “${m[1]}”.`); continue; }
+    if (m[2].trim().toLowerCase() !== DIAG_LABEL[d.state].toLowerCase()) fail('summary-diagnostics', `${d.source}: the summary says “${m[2].trim()}”, the diagnostics say “${DIAG_LABEL[d.state]}”.`);
   }
 
   // 22. One register: no two actions with the same title.
