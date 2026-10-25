@@ -379,6 +379,7 @@ export default function CreatorTypeWorkflowPage() {
     handleRenderInline,
     handleSaveAsBlock,
     handleTemplateAiAssist,
+    userEditedKeys: s.userEditedKeys,
     handleUseExistingAsset,
     hasBrandProfile,
     inlineRenderError,

@@ -11,6 +11,7 @@ import type { MarketingBrief } from '../content/unifiedCreationModel';
 import { getCreationGoal } from '../content/unifiedCreationModel';
 import type { AttachmentMode } from '../content/writerCreatorAttachmentContracts';
 import { clipWords, deriveMainMessage } from './creatorBrief';
+import { isInstructionLikeCopy } from './creatorCopyPurpose';
 import type { CreatorDiagnosticReport } from '../../backend/services/creator/creatorDiagnosticReport';
 import {
   type CreatorTypeId,
@@ -316,7 +317,10 @@ export function mapBriefToEditorAnswers(brief: MarketingBrief, config: WorkflowC
   set('audience', brief.audience);
   set('topic', (brief.offer ?? '').trim() || firstSentence);
   // Core-message style fields across asset types.
-  for (const id of ['keyMessage', 'message', 'coreMessage', 'mainMessage', 'headline']) set(id, mainMessage);
+  for (const id of ['keyMessage', 'message', 'coreMessage', 'mainMessage']) set(id, mainMessage);
+  // A headline is COPY: an instruction-like main message ("Create an engaging
+  // promotion for our …") is the brief, never the headline (owner 2026-10-25).
+  if (!isInstructionLikeCopy(mainMessage)) set('headline', mainMessage);
   set('cta', brief.cta);
   set('offer', brief.offer);
   // Objective Preservation (Wave 0): seed `objective` from the brief's

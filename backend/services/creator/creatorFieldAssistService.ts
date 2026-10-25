@@ -23,6 +23,10 @@ import {
 } from '../../../lib/creator-templates';
 import { buildCreatorGroundingBlock, type CreatorCompanyContext, type CreatorBrandVoice } from './creatorCopyContextResolver';
 import { validateCreatorCopyValue, type CopyViolation } from './creatorCopyValidation';
+import { resolvePurposeStrategy } from './purposeStrategyRegistry';
+import {
+  goalCtaSuggestions, instructionSubject, isInstructionLikeCopy, pickFittingCta,
+} from '../../../lib/creator-content/creatorCopyPurpose';
 
 export type FieldAssistScope = 'flat' | 'slide' | 'section' | 'overlay' | 'brief';
 
@@ -79,6 +83,9 @@ export interface FieldAssistContext {
   cta?: string;
   /** The offer / product being promoted. */
   offer?: string;
+  /** The chosen purpose strategy key (e.g. "promotional-image") — its CTA
+   *  suggestions make a fallback / prompted button goal-specific. */
+  purposeKey?: string;
   /** Source content the asset is being BUILT FROM — the Writer post body, a campaign theme /
    *  weekly / daily card, or a longer brief. When present, generated copy (esp. carousel slides)
    *  must be derived from this content, preserving its facts and sequence — not invented from the
@@ -91,6 +98,9 @@ export interface FieldAssistContext {
   company?: CreatorCompanyContext;
   /** Canonical brand voice (communication style) — server-resolved. */
   brandVoice?: CreatorBrandVoice;
+  /** Server-internal: the asset family, so the deterministic fallback can resolve
+   *  the purpose strategy. Never read from the client. */
+  assetFamilyHint?: string;
 }
 
 export interface FieldAssistRequest {
@@ -171,6 +181,7 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
     mainMessage: clamp(str(rawContext.main_message ?? rawContext.mainMessage), 300) || undefined,
     cta: str(rawContext.cta).slice(0, 120) || undefined,
     offer: str(rawContext.offer).slice(0, 300) || undefined,
+    purposeKey: str(rawContext.purpose_key ?? rawContext.purposeKey).slice(0, 80) || undefined,
     sourceContent: str(rawContext.source_content ?? rawContext.sourceContent).slice(0, 6000) || undefined,
     siblings: Array.isArray(rawContext.siblings)
       ? (rawContext.siblings as unknown[])
@@ -240,6 +251,11 @@ export function buildFieldAssistMessages(
     company: request.context?.company,
     brandVoice: request.context?.brandVoice,
   });
+  // Persuasive copy (owner 2026-10-25): an instruction-like main message is the
+  // user's BRIEF ("Create an engaging promotion for our X"), not copy.
+  const mainIsInstruction = isInstructionLikeCopy(ctx.mainMessage);
+  const subject = mainIsInstruction ? instructionSubject(ctx.mainMessage) : '';
+  const ctaIdeas = purposeCtaCandidates(request.assetFamily, ctx);
 
   const system = [
     `You are a marketing copy assistant for a ${template.assetFamily} asset ("${template.name}").`,
@@ -256,9 +272,16 @@ export function buildFieldAssistMessages(
     // Ground copy in the company's ACTUAL business — never invent company facts.
     'Ground the copy in the company context provided below; do not invent products, claims, or company facts that are not given.',
     // Owner decision (2026-10-24): the main message is THE key of the asset.
-    ...(ctx.mainMessage
+    ...(ctx.mainMessage && !mainIsInstruction
       ? ['A MAIN MESSAGE is given below. It is the key of this asset: the headline/title/lead field EXPRESSES it (condensed to fit when needed, never replaced by a different idea), and every other field SUPPORTS it — adding proof, context, benefit or the next step for that same message. Never contradict it, drift to another topic, or ignore it.']
       : []),
+    // Owner request (2026-10-25): an instruction is a TASK, not copy.
+    ...(mainIsInstruction
+      ? ['The USER\'S BRIEF below is an INSTRUCTION to you (it describes what to make), NOT copy. NEVER output it, quote it, or lightly reword it as any value, and never write copy that describes the asset ("an engaging promotion", "this post"). Work out the actual offer/subject it names and write persuasive copy ABOUT that subject, for the audience.']
+      : []),
+    // Owner request (2026-10-25): copy that influences people, complete with purpose.
+    'PERSUASIVE, PURPOSE-DRIVEN COPY: every value must move the audience toward the Objective. HEADLINE / TITLE / QUOTE lead = a specific, benefit-led claim or hook about what the audience gets — never an instruction ("Create…", "Make…", "Promote…"), never a description of the asset, never the brand or product name alone. SUBHEADLINE / SUPPORTING line = backs the headline with proof, a specific detail, or the outcome. CTA / BUTTON = 2–4 words that start with an imperative verb and are specific to the goal (promote an offer → "Claim 30% off" / "Get the offer"; generate leads → "Book a demo"; launch → "Try it free"; awareness → "See how it works"; event → "Reserve your seat"); never a sentence, never cut off, always complete within its max length.',
+    'CAROUSEL slides follow the arc hook → value → proof → CTA: the first title stops the scroll with tension or a bold benefit, middle slides each deliver one concrete benefit or proof point, the last slide asks for the goal\'s action. INFOGRAPHIC section titles are short benefit-led claims; their bodies give the specific fact, step or number behind the claim.',
     // Strength: a generic goal/category label is an ANGLE, not the message.
     // Owner decision (2026-10-24): the text the asset is made FOR drives the copy.
     'SOURCE ORDER: the user\'s own words come first — the main message (when given), the current value of the field, and the source content (the post, blog or brief this asset is made for). Build every value FROM that material. The company context only shapes tone, angle, audience and vocabulary: never copy positioning, differentiator or messaging-pillar text verbatim, never output analysis labels such as "trust model:", "audience distinction:" or "Differentiate through", and never replace the user\'s message with a company description. When source content or a current value is given for a brief/description field, refine and extend THAT text — do not replace it with a different idea.',
@@ -291,9 +314,12 @@ export function buildFieldAssistMessages(
     ctx.audience ? `Audience (this asset): ${ctx.audience}` : '',
     ctx.objective ? `Objective: ${ctx.objective}` : '',
     ctx.tone ? `Requested tone: ${ctx.tone}` : '',
-    ctx.mainMessage ? `MAIN MESSAGE (the key): ${ctx.mainMessage}` : '',
+    ctx.mainMessage && !mainIsInstruction ? `MAIN MESSAGE (the key): ${ctx.mainMessage}` : '',
+    ctx.mainMessage && mainIsInstruction ? `USER'S BRIEF (an instruction — do NOT output it as copy): ${ctx.mainMessage}` : '',
+    subject ? `Subject to write about: ${subject}` : '',
     ctx.offer ? `Offer / product: ${ctx.offer}` : '',
-    ctx.cta ? `Viewer action (use it for any CTA field, keep it short): ${ctx.cta}` : '',
+    ctx.cta ? `Viewer action (the intent for any CTA field — rewrite it to 2–4 words that fit the max length; never cut it): ${ctx.cta}` : '',
+    ctaIdeas.length ? `Goal-appropriate button ideas: ${ctaIdeas.join(' / ')}` : '',
     // Canonical company context (business understanding) — shared grounding.
     ...companyLines,
   ].filter(Boolean).join('\n');
@@ -351,10 +377,18 @@ export function deterministicTransform(
 
   // The brief's own words outrank every derived fact: the main message IS the
   // lead line and the viewer action IS the CTA (owner decision 2026-10-24).
-  const mainMessage = str(context.mainMessage);
-  const briefCta = str(context.cta);
+  // An instruction-like main message is the BRIEF, never copy (owner 2026-10-25):
+  // it is not echoed into any field; its subject is written about instead.
+  const rawMain = str(context.mainMessage);
+  const mainIsInstruction = isInstructionLikeCopy(rawMain);
+  const mainMessage = mainIsInstruction ? '' : rawMain;
+  const subject = mainIsInstruction ? instructionSubject(rawMain) : '';
   const generateSeed = (): string => {
-    if (key.includes('cta')) return briefCta ? clamp(briefCta, field.maxLength) : 'Learn more';
+    // A button is a short goal-specific action that fits WHOLE: the brief's
+    // viewer action when it fits, else the purpose strategy's / goal's CTA.
+    if (key.includes('cta')) {
+      return pickFittingCta([str(context.cta), ...purposeCtaCandidates(context.assetFamilyHint, context)], field.maxLength) || 'Learn more';
+    }
     if (mainMessage && (key === 'headline' || key === 'title' || key === 'quote')) {
       return clampWords(mainMessage, field.maxLength);
     }
@@ -377,7 +411,8 @@ export function deterministicTransform(
     // paragraph had become the image's main message). The goal label is only ever an
     // ANGLE of last resort. Each field prefers a DIFFERENT fact so a multi-field fallback
     // stays distinct rather than repeating one positioning line.
-    const userLine = firstOf(mainMessage, firstSentence(str(context.sourceContent)));
+    const sourceLine = firstSentence(str(context.sourceContent));
+    const userLine = firstOf(mainMessage, isInstructionLikeCopy(sourceLine) ? '' : sourceLine);
     const fact = (...xs: string[]): string => profileClause(firstOf(...xs));
     if (key.includes('freetext') || key.includes('brief') || key.includes('description') || key.includes('body')) {
       const s = firstOf(userLine, fact(positioning, differentiator, pillar));
@@ -396,7 +431,7 @@ export function deterministicTransform(
     }
     // Headline / offer / generic — the user's line, then a real product name, then one
     // short positioning clause, before the goal label.
-    const lead = firstOf(userLine, product, fact(positioning, differentiator, pillar));
+    const lead = firstOf(userLine, str(context.offer), subject, product, fact(positioning, differentiator, pillar));
     if (lead) return clamp(capitalize(lead), field.maxLength);
     if (topic) return capitalize(topic);
     return field.label;
@@ -416,7 +451,9 @@ export function deterministicTransform(
     case 'rewrite':
     case 'improve':
     default:
-      out = cur ? capitalize(collapseWhitespace(cur)) : generateSeed();
+      // An instruction or an over-long button is not improvable copy — write it fresh.
+      out = cur && !isInstructionLikeCopy(cur) && !(key.includes('cta') && cur.length > (field.maxLength ?? Infinity))
+        ? capitalize(collapseWhitespace(cur)) : generateSeed();
       break;
   }
   return clamp(out, field.maxLength);
@@ -569,8 +606,11 @@ export async function runCreatorFieldAssist(input: {
   for (const { target, field } of resolved) {
     const k = targetKey(target.scope, target.fieldKey, target.index);
     let value = llmValues.get(k);
+    // Owner 2026-10-25: an instruction is never shipped as copy (brief fields
+    // — the intake's own "what to create" text — are exempt).
+    if (value && target.scope !== 'brief' && isInstructionLikeCopy(value)) value = '';
     if (value == null || value.length === 0) {
-      value = deterministicTransform(request.action, field, target.currentValue ?? '', request.context ?? {});
+      value = deterministicTransform(request.action, field, target.currentValue ?? '', { ...(request.context ?? {}), assetFamilyHint: request.assetFamily });
       usedFallback = true;
     }
     // Canonical deterministic validation — repair forbidden words / prohibited
@@ -578,7 +618,7 @@ export async function runCreatorFieldAssist(input: {
     let v = validateCreatorCopyValue(value, target.fieldKey, brandVoice);
     if (!v.ok) {
       // Repair emptied the value → deterministic fallback, then re-validate.
-      value = deterministicTransform(request.action, field, target.currentValue ?? '', request.context ?? {});
+      value = deterministicTransform(request.action, field, target.currentValue ?? '', { ...(request.context ?? {}), assetFamilyHint: request.assetFamily });
       usedFallback = true;
       v = validateCreatorCopyValue(value, target.fieldKey, brandVoice);
     }
@@ -612,6 +652,19 @@ export async function loadTemplateForAssist(request: FieldAssistRequest): Promis
 }
 
 /* ── helpers ────────────────────────────────────────────────────────── */
+
+/**
+ * Goal-appropriate button candidates, most specific first: the chosen purpose
+ * strategy's CTA suggestions, then those implied by the goal / objective text.
+ */
+export function purposeCtaCandidates(assetFamily: string | undefined, context: FieldAssistContext): string[] {
+  const strategy = context.purposeKey && assetFamily ? resolvePurposeStrategy(assetFamily, context.purposeKey) : null;
+  const out: string[] = [];
+  for (const c of [...(strategy?.ctaSuggestions ?? []), ...goalCtaSuggestions(str(context.objective) || str(context.topic))]) {
+    if (c && !out.includes(c)) out.push(c);
+  }
+  return out;
+}
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim();
