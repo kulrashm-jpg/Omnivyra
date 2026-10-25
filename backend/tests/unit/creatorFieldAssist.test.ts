@@ -99,7 +99,9 @@ describe('Field assist — intake fallback is field-aligned, not the goal label 
     expect(freeText.length).toBeGreaterThan(offer.length);
     // offer legitimately restates the goal; cta is an action.
     expect(offer).toBe('Promote an Event');
-    expect(cta).toBe('Learn more');
+    // Updated deliberately (owner 2026-10-25, persuasive copy): the fallback CTA is
+    // goal-appropriate — an event goal asks for a seat, not a generic "Learn more".
+    expect(cta).toBe('Reserve your seat');
   });
 
   it('does not fill hook / key insight with the bare goal label (they interpret the topic)', () => {

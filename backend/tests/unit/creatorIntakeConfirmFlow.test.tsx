@@ -68,7 +68,9 @@ describe('intake screen — every choice is made here and handed to the editor',
     fireEvent.click(screen.getByTestId('intake-attachment-supporting_visual'));
     fireEvent.click(screen.getByTestId('intake-layout-portrait'));
     fireEvent.click(screen.getByTestId('intake-presence-strong'));
-    fireEvent.click(screen.getByTestId('intake-include-logo'));
+    // Owner 2026-10-25: pick the mark (logo / site icon / none) and its size.
+    fireEvent.click(screen.getByTestId('intake-mark-favicon'));
+    fireEvent.click(screen.getByTestId('intake-mark-size-large'));
     // The image panel belongs to the same draft the editor will open.
     const panelDraft = screen.getByTestId('image-panel').getAttribute('data-composition');
     expect(panelDraft).toBeTruthy();
@@ -84,7 +86,8 @@ describe('intake screen — every choice is made here and handed to the editor',
 
     const intake = readCreatorIntake(window.sessionStorage.getItem(CREATOR_INTAKE_SESSION_KEY));
     expect(intake).toEqual({
-      attachmentMode: 'supporting_visual', brandMode: 'brand-aware', brandPresence: 'strong', includeLogo: false, layout: 'portrait',
+      attachmentMode: 'supporting_visual', brandMode: 'brand-aware', brandPresence: 'strong', includeLogo: true, layout: 'portrait',
+      brandMark: 'favicon', brandMarkSize: 'large',
     });
     const brief = readMarketingBrief(window.sessionStorage.getItem(MARKETING_BRIEF_SESSION_KEY));
     expect(brief?.mainMessage).toBe('Plan a month of posts in an hour');
@@ -209,5 +212,31 @@ describe('independent colours — intake → editor → payload → summary', ()
     expect(colours({ brandAware: false, paletteMode: 'look' })).toBe("The look's own palette");
     expect(colours({ brandAware: false, paletteMode: 'experimental' })).toBe('Experimental palette chosen by AI');
     expect(colours({ brandAware: true, paletteMode: 'brand' })).toBeUndefined();
+  });
+});
+
+/* Owner 2026-10-25: "Include my logo" — size handled dynamically or picked, and the
+ * favicon offered. The choice reaches the renderer (brand kit + placement). */
+describe('brand mark — logo / site icon / none, and its size', () => {
+  it('the intake maps to the editor selections and size override', () => {
+    const restore = intakeToEditorRestore({
+      attachmentMode: null, brandMode: 'brand-aware', brandPresence: null, includeLogo: true, layout: null,
+      brandMark: 'favicon', brandMarkSize: 'large',
+    }, WORKFLOW_CONFIG.image ?? null);
+    expect(restore?.brandSelections).toEqual(expect.objectContaining({ logo: false, favicon: true }));
+    expect(restore?.brandOverrides).toEqual({ faviconSize: 'large' });
+    const none = intakeToEditorRestore({
+      attachmentMode: null, brandMode: 'brand-aware', brandPresence: null, includeLogo: false, layout: null, brandMark: 'none',
+    }, WORKFLOW_CONFIG.image ?? null);
+    expect(none?.brandSelections).toEqual(expect.objectContaining({ logo: false, favicon: false }));
+    expect(none?.brandOverrides).toBeUndefined();
+  });
+
+  it('the size row hides when no mark is chosen', async () => {
+    render(<ImageCreationWorkspace onNavigate={jest.fn()} />);
+    await toBrief();
+    expect(screen.getByTestId('intake-mark-size-auto')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('intake-mark-none'));
+    expect(screen.queryByTestId('intake-mark-size-auto')).toBeNull();
   });
 });

@@ -8,6 +8,9 @@
 import { INDEPENDENT_PALETTE_OPTIONS, paletteModeFor } from '../../../lib/creator-content/creatorPaletteMode';
 import React from 'react';
 import TemplateFieldsPanel from '../TemplateFieldsPanel';
+import { CREATOR_EDITOR_OPEN_EVENT } from '../../../lib/content/openCreatorEditor';
+import CreatorCopyEditor from '../CreatorCopyEditor';
+import { isInstructionLikeCopy } from '../../../lib/creator-content/creatorCopyPurpose';
 import { IMAGE_COPY_FIELD_KEYS } from '../../../lib/creator-templates/types';
 import CreatorVariantExperienceSection from '../CreatorVariantExperienceSection';
 import LookVariationsButton from '../LookVariationsButton';
@@ -18,7 +21,6 @@ import {
   BRAND_ASSET_SIZE_PRESETS,
   type BrandPresence,
   type CreatorBrandMode,
-  brandAssetSizePx,
   getSavedAssetAttachmentLabel,
   getSavedAssetCreatorType,
   humanizeValue,
@@ -32,6 +34,8 @@ import CreativeSummaryCard, { type CreativeSummaryProps } from '../CreativeSumma
 import { EMPTY_GUIDED_CHOICES } from '../../../lib/content/guidedCreativeDirection';
 import { getOutcome } from '../../../lib/creator-outcomes/outcomeRegistry';
 import { intakeLayoutFieldId, intakeLayoutOptions } from '../../../lib/creator-content/creatorIntake';
+
+const EMPTY_EDITED_KEYS: ReadonlySet<string> = new Set<string>();
 
 /**
  * Global AI-activity indicator. EVERY AI operation on this screen sets `aiBusyKey`
@@ -144,6 +148,7 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
     showProgress,
     standaloneAttachmentMode,
     templateValues,
+    userEditedKeys,
     topicFieldRef,
     topicMissing,
     type,
@@ -170,6 +175,12 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
   const [editingDetails, setEditingDetails] = React.useState(false);
   const confirmMode = router.query.from === 'workspace' && Boolean(activeTemplate) && !editingDetails;
   React.useEffect(() => { if (topicMissing) setEditingDetails(true); }, [topicMissing]);
+  // "Open editor" on the results column shows the full form (see openCreatorEditor).
+  React.useEffect(() => {
+    const open = () => setEditingDetails(true);
+    window.addEventListener(CREATOR_EDITOR_OPEN_EVENT, open);
+    return () => window.removeEventListener(CREATOR_EDITOR_OPEN_EVENT, open);
+  }, []);
   const summaryLayoutLabel = (() => {
     const id = intakeLayoutFieldId(config);
     const value = id ? String(answers[id] || '') : '';
@@ -521,7 +532,7 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                                             onChange={() => setBrandOverride(sizeFieldKey, preset.value)}
                                             className="h-3.5 w-3.5 border-gray-300 text-slate-900"
                                           />
-                                          {preset.label} ({brandAssetSizePx(item.id, preset.value)}px)
+                                          {preset.label}
                                         </label>
                                       ))}
                                     </div>
@@ -1132,6 +1143,23 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
               />
             ) : null}
 
+            {/* Owner request (2026-10-25): refine the copy HERE, before generating.
+              * Bound to the same template values + handlers as the (hidden) full
+              * form, so the summary below and the payload read what is shown. */}
+            {confirmMode && effectiveTemplate ? (
+              <div className="mt-6">
+                <CreatorCopyEditor
+                  template={effectiveTemplate}
+                  values={templateValues}
+                  onChange={handleEditorChange}
+                  onAiAssist={handleTemplateAiAssist}
+                  aiBusyKey={aiBusyKey}
+                  editedKeys={userEditedKeys ?? EMPTY_EDITED_KEYS}
+                  imageCopyActive={imageCopyActiveForUi}
+                />
+              </div>
+            ) : null}
+
             {/* The last thing before a generation is spent. Every value is read
               * from the state about to be submitted — see CreativeSummaryCard. */}
             {(isSocialCreativeType(type) || type === 'carousel') && activeTemplate ? (
@@ -1148,11 +1176,20 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                     : null}
                   layoutLabel={summaryLayoutLabel}
                   brandPresence={brandMode === 'brand-aware' ? brandPresence : null}
-                  includeLogo={brandMode === 'brand-aware' ? Boolean(brandSelections?.logo) : null}
+                  includeLogo={brandMode === 'brand-aware' ? Boolean(brandSelections?.logo || brandSelections?.favicon) : null}
+                  brandMarkLabel={(() => {
+                    const mark = brandSelections?.logo ? 'logo' : brandSelections?.favicon ? 'favicon' : null;
+                    if (!mark) return null;
+                    const size = normalizeBrandAssetSize(brandOverrides?.[`${mark}Size`]);
+                    return `${mark === 'logo' ? 'logo' : 'site icon'}${size === 'auto' ? '' : ` (${size})`}`;
+                  })()}
                   editHint={confirmMode ? 'Use “Edit details” to change any of it.' : null}
                   choices={guidedChoices ?? EMPTY_GUIDED_CHOICES}
                   attachment={imageAttachment}
-                  headline={String(templateValues?.fields?.headline || answers.topic || '').trim() || null}
+                  /* An instruction-like topic ("Create a promotion for …") is the
+                   * brief, never shown as the headline (owner 2026-10-25). */
+                  headline={String(templateValues?.fields?.headline
+                    || (isInstructionLikeCopy(answers.topic) ? '' : answers.topic) || '').trim() || null}
                   subheadline={String(templateValues?.fields?.subheadline || '').trim() || null}
                   cta={String(templateValues?.fields?.cta || answers.cta || '').trim() || null}
                   platform={selectedPlatform ?? null}

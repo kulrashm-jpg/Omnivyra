@@ -11,6 +11,7 @@ import type { MarketingBrief } from '../content/unifiedCreationModel';
 import { getCreationGoal } from '../content/unifiedCreationModel';
 import type { AttachmentMode } from '../content/writerCreatorAttachmentContracts';
 import { clipWords, deriveMainMessage } from './creatorBrief';
+import { isInstructionLikeCopy } from './creatorCopyPurpose';
 import type { CreatorDiagnosticReport } from '../../backend/services/creator/creatorDiagnosticReport';
 import {
   type CreatorTypeId,
@@ -234,21 +235,23 @@ export const DEFAULT_BRAND_SELECTIONS: BrandContextSelections = {
   campaign: false,
 };
 
-export type BrandAssetSize = 'small' | 'medium' | 'large';
+export type BrandAssetSize = 'auto' | 'small' | 'medium' | 'large';
 
-// Each step up is 80% bigger than the previous: small = 1.0x (current size on
-// the rendered asset), medium = 1.8x, large = ~3.24x. The numeric factor is
-// surfaced in the brief so the renderer can scale logo / favicon proportionally.
+// The renderer sizes the mark to the design (a share of the canvas, per layout).
+// 'auto' keeps that size; the others scale it — the SAME factors the renderer
+// applies (backend creatorBrandKit BRAND_MARK_SCALE), so what is described here
+// is what is drawn (owner 2026-10-25: size choices never reached the render).
 export const BRAND_ASSET_SIZE_PRESETS: ReadonlyArray<{ value: BrandAssetSize; label: string; scale: number }> = [
-  { value: 'small',  label: 'Small',  scale: 1.0  },
-  { value: 'medium', label: 'Medium', scale: 1.8  },
-  { value: 'large',  label: 'Large',  scale: 3.24 },
+  { value: 'auto',   label: 'Auto',   scale: 1.0  },
+  { value: 'small',  label: 'Small',  scale: 0.75 },
+  { value: 'medium', label: 'Medium', scale: 1.25 },
+  { value: 'large',  label: 'Large',  scale: 1.6  },
 ];
 
-export const DEFAULT_BRAND_ASSET_SIZE: BrandAssetSize = 'small';
+export const DEFAULT_BRAND_ASSET_SIZE: BrandAssetSize = 'auto';
 
-// "Small" is the current rendered baseline per asset class. Medium / large
-// derive from this base via the scale factor in BRAND_ASSET_SIZE_PRESETS.
+// Nominal on-asset size at 'auto', for descriptions only — the render sizes the
+// mark from the canvas.
 export const BRAND_ASSET_BASE_PX: Readonly<Record<'logo' | 'favicon', number>> = {
   logo:    96,
   favicon: 32,
@@ -265,9 +268,9 @@ export function brandAssetSizePx(asset: 'logo' | 'favicon', size: BrandAssetSize
   return Math.round(BRAND_ASSET_BASE_PX[asset] * preset.scale);
 }
 
-export function describeBrandAssetSize(asset: 'logo' | 'favicon', size: BrandAssetSize): string {
+export function describeBrandAssetSize(_asset: 'logo' | 'favicon', size: BrandAssetSize): string {
   const preset = BRAND_ASSET_SIZE_PRESETS.find((p) => p.value === size) ?? BRAND_ASSET_SIZE_PRESETS[0];
-  return `${preset.label.toLowerCase()} (~${brandAssetSizePx(asset, size)}px on the asset)`;
+  return preset.value === 'auto' ? 'auto — sized to fit the design' : `${preset.label.toLowerCase()} (${preset.scale}× the design's size)`;
 }
 
 export function buildDefaultAnswers(config: WorkflowConfig): Record<string, string> {
@@ -316,7 +319,10 @@ export function mapBriefToEditorAnswers(brief: MarketingBrief, config: WorkflowC
   set('audience', brief.audience);
   set('topic', (brief.offer ?? '').trim() || firstSentence);
   // Core-message style fields across asset types.
-  for (const id of ['keyMessage', 'message', 'coreMessage', 'mainMessage', 'headline']) set(id, mainMessage);
+  for (const id of ['keyMessage', 'message', 'coreMessage', 'mainMessage']) set(id, mainMessage);
+  // A headline is COPY: an instruction-like main message ("Create an engaging
+  // promotion for our …") is the brief, never the headline (owner 2026-10-25).
+  if (!isInstructionLikeCopy(mainMessage)) set('headline', mainMessage);
   set('cta', brief.cta);
   set('offer', brief.offer);
   // Objective Preservation (Wave 0): seed `objective` from the brief's
@@ -339,9 +345,26 @@ export function mapBriefToEditorAnswers(brief: MarketingBrief, config: WorkflowC
 export const CREATOR_DRAFT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7;
 export const CREATOR_GENERATION_TIMEOUT_MS = 1000 * 90;
 
+/**
+ * The server's text-only stand-in when generation failed (generatePrep
+ * buildBetaCreatorFallback): no rendered file, nothing saved. It must never be
+ * shown as "completed" or offered for download / duplicate (owner 2026-10-25:
+ * "none of these buttons work" — they were acting on this placeholder).
+ * Returns the failure reason, or null for a real output.
+ */
+export function creatorPlaceholderFailure(result: CreatorResult | null): { reason: string } | null {
+  const output = result?.output as (CreatorResult['output'] & { metadata?: Record<string, unknown> }) | undefined;
+  if (!output) return null;
+  const bundleMeta = (output.asset_payload?.media_bundle?.metadata ?? {}) as Record<string, unknown>;
+  const outputMeta = (output.metadata ?? {}) as Record<string, unknown>;
+  if (outputMeta.beta_fallback !== true && bundleMeta.placeholder !== true) return null;
+  return { reason: String(outputMeta.fallback_reason ?? bundleMeta.fallback_reason ?? '').trim() };
+}
+
 export function hasUsableCreatorOutput(result: CreatorResult | null): result is CreatorResult {
   return Boolean(
     result?.output &&
+    !creatorPlaceholderFailure(result) &&
     result.output.asset_payload &&
     result.output.packaging &&
     (

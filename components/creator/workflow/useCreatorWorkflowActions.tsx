@@ -24,7 +24,7 @@ import { useCreatorCompositionId } from '../useCreatorCompositionId';
 import { applyTemplateFieldUpdates, type TemplateFieldValues } from '../../../lib/creator-templates/values';
 import {
   OVERLAY_LIMITS, fieldEditKey, planOverlayFillTargets, planTemplateFillTargets,
-  seedOverlayFromBrief, seedTemplateFromBrief, type FillScope,
+  clipCopy, seedOverlayFromBrief, seedTemplateFromBrief, type FillScope,
 } from '../../../lib/creator-content/creatorContentFill';
 import {
   type CreatorResult, type RepurposePath, type SavedCreatorAsset,
@@ -106,8 +106,11 @@ export function useCreatorWorkflowActions(
       ...(b?.cta || answers.cta ? { cta: String(b?.cta || answers.cta || '').trim() } : {}),
       ...(b?.offer ? { offer: b.offer } : {}),
       source_content: String(b?.body || fallbackSource || '').trim().slice(0, 6000) || undefined,
+      // The chosen purpose (e.g. "promotional-image") — the server derives the
+      // goal-specific CTA suggestions from it for purpose-driven copy.
+      ...(String(answers.subtype || '').trim() ? { purpose_key: String(answers.subtype).trim() } : {}),
     };
-  }, [effectiveBrief, answers.topic, answers.audience, answers.objective, answers.styleDirection, answers.cta]);
+  }, [effectiveBrief, answers.topic, answers.audience, answers.objective, answers.styleDirection, answers.cta, answers.subtype]);
 
   /** Arc roles for carousel slide targets (hook → build → proof → CTA). */
   const slideRolesFor = React.useCallback((targets: Array<{ scope: string; index?: number }>, slideCountHint: number) => {
@@ -411,7 +414,7 @@ export function useCreatorWorkflowActions(
           const value = typeof u?.value === 'string' ? u.value : '';
           if (emptyFields.includes(key) && value.trim()) {
             // Never land on a role the user typed into while this was in flight.
-            setOverlayText((prev) => (String(prev[key] || '').trim() ? prev : { ...prev, [key]: value.slice(0, OVERLAY_LIMITS[key]) }));
+            setOverlayText((prev) => (String(prev[key] || '').trim() ? prev : { ...prev, [key]: clipCopy(value, OVERLAY_LIMITS[key]) }));
           }
         }
       } catch { /* best-effort — the user can still use per-field +AI */ }
@@ -478,7 +481,7 @@ export function useCreatorWorkflowActions(
       for (const u of oUpdates) {
         const key = String(u?.field_key ?? u?.fieldKey ?? '') as keyof WriterOverlayText;
         const value = typeof u?.value === 'string' ? u.value.trim() : '';
-        if (overlayTargets.includes(key) && value) nextOverlay = { ...nextOverlay, [key]: value.slice(0, OVERLAY_LIMITS[key]) };
+        if (overlayTargets.includes(key) && value) nextOverlay = { ...nextOverlay, [key]: clipCopy(value, OVERLAY_LIMITS[key]) };
       }
     } finally {
       setAiBusyKey(null);
@@ -1240,34 +1243,40 @@ export function useCreatorWorkflowActions(
       // focused workflow. We fetch the primary media URL, infer the
       // extension from the URL path, and stream it through a Blob anchor
       // so cross-origin Supabase storage URLs download cleanly.
-      const imageUrl = mediaUrls[0];
-      if (!imageUrl) {
-        setError('No image available to download yet.');
+      // Every rendered file: one image, or each carousel slide / infographic page
+      // (only the first slide was downloaded before).
+      if (mediaUrls.length === 0) {
+        setError('Nothing to download yet — the asset is still rendering or did not render. Try again in a moment.');
         return;
       }
       const title = String(answers.topic || config.title || 'creator-asset').trim();
       const safeTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'creator-asset';
-      let ext = 'png';
-      try {
-        const parsed = new URL(imageUrl, window.location.href);
-        const extMatch = parsed.pathname.match(/\.(png|jpe?g|webp|gif|svg)$/i);
-        if (extMatch) ext = extMatch[1].toLowerCase() === 'jpeg' ? 'jpg' : extMatch[1].toLowerCase();
-      } catch {
-        // keep png fallback
+      const names: string[] = [];
+      for (let i = 0; i < mediaUrls.length; i += 1) {
+        const fileUrl = mediaUrls[i];
+        let ext = 'png';
+        try {
+          const parsed = new URL(fileUrl, window.location.href);
+          const extMatch = parsed.pathname.match(/\.(png|jpe?g|webp|gif|svg|pdf)$/i);
+          if (extMatch) ext = extMatch[1].toLowerCase() === 'jpeg' ? 'jpg' : extMatch[1].toLowerCase();
+        } catch {
+          // keep png fallback
+        }
+        const filename = mediaUrls.length > 1 ? `${safeTitle}-${i + 1}.${ext}` : `${safeTitle}.${ext}`;
+        const response = await fetch(fileUrl, { credentials: 'omit' });
+        if (!response.ok) throw new Error(`fetch failed (${response.status})`);
+        const blob = await response.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(blobUrl);
+        names.push(filename);
       }
-      const filename = `${safeTitle}.${ext}`;
-      const response = await fetch(imageUrl, { credentials: 'omit' });
-      if (!response.ok) throw new Error(`fetch failed (${response.status})`);
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(blobUrl);
-      setNotice(`Downloaded ${filename}.`);
+      setNotice(names.length > 1 ? `Downloaded ${names.length} files (${names[0]} …).` : `Downloaded ${names[0]}.`);
     } catch {
       setError('Could not prepare the download. Please try again.');
     } finally {

@@ -17,6 +17,8 @@ import { resolvePurposeStrategy } from '../../../backend/services/creator/purpos
 import { buildGenerationReview, buildCreatorCampaignPackage } from '../../../lib/creator-templates';
 import { getDiagnosticReport, getSavedAssetCreatorType } from '../../../lib/creator-content/creatorTypeWorkflow';
 import { shouldOfferInlineCreatorRender } from '../../../lib/creator-content/creatorRenderedResult';
+import { creatorPlaceholderFailure } from '../../../lib/creator-content/creatorWorkflowModel';
+import { describeCreatorGenerationError } from '../../../lib/creator-content/creatorErrorMessages';
 import type { CreatorWorkflowCtx } from './creatorWorkflowCtx';
 
 export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx }) {
@@ -46,6 +48,7 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
     isSavingBlock,
     isThemeTreatment,
     mediaUrls,
+    notice,
     overlayQuality,
     conditionReferenceFallbackCategory,
     conditionReferenceStatus,
@@ -87,6 +90,9 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
     visualGovernanceWarnings,
     writerSource,
   } = ctx;
+  // Generation failed and the server returned its text-only stand-in: say so, and
+  // offer only "Try again" — never "Completed" with buttons that act on nothing.
+  const placeholderFailure = creatorPlaceholderFailure(result);
   return (
           <div className="space-y-6">
             <div
@@ -96,6 +102,18 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
                 {result ? 'Generated Output' : 'Pick A Direction'}
               </p>
+              {/* Action feedback (download, duplicate, open editor, errors) shows HERE,
+                  next to the buttons — it used to appear only in the left column. */}
+              {error && !isGenerating ? (
+                <div role="alert" data-testid="results-error" className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                  {describeCreatorGenerationError(error)}
+                </div>
+              ) : null}
+              {notice && !error ? (
+                <div role="status" data-testid="results-notice" className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                  {notice}
+                </div>
+              ) : null}
               {/* Quality Inspector — read-only panel for the attached diagnostic
                   report (image / carousel / infographic). Renders only when the
                   asset metadata carries a creator_diagnostic_report. */}
@@ -187,6 +205,24 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
                       </div>
                     ) : null}
                   </div>
+                </div>
+              ) : placeholderFailure ? (
+                <div className="mt-4 space-y-3" data-testid="results-placeholder-failure">
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4">
+                    <p className="text-sm font-semibold text-rose-900">Your {type} wasn&apos;t created</p>
+                    <p className="mt-1 text-sm leading-6 text-rose-800">
+                      {describeCreatorGenerationError(placeholderFailure.reason || null)}
+                    </p>
+                    <p className="mt-1 text-xs text-rose-700">Your text and settings are kept. Nothing was saved as an asset.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleGenerate}
+                    disabled={isGenerating}
+                    className="rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isGenerating ? 'Trying again…' : 'Try again'}
+                  </button>
                 </div>
               ) : (
                 <div className="mt-4 space-y-5">

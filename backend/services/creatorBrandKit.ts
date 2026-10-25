@@ -11,6 +11,8 @@ export type CreatorBrandKit = {
   faviconUrl: string;
   resolvedBrandMark: string;
   resolvedBrandMarkType: CreatorBrandMarkType;
+  /** The user's size for the mark relative to the design's own sizing (1 = auto). */
+  markScale?: number;
   fallbackInitials: string;
   palette: string[];
   normalizedPalette: string[];
@@ -277,14 +279,20 @@ function resolveBrandFields(input: ResolveBrandKitInput) {
       || metadata.company_name
       || 'OMNIVYRA',
   );
+  // The user's mark choice (brand_context.selections): logo off → no logo; logo AND
+  // favicon off → no mark at all (owner 2026-10-25: "Include my logo" unticked still
+  // stamped the logo, because nothing past the prompt text read the selection).
+  const selections = safeObject(brandContext.selections);
+  const logoOff = selections.logo === false;
+  const markOff = logoOff && selections.favicon === false;
   return {
     metadata,
     selected,
     overrides,
     profile,
     companyName,
-    logoUrl: clean(selected.logoUrl || selected.logo_url || overrides.logoUrl || overrides.logo_url || profile.logoUrl || profile.logo_url),
-    faviconUrl: clean(selected.faviconUrl || selected.favicon_url || overrides.faviconUrl || overrides.favicon_url || profile.faviconUrl || profile.favicon_url),
+    logoUrl: logoOff ? '' : clean(selected.logoUrl || selected.logo_url || overrides.logoUrl || overrides.logo_url || profile.logoUrl || profile.logo_url),
+    faviconUrl: markOff ? '' : clean(selected.faviconUrl || selected.favicon_url || overrides.faviconUrl || overrides.favicon_url || profile.faviconUrl || profile.favicon_url),
     tone: clean(selected.brandTone || selected.brand_tone || overrides.brandTone || overrides.brand_tone || profile.brandTone || profile.brand_tone || profile.brand_voice || metadata.tone),
     audience: clean(selected.audience || overrides.audience || profile.audience || profile.target_audience || metadata.audience),
     industry: clean(selected.industry || overrides.industry || profile.industry || profile.category || metadata.industry),
@@ -294,7 +302,25 @@ function resolveBrandFields(input: ResolveBrandKitInput) {
   };
 }
 
+/**
+ * Mark size relative to the design's own (dynamic) sizing. 'auto' — or no choice —
+ * keeps the design's size; the explicit sizes step down or up from it.
+ */
+export const BRAND_MARK_SCALE: Readonly<Record<string, number>> = { auto: 1, small: 0.75, medium: 1.25, large: 1.6 };
+
+export function brandMarkScaleFor(overrides: Record<string, unknown>, markType: CreatorBrandMarkType): number {
+  const size = String((markType === 'favicon' ? overrides.faviconSize : overrides.logoSize) ?? '').toLowerCase();
+  return BRAND_MARK_SCALE[size] ?? 1;
+}
+
 export function resolveCreatorBrandKit(input: ResolveBrandKitInput = {}): CreatorBrandKit {
+  const kit = resolveCreatorBrandKitCached(input);
+  // Per request, not cached: the size is a per-asset choice, not part of the brand.
+  const markScale = brandMarkScaleFor(safeObject(safeObject(safeObject(input.metadata).brand_context).overrides), kit.resolvedBrandMarkType);
+  return markScale === 1 ? kit : { ...kit, markScale };
+}
+
+function resolveCreatorBrandKitCached(input: ResolveBrandKitInput): CreatorBrandKit {
   const fields = resolveBrandFields(input);
   const palette = normalizePalette(getPaletteCandidates(input));
   const normalizedPalette = palette.slice(0, 3);

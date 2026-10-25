@@ -187,6 +187,12 @@ function shouldUseCreatorFallback(error: unknown): boolean {
   ) {
     return false;
   }
+  // The image provider itself is unavailable (model not enabled, bad key, no quota) or
+  // the governed render failed closed: a text-only stand-in would be shown as a
+  // "completed" asset with nothing behind it (owner 2026-10-25). Surface the error.
+  if (message.includes('provider_image_unavailable') || message.includes('governed_render_failed_closed')) {
+    return false;
+  }
 
   return true;
 }

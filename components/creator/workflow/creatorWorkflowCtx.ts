@@ -65,6 +65,9 @@ export interface CreatorWorkflowCtx {
   templateValues: TemplateFieldValues;
   handleEditorChange: (next: TemplateFieldValues) => void;
   handleTemplateAiAssist: (ctx: TemplateAiAssistContext) => Promise<void>;
+  /** Field edit keys the user changed by hand (the confirm-page copy editor's
+   *  "Rewrite all" keeps them). Optional: absent means none. */
+  userEditedKeys?: ReadonlySet<string>;
   aiBusyKey: string | null;
   generatedSnapshot: TemplateFieldValues | null;
 
