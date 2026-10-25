@@ -18,7 +18,6 @@ import {
   BRAND_ASSET_SIZE_PRESETS,
   type BrandPresence,
   type CreatorBrandMode,
-  brandAssetSizePx,
   getSavedAssetAttachmentLabel,
   getSavedAssetCreatorType,
   humanizeValue,
@@ -521,7 +520,7 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                                             onChange={() => setBrandOverride(sizeFieldKey, preset.value)}
                                             className="h-3.5 w-3.5 border-gray-300 text-slate-900"
                                           />
-                                          {preset.label} ({brandAssetSizePx(item.id, preset.value)}px)
+                                          {preset.label}
                                         </label>
                                       ))}
                                     </div>
@@ -1148,7 +1147,13 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                     : null}
                   layoutLabel={summaryLayoutLabel}
                   brandPresence={brandMode === 'brand-aware' ? brandPresence : null}
-                  includeLogo={brandMode === 'brand-aware' ? Boolean(brandSelections?.logo) : null}
+                  includeLogo={brandMode === 'brand-aware' ? Boolean(brandSelections?.logo || brandSelections?.favicon) : null}
+                  brandMarkLabel={(() => {
+                    const mark = brandSelections?.logo ? 'logo' : brandSelections?.favicon ? 'favicon' : null;
+                    if (!mark) return null;
+                    const size = normalizeBrandAssetSize(brandOverrides?.[`${mark}Size`]);
+                    return `${mark === 'logo' ? 'logo' : 'site icon'}${size === 'auto' ? '' : ` (${size})`}`;
+                  })()}
                   editHint={confirmMode ? 'Use “Edit details” to change any of it.' : null}
                   choices={guidedChoices ?? EMPTY_GUIDED_CHOICES}
                   attachment={imageAttachment}

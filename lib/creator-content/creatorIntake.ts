@@ -13,7 +13,7 @@
  * own default, exactly as before this screen existed.
  */
 import type { AttachmentMode } from '../content/writerCreatorAttachmentContracts';
-import { DEFAULT_BRAND_SELECTIONS, type BrandContextSelections } from './creatorWorkflowModel';
+import { BRAND_ASSET_SIZE_PRESETS, DEFAULT_BRAND_SELECTIONS, type BrandAssetSize, type BrandContextSelections } from './creatorWorkflowModel';
 import type { WorkflowConfig } from './creatorWorkflowConfig';
 import { readIndependentPaletteChoice, type IndependentPaletteChoice } from './creatorPaletteMode';
 
@@ -21,6 +21,8 @@ export const CREATOR_INTAKE_SESSION_KEY = 'omnivyra.creator.intake.v1';
 
 export type IntakeBrandMode = 'brand-aware' | 'independent';
 export type IntakeBrandPresence = 'minimal' | 'balanced' | 'strong';
+/** Which brand mark goes on the asset: the full logo, the site icon (favicon), or none. */
+export type IntakeBrandMark = 'logo' | 'favicon' | 'none';
 
 export interface CreatorIntakeChoices {
   /** Image only: text painted inside the image, or the image beside the post text. */
@@ -36,6 +38,12 @@ export interface CreatorIntakeChoices {
    * choice existed parse unchanged; absent → the editor's default ('look').
    */
   paletteMode?: IndependentPaletteChoice | null;
+  /**
+   * Brand-aware only: logo, favicon or no mark, and its size (auto = fit the design).
+   * Optional so older intakes parse unchanged; absent → `includeLogo` decides.
+   */
+  brandMark?: IntakeBrandMark | null;
+  brandMarkSize?: BrandAssetSize | null;
 }
 
 export const EMPTY_CREATOR_INTAKE: CreatorIntakeChoices = {
@@ -78,6 +86,8 @@ export function readCreatorIntake(raw: string | null | undefined): CreatorIntake
     includeLogo: typeof o.includeLogo === 'boolean' ? o.includeLogo : null,
     layout: typeof o.layout === 'string' && o.layout.trim() ? o.layout.trim().slice(0, 64) : null,
     ...(readIndependentPaletteChoice(o.paletteMode) ? { paletteMode: readIndependentPaletteChoice(o.paletteMode) } : {}),
+    ...(oneOf(o.brandMark, ['logo', 'favicon', 'none'] as const) ? { brandMark: oneOf(o.brandMark, ['logo', 'favicon', 'none'] as const) } : {}),
+    ...(oneOf(o.brandMarkSize, BRAND_ASSET_SIZE_PRESETS.map((p) => p.value)) ? { brandMarkSize: oneOf(o.brandMarkSize, BRAND_ASSET_SIZE_PRESETS.map((p) => p.value)) } : {}),
   };
 }
 
@@ -100,7 +110,14 @@ export function intakeToEditorRestore(
   if (intake.brandPresence) out.brandPresence = intake.brandPresence;
   // The colour choice only exists in independent mode.
   if (intake.brandMode === 'independent' && readIndependentPaletteChoice(intake.paletteMode)) out.paletteChoice = intake.paletteMode;
-  if (intake.includeLogo !== null) {
+  if (intake.brandMark) {
+    // The renderer reads these: logo, favicon, or neither (no mark at all).
+    const selections: BrandContextSelections = {
+      ...DEFAULT_BRAND_SELECTIONS, logo: intake.brandMark === 'logo', favicon: intake.brandMark === 'favicon',
+    };
+    out.brandSelections = selections;
+    if (intake.brandMark !== 'none' && intake.brandMarkSize) out.brandOverrides = { [`${intake.brandMark}Size`]: intake.brandMarkSize };
+  } else if (intake.includeLogo !== null) {
     const selections: BrandContextSelections = { ...DEFAULT_BRAND_SELECTIONS, logo: intake.includeLogo };
     out.brandSelections = selections;
   }

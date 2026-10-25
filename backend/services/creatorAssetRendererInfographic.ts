@@ -91,7 +91,7 @@ ensureRenderFonts();
 import { sharp, unsupportedFamilyConditionDegradation, type RenderedMediaBundle, type RenderOptions, getCachedRenderBuffer, safeObject, escapeXml, balanceTextLines, renderWrappedBodyText, blueprintIdForRender, curatedDesignTemplate, resolveInfographicRenderStyle, compactText, buildAccessibleAltText, resolveRenderSize, fitTextToBox } from './creatorAssetRendererContracts';
 import { emitCreatorEvent, CREATOR_EVENTS } from './creatorOperationalTelemetryService';
 import { resolveInfographicBackgroundBytes } from './creator/infographicUserBackground';
-import { loadBrandMark } from './creatorAssetRendererOverlay';
+import { loadBrandMark, scaleBrandPlacement } from './creatorAssetRendererOverlay';
 import { bufferFromRemoteImage } from './creatorAssetRendererSvg';
 import { uploadRenderedPng } from './creatorAssetRendererMedia';
 import { existingNoveltySeed, noveltyIndex } from './creator/creatorNoveltyPlan';
@@ -447,12 +447,12 @@ export async function renderInfographicAsset(
   // Brand mark placement — top-right, sized at ~14% canvas width.
   const logoMaxWidth = Math.round(width * 0.14);
   const logoMaxHeight = Math.round(height * 0.07);
-  const brandPlacement = {
+  const brandPlacement = scaleBrandPlacement({
     top: 56,
     left: width - 80 - logoMaxWidth,
     maxWidth: logoMaxWidth,
     maxHeight: logoMaxHeight,
-  };
+  }, brandKit.markScale, { width, height });
   const brandMark = await loadBrandMark({ brandKit, placement: brandPlacement });
 
   // ── Background image mode (Phase 4) — opt-in + flag-gated. Resolves to

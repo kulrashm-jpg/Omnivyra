@@ -57,6 +57,8 @@ jest.mock('../../services/creatorAssetRendererMedia', () => ({
 }));
 jest.mock('../../services/creatorAssetRendererOverlay', () => ({
   loadBrandMark: jest.fn(async () => null),
+  // Mark size choice: identity here (no size chosen → the design's own box).
+  scaleBrandPlacement: (placement: unknown) => placement,
 }));
 jest.mock('../../services/creatorAssetRendererSvg', () => ({
   bufferFromRemoteImage: jest.fn(async () => Buffer.from('remote-image')),

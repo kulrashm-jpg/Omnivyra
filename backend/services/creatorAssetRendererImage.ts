@@ -88,7 +88,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 ensureRenderFonts();
 import { sharp, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, type ProviderImageResult, safeObject, resolveImageRenderStyle, resolveImageComposition, resolveImageStyleId, renderBackgroundPng, compactText, buildAccessibleAltText, normalizeOverlayText, resolveRenderSize, BLOCKING_PROVIDER_FAILURES } from './creatorAssetRendererContracts';
 import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg, buildTwoColumnCardSvg, buildListCardSvg } from './creatorAssetRendererText';
-import { buildStyleCardSvg, buildOverlaySvg, loadBrandMark, normalizeBackgroundBuffer } from './creatorAssetRendererOverlay';
+import { buildStyleCardSvg, buildOverlaySvg, loadBrandMark, normalizeBackgroundBuffer, scaleBrandPlacement } from './creatorAssetRendererOverlay';
 import { buildAiImagePrompt } from './creatorAssetRendererSvg';
 import { generateProviderImage, uploadRenderedPng, type AttachmentRenderPolicy, resolveImageSubtype, resolveCanonicalRenderPolicy } from './creatorAssetRendererMedia';
 // Purpose-aware endpoint + fidelity for the user's own photos — one
@@ -653,8 +653,9 @@ ${lookStyleReferenceInstruction(lookStyleReference.lookTitle, { lastOfSeveral: u
           // Image/banner overlay base resolved via the canonical resolveTemplate().
           imageStyle: resolveImageRenderStyle(metadata),
         });
+  // The overlay already sized its box with the user's mark size; the default box is scaled here.
   const brandPlacement = overlayRender?.brandPlacement
-    ?? defaultBrandPlacement({ width, height, fileNamePrefix });
+    ?? scaleBrandPlacement(defaultBrandPlacement({ width, height, fileNamePrefix }), brandKit.markScale, { width, height });
   const brandMark = await loadBrandMark({ brandKit, placement: brandPlacement });
 
   const composites: Array<{ input: Buffer; top: number; left: number }> = [];

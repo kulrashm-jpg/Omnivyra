@@ -234,21 +234,23 @@ export const DEFAULT_BRAND_SELECTIONS: BrandContextSelections = {
   campaign: false,
 };
 
-export type BrandAssetSize = 'small' | 'medium' | 'large';
+export type BrandAssetSize = 'auto' | 'small' | 'medium' | 'large';
 
-// Each step up is 80% bigger than the previous: small = 1.0x (current size on
-// the rendered asset), medium = 1.8x, large = ~3.24x. The numeric factor is
-// surfaced in the brief so the renderer can scale logo / favicon proportionally.
+// The renderer sizes the mark to the design (a share of the canvas, per layout).
+// 'auto' keeps that size; the others scale it — the SAME factors the renderer
+// applies (backend creatorBrandKit BRAND_MARK_SCALE), so what is described here
+// is what is drawn (owner 2026-10-25: size choices never reached the render).
 export const BRAND_ASSET_SIZE_PRESETS: ReadonlyArray<{ value: BrandAssetSize; label: string; scale: number }> = [
-  { value: 'small',  label: 'Small',  scale: 1.0  },
-  { value: 'medium', label: 'Medium', scale: 1.8  },
-  { value: 'large',  label: 'Large',  scale: 3.24 },
+  { value: 'auto',   label: 'Auto',   scale: 1.0  },
+  { value: 'small',  label: 'Small',  scale: 0.75 },
+  { value: 'medium', label: 'Medium', scale: 1.25 },
+  { value: 'large',  label: 'Large',  scale: 1.6  },
 ];
 
-export const DEFAULT_BRAND_ASSET_SIZE: BrandAssetSize = 'small';
+export const DEFAULT_BRAND_ASSET_SIZE: BrandAssetSize = 'auto';
 
-// "Small" is the current rendered baseline per asset class. Medium / large
-// derive from this base via the scale factor in BRAND_ASSET_SIZE_PRESETS.
+// Nominal on-asset size at 'auto', for descriptions only — the render sizes the
+// mark from the canvas.
 export const BRAND_ASSET_BASE_PX: Readonly<Record<'logo' | 'favicon', number>> = {
   logo:    96,
   favicon: 32,
@@ -265,9 +267,9 @@ export function brandAssetSizePx(asset: 'logo' | 'favicon', size: BrandAssetSize
   return Math.round(BRAND_ASSET_BASE_PX[asset] * preset.scale);
 }
 
-export function describeBrandAssetSize(asset: 'logo' | 'favicon', size: BrandAssetSize): string {
+export function describeBrandAssetSize(_asset: 'logo' | 'favicon', size: BrandAssetSize): string {
   const preset = BRAND_ASSET_SIZE_PRESETS.find((p) => p.value === size) ?? BRAND_ASSET_SIZE_PRESETS[0];
-  return `${preset.label.toLowerCase()} (~${brandAssetSizePx(asset, size)}px on the asset)`;
+  return preset.value === 'auto' ? 'auto — sized to fit the design' : `${preset.label.toLowerCase()} (${preset.scale}× the design's size)`;
 }
 
 export function buildDefaultAnswers(config: WorkflowConfig): Record<string, string> {

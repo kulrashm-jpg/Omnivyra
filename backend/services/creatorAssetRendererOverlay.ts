@@ -391,8 +391,11 @@ export function buildOverlaySvg(input: {
   // recomputed later from these same values for backward-compat.
   const standardBrandMode = preset.brandMode === 'standard';
   // Brand mark enlarged 1.8× — operator feedback: logo/favicon too small on the asset.
-  const logoBaseWidth = Math.round(input.width * (standardBrandMode ? 0.24 : 0.16) * 1.8);
-  const logoBaseHeight = Math.round(input.height * (standardBrandMode ? 0.13 : 0.11) * 1.8);
+  // The user's size choice (Small / Medium / Large; auto = 1) scales the design's own
+  // box here, so the text stack below is laid out around the mark's real size.
+  const markScale = input.brandKit.markScale ?? 1;
+  const logoBaseWidth = Math.round(input.width * (standardBrandMode ? 0.24 : 0.16) * 1.8 * markScale);
+  const logoBaseHeight = Math.round(input.height * (standardBrandMode ? 0.13 : 0.11) * 1.8 * markScale);
   const logoMaxWidth = strategyMods
     ? Math.round(applyScale(logoBaseWidth, strategyMods.logoScaleMultiplier, 0.5, 1.6))
     : logoBaseWidth;
@@ -723,6 +726,33 @@ export function buildOverlaySvg(input: {
     </svg>
   `.trim();
   return { svg, quality, brandPlacement };
+}
+
+/**
+ * Scale a brand-mark box by the user's size choice, keeping the corner it is anchored
+ * to (right edge for a right-hand mark, bottom edge for a bottom mark) and keeping it
+ * on the canvas.
+ */
+export function scaleBrandPlacement<T extends { top: number; left: number; maxWidth: number; maxHeight: number }>(
+  placement: T,
+  scale: number | undefined,
+  canvas: { width: number; height: number },
+): T {
+  if (!scale || scale === 1) return placement;
+  const margin = 8;
+  const maxWidth = Math.max(16, Math.min(Math.round(placement.maxWidth * scale), canvas.width - 2 * margin));
+  const maxHeight = Math.max(16, Math.min(Math.round(placement.maxHeight * scale), canvas.height - 2 * margin));
+  const rightAnchored = placement.left + placement.maxWidth / 2 > canvas.width / 2;
+  const bottomAnchored = placement.top + placement.maxHeight / 2 > canvas.height / 2;
+  const left = rightAnchored ? placement.left + placement.maxWidth - maxWidth : placement.left;
+  const top = bottomAnchored ? placement.top + placement.maxHeight - maxHeight : placement.top;
+  return {
+    ...placement,
+    maxWidth,
+    maxHeight,
+    left: Math.max(margin, Math.min(left, canvas.width - maxWidth - margin)),
+    top: Math.max(margin, Math.min(top, canvas.height - maxHeight - margin)),
+  };
 }
 
 export async function loadBrandMark(input: {
