@@ -11,6 +11,7 @@
  *   dropped       — no URL given
  * Revenue is reported only when a public source states it; otherwise the profile says so.
  */
+import { readCapped, safeFetch } from '../../../../lib/security/safeFetch';
 import { webJsonCompletion } from './llm';
 
 export type FieldKey =
@@ -78,10 +79,14 @@ export function keyTokens(value: string): string[] {
 }
 
 const pageCache = new Map<string, Promise<string | null>>();
+/**
+ * Source URLs come from a model's output, so they are untrusted: every fetch goes through the
+ * SSRF-safe client (validated, DNS-pinned, private/metadata addresses blocked, redirects re-checked).
+ */
 function pageText(url: string, timeoutMs: number): Promise<string | null> {
   if (!pageCache.has(url)) {
-    pageCache.set(url, fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; OmnivyraSnapshot/1.0)' }, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) })
-      .then(async (r) => (r.ok ? (await r.text()).slice(0, 600_000).replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').toLowerCase().replace(/,/g, '') : null))
+    pageCache.set(url, safeFetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; OmnivyraSnapshot/1.0)' } }, { timeoutMs, maxBytes: 2_000_000, metricLabel: 'public_research_source' })
+      .then(async (r) => (r.ok ? (await readCapped(r, 2_000_000)).toString('utf8').slice(0, 600_000).replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').toLowerCase().replace(/,/g, '') : null))
       .catch(() => null));
   }
   return pageCache.get(url)!;

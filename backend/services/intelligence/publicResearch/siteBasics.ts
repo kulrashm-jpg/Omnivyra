@@ -4,6 +4,8 @@
  * every <lastmod> is identical), structured-data types on the homepage, and whether official
  * social profiles are linked. Each check returns what was fetched; nothing is inferred.
  */
+import { readCapped, safeFetch } from '../../../../lib/security/safeFetch';
+
 export type SiteCheck = {
   key: 'robots' | 'llms' | 'sitemap' | 'organization_schema' | 'profile_links';
   ok: boolean | null;
@@ -15,10 +17,12 @@ export type SiteCheck = {
 const UA = 'Mozilla/5.0 (compatible; OmnivyraSnapshot/1.0; +https://www.omnivyra.com)';
 const SOCIAL = /https?:\/\/(?:www\.)?(linkedin\.com|x\.com|twitter\.com|facebook\.com|instagram\.com|youtube\.com|tiktok\.com)\/[^"'\s<>]+/gi;
 
+/** The domain comes from the company profile, so every fetch goes through the SSRF-safe client. */
 async function get(url: string, timeoutMs: number): Promise<{ status: number; type: string; body: string } | null> {
   try {
-    const res = await fetch(url, { headers: { 'user-agent': UA }, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
-    return { status: res.status, type: res.headers.get('content-type') ?? '', body: (await res.text()).slice(0, 400_000) };
+    const res = await safeFetch(url, { headers: { 'user-agent': UA } }, { timeoutMs, maxBytes: 2_000_000, metricLabel: 'public_research_site' });
+    const body = (await readCapped(res, 2_000_000)).toString('utf8');
+    return { status: res.status, type: res.headers.get('content-type') ?? '', body: body.slice(0, 400_000) };
   } catch {
     return null;
   }

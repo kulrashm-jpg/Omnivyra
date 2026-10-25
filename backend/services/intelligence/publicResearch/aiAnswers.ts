@@ -40,6 +40,7 @@ type Surface = {
 const env = (names: string[]): string | null => names.map((n) => process.env[n]).find((v) => v && v.trim()) ?? null;
 
 async function postJson(url: string, body: unknown, headers: Record<string, string>, signal: AbortSignal): Promise<any> {
+  // ssrf-ok: callers pass only the fixed provider API endpoints in SURFACES (OpenAI, Perplexity, Anthropic, Google); never caller input.
   const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${String(json?.error?.message ?? json?.error ?? '').slice(0, 160)}`);

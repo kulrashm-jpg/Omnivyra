@@ -9,6 +9,16 @@ import { collectPublicResearch, distinctCapabilities, researchInputFromNarrative
 import { parseResearchPack, summariseVisibility } from '../../services/intelligence/dossierV2/research';
 import { renderDossierV2Html } from '../../services/intelligence/dossierV2/render';
 
+// The SSRF-safe client resolves DNS and opens real sockets; here it delegates to the mocked fetch,
+// and refuses private / metadata addresses the way the real client does.
+jest.mock('../../../lib/security/safeFetch', () => ({
+  safeFetch: async (url: string, init?: RequestInit) => {
+    if (/^https?:\/\/(169\.254\.|127\.|10\.|localhost)/.test(url)) throw new Error('SSRF blocked');
+    return (global.fetch as typeof fetch)(url, init);
+  },
+  readCapped: async (res: Response) => Buffer.from(await res.text()),
+}));
+
 type Handler = (url: string, body: any) => { status?: number; json?: unknown; text?: string; type?: string };
 const realFetch = global.fetch;
 const KEYS = ['OPENAI_API_KEY', 'PERPLEXITY_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'SERPAPI_KEY', 'SERP_API_KEY', 'SERPAPI_API_KEY'];
@@ -104,6 +114,13 @@ describe('competitor values', () => {
     expect(await verify('1,000+ teams', 'https://good.test/a')).toBe('confirmed');
     expect(await verify('1,000+ teams', 'https://bad.test/a')).toBe('unconfirmed');
     expect(await verify('1,000+ teams', 'not a url')).toBe('unconfirmed');
+  });
+
+  it('never fetches an internal address a model returns as a source', async () => {
+    const seen: string[] = [];
+    mockFetch((url) => { seen.push(url); return { text: '<p>1,000+ teams</p>', type: 'text/html' }; });
+    expect(await verify('1,000+ teams', 'http://169.254.169.254/latest/meta-data')).toBe('unconfirmed');
+    expect(seen).toEqual([]);
   });
 
   it('never confirms a value from a page about a different company, and takes self-descriptions only from the company site', async () => {
