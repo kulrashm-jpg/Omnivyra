@@ -97,6 +97,11 @@ import {
   resolveCreatorImageEndpoint,
   referenceFidelityForPurposes,
 } from './creator/creatorMultimodalReferences';
+// Static namespace imports (not lazy `require` inside functions): in the production
+// Next.js bundle a destructured lazy require came back without its function. None
+// of these modules imports a renderer, so there is no cycle to avoid.
+import * as creatorPaletteModeModule from './creator/creatorPaletteMode';
+import * as creatorNoveltyPlanModule from './creator/creatorNoveltyPlan';
 
 export async function composeSingleVisualAsset(
   assetPayload: Record<string, unknown>,
@@ -136,9 +141,9 @@ export async function composeSingleVisualAsset(
   // Brand-aware → the kit unchanged.
   const brandKit = (() => {
     const { resolveIndependentPalette, applyIndependentPaletteToBrandKit } =
-      require('./creator/creatorPaletteMode') as typeof import('./creator/creatorPaletteMode');
+      creatorPaletteModeModule;
     const { existingNoveltySeed } =
-      require('./creator/creatorNoveltyPlan') as typeof import('./creator/creatorNoveltyPlan');
+      creatorNoveltyPlanModule;
     const independent = resolveIndependentPalette({ metadata, seed: existingNoveltySeed(metadata) });
     return independent ? applyIndependentPaletteToBrandKit(resolvedBrandKit, independent.palette) : resolvedBrandKit;
   })();
