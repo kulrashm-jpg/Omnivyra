@@ -15,7 +15,7 @@ import { isBrandQuestion, type ResearchPack, type ResearchRecord } from '../doss
 import { askAiSurfaces, SURFACES, type SurfaceAnswer } from './aiAnswers';
 import { buyerQuestions, readAnswers, type BuyerQuestion, type CompanyBrief } from './aiQuestions';
 import { checkSiteBasics, type SiteCheck } from './siteBasics';
-import { discoverCompetitors, profileCompetitor, type CompetitorProfile, type FieldKey } from './competitors';
+import { discoverAndProfile, type CompetitorProfile, type FieldKey } from './competitors';
 
 /** Build the research input from the company context the report already resolved. */
 export function researchInputFromNarrative(c: {
@@ -95,15 +95,14 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
   });
 
   // Competitor discovery and profiling do not depend on the AI answers: start them first, in parallel.
-  const caps = (input.capabilities ?? []).filter(Boolean).slice(0, 8);
+  const caps = (input.capabilities ?? []).filter(Boolean).slice(0, 6);
   const subjectBrief = { brand: input.brand, domain: input.domain.replace(/^www\./, ''), offering: input.offering ?? input.category ?? input.siteText.slice(0, 200), capabilities: caps };
-  const maxCompetitors = Number(process.env.PUBLIC_RESEARCH_MAX_COMPETITORS ?? 5);
-  const competitorTask = process.env.OPENAI_API_KEY ? (async () => {
-    const declared = (input.competitors ?? []).map((c) => ({ name: c.name, domain: c.domain, origin: 'declared by the company' }));
-    const found = declared.length >= maxCompetitors ? [] : await discoverCompetitors({ ...subjectBrief, buyers: input.buyers, geography: input.market }, maxCompetitors - declared.length);
-    const candidates = [...declared, ...found.filter((f) => !declared.some((d) => d.domain === f.domain || d.name.toLowerCase() === f.name.toLowerCase()))
-      .map((f) => ({ name: f.name, domain: f.domain, origin: `found by web research (${f.url})` }))].slice(0, maxCompetitors);
-    return Promise.all(candidates.map((c) => profileCompetitor(subjectBrief, c).then((p) => ({ p, origin: c.origin }))));
+  const maxCompetitors = Number(process.env.PUBLIC_RESEARCH_MAX_COMPETITORS ?? 4);
+  // One web-search call finds AND profiles the competitors (declared ones first).
+  const competitorTask = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY ? (async () => {
+    const declared = (input.competitors ?? []).slice(0, maxCompetitors);
+    const profiles = await discoverAndProfile({ ...subjectBrief, buyers: input.buyers, geography: input.market }, declared, maxCompetitors);
+    return profiles.map((p) => ({ p, origin: declared.some((d) => d.name === p.name) ? 'declared by the company' : 'found by web research' }));
   })().catch(() => null) : Promise.resolve(null);
 
   const [site, q] = await Promise.all([

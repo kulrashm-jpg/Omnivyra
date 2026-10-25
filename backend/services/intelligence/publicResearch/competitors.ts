@@ -11,6 +11,8 @@
  *   dropped       — no URL given
  * Revenue is reported only when a public source states it; otherwise the profile says so.
  */
+import { webJsonCompletion } from './llm';
+
 export type FieldKey =
   | 'offering' | 'productLines' | 'buyers' | 'segments' | 'geography' | 'entryPrice' | 'freePlanOrTrial'
   | 'employees' | 'funding' | 'revenue' | 'customers' | 'reviews' | 'headquarters' | 'founded';
@@ -61,24 +63,11 @@ export const PROFILE_SCHEMA = {
   },
 };
 
-async function webJson(prompt: string, signal: AbortSignal, schema?: { name: string; schema: unknown }): Promise<any | null> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return null;
-  const res = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST', signal,
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: process.env.PUBLIC_RESEARCH_OPENAI_MODEL ?? 'gpt-4.1-mini',
-      tools: [{ type: 'web_search_preview' }], input: prompt,
-      ...(schema ? { text: { format: { type: 'json_schema', name: schema.name, strict: true, schema: schema.schema } } } : {}),
-    }),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const j: any = await res.json();
-  const text = (j.output ?? []).find((o: any) => o.type === 'message')?.content?.find((c: any) => c.type === 'output_text')?.text ?? '';
-  if (process.env.PUBLIC_RESEARCH_DEBUG) console.info('[public-research] analyst raw', String(text).slice(0, 4000));
-  const m = /\{[\s\S]*\}/.exec(String(text));
-  try { return m ? JSON.parse(m[0]) : null; } catch { return null; }
+/** Web-search research as JSON: OpenAI first, Claude with web search if OpenAI is unavailable (see llm.ts). */
+async function webJson(step: string, prompt: string, timeoutMs: number, schema: { name: string; schema: unknown }): Promise<any | null> {
+  const r = await webJsonCompletion(step, prompt, schema, { timeoutMs });
+  if (process.env.PUBLIC_RESEARCH_DEBUG) console.info('[public-research] analyst raw', r?.provider, JSON.stringify(r?.json ?? null).slice(0, 4000));
+  return r?.json ?? null;
 }
 
 /** Key tokens a page must contain for a value to count as confirmed: numbers first, else long words. */
@@ -145,8 +134,22 @@ Fields: ${Object.entries(FIELD_HELP).map(([k, v]) => `${k} (${v})`).join('; ')}.
 Also: "capabilities": for each of these ${subject.brand} capabilities, copied exactly, say "yes", "no" or "unknown" for whether ${candidate.name} offers it, with the URL of the page that shows it: ${subject.capabilities.map((c) => `"${c}"`).join(', ')}.
 And "classification": "direct" (same product for the same buyer), "adjacent" (overlapping product or buyer), "substitute" (a different way to do the same job), or "not_competitor"; with a one-sentence "rationale".`;
   try {
-    const j = await webJson(prompt, AbortSignal.timeout(timeoutMs), { name: 'competitor_profile', schema: PROFILE_SCHEMA });
+    const j = await webJson('competitor_profile', prompt, timeoutMs, { name: 'competitor_profile', schema: PROFILE_SCHEMA });
     if (!j) return { name: candidate.name, domain: candidate.domain ?? '', classification: 'unconfirmed', rationale: '', capabilities: [], fields: {}, status: 'failed_source', error: 'No structured answer from the research model.', observedAt };
+    return await toProfile(j, candidate, subject, observedAt);
+  } catch (error) {
+    return { name: candidate.name, domain: candidate.domain ?? '', classification: 'unconfirmed', rationale: '', capabilities: [], fields: {}, status: 'failed_source', error: error instanceof Error ? error.message : String(error), observedAt };
+  }
+}
+
+/** Turn one structured profile into checked fields: every value re-opened at its source. */
+async function toProfile(
+  j: any,
+  candidate: { name: string; domain?: string | null },
+  subject: { capabilities: string[] },
+  observedAt: string,
+): Promise<CompetitorProfile> {
+  {
     const fields: CompetitorProfile['fields'] = {};
     await Promise.all(Object.keys(FIELD_HELP).map(async (k) => {
       const f = j.fields?.[k];
@@ -167,8 +170,41 @@ And "classification": "direct" (same product for the same buyer), "adjacent" (ov
     // The candidate's own domain wins: the model must not swap in a different company.
     const domain = String(candidate.domain || j.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
     return { name: candidate.name || String(j.name ?? ''), domain, classification, rationale: String(j.rationale ?? '').slice(0, 300), capabilities, fields, status: 'observed', error: null, observedAt };
-  } catch (error) {
-    return { name: candidate.name, domain: candidate.domain ?? '', classification: 'unconfirmed', rationale: '', capabilities: [], fields: {}, status: 'failed_source', error: error instanceof Error ? error.message : String(error), observedAt };
+  }
+}
+
+/**
+ * Discovery and profiling in ONE web-search call: the declared competitors plus up to `limit`
+ * companies found that sell the same kind of product to the same buyer, each with a full sourced
+ * profile. Every value is still re-opened and checked afterwards, exactly as for a single profile.
+ */
+export async function discoverAndProfile(
+  subject: { brand: string; domain: string; offering: string; capabilities: string[]; buyers: string | null; geography: string | null },
+  declared: Array<{ name: string; domain: string }>,
+  limit = 4,
+  timeoutMs = 150_000,
+): Promise<CompetitorProfile[]> {
+  const observedAt = new Date().toISOString();
+  const own = subject.domain.replace(/^www\./, '').toLowerCase();
+  const prompt = `You are a market analyst. Use web search. "${subject.brand}" (${subject.domain}) sells: ${subject.offering}. Its buyers: ${subject.buyers ?? 'not stated'}. Market: ${subject.geography ?? 'not stated'}.
+Return up to ${limit} competitors: ${declared.length ? `first these, declared by the company: ${declared.map((d) => `${d.name}${d.domain ? ` (${d.domain})` : ''}`).join(', ')}; then ` : ''}other companies selling the same kind of product to the same kind of buyer — specialist products a buyer would genuinely compare with ${subject.brand}, not general-purpose platforms unless they market a directly comparable product. Never include ${subject.brand} itself.
+For each, fill every field ONLY from a page you actually opened, with that exact page's URL; if not found, value "" and url "". Never estimate: revenue, funding and employee figures only when a page states them.
+Fields: ${Object.entries(FIELD_HELP).map(([k, v]) => `${k} (${v})`).join('; ')}.
+"capabilities": for each of these ${subject.brand} capabilities, copied exactly, "yes", "no" or "unknown" with the URL that shows it: ${subject.capabilities.map((c) => `"${c}"`).join(', ')}.
+"classification": "direct" (same product, same buyer), "adjacent" (overlapping product or buyer), "substitute" (different way to do the same job) or "not_competitor"; one-sentence "rationale".`;
+  try {
+    const j = await webJson('competitor_set', prompt, timeoutMs, {
+      name: 'competitor_set', schema: { type: 'object', additionalProperties: false, required: ['competitors'], properties: { competitors: { type: 'array', items: PROFILE_SCHEMA } } },
+    });
+    const list: any[] = Array.isArray(j?.competitors) ? j.competitors : [];
+    const clean = (d: unknown) => String(d ?? '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+    const picked = list.filter((c) => c && c.name && clean(c.domain) !== own && String(c.name).toLowerCase() !== subject.brand.toLowerCase()).slice(0, limit);
+    return await Promise.all(picked.map((c) => {
+      const match = declared.find((d) => d.name.toLowerCase() === String(c.name).toLowerCase() || (d.domain && d.domain === clean(c.domain)));
+      return toProfile(c, { name: match?.name ?? String(c.name), domain: match?.domain || clean(c.domain) }, subject, observedAt);
+    }));
+  } catch {
+    return [];
   }
 }
 
@@ -191,7 +227,7 @@ export async function discoverCompetitors(
   const prompt = `You are a market analyst. Use web search. "${subject.brand}" (${subject.domain}) sells: ${subject.offering}. Its buyers: ${subject.buyers ?? 'not stated'}. Market: ${subject.geography ?? 'not stated'}.
 Find up to ${limit} other companies that sell the same kind of product to the same kind of buyer — specialist products a buyer would genuinely compare with ${subject.brand}, not general-purpose platforms unless they market a directly comparable product. For each give its name, website domain, one sentence on why it competes, and the URL of the page (its own product page or a comparison article) that shows it.`;
   try {
-    const j = await webJson(prompt, AbortSignal.timeout(timeoutMs), { name: 'competitor_discovery', schema: DISCOVERY_SCHEMA });
+    const j = await webJson('competitor_discovery', prompt, timeoutMs, { name: 'competitor_discovery', schema: DISCOVERY_SCHEMA });
     const own = subject.domain.replace(/^www\./, '').toLowerCase();
     return (Array.isArray(j?.competitors) ? j.competitors : [])
       .map((c: any) => ({ name: String(c?.name ?? '').trim(), domain: String(c?.domain ?? '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase(), why: String(c?.why ?? '').slice(0, 240), url: String(c?.url ?? '') }))

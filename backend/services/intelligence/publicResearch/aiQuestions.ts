@@ -11,6 +11,8 @@
  * judgement is the model's reading of the answer against the company's own description, so it is
  * labelled inferred.
  */
+import { jsonCompletion } from './llm';
+
 export type BuyerQuestion = { intent: 'category' | 'problem' | 'commercial' | 'use_case' | 'comparison' | 'branded'; query: string };
 
 export type CompanyBrief = {
@@ -24,20 +26,9 @@ export type CompanyBrief = {
   market: string | null;
 };
 
-async function openaiJson(prompt: string, signal: AbortSignal): Promise<any | null> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return null;
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST', signal,
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: process.env.PUBLIC_RESEARCH_OPENAI_MODEL ?? 'gpt-4.1-mini', temperature: 0,
-      response_format: { type: 'json_object' }, messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-  if (!res.ok) return null;
-  const j: any = await res.json().catch(() => null);
-  try { return JSON.parse(String(j?.choices?.[0]?.message?.content ?? '')); } catch { return null; }
+/** OpenAI first, Claude if OpenAI is unavailable (see llm.ts). */
+async function modelJson(step: string, prompt: string, timeoutMs: number, maxTokens = 2000): Promise<any | null> {
+  return (await jsonCompletion(step, prompt, { timeoutMs, maxTokens }))?.json ?? null;
 }
 
 const INTENTS = new Set(['category', 'problem', 'commercial', 'use_case', 'comparison']);
@@ -67,7 +58,7 @@ Declared category: ${c.category ?? 'unknown'}. Offering: ${c.offering ?? 'unknow
 Write exactly 6 distinct questions covering these intents: 2 "commercial" (best tools for a buyer), 1 "category", 1 "problem" (the buyer's pain, no product words), 1 "use_case", 1 "comparison" (between generic options, no brand names).
 Rules: never mention "${c.brand}" or "${c.domain}" or any company name; plain English a non-specialist would type; under 120 characters each.
 Return JSON: {"questions":[{"intent":"commercial|category|problem|use_case|comparison","query":"..."}]}`;
-  const json = await openaiJson(prompt, AbortSignal.timeout(timeoutMs)).catch(() => null);
+  const json = await modelJson('questions', prompt, timeoutMs);
   const brandRe = new RegExp(c.brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
   const got: BuyerQuestion[] = (Array.isArray(json?.questions) ? json.questions : [])
     .filter((q: any) => q && INTENTS.has(q.intent) && typeof q.query === 'string')
@@ -101,8 +92,9 @@ For each AI answer below:
 - For answers marked branded=true only, "accuracy": "correct" if the answer describes this company, "partly" if it describes this company but also mixes in unrelated companies or wrong alternatives, "misidentified" if it describes something else (another company, a fictional character, a different product); "note": one short reason.
 Return JSON: {"readings":[{"id":"...","brands":["..."],"accuracy":"correct|partly|misidentified|null","note":"..."}]}
 Answers:
-${answers.map((a) => `--- id=${a.id} branded=${a.branded}\n${a.text.slice(0, 2500)}`).join('\n')}`;
-  const json = await openaiJson(prompt, AbortSignal.timeout(timeoutMs)).catch(() => null);
+${answers.map((a) => `--- id=${a.id} branded=${a.branded}\n${a.text.slice(0, a.branded ? 800 : 1500)}`).join('\n')}`;
+  // One reading per answer, so the reply grows with the number of answers; leave it room to finish.
+  const json = await modelJson('reading', prompt, timeoutMs, Math.min(8000, 600 + answers.length * 250));
   for (const r of Array.isArray(json?.readings) ? json.readings : []) {
     const a = answers.find((x) => x.id === r?.id);
     if (!a) continue;

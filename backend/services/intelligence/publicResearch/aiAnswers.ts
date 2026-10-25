@@ -47,6 +47,8 @@ async function postJson(url: string, body: unknown, headers: Record<string, stri
 }
 
 const COUNTRY = () => process.env.PUBLIC_RESEARCH_COUNTRY ?? 'IN';
+/** Output cap per answer: long enough for a full recommendation list, short enough to keep cost flat. */
+const ANSWER_TOKENS = () => Number(process.env.PUBLIC_RESEARCH_ANSWER_TOKENS ?? 800);
 
 export const SURFACES: Surface[] = [
   {
@@ -55,7 +57,7 @@ export const SURFACES: Surface[] = [
       const j = await postJson('https://api.openai.com/v1/responses', {
         model: process.env.PUBLIC_RESEARCH_OPENAI_MODEL ?? 'gpt-4.1-mini',
         tools: [{ type: 'web_search_preview', user_location: { type: 'approximate', country: COUNTRY() } }],
-        tool_choice: { type: 'web_search_preview' }, input: query,
+        tool_choice: { type: 'web_search_preview' }, input: query, max_output_tokens: ANSWER_TOKENS(),
       }, { authorization: `Bearer ${key}` }, signal);
       const out = Array.isArray(j.output) ? j.output : [];
       const part = out.find((o: any) => o.type === 'message')?.content?.find((c: any) => c.type === 'output_text');
@@ -70,7 +72,7 @@ export const SURFACES: Surface[] = [
     id: 'perplexity', label: 'Perplexity', keys: ['PERPLEXITY_API_KEY'], geography: 'provider default',
     ask: (key) => async (query, signal) => {
       const j = await postJson('https://api.perplexity.ai/chat/completions', {
-        model: process.env.PUBLIC_RESEARCH_PERPLEXITY_MODEL ?? 'sonar', messages: [{ role: 'user', content: query }],
+        model: process.env.PUBLIC_RESEARCH_PERPLEXITY_MODEL ?? 'sonar', messages: [{ role: 'user', content: query }], max_tokens: ANSWER_TOKENS(),
       }, { authorization: `Bearer ${key}` }, signal);
       const sources = [...(Array.isArray(j.citations) ? j.citations : []), ...(Array.isArray(j.search_results) ? j.search_results.map((r: any) => r?.url) : [])]
         .filter((u): u is string => typeof u === 'string');
@@ -81,8 +83,8 @@ export const SURFACES: Surface[] = [
     id: 'claude_search', label: 'Claude (web search)', keys: ['ANTHROPIC_API_KEY'], geography: 'provider default',
     ask: (key) => async (query, signal) => {
       const j = await postJson('https://api.anthropic.com/v1/messages', {
-        model: process.env.PUBLIC_RESEARCH_ANTHROPIC_MODEL ?? 'claude-haiku-5-5', max_tokens: 1500,
-        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
+        model: process.env.PUBLIC_RESEARCH_ANTHROPIC_MODEL ?? 'claude-haiku-5-5', max_tokens: ANSWER_TOKENS(),
+        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }],
         messages: [{ role: 'user', content: query }],
       }, { 'x-api-key': key, 'anthropic-version': '2023-06-01' }, signal);
       const blocks: any[] = Array.isArray(j.content) ? j.content : [];
@@ -96,9 +98,9 @@ export const SURFACES: Surface[] = [
   {
     id: 'gemini_search', label: 'Gemini (Google Search grounding)', keys: ['GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'], geography: 'provider default',
     ask: (key) => async (query, signal) => {
-      const model = process.env.PUBLIC_RESEARCH_GEMINI_MODEL ?? 'gemini-2.5-flash';
+      const model = process.env.PUBLIC_RESEARCH_GEMINI_MODEL ?? 'gemini-flash-lite-latest';
       const j = await postJson(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-        contents: [{ parts: [{ text: query }] }], tools: [{ google_search: {} }],
+        contents: [{ parts: [{ text: query }] }], tools: [{ google_search: {} }], generationConfig: { maxOutputTokens: ANSWER_TOKENS() },
       }, { 'x-goog-api-key': key }, signal);
       const cand = j.candidates?.[0];
       const text = (cand?.content?.parts ?? []).map((p: any) => p?.text ?? '').join('');
@@ -137,7 +139,7 @@ export const SURFACES: Surface[] = [
   {
     id: 'meta_ai', label: 'Meta AI', keys: [], geography: '—',
     ask: () => async () => ({ text: '', sources: [], grounded: false }),
-    unavailable: 'Meta offers no public API that answers from live web search; its Llama API answers from model memory, which is not visibility evidence.',
+    unavailable: 'Meta offers no public API that answers from live web search (its Llama API answers from model memory, which is not visibility evidence), and the Meta AI web app requires a logged-in account.',
   },
 ];
 
@@ -159,7 +161,9 @@ export async function askAiSurfaces(
   questions: string[],
   opts: { surfaces?: Surface[]; timeoutMs?: number; concurrency?: number } = {},
 ): Promise<SurfaceAnswer[]> {
-  const surfaces = opts.surfaces ?? SURFACES;
+  // PUBLIC_RESEARCH_SURFACES (comma-separated ids) limits which tools run, e.g. to save SerpAPI quota.
+  const only = (process.env.PUBLIC_RESEARCH_SURFACES ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const surfaces = opts.surfaces ?? (only.length ? SURFACES.filter((s) => only.includes(s.id)) : SURFACES);
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const perSurface = await Promise.all(surfaces.map(async (sf) => {
     const key = sf.keys.length ? env(sf.keys) : null;

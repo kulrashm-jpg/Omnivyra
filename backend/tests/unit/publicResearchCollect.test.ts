@@ -118,6 +118,55 @@ describe('competitor values', () => {
   });
 });
 
+describe('analysis model fallback', () => {
+  const claudeReply = (obj: unknown) => ({ json: { content: [{ type: 'text', text: '```json\n' + JSON.stringify(obj) + '\n```' }] } });
+
+  it('uses Claude when OpenAI is out of credit, and when OpenAI is not configured', async () => {
+    const { jsonCompletion } = await import('../../services/intelligence/publicResearch/llm');
+    process.env.OPENAI_API_KEY = 'k';
+    process.env.ANTHROPIC_API_KEY = 'k';
+    mockFetch((url) => (url.includes('openai.com') ? { status: 429, json: { error: { message: 'no credits' } } } : claudeReply({ ok: 1 })));
+    expect(await jsonCompletion('t', 'p')).toEqual({ json: { ok: 1 }, provider: 'anthropic' });
+    delete process.env.OPENAI_API_KEY;
+    expect(await jsonCompletion('t', 'p')).toEqual({ json: { ok: 1 }, provider: 'anthropic' });
+  });
+
+  it('returns nothing rather than inventing when both providers fail', async () => {
+    const { jsonCompletion } = await import('../../services/intelligence/publicResearch/llm');
+    process.env.OPENAI_API_KEY = 'k';
+    process.env.ANTHROPIC_API_KEY = 'k';
+    mockFetch(() => ({ status: 500 }));
+    expect(await jsonCompletion('t', 'p')).toBeNull();
+  });
+
+  it('gives Claude web search when it stands in for the research analyst', async () => {
+    const { webJsonCompletion } = await import('../../services/intelligence/publicResearch/llm');
+    process.env.ANTHROPIC_API_KEY = 'k';
+    let claudeBody: any = null;
+    mockFetch((url, body) => { if (url.includes('anthropic.com')) { claudeBody = body; return claudeReply({ competitors: [] }); } return { status: 404 }; });
+    expect((await webJsonCompletion('t', 'p', { name: 's', schema: {} }))?.provider).toBe('anthropic');
+    expect(claudeBody.tools[0].type).toBe('web_search_20250305');
+  });
+});
+
+describe('competitor set in one call', () => {
+  it('never lists the company itself, and keeps a declared competitor under its declared name and domain', async () => {
+    process.env.OPENAI_API_KEY = 'k';
+    const profile = (name: string, domain: string) => ({ name, domain, classification: 'direct', rationale: 'same buyer',
+      fields: { offering: { value: 'Campaign planning for agencies', url: `https://${domain}/` } }, capabilities: [] });
+    mockFetch((url) => {
+      if (url.includes('api.openai.com/v1/responses')) {
+        return { json: { output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ competitors: [profile('Acme', 'acme.test'), profile('RIVAL Inc', 'www.rival.io'), profile('Other', 'other.io')] }) }] }] } };
+      }
+      return { text: '<p>Campaign planning for agencies</p>', type: 'text/html' };
+    });
+    const { discoverAndProfile } = await import('../../services/intelligence/publicResearch/competitors');
+    const out = await discoverAndProfile({ brand: 'Acme', domain: 'acme.test', offering: 'x', capabilities: [], buyers: null, geography: null }, [{ name: 'Rival', domain: 'rival.io' }], 4);
+    expect(out.map((p) => [p.name, p.domain])).toEqual([['Rival', 'rival.io'], ['Other', 'other.io']]);
+    expect(out[0].fields.offering?.check).toBe('confirmed');
+  });
+});
+
 describe('collected pack', () => {
   it('maps the resolved company context, including competitors given as domains', () => {
     const input = researchInputFromNarrative({ companyName: 'Acme', domain: 'acme.test', homepageHeadline: 'Plan campaigns', tagline: null, primaryOffering: 'Campaign planning', positioning: null,
