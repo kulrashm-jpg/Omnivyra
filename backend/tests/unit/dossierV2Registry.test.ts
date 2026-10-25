@@ -251,3 +251,128 @@ describe('dossier v2 states', () => {
     expect(html).not.toMatch(/medium\.com<\/strong><\/td>/);
   });
 });
+
+describe('dossier v2 summary pages and public research', () => {
+  const T = '2026-10-24T10:00:00Z';
+  const r = (id: string, extra: Record<string, unknown>) => ({ id, claim: id, status: 'observed', confidence: 'high', sourceUrl: 'https://example.test/', observedAt: T, method: 'm', scope: 's', ...extra });
+  const pack = () => ({
+    subject: { brand: 'Acme', domain: 'acme.test' }, collectedAt: '2026-10-24', collector: 'test', method: { search: 'Google, gl=in' },
+    company: [r('E-COM-01', { kind: 'company_definition', status: 'company_declared', claim: 'Pricing: $10/mo', price: '$10 per month' }),
+      r('E-COM-02', { kind: 'site_navigation', pages: ['/', '/pricing', '/terms'] })],
+    search: [
+      r('E-SRC-01', { kind: 'serp', intent: 'branded', query: 'acme', ownPosition: 1, depth: 9, topDomains: ['acme.test'], geography: 'India', language: 'en' }),
+      r('E-SRC-02', { kind: 'serp', intent: 'category', query: 'widget platform', ownPosition: null, depth: 8, topDomains: ['rival.io', 'other.io'], geography: 'India', language: 'en' }),
+      r('E-SRC-03', { kind: 'serp', intent: 'problem', query: 'fix widgets', ownPosition: null, depth: 9, topDomains: ['label.io'], geography: 'India', language: 'en' }),
+    ],
+    generative: [
+      r('E-GEN-01', { kind: 'ai_overview', surface: 'Google AI Overview', query: 'widget platform', mentioned: false, cited: false, citedDomains: ['a', 'b'] }),
+      r('E-GEN-02', { kind: 'ai_overview', surface: 'Google AI Overview', query: 'fix widgets', status: 'failed_source' }),
+      r('E-GEN-03', { kind: 'model_recall', surface: 'ChatGPT', status: 'not_measured' }),
+      r('E-GEN-04', { kind: 'chatgpt_search', surface: 'ChatGPT search', intent: 'category', query: 'widget platform', mentioned: false, brandsNamed: ['HubSpot'], citedDomains: ['x.io'] }),
+      r('E-GEN-05', { kind: 'chatgpt_search', surface: 'ChatGPT search', intent: 'branded', query: 'What is Acme?', mentioned: false, accuracy: 'misidentified' }),
+    ],
+    competitors: [
+      r('E-CMP-01', { kind: 'competitor', name: 'Rival', domain: 'rival.io', classification: 'direct', confidence: 'medium' }),
+      r('E-CMP-02', { kind: 'competitor', name: 'Label', domain: 'label.io', classification: 'not_competitor', confidence: 'medium' }),
+      r('E-CMP-03', { kind: 'competitor', name: 'Maybe', domain: 'maybe.io', classification: 'substitute_candidate', status: 'insufficient_evidence', confidence: 'low' }),
+    ],
+    independent: [
+      r('E-IND-01', { kind: 'third_party_mention', status: 'looked_for_not_found' }),
+      r('E-IND-02', { kind: 'name_collision' }),
+    ],
+    gaps: [r('E-GAP-01', { kind: 'gap', status: 'not_measured', claim: 'Reviews', method: 'Create listings and re-check.' })],
+    site: [r('E-SIT-01', { kind: 'site_basics', claim: 'robots.txt returns HTTP 404', recommends: { id: 'A-site-crawl-basics', title: 'Fix the crawl basics', action: 'Publish robots.txt.', effort: 'low', impact: 'high', verification: 'robots.txt returns 200.' } })],
+    benchmark: [r('E-BEN-01', { kind: 'benchmark', dimension: 'customer_proof', claim: 'Customer proof on site', gap: 'Competitors show customers.',
+      values: { 'acme.test': { value: 'none found', status: 'looked_for_not_found', url: '' }, 'rival.io': { value: '12 case studies', status: 'company_declared', url: '' } } })],
+  });
+  const html = renderDossierV2Html(payload(), { brandName: 'Acme', domain: 'acme.test' }, pack());
+  const plain = renderDossierV2Html(payload(), { brandName: 'Acme', domain: 'acme.test' });
+  const summary = (h: string, id: string) => { const at = h.indexOf(`id="${id}"`); return at < 0 ? '' : h.slice(at, h.indexOf('</section>', at)); };
+
+  it('puts exactly two summary pages after the cover, situation first, before the detailed sections', () => {
+    for (const h of [html, plain]) {
+      expect(h.match(/class="v2-summary"/g)).toHaveLength(2);
+      const cover = h.indexOf('class="v2-cover"');
+      const now = h.indexOf('id="summary-now"');
+      const next = h.indexOf('id="summary-next"');
+      const first = h.indexOf('class="v2-section"');
+      expect(cover).toBeLessThan(now);
+      expect(now).toBeLessThan(next);
+      expect(next).toBeLessThan(first);
+    }
+  });
+
+  it('page 3 carries three decisions, each with a register id, an owner (or Unassigned), a prerequisite and a success test', () => {
+    const next = summary(html, 'summary-next');
+    expect(next.match(/class="v2-next"/g)).toHaveLength(3);
+    const reg = buildDossierRegistry(payload(), pack() as never);
+    const ids = new Set(reg.actions.map((a) => a.id));
+    for (const m of next.matchAll(/<span>(A-[a-z0-9-]+)<\/span>/g)) expect(ids.has(m[1])).toBe(true);
+    expect(next.match(/Owner: /g)).toHaveLength(3);
+    expect(next.match(/Prerequisite: /g)).toHaveLength(3);
+    expect(next.match(/Success test/g)).toHaveLength(3);
+  });
+
+  it('keeps search, generative-search and readiness visibility separate, counting only grounded answers', () => {
+    const now = summary(html, 'summary-now');
+    expect(now).toContain('Found for 1 of 3 buyer searches');
+    expect(now).toContain('Named in 0 of 2 AI answers to buyer questions');
+    expect(now).toContain('confused in 1');
+    expect(now).toContain('Website readiness');
+  });
+
+  it('never shows missing evidence as zero on the summary', () => {
+    expect(summary(plain, 'summary-now')).toContain('Insufficient evidence — not zero');
+    expect(summary(plain, 'summary-now')).toContain('Not measured — no grounded AI answer was read');
+  });
+
+  it('compares only validated competitors, and keeps rejected and unvalidated ones out of the search matrix', () => {
+    expect(html).toContain('Direct competitor');
+    expect(html).toContain('Not a competitor');
+    expect(html).toContain('Possible substitute — unvalidated');
+    const matrix = html.slice(html.indexOf('Search results by buyer question'), html.indexOf('AI search: question'));
+    const cols = matrix.replace(/<wbr>/g, '');
+    expect(cols).toContain('rival.io');
+    expect(cols).not.toContain('label.io');
+    expect(cols).not.toContain('maybe.io');
+  });
+
+  it('prints prices and page roles only from the evidence pack', () => {
+    expect(html).toContain('$10 per month');
+    expect(html).toContain('Legal / policy');
+    expect(plain).not.toContain('Published pricing');
+    expect(plain).not.toContain('Page purpose map');
+  });
+
+  it('ignores a research pack about another domain', () => {
+    const other = { ...pack(), subject: { brand: 'Else', domain: 'else.test' } };
+    expect(renderDossierV2Html(payload(), { brandName: 'Acme', domain: 'acme.test' }, other)).not.toContain('E-SRC-01');
+  });
+
+  it('lists every research observation by id in the appendix, and every action evidence id exists in the pack', () => {
+    const all = Object.values(pack()).filter(Array.isArray).flat() as Array<{ id: string }>;
+    const appendix = html.slice(html.indexOf('id="s6"'));
+    for (const rec of all) expect(appendix).toContain(rec.id);
+    const known = new Set(all.map((x) => x.id));
+    for (const a of buildDossierRegistry(payload(), pack() as never).actions) for (const id of a.evidenceIds) expect(known.has(id)).toBe(true);
+  });
+
+  it('puts a high-impact, low-effort move first on page 3, and it comes from the evidence', () => {
+    const next = summary(html, 'summary-next');
+    expect(next.indexOf('A-site-crawl-basics')).toBeGreaterThan(-1);
+    expect(next.indexOf('A-site-crawl-basics')).toBeLessThan(next.indexOf('class="v2-next"', next.indexOf('class="v2-next"') + 1));
+    const reg = buildDossierRegistry(payload(), pack() as never);
+    expect(reg.actions.find((a) => a.id === 'A-site-crawl-basics')?.evidenceIds).toEqual(['E-SIT-01']);
+  });
+
+  it('benchmarks competitors side by side and marks where the company has nothing comparable', () => {
+    expect(html).toContain('How the competitors market themselves');
+    expect(html).toMatch(/<td class="v2-gapcell"><small>none found/);
+    expect(html).toContain('12 case studies <em>(claimed)</em>');
+  });
+
+  it('shows an AI answer that confuses the brand as confused, not as a mention', () => {
+    expect(html).toContain('confused with another');
+    expect(html).toContain('Who AI answers recommend instead');
+  });
+});

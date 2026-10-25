@@ -35,7 +35,8 @@ small { color: ${P.grey}; }
 .v2-section-head h2 { font-size: 19pt; font-weight: 700; }
 .v2-section-head p { margin: 1mm 0 0; color: ${P.grey}; font-size: 9.4pt; }
 .v2-block { margin: 0 0 7mm; break-inside: avoid; page-break-inside: avoid; }
-.v2-block h3 { font-size: 11.5pt; margin-bottom: 1.5mm; }
+.v2-block h3 { font-size: 11.5pt; margin-bottom: 1.5mm; break-after: avoid; page-break-after: avoid; }
+.v2-block > .v2-sub { break-after: avoid; page-break-after: avoid; }
 .v2-block > .v2-sub { color: ${P.grey}; font-size: 8.8pt; margin: 0 0 3mm; }
 .v2-allow-break { break-inside: auto; page-break-inside: auto; }
 
@@ -128,4 +129,81 @@ table { border-collapse: collapse; width: 100%; }
 .v2-lens small { display: block; margin-top: 1.5mm; font-size: 7.4pt; }
 .v2-lens .v2-pill { white-space: normal; line-height: 1.3; }
 .v2-ring { display: block; }
+
+/* Cover tags */
+.v2-cover-tags { margin-top: 8mm; display: flex; gap: 3mm; }
+.v2-cover-tags span { border: 1px solid #2B4466; border-radius: 10mm; padding: 1.5mm 4mm; font-size: 8.5pt; color: #D6E2F2; }
+.v2-cover-meta em { display: block; font-style: normal; color: #9FB6D6; font-size: 7.4pt; margin-top: .5mm; }
+
+/* Summary pages: each is exactly one A4 page */
+.v2-summary { break-before: page; page-break-before: always; break-after: page; page-break-after: always;
+  height: 262mm; overflow: hidden; display: flex; flex-direction: column; }
+.v2-summary + .v2-section { break-before: auto; page-break-before: auto; }
+.v2-summary-head { border-bottom: 2px solid ${P.navy}; padding-bottom: 2.5mm; margin-bottom: 4mm; }
+.v2-summary-head span { font-size: 7.4pt; letter-spacing: .2em; text-transform: uppercase; color: ${P.blue}; font-weight: 700; }
+.v2-summary-head h2 { font-size: 20pt; font-weight: 750; margin: .5mm 0 1mm; }
+.v2-summary-head p { margin: 0; color: ${P.grey}; font-size: 9.2pt; }
+.v2-summary-h { font-size: 10.5pt; margin: 4.5mm 0 2.2mm; }
+.v2-tiles4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3mm; }
+.v2-tile { border: 1px solid ${P.line}; border-top: 3px solid ${P.blue}; border-radius: 2mm; padding: 3mm; }
+.v2-tile-value { font-size: 19pt; font-weight: 800; line-height: 1.1; }
+.v2-tile-value small { font-size: 9pt; color: ${P.grey}; font-weight: 600; }
+.v2-tile-label { font-size: 8.6pt; font-weight: 700; color: ${P.navy}; margin-top: 1mm; }
+.v2-tile-note { font-size: 7.6pt; color: ${P.grey}; line-height: 1.3; margin-top: .5mm; }
+.v2-vis3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3mm; }
+.v2-vis { display: flex; gap: 2.5mm; border: 1px solid ${P.line}; border-left: 3px solid ${P.greyMid}; border-radius: 2mm; padding: 3mm; break-inside: avoid; }
+.v2-vis-good { border-left-color: ${P.green}; } .v2-vis-warn { border-left-color: ${P.amber}; } .v2-vis-bad { border-left-color: ${P.crimson}; } .v2-vis-info { border-left-color: ${P.blue}; }
+.v2-vis-n { flex: none; width: 6mm; height: 6mm; border-radius: 50%; background: ${P.navy}; color: #fff; font-weight: 800; font-size: 8.5pt; display: flex; align-items: center; justify-content: center; }
+.v2-vis h4 { font-size: 8.6pt; text-transform: uppercase; letter-spacing: .06em; color: ${P.grey}; margin-bottom: 1mm; }
+.v2-vis-value { font-size: 9.6pt; font-weight: 700; color: ${P.navy}; line-height: 1.3; margin-bottom: 1mm; }
+.v2-vis small { font-size: 7.4pt; line-height: 1.3; display: block; }
+.v2-tight { gap: 3mm; }
+.v2-tight .v2-panel { padding: 3mm; }
+.v2-tight .v2-panel p { margin-bottom: 1.5mm; line-height: 1.9; }
+.v2-tight small { font-size: 7.4pt; display: block; line-height: 1.3; }
+.v2-mini-funnel { display: flex; align-items: stretch; gap: 1mm; margin-bottom: 2mm; }
+.v2-mini-funnel span { flex: 1; background: ${P.wash}; border-radius: 1.5mm; padding: 1.5mm; font-size: 7.4pt; text-align: center; line-height: 1.25; }
+.v2-mini-funnel b { display: block; font-size: 12pt; color: ${P.navy}; }
+.v2-mini-funnel em { display: block; font-style: normal; color: ${P.amber}; font-weight: 600; }
+.v2-mini-funnel i { align-self: center; color: ${P.greyMid}; font-style: normal; }
+.v2-know { margin: 0; padding-left: 5mm; }
+.v2-know li { margin-bottom: 2.2mm; font-size: 9.2pt; line-height: 1.45; }
+.v2-where { font-size: 7.4pt; color: ${P.blue}; font-weight: 600; white-space: nowrap; }
+.v2-next-list { display: flex; flex-direction: column; gap: 2.5mm; }
+.v2-next { display: flex; gap: 3mm; border: 1px solid ${P.line}; border-left: 3px solid ${P.blue}; border-radius: 2mm; padding: 2.8mm 3.5mm; break-inside: avoid; }
+.v2-next-n { flex: none; width: 7mm; height: 7mm; border-radius: 50%; background: ${P.navy}; color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+.v2-next-body { flex: 1; }
+.v2-next h4 { font-size: 10pt; margin-bottom: 1mm; }
+.v2-next dl { margin: 0; display: grid; grid-template-columns: 22mm 1fr; gap: .6mm 2mm; font-size: 8.4pt; }
+.v2-next dt { color: ${P.grey}; font-weight: 700; font-size: 7.4pt; text-transform: uppercase; letter-spacing: .06em; padding-top: .4mm; }
+.v2-next dd { margin: 0; line-height: 1.35; }
+.v2-next-meta { display: flex; flex-wrap: wrap; gap: 1mm 4mm; margin-top: 1.5mm; font-size: 7.4pt; color: ${P.grey}; }
+.v2-next-meta span:first-child { font-family: Consolas, monospace; color: ${P.blue}; }
+.v2-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3mm; }
+.v2-strip-col { border: 1px solid ${P.line}; border-radius: 2mm; padding: 2.5mm 3mm; }
+.v2-strip-head { font-size: 7.4pt; text-transform: uppercase; letter-spacing: .1em; color: ${P.blue}; font-weight: 700; }
+.v2-strip-theme { font-size: 9.2pt; font-weight: 700; color: ${P.navy}; }
+.v2-strip-count { font-size: 8pt; color: ${P.grey}; margin-bottom: 1mm; }
+.v2-strip-col small { font-family: Consolas, monospace; font-size: 7pt; line-height: 1.4; display: block; }
+
+/* Competitor pipeline */
+.v2-pipe { display: flex; align-items: stretch; gap: 2mm; margin-bottom: 4mm; }
+.v2-pipe i { align-self: center; color: ${P.greyMid}; font-style: normal; font-size: 14pt; }
+.v2-pipe-stage { flex: 1; border: 1px solid; border-top-width: 3px; border-radius: 2mm; padding: 2.5mm; text-align: center; }
+.v2-pipe-stage b { display: block; font-size: 16pt; color: ${P.navy}; }
+.v2-pipe-stage span { display: block; font-size: 8.6pt; font-weight: 700; color: ${P.navy}; }
+.v2-pipe-stage small { font-size: 7.2pt; }
+.v2-muted { color: ${P.greyMid}; }
+
+/* Page roles */
+.v2-roles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2.5mm; }
+.v2-role { background: ${P.wash}; border-radius: 1.5mm; padding: 2.5mm 3mm; }
+.v2-role b { display: block; font-size: 8.8pt; color: ${P.navy}; }
+.v2-role small { font-family: Consolas, monospace; font-size: 7.4pt; }
+.v2-bench td { vertical-align: top; }
+.v2-bench td small { font-size: 7.6pt; line-height: 1.35; display: block; }
+.v2-src { font-size: 6.6pt; color: ${P.greyMid}; }
+.v2-gapcell { background: ${P.crimsonSoft}; }
+.v2-register td { padding: .9mm 1.6mm; font-size: 7.2pt; line-height: 1.3; vertical-align: top; }
+.v2-register .v2-group td { background: ${P.wash}; font-weight: 700; color: ${P.navy}; font-size: 7.6pt; padding-top: 1.6mm; }
 `;

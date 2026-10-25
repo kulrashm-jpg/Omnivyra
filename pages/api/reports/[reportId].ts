@@ -207,6 +207,8 @@ async function handler(
     intelligence?: ReportIntelligenceData;
     composed_report?: ComposedReportData;
     engine_version?: string;
+    /** Public research pack collected at generation (v2 layout only; validated against the domain there). */
+    public_research?: unknown;
   } | null;
   const intel = stored?.intelligence;
   const composedReport = stored?.composed_report;
@@ -384,13 +386,13 @@ async function handler(
     applyLogoFallback(withComparison);
     const sanitizedWithComparison = applyLogoFallback(sanitizeReportViewPayload(withComparison));
     if (format === 'html') {
-      const html = renderCanonicalReportHtml(sanitizedWithComparison);
+      const html = renderCanonicalReportHtml(sanitizedWithComparison, { research: stored?.public_research });
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cache-Control', 'private, no-store');
       return (res as NextApiResponse<any>).status(200).send(html);
     }
     if (format === 'pdf') {
-      const pdfBuffer = await renderCanonicalReportPdf(sanitizedWithComparison);
+      const pdfBuffer = await renderCanonicalReportPdf(sanitizedWithComparison, { research: stored?.public_research });
       const filename = buildPdfDownloadFilename(
         type,
         sanitizedWithComparison.companyContext?.companyName ?? null,
@@ -431,14 +433,14 @@ async function handler(
   const sanitizedPayloadWithComparison = applyLogoFallback(sanitizeReportViewPayload(payloadWithComparison));
 
   if (format === 'html') {
-    const html = renderCanonicalReportHtml(sanitizedPayloadWithComparison);
+    const html = renderCanonicalReportHtml(sanitizedPayloadWithComparison, { research: stored?.public_research });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'private, no-store');
     return (res as NextApiResponse<any>).status(200).send(html);
   }
 
   if (format === 'pdf') {
-    const pdfBuffer = await renderCanonicalReportPdf(sanitizedPayloadWithComparison);
+    const pdfBuffer = await renderCanonicalReportPdf(sanitizedPayloadWithComparison, { research: stored?.public_research });
     const filename = buildPdfDownloadFilename(
       type,
       sanitizedPayloadWithComparison.companyContext?.companyName ?? null,

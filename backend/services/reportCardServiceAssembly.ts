@@ -394,6 +394,33 @@ export async function generateReportPayload(
   // growth/performance run does not crawl, and must record `null` rather than a false success.
 
   let composed_report: Record<string, unknown> | undefined;
+  // Public research (AI search answers, site basics, competitor profiles) runs ALONGSIDE composition,
+  // snapshot only and only when REPORT_PUBLIC_RESEARCH=on. It never feeds a score and never fails
+  // the report: past its deadline, or on any error, the report simply has no research section.
+  let researchPromise: Promise<Record<string, unknown> | null> | null = null;
+  if (requestedCategory === 'snapshot') {
+    const { publicResearchEnabled, collectPublicResearch, researchInputFromNarrative } = await import('./intelligence/publicResearch/collect');
+    if (publicResearchEnabled()) {
+      const { extractCompanyNarrativeContext } = await import('./snapshotReport/narrativeHelpers');
+      const input = researchInputFromNarrative({
+        ...extractCompanyNarrativeContext({ resolvedInput }),
+        targetCustomer: resolvedInput.resolved.companyContext?.targetCustomer ?? null,
+        teamSize: resolvedInput.resolved.companyContext?.teamSize ?? null,
+        foundedYear: resolvedInput.resolved.companyContext?.foundedYear ?? null,
+        revenueRange: resolvedInput.resolved.companyContext?.revenueRange ?? null,
+      });
+      const deadlineMs = Number(process.env.PUBLIC_RESEARCH_DEADLINE_MS ?? 180_000);
+      researchPromise = input
+        ? Promise.race([
+          collectPublicResearch(input) as unknown as Promise<Record<string, unknown>>,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), deadlineMs).unref?.()),
+        ]).catch((error) => {
+          console.warn('[reportCardService] public research failed', { reportId: report.id, error: error instanceof Error ? error.message : String(error) });
+          return null;
+        })
+        : null;
+    }
+  }
   try {
     if (requestedCategory === 'growth') {
       const { composeGrowthReport } = await import('./growthReportService');
@@ -450,6 +477,9 @@ export async function generateReportPayload(
     }
   }
 
+  const public_research = researchPromise ? await researchPromise : null;
+  if (researchPromise) console.info('[reportCardService] public_research', { reportId: report.id, collected: Boolean(public_research) });
+
   return {
     generated_at: new Date().toISOString(),
     engine_version: REPORT_ENGINE_VERSION,
@@ -463,6 +493,7 @@ export async function generateReportPayload(
       resolvedInput,
       readiness,
     }),
+    ...(public_research ? { public_research } : {}),
   };
 }
 

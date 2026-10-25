@@ -91,7 +91,12 @@ export type CanonicalSerpRefusal =
 
 export interface CanonicalSerpQuery {
   readonly query: string;
-  /** Appended to the query when present, exactly as the previous callers did. */
+  /**
+   * Target market. A recognised country is sent as Google's own location/language
+   * parameters (gl/hl/location) and the query text is left exactly as written; an
+   * unrecognised value is appended to the query, as previous callers did. Either way
+   * the result records the context actually used (`searchContext`).
+   */
   readonly geography?: string | null;
   /** REQUIRED. Never defaulted — see the depth note above. */
   readonly depth: number;
@@ -125,6 +130,46 @@ export interface CanonicalSerpResult {
    * search showed", those are different facts and only one of them is evidence.
    */
   readonly observedAt: string | null;
+  /**
+   * Where and how the search was run, as sent. Present whenever a request was made,
+   * so "not found" can always be read against its geography, language and depth.
+   */
+  readonly searchContext?: SerpSearchContext | null;
+}
+
+export type SerpSearchContext = {
+  /** Google country code sent as `gl`, when the geography was recognised. */
+  readonly gl: string | null;
+  /** Interface/results language sent as `hl`. */
+  readonly hl: string;
+  /** Location sent as `location`, when recognised. */
+  readonly location: string | null;
+  /** True when an unrecognised geography was appended to the query text instead. */
+  readonly geographyAppendedToQuery: boolean;
+  /** The query text actually sent. */
+  readonly sentQuery: string;
+  readonly depth: number;
+};
+
+/** Countries we can express with Google's own parameters. Lower-case name → [gl, location]. */
+const GOOGLE_COUNTRY: Record<string, [string, string]> = {
+  india: ['in', 'India'],
+  'united states': ['us', 'United States'], usa: ['us', 'United States'], us: ['us', 'United States'],
+  'united kingdom': ['uk', 'United Kingdom'], uk: ['uk', 'United Kingdom'],
+  canada: ['ca', 'Canada'], australia: ['au', 'Australia'], germany: ['de', 'Germany'],
+  france: ['fr', 'France'], singapore: ['sg', 'Singapore'], 'united arab emirates': ['ae', 'United Arab Emirates'],
+  uae: ['ae', 'United Arab Emirates'], 'saudi arabia': ['sa', 'Saudi Arabia'], ireland: ['ie', 'Ireland'],
+  netherlands: ['nl', 'Netherlands'], 'new zealand': ['nz', 'New Zealand'], 'south africa': ['za', 'South Africa'],
+};
+
+/** Resolve how a geography is expressed in the request. Pure; exported for tests. */
+export function resolveSearchContext(query: string, geography: string | null | undefined, depth: number): SerpSearchContext {
+  const geo = String(geography ?? '').trim();
+  const country = geo ? GOOGLE_COUNTRY[geo.toLowerCase()] : undefined;
+  if (country) {
+    return { gl: country[0], hl: 'en', location: country[1], geographyAppendedToQuery: false, sentQuery: query, depth };
+  }
+  return { gl: null, hl: 'en', location: null, geographyAppendedToQuery: Boolean(geo), sentQuery: geo ? `${query} ${geo}` : query, depth };
 }
 
 const refuse = (
@@ -276,7 +321,8 @@ export async function fetchCanonicalSerp(
 
   // ── 4. the call ──────────────────────────────────────────────────────────
   const startedAt = Date.now();
-  const query = input.geography ? `${input.query} ${input.geography}` : input.query;
+  const searchContext = resolveSearchContext(input.query, input.geography, input.depth);
+  const query = searchContext.sentQuery;
   const url = new URL('https://serpapi.com/search.json');
   // The SAME literal that is reported as the observation's engine. One source, so
   // the recorded engine cannot disagree with the engine that was requested.
@@ -284,6 +330,9 @@ export async function fetchCanonicalSerp(
   url.searchParams.set('q', query);
   // The caller's depth, never a substitute.
   url.searchParams.set('num', String(input.depth));
+  url.searchParams.set('hl', searchContext.hl);
+  if (searchContext.gl) url.searchParams.set('gl', searchContext.gl);
+  if (searchContext.location) url.searchParams.set('location', searchContext.location);
   url.searchParams.set('api_key', apiKey);
 
   try {
@@ -325,6 +374,7 @@ export async function fetchCanonicalSerp(
       provider: providerId,
       engine: REPORT_SERP_ENGINE,
       observedAt,
+      searchContext,
     };
   } catch (error) {
     // SEC-E3: the request URL carries `api_key` (SerpAPI has no header auth).
@@ -345,6 +395,8 @@ export async function fetchCanonicalSerp(
     return {
       status: 'failed', refusedBy: null, rows: [], reason, provider: providerId,
       engine: null, observedAt: null,
+      // The request WAS made in this context; recording it lets a failure be read against it.
+      searchContext,
     };
   }
 }

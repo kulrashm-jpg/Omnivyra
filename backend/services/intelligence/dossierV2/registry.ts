@@ -16,6 +16,7 @@
  * findings they address.
  */
 import type { CanonicalExportPayload } from '../canonicalExport';
+import { isBrandQuestion, isMarketingBasic, summariseVisibility, type ResearchPack, type ResearchRecord } from './research';
 
 export type EvidenceState = 'measured' | 'inferred' | 'declared' | 'unavailable' | 'not_measured';
 export type Effort = 'low' | 'medium' | 'high';
@@ -29,7 +30,8 @@ export type ActionSource =
   | 'geo_decision'
   | 'digital_experience'
   | 'improvement_lever'
-  | 'evidence_coverage';
+  | 'evidence_coverage'
+  | 'public_research';
 
 export type DossierAction = {
   id: string;
@@ -64,6 +66,8 @@ export type DossierAction = {
   /** Score lever, when a source projected one. */
   lever: { dimension: string; now: number; target: number; overallGain: number; pillarGain: number } | null;
   sources: ActionSource[];
+  /** Public-research evidence records (ids) this action rests on. */
+  evidenceIds: string[];
   /** Every source title merged into this action, verbatim — the audit trail. */
   mergedTitles: string[];
 };
@@ -155,7 +159,7 @@ type Candidate = Omit<DossierAction, 'id' | 'sources' | 'mergedTitles' | 'findin
 const blank = (source: ActionSource, title: string): Candidate => ({
   source, sourceId: null, title, action: title, pillar: null, effort: null, confidence: null,
   horizon: null, impact: null, impactBasis: null, priority: null, priorityBasis: null, why: null, steps: [], verification: null,
-  owner: null, dependsOnSourceIds: [], evidence: [], lever: null,
+  owner: null, dependsOnSourceIds: [], evidence: [], evidenceIds: [], lever: null,
 });
 
 function snapshotCandidates(payload: CanonicalExportPayload): Candidate[] {
@@ -295,6 +299,7 @@ function coverageCandidates(payload: CanonicalExportPayload): Candidate[] {
 const SOURCE_RANK: Record<ActionSource, number> = {
   digital_snapshot: 0, strategic_playbook: 1, action_playbook: 2, digital_experience: 3, geo_decision: 4, improvement_lever: 5,
   evidence_coverage: 6,
+  public_research: 7,
 };
 
 /**
@@ -400,6 +405,7 @@ export function buildActions(payload: CanonicalExportPayload): { actions: Dossie
       lever: pick('lever'),
       sources: [...new Set(members.map((m) => m.source))],
       mergedTitles: [...new Set(members.map((m) => m.title))],
+      evidenceIds: [],
       _deps: members.flatMap((m) => m.dependsOnSourceIds),
     } as DossierAction & { _deps: string[] };
   });
@@ -590,6 +596,8 @@ export function buildFindings(payload: CanonicalExportPayload): DossierFinding[]
 /** Link actions to the findings they address (pillar match + shared subject terms). */
 export function linkFindings(findings: DossierFinding[], actions: DossierAction[]): void {
   for (const a of actions) {
+    // Links declared by the producer (research actions name their findings) are kept both ways.
+    for (const id of a.findingIds) { const f = findings.find((x) => x.id === id); if (f && !f.actionIds.includes(a.id)) f.actionIds.push(a.id); }
     const text = [a.title, a.action, a.why, ...a.evidence.map((e) => e.statement), a.lever?.dimension].join(' ');
     for (const f of findings) {
       if (a.kind === 'measurement') {
@@ -610,12 +618,172 @@ export function linkFindings(findings: DossierFinding[], actions: DossierAction[
   }
 }
 
-export function buildDossierRegistry(payload: CanonicalExportPayload): DossierRegistry {
+export function buildDossierRegistry(payload: CanonicalExportPayload, research: ResearchPack | null = null): DossierRegistry {
   const { actions, audit } = buildActions(payload);
+  for (const a of actions) a.evidenceIds ??= [];
   const findings = buildFindings(payload);
+  if (research) addResearch(research, findings, actions, audit);
   linkFindings(findings, actions);
   completeFromFindings(findings, actions);
   return { findings, actions, audit };
+}
+
+/** Coverage-gap action a research gap belongs to, by subject. */
+const GAP_ROUTES: Array<[RegExp, string]> = [
+  [/backlink/i, 'A-gap-backlink-authority'],
+  [/generative|perplexity|ai search|ai visibility/i, 'A-gap-ai-visibility'],
+  [/review|reputation|independent proof/i, 'A-gap-trust-reputation'],
+];
+
+/**
+ * Public research joins the SAME registry. Its observations become findings; the conditions it
+ * establishes become actions only where the evidence supports one; its gaps attach to the
+ * matching measurement action, or become one. Every addition is counted in the audit.
+ */
+export function addResearch(pack: ResearchPack, findings: DossierFinding[], actions: DossierAction[], audit: RegistryAudit): void {
+  const base = (over: Partial<DossierAction> & Pick<DossierAction, 'id' | 'title' | 'action' | 'kind'>): DossierAction => ({
+    pillar: null, effort: null, confidence: null, horizon: null, horizonBasis: null, impact: null, impactBasis: null,
+    priority: null, priorityBasis: null, why: null, steps: [], verification: null, owner: null, dependsOn: [],
+    findingIds: [], evidence: [], lever: null, sources: ['public_research'], evidenceIds: [], mergedTitles: [over.title], ...over,
+  });
+  const add = (a: DossierAction) => {
+    if (actions.some((x) => x.id === a.id)) return;
+    actions.push(a);
+    audit.candidates += 1;
+    audit.actions += 1;
+    audit.bySource.public_research = (audit.bySource.public_research ?? 0) + 1;
+  };
+
+  const search = pack.search.filter((r) => r.status === 'observed');
+  const nonBranded = search.filter((r) => r.intent !== 'branded');
+  const foundNonBranded = nonBranded.filter((r) => r.ownPosition != null).length;
+  if (nonBranded.length) {
+    findings.push({
+      id: 'F-research-search', title: `Found for ${foundNonBranded} of ${nonBranded.length} non-branded buyer searches`, pillar: 'discoverability',
+      kind: 'search', state: 'measured', metric: `${foundNonBranded} of ${nonBranded.length}`,
+      observation: `Google, ${search[0]?.geography ?? 'unrecorded geography'}, ${search[0]?.language ?? ''}, ${search[0]?.observedAt?.slice(0, 10) ?? ''}: omnivyra.com ${foundNonBranded ? 'appeared for' : 'did not appear within the results returned for'} category, problem, commercial, use-case and comparison queries.`,
+      implication: 'Buyers who search for the problem or the category, rather than the brand, do not currently find the site in the results checked.',
+      source: `Public research ${pack.collectedAt} (${nonBranded.map((r) => r.id).slice(0, 3).join(', ')}…)`, actionIds: [],
+    });
+  }
+
+  const collision = pack.independent.find((r) => r.kind === 'name_collision' && r.status === 'observed');
+  if (collision) {
+    findings.push({
+      id: 'F-research-name-collision', title: 'The brand name is ambiguous in search', pillar: 'authority', kind: 'search', state: 'measured',
+      metric: null, observation: collision.claim, implication: 'Someone who hears the name and searches for it may not find the company.',
+      source: `Public research ${pack.collectedAt} (${collision.id})`, actionIds: [],
+    });
+    add(base({
+      id: 'A-brand-name-unambiguous', kind: 'improvement', pillar: 'authority', effort: 'low', confidence: 'medium',
+      horizon: horizonFromEffort('low'), horizonBasis: 'effort',
+      title: 'Make the brand name unambiguous in search',
+      action: `Pair "${pack.subject.brand}" with its category in page titles, Organization structured data and every public profile, so engines can tell it apart from similarly spelled names.`,
+      why: collision.claim, verification: `A plain "${pack.subject.brand}" search (same engine and geography) returns ${pack.subject.domain} within the results checked.`,
+      evidenceIds: [collision.id], findingIds: ['F-research-name-collision'],
+    }));
+  }
+
+  const notFound = pack.independent.filter((r) => r.status === 'looked_for_not_found');
+  if (notFound.length) {
+    findings.push({
+      id: 'F-research-no-independent-proof', title: 'No independent mention or listing was found', pillar: 'trust', kind: 'search', state: 'measured',
+      metric: null, observation: notFound.map((r) => r.claim).join(' '),
+      implication: 'Buyers and AI tools look for third-party confirmation; none was found in the searches made. This is not proof that none exists.',
+      source: `Public research ${pack.collectedAt} (${notFound.map((r) => r.id).join(', ')})`, actionIds: [],
+    });
+  }
+
+  // What AI search tools say: buyer questions (is the brand named?) and brand-name questions (is it right?).
+  const vis = summariseVisibility(pack).generative;
+  if (vis && vis.buyerAnswers) {
+    const ids = pack.generative.filter((r) => r.status === 'observed' && r.query && !isBrandQuestion(r, pack.subject.brand)).map((r) => r.id);
+    findings.push({
+      id: 'F-research-ai-answers', title: `Named in ${vis.buyerNamed} of ${vis.buyerAnswers} AI answers to buyer questions`, pillar: 'discoverability', kind: 'search', state: 'measured',
+      metric: `${vis.buyerNamed} of ${vis.buyerAnswers}`,
+      observation: `${vis.surfaces.join(', ')} answered buyer questions from live web sources; ${pack.subject.brand} was named in ${vis.buyerNamed}.${vis.brandAnswers ? ` Asked by name, ${vis.brandCorrect} of ${vis.brandAnswers} answers described the company correctly and ${vis.brandMisidentified} confused it with something else.` : ''}`,
+      implication: 'A buyer who asks an AI tool a category question is shown the brands its sources discuss; this company is not among them yet.',
+      source: `Public research ${pack.collectedAt} (${ids.slice(0, 3).join(', ')}…)`, actionIds: [],
+    });
+  }
+
+  // Own-site basics and competitor benchmark: findings, and the actions their evidence supports.
+  const site = pack.site ?? [];
+  const benchmark = pack.benchmark ?? [];
+  const siteIssues = site.filter((r) => r.recommends);
+  if (siteIssues.length) {
+    findings.push({
+      id: 'F-research-site-basics', title: 'Basic crawl and entity signals are missing', pillar: 'foundation', kind: 'search', state: 'measured',
+      metric: `${siteIssues.length} gaps`, observation: siteIssues.map((r) => r.claim).join('. ') + '.',
+      implication: 'Search engines and AI crawlers read these files and tags first; without them the site is harder to crawl completely and to recognise as one company.',
+      source: `Direct fetch ${pack.collectedAt} (${siteIssues.map((r) => r.id).join(', ')})`, actionIds: [],
+    });
+  }
+  const stale = site.find((r) => r.kind === 'content_cadence');
+  const velocity = actions.find((a) => a.id === 'A-authority-velocity');
+  if (stale && velocity && !velocity.evidenceIds.includes(stale.id)) velocity.evidenceIds.push(stale.id);
+  const basics = benchmark.filter(isMarketingBasic);
+  const behind = basics.filter((r) => r.values && Object.entries(r.values)[0]?.[1].status === 'looked_for_not_found');
+  if (basics.length) {
+    findings.push({
+      id: 'F-research-competitor-benchmark', title: `Behind the validated competitors on ${behind.length} of ${basics.length} marketing basics`,
+      pillar: 'authority', kind: 'competitive', state: 'measured', metric: null,
+      observation: behind.map((r) => `${r.claim}: ${Object.values(r.values ?? {})[0]?.value}`).join('; ') + '.',
+      implication: 'Competitors give buyers, review sites and AI tools more to find, cite and trust.',
+      source: `Public research ${pack.collectedAt} (${benchmark.map((r) => r.id).join(', ')})`, actionIds: [],
+    });
+  }
+  const recs = new Map<string, { rec: NonNullable<ResearchRecord['recommends']>; ids: string[] }>();
+  for (const r of [...site, ...benchmark]) {
+    if (!r.recommends) continue;
+    const entry = recs.get(r.recommends.id) ?? { rec: r.recommends, ids: [] };
+    entry.ids.push(r.id);
+    recs.set(r.recommends.id, entry);
+  }
+  for (const { rec, ids } of recs.values()) {
+    add(base({
+      id: rec.id, kind: 'improvement', title: rec.title, action: rec.action, effort: rec.effort, impact: rec.impact ?? null,
+      impactBasis: rec.impact ? 'analyst rating from public research' : null, pillar: rec.pillar ?? null, confidence: 'medium',
+      horizon: horizonFromEffort(rec.effort), horizonBasis: 'effort', verification: rec.verification,
+      why: [...site, ...benchmark].filter((r) => ids.includes(r.id)).map((r) => r.claim).slice(0, 2).join('; '),
+      evidenceIds: ids,
+      findingIds: rec.id === 'A-site-crawl-basics' ? ['F-research-site-basics'] : rec.id === 'A-ai-cited-sources' ? ['F-research-ai-answers'] : ['F-research-competitor-benchmark'],
+    }));
+  }
+
+  for (const g of pack.gaps) {
+    const route = GAP_ROUTES.find(([re]) => re.test(g.claim));
+    const target = route ? actions.find((a) => a.id === route[1]) : null;
+    if (target) {
+      if (!target.steps.includes(g.method)) target.steps.push(g.method);
+      if (!target.evidenceIds.includes(g.id)) target.evidenceIds.push(g.id);
+      if (!target.sources.includes('public_research')) target.sources.push('public_research');
+      audit.candidates += 1;
+      audit.merges.push({ into: target.id, from: 'public_research', title: g.claim });
+      continue;
+    }
+    add(base({
+      id: `A-gap-${slug(g.claim).split('-').slice(0, 4).join('-')}`, kind: 'measurement', effort: 'low', horizon: '0-30', horizonBasis: 'effort',
+      title: `Measure: ${g.claim}`, action: g.method, why: 'An evidence gap left open by the public research.',
+      verification: 'The next report records an observation for this gap, with source and date.', evidenceIds: [g.id],
+    }));
+  }
+  // Research findings point at the existing actions that address them (when present).
+  const LINKS: Array<[string, string[]]> = [
+    ['F-research-search', ['A-content-search-foundation', 'A-comparison-decision-pages']],
+    ['F-research-no-independent-proof', ['A-proof-unified-driven-platform', 'A-gap-trust-reputation']],
+    ['F-competitors-unresolved', ['A-gap-competitor-pricing-feature-matrix']],
+    ['F-search-not-found', ['A-content-search-foundation']],
+    ['F-research-ai-answers', ['A-gap-ai-visibility']],
+    ['F-research-competitor-benchmark', ['A-gap-trust-reputation', 'A-authority-velocity']],
+  ];
+  for (const [fid, aids] of LINKS) {
+    for (const aid of aids) {
+      const a = actions.find((x) => x.id === aid);
+      if (a && findings.some((f) => f.id === fid) && !a.findingIds.includes(fid)) a.findingIds.push(fid);
+    }
+  }
+  actions.sort((a, b) => (a.kind === b.kind ? rankValue(b) - rankValue(a) : a.kind === 'improvement' ? -1 : 1));
 }
 
 /**
