@@ -90,6 +90,12 @@ import { generateProviderImage, type ImageSubtypeHint } from './creatorAssetRend
 // Type-only: the composer itself stays lazily required below (import cycle), so
 // this adds no runtime edge.
 import type { ReferenceImage } from './creator/creatorPromptComposer';
+// Static namespace imports (not lazy `require` inside functions): in the production
+// Next.js bundle a destructured lazy require came back without its function. None
+// of these modules imports a renderer, so there is no cycle to avoid.
+import * as creatorPaletteModeModule from './creator/creatorPaletteMode';
+import * as creatorNoveltyPlanModule from './creator/creatorNoveltyPlan';
+import * as creatorLookStyleReferenceModule from './creator/creatorLookStyleReference';
 
 export function buildAiImagePrompt(input: {
   title: string;
@@ -120,7 +126,7 @@ export function buildAiImagePrompt(input: {
   // colours or a fresh experimental palette — no brand colour may reach the
   // prompt, so the brand palette / accent are dropped from the composer input.
   const { resolveRenderPaletteMode, noveltyAvoidFromMetadata } =
-    require('./creator/creatorPaletteMode') as typeof import('./creator/creatorPaletteMode');
+    creatorPaletteModeModule;
   const paletteMode = resolveRenderPaletteMode(input.metadata);
   const independentColours = paletteMode !== 'brand';
   const palette = independentColours
@@ -372,7 +378,7 @@ export function buildAiImagePrompt(input: {
   // `novelty_seed` (pinned per request by renderAsset, so the fix loop and true
   // retries reproduce it) or a fresh one. The user's typed direction wins.
   const { buildNoveltyPlan, resolveNoveltySeed, PALETTE_DIRECTION_PHRASE } =
-    require('./creator/creatorNoveltyPlan') as typeof import('./creator/creatorNoveltyPlan');
+    creatorNoveltyPlanModule;
   const noveltyPlan = (() => {
     const card = safeObject(input.metadata.creator_card);
     const rawVariation = safeObject(input.metadata.look_variation ?? card.look_variation);
@@ -405,7 +411,7 @@ export function buildAiImagePrompt(input: {
   // the composer states the "inspired, not copied" instruction in the body.
   if (!chosenStyle) {
     const { curatedSampleIdFromRenderMetadata } =
-      require('./creator/creatorLookStyleReference') as typeof import('./creator/creatorLookStyleReference');
+      creatorLookStyleReferenceModule;
     const sampleId = curatedSampleIdFromRenderMetadata(input.metadata);
     composerInput.styleReference = sampleId ? { title: getVisualStyle(sampleId)?.title ?? null } : null;
   }

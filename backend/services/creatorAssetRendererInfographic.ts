@@ -97,6 +97,10 @@ import { uploadRenderedPng } from './creatorAssetRendererMedia';
 import { existingNoveltySeed, noveltyIndex } from './creator/creatorNoveltyPlan';
 import { stripPromptDirectives } from './creatorAssetRendererCarousel';
 import { planInfographicContent, resolveInfographicSections, resolveInfographicLayout, validateInfographicDensity, resolveInfographicEngine, estimateDenseBodyHeight } from './creatorAssetRendererCompose';
+// Static namespace imports (not lazy `require` inside functions): in the production
+// Next.js bundle a destructured lazy require came back without its function. None
+// of these modules imports a renderer, so there is no cycle to avoid.
+import * as creatorPaletteModeModule from './creator/creatorPaletteMode';
 
 export async function renderInfographicAsset(
   assetPayload: Record<string, unknown>,
@@ -140,7 +144,7 @@ export async function renderInfographicAsset(
   // taken when white on it clears WCAG 3:1; otherwise the current accent above
   // stays (contrast fallback). Applied to a COPY of the kit. Brand-aware → unchanged.
   const { resolveIndependentPalette, applyIndependentPaletteToBrandKit, resolveRenderPaletteMode } =
-    require('./creator/creatorPaletteMode') as typeof import('./creator/creatorPaletteMode');
+    creatorPaletteModeModule;
   const independentPalette = resolveIndependentPalette({ metadata, seed: existingNoveltySeed(metadata) });
   if (independentPalette) brandKit = applyIndependentPaletteToBrandKit(brandKit, independentPalette.palette, brandKit.accentColor);
   // CREATOR-114: when a sample is selected, the SAMPLE's semantic structure decides the

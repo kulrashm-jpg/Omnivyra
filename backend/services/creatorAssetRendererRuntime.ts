@@ -39,6 +39,15 @@ import {
 import { detectSemanticThreadDuplication } from './creatorSemanticDuplication';
 import { validateCreatorAccessibility } from './creatorAccessibilityValidation';
 import { logPipelineEvent } from '../../lib/shared/observability';
+// Static imports (not lazy `require` inside the function): in the production
+// Next.js bundle a destructured lazy require of these modules came back WITHOUT
+// the function ("attachRecentNoveltyAvoid is not a function"), failing every
+// generation. None of them imports this module, so there is no cycle to avoid.
+// The validation module is imported as a namespace so tests can still spy on it.
+import * as creatorVisualValidation from './creator/creatorVisualValidation';
+import { runVisualFixLoop } from './creator/creatorVisualFixLoop';
+import { attachRecentNoveltyAvoid } from './creator/creatorNoveltyRecentPicks';
+import { resolveNoveltySeed } from './creator/creatorNoveltyPlan';
 import { persistCreatorValidationManifest } from './creatorRenderPersistence';
 import { resolvePlatformGeometryProfile, platformTextBoxY } from './creatorPlatformGeometry';
 import { getCreatorRendererRegistration } from './creatorRendererRegistry';
@@ -488,10 +497,6 @@ export async function renderAsset(
   assetPayload: Record<string, unknown>,
   options: RenderOptions = {},
 ): Promise<RenderedMediaBundle> {
-  const validation =
-    require('./creator/creatorVisualValidation') as typeof import('./creator/creatorVisualValidation');
-  const { runVisualFixLoop } =
-    require('./creator/creatorVisualFixLoop') as typeof import('./creator/creatorVisualFixLoop');
   const contentType = String(
     safeObject(safeObject(assetPayload.media_bundle).metadata).content_type || assetPayload.asset_kind || '',
   );
@@ -505,13 +510,16 @@ export async function renderAsset(
   // same-company same-look generations' picks ride as `novelty_avoid`, so this
   // generation's primary picks differ when the pools allow. Pinned on the
   // payload once, so the fix loop's re-renders reuse the same list.
-  const { attachRecentNoveltyAvoid } =
-    require('./creator/creatorNoveltyRecentPicks') as typeof import('./creator/creatorNoveltyRecentPicks');
-  await attachRecentNoveltyAvoid(assetPayload, options.companyId ?? null);
+  // Best-effort by design: it must never be able to fail a generation.
+  try {
+    await attachRecentNoveltyAvoid(assetPayload, options.companyId ?? null);
+  } catch (error) {
+    console.warn('[creator-asset-renderer][novelty-avoid-skipped]', error instanceof Error ? error.message : String(error));
+  }
   return runVisualFixLoop(assetPayload, options, contentType, {
     dispatch: renderAssetDispatch,
     // Read through the module object at call time (keeps it spy-able in tests).
-    validate: (metadata, ct) => validation.validateCreatorVisual(metadata, ct),
+    validate: (metadata, ct) => creatorVisualValidation.validateCreatorVisual(metadata, ct),
   });
 }
 
@@ -520,8 +528,6 @@ export async function renderAsset(
  * place, like the renderer's other metadata writes). Returns the seed.
  */
 export function pinNoveltySeed(assetPayload: Record<string, unknown>): string {
-  const { resolveNoveltySeed } =
-    require('./creator/creatorNoveltyPlan') as typeof import('./creator/creatorNoveltyPlan');
   if (!assetPayload.media_bundle || typeof assetPayload.media_bundle !== 'object' || Array.isArray(assetPayload.media_bundle)) {
     assetPayload.media_bundle = {};
   }
