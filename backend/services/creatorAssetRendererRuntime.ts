@@ -501,6 +501,13 @@ export async function renderAsset(
   // payload that already carries `novelty_seed` (minted per request by the
   // execution engine, or a true retry / reproduction) keeps it.
   pinNoveltySeed(assetPayload);
+  // Avoid-recent (best-effort, read-only, time-boxed, fail-open): the last few
+  // same-company same-look generations' picks ride as `novelty_avoid`, so this
+  // generation's primary picks differ when the pools allow. Pinned on the
+  // payload once, so the fix loop's re-renders reuse the same list.
+  const { attachRecentNoveltyAvoid } =
+    require('./creator/creatorNoveltyRecentPicks') as typeof import('./creator/creatorNoveltyRecentPicks');
+  await attachRecentNoveltyAvoid(assetPayload, options.companyId ?? null);
   return runVisualFixLoop(assetPayload, options, contentType, {
     dispatch: renderAssetDispatch,
     // Read through the module object at call time (keeps it spy-able in tests).

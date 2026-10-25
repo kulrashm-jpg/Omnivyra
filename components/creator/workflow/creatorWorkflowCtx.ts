@@ -84,6 +84,9 @@ export interface CreatorWorkflowCtx {
   setBrandMode: React.Dispatch<React.SetStateAction<CreatorBrandMode>>;
   brandPresence: BrandPresence;
   setBrandPresence: React.Dispatch<React.SetStateAction<BrandPresence>>;
+  /** Independent mode: the look's own colours or an AI-chosen fresh palette. */
+  paletteChoice: import('../../../lib/creator-content/creatorPaletteMode').IndependentPaletteChoice;
+  setPaletteChoice: React.Dispatch<React.SetStateAction<import('../../../lib/creator-content/creatorPaletteMode').IndependentPaletteChoice>>;
   brandSelections: BrandContextSelections;
   setBrandSelection: (id: keyof BrandContextSelections, value: boolean) => void;
   brandProfile: import('../../../lib/creator-content/creatorTypeWorkflow').CreatorBrandProfile | null;

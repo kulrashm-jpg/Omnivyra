@@ -51,7 +51,7 @@ const IMG_CAR: TemplateAssetFamily[] = ['image', 'carousel'];
 const STYLE_CATEGORY: Record<string, BlueprintCategory> = {
   lifestyle: 'photography', 'real-photography': 'photography', 'portrait-photography': 'photography', 'product-photography': 'photography', studio: 'photography',
   technology: 'photography', healthcare: 'photography', finance: 'photography', education: 'photography', construction: 'photography', restaurant: 'photography', travel: 'photography', retail: 'photography', fashion: 'photography', 'luxury-brand': 'photography',
-  graffiti: 'illustration', street: 'illustration', comic: 'illustration', anime: 'illustration', clay: 'illustration', watercolor: 'illustration', sketch: 'illustration', illustration: 'illustration', 'flat-illustration': 'illustration', isometric: 'illustration', 'hand-drawn': 'illustration', 'paper-cut': 'illustration',
+  graffiti: 'illustration', street: 'illustration', comic: 'illustration', anime: 'illustration', clay: 'illustration', watercolor: 'illustration', sketch: 'illustration', illustration: 'illustration', 'flat-illustration': 'illustration', isometric: 'illustration', 'hand-drawn': 'illustration', 'pixel-art': 'illustration', 'paper-cut': 'illustration',
   '3d': '3d',
   'ui-mockup': 'ui', dashboard: 'ui', infographic: 'ui',
 };
@@ -102,7 +102,8 @@ const EXTRAS: VisualBlueprint[] = [
   extra('corporate-portrait', 'Corporate Portrait', 'Professional headshot-led layouts.', 'photography', '#1e3a8a', '#0b1220', 'corporate portrait photography, professional headshots', { supportedFamilies: IMG_CAR }),
   extra('food', 'Food', 'Appetising food photography.', 'photography', '#dc2626', '#1a1a1a', 'food photography, fresh appetising, rich warm tones', { supportedFamilies: IMG_CAR, recommendedIndustries: ['restaurant', 'retail'] }),
   extra('manga', 'Manga', 'Black-and-white manga line art.', 'illustration', '#111827', '#f8fafc', 'manga style, ink line art, screentones, dynamic panels', { supportedFamilies: IMG_CAR }),
-  extra('pixel-art', 'Pixel Art', 'Retro pixel-art aesthetic.', 'illustration', '#22c55e', '#0b1220', 'pixel art, 8-bit, crisp pixels, retro game palette', { supportedFamilies: IMG_CAR }),
+  // pixel-art is a registered visual style (VISUAL_STYLES) since the look-palette
+  // work, so it is promoted above with the same id/title/prompt — not an extra.
   extra('product-3d', '3D Product', 'Rendered 3D product hero.', '3d', '#8b5cf6', '#0b1220', '3D rendered product, studio lighting, soft reflections', { supportedFamilies: IMG_CAR, recommendedIndustries: ['technology', 'retail'] }),
   extra('character-3d', '3D Character', 'Friendly 3D character scenes.', '3d', '#fb7185', '#1f2937', '3D character, soft rounded, expressive, brand mascot', { supportedFamilies: IMG_CAR }),
   extra('abstract-3d', '3D Abstract', 'Abstract 3D forms and depth.', '3d', '#06b6d4', '#020617', '3D abstract shapes, depth, gradient lighting', { supportedFamilies: ALL_FAM }),

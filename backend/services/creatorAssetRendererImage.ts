@@ -120,7 +120,7 @@ export async function composeSingleVisualAsset(
   const brandRuntime = options.companyId
     ? await resolveBrand(options.companyId).catch(() => null)
     : null;
-  const brandKit = brandRuntime && brandRuntime.meta.source === 'brand_identity'
+  const resolvedBrandKit = brandRuntime && brandRuntime.meta.source === 'brand_identity'
     ? brandRuntimeToCreatorBrandKit(brandRuntime, { assetPayload, metadata, platform, assetType: fileNamePrefix })
     : resolveCreatorBrandKit({
         assetPayload,
@@ -130,6 +130,18 @@ export async function composeSingleVisualAsset(
         platform,
         assetType: fileNamePrefix,
       });
+  // Palette mode (owner 2026-10-25): an INDEPENDENT image's overlay CTA and
+  // fallback gradient take the look's own / the experimental palette instead
+  // of the brand kit's (contrast-safe; the current accent is the fallback).
+  // Brand-aware → the kit unchanged.
+  const brandKit = (() => {
+    const { resolveIndependentPalette, applyIndependentPaletteToBrandKit } =
+      require('./creator/creatorPaletteMode') as typeof import('./creator/creatorPaletteMode');
+    const { existingNoveltySeed } =
+      require('./creator/creatorNoveltyPlan') as typeof import('./creator/creatorNoveltyPlan');
+    const independent = resolveIndependentPalette({ metadata, seed: existingNoveltySeed(metadata) });
+    return independent ? applyIndependentPaletteToBrandKit(resolvedBrandKit, independent.palette) : resolvedBrandKit;
+  })();
   const brandColors = brandKit.normalizedPalette;
   // BETA-015 RULE 1/2 — derive the ONE canonical render policy from attachment_mode FIRST.
   // supporting_visual (POST + IMAGE) is a clean photograph: it suppresses overlay text here and

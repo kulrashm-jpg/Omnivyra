@@ -79,6 +79,7 @@ const LOOK_SURFACE: Record<string, string> = {
   retro: 'bold flat geometric shapes, chunky outlines and a sunset-style colour banding',
   neon: 'glowing tube lines with bloom on deep black, coloured reflections on dark surfaces',
   cyberpunk: 'neon-lit rain-slick surfaces, magenta and cyan glow, dense layered depth',
+  'pixel-art': 'a visible square pixel grid with hard stair-stepped edges, a limited flat colour palette, no anti-aliasing or smooth gradients',
 };
 
 const NOT_PHOTO = 'photorealism, photographic skin texture, film grain, camera lens blur';
@@ -140,6 +141,7 @@ const LOOK_RENDERING: Record<string, LookRendering> = {
   isometric: L('isometric 2.5D vector illustration', ['#3b82f6', '#0b1220', '#22d3ee', '#f8fafc'], `perspective distortion, ${NOT_PHOTO}`),
   'hand-drawn': L('hand-drawn marker doodles', ['#0f766e', '#fffbeb', '#f97316'], `precise vector geometry, glossy render, ${NOT_PHOTO}`),
   'paper-cut': L('layered paper-cut craft with soft shadows', ['#f59e0b', '#1f2937', '#fb7185', '#fef3c7'], `glossy plastic, ${NOT_PHOTO}`),
+  'pixel-art': L('retro 8-bit pixel art on a crisp square pixel grid', ['#22c55e', '#0b1220', '#facc15', '#38bdf8', '#f472b6'], `smooth gradients, anti-aliased soft edges, high-resolution detail, ${NOT_PHOTO}`),
   // Futuristic
   cyberpunk: L('cyberpunk neon-noir digital art', ['#d946ef', '#020617', '#22d3ee', '#facc15'], 'daylight pastoral scenes, muted beige tones, photorealism'),
   futuristic: L('sleek sci-fi digital render with clean glow', ['#818cf8', '#020617', '#22d3ee', '#e2e8f0'], `rustic vintage textures, ${NOT_PHOTO}`),
@@ -224,6 +226,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
   S('isometric', 'Isometric', '2.5D isometric scenes.', '#3b82f6', '#0b1220', { icon: 'Grid3x3', tags: ['isometric', '2.5d'], supportedFamilies: ALL, brandBehavior: 'illustration-led', stylePrompt: 'isometric illustration, 2.5D scenes, clean angles' }),
   S('hand-drawn', 'Hand Drawn', 'Organic doodle / marker feel.', '#0f766e', '#fffbeb', { icon: 'Pencil', tags: ['hand-drawn', 'doodle'], supportedFamilies: IMG_CAR, brandBehavior: 'monochrome', stylePrompt: 'hand drawn doodles, marker, playful organic lines' }),
   S('paper-cut', 'Paper Cut', 'Layered paper-cut depth.', '#f59e0b', '#1f2937', { icon: 'Scissors', tags: ['paper-cut', 'layered'], supportedFamilies: ['image', 'infographic'], brandBehavior: 'pastel', stylePrompt: 'layered paper cut craft, soft shadows, depth' }),
+  S('pixel-art', 'Pixel Art', 'Retro pixel-art aesthetic.', '#22c55e', '#0b1220', { icon: 'Grid2x2', tags: ['pixel-art', 'retro', '8-bit'], supportedFamilies: IMG_CAR, brandBehavior: 'high-contrast', stylePrompt: 'pixel art, 8-bit, crisp pixels, retro game palette' }),
 
   // ── Futuristic ──────────────────────────────────────────────────────────
   S('cyberpunk', 'Cyberpunk', 'Neon-noir high tech.', '#d946ef', '#020617', { icon: 'Bolt', tags: ['cyberpunk', 'neon'], supportedFamilies: IMG_CAR, brandBehavior: 'high-contrast', stylePrompt: 'cyberpunk neon-noir, glitch, magenta and cyan glow' }),

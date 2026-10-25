@@ -116,11 +116,20 @@ export function buildAiImagePrompt(input: {
   const selectedAssets = safeObject(input.metadata.selected_brand_assets);
   const productContextRaw = safeObject(input.metadata.product_context);
   const brandKit = safeObject(input.metadata.brand_kit ?? selectedAssets);
-  const palette = Array.isArray(input.assetPayload.color_palette)
-    ? input.assetPayload.color_palette.map((v) => String(v)).filter(Boolean).slice(0, 5)
-    : Array.isArray(brandKit.palette)
-      ? (brandKit.palette as unknown[]).map((v) => String(v)).filter(Boolean).slice(0, 5)
-      : [];
+  // Palette mode (owner 2026-10-25): independent mode uses the look's own
+  // colours or a fresh experimental palette — no brand colour may reach the
+  // prompt, so the brand palette / accent are dropped from the composer input.
+  const { resolveRenderPaletteMode, noveltyAvoidFromMetadata } =
+    require('./creator/creatorPaletteMode') as typeof import('./creator/creatorPaletteMode');
+  const paletteMode = resolveRenderPaletteMode(input.metadata);
+  const independentColours = paletteMode !== 'brand';
+  const palette = independentColours
+    ? []
+    : Array.isArray(input.assetPayload.color_palette)
+      ? input.assetPayload.color_palette.map((v) => String(v)).filter(Boolean).slice(0, 5)
+      : Array.isArray(brandKit.palette)
+        ? (brandKit.palette as unknown[]).map((v) => String(v)).filter(Boolean).slice(0, 5)
+        : [];
 
   // Lazy require so the creative-intelligence modules are only loaded
   // when the renderer actually needs them.
@@ -166,7 +175,9 @@ export function buildAiImagePrompt(input: {
       logoUrl: typeof brandKit.logoUrl === 'string' ? brandKit.logoUrl : (typeof brandContext.logoUrl === 'string' ? brandContext.logoUrl : undefined),
       faviconUrl: typeof brandKit.faviconUrl === 'string' ? brandKit.faviconUrl : (typeof brandContext.faviconUrl === 'string' ? brandContext.faviconUrl : undefined),
       palette,
-      accentColor: typeof brandKit.accentColor === 'string' ? brandKit.accentColor : (typeof brandContext.accentColor === 'string' ? brandContext.accentColor : undefined),
+      accentColor: independentColours
+        ? undefined
+        : (typeof brandKit.accentColor === 'string' ? brandKit.accentColor : (typeof brandContext.accentColor === 'string' ? brandContext.accentColor : undefined)),
       typography: typeof brandKit.typography === 'object' && brandKit.typography !== null ? brandKit.typography as { fontFamily?: string } : undefined,
       tone: typeof brandContext.tone === 'string' ? brandContext.tone : (typeof input.metadata.tone === 'string' ? input.metadata.tone : undefined),
       industry: typeof brandKit.industry === 'string' ? brandKit.industry : (typeof brandContext.industry === 'string' ? brandContext.industry : undefined),
@@ -195,10 +206,13 @@ export function buildAiImagePrompt(input: {
       ? input.metadata.brand_generation_mode
       : (typeof input.metadata.brand_mode === 'string'
         ? input.metadata.brand_mode
-        // The form's brand mode rides on creator_card (now carried onto render metadata).
-        : (typeof safeObject(input.metadata.creator_card).brand_mode === 'string'
-          ? String(safeObject(input.metadata.creator_card).brand_mode)
-          : 'brand-aware')),
+        // The form's brand mode rides on creator_card (now carried onto render
+        // metadata) — as `brand_generation_mode` (the editor payload) or `brand_mode`.
+        : (typeof safeObject(input.metadata.creator_card).brand_generation_mode === 'string'
+          ? String(safeObject(input.metadata.creator_card).brand_generation_mode)
+          : (typeof safeObject(input.metadata.creator_card).brand_mode === 'string'
+            ? String(safeObject(input.metadata.creator_card).brand_mode)
+            : 'brand-aware'))),
     contentType: typeof input.metadata.content_type === 'string' ? input.metadata.content_type : input.eyebrow,
     // Purpose-driven generation strategy. Resolved by the composer
     // against the PurposeStrategyRegistry — see purposeStrategyRegistry.ts.
@@ -357,7 +371,7 @@ export function buildAiImagePrompt(input: {
   // background, as a separate "This version:" layer. The seed is the payload's
   // `novelty_seed` (pinned per request by renderAsset, so the fix loop and true
   // retries reproduce it) or a fresh one. The user's typed direction wins.
-  const { buildNoveltyPlan, resolveNoveltySeed } =
+  const { buildNoveltyPlan, resolveNoveltySeed, PALETTE_DIRECTION_PHRASE } =
     require('./creator/creatorNoveltyPlan') as typeof import('./creator/creatorNoveltyPlan');
   const noveltyPlan = (() => {
     const card = safeObject(input.metadata.creator_card);
@@ -379,9 +393,14 @@ export function buildAiImagePrompt(input: {
         hasInstruction: Boolean(guidedChoices.visualInstruction),
         subject: guidedChoices.subject ?? null,
       },
+      paletteMode,
+      // Recent same-company same-look picks (attached by renderAsset; absent → none).
+      avoid: noveltyAvoidFromMetadata(input.metadata),
     });
   })();
   composerInput.novelty = { lines: noveltyPlan.lines };
+  const palettePick = noveltyPlan.picks.palette as keyof typeof PALETTE_DIRECTION_PHRASE | undefined;
+  composerInput.palette = { mode: paletteMode, direction: palettePick ? PALETTE_DIRECTION_PHRASE[palettePick] ?? palettePick : null };
   // No look chosen, but a curated gallery sample rides as the style reference:
   // the composer states the "inspired, not copied" instruction in the body.
   if (!chosenStyle) {
@@ -433,7 +452,8 @@ export function buildAiImagePrompt(input: {
     companyId: input.companyId,
     currentStrategy: null,
   });
-  if (optimization.mutations.forceBrandAware) composerInput.brandMode = 'brand-aware';
+  // The user's explicit Independent choice outranks the optimizer's nudge.
+  if (optimization.mutations.forceBrandAware && !independentColours) composerInput.brandMode = 'brand-aware';
   // Realism + suppression intensification is already baked into the
   // composer's premium variant templates; the optimizer signals this
   // by setting `promoteToPremium` which the variant orchestrator
@@ -534,7 +554,8 @@ export function buildAiImagePrompt(input: {
     switch (governance.retryStrategy) {
       case 'tighten_brand_signals':
       case 'tighten_palette':
-        govMutations.brandMode = 'brand-aware';
+        // Never re-brand a request the user made Independent.
+        if (!independentColours) govMutations.brandMode = 'brand-aware';
         break;
       case 'tighten_realism':
       case 'reduce_stock_bias':
@@ -788,6 +809,8 @@ export function buildAiImagePrompt(input: {
     creative_look_variation: composerInput.lookVariation ?? null,
     // This generation's novelty seed + picks (reproducible from the seed).
     novelty: noveltyPlan.audit,
+    // Whose colours led the image: 'brand' | 'look' | 'experimental'.
+    palette_mode: paletteMode,
     // Variant exploration audit
     variant_count: orchestration.count,
     variant_rationale: orchestration.rationale,

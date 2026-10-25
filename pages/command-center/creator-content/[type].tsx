@@ -426,6 +426,8 @@ export default function CreatorTypeWorkflowPage() {
     setBrandOverride,
     setBrandPanelOpen,
     setBrandPresence,
+    paletteChoice: s.paletteChoice,
+    setPaletteChoice: s.setPaletteChoice,
     setBrandSelection,
     setError,
     setNotice,

@@ -3,6 +3,7 @@
  * pure functions over explicit inputs; the page keeps thin useMemo/useCallback wrappers.
  * ENFORCEMENT: part of the asset-id-minting forbidden-pattern scan (creatorAssetIdFactory.test.ts).
  */
+import { paletteModeFor, type IndependentPaletteChoice } from './creatorPaletteMode';
 import {
   type WriterOverlayText,
   type WriterCreatorSourcePayload,
@@ -342,6 +343,11 @@ export interface BuildGenerationBodyInput {
   overlayText: WriterOverlayText;
   brandMode: CreatorBrandMode;
   brandPresence: BrandPresence;
+  /**
+   * Independent mode only: the look's own colours ('look', default) or a fresh
+   * AI palette ('experimental'). Ignored in brand-aware mode (→ 'brand').
+   */
+  paletteChoice?: IndependentPaletteChoice | null;
   brandSelections: BrandContextSelections;
   brandProfile: CreatorBrandProfile | null;
   brandOverrides: Record<string, string>;
@@ -600,6 +606,9 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
                 })())
           : overlayPayload,
         brand_generation_mode: brandMode,
+        // Whose colours the render uses: 'brand' (brand-aware), else the look's
+        // own ('look', default) or an experimental AI palette.
+        palette_mode: paletteModeFor(brandMode, input.paletteChoice ?? null),
         brand_presence: brandMode === 'brand-aware' ? brandPresence : 'none',
         brand_context: brandMode === 'brand-aware'
           ? {

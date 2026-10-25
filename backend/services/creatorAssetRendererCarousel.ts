@@ -86,6 +86,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
 import { existingNoveltySeed } from './creator/creatorNoveltyPlan';
+import { resolveIndependentPalette, applyIndependentPaletteToBrandKit, resolveRenderPaletteMode } from './creator/creatorPaletteMode';
 import { sharp, PDFDocument, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, type OverlayQualityReport, safeObject, resolveCarouselRenderStyle, resolveCarouselTemplateArc, carouselOverlayBaseStyle, renderBackgroundPng, classifyPdfStorageFailure, USER_MESSAGE_FOR_PDF_FALLBACK, compactText, getCachedRenderBuffer, unsupportedFamilyConditionDegradation } from './creatorAssetRendererContracts';
 import { buildOverlaySvg, loadBrandMark } from './creatorAssetRendererOverlay';
 import { resolveUserBackgroundBytes, carouselUserBackgroundEnabled } from './creator/userBackgroundReference';
@@ -688,7 +689,7 @@ export async function composeStructuredDeckAsset(
   const brandRuntime = options.companyId
     ? await resolveBrand(options.companyId).catch(() => null)
     : null;
-  const brandKit = brandRuntime && brandRuntime.meta.source === 'brand_identity'
+  const resolvedBrandKit = brandRuntime && brandRuntime.meta.source === 'brand_identity'
     ? brandRuntimeToCreatorBrandKit(brandRuntime, { assetPayload, metadata, platform, assetType: fileNamePrefix })
     : resolveCreatorBrandKit({
         assetPayload,
@@ -698,6 +699,15 @@ export async function composeStructuredDeckAsset(
         platform,
         assetType: fileNamePrefix,
       });
+  // Palette mode (owner 2026-10-25): an INDEPENDENT deck's backgrounds and
+  // accent come from the chosen look's palette ('look') or a seeded harmonious
+  // palette ('experimental') instead of the brand kit — darkened for white copy
+  // and with the current accent as the contrast fallback. Brand-aware decks (and
+  // independent decks with no look in 'look' mode) keep the kit exactly.
+  const independentPalette = resolveIndependentPalette({ metadata, seed: existingNoveltySeed(metadata) });
+  const brandKit = independentPalette
+    ? applyIndependentPaletteToBrandKit(resolvedBrandKit, independentPalette.palette)
+    : resolvedBrandKit;
   const renderItems = normalizeStructuredItems(items, fallbackLabel, fileNamePrefix, metadata);
   // Canonical Template visual language (carousel/slider/pdf). Default style ==
   // prior canvas constants → byte-identical.
@@ -1040,7 +1050,17 @@ export async function composeStructuredDeckAsset(
       },
       overlay_renderer: 'deterministic_svg_v1',
       // The seed that varied this deck's backgrounds (absent → none was set).
-      novelty: existingNoveltySeed(metadata) ? { seed: existingNoveltySeed(metadata), picks: { background_variant: 'seeded' } } : undefined,
+      novelty: existingNoveltySeed(metadata)
+        ? {
+            seed: existingNoveltySeed(metadata),
+            picks: {
+              background_variant: 'seeded',
+              ...(independentPalette?.direction ? { palette: independentPalette.direction } : {}),
+            },
+            ...(independentPalette ? { look_id: independentPalette.lookId } : {}),
+          }
+        : undefined,
+      palette_mode: resolveRenderPaletteMode(metadata),
       text_fit: deckTextFit,
       overlay_quality: avgQuality,
       // Per-slide overlay quality reports — additive, so post-render visual

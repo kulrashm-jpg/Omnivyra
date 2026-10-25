@@ -244,6 +244,26 @@ const BACKGROUND: Record<NoveltyLookKind, Pool> = {
   ],
 };
 
+/*
+ * Palette directions for "Open to experimentation" (independent mode, owner
+ * 2026-10-25): a fresh, harmonious palette chosen per generation instead of the
+ * look's own colours. Only picked when the request's palette mode is
+ * 'experimental'; every other request's picks are unchanged.
+ */
+export const PALETTE_DIRECTIONS = Object.freeze(
+  ['warm', 'cool', 'complementary', 'monochrome-accent', 'duotone'] as const,
+);
+export type PaletteDirection = typeof PALETTE_DIRECTIONS[number];
+
+/** How each palette direction is stated in the image prompt. */
+export const PALETTE_DIRECTION_PHRASE: Readonly<Record<PaletteDirection, string>> = Object.freeze({
+  warm: 'a warm palette of reds, oranges and ambers with one deep anchor tone',
+  cool: 'a cool palette of blues, teals and violets with one deep anchor tone',
+  complementary: 'a complementary palette: one dominant hue balanced by its opposite as the accent',
+  'monochrome-accent': 'a near-monochrome palette of one hue in several values, plus a single contrasting accent',
+  duotone: 'a duotone palette built from two strong hues and their tints',
+});
+
 /* ── Seeded selection ─────────────────────────────────────────────────── */
 
 const SEED_PATTERN = /^[A-Za-z0-9:_.-]{1,128}$/;
@@ -263,6 +283,27 @@ function hashInt(...parts: string[]): number {
 export function noveltyIndex(seed: string, salt: string, n: number): number {
   if (!Number.isFinite(n) || n <= 1) return 0;
   return hashInt(seed, salt) % Math.floor(n);
+}
+
+/**
+ * The seeded pick from `pool`, stepping forward past any value in `avoid`
+ * (recent generations' picks) when the pool still has an alternative. No avoid
+ * list → exactly `pool[noveltyIndex(seed, salt, n)]`, so existing seeds keep
+ * their picks.
+ */
+export function seededPickAvoiding<T extends string>(pool: readonly T[], seed: string, salt: string, avoid?: readonly string[] | null): T {
+  const start = noveltyIndex(seed, salt, pool.length);
+  if (!avoid || avoid.length === 0) return pool[start];
+  for (let k = 0; k < pool.length; k += 1) {
+    const candidate = pool[(start + k) % pool.length];
+    if (!avoid.includes(candidate)) return candidate;
+  }
+  return pool[start];
+}
+
+/** This generation's palette direction (experimental palette mode). */
+export function pickPaletteDirection(seed: string, avoid?: readonly string[] | null): PaletteDirection {
+  return seededPickAvoiding(PALETTE_DIRECTIONS, seed, 'palette', avoid);
 }
 
 /** Deterministic shuffle of a pool by (seed, salt) — Fisher–Yates over a hash stream. */
@@ -322,19 +363,37 @@ export interface NoveltyPlanInput {
   variant?: { index: number; count: number; baseSeed?: string | null } | null;
   /** The user's own choices, which always override a pick. */
   user?: { hasInstruction?: boolean; subject?: string | null } | null;
+  /**
+   * The request's palette mode. 'experimental' (independent mode, "open to
+   * experimentation") adds a seeded `palette` direction pick; anything else
+   * leaves the picks exactly as before.
+   */
+  paletteMode?: string | null;
+  /**
+   * Recent generations' picks for the same company + look (best-effort, read
+   * before the plan). Primary picks (setting, composition) and the palette
+   * direction step past these when the pool has an alternative. Variant
+   * versions keep their own distinct-slot rule. Absent → unchanged.
+   */
+  avoid?: Partial<Record<string, readonly string[]>> | null;
 }
+
+/** A plan's picks: the six novelty dimensions plus, in experimental palette mode, `palette`. */
+export type NoveltyPicks = Partial<Record<NoveltyDimension | 'palette', string>>;
 
 export interface NoveltyPlan {
   seed: string;
   lookKind: NoveltyLookKind;
   purposeKind: NoveltyPurposeKind;
-  picks: Partial<Record<NoveltyDimension, string>>;
+  picks: NoveltyPicks;
   /** The "This version:" prompt layer (empty for families that are not provider-rendered). */
   lines: string[];
   /** What is recorded on output metadata as `novelty`. */
   audit: {
     seed: string;
-    picks: Partial<Record<NoveltyDimension, string>>;
+    picks: NoveltyPicks;
+    /** The look these picks were made for (null = no look) — the avoid-recent lookup key. */
+    look_id: string | null;
     look_kind: NoveltyLookKind;
     purpose_kind: NoveltyPurposeKind;
     variant: { index: number; count: number; base_seed: string } | null;
@@ -373,16 +432,23 @@ export function buildNoveltyPlan(input: NoveltyPlanInput): NoveltyPlan {
       })()
     : null;
 
-  const picks: Partial<Record<NoveltyDimension, string>> = {};
+  const avoid = input.avoid ?? null;
+  const picks: NoveltyPicks = {};
   for (const dim of NOVELTY_DIMENSIONS) {
     const pool = pools[dim];
     if (variant && NOVELTY_PRIMARY_DIMENSIONS.includes(dim)) {
       // Version i takes slot i of ONE shuffle shared by all N versions → no repeats (pools ≥ 6, N ≤ 4).
       picks[dim] = seededShuffle(pool, variant.baseSeed, `${lookKind}:${purposeKind}:${dim}`)[(variant.index - 1) % pool.length];
+    } else if (NOVELTY_PRIMARY_DIMENSIONS.includes(dim)) {
+      // Avoid-recent: step past the last few generations' primary picks when possible.
+      picks[dim] = seededPickAvoiding(pool, seed, dim, avoid?.[dim]);
     } else {
       picks[dim] = pool[noveltyIndex(seed, dim, pool.length)];
     }
   }
+  // Experimental palette mode: this version's palette direction (stated by the
+  // composer's colour line, not in the "This version:" layer).
+  if (input.paletteMode === 'experimental') picks.palette = pickPaletteDirection(seed, avoid?.palette);
   // The user's typed creative direction decides the setting — never a pick.
   if (input.user?.hasInstruction) delete picks.scene;
 
@@ -405,6 +471,7 @@ export function buildNoveltyPlan(input: NoveltyPlanInput): NoveltyPlan {
     audit: {
       seed,
       picks: { ...picks },
+      look_id: getVisualStyle(input.lookId ?? null)?.id ?? null,
       look_kind: lookKind,
       purpose_kind: purposeKind,
       variant: variant ? { index: variant.index, count: variant.count, base_seed: variant.baseSeed } : null,

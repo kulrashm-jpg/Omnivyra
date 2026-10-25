@@ -659,6 +659,7 @@ export function useCreatorWorkflowActions(
       writerSource, writerSupportingVisual, writerEmbeddedCopy, writerCompositionIntent,
       writerAssetType, writerAttachmentMode, standaloneAttachmentMode,
       overlayText: filled?.overlayText ?? overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
+      paletteChoice: s.paletteChoice,
       brandContextLines, selectedPlatform, selectedCompanyId,
       activeTemplate, templateValues: filled?.templateValues ?? templateValues,
       creatorBrief: effectiveBrief,
@@ -676,7 +677,7 @@ export function useCreatorWorkflowActions(
     overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
     brandContextLines, selectedPlatform, selectedCompanyId,
     activeTemplate, templateValues, router.query.blueprint, compositionIdForGeneration,
-    s.guidedChoices, effectiveBrief,
+    s.guidedChoices, effectiveBrief, s.paletteChoice,
   ]);
 
   const handleGenerate = async () => {

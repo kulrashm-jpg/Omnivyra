@@ -15,6 +15,7 @@
 import type { AttachmentMode } from '../content/writerCreatorAttachmentContracts';
 import { DEFAULT_BRAND_SELECTIONS, type BrandContextSelections } from './creatorWorkflowModel';
 import type { WorkflowConfig } from './creatorWorkflowConfig';
+import { readIndependentPaletteChoice, type IndependentPaletteChoice } from './creatorPaletteMode';
 
 export const CREATOR_INTAKE_SESSION_KEY = 'omnivyra.creator.intake.v1';
 
@@ -29,6 +30,12 @@ export interface CreatorIntakeChoices {
   includeLogo: boolean | null;
   /** The value of the asset's layout field (image/carousel `layout`, infographic `structureMode`). */
   layout: string | null;
+  /**
+   * Independent mode only: "Use the look's own colours" ('look') or "Open to
+   * experimentation" ('experimental'). Optional so intakes written before this
+   * choice existed parse unchanged; absent → the editor's default ('look').
+   */
+  paletteMode?: IndependentPaletteChoice | null;
 }
 
 export const EMPTY_CREATOR_INTAKE: CreatorIntakeChoices = {
@@ -70,6 +77,7 @@ export function readCreatorIntake(raw: string | null | undefined): CreatorIntake
     brandPresence: oneOf(o.brandPresence, ['minimal', 'balanced', 'strong'] as const),
     includeLogo: typeof o.includeLogo === 'boolean' ? o.includeLogo : null,
     layout: typeof o.layout === 'string' && o.layout.trim() ? o.layout.trim().slice(0, 64) : null,
+    ...(readIndependentPaletteChoice(o.paletteMode) ? { paletteMode: readIndependentPaletteChoice(o.paletteMode) } : {}),
   };
 }
 
@@ -90,6 +98,8 @@ export function intakeToEditorRestore(
   if (intake.attachmentMode) out.standaloneAttachmentMode = intake.attachmentMode;
   if (intake.brandMode) out.brandMode = intake.brandMode;
   if (intake.brandPresence) out.brandPresence = intake.brandPresence;
+  // The colour choice only exists in independent mode.
+  if (intake.brandMode === 'independent' && readIndependentPaletteChoice(intake.paletteMode)) out.paletteChoice = intake.paletteMode;
   if (intake.includeLogo !== null) {
     const selections: BrandContextSelections = { ...DEFAULT_BRAND_SELECTIONS, logo: intake.includeLogo };
     out.brandSelections = selections;

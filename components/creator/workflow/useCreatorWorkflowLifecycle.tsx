@@ -9,6 +9,7 @@ import { type WriterOverlayText, type WriterCreatorSourcePayload } from '../../.
 import { loadAttachmentSession } from '../../../lib/content/creatorAttachmentSession';
 import { readMarketingBrief, MARKETING_BRIEF_SESSION_KEY } from '../../../lib/content/marketingBriefResolver';
 import { CREATOR_INTAKE_SESSION_KEY, intakeToEditorRestore, readCreatorIntake } from '../../../lib/creator-content/creatorIntake';
+import { DEFAULT_INDEPENDENT_PALETTE, readIndependentPaletteChoice } from '../../../lib/creator-content/creatorPaletteMode';
 import { readGuidedChoices, GUIDED_CHOICES_SESSION_KEY } from '../../../lib/content/guidedCreativeSession';
 import {
   creatorRenderPollFailureReason,
@@ -266,6 +267,8 @@ export function useCreatorWorkflowLifecycle(s: ReturnType<typeof useCreatorWorkf
     // (Small/Medium/Large) + brand controls are visible up front, not buried.
     setBrandPanelOpen(router.query.from === 'workspace');
     setBrandMode(restored?.brandMode === 'brand-aware' ? 'brand-aware' : 'independent');
+    // The intake's colour choice (independent mode); absent → the look's own colours.
+    s.setPaletteChoice(readIndependentPaletteChoice(restored?.paletteChoice) ?? DEFAULT_INDEPENDENT_PALETTE);
     setBrandPresence(
       restored?.brandPresence === 'minimal' || restored?.brandPresence === 'strong'
         ? restored.brandPresence

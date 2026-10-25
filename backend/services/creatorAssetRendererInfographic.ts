@@ -116,7 +116,7 @@ export async function renderInfographicAsset(
   const brandRuntime = options.companyId
     ? await resolveBrand(options.companyId).catch(() => null)
     : null;
-  const brandKit = brandRuntime && brandRuntime.meta.source === 'brand_identity'
+  let brandKit = brandRuntime && brandRuntime.meta.source === 'brand_identity'
     ? brandRuntimeToCreatorBrandKit(brandRuntime, { assetPayload, metadata, platform, assetType: 'infographic' })
     : resolveCreatorBrandKit({
         assetPayload,
@@ -134,6 +134,15 @@ export async function renderInfographicAsset(
     ? metadata.blueprint_color_primary
     : null;
   if (sampleAccent) (brandKit as { accentColor?: string }).accentColor = sampleAccent;
+  // Palette mode (owner 2026-10-25): an INDEPENDENT infographic takes its
+  // accent (and dark background tones) from the chosen look's palette or a
+  // seeded experimental palette — never the brand kit. The accent is only
+  // taken when white on it clears WCAG 3:1; otherwise the current accent above
+  // stays (contrast fallback). Applied to a COPY of the kit. Brand-aware → unchanged.
+  const { resolveIndependentPalette, applyIndependentPaletteToBrandKit, resolveRenderPaletteMode } =
+    require('./creator/creatorPaletteMode') as typeof import('./creator/creatorPaletteMode');
+  const independentPalette = resolveIndependentPalette({ metadata, seed: existingNoveltySeed(metadata) });
+  if (independentPalette) brandKit = applyIndependentPaletteToBrandKit(brandKit, independentPalette.palette, brandKit.accentColor);
   // CREATOR-114: when a sample is selected, the SAMPLE's semantic structure decides the
   // slot count (3 KPIs / 4 steps / 2 columns …) — the content planner produces exactly
   // that many. No blueprint → the generic section extractor runs unchanged (RULE 7).
@@ -1627,8 +1636,17 @@ export async function renderInfographicAsset(
     overlay_renderer: 'none',
     // The seed that turned this render's background/wave gradients (absent → none).
     novelty: noveltySeed
-      ? { seed: noveltySeed, picks: { background_direction: grads.background.direction, wave_direction: grads.wave.direction } }
+      ? {
+          seed: noveltySeed,
+          picks: {
+            background_direction: grads.background.direction,
+            wave_direction: grads.wave.direction,
+            ...(independentPalette?.direction ? { palette: independentPalette.direction } : {}),
+          },
+          ...(independentPalette ? { look_id: independentPalette.lookId } : {}),
+        }
       : undefined,
+    palette_mode: resolveRenderPaletteMode(metadata),
     provider_text_validation: providerTextValidation,
     /*
      * An attached reference this family cannot apply is DISCLOSED, not dropped.
