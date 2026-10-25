@@ -19,6 +19,12 @@ jest.mock('../../../lib/security/safeFetch', () => ({
   readCapped: async (res: Response) => Buffer.from(await res.text()),
 }));
 
+// SerpAPI tools resolve their key like the report run (providerCredentialResolver); here only the
+// environment fallback is modelled, so a test controls the key through process.env alone.
+jest.mock('../../services/providerCredentialResolver', () => ({
+  resolveProviderCredential: async () => ({ value: ['SERPAPI_API_KEY', 'SERP_API_KEY', 'SERPAPI_KEY'].map((n) => process.env[n]).find(Boolean) ?? null }),
+}));
+
 type Handler = (url: string, body: any) => { status?: number; json?: unknown; text?: string; type?: string };
 const realFetch = global.fetch;
 const KEYS = ['OPENAI_API_KEY', 'PERPLEXITY_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'SERPAPI_KEY', 'SERP_API_KEY', 'SERPAPI_API_KEY'];
@@ -53,7 +59,7 @@ describe('AI search answers', () => {
     const out = await askAiSurfaces(['best campaign tools?']);
     expect(out.find((a) => a.surface === 'perplexity')).toMatchObject({ status: 'not_measured' });
     expect(out.find((a) => a.surface === 'perplexity')?.reason).toContain('PERPLEXITY_API_KEY');
-    expect(out.find((a) => a.surface === 'meta_ai')?.reason).toContain('no public API');
+    expect(out.find((a) => a.surface === 'meta_ai')?.reason).toContain('No adapter');
     expect(out.every((a) => a.status === 'not_measured')).toBe(true);
     expect(SURFACES.map((s) => s.id)).toEqual(expect.arrayContaining(['chatgpt_search', 'perplexity', 'claude_search', 'gemini_search', 'google_ai_mode', 'bing_copilot', 'meta_ai']));
   });
@@ -63,7 +69,15 @@ describe('AI search answers', () => {
     mockFetch(() => ({ json: responsesAnswer('HubSpot is great.', [], false) }));
     const [a] = (await askAiSurfaces(['q'])).filter((x) => x.surface === 'chatgpt_search');
     expect(a.status).toBe('failed_source');
-    expect(a.reason).toContain('without searching');
+    expect(a.reason).toContain('without a web search');
+  });
+
+  it('does not count a searched answer that returned no checkable source', async () => {
+    process.env.OPENAI_API_KEY = 'k';
+    mockFetch(() => ({ json: responsesAnswer('HubSpot is great.', [], true) }));
+    const [a] = (await askAiSurfaces(['q'])).filter((x) => x.surface === 'chatgpt_search');
+    expect(a.status).toBe('failed_source');
+    expect(a.reason).toContain('checkable source');
   });
 
   it('reads grounded answers and their sources from each API shape', async () => {
@@ -220,10 +234,72 @@ describe('collected pack', () => {
     expect(vis.generative?.notMeasuredSurfaces).toEqual(expect.arrayContaining(['Perplexity', 'Meta AI']));
     expect(parsed!.site.find((r) => /robots\.txt is missing/.test(r.claim))?.recommends?.id).toBe('A-site-crawl-basics');
     expect(parsed!.gaps.map((g) => g.claim)).toEqual(expect.arrayContaining(['Perplexity answers']));
-    const ids = Object.values(parsed!).filter(Array.isArray).flat().map((r: any) => r.id);
+    // Evidence records carry ids; candidate and provider-check rows are keyed by domain / provider instead.
+    const ids = Object.values(parsed!).filter(Array.isArray).flat().map((r: any) => r.id).filter(Boolean);
     expect(new Set(ids).size).toBe(ids.length);
     const html = renderDossierV2Html({ generated_at: '2026-10-24T00:00:00Z', pillars: [], report1: {} } as never, { brandName: 'Acme', domain: 'acme.test' }, pack);
     expect(html).toContain('What AI search tools say, question by question');
     expect(html).toContain('not measured');
+  });
+});
+
+describe('external footprint', () => {
+  it('merges one profile found in several places, detects sign-in walls, and confirms identity only from the page', async () => {
+    const { checkProfiles } = await import('../../services/intelligence/publicResearch/footprint');
+    mockFetch((url) => {
+      if (url.includes('linkedin')) return { status: 999, text: 'authwall', type: 'text/html' };
+      if (url.includes('youtube')) return { text: '<title>Acme</title><a href="https://acme.test">site</a>', type: 'text/html' };
+      return { text: '<p>someone else</p>', type: 'text/html' };
+    });
+    const out = await checkProfiles('Acme', 'acme.test', {
+      declared: ['https://www.linkedin.com/company/acme/', 'https://youtube.com/@acme', 'https://acme.test/blog'],
+      homepage: ['https://linkedin.com/company/acme'], sameAs: ['https://x.com/other'],
+    });
+    expect(out).toHaveLength(3);
+    const li = out.find((p) => p.platform === 'LinkedIn')!;
+    expect(li).toMatchObject({ declared: true, onHomepage: true, state: 'inaccessible', outcome: 'login_wall' });
+    expect(out.find((p) => p.platform === 'YouTube')?.state).toBe('identity_confirmed');
+    expect(out.find((p) => p.platform === 'X')?.state).toBe('fetched');
+  });
+
+  it('keeps owned pages out of independent mentions and does not turn an unconfirmable listing into "not found"', async () => {
+    process.env.ANTHROPIC_API_KEY = 'k';
+    const { findIndependentMentions } = await import('../../services/intelligence/publicResearch/footprint');
+    const reply = { mentions: [
+      { url: 'https://acme.test/about', title: 'own', type: 'other' },
+      { url: 'https://www.linkedin.com/company/acme', title: 'own profile', type: 'other' },
+      { url: 'https://dir.test/acme', title: 'Acme listed', type: 'directory' },
+    ], platforms: [{ platform: 'G2', found: true, url: 'https://g2.test/acme' }, { platform: 'Capterra', found: false, url: '' }] };
+    mockFetch((url) => {
+      if (url.includes('anthropic.com')) return { json: { content: [{ type: 'text', text: JSON.stringify(reply) }] } };
+      if (url.includes('g2.test')) return { status: 403, text: 'blocked', type: 'text/html' };
+      return { text: '<p>Acme is a widget company</p>', type: 'text/html' };
+    });
+    const r = await findIndependentMentions({ brand: 'Acme', domain: 'acme.test', offering: 'widgets' }, ['https://linkedin.com/company/acme']);
+    expect(r.mentions.map((m) => m.url)).toEqual(['https://dir.test/acme']);
+    expect(r.mentions[0].check).toBe('confirmed');
+    expect(r.platforms.find((p) => p.platform === 'G2')?.state).toBe('claimed_unconfirmed');
+    expect(r.platforms.find((p) => p.platform === 'Capterra')?.state).toBe('not_found_in_search');
+  });
+});
+
+describe('evidence auditability', () => {
+  it('does not count an AI Mode answer that returns no source links', async () => {
+    process.env.SERPAPI_KEY = 'k';
+    mockFetch(() => ({ json: { reconstructed_markdown: 'Try HubSpot.', references: [] } }));
+    const [a] = (await askAiSurfaces(['best tools?'], { surfaces: SURFACES.filter((s) => s.id === 'google_ai_mode') }));
+    expect(a.status).toBe('failed_source');
+    expect(a.reason).toBe('The answer came back without checkable source links, so it is not counted.');
+  });
+
+  it('records the web-search queries the model actually ran, from either provider', async () => {
+    const { webJsonCompletion } = await import('../../services/intelligence/publicResearch/llm');
+    process.env.OPENAI_API_KEY = 'k';
+    mockFetch(() => ({ json: { output: [{ type: 'web_search_call', action: { type: 'search', query: '"Acme" reviews' } }, { type: 'message', content: [{ type: 'output_text', text: '{"ok":1}' }] }] } }));
+    expect((await webJsonCompletion('t', 'p', { name: 's', schema: {} }))?.searches).toEqual(['"Acme" reviews']);
+    delete process.env.OPENAI_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'k';
+    mockFetch(() => ({ json: { content: [{ type: 'server_tool_use', name: 'web_search', input: { query: 'Acme G2' } }, { type: 'text', text: '{"ok":1}' }] } }));
+    expect((await webJsonCompletion('t', 'p', { name: 's', schema: {} }))?.searches).toEqual(['Acme G2']);
   });
 });

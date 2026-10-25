@@ -1,0 +1,79 @@
+name: Report Consistency
+
+# DELIBERATELY SCOPED — NOT a whole-repo jest job.
+#
+# WHY THIS EXISTS
+# ---------------
+# The Digital Snapshot dossier (dossierV2) runs a report-wide contradiction check on every render:
+# numbers against evidence rows, coverage totals, stale narrative, failed sources shown as zero,
+# unscoped "not found", a missing key read as "no evidence", claim provenance, competitor
+# comparisons, action ids, evidence dates and unsupported summary claims. Until now no workflow ran
+# its suites, so a renderer change could reintroduce a contradiction and still pass every check.
+# Here a blocking contradiction fails the build.
+#
+# HERMETIC: pure unit tests — no DB, no network, no LLM. The env values are FAKE placeholders whose
+# only job is to satisfy config/env.schema.ts validateEnv() at import time (same rationale and values
+# as campaign-generation-contracts.yml). Do NOT replace them with real credentials.
+
+on:
+  # No path filter, so the check is always reported (a path-filtered required check can leave a PR
+  # waiting for a status that never arrives). The job is small.
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: report-consistency-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  report-consistency:
+    name: Snapshot dossier consistency (contradiction checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_URL: https://placeholder.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
+      REDIS_URL: 'redis://localhost:6379'
+      OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+      ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # FAIL LOUDLY, NEVER SILENTLY SKIP: a renamed or deleted suite must fail here, not vanish.
+      - name: Verify the gated suite inventory (no silent skips)
+        run: |
+          set -euo pipefail
+          EXPECTED=6
+          for s in dossierV2Contradictions dossierV2SourceDiagnostics dossierV2Registry publicResearchCollect snapshotProfileEnrichment reportProfileOptional; do
+            test -f "backend/tests/unit/$s.test.ts" || { echo "Gated suite missing: $s"; exit 1; }
+          done
+          FOUND=$(npx jest --listTests \
+            backend/tests/unit/dossierV2Contradictions.test.ts \
+            backend/tests/unit/dossierV2SourceDiagnostics.test.ts \
+            backend/tests/unit/dossierV2Registry.test.ts \
+            backend/tests/unit/publicResearchCollect.test.ts \
+            backend/tests/unit/snapshotProfileEnrichment.test.ts \
+            backend/tests/unit/reportProfileOptional.test.ts \
+            2>/dev/null | grep -c 'test\.ts')
+          echo "jest discovered $FOUND suite(s); expected $EXPECTED"
+          test "$FOUND" -eq "$EXPECTED"
+
+      - name: Contradiction checks, evidence ledger and rendered dossier
+        run: npx jest backend/tests/unit/dossierV2Contradictions.test.ts backend/tests/unit/dossierV2SourceDiagnostics.test.ts backend/tests/unit/dossierV2Registry.test.ts backend/tests/unit/publicResearchCollect.test.ts backend/tests/unit/snapshotProfileEnrichment.test.ts backend/tests/unit/reportProfileOptional.test.ts --no-coverage --colors --ci

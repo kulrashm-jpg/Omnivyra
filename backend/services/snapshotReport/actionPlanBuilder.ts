@@ -167,8 +167,9 @@ export function buildActionPlan(
 
   if (decision.action_type === 'adjust_strategy') {
     return {
+      // The positioning statement is a sentence, not a noun: it is not spliced into the title.
       title: companyContext?.positioning
-        ? `Strengthen proof for ${companyContext.positioning} around the core focus area to recover trust`
+        ? 'Strengthen proof behind the stated positioning to recover buyer trust'
         : focusKeyword
           ? `Strengthen positioning proof around ${focusKeyword} to recover trust`
           : 'Strengthen positioning proof to recover buyer trust',

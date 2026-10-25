@@ -18,7 +18,8 @@
 import type { ReportViewPayload } from '../../../pages/api/reports/reportViewPayloadTypes';
 import { buildCanonicalExport } from '../intelligence/canonicalExport';
 import { renderExportHtml } from '../intelligence/exportRenderer';
-import { renderDossierV2Html } from '../intelligence/dossierV2/render';
+import { renderDossierV2Html, validateDossierV2Html } from '../intelligence/dossierV2/render';
+import type { ValidationResult } from '../intelligence/dossierV2/validate';
 import { renderPdfFromHtml } from './htmlToPdfRenderer';
 
 function escape(text: string | null | undefined): string {
@@ -92,7 +93,43 @@ export function renderCanonicalReportHtml(payload: ReportViewPayload, options: C
   if (!payload.canonical) {
     return renderInsufficientReportHtml(payload);
   }
-  const exportPayload = buildCanonicalExport({
+  const exportPayload = toExportPayload(payload);
+  // Brand presence: thread companyName, domain, logoUrl, and faviconUrl
+  // from the sanitised view payload's companyContext into the renderer.
+  // The renderer falls back to companyId / payload.domain when these
+  // are absent, so logo-less reports still render correctly.
+  // Dossier v2 (six sections, one action register, visual layout) is opt-in until approved:
+  // REPORT_DOSSIER_LAYOUT=v2. v1 stays the default and is unchanged.
+  if (process.env.REPORT_DOSSIER_LAYOUT === 'v2') {
+    return renderDossierV2Html(exportPayload, dossierBranding(payload), options.research ?? null);
+  }
+  return renderExportHtml(exportPayload, {
+    brandName: payload.companyContext?.companyName ?? payload.domain ?? null,
+    domain: payload.domain ?? null,
+    logoUrl: payload.companyContext?.logoUrl ?? null,
+    faviconUrl: payload.companyContext?.faviconUrl ?? null,
+    companyContext: payload.companyContext ?? null,
+  });
+}
+
+const dossierBranding = (payload: ReportViewPayload) => ({
+  brandName: payload.companyContext?.companyName ?? payload.domain ?? null,
+  domain: payload.domain ?? null,
+  logoUrl: payload.companyContext?.logoUrl ?? null,
+});
+
+/**
+ * Run the dossier v2 consistency check over an already rendered HTML artifact, against the ledger
+ * the same stored report and research pack produce. Used by scripts/check-dossier-consistency.ts.
+ */
+export function validateCanonicalDossierHtml(payload: ReportViewPayload, html: string, options: CanonicalRenderOptions = {}): ValidationResult | null {
+  if (!payload.canonical) return null;
+  return validateDossierV2Html(toExportPayload(payload), dossierBranding(payload), options.research ?? null, html);
+}
+
+/** The export payload both the renderer and the artifact check read; callers have checked `canonical`. */
+function toExportPayload(payload: ReportViewPayload) {
+  const exported = buildCanonicalExport({
     shape: 'executive',
     // The view payload does not surface tenant context separately;
     // companyId is the stable export framing identifier the dossier
@@ -100,7 +137,7 @@ export function renderCanonicalReportHtml(payload: ReportViewPayload, options: C
     // lives on the canonical report itself.
     tenantId: payload.companyId,
     companyId: payload.companyId,
-    report: payload.canonical,
+    report: payload.canonical!,
     // GAP-01 — carry the Report 1 surfaces into the export. These were computed by
     // `composeSnapshotReport`, persisted in `composed_report`, and previously discarded here
     // because the export payload had no slot for them. Pass-through: `null` where the
@@ -127,26 +164,11 @@ export function renderCanonicalReportHtml(payload: ReportViewPayload, options: C
         : null,
     },
   });
-  // Brand presence: thread companyName, domain, logoUrl, and faviconUrl
-  // from the sanitised view payload's companyContext into the renderer.
-  // The renderer falls back to companyId / payload.domain when these
-  // are absent, so logo-less reports still render correctly.
-  // Dossier v2 (six sections, one action register, visual layout) is opt-in until approved:
-  // REPORT_DOSSIER_LAYOUT=v2. v1 stays the default and is unchanged.
-  if (process.env.REPORT_DOSSIER_LAYOUT === 'v2') {
-    return renderDossierV2Html(exportPayload, {
-      brandName: payload.companyContext?.companyName ?? payload.domain ?? null,
-      domain: payload.domain ?? null,
-      logoUrl: payload.companyContext?.logoUrl ?? null,
-    }, options.research ?? null);
-  }
-  return renderExportHtml(exportPayload, {
-    brandName: payload.companyContext?.companyName ?? payload.domain ?? null,
-    domain: payload.domain ?? null,
-    logoUrl: payload.companyContext?.logoUrl ?? null,
-    faviconUrl: payload.companyContext?.faviconUrl ?? null,
-    companyContext: payload.companyContext ?? null,
-  });
+  // The report's date is the run's own time, not the moment this export is rendered: every
+  // "evidence date" and freshness comparison in the dossier is measured against it.
+  // Stored timestamps without an offset are UTC (Postgres `timestamp`); read as local time they shift by the server's zone.
+  const runAt = payload.generated_at && !/(z|[+-]\d\d:?\d\d)$/i.test(payload.generated_at) ? `${payload.generated_at}Z` : payload.generated_at;
+  return runAt && Number.isFinite(Date.parse(runAt)) ? { ...exported, generated_at: new Date(runAt).toISOString() } : exported;
 }
 
 export async function renderCanonicalReportPdf(payload: ReportViewPayload, options: CanonicalRenderOptions = {}): Promise<Buffer> {

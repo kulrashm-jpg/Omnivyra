@@ -6,6 +6,7 @@ import {
   buildReportInputObservation,
 } from './companyProfile/reportObservation';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
+import { lookupProfile, type ProfileLookup } from './intelligence/publicResearch/profileEvidence';
 import {
   normalizeSocialUrl,
   isLikelyCompanySocialLink,
@@ -75,6 +76,11 @@ export type ResolvedReportInput = {
   companyId: string;
   reportCategory: ResolvedReportCategory;
   profile: CompanyProfile | null;
+  /**
+   * How the optional company-profile lookup went. The report never depends on it: a failed lookup
+   * is recorded as an access error (not as "no profile") and composition continues without it.
+   */
+  profileLookup?: ProfileLookup;
   requestPayload: ReportRequestPayload;
   defaults: ReportDefaultInputs;
   resolved: {
@@ -460,7 +466,16 @@ export async function resolveReportInput(params: {
   requestPayload?: ReportRequestPayload | null;
 }): Promise<ResolvedReportInput> {
   const requestPayload = params.requestPayload ?? {};
-  const profile = await getProfile(params.companyId, { autoRefine: false, languageRefine: true });
+  // The profile is optional enrichment: a read failure must not fail the report, and a record that
+  // belongs to another company is never used.
+  const looked = await lookupProfile(() => getProfile(params.companyId, { autoRefine: false, languageRefine: true }));
+  let profile = looked.profile;
+  let profileLookup = looked.lookup;
+  if (profile && profile.company_id && profile.company_id !== params.companyId) {
+    profile = null;
+    profileLookup = { status: 'profile_identity_mismatch', detail: 'The profile record belongs to a different company and was not used.', checkedAt: profileLookup.checkedAt };
+  }
+  if (profileLookup.status === 'profile_access_error') console.warn('[reportInputResolver] company profile could not be read; continuing without it', { companyId: params.companyId });
   const defaults = getDefaultInputs(profile);
   const [integrations, firmographics] = await Promise.all([
     loadCompanyIntegrationState(params.companyId, requestPayload, profile),
@@ -476,6 +491,7 @@ export async function resolveReportInput(params: {
     companyId: params.companyId,
     reportCategory: params.reportCategory,
     profile,
+    profileLookup,
     requestPayload,
     defaults,
     resolved: {

@@ -188,8 +188,12 @@ export function assessPositioningAndMarket(params: {
   const positioningStrength: import('./types').PositioningStrength =
     rawStrengthScore >= 70 ? 'strong' : rawStrengthScore >= 45 ? 'moderate' : 'weak';
 
+  // The two signals can disagree ("visible" clarity, "fragmented" reinforcement); the sentence must
+  // say so with "but" rather than present a contradiction as the reason for the rating.
+  const clarityVisible = claritySignals >= 3;
+  const reinforced = consistencyPenalties <= 2;
   const positioningNarrative =
-    `${companyName}'s positioning as ${positioningLabel} is currently ${positioningStrength}, because clarity signals ${claritySignals >= 3 ? 'are visible' : 'are limited'} and cross-page reinforcement is ${consistencyPenalties <= 2 ? 'mostly consistent' : 'fragmented'}.`;
+    `${companyName}'s positioning as ${positioningLabel} is currently ${positioningStrength}: clarity signals ${clarityVisible ? 'are visible' : 'are limited'}${clarityVisible === reinforced ? ' and' : ', but'} cross-page reinforcement is ${reinforced ? 'mostly consistent' : 'fragmented'}.`;
   const positioningGap = positioningStrength === 'weak'
     ? 'This positioning is not consistently reinforced in buyer-stage content and proof-led decision pages.'
     : positioningStrength === 'moderate'

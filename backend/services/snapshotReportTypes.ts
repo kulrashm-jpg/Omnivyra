@@ -708,6 +708,11 @@ export type SnapshotCrawlEvidence = {
   reason: string;
   /** Present only when the crawl was attempted and threw. */
   error?: string;
+  /**
+   * Every stored URL for the domain with its attempt status (read / HTTP error / no response /
+   * never fetched). Null when the table could not be read; absent on runs before it was recorded.
+   */
+  urls?: import('./crawl/reportCrawlEvidenceService').CrawlUrlState[] | null;
 };
 
 /**

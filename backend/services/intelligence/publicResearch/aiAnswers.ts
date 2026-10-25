@@ -9,6 +9,7 @@
  * report.
  */
 import { logProviderCall } from '../productionPrimitives';
+import { classifyProviderError, errorEvidence, sanitize, type ErrorClass, type ProviderErrorEvidence } from './providerErrors';
 
 export type AnswerSurfaceId =
   | 'chatgpt_search' | 'perplexity' | 'claude_search' | 'gemini_search' | 'google_ai_mode' | 'bing_copilot' | 'meta_ai';
@@ -23,7 +24,16 @@ export type SurfaceAnswer = {
   reason: string | null;
   observedAt: string;
   geography: string;
+  /** Failed requests: the provider's sanitised error fields and the class they support (providerErrors.ts). */
+  error?: ProviderErrorEvidence & { errorClass: ErrorClass; causeConfirmed: boolean };
 };
+
+/** A provider refusal that keeps its sanitised evidence, so the cause is read from the provider, not guessed. */
+class ProviderError extends Error {
+  constructor(readonly evidence: ProviderErrorEvidence) {
+    super(`HTTP ${evidence.httpStatus}: ${evidence.message}`);
+  }
+}
 
 type Ask = (query: string, signal: AbortSignal) => Promise<{ text: string; sources: string[]; grounded: boolean }>;
 
@@ -35,15 +45,33 @@ type Surface = {
   geography: string;
   ask: (key: string) => Ask;
   unavailable?: string;
+  /**
+   * Resolve the key through providerCredentialResolver (Super Admin account first, then its env
+   * fallback order), exactly as the report run's own search does. Reading `keys` directly let this
+   * step pick a different variable from the report run, and SerpAPI rejected it in production.
+   */
+  credential?: 'serpapi';
 };
 
 const env = (names: string[]): string | null => names.map((n) => process.env[n]).find((v) => v && v.trim()) ?? null;
+
+async function keyFor(sf: Surface): Promise<string | null> {
+  if (sf.credential) {
+    try {
+      const { resolveProviderCredential } = await import('../../providerCredentialResolver');
+      return (await resolveProviderCredential(sf.credential)).value;
+    } catch {
+      // The resolver could not load (e.g. no database client): use its own environment fallback order.
+    }
+  }
+  return sf.keys.length ? env(sf.keys) : null;
+}
 
 async function postJson(url: string, body: unknown, headers: Record<string, string>, signal: AbortSignal): Promise<any> {
   // ssrf-ok: callers pass only the fixed provider API endpoints in SURFACES (OpenAI, Perplexity, Anthropic, Google); never caller input.
   const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${String(json?.error?.message ?? json?.error ?? '').slice(0, 160)}`);
+  if (!res.ok) throw new ProviderError(errorEvidence(res.status, json));
   return json;
 }
 
@@ -65,7 +93,8 @@ export const SURFACES: Surface[] = [
       return {
         text: String(part?.text ?? ''),
         sources: (part?.annotations ?? []).filter((a: any) => a.type === 'url_citation').map((a: any) => String(a.url)),
-        grounded: out.some((o: any) => o.type === 'web_search_call'),
+        // Counted only with a web search AND at least one checkable source (the report's definition of grounded).
+        grounded: out.some((o: any) => o.type === 'web_search_call') && (part?.annotations ?? []).some((a: any) => a.type === 'url_citation'),
       };
     },
   },
@@ -86,6 +115,8 @@ export const SURFACES: Surface[] = [
       const j = await postJson('https://api.anthropic.com/v1/messages', {
         model: process.env.PUBLIC_RESEARCH_ANTHROPIC_MODEL ?? 'claude-haiku-5-5', max_tokens: ANSWER_TOKENS(),
         tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }],
+        // Like a buyer's search assistant, it must look the question up: an answer from memory is not counted.
+        tool_choice: { type: 'any' },
         messages: [{ role: 'user', content: query }],
       }, { 'x-api-key': key, 'anthropic-version': '2023-06-01' }, signal);
       const blocks: any[] = Array.isArray(j.content) ? j.content : [];
@@ -93,7 +124,7 @@ export const SURFACES: Surface[] = [
       const cited = blocks.flatMap((b) => (b.type === 'text' ? b.citations ?? [] : [])).map((c: any) => c?.url);
       const results = blocks.flatMap((b) => (b.type === 'web_search_tool_result' && Array.isArray(b.content) ? b.content : [])).map((r: any) => r?.url);
       const sources = [...new Set([...cited, ...results].filter((u): u is string => typeof u === 'string'))];
-      return { text, sources, grounded: blocks.some((b) => b.type === 'server_tool_use' || b.type === 'web_search_tool_result') };
+      return { text, sources, grounded: blocks.some((b) => b.type === 'server_tool_use' || b.type === 'web_search_tool_result') && sources.length > 0 };
     },
   },
   {
@@ -112,25 +143,25 @@ export const SURFACES: Surface[] = [
     },
   },
   {
-    id: 'google_ai_mode', label: 'Google AI Mode', keys: ['SERPAPI_KEY', 'SERP_API_KEY', 'SERPAPI_API_KEY'], geography: `gl=${COUNTRY().toLowerCase()}, hl=en`,
+    id: 'google_ai_mode', label: 'Google AI Mode', keys: ['SERPAPI_API_KEY', 'SERP_API_KEY', 'SERPAPI_KEY'], credential: 'serpapi', geography: `gl=${COUNTRY().toLowerCase()}, hl=en`,
     ask: (key) => async (query, signal) => {
       const params = new URLSearchParams({ engine: 'google_ai_mode', q: query, gl: COUNTRY().toLowerCase(), hl: 'en', api_key: key });
       const res = await fetch(`https://serpapi.com/search.json?${params}`, { signal });
       const j: any = await res.json().catch(() => ({}));
-      if (!res.ok || j.error) throw new Error(String(j.error ?? `HTTP ${res.status}`).slice(0, 160));
+      if (!res.ok || j.error) throw new ProviderError(errorEvidence(res.status, j));
       const text = String(j.reconstructed_markdown ?? (j.text_blocks ?? []).map((b: any) => b?.snippet ?? '').join('\n'));
       const sources = (j.references ?? []).map((r: any) => r?.link).filter((u: unknown): u is string => typeof u === 'string');
-      // AI Mode answers are generated from Google Search by design; references are not always returned.
-      return { text, sources, grounded: text.trim().length > 0 };
+      // An answer counts only with checkable sources; AI Mode does not always return them.
+      return { text, sources, grounded: sources.length > 0 };
     },
   },
   {
-    id: 'bing_copilot', label: 'Bing Copilot', keys: ['SERPAPI_KEY', 'SERP_API_KEY', 'SERPAPI_API_KEY'], geography: 'Bing default',
+    id: 'bing_copilot', label: 'Bing Copilot', keys: ['SERPAPI_API_KEY', 'SERP_API_KEY', 'SERPAPI_KEY'], credential: 'serpapi', geography: 'Bing default',
     ask: (key) => async (query, signal) => {
       const params = new URLSearchParams({ engine: 'bing_copilot', q: query, api_key: key });
       const res = await fetch(`https://serpapi.com/search.json?${params}`, { signal });
       const j: any = await res.json().catch(() => ({}));
-      if (!res.ok || j.error) throw new Error(String(j.error ?? `HTTP ${res.status}`).slice(0, 160));
+      if (!res.ok || j.error) throw new ProviderError(errorEvidence(res.status, j));
       const blocks: any[] = j.text_blocks ?? [];
       const text = blocks.map((b) => [b?.snippet, ...(b?.list ?? []).map((l: any) => l?.snippet)].filter(Boolean).join(' ')).join('\n');
       const sources = (j.references ?? []).map((r: any) => r?.link).filter((u: unknown): u is string => typeof u === 'string');
@@ -140,7 +171,10 @@ export const SURFACES: Surface[] = [
   {
     id: 'meta_ai', label: 'Meta AI', keys: [], geography: '—',
     ask: () => async () => ({ text: '', sources: [], grounded: false }),
-    unavailable: 'Meta offers no public API that answers from live web search (its Llama API answers from model memory, which is not visibility evidence), and the Meta AI web app requires a logged-in account.',
+    // Meta's Model API documents search grounding with citations (Responses / Messages APIs, paid per search
+    // plus tokens: dev.meta.ai/docs/search-grounding). No adapter is implemented here, and an API answer is
+    // not the consumer Meta AI app, which requires a signed-in account.
+    unavailable: 'No adapter is implemented for Meta’s Model API search grounding (paid usage); the consumer Meta AI app requires a signed-in account.',
   },
 ];
 
@@ -167,7 +201,7 @@ export async function askAiSurfaces(
   const surfaces = opts.surfaces ?? (only.length ? SURFACES.filter((s) => only.includes(s.id)) : SURFACES);
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const perSurface = await Promise.all(surfaces.map(async (sf) => {
-    const key = sf.keys.length ? env(sf.keys) : null;
+    const key = await keyFor(sf);
     const base = { surface: sf.id, label: sf.label, geography: sf.geography };
     if (sf.unavailable || !key) {
       const reason = sf.unavailable ?? `Not measured: ${sf.keys.join(' or ')} is not configured.`;
@@ -182,13 +216,17 @@ export async function askAiSurfaces(
         logProviderCall({ providerId: `research:${sf.id}`, operation: 'probe', status: 'ok', duration_ms: Date.now() - startedAt });
         if (!r.grounded || !r.text.trim()) {
           return { ...base, query, status: 'failed_source', text: r.text.slice(0, 6000), sources: r.sources, observedAt,
-            reason: r.text.trim() ? 'The tool answered without searching the web, so the answer is not counted.' : 'The tool returned no answer.' };
+            reason: !r.text.trim() ? 'The tool returned no answer.'
+              // Tools that report a search step are judged by it; the others only by the sources they return.
+              : sf.id === 'chatgpt_search' || sf.id === 'claude_search' ? 'The tool answered without a web search or without any checkable source, so the answer is not counted.'
+                : 'The answer came back without checkable source links, so it is not counted.' };
         }
         return { ...base, query, status: 'observed', text: r.text.slice(0, 6000), sources: r.sources, reason: null, observedAt };
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
+        const ev = error instanceof ProviderError ? error.evidence : errorEvidence(null, { error: { message: error instanceof Error ? error.message : String(error) } });
+        const reason = sanitize(error instanceof Error ? error.message : String(error));
         logProviderCall({ providerId: `research:${sf.id}`, operation: 'probe', status: 'unavailable', reason, duration_ms: Date.now() - startedAt });
-        return { ...base, query, status: 'failed_source', text: '', sources: [], reason: reason.slice(0, 200), observedAt };
+        return { ...base, query, status: 'failed_source', text: '', sources: [], reason: reason.slice(0, 200), observedAt, error: { ...ev, ...classifyProviderError(ev) } };
       }
     });
   }));

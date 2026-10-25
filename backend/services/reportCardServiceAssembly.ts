@@ -358,7 +358,7 @@ export async function generateReportPayload(
   // R1-OPEN-01 — the composition reads website evidence only from the domain this crawl targeted.
   let domainScope: import('./crawl/reportDomainScope').ReportDomainScope | undefined;
   if (requestedCategory === 'snapshot') {
-    const { ensureReportCrawlEvidence } = await import('./crawl/reportCrawlEvidenceService');
+    const { ensureReportCrawlEvidence, listCrawlUrlStates } = await import('./crawl/reportCrawlEvidenceService');
     const crawlResult = await ensureReportCrawlEvidence({
       companyId: report.company_id,
       websiteDomain: resolvedInput.resolved.websiteDomain ?? report.domain ?? null,
@@ -382,6 +382,8 @@ export async function generateReportPayload(
       durationMs: crawlResult.durationMs,
       reason: crawlResult.reason,
       ...(crawlResult.error ? { error: crawlResult.error } : {}),
+      // The crawl funnel needs each URL's attempt status, not only the totals.
+      urls: crawlResult.targetUrl ? await listCrawlUrlStates(report.company_id, crawlResult.targetUrl) : null,
     };
     const { resolveReportDomainScope } = await import('./crawl/reportDomainScope');
     domainScope = await resolveReportDomainScope(report.company_id, crawlResult.targetUrl ?? null)
@@ -400,6 +402,7 @@ export async function generateReportPayload(
   let researchPromise: Promise<Record<string, unknown> | null> | null = null;
   if (requestedCategory === 'snapshot') {
     const { publicResearchEnabled, collectPublicResearch, researchInputFromNarrative } = await import('./intelligence/publicResearch/collect');
+    const { profileEvidence } = await import('./intelligence/publicResearch/profileEvidence');
     if (publicResearchEnabled()) {
       const { extractCompanyNarrativeContext } = await import('./snapshotReport/narrativeHelpers');
       const input = researchInputFromNarrative({
@@ -408,6 +411,9 @@ export async function generateReportPayload(
         teamSize: resolvedInput.resolved.companyContext?.teamSize ?? null,
         foundedYear: resolvedInput.resolved.companyContext?.foundedYear ?? null,
         revenueRange: resolvedInput.resolved.companyContext?.revenueRange ?? null,
+        socialLinks: resolvedInput.resolved.socialLinks ?? [],
+        // Optional enrichment: the profile's own fields as company-declared facts with provenance.
+        profile: profileEvidence(resolvedInput.profile, resolvedInput.profileLookup ?? { status: resolvedInput.profile ? 'profile_available' : 'profile_not_found', detail: null }, report.company_id),
       });
       const deadlineMs = Number(process.env.PUBLIC_RESEARCH_DEADLINE_MS ?? 180_000);
       researchPromise = input

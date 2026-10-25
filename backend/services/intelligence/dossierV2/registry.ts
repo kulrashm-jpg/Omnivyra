@@ -156,7 +156,15 @@ type Candidate = Omit<DossierAction, 'id' | 'sources' | 'mergedTitles' | 'findin
   dependsOnSourceIds: string[];
 };
 
-const blank = (source: ActionSource, title: string): Candidate => ({
+/**
+ * Titles produced before actionPlanBuilder stopped splicing the positioning sentence into them
+ * ("Strengthen proof for <a whole sentence> around the core focus area…") are restated, so a
+ * stored report renders the same title a new run would.
+ */
+export const cleanTitle = (t: string): string =>
+  t.replace(/^Strengthen proof for .{20,} around the core focus area to recover trust$/i, 'Strengthen proof behind the stated positioning to recover buyer trust');
+
+const blank = (source: ActionSource, rawTitle: string, title = cleanTitle(rawTitle)): Candidate => ({
   source, sourceId: null, title, action: title, pillar: null, effort: null, confidence: null,
   horizon: null, impact: null, impactBasis: null, priority: null, priorityBasis: null, why: null, steps: [], verification: null,
   owner: null, dependsOnSourceIds: [], evidence: [], evidenceIds: [], lever: null,
@@ -223,6 +231,9 @@ function playbookCandidates(payload: CanonicalExportPayload, source: 'action_pla
       .map((d) => str(d) ?? str(obj(d)?.id)).filter((d): d is string => Boolean(d));
     const outcome = str(a.expected_outcome);
     if (outcome) c.verification = outcome;
+    // The action's own evidence trace (observations Report 1 may assert on): the basis it rests on.
+    c.evidence = arr(obj(a.evidence)?.observations).map((o) => str(obj(o)?.signal)).filter((t): t is string => Boolean(t))
+      .slice(0, 3).map((statement) => ({ state: 'measured' as EvidenceState, statement }));
     return c;
   });
 }
@@ -533,13 +544,14 @@ export function buildFindings(payload: CanonicalExportPayload): DossierFinding[]
     if (f.agreement !== 'differ') continue;
     push({
       id: `F-identity-${slug(String(f.key ?? 'field'))}`,
-      title: `Declared and published ${String(f.label ?? 'positioning').toLowerCase()} differ`,
+      // The comparison is of wording, not meaning: the title says so.
+      title: `Declared and published ${String(f.label ?? 'positioning').toLowerCase()} are worded differently`,
       pillar: 'trust',
       kind: 'positioning',
       state: 'measured',
       metric: null,
       observation: `Declared: "${str(f.declaredValue) ?? '—'}". Website: "${str(f.observedValue) ?? '—'}".`,
-      implication: 'Buyers and answer engines read the website, so the declared positioning is not what they encounter.',
+      implication: 'Buyers and answer engines read the website’s words, not the profile’s; check that both tell the same story.',
       source: 'Company profile vs website crawl',
     });
   }
@@ -548,12 +560,12 @@ export function buildFindings(payload: CanonicalExportPayload): DossierFinding[]
   if (sv && num(sv.queriesRun) && num(sv.queriesRanked) === 0) {
     push({
       id: 'F-search-not-found',
-      title: 'Domain absent from the checked search results',
+      title: `Domain absent from the ${num(sv.queriesRun)} generic searches checked`,
       pillar: 'discoverability',
       kind: 'search',
       state: 'measured',
       metric: `0 of ${num(sv.queriesRun)} queries`,
-      observation: str(sv.reason) ?? 'The domain did not appear in the results checked.',
+      observation: `${str(sv.reason) ?? 'The domain did not appear in the results checked.'} The queries were built from the declared category label${str(obj(arr(sv.observations)[0])?.query) ? ` (e.g. “${str(obj(arr(sv.observations)[0])?.query)}”)` : ''}, not from buyer questions.`,
       implication: 'Read with the query set: a small or generic query set is weak evidence about commercial visibility.',
       source: 'Public search results (SerpAPI)',
     });
@@ -654,14 +666,25 @@ export function addResearch(pack: ResearchPack, findings: DossierFinding[], acti
     audit.bySource.public_research = (audit.bySource.public_research ?? 0) + 1;
   };
 
+  // The scoring run's "no competitor set" is superseded when this research validated one.
+  const validatedRivals = pack.competitors.filter((c) => ['direct', 'adjacent', 'strategic'].includes(String(c.classification)) && c.status === 'observed');
+  const unresolved = findings.find((f) => f.id === 'F-competitors-unresolved');
+  if (unresolved && validatedRivals.length) {
+    unresolved.title = 'Competitor set established by public research';
+    unresolved.state = 'measured';
+    unresolved.observation = `The scoring run's discovery found none; the public research validated ${validatedRivals.map((c) => c.name).join(', ')} against ${validatedRivals.length === 1 ? 'its' : 'their'} own website${validatedRivals.length === 1 ? '' : 's'} (section 1).`;
+    unresolved.implication = 'Comparisons in section 1 use the validated set; the score’s competitive inputs still come from the scoring run.';
+    unresolved.source = `Public research ${pack.collectedAt} (${validatedRivals.map((c) => c.id).join(', ')})`;
+  }
+
   const search = pack.search.filter((r) => r.status === 'observed');
-  const nonBranded = search.filter((r) => r.intent !== 'branded');
+  const nonBranded = search.filter((r) => !isBrandQuestion(r, pack.subject.brand));
   const foundNonBranded = nonBranded.filter((r) => r.ownPosition != null).length;
   if (nonBranded.length) {
     findings.push({
       id: 'F-research-search', title: `Found for ${foundNonBranded} of ${nonBranded.length} non-branded buyer searches`, pillar: 'discoverability',
       kind: 'search', state: 'measured', metric: `${foundNonBranded} of ${nonBranded.length}`,
-      observation: `Google, ${search[0]?.geography ?? 'unrecorded geography'}, ${search[0]?.language ?? ''}, ${search[0]?.observedAt?.slice(0, 10) ?? ''}: omnivyra.com ${foundNonBranded ? 'appeared for' : 'did not appear within the results returned for'} category, problem, commercial, use-case and comparison queries.`,
+      observation: `Google, ${search[0]?.geography ?? 'unrecorded geography'}, ${search[0]?.language ?? ''}, ${search[0]?.observedAt?.slice(0, 10) ?? ''}: ${pack.subject.domain} ${foundNonBranded ? 'appeared for' : 'did not appear within the results returned for'} category, problem, commercial, use-case and comparison queries.`,
       implication: 'Buyers who search for the problem or the category, rather than the brand, do not currently find the site in the results checked.',
       source: `Public research ${pack.collectedAt} (${nonBranded.map((r) => r.id).slice(0, 3).join(', ')}…)`, actionIds: [],
     });
@@ -705,6 +728,32 @@ export function addResearch(pack: ResearchPack, findings: DossierFinding[], acti
       implication: 'A buyer who asks an AI tool a category question is shown the brands its sources discuss; this company is not among them yet.',
       source: `Public research ${pack.collectedAt} (${ids.slice(0, 3).join(', ')}…)`, actionIds: [],
     });
+    // The scoring run's "AI visibility cannot be measured" gap is stale once tools were measured here:
+    // re-scope it to the tools that are still missing, never to all AI visibility.
+    // Without a runtime record: every tool that was asked but returned no grounded answer (failed or not configured).
+    const asked = [...new Set(pack.generative.filter((g) => g.query && g.kind !== 'ai_overview').map((g) => String(g.surface)))];
+    const missing = pack.runtime?.capabilities.filter((c) => c.family === 'ai_answers' && c.reason !== 'measured' && c.reason !== 'partial').map((c) => c.label)
+      ?? asked.filter((sf) => !pack.generative.some((g) => g.surface === sf && g.query && g.status === 'observed'));
+    const short = (l: string) => l.replace(/ \(.*\)$/, '');
+    const gapFinding = findings.find((f) => f.id === 'F-gap-ai-visibility');
+    if (gapFinding) {
+      gapFinding.title = missing.length ? 'Not every AI search tool could be measured' : 'Every AI search tool was measured';
+      gapFinding.observation = `This report measured ${vis.surfaces.join(', ')} from live web search${missing.length ? `; ${missing.map(short).join(', ')} could not be measured (see the access matrix for why)` : ''}. The score's AI Surface Presence input still comes from the scoring run, which did not use these answers.`;
+      gapFinding.implication = missing.length ? 'Visibility in the tools that were not measured is unknown — not zero.' : null;
+      gapFinding.source = `Public research ${pack.collectedAt}; scoring-run evidence coverage`;
+    }
+    const gapAction = actions.find((a) => a.id === 'A-gap-ai-visibility');
+    if (gapAction) {
+      gapAction.title = missing.length ? `Measure the remaining AI search tools: ${missing.map(short).join(', ')}` : 'Feed the measured AI answers into the score';
+      gapAction.action = missing.length
+        ? `Connect or enable ${missing.map(short).join(', ')} (see the access matrix for each one's reason and cheapest route), then regenerate the report.`
+        : 'Use the grounded AI answers already collected as the AI Surface Presence input.';
+      gapAction.verification = 'The next report shows every AI search tool in the access matrix as measured.';
+      // The scoring run's reason ("AI presence is unmeasured") is no longer true once tools were measured.
+      gapAction.why = missing.length
+        ? `${vis.surfaces.map(short).join(' and ')} ${vis.surfaces.length === 1 ? 'was' : 'were'} measured; ${missing.map(short).join(', ')} ${missing.length === 1 ? 'was' : 'were'} not, so visibility there is unknown — not zero.`
+        : null;
+    }
   }
 
   // Own-site basics and competitor benchmark: findings, and the actions their evidence supports.
