@@ -25,8 +25,14 @@ function str(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-/** The creator_card keys the renderer reads (purpose key, brand mode, the look). */
-const RENDER_CARD_KEYS = ['subtype', 'purpose_key', 'brand_mode', 'guided_creative', 'look_variation'] as const;
+/**
+ * The creator_card keys the renderer reads (purpose key, brand mode, the look,
+ * palette mode). The editor sends its brand mode as `brand_generation_mode`; it
+ * was not carried, so an Independent request rendered as brand-aware and the
+ * brand palette leaked into it. `palette_mode` ('brand' | 'look' |
+ * 'experimental') decides whose colours the render uses.
+ */
+const RENDER_CARD_KEYS = ['subtype', 'purpose_key', 'brand_mode', 'brand_generation_mode', 'palette_mode', 'guided_creative', 'look_variation'] as const;
 
 export function buildCreatorLookRenderMetadata(creatorCard: Record<string, unknown> | null | undefined): Record<string, unknown> {
   const card = obj(creatorCard);

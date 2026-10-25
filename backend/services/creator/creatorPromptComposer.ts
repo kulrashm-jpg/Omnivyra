@@ -159,6 +159,14 @@ export type CreatorPromptInput = {
    * the body too. Absent → unchanged.
    */
   styleReference?: { title?: string | null } | null;
+  /**
+   * Whose colours lead the image (owner 2026-10-25). 'look' (independent mode):
+   * the chosen look's palette is authoritative and no brand colour is stated;
+   * 'experimental': the look palette line is replaced by an instruction to
+   * choose a fresh, harmonious palette in the seeded `direction`. 'brand' /
+   * absent → every line exactly as before.
+   */
+  palette?: { mode: 'brand' | 'look' | 'experimental'; direction?: string | null } | null;
 };
 
 export type CreatorPromptLayers = {
@@ -815,6 +823,28 @@ function buildNoveltyLayer(input: CreatorPromptInput): string[] {
   return lines.map((l) => clean(l)).filter(Boolean).slice(0, 4);
 }
 
+/** The experimental-palette instruction (independent mode, "open to experimentation"). */
+function experimentalPaletteLine(input: CreatorPromptInput): string {
+  const chosen = input.userVisualDirection;
+  const medium = clean(chosen?.renderingMedium) || clean(chosen?.title) || 'the chosen style';
+  const direction = clean(input.palette?.direction);
+  return `Colour palette: choose a fresh, harmonious palette suited to ${medium}${direction ? ` — this version: ${direction}` : ''}. It may depart from any reference image's colours; apply it consistently across the whole frame.`;
+}
+
+/**
+ * Independent-mode colour lines for the photographic / no-look path (the
+ * look-native path states them in its look block). [] for brand mode.
+ */
+function independentPaletteLines(input: CreatorPromptInput): string[] {
+  const mode = input.palette?.mode;
+  if (mode === 'experimental') return [experimentalPaletteLine(input)];
+  if (mode === 'look') {
+    const palette = (input.userVisualDirection?.palette ?? []).map(clean).filter(Boolean).slice(0, 6);
+    if (palette.length > 0) return [`Look palette (dominant colours, authoritative): ${palette.join(', ')}.`];
+  }
+  return [];
+}
+
 /** The look block that leads a look-native prompt. */
 function buildLookBlock(input: CreatorPromptInput): string[] {
   const chosen = input.userVisualDirection;
@@ -827,11 +857,16 @@ function buildLookBlock(input: CreatorPromptInput): string[] {
   lines.push(`Chosen look${title ? `: ${title}` : ''}. This look defines the whole image; every direction below serves it and none overrides it.`);
   if (medium) lines.push(`Rendering medium: ${medium}.`);
   if (stylePrompt) lines.push(`Look style: ${stylePrompt}.`);
-  if (palette.length > 0) lines.push(`Look palette (dominant colours): ${palette.join(', ')}.`);
+  const experimental = input.palette?.mode === 'experimental';
+  if (experimental) lines.push(experimentalPaletteLine(input));
+  else if (palette.length > 0) lines.push(`Look palette (dominant colours): ${palette.join(', ')}.`);
   const surface = clean(chosen.surface);
   if (surface) lines.push(`Look surface and line: ${surface}.`);
-  lines.push('Match the look consistently across the frame: medium, palette, line work and shading, texture and lighting.');
+  lines.push(experimental
+    ? 'Match the look consistently across the frame: medium, line work and shading, texture and lighting, with the fresh palette above.'
+    : 'Match the look consistently across the frame: medium, palette, line work and shading, texture and lighting.');
   lines.push(ORIGINAL_SCENE_INSTRUCTION);
+  if (experimental) lines.push('Colour is the exception: do not take the colours from the style reference — use the fresh palette above.');
   const variation = lookVariationLine(input.lookVariation, title, buildNoveltyLayer(input).length > 0);
   if (variation) lines.push(variation);
   const instruction = clean(chosen.instruction);
@@ -871,9 +906,14 @@ function buildLookNativeNegativeLayer(input: CreatorPromptInput): string[] {
 }
 
 function buildLookNativeQualityLayer(input: CreatorPromptInput): string[] {
+  const mode = input.palette?.mode;
   const lines = [
     'Render at production quality with crisp, intentional detail in the chosen medium.',
-    'Colour follows the look palette; brand colours appear as accents within it.',
+    mode === 'experimental'
+      ? 'Colour follows the fresh palette chosen for this version.'
+      : mode === 'look'
+        ? 'Colour follows the look palette.'
+        : 'Colour follows the look palette; brand colours appear as accents within it.',
   ];
   if (input.platform) {
     lines.push(`Compose at production resolution suitable for ${clean(input.platform)} — sharp on phone, sharp on desktop.`);
@@ -1115,6 +1155,8 @@ export function composeCreatorImagePrompt(
       ? buildLookNativeVisualDirectionLayer(template)
       : [
           ...userVisualDirectionLines(input.userVisualDirection),
+          // Independent mode: the look's own palette (or a fresh one) — never the brand's.
+          ...independentPaletteLines(input),
           // A curated sample is the style reference and no look line said so.
           ...(input.styleReference && !clean(input.userVisualDirection?.title) && !clean(input.userVisualDirection?.stylePrompt)
             ? [ORIGINAL_SCENE_INSTRUCTION]

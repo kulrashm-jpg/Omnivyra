@@ -25,6 +25,7 @@ import {
 } from '../../lib/content/guidedCreativeDirection';
 import { creatorAssetUsageLabel } from '../../lib/content/creatorCompositionAsset';
 import type { CompositionAssetPurpose } from '../../lib/content/compositionAssetReference';
+import { paletteSummaryLabel } from '../../lib/creator-content/creatorPaletteMode';
 
 export interface CreativeSummaryProps {
   /** The design the user picked. */
@@ -56,6 +57,8 @@ export interface CreativeSummaryProps {
   /** How strongly the brand shows, when it is applied. */
   brandPresence?: 'minimal' | 'balanced' | 'strong' | null;
   includeLogo?: boolean | null;
+  /** Whose colours the render uses — shown when the brand is not applied. */
+  paletteMode?: import('../../lib/creator-content/creatorPaletteMode').CreatorPaletteMode | null;
 }
 
 interface Row { label: string; value: string; chosenByUser: boolean }
@@ -127,6 +130,8 @@ export function buildCreativeSummaryRows(props: CreativeSummaryProps): Row[] {
     rows.push({ label: 'Brand', value: parts.join(', '), chosenByUser: true });
   } else if (props.brandAware === false) {
     rows.push({ label: 'Brand', value: 'Not applied', chosenByUser: true });
+    const colours = paletteSummaryLabel(props.paletteMode ?? null);
+    if (colours) rows.push({ label: 'Colours', value: colours, chosenByUser: true });
   }
   return rows;
 }

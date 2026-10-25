@@ -40,6 +40,9 @@ import {
   CREATOR_INTAKE_SESSION_KEY, intakeLayoutOptions, serializeCreatorIntake,
   type IntakeBrandMode, type IntakeBrandPresence,
 } from '../../lib/creator-content/creatorIntake';
+import {
+  DEFAULT_INDEPENDENT_PALETTE, INDEPENDENT_PALETTE_OPTIONS, type IndependentPaletteChoice,
+} from '../../lib/creator-content/creatorPaletteMode';
 import type { AttachmentMode } from '../../lib/content/writerCreatorAttachmentContracts';
 
 type Asset = 'image' | 'carousel' | 'infographic';
@@ -140,6 +143,8 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
   const [brandMode, setBrandMode] = React.useState<IntakeBrandMode>(selectedCompanyId ? 'brand-aware' : 'independent');
   const [brandPresence, setBrandPresence] = React.useState<IntakeBrandPresence>('balanced');
   const [includeLogo, setIncludeLogo] = React.useState(true);
+  // Independent mode: the look's own colours (default) or an AI-chosen fresh palette.
+  const [paletteMode, setPaletteMode] = React.useState<IndependentPaletteChoice>(DEFAULT_INDEPENDENT_PALETTE);
   const [layout, setLayout] = React.useState<string | null>(null);
   const [compositionId, setCompositionId] = React.useState('');
   const layoutOptions = React.useMemo(() => intakeLayoutOptions(WORKFLOW_CONFIG[asset] ?? null), [asset]);
@@ -271,6 +276,7 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
         brandPresence: brandMode === 'brand-aware' ? brandPresence : null,
         includeLogo: brandMode === 'brand-aware' ? includeLogo : null,
         layout,
+        paletteMode: brandMode === 'independent' ? paletteMode : null,
       }));
     } catch { /* noop */ }
     /* The draft identity travels in the URL (not just this tab's storage), so a
@@ -476,7 +482,14 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced, launchQuery }: 
               <input type="checkbox" data-testid="intake-include-logo" checked={includeLogo} onChange={(e) => setIncludeLogo(e.target.checked)} /> Include my logo
             </label>
           </div>
-        ) : null}
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10 }}>
+            <span style={{ fontSize: 12, color: color.textMuted }}>Colours:</span>
+            {INDEPENDENT_PALETTE_OPTIONS.map((o) => (
+              <button key={o.id} type="button" data-testid={`intake-palette-${o.id}`} title={o.body} onClick={() => setPaletteMode(o.id)} style={chip(paletteMode === o.id)}>{o.label}</button>
+            ))}
+          </div>
+        )}
         {!selectedCompanyId ? <div style={{ fontSize: 12, color: color.textSubtle, marginTop: 6 }}>Select a company to apply its brand.</div> : null}
       </section>
 

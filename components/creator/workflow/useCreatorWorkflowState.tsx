@@ -2,6 +2,7 @@
  * useCreatorWorkflowState — every useState/useRef + writer-derived flags of the creator
  * type-workflow page, extracted VERBATIM. First link of the s → l → a hook chain.
  */
+import { DEFAULT_INDEPENDENT_PALETTE, type IndependentPaletteChoice } from '../../../lib/creator-content/creatorPaletteMode';
 import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../CompanyContext';
@@ -116,6 +117,8 @@ export function useCreatorWorkflowState() {
   const [brandMode, setBrandMode] = React.useState<CreatorBrandMode>('independent');
   const [brandPanelOpen, setBrandPanelOpen] = React.useState(false);
   const [brandPresence, setBrandPresence] = React.useState<BrandPresence>('balanced');
+  // Independent mode: the look's own colours (default) or an AI-chosen fresh palette.
+  const [paletteChoice, setPaletteChoice] = React.useState<IndependentPaletteChoice>(DEFAULT_INDEPENDENT_PALETTE);
   const [brandSelections, setBrandSelections] = React.useState<BrandContextSelections>(DEFAULT_BRAND_SELECTIONS);
   const [brandProfile, setBrandProfile] = React.useState<CreatorBrandProfile | null>(null);
   const [brandOverrides, setBrandOverrides] = React.useState<Record<string, string>>({});
@@ -301,6 +304,7 @@ export function useCreatorWorkflowState() {
     refinedSuggestion, regenCount, regenSeenResultRef, renderJobProgress, result, resultPanelRef, router,
     saveInFlightRef, savedAssets, savedBlock, selectNewestAssetRef, selectedAssetId, selectedCompanyId,
     guidedChoices, setGuidedChoices,
+    paletteChoice, setPaletteChoice,
     creatorBrief, setCreatorBrief, userEditedKeys, setUserEditedKeys, overlayAiAlternatives, setOverlayAiAlternatives,
     selectedCompanyName, selectedPlatform, selectedSuggestionId, setActionInProgress, setActiveTemplate,
     setAiBusyKey, setAnswers, setAssetReloadNonce, setBrandMode, setBrandOverrides, setBrandPanelOpen,

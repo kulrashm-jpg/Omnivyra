@@ -45,6 +45,8 @@ import { resolveCreatorBriefFromWorkspace } from '../../../lib/creator-content/c
 import { mapBriefToEditorAnswers } from '../../../lib/creator-content/creatorWorkflowModel';
 import { WORKFLOW_CONFIG } from '../../../lib/creator-content/creatorWorkflowConfig';
 import { buildCreativeSummaryRows } from '../../../components/creator/CreativeSummaryCard';
+import { paletteModeFor } from '../../../lib/creator-content/creatorPaletteMode';
+import { EMPTY_CREATOR_INTAKE as EMPTY_INTAKE } from '../../../lib/creator-content/creatorIntake';
 
 const toBrief = async () => {
   fireEvent.click(screen.getByText('My own idea'));
@@ -160,5 +162,52 @@ describe('confirmation summary — states every decision that will be generated'
   it('says plainly when the brand is not applied', () => {
     const rows = buildCreativeSummaryRows({ templateName: 'X', choices: { visualDirectionId: null, subject: null, visualInstruction: null }, brandAware: false });
     expect(rows.find((r) => r.label === 'Brand')?.value).toBe('Not applied');
+  });
+});
+
+/*
+ * Independent mode colours (owner 2026-10-25): "Use the look's own colours"
+ * (default) or "Open to experimentation". Chosen on the intake screen, carried
+ * in the intake session, restored into the editor, sent as `palette_mode`, and
+ * stated on the summary card.
+ */
+describe('independent colours — intake → editor → payload → summary', () => {
+  it('the intake offers the colour choice only when the brand is not applied, and persists it', async () => {
+    const onNavigate = jest.fn();
+    render(<ImageCreationWorkspace onNavigate={onNavigate} />);
+    await toBrief();
+    // Brand-aware (company selected) → no colour choice on screen.
+    expect(screen.queryByTestId('intake-palette-look')).toBeNull();
+    fireEvent.click(screen.getByTestId('intake-brand-independent'));
+    expect(screen.getByTestId('intake-palette-look')).toHaveTextContent("Use the look's own colours");
+    expect(screen.getByTestId('intake-palette-experimental')).toHaveTextContent('Open to experimentation');
+    fireEvent.click(screen.getByTestId('intake-palette-experimental'));
+    fireEvent.click(screen.getByText(/Review what we/));
+    const intake = readCreatorIntake(window.sessionStorage.getItem(CREATOR_INTAKE_SESSION_KEY));
+    expect(intake?.brandMode).toBe('independent');
+    expect(intake?.paletteMode).toBe('experimental');
+    // Editor restore → the payload's palette_mode.
+    const restored = intakeToEditorRestore(intake, WORKFLOW_CONFIG.image ?? null);
+    expect(restored?.paletteChoice).toBe('experimental');
+    expect(paletteModeFor('independent', restored?.paletteChoice)).toBe('experimental');
+  });
+
+  it('defaults to the look\'s own colours; brand-aware never restores a colour choice', async () => {
+    render(<ImageCreationWorkspace onNavigate={jest.fn()} />);
+    await toBrief();
+    fireEvent.click(screen.getByTestId('intake-brand-independent'));
+    fireEvent.click(screen.getByText(/Review what we/));
+    const intake = readCreatorIntake(window.sessionStorage.getItem(CREATOR_INTAKE_SESSION_KEY));
+    expect(intake?.paletteMode).toBe('look');
+    expect(intakeToEditorRestore({ ...EMPTY_INTAKE, brandMode: 'brand-aware', paletteMode: 'experimental' }, WORKFLOW_CONFIG.image ?? null)).toEqual({ brandMode: 'brand-aware' });
+    expect(readCreatorIntake(JSON.stringify({ paletteMode: 'bogus' }))?.paletteMode).toBeUndefined();
+  });
+
+  it('the summary states the colours when the brand is not applied', () => {
+    const base = { templateName: 'X', choices: { visualDirectionId: null, subject: null, visualInstruction: null } };
+    const colours = (p: Record<string, unknown>) => buildCreativeSummaryRows({ ...base, ...p } as never).find((r) => r.label === 'Colours')?.value;
+    expect(colours({ brandAware: false, paletteMode: 'look' })).toBe("The look's own palette");
+    expect(colours({ brandAware: false, paletteMode: 'experimental' })).toBe('Experimental palette chosen by AI');
+    expect(colours({ brandAware: true, paletteMode: 'brand' })).toBeUndefined();
   });
 });

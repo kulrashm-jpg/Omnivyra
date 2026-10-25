@@ -5,6 +5,7 @@
  * Extracted VERBATIM from pages/command-center/creator-content/[type].tsx (page < 1000 LOC).
  * All state/handlers live on the page and arrive via CreatorWorkflowCtx.
  */
+import { INDEPENDENT_PALETTE_OPTIONS, paletteModeFor } from '../../../lib/creator-content/creatorPaletteMode';
 import React from 'react';
 import TemplateFieldsPanel from '../TemplateFieldsPanel';
 import { IMAGE_COPY_FIELD_KEYS } from '../../../lib/creator-templates/types';
@@ -116,6 +117,7 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
     notice,
     overlayFieldSuggestions,
     overlayText,
+    paletteChoice,
     proposalLine,
     recommendedAttachmentMode,
     router,
@@ -131,6 +133,7 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
     setBrandPresence,
     setBrandSelection,
     setOverlayField,
+    setPaletteChoice,
     setSelectedAssetId,
     setSelectedPlatform,
     setStandaloneAttachmentMode,
@@ -387,6 +390,30 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                     );
                   })}
                 </div>
+
+                {brandMode === 'independent' ? (
+                  <div className="mt-4" data-testid="editor-palette-choice">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">Colours</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {INDEPENDENT_PALETTE_OPTIONS.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          data-testid={`editor-palette-${option.id}`}
+                          onClick={() => setPaletteChoice(option.id)}
+                          className={`rounded-xl border px-3 py-2 text-left text-sm transition ${
+                            paletteChoice === option.id
+                              ? 'border-slate-900 bg-slate-50 text-slate-900'
+                              : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                          }`}
+                        >
+                          <span className="font-semibold">{option.label}</span>
+                          <span className="mt-0.5 block text-xs text-gray-500">{option.body}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 {brandPanelOpen && (
                   <div className="mt-4 space-y-4 rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
@@ -1130,6 +1157,7 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                   cta={String(templateValues?.fields?.cta || answers.cta || '').trim() || null}
                   platform={selectedPlatform ?? null}
                   brandAware={brandMode === 'brand-aware'}
+                  paletteMode={paletteModeFor(brandMode, paletteChoice)}
                 />
               </div>
             ) : null}
