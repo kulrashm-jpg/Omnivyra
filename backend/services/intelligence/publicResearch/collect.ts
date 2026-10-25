@@ -15,9 +15,10 @@ import { isBrandQuestion, type ResearchPack, type ResearchRecord } from '../doss
 import { askAiSurfaces, SURFACES, type SurfaceAnswer } from './aiAnswers';
 import { buyerQuestions, readAnswers, type BuyerQuestion, type CompanyBrief } from './aiQuestions';
 import { checkSiteBasicsWithLinks, type SiteCheck } from './siteBasics';
-import { checkProfiles, findIndependentMentions, type ProfileCheck } from './footprint';
+import { canonicalProfile, checkProfiles, findIndependentMentions, type ProfileCheck } from './footprint';
 import { aiCapabilities, configCapabilities } from './runtime';
 import { discoverAndProfile, type CompetitorProfile, type FieldKey } from './competitors';
+import { checkOffering, type OfferingEvidence } from './offering';
 
 /** Build the research input from the company context the report already resolved. */
 export function researchInputFromNarrative(c: {
@@ -121,11 +122,20 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
   const declaredProfiles = input.socialLinks ?? [];
   const footprintTask = Promise.all([
     checkProfiles(input.brand, input.domain, { declared: declaredProfiles, homepage: siteResult.homepageProfiles, sameAs: siteResult.sameAs }).catch((): ProfileCheck[] => []),
-    findIndependentMentions(subjectBrief, [...declaredProfiles, ...siteResult.homepageProfiles, ...siteResult.sameAs]).catch(() => ({ mentions: [], socialPosts: [], platforms: [], provider: null, searches: [] as string[] })),
-  ]);
+    findIndependentMentions(subjectBrief, [...declaredProfiles, ...siteResult.homepageProfiles, ...siteResult.sameAs]).catch(() => ({ mentions: [], socialPosts: [], platforms: [], provider: null, searches: [] as string[], profiles: [] as string[] })),
+  ]).then(async ([profiles, m]) => {
+    // Profiles the search surfaced that the company neither declared nor linked: opened and verified the same way.
+    const known = new Set(profiles.map((p) => canonicalProfile(p.url)));
+    const extra = m.profiles.filter((u) => !known.has(canonicalProfile(u)));
+    const found = extra.length ? await checkProfiles(input.brand, input.domain, { declared: [], homepage: [], sameAs: [], searched: extra }).catch((): ProfileCheck[] => []) : [];
+    return [[...profiles, ...found], m] as [ProfileCheck[], typeof m];
+  });
+  // The declared offering and capabilities, checked against the site's own product, pricing and help pages.
+  const offeringTask = checkOffering(input.domain, { offering: input.offering, capabilities: caps }).catch((): OfferingEvidence | null => null);
   const questions: BuyerQuestion[] = q.questions;
   const answers: SurfaceAnswer[] = await askAiSurfaces(questions.map((x) => x.query), { timeoutMs: opts.timeoutMs });
   const [profileChecks, mentionResult] = await footprintTask;
+  const offering = await offeringTask;
 
   const intentOf = new Map(questions.map((x) => [x.query, x.intent]));
   const observed = answers.filter((a) => a.status === 'observed');
@@ -209,7 +219,10 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     }
     const shown = rivals.filter(({ p }) => p.status === 'observed' && ['direct', 'adjacent', 'substitute'].includes(p.classification));
     const keyOf = (p: CompetitorProfile) => p.domain || p.name;
-    const ownCell = (k: FieldKey) => (ownDeclared[k] ? { value: String(ownDeclared[k]), status: 'company_declared', url: '' } : { value: 'not declared', status: 'looked_for_not_found', url: '' });
+    // Published on the company's own pricing page beats "not declared": the profile is not the only source.
+    const ownSite: Partial<Record<FieldKey, { excerpt: string; url: string } | null>> = { entryPrice: offering?.pricing, freePlanOrTrial: offering?.freePlan };
+    const ownCell = (k: FieldKey) => (ownSite[k] ? { value: `“${ownSite[k]!.excerpt}”`, status: 'observed', url: ownSite[k]!.url }
+      : ownDeclared[k] ? { value: String(ownDeclared[k]), status: 'company_declared', url: '' } : { value: 'not declared', status: 'looked_for_not_found', url: '' });
     const cell = (p: CompetitorProfile, k: FieldKey) => {
       const f = p.fields[k];
       return f ? { value: f.value, status: f.check === 'confirmed' ? 'observed' : 'inferred', url: f.url } : { value: 'not found', status: 'looked_for_not_found', url: '' };
@@ -224,17 +237,19 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
       }
       // Offering overlap: which of the subject's capabilities each company also offers.
       for (const cap of caps) {
+        const own = offering?.capabilities.find((x) => x.claim === cap);
         const values = {
-          [ownHost]: { value: 'yes', status: 'company_declared', url: '' },
+          // The company's own column carries the provenance of its claim, not a bare "yes".
+          [ownHost]: { value: own?.state ?? 'company_declared', status: own?.state === 'website_verified' || own?.state === 'independently_corroborated' ? 'observed' : 'company_declared', url: own?.sourceUrl ?? '' },
           ...Object.fromEntries(shown.map(({ p }) => {
             const c = p.capabilities.find((x) => x.capability === cap);
             const v = !c || c.offers === null ? 'unknown' : c.offers ? 'yes' : 'no';
             return [keyOf(p), { value: v, status: v === 'unknown' ? 'looked_for_not_found' : c?.check === 'confirmed' ? 'observed' : 'inferred', url: c?.url ?? '' }];
           })),
         };
-        const offering = shown.filter(({ p }) => p.capabilities.some((x) => x.capability === cap && x.offers)).length;
+        const offeredBy = shown.filter(({ p }) => p.capabilities.some((x) => x.capability === cap && x.offers)).length;
         benchmark.push(base({ id: id('BEN'), kind: 'capability', dimension: 'capability', claim: cap, status: 'observed', confidence: 'medium', values,
-          gap: `${offering} of ${shown.length} competitors offer this`, method: 'AI analyst with live web search', scope: 'Offering overlap' }));
+          gap: `${offeredBy} of ${shown.length} competitors offer this`, method: 'AI analyst with live web search', scope: 'Offering overlap' }));
       }
     }
   }
@@ -260,7 +275,8 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
       competitors: 'Declared competitors and the brands AI answers recommend, each profiled by an AI analyst with live web search. Every value carries its source URL and is re-opened and checked; values the page did not confirm are labelled. Revenue appears only when a public source states it.',
     },
     company: [], search: [], generative, competitors: competitorRecords, independent: [], gaps, site: siteRecords, benchmark,
-    footprint: { checkedAt: new Date().toISOString(), profiles: profileChecks, mentions: mentionResult.mentions, socialPosts: mentionResult.socialPosts, platforms: mentionResult.platforms, mentionSearch: mentionResult.provider, mentionQueries: mentionResult.searches },
+    footprint: { checkedAt: new Date().toISOString(), profiles: profileChecks, mentions: mentionResult.mentions, socialPosts: mentionResult.socialPosts, platforms: mentionResult.platforms, mentionSearch: mentionResult.provider, mentionQueries: mentionResult.searches, profilesFound: mentionResult.profiles },
     runtime: { checkedAt: new Date().toISOString(), capabilities: [...aiCapabilities(answers), ...configCapabilities()] },
+    offering,
   };
 }

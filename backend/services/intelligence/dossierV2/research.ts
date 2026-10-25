@@ -12,6 +12,7 @@
  */
 import type { Mention, PlatformCheck, ProfileCheck, SocialPost } from '../publicResearch/footprint';
 import type { RuntimeSnapshot } from '../publicResearch/runtime';
+import type { OfferingEvidence } from '../publicResearch/offering';
 
 export type ResearchStatus =
   | 'observed'
@@ -86,6 +87,8 @@ export type ResearchPack = {
   footprint?: Footprint | null;
   /** What this run could reach and why not when it could not (publicResearch/runtime.ts). */
   runtime?: RuntimeSnapshot | null;
+  /** Declared offering and capabilities checked against the live site's own pages (publicResearch/offering.ts). */
+  offering?: OfferingEvidence | null;
 };
 
 export type Footprint = {
@@ -99,7 +102,49 @@ export type Footprint = {
   mentionSearch: string | null;
   /** The web-search queries that search ran, as the provider reported them. */
   mentionQueries?: string[];
+  /** Official profile URLs the same search surfaced (LinkedIn, Facebook, Instagram, YouTube, X, TikTok); null when not asked. */
+  profilesFound?: string[] | null;
+  /** Unconfirmed results whose page and title never name the brand (similarly named companies): excluded, and disclosed. */
+  namesakes?: Array<{ url: string; title: string }>;
 };
+
+/**
+ * A grounded answer is one built from live web search WITH at least one checkable source. Packs
+ * collected before the collector enforced the second half can hold "observed" answers with no
+ * source at all; those are re-classified here (answered, not grounded) and never counted.
+ */
+export function withoutUnsourcedAnswers(r: ResearchRecord): ResearchRecord {
+  if (r.status !== 'observed' || !r.query || r.kind === 'ai_overview' || r.kind === 'model_recall') return r;
+  if ((r.citedDomains ?? []).length || r.sourceUrl) return r;
+  return { ...r, status: 'insufficient_evidence', mentioned: false, cited: false,
+    claim: `${r.claim} — no checkable source was returned, so the answer is not counted` };
+}
+
+/** Letters and digits only, lower case: "Omni-Vyra.ai" → "omnivyraai". */
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * A web search for a brand returns similarly named companies. An unconfirmed result whose URL and
+ * title never contain the brand is a namesake: it is removed from mentions and listings (a listing it
+ * claimed becomes "not found in search") and kept in `namesakes` so the report can say what was excluded.
+ */
+export function withoutNamesakes(fp: Footprint, brand: string): Footprint {
+  const token = squash(brand);
+  if (token.length < 3) return fp;
+  const names = (url: string, title = '') => squash(`${url} ${title}`).includes(token);
+  const namesakes: Array<{ url: string; title: string }> = [...(fp.namesakes ?? [])];
+  const mentions = fp.mentions.filter((m) => {
+    if (m.check === 'confirmed' || names(m.url, m.title)) return true;
+    namesakes.push({ url: m.url, title: m.title });
+    return false;
+  });
+  const platforms = fp.platforms.map((p) => {
+    if (p.state !== 'claimed_unconfirmed' || names(p.url)) return p;
+    namesakes.push({ url: p.url, title: `${p.platform} listing` });
+    return { ...p, state: 'not_found_in_search' as const, url: '' };
+  });
+  return { ...fp, mentions, platforms, namesakes };
+}
 
 const SECTIONS = ['company', 'search', 'generative', 'competitors', 'independent', 'gaps'] as const;
 
@@ -116,27 +161,32 @@ export function parseResearchPack(input: unknown, domain: string | null | undefi
   for (const s of SECTIONS) if (!Array.isArray(p[s])) return null;
   const valid = (r: unknown): r is ResearchRecord =>
     Boolean(r) && typeof (r as ResearchRecord).id === 'string' && typeof (r as ResearchRecord).claim === 'string' && typeof (r as ResearchRecord).status === 'string';
+  const brand = String(p.subject?.brand ?? '');
   return {
-    subject: { brand: String(p.subject?.brand ?? ''), domain: subject },
+    subject: { brand, domain: subject },
     collectedAt: String(p.collectedAt ?? ''),
     collector: String(p.collector ?? ''),
     method: (p.method && typeof p.method === 'object') ? p.method as Record<string, string> : {},
     company: (p.company ?? []).filter(valid),
     search: (p.search ?? []).filter(valid),
-    generative: (p.generative ?? []).filter(valid),
+    generative: (p.generative ?? []).filter(valid).map(withoutUnsourcedAnswers),
     competitors: (p.competitors ?? []).filter(valid),
     independent: (p.independent ?? []).filter(valid),
     gaps: (p.gaps ?? []).filter(valid),
     site: (Array.isArray(p.site) ? p.site : []).filter(valid),
     benchmark: (Array.isArray(p.benchmark) ? p.benchmark : []).filter(valid),
     footprint: p.footprint && typeof p.footprint === 'object' && Array.isArray(p.footprint.profiles)
-      ? { checkedAt: String(p.footprint.checkedAt ?? ''), profiles: p.footprint.profiles, mentions: Array.isArray(p.footprint.mentions) ? p.footprint.mentions : [],
+      ? withoutNamesakes({ checkedAt: String(p.footprint.checkedAt ?? ''), profiles: p.footprint.profiles, mentions: Array.isArray(p.footprint.mentions) ? p.footprint.mentions : [],
         socialPosts: Array.isArray(p.footprint.socialPosts) ? p.footprint.socialPosts : [],
         platforms: Array.isArray(p.footprint.platforms) ? p.footprint.platforms : [], mentionSearch: p.footprint.mentionSearch ?? null,
-        mentionQueries: Array.isArray(p.footprint.mentionQueries) ? p.footprint.mentionQueries : [] }
+        mentionQueries: Array.isArray(p.footprint.mentionQueries) ? p.footprint.mentionQueries : [],
+        profilesFound: Array.isArray(p.footprint.profilesFound) ? p.footprint.profilesFound : null }, brand)
       : null,
     runtime: p.runtime && typeof p.runtime === 'object' && Array.isArray(p.runtime.capabilities)
       ? { checkedAt: String(p.runtime.checkedAt ?? ''), capabilities: p.runtime.capabilities } : null,
+    offering: p.offering && typeof p.offering === 'object' && Array.isArray(p.offering.pages) && Array.isArray(p.offering.capabilities)
+      ? { ...p.offering, selfDescription: p.offering.selfDescription ?? null, offering: p.offering.offering ?? null, pricing: p.offering.pricing ?? null, freePlan: p.offering.freePlan ?? null }
+      : null,
   };
 }
 
@@ -166,9 +216,11 @@ export function isBrandQuestion(r: Pick<ResearchRecord, 'intent' | 'query'>, bra
 export function summariseVisibility(pack: ResearchPack | null): VisibilitySummary {
   if (!pack) return { search: null, generative: null };
   const ok = pack.search.filter((r) => r.status === 'observed');
-  const branded = ok.filter((r) => r.intent === 'branded');
+  const branded = ok.filter((r) => isBrandQuestion(r, pack.subject.brand));
   const grounded = pack.generative.filter((r) => r.status === 'observed');
-  const buyer = grounded.filter((r) => r.query && !isBrandQuestion(r, pack.subject.brand));
+  // Google AI Overview has its own denominator (overviews retrieved); it is not one of the AI tools'
+  // answers, so it stays out of these counts exactly as it does in the ledger.
+  const buyer = grounded.filter((r) => r.query && r.kind !== 'ai_overview' && !isBrandQuestion(r, pack.subject.brand));
   const brand = grounded.filter((r) => r.accuracy);
   return {
     search: {

@@ -38,7 +38,8 @@ export function aiCapabilities(answers: SurfaceAnswer[]): Capability[] {
   return SURFACES.map((sf): Capability => {
     const rs = answers.filter((a) => a.surface === sf.id);
     const ok = rs.filter((a) => a.status === 'observed').length;
-    const credential = sf.keys.length ? present(...sf.keys) : null;
+    // A managed (Super Admin) credential is not in the environment: a request that was made proves one.
+    const credential = sf.keys.length ? present(...sf.keys) || rs.some((a) => a.status !== 'not_measured') : null;
     const base = { id: `ai:${sf.id}`, label: sf.label, family: 'ai_answers' as const, adapter: !sf.unavailable, credential };
     if (sf.unavailable) {
       return { ...base, attempted: false, reason: 'no_adapter', outcome: 'No grounded API exists; the consumer app requires a logged-in account.', nextStep: 'A licensed AI-visibility data provider, or a manual check recorded as evidence.' };
@@ -48,7 +49,7 @@ export function aiCapabilities(answers: SurfaceAnswer[]): Capability[] {
       return { ...base, attempted: false, reason: 'missing_credential', outcome: 'No credential is configured.', nextStep: `Add an API key for ${sf.label}.` };
     }
     const failures = rs.filter((a) => a.status === 'failed_source');
-    const quota = failures.some((a) => /\b429\b|quota|credit|billing/i.test(a.reason ?? ''));
+    const quota = failures.some((a) => /\b429\b|quota|credit|billing|run out of searches/i.test(a.reason ?? ''));
     if (ok === rs.length) return { ...base, attempted: true, reason: 'measured', outcome: `${ok} of ${rs.length} questions answered from live web search.`, nextStep: null };
     if (ok > 0) return { ...base, attempted: true, reason: 'partial', outcome: `${ok} of ${rs.length} questions answered from live web search; ${failures.length} failed${quota ? ' (quota or billing limit)' : ''}.`, nextStep: quota ? 'Raise the plan or quota.' : 'Retry the failed questions.' };
     return { ...base, attempted: true, reason: quota ? 'quota_restricted' : 'request_failed',

@@ -27,6 +27,8 @@ export type ProfileCheck = {
   declared: boolean;
   onHomepage: boolean;
   inSameAs: boolean;
+  /** Not declared or linked by the company: surfaced by the web search, so identity must be shown, not assumed. */
+  foundBySearch?: boolean;
   attempted: boolean;
   httpStatus: number | null;
   outcome: 'responded' | 'login_wall' | 'http_error' | 'transport_failed' | 'not_attempted';
@@ -72,25 +74,27 @@ const LOGIN_WALL = /(authwall|sign in to (see|view)|log in to (see|view|continue
 export async function checkProfiles(
   brand: string,
   domain: string,
-  sources: { declared: string[]; homepage: string[]; sameAs: string[] },
+  sources: { declared: string[]; homepage: string[]; sameAs: string[]; searched?: string[] },
   timeoutMs = 15_000,
 ): Promise<ProfileCheck[]> {
-  const byKey = new Map<string, { url: string; declared: boolean; onHomepage: boolean; inSameAs: boolean }>();
-  const add = (url: string, field: 'declared' | 'onHomepage' | 'inSameAs') => {
+  const byKey = new Map<string, { url: string; declared: boolean; onHomepage: boolean; inSameAs: boolean; foundBySearch: boolean }>();
+  const add = (url: string, field: 'declared' | 'onHomepage' | 'inSameAs' | 'foundBySearch') => {
     if (!platformOf(url)) return;
     const key = canonicalProfile(url);
-    const entry = byKey.get(key) ?? { url, declared: false, onHomepage: false, inSameAs: false };
+    const entry = byKey.get(key) ?? { url, declared: false, onHomepage: false, inSameAs: false, foundBySearch: false };
     entry[field] = true;
     byKey.set(key, entry);
   };
   sources.declared.forEach((u) => add(u, 'declared'));
   sources.homepage.forEach((u) => add(u, 'onHomepage'));
   sources.sameAs.forEach((u) => add(u, 'inSameAs'));
+  // Only profiles the company did not already declare or link: a search result is a lead, not a claim.
+  (sources.searched ?? []).filter((u) => !byKey.has(canonicalProfile(u))).forEach((u) => add(u, 'foundBySearch'));
 
   const own = domain.replace(/^www\./, '').toLowerCase();
   return Promise.all([...byKey.values()].map(async (p): Promise<ProfileCheck> => {
     const checkedAt = new Date().toISOString();
-    const base = { platform: platformOf(p.url) ?? 'Other', url: p.url, declared: p.declared, onHomepage: p.onHomepage, inSameAs: p.inSameAs, checkedAt };
+    const base = { platform: platformOf(p.url) ?? 'Other', url: p.url, declared: p.declared, onHomepage: p.onHomepage, inSameAs: p.inSameAs, foundBySearch: p.foundBySearch, checkedAt };
     try {
       const res = await safeFetch(p.url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; OmnivyraSnapshot/1.0)', 'accept-language': 'en' } },
         { timeoutMs, maxBytes: 3_000_000, metricLabel: 'public_research_profile' });
@@ -133,8 +137,9 @@ const handleOf = (url: string): string | null => {
 export type PlatformCheck = { platform: string; state: 'listed' | 'claimed_unconfirmed' | 'not_found_in_search'; url: string };
 
 const MENTION_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['mentions', 'platforms'],
+  type: 'object', additionalProperties: false, required: ['mentions', 'platforms', 'profiles'],
   properties: {
+    profiles: { type: 'array', items: { type: 'string' } },
     mentions: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['url', 'title', 'type'],
       properties: { url: { type: 'string' }, title: { type: 'string' }, type: { type: 'string', enum: ['directory', 'review', 'press', 'partner_or_customer', 'comparison', 'community', 'other'] } } } },
     platforms: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['platform', 'found', 'url'],
@@ -152,14 +157,15 @@ export async function findIndependentMentions(
   subject: { brand: string; domain: string; offering: string },
   ownedUrls: string[],
   timeoutMs = 120_000,
-): Promise<{ mentions: Mention[]; socialPosts: SocialPost[]; platforms: PlatformCheck[]; provider: string | null; searches: string[] }> {
+): Promise<{ mentions: Mention[]; socialPosts: SocialPost[]; platforms: PlatformCheck[]; provider: string | null; searches: string[]; profiles: string[] }> {
   const own = subject.domain.replace(/^www\./, '').toLowerCase();
   const owned = new Set(ownedUrls.map(canonicalProfile));
   const prompt = `Use web search. Find third-party web pages (not ${subject.domain} and not the company's own social profiles) that mention the company "${subject.brand}" (${subject.domain}), which sells: ${subject.offering}. Beware of similarly named companies — include a page only if it is about THIS company.
 Also check whether it has a listing on each of these platforms: ${REVIEW_PLATFORMS.join(', ')}; report found true only with the listing URL.
+Also list the company's own official social profiles you find (LinkedIn, Facebook, Instagram, YouTube, X, TikTok), as exact profile URLs, only if they belong to THIS company.
 Return up to 10 mentions with the exact page URL, its title and its type.`;
   const r = await webJsonCompletion('mentions', prompt, { name: 'mentions', schema: MENTION_SCHEMA }, { timeoutMs }).catch(() => null);
-  if (!r) return { mentions: [], socialPosts: [], platforms: [], provider: null, searches: [] };
+  if (!r) return { mentions: [], socialPosts: [], platforms: [], provider: null, searches: [], profiles: [] };
   const brandLc = subject.brand.toLowerCase();
   const check = async (url: string) => {
     try {
@@ -189,5 +195,6 @@ Return up to 10 mentions with the exact page URL, its title and its type.`;
     // A claimed listing counts as listed only if its page names the brand.
     return { platform: name, state: (await check(url)) === 'confirmed' ? 'listed' as const : 'claimed_unconfirmed' as const, url };
   }));
-  return { mentions, socialPosts, platforms, provider: r.provider, searches: r.searches ?? [] };
+  const profiles = (Array.isArray(r.json?.profiles) ? r.json.profiles : []).filter((u: unknown): u is string => typeof u === 'string' && /^https?:\/\//.test(u) && Boolean(platformOf(u)));
+  return { mentions, socialPosts, platforms, provider: r.provider, searches: r.searches ?? [], profiles };
 }

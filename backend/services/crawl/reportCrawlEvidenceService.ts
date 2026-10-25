@@ -336,3 +336,44 @@ export async function ensureReportCrawlEvidence(params: {
     };
   }
 }
+
+/**
+ * Per-URL attempt status for the report's evidence (crawl funnel: known → attempted → answered →
+ * read). `canonical_pages` holds rows the crawler never fetched (analytics paths, NULL status), so
+ * "known" is not "attempted": each row says which it is, and nothing unattempted reads as failed.
+ */
+export type CrawlUrlOutcome = 'read' | 'redirected_off_site' | 'client_error' | 'server_error' | 'no_response' | 'not_fetched';
+export type CrawlUrlState = { path: string; pageType: string; status: number | null; outcome: CrawlUrlOutcome; crawledAt: string | null };
+
+export function classifyCrawlRow(row: { http_status: number | null; last_crawled_at: string | null; reason?: string | null }): CrawlUrlOutcome {
+  if (row.http_status == null) return 'not_fetched';
+  if (row.http_status === 0) return 'no_response';
+  if (row.reason === OFF_SITE_REDIRECT_REASON || row.reason === UNVERIFIABLE_FINAL_URL_REASON) return 'redirected_off_site';
+  if (row.http_status >= 500) return 'server_error';
+  if (row.http_status >= 400) return 'client_error';
+  return 'read';
+}
+
+/** Bounded (500 rows) and never throws: a failed read returns null and the report says so. */
+export async function listCrawlUrlStates(companyId: string, targetUrl: string): Promise<CrawlUrlState[] | null> {
+  try {
+    const scope = await resolveReportDomainScope(companyId, targetUrl);
+    if (scope.domainId === null) return [];
+    const { data, error } = await supabase
+      .from('canonical_pages')
+      .select('url, page_type, http_status, last_crawled_at, crawl_metadata')
+      .eq('company_id', companyId)
+      .eq('domain_id', scope.domainId)
+      .limit(500);
+    if (error) return null;
+    return (data ?? []).map((r: Record<string, any>) => {
+      const reason = r.crawl_metadata?.reachability?.reason ?? null;
+      let path = String(r.url);
+      try { path = new URL(path).pathname || '/'; } catch { /* keep the stored value */ }
+      return { path, pageType: String(r.page_type ?? 'other'), status: r.http_status ?? null,
+        outcome: classifyCrawlRow({ http_status: r.http_status ?? null, last_crawled_at: r.last_crawled_at ?? null, reason }), crawledAt: r.last_crawled_at ?? null };
+    });
+  } catch {
+    return null;
+  }
+}

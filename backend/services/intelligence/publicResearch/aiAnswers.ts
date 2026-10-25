@@ -35,9 +35,27 @@ type Surface = {
   geography: string;
   ask: (key: string) => Ask;
   unavailable?: string;
+  /**
+   * Resolve the key through providerCredentialResolver (Super Admin account first, then its env
+   * fallback order), exactly as the report run's own search does. Reading `keys` directly let this
+   * step pick a different variable from the report run, and SerpAPI rejected it in production.
+   */
+  credential?: 'serpapi';
 };
 
 const env = (names: string[]): string | null => names.map((n) => process.env[n]).find((v) => v && v.trim()) ?? null;
+
+async function keyFor(sf: Surface): Promise<string | null> {
+  if (sf.credential) {
+    try {
+      const { resolveProviderCredential } = await import('../../providerCredentialResolver');
+      return (await resolveProviderCredential(sf.credential)).value;
+    } catch {
+      // The resolver could not load (e.g. no database client): use its own environment fallback order.
+    }
+  }
+  return sf.keys.length ? env(sf.keys) : null;
+}
 
 async function postJson(url: string, body: unknown, headers: Record<string, string>, signal: AbortSignal): Promise<any> {
   // ssrf-ok: callers pass only the fixed provider API endpoints in SURFACES (OpenAI, Perplexity, Anthropic, Google); never caller input.
@@ -65,7 +83,8 @@ export const SURFACES: Surface[] = [
       return {
         text: String(part?.text ?? ''),
         sources: (part?.annotations ?? []).filter((a: any) => a.type === 'url_citation').map((a: any) => String(a.url)),
-        grounded: out.some((o: any) => o.type === 'web_search_call'),
+        // Counted only with a web search AND at least one checkable source (the report's definition of grounded).
+        grounded: out.some((o: any) => o.type === 'web_search_call') && (part?.annotations ?? []).some((a: any) => a.type === 'url_citation'),
       };
     },
   },
@@ -95,7 +114,7 @@ export const SURFACES: Surface[] = [
       const cited = blocks.flatMap((b) => (b.type === 'text' ? b.citations ?? [] : [])).map((c: any) => c?.url);
       const results = blocks.flatMap((b) => (b.type === 'web_search_tool_result' && Array.isArray(b.content) ? b.content : [])).map((r: any) => r?.url);
       const sources = [...new Set([...cited, ...results].filter((u): u is string => typeof u === 'string'))];
-      return { text, sources, grounded: blocks.some((b) => b.type === 'server_tool_use' || b.type === 'web_search_tool_result') };
+      return { text, sources, grounded: blocks.some((b) => b.type === 'server_tool_use' || b.type === 'web_search_tool_result') && sources.length > 0 };
     },
   },
   {
@@ -114,7 +133,7 @@ export const SURFACES: Surface[] = [
     },
   },
   {
-    id: 'google_ai_mode', label: 'Google AI Mode', keys: ['SERPAPI_KEY', 'SERP_API_KEY', 'SERPAPI_API_KEY'], geography: `gl=${COUNTRY().toLowerCase()}, hl=en`,
+    id: 'google_ai_mode', label: 'Google AI Mode', keys: ['SERPAPI_API_KEY', 'SERP_API_KEY', 'SERPAPI_KEY'], credential: 'serpapi', geography: `gl=${COUNTRY().toLowerCase()}, hl=en`,
     ask: (key) => async (query, signal) => {
       const params = new URLSearchParams({ engine: 'google_ai_mode', q: query, gl: COUNTRY().toLowerCase(), hl: 'en', api_key: key });
       const res = await fetch(`https://serpapi.com/search.json?${params}`, { signal });
@@ -127,7 +146,7 @@ export const SURFACES: Surface[] = [
     },
   },
   {
-    id: 'bing_copilot', label: 'Bing Copilot', keys: ['SERPAPI_KEY', 'SERP_API_KEY', 'SERPAPI_API_KEY'], geography: 'Bing default',
+    id: 'bing_copilot', label: 'Bing Copilot', keys: ['SERPAPI_API_KEY', 'SERP_API_KEY', 'SERPAPI_KEY'], credential: 'serpapi', geography: 'Bing default',
     ask: (key) => async (query, signal) => {
       const params = new URLSearchParams({ engine: 'bing_copilot', q: query, api_key: key });
       const res = await fetch(`https://serpapi.com/search.json?${params}`, { signal });
@@ -169,7 +188,7 @@ export async function askAiSurfaces(
   const surfaces = opts.surfaces ?? (only.length ? SURFACES.filter((s) => only.includes(s.id)) : SURFACES);
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const perSurface = await Promise.all(surfaces.map(async (sf) => {
-    const key = sf.keys.length ? env(sf.keys) : null;
+    const key = await keyFor(sf);
     const base = { surface: sf.id, label: sf.label, geography: sf.geography };
     if (sf.unavailable || !key) {
       const reason = sf.unavailable ?? `Not measured: ${sf.keys.join(' or ')} is not configured.`;
@@ -186,7 +205,7 @@ export async function askAiSurfaces(
           return { ...base, query, status: 'failed_source', text: r.text.slice(0, 6000), sources: r.sources, observedAt,
             reason: !r.text.trim() ? 'The tool returned no answer.'
               // Tools that report a search step are judged by it; the others only by the sources they return.
-              : sf.id === 'chatgpt_search' || sf.id === 'claude_search' ? 'The tool answered without searching the web, so the answer is not counted.'
+              : sf.id === 'chatgpt_search' || sf.id === 'claude_search' ? 'The tool answered without a web search or without any checkable source, so the answer is not counted.'
                 : 'The answer came back without checkable source links, so it is not counted.' };
         }
         return { ...base, query, status: 'observed', text: r.text.slice(0, 6000), sources: r.sources, reason: null, observedAt };

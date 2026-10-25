@@ -190,7 +190,9 @@ describe('dossier v2 rendered report', () => {
   });
 
   it('separates a failed AI provider from an unconfigured one, and a failed source from an inferred value', () => {
-    expect(html).toContain('provider failed');
+    // One AI vocabulary: source failed / not configured, never "provider failed".
+    expect(html).toContain('source failed');
+    expect(html).not.toContain('provider failed');
     expect(html).toContain('not configured');
     expect(html).toContain('Source failed');
   });
@@ -241,8 +243,8 @@ describe('dossier v2 states', () => {
     expect(html).toContain('Looked for, not found');
   });
 
-  it('flags thin-page examples that are all legal pages', () => {
-    expect(html).toContain('legal or policy pages');
+  it('flags thin-page examples that are legal or account pages (purpose before depth)', () => {
+    expect(html).toMatch(/(are account or legal pages|is an account or legal page), short by design/);
   });
 
   it('classifies directories and platforms by name, and nothing else', () => {
@@ -306,10 +308,12 @@ describe('dossier v2 summary pages and public research', () => {
     const next = summary(html, 'summary-next');
     for (const title of ['Fix the foundation', 'Improve buyer-intent discoverability', 'Build independent proof and measure again']) expect(next).toContain(title);
     expect(next.match(/class="v2-lane v2-lane-/g)).toHaveLength(3);
-    expect(next.match(/<dt>Who<\/dt>/g)).toHaveLength(3);
-    expect(next.match(/<dt>Depends on<\/dt>/g)).toHaveLength(3);
-    expect(next.match(/<dt>Success<\/dt>/g)).toHaveLength(3);
-    expect(next.match(/class="v2-lane-time"/g)).toHaveLength(3);
+    // Every action row: action, business reason, owner class, dependency, success measure, window.
+    for (const col of ['Action', 'Business reason', 'Owner', 'Depends on', 'Success measure', 'Window']) {
+      expect(next.match(new RegExp(`<th[^>]*>${col}</th>`, 'g'))?.length).toBeGreaterThanOrEqual(2);
+    }
+    // Evidence-supported actions are told apart from hypotheses.
+    expect(next).toMatch(/v2-pill[^>]*>(Evidence|Hypothesis|Partly inferred|Closes a gap)</);
     const text = next.replace(/<[^>]+>/g, ' ');
     expect(text).not.toMatch(/\bA-[a-z0-9-]{3,}|E-[A-Z]{3}-\d{2}|[A-Z]{3,}_[A-Z_]*KEY/);
   });
@@ -318,7 +322,10 @@ describe('dossier v2 summary pages and public research', () => {
     const now = summary(html, 'summary-now');
     expect(now).toMatch(/Search<\/div><div class="v2-ind-value">0<small> of 2<\/small>/);
     expect(now).toMatch(/AI answers<\/div><div class="v2-ind-value">0<small> of 1<\/small>/);
-    expect(now).toContain('Website evidence');
+    expect(now).toContain('Website readiness');
+    // Each indicator carries a definition and a confidence.
+    expect(now.match(/class="v2-ind-def"/g)!.length).toBeGreaterThanOrEqual(4);
+    expect(now.match(/class="v2-ind-conf"/g)!.length).toBeGreaterThanOrEqual(4);
     expect(now).toContain('How a buyer looks — and what they find');
     expect(now).toContain('v2-headline');
   });
@@ -444,7 +451,9 @@ describe('dossier v2 evidence ledger, footprint and consistency check', () => {
     expect(l.access.every((a) => Boolean(a.reason))).toBe(true);
     const html = load().renderDossierV2Html(run(), { brandName: 'Acme', domain: 'acme.test' }, pack());
     expect(html).toContain('Access reconciliation');
-    expect(html).toContain('Sign-in wall');
+    // The identity ladder: a sign-in wall is a limitation on a step, not a "no".
+    expect(html).toContain('Official profiles: identity, step by step');
+    expect(html).toMatch(/requires sign-in|Sign-in wall/);
     expect(html).toContain('reported, not confirmable');
     expect(html).toContain('not found in search');
     expect(html).toContain('External digital footprint');

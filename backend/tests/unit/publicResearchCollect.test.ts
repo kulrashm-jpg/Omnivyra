@@ -19,6 +19,12 @@ jest.mock('../../../lib/security/safeFetch', () => ({
   readCapped: async (res: Response) => Buffer.from(await res.text()),
 }));
 
+// SerpAPI tools resolve their key like the report run (providerCredentialResolver); here only the
+// environment fallback is modelled, so a test controls the key through process.env alone.
+jest.mock('../../services/providerCredentialResolver', () => ({
+  resolveProviderCredential: async () => ({ value: ['SERPAPI_API_KEY', 'SERP_API_KEY', 'SERPAPI_KEY'].map((n) => process.env[n]).find(Boolean) ?? null }),
+}));
+
 type Handler = (url: string, body: any) => { status?: number; json?: unknown; text?: string; type?: string };
 const realFetch = global.fetch;
 const KEYS = ['OPENAI_API_KEY', 'PERPLEXITY_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'SERPAPI_KEY', 'SERP_API_KEY', 'SERPAPI_API_KEY'];
@@ -63,7 +69,15 @@ describe('AI search answers', () => {
     mockFetch(() => ({ json: responsesAnswer('HubSpot is great.', [], false) }));
     const [a] = (await askAiSurfaces(['q'])).filter((x) => x.surface === 'chatgpt_search');
     expect(a.status).toBe('failed_source');
-    expect(a.reason).toContain('without searching');
+    expect(a.reason).toContain('without a web search');
+  });
+
+  it('does not count a searched answer that returned no checkable source', async () => {
+    process.env.OPENAI_API_KEY = 'k';
+    mockFetch(() => ({ json: responsesAnswer('HubSpot is great.', [], true) }));
+    const [a] = (await askAiSurfaces(['q'])).filter((x) => x.surface === 'chatgpt_search');
+    expect(a.status).toBe('failed_source');
+    expect(a.reason).toContain('checkable source');
   });
 
   it('reads grounded answers and their sources from each API shape', async () => {

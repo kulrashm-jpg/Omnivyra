@@ -358,7 +358,7 @@ export async function generateReportPayload(
   // R1-OPEN-01 — the composition reads website evidence only from the domain this crawl targeted.
   let domainScope: import('./crawl/reportDomainScope').ReportDomainScope | undefined;
   if (requestedCategory === 'snapshot') {
-    const { ensureReportCrawlEvidence } = await import('./crawl/reportCrawlEvidenceService');
+    const { ensureReportCrawlEvidence, listCrawlUrlStates } = await import('./crawl/reportCrawlEvidenceService');
     const crawlResult = await ensureReportCrawlEvidence({
       companyId: report.company_id,
       websiteDomain: resolvedInput.resolved.websiteDomain ?? report.domain ?? null,
@@ -382,6 +382,8 @@ export async function generateReportPayload(
       durationMs: crawlResult.durationMs,
       reason: crawlResult.reason,
       ...(crawlResult.error ? { error: crawlResult.error } : {}),
+      // The crawl funnel needs each URL's attempt status, not only the totals.
+      urls: crawlResult.targetUrl ? await listCrawlUrlStates(report.company_id, crawlResult.targetUrl) : null,
     };
     const { resolveReportDomainScope } = await import('./crawl/reportDomainScope');
     domainScope = await resolveReportDomainScope(report.company_id, crawlResult.targetUrl ?? null)
