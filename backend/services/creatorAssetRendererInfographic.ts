@@ -94,6 +94,7 @@ import { resolveInfographicBackgroundBytes } from './creator/infographicUserBack
 import { loadBrandMark } from './creatorAssetRendererOverlay';
 import { bufferFromRemoteImage } from './creatorAssetRendererSvg';
 import { uploadRenderedPng } from './creatorAssetRendererMedia';
+import { existingNoveltySeed, noveltyIndex } from './creator/creatorNoveltyPlan';
 import { stripPromptDirectives } from './creatorAssetRendererCarousel';
 import { planInfographicContent, resolveInfographicSections, resolveInfographicLayout, validateInfographicDensity, resolveInfographicEngine, estimateDenseBodyHeight } from './creatorAssetRendererCompose';
 
@@ -1477,7 +1478,20 @@ export async function renderInfographicAsset(
     `<linearGradient id="${id}" ${gradDir(spec.direction)}>`
     + spec.stops.map((s) => `<stop offset="${s.offset}%" stop-color="${gradColor(s.color)}"${s.opacity === 1 ? '' : ` stop-opacity="${s.opacity}"`} />`).join('')
     + `</linearGradient>`;
-  const grads = infographicStyle.color_scheme.gradients;
+  // "Every generation is new" (owner 2026-10-25): the per-request novelty seed
+  // turns the full-bleed background and the continuity wave through the
+  // style's OWN gradient directions (same colours, same stops). The semantic
+  // plan, structure and layout stay deterministic. No seed → the style's
+  // directions exactly as before.
+  const GRAD_DIRECTIONS = ['vertical', 'horizontal', 'diagonal'] as const;
+  const noveltySeed = existingNoveltySeed(metadata);
+  const grads = noveltySeed
+    ? {
+        ...infographicStyle.color_scheme.gradients,
+        background: { ...infographicStyle.color_scheme.gradients.background, direction: GRAD_DIRECTIONS[noveltyIndex(noveltySeed, 'infographic-background', 3)] },
+        wave: { ...infographicStyle.color_scheme.gradients.wave, direction: GRAD_DIRECTIONS[noveltyIndex(noveltySeed, 'infographic-wave', 3)] },
+      }
+    : infographicStyle.color_scheme.gradients;
   const svg = `
     <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
       <defs>
@@ -1611,6 +1625,10 @@ export async function renderInfographicAsset(
     renderer_id: getCreatorRendererRegistration('infographic').rendererId,
     auto_corrections: corrected.corrections,
     overlay_renderer: 'none',
+    // The seed that turned this render's background/wave gradients (absent → none).
+    novelty: noveltySeed
+      ? { seed: noveltySeed, picks: { background_direction: grads.background.direction, wave_direction: grads.wave.direction } }
+      : undefined,
     provider_text_validation: providerTextValidation,
     /*
      * An attached reference this family cannot apply is DISCLOSED, not dropped.

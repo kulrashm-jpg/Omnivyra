@@ -6,6 +6,7 @@ import { config } from '@/config';
 import { buildCreatorBlueprintPromptSpecification } from '../creator/creatorPromptSpecification';
 import { assembleBlueprintPrompt } from '../creator/intelligence/blueprintPromptAssembler';
 import { buildCreatorLookRenderMetadata, effectiveBlueprintIdForCreatorCard } from '../creator/creatorLookRenderMetadata';
+import { resolveNoveltySeed } from '../creator/creatorNoveltyPlan';
 import {
   repurposeCarouselForPlatforms,
   repurposeVideoScriptForPlatforms,
@@ -613,6 +614,12 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
               // it. Spread last: when a look is set its blueprint_id /
               // blueprint_color_primary replace the curated sample's above.
               ...buildCreatorLookRenderMetadata(intent.creatorCard ?? null),
+              // "Every generation is new" (owner 2026-10-25): one novelty seed
+              // per generation request — the card's own `novelty_seed` (a true
+              // retry / reproduction / "More versions" version) or a fresh one.
+              // Stored with the payload, so the durable worker, retries and the
+              // fix loop all reproduce the same picks.
+              novelty_seed: resolveNoveltySeed({ creator_card: safeObject(intent.creatorCard) }),
             },
           },
         },

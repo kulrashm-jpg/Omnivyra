@@ -56,7 +56,7 @@ export default function LookVariationsButton(props: {
         onClick={() => { void onClick(); }}
         disabled={inFlight || props.disabled}
         className="rounded-full border border-indigo-200 bg-white px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
-        title={`Generate ${DEFAULT_LOOK_VARIATION_COUNT} more versions that keep the ${look.title} look and vary the composition, subject and angle. Uses the look's sample as a style reference, which costs more than a standard generation.`}
+        title={`Generate ${DEFAULT_LOOK_VARIATION_COUNT} more versions that keep the ${look.title} look and give each one its own setting, composition and viewpoint. Each version is inspired by the look's sample — a new, original image, not a copy of it.`}
       >
         {inFlight ? 'Generating versions…' : 'More versions in this look'}
       </button>

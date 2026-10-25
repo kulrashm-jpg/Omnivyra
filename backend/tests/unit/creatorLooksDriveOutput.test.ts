@@ -197,11 +197,15 @@ describe('B — a picked look is the single source of style', () => {
     expect(applyLookPrecedenceToCreatorCard(card)).toBe(card);
   });
 
-  it('the generate route applies precedence before blueprint merge; the showcase URL follows the look', () => {
+  it('the generate route applies precedence before blueprint merge; no showcase URL is ever built', () => {
     const handler = SRC('../../services/creator/generateRoute/generateHandler.ts');
     expect(handler).toContain('applyLookPrecedenceToCreatorCard(rawCreatorCard, { sampleBlueprintId: topLevelBlueprintId })');
+    // Owner 2026-10-25 ("new but inspired by the reference selected"): the
+    // look / curated sample now rides as BYTES through the style-reference path
+    // with its instruction; the instruction-less showcase URL is no longer built.
     const image = SRC('../../services/creatorAssetRendererImage.ts');
-    expect(image).toMatch(/const bpId = lookStyleReference\.lookId\s*\?\?/);
+    expect(image).not.toMatch(/const bpId = /);
+    expect(image).not.toMatch(/creator-showcases\/\$\{/);
   });
 });
 
@@ -308,16 +312,41 @@ describe('D — the look sample as a style reference', () => {
     expect(lookShowcaseLocalPath('../../etc/passwd', '/repo')).toBeNull();
   });
 
-  it('CRITICAL: a variation loads the LOOK\'s showcase from local disk, never the sample, never APP_URL', async () => {
+  /*
+   * Owner clarification 2026-10-25 ("generation is new but inspired by the
+   * image reference selected"): the selected reference — the look's sample,
+   * else the curated gallery sample — is sent BY DEFAULT as a standard-fidelity
+   * style reference (also as the only image), always with the instruction and
+   * the "This version:" novelty layer; never with input_fidelity 'high'.
+   * CREATOR_LOOK_SAMPLE_REFERENCE=off and the global kill switch turn it off.
+   * These cases replace the PR5 "only for a variation / global edit" gate.
+   */
+  const withUserPhoto = { userReferenceCount: 1, userReferenceFidelity: 'standard' as const };
+
+  it('CRITICAL: default — an ordinary look render loads the LOOK\'s showcase from local disk, never the sample, never APP_URL', async () => {
     const fetchRemote = jest.fn();
-    const meta = renderMetadata(formCard('comic', { look_variation: { index: 1, count: 3 } }));
-    const r = await resolveLookStyleReference(meta, { fetchRemote });
+    const r = await resolveLookStyleReference(renderMetadata(formCard('comic')), { fetchRemote });
     expect(r.status).toBe('attached');
     expect(r.lookId).toBe('comic');
+    expect(r.kind).toBe('look');
     expect(r.reference!.source).toBe('local');
     expect(r.reference!.mimeType).toBe('image/webp');
     expect(r.reference!.bytes.equals(fs.readFileSync(comicPath))).toBe(true);
     expect(fetchRemote).not.toHaveBeenCalled();
+  });
+
+  it('no look → the curated gallery sample is the style reference', async () => {
+    const r = await resolveLookStyleReference(renderMetadata(formCard(null)));
+    expect(r.status).toBe('attached');
+    expect(r.kind).toBe('sample');
+    expect(r.lookId).toBe('corporate');
+  });
+
+  it('a crafted sample id never builds a path', async () => {
+    const readLocal = jest.fn();
+    const r = await resolveLookStyleReference({ blueprint_id: '../../etc/passwd' }, { readLocal });
+    expect(r.status).toBe('not_requested');
+    expect(readLocal).not.toHaveBeenCalled();
   });
 
   it('falls back to APP_URL only when the file is not on disk', async () => {
@@ -325,25 +354,32 @@ describe('D — the look sample as a style reference', () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     const fetchRemote = jest.fn(async () => Buffer.from('REMOTE'));
     const r = await resolveLookStyleReference(
-      renderMetadata(formCard('comic', { look_variation: { index: 1, count: 3 } })),
+      renderMetadata(formCard('comic')),
       { readLocal: async () => { throw new Error('ENOENT'); }, fetchRemote },
     );
     expect(fetchRemote).toHaveBeenCalledWith('https://app.example/creator-showcases/comic/image.webp');
     expect(r.reference!.source).toBe('remote');
   });
 
-  it('an ordinary (non-variation) render with the setting unset sends no style reference (no cost change)', async () => {
+  it('CRITICAL: never on a high-fidelity call — a subject/product photo goes alone, the look stays prompt-only', async () => {
     const readLocal = jest.fn();
-    const r = await resolveLookStyleReference(renderMetadata(formCard('comic')), { readLocal });
-    expect(r.status).toBe('not_requested');
+    const r = await resolveLookStyleReference(renderMetadata(formCard('comic')), { readLocal }, { userReferenceCount: 1, userReferenceFidelity: 'high' });
+    expect(r.status).toBe('prompt_only');
     expect(readLocal).not.toHaveBeenCalled();
+    const standard = await resolveLookStyleReference(renderMetadata(formCard('comic')), undefined, withUserPhoto);
+    expect(standard.status).toBe('attached');
   });
 
-  it("global 'edit' sends the look's sample for every look render", async () => {
-    process.env.CREATOR_IMAGE_REFERENCE_MODE = 'edit';
-    const r = await resolveLookStyleReference(renderMetadata(formCard('neon')));
-    expect(r.status).toBe('attached');
-    expect(r.lookId).toBe('neon');
+  it('CRITICAL: CREATOR_LOOK_SAMPLE_REFERENCE=off → never read, prompt-only', async () => {
+    process.env.CREATOR_LOOK_SAMPLE_REFERENCE = 'off';
+    try {
+      const readLocal = jest.fn();
+      const r = await resolveLookStyleReference(renderMetadata(formCard('comic')), { readLocal });
+      expect(r.status).toBe('prompt_only');
+      expect(readLocal).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.CREATOR_LOOK_SAMPLE_REFERENCE;
+    }
   });
 
   it('CRITICAL: kill switch (explicit non-edit) → never read, never sent, reported disabled', async () => {
@@ -355,22 +391,33 @@ describe('D — the look sample as a style reference', () => {
     expect(readLocal).not.toHaveBeenCalled();
   });
 
-  it('the instruction asks for medium/palette/line/texture/lighting and forbids layout/subject/text copying', () => {
+  it('the instruction asks for medium/palette/line/texture/lighting/mood, forbids copying, and points at "This version:"', () => {
     const line = lookStyleReferenceInstruction('Comic');
-    for (const w of ['rendering medium', 'colour palette', 'line work', 'shading', 'texture', 'lighting']) expect(line).toContain(w);
+    for (const w of ['rendering medium', 'colour palette', 'line work', 'shading', 'texture', 'lighting', 'mood']) expect(line).toContain(w);
     expect(line).toMatch(/Do NOT copy its layout, composition, subject, characters, objects or any text/);
+    expect(line).toContain('"This version:"');
     expect(lookStyleReferenceInstruction('Comic', { lastOfSeveral: true })).toMatch(/^The LAST attached image/);
   });
 
-  it('CRITICAL: provider — the look sample goes to images.edit at normal fidelity', async () => {
+  it('CRITICAL: provider — the look sample alone goes to images.edit at standard fidelity', async () => {
     const bytes = fs.readFileSync(comicPath);
-    const r = await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes, mimeType: 'image/webp' }], referenceFidelity: 'standard', referenceKind: 'look' });
+    const r = await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes, mimeType: 'image/webp' }], referenceFidelity: 'high', referenceKind: 'look' });
     expect(editCalls).toHaveLength(1);
     expect(generateCalls).toHaveLength(0);
+    // Even a (mistaken) 'high' request is forced to standard for a style-only reference.
     expect(editCalls[0].input_fidelity).toBeUndefined();
     expect(editCalls[0].quality).toBe('low');
     expect((editCalls[0].image as { type: string }).type).toBe('image/webp');
     expect(r.conditionApplied).toBe(true);
+  });
+
+  it('CRITICAL: provider — the look sample never rides on input_fidelity high (user photo sent alone)', async () => {
+    const user = { bytes: Buffer.from('USER'), mimeType: 'image/png' };
+    const look = { bytes: fs.readFileSync(comicPath), mimeType: 'image/webp' };
+    await generateProviderImage({ prompt: 'p', referenceImages: [user, look], referenceFidelity: 'high', referenceKind: 'user+look' });
+    expect(editCalls).toHaveLength(1);
+    expect(editCalls[0].input_fidelity).toBe('high');
+    expect((editCalls[0].image as { type: string }).type).toBe('image/png');
   });
 
   it('edit failure → text-to-image fallback with the conditionDegradation disclosure (look copy)', async () => {
@@ -393,27 +440,32 @@ describe('D — the look sample as a style reference', () => {
     expect(r2.conditionDegradation?.userMessage).toMatch(/Style references are switched off/);
   });
 
-  it('the renderer appends the look sample LAST, with the instruction, through the canonical path', () => {
+  it('the renderer appends the selected reference LAST, with the instruction, through the canonical path', () => {
     const image = SRC('../../services/creatorAssetRendererImage.ts');
     expect(image).toContain('[...userReferenceBytes, { bytes: lookStyleReference.reference!.bytes');
     expect(image).toContain('lookStyleReferenceInstruction(lookStyleReference.lookTitle');
-    expect(image).toContain('if (lookReferenceAttached) return null;');
+    expect(image).toContain("!(userReferenceBytes.length > 0 && conditionReferenceFidelity === 'high')");
   });
 });
 
 /* ── E ─────────────────────────────────────────────────────────────────── */
 
 describe('E — more versions in this look (look locked)', () => {
-  it('builds N payloads with the look locked and the focus rotated; base untouched', () => {
+  it('builds N payloads with the look locked, a shared base seed and a per-version seed; base untouched', () => {
     const base = { topic: 't', creator_card: formCard('neon') };
     const snapshot = JSON.stringify(base);
-    const payloads = buildLookVariationPayloads(base, 'comic', 3);
+    const payloads = buildLookVariationPayloads(base, 'comic', 3, 'base-seed-1');
     expect(payloads).toHaveLength(3);
     payloads.forEach((p, i) => {
       const card = p.creator_card as Record<string, unknown>;
       expect((card.guided_creative as Record<string, unknown>).visual_direction_id).toBe('comic');
-      expect(card.look_variation).toEqual({ index: i + 1, count: 3, focus: ['composition', 'subject', 'angle'][i] });
+      // Owner 2026-10-25: every version is a new generation with its own seed;
+      // the shared base seed makes their primary picks distinct.
+      expect(card.look_variation).toEqual({ index: i + 1, count: 3, focus: ['composition', 'subject', 'angle'][i], base_seed: 'base-seed-1' });
+      expect(card.novelty_seed).toBe(`base-seed-1:v${i + 1}`);
     });
+    const minted = buildLookVariationPayloads(base, 'comic', 2).map((p) => (p.creator_card as Record<string, unknown>).novelty_seed);
+    expect(new Set(minted).size).toBe(2);
     expect(JSON.stringify(base)).toBe(snapshot);
     expect(buildLookVariationPayloads(base, 'comic', 99)).toHaveLength(4);
   });
@@ -432,9 +484,18 @@ describe('E — more versions in this look (look locked)', () => {
     expect(apiFetchMock.mock.calls.map((c) => c[0])).toEqual(Array(3).fill('/api/command-center/creator-content/generate'));
   });
 
-  it('the version line keeps the look and varies only the focus', () => {
-    const composed = composeCreatorImagePrompt(lookInput('comic', { lookVariation: { index: 2, count: 3, focus: 'subject' } }));
-    expect(composed.prompt).toContain('Version 2 of 3 in the same Comic look: keep the medium, palette, line work, shading, texture and lighting unchanged; depict a different subject, moment or metaphor that carries the same message.');
+  it('the version line keeps the look; with a novelty plan it points at the concrete "This version:" picks', () => {
+    // Owner 2026-10-25: the generic "clearly different from the other versions"
+    // wording is replaced by concrete per-version picks.
+    const plain = composeCreatorImagePrompt(lookInput('comic', { lookVariation: { index: 2, count: 3, focus: 'subject' } }));
+    expect(plain.prompt).toContain('Version 2 of 3 in the same Comic look: keep the medium, palette, line work, shading and texture unchanged; depict its own subject, moment or metaphor that carries the same message.');
+    expect(plain.prompt).not.toContain('from the other versions');
+    const withPlan = composeCreatorImagePrompt(lookInput('comic', {
+      lookVariation: { index: 2, count: 3, focus: 'subject' },
+      novelty: { lines: ['This version: an original take on the same message — setting: a stylised cityscape.'] },
+    }));
+    expect(withPlan.prompt).toContain('Version 2 of 3 in the same Comic look: keep the medium, palette, line work, shading and texture unchanged; its setting, composition, viewpoint and mood are the ones set out under "This version:".');
+    expect(withPlan.prompt).toContain('This version: an original take on the same message — setting: a stylised cityscape.');
   });
 
   it('CRITICAL: every orchestrated variant carries the locked look', () => {
@@ -476,9 +537,10 @@ describe('E — more versions in this look (look locked)', () => {
     expect(plan.userVisualDirectionId).toBe('comic');
   });
 
-  it('end to end: a variation render prompt is look-native and names its version', () => {
-    const p = prompt(renderMetadata(formCard('comic', { look_variation: { index: 3, count: 3, focus: 'angle' } })));
+  it('end to end: a variation render prompt is look-native, names its version and carries its own picks', () => {
+    const p = prompt(renderMetadata(formCard('comic', { look_variation: { index: 3, count: 3, focus: 'angle', base_seed: 'b1' }, novelty_seed: 'b1:v3' })));
     expect(p).toContain('Version 3 of 3 in the same Comic look');
+    expect(p).toContain('This version:');
     expect(p).not.toContain(REALISM_LEAD);
   });
 });

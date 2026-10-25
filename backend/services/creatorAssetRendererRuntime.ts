@@ -495,11 +495,37 @@ export async function renderAsset(
   const contentType = String(
     safeObject(safeObject(assetPayload.media_bundle).metadata).content_type || assetPayload.asset_kind || '',
   );
+  // "Every generation is new" (owner 2026-10-25): pin ONE novelty seed for
+  // this render BEFORE the fix loop, so the first attempt and every PR4
+  // re-render (which reuses the first AI image) share it — no reseed. A
+  // payload that already carries `novelty_seed` (minted per request by the
+  // execution engine, or a true retry / reproduction) keeps it.
+  pinNoveltySeed(assetPayload);
   return runVisualFixLoop(assetPayload, options, contentType, {
     dispatch: renderAssetDispatch,
     // Read through the module object at call time (keeps it spy-able in tests).
     validate: (metadata, ct) => validation.validateCreatorVisual(metadata, ct),
   });
+}
+
+/**
+ * Sets `media_bundle.metadata.novelty_seed` on the payload when absent (in
+ * place, like the renderer's other metadata writes). Returns the seed.
+ */
+export function pinNoveltySeed(assetPayload: Record<string, unknown>): string {
+  const { resolveNoveltySeed } =
+    require('./creator/creatorNoveltyPlan') as typeof import('./creator/creatorNoveltyPlan');
+  if (!assetPayload.media_bundle || typeof assetPayload.media_bundle !== 'object' || Array.isArray(assetPayload.media_bundle)) {
+    assetPayload.media_bundle = {};
+  }
+  const bundle = assetPayload.media_bundle as Record<string, unknown>;
+  if (!bundle.metadata || typeof bundle.metadata !== 'object' || Array.isArray(bundle.metadata)) {
+    bundle.metadata = {};
+  }
+  const meta = bundle.metadata as Record<string, unknown>;
+  const seed = resolveNoveltySeed(meta);
+  meta.novelty_seed = seed;
+  return seed;
 }
 
 // ── Test-only internal exports ───────────────────────────────────────────────

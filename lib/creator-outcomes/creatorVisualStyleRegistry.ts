@@ -47,9 +47,39 @@ export interface VisualStyle {
    * illustration" is the opposite of what a comic or clay look asks for.
    */
   photographic: boolean;
+  /**
+   * Surface, line and texture qualities that make the look recognisable from
+   * the description alone ("visible layered paper edges…"). Set for the looks
+   * whose identity lives in their surface, so the look still reads correctly
+   * when its sample image is not attached (kill switch, high-fidelity user
+   * photo, sample unavailable) — owner 2026-10-25: looks inspire. Optional.
+   */
+  surface?: string;
 }
 
 type LookRendering = Pick<VisualStyle, 'renderingMedium' | 'palette' | 'negativePrompt' | 'photographic'>;
+
+/** Prompt-only surface descriptors for the looks most likely to drift without their sample. */
+const LOOK_SURFACE: Record<string, string> = {
+  'paper-cut': 'visible cut-paper edges, several stacked paper layers with soft drop shadows between them, faint paper-fibre grain',
+  clay: 'hand-sculpted matte clay with soft rounded forms, subtle fingerprint and tool marks, soft studio shading',
+  watercolor: 'transparent pigment washes with soft blooms and pooled edges, visible cold-press paper grain, white paper left as highlights',
+  sketch: 'graphite pencil lines with varied pressure, crosshatched shading, paper tooth visible',
+  comic: 'heavy black ink outlines, flat colour fills with halftone dot shading, crisp panel-like framing',
+  'hand-drawn': 'loose marker strokes with slight wobble, uneven fills, doodled accents',
+  graffiti: 'sprayed paint with soft overspray, drips and tagged outlines on a textured wall',
+  street: 'brushed and rollered mural paint on a weathered urban wall',
+  isometric: 'strict isometric projection with parallel edges, clean flat faces with simple light/mid/dark shading per face',
+  'flat-illustration': 'flat solid colour shapes, no gradients, minimal simple shadows, consistent stroke-free edges',
+  anime: 'clean cel-shaded line art with hard-edged two-tone shadows and expressive highlights',
+  '3d': 'smooth rendered surfaces with soft global illumination and gentle ambient occlusion',
+  glassmorphism: 'frosted translucent panels with background blur, thin bright edges and soft coloured glow behind',
+  neumorphism: 'soft extruded surfaces of one base colour, paired light and dark soft shadows, no hard edges',
+  vintage: 'muted printed inks with slight misregistration, aged paper texture and gentle grain',
+  retro: 'bold flat geometric shapes, chunky outlines and a sunset-style colour banding',
+  neon: 'glowing tube lines with bloom on deep black, coloured reflections on dark surfaces',
+  cyberpunk: 'neon-lit rain-slick surfaces, magenta and cyan glow, dense layered depth',
+};
 
 const NOT_PHOTO = 'photorealism, photographic skin texture, film grain, camera lens blur';
 
@@ -139,6 +169,7 @@ function S(id: string, title: string, description: string, accent: string, surfa
     stylePrompt: p.stylePrompt ?? '',
     brandBehavior: p.brandBehavior ?? 'accent-led',
     ...(LOOK_RENDERING[id] ?? DEFAULT_LOOK_RENDERING),
+    ...(LOOK_SURFACE[id] ? { surface: LOOK_SURFACE[id] } : {}),
   };
 }
 

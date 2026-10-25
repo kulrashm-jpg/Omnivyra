@@ -85,6 +85,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
+import { existingNoveltySeed } from './creator/creatorNoveltyPlan';
 import { sharp, PDFDocument, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, type OverlayQualityReport, safeObject, resolveCarouselRenderStyle, resolveCarouselTemplateArc, carouselOverlayBaseStyle, renderBackgroundPng, classifyPdfStorageFailure, USER_MESSAGE_FOR_PDF_FALLBACK, compactText, getCachedRenderBuffer, unsupportedFamilyConditionDegradation } from './creatorAssetRendererContracts';
 import { buildOverlaySvg, loadBrandMark } from './creatorAssetRendererOverlay';
 import { resolveUserBackgroundBytes, carouselUserBackgroundEnabled } from './creator/userBackgroundReference';
@@ -455,6 +456,12 @@ function buildDeckRenderContext(input: {
   return { fontMultiplier, layoutModes, waveAnchors };
 }
 
+/** The novelty seed as a background-variant suffix ('' when the payload carries none → variant unchanged). */
+export function noveltyVariantSuffix(metadata: Record<string, unknown>): string {
+  const seed = existingNoveltySeed(metadata);
+  return seed ? `:n:${seed}` : '';
+}
+
 async function renderStructuredSlidePng(input: {
   item: Record<string, string>;
   index: number;
@@ -504,7 +511,13 @@ async function renderStructuredSlidePng(input: {
     colors: input.brandKit.normalizedPalette,
     // Per-slide index keeps slides within a carousel distinct; mixing the
     // slide body keeps DIFFERENT carousels distinct from each other too.
-    variantId: `${input.brandKit.layoutVariantId}:${input.index}:${String(input.item?.body || '').slice(0, 48)}`,
+    // "Every generation is new" (owner 2026-10-25): the per-request novelty
+    // seed also rides in the variant, so the SAME text no longer yields a
+    // byte-identical deck (and the background cache key changes with it). The
+    // variant only rotates the brand palette order, gradient direction and
+    // decorative geometry — never colours outside the palette. No seed → the
+    // previous variant exactly.
+    variantId: `${input.brandKit.layoutVariantId}:${input.index}:${String(input.item?.body || '').slice(0, 48)}${noveltyVariantSuffix(input.metadata)}`,
     // Carousel visual language — slide frame radius (0 → square, byte-identical).
     frameRadius: input.carouselStyle?.frame.cornerRadius ?? 0,
   });
@@ -1026,6 +1039,8 @@ export async function composeStructuredDeckAsset(
         verified_at: new Date().toISOString(),
       },
       overlay_renderer: 'deterministic_svg_v1',
+      // The seed that varied this deck's backgrounds (absent → none was set).
+      novelty: existingNoveltySeed(metadata) ? { seed: existingNoveltySeed(metadata), picks: { background_variant: 'seeded' } } : undefined,
       text_fit: deckTextFit,
       overlay_quality: avgQuality,
       // Per-slide overlay quality reports — additive, so post-render visual

@@ -133,17 +133,32 @@ export type CreatorPromptInput = {
      * True / absent keeps the photographic path exactly as it was.
      */
     photographic?: boolean | null;
+    /** Surface / line / texture qualities of the look, when the registry states them. */
+    surface?: string | null;
   } | null;
   /**
    * One of N versions generated with the look LOCKED ("More versions in this
-   * look"). The look stays fixed; only `focus` (composition / subject / angle)
-   * changes between versions. Absent → a normal single generation.
+   * look"). The look stays fixed; the version's own scene / composition come
+   * from `novelty` when present, else from `focus`. Absent → a normal single
+   * generation.
    */
   lookVariation?: {
     index: number;
     count: number;
     focus?: string | null;
   } | null;
+  /**
+   * Per-generation novelty ("Looks inspire, every generation is new"): the
+   * "This version:" lines from creatorNoveltyPlan. Absent → no novelty layer
+   * (every direct composer caller stays byte-identical).
+   */
+  novelty?: { lines: string[] } | null;
+  /**
+   * A curated sample (gallery pick) rides as a style reference although no look
+   * was chosen: the composer then states the "original scene" instruction in
+   * the body too. Absent → unchanged.
+   */
+  styleReference?: { title?: string | null } | null;
 };
 
 export type CreatorPromptLayers = {
@@ -175,6 +190,12 @@ export type CreatorPromptLayers = {
    * look-native prompt was composed; absent on every other path.
    */
   look?: string[];
+  /**
+   * "This version:" — the per-generation novelty picks (creatorNoveltyPlan).
+   * Present only when the caller supplied a novelty plan; kept apart from every
+   * content line so the user's copy and facts are never rewritten by it.
+   */
+  novelty?: string[];
 };
 
 export type CreatorComposedPrompt = {
@@ -727,6 +748,7 @@ function userVisualDirectionLines(
   } else if (title) {
     lines.push(`Visual style: ${title}.`);
   }
+  if (stylePrompt || title) lines.push(ORIGINAL_SCENE_INSTRUCTION);
   const instruction = String(chosen.instruction || '').trim();
   // Bounded: a prompt line, not an essay. The field is already capped upstream;
   // capping again here keeps the composer safe against any other caller.
@@ -746,11 +768,25 @@ export function isLookNative(chosen: CreatorPromptInput['userVisualDirection']):
   return Boolean(clean(chosen.title) || clean(chosen.stylePrompt) || clean(chosen.renderingMedium));
 }
 
-/** What each locked-look version varies. Rotated by index, so N versions differ on purpose. */
+/**
+ * Owner requirement 2026-10-25 ("generation is new but inspired by the image
+ * reference selected"): the selected look / curated sample is sent as a style
+ * reference, and this line — in the main prompt body, not only appended next
+ * to the image — says what to take from it and what never to copy. The scene
+ * itself is the seeded "This version:" layer.
+ */
+export const ORIGINAL_SCENE_INSTRUCTION =
+  'Create an original scene in this look — use any attached style reference only for its medium, palette, texture, line work, lighting and mood; do not reproduce its composition, layout, subject, characters, objects or any text.';
+
+/**
+ * Fallback for a locked-look version composed WITHOUT a novelty plan (direct
+ * composer callers). The renderer always supplies the plan, whose concrete
+ * picks replace these generic foci.
+ */
 const LOOK_VARIATION_FOCUS: Record<string, string> = {
-  composition: 'use a clearly different composition and framing from the other versions',
-  subject: 'depict a different subject, moment or metaphor that carries the same message',
-  angle: 'use a different viewpoint, camera angle and scale',
+  composition: 'use its own composition and framing',
+  subject: 'depict its own subject, moment or metaphor that carries the same message',
+  angle: 'use its own viewpoint, camera angle and scale',
 };
 
 export const LOOK_VARIATION_FOCI: readonly string[] = Object.freeze(Object.keys(LOOK_VARIATION_FOCUS));
@@ -758,15 +794,25 @@ export const LOOK_VARIATION_FOCI: readonly string[] = Object.freeze(Object.keys(
 function lookVariationLine(
   variation: CreatorPromptInput['lookVariation'],
   title: string,
+  hasNovelty = false,
 ): string | null {
   if (!variation) return null;
   const count = Math.max(1, Math.min(8, Math.floor(Number(variation.count) || 1)));
   const index = Math.max(1, Math.min(count, Math.floor(Number(variation.index) || 1)));
   const focusKey = clean(variation.focus).toLowerCase();
-  const focus = LOOK_VARIATION_FOCUS[focusKey]
-    ?? LOOK_VARIATION_FOCUS[LOOK_VARIATION_FOCI[(index - 1) % LOOK_VARIATION_FOCI.length]];
+  const focus = hasNovelty
+    ? 'its setting, composition, viewpoint and mood are the ones set out under "This version:"'
+    : LOOK_VARIATION_FOCUS[focusKey]
+      ?? LOOK_VARIATION_FOCUS[LOOK_VARIATION_FOCI[(index - 1) % LOOK_VARIATION_FOCI.length]];
   const look = title ? `the same ${title} look` : 'the same look';
-  return `Version ${index} of ${count} in ${look}: keep the medium, palette, line work, shading, texture and lighting unchanged; ${focus}.`;
+  return `Version ${index} of ${count} in ${look}: keep the medium, palette, line work, shading and texture unchanged; ${focus}.`;
+}
+
+/** The "This version:" layer, or [] when no plan was supplied. */
+function buildNoveltyLayer(input: CreatorPromptInput): string[] {
+  const lines = input.novelty?.lines;
+  if (!Array.isArray(lines)) return [];
+  return lines.map((l) => clean(l)).filter(Boolean).slice(0, 4);
 }
 
 /** The look block that leads a look-native prompt. */
@@ -782,8 +828,11 @@ function buildLookBlock(input: CreatorPromptInput): string[] {
   if (medium) lines.push(`Rendering medium: ${medium}.`);
   if (stylePrompt) lines.push(`Look style: ${stylePrompt}.`);
   if (palette.length > 0) lines.push(`Look palette (dominant colours): ${palette.join(', ')}.`);
+  const surface = clean(chosen.surface);
+  if (surface) lines.push(`Look surface and line: ${surface}.`);
   lines.push('Match the look consistently across the frame: medium, palette, line work and shading, texture and lighting.');
-  const variation = lookVariationLine(input.lookVariation, title);
+  lines.push(ORIGINAL_SCENE_INSTRUCTION);
+  const variation = lookVariationLine(input.lookVariation, title, buildNoveltyLayer(input).length > 0);
   if (variation) lines.push(variation);
   const instruction = clean(chosen.instruction);
   if (instruction) lines.push(`Creative direction from the requester: ${instruction.slice(0, 400)}`);
@@ -1052,8 +1101,9 @@ export function composeCreatorImagePrompt(
   // contradict it are replaced. Photographic looks (and no look) take the
   // original path below unchanged.
   const lookNative = isLookNative(input.userVisualDirection);
+  const noveltyLayer = buildNoveltyLayer(input);
   const photoVariationLine = !lookNative
-    ? lookVariationLine(input.lookVariation, clean(input.userVisualDirection?.title))
+    ? lookVariationLine(input.lookVariation, clean(input.userVisualDirection?.title), noveltyLayer.length > 0)
     : null;
 
   const layers: CreatorPromptLayers = {
@@ -1065,6 +1115,10 @@ export function composeCreatorImagePrompt(
       ? buildLookNativeVisualDirectionLayer(template)
       : [
           ...userVisualDirectionLines(input.userVisualDirection),
+          // A curated sample is the style reference and no look line said so.
+          ...(input.styleReference && !clean(input.userVisualDirection?.title) && !clean(input.userVisualDirection?.stylePrompt)
+            ? [ORIGINAL_SCENE_INSTRUCTION]
+            : []),
           ...(photoVariationLine ? [photoVariationLine] : []),
           ...buildVisualDirectionLayer(template),
         ],
@@ -1075,6 +1129,7 @@ export function composeCreatorImagePrompt(
     purpose: purposeLayer,
     governance: governanceLayer,
     ...(lookNative ? { look: buildLookBlock(input) } : {}),
+    ...(noveltyLayer.length > 0 ? { novelty: noveltyLayer } : {}),
   };
 
   // Mode-shared header preserved verbatim from the prior implementation so
@@ -1109,6 +1164,10 @@ export function composeCreatorImagePrompt(
     ...layers.brand,
     ...layers.product,
     ...layers.visualDirection,
+    // Per-generation novelty: its own layer, after every content / brand /
+    // direction line and before the realism + composition discipline (which
+    // still governs the overlay-safe area). Empty when no plan was supplied.
+    ...(layers.novelty ?? []),
     ...layers.realism,
     ...layers.composition,
     ...layers.quality,

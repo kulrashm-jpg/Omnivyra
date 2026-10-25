@@ -337,6 +337,7 @@ export function buildAiImagePrompt(input: {
               palette: chosenStyle.palette,
               negativePrompt: chosenStyle.negativePrompt || null,
               photographic: chosenStyle.photographic,
+              surface: chosenStyle.surface || null,
             }
           : {}),
       }
@@ -351,6 +352,44 @@ export function buildAiImagePrompt(input: {
         return { index, count, focus: typeof raw.focus === 'string' ? raw.focus : null };
       })()
     : null;
+  // "Looks inspire, every generation is new" (owner 2026-10-25): this
+  // generation's own seeded scene / composition / viewpoint / light / motif /
+  // background, as a separate "This version:" layer. The seed is the payload's
+  // `novelty_seed` (pinned per request by renderAsset, so the fix loop and true
+  // retries reproduce it) or a fresh one. The user's typed direction wins.
+  const { buildNoveltyPlan, resolveNoveltySeed } =
+    require('./creator/creatorNoveltyPlan') as typeof import('./creator/creatorNoveltyPlan');
+  const noveltyPlan = (() => {
+    const card = safeObject(input.metadata.creator_card);
+    const rawVariation = safeObject(input.metadata.look_variation ?? card.look_variation);
+    return buildNoveltyPlan({
+      seed: resolveNoveltySeed(input.metadata),
+      lookId: chosenStyle?.id ?? null,
+      family: 'image',
+      purpose: [card.purpose_key, input.metadata.purpose_key, composerInput.contentType, composerInput.objective]
+        .filter((v) => typeof v === 'string' && v).join(' '),
+      variant: composerInput.lookVariation
+        ? {
+            index: composerInput.lookVariation.index,
+            count: composerInput.lookVariation.count,
+            baseSeed: typeof rawVariation.base_seed === 'string' ? rawVariation.base_seed : null,
+          }
+        : null,
+      user: {
+        hasInstruction: Boolean(guidedChoices.visualInstruction),
+        subject: guidedChoices.subject ?? null,
+      },
+    });
+  })();
+  composerInput.novelty = { lines: noveltyPlan.lines };
+  // No look chosen, but a curated gallery sample rides as the style reference:
+  // the composer states the "inspired, not copied" instruction in the body.
+  if (!chosenStyle) {
+    const { curatedSampleIdFromRenderMetadata } =
+      require('./creator/creatorLookStyleReference') as typeof import('./creator/creatorLookStyleReference');
+    const sampleId = curatedSampleIdFromRenderMetadata(input.metadata);
+    composerInput.styleReference = sampleId ? { title: getVisualStyle(sampleId)?.title ?? null } : null;
+  }
 
   const plan = campaignDNA
     ? projectAssetPlanFromDNA({
@@ -747,6 +786,8 @@ export function buildAiImagePrompt(input: {
     // PR5 — the look the user chose and how the composer applied it.
     creative_look: composed.look ?? null,
     creative_look_variation: composerInput.lookVariation ?? null,
+    // This generation's novelty seed + picks (reproducible from the seed).
+    novelty: noveltyPlan.audit,
     // Variant exploration audit
     variant_count: orchestration.count,
     variant_rationale: orchestration.rationale,
