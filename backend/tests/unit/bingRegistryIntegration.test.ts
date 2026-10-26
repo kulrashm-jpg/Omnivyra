@@ -207,7 +207,7 @@ const payload = (): any => ({
 const pack = (o: Record<string, unknown> = {}): any => parseResearchPack({
   subject: { brand: 'Acme', domain: 'acme.test' }, collectedAt: '2026-10-26T09:00:00Z', collector: 't', method: {},
   company: [], search: [], generative: [], competitors: [], independent: [], gaps: [], site: [], benchmark: [], ...o,
-});
+}, 'acme.test');
 const bing = (o: Record<string, unknown>) => ({ checkedAt: '2026-10-26T09:00:00Z', siteUrl: 'https://acme.test/', detail: 'd', links: null, search: null, ...o });
 const reg = (o: Record<string, unknown>) => ({ checkedAt: '2026-10-26T09:00:00Z', detail: 'd', pagesRead: [{ url: 'https://acme.test/', status: 200, role: 'homepage' }], identifiers: [], unavailable: [], ...o });
 const diag = (p: any, key: string) => buildDiagnostics(buildLedger(payload(), p), p).find((d) => d.key === key)!;
