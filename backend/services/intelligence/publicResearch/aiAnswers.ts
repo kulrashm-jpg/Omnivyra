@@ -130,7 +130,8 @@ export const SURFACES: Surface[] = [
   {
     id: 'gemini_search', label: 'Gemini (Google Search grounding)', keys: ['GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'], geography: 'provider default',
     ask: (key) => async (query, signal) => {
-      const model = process.env.PUBLIC_RESEARCH_GEMINI_MODEL ?? 'gemini-flash-lite-latest';
+      // 2.5 Flash: Google's free tier lists Search grounding for it (up to 500 requests/day); Gemini 3+ models have none.
+      const model = process.env.PUBLIC_RESEARCH_GEMINI_MODEL ?? 'gemini-2.5-flash';
       const j = await postJson(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         contents: [{ parts: [{ text: query }] }], tools: [{ google_search: {} }], generationConfig: { maxOutputTokens: ANSWER_TOKENS() },
       }, { 'x-goog-api-key': key }, signal);

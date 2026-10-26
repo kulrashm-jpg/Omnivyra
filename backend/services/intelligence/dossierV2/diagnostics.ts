@@ -46,6 +46,11 @@ export type SourceDiagnostic = {
   cost: Cost;
   needs: Need[];
   unlocks: string;
+  /**
+   * The gap in the reader's terms: which data or access was missing (never "we cannot"), what
+   * provides it, and who acts. Set for every row that is not measured.
+   */
+  plain?: { why: string; unlock: string; by: 'company' | 'next run' | 'report operator'; short: string };
 };
 
 /** Official facts only (pages read 25 Oct 2026). `price` is verbatim-faithful or "not confirmed". */
@@ -71,7 +76,8 @@ export function buildDiagnostics(ledger: Ledger, pack: ResearchPack | null): Sou
   const rows: SourceDiagnostic[] = [];
   const checks = pack?.providerChecks ?? [];
   const disc = pack?.candidateDiscovery ?? null;
-  const check = (provider: string, env?: ProviderCheck['environment']) => checks.find((c) => c.provider === provider && (!env || c.environment === env));
+  // Whichever environment ran the check: a report generated on the worker labels its checks as it labels itself.
+  const check = (provider: string): ProviderCheck | undefined => checks.filter((c) => c.provider === provider).sort((a, b) => Number(b.environment === 'production') - Number(a.environment === 'production'))[0];
   const c = ledger.crawl;
 
   rows.push({ key: 'crawl', source: 'Website crawl', family: 'Website', sought: 'Every public page, its HTTP outcome and content, to judge readiness to be found and quoted.',
@@ -89,16 +95,23 @@ export function buildDiagnostics(ledger: Ledger, pack: ResearchPack | null): Sou
     next: pack?.register?.missing.includes('geography') ? 'State the markets served on the website (e.g. an About or pricing note).' : 'None.', cost: 'free', needs: [], unlocks: 'A market and competitor set grounded in the site.' });
 
   // Search: stored observations vs new runs.
-  const serp = check('SerpAPI', 'local');
-  const serpProd = check('SerpAPI', 'production');
+  const serp = check('SerpAPI');
+  const serpQuota = serp?.outcome === 'quota_exhausted';
+  const runSearch = ledger.access.find((a) => a.family === 'search' && a.source === 'report_run');
+  const s = ledger.search;
+  const buyerN = (pack?.search ?? []).filter((r) => r.status === 'observed' && !isBrandQuestion(r, pack!.subject.brand)).length;
   rows.push({ key: 'search', source: 'Google search results (SerpAPI)', family: 'Search', sought: 'Where the site ranks for buyer-intent searches.',
     capability: 'SerpAPI Google engine (organic results).', docUrl: CATALOGUE.serpapi.docUrl, integration: 'implemented', credential: serp?.credential === 'present' ? 'present' : 'unverified',
-    usable: Boolean(ledger.search), attempt: `${ledger.search ? `${ledger.search.checked} stored observations of ${ledger.search.date ?? '—'} used` : 'No observations'}; free account check ${fmt(serp?.at)}: ${serp?.detail ?? 'not run'}`,
-    state: ledger.search?.source === 'research' ? 'partial' : ledger.search ? 'partial' : 'not_attempted',
-    cause: serp?.outcome === 'quota_exhausted' ? 'The plan has no searches left this period (SerpAPI account endpoint), so no new search was run; stored results of the day before were used.' : 'Search ran in the report run with generic category queries.',
-    causeConfirmed: serp?.outcome === 'quota_exhausted',
-    impact: `Search visibility rests on ${(pack?.search ?? []).filter((r) => r.status === 'observed' && !isBrandQuestion(r, pack!.subject.brand)).length || 'no'} buyer searches from one day (plus ${ledger.search?.source === 'report_run' ? 'the run’s generic queries' : 'brand-name searches'}): a small sample, not market-wide.`, next: 'Wait for the monthly reset, then run the proposed buyer-intent queries; or upgrade the plan.',
-    cost: serp?.outcome === 'quota_exhausted' ? 'paid usage' : 'existing entitlement', needs: serp?.outcome === 'quota_exhausted' ? ['paid entitlement'] : [], unlocks: `A buyer-intent sample from the validated offering (${CATALOGUE.serpapi.price})` });
+    usable: Boolean(s),
+    attempt: [s ? `${s.checked} ${s.source === 'research' ? 'research' : 'report-run'} searches observed (${s.date ?? 'date not recorded'})` : `No search result observed${runSearch ? ` (report run: ${runSearch.outcome})` : ''}`,
+      serp ? `free account check ${fmt(serp.at)}: ${serp.detail}` : null].filter(Boolean).join('; ') + '.',
+    state: s ? 'partial' : serpQuota ? 'quota_exhausted' : runSearch?.reason === 'request_failed' ? 'request_failed' : 'not_attempted',
+    cause: serpQuota ? `The plan has no searches left this period (SerpAPI account check${serp?.detail ? `: “${serp.detail}”` : ''}), so ${s ? 'no further search was run' : 'no search could run'}.`
+      : s ? 'Search ran.' : runSearch ? `The report run’s search failed: ${runSearch.outcome}` : 'No search was attempted in this run.',
+    causeConfirmed: serpQuota || Boolean(s),
+    impact: s ? `Search visibility rests on ${buyerN || (s.source === 'report_run' ? s.checked : 0)} ${s.source === 'report_run' ? 'generic category' : 'buyer'} searches from one day: a small sample, not market-wide.` : 'Search visibility is unknown for this run — not zero.',
+    next: serpQuota ? 'Re-run after the monthly reset, or extend the plan; the next run searches the brand name and the proposed buyer-intent queries.' : 'Re-run the report.',
+    cost: serpQuota ? 'paid usage' : 'existing entitlement', needs: serpQuota ? ['paid entitlement'] : [], unlocks: `A buyer-intent sample from the validated offering (${CATALOGUE.serpapi.price})` });
 
   // AI tools.
   const ai = (label: string) => ledger.ai.find((a) => a.label === label);
@@ -122,19 +135,27 @@ export function buildDiagnostics(ledger: Ledger, pack: ResearchPack | null): Sou
       impact: measured ? 'Counted in the AI-answer sample.' : 'Visibility in this tool is unknown — not zero.', next: '—', cost: 'unknown', needs: [], unlocks: `Grounded answers from ${label.replace(/ \(.*\)$/, '')}`, ...extra });
   };
   aiRow('chatgpt', 'ChatGPT search', 'Grounded answers to buyer questions (OpenAI API with web search — not the ChatGPT app).', null, { next: 'None; answers without sources are excluded by rule.', cost: 'existing entitlement', capability: 'OpenAI Responses API with the web search tool.' });
-  aiRow('claude', 'Claude (web search)', 'Grounded answers to buyer questions (Anthropic API with web search — not the Claude app).', null, { next: 'Retry the 3 questions answered without a search.', cost: 'existing entitlement', capability: 'Anthropic Messages API with the web search tool.' });
-  const gem = check('Gemini', 'local');
-  aiRow('gemini', 'Gemini (Google Search grounding)', 'Grounded answers via Google Search grounding.', 'gemini', {
-    cause: 'The provider answered HTTP 429 “You exceeded your current quota, please check your plan and billing details” to every grounded request. Which quota (free-tier limit, grounding allowance or billing) is not named in the recorded message — cause unconfirmed.',
-    causeConfirmed: false,
-    attempt: `8 grounded requests, all HTTP 429 (report run). Free metadata check ${fmt(gem?.at)} (${gem?.environment ?? '—'}): ${gem?.detail ?? 'not run'}`,
-    next: 'Next diagnostic (no cost): the collector now records the quota metric in the error; read the project’s quota and billing page in Google AI Studio. Possible no-cost route, unverified: a Gemini 2.5 Flash model, whose free tier lists grounding (up to 500 requests/day); confirm billing is off before testing.',
-    cost: 'unknown', needs: ['human verification', 'deployment'], unlocks: `Grounded Gemini answers (${CATALOGUE.gemini.price})` });
+  const cl = ai('Claude (web search)');
+  const clMissed = cl ? cl.asked - cl.answered : 0;
+  aiRow('claude', 'Claude (web search)', 'Grounded answers to buyer questions (Anthropic API with web search — not the Claude app).', null, {
+    next: clMissed ? `None needed; ${clMissed} answer${clMissed === 1 ? ' was' : 's were'} given without a search or a checkable source and ${clMissed === 1 ? 'is' : 'are'} excluded by rule.` : 'None.',
+    cost: 'existing entitlement', capability: 'Anthropic Messages API with the web search tool.' });
+  const gem = check('Gemini');
+  const gemErr = firstError('Gemini (Google Search grounding)');
+  const gemAi = ai('Gemini (Google Search grounding)');
+  const gemFailed = (pack?.generative ?? []).filter((g) => g.surface === 'Gemini (Google Search grounding)' && g.status === 'failed_source').length;
+  aiRow('gemini', 'Gemini (Google Search grounding)', 'Grounded answers via Google Search grounding.', 'gemini', gemErr ? {
+    cause: `The provider answered HTTP ${gemErr.status ?? '—'} “${gemErr.msg.slice(0, 160)}” to ${gemFailed === gemAi?.asked ? 'every' : `${gemFailed} of ${gemAi?.asked ?? '?'}`} grounded request${gemFailed === 1 ? '' : 's'}.${gemErr.confirmed ? '' : ' The message does not name which quota (free-tier limit, grounding allowance or billing) — cause unconfirmed.'}`,
+    causeConfirmed: gemErr.confirmed,
+    attempt: `${gemAi?.asked ?? '?'} grounded requests, ${gemFailed} refused (HTTP ${gemErr.status ?? '—'}). Free metadata check ${fmt(gem?.at)}: ${gem?.detail ?? 'not run'}`,
+    next: 'The research step now defaults to Gemini 2.5 Flash, whose free tier lists Search grounding (up to 500 requests/day); the next run shows whether that clears it, and the error now keeps the quota Google names.',
+    cost: 'unknown', needs: ['deployment'], unlocks: `Grounded Gemini answers (${CATALOGUE.gemini.price})` } : { cost: 'unknown', unlocks: `Grounded Gemini answers (${CATALOGUE.gemini.price})` });
   for (const [key, label] of [['ai_mode', 'Google AI Mode'], ['copilot', 'Bing Copilot']] as const) {
+    const err = firstError(label);
+    const quota = err?.cls === 'quota_exhausted' || (!err && serpQuota);
     aiRow(key, label, `The ${label} answer for each buyer question, with its references.`, 'serpapi', {
-      cause: `SerpAPI answered “Invalid API key” to the key the deployed research step read. ${serpProd?.detail ?? ''}`.trim(), causeConfirmed: Boolean(serpProd),
-      next: 'Deploy the credential fix on this branch (research resolves the managed credential the report run uses); then the plan quota applies: 0 searches left this period, so it needs the monthly reset or a paid plan.',
-      cost: 'paid usage', needs: ['deployment', 'paid entitlement'], unlocks: `${label} answers (${CATALOGUE.serpapi.price})` });
+      next: quota ? 'Same SerpAPI plan as Google search: re-run after the monthly reset, or extend the plan.' : err?.cls === 'invalid_credential' ? 'Check the SerpAPI credential the report run resolves.' : 'Re-run the report.',
+      cost: 'paid usage', needs: quota ? ['paid entitlement'] : err?.cls === 'invalid_credential' ? ['credential'] : [], unlocks: `${label} answers (${CATALOGUE.serpapi.price})` });
   }
   aiRow('perplexity', 'Perplexity', 'Grounded Perplexity answers with citations.', 'perplexity', { integration: 'implemented', next: 'Add a Perplexity API key (API access is sold separately from the consumer subscription).', cost: 'paid usage', needs: ['credential', 'paid entitlement'], unlocks: `Perplexity answers (${CATALOGUE.perplexity.price})` });
   aiRow('meta', 'Meta AI', 'Grounded answers from Meta’s model with web search.', 'meta', { integration: 'absent', credential: 'absent', state: 'not_attempted',
@@ -158,7 +179,7 @@ export function buildDiagnostics(ledger: Ledger, pack: ResearchPack | null): Sou
   }
 
   // PageSpeed.
-  const psi = check('PageSpeed Insights', 'local');
+  const psi = check('PageSpeed Insights');
   rows.push({ key: 'pagespeed', source: 'Page speed (PageSpeed Insights)', family: 'Website', sought: 'Lab performance of the homepage (loading, layout shift, blocking time).',
     capability: CATALOGUE.pagespeed.capability, docUrl: CATALOGUE.pagespeed.docUrl, integration: 'implemented', credential: psi?.credential === 'present' ? 'present' : 'not needed', usable: psi?.outcome === 'ok',
     attempt: psi ? `${fmt(psi.at)} (${psi.environment}): ${psi.operation} → HTTP ${psi.httpStatus ?? '—'}. ${psi.detail}` : 'Not attempted (the report run has PageSpeed disabled).',
@@ -175,5 +196,31 @@ export function buildDiagnostics(ledger: Ledger, pack: ResearchPack | null): Sou
       state: disc && disc.checked < disc.found ? 'partial' : 'measured', cause: disc && disc.checked < disc.found ? `${disc.found - disc.checked} lower-evidence candidates were not checked.` : '—', causeConfirmed: true,
       impact: 'Classification is rule-based from each company’s own pages; it is not an analyst’s review.', next: 'Have an analyst review the direct and substitute classifications.', cost: 'free', needs: ['human verification'], unlocks: 'A reviewed competitor set' });
   }
-  return rows;
+  return rows.map((r) => (['measured', 'partial', 'searched_not_found'].includes(r.state) ? r : { ...r, plain: plainGap(r) }));
+}
+
+/**
+ * A gap in the reader's terms: the data or access that was missing at run time, and what provides it.
+ * Never a statement that the report cannot do something — a source that had no data says so.
+ */
+export function plainGap(d: SourceDiagnostic): NonNullable<SourceDiagnostic['plain']> {
+  const quota = d.state === 'quota_exhausted' || d.state === 'rate_limited' || d.state === 'billing_blocked';
+  if (d.key === 'search' || d.key === 'ai_mode' || d.key === 'copilot') {
+    if (quota) return { why: `The search-data allowance for this period was used up before this run, so ${d.key === 'search' ? 'no Google result pages' : `no ${d.source} answers`} could be fetched.`, unlock: 'Collected on a run after the allowance resets, or with an extended allowance.', by: 'next run', short: 'search allowance used up' };
+  }
+  if (d.key === 'gemini' && quota) return { why: 'Google declined the search-grounded requests with a usage-limit message.', unlock: 'Collected on the next run, which uses a Gemini model whose free tier includes search grounding.', by: 'next run', short: 'usage limit hit' };
+  if (d.key === 'perplexity' && d.state === 'not_configured') return { why: 'No Perplexity API access is connected to this report.', unlock: 'Connect Perplexity API access (paid usage).', by: 'report operator', short: 'not connected' };
+  if (d.key === 'meta') return { why: 'Meta’s search-grounded API is not connected to this report; the consumer app needs a signed-in account.', unlock: 'Connect Meta’s grounded API (paid usage).', by: 'report operator', short: 'not connected' };
+  if (d.key === 'family:inbound_links') return { why: 'Backlink data is released only to the verified owner of a website, and no owner-verified source is connected.', unlock: 'Verify the website in Ahrefs Webmaster Tools or Google Search Console (both free) and share access or an export of the links report.', by: 'company', short: 'needs site-owner access' };
+  if (d.key === 'family:registry') return { why: 'The registry search needs the registered company name or CIN, and the website does not state either.', unlock: 'Provide the CIN or exact registered name; the registry record (status, incorporation date) is then looked up.', by: 'company', short: 'needs CIN or registered name' };
+  if (d.key === 'pagespeed') {
+    return quota ? { why: 'Google’s speed-test service declined the request: its shared free allowance was used up at that moment.', unlock: 'Measured on a re-run; a dedicated free Google API key for the report removes the shared limit.', by: 'report operator', short: 'speed-test limit hit' }
+      : { why: 'The speed test was not run for this report.', unlock: 'Enable the free Google speed test for the report run.', by: 'report operator', short: 'not run' };
+  }
+  if (d.state === 'invalid_credential') return { why: `The access key for ${d.source} was refused.`, unlock: 'Replace the access key.', by: 'report operator', short: 'access key refused' };
+  const next = d.next && d.next !== '—' ? d.next : 'Checked on the next run of the report.';
+  if (d.state === 'not_configured') return { why: `No access to ${d.source} is connected to this report.`, unlock: next, by: 'report operator', short: 'not connected' };
+  // A source the run never reached says so; its method note (d.cause) is not a reason.
+  if (d.state === 'not_attempted') return { why: `${d.source} was not checked in this run.`, unlock: next, by: 'next run', short: 'not attempted' };
+  return { why: d.cause, unlock: next, by: quota ? 'next run' : 'report operator', short: quota ? 'usage limit hit' : DIAG_LABEL[d.state].toLowerCase() };
 }

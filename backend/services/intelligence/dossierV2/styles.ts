@@ -244,6 +244,12 @@ table { border-collapse: collapse; width: 100%; }
 .v2-path-step ul { margin: 0; padding-left: 3.5mm; }
 .v2-path-step em { font-style: normal; color: ${P.grey}; }
 .v2-sf { margin-top: 3.5mm; }
+.v2-twoway { display: grid; grid-template-columns: 1fr 1.35fr; gap: 2mm; }
+.v2-twoway > div { background: ${P.wash}; border-radius: 2mm; padding: 2mm 2.6mm; font-size: 7.4pt; line-height: 1.35; }
+.v2-twoway b { display: block; color: ${P.navy}; font-size: 7.8pt; margin-bottom: .6mm; }
+.v2-twoway ul { margin: 0; padding-left: 3.5mm; }
+.v2-tier td { background: ${P.wash}; color: ${P.navy}; font-size: 7.6pt; padding-top: 1.2mm; padding-bottom: 1.2mm; }
+.v2-tier { break-after: avoid; page-break-after: avoid; }
 .v2-sf .v2-panel h4 { font-size: 8.8pt; margin-bottom: 1.6mm; }
 .v2-mbar { display: grid; grid-template-columns: 28mm 1fr 6mm; align-items: center; gap: 1.5mm; font-size: 7.6pt; margin-bottom: .9mm; }
 .v2-mbar i { display: block; height: 3mm; border-radius: 1mm; }
@@ -284,9 +290,10 @@ table { border-collapse: collapse; width: 100%; }
 .v2-lane-time { display: flex; gap: 1mm; margin-top: 2mm; }
 .v2-lane-time span { flex: 1; text-align: center; font-size: 6.8pt; border: 1px solid ${P.line}; border-radius: 1mm; padding: .6mm 0; color: ${P.greyMid}; }
 .v2-lane-time span.on { background: ${P.navy}; border-color: ${P.navy}; color: #fff; font-weight: 700; }
-.v2-blocked { margin-top: 2.5mm; border: 1px dashed ${P.amber}; border-radius: 2mm; padding: 2.5mm 3.5mm; background: ${P.amberSoft}; }
-.v2-blocked h4 { font-size: 9pt; margin-bottom: 1.2mm; }
-.v2-blocked ul { margin: 0; padding-left: 4mm; font-size: 7.5pt; line-height: 1.4; columns: 2; column-gap: 6mm; }
+.v2-blocked { margin-top: 1.5mm; border: 1px dashed ${P.amber}; border-radius: 2mm; padding: 1.6mm 3.5mm; background: ${P.amberSoft}; }
+.v2-blocked h4 { font-size: 9pt; margin-bottom: .6mm; }
+.v2-blocked h4 small { font-weight: 400; color: ${P.grey}; font-size: 7.4pt; }
+.v2-blocked ul { margin: 0; padding-left: 4mm; font-size: 7.4pt; line-height: 1.3; columns: 2; column-gap: 6mm; }
 .v2-blocked li { break-inside: avoid; margin-bottom: .8mm; } .v2-blocked li span { color: ${P.grey}; }
 
 /* Footprint */

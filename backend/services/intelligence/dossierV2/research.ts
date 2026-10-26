@@ -50,6 +50,10 @@ export type ResearchRecord = {
   ownPosition?: number | null;
   depth?: number;
   topDomains?: string[];
+  /** The first results Google showed, in order (title and domain), for reading what took the place of the site. */
+  results?: Array<{ position: number; title: string; domain: string; url: string }>;
+  /** The knowledge panel Google showed for the query, and whether its website is the company's own. */
+  knowledgePanel?: { title: string; website: string | null; matchesSite: boolean } | null;
   engine?: string;
   geography?: string;
   language?: string;
@@ -248,6 +252,48 @@ export function isMarketingBasic(r: Pick<ResearchRecord, 'kind' | 'dimension'>):
 export function isBrandQuestion(r: Pick<ResearchRecord, 'intent' | 'query'>, brand: string): boolean {
   if (r.intent === 'branded') return true;
   return Boolean(brand) && String(r.query ?? '').toLowerCase().includes(brand.toLowerCase());
+}
+
+/**
+ * Visibility read both ways, from what the pack observed:
+ *   found      — searches and AI answers to buyer questions that do not name the company;
+ *   recognised — the company's own name (Google: is the site first, is there a panel for it, what else
+ *                ranks; AI tools: is the company described correctly) and the definitional question
+ *                (a precise description of the offering without the name: is the company the answer?).
+ * Each part is null when it was not observed — unknown, never zero.
+ */
+export type TwoWayVisibility = {
+  found: { searchChecked: number; searchFound: number; aiAnswers: number; aiNamed: number } | null;
+  recognised: {
+    nameSearch: { query: string; ownPosition: number | null; panel: ResearchRecord['knowledgePanel'] | null; others: string[]; date: string } | null;
+    nameSearchFailed: string | null;
+    aiByName: Array<{ surface: string; query: string; accuracy: 'correct' | 'partly' | 'misidentified' | null; note: string | null }>;
+    definitional: { query: string; answers: number; named: number; namedInstead: string[] } | null;
+  };
+};
+
+export function twoWayVisibility(pack: ResearchPack | null): TwoWayVisibility | null {
+  if (!pack) return null;
+  const brand = pack.subject.brand;
+  const ok = pack.search.filter((r) => r.status === 'observed');
+  const buyerSearch = ok.filter((r) => !isBrandQuestion(r, brand));
+  const ai = pack.generative.filter((r) => r.status === 'observed' && r.query && r.kind !== 'ai_overview');
+  const buyerAi = ai.filter((r) => !isBrandQuestion(r, brand));
+  const name = ok.find((r) => r.intent === 'branded');
+  const nameFailed = name ? null : pack.search.find((r) => r.intent === 'branded' && r.status !== 'observed');
+  const def = ai.filter((r) => r.intent === 'definitional');
+  const instead = new Map<string, number>();
+  for (const r of def) for (const b of r.brandsNamed ?? []) instead.set(b, (instead.get(b) ?? 0) + 1);
+  return {
+    found: buyerSearch.length || buyerAi.length ? { searchChecked: buyerSearch.length, searchFound: buyerSearch.filter((r) => r.ownPosition != null).length, aiAnswers: buyerAi.length, aiNamed: buyerAi.filter((r) => r.mentioned).length } : null,
+    recognised: {
+      nameSearch: name ? { query: String(name.query ?? brand), ownPosition: name.ownPosition ?? null, panel: name.knowledgePanel ?? null,
+        others: (name.results ?? []).filter((x) => x.position < (name.ownPosition ?? 99)).map((x) => x.domain).filter((d, i, a) => d && a.indexOf(d) === i).slice(0, 5), date: name.observedAt.slice(0, 10) } : null,
+      nameSearchFailed: nameFailed ? nameFailed.claim : null,
+      aiByName: ai.filter((r) => r.accuracy !== undefined && isBrandQuestion(r, brand)).map((r) => ({ surface: String(r.surface ?? r.kind), query: String(r.query), accuracy: r.accuracy ?? null, note: r.claim.split('(')[1]?.replace(/\).*$/, '') ?? null })),
+      definitional: def.length ? { query: String(def[0].query), answers: def.length, named: def.filter((r) => r.mentioned).length, namedInstead: [...instead.entries()].sort((a, b) => b[1] - a[1]).map(([b]) => b).slice(0, 5) } : null,
+    },
+  };
 }
 
 /** The three kinds of visibility, counted only from what the pack observed. */

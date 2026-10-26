@@ -2,7 +2,8 @@
  * Public research — collected while a report is generated, without a browser.
  *
  *   1. Site basics, read directly (robots.txt, llms.txt, sitemap, structured data, profile links).
- *   2. Eight questions: six a buyer would ask without knowing the brand, two about the brand.
+ *   2. Eight questions: five a buyer would ask without knowing the brand, one definitional (the offering
+ *      described precisely, without the name), two about the brand.
  *   3. The same eight questions to every AI search tool with a supported, web-grounded API, in
  *      parallel (ChatGPT search, Perplexity, Claude, Gemini, Google AI Mode, Bing Copilot; Meta AI
  *      is recorded as not measurable).
@@ -21,8 +22,9 @@ import { discoverAndProfile, type CompetitorProfile, type FieldKey } from './com
 import { checkOffering, type OfferingEvidence } from './offering';
 import { applyProfileEvidence, buildOfferingRegister, deriveMarket, proposeQueries } from './offeringRegister';
 import type { ProfileEvidence } from './profileEvidence';
-import { candidatesFromEvidence, CAPABILITIES, capabilityState, validateCandidates } from './competitorDiscovery';
+import { candidatesFromEvidence, CAPABILITIES, capabilityState, focusOf, validateCandidates } from './competitorDiscovery';
 import { runProviderChecks } from './providerChecks';
+import { searchGoogle, searchPlan } from './searchResults';
 
 /** Build the research input from the company context the report already resolved. */
 export function researchInputFromNarrative(c: {
@@ -288,11 +290,39 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
   const market = register ? deriveMarket(register) : null;
   const ownPages = (offering?.pages ?? []).filter((p) => p.read && p.text).map((p) => ({ url: p.url, text: p.text! }));
   const ownConfirmed = CAPABILITIES.filter((d) => capabilityState(d, ownPages).state === 'confirmed').map((d) => d.key);
-  const [candidates, providerChecks] = await Promise.all([
-    validateCandidates(candidatesFromEvidence({ subject: { domain: ownHost, brand: input.brand }, search: [], competitors: competitorRecords, generative },
-      (q) => isBrandQuestion({ query: q }, input.brand)).slice(0, Number(process.env.PUBLIC_RESEARCH_MAX_CANDIDATES ?? 15)), ownConfirmed).catch(() => null),
+  const proposed = register && market ? proposeQueries(register, market) : null;
+
+  // Google, both ways: the company's own name (is it recognised?) and buyer queries from the offering (is it found?).
+  const [observations, providerChecks] = await Promise.all([
+    searchGoogle(searchPlan(input.brand, proposed ?? []), ownHost).catch(() => []),
     runProviderChecks(input.domain).catch(() => null),
   ]);
+  const search: ResearchRecord[] = observations.map((o) => base({
+    id: id('SER'), kind: 'search', intent: o.intent, query: o.query, engine: 'google', geography: o.geography, observedAt: o.observedAt,
+    status: o.status, ownPosition: o.ownPosition, topDomains: o.results.map((r) => r.domain), results: o.results, knowledgePanel: o.knowledgePanel,
+    claim: o.status !== 'observed' ? `Google “${o.query}”: ${o.reason ?? 'no result'}`
+      : `Google “${o.query}”: ${o.ownPosition != null ? `${ownHost} at position ${o.ownPosition}` : `${ownHost} not in the first ${o.results.length} results`}${o.knowledgePanel ? `; knowledge panel “${o.knowledgePanel.title}”${o.knowledgePanel.matchesSite ? ' (links to the site)' : ' (not this company’s site)'}` : ''}`,
+    sourceUrl: `https://www.google.com/search?q=${encodeURIComponent(o.query)}`, method: 'SerpAPI Google engine, first page of organic results', scope: 'One query, one time',
+    ...(o.error ? { providerError: o.error } : {}),
+  }));
+  const ran = new Set(search.filter((r) => r.status === 'observed').map((r) => r.query));
+
+  // Candidates: analyst profiles, Google results for the buyer queries, and brands AI answers named; the
+  // best-evidenced are read on their own sites. Profile figures feed the size band; the buyer bands come
+  // from what the company's own register says it sells to.
+  const profileFacts: Record<string, { revenue?: string | null; employees?: string | null }> = {};
+  for (const b of benchmark.filter((r) => r.dimension === 'profile_revenue' || r.dimension === 'profile_employees')) {
+    for (const [d, v] of Object.entries(b.values ?? {})) {
+      if (v.status === 'looked_for_not_found') continue;
+      (profileFacts[d] ??= {})[b.dimension === 'profile_revenue' ? 'revenue' : 'employees'] = v.value;
+    }
+  }
+  const ownFocus = focusOf((register?.entries ?? []).filter((e) => e.field === 'buyer').map((e) => e.value).join('. ')).bands;
+  const weight = (c: { sources: Array<{ kind: string }> }) => c.sources.length + (c.sources.some((s) => s.kind === 'analyst_profile') ? 10 : 0);
+  const raw = candidatesFromEvidence({ subject: { domain: ownHost, brand: input.brand }, search, competitors: competitorRecords, generative }, (q) => isBrandQuestion({ query: q }, input.brand))
+    .sort((a, b) => weight(b) - weight(a));
+  const cap = Number(process.env.PUBLIC_RESEARCH_MAX_CANDIDATES ?? 16);
+  const candidates = await validateCandidates(raw.slice(0, cap), ownConfirmed, { ownFocus, profileFacts, concurrency: 6 }).catch(() => null);
 
   const surfacesRun = [...new Set(observed.map((a) => a.label))];
   return {
@@ -306,7 +336,7 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
       site: 'robots.txt, llms.txt, sitemap and homepage structured data fetched directly.',
       competitors: 'Declared competitors and the brands AI answers recommend, each profiled by an AI analyst with live web search. Every value carries its source URL and is re-opened and checked; values the page did not confirm are labelled. Revenue appears only when a public source states it.',
     },
-    company: [], search: [], generative, competitors: competitorRecords, independent: [], gaps, site: siteRecords, benchmark,
+    company: [], search, generative, competitors: competitorRecords, independent: [], gaps, site: siteRecords, benchmark,
     footprint: { checkedAt: new Date().toISOString(), profiles: profileChecks, mentions: mentionResult.mentions, socialPosts: mentionResult.socialPosts, platforms: mentionResult.platforms, mentionSearch: mentionResult.provider, mentionQueries: mentionResult.searches, profilesFound: mentionResult.profiles },
     runtime: { checkedAt: new Date().toISOString(), capabilities: [...aiCapabilities(answers), ...configCapabilities()] },
     offering, register, market, candidates, providerChecks,
@@ -314,6 +344,7 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     brandSource: input.brandSource ?? 'declared',
     // Competitor classes rest on the offering: without a website-verified product line and buyer they are provisional.
     candidatesProvisional: register ? register.provisional : true,
-    proposedQueries: register && market ? proposeQueries(register, market) : null,
+    proposedQueries: proposed ? proposed.map((p) => (ran.has(p.query) ? { ...p, status: 'run' as const } : p)) : null,
+    candidateDiscovery: candidates ? { found: raw.length, checked: Math.min(raw.length, cap) } : null,
   };
 }

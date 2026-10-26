@@ -40,15 +40,22 @@ export function errorEvidence(httpStatus: number | null, body: unknown): Provide
   const e = (b.error && typeof b.error === 'object' ? b.error : {}) as Record<string, any>;
   const codes = [e.status, e.code, e.type, typeof b.error === 'string' ? null : null].filter((x): x is string => typeof x === 'string' && x.length < 60);
   const violations = (Array.isArray(e.details) ? e.details : []).flatMap((d: any) => (Array.isArray(d?.violations) ? d.violations : []));
-  const quota = violations.map((v: any) => [v?.quotaMetric, v?.quotaId].filter(Boolean).join(' / ')).find(Boolean) ?? null;
-  const message = sanitize(String(typeof b.error === 'string' ? b.error : e.message ?? b.message ?? '')).slice(0, 200);
-  return { httpStatus, codes, quota, message };
+  const full = sanitize(String(typeof b.error === 'string' ? b.error : e.message ?? b.message ?? ''));
+  // Google often names the quota only inside the message ("Quota exceeded for metric: …, limit: 0, model: …").
+  const inMessage = /quota exceeded for metric:\s*([^\s,]+)[\s\S]*?limit:\s*(\d+)(?:[\s\S]*?model:\s*([\w.-]+))?/i.exec(full);
+  const quota = violations.map((v: any) => [v?.quotaMetric, v?.quotaId].filter(Boolean).join(' / ')).find(Boolean)
+    ?? (inMessage ? `${inMessage[1]} (limit ${inMessage[2]}${inMessage[3] ? `, model ${inMessage[3]}` : ''})` : null);
+  return { httpStatus, codes, quota, message: full.slice(0, 400) };
 }
 
 /** Classify from codes and message first; the status only narrows, it never decides alone. */
 export function classifyProviderError(ev: ProviderErrorEvidence): ClassifiedError {
   const text = `${ev.codes.join(' ')} ${ev.message} ${ev.quota ?? ''}`.toLowerCase();
   const said = (re: RegExp, cls: ErrorClass, basis: string): ClassifiedError | null => (re.test(text) ? { errorClass: cls, causeConfirmed: true, basis, nextDiagnostic: null } : null);
+  // A free-tier metric with limit 0: this model has no free allowance at all for the operation.
+  if (ev.quota && /free_?tier/i.test(ev.quota) && /\blimit 0\b/.test(ev.quota)) {
+    return { errorClass: 'quota_exhausted', causeConfirmed: true, basis: `The provider names a free-tier quota of 0 for this operation (${ev.quota}): the model has no free allowance for it.`, nextDiagnostic: null };
+  }
   const found =
     said(/invalid api key|invalid_api_key|incorrect api key|api key not valid|authentication_error|invalid x-api-key|unauthenticated/, 'invalid_credential', 'The provider says the key is not valid.')
     ?? said(/insufficient_quota|credit balance is too low|billing (is )?not (enabled|active)|payment required|billing_not_active/, 'billing_blocked', 'The provider says billing or credit is missing.')

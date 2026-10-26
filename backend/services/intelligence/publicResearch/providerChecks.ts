@@ -28,7 +28,10 @@ export type ProviderCheck = {
 };
 
 // A pulled .env file can carry VERCEL=1 locally; only a running Vercel function has AWS_LAMBDA_FUNCTION_NAME.
-const ENV = (): ProviderCheck['environment'] => (process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.VERCEL_ENV === 'production' ? 'production' : 'local');
+// Reports are also generated on the Railway worker, which Railway itself labels with its environment name.
+const ENV = (): ProviderCheck['environment'] =>
+  (process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.VERCEL_ENV === 'production') || /^production$/i.test(process.env.RAILWAY_ENVIRONMENT_NAME ?? process.env.RAILWAY_ENVIRONMENT ?? '')
+    ? 'production' : 'local';
 const firstEnv = (names: string[]) => names.find((n) => process.env[n]?.trim()) ?? null;
 
 async function call(url: string, headers: Record<string, string> = {}, timeoutMs = 20_000): Promise<{ status: number | null; body: any }> {
@@ -78,7 +81,7 @@ export async function runProviderChecks(domain: string, opts: { environment?: Pr
     (b) => `Key accepted; ${Array.isArray(b?.data) ? b.data.length : 'some'} models listed. Listing models does not test credit or search entitlement.`, 'GET /v1/models (free)'));
   checks.push(keyed('Anthropic', ['ANTHROPIC_API_KEY'], 'https://api.anthropic.com/v1/models', (k) => ({ 'x-api-key': k, 'anthropic-version': '2023-06-01' }),
     (b) => `Key accepted; ${Array.isArray(b?.data) ? b.data.length : 'some'} models listed. Listing models does not test credit or web-search entitlement.`, 'GET /v1/models (free)'));
-  const geminiModel = process.env.PUBLIC_RESEARCH_GEMINI_MODEL ?? 'gemini-flash-lite-latest';
+  const geminiModel = process.env.PUBLIC_RESEARCH_GEMINI_MODEL ?? 'gemini-2.5-flash';
   checks.push(keyed('Gemini', ['GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'], `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}`, (k) => ({ 'x-goog-api-key': k }),
     (b) => `Key accepted; model “${sanitize(String(b?.displayName ?? geminiModel))}” is visible. Model metadata does not test the Google Search grounding quota.`, `GET models/${geminiModel} (free metadata)`));
   checks.push(Promise.resolve({ provider: 'Perplexity', check: 'Credential', operation: '— (no free check endpoint used)', at: at(), environment,

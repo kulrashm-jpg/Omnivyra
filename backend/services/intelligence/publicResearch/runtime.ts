@@ -42,7 +42,7 @@ export function aiCapabilities(answers: SurfaceAnswer[]): Capability[] {
     const credential = sf.keys.length ? present(...sf.keys) || rs.some((a) => a.status !== 'not_measured') : null;
     const base = { id: `ai:${sf.id}`, label: sf.label, family: 'ai_answers' as const, adapter: !sf.unavailable, credential };
     if (sf.unavailable) {
-      return { ...base, attempted: false, reason: 'no_adapter', outcome: 'No grounded API exists; the consumer app requires a logged-in account.', nextStep: 'A licensed AI-visibility data provider, or a manual check recorded as evidence.' };
+      return { ...base, attempted: false, reason: 'no_adapter', outcome: sf.unavailable, nextStep: 'An adapter for the provider’s grounded API (paid usage), or a manual check recorded as evidence.' };
     }
     if (!rs.length) return { ...base, attempted: false, reason: 'not_searched', outcome: 'Not run in this report (excluded by configuration).', nextStep: 'Include it in the research run.' };
     if (rs.every((a) => a.status === 'not_measured')) {
@@ -52,9 +52,12 @@ export function aiCapabilities(answers: SurfaceAnswer[]): Capability[] {
     const quota = failures.some((a) => /\b429\b|quota|credit|billing|run out of searches/i.test(a.reason ?? ''));
     if (ok === rs.length) return { ...base, attempted: true, reason: 'measured', outcome: `${ok} of ${rs.length} questions answered from live web search.`, nextStep: null };
     if (ok > 0) return { ...base, attempted: true, reason: 'partial', outcome: `${ok} of ${rs.length} questions answered from live web search; ${failures.length} failed${quota ? ' (quota or billing limit)' : ''}.`, nextStep: quota ? 'Raise the plan or quota.' : 'Retry the failed questions.' };
+    // The provider's own words, so the outcome never claims more than the provider said.
+    const said = failures.find((a) => a.error?.message)?.error?.message ?? failures[0]?.reason ?? null;
     return { ...base, attempted: true, reason: quota ? 'quota_restricted' : 'request_failed',
-      outcome: quota ? 'Every request was refused for quota or billing reasons.' : `Every request failed: ${(failures[0]?.reason ?? 'no answer').slice(0, 120)}`,
-      nextStep: quota ? 'Enable billing or raise the quota for this provider.' : 'Check the provider status and retry.' };
+      outcome: `Every request was refused${said ? `; the provider said: “${said.slice(0, 140)}”` : ''}.`,
+      nextStep: /run out of searches/i.test(said ?? '') ? 'The plan’s searches for this period are used up: wait for the monthly reset, or extend the plan.'
+        : quota ? 'Read the provider’s quota page to see which limit applies, then raise it or use a model that has an allowance.' : 'Check the provider status and retry.' };
   });
 }
 

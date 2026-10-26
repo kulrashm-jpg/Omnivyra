@@ -318,7 +318,7 @@ describe('dossier v2 summary pages and public research', () => {
     expect(text).not.toMatch(/\bA-[a-z0-9-]{3,}|E-[A-Z]{3}-\d{2}|[A-Z]{3,}_[A-Z_]*KEY/);
   });
 
-  it('page 2 shows separate search, AI-answer and website indicators from one ledger, plus the discovery path', () => {
+  it('page 2 shows separate search, AI-answer and website indicators from one ledger, plus visibility both ways', () => {
     const now = summary(html, 'summary-now');
     expect(now).toMatch(/Search<\/div><div class="v2-ind-value">0<small> of 2<\/small>/);
     expect(now).toMatch(/AI answers<\/div><div class="v2-ind-value">0<small> of 1<\/small>/);
@@ -326,7 +326,10 @@ describe('dossier v2 summary pages and public research', () => {
     // Each indicator carries a definition and a confidence.
     expect(now.match(/class="v2-ind-def"/g)!.length).toBeGreaterThanOrEqual(4);
     expect(now.match(/class="v2-ind-conf"/g)!.length).toBeGreaterThanOrEqual(4);
-    expect(now).toContain('How a buyer looks — and what they find');
+    // With research, the found / recognised panel replaces the single discovery path (it covers the same route).
+    expect(now).toContain('Found, and recognised: visibility both ways');
+    expect(now).toContain('Found — by buyers who do not know the name');
+    expect(now).not.toContain('How a buyer looks — and what they find');
     expect(now).toContain('v2-headline');
   });
 
