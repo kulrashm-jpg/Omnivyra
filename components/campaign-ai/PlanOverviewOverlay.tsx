@@ -1,4 +1,5 @@
 import React from 'react';
+import ChatVoiceButton from '../ChatVoiceButton';
 import { Loader2, Sparkles, X } from 'lucide-react';
 import { formatPlanMarkersForDisplay } from './FormattedAIMessage';
 import {
@@ -321,6 +322,11 @@ export function PlanOverviewOverlay({
                   placeholder={replaceMode ? `Type the edited text and press Enter (Week ${replaceSelection?.week ?? reviewWeekNumber}).` : 'e.g. Week 1 Facebook topic: Professional neglecting personal lives. Week 3 LinkedIn: 2 posts, 1 article.'}
                   className="flex-1 px-3 py-2 border rounded-lg text-sm"
                   disabled={isBusy}
+                />
+                <ChatVoiceButton
+                  onTranscription={(t) => onSetNewMessage(newMessage.trim() ? `${newMessage.trim()} ${t}` : t)}
+                  disabled={isBusy}
+                  title="Speak your message"
                 />
                 <button
                   onClick={onSubmitInput}

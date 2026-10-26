@@ -119,9 +119,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   } catch (error: any) {
     console.error('Voice transcription error:', error);
-    res.status(500).json({ 
-      error: 'Transcription failed',
-      details: error.message 
+    res.status(500).json({
+      error: 'Transcription failed — please try again.',
+      details: error.message
     });
   }
 }
@@ -442,6 +442,16 @@ async function generateDailySuggestions(text: string, keywords: string[]): Promi
   
   return suggestions;
 }
+
+// The recording arrives as a base64 data: URL in JSON. Next's default 1 MB body limit
+// rejected anything past ~30-60 s of speech with a bare 413, shown to users as
+// "Transcription failed" (prod logs 2026-10-26). 4 MB stays under Vercel's 4.5 MB
+// request cap; the mic records at a speech bitrate and stops at 5 minutes, which fits.
+export const config = {
+  api: {
+    bodyParser: { sizeLimit: '4mb' },
+  },
+};
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
 export default __createApiRoute(handler, { route: '/api/voice/transcribe' });

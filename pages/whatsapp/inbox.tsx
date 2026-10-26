@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import ChatVoiceButton from '../../components/ChatVoiceButton';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useCompanyContext } from '@/components/CompanyContext';
@@ -326,6 +327,11 @@ export default function WhatsAppInboxPage() {
                         }}
                         placeholder="Type a reply... (Enter to send, Shift+Enter for new line)"
                         className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                      <ChatVoiceButton
+                        onTranscription={(t) => { setReplyText((prev) => (prev.trim() ? `${prev.trim()} ${t}` : t)); setReplyError(null); setReplySuccess(false); }}
+                        disabled={replying}
+                        title="Speak your reply"
                       />
                       <button
                         onClick={sendReply}

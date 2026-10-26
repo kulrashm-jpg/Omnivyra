@@ -3,6 +3,7 @@
  * Displays thread: User name, Message, Time. Allows replies.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import ChatVoiceButton from '../ChatVoiceButton';
 import { Send } from 'lucide-react';
 
 type Message = {
@@ -153,6 +154,11 @@ export default function ActivityDiscussionTab({
           placeholder="Write message..."
           className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
           disabled={sending}
+        />
+        <ChatVoiceButton
+          onTranscription={(t) => setInput((prev) => (prev.trim() ? `${prev.trim()} ${t}` : t))}
+          disabled={sending}
+          title="Speak your message"
         />
         <button
           type="button"

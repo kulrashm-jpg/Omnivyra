@@ -5,6 +5,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import ChatVoiceButton from '../ChatVoiceButton';
 import { X, Send } from 'lucide-react';
 import ContentRenderer from '../ContentRenderer';
 
@@ -239,6 +240,11 @@ export default function FloatingChatPanel({
           placeholder={inputPlaceholder}
           className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
           disabled={sending}
+        />
+        <ChatVoiceButton
+          onTranscription={(t) => setInput((prev) => (prev.trim() ? `${prev.trim()} ${t}` : t))}
+          disabled={sending}
+          title="Speak your message"
         />
         <button
           type="button"

@@ -5,6 +5,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
+import ChatVoiceButton from '../components/ChatVoiceButton';
 import Head from 'next/head';
 import { useCompanyContext } from '@/components/CompanyContext';
 import PlatformIcon from '@/components/ui/PlatformIcon';
@@ -811,6 +812,18 @@ export default function EngagementInboxPage() {
                       placeholder="Type your reply..."
                       className="w-full rounded border border-gray-300 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
+                    <div className="flex justify-end">
+                      <ChatVoiceButton
+                        onTranscription={(t) => {
+                          setReplyText((prev) => (prev.trim() ? `${prev.trim()} ${t}` : t));
+                          setReplyError(null);
+                          setReplySuccess(false);
+                          setSuggestionUsed(false);
+                        }}
+                        disabled={replying}
+                        title="Speak your reply"
+                      />
+                    </div>
                     {replyError && (
                       <p className="text-xs text-red-600">{replyError}</p>
                     )}
