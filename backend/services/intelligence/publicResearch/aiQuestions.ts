@@ -1,10 +1,12 @@
 /**
  * Public research — the questions put to AI search tools, and the reading of their answers.
  *
- * Questions: six a buyer would ask WITHOUT knowing the brand, written by a model from the company's
- * own site and profile (the brand name is rejected if it appears), plus two fixed brand-name
- * questions. If the model is unavailable, plain templates on the declared category are used and the
- * method says so.
+ * Questions: five a buyer would ask WITHOUT knowing the brand, and one "definitional" question — a
+ * description so close to what this company sells that the company itself is the expected answer —
+ * written by a model from the company's own site and profile (the brand name is rejected if it
+ * appears), plus two fixed brand-name questions. Visibility is read both ways: found for the category,
+ * and recognised as itself. If the model is unavailable, plain templates on the declared category are
+ * used and the method says so.
  *
  * Reading: which brands each answer names (kept only when the name appears verbatim in the answer)
  * and, for brand-name questions, whether the answer describes this company or something else. The
@@ -13,7 +15,7 @@
  */
 import { jsonCompletion } from './llm';
 
-export type BuyerQuestion = { intent: 'category' | 'problem' | 'commercial' | 'use_case' | 'comparison' | 'branded'; query: string };
+export type BuyerQuestion = { intent: 'category' | 'problem' | 'commercial' | 'use_case' | 'comparison' | 'definitional' | 'branded'; query: string };
 
 export type CompanyBrief = {
   brand: string;
@@ -31,7 +33,13 @@ async function modelJson(step: string, prompt: string, timeoutMs: number, maxTok
   return (await jsonCompletion(step, prompt, { timeoutMs, maxTokens }))?.json ?? null;
 }
 
-const INTENTS = new Set(['category', 'problem', 'commercial', 'use_case', 'comparison']);
+const INTENTS = new Set(['category', 'problem', 'commercial', 'use_case', 'comparison', 'definitional']);
+
+/** The fallback definitional question: the declared offering and buyer, described without the name. */
+export function definitionalTemplate(c: CompanyBrief): BuyerQuestion {
+  const what = (c.offering ?? c.category ?? 'marketing software').replace(/[.]+$/, '').toLowerCase();
+  return { intent: 'definitional', query: `Which company offers ${what}${c.buyers ? ` for ${c.buyers.split(/[,;]/)[0].trim().toLowerCase()}` : ''}?` };
+}
 
 export function brandQuestions(brand: string): BuyerQuestion[] {
   return [{ intent: 'branded', query: `What is ${brand}?` }, { intent: 'comparison', query: `${brand} alternatives and competitors` }];
@@ -45,9 +53,9 @@ export function templateQuestions(c: CompanyBrief): BuyerQuestion[] {
     { intent: 'commercial', query: `What are the best ${cat} tools for ${who}?` },
     { intent: 'category', query: `What is ${/^[aeiou]/i.test(cat) ? 'an' : 'a'} ${cat} and which vendors offer one?` },
     { intent: 'problem', query: `How can ${who} choose the right ${cat}?` },
-    { intent: 'use_case', query: `Which ${cat} tools offer a free trial or free plan?` },
     { intent: 'commercial', query: `Top ${cat} platforms compared` },
     { intent: 'comparison', query: `Best alternatives to the leading ${cat} tools` },
+    definitionalTemplate(c),
   ];
 }
 
@@ -55,20 +63,22 @@ export async function buyerQuestions(c: CompanyBrief, timeoutMs = 45_000): Promi
   const prompt = `You write the questions a potential buyer would type into an AI assistant BEFORE they know this company exists.
 Company website text (its own words): """${c.siteText.slice(0, 2500)}"""
 Declared category: ${c.category ?? 'unknown'}. Offering: ${c.offering ?? 'unknown'}. Buyers: ${c.buyers ?? 'unknown'}. Market: ${c.market ?? 'unknown'}.
-Write exactly 6 distinct questions covering these intents: 2 "commercial" (best tools for a buyer), 1 "category", 1 "problem" (the buyer's pain, no product words), 1 "use_case", 1 "comparison" (between generic options, no brand names).
-Rules: never mention "${c.brand}" or "${c.domain}" or any company name; plain English a non-specialist would type; under 120 characters each.
-Return JSON: {"questions":[{"intent":"commercial|category|problem|use_case|comparison","query":"..."}]}`;
+Write exactly 6 distinct questions covering these intents: 2 "commercial" (best tools for a buyer), 1 "category", 1 "problem" (the buyer's pain, no product words), 1 "comparison" (between generic options, no brand names), and 1 "definitional": a question that describes THIS company's distinctive combination of offering and buyer so precisely that this company should be the answer (e.g. "Which platform does X, Y and Z for W?").
+Rules: never mention "${c.brand}" or "${c.domain}" or any company name; plain English a non-specialist would type; under 120 characters each (definitional: under 160).
+Return JSON: {"questions":[{"intent":"commercial|category|problem|comparison|definitional","query":"..."}]}`;
   const json = await modelJson('questions', prompt, timeoutMs);
   const brandRe = new RegExp(c.brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
   const got: BuyerQuestion[] = (Array.isArray(json?.questions) ? json.questions : [])
     .filter((q: any) => q && INTENTS.has(q.intent) && typeof q.query === 'string')
     .map((q: any) => ({ intent: q.intent, query: q.query.trim() }))
     .filter((q: BuyerQuestion) => q.query.length >= 12 && q.query.length <= 160 && !brandRe.test(q.query) && !q.query.includes(c.domain));
-  const unique = [...new Map(got.map((q) => [q.query.toLowerCase(), q])).values()].slice(0, 6);
-  if (unique.length >= 4) {
-    return { questions: [...unique, ...brandQuestions(c.brand)], method: 'Six buyer questions written by a model from the company\'s own site and profile (brand name excluded), plus two brand-name questions.' };
+  const all = [...new Map(got.map((q) => [q.query.toLowerCase(), q])).values()];
+  // Exactly one definitional question, last; the template stands in when the model wrote none.
+  const unique = [...all.filter((q) => q.intent !== 'definitional').slice(0, 5), all.find((q) => q.intent === 'definitional') ?? definitionalTemplate(c)];
+  if (unique.length >= 5) {
+    return { questions: [...unique, ...brandQuestions(c.brand)], method: 'Five buyer questions and one definitional question (a precise description of the offering, without the name) written by a model from the company\'s own site and profile, plus two brand-name questions.' };
   }
-  return { questions: [...templateQuestions(c), ...brandQuestions(c.brand)], method: 'Template buyer questions on the declared category (the question-writing model was unavailable), plus two brand-name questions.' };
+  return { questions: [...templateQuestions(c), ...brandQuestions(c.brand)], method: 'Template buyer questions and a definitional question on the declared category and offering (the question-writing model was unavailable), plus two brand-name questions.' };
 }
 
 export type AnswerReading = { brands: string[]; accuracy: 'correct' | 'partly' | 'misidentified' | null; note: string | null };

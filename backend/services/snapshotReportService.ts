@@ -532,13 +532,15 @@ export async function composeSnapshotReportFromDecisions(params: {
       ? {
         state: performanceEvidence.state,
         reasonUnavailable: performanceEvidence.reasonUnavailable,
+        // Why nothing was measured, in PageSpeed terms (disabled, not_configured, invalid_key, api_disabled, quota_exhausted, timeout…).
+        issue: performanceEvidence.issue ?? null,
         coverage: performanceEvidence.coverage,
         byFormFactor: performanceEvidence.byFormFactor,
         observations: performanceEvidence.observations.map((o) => ({
           url: o.url, formFactor: o.formFactor,
           providerPerformanceScore: o.providerPerformanceScore,
           overallCategory: o.overallCategory, observedAt: o.observedAt,
-          provider: o.provider, state: o.state, reasonUnavailable: o.reasonUnavailable,
+          provider: o.provider, state: o.state, reasonUnavailable: o.reasonUnavailable, issue: o.issue ?? null,
           metrics: o.metrics,
         })),
       }

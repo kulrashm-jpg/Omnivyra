@@ -121,3 +121,67 @@ describe('competitor discovery: offering first, then identity, then comparison',
     expect(v.issues.filter((i) => i.blocking).map((i) => i.rule)).toContain('unsupported');
   });
 });
+
+describe('scoring-run AI state comes from what was attempted, never from a default zero', () => {
+  // One citation cell per question group, written by the scoring run exactly as the adapters do.
+  const cell = (state: string, reason: string | null) => ({ provider: 'gemini', query_class: 'x', state, reason_unavailable: reason });
+  const NO_QUERIES = 'No queries derived for competitive.';
+  const NOT_CONFIGURED = 'GEMINI_API_KEY not configured.';
+  const FAILED = 'invalid_request:gemini';
+  const run = (cells: Array<Record<string, unknown>>) => {
+    const pl = { ...payload(), ai_surface_presence: { citation_matrix: { coverage: {}, cells } } };
+    const ledger = buildLedger(pl, null);
+    const row = ledger.ai.find((a) => a.label === 'Gemini (Google Search grounding)')!;
+    const access = ledger.access.find((a) => a.capability === 'Gemini (Google Search grounding)')!;
+    const diag = buildDiagnostics(ledger, null).find((d) => d.key === 'gemini')!;
+    const blocking = validateReport(ledger, buildDossierRegistry(pl, null), `<html><body>${DAY}</body></html>`, [], null).issues.filter((i) => i.blocking).map((i) => i.rule);
+    return { row, access, diag, blocking };
+  };
+
+  it('no question submitted: "not attempted", never "0 of 4 answered"', () => {
+    const r = run([cell('unavailable', NO_QUERIES), cell('unavailable', NO_QUERIES), cell('unavailable', 'circuit_open:gemini (cool-down 30s remaining)'), cell('unavailable', NO_QUERIES)]);
+    expect(r.row).toMatchObject({ reason: 'not_searched', state: 'not_tested', asked: 0, answered: 0 });
+    expect(r.access.attempted).toBe(false);
+    expect(r.access.outcome).toMatch(/^Not asked in this run: no question was submitted/);
+    expect(r.access.outcome).not.toMatch(/\b0 of \d+/);
+    expect(r.diag.state).toBe('not_attempted');
+    expect(r.blocking).not.toContain('failed-as-zero');
+  });
+
+  it('not configured: "not configured", with nothing counted as asked', () => {
+    const r = run([cell('unavailable', NOT_CONFIGURED), cell('unavailable', NOT_CONFIGURED), cell('unavailable', NOT_CONFIGURED), cell('unavailable', NOT_CONFIGURED)]);
+    expect(r.row).toMatchObject({ reason: 'missing_credential', asked: 0 });
+    expect(r.diag.state).toBe('not_configured');
+    expect(r.blocking).not.toContain('failed-as-zero');
+  });
+
+  it('four groups asked, none answered: the actual failed state, with the recorded failure class', () => {
+    const r = run([cell('unavailable', FAILED), cell('unavailable', FAILED), cell('unavailable', 'timeout:gemini'), cell('unavailable', FAILED)]);
+    expect(r.row).toMatchObject({ reason: 'request_failed', state: 'source_failed', asked: 4, answered: 0 });
+    expect(r.access.attempted).toBe(true);
+    expect(r.access.outcome).toBe('Asked 4 question groups; none produced a usable answer; 4 failed (invalid_request:gemini; timeout:gemini).');
+    expect(r.diag).toMatchObject({ state: 'request_failed', causeConfirmed: false });
+    expect(r.blocking).not.toContain('failed-as-zero');
+  });
+
+  it('three asked and failed, one not asked: the unasked group is not counted as a failure', () => {
+    const r = run([cell('unavailable', FAILED), cell('unavailable', FAILED), cell('unavailable', NO_QUERIES), cell('unavailable', FAILED)]);
+    expect(r.row).toMatchObject({ asked: 3, answered: 0 });
+    expect(r.access.outcome).toBe(`Asked 3 question groups; none produced a usable answer; 3 failed (${FAILED}); 1 question group not asked (${NO_QUERIES}).`);
+  });
+
+  it('partially answered: accurate counts and a partial state', () => {
+    const r = run([cell('measured', null), cell('unavailable', FAILED), cell('measured', null), cell('unavailable', NO_QUERIES)]);
+    expect(r.row).toMatchObject({ reason: 'partial', state: 'measured_grounded', asked: 3, answered: 2 });
+    expect(r.access.outcome).toBe(`2 of 3 question groups asked answered from live web search; 1 failed (${FAILED}); 1 question group not asked (${NO_QUERIES}).`);
+    expect(r.diag.state).toBe('partial');
+  });
+
+  it('fully answered: the normal success state', () => {
+    const r = run([cell('measured', null), cell('measured', null), cell('measured', null), cell('measured', null)]);
+    expect(r.row).toMatchObject({ reason: 'measured', state: 'measured_grounded', asked: 4, answered: 4 });
+    expect(r.access.outcome).toBe('4 of 4 question groups asked answered from live web search.');
+    expect(r.diag.state).toBe('measured');
+    expect(r.blocking).toEqual([]);
+  });
+});

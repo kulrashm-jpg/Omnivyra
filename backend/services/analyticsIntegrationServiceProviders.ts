@@ -414,6 +414,18 @@ export async function syncAnalyticsProperties(
     }
   }
 
+  // `properties` is the list Google just returned for THIS integration's current token (every caller
+  // fetches it with that token and throws on a failed fetch). A stored property missing from it is
+  // one the token can no longer read — e.g. after reconnecting with another Google account — so it
+  // must stop being selectable (select-property only accepts rows of this integration).
+  const keep = properties.map((property) => property.propertyId);
+  let prune = ownedDbTable('analytics_properties').delete().eq('integration_id', integrationId);
+  if (keep.length > 0) prune = prune.not('property_id', 'in', `(${keep.map((id) => `"${String(id).replace(/"/g, '')}"`).join(',')})`);
+  const { error: pruneError } = await prune;
+  if (pruneError) {
+    throw new Error(`Failed to prune stale analytics properties: ${pruneError.message}`);
+  }
+
   const { data, error } = await ownedDbTable('analytics_properties')
     .select('*')
     .eq('integration_id', integrationId)

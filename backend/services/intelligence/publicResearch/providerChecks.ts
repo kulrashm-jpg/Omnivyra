@@ -3,7 +3,7 @@
  *
  * Only endpoints that cost nothing are called: SerpAPI's account endpoint (documented as not counted
  * toward the quota), the model-list / model-metadata endpoints of OpenAI, Anthropic and Gemini, and a
- * keyless PageSpeed Insights run (the v5 API documents use without a key). Nothing generates text,
+ * PageSpeed Insights run through the shared client (no paid usage; keyless allowed). Nothing generates text,
  * searches or grounds an answer here.
  *
  * Credential values are never recorded: only whether one resolved, from where (managed account or
@@ -11,6 +11,13 @@
  * ("production" or "local"), because a workstation's credentials can differ from production's.
  */
 import { errorEvidence, classifyProviderError, sanitize, type ErrorClass } from './providerErrors';
+import { pageSpeedFailure, pageSpeedSuccess, runPageSpeed, type PageSpeedIssue } from '../../pageSpeedClient';
+
+/** A PageSpeed client issue in this module's outcome vocabulary. */
+const PSI_OUTCOME: Record<PageSpeedIssue, ProviderCheck['outcome']> = {
+  disabled: 'disabled', not_configured: 'not_configured', invalid_key: 'invalid_credential', api_disabled: 'permission_denied',
+  quota_exhausted: 'quota_exhausted', timeout: 'request_failed', provider_failure: 'provider_unavailable', malformed_response: 'request_failed',
+};
 
 export type ProviderCheck = {
   provider: string;
@@ -22,13 +29,17 @@ export type ProviderCheck = {
   credential: 'present' | 'absent' | 'not_needed';
   credentialSource: string | null;
   httpStatus: number | null;
-  outcome: 'ok' | ErrorClass | 'not_checked';
+  /** `not_configured` / `disabled`: no request was made (no credential; switched off in Super Admin). */
+  outcome: 'ok' | ErrorClass | 'not_checked' | 'not_configured' | 'disabled';
   causeConfirmed: boolean;
   detail: string;
 };
 
 // A pulled .env file can carry VERCEL=1 locally; only a running Vercel function has AWS_LAMBDA_FUNCTION_NAME.
-const ENV = (): ProviderCheck['environment'] => (process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.VERCEL_ENV === 'production' ? 'production' : 'local');
+// Reports are also generated on the Railway worker, which Railway itself labels with its environment name.
+const ENV = (): ProviderCheck['environment'] =>
+  (process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.VERCEL_ENV === 'production') || /^production$/i.test(process.env.RAILWAY_ENVIRONMENT_NAME ?? process.env.RAILWAY_ENVIRONMENT ?? '')
+    ? 'production' : 'local';
 const firstEnv = (names: string[]) => names.find((n) => process.env[n]?.trim()) ?? null;
 
 async function call(url: string, headers: Record<string, string> = {}, timeoutMs = 20_000): Promise<{ status: number | null; body: any }> {
@@ -78,24 +89,31 @@ export async function runProviderChecks(domain: string, opts: { environment?: Pr
     (b) => `Key accepted; ${Array.isArray(b?.data) ? b.data.length : 'some'} models listed. Listing models does not test credit or search entitlement.`, 'GET /v1/models (free)'));
   checks.push(keyed('Anthropic', ['ANTHROPIC_API_KEY'], 'https://api.anthropic.com/v1/models', (k) => ({ 'x-api-key': k, 'anthropic-version': '2023-06-01' }),
     (b) => `Key accepted; ${Array.isArray(b?.data) ? b.data.length : 'some'} models listed. Listing models does not test credit or web-search entitlement.`, 'GET /v1/models (free)'));
-  const geminiModel = process.env.PUBLIC_RESEARCH_GEMINI_MODEL ?? 'gemini-flash-lite-latest';
+  const geminiModel = process.env.PUBLIC_RESEARCH_GEMINI_MODEL ?? 'gemini-2.5-flash';
   checks.push(keyed('Gemini', ['GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'], `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}`, (k) => ({ 'x-goog-api-key': k }),
     (b) => `Key accepted; model “${sanitize(String(b?.displayName ?? geminiModel))}” is visible. Model metadata does not test the Google Search grounding quota.`, `GET models/${geminiModel} (free metadata)`));
   checks.push(Promise.resolve({ provider: 'Perplexity', check: 'Credential', operation: '— (no free check endpoint used)', at: at(), environment,
     credential: (firstEnv(['PERPLEXITY_API_KEY']) ? 'present' : 'absent') as ProviderCheck['credential'], credentialSource: firstEnv(['PERPLEXITY_API_KEY']) ? 'environment variable PERPLEXITY_API_KEY' : null,
     httpStatus: null, outcome: 'not_checked' as const, causeConfirmed: true, detail: firstEnv(['PERPLEXITY_API_KEY']) ? 'A key is present but was not tested (no free endpoint is called).' : 'No credential is configured.' }));
 
-  // PageSpeed Insights: the documented keyless route, one mobile run of the homepage.
+  // PageSpeed Insights: one mobile run of the company's own homepage, through the shared client (the
+  // application-level Super Admin key, else PAGESPEED_API_KEY, else the documented keyless route;
+  // nothing when disabled in Super Admin). A fresh result the report run already fetched is reused.
   checks.push((async () => {
     const target = `https://${domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/`;
-    const key = firstEnv(['PAGESPEED_API_KEY']);
-    const r = await call(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(target)}&strategy=mobile&category=performance${key ? `&key=${encodeURIComponent(process.env[key]!.trim())}` : ''}`, {}, 90_000);
-    const lh = r.body?.lighthouseResult;
+    const r = await runPageSpeed({ url: target, strategy: 'mobile', category: 'performance', timeoutMs: 90_000, allowKeyless: true });
+    const how = r.source === 'managed' ? 'Super Admin key' : r.source === 'environment' ? 'environment key' : r.source === 'keyless' ? 'keyless' : r.source;
+    const base = { provider: 'PageSpeed Insights', check: 'Homepage, mobile', operation: `GET pagespeedonline/v5/runPagespeed (${how})`, at: at(), environment,
+      credential: (r.source === 'managed' || r.source === 'environment' ? 'present' : r.source === 'keyless' ? 'not_needed' : 'absent') as ProviderCheck['credential'],
+      credentialSource: r.source === 'managed' ? 'Super Admin (Google PageSpeed Insights)' : r.source === 'environment' ? 'environment variable PAGESPEED_API_KEY' : null };
+    const fail = pageSpeedFailure(r);
+    if (fail) return { ...base, httpStatus: fail.httpStatus, outcome: PSI_OUTCOME[fail.issue], causeConfirmed: fail.issue !== 'provider_failure', detail: fail.detail };
+    const ok = pageSpeedSuccess(r)!;
+    const lh = (ok.body as any)?.lighthouseResult;
     const score = typeof lh?.categories?.performance?.score === 'number' ? Math.round(lh.categories.performance.score * 100) : null;
     const audit = (id: string) => sanitize(String(lh?.audits?.[id]?.displayValue ?? '—'));
-    return { provider: 'PageSpeed Insights', check: 'Homepage, mobile', operation: `GET pagespeedonline/v5/runPagespeed (${key ? 'with key' : 'keyless'})`, at: at(), environment,
-      credential: key ? 'present' as const : 'not_needed' as const, credentialSource: key ? `environment variable ${key}` : null,
-      ...judged(r.status, r.body, score == null ? 'Answered without a performance score.' : `Performance ${score}/100; LCP ${audit('largest-contentful-paint')}; CLS ${audit('cumulative-layout-shift')}; TBT ${audit('total-blocking-time')} (lab data, one run).`) };
+    return { ...base, httpStatus: 200, outcome: 'ok' as const, causeConfirmed: true,
+      detail: `${score == null ? 'Answered without a performance score.' : `Performance ${score}/100; LCP ${audit('largest-contentful-paint')}; CLS ${audit('cumulative-layout-shift')}; TBT ${audit('total-blocking-time')} (lab data, one run).`}${ok.fromCache ? ` Result fetched ${ok.fetchedAt.slice(0, 16).replace('T', ' ')} UTC and reused from cache.` : ''}` };
   })());
 
   return Promise.all(checks);

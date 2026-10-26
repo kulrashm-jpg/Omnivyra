@@ -145,11 +145,25 @@ const profileSource = (e: RegisterEntry) => (e.provenance ? `Company profile · 
 export function deriveMarket(reg: OfferingRegister): MarketView {
   const items: MarketItem[] = [];
   const verified = reg.entries.filter((e) => e.status === 'official_website_verified');
+  const offerFields = (e: RegisterEntry) => ['product_line', 'value_proposition', 'free_offer'].includes(e.field);
   for (const [re, label] of CATEGORIES) {
-    const src = verified.find((e) => ['product_line', 'value_proposition', 'free_offer'].includes(e.field) && re.test(`${e.value} ${e.excerpt ?? ''}`));
-    if (src) items.push({ kind: 'category', value: label, basis: 'verified', evidence: `“${src.value}” — ${src.url}` });
+    // The evidence quoted is the words that match: an entry's own name first, else the passage of its excerpt.
+    const byValue = verified.find((e) => offerFields(e) && re.test(e.value));
+    const byExcerpt = byValue ? null : verified.find((e) => offerFields(e) && re.test(e.excerpt ?? ''));
+    if (byValue) items.push({ kind: 'category', value: label, basis: 'verified', evidence: `“${byValue.value}” — ${byValue.url}` });
+    else if (byExcerpt) {
+      const ex = byExcerpt.excerpt ?? '';
+      const at = ex.search(re);
+      items.push({ kind: 'category', value: label, basis: 'verified', evidence: `“${ex.slice(Math.max(0, at - 40), at + 60).trim()}” — ${byExcerpt.url}` });
+    }
   }
-  for (const e of verified.filter((x) => x.field === 'buyer')) items.push({ kind: 'segment', value: e.value, basis: 'verified', evidence: `“${e.excerpt}” — ${e.url}` });
+  const seenSeg = new Set<string>();
+  for (const e of verified.filter((x) => x.field === 'buyer')) {
+    const k = e.value.toLowerCase().replace(/[^a-z]+/g, ' ').replace(/s\b/g, '').trim();
+    if (seenSeg.has(k)) continue;
+    seenSeg.add(k);
+    items.push({ kind: 'segment', value: e.value, basis: 'verified', evidence: `“${e.excerpt}” — ${e.url}` });
+  }
   for (const e of verified.filter((x) => x.field === 'customer_problem')) items.push({ kind: 'problem', value: e.value, basis: 'verified', evidence: e.url ?? '' });
   const assumptions: string[] = [];
   for (const e of reg.entries.filter((x) => x.status === 'company_declared' && (x.field === 'geography' || x.field === 'buyer' || x.field === 'industry'))) {
@@ -168,12 +182,18 @@ export function deriveMarket(reg: OfferingRegister): MarketView {
 export function proposeQueries(reg: OfferingRegister, market: MarketView): Array<{ query: string; basis: string; status: 'proposed' }> {
   const out: Array<{ query: string; basis: string; status: 'proposed' }> = [];
   const add = (query: string, basis: string) => { if (!out.some((q) => q.query.toLowerCase() === query.toLowerCase())) out.push({ query, basis, status: 'proposed' }); };
-  const segments = market.items.filter((i) => i.kind === 'segment' && i.basis === 'verified').map((i) => i.value.toLowerCase());
+  // The broadest buyer the site names leads (how a buyer describes themself in a search), then the rest in site order.
+  const segments = market.items.filter((i) => i.kind === 'segment' && i.basis === 'verified').map((i) => i.value.toLowerCase())
+    .sort((a, b) => Number(/small (and medium )?business|smb|startup/.test(b)) - Number(/small (and medium )?business|smb|startup/.test(a)));
   for (const c of market.items.filter((i) => i.kind === 'category' && i.basis === 'verified')) {
     add(`${c.value.toLowerCase().replace(/ and .*$/, '')} software${segments[0] ? ` for ${segments[0]}` : ''}`, `Market category from ${c.evidence.split(' — ')[0]}`);
   }
+  // A problem becomes a query only when the site states it as a short noun phrase ("fragmented marketing
+  // tools"); a full sentence ("operations rarely fail from lack of effort") is not what a buyer types.
   for (const p of reg.entries.filter((e) => e.field === 'customer_problem' && e.status === 'official_website_verified')) {
-    add(`how to fix ${p.value.replace(/[.!?]$/, '').toLowerCase()}`, 'Customer problem stated on the website');
+    const phrase = p.value.replace(/[.!?,]+$/, '').toLowerCase().trim();
+    if (phrase.split(/\s+/).length > 6 || /\b(is|are|was|were|rarely|never|sees?|happens?|happening|fail|fails|limit|limits|but)\b/.test(phrase)) continue;
+    add(`how to fix ${phrase}`, 'Customer problem stated on the website');
   }
   for (const l of reg.entries.filter((e) => e.field === 'product_line' && e.status === 'official_website_verified').slice(0, 4)) {
     add(`${l.value.toLowerCase()} tool${segments[0] ? ` for ${segments[0]}` : ''}`, `Product line “${l.value}”`);
@@ -182,7 +202,9 @@ export function proposeQueries(reg: OfferingRegister, market: MarketView): Array
   // with reserved room so they are not cut by the cap. Stale profile facts never drive a query.
   const declared = reg.entries.filter((e) => ['value_proposition', 'product_line'].includes(e.field) && e.status === 'company_declared' && e.provenance && !e.stale).slice(0, 2);
   const buyer = reg.entries.find((e) => e.field === 'buyer' && e.provenance && !e.stale) ?? reg.entries.find((e) => e.field === 'buyer' && e.status === 'official_website_verified');
-  const extra = declared.map((d) => ({ query: `${d.value.toLowerCase()}${buyer ? ` for ${buyer.value.toLowerCase()}` : ''}`, basis: `Company profile (declared, not verified on the website): “${d.value}”`, status: 'proposed' as const }))
+  // "Startups, micro, SMB, and later enterprises." → "startups": the first buyer named, without punctuation.
+  const who = buyer ? buyer.value.split(/[,;]| and later /)[0].replace(/[.!?]+$/, '').trim().toLowerCase() : '';
+  const extra = declared.map((d) => ({ query: `${d.value.replace(/[.!?]+$/, '').toLowerCase()}${who ? ` for ${who}` : ''}`, basis: `Company profile (declared, not verified on the website): “${d.value}”`, status: 'proposed' as const }))
     .filter((q) => !out.some((o) => o.query === q.query));
   return [...out.slice(0, 10 - extra.length), ...extra];
 }

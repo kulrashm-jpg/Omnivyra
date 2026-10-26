@@ -32,8 +32,12 @@ import {
   resolveAccountCredentials,
 } from './providerAccountService';
 
+/** The platform catalog row (`external_api_sources.name`) that holds the PageSpeed key. */
+export const PAGESPEED_SOURCE_NAME = 'Google PageSpeed Insights';
+
 export type CredentialMode = 'SUPER_ADMIN_MANAGED' | 'ENVIRONMENT_MANAGED' | 'KEYLESS';
-export type CredentialSource = 'managed' | 'environment' | 'unavailable';
+/** `disabled`: Super Admin switched the provider off; no credential (not even the env fallback) is used. */
+export type CredentialSource = 'managed' | 'environment' | 'unavailable' | 'disabled';
 
 export interface ProviderCredentialDescriptor {
   /** Stable key used by runtime callers. */
@@ -45,6 +49,12 @@ export interface ProviderCredentialDescriptor {
   envNames: string[];
   /** Why this provider is in its declared mode — surfaced in the UI, never a secret. */
   rationale: string;
+  /**
+   * When true, an inactive `external_api_sources` row means the provider is DISABLED by Super
+   * Admin: the resolver returns `source: 'disabled'` and does not fall back to the environment.
+   * Off for providers whose catalog toggle has never been enforced at runtime (e.g. SerpAPI).
+   */
+  honourSourceToggle?: boolean;
 }
 
 /**
@@ -61,15 +71,14 @@ export const PROVIDER_CREDENTIALS: Record<string, ProviderCredentialDescriptor> 
   },
   pagespeed: {
     key: 'pagespeed',
-    sourceName: null,
-    mode: 'ENVIRONMENT_MANAGED',
+    // Managed from the "Google PageSpeed Insights" card in Super Admin (pageSpeedProviderConfigService),
+    // which owns this catalog row and its one encrypted account. Every PageSpeed call goes through
+    // pageSpeedClient → this resolver, so the key Super Admin shows is the key the reports use.
+    sourceName: PAGESPEED_SOURCE_NAME,
+    mode: 'SUPER_ADMIN_MANAGED',
     envNames: ['PAGESPEED_API_KEY'],
-    // §5: do not invent provider infrastructure. PageSpeed has no `external_api_sources`
-    // row and no account, and the API works keyless (on a shared, frequently-exhausted
-    // quota). Registering a source purely to host one key would add infrastructure the
-    // brief explicitly rules out. It is therefore environment-managed AND LABELLED as such,
-    // so no misleading credential control is offered.
-    rationale: 'PageSpeed has no provider-account record and operates keyless or with a single platform key. Configure PAGESPEED_API_KEY in the environment.',
+    honourSourceToggle: true,
+    rationale: 'One application-level Google API key, shared by every tenant report: PageSpeed only measures public pages, so tenants never supply their own. Managed in Super Admin, with PAGESPEED_API_KEY as the environment fallback.',
   },
   openai_report_probe: {
     key: 'openai_report_probe',
@@ -152,17 +161,18 @@ function fromEnvironment(envNames: readonly string[]): { value: string | null; e
   return { value: null, envName: null };
 }
 
-/** Look up the `external_api_sources` id for a provider by name. Null when not registered. */
-async function findApiSourceId(sourceName: string): Promise<string | null> {
+/** Look up the platform `external_api_sources` row for a provider by name. Null when not registered. */
+async function findApiSource(sourceName: string): Promise<{ id: string; isActive: boolean } | null> {
   try {
     const { data } = await supabase
       .from('external_api_sources')
-      .select('id')
+      .select('id, is_active')
       .eq('name', sourceName)
       .is('company_id', null)
       .limit(1)
       .maybeSingle();
-    return (data as { id?: string } | null)?.id ?? null;
+    const row = data as { id?: string; is_active?: boolean | null } | null;
+    return row?.id ? { id: row.id, isActive: row.is_active !== false } : null;
   } catch {
     return null;
   }
@@ -196,7 +206,14 @@ export async function resolveProviderCredential(providerKey: string): Promise<Re
   // 1 + 2. Managed account (encrypted secret, then the account's env reference).
   if (descriptor.mode === 'SUPER_ADMIN_MANAGED' && descriptor.sourceName) {
     try {
-      const apiSourceId = await findApiSourceId(descriptor.sourceName);
+      const source = await findApiSource(descriptor.sourceName);
+      if (source && !source.isActive && descriptor.honourSourceToggle) {
+        return {
+          providerKey, mode: descriptor.mode, value: null, source: 'disabled',
+          accountId: null, envName: null, reason: 'Disabled in Super Admin; no credential is used.',
+        };
+      }
+      const apiSourceId = source?.id ?? null;
       if (apiSourceId) {
         const account = await getActiveAccountForApi(apiSourceId);
         if (account) {

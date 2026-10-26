@@ -86,6 +86,8 @@ export type AiRow = {
   buyerNamed: number;
   brandCorrect: number;
   brandConfused: number;
+  /** Scoring-run rows only: what was attempted, answered and failed, from the run's own cells. */
+  run?: RunAttempts;
 };
 
 /** What a web address is for, read from its path (and the crawler's page type), so depth is judged against purpose. */
@@ -160,14 +162,66 @@ export type ProfileIdentity = {
   posts: { count: number; newest: string | null; oldest: string | null } | null; blocked: string | null;
 };
 
-/** Scoring-run state of one AI provider, from its citation-matrix cells. */
+/**
+ * What happened to one scoring-run citation cell (one provider × one question group), read from
+ * the producer's own record — never from a default count:
+ *   answered       state "measured": a grounded answer was observed;
+ *   ungrounded     the provider answered from model memory (not retrieval-grounded);
+ *   failed         a request was SENT and failed — productionPrimitives.reasonFromError writes
+ *                  `<class>:<provider>` for timeout, auth_failure, rate_limited, quota_exceeded,
+ *                  upstream_error, invalid_request (HTTP 4xx / unreadable body) and error;
+ *   not_attempted  nothing was sent: adapter not configured, no queries derived for the group,
+ *                  circuit open, no observed identity, or anything unrecognised.
+ */
+export type RunCellOutcome = 'answered' | 'ungrounded' | 'failed' | 'not_attempted';
+const RUN_FAILURE = /^(timeout|auth_failure|rate_limited|quota_exceeded|upstream_error|invalid_request|error):/i;
+
+export function runCellOutcome(c: Obj): RunCellOutcome {
+  if (c.state === 'measured') return 'answered';
+  const r = String(c.reason_unavailable ?? '');
+  if (/not retrieval-grounded|model recall/i.test(r)) return 'ungrounded';
+  if (RUN_FAILURE.test(r) || /failed to load/i.test(r)) return 'failed';
+  return 'not_attempted';
+}
+
+/** The scoring run's attempt evidence for one provider: counts by outcome and the recorded reasons. */
+export type RunAttempts = {
+  total: number; attempted: number; answered: number; ungrounded: number; failed: number; notAttempted: number;
+  failureReasons: string[]; notAttemptedReasons: string[];
+};
+
+export function runAttempts(cells: Obj[]): RunAttempts {
+  const outcomes = cells.map((c) => ({ c, o: runCellOutcome(c) }));
+  const count = (o: RunCellOutcome) => outcomes.filter((x) => x.o === o).length;
+  const reasons = (o: RunCellOutcome) => [...new Set(outcomes.filter((x) => x.o === o).map((x) => String(x.c.reason_unavailable ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean))];
+  const notAttempted = count('not_attempted');
+  return { total: cells.length, attempted: cells.length - notAttempted, answered: count('answered'), ungrounded: count('ungrounded'), failed: count('failed'), notAttempted,
+    failureReasons: reasons('failed'), notAttemptedReasons: reasons('not_attempted') };
+}
+
+/**
+ * Scoring-run state of one AI provider, from the groups actually attempted:
+ *   none attempted → not configured (when that is the recorded reason) or not searched;
+ *   all attempted answered → measured; some → partial; none answered → from memory, else failed.
+ */
 function runAiReason(cells: Obj[]): AiRow['reason'] {
-  const reasons = cells.map((c) => String(c.reason_unavailable ?? ''));
-  if (cells.some((c) => c.state === 'measured')) return 'measured';
-  if (reasons.some((r) => /not retrieval-grounded|model recall/i.test(r))) return 'ungrounded';
-  if (reasons.some((r) => /failed to load|error/i.test(r))) return 'request_failed';
-  if (reasons.some((r) => /not configured/i.test(r))) return 'missing_credential';
-  return 'not_searched';
+  const a = runAttempts(cells);
+  if (!a.attempted) return a.notAttemptedReasons.some((r) => /not configured/i.test(r)) ? 'missing_credential' : 'not_searched';
+  if (a.answered) return a.answered === a.attempted ? 'measured' : 'partial';
+  return a.ungrounded ? 'ungrounded' : 'request_failed';
+}
+
+/** One sentence on a scoring-run provider's attempts, in question groups (the unit the run records). */
+export function runAttemptText(a: RunAttempts): string {
+  const groups = (n: number) => `${n} question group${n === 1 ? '' : 's'}`;
+  const notAsked = a.notAttempted ? `${groups(a.notAttempted)} not asked (${a.notAttemptedReasons.join('; ')})` : '';
+  if (!a.attempted) return `Not asked in this run: no question was submitted (${a.notAttemptedReasons.join('; ') || 'no reason recorded'}).`;
+  const failed = a.failed ? `${a.failed} failed (${a.failureReasons.join('; ')})` : '';
+  const memory = a.ungrounded ? `${a.ungrounded} answered from model memory, not counted` : '';
+  const head = a.answered
+    ? `${a.answered} of ${groups(a.attempted)} asked answered from live web search`
+    : `Asked ${groups(a.attempted)}; none produced a usable answer`;
+  return `${[head, failed, memory, notAsked].filter(Boolean).join('; ')}.`;
 }
 
 /** Scoring-run provider ids, in the labels the research step uses, so one tool has one row. */
@@ -238,8 +292,10 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
     const label = PROVIDER_LABEL[prov] ?? prov;
     if (ai.some((a) => a.label === label)) continue; // newer research evidence already covers it
     const pc = cells.filter((c) => c.provider === prov);
-    ai.push({ label, source: 'report_run', surfaceType: surfaceTypeOf(label, 'report_run'), state: aiStateOf(runAiReason(pc)), reason: runAiReason(pc), asked: pc.length, answered: pc.filter((c) => c.state === 'measured').length,
-      buyerAnswers: 0, buyerNamed: 0, brandCorrect: 0, brandConfused: 0 });
+    // Asked = groups actually submitted; a group with nothing sent is never counted as a failed answer.
+    const run = runAttempts(pc);
+    ai.push({ label, source: 'report_run', surfaceType: surfaceTypeOf(label, 'report_run'), state: aiStateOf(runAiReason(pc)), reason: runAiReason(pc), asked: run.attempted, answered: run.answered,
+      buyerAnswers: 0, buyerNamed: 0, brandCorrect: 0, brandConfused: 0, run });
   }
   const groundedRows = ai.filter((a) => a.reason === 'measured' || a.reason === 'partial');
   const aiTotals = {
@@ -357,9 +413,9 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
     nextStep: search ? null : 'Add a SerpAPI key.', source: search?.source ?? 'report_run' });
   for (const a of ai) {
     const cap = pack?.runtime?.capabilities.find((c) => c.label === a.label);
-    access.push({ capability: a.label, family: 'ai_answers', adapter: cap ? cap.adapter : true, credential: cap ? cap.credential : null, attempted: a.asked > 0 && a.reason !== 'missing_credential' && a.reason !== 'no_adapter',
+    access.push({ capability: a.label, family: 'ai_answers', adapter: cap ? cap.adapter : true, credential: cap ? cap.credential : null, attempted: a.run ? a.run.attempted > 0 : a.asked > 0 && a.reason !== 'missing_credential' && a.reason !== 'no_adapter',
       reason: a.reason === 'ungrounded' ? 'partial' : a.reason,
-      outcome: cap?.outcome ?? (a.reason === 'ungrounded' ? 'Answered from model memory without searching the web; not counted.'
+      outcome: cap?.outcome ?? (a.run ? runAttemptText(a.run) : a.reason === 'ungrounded' ? 'Answered from model memory without searching the web; not counted.'
         : a.reason === 'missing_credential' ? 'No credential is configured, so it was not asked.'
           : a.reason === 'no_adapter' ? 'No adapter is implemented for the provider’s grounded API, so it was not asked; the consumer app is not used.'
             : a.reason === 'request_failed' ? `Asked ${a.asked} questions; every request failed, so the result is unknown.`
@@ -399,9 +455,21 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
     reason: kg.state === 'measured' ? 'measured' : /no wikidata entity was found|not found/i.test(kg.text) ? 'searched_not_found' : /failed/i.test(kg.text) ? 'request_failed' : 'partial',
     outcome: kg.text || 'See the brand section.', nextStep: kg.state === 'measured' ? null : 'Create a Wikidata entry; add Organization structured data. A missing entry alone does not prove weak authority.', source: 'report_run' });
   const perf = obj(r1?.performance);
-  access.push({ capability: 'Page speed', family: 'page_speed', adapter: true, credential: cfg('page_speed')?.credential ?? null, attempted: perf?.state === 'measured',
-    reason: perf?.state === 'measured' ? 'measured' : 'missing_credential', outcome: str(perf?.reasonUnavailable) ?? 'See the website section.',
-    nextStep: perf?.state === 'measured' ? null : 'Enable PageSpeed Insights (free API key).', source: 'report_run' });
+  // The run's own PageSpeed cause (pageSpeedClient issue); older runs carry only prose, read conservatively.
+  const perfText = str(perf?.reasonUnavailable) ?? '';
+  const perfIssue = str(perf?.issue) ?? (/not enabled for this environment/i.test(perfText) ? 'not_configured' : /disabled in super admin/i.test(perfText) ? 'disabled'
+    : /quota|\b429\b/i.test(perfText) ? 'quota_exhausted' : perfText ? 'provider_failure' : null);
+  const perfReason: ReasonClass = perf?.state === 'measured' ? 'measured' : perf?.state === 'partial' ? 'partial'
+    : perfIssue === 'not_configured' ? 'missing_credential' : perfIssue === 'disabled' ? 'not_searched' : perfIssue === 'quota_exhausted' ? 'quota_restricted'
+      : perfIssue === 'api_disabled' ? 'restricted' : perf ? 'request_failed' : 'not_searched';
+  access.push({ capability: 'Page speed', family: 'page_speed', adapter: true, credential: cfg('page_speed')?.credential ?? null,
+    attempted: perf?.state === 'measured' || !['not_configured', 'disabled', null].includes(perfIssue),
+    reason: perfReason, outcome: perfText || (perf?.state === 'measured' ? 'Measured.' : 'See the website section.'),
+    nextStep: perf?.state === 'measured' ? null : perfIssue === 'disabled' ? 'Enable Google PageSpeed Insights in Super Admin.'
+      : perfIssue === 'invalid_key' ? 'Replace the key on the Google PageSpeed Insights card in Super Admin.'
+        : perfIssue === 'api_disabled' ? 'Enable the PageSpeed Insights API in the Google Cloud project that owns the key.'
+          : perfIssue === 'not_configured' ? 'Add an application-level PageSpeed Insights key in Super Admin (Google PageSpeed Insights).' : 'Re-run the report.',
+    source: 'report_run' });
 
   const registry = families.find((f) => f.key === 'registry')!;
   access.push({ capability: registry.label, family: 'registry', adapter: false, credential: null, attempted: false, reason: 'no_adapter',

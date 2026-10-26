@@ -277,6 +277,8 @@ export interface SnapshotReport {
   performance?: {
     state: string;
     reasonUnavailable: string | null;
+    /** PageSpeed-specific cause when nothing was measured (pageSpeedClient.PageSpeedIssue). */
+    issue?: string | null;
     coverage: { measured: number; attempted: number; eligible: number };
     byFormFactor: Record<'mobile' | 'desktop', { measured: number; verdict: string }>;
     observations: Array<{
@@ -288,6 +290,7 @@ export interface SnapshotReport {
       provider: string;
       state: string;
       reasonUnavailable: string | null;
+      issue?: string | null;
       metrics: Array<{
         key: string; label: string; value: number | null; unit: string;
         category: string; verdict: string; source: string | null;

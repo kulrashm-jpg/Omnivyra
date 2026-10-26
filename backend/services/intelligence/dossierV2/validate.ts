@@ -272,7 +272,9 @@ export function validateReport(ledger: Ledger, registry: DossierRegistry, html: 
   for (const m of summaries.matchAll(/data-diag="([^"]+)"[^>]*>[\s\S]*?<\/b>(?:<span>| — )([^<.(]+)/g)) {
     const d = diags.find((x) => x.key === m[1]);
     if (!d) { fail('summary-diagnostics', `A summary names an unknown source “${m[1]}”.`); continue; }
-    if (m[2].trim().toLowerCase() !== DIAG_LABEL[d.state].toLowerCase()) fail('summary-diagnostics', `${d.source}: the summary says “${m[2].trim()}”, the diagnostics say “${DIAG_LABEL[d.state]}”.`);
+    // The state label, or the row's own plain-language label for missing data — both derive from the same row.
+    const said = m[2].trim().toLowerCase();
+    if (said !== DIAG_LABEL[d.state].toLowerCase() && said !== d.plain?.short.toLowerCase()) fail('summary-diagnostics', `${d.source}: the summary says “${m[2].trim()}”, the diagnostics say “${DIAG_LABEL[d.state]}”.`);
   }
 
   // 30. Company profile: declared stays declared, missing stays unknown, conflicts stay visible.

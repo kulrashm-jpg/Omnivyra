@@ -18,6 +18,10 @@ import {
   detectClientSideRendering,
   type ExperiencePage,
 } from '../../services/digitalExperience';
+import { resetPageSpeedClientState } from '../../services/pageSpeedClient';
+
+// The shared PageSpeed client caches a valid answer per URL: reset it per case.
+beforeEach(() => resetPageSpeedClientState());
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 

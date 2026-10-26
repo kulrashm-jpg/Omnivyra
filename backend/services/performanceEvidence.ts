@@ -40,8 +40,9 @@ import {
 // E — one readiness vocabulary across Report 1 providers. Type-only, erased at
 // compile time: no runtime dependency on the intelligence registry.
 import type { ProviderSlotAvailability } from './intelligence/providerRegistry';
-
-const PSI_ENDPOINT = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
+// Every PageSpeed request goes through the shared client: one credential policy (Super Admin key,
+// env fallback, keyless only when enabled), one error classification, one cache.
+import { environmentPageSpeedAccess, pageSpeedFailure, pageSpeedSuccess, runPageSpeed, type PageSpeedAccess, type PageSpeedIssue } from './pageSpeedClient';
 
 /** Lighthouse is slow; PSI routinely takes 15–40s for a cold URL. */
 const DEFAULT_TIMEOUT_MS = Math.max(10_000, Number(process.env.PAGESPEED_TIMEOUT_MS) || 60_000);
@@ -133,6 +134,11 @@ export interface PerformanceObservation {
    * measured zero and no verdict is derived from it.
    */
   failureKind: ProviderFailureKind | null;
+  /**
+   * The PageSpeed-specific cause, from Google's own error body (pageSpeedClient): an invalid key,
+   * the API disabled in the Cloud project, an exhausted quota, a timeout... Absent when measured.
+   */
+  issue?: PageSpeedIssue | null;
   /** Lighthouse JS execution time, used as a client-rendering signal. */
   jsBootupMs: number | null;
 }
@@ -152,6 +158,8 @@ export interface PerformanceEvidence {
    * does not own; that path still carries its reason in prose only.
    */
   failureKind?: ProviderFailureKind | null;
+  /** Why nothing was measured, in PageSpeed's own terms (disabled, not configured, invalid key, quota…). */
+  issue?: PageSpeedIssue | null;
 }
 
 export function isPageSpeedConfigured(): boolean {
@@ -346,63 +354,40 @@ export async function fetchPageSpeed(params: {
   formFactor: FormFactor;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /**
+   * The access decision the report run made once (Super Admin key, env key or keyless). Without
+   * it the call uses what the environment alone grants — never a Super Admin lookup per URL.
+   */
+  access?: PageSpeedAccess;
 }): Promise<PerformanceObservation> {
-  const doFetch = params.fetchImpl ?? fetch;
-  const query = new URLSearchParams({
-    url: params.url,
-    strategy: params.formFactor,
-    category: 'performance',
+  const r = await runPageSpeed({
+    url: params.url, strategy: params.formFactor, category: 'performance',
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS, fetchImpl: params.fetchImpl,
+    access: params.access ?? environmentPageSpeedAccess(),
   });
-  if (process.env.PAGESPEED_API_KEY) query.set('key', process.env.PAGESPEED_API_KEY);
-
-  try {
-    const response = await doFetch(`${PSI_ENDPOINT}?${query.toString()}`, {
-      signal: AbortSignal.timeout(params.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-      headers: { Accept: 'application/json' },
-    });
-    if (!response.ok) {
-      let detail = `HTTP ${response.status}`;
-      try {
-        const body = await response.json() as any;
-        if (body?.error?.message) detail = `HTTP ${response.status} — ${String(body.error.message).slice(0, 200)}`;
-      } catch { /* keep the status-only detail */ }
-      return unavailableObservation({
-        url: params.url, formFactor: params.formFactor,
-        reason: response.status === 429
-          ? `PageSpeed quota exceeded (${detail}). Set PAGESPEED_API_KEY for a dedicated quota.`
-          : `PageSpeed request failed: ${detail}`,
-        // E — classified by the SHARED HTTP mapping (`failureFromStatus`), so a
-        // 429 is `rate_limited`, a 5xx is `retrieval_failed` and a 4xx is not
-        // quietly folded in with either.
-        failureKind: failureFromStatus(response.status, 'pagespeed').failure,
-      });
-    }
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch (error) {
-      // E — a 200 whose body is not the expected JSON is `malformed_response`,
-      // not a transport failure and certainly not a measurement.
-      return unavailableObservation({
-        url: params.url, formFactor: params.formFactor,
-        reason: `PageSpeed returned a response that could not be parsed: ${
-          (error instanceof Error ? error.message : String(error)).slice(0, 200)}`,
-        failureKind: 'malformed_response',
-      });
-    }
-    return parsePageSpeedResponse({ body, url: params.url, formFactor: params.formFactor });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return unavailableObservation({
-      url: params.url, formFactor: params.formFactor,
-      reason: /abort|timeout/i.test(message)
-        ? `PageSpeed timed out after ${params.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms.`
-        : `PageSpeed request error: ${message.slice(0, 200)}`,
-      // E — timeout, connection reset and DNS failure are all transient
-      // retrieval failures in the shared vocabulary. None of them is a zero.
-      failureKind: 'retrieval_failed',
-    });
+  const ok = pageSpeedSuccess(r);
+  if (ok) {
+    const observation = parsePageSpeedResponse({ body: ok.body, url: params.url, formFactor: params.formFactor });
+    // A fresh cached result is the provider's own answer from earlier; it is dated as such.
+    return ok.fromCache ? { ...observation, observedAt: ok.fetchedAt } : observation;
   }
+  const f = pageSpeedFailure(r)!;
+  const fix = f.issue === 'quota_exhausted' ? ' Set a dedicated key in Super Admin (Google PageSpeed Insights) or PAGESPEED_API_KEY.'
+    : f.issue === 'invalid_key' ? ' Replace the key in Super Admin (Google PageSpeed Insights).'
+      : f.issue === 'api_disabled' ? ' Enable the PageSpeed Insights API in the Google Cloud project that owns the key.' : '';
+  return {
+    ...unavailableObservation({
+      url: params.url, formFactor: params.formFactor,
+      reason: `${f.detail}${fix}`,
+      // E — the machine-readable kind stays in the SHARED vocabulary: by HTTP status when there
+      // was one (`failureFromStatus`: 429 rate_limited, 5xx retrieval_failed, 403 inaccessible),
+      // a timeout or transport error is retrieval_failed, an unreadable 200 is malformed_response.
+      // None of them is a zero.
+      failureKind: f.issue === 'malformed_response' ? 'malformed_response'
+        : f.httpStatus ? failureFromStatus(f.httpStatus, 'pagespeed').failure : 'retrieval_failed',
+    }),
+    issue: f.issue,
+  };
 }
 
 /**

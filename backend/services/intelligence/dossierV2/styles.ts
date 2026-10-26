@@ -7,6 +7,8 @@ export const DOSSIER_V2_CSS = `
   @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 7.5pt Inter, "Segoe UI", Arial, sans-serif; color: ${P.greyMid}; }
 }
 @page :first { margin: 0; @bottom-left { content: none; } @bottom-right { content: none; } }
+/* The cover is its own named page: full-bleed, no margin boxes, so the navy fills the whole sheet. */
+@page cover { margin: 0; @bottom-left { content: none; } @bottom-right { content: none; } }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: #fff; }
 body { font-family: Inter, "Segoe UI", system-ui, -apple-system, Arial, sans-serif; color: ${P.ink};
@@ -17,18 +19,35 @@ a { color: ${P.blue}; text-decoration: none; }
 small { color: ${P.grey}; }
 
 /* Cover */
-.v2-cover { height: 297mm; padding: 26mm 22mm 20mm; background: ${P.navy}; color: #fff; display: flex; flex-direction: column;
-  page-break-after: always; break-after: page; }
+.v2-cover { page: cover; height: 297mm; padding: 22mm 20mm 16mm; background: ${P.navy}; color: #fff; display: flex; flex-direction: column;
+  page-break-after: always; break-after: page; overflow: hidden; }
 .v2-cover-brand { display: flex; align-items: center; gap: 4mm; }
 .v2-cover-brand img { height: 12mm; background: #fff; border-radius: 2mm; padding: 1.5mm 3mm; }
 .v2-cover-eyebrow { font-size: 8pt; letter-spacing: .24em; text-transform: uppercase; color: #9FB6D6; font-weight: 600; }
-.v2-cover h1 { color: #fff; font-size: 30pt; font-weight: 700; margin: 34mm 0 5mm; max-width: 150mm; letter-spacing: -.01em; }
-.v2-cover-thesis { font-size: 12.5pt; color: #D6E2F2; max-width: 145mm; line-height: 1.55; }
-.v2-cover-scores { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3mm; margin-top: 14mm; }
-.v2-cover-scores div { border: 1px solid #2B4466; border-radius: 2.5mm; padding: 4mm; background: #10284A; }
-.v2-cover-scores b { display: block; font-size: 24pt; font-weight: 800; line-height: 1.05; }
-.v2-cover-scores span { display: block; color: #fff; font-size: 9.5pt; font-weight: 700; margin-top: 1.5mm; }
-.v2-cover-scores em { display: block; font-style: normal; color: #9FB6D6; font-size: 7.6pt; margin-top: .6mm; }
+.v2-cover h1 { color: #fff; font-size: 27pt; font-weight: 700; margin: 22mm 0 4mm; max-width: 160mm; letter-spacing: -.01em; line-height: 1.15; }
+.v2-cover-thesis { font-size: 11.5pt; color: #D6E2F2; max-width: 150mm; line-height: 1.55; margin-bottom: 0; }
+/* Four indicators, 2 × 2: value, what it counts, one small visual, and the basis. */
+.v2-cover-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4.5mm; margin-top: 13mm; }
+.v2-cov-card { background: #10284A; border: 1px solid #2B4466; border-top: 3px solid #5B7BA6; border-radius: 2.5mm; padding: 5mm 5.5mm 4.5mm; display: flex; flex-direction: column; min-height: 58mm; }
+.v2-cov-card-bad { border-top-color: #E0707D; } .v2-cov-card-warn { border-top-color: #E8A84A; } .v2-cov-card-ok { border-top-color: #4FC48E; } .v2-cov-card-none { border-top-color: #5B6E8A; }
+.v2-cov-card-title { font-size: 8pt; letter-spacing: .14em; text-transform: uppercase; color: #9FB6D6; font-weight: 700; }
+.v2-cov-card-value { font-size: 26pt; font-weight: 800; line-height: 1.1; margin-top: 2mm; color: #fff; }
+.v2-cov-card-value small { font-size: 12pt; color: #C9D6E8; font-weight: 600; }
+.v2-cov-card-value .v2-cov-nm { font-size: 17pt; color: #C9D6E8; }
+.v2-cov-card-value small:not(:first-child) { display: block; font-size: 8.4pt; font-weight: 500; color: #E8A84A; margin-top: .5mm; }
+.v2-cov-card-sub { font-size: 8.8pt; color: #D6E2F2; margin-top: 1mm; line-height: 1.35; }
+.v2-cov-card-note { font-size: 7.8pt; color: #9FB6D6; margin-top: auto; padding-top: 2.5mm; line-height: 1.35; }
+.v2-cov-dots { display: flex; flex-wrap: wrap; gap: 1.4mm; margin-top: 3mm; min-height: 4mm; }
+.v2-cov-dots i { width: 4mm; height: 4mm; border-radius: 1mm; background: transparent; border: 1.2px solid #5B7BA6; }
+.v2-cov-dots i.on { background: #4FC48E; border-color: #4FC48E; }
+.v2-cov-dots-none { border: 1.2px dashed #5B6E8A; border-radius: 1mm; height: 4mm; }
+.v2-cov-bar { height: 4mm; border-radius: 2mm; background: #22395C; margin-top: 3mm; overflow: hidden; }
+.v2-cov-bar i { display: block; height: 100%; border-radius: 2mm; }
+.v2-cov-stack { display: flex; gap: 1mm; margin-top: 3mm; min-height: 6mm; }
+.v2-cov-seg { border-radius: 1.2mm; font-size: 8pt; font-weight: 800; color: #0B1F3A; padding: 1mm 1.6mm; text-align: center; min-width: 7mm; }
+.v2-cov-seg-direct_peer { background: #E0707D; } .v2-cov-seg-direct_other { background: #E8A84A; } .v2-cov-seg-alternative { background: #8FB3E0; }
+.v2-cov-legend { display: flex; flex-wrap: wrap; gap: 1mm 3.5mm; margin-top: 1.8mm; font-size: 7.6pt; color: #C9D6E8; }
+.v2-cov-legend i { display: inline-block; width: 2.6mm; height: 2.6mm; border-radius: .6mm; margin-right: 1.2mm; vertical-align: -.2mm; }
 .v2-cover-meta { margin-top: auto; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4mm; border-top: 1px solid #2B4466; padding-top: 6mm; }
 .v2-cover-meta div { font-size: 8pt; color: #9FB6D6; }
 .v2-cover-meta strong { display: block; color: #fff; font-size: 11pt; margin-top: 1mm; }
@@ -71,18 +90,27 @@ small { color: ${P.grey}; }
 
 /* Tables */
 table { border-collapse: collapse; width: 100%; }
-.v2-table th, .v2-table td { text-align: left; vertical-align: top; padding: 2mm 2.2mm; border-bottom: 1px solid ${P.line}; font-size: 8.6pt; }
-.v2-table thead th { font-size: 7.4pt; text-transform: uppercase; letter-spacing: .08em; color: ${P.grey}; border-bottom: 1.5px solid ${P.navy}; }
+/* One table system for the whole report: a coloured header band with bold, high-contrast labels,
+   generous cell padding, readable type, a subtle zebra, and right-aligned tabular numbers. The
+   header repeats on every page a long table spans. */
+.v2-table { margin: 1mm 0 3mm; }
+.v2-table th, .v2-table td { text-align: left; vertical-align: top; padding: 2.4mm 2.8mm; border-bottom: 1px solid ${P.line}; font-size: 8.6pt; line-height: 1.42; overflow-wrap: break-word; }
+.v2-table thead { display: table-header-group; }
+.v2-table thead th { background: #E4ECF7; color: ${P.navy}; font-size: 7.8pt; font-weight: 700; letter-spacing: .02em; text-transform: none; border-bottom: 2px solid #9DB7DA; vertical-align: bottom; padding-top: 2mm; padding-bottom: 2mm; }
+.v2-table tbody tr:nth-child(even) > td { background: #F7F9FC; }
+.v2-table tbody tr:last-child > td { border-bottom: none; }
 .v2-table tr { break-inside: avoid; page-break-inside: avoid; }
-.v2-table td.v2-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.v2-table td.v2-num, .v2-table th.v2-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.v2-table td small, .v2-table td .v2-id { line-height: 1.4; }
+.v2-table + .v2-note, .v2-table + p { margin-top: 2.5mm; }
 .v2-id { font-family: "JetBrains Mono", Consolas, monospace; font-size: 7.4pt; color: ${P.grey}; }
 
 /* Heatmap */
 .v2-heat th, .v2-heat td { border: 1.5px solid #fff; padding: 1.6mm 1.8mm; font-size: 8.2pt; text-align: center; }
-.v2-heat thead th { font-size: 7.4pt; color: ${P.grey}; font-weight: 600; vertical-align: bottom; }
+.v2-heat thead th { font-size: 7.6pt; color: ${P.navy}; font-weight: 700; vertical-align: bottom; background: #E4ECF7; border-bottom: 2px solid #9DB7DA; }
 .v2-heat thead th span { display: inline-block; max-width: 24mm; overflow-wrap: normal; word-break: keep-all; }
 .v2-heat tbody th { text-align: left; font-weight: 600; background: ${P.wash}; max-width: 48mm; }
-.v2-heat tbody th small { display: block; font-weight: 400; font-size: 7pt; }
+.v2-heat tbody th small { display: block; font-weight: 400; font-size: 7.2pt; }
 .v2-legend { display: flex; flex-wrap: wrap; gap: 4mm; margin-top: 2.5mm; font-size: 7.8pt; color: ${P.grey}; }
 .v2-legend i { display: inline-block; width: 3.2mm; height: 3.2mm; border: 1px solid; border-radius: .6mm; margin-right: 1.2mm; vertical-align: -0.5mm; }
 
@@ -121,7 +149,8 @@ table { border-collapse: collapse; width: 100%; }
 .v2-plain { background: ${P.blueSoft}; border-left: 3px solid ${P.blue}; border-radius: 1.5mm; padding: 3mm 4mm; margin: 0 0 6mm; font-size: 9.6pt; color: ${P.navy}; }
 .v2-kpi-meaning { font-size: 7.8pt; color: ${P.grey}; margin-top: 1.5mm; border-top: 1px solid ${P.line}; padding-top: 1.5mm; line-height: 1.35; }
 .v2-card-plain { font-size: 8.8pt; color: ${P.navy}; background: ${P.wash}; border-radius: 1.5mm; padding: 1.8mm 2.5mm; margin: 0 0 2mm; }
-.v2-compact td { padding: 1.4mm 2mm; }
+.v2-compact th, .v2-compact td { padding: 1.9mm 2.4mm; }
+.v2-compact td { font-size: 8.2pt; }
 
 /* Decision cards */
 .v2-decisions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3.5mm; }
@@ -151,11 +180,11 @@ table { border-collapse: collapse; width: 100%; }
 .v2-summary { break-before: page; page-break-before: always; break-after: page; page-break-after: always;
   height: 262mm; overflow: hidden; display: flex; flex-direction: column; }
 .v2-summary + .v2-section { break-before: auto; page-break-before: auto; }
-.v2-summary-head { border-bottom: 2px solid ${P.navy}; padding-bottom: 2.5mm; margin-bottom: 4mm; }
+.v2-summary-head { border-bottom: 2px solid ${P.navy}; padding-bottom: 2mm; margin-bottom: 3mm; }
 .v2-summary-head span { font-size: 7.4pt; letter-spacing: .2em; text-transform: uppercase; color: ${P.blue}; font-weight: 700; }
 .v2-summary-head h2 { font-size: 20pt; font-weight: 750; margin: .5mm 0 1mm; }
 .v2-summary-head p { margin: 0; color: ${P.grey}; font-size: 9.2pt; }
-.v2-summary-h { font-size: 10.5pt; margin: 4.5mm 0 2.2mm; }
+.v2-summary-h { font-size: 10.5pt; margin: 3.2mm 0 1.6mm; }
 .v2-tiles4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3mm; }
 .v2-tile { border: 1px solid ${P.line}; border-top: 3px solid ${P.blue}; border-radius: 2mm; padding: 3mm; }
 .v2-tile-value { font-size: 19pt; font-weight: 800; line-height: 1.1; }
@@ -214,7 +243,7 @@ table { border-collapse: collapse; width: 100%; }
 .v2-role small { font-family: Consolas, monospace; font-size: 7.4pt; }
 .v2-bench td { vertical-align: top; }
 .v2-bench td small { font-size: 7.6pt; line-height: 1.35; display: block; }
-.v2-src { font-size: 6.6pt; color: ${P.greyMid}; }
+.v2-src { font-size: 7pt; color: ${P.grey}; }
 .v2-gapcell { background: ${P.crimsonSoft}; }
 .v2-register td { padding: .9mm 1.6mm; font-size: 7.2pt; line-height: 1.3; vertical-align: top; }
 .v2-register .v2-group td { background: ${P.wash}; font-weight: 700; color: ${P.navy}; font-size: 7.6pt; padding-top: 1.6mm; }
@@ -243,17 +272,23 @@ table { border-collapse: collapse; width: 100%; }
 .v2-path-step b { display: block; color: ${P.navy}; font-size: 8pt; margin-bottom: .8mm; }
 .v2-path-step ul { margin: 0; padding-left: 3.5mm; }
 .v2-path-step em { font-style: normal; color: ${P.grey}; }
-.v2-sf { margin-top: 3.5mm; }
-.v2-sf .v2-panel h4 { font-size: 8.8pt; margin-bottom: 1.6mm; }
+.v2-sf { margin-top: 2.6mm; }
+.v2-twoway { display: grid; grid-template-columns: 1fr 1.35fr; gap: 2mm; }
+.v2-twoway > div { background: ${P.wash}; border-radius: 2mm; padding: 1.6mm 2.4mm; font-size: 7.4pt; line-height: 1.35; }
+.v2-twoway b { display: block; color: ${P.navy}; font-size: 7.8pt; margin-bottom: .6mm; }
+.v2-twoway ul { margin: 0; padding-left: 3.5mm; }
+.v2-tier td { background: ${P.wash}; color: ${P.navy}; font-size: 7.6pt; padding-top: 1.2mm; padding-bottom: 1.2mm; }
+.v2-tier { break-after: avoid; page-break-after: avoid; }
+.v2-sf .v2-panel { padding: 3mm 3.4mm; } .v2-sf .v2-panel h4 { font-size: 8.8pt; margin-bottom: 1.4mm; }
 .v2-mbar { display: grid; grid-template-columns: 28mm 1fr 6mm; align-items: center; gap: 1.5mm; font-size: 7.6pt; margin-bottom: .9mm; }
 .v2-mbar i { display: block; height: 3mm; border-radius: 1mm; }
 .v2-mbar b { color: ${P.navy}; text-align: right; }
 .v2-unk { list-style: none; margin: 0 0 1.2mm; padding: 0; font-size: 7.6pt; }
 .v2-unk li { display: flex; justify-content: space-between; gap: 2mm; border-bottom: 1px dotted ${P.line}; padding: .6mm 0; }
 .v2-unk span { color: ${P.amber}; font-weight: 600; text-align: right; }
-.v2-covstrip { display: flex; flex-wrap: wrap; gap: 1.5mm; }
-.v2-cov { border-radius: 1.5mm; padding: 1mm 2.2mm; font-size: 7.6pt; font-weight: 700; color: ${P.navy}; border: 1px solid ${P.line}; }
-.v2-cov em { font-style: normal; font-weight: 500; color: ${P.grey}; margin-left: 1.2mm; }
+.v2-covstrip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.4mm; }
+.v2-cov { border-radius: 1.5mm; padding: .8mm 1.8mm; font-size: 7.6pt; font-weight: 700; color: ${P.navy}; border: 1px solid ${P.line}; line-height: 1.25; }
+.v2-cov em { display: block; font-style: normal; font-weight: 500; font-size: 7pt; color: ${P.grey}; margin-top: .2mm; }
 .v2-cov-good { background: ${P.greenSoft}; } .v2-cov-info { background: ${P.blueSoft}; } .v2-cov-neutral { background: #fff; }
 .v2-fresh { font-size: 7.4pt; color: ${P.grey}; margin: 1.5mm 0 0; }
 
@@ -261,7 +296,7 @@ table { border-collapse: collapse; width: 100%; }
 .v2-lanes { display: grid; grid-template-columns: 1fr; gap: 2.6mm; }
 .v2-lane { border: 1px solid ${P.line}; border-left: 4px solid ${P.blue}; border-radius: 2mm; padding: 1.8mm 3mm; display: flex; flex-direction: column; break-inside: avoid; }
 .v2-lane-table { width: 100%; border-collapse: collapse; font-size: 7.6pt; line-height: 1.32; }
-.v2-lane-table th { text-align: left; font-size: 6.8pt; text-transform: uppercase; letter-spacing: .06em; color: ${P.grey}; font-weight: 700; padding: .6mm 1.2mm; border-bottom: 1px solid ${P.line}; }
+.v2-lane-table th { text-align: left; font-size: 7pt; letter-spacing: .02em; color: ${P.navy}; background: #E4ECF7; font-weight: 700; padding: .5mm 1.2mm; border-bottom: 1.5px solid #9DB7DA; }
 .v2-lane-table td { vertical-align: top; padding: 1mm 1.2mm; border-bottom: 1px dotted ${P.line}; }
 .v2-lane-table td small { font-size: 7.4pt; }
 .v2-lane-table em { font-style: normal; color: ${P.grey}; }
@@ -284,14 +319,17 @@ table { border-collapse: collapse; width: 100%; }
 .v2-lane-time { display: flex; gap: 1mm; margin-top: 2mm; }
 .v2-lane-time span { flex: 1; text-align: center; font-size: 6.8pt; border: 1px solid ${P.line}; border-radius: 1mm; padding: .6mm 0; color: ${P.greyMid}; }
 .v2-lane-time span.on { background: ${P.navy}; border-color: ${P.navy}; color: #fff; font-weight: 700; }
-.v2-blocked { margin-top: 2.5mm; border: 1px dashed ${P.amber}; border-radius: 2mm; padding: 2.5mm 3.5mm; background: ${P.amberSoft}; }
-.v2-blocked h4 { font-size: 9pt; margin-bottom: 1.2mm; }
-.v2-blocked ul { margin: 0; padding-left: 4mm; font-size: 7.5pt; line-height: 1.4; columns: 2; column-gap: 6mm; }
+.v2-blocked { margin-top: 1.5mm; border: 1px dashed ${P.amber}; border-radius: 2mm; padding: 1.6mm 3.5mm; background: ${P.amberSoft}; }
+.v2-blocked h4 { font-size: 9pt; margin-bottom: .6mm; }
+.v2-blocked h4 small { font-weight: 400; color: ${P.grey}; font-size: 7.4pt; }
+.v2-blocked ul { margin: 0; padding-left: 4mm; font-size: 7.4pt; line-height: 1.3; columns: 2; column-gap: 6mm; }
 .v2-blocked li { break-inside: avoid; margin-bottom: .8mm; } .v2-blocked li span { color: ${P.grey}; }
 
 /* Footprint */
 .v2-keep > .v2-subsection { break-after: avoid; page-break-after: avoid; }
 .v2-keep > .v2-subsection + .v2-block { break-before: avoid; page-break-before: avoid; }
+/* A breakable block keeps its heading and intro with the first rows of its table. */
+.v2-allow-break > table, .v2-allow-break > .v2-sub + * { break-before: avoid; page-break-before: avoid; }
 .v2-subsection { font-size: 13pt; margin: 2mm 0 3mm; padding-bottom: 1.5mm; border-bottom: 1px solid ${P.line}; }
 .v2-chips { display: flex; flex-wrap: wrap; gap: 1.5mm; }
 .v2-chip { border: 1px solid ${P.line}; border-radius: 1.5mm; padding: 1mm 2.2mm; font-size: 7.8pt; font-weight: 700; color: ${P.navy}; }
@@ -314,4 +352,21 @@ table { border-collapse: collapse; width: 100%; }
 .v2-card-action { margin-top: 1.6mm; font-size: 8pt; } .v2-card-action b { color: ${P.navy}; margin-right: 1mm; }
 .v2-ladder td { vertical-align: top; text-align: center; } .v2-ladder td:first-child, .v2-ladder td:nth-last-child(-n+2) { text-align: left; }
 .v2-yes { color: ${P.green}; } .v2-no { color: ${P.crimson}; }
+/* Section 1 opening: capability overlap per shortlisted competitor. */
+.v2-ov { display: grid; gap: 1.6mm; margin: 1mm 0 2mm; }
+.v2-ov-row { display: grid; grid-template-columns: 52mm 1fr 18mm; align-items: center; gap: 3mm; }
+.v2-ov-name b { display: block; font-size: 8.8pt; color: ${P.navy}; line-height: 1.2; }
+.v2-ov-name small { font-size: 7.4pt; }
+.v2-ov-track { display: flex; gap: 1.5mm; }
+.v2-ov-track i { flex: 1; height: 5mm; border-radius: 1.2mm; border: 1.2px solid; }
+.v2-ov-n { font-size: 8.4pt; font-weight: 700; color: ${P.navy}; text-align: right; font-variant-numeric: tabular-nums; }
+/* Appendix opening: source availability by evidence family. */
+.v2-sa { display: grid; gap: 1.5mm; margin: 1mm 0 2mm; }
+.v2-sa-row { display: grid; grid-template-columns: 40mm 1fr 62mm; align-items: center; gap: 3mm; }
+.v2-sa-name { font-size: 8.6pt; font-weight: 700; color: ${P.navy}; }
+.v2-sa-track { display: flex; gap: 1mm; }
+.v2-sa-track i { flex: 1; height: 4.5mm; border-radius: 1mm; max-width: 16mm; }
+.v2-sa-n { font-size: 8pt; color: ${P.ink}; }
+.v2-sa-n em { font-style: normal; color: ${P.amber}; font-weight: 600; }
+.v2-h-key { font-size: 7.4pt; font-weight: 500; color: ${P.grey}; margin-left: 2mm; }
 `;

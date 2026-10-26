@@ -50,9 +50,11 @@ describe('Report 1 credential resolution — registry', () => {
     }
   });
 
-  it('classifies SerpAPI as managed and PageSpeed / OpenAI probe as environment-managed', () => {
+  it('classifies SerpAPI and PageSpeed as managed (Super Admin cards) and the OpenAI probe as environment-managed', () => {
     expect(PROVIDER_CREDENTIALS.serpapi.mode).toBe('SUPER_ADMIN_MANAGED');
-    expect(PROVIDER_CREDENTIALS.pagespeed.mode).toBe('ENVIRONMENT_MANAGED');
+    // PageSpeed: one application-level key on the "Google PageSpeed Insights" Super Admin card,
+    // honouring its enable/disable toggle; PAGESPEED_API_KEY remains the environment fallback.
+    expect(PROVIDER_CREDENTIALS.pagespeed).toMatchObject({ mode: 'SUPER_ADMIN_MANAGED', sourceName: 'Google PageSpeed Insights', envNames: ['PAGESPEED_API_KEY'], honourSourceToggle: true });
     expect(PROVIDER_CREDENTIALS.openai_report_probe.mode).toBe('ENVIRONMENT_MANAGED');
   });
 
@@ -142,10 +144,10 @@ describe('Report 1 credential resolution — precedence and fallback', () => {
     expect(resolved.reason).toContain('Keyless');
   });
 
-  it('PageSpeed resolves from PAGESPEED_API_KEY only', async () => {
+  it('PageSpeed falls back to PAGESPEED_API_KEY when no Super Admin key is stored', async () => {
     process.env.PAGESPEED_API_KEY = PLACEHOLDER_ENV_VALUE;
     const resolved = await resolveProviderCredential('pagespeed');
-    expect(resolved.mode).toBe('ENVIRONMENT_MANAGED');
+    expect(resolved.mode).toBe('SUPER_ADMIN_MANAGED');
     expect(resolved.source).toBe('environment');
     expect(resolved.envName).toBe('PAGESPEED_API_KEY');
   });
