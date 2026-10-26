@@ -691,9 +691,14 @@ function backlinkPhrase(ctx: Context): string {
 function bingLinkTable(ctx: Context): string {
   const l = ctx.research?.bingWebmaster?.status === 'measured' ? ctx.research.bingWebmaster.links : null;
   if (!l || !l.pages.length) return '';
+  const s = ctx.research?.bingWebmaster?.linkSample;
+  const strip = (u: string) => u.replace(/^https?:\/\/(www\.)?/, '');
+  const sample = s?.links.length ? `<table class="v2-table v2-compact"><thead><tr><th>Linking page (sample)</th><th style="width:26%">Anchor text</th><th style="width:28%">Links to</th></tr></thead><tbody>${
+    s.links.slice(0, 12).map((x) => `<tr><td><small>${e(strip(x.source).slice(0, 80))}</small></td><td><small>${e(x.anchorText ?? '—')}</small></td><td><small>${e(strip(x.target))}</small></td></tr>`).join('')
+  }</tbody></table><p class="v2-note">A sample: the first page of Bing’s link list for the ${s.targetsSampled} most-linked page${s.targetsSampled === 1 ? '' : 's'} (${s.referringHosts.length} distinct linking site${s.referringHosts.length === 1 ? '' : 's'} in the sample). Not the full set of referring domains.</p>` : '';
   return `<table class="v2-table v2-compact"><thead><tr><th>Page on the site</th><th class="v2-num" style="width:18%">Inbound links</th></tr></thead><tbody>${
-    [...l.pages].sort((a, b) => b.count - a.count).slice(0, 10).map((p) => `<tr><td>${e(p.url.replace(/^https?:\/\/(www\.)?/, ''))}</td><td class="v2-num">${p.count}</td></tr>`).join('')
-  }</tbody></table>`;
+    [...l.pages].sort((a, b) => b.count - a.count).slice(0, 10).map((p) => `<tr><td>${e(strip(p.url))}</td><td class="v2-num">${p.count}</td></tr>`).join('')
+  }</tbody></table><p class="v2-note">Counts are from Bing’s own link index for the verified site (Bing Webmaster Tools, ${e(fmtDate(ctx.research?.bingWebmaster?.checkedAt) ?? '')}); links Bing knows about, not every link on the web, and not an authority score.</p>${sample}`;
 }
 
 // ── 1. Market & competitors ─────────────────────────────────────────────────
@@ -1249,7 +1254,7 @@ function competitorOverlapVisual(ctx: Context): string {
 
 /** The appendix's opening visual: every evidence family, its sources' states, and what was missing. */
 function sourceAvailabilityVisual(ctx: Context): string {
-  const FAMILIES: Array<[AccessRow['family'], string]> = [['website', 'Website'], ['search', 'Google search'], ['ai_answers', 'AI answers'], ['social', 'Social profiles'], ['mentions', 'Mentions'], ['reviews', 'Reviews'], ['backlinks', 'Links from other sites'], ['knowledge_graph', 'Knowledge graph'], ['registry', 'Company registry'], ['page_speed', 'Page speed'], ['competitors', 'Competitors']];
+  const FAMILIES: Array<[AccessRow['family'], string]> = [['website', 'Website'], ['search', 'Search'], ['ai_answers', 'AI answers'], ['social', 'Social profiles'], ['mentions', 'Mentions'], ['reviews', 'Reviews'], ['backlinks', 'Links from other sites'], ['knowledge_graph', 'Knowledge graph'], ['registry', 'Company registry'], ['page_speed', 'Page speed'], ['competitors', 'Competitors']];
   const tone = (a: AccessRow) => (a.reason === 'measured' ? PALETTE.green : a.reason === 'partial' ? PALETTE.blue : a.reason === 'searched_not_found' ? '#9DB7DA' : '#C9D1DC');
   const rows = FAMILIES.map(([fam, label]) => {
     const rs = ctx.ledger.access.filter((a) => a.family === fam);
@@ -1620,11 +1625,13 @@ function bingSearch(ctx: Context): string {
   const b = ctx.research?.bingWebmaster;
   if (!b || b.status !== 'measured' || !b.search) return '';
   const s = b.search;
-  if (!s.queries.length) return `<p class="v2-note">Bing Webmaster Tools reports no search queries for ${e(b.siteUrl ?? ctx.domain)} in the period it keeps. Measured: no Bing impressions recorded.</p>`;
+  const c = b.crawl;
+  const crawl = c ? `<p class="v2-note">Bing crawl and index on ${e(c.date ?? '')}: ${c.inIndex ?? '—'} pages in Bing’s index, ${c.crawledPages ?? '—'} crawled that day, ${c.crawlErrors ?? '—'} crawl errors, ${c.blockedByRobotsTxt ?? '—'} blocked by robots.txt (Bing’s daily figures${c.stale ? '; the newest row is more than a week old — stale' : ''}).</p>` : '';
+  if (!s.queries.length) return `<p class="v2-note">Bing Webmaster Tools reports no search queries for ${e(b.siteUrl ?? ctx.domain)} in the period it keeps. Measured: no Bing impressions recorded.</p>${crawl}`;
   const pos = (v: number | null) => (v != null && v > 0 ? v.toFixed(1) : '—');
   return `<table class="v2-table v2-compact"><thead><tr><th>Query in Bing</th><th class="v2-num" style="width:14%">Impressions</th><th class="v2-num" style="width:11%">Clicks</th><th class="v2-num" style="width:16%">Avg. position shown</th></tr></thead><tbody>${
     s.queries.slice(0, 15).map((q) => `<tr><td>${e(q.query)}</td><td class="v2-num">${q.impressions}</td><td class="v2-num">${q.clicks}</td><td class="v2-num">${pos(q.avgImpressionPosition)}</td></tr>`).join('')
-  }</tbody></table><p class="v2-note">${s.impressions} impressions and ${s.clicks} clicks across ${s.queries.length} quer${s.queries.length === 1 ? 'y' : 'ies'}${s.from ? `, ${e(s.from)} to ${e(s.to ?? '')}` : ''}. Bing only — Google search performance needs Search Console access.</p>`;
+  }</tbody></table><p class="v2-note">${s.impressions} impressions and ${s.clicks} clicks across ${s.queries.length} quer${s.queries.length === 1 ? 'y' : 'ies'}${s.from ? `, ${e(s.from)} to ${e(s.to ?? '')}` : ''}. Bing only — Google search performance needs Search Console access. Bing updates these figures weekly${s.stale ? '; the newest data point is more than three weeks old, so treat them as stale' : ''}.</p>${crawl}`;
 }
 
 // ── 5. Priorities & roadmap ─────────────────────────────────────────────────

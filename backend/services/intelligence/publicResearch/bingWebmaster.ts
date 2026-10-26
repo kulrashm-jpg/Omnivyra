@@ -40,11 +40,53 @@ export type BingWebmasterEvidence = {
     /** Range of the Date values Bing returned (it updates weekly). */
     from: string | null;
     to: string | null;
+    /** The newest data point is older than STALE_SEARCH_DAYS at retrieval (Bing updates weekly). */
+    stale?: boolean;
   } | null;
+  /** GetCrawlStats: the newest daily row of the last six months Bing returns (updated daily). */
+  crawl?: {
+    date: string | null;
+    inIndex: number | null;
+    inLinks: number | null;
+    crawledPages: number | null;
+    crawlErrors: number | null;
+    blockedByRobotsTxt: number | null;
+    code4xx: number | null;
+    code5xx: number | null;
+    from: string | null;
+    stale: boolean;
+  } | null;
+  /** GetUrlLinks, first result page for the most-linked pages: a SAMPLE of linking URLs, never the full list. */
+  linkSample?: {
+    links: Array<{ target: string; source: string; anchorText: string | null }>;
+    /** Distinct linking hosts within the sample only. */
+    referringHosts: string[];
+    targetsSampled: number;
+  } | null;
+  /** Optional reports that failed while the core reads succeeded (no key material). */
+  partial?: string[];
+  provenance?: {
+    source: 'Bing Webmaster Tools API';
+    methods: string[];
+    docUrl: string;
+    definitions: Record<string, string>;
+  };
+};
+
+const STALE_SEARCH_DAYS = 21;
+const STALE_CRAWL_DAYS = 7;
+const SAMPLE_TARGETS = 3;
+
+/** What each reported number means, as Bing documents it; carried into the evidence ledger. */
+export const BING_METRIC_DEFINITIONS: Record<string, string> = {
+  inbound_links: 'GetLinkCounts: pages of the verified site that have inbound links, with Bing’s count per page. Bing’s own index, not every link on the web.',
+  link_sample: 'GetUrlLinks: linking URLs and anchor text for one page of the site (first result page only — a sample).',
+  search_queries: 'GetQueryStats: impressions, clicks and average position per query in Bing search; updated weekly.',
+  crawl: 'GetCrawlStats: daily pages crawled, crawl errors, pages in Bing’s index and inbound links Bing counted; last six months, updated daily.',
 };
 
 const BASE = 'https://ssl.bing.com/webmaster/api.svc/json/';
-const scrub = (s: string) => s.replace(/([?&]apikey=)[^&\s"']+/gi, '$1[redacted]').replace(/\b[a-f0-9]{24,}\b/gi, '[redacted]');
+const scrub = (s: string, key?: string) => (key ? s.split(key).join('[redacted]') : s).replace(/(apikey=)[^&\s"']+/gi, '$1[redacted]').replace(/\b[a-f0-9]{24,}\b/gi, '[redacted]');
 
 /** "/Date(1316156400000-0700)/" → ISO date (day), or null. Pure. */
 export function bingDate(v: unknown): string | null {
@@ -73,13 +115,13 @@ async function call(method: string, params: Record<string, string>, key: string,
     // ssrf-ok: fixed Microsoft endpoint; the site URL is a query parameter, never a host.
     res = await fetchImpl(`${BASE}${method}?${q.toString()}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
   } catch (e) {
-    throw new BingCallError('failed', null, scrub(`${method}: ${e instanceof Error ? e.message : String(e)}`).slice(0, 200));
+    throw new BingCallError('failed', null, scrub(`${method}: ${e instanceof Error ? e.message : String(e)}`, key).slice(0, 200));
   }
   const text = await res.text().catch(() => '');
   let body: any = null;
   try { body = text ? JSON.parse(text) : null; } catch { /* non-JSON fault body */ }
   if (!res.ok) {
-    const said = scrub(String(body?.Message ?? body?.d?.Message ?? text ?? '')).slice(0, 200);
+    const said = scrub(String(body?.Message ?? body?.d?.Message ?? text ?? ''), key).slice(0, 200);
     const status: BingStatus = res.status === 429 || /throttl|quota|too many/i.test(said) ? 'rate_limited'
       : /not authori[sz]ed|not verified|access denied|unauthori[sz]ed site/i.test(said) ? 'site_not_authorised'
         : res.status === 401 || res.status === 403 || /invalid api ?key|apikey/i.test(said) ? 'invalid_key' : 'failed';
@@ -135,14 +177,45 @@ export async function fetchBingWebmaster(domain: string, key: string | null, opt
     const queries = [...byQuery.values()].sort((a, b) => b.impressions - a.impressions).slice(0, 25)
       .map((q) => ({ query: q.query, impressions: q.impressions, clicks: q.clicks, avgImpressionPosition: avg(q.ip), avgClickPosition: avg(q.cp) }));
     dates.sort();
+    const ageDays = (d: string | null) => (d ? (Date.parse(checkedAt) - Date.parse(d)) / 86_400_000 : Infinity);
+
+    // Optional reports: a failure here keeps the links and search data and is recorded in `partial`.
+    const partial: string[] = [];
+    const optional = <T>(label: string, p: Promise<T>): Promise<T | null> => p.catch((e) => {
+      partial.push(`${label}: ${e instanceof BingCallError ? e.message : scrub(String(e), key).slice(0, 160)}`);
+      return null;
+    });
+    const targets = pages.filter((p) => p.count > 0).slice(0, SAMPLE_TARGETS);
+    const [crawlRows, ...linkDetails] = await Promise.all([
+      optional('GetCrawlStats', call('GetCrawlStats', { siteUrl }, key, fetchImpl, timeoutMs)),
+      ...targets.map((t) => optional(`GetUrlLinks ${t.url}`, call('GetUrlLinks', { siteUrl, link: t.url, page: '0' }, key, fetchImpl, timeoutMs))),
+    ]);
+
+    const n = (v: unknown) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+    const crawlList = (Array.isArray(crawlRows) ? crawlRows : []).map((r: any) => ({ r, date: bingDate(r?.Date) })).filter((x) => x.date).sort((a, b) => a.date!.localeCompare(b.date!));
+    const last = crawlList[crawlList.length - 1];
+    const crawl = last ? {
+      date: last.date, inIndex: n(last.r.InIndex), inLinks: n(last.r.InLinks), crawledPages: n(last.r.CrawledPages), crawlErrors: n(last.r.CrawlErrors),
+      blockedByRobotsTxt: n(last.r.BlockedByRobotsTxt), code4xx: n(last.r.Code4xx), code5xx: n(last.r.Code5xx), from: crawlList[0].date, stale: ageDays(last.date) > STALE_CRAWL_DAYS,
+    } : null;
+
+    const sampled = targets.flatMap((t, i) => (Array.isArray((linkDetails[i] as any)?.Details) ? (linkDetails[i] as any).Details : [])
+      .filter((d: any) => typeof d?.Url === 'string')
+      .map((d: any) => ({ target: t.url, source: String(d.Url), anchorText: typeof d.AnchorText === 'string' && d.AnchorText.trim() ? d.AnchorText.trim().slice(0, 120) : null })));
+    const linkSample = targets.length ? { links: sampled.slice(0, 30), referringHosts: [...new Set(sampled.map((s) => host(s.source)).filter(Boolean))].sort(), targetsSampled: targets.length } : null;
+
+    const methods = ['GetUserSites', 'GetLinkCounts', 'GetQueryStats', 'GetCrawlStats', ...(targets.length ? ['GetUrlLinks'] : [])];
     return {
       checkedAt, siteUrl, status: 'measured',
-      detail: `Read from Bing Webmaster Tools for ${siteUrl}: ${pages.length} linked page${pages.length === 1 ? '' : 's'}${totalPages > maxPages ? ` (first ${maxPages} of ${totalPages} result pages)` : ''}; ${byQuery.size} search quer${byQuery.size === 1 ? 'y' : 'ies'}.`,
+      detail: `Read from Bing Webmaster Tools for ${siteUrl}: ${pages.length} linked page${pages.length === 1 ? '' : 's'}${totalPages > maxPages ? ` (first ${maxPages} of ${totalPages} result pages)` : ''}; ${byQuery.size} search quer${byQuery.size === 1 ? 'y' : 'ies'}${partial.length ? `; ${partial.length} optional report${partial.length === 1 ? '' : 's'} unavailable` : ''}.`,
       links: { pages: pages.slice(0, 50), total: pages.reduce((s, p) => s + p.count, 0), complete: totalPages <= maxPages },
-      search: { queries, impressions: [...byQuery.values()].reduce((s, q) => s + q.impressions, 0), clicks: [...byQuery.values()].reduce((s, q) => s + q.clicks, 0), from: dates[0] ?? null, to: dates[dates.length - 1] ?? null },
+      search: { queries, impressions: [...byQuery.values()].reduce((s, q) => s + q.impressions, 0), clicks: [...byQuery.values()].reduce((s, q) => s + q.clicks, 0), from: dates[0] ?? null, to: dates[dates.length - 1] ?? null,
+        stale: dates.length ? ageDays(dates[dates.length - 1]) > STALE_SEARCH_DAYS : false },
+      crawl, linkSample, partial,
+      provenance: { source: 'Bing Webmaster Tools API', methods, docUrl: 'https://learn.microsoft.com/en-us/dotnet/api/microsoft.bing.webmaster.api.interfaces.iwebmasterapi', definitions: BING_METRIC_DEFINITIONS },
     };
   } catch (e) {
-    const err = e instanceof BingCallError ? e : new BingCallError('failed', null, scrub(String(e)).slice(0, 200));
+    const err = e instanceof BingCallError ? e : new BingCallError('failed', null, scrub(String(e), key ?? undefined).slice(0, 200));
     return { ...base, status: err.status, detail: err.message };
   }
 }

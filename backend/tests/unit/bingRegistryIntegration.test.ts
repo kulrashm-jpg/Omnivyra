@@ -70,7 +70,55 @@ describe('Bing Webmaster Tools: owner-authorised links and search performance', 
     expect(r.search!.queries.map((q) => q.query)).toEqual(['crm for small teams', 'acme crm']);
     expect(r.search!.queries[1]).toMatchObject({ impressions: 50, clicks: 5, avgImpressionPosition: 4, avgClickPosition: 2 });
     expect(r.search).toMatchObject({ impressions: 140, clicks: 5, from: '2025-10-19', to: '2025-10-26' });
-    expect(log).toEqual(['GetUserSites', 'GetLinkCounts', 'GetLinkCounts', 'GetQueryStats']);
+    expect(log.slice(0, 4)).toEqual(['GetUserSites', 'GetLinkCounts', 'GetLinkCounts', 'GetQueryStats']);
+    // Optional reports (crawl, link detail) answered 404 here: recorded as partial, core data kept.
+    expect(log.slice(4).sort()).toEqual(['GetCrawlStats', 'GetUrlLinks', 'GetUrlLinks']);
+    expect(r.partial).toHaveLength(3);
+    expect(r.crawl).toBeNull();
+    expect(r.search!.stale).toBe(true); // newest row 2025-10-26, checked 2026-10-26
+    expect(r.provenance).toMatchObject({ source: 'Bing Webmaster Tools API', methods: expect.arrayContaining(['GetLinkCounts', 'GetQueryStats', 'GetCrawlStats', 'GetUrlLinks']) });
+    expect(Object.keys(r.provenance!.definitions)).toEqual(['inbound_links', 'link_sample', 'search_queries', 'crawl']);
+  });
+
+  it('crawl stats (newest daily row) and a link-detail sample, with freshness', async () => {
+    const day = (iso: string) => `/Date(${Date.parse(iso)}-0700)/`;
+    const seen: URL[] = [];
+    const r = await fetchBingWebmaster('acme.test', KEY, { now: NOW, fetchImpl: bingFetch((u) => {
+      seen.push(u);
+      switch (method(u)) {
+        case 'GetUserSites': return SITES;
+        case 'GetLinkCounts': return { status: 200, body: { d: { Links: [{ Url: 'https://acme.test/', Count: 5 }, { Url: 'https://acme.test/none', Count: 0 }], TotalPages: 1 } } };
+        case 'GetQueryStats': return { status: 200, body: { d: [{ Query: 'acme', Impressions: 3, Clicks: 1, AvgImpressionPosition: 2, AvgClickPosition: 2, Date: day('2026-10-19T00:00:00Z') }] } };
+        case 'GetCrawlStats': return { status: 200, body: { d: [
+          { Date: day('2026-10-24T00:00:00Z'), InIndex: 40, InLinks: 9, CrawledPages: 12, CrawlErrors: 1, BlockedByRobotsTxt: 0, Code4xx: 1, Code5xx: 0 },
+          { Date: day('2026-05-01T00:00:00Z'), InIndex: 10, InLinks: 2, CrawledPages: 3, CrawlErrors: 0, BlockedByRobotsTxt: 0, Code4xx: 0, Code5xx: 0 },
+        ] } };
+        case 'GetUrlLinks': return { status: 200, body: { d: { Details: [{ AnchorText: 'Acme CRM', Url: 'https://blog.example/review' }, { AnchorText: '', Url: 'https://news.example/x' }], TotalPages: 4 } } };
+        default: return undefined;
+      }
+    }) });
+    expect(r.status).toBe('measured');
+    expect(r.search!.stale).toBe(false);
+    expect(r.crawl).toEqual({ date: '2026-10-24', inIndex: 40, inLinks: 9, crawledPages: 12, crawlErrors: 1, blockedByRobotsTxt: 0, code4xx: 1, code5xx: 0, from: '2026-05-01', stale: false });
+    // Only pages with links are sampled; the link parameter is the page URL itself.
+    const sampled = seen.filter((u) => method(u) === 'GetUrlLinks');
+    expect(sampled.map((u) => [u.searchParams.get('link'), u.searchParams.get('page')])).toEqual([['https://acme.test/', '0']]);
+    expect(r.linkSample).toEqual({ targetsSampled: 1, referringHosts: ['blog.example', 'news.example'],
+      links: [{ target: 'https://acme.test/', source: 'https://blog.example/review', anchorText: 'Acme CRM' }, { target: 'https://acme.test/', source: 'https://news.example/x', anchorText: null }] });
+    expect(r.partial).toEqual([]);
+  });
+
+  it('a stale crawl row is flagged; an optional-report failure never hides the key', async () => {
+    const r = await fetchBingWebmaster('acme.test', KEY, { now: NOW, fetchImpl: bingFetch((u) => {
+      if (method(u) === 'GetUserSites') return SITES;
+      if (method(u) === 'GetLinkCounts') return { status: 200, body: { d: { Links: [{ Url: 'https://acme.test/', Count: 1 }], TotalPages: 1 } } };
+      if (method(u) === 'GetQueryStats') return { status: 200, body: { d: [] } };
+      if (method(u) === 'GetCrawlStats') return { status: 200, body: { d: [{ Date: `/Date(${Date.parse('2026-10-01T00:00:00Z')})/`, InIndex: 1 }] } };
+      return { status: 500, body: { Message: `boom apikey=${KEY}` } };
+    }) });
+    expect(r.crawl!.stale).toBe(true);
+    expect(r.partial).toHaveLength(1);
+    expect(JSON.stringify(r)).not.toContain(KEY);
   });
 
   it('a link index larger than the pages read is a lower bound (complete: false)', async () => {

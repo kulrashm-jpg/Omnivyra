@@ -1,15 +1,9 @@
 import type { GetServerSideProps } from 'next';
+import { SITEMAP_PATHS } from '../lib/seo/sitemapPaths';
 
 const BASE_URL = 'https://www.omnivyra.com';
 
-const URLS = [
-  '',
-  '/landing',
-  '/about',
-  '/pricing',
-  '/marketing-performance-analytics',
-  '/funnel-and-conversion-analysis',
-];
+const URLS = SITEMAP_PATHS;
 
 function buildSitemapXml() {
   const lastModified = new Date().toISOString();

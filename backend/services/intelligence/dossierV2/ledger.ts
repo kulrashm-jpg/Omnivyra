@@ -338,7 +338,7 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
     families.push({ key: 'inbound_links', label: 'Inbound links (backlinks)', attempted: true, source: `Bing Webmaster Tools${bing.siteUrl ? ` (${bing.siteUrl})` : ''}`,
       state: bingLinks ? (bingLinks.total > 0 ? 'found' : 'searched_not_found') : bing.status === 'site_not_authorised' ? 'inaccessible' : 'not_measured',
       checkedAt: bing.checkedAt, urls: bingLinks?.pages.slice(0, 10).map((p) => p.url) ?? [], identity: bingLinks ? 'high' : null,
-      result: bingLinks ? `${bingLinks.total}${bingLinks.complete ? '' : '+'} inbound links reported by Bing to ${bingLinks.pages.length} page${bingLinks.pages.length === 1 ? '' : 's'} of the site.` : bing.detail,
+      result: bingLinks ? `${bingLinks.total}${bingLinks.complete ? '' : '+'} inbound links reported by Bing to ${bingLinks.pages.length} page${bingLinks.pages.length === 1 ? '' : 's'} of the site.${bing.linkSample?.referringHosts.length ? ` Sample of linking sites (first result page for ${bing.linkSample.targetsSampled} most-linked page${bing.linkSample.targetsSampled === 1 ? '' : 's'}): ${bing.linkSample.referringHosts.slice(0, 8).join(', ')}${bing.linkSample.referringHosts.length > 8 ? ', …' : ''}.` : ''}` : bing.detail,
       limitation: 'Bing’s own link index for an owner-verified site: links Bing knows about, not every link on the web. Counts are Bing’s, not an authority score.' });
   } else {
     families.push({ key: 'inbound_links', label: 'Inbound links (backlinks)', attempted: backlinkSig?.state === 'measured', source: 'Backlink index (Ahrefs adapter)',
@@ -496,8 +496,14 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
     // Bing search performance: owner-authorised impressions / clicks / position per query (weekly data).
     access.push({ capability: 'Bing search performance (Webmaster Tools)', family: 'search', adapter: true, credential: bing.status === 'not_configured' ? false : bing.status === 'invalid_key' ? false : true,
       attempted: bing.status !== 'not_configured', reason: bingReason(bing),
-      outcome: bing.status === 'measured' && bing.search ? `${bing.search.queries.length} queries, ${bing.search.impressions} impressions and ${bing.search.clicks} clicks in Bing${bing.search.from ? ` (${bing.search.from} to ${bing.search.to})` : ''}.` : bing.detail,
+      outcome: bing.status === 'measured' && bing.search ? `${bing.search.queries.length} queries, ${bing.search.impressions} impressions and ${bing.search.clicks} clicks in Bing${bing.search.from ? ` (${bing.search.from} to ${bing.search.to})` : ''}.${bing.search.stale ? ' The newest Bing data point is more than three weeks old — stale.' : ''}` : bing.detail,
       nextStep: bingNext(bing), source: 'research' });
+    if (bing.status === 'measured' && bing.crawl) {
+      const c = bing.crawl;
+      access.push({ capability: 'Bing crawl and index (Webmaster Tools)', family: 'website', adapter: true, credential: true, attempted: true, reason: 'measured',
+        outcome: `On ${c.date}: ${c.inIndex ?? '—'} pages in Bing’s index, ${c.crawledPages ?? '—'} crawled, ${c.crawlErrors ?? '—'} crawl errors, ${c.blockedByRobotsTxt ?? '—'} blocked by robots.txt (daily data since ${c.from}).${c.stale ? ' The newest row is more than a week old — stale.' : ''}`,
+        nextStep: null, source: 'research' });
+    }
   }
   const kg = sig(payload.knowledge_graph);
   access.push({ capability: 'Knowledge graph (Wikidata)', family: 'knowledge_graph', adapter: true, credential: null, attempted: true,
