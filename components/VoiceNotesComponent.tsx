@@ -16,6 +16,7 @@ import {
   Sparkles,
   Brain
 } from 'lucide-react';
+import { transcriptionErrorMessage } from './ChatVoiceButton';
 
 interface VoiceNote {
   id: string;
@@ -94,7 +95,9 @@ export default function VoiceNotesComponent({
       
       streamRef.current = stream;
       const recorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
+        mimeType: 'audio/webm;codecs=opus',
+        // Speech bitrate keeps a long note inside the transcribe route's body limit.
+        audioBitsPerSecond: 32_000,
       });
       
       const chunks: Blob[] = [];
@@ -165,7 +168,8 @@ export default function VoiceNotesComponent({
       });
 
       if (!response.ok) {
-        throw new Error('Transcription failed');
+        const body = await response.json().catch(() => ({}));
+        throw new Error(transcriptionErrorMessage(response.status, typeof body?.error === 'string' ? body.error : null));
       }
 
       const result = await response.json();

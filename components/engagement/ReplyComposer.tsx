@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import ChatVoiceButton from '../ChatVoiceButton';
 import { recordEngagementEvent } from '@/lib/engagementTelemetry';
 import { resolveEngagementCapability } from '@/lib/engagementCapabilities';
 import { isDmMessageType } from '@/lib/engagement/messageRoles';
@@ -178,6 +179,11 @@ export const ReplyComposer = React.memo(function ReplyComposer({
           rows={3}
           disabled={composerDisabled}
           className="flex-1 rounded border border-slate-300 p-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+        />
+        <ChatVoiceButton
+          onTranscription={(t) => setText(text.trim() ? `${text.trim()} ${t}` : t)}
+          disabled={composerDisabled}
+          title="Speak your reply"
         />
       </div>
       <div className="flex items-center justify-between gap-2">

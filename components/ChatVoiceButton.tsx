@@ -15,6 +15,24 @@ export type ChatVoiceButtonProps = {
 
 type Status = 'idle' | 'recording' | 'transcribing';
 
+/**
+ * Speech needs far less than the browser's default bitrate (often 128 kbps). At 32 kbps a
+ * minute is ~240 KB, so the 5-minute cap stays well inside the transcribe route's 4 MB
+ * body limit even as base64. Before this, ~30-60 s of speech exceeded the old 1 MB limit
+ * and failed as a bare "Transcription failed" (prod 413s, 2026-10-26).
+ */
+const AUDIO_BITS_PER_SECOND = 32_000;
+export const MAX_RECORDING_MS = 5 * 60 * 1000;
+
+/** A readable message for a failed transcription response. */
+export function transcriptionErrorMessage(status: number, serverError?: string | null): string {
+  if (status === 413) return 'That recording was too long to send. Keep voice notes under 5 minutes, or split them.';
+  if (status === 401) return 'Your session expired — sign in again to use voice.';
+  if (status === 429) return serverError || 'Too many voice notes in a short time. Wait a moment and try again.';
+  if (serverError) return serverError;
+  return status >= 500 ? 'Transcription failed — please try again.' : `Transcription failed (${status}).`;
+}
+
 /** Pick a MediaRecorder mime type supported by this browser (cross-browser). */
 function pickMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return '';
@@ -43,6 +61,9 @@ export default function ChatVoiceButton({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const clearTimer = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
   const onTranscriptionRef = useRef(onTranscription);
   const contextRef = useRef(context);
   onTranscriptionRef.current = onTranscription;
@@ -55,6 +76,7 @@ export default function ChatVoiceButton({
 
   useEffect(() => {
     return () => {
+      clearTimer();
       try {
         if (recorderRef.current && recorderRef.current.state !== 'inactive') recorderRef.current.stop();
       } catch { /* ignore */ }
@@ -77,7 +99,7 @@ export default function ChatVoiceButton({
         body: JSON.stringify({ audioFile: dataUrl, provider: 'whisper', context: contextRef.current }),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json?.success) throw new Error(json?.error || 'Transcription failed');
+      if (!res.ok || !json?.success) throw new Error(transcriptionErrorMessage(res.status, typeof json?.error === 'string' ? json.error : null));
       const text = String(json.transcription || '').trim();
       if (text) onTranscriptionRef.current(text);
       else setError('No speech detected.');
@@ -121,7 +143,7 @@ export default function ChatVoiceButton({
     const mimeType = pickMimeType();
     let recorder: MediaRecorder;
     try {
-      recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType, audioBitsPerSecond: AUDIO_BITS_PER_SECOND } : { audioBitsPerSecond: AUDIO_BITS_PER_SECOND });
     } catch {
       stopStream();
       setError('Could not start recording.');
@@ -129,6 +151,7 @@ export default function ChatVoiceButton({
     }
     recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
     recorder.onstop = () => {
+      clearTimer();
       stopStream();
       const type = recorder.mimeType || 'audio/webm';
       const blob = new Blob(chunksRef.current, { type });
@@ -139,6 +162,18 @@ export default function ChatVoiceButton({
     recorder.start();
     recorderRef.current = recorder;
     setStatus('recording');
+    // A visible timer, and an automatic stop at the cap so a recording always fits.
+    const startedAt = Date.now();
+    setElapsedMs(0);
+    clearTimer();
+    timerRef.current = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      setElapsedMs(elapsed);
+      if (elapsed >= MAX_RECORDING_MS && recorder.state !== 'inactive') {
+        try { recorder.stop(); } catch { /* ignore */ }
+        recorderRef.current = null;
+      }
+    }, 250);
   };
 
   const stopRecording = () => {
@@ -187,6 +222,11 @@ export default function ChatVoiceButton({
           <Mic className="h-4 w-4" />
         )}
       </button>
+      {status === 'recording' ? (
+        <span className="text-[10px] tabular-nums text-red-600" aria-live="polite">
+          {Math.floor(elapsedMs / 60000)}:{String(Math.floor((elapsedMs % 60000) / 1000)).padStart(2, '0')}
+        </span>
+      ) : null}
       {error && (
         <span className="text-xs text-red-600 max-w-[140px] text-center leading-tight" role="alert">
           {error}
