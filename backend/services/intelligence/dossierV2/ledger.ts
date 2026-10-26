@@ -330,10 +330,22 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
   const families: FootprintFamily[] = [];
   const backlinkSig = obj(obj(payload.authority_inflow)?.score);
   const backlinkText = str(obj(obj(payload.authority_inflow)?.rationale)?.text) ?? '';
-  families.push({ key: 'inbound_links', label: 'Inbound links (backlinks)', attempted: backlinkSig?.state === 'measured', source: 'Backlink index (Ahrefs adapter)',
-    state: backlinkSig?.state === 'measured' ? 'found' : 'not_measured', checkedAt: null, urls: [], identity: null,
-    result: backlinkSig?.state === 'measured' ? backlinkText || 'Measured by the report run.' : 'Backlink authority not measured: no backlink source is connected.',
-    limitation: 'A missing key means the count is unknown, not zero. Search Console’s Links report lists linking sites for free to the site owner.' });
+  // Backlinks: the report run's backlink index (Ahrefs) when it measured; else Bing Webmaster Tools for the
+  // owner-verified site. A Bing site that is not authorised for the platform account is unknown, never zero.
+  const bing = pack?.bingWebmaster ?? null;
+  const bingLinks = bing?.status === 'measured' ? bing.links : null;
+  if (backlinkSig?.state !== 'measured' && bing && bing.status !== 'not_configured') {
+    families.push({ key: 'inbound_links', label: 'Inbound links (backlinks)', attempted: true, source: `Bing Webmaster Tools${bing.siteUrl ? ` (${bing.siteUrl})` : ''}`,
+      state: bingLinks ? (bingLinks.total > 0 ? 'found' : 'searched_not_found') : bing.status === 'site_not_authorised' ? 'inaccessible' : 'not_measured',
+      checkedAt: bing.checkedAt, urls: bingLinks?.pages.slice(0, 10).map((p) => p.url) ?? [], identity: bingLinks ? 'high' : null,
+      result: bingLinks ? `${bingLinks.total}${bingLinks.complete ? '' : '+'} inbound links reported by Bing to ${bingLinks.pages.length} page${bingLinks.pages.length === 1 ? '' : 's'} of the site.` : bing.detail,
+      limitation: 'Bing’s own link index for an owner-verified site: links Bing knows about, not every link on the web. Counts are Bing’s, not an authority score.' });
+  } else {
+    families.push({ key: 'inbound_links', label: 'Inbound links (backlinks)', attempted: backlinkSig?.state === 'measured', source: 'Backlink index (Ahrefs adapter)',
+      state: backlinkSig?.state === 'measured' ? 'found' : 'not_measured', checkedAt: null, urls: [], identity: null,
+      result: backlinkSig?.state === 'measured' ? backlinkText || 'Measured by the report run.' : 'Backlink authority not measured: no backlink source is connected.',
+      limitation: 'A missing key means the count is unknown, not zero. Search Console’s Links report lists linking sites for free to the site owner.' });
+  }
   const fpAt = fp?.checkedAt ?? null;
   const profs = fp?.profiles ?? [];
   const linking = profs.filter((p) => p.linksDomain);
@@ -375,10 +387,26 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
   platformFamily('reviews', 'Review sites', (n) => !DIRECTORY.test(n));
   const market = String(objs(obj(r1?.company_identity)?.fields).find((f) => /market|geograph/i.test(String(f.label)))?.declaredValue ?? '');
   const india = /\bindia\b/i.test(market);
-  families.push({ key: 'registry', label: india ? 'Corporate registry (MCA, India)' : 'Corporate registry', attempted: false,
-    source: india ? 'Ministry of Corporate Affairs company master data (mca.gov.in)' : 'The national company registry', state: 'not_attempted', checkedAt: null, urls: [], identity: null,
-    result: 'Not checked: the report has no registry adapter.',
-    limitation: india ? 'The MCA master-data search is an interactive form with a captcha, so it is not automated here. Cheapest next step: look up the company by name or CIN on mca.gov.in by hand and record the CIN.' : 'Look the company up in its national registry by hand and record the registration number.' });
+  // Registry: identifiers the company states, confirmed where a registry can be read (publicResearch/registryEvidence).
+  const reg = pack?.registry ?? null;
+  if (reg) {
+    const confirmed = reg.identifiers.filter((i) => i.verified && i.role !== 'related_entity');
+    families.push({ key: 'registry', label: india ? 'Corporate registry (MCA, India)' : 'Corporate registry', attempted: reg.status !== 'failed',
+      source: `Company’s own legal and investor pages${confirmed.length ? `, confirmed by ${[...new Set(confirmed.map((i) => i.provider))].join(', ')}` : ''}`,
+      state: reg.status === 'verified' ? 'found' : reg.status === 'stated_unverified' ? (reg.unavailable.length ? 'inaccessible' : 'searched_not_found')
+        : reg.status === 'none_stated' ? 'searched_not_found' : 'not_measured',
+      checkedAt: reg.checkedAt, urls: [...new Set(reg.identifiers.map((i) => i.sourceUrl).filter((u): u is string => Boolean(u)))].slice(0, 5),
+      identity: reg.status === 'verified' ? 'high' : reg.status === 'stated_unverified' ? 'medium' : null,
+      result: reg.detail,
+      limitation: india
+        ? 'India’s MCA blocks automated access (HTTP 403 and a CAPTCHA), so a CIN is confirmed only through GLEIF when a GLEIF record names it. Otherwise: provide the CIN and check it on mca.gov.in by hand.'
+        : 'Only identifiers the company states on its own pages are looked up; registries that need a credential or block automation are reported as such.' });
+  } else {
+    families.push({ key: 'registry', label: india ? 'Corporate registry (MCA, India)' : 'Corporate registry', attempted: false,
+      source: india ? 'Ministry of Corporate Affairs company master data (mca.gov.in)' : 'The national company registry', state: 'not_attempted', checkedAt: null, urls: [], identity: null,
+      result: 'Not checked in this run.',
+      limitation: india ? 'The MCA master-data search is an interactive form with a captcha, so it is not automated here. Cheapest next step: look up the company by name or CIN on mca.gov.in by hand and record the CIN.' : 'Look the company up in its national registry by hand and record the registration number.' });
+  }
 
   // Brand/entity consistency: the site's own structured identity and the public knowledge graph.
   const orgRec = pack?.site.find((r) => /structured data/i.test(r.claim));
@@ -445,11 +473,32 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
   }
   const sig = (x: unknown) => ({ state: String(obj(obj(x)?.score)?.state ?? 'unavailable'), text: str(obj(obj(x)?.rationale)?.text) ?? '' });
   const backlinks = sig(payload.authority_inflow);
-  access.push({ capability: 'Backlinks / referring domains', family: 'backlinks', adapter: true, credential: cfg('backlinks')?.credential ?? null,
-    attempted: backlinks.state === 'measured' ? true : cfg('backlinks')?.credential === false ? false : null,
-    reason: backlinks.state === 'measured' ? 'measured' : /not configured|no backlink/i.test(backlinks.text) || cfg('backlinks')?.credential === false ? 'missing_credential' : /failed/i.test(backlinks.text) ? 'request_failed' : 'not_searched',
-    outcome: backlinks.state === 'measured' ? 'Measured by the report run.' : 'Not measured: no backlink source is connected. This says nothing about how many backlinks exist.',
-    nextStep: backlinks.state === 'measured' ? null : 'Connect a backlink data source (an Ahrefs adapter is implemented), or read the Search Console Links report by hand.', source: 'report_run' });
+  // Bing Webmaster Tools reasons, in this ledger's vocabulary (shared by the backlinks and Bing search rows).
+  const bingReason = (b: NonNullable<typeof bing>): ReasonClass => (b.status === 'measured' ? 'measured' : b.status === 'not_configured' ? 'missing_credential'
+    : b.status === 'site_not_authorised' ? 'restricted' : b.status === 'rate_limited' ? 'quota_restricted' : 'request_failed');
+  const bingNext = (b: NonNullable<typeof bing>): string | null => (b.status === 'measured' ? null
+    : b.status === 'site_not_authorised' ? 'The site owner verifies the site in Bing Webmaster Tools, or adds Omnivyra’s Bing Webmaster account as a user of the site.'
+      : b.status === 'invalid_key' ? 'Replace BING_WEBMASTER_API_KEY with a current key from Bing Webmaster Tools (Settings → API Access).'
+        : b.status === 'not_configured' ? 'Set BING_WEBMASTER_API_KEY (free, from Bing Webmaster Tools → Settings → API Access).' : 'Re-run the report.');
+  if (backlinks.state !== 'measured' && bing && bing.status !== 'not_configured') {
+    access.push({ capability: 'Backlinks / referring domains', family: 'backlinks', adapter: true, credential: bing.status === 'invalid_key' ? false : true, attempted: true,
+      reason: bingReason(bing),
+      outcome: bingLinks ? `${bingLinks.total}${bingLinks.complete ? '' : '+'} inbound links to ${bingLinks.pages.length} pages, from Bing Webmaster Tools.` : bing.detail,
+      nextStep: bingNext(bing), source: 'research' });
+  } else {
+    access.push({ capability: 'Backlinks / referring domains', family: 'backlinks', adapter: true, credential: cfg('backlinks')?.credential ?? null,
+      attempted: backlinks.state === 'measured' ? true : cfg('backlinks')?.credential === false ? false : null,
+      reason: backlinks.state === 'measured' ? 'measured' : /not configured|no backlink/i.test(backlinks.text) || cfg('backlinks')?.credential === false ? 'missing_credential' : /failed/i.test(backlinks.text) ? 'request_failed' : 'not_searched',
+      outcome: backlinks.state === 'measured' ? 'Measured by the report run.' : 'Not measured: no backlink source is connected. This says nothing about how many backlinks exist.',
+      nextStep: backlinks.state === 'measured' ? null : 'Connect a backlink data source: Bing Webmaster Tools (free, BING_WEBMASTER_API_KEY) or Ahrefs (paid, AHREFS_API_KEY).', source: 'report_run' });
+  }
+  if (bing) {
+    // Bing search performance: owner-authorised impressions / clicks / position per query (weekly data).
+    access.push({ capability: 'Bing search performance (Webmaster Tools)', family: 'search', adapter: true, credential: bing.status === 'not_configured' ? false : bing.status === 'invalid_key' ? false : true,
+      attempted: bing.status !== 'not_configured', reason: bingReason(bing),
+      outcome: bing.status === 'measured' && bing.search ? `${bing.search.queries.length} queries, ${bing.search.impressions} impressions and ${bing.search.clicks} clicks in Bing${bing.search.from ? ` (${bing.search.from} to ${bing.search.to})` : ''}.` : bing.detail,
+      nextStep: bingNext(bing), source: 'research' });
+  }
   const kg = sig(payload.knowledge_graph);
   access.push({ capability: 'Knowledge graph (Wikidata)', family: 'knowledge_graph', adapter: true, credential: null, attempted: true,
     reason: kg.state === 'measured' ? 'measured' : /no wikidata entity was found|not found/i.test(kg.text) ? 'searched_not_found' : /failed/i.test(kg.text) ? 'request_failed' : 'partial',
@@ -472,8 +521,10 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
     source: 'report_run' });
 
   const registry = families.find((f) => f.key === 'registry')!;
-  access.push({ capability: registry.label, family: 'registry', adapter: false, credential: null, attempted: false, reason: 'no_adapter',
-    outcome: registry.result, nextStep: registry.limitation, source: 'report_run' });
+  access.push({ capability: registry.label, family: 'registry', adapter: Boolean(reg), credential: null, attempted: registry.attempted,
+    reason: !reg ? 'no_adapter' : reg.status === 'verified' ? 'measured' : reg.status === 'stated_unverified' ? (reg.unavailable.length ? 'restricted' : 'partial')
+      : reg.status === 'none_stated' ? 'searched_not_found' : 'request_failed',
+    outcome: registry.result, nextStep: reg?.status === 'verified' ? null : registry.limitation, source: reg ? 'research' : 'report_run' });
 
   // Paid advertising belongs to Report 2: it is not an evidence source of this organic report.
   const off = pack?.offering ?? null;

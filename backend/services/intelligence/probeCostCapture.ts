@@ -49,7 +49,7 @@ export function extractProbeTokenUsage(providerId: string, json: unknown): Probe
 }
 
 const PROVIDER_DEFAULT_MODEL: Record<string, string> = {
-  gemini: 'gemini-1.5-flash',
+  gemini: 'gemini-2.5-flash',
   claude: 'claude-3-5-sonnet',
   perplexity: 'sonar',
   copilot: 'gpt-4o-mini',

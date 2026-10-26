@@ -496,7 +496,7 @@ function renderSummaryNow(ctx: Context): string {
   const f = l.footprint;
   const fpTile = f
     ? tile('External footprint', `${f.profiles.confirmed + f.profiles.domainLinked}<small> of ${f.profiles.total}</small>`, `official profiles confirmed to link to the website; ${f.mentions.confirmed} independent mention${f.mentions.confirmed === 1 ? '' : 's'} confirmed`, f.mentions.confirmed ? 'warn' : 'bad', '',
-      `Profiles opened signed out${f.profiles.inaccessible ? ` (${f.profiles.inaccessible} behind a sign-in wall)` : ''}; mentions from one web search. Backlinks not measured.`,
+      `Profiles opened signed out${f.profiles.inaccessible ? ` (${f.profiles.inaccessible} behind a sign-in wall)` : ''}; mentions from one web search. ${cap(backlinkPhrase(ctx))}.`,
       'low — one web search')
     : tile('External footprint', nm, 'Profiles and mentions were not checked in this run.', 'neutral', '', 'Official profiles, independent mentions and listings.', 'none — unknown, not zero');
   const revTile = f && f.reviews.searched
@@ -674,9 +674,26 @@ function laneEvidence(ctx: Context, key: Lane['key']): string | null {
   } else {
     const f = l.footprint;
     if (f) parts.push(`${f.mentions.confirmed} independent mentions confirmed`, `${f.reviews.listed} of ${f.reviews.checked} review and directory sites listed`);
-    parts.push('backlinks not measured');
+    parts.push(backlinkPhrase(ctx));
   }
   return parts.length ? parts.join(' · ') : null;
+}
+
+/** "backlinks not measured" unless Bing Webmaster Tools measured them for the verified site. */
+function backlinkPhrase(ctx: Context): string {
+  const l = ctx.research?.bingWebmaster?.status === 'measured' ? ctx.research.bingWebmaster.links : null;
+  const inb = ctx.ledger.families.find((x) => x.key === 'inbound_links');
+  if (inb?.state === 'found' && !l) return 'backlinks measured by the report run';
+  return l ? (l.total ? `${l.total}${l.complete ? '' : '+'} inbound links reported by Bing` : 'no inbound links reported by Bing') : 'backlinks not measured';
+}
+
+/** Top linked pages from Bing Webmaster Tools; empty unless measured. */
+function bingLinkTable(ctx: Context): string {
+  const l = ctx.research?.bingWebmaster?.status === 'measured' ? ctx.research.bingWebmaster.links : null;
+  if (!l || !l.pages.length) return '';
+  return `<table class="v2-table v2-compact"><thead><tr><th>Page on the site</th><th class="v2-num" style="width:18%">Inbound links</th></tr></thead><tbody>${
+    [...l.pages].sort((a, b) => b.count - a.count).slice(0, 10).map((p) => `<tr><td>${e(p.url.replace(/^https?:\/\/(www\.)?/, ''))}</td><td class="v2-num">${p.count}</td></tr>`).join('')
+  }</tbody></table>`;
 }
 
 // ── 1. Market & competitors ─────────────────────────────────────────────────
@@ -1035,9 +1052,10 @@ function renderBrand(ctx: Context): string {
     const listed = fp.platforms.filter((x) => x.state === 'listed').length;
     nodes.push({ id: 'mentions', label: 'Third-party mentions', sub: confirmed ? `${confirmed} confirmed` : 'none confirmed', kind: confirmed ? 'observed' : 'absent' });
     nodes.push({ id: 'reviews', label: 'Review sites', sub: listed ? `${listed} listed` : `none of ${fp.platforms.length} confirmed`, kind: listed ? 'observed' : 'absent' });
-    nodes.push({ id: 'backlinks', label: 'Backlinks', sub: 'not measured', kind: 'absent' });
+    const inb = ctx.ledger.families.find((x) => x.key === 'inbound_links');
+    nodes.push({ id: 'backlinks', label: 'Backlinks', sub: inb?.state === 'found' ? 'measured (Bing)' : inb?.state === 'searched_not_found' ? 'none reported' : 'not measured', kind: inb?.state === 'found' ? 'observed' : 'absent' });
     const reg = ctx.ledger.families.find((x) => x.key === 'registry');
-    if (reg) nodes.push({ id: 'registry', label: 'Company registry', sub: reg.state === 'found' ? 'record found' : 'not checked', kind: reg.state === 'found' ? 'observed' : 'absent' });
+    if (reg) nodes.push({ id: 'registry', label: 'Company registry', sub: reg.state === 'found' ? 'record confirmed' : reg.state === 'searched_not_found' ? 'no number stated' : reg.state === 'inaccessible' ? 'not confirmable' : 'not checked', kind: reg.state === 'found' ? 'observed' : 'absent' });
   } else if (pack) {
     if (pack.independent.some((r) => r.kind === 'directory_listing' && r.status === 'looked_for_not_found')) nodes.push({ id: 'reviews', label: 'Review sites', sub: 'G2 / Capterra: not found', kind: 'absent' });
     if (pack.independent.some((r) => r.kind === 'third_party_mention' && r.status === 'looked_for_not_found')) nodes.push({ id: 'press', label: 'Press & mentions', sub: 'none found', kind: 'absent' });
@@ -1072,7 +1090,7 @@ function renderBrand(ctx: Context): string {
     const how = fp.mentionSearch
       ? `<p class="v2-note">Method: web search by ${e(fp.mentionSearch === 'openai' ? 'OpenAI (web search tool)' : 'Claude (web search tool)')} on ${e(fmtDate(fp.checkedAt) ?? '')}, then each page re-opened to confirm it names the company. ${queries.length ? `Queries the search ran: ${queries.slice(0, 6).map((q) => `“${e(q)}”`).join('; ')}.` : 'The exact queries were not recorded for this run.'} A model-directed web search is a sample, not an exhaustive index of the web.</p>`
       : '';
-    return `${identityTable ? block('Official profiles: identity, step by step', 'From declared, to opened, to confirmed as this company, to linked both ways.', identityTable) : block('Owned profiles', null, profiles)}${block('Independent mentions', 'Pages on other sites that discuss the company. A mention is not necessarily a link.', mentions + postsNote + namesakeNote + how)}${reviews ? block('Review and directory listings', null, reviews) : ''}${block('Websites linking to the company (backlinks)', null, `<p class="v2-note">${e(bl?.outcome ?? 'Not measured.')} ${e(bl?.nextStep ?? '')}</p>`)}`;
+    return `${identityTable ? block('Official profiles: identity, step by step', 'From declared, to opened, to confirmed as this company, to linked both ways.', identityTable) : block('Owned profiles', null, profiles)}${block('Independent mentions', 'Pages on other sites that discuss the company. A mention is not necessarily a link.', mentions + postsNote + namesakeNote + how)}${reviews ? block('Review and directory listings', null, reviews) : ''}${block('Websites linking to the company (backlinks)', null, `${bingLinkTable(ctx)}<p class="v2-note">${e(bl?.outcome ?? 'Not measured.')} ${e(bl?.nextStep ?? '')}</p>`)}`;
   })() : '';
 
   const independent = pack?.independent.length ? `<table class="v2-table"><thead><tr><th>What was looked for</th><th style="width:20%">State</th><th style="width:22%">Method</th></tr></thead><tbody>${
@@ -1092,6 +1110,11 @@ function renderBrand(ctx: Context): string {
 
   const ba = obj(obj(p.backlink_authority)?.strategy);
   const recs = objs(ba?.recommendations);
+  const reg = ctx.research?.registry;
+  const registryTable = reg && (reg.identifiers.length || reg.unavailable.length) ? `<table class="v2-table v2-compact"><thead><tr><th>Identifier</th><th style="width:22%">Registry</th><th style="width:26%">State</th><th>Registered as</th></tr></thead><tbody>${
+    [...reg.identifiers.map((i) => `<tr><td><strong>${e(i.id)}</strong></td><td><small>${e(i.provider)}</small></td><td>${i.verified ? pill('Confirmed by the registry', 'good') : pill('Stated by the company', 'info')}</td><td><small>${e([i.legalName, i.status, i.jurisdiction].filter(Boolean).join(' · ') || '—')}</small></td></tr>`),
+      ...reg.unavailable.filter((u) => !reg.identifiers.some((i) => i.id === u.id && i.verified)).map((u) => `<tr><td><strong>${e(u.id)}</strong></td><td><small>${e(u.provider)}</small></td><td>${pill(u.outcome === 'credential_required' ? 'Registry needs a credential' : u.outcome === 'inaccessible' ? 'Registry blocks automated checks' : 'Not checkable automatically', 'neutral')}</td><td><small>—</small></td></tr>`)].join('')
+  }</tbody></table><p class="v2-note">${e(reg.detail)}</p>` : '';
   const strategy = recs.length ? `<table class="v2-table"><thead><tr><th>Type of external authority</th><th style="width:12%">When</th><th style="width:14%">Horizon</th><th style="width:14%">Relevance</th></tr></thead><tbody>${
     recs.map((r) => {
       const rel = objs(r.relevance);
@@ -1105,6 +1128,7 @@ function renderBrand(ctx: Context): string {
     brandPlainEnglish(ctx, kgState), `
     ${block('How the web connects to the brand', 'Search engines and AI tools recognise a company by the profiles and records that point to it. Each line shows how that link was established.', graph)}
     ${block('External footprint by family', 'Websites linking to the company, profiles, press, partners, directories, the company registry and reviews — each with what was tried and what it can and cannot show.', familyTable, 'v2-allow-break')}
+    ${registryTable ? block('Company registration', 'Registration numbers the company states on its own pages, and whether a public registry confirmed them.', registryTable) : ''}
     ${footprint ? `<div class="v2-keep"><h3 class="v2-subsection">External digital footprint</h3>${footprint}</div>` : ''}
     ${independent ? block('Independent evidence', 'Third-party confirmation, looked for in public sources.', independent) : ''}
     ${block('External signal status', '"Unavailable" means a source is missing, not that the result is weak.', status)}
@@ -1587,7 +1611,20 @@ function renderSearch(ctx: Context): string {
     ${proposedQueries(ctx) ? block(`Searches potential customers might make${(ctx.research?.proposedQueries ?? []).some((x) => x.status === 'run') ? '' : ' — not yet run'}`, 'Built from what the company offers and who it sells to (section 1), never from a category label.', proposedQueries(ctx)) : ''}
     ${runTable ? block('Queries checked by the report run (generic)', 'Built from the declared category label, not from buyer questions: shown for completeness, not as evidence of what customers search for.', runTable, 'v2-allow-break') : ''}
     ${domainTable ? block('Domains seen in the report run’s results', null, domainTable) : ''}
+    ${bingSearch(ctx) ? block('Bing search performance (Webmaster Tools)', 'From the site’s verified Bing Webmaster Tools account: the queries the site was shown for in Bing, with impressions, clicks and average position. Bing updates these weekly.', bingSearch(ctx)) : ''}
   `);
+}
+
+/** Bing Webmaster Tools query stats for the verified site; empty unless measured. */
+function bingSearch(ctx: Context): string {
+  const b = ctx.research?.bingWebmaster;
+  if (!b || b.status !== 'measured' || !b.search) return '';
+  const s = b.search;
+  if (!s.queries.length) return `<p class="v2-note">Bing Webmaster Tools reports no search queries for ${e(b.siteUrl ?? ctx.domain)} in the period it keeps. Measured: no Bing impressions recorded.</p>`;
+  const pos = (v: number | null) => (v != null && v > 0 ? v.toFixed(1) : '—');
+  return `<table class="v2-table v2-compact"><thead><tr><th>Query in Bing</th><th class="v2-num" style="width:14%">Impressions</th><th class="v2-num" style="width:11%">Clicks</th><th class="v2-num" style="width:16%">Avg. position shown</th></tr></thead><tbody>${
+    s.queries.slice(0, 15).map((q) => `<tr><td>${e(q.query)}</td><td class="v2-num">${q.impressions}</td><td class="v2-num">${q.clicks}</td><td class="v2-num">${pos(q.avgImpressionPosition)}</td></tr>`).join('')
+  }</tbody></table><p class="v2-note">${s.impressions} impressions and ${s.clicks} clicks across ${s.queries.length} quer${s.queries.length === 1 ? 'y' : 'ies'}${s.from ? `, ${e(s.from)} to ${e(s.to ?? '')}` : ''}. Bing only — Google search performance needs Search Console access.</p>`;
 }
 
 // ── 5. Priorities & roadmap ─────────────────────────────────────────────────

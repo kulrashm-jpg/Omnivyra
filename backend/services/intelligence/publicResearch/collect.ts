@@ -26,6 +26,8 @@ import { candidatesFromEvidence, CAPABILITIES, capabilityState, focusOf, validat
 import { runProviderChecks } from './providerChecks';
 import { searchGoogle, searchPlan } from './searchResults';
 import { resolvePageSpeedAccess } from '../../pageSpeedClient';
+import { fetchBingWebmaster } from './bingWebmaster';
+import { collectRegistryEvidence, jurisdictionsFrom } from './registryEvidence';
 
 /** Build the research input from the company context the report already resolved. */
 export function researchInputFromNarrative(c: {
@@ -150,6 +152,18 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
   });
   // The declared offering and capabilities, checked against the site's own product, pricing and help pages.
   const offeringTask = checkOffering(input.domain, { offering: input.offering, capabilities: caps }).catch((): OfferingEvidence | null => null);
+  // Bing Webmaster Tools (owner-authorised): inbound links and Bing search performance, when a key exists.
+  const bingTask = (async () => {
+    const { resolveProviderCredential } = await import('../../providerCredentialResolver');
+    return fetchBingWebmaster(input.domain, (await resolveProviderCredential('bing_webmaster')).value);
+  })().catch(() => null);
+  // Company registry: identifiers the company states on its own legal / investor pages, confirmed where a
+  // registry can be read automatically (GLEIF, SEC EDGAR, Sirene, CNPJ). Nothing is persisted.
+  const registryTask = collectRegistryEvidence({
+    domain: input.domain,
+    companyNames: [input.brand],
+    jurisdictions: jurisdictionsFrom([input.market, ...(input.profile?.facts ?? []).filter((f) => f.field === 'geography').map((f) => f.value)]),
+  }).catch(() => null);
   const questions: BuyerQuestion[] = q.questions;
   const answers: SurfaceAnswer[] = await askAiSurfaces(questions.map((x) => x.query), { timeoutMs: opts.timeoutMs });
   const [profileChecks, mentionResult] = await footprintTask;
@@ -347,5 +361,7 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     candidatesProvisional: register ? register.provisional : true,
     proposedQueries: proposed ? proposed.map((p) => (ran.has(p.query) ? { ...p, status: 'run' as const } : p)) : null,
     candidateDiscovery: candidates ? { found: raw.length, checked: Math.min(raw.length, cap) } : null,
+    bingWebmaster: await bingTask,
+    registry: await registryTask,
   };
 }
