@@ -54,22 +54,37 @@ async function findSource(): Promise<SourceRow | null> {
   return (data as SourceRow | null) ?? null;
 }
 
+/**
+ * A save step that failed, with what is safe to show: the step and the database error CODE.
+ * The database message is kept for the server log only after its row-data part is removed
+ * (Postgres "DETAIL: Failing row contains (...)" echoes values). No value is ever included.
+ */
+export class PageSpeedSaveError extends Error {
+  constructor(readonly step: 'provider_row' | 'provider_toggle' | 'credential' | 'summary', readonly code: string | null, readonly logDetail: string) {
+    super(`Could not save the PageSpeed provider (${step}${code ? `, database error ${code}` : ''}).`);
+  }
+}
+const dbFailure = (step: PageSpeedSaveError['step'], error: { code?: string | null; message?: string | null } | null | undefined): PageSpeedSaveError =>
+  new PageSpeedSaveError(step, error?.code ?? null, String(error?.message ?? 'no row returned').split(/DETAIL|Failing row/i)[0].replace(/AIza[0-9A-Za-z_-]{10,}/g, '[redacted]').slice(0, 200));
+
 async function ensureSource(enabled: boolean): Promise<SourceRow> {
   const existing = await findSource();
   if (existing) {
     if ((existing.is_active !== false) !== enabled) {
       const { error } = await ownedDbTable('external_api_sources').update({ is_active: enabled }).eq('id', existing.id);
-      if (error) throw new Error(`Could not update the PageSpeed provider: ${error.message}`);
+      if (error) throw dbFailure('provider_toggle', error);
     }
     return { ...existing, is_active: enabled };
   }
+  // Only long-standing columns. Category 'others' without whitelisting already keeps the row out of every
+  // external-API executor (isApiSourceExecutable), so no newer column (e.g. is_enabled_global) is needed.
   const { data, error } = await ownedDbTable('external_api_sources').insert({
     name: PAGESPEED_SOURCE_NAME, base_url: 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed', purpose: 'report_performance',
-    category: 'others', is_active: enabled, is_whitelisted: false, is_enabled_global: false, is_preset: false,
+    category: 'others', is_active: enabled, is_whitelisted: false, is_preset: false,
     method: 'GET', auth_type: 'query', api_key_name: 'key', api_key_env_name: PAGESPEED_ENV_NAME, platform_type: 'api',
     requires_admin: true, company_id: null, required_metadata: {}, created_at: new Date().toISOString(),
   }).select('id, is_active, required_metadata').single();
-  if (error || !data) throw new Error(`Could not create the PageSpeed provider: ${error?.message ?? 'no row returned'}`);
+  if (error || !data) throw dbFailure('provider_row', error);
   return data as SourceRow;
 }
 
@@ -122,16 +137,26 @@ export async function savePageSpeedConfig(input: { enabled: boolean; apiKey?: st
   }
   const row = await ensureSource(input.enabled);
   const account: ProviderAccount | null = await getActiveAccountForApi(row.id);
-  if (input.clearKey && account) {
-    await updateProviderAccount(account.id, { is_active: false });
-  } else if (key) {
-    // Merge onto the existing envelope; the value is encrypted (AES-256-GCM) before it is stored.
-    const envelope = buildCredentialEnvelope({ existing: account?.credentials_encrypted ?? null, supplied: { api_key_value: key } });
-    if (account) await updateProviderAccount(account.id, { credentials_encrypted: envelope });
-    else await createProviderAccount({ api_source_id: row.id, account_name: 'Application key', credentials_encrypted: envelope, priority: 1 });
+  try {
+    if (input.clearKey && account) {
+      await updateProviderAccount(account.id, { is_active: false });
+    } else if (key) {
+      // Merge onto the existing envelope; the value is encrypted (AES-256-GCM) before it is stored.
+      const envelope = buildCredentialEnvelope({ existing: account?.credentials_encrypted ?? null, supplied: { api_key_value: key } });
+      if (account) await updateProviderAccount(account.id, { credentials_encrypted: envelope });
+      else await createProviderAccount({ api_source_id: row.id, account_name: 'Application key', credentials_encrypted: envelope, priority: 1 });
+    }
+  } catch (error) {
+    // createProviderAccount / updateProviderAccount throw "<fn>: <db message>"; encryption throws on a bad ENCRYPTION_KEY.
+    const message = error instanceof Error ? error.message : String(error);
+    throw dbFailure('credential', { code: (error as { code?: string })?.code ?? (/encrypt/i.test(message) ? 'ENCRYPTION' : null), message });
   }
   invalidatePageSpeedAccess();
-  return getPageSpeedConfigSummary();
+  try {
+    return await getPageSpeedConfigSummary();
+  } catch (error) {
+    throw dbFailure('summary', { message: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 /**
