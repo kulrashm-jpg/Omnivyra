@@ -8,7 +8,7 @@
  * says "not confirmed" and the cost category is `unknown` — never a guess. A cause is "confirmed" only
  * when a provider error message, a free check or a configuration inspection supports it.
  */
-import type { Ledger } from './ledger';
+import { runAttemptText, type Ledger } from './ledger';
 import { isBrandQuestion, type ResearchPack } from './research';
 import { classifyStoredReason, type ErrorClass } from '../publicResearch/providerErrors';
 import type { ProviderCheck } from '../publicResearch/providerChecks';
@@ -128,12 +128,25 @@ export function buildDiagnostics(ledger: Ledger, pack: ResearchPack | null): Sou
     if (!a) return;
     const err = firstError(label);
     const measured = a.state === 'measured_grounded';
+    // A scoring-run row (no research answers for this tool) is explained by the run's own attempt record.
+    const run = !err && a.source === 'report_run' ? a.run : undefined;
+    const runState: DiagState | null = !run ? null
+      : !run.attempted ? (a.reason === 'missing_credential' ? 'not_configured' : 'not_attempted')
+        : run.answered ? (run.answered < run.attempted ? 'partial' : 'measured')
+          : run.failed ? 'request_failed' : 'unsupported_capability';
     rows.push({ key, source: label, family: 'AI answers', sought, capability: cat ? CATALOGUE[cat].capability : 'Provider API with live web search.', docUrl: cat ? CATALOGUE[cat].docUrl : null,
       integration: 'implemented', credential: a.state === 'not_configured' ? 'absent' : err?.cls === 'invalid_credential' ? 'rejected' : 'present', usable: measured,
-      attempt: `${a.asked} questions, ${a.answered} grounded answers${err ? `; first failure: HTTP ${err.status ?? '—'} “${err.msg.slice(0, 120)}”` : ''}.`,
-      state: measured ? (a.answered < a.asked ? 'partial' : 'measured') : err ? err.cls : a.state === 'not_configured' ? 'not_configured' : 'not_attempted',
-      cause: measured ? (a.answered < a.asked ? `${a.asked - a.answered} answers were not counted (no web search or no checkable source).` : '—') : err ? `Provider message: “${err.msg.slice(0, 160)}”.` : 'No credential is configured.',
-      causeConfirmed: measured || (err ? err.confirmed : true),
+      attempt: run ? `Scoring-run check: ${runAttemptText(run)}`
+        : `${a.asked} questions, ${a.answered} grounded answers${err ? `; first failure: HTTP ${err.status ?? '—'} “${err.msg.slice(0, 120)}”` : ''}.`,
+      state: runState ?? (measured ? (a.answered < a.asked ? 'partial' : 'measured') : err ? err.cls : a.state === 'not_configured' ? 'not_configured' : 'not_attempted'),
+      cause: run ? (runState === 'measured' ? '—'
+        : runState === 'partial' ? `${run.attempted - run.answered} of the ${run.attempted} groups asked gave no grounded answer.`
+          : runState === 'request_failed' ? `Every request sent failed; the run recorded: ${run.failureReasons.join('; ')}. The provider’s own message was not kept by the scoring run.`
+            : runState === 'unsupported_capability' ? 'The provider answered from model memory, not live web search, so nothing is counted.'
+              : `No question was submitted: ${run.notAttemptedReasons.join('; ') || 'no reason recorded'}.`)
+        : measured ? (a.answered < a.asked ? `${a.asked - a.answered} answers were not counted (no web search or no checkable source).` : '—') : err ? `Provider message: “${err.msg.slice(0, 160)}”.` : 'No credential is configured.',
+      // A failure class without the provider's message does not establish which limit or fault it was.
+      causeConfirmed: run ? runState !== 'request_failed' : measured || (err ? err.confirmed : true),
       impact: measured ? 'Counted in the AI-answer sample.' : 'Visibility in this tool is unknown — not zero.', next: '—', cost: 'unknown', needs: [], unlocks: `Grounded answers from ${label.replace(/ \(.*\)$/, '')}`, ...extra });
   };
   aiRow('chatgpt', 'ChatGPT search', 'Grounded answers to buyer questions (OpenAI API with web search — not the ChatGPT app).', null, { next: 'None; answers without sources are excluded by rule.', cost: 'existing entitlement', capability: 'OpenAI Responses API with the web search tool.' });

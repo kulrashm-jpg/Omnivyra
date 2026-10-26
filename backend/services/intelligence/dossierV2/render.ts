@@ -27,7 +27,7 @@ import {
 import { buildDossierRegistry, type DossierAction, type DossierFinding, type DossierRegistry } from './registry';
 import { isBrandQuestion, isMarketingBasic, parseResearchPack, summariseVisibility, twoWayVisibility, type ResearchPack, type ResearchRecord } from './research';
 import { DOSSIER_V2_CSS } from './styles';
-import { AI_STATE_LABEL, aiCellState, aiStateOf, buildLedger, PROVIDER_LABEL, urlPurpose, type AccessRow, type AiState, type Ledger } from './ledger';
+import { AI_STATE_LABEL, aiCellState, aiStateOf, buildLedger, PROVIDER_LABEL, runCellOutcome, urlPurpose, type AccessRow, type AiState, type Ledger } from './ledger';
 import { validateReport, type ValidationResult } from './validate';
 import { buildDiagnostics, DIAG_LABEL, type DiagState, type SourceDiagnostic } from './diagnostics';
 import { brandTokens, CAPABILITIES, capabilityState, scaleOf, shortlist, TIER_LABEL, type Candidate, type ScaleBand } from '../publicResearch/competitorDiscovery';
@@ -1493,13 +1493,15 @@ function aiGrid(ctx: Context): string {
     label: proper(prov),
     cells: classes.map((q): HeatCell => {
       const c = cells.find((x) => x.provider === prov && x.query_class === q);
-      const reason = String(c?.reason_unavailable ?? '');
-      if (c?.state === 'measured') return { text: `measured, grounded: ${Math.round((num(c.citation_rate) ?? 0) * 100)}% cited`, tone: 'top' };
-      if (/not retrieval-grounded|model recall/i.test(reason)) return { text: AI_STATE_LABEL.answered_not_grounded, tone: 'self', title: reason };
-      if (/no queries derived/i.test(reason)) return { text: AI_STATE_LABEL.not_tested, tone: 'unmeasured', title: reason };
-      if (/failed to load|error/i.test(reason)) return { text: AI_STATE_LABEL.source_failed, tone: 'low', title: reason };
+      if (!c) return { text: AI_STATE_LABEL.unknown, tone: 'unmeasured' };
+      const reason = String(c.reason_unavailable ?? '');
+      // The same per-cell classification as the ledger, so the grid and the access matrix agree.
+      const outcome = runCellOutcome(c);
+      if (outcome === 'answered') return { text: `measured, grounded: ${Math.round((num(c.citation_rate) ?? 0) * 100)}% cited`, tone: 'top' };
+      if (outcome === 'ungrounded') return { text: AI_STATE_LABEL.answered_not_grounded, tone: 'self', title: reason };
+      if (outcome === 'failed') return { text: AI_STATE_LABEL.source_failed, tone: 'low', title: reason };
       if (/not configured/i.test(reason)) return { text: AI_STATE_LABEL.not_configured, tone: 'unmeasured', title: reason };
-      return { text: AI_STATE_LABEL.unknown, tone: 'unmeasured', title: reason };
+      return { text: AI_STATE_LABEL.not_tested, tone: 'unmeasured', title: reason };
     }),
   }))) + heatLegend([
     { tone: 'top', label: 'Measured, grounded' }, { tone: 'self', label: 'Answered, not grounded (not counted)' },
