@@ -45,6 +45,8 @@ const objs = (v: unknown): Obj[] => arr(v).map(obj).filter((o): o is Obj => Bool
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const e = (v: unknown): string => escape(String(v ?? ''));
+/** Plain words for stored labels written before the terminology pass ("Product line" → "Offering"). Display only. */
+const plainTerm = (s: string): string => s.replace(/\bProduct lines\b/g, 'Offerings').replace(/\bProduct line\b/g, 'Offering');
 const cap = (s: string): string => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 const fmtDate = (iso: string | null | undefined): string | null => {
@@ -276,21 +278,73 @@ function renderCover(ctx: Context, branding: DossierV2Branding): string {
   const stage = str(obj(ctx.payload.maturity_stage)?.label);
   const connected = ctx.sources.filter((s) => s.status === 'connected').length;
   return `<section class="v2-cover">
-  <div class="v2-cover-brand">${branding.logoUrl ? `<img src="${e(branding.logoUrl)}" alt="${e(ctx.brand)}" onerror="this.style.display='none'"/>` : ''}<span class="v2-cover-eyebrow">${e(ctx.domain)} · Digital intelligence dossier</span></div>
-  <h1>${e(ctx.brand)}: how it shows up in public search, and what to do first</h1>
-  <p class="v2-cover-thesis">Three kinds of visibility, measured separately: what search engines return for buyer searches, what AI search tools retrieve and cite, and how ready the website itself is. Pages 2 and 3 summarise it in plain English.</p>
-  <div class="v2-cover-tags"><span>Brand presence</span><span>Discoverability</span><span>Trust &amp; proof</span></div>
-  <div class="v2-cover-scores"><div><b>${index ?? '—'}</b><span>Authority Index</span><em>${index == null ? 'insufficient evidence — not zero' : `composite of ${scored(ctx).length} of ${ctx.pillars.length} pillars`}</em></div>${[['discoverability', 'Discoverability'], ['momentum', 'Momentum'], ['trust', 'Trust']].map(([k, label]) => {
-    const p = pillarOf(ctx, k);
-    const v = p?.value ?? null;
-    return `<div><b style="color:${v == null ? '#9FB6D6' : '#fff'}">${v == null ? '—' : `${v}${p?.state === 'measured' ? '' : '*'}`}</b><span>${e(label)}</span><em>${v == null ? 'insufficient evidence — not zero' : p?.state === 'measured' ? 'measured' : '*inferred, not rankings'}</em></div>`;
-  }).join('')}</div>
+  <div class="v2-cover-brand">${branding.logoUrl ? `<img src="${e(branding.logoUrl)}" alt="${e(ctx.brand)}" onerror="this.style.display='none'"/>` : ''}<span class="v2-cover-eyebrow">${e(ctx.domain)} · Digital Snapshot</span></div>
+  <h1>${e(ctx.brand)}: how it shows up in search and AI answers, and what to do first</h1>
+  <p class="v2-cover-thesis">Four things a buyer’s first look depends on, each measured on its own and never blended into one score. Pages 2 and 3 explain them in plain English.</p>
+  <div class="v2-cover-grid">${coverIndicators(ctx).join('')}</div>
   <div class="v2-cover-meta">
     <div>Stage<strong>${e(stage ?? '—')}</strong></div>
+    <div>Authority Index<strong>${index ?? '—'}</strong><em>${index == null ? 'insufficient evidence — not zero' : `composite of ${scored(ctx).length} of ${ctx.pillars.length} pillars; method in the appendix`}</em></div>
     <div>Evidence sources measured<strong>${ctx.ledger.coverage.measured} of ${ctx.ledger.access.length}</strong>${ctx.ledger.coverage.partial ? `<em>${ctx.ledger.coverage.partial} partly</em>` : ''}</div>
     <div>Generated<strong>${e(ctx.generated)}</strong>${ctx.research ? `<em>Public research ${e(fmtDate(ctx.research.collectedAt) ?? ctx.research.collectedAt)}</em>` : ''}</div>
   </div>
 </section>`;
+}
+
+/**
+ * The cover's four indicators, each read from the same evidence as the pages that explain it:
+ * organic search, AI answers, website readiness and the competitor shortlist. A source this run
+ * could not measure is shown as "Not measured" with what was missing — never as a value.
+ */
+function coverIndicators(ctx: Context): string[] {
+  const l = ctx.ledger;
+  const card = (title: string, value: string, sub: string, visual: string, note: string, tone: 'ok' | 'warn' | 'bad' | 'none') =>
+    `<div class="v2-cov-card v2-cov-card-${tone}"><div class="v2-cov-card-title">${e(title)}</div><div class="v2-cov-card-value">${value}</div><div class="v2-cov-card-sub">${e(sub)}</div>${visual}<div class="v2-cov-card-note">${e(note)}</div></div>`;
+  const dots = (filled: number, total: number) => `<div class="v2-cov-dots">${Array.from({ length: Math.min(total, 24) }, (_, i) => `<i class="${i < filled ? 'on' : ''}"></i>`).join('')}</div>`;
+  const nm = (why: string | undefined) => `<span class="v2-cov-nm">Not measured</span>${why ? `<small>${e(why)}</small>` : ''}`;
+
+  // 1. Organic search: Google results for searches buyers make without the name.
+  const s = l.search;
+  const brandObserved = s?.source === 'research' ? ctx.research?.search.filter((r) => r.status === 'observed' && isBrandQuestion(r, ctx.brand)).length ?? 0 : 0;
+  const buyerSearches = s ? s.checked - brandObserved : 0;
+  const searchFound = s ? s.found - s.brandedFound : 0;
+  const searchCard = s && buyerSearches > 0
+    ? card('Organic search', `${searchFound}<small> of ${buyerSearches}</small>`, s.source === 'research' ? 'buyer searches that returned the website' : 'generic category searches that returned the website',
+      dots(searchFound, buyerSearches), `Google, ${fmtDate(s.date) ?? 'date not recorded'}; one search per query.`, searchFound === 0 ? 'bad' : 'warn')
+    : card('Organic search', nm(ctx.diagnostics.find((d) => d.key === 'search')?.plain?.short), 'Google results for searches potential customers might make',
+      '<div class="v2-cov-dots v2-cov-dots-none"></div>', 'Unknown, not zero: no search result was available to this run.', 'none');
+
+  // 2. Visibility in AI answers: grounded answers to buyer questions that name the company.
+  const t = l.aiTotals;
+  const tools = l.ai.filter((a) => a.state === 'measured_grounded').length;
+  const aiCard = t.buyerAnswers
+    ? card('Visibility in AI answers', `${t.buyerNamed}<small> of ${t.buyerAnswers}</small>`, 'grounded AI answers to buyer questions that name the company',
+      dots(t.buyerNamed, t.buyerAnswers), `${tools} of ${l.ai.length} AI tools measured; answers built from live web search.`, t.buyerNamed === 0 ? 'bad' : 'warn')
+    : card('Visibility in AI answers', nm(topGaps(ctx, 1)[0]?.plain?.short), 'grounded AI answers to buyer questions', '<div class="v2-cov-dots v2-cov-dots-none"></div>', 'Unknown, not zero: no grounded AI answer was read.', 'none');
+
+  // 3. Website readiness: how easily engines can lift an answer from the site (measured dimension).
+  const extraction = ctx.pillars.flatMap((p) => p.dims).find((d) => d.key === 'extraction_readiness');
+  const c = l.crawl;
+  const speed = ctx.diagnostics.find((d) => d.key === 'pagespeed');
+  const speedText = speed?.state === 'measured' ? 'Page speed measured.' : `Page speed not measured${speed?.plain?.short ? ` (${speed.plain.short})` : ''}.`;
+  const webCard = extraction?.value != null
+    ? card('Website readiness', `${extraction.value}<small> / 100</small>`, 'how easily search and AI engines can lift a clear answer from the site',
+      `<div class="v2-cov-bar"><i style="width:${Math.max(2, extraction.value)}%;background:${scoreColor(extraction.value)}"></i></div>`,
+      `${c.attempted != null && c.known != null ? `${c.attempted} of ${c.known} known addresses fetched. ` : ''}${speedText}`, extraction.value < 25 ? 'bad' : extraction.value < 50 ? 'warn' : 'ok')
+    : card('Website readiness', nm(undefined), 'readiness of the site to be read and quoted', '<div class="v2-cov-bar"></div>', speedText, 'none');
+
+  // 4. How the company compares with alternatives: the offering-first competitor shortlist.
+  // Counts cover every confirmed competitor; the section-1 shortlist shows the first eight of them.
+  const list = competitorShortlist(ctx, Number.MAX_SAFE_INTEGER);
+  const n = (tier: string) => list.filter((x) => x.tier === tier).length;
+  const peers = list.filter((x) => x.tier === 'direct_peer').map((x) => x.name);
+  const TIERS: Array<[string, string]> = [['direct_peer', 'direct, same buyers'], ['direct_other', 'direct, larger or other buyers'], ['alternative', 'alternatives']];
+  const compCard = list.length
+    ? card('Competitive landscape', `${n('direct_peer') + n('direct_other')}<small> direct</small>`, `competitors confirmed on their own websites; ${n('alternative')} alternative${n('alternative') === 1 ? '' : 's'}`,
+      `<div class="v2-cov-stack">${TIERS.filter(([k]) => n(k)).map(([k]) => `<span class="v2-cov-seg v2-cov-seg-${k}" style="flex:${n(k)}">${n(k)}</span>`).join('')}</div><div class="v2-cov-legend">${TIERS.filter(([k]) => n(k)).map(([k, label]) => `<span><i class="v2-cov-seg-${k}"></i>${e(label)}</span>`).join('')}</div>`,
+      peers.length ? `Closest: ${peers.slice(0, 3).join(', ')}.` : 'No competitor of comparable size and buyer focus was confirmed.', 'warn')
+    : card('Competitive landscape', nm(undefined), 'competitors confirmed on their own websites', '<div class="v2-cov-stack"></div>', 'No competitor was confirmed in this run.', 'none');
+  return [searchCard, aiCard, webCard, compCard];
 }
 
 // ── Summary page 1 — What is happening? ─────────────────────────────────────
@@ -496,7 +550,7 @@ function renderSummaryNow(ctx: Context): string {
   const gapRows = topGaps(ctx, 5);
   const uncertainty = `<div class="v2-panel"><h4>Largest uncertainty: data this run did not have</h4><ul class="v2-unk">${gapRows.map((d) => `<li data-diag="${e(d.key)}"><b>${e(d.source.replace(/ \(.*\)$/, ''))}</b><span>${e(d.plain?.short ?? diagText(d))}</span></li>`).join('') || (gaps.length ? '' : '<li><span>Every planned source was reached.</span></li>')}</ul><small>Each is missing data or access, not a missing check; unknown is not zero. What gets each one measured: “Missing data” in section 5.</small></div>`;
 
-  const families: Array<[string, AccessRow['family'][]]> = [['Website', ['website']], ['Search', ['search']], ['AI answers', ['ai_answers']], ['Social', ['social']], ['Mentions', ['mentions']], ['Reviews', ['reviews']], ['Backlinks', ['backlinks']], ['Knowledge graph', ['knowledge_graph']], ['Registry', ['registry']], ['Page speed', ['page_speed']]];
+  const families: Array<[string, AccessRow['family'][]]> = [['Website', ['website']], ['Search', ['search']], ['AI answers', ['ai_answers']], ['Social', ['social']], ['Mentions', ['mentions']], ['Reviews', ['reviews']], ['Links to the site', ['backlinks']], ['Knowledge graph', ['knowledge_graph']], ['Registry', ['registry']], ['Page speed', ['page_speed']]];
   const chip = ([name, fams]: [string, AccessRow['family'][]]) => {
     const rows = l.access.filter((a) => fams.includes(a.family));
     if (!rows.length) return '';
@@ -508,7 +562,7 @@ function renderSummaryNow(ctx: Context): string {
     return `<span class="v2-cov v2-cov-${state}">${e(name)}<em>${state === 'good' ? 'measured' : state === 'info' ? 'partial' : gap ? e(gap) : 'not measured'}</em></span>`;
   };
   const fresh = [l.search?.source === 'research' && l.search.date ? `Google searches ${fmtDate(l.search.date)}` : null, ctx.research ? `public research ${fmtDate(ctx.research.collectedAt)}` : null, l.crawl.lastCrawledIso ? `website crawl ${fmtDate(l.crawl.lastCrawledIso)}` : null, `report ${ctx.generated}`].filter(Boolean).join(' · ');
-  const strip = `<div class="v2-covstrip">${families.map(chip).join('')}</div><p class="v2-fresh">Evidence dates: ${e(fresh)}. Green: measured · blue: partly · grey: not measured, labelled with the data or access that was missing — unknown, not poor.</p>`;
+  const strip = `<div class="v2-covstrip">${families.map(chip).join('')}</div><p class="v2-fresh">Evidence dates: ${e(fresh)}.</p>`;
 
   return `<section class="v2-summary" id="summary-now">
   <header class="v2-summary-head"><span>Summary 1 of 2</span><h2>What is happening?</h2></header>
@@ -517,7 +571,7 @@ function renderSummaryNow(ctx: Context): string {
   ${twoWayPanel(ctx, true) ? `<h3 class="v2-summary-h">Found, and recognised: visibility both ways</h3>${twoWayPanel(ctx, true)}` : ''}
   ${path && !twoWayPanel(ctx, true) ? `<h3 class="v2-summary-h">How a buyer looks — and what they find</h3>${path}` : ''}
   <div class="v2-cols v2-tight v2-sf">${strongest}${uncertainty}</div>
-  <h3 class="v2-summary-h">How much was measured</h3>
+  <h3 class="v2-summary-h">How much was measured <small class="v2-h-key">green: measured · blue: partly · white: not measured, with what was missing</small></h3>
   ${strip}
 </section>`;
 }
@@ -552,7 +606,7 @@ function renderSummaryNext(ctx: Context): string {
   const actions = ctx.registry.actions;
   const lanes: Lane[] = [
     { key: 'foundation', title: 'Fix the foundation', outcome: 'Search engines and AI tools can read, understand and quote every important page.', actions: [] },
-    { key: 'discover', title: 'Improve buyer-intent discoverability', outcome: `Buyers who search for the problem — not the name — start to find ${ctx.brand}.`, actions: [] },
+    { key: 'discover', title: 'Get found in the searches customers make', outcome: `Buyers who search for the problem — not the name — start to find ${ctx.brand}.`, actions: [] },
     { key: 'proof', title: 'Build independent proof and measure again', outcome: `Others vouch for ${ctx.brand}, and the next report can show what changed.`, actions: [] },
   ];
   for (const a of actions) lanes.find((l) => l.key === laneOf(a))!.actions.push(a);
@@ -734,7 +788,7 @@ function renderMarket(ctx: Context): string {
       return site && r.values ? { ...r, values: { ...r.values, [own]: { value: `“${site.excerpt}”`, status: 'observed', url: site.url } } } : r;
     });
     const table = (rows: ResearchRecord[], first: string, last: boolean) => `<table class="v2-table v2-compact v2-bench"><thead><tr><th style="width:15%">${e(first)}</th>${domains.map((d) => `<th>${e(nameOf(d))}</th>`).join('')}${last ? `<th style="width:22%">What it means for ${e(ctx.brand)}</th>` : ''}</tr></thead><tbody>${
-      rows.map((r) => `<tr><td><strong>${e(r.claim)}</strong><br/><span class="v2-id">${e(r.id)}</span></td>${domains.map((d, i) => cell(r.values?.[d], i === 0 && last)).join('')}${last ? `<td><small>${e(r.gap ?? '')}</small>${r.recommends ? `<br/><span class="v2-id">${e(r.recommends.id)}</span>` : ''}</td>` : ''}</tr>`).join('')
+      rows.map((r) => `<tr><td><strong>${e(plainTerm(r.claim))}</strong><br/><span class="v2-id">${e(r.id)}</span></td>${domains.map((d, i) => cell(r.values?.[d], i === 0 && last)).join('')}${last ? `<td><small>${e(r.gap ?? '')}</small>${r.recommends ? `<br/><span class="v2-id">${e(r.recommends.id)}</span>` : ''}</td>` : ''}</tr>`).join('')
     }</tbody></table>`;
     profile = profileRows.length ? table(profileRows, 'Company profile', false) + `<p class="v2-note">Each value was found by an AI analyst using live web search and carries its source; the pipeline re-opened every source page. "(not re-confirmed)" marks a value the page did not show when re-checked. Revenue is shown only where a public source states it.</p>` : '';
     benchmark = basicRows.length ? table(basicRows, 'Marketing basic', true) + `<p class="v2-note">Shaded cells are where ${e(ctx.brand)} has nothing comparable yet. "(claimed)" marks a company's statement about itself.</p>` : '';
@@ -781,12 +835,13 @@ function renderMarket(ctx: Context): string {
   const capMatrix = capabilityMatrix(ctx);
   return section(1, 'Market and competitors', 'What does the company sell, to whom, and who else competes for that buyer?',
     cands.length ? discoveryPlainEnglish(ctx) : marketPlainEnglish(verifiedNames, pack?.competitors.filter((c) => c.classification === 'not_competitor').length ?? 0), `
+    ${competitorOverlapVisual(ctx) ? block('At a glance: how much of the offer each competitor also sells', 'Capabilities stated on each company’s own website, against those stated on the company’s own site — the same five definitions for everyone. Detail in stages 1–4 below.', competitorOverlapVisual(ctx)) : ''}
     ${definition ? block('What the company offers — from its own pages', 'The starting point for everything else: buyer problems, search queries and competitor criteria come from this.', definition) : ''}
-    ${register ? block('Stage 1 · What it offers: the offering register', 'Each entry quotes the official page it came from. Profile-only entries are labelled company-declared.', register, 'v2-allow-break') : ''}
+    ${register ? block('Stage 1 · What it offers: offerings, buyers and prices', 'Each entry quotes the official page it came from. Profile-only entries are labelled company-declared.', register, 'v2-allow-break') : ''}
     ${identity ? block('Company profile versus website', 'What was entered in the company profile next to what the website says. A difference is shown, not resolved.', identity) : ''}
     ${capabilityTable ? block('What it offers: declared versus shown on its website', 'Each claim from the company profile, checked against the product, feature, pricing, solutions and help pages the homepage links to.', capabilityTable) : ''}
     ${marketView ? block('Stage 2 · The market this places it in', 'Derived only from the offering register. Anything resting on the company profile alone is an assumption.', marketView) : ''}
-    ${discovery ? block('Stage 3 · Who competes: the shortlist (at most eight)', 'Candidates come from this report’s own evidence and were each read on their own website; direct competitors first, then alternatives.', discovery, 'v2-allow-break') : landscape}
+    ${discovery ? block('Stage 3 · How the company compares with alternatives: the shortlist (at most eight)', 'Candidates come from this report’s own evidence and were each read on their own website; direct competitors first, then alternatives.', discovery, 'v2-allow-break') : landscape}
     ${capMatrix ? block('Stage 4 · Capabilities, same definitions for every company', 'A capability counts only where the company’s own pages state it within one short passage. “Not found in checked pages” is not “does not offer”.', capMatrix) : overlap ? block('Offering overlap', 'Which of the company\'s own capabilities each competitor also offers.', overlap) : ''}
     ${profile ? block('Competitor profiles (analyst, sourced)', 'What each company sells, to whom, where, and how big it is — from public sources.', profile, 'v2-allow-break') : ''}
     ${benchmark ? block('How the competitors market themselves', 'The same public checks for each company, side by side, and what closing each gap would take.', benchmark, 'v2-allow-break') : ''}
@@ -844,7 +899,7 @@ function findingCard(f: DossierFinding, actions: DossierAction[]): string {
     ${metric ? `<div class="v2-card-metric">${e(metric)}</div>` : ''}
     <div class="v2-layer v2-layer-plain"><b>Plain English</b>${e(plain ?? f.observation)}</div>
     ${f.implication ? `<div class="v2-layer v2-layer-impl"><b>Business implication</b>${e(f.implication)}</div>` : ''}
-    <div class="v2-layer v2-layer-ev"><b>Evidence trail</b>${plain && f.observation !== metric ? `${e(f.observation)}<br/>` : ''}<span>Source: ${e(f.source)} · state: ${e(st.text.toLowerCase())} · <span class="v2-id">${e(f.id)}</span></span>${caveat ? `<br/><em>Caveat: ${e(caveat)}</em>` : ''}</div>
+    <div class="v2-layer v2-layer-ev"><b>Where the information came from</b>${plain && f.observation !== metric ? `${e(f.observation)}<br/>` : ''}<span>Source: ${e(f.source)} · state: ${e(st.text.toLowerCase())} · <span class="v2-id">${e(f.id)}</span></span>${caveat ? `<br/><em>Caveat: ${e(caveat)}</em>` : ''}</div>
     ${linked.length ? `<div class="v2-card-action"><b>Action</b> ${linked.map((a) => `${e(a.title)} <span class="v2-id">${e(a.id)}</span>`).join('<br/>')}</div>` : ''}</div>`;
 }
 
@@ -1017,7 +1072,7 @@ function renderBrand(ctx: Context): string {
     const how = fp.mentionSearch
       ? `<p class="v2-note">Method: web search by ${e(fp.mentionSearch === 'openai' ? 'OpenAI (web search tool)' : 'Claude (web search tool)')} on ${e(fmtDate(fp.checkedAt) ?? '')}, then each page re-opened to confirm it names the company. ${queries.length ? `Queries the search ran: ${queries.slice(0, 6).map((q) => `“${e(q)}”`).join('; ')}.` : 'The exact queries were not recorded for this run.'} A model-directed web search is a sample, not an exhaustive index of the web.</p>`
       : '';
-    return `${identityTable ? block('Official profiles: identity, step by step', 'From declared, to opened, to confirmed as this company, to linked both ways.', identityTable) : block('Owned profiles', null, profiles)}${block('Independent mentions', 'Pages on other sites that discuss the company. A mention is not necessarily a link.', mentions + postsNote + namesakeNote + how)}${reviews ? block('Review and directory listings', null, reviews) : ''}${block('Backlinks', null, `<p class="v2-note">${e(bl?.outcome ?? 'Not measured.')} ${e(bl?.nextStep ?? '')}</p>`)}`;
+    return `${identityTable ? block('Official profiles: identity, step by step', 'From declared, to opened, to confirmed as this company, to linked both ways.', identityTable) : block('Owned profiles', null, profiles)}${block('Independent mentions', 'Pages on other sites that discuss the company. A mention is not necessarily a link.', mentions + postsNote + namesakeNote + how)}${reviews ? block('Review and directory listings', null, reviews) : ''}${block('Websites linking to the company (backlinks)', null, `<p class="v2-note">${e(bl?.outcome ?? 'Not measured.')} ${e(bl?.nextStep ?? '')}</p>`)}`;
   })() : '';
 
   const independent = pack?.independent.length ? `<table class="v2-table"><thead><tr><th>What was looked for</th><th style="width:20%">State</th><th style="width:22%">Method</th></tr></thead><tbody>${
@@ -1046,21 +1101,21 @@ function renderBrand(ctx: Context): string {
     }).join('')
   }</tbody></table><p class="v2-note">Types of authority worth building — not a list of sites, and not links the company already has.</p>` : '';
 
-  return section(3, 'Brand, entity and trust', 'Does the wider web recognise and vouch for the brand?',
+  return section(3, 'Brand recognition and trust', 'Does the wider web recognise and vouch for the brand?',
     brandPlainEnglish(ctx, kgState), `
-    ${block('Brand ecosystem', 'An entity is an organisation that search engines and AI tools can recognise across sources. Each line shows how the link to the brand was established.', graph)}
-    ${block('External footprint by family', 'Inbound links, profiles, press, partners, directories, the company registry and reviews — each with what was tried and what it can and cannot show.', familyTable, 'v2-allow-break')}
+    ${block('How the web connects to the brand', 'Search engines and AI tools recognise a company by the profiles and records that point to it. Each line shows how that link was established.', graph)}
+    ${block('External footprint by family', 'Websites linking to the company, profiles, press, partners, directories, the company registry and reviews — each with what was tried and what it can and cannot show.', familyTable, 'v2-allow-break')}
     ${footprint ? `<div class="v2-keep"><h3 class="v2-subsection">External digital footprint</h3>${footprint}</div>` : ''}
     ${independent ? block('Independent evidence', 'Third-party confirmation, looked for in public sources.', independent) : ''}
     ${block('External signal status', '"Unavailable" means a source is missing, not that the result is weak.', status)}
-    ${proof ? block('Proof inventory', null, proof) : ''}
+    ${proof ? block('Proof the company shows on its own site', null, proof) : ''}
     ${cards.length ? block('Findings', null, `<div class="v2-cards">${cards.map((f) => findingCard(f, ctx.registry.actions)).join('')}</div>`, 'v2-allow-break') : ''}
     ${strategy ? block('External authority worth building', null, strategy, 'v2-allow-break') : ''}
   `);
 }
 
 const REG_LABEL: Record<string, string> = {
-  product_line: 'Product line', customer_problem: 'Customer problem', value_proposition: 'Value proposition', buyer: 'Buyer / segment', use_case: 'Declared capability',
+  product_line: 'Offering', customer_problem: 'Customer problem', value_proposition: 'Value proposition', buyer: 'Buyer / segment', use_case: 'Declared capability',
   pricing: 'Pricing', business_model: 'Business model', free_offer: 'Free offer', geography: 'Geography',
   industry: 'Industry', differentiator: 'Differentiator', revenue: 'Revenue (as declared)', team_size: 'Team size (as declared)', founded: 'Founded',
 };
@@ -1147,8 +1202,39 @@ function discoveryBlock(ctx: Context): string {
   const unNote = unverified.length ? `<p class="v2-note">Not compared (${unverified.length}): ${e(unverified.slice(0, 8).map((c) => `${c.name} — ${c.rationale.replace(/\.$/, '')}`).join('; '))}.</p>` : '';
   const excluded = cands.filter((c) => c.classification === 'excluded');
   const exNote = excluded.length ? `<p class="v2-note">Excluded (${excluded.length}): publishers, platforms and directories — sources buyers read, not competitors (${e(excluded.filter((c) => /publisher/.test(c.rationale)).map((c) => c.domain).slice(0, 8).join(', '))}); and companies whose own pages state none of ${e(ctx.brand)}’s capabilities (${e(excluded.filter((c) => /Irrelevant/.test(c.rationale)).map((c) => c.domain).slice(0, 8).join(', ') || 'none')}).${disc && disc.found > disc.checked ? ` ${disc.found - disc.checked} further candidates with less evidence were not checked.` : ''}</p>` : '';
-  const provisional = ctx.research?.candidatesProvisional ? `<p class="v2-note"><b>Provisional:</b> ${e(ctx.brand)}’s product lines or buyers are not yet established from its own website, so these classes may change once they are.</p>` : '';
+  const provisional = ctx.research?.candidatesProvisional ? `<p class="v2-note"><b>Provisional:</b> ${e(ctx.brand)}’s offerings or buyers are not yet established from its own website, so these classes may change once they are.</p>` : '';
   return pipeline + table + beyond + unNote + exNote + provisional + '<p class="v2-note">Rule-based from each company’s own pages (identity, product or service wording, buyer focus, and the same capability definitions as below); not an analyst’s review. Ordered by offering first: direct competitors selling to the same buyers at a comparable size, then larger or differently-focused direct competitors, then alternatives. Size comes only from a stated figure; when none was found it is “not established”, never assumed.</p>';
+}
+
+/**
+ * Section 1's opening visual: for each shortlisted competitor, how many of the company's
+ * website-stated capabilities its own pages also state (the overlap the classification rests on),
+ * coloured by shortlist tier. Read from the same candidates as the shortlist table.
+ */
+function competitorOverlapVisual(ctx: Context): string {
+  const list = competitorShortlist(ctx);
+  const ownPages = (ctx.research?.offering?.pages ?? []).filter((p) => p.read && p.text).map((p) => ({ url: p.url, text: p.text! }));
+  const own = CAPABILITIES.filter((d) => capabilityState(d, ownPages).state === 'confirmed').length;
+  if (!list.length || !own) return '';
+  const TIER_COLOR: Record<string, string> = { direct_peer: PALETTE.crimson, direct_other: PALETTE.amber, alternative: PALETTE.blue };
+  const row = (name: string, sub: string, n: number, color: string) =>
+    `<div class="v2-ov-row"><div class="v2-ov-name"><b>${e(name)}</b><small>${e(sub)}</small></div><div class="v2-ov-track">${Array.from({ length: own }, (_, i) => `<i style="background:${i < n ? color : 'transparent'};border-color:${color}"></i>`).join('')}</div><div class="v2-ov-n">${n} of ${own}</div></div>`;
+  return `<div class="v2-ov">${row(ctx.brand, 'its own website', own, PALETTE.navy)}${list.map((c) => row(c.name, TIER_LABEL[c.tier].split(' — ')[1] ?? c.tier, Math.min(own, c.overlap.length), TIER_COLOR[c.tier])).join('')}</div>`
+    + swatchLegend([[PALETTE.crimson, 'Direct — same buyers'], [PALETTE.amber, 'Direct — much larger or other buyers'], [PALETTE.blue, 'Alternative — part of the offer, or a service']]);
+}
+
+/** The appendix's opening visual: every evidence family, its sources' states, and what was missing. */
+function sourceAvailabilityVisual(ctx: Context): string {
+  const FAMILIES: Array<[AccessRow['family'], string]> = [['website', 'Website'], ['search', 'Google search'], ['ai_answers', 'AI answers'], ['social', 'Social profiles'], ['mentions', 'Mentions'], ['reviews', 'Reviews'], ['backlinks', 'Links from other sites'], ['knowledge_graph', 'Knowledge graph'], ['registry', 'Company registry'], ['page_speed', 'Page speed'], ['competitors', 'Competitors']];
+  const tone = (a: AccessRow) => (a.reason === 'measured' ? PALETTE.green : a.reason === 'partial' ? PALETTE.blue : a.reason === 'searched_not_found' ? '#9DB7DA' : '#C9D1DC');
+  const rows = FAMILIES.map(([fam, label]) => {
+    const rs = ctx.ledger.access.filter((a) => a.family === fam);
+    if (!rs.length) return '';
+    const m = rs.filter((a) => a.reason === 'measured').length;
+    const gap = m === rs.length ? null : ctx.diagnostics.find((d) => d.plain && d.key === (CHIP_DIAG[fam] ?? `family:${fam}`))?.plain?.short;
+    return `<div class="v2-sa-row"><div class="v2-sa-name">${e(label)}</div><div class="v2-sa-track">${rs.map((a) => `<i style="background:${tone(a)}" title="${e(a.capability)}"></i>`).join('')}</div><div class="v2-sa-n">${m} of ${rs.length} measured${gap ? ` · <em>${e(gap)}</em>` : ''}</div></div>`;
+  }).join('');
+  return `<div class="v2-sa">${rows}</div>` + swatchLegend([[PALETTE.green, 'Measured'], [PALETTE.blue, 'Partly measured'], ['#9DB7DA', 'Searched, not found'], ['#C9D1DC', 'Not measured (missing data or access)']]);
 }
 
 /** The company's own size band, from what it states (register revenue or team size); null when it states none. */
@@ -1159,8 +1245,8 @@ function ownScaleOf(ctx: Context): ScaleBand | null {
 }
 
 /** At most eight competitors, offering first: direct peers, then other direct competitors, then alternatives. */
-function competitorShortlist(ctx: Context) {
-  return shortlist(ctx.research?.candidates ?? [], ownScaleOf(ctx), 8);
+function competitorShortlist(ctx: Context, max = 8) {
+  return shortlist(ctx.research?.candidates ?? [], ownScaleOf(ctx), max);
 }
 
 /** Stage 4: one capability definition per row, applied to every company. */
@@ -1425,7 +1511,7 @@ function proposedQueries(ctx: Context): string {
   const q = ctx.research?.proposedQueries ?? [];
   if (!q.length) return '';
   return `<table class="v2-table v2-compact"><thead><tr><th style="width:44%">Query</th><th>Basis</th><th style="width:12%">Status</th></tr></thead><tbody>${
-    q.map((x) => `<tr><td>${e(x.query)}</td><td><small>${e(x.basis)}</small></td><td>${pill(x.status === 'run' ? 'Run' : 'Proposed', x.status === 'run' ? 'good' : 'neutral')}</td></tr>`).join('')
+    q.map((x) => `<tr><td>${e(x.query)}</td><td><small>${e(plainTerm(x.basis))}</small></td><td>${pill(x.status === 'run' ? 'Run' : 'Proposed', x.status === 'run' ? 'good' : 'neutral')}</td></tr>`).join('')
   }</tbody></table>${(() => {
     const run = q.filter((x) => x.status === 'run').length;
     const notRun = q.length - run;
@@ -1443,7 +1529,7 @@ function renderSearch(ctx: Context): string {
   const disc = pillarOf(ctx, 'discoverability');
   const three = `<div class="v2-vis3">
     <div class="v2-vis v2-vis-warn"><div class="v2-vis-n">1</div><div><h4>Search visibility</h4><div class="v2-vis-value">${e(search?.line ?? `Not measured — ${ctx.diagnostics.find((d) => d.key === 'search')?.plain?.short ?? 'no result observed'}`)}</div><small>What search engines actually returned · ${e(search?.source ?? '')}</small></div></div>
-    <div class="v2-vis v2-vis-warn"><div class="v2-vis-n">2</div><div><h4>Generative-search visibility</h4><div class="v2-vis-value">${e(gen.line)}</div><small>What AI search tools retrieved and cited · ${e(gen.note)}</small></div></div>
+    <div class="v2-vis v2-vis-warn"><div class="v2-vis-n">2</div><div><h4>Visibility in AI answers</h4><div class="v2-vis-value">${e(gen.line)}</div><small>What AI search tools retrieved and cited · ${e(gen.note)}</small></div></div>
     <div class="v2-vis v2-vis-info"><div class="v2-vis-n">3</div><div><h4>Readiness</h4><div class="v2-vis-value">Discoverability ${disc?.value ?? '—'}${disc?.state === 'measured' ? '' : '*'} · extraction ${extraction?.value ?? '—'}/100</div><small>How well the site is built to be found and quoted · *inferred, not rankings</small></div></div>
   </div>
   <p class="v2-note">These are kept apart on purpose: a well-built site is not the same as a site that appears in results, and an AI model that has heard of a brand is not the same as an AI search tool that retrieves it today. The <b>AI Surface Presence</b> score in section 5 (${e(aiDimText(ctx))}) is a separate measure from the scoring run's on-site checks; it is <b>not</b> calculated from the AI answers in this section.</p>`;
@@ -1494,10 +1580,10 @@ function renderSearch(ctx: Context): string {
     ${aiAnswerGrid(ctx) ? block('What AI search tools say, question by question', 'Each answer was built from live web sources the tool cites. Buyer questions: is the brand named? Brand-name questions: is it described correctly?', aiAnswerGrid(ctx), 'v2-allow-break') : ''}
     ${aiShareOfVoice(ctx) ? block('Who AI answers recommend instead', 'Brands named in the answers to buyer questions.', aiShareOfVoice(ctx)) : ''}
     ${aiCitedSources(ctx) ? block('Where AI answers get their information', null, aiCitedSources(ctx)) : ''}
-    ${generativeMatrix(ctx) ? block('AI search tools checked', 'Only answers retrieved from the live web, with checkable sources, count as visibility. Answers from a model’s memory are excluded.', generativeMatrix(ctx)) : ''}
+    ${generativeMatrix(ctx) ? block('AI search tools checked', 'Only answers retrieved from the live web, with checkable sources, count as visibility. Answers from a model’s memory are excluded.', generativeMatrix(ctx), 'v2-allow-break') : ''}
     ${aiGrid(ctx) ? block('AI answer engines checked by the report run', 'By provider and question type. Only a grounded answer counts; every other outcome is shown by its reason.', aiGrid(ctx)) : ''}
-    ${proposedQueries(ctx) ? block(`Buyer-intent queries from the validated offering${(ctx.research?.proposedQueries ?? []).some((x) => x.status === 'run') ? '' : ' — not yet run'}`, 'Derived from the offering register and market (section 1), never from a category label.', proposedQueries(ctx)) : ''}
-    ${runTable ? block('Queries checked by the report run (generic)', 'Built from the declared category label, not from buyer questions: shown for completeness, not as buyer-intent evidence.', runTable, 'v2-allow-break') : ''}
+    ${proposedQueries(ctx) ? block(`Searches potential customers might make${(ctx.research?.proposedQueries ?? []).some((x) => x.status === 'run') ? '' : ' — not yet run'}`, 'Built from what the company offers and who it sells to (section 1), never from a category label.', proposedQueries(ctx)) : ''}
+    ${runTable ? block('Queries checked by the report run (generic)', 'Built from the declared category label, not from buyer questions: shown for completeness, not as evidence of what customers search for.', runTable, 'v2-allow-break') : ''}
     ${domainTable ? block('Domains seen in the report run’s results', null, domainTable) : ''}
   `);
 }
@@ -1535,7 +1621,7 @@ function renderPlan(ctx: Context): string {
   }));
   const empty = [0, 1, 2].filter((w) => !items.some((i) => i.window === w)).map((w) => ['Days 0–30', 'Days 31–60', 'Days 61–90'][w]);
   const map = roadmap(items, ['Days 0–30', 'Days 31–60', 'Days 61–90'])
-    + swatchLegend([[PALETTE.blue, 'Fix the foundation'], [PALETTE.teal, 'Improve buyer-intent discoverability'], [PALETTE.purple, 'Build independent proof and measure again']])
+    + swatchLegend([[PALETTE.blue, 'Fix the foundation'], [PALETTE.teal, 'Get found in the searches customers make'], [PALETTE.purple, 'Build independent proof and measure again']])
     + (empty.length ? `<p class="v2-note">${e(empty.join(' and '))}: nothing scheduled. No action was scheduled there by a source or falls there by effort; the window is left empty rather than filled with generic work.</p>` : '');
 
   const levers = actions.filter((a) => a.lever).sort((a, b) => (b.lever!.overallGain - a.lever!.overallGain));
@@ -1646,7 +1732,7 @@ function renderAppendix(ctx: Context): string {
     <tr><td><strong>AI answer states</strong></td><td>One vocabulary throughout: measured, grounded (built from live web search, with sources — the only state that counts); answered, not grounded; source failed; not configured; not tested; inaccessible; unknown. Denominators: questions sent → grounded answers → grounded answers to buyer questions → answers naming the company.</td></tr>
     <tr><td><strong>Crawl funnel</strong></td><td>Known addresses → fetched → answered → read → evaluated. Addresses never fetched (known only from site analytics) are not failures.</td></tr>
     <tr><td><strong>Search visibility</strong></td><td>The search provider's own ranks for the listed queries, within the results returned. Not found within that depth is not a rank of zero and does not mean the site is not indexed.</td></tr>
-    <tr><td><strong>Generative-search visibility</strong></td><td>Counts only answers retrieved from the live web with checkable sources. Answers from a model’s memory, failures and unconfigured tools are shown by reason and never counted.</td></tr>
+    <tr><td><strong>Visibility in AI answers</strong></td><td>Counts only answers retrieved from the live web with checkable sources. Answers from a model’s memory, failures and unconfigured tools are shown by reason and never counted.</td></tr>
     <tr><td><strong>Competitors</strong></td><td>Candidates from the brand’s own buyer searches; included only after checking each company’s own site for the same product, buyer and job. Label or name overlap is not enough.</td></tr>
   </tbody></table>`;
 
@@ -1654,6 +1740,7 @@ function renderAppendix(ctx: Context): string {
 
   return section(6, 'Evidence appendix', 'What was observed, where it came from, and how the numbers are calculated.',
     'Everything needed to check a conclusion: each source and its age, every research observation with its id and link, the open gaps and how to close them, each finding, every website check, and how scores are calculated.', `
+    ${block('Where the information came from: source availability', `Each evidence family and how many of its ${ctx.ledger.access.length} sources this run could measure. Grey is missing data or access, labelled with what was missing — unknown, not poor.`, sourceAvailabilityVisual(ctx))}
     ${block('Source diagnostics', 'Every source: what was sought, what happened (with the provider’s own words where it refused), why — or “cause unconfirmed” — what it costs the conclusions, and the cheapest compliant next step.', diagnosticsTable(ctx), 'v2-allow-break')}
     <!--V2-VALIDATION-->
     ${block('Scoring inputs', 'The six inputs the Authority Index rests on, and whether each was measured. This is narrower than the access matrix above, which covers every source the report uses.', `<table class="v2-table v2-compact"><tbody>${ctx.sources.map((src) => {
@@ -1724,10 +1811,10 @@ const REASON_PILL: Record<string, [string, Tone]> = {
 const DIAG_TONE = (s: DiagState): Tone => (s === 'measured' ? 'good' : s === 'partial' ? 'info' : ['searched_not_found', 'not_attempted', 'unsupported_capability'].includes(s) ? 'neutral' : ['not_configured', 'login_restricted', 'permission_denied'].includes(s) ? 'warn' : 'bad');
 
 function diagnosticsTable(ctx: Context): string {
-  return `<table class="v2-table v2-compact v2-access"><thead><tr><th style="width:17%">Source</th><th style="width:20%">State · cause</th><th style="width:22%">What happened</th><th style="width:15%">Impact</th><th>Next step · cost · needs</th></tr></thead><tbody>${
-    ctx.diagnostics.map((d) => `<tr data-diag="${e(d.key)}"><td><strong>${e(d.source)}</strong><br/><small>${e(d.family)} · integration ${e(d.integration)} · credential ${e(d.credential)}</small></td>
-      <td>${pill(DIAG_LABEL[d.state], DIAG_TONE(d.state))}${d.causeConfirmed ? '' : ' <em class="v2-unconf">cause unconfirmed</em>'}<br/><small>${e(d.cause)}</small></td>
-      <td><small>${e(d.attempt)}</small></td><td><small>${e(d.impact)}</small></td>
+  return `<table class="v2-table v2-compact v2-access"><thead><tr><th style="width:21%">Source · state</th><th style="width:30%">What happened · why</th><th style="width:19%">What it costs the report</th><th>Next step · cost · needs</th></tr></thead><tbody>${
+    // Four readable columns: the source with its state, then what happened and why, the cost to the report, the fix.
+    ctx.diagnostics.map((d) => `<tr data-diag="${e(d.key)}"><td><strong>${e(d.source)}</strong><br/>${pill(DIAG_LABEL[d.state], DIAG_TONE(d.state))}${d.causeConfirmed ? '' : ' <em class="v2-unconf">cause unconfirmed</em>'}<br/><small>${e(d.family)} · credential ${e(d.credential)}${d.integration === 'implemented' ? '' : ` · integration ${e(d.integration)}`}</small></td>
+      <td><small>${e(d.attempt)}</small>${d.cause && d.cause !== '—' ? `<br/><small><b>Why:</b> ${e(d.cause)}</small>` : ''}</td><td><small>${e(d.impact)}</small></td>
       <td><small>${e(d.next)}<br/><b>Cost:</b> ${e(d.cost)}${d.needs.length ? ` · <b>needs:</b> ${e(d.needs.join(', '))}` : ''}${d.unlocks && d.unlocks !== '—' ? `<br/><b>Unlocks:</b> ${e(d.unlocks)}` : ''}${d.docUrl ? `<br/><span class="v2-src">${e(d.docUrl.replace(/^https?:\/\//, ''))}</span>` : ''}</small></td></tr>`).join('')
   }</tbody></table><p class="v2-note">Credentials are recorded as present, absent or rejected only — never their values. Provider facts and prices are from the official pages linked, read on 25 Oct 2026; where a page did not state a price, the cost is “unknown”. Checks marked local ran from the analyst’s workstation and may differ from production.</p>`;
 }

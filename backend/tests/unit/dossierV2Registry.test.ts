@@ -306,7 +306,7 @@ describe('dossier v2 summary pages and public research', () => {
 
   it('page 3 shows the three decision lanes, each with owner class, dependency, success measure and timing — and no internal ids', () => {
     const next = summary(html, 'summary-next');
-    for (const title of ['Fix the foundation', 'Improve buyer-intent discoverability', 'Build independent proof and measure again']) expect(next).toContain(title);
+    for (const title of ['Fix the foundation', 'Get found in the searches customers make', 'Build independent proof and measure again']) expect(next).toContain(title);
     expect(next.match(/class="v2-lane v2-lane-/g)).toHaveLength(3);
     // Every action row: action, business reason, owner class, dependency, success measure, window.
     for (const col of ['Action', 'Business reason', 'Owner', 'Depends on', 'Success measure', 'Window']) {
