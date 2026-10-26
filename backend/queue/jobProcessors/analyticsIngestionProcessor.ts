@@ -24,6 +24,9 @@
  *   { type: 'analytics-post-connect-import', companyId, source }
  *     The first import after a company connects GA4 / GSC or selects a property.
  *
+ *   { type: 'analytics-manual-sync', companyId, source, startDate, endDate }
+ *     "Sync now" from the integrations page (backend/services/analyticsManualSync.ts).
+ *
  *   { type: 'oauth-refresh' }
  *     Phase C — fold of the autonomous OAuth lifecycle sweep into the
  *     existing analytics-ingestion queue (Hobby plan has only 2 cron
@@ -37,6 +40,7 @@ import type { Job } from 'bullmq';
 import { runDailyGrowthIngestion, runPendingPostPolls } from '../../jobs/analyticsIngestionJob';
 import { runScheduledAnalyticsSync } from '../../services/scheduledAnalyticsSync';
 import { runPostConnectImport } from '../../services/analyticsPostConnectImport';
+import { runManualSyncJob, type ManualSyncJobData, type ManualSyncResult } from '../../services/analyticsManualSync';
 import { runOAuthLifecycleSweep } from '../../services/integrations/oauthLifecycleScheduler';
 
 export type AnalyticsIngestionJobData =
@@ -45,9 +49,10 @@ export type AnalyticsIngestionJobData =
   | { type: 'ga4-all-companies'; startDate?: string; endDate?: string }
   | { type: 'gsc-all-companies' }
   | { type: 'analytics-post-connect-import'; companyId: string; source: 'ga4' | 'gsc' }
+  | ManualSyncJobData
   | { type: 'oauth-refresh' };
 
-export async function processAnalyticsIngestionJob(job: Job<AnalyticsIngestionJobData>): Promise<void> {
+export async function processAnalyticsIngestionJob(job: Job<AnalyticsIngestionJobData>): Promise<void | ManualSyncResult> {
   const { type } = job.data;
 
   if (type === 'daily-growth') {
@@ -69,7 +74,7 @@ export async function processAnalyticsIngestionJob(job: Job<AnalyticsIngestionJo
 
     const summary = await runScheduledAnalyticsSync('ga4', { startDate, endDate });
     console.log(
-      `[analyticsIngestionProcessor][ga4-all-companies] attempted=${summary.attempted} succeeded=${summary.succeeded} failed=${summary.failed} window=${startDate}..${endDate}`,
+      `[analyticsIngestionProcessor][ga4-all-companies] attempted=${summary.attempted} imported=${summary.succeeded} skipped=${summary.skipped} failed=${summary.failed} window=${startDate}..${endDate}`,
     );
     return;
   }
@@ -77,7 +82,7 @@ export async function processAnalyticsIngestionJob(job: Job<AnalyticsIngestionJo
   if (type === 'gsc-all-companies') {
     const summary = await runScheduledAnalyticsSync('gsc');
     console.log(
-      `[analyticsIngestionProcessor][gsc-all-companies] attempted=${summary.attempted} succeeded=${summary.succeeded} failed=${summary.failed}`,
+      `[analyticsIngestionProcessor][gsc-all-companies] attempted=${summary.attempted} imported=${summary.succeeded} skipped=${summary.skipped} failed=${summary.failed}`,
     );
     return;
   }
@@ -92,6 +97,17 @@ export async function processAnalyticsIngestionJob(job: Job<AnalyticsIngestionJo
     }
     await runPostConnectImport(companyId, source);
     return;
+  }
+
+  if (type === 'analytics-manual-sync') {
+    // "Sync now" from the integrations page. Throws on failure so BullMQ retries; the returned result
+    // is what GET /api/analytics/force-sync reports once the job completes.
+    const data = job.data as ManualSyncJobData;
+    if (typeof data.companyId !== 'string' || !data.companyId || (data.source !== 'ga4' && data.source !== 'gsc') || !data.startDate || !data.endDate) {
+      console.warn('[analyticsIngestionProcessor][analytics-manual-sync] invalid job data');
+      return;
+    }
+    return runManualSyncJob(data);
   }
 
   if (type === 'oauth-refresh') {

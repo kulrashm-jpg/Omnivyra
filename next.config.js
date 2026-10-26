@@ -72,7 +72,7 @@ const nextConfig = {
     { source: '/blog/rss.xml', destination: '/api/blog/rss' },
     { source: '/blog/sitemap.xml', destination: '/api/blog/sitemap' },
     // IndexNow key file (/<key>.txt): 404 unless INDEXNOW_PUBLISH_KEY_FILE=true and the name is INDEXNOW_API_KEY. Static files in
-    // public/ (robots.txt etc.) are matched before rewrites and are unaffected.
+    // public/ (robots.txt) are served before rewrites, and its 6-character name cannot match the 8–128 pattern.
     { source: '/:key([A-Za-z0-9-]{8,128}).txt', destination: '/api/indexnow-key?key=:key' },
   ],
   headers: async () => [

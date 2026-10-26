@@ -60,8 +60,8 @@ jobs:
       - name: Verify the gated suite inventory (no silent skips)
         run: |
           set -euo pipefail
-          EXPECTED=11
-          for s in dossierV2Contradictions dossierV2SourceDiagnostics dossierV2Registry publicResearchCollect snapshotProfileEnrichment reportProfileOptional dossierV2TwoWayVisibility pageSpeedSharedProvider googleSearchConsoleTenantIsolation bingRegistryIntegration indexNowSubmission; do
+          EXPECTED=15
+          for s in dossierV2Contradictions dossierV2SourceDiagnostics dossierV2Registry publicResearchCollect snapshotProfileEnrichment reportProfileOptional dossierV2TwoWayVisibility pageSpeedSharedProvider googleSearchConsoleTenantIsolation bingRegistryIntegration indexNowSubmission googleSyncRepair analyticsIngestionProcessorJobs googleIntegrationClosure indexNowRouteAndTrigger; do
             test -f "backend/tests/unit/$s.test.ts" || { echo "Gated suite missing: $s"; exit 1; }
           done
           FOUND=$(npx jest --listTests \
@@ -76,9 +76,13 @@ jobs:
             backend/tests/unit/googleSearchConsoleTenantIsolation.test.ts \
             backend/tests/unit/bingRegistryIntegration.test.ts \
             backend/tests/unit/indexNowSubmission.test.ts \
+            backend/tests/unit/googleSyncRepair.test.ts \
+            backend/tests/unit/analyticsIngestionProcessorJobs.test.ts \
+            backend/tests/unit/googleIntegrationClosure.test.ts \
+            backend/tests/unit/indexNowRouteAndTrigger.test.ts \
             2>/dev/null | grep -c 'test\.ts')
           echo "jest discovered $FOUND suite(s); expected $EXPECTED"
           test "$FOUND" -eq "$EXPECTED"
 
       - name: Contradiction checks, evidence ledger and rendered dossier
-        run: npx jest backend/tests/unit/dossierV2Contradictions.test.ts backend/tests/unit/dossierV2SourceDiagnostics.test.ts backend/tests/unit/dossierV2Registry.test.ts backend/tests/unit/publicResearchCollect.test.ts backend/tests/unit/snapshotProfileEnrichment.test.ts backend/tests/unit/reportProfileOptional.test.ts backend/tests/unit/dossierV2TwoWayVisibility.test.ts backend/tests/unit/pageSpeedSharedProvider.test.ts backend/tests/unit/googleSearchConsoleTenantIsolation.test.ts backend/tests/unit/bingRegistryIntegration.test.ts backend/tests/unit/indexNowSubmission.test.ts --no-coverage --colors --ci
+        run: npx jest backend/tests/unit/dossierV2Contradictions.test.ts backend/tests/unit/dossierV2SourceDiagnostics.test.ts backend/tests/unit/dossierV2Registry.test.ts backend/tests/unit/publicResearchCollect.test.ts backend/tests/unit/snapshotProfileEnrichment.test.ts backend/tests/unit/reportProfileOptional.test.ts backend/tests/unit/dossierV2TwoWayVisibility.test.ts backend/tests/unit/pageSpeedSharedProvider.test.ts backend/tests/unit/googleSearchConsoleTenantIsolation.test.ts backend/tests/unit/bingRegistryIntegration.test.ts backend/tests/unit/indexNowSubmission.test.ts backend/tests/unit/googleSyncRepair.test.ts backend/tests/unit/analyticsIngestionProcessorJobs.test.ts backend/tests/unit/googleIntegrationClosure.test.ts backend/tests/unit/indexNowRouteAndTrigger.test.ts --no-coverage --colors --ci

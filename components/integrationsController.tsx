@@ -316,81 +316,69 @@ export function useIntegrationsPageController() {
     }
   };
 
+  /**
+   * Queue a manual sync and follow THAT job (GET /api/analytics/force-sync) until it completes or fails.
+   * Success is reported only from the job's own result — never inferred from an older status row.
+   */
+  const runQueuedManualSync = async (capability: 'google_analytics' | 'google_search_console'): Promise<
+    | { kind: 'completed'; records: number | null }
+    | { kind: 'failed'; message: string }
+    | { kind: 'pending'; message: string }
+    | { kind: 'no_property' }
+  > => {
+    const response = await fetchWithAuth('/api/analytics/force-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ companyId, capability }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 400 && (data?.error === 'no_active_property' || data?.error === 'no_active_search_console_property')) {
+      return { kind: 'no_property' };
+    }
+    if (response.status === 503) return { kind: 'failed', message: data?.error || 'The sync queue is unavailable. Nothing was started; try again shortly.' };
+    if (!response.ok && response.status !== 202) return { kind: 'failed', message: data?.error || data?.message || 'Failed to start the sync' };
+    if (data?.status === 'completed') return { kind: 'completed', records: typeof data.records_written === 'number' ? data.records_written : null };
+
+    const POLL_TIMEOUT_MS = 120_000;
+    const POLL_INTERVAL_MS = 3_000;
+    const pollDeadline = Date.now() + POLL_TIMEOUT_MS;
+    while (Date.now() < pollDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      try {
+        const poll = await fetchWithAuth(`/api/analytics/force-sync?companyId=${encodeURIComponent(companyId!)}&capability=${capability}`);
+        const job = await poll.json().catch(() => ({}));
+        if (job?.status === 'completed') return { kind: 'completed', records: typeof job.records_written === 'number' ? job.records_written : null };
+        if (job?.status === 'failed') return { kind: 'failed', message: job?.error || 'The sync failed.' };
+      } catch {
+        // transient — keep polling
+      }
+    }
+    return { kind: 'pending', message: 'Sync is queued or still running. Results appear when it finishes.' };
+  };
+
   const handleForceSyncGoogleAnalytics = async () => {
     if (!companyId || gaSyncing) return;
     setGaSyncing(true);
     setGaError(null);
     setGaNotice('Syncing Google Analytics...');
 
-    const requestStart = Date.now();
-
     try {
-      const response = await fetchWithAuth('/api/analytics/force-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId }),
-      });
-      const data = await response.json().catch(() => ({}));
-
-      if (response.status === 400 && data?.error === 'no_active_property') {
+      const outcome = await runQueuedManualSync('google_analytics');
+      if (outcome.kind === 'no_property') {
         setGaError('Select a Google Analytics property before syncing.');
         return;
       }
-      if (!response.ok && response.status !== 202) {
-        throw new Error(data?.error || data?.message || 'Failed to sync Google Analytics');
-      }
-
-      if (data?.status === 'synced') {
-        const written = typeof data.sessions_written === 'number' ? ` (${data.sessions_written} sessions)` : '';
+      if (outcome.kind === 'completed') {
+        const written = typeof outcome.records === 'number' ? ` (${outcome.records} records)` : '';
         setGaNotice(`Sync complete${written}.`);
         await loadGoogleAnalyticsStatus();
         return;
       }
-
-      // status === 'started' — poll /api/analytics/status until last_sync moves
-      // past requestStart, or status becomes error, or hard timeout (90s).
-      const POLL_TIMEOUT_MS = 90_000;
-      const POLL_INTERVAL_MS = 2_500;
-      const pollDeadline = Date.now() + POLL_TIMEOUT_MS;
-
-      let lastError: string | null = null;
-      while (Date.now() < pollDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-
-        try {
-          const pollResponse = await fetchWithAuth(
-            `/api/analytics/status?companyId=${encodeURIComponent(companyId)}`,
-          );
-          if (!pollResponse.ok) continue;
-          const pollData = await pollResponse.json();
-
-          // Update the card live so the user sees status changes during polling.
-          setGaStatus(pollData);
-
-          if (pollData?.status === 'error') {
-            lastError = pollData?.message || 'Sync failed';
-            break;
-          }
-
-          const lastSyncMs = pollData?.last_sync ? new Date(pollData.last_sync).getTime() : 0;
-          if (
-            lastSyncMs > requestStart &&
-            pollData?.status &&
-            ['ready', 'low_data', 'waiting_for_data'].includes(pollData.status)
-          ) {
-            setGaNotice('Sync complete.');
-            return;
-          }
-        } catch {
-          // transient — keep polling
-        }
+      if (outcome.kind === 'failed') {
+        setGaError(outcome.message);
+        return;
       }
-
-      if (lastError) {
-        setGaError(lastError);
-      } else {
-        setGaNotice('Sync still running in the background. Refresh in a few minutes to see results.');
-      }
+      setGaNotice(outcome.message);
     } catch (err: any) {
       setGaError(err?.message || 'Failed to sync Google Analytics');
     } finally {
@@ -403,71 +391,23 @@ export function useIntegrationsPageController() {
     setGscSyncing(true);
     setGscError(null);
     setGscNotice('Syncing Search Console...');
-    const requestStart = Date.now();
 
     try {
-      const response = await fetchWithAuth('/api/analytics/force-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId, capability: 'google_search_console' }),
-      });
-      const data = await response.json().catch(() => ({}));
-
-      if (response.status === 400 && data?.error === 'no_active_search_console_property') {
+      const outcome = await runQueuedManualSync('google_search_console');
+      if (outcome.kind === 'no_property') {
         setGscError('Select a Search Console property before syncing.');
         return;
       }
-      if (!response.ok && response.status !== 202) {
-        throw new Error(data?.error || data?.message || 'Failed to sync Search Console');
-      }
-
-      if (data?.status === 'synced') {
+      if (outcome.kind === 'completed') {
         setGscNotice('Sync complete.');
         await loadGoogleAnalyticsStatus();
         return;
       }
-
-      const POLL_TIMEOUT_MS = 90_000;
-      const POLL_INTERVAL_MS = 2_500;
-      const pollDeadline = Date.now() + POLL_TIMEOUT_MS;
-      let lastError: string | null = null;
-
-      while (Date.now() < pollDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-
-        try {
-          const pollResponse = await fetchWithAuth(
-            `/api/analytics/status?companyId=${encodeURIComponent(companyId)}`,
-          );
-          if (!pollResponse.ok) continue;
-          const pollData = await pollResponse.json();
-          const nextGscStatus = pollData?.search_console ?? null;
-          setGscStatus(nextGscStatus);
-
-          if (nextGscStatus?.status === 'error') {
-            lastError = nextGscStatus?.message || 'Search Console sync failed';
-            break;
-          }
-
-          const lastSyncMs = nextGscStatus?.last_sync ? new Date(nextGscStatus.last_sync).getTime() : 0;
-          if (
-            lastSyncMs > requestStart &&
-            nextGscStatus?.status &&
-            ['ready', 'limited_coverage', 'waiting_for_data'].includes(nextGscStatus.status)
-          ) {
-            setGscNotice(nextGscStatus.status === 'ready' ? 'Sync complete.' : nextGscStatus.message || 'Search Console data is still building coverage.');
-            return;
-          }
-        } catch {
-          // transient - keep polling
-        }
+      if (outcome.kind === 'failed') {
+        setGscError(outcome.message);
+        return;
       }
-
-      if (lastError) {
-        setGscError(lastError);
-      } else {
-        setGscNotice('Sync still running in the background. Refresh in a few minutes to see results.');
-      }
+      setGscNotice(outcome.message);
     } catch (err: any) {
       setGscError(err?.message || 'Failed to sync Search Console');
     } finally {

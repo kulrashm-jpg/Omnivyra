@@ -183,3 +183,37 @@ export async function submitIndexNow(changes: IndexNowChange[], cfg: IndexNowCon
       : `IndexNow ${httpStatus == null ? 'did not answer' : `answered HTTP ${httpStatus}`}${detail ? ` — ${detail}` : ''}.`;
   return { ...base, outcome, httpStatus, attempts, submitted: outcome.startsWith('received') ? batch : [], detail: what };
 }
+
+/**
+ * The publishing trigger: a marketing-blog post was published, updated while published, unpublished or
+ * deleted (pages/api/admin/blog). Announces the post URL and /blog (the listing changes too) — both are
+ * in the blog sitemap. A slug change also announces the old URL (now gone).
+ *
+ * Bounded so an admin save never waits on IndexNow: one attempt, 5 s timeout. Never throws. With
+ * INDEXNOW_SUBMIT_ENABLED unset nothing is sent (outcome 'disabled'). Duplicate suppression is per server
+ * instance (serverless instances do not share memory); IndexNow tolerates a repeated notification.
+ */
+export type BlogChange = { slug: string; change: 'added' | 'updated' | 'deleted'; previousSlug?: string | null };
+
+export async function notifyIndexNowOfBlogChange(
+  event: BlogChange,
+  deps: { origin?: string; env?: Record<string, string | undefined>; fetchImpl?: typeof fetch; store?: IndexNowStore; now?: () => number } = {},
+): Promise<IndexNowResult | null> {
+  try {
+    const origin = deps.origin ?? (await import('../../config/getCanonicalAppUrl')).getCanonicalAppUrl();
+    const cfg = readIndexNowConfig(origin, deps.env ?? process.env);
+    const changes: IndexNowChange[] = [
+      { url: `${cfg.origin}/blog/${event.slug}`, change: event.change },
+      { url: `${cfg.origin}/blog`, change: 'updated' },
+    ];
+    if (event.previousSlug && event.previousSlug !== event.slug) changes.push({ url: `${cfg.origin}/blog/${event.previousSlug}`, change: 'deleted' });
+    const result = await submitIndexNow(changes, cfg, { fetchImpl: deps.fetchImpl, store: deps.store, now: deps.now, maxRetries: 0, timeoutMs: 5_000, minIntervalMs: 0 });
+    if (result.outcome !== 'disabled') {
+      console.info('[indexnow][blog]', { outcome: result.outcome, http_status: result.httpStatus, submitted: result.submitted.length, rejected: result.rejected.length, suppressed: result.suppressed.length });
+    }
+    return result;
+  } catch (err) {
+    console.warn('[indexnow][blog] notification skipped', { message: err instanceof Error ? err.message.slice(0, 120) : 'error' });
+    return null;
+  }
+}

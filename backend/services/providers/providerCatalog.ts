@@ -106,8 +106,10 @@ export const PROVIDER_CATALOG: Record<string, ProviderDescriptor> = {
   similarweb: d({ id: 'similarweb', category: 'analytics', authType: 'api_key', quota: null, pricingModel: 'subscription', enabled: false, health: 'unknown', timeoutMs: 20_000, retryPolicy: DEFAULT_RETRY, envKeys: ['SIMILARWEB_API_KEY'], paid: true, governedVia: 'governor', integrated: false, costCategory: 'connector' }),
 
   // ── First-party Google (OAuth, free tier) ───────────────────────────────────
-  search_console: d({ id: 'search_console', category: 'search', authType: 'oauth', quota: null, pricingModel: 'free', enabled: false, health: 'unknown', timeoutMs: 20_000, retryPolicy: DEFAULT_RETRY, envKeys: ['GSC_OAUTH_CLIENT_ID', 'GSC_OAUTH_CLIENT_SECRET'], paid: false, governedVia: 'governor', integrated: true, costCategory: 'connector' }),
-  ga4:            d({ id: 'ga4', category: 'analytics', authType: 'oauth', quota: null, pricingModel: 'free', enabled: false, health: 'unknown', timeoutMs: 20_000, retryPolicy: DEFAULT_RETRY, envKeys: ['GA4_PROPERTY_ID', 'GA4_OAUTH'], paid: false, governedVia: 'governor', integrated: true, costCategory: 'connector' }),
+  // No env keys: the platform OAuth client lives in Super Admin (analytics_provider_config) and each
+  // company authorises its own account. See googleTenantSourceAvailability for the real states.
+  search_console: d({ id: 'search_console', category: 'search', authType: 'oauth', quota: null, pricingModel: 'free', enabled: false, health: 'unknown', timeoutMs: 20_000, retryPolicy: DEFAULT_RETRY, envKeys: [], paid: false, governedVia: 'governor', integrated: true, costCategory: 'connector' }),
+  ga4:            d({ id: 'ga4', category: 'analytics', authType: 'oauth', quota: null, pricingModel: 'free', enabled: false, health: 'unknown', timeoutMs: 20_000, retryPolicy: DEFAULT_RETRY, envKeys: [], paid: false, governedVia: 'governor', integrated: true, costCategory: 'connector' }),
   bing_webmaster: d({ id: 'bing_webmaster', category: 'search', authType: 'api_key', quota: null, pricingModel: 'free', enabled: false, health: 'unknown', timeoutMs: 20_000, retryPolicy: DEFAULT_RETRY, envKeys: ['BING_WEBMASTER_API_KEY'], paid: false, governedVia: 'governor', integrated: false, costCategory: 'connector' }),
 
   // ── Reputation (paid; ingestion unbuilt) ────────────────────────────────────

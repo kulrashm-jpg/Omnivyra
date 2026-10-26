@@ -43,6 +43,9 @@ export interface ProviderHealth {
 
 function isAuthenticated(descriptor: ProviderDescriptor): boolean {
   if (descriptor.authType === 'none') return true;
+  // OAuth providers (Google Search Console / GA4) are authorised per company with a platform client
+  // stored in Super Admin; env vars prove nothing here. Per-company state: googleTenantSourceAvailability.
+  if (descriptor.authType === 'oauth') return false;
   if (descriptor.envKeys.length === 0) return true;
   return descriptor.envKeys.every((k) => {
     const v = process.env[k];

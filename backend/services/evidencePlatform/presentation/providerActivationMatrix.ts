@@ -3,13 +3,13 @@
  *
  * A deterministic, HONEST activation status for every implemented provider — read-only, no fabrication, no
  * credential bypass. It reports what is configured vs awaiting credentials by consulting each provider's
- * `is<X>ProviderConfigured()` (env only) + its anticipated descriptor. This is presentation/activation only:
+ * `is<X>ProviderConfigured()` (env) + its anticipated descriptor — except Google Search Console / GA4,
+ * whose configuration is the platform OAuth client saved in Super Admin (buildProviderActivationMatrixLive).
+ * PLATFORM-WIDE: it never says whether any company has connected Google or has fresh data. This is presentation/activation only:
  * it changes no engine, no score, no calculation.
  */
 import { ANTICIPATED_PROVIDERS } from '../providers/anticipatedProviders';
 import { isBacklinkProviderConfigured } from '../../backlinkAuthorityProviderBridge';
-import { isSearchConsoleProviderConfigured } from '../../searchConsoleProviderBridge';
-import { isGa4ProviderConfigured } from '../../ga4ProviderBridge';
 import { isBingProviderConfigured } from '../../bingWebmasterProviderBridge';
 import { isReputationProviderConfigured } from '../../reputationProviderBridge';
 import { isEntityProviderConfigured } from '../../entityGraphProviderBridge';
@@ -31,13 +31,23 @@ export interface ProviderActivation {
   migrationPending: boolean;
   /** Deterministic, honest activation steps for this provider. */
   activationChecklist: string[];
+  /**
+   * Where the provider's configuration lives. Google Search Console / GA4 are configured by the
+   * platform OAuth client saved in Super Admin — not by environment variables — and `configured` here
+   * is PLATFORM configuration only: each company still connects its own Google account.
+   */
+  configurationSource: 'environment' | 'super_admin_oauth_client';
 }
+
+/** Google providers: platform OAuth client (Super Admin), then a per-company connection. */
+const GOOGLE_OAUTH_PROVIDERS = new Set(['search_console', 'analytics.ga4']);
 
 /** The implemented providers (BETA-PROVIDER-001..008) with their live `isConfigured` gate. */
 const IMPLEMENTED: Array<{ id: string; domain: string; isConfigured: () => boolean }> = [
   { id: 'backlink.authority', domain: 'Authority', isConfigured: isBacklinkProviderConfigured },
-  { id: 'search_console', domain: 'Google search', isConfigured: isSearchConsoleProviderConfigured },
-  { id: 'analytics.ga4', domain: 'Behaviour', isConfigured: isGa4ProviderConfigured },
+  // Configured = the platform Google OAuth client (opts.googleOauthConfigured); never env vars.
+  { id: 'search_console', domain: 'Google search', isConfigured: () => false },
+  { id: 'analytics.ga4', domain: 'Behaviour', isConfigured: () => false },
   { id: 'bing_webmaster', domain: 'Bing search', isConfigured: isBingProviderConfigured },
   { id: 'reviews', domain: 'Reputation / trust', isConfigured: isReputationProviderConfigured },
   { id: 'entity_graph', domain: 'Entity / knowledge graph', isConfigured: isEntityProviderConfigured },
@@ -58,14 +68,35 @@ function checklist(envKeys: string[], configured: boolean, migrationPending: boo
  * Build the activation matrix for all implemented + anticipated providers. `migrationApplied` reflects
  * whether the canonical `provider_evidence` table has been applied (default false in this environment).
  */
-export function buildProviderActivationMatrix(opts: { migrationApplied?: boolean } = {}): ProviderActivation[] {
+export function buildProviderActivationMatrix(opts: { migrationApplied?: boolean; googleOauthConfigured?: boolean } = {}): ProviderActivation[] {
   const migrationPending = !opts.migrationApplied;
   const implementedIds = new Set(IMPLEMENTED.map((p) => p.id));
   const out: ProviderActivation[] = [];
 
   for (const impl of IMPLEMENTED) {
     const desc = ANTICIPATED_PROVIDERS.find((p) => p.providerId === impl.id);
-    const configured = impl.isConfigured();
+    const google = GOOGLE_OAUTH_PROVIDERS.has(impl.id);
+    const configured = google ? Boolean(opts.googleOauthConfigured) : impl.isConfigured();
+    if (google) {
+      out.push({
+        providerId: impl.id,
+        providerName: desc?.providerName ?? impl.id,
+        domain: impl.domain,
+        implemented: true,
+        configured,
+        status: configured ? 'active' : 'awaiting_credentials',
+        reliability: desc?.providerReliability ?? 0,
+        requiredEnvKeys: [],
+        migrationPending,
+        activationChecklist: [
+          configured ? '✓ platform Google OAuth client saved and enabled (Super Admin)' : '☐ save and enable the Google OAuth client in Super Admin',
+          '☐ each company connects its own Google account and selects a property (per-company — not shown here)',
+          '☐ per-company import freshness: see that company’s provider health',
+        ],
+        configurationSource: 'super_admin_oauth_client',
+      });
+      continue;
+    }
     out.push({
       providerId: impl.id,
       providerName: desc?.providerName ?? impl.id,
@@ -77,6 +108,7 @@ export function buildProviderActivationMatrix(opts: { migrationApplied?: boolean
       requiredEnvKeys: desc?.envKeys ?? [],
       migrationPending,
       activationChecklist: checklist(desc?.envKeys ?? [], configured, migrationPending),
+      configurationSource: 'environment',
     });
   }
 
@@ -88,6 +120,7 @@ export function buildProviderActivationMatrix(opts: { migrationApplied?: boolean
       implemented: false, configured: false, status: 'not_implemented', reliability: desc.providerReliability ?? 0,
       requiredEnvKeys: desc.envKeys ?? [], migrationPending,
       activationChecklist: ['☐ provider not yet implemented (descriptor only)'],
+      configurationSource: 'environment',
     });
   }
   return out;
@@ -109,4 +142,10 @@ export function summarizeActivation(matrix: ProviderActivation[]): ActivationSum
     notImplemented: matrix.filter((m) => m.status === 'not_implemented').length,
     migrationPending: matrix.some((m) => m.implemented && m.migrationPending),
   };
+}
+
+/** The matrix with the Google OAuth client state read from Super Admin configuration (booleans only). */
+export async function buildProviderActivationMatrixLive(opts: { migrationApplied?: boolean } = {}): Promise<ProviderActivation[]> {
+  const { isGooglePlatformOauthConfigured } = await import('../../googleTenantSourceAvailability');
+  return buildProviderActivationMatrix({ ...opts, googleOauthConfigured: await isGooglePlatformOauthConfigured() });
 }

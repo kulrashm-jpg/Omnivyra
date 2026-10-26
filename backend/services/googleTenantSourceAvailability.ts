@@ -101,3 +101,73 @@ export async function tenantProviderReliability(companyId: string, source: Googl
   if (!availability.available) return null;
   return ANTICIPATED_PROVIDERS.find((p) => p.providerId === RELIABILITY_PROVIDER_ID[source])?.providerReliability ?? null;
 }
+
+// ── Four separate states (platform configuration ≠ tenant connection ≠ data ≠ freshness) ─────────────
+
+/**
+ * 1 providerConfigured  the PLATFORM Google OAuth client is saved and enabled (Super Admin →
+ *                       analytics_provider_config 'google_analytics'). Platform-wide; says nothing
+ *                       about any company.
+ * 2 tenantConnected     THIS company's integration is connected (not revoked) with an active
+ *                       property / site.
+ * 3 dataAvailable       THIS company has at least one completed import of the source.
+ * 4 dataFresh           that latest completed import is within the source's freshness limit.
+ * A platform-wide view (no company) reports only (1); a tenant view reports all four.
+ */
+export type GoogleSourceStates = {
+  source: GoogleSource;
+  providerConfigured: boolean;
+  tenantConnected: boolean | null;
+  dataAvailable: boolean | null;
+  dataFresh: boolean | null;
+  lastSyncedAt: string | null;
+  state: TenantSourceState | 'platform_only';
+};
+
+/** Pure: combine the platform flag with (optionally) one company's snapshot. */
+export function googleSourceStatesFrom(source: GoogleSource, providerConfigured: boolean, snap: TenantSnapshot | null, now: Date): GoogleSourceStates {
+  if (!snap) return { source, providerConfigured, tenantConnected: null, dataAvailable: null, dataFresh: null, lastSyncedAt: null, state: 'platform_only' };
+  const decided = decideTenantSourceAvailability(source, snap, now);
+  const connected = decided.state !== 'not_connected' && decided.state !== 'reauth_required' && decided.state !== 'no_property';
+  return {
+    source,
+    providerConfigured,
+    tenantConnected: connected,
+    dataAvailable: Boolean(snap.lastCompletedAt),
+    dataFresh: decided.state === 'connected',
+    lastSyncedAt: snap.lastCompletedAt,
+    state: decided.state,
+  };
+}
+
+/** (1) Whether the platform OAuth client is saved and enabled. Booleans only; credentials never leave. */
+export async function isGooglePlatformOauthConfigured(
+  deps: { loadConfig?: () => Promise<{ enabled?: boolean; oauth_client_id?: string | null; oauth_client_secret?: string | null } | null> } = {},
+): Promise<boolean> {
+  try {
+    const load = deps.loadConfig
+      ?? (async () => (await import('./analyticsProviderConfigService')).getAnalyticsProviderConfig('google_analytics'));
+    const config = await load();
+    return Boolean(config?.enabled && config.oauth_client_id && config.oauth_client_secret);
+  } catch {
+    return false;
+  }
+}
+
+/** All four states for one source; pass a company id for the tenant view, or null for platform-only. */
+export async function getGoogleSourceStates(
+  companyId: string | null,
+  source: GoogleSource,
+  deps: { now?: () => Date; load?: typeof loadSnapshot; platformConfigured?: () => Promise<boolean> } = {},
+): Promise<GoogleSourceStates> {
+  const now = (deps.now ?? (() => new Date()))();
+  const providerConfigured = await (deps.platformConfigured ?? (() => isGooglePlatformOauthConfigured()))();
+  if (!companyId) return googleSourceStatesFrom(source, providerConfigured, null, now);
+  let snap: TenantSnapshot;
+  try {
+    snap = await (deps.load ?? loadSnapshot)(companyId, source);
+  } catch {
+    snap = { integration: null, hasActiveProperty: false, lastCompletedAt: null };
+  }
+  return googleSourceStatesFrom(source, providerConfigured, snap, now);
+}

@@ -202,7 +202,7 @@ describe('scheduled sync: dated windows, watermark, minimum interval', () => {
     const runAll: any = async (params: any) => {
       expect(params.sources).toEqual(['gsc']);
       for (const id of ['tenant-a', 'tenant-b', 'tenant-c', 'platform']) plans[id] = await params.planFor(id);
-      return { attempted: 4, succeeded: 4, failed: 0, companies: [] };
+      return { attempted: 4, succeeded: 2, skipped: 2, failed: 0, companies: [] };
     };
     const last: Record<string, any> = {
       'tenant-a': { completedAt: '2026-10-25T06:00:00Z', window: { endDate: '2026-10-22' } },
@@ -219,7 +219,7 @@ describe('scheduled sync: dated windows, watermark, minimum interval', () => {
 
   it('GA4 pass: a dated window for every company; an explicit window (the queued daily job) is honoured', async () => {
     const plans: any[] = [];
-    const runAll: any = async (params: any) => { plans.push(await params.planFor('tenant-a'), await params.planFor('tenant-b')); return { attempted: 2, succeeded: 2, failed: 0, companies: [] }; };
+    const runAll: any = async (params: any) => { plans.push(await params.planFor('tenant-a'), await params.planFor('tenant-b')); return { attempted: 2, succeeded: 1, skipped: 1, failed: 0, companies: [] }; };
     const last: Record<string, any> = { 'tenant-b': { completedAt: '2026-10-26T04:00:00Z', window: null } };
     await runScheduledAnalyticsSync('ga4', {}, { now: () => now, runAll, lastRun: async (id) => last[id] ?? null });
     expect(plans).toEqual([{ overrides: { ga4: { startDate: '2026-10-19', endDate: '2026-10-26' } } }, { skip: 'recently_synced' }]);
@@ -390,6 +390,8 @@ describe('scheduler: companies selected by provider; a dates-only override never
     const integ = dbOps.find((o) => o.table === 'analytics_integrations')!;
     expect(integ.calls).toEqual(expect.arrayContaining([['eq', ['provider', 'GSC']], ['eq', ['status', 'connected']]]));
     expect(planned).toEqual(['tenant-a', 'tenant-b']);
+    // Skipped companies are counted as skipped — never as successful syncs.
+    expect(summary).toMatchObject({ attempted: 2, succeeded: 0, skipped: 2, failed: 0 });
     expect(summary.companies.map((c) => c.sources[0])).toEqual([
       { source: 'gsc', success: true, skipped: true, details: { reason: 'recently_synced' } },
       { source: 'gsc', success: true, skipped: true, details: { reason: 'recently_synced' } },

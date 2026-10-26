@@ -38,7 +38,10 @@ const num = (v: number | string | null | undefined): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** True when the GA4 property id + OAuth credentials are present. */
+/**
+ * Legacy env check (GA4_PROPERTY_ID / GA4_OAUTH — names the real OAuth flow never reads). Not an
+ * availability signal: use googleTenantSourceAvailability (per company) or isGooglePlatformOauthConfigured.
+ */
 export function isGa4ProviderConfigured(): boolean {
   return ENV_KEYS.every((k) => Boolean(process.env[k]));
 }

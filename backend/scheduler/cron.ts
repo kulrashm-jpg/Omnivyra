@@ -1699,7 +1699,7 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
       // skipped as a duplicate after the first run.
       const result = await runScheduledAnalyticsSync('ga4');
       console.log(
-        `[ga4Ingestion] completed attempted=${result.attempted} succeeded=${result.succeeded} failed=${result.failed}`,
+        `[ga4Ingestion] completed attempted=${result.attempted} imported=${result.succeeded} skipped=${result.skipped} failed=${result.failed}`,
       );
       for (const company of result.companies) {
         const ga4Result = company.sources.find((source) => source.source === 'ga4');
@@ -1731,7 +1731,7 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
     // synced within the last 20 h (e.g. by the daily queued job) is skipped.
     try {
       const gsc = await runScheduledAnalyticsSync('gsc');
-      console.log(`[gscIngestion] completed attempted=${gsc.attempted} succeeded=${gsc.succeeded} failed=${gsc.failed}`);
+      console.log(`[gscIngestion] completed attempted=${gsc.attempted} imported=${gsc.succeeded} skipped=${gsc.skipped} failed=${gsc.failed}`);
       for (const company of gsc.companies) {
         const r = company.sources.find((source) => source.source === 'gsc');
         if (r && !r.success) console.error(`[gscIngestion] company=${company.companyId} failed error=${(r.error ?? 'unknown_error').slice(0, 200)}`);

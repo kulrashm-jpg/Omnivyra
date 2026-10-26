@@ -2,10 +2,12 @@
  * The analytics-ingestion worker dispatches the scheduled Search Console job and the queued
  * post-connect import (no live Google or DB calls: both services are mocked).
  */
-const scheduled = jest.fn(async (..._a: unknown[]) => ({ attempted: 0, succeeded: 0, failed: 0, companies: [] }));
+const scheduled = jest.fn(async (..._a: unknown[]) => ({ attempted: 0, succeeded: 0, skipped: 0, failed: 0, companies: [] }));
 const postConnect = jest.fn(async (..._a: unknown[]) => undefined);
 jest.mock('../../services/scheduledAnalyticsSync', () => ({ runScheduledAnalyticsSync: (...a: unknown[]) => scheduled(...a) }));
 jest.mock('../../services/analyticsPostConnectImport', () => ({ runPostConnectImport: (...a: unknown[]) => postConnect(...a) }));
+const manualSync = jest.fn(async (..._a: unknown[]) => ({ success: true, skipped: false, reason: null, recordsWritten: 3, error: null }));
+jest.mock('../../services/analyticsManualSync', () => ({ runManualSyncJob: (...a: unknown[]) => manualSync(...a) }));
 jest.mock('../../jobs/analyticsIngestionJob', () => ({ runDailyGrowthIngestion: async () => undefined, runPendingPostPolls: async () => undefined }));
 jest.mock('../../services/integrations/oauthLifecycleScheduler', () => ({ runOAuthLifecycleSweep: async () => ({}) }));
 
@@ -37,5 +39,24 @@ describe('analytics-ingestion worker jobs', () => {
   ])('rejects malformed post-connect job data: %s', async (_label, data) => {
     await processAnalyticsIngestionJob(job({ type: 'analytics-post-connect-import', ...data }));
     expect(postConnect).not.toHaveBeenCalled();
+  });
+});
+
+describe('analytics-manual-sync job', () => {
+  it('dispatches a well-formed job to the manual-sync runner and returns its result', async () => {
+    const result = await processAnalyticsIngestionJob(job({ type: 'analytics-manual-sync', companyId: 'tenant-a', source: 'gsc', startDate: '2026-07-26', endDate: '2026-10-23' }));
+    expect(manualSync).toHaveBeenCalledWith({ type: 'analytics-manual-sync', companyId: 'tenant-a', source: 'gsc', startDate: '2026-07-26', endDate: '2026-10-23' });
+    expect(result).toEqual({ success: true, skipped: false, reason: null, recordsWritten: 3, error: null });
+  });
+
+  it('a failing run propagates so BullMQ retries it', async () => {
+    manualSync.mockRejectedValueOnce(new Error('Search Console API failed (503)'));
+    await expect(processAnalyticsIngestionJob(job({ type: 'analytics-manual-sync', companyId: 'tenant-a', source: 'gsc', startDate: '2026-07-26', endDate: '2026-10-23' }))).rejects.toThrow(/503/);
+  });
+
+  it('malformed data is ignored', async () => {
+    manualSync.mockClear();
+    await processAnalyticsIngestionJob(job({ type: 'analytics-manual-sync', companyId: 'tenant-a', source: 'gsc' }));
+    expect(manualSync).not.toHaveBeenCalled();
   });
 });
