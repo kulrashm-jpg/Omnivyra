@@ -9,8 +9,8 @@ import { clamp, roundNumber, safeAverage } from './intelligenceEngineUtils';
 // BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
 import { deriveDecisionConfidence } from './evidencePlatform';
 // BETA-PROVIDER-002: canonical GSC provider reliability lifts confidence on already-MEASURED search data.
-// BETA-PROVIDER-004: Bing Webmaster complements GSC as a first-party search provider — blend both when live.
-import { isBingProviderAvailable, bingProviderReliability } from './bingWebmasterProviderBridge';
+// Bing Webmaster is NOT blended here: keyword_metrics are Google Search Console rows only, and a configured
+// BING_WEBMASTER_API_KEY says nothing about them (it previously raised confidence from the key alone).
 import { combinedProviderReliability } from './ga4ProviderBridge';
 import { tenantProviderReliability } from './googleTenantSourceAvailability';
 
@@ -100,20 +100,15 @@ export async function generateSeoIntelligenceDecisions(companyId: string): Promi
 
   // BETA-ENGINE-003: evidence-derived confidence (was 0.85/0.8/0.77/0.79/0.81/0.78). MEASURED GSC
   // keyword metrics; confidence scales with the keyword-metric sample size.
-  // BETA-PROVIDER-002/004: keyword_metrics is first-party GSC data (already MEASURED). Search evidence is
-  // provider-backed by Google Search Console (Google search) and — complementarily — Bing Webmaster (Bing
-  // search). When either/both canonical search providers are connected, blend their reliabilities
-  // deterministically (mean of the live set) as the single providerReliability factor — confidence rises
-  // from provenance alone, no scoring redesign. Without credentials this is null, so confidence is
-  // unchanged (backward compatible).
-  // Tenant-specific: this company's own Search Console connection, property and import freshness.
+  // BETA-PROVIDER-002: keyword_metrics is first-party GSC data (already MEASURED). The providerReliability
+  // factor is added only when THIS company's own Search Console connection, property and import freshness
+  // hold (tenant-specific; never a platform env var). Bing is excluded: these rows are not Bing data.
   const gscReliability = await tenantProviderReliability(companyId, 'gsc');
-  const bingProviderLive = isBingProviderAvailable();
   const seoConfidence = deriveDecisionConfidence({
     maturity: 'MEASURED',
     providerReliability: combinedProviderReliability(
       gscReliability,
-      bingProviderLive ? bingProviderReliability() : null,
+      null, // Bing: no Bing rows feed keyword_metrics (see import note)
     ),
     sampleSize: metrics.length,
     dataPresent: metrics.length > 0,

@@ -129,6 +129,16 @@ export const PROVIDER_CREDENTIALS: Record<string, ProviderCredentialDescriptor> 
     envNames: ['PERPLEXITY_API_KEY'],
     rationale: 'Perplexity is the only retrieval-grounded AI engine wired into Report 1, so AI visibility is honestly unmeasurable without it. The adapter reads PERPLEXITY_API_KEY from the environment and consults no credential store; no Super Admin control is offered because none would be honoured.',
   },
+  bing_webmaster: {
+    key: 'bing_webmaster',
+    sourceName: null,
+    mode: 'ENVIRONMENT_MANAGED',
+    envNames: ['BING_WEBMASTER_API_KEY'],
+    // One platform key: the API key of Omnivyra's Bing Webmaster Tools user. It reads only sites that user
+    // has verified or been added to by the site owner (publicResearch/bingWebmaster.ts), so a company's data
+    // is reachable only with that owner's consent. Environment-managed: no Super Admin control is offered.
+    rationale: 'Bing Webmaster Tools (inbound links and Bing search performance) for sites the platform Bing Webmaster account can read. Set BING_WEBMASTER_API_KEY; each site owner verifies the site or adds that account as a user.',
+  },
   ahrefs: {
     key: 'ahrefs',
     sourceName: null,
