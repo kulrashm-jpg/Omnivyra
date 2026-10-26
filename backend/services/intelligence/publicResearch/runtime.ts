@@ -65,10 +65,16 @@ export function aiCapabilities(answers: SurfaceAnswer[]): Capability[] {
  * Configuration facts only (adapter + credential presence). The report run, not this step, makes
  * these requests, so the ledger takes their outcome from the run's own evidence.
  */
-export function configCapabilities(): Capability[] {
-  const serp = present('SERPAPI_KEY', 'SERP_API_KEY', 'SERPAPI_API_KEY');
+export function configCapabilities(opts: {
+  /** Where PageSpeed's credential resolved (pageSpeedClient), so a Super Admin key counts, not just the env. */
+  pageSpeed?: 'managed' | 'environment' | 'keyless' | 'disabled' | 'none';
+  /** Whether SerpAPI resolved a credential (managed account or env), when the caller knows. */
+  serp?: boolean;
+} = {}): Capability[] {
+  const serp = opts.serp ?? present('SERPAPI_KEY', 'SERP_API_KEY', 'SERPAPI_API_KEY');
   const ahrefs = present('AHREFS_API_KEY');
-  const psi = present('PAGESPEED_API_KEY') || /^(1|true|on)$/i.test(process.env.PAGESPEED_ENABLED ?? '');
+  const psi = opts.pageSpeed ? ['managed', 'environment', 'keyless'].includes(opts.pageSpeed)
+    : present('PAGESPEED_API_KEY') || /^(1|true|on|yes)$/i.test(process.env.PAGESPEED_ENABLED ?? '');
   const row = (id: string, label: string, family: Capability['family'], credential: boolean, next: string): Capability => ({
     id, label, family, adapter: true, credential, attempted: false,
     reason: credential ? 'not_searched' : 'missing_credential',
@@ -78,6 +84,8 @@ export function configCapabilities(): Capability[] {
   return [
     row('search:serp', 'Search results', 'search', serp, 'Add a SerpAPI key.'),
     row('backlinks', 'Backlinks / referring domains', 'backlinks', ahrefs, 'Connect a backlink data source (an Ahrefs adapter is implemented), or read the Search Console Links report by hand.'),
-    row('page_speed', 'Page speed', 'page_speed', psi, 'Enable PageSpeed Insights (free API key).'),
+    opts.pageSpeed === 'disabled'
+      ? { ...row('page_speed', 'Page speed', 'page_speed', false, 'Enable Google PageSpeed Insights in Super Admin.'), reason: 'not_searched', outcome: 'Disabled in Super Admin.' }
+      : row('page_speed', 'Page speed', 'page_speed', psi, 'Add an application-level PageSpeed Insights key in Super Admin (Google PageSpeed Insights).'),
   ];
 }

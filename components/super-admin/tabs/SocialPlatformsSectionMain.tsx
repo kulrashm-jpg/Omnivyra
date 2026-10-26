@@ -4,6 +4,7 @@ import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
 import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 import { classifyAuthFailure, describeAuthFailure, isRecoverableAuthFailure, type AuthFailure } from '@/lib/security/superAdminAuthFailure';
 import { runStepUpFlowIfNeeded, describeStepUpOutcome } from '@/lib/security/superAdminStepUp';
+import PageSpeedProviderCard from './PageSpeedProviderCard';
 import { AlertCircle, BarChart3, Check, CheckCircle, ChevronDown, ChevronUp, Copy, Eye, EyeOff, Globe, RefreshCw, Save, XCircle } from 'lucide-react';
 
 import { type OAuthFormState, type AnalyticsProviderFormState, type AnalyticsProviderConfigSummary, type PlatformCheckResult, type IntegrationHealthSummary, type BadgeTone, CALLBACK_PLATFORMS, CONNECTOR_PLATFORMS, PLATFORM_ICONS, createDefaultOauthForm, getPublicAppBaseUrl, getPublishingCallbackUri, getPlatformStatus } from './SocialPlatformsSectionModel';
@@ -648,6 +649,9 @@ export default function SocialPlatformsSection() {
           )}
         </div>
       </div>
+
+      {/* Google PageSpeed Insights — the shared application-level key for report jobs. */}
+      <PageSpeedProviderCard />
 
       <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
         <div>

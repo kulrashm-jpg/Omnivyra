@@ -25,6 +25,7 @@ import type { ProfileEvidence } from './profileEvidence';
 import { candidatesFromEvidence, CAPABILITIES, capabilityState, focusOf, validateCandidates } from './competitorDiscovery';
 import { runProviderChecks } from './providerChecks';
 import { searchGoogle, searchPlan } from './searchResults';
+import { resolvePageSpeedAccess } from '../../pageSpeedClient';
 
 /** Build the research input from the company context the report already resolved. */
 export function researchInputFromNarrative(c: {
@@ -338,7 +339,7 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     },
     company: [], search, generative, competitors: competitorRecords, independent: [], gaps, site: siteRecords, benchmark,
     footprint: { checkedAt: new Date().toISOString(), profiles: profileChecks, mentions: mentionResult.mentions, socialPosts: mentionResult.socialPosts, platforms: mentionResult.platforms, mentionSearch: mentionResult.provider, mentionQueries: mentionResult.searches, profilesFound: mentionResult.profiles },
-    runtime: { checkedAt: new Date().toISOString(), capabilities: [...aiCapabilities(answers), ...configCapabilities()] },
+    runtime: { checkedAt: new Date().toISOString(), capabilities: [...aiCapabilities(answers), ...configCapabilities({ pageSpeed: (await resolvePageSpeedAccess().catch(() => null))?.source })] },
     offering, register, market, candidates, providerChecks,
     profileEvidence: input.profile ? { status: input.profile.status, detail: input.profile.detail, checkedAt: input.profile.checkedAt, facts: input.profile.facts } : null,
     brandSource: input.brandSource ?? 'declared',

@@ -33,6 +33,8 @@ import {
   type PerformanceObservation,
 } from '../../services/performanceEvidence';
 import { pageSpeedEnabled } from '../../services/digitalExperienceRepository';
+// Every PageSpeed call now goes through the shared client, which caches a valid answer per URL: reset it per case.
+import { resetPageSpeedClientState } from '../../services/pageSpeedClient';
 
 const URL_UNDER_TEST = 'https://acme.test/';
 
@@ -58,6 +60,7 @@ const respond = (status: number, body: unknown): typeof fetch =>
 const savedEnv = new Map<string, string | undefined>();
 
 beforeEach(() => {
+  resetPageSpeedClientState();
   for (const name of ['PAGESPEED_API_KEY', 'PAGESPEED_ENABLED']) {
     savedEnv.set(name, process.env[name]);
     delete process.env[name];

@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getBaseUrl } from '../../../../../backend/auth/getBaseUrl';
-import { decodeOAuthState } from '../../../../../backend/auth/oauthState';
+import { decodeOAuthState, isCallbackStateInvalid } from '../../../../../backend/auth/oauthState';
 import { handleGoogleOAuthCallback } from '../../../../../backend/services/analyticsIntegrationService';
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
 import { logOAuthEvent, safeHost } from '../../../../../backend/auth/oauthTelemetry';
@@ -114,12 +114,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.redirect(buildRedirectUrl(decodedState.returnTo ?? null, { error: 'unauthorized' }));
   }
 
-  const invalidState =
-    decodedState.valid !== true ||
-    (
-      !hasSuperAdminSession &&
-      (!decodedState.userId || decodedState.userId !== user?.id)
-    );
+  // A state that names a user binds the callback to THAT user, whatever other session is present:
+  // a super-admin cookie must not complete another user's connect for another company. Only a
+  // state minted without a user (the super-admin bridge flow) is accepted on the super-admin session.
+  const invalidState = isCallbackStateInvalid({
+    stateValid: decodedState.valid === true,
+    stateUserId: decodedState.userId ?? null,
+    authUserId: user?.id ?? null,
+    hasSuperAdminSession,
+  });
 
   if (invalidState) {
     console.warn('[GA-OAUTH][callback] failure_point=invalid_oauth_state', {

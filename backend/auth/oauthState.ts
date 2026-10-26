@@ -198,3 +198,22 @@ export function decodeOAuthState(state: string | undefined): OAuthStateParams {
     return result;
   }
 }
+
+/**
+ * Callback binding for the Google Analytics / Search Console connect flow.
+ *
+ * A state that names a user binds the callback to that user, whatever other session is present,
+ * so a super-admin cookie can never complete another user's connect for another company. Only a
+ * state minted WITHOUT a user (the super-admin bridge flow, `/api/super-admin/{ga,gsc}-connect`)
+ * is accepted on the super-admin session alone.
+ */
+export function isCallbackStateInvalid(input: {
+  stateValid: boolean;
+  stateUserId: string | null;
+  authUserId: string | null;
+  hasSuperAdminSession: boolean;
+}): boolean {
+  if (!input.stateValid) return true;
+  if (input.stateUserId) return input.stateUserId !== input.authUserId;
+  return !input.hasSuperAdminSession;
+}

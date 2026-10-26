@@ -136,6 +136,7 @@ const fx = {
   getToken: jest.fn(async () => ({ access_token: 'synthetic-not-a-token' })),
   getOrUploadLinkedInAsset: jest.fn(async () => ({ ok: true, result: { kind: 'image', fromCache: false } })),
   insertAuditLogStrict: jest.fn(async () => undefined),
+  savePageSpeedConfig: jest.fn(async () => ({ provider: 'google_pagespeed', hasStoredKey: true, keyDisplay: '•••••••• (encrypted)' })),
 };
 const via = (k: keyof typeof fx) => (...a: unknown[]) => (fx[k] as (...x: unknown[]) => unknown)(...a);
 jest.mock('../../auth/credentialEncryption', () => ({ encryptCredential: via('encryptCredential'), decryptCredential: via('decryptCredential') }));
@@ -159,9 +160,15 @@ jest.mock('../../adapters/linkedin/linkedinMediaUpload', () => ({
   inferLinkedInMediaKind: () => 'image',
 }));
 jest.mock('../../services/auditActorService', () => ({ insertAuditLogStrict: via('insertAuditLogStrict'), SYSTEM_USER_ID: 'system' }));
+jest.mock('../../services/pageSpeedProviderConfigService', () => ({
+  savePageSpeedConfig: via('savePageSpeedConfig'),
+  getPageSpeedConfigSummary: async () => ({ provider: 'google_pagespeed' }),
+  checkPageSpeedConfig: async () => ({ provider: 'google_pagespeed' }),
+}));
 
 import oauthConfigsRoute from '../../../pages/api/super-admin/platform-oauth-configs';
 import analyticsConfigRoute from '../../../pages/api/super-admin/analytics-provider-config';
+import pageSpeedConfigRoute from '../../../pages/api/super-admin/pagespeed-config';
 import providerAccountsRoute from '../../../pages/api/provider-accounts/index';
 import providerAccountRoute from '../../../pages/api/provider-accounts/[id]';
 import curatedSourcesRoute from '../../../pages/api/super-admin/curated-industry-sources';
@@ -273,6 +280,16 @@ const SURFACES: Surface[] = [
     invalid: {
       body: { enabled: true, redirect_uri: 'javascript:alert(1)' }, status: 400, error: 'Invalid redirect_uri',
       arrange: () => { fx.upsertAnalyticsProviderConfig.mockImplementationOnce(async () => { throw new Error('Invalid redirect_uri'); }); },
+    },
+  },
+  {
+    // The application-level PageSpeed key every tenant report uses: same gate as the GA/GSC client.
+    name: 'POST pagespeed-config', method: 'POST', handler: pageSpeedConfigRoute as Handler,
+    body: { enabled: true, api_key: 'synthetic-placeholder-pagespeed-key-0000' },
+    effects: [fx.savePageSpeedConfig], rateLimited: true,
+    invalid: {
+      body: { enabled: true, api_key: 'short' }, status: 400, error: 'That does not look like a Google API key.',
+      arrange: () => { fx.savePageSpeedConfig.mockImplementationOnce(async () => { throw new Error('That does not look like a Google API key.'); }); },
     },
   },
   {

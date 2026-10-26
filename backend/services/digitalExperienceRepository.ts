@@ -15,9 +15,11 @@ import {
   aggregatePerformanceEvidence,
   fetchPageSpeed,
   isPageSpeedConfigured,
+  unavailableObservation,
   type PerformanceEvidence,
   type PerformanceObservation,
 } from './performanceEvidence';
+import { environmentPageSpeedAccess, PAGESPEED_ISSUE_TEXT, resolvePageSpeedAccess, type PageSpeedAccess } from './pageSpeedClient';
 
 /** Pages to assess. Matches the technical engine's own cap so both read the same corpus. */
 const MAX_PAGES = 500;
@@ -108,13 +110,22 @@ export async function collectPerformanceEvidence(params: {
   // though it were a known-good page. Only a page observed to return 200 qualifies.
   const eligible = params.pages.filter((p) => reachabilityForPage(p).outcome === 'success' && p.url);
 
-  if (!(params.enabled ?? pageSpeedEnabled())) {
+  // One access decision per report: the Super Admin key (shared by every tenant — PageSpeed only
+  // reads public pages), else the PAGESPEED_API_KEY fallback, else keyless when PAGESPEED_ENABLED.
+  // `enabled` (tests, callers that already decided) skips the lookup and uses the environment.
+  const access: PageSpeedAccess = params.enabled === undefined
+    ? await resolvePageSpeedAccess().catch((): PageSpeedAccess => ({ allowed: pageSpeedEnabled(), key: null, source: 'none', issue: pageSpeedEnabled() ? null : 'not_configured', detail: PAGESPEED_ISSUE_TEXT.not_configured }))
+    : params.enabled ? environmentPageSpeedAccess() : { allowed: false, key: null, source: 'none', issue: 'not_configured', detail: PAGESPEED_ISSUE_TEXT.not_configured };
+  if (!access.allowed) {
     return {
       observations: [],
       coverage: { measured: 0, attempted: 0, eligible: eligible.length },
       byFormFactor: { mobile: { measured: 0, verdict: 'unknown' }, desktop: { measured: 0, verdict: 'unknown' } },
       state: 'unavailable',
-      reasonUnavailable: 'PageSpeed Insights is not enabled for this environment. Set PAGESPEED_API_KEY (or PAGESPEED_ENABLED=true) to collect performance evidence.',
+      reasonUnavailable: access.issue === 'disabled'
+        ? 'PageSpeed Insights is disabled in Super Admin, so performance evidence was not collected.'
+        : 'PageSpeed Insights is not enabled for this environment. Add the key in Super Admin (Google PageSpeed Insights), or set PAGESPEED_API_KEY (or PAGESPEED_ENABLED=true), to collect performance evidence.',
+      issue: access.issue,
     };
   }
 
@@ -127,11 +138,21 @@ export async function collectPerformanceEvidence(params: {
   const targets = [home, ...rest].filter(Boolean).slice(0, MAX_PSI_URLS) as ExperiencePage[];
 
   const observations: PerformanceObservation[] = [];
+  // A failure that will repeat for every URL (bad key, API off, quota gone) stops the remaining
+  // requests: they are recorded with the same reason instead of being sent.
+  let stop: PerformanceObservation | null = null;
   for (const page of targets) {
     for (const formFactor of ['mobile', 'desktop'] as const) {
-      observations.push(await fetchPageSpeed({ url: page.url, formFactor }));
+      if (stop) {
+        observations.push({ ...unavailableObservation({ url: page.url, formFactor, reason: `Not requested: ${stop.reasonUnavailable}`, failureKind: stop.failureKind ?? 'retrieval_failed' }), issue: stop.issue });
+        continue;
+      }
+      const o = await fetchPageSpeed({ url: page.url, formFactor, access });
+      observations.push(o);
+      if (o.issue && ['invalid_key', 'api_disabled', 'quota_exhausted'].includes(o.issue)) stop = o;
     }
   }
 
-  return aggregatePerformanceEvidence({ observations, eligiblePages: eligible.length });
+  const evidence = aggregatePerformanceEvidence({ observations, eligiblePages: eligible.length });
+  return evidence.state === 'measured' ? evidence : { ...evidence, issue: observations.find((o) => o.issue)?.issue ?? null };
 }

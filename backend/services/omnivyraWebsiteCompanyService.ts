@@ -59,10 +59,31 @@ function scoreOmnivyraWebsiteCompany(company: OmnivyraWebsiteCompanyRecord): num
   return score;
 }
 
+/**
+ * Which claimant is the platform's own Omnivyra company. A website domain or a name is something
+ * ANY tenant can type, so neither may decide it — that let a new tenant claiming omnivyra.com
+ * receive Omnivyra's platform Search Console data and capture the Super Admin GSC binding.
+ * Ownership signals decide instead, in order:
+ *   1. OMNIVYRA_WEBSITE_COMPANY_ID, when set (explicit pin; must be an active claimant);
+ *   2. a company with an active SUPER_ADMIN member (a tenant cannot grant itself that role);
+ *   3. the OLDEST claimant (a later sign-up can never outrank the original);
+ *   then the name score, only as a final tie-break.
+ */
+export function rankOmnivyraClaimants<T extends OmnivyraWebsiteCompanyRecord & { created_at?: string | null }>(
+  candidates: T[], superAdminCompanyIds: ReadonlySet<string>, pinnedId: string | null,
+): T | null {
+  if (pinnedId) return candidates.find((c) => c.id === pinnedId) ?? null;
+  const t = (c: T) => (c.created_at ? Date.parse(c.created_at) : Number.MAX_SAFE_INTEGER);
+  return [...candidates].sort((a, b) =>
+    Number(superAdminCompanyIds.has(b.id)) - Number(superAdminCompanyIds.has(a.id))
+    || t(a) - t(b)
+    || scoreOmnivyraWebsiteCompany(b) - scoreOmnivyraWebsiteCompany(a))[0] ?? null;
+}
+
 export async function resolveOmnivyraWebsiteCompany(): Promise<OmnivyraWebsiteCompanyRecord | null> {
   const { data, error } = await supabase
     .from('companies')
-    .select('id, name, website, website_domain, status')
+    .select('id, name, website, website_domain, status, created_at')
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -94,8 +115,8 @@ export async function resolveOmnivyraWebsiteCompany(): Promise<OmnivyraWebsiteCo
     company_profiles: profilesByCompanyId.get(company.id) ?? [],
   }));
 
-  // Match strictly on verified website-domain, then prefer the canonical
-  // Omnivyra tenant when QA/test tenants also claim omnivyra.com.
+  // Claimants: active companies whose website names omnivyra.com. Any tenant can type that, so a
+  // claim alone never decides — rankOmnivyraClaimants picks by ownership signals.
   const candidates = enrichedCompanies.filter(
     (company) =>
       company.status === 'active' &&
@@ -106,7 +127,17 @@ export async function resolveOmnivyraWebsiteCompany(): Promise<OmnivyraWebsiteCo
       ),
   );
 
-  return candidates.sort(
-    (a, b) => scoreOmnivyraWebsiteCompany(b) - scoreOmnivyraWebsiteCompany(a),
-  )[0] ?? null;
+  if (candidates.length === 0) return null;
+  const pinned = process.env.OMNIVYRA_WEBSITE_COMPANY_ID?.trim() || null;
+  let superAdminCompanyIds = new Set<string>();
+  if (!pinned) {
+    const { data: roles } = await supabase
+      .from('user_company_roles')
+      .select('company_id')
+      .eq('role', 'SUPER_ADMIN')
+      .eq('status', 'active')
+      .in('company_id', candidates.map((c) => c.id));
+    superAdminCompanyIds = new Set(((roles ?? []) as Array<{ company_id: string }>).map((r) => r.company_id));
+  }
+  return rankOmnivyraClaimants(candidates as Array<OmnivyraWebsiteCompanyRecord & { created_at?: string | null }>, superAdminCompanyIds, pinned);
 }

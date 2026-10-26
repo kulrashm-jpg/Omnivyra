@@ -15,9 +15,11 @@ import type { ProviderCheck } from '../publicResearch/providerChecks';
 
 export type DiagState =
   | 'measured' | 'partial' | 'not_attempted' | 'not_configured' | 'invalid_credential' | 'billing_blocked' | 'quota_exhausted'
-  | 'rate_limited' | 'permission_denied' | 'login_restricted' | 'unsupported_capability' | 'provider_unavailable' | 'request_failed' | 'searched_not_found';
+  | 'rate_limited' | 'permission_denied' | 'login_restricted' | 'unsupported_capability' | 'provider_unavailable' | 'request_failed' | 'searched_not_found'
+  | 'disabled';
 
 export const DIAG_LABEL: Record<DiagState, string> = {
+  disabled: 'Disabled in Super Admin',
   measured: 'Measured', partial: 'Partial', not_attempted: 'Not attempted', not_configured: 'Not configured', invalid_credential: 'Invalid credential',
   billing_blocked: 'Billing / entitlement blocked', quota_exhausted: 'Quota exhausted', rate_limited: 'Rate limited', permission_denied: 'Permission denied',
   login_restricted: 'Login / CAPTCHA restricted', unsupported_capability: 'Unsupported capability', provider_unavailable: 'Provider unavailable',
@@ -68,7 +70,7 @@ export const CATALOGUE: Record<string, { capability: string; docUrl: string; pri
 
 const fmt = (iso: string | null | undefined) => (iso ? iso.slice(0, 16).replace('T', ' ') + ' UTC' : 'time not recorded');
 
-function fromError(cls: ErrorClass | 'ok' | 'not_checked'): DiagState {
+function fromError(cls: ProviderCheck['outcome']): DiagState {
   return cls === 'ok' ? 'measured' : cls === 'not_checked' ? 'not_attempted' : cls;
 }
 
@@ -178,14 +180,26 @@ export function buildDiagnostics(ledger: Ledger, pack: ResearchPack | null): Sou
       cost: 'free', needs: f.key === 'inbound_links' ? ['permission', 'human verification'] : restricted ? ['human verification'] : [], unlocks: f.key === 'inbound_links' ? 'Linking domains and top linked pages' : restricted ? 'Registered name, status and incorporation date' : '—' });
   }
 
-  // PageSpeed.
+  // PageSpeed: the report run's own measurement first (several URLs, both form factors); the
+  // research check (homepage, mobile) when the run has nothing. One application-level key serves
+  // every tenant, so the fix is always the operator's — never the company's.
   const psi = check('PageSpeed Insights');
+  const runPerf = ledger.access.find((a) => a.family === 'page_speed' && a.source === 'report_run');
+  const runMeasured = runPerf?.reason === 'measured';
+  const psiState: DiagState = runMeasured ? 'measured' : psi ? fromError(psi.outcome) : runPerf?.reason === 'quota_restricted' ? 'quota_exhausted' : 'not_configured';
+  const keyed = psi?.credential === 'present';
   rows.push({ key: 'pagespeed', source: 'Page speed (PageSpeed Insights)', family: 'Website', sought: 'Lab performance of the homepage (loading, layout shift, blocking time).',
-    capability: CATALOGUE.pagespeed.capability, docUrl: CATALOGUE.pagespeed.docUrl, integration: 'implemented', credential: psi?.credential === 'present' ? 'present' : 'not needed', usable: psi?.outcome === 'ok',
-    attempt: psi ? `${fmt(psi.at)} (${psi.environment}): ${psi.operation} → HTTP ${psi.httpStatus ?? '—'}. ${psi.detail}` : 'Not attempted (the report run has PageSpeed disabled).',
-    state: psi ? fromError(psi.outcome) : 'not_configured', cause: psi?.outcome === 'ok' ? 'Measured keyless.' : psi ? `${psi.detail}${psi.causeConfirmed ? '' : ' Cause unconfirmed (keyless requests share a quota).'}` : 'PageSpeed is not enabled in the report run.',
-    causeConfirmed: psi ? psi.causeConfirmed : true, impact: psi?.outcome === 'ok' ? 'Counted.' : 'Page speed not measured.', next: 'Create a PageSpeed Insights API key and enable it for the report run.',
-    cost: 'unknown', needs: ['credential', 'deployment'], unlocks: 'Performance score and Core Web Vitals lab values' });
+    capability: CATALOGUE.pagespeed.capability, docUrl: CATALOGUE.pagespeed.docUrl, integration: 'implemented', credential: keyed ? 'present' : 'not needed', usable: runMeasured || psi?.outcome === 'ok',
+    attempt: [runPerf ? `Report run: ${runPerf.outcome}` : null, psi ? `${fmt(psi.at)} (${psi.environment}): ${psi.operation} → HTTP ${psi.httpStatus ?? '—'}. ${psi.detail}` : null].filter(Boolean).join(' · ') || 'Not attempted.',
+    state: psiState,
+    cause: psiState === 'measured' ? (psi?.credentialSource ? `Measured with the ${psi.credentialSource} key.` : 'Measured.')
+      : psi ? `${psi.detail}${psi.causeConfirmed ? '' : ' Cause unconfirmed.'}` : runPerf?.outcome ?? 'PageSpeed is not enabled in the report run.',
+    causeConfirmed: psiState === 'measured' || (psi ? psi.causeConfirmed : true), impact: psiState === 'measured' ? 'Counted.' : 'Page speed not measured.',
+    next: psiState === 'invalid_credential' ? 'Replace the key on the Google PageSpeed Insights card in Super Admin.'
+      : psiState === 'permission_denied' ? 'Enable the PageSpeed Insights API in the Google Cloud project that owns the key.'
+        : psiState === 'disabled' ? 'Enable Google PageSpeed Insights in Super Admin.'
+          : 'Add an application-level PageSpeed Insights key in Super Admin (Google PageSpeed Insights).',
+    cost: 'free', needs: psiState === 'measured' ? [] : ['credential'], unlocks: 'Performance score and Core Web Vitals lab values' });
 
   // Competitor discovery.
   const cands = pack?.candidates ?? [];
@@ -214,8 +228,12 @@ export function plainGap(d: SourceDiagnostic): NonNullable<SourceDiagnostic['pla
   if (d.key === 'family:inbound_links') return { why: 'Backlink data is released only to the verified owner of a website, and no owner-verified source is connected.', unlock: 'Verify the website in Ahrefs Webmaster Tools or Google Search Console (both free) and share access or an export of the links report.', by: 'company', short: 'needs site-owner access' };
   if (d.key === 'family:registry') return { why: 'The registry search needs the registered company name or CIN, and the website does not state either.', unlock: 'Provide the CIN or exact registered name; the registry record (status, incorporation date) is then looked up.', by: 'company', short: 'needs CIN or registered name' };
   if (d.key === 'pagespeed') {
-    return quota ? { why: 'Google’s speed-test service declined the request: its shared free allowance was used up at that moment.', unlock: 'Measured on a re-run; a dedicated free Google API key for the report removes the shared limit.', by: 'report operator', short: 'speed-test limit hit' }
-      : { why: 'The speed test was not run for this report.', unlock: 'Enable the free Google speed test for the report run.', by: 'report operator', short: 'not run' };
+    if (quota) return { why: 'Google’s speed-test service declined the request: its usage allowance was used up at that moment.', unlock: 'Measured on a re-run; an application-level Google API key in Super Admin gives a dedicated allowance.', by: 'report operator', short: 'speed-test limit hit' };
+    if (d.state === 'invalid_credential') return { why: 'Google rejected the speed-test API key (invalid or restricted).', unlock: 'Replace the key on the Google PageSpeed Insights card in Super Admin.', by: 'report operator', short: 'speed-test key refused' };
+    if (d.state === 'permission_denied') return { why: 'The speed-test API is not enabled in the Google Cloud project that owns the key.', unlock: 'Enable the PageSpeed Insights API in that Google Cloud project.', by: 'report operator', short: 'speed-test API not enabled' };
+    if (d.state === 'disabled') return { why: 'The speed test is switched off in Super Admin.', unlock: 'Enable Google PageSpeed Insights in Super Admin.', by: 'report operator', short: 'switched off' };
+    if (d.state === 'request_failed' || d.state === 'provider_unavailable') return { why: 'Google’s speed-test service did not answer in time or failed.', unlock: 'Measured on a re-run.', by: 'next run', short: 'speed test failed' };
+    return { why: 'No speed-test key is connected to this report.', unlock: 'Add an application-level Google PageSpeed Insights key in Super Admin.', by: 'report operator', short: 'not connected' };
   }
   if (d.state === 'invalid_credential') return { why: `The access key for ${d.source} was refused.`, unlock: 'Replace the access key.', by: 'report operator', short: 'access key refused' };
   const next = d.next && d.next !== '—' ? d.next : 'Checked on the next run of the report.';

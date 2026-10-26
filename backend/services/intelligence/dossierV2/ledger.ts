@@ -399,9 +399,21 @@ export function buildLedger(payload: CanonicalExportPayload, pack: ResearchPack 
     reason: kg.state === 'measured' ? 'measured' : /no wikidata entity was found|not found/i.test(kg.text) ? 'searched_not_found' : /failed/i.test(kg.text) ? 'request_failed' : 'partial',
     outcome: kg.text || 'See the brand section.', nextStep: kg.state === 'measured' ? null : 'Create a Wikidata entry; add Organization structured data. A missing entry alone does not prove weak authority.', source: 'report_run' });
   const perf = obj(r1?.performance);
-  access.push({ capability: 'Page speed', family: 'page_speed', adapter: true, credential: cfg('page_speed')?.credential ?? null, attempted: perf?.state === 'measured',
-    reason: perf?.state === 'measured' ? 'measured' : 'missing_credential', outcome: str(perf?.reasonUnavailable) ?? 'See the website section.',
-    nextStep: perf?.state === 'measured' ? null : 'Enable PageSpeed Insights (free API key).', source: 'report_run' });
+  // The run's own PageSpeed cause (pageSpeedClient issue); older runs carry only prose, read conservatively.
+  const perfText = str(perf?.reasonUnavailable) ?? '';
+  const perfIssue = str(perf?.issue) ?? (/not enabled for this environment/i.test(perfText) ? 'not_configured' : /disabled in super admin/i.test(perfText) ? 'disabled'
+    : /quota|\b429\b/i.test(perfText) ? 'quota_exhausted' : perfText ? 'provider_failure' : null);
+  const perfReason: ReasonClass = perf?.state === 'measured' ? 'measured' : perf?.state === 'partial' ? 'partial'
+    : perfIssue === 'not_configured' ? 'missing_credential' : perfIssue === 'disabled' ? 'not_searched' : perfIssue === 'quota_exhausted' ? 'quota_restricted'
+      : perfIssue === 'api_disabled' ? 'restricted' : perf ? 'request_failed' : 'not_searched';
+  access.push({ capability: 'Page speed', family: 'page_speed', adapter: true, credential: cfg('page_speed')?.credential ?? null,
+    attempted: perf?.state === 'measured' || !['not_configured', 'disabled', null].includes(perfIssue),
+    reason: perfReason, outcome: perfText || (perf?.state === 'measured' ? 'Measured.' : 'See the website section.'),
+    nextStep: perf?.state === 'measured' ? null : perfIssue === 'disabled' ? 'Enable Google PageSpeed Insights in Super Admin.'
+      : perfIssue === 'invalid_key' ? 'Replace the key on the Google PageSpeed Insights card in Super Admin.'
+        : perfIssue === 'api_disabled' ? 'Enable the PageSpeed Insights API in the Google Cloud project that owns the key.'
+          : perfIssue === 'not_configured' ? 'Add an application-level PageSpeed Insights key in Super Admin (Google PageSpeed Insights).' : 'Re-run the report.',
+    source: 'report_run' });
 
   const registry = families.find((f) => f.key === 'registry')!;
   access.push({ capability: registry.label, family: 'registry', adapter: false, credential: null, attempted: false, reason: 'no_adapter',
