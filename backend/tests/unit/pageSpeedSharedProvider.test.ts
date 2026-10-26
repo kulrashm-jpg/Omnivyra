@@ -16,6 +16,9 @@ process.env.ENCRYPTION_KEY = 'ab'.repeat(32);
 type Row = Record<string, any>;
 const mockDb: Record<string, Row[]> = {};
 let mockSeq = 0;
+/** Make the next write of this table and operation fail with a database error, as PostgREST reports one. */
+const mockFail: Array<{ table: string; op: string; error: { code: string; message: string } }> = [];
+const mockInserts: Array<{ table: string; payload: any }> = [];
 function mockTable(table: string) {
   const filters: Array<(r: Row) => boolean> = [];
   let op: 'select' | 'insert' | 'update' | 'delete' = 'select';
@@ -23,6 +26,9 @@ function mockTable(table: string) {
   let single = false;
   const run = async () => {
     const rows = (mockDb[table] ??= []);
+    const fail = mockFail.findIndex((x) => x.table === table && x.op === op);
+    if (fail >= 0) { const [f] = mockFail.splice(fail, 1); return { data: null, error: f.error }; }
+    if (op === 'insert') mockInserts.push({ table, payload });
     const match = rows.filter((r) => filters.every((f) => f(r)));
     if (op === 'insert') {
       const items = (Array.isArray(payload) ? payload : [payload]).map((p: Row) => ({ id: `${table}-${++mockSeq}`, ...p }));
@@ -55,7 +61,7 @@ import {
 } from '../../services/pageSpeedClient';
 import { collectPerformanceEvidence } from '../../services/digitalExperienceRepository';
 import { resolveProviderCredential, PAGESPEED_SOURCE_NAME } from '../../services/providerCredentialResolver';
-import { checkPageSpeedConfig, getPageSpeedConfigSummary, savePageSpeedConfig } from '../../services/pageSpeedProviderConfigService';
+import { checkPageSpeedConfig, getPageSpeedConfigSummary, PageSpeedSaveError, savePageSpeedConfig } from '../../services/pageSpeedProviderConfigService';
 
 // Google-key-SHAPED placeholders, assembled at runtime so no key-like literal sits in the source (secret gate).
 const GOOGLE_PREFIX = ['AI', 'za'].join('');
@@ -89,6 +95,8 @@ afterAll(() => { global.fetch = realFetch; });
 
 beforeEach(() => {
   for (const k of Object.keys(mockDb)) delete mockDb[k];
+  mockFail.length = 0;
+  mockInserts.length = 0;
   delete process.env.PAGESPEED_API_KEY;
   delete process.env.PAGESPEED_ENABLED;
   resetPageSpeedClientState();
@@ -239,7 +247,7 @@ describe('Super Admin configuration: encrypted, masked, never echoed', () => {
     expect(JSON.stringify(summary)).not.toContain(ADMIN_KEY);
     expect(summary).toMatchObject({ enabled: true, configured: true, keySource: 'super_admin', hasStoredKey: true, keyDisplay: '•••••••• (encrypted)', status: 'active' });
     const [source] = mockDb.external_api_sources;
-    expect(source).toMatchObject({ name: PAGESPEED_SOURCE_NAME, company_id: null, is_active: true, category: 'others', is_whitelisted: false, is_enabled_global: false });
+    expect(source).toMatchObject({ name: PAGESPEED_SOURCE_NAME, company_id: null, is_active: true, category: 'others', is_whitelisted: false });
     const [account] = mockDb.api_provider_accounts;
     expect(account.credentials_encrypted).not.toContain(ADMIN_KEY);
     expect(JSON.parse(account.credentials_encrypted).api_key_value).toMatch(/^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/);
@@ -271,5 +279,32 @@ describe('Super Admin configuration: encrypted, masked, never echoed', () => {
   it('with nothing configured the summary says so, and names the env fallback without a value', async () => {
     const s = await getPageSpeedConfigSummary();
     expect(s).toMatchObject({ configured: false, keySource: 'none', status: 'not_configured', envFallback: { name: 'PAGESPEED_API_KEY', present: false } });
+  });
+});
+
+describe('a failed save says which step failed, never the key', () => {
+  it('the provider row uses only long-standing columns (no is_enabled_global) and stays non-executable', async () => {
+    await savePageSpeedConfig({ enabled: true, apiKey: ADMIN_KEY });
+    const row = mockInserts.find((x) => x.table === 'external_api_sources')!.payload;
+    expect(row).not.toHaveProperty('is_enabled_global');
+    expect(row).toMatchObject({ category: 'others', is_whitelisted: false, is_preset: false, company_id: null });
+  });
+
+  it('a rejected provider row → step provider_row with the database code; no key anywhere', async () => {
+    mockFail.push({ table: 'external_api_sources', op: 'insert', error: { code: '42703', message: 'column "x" of relation "external_api_sources" does not exist' } });
+    const err = await savePageSpeedConfig({ enabled: true, apiKey: ADMIN_KEY }).catch((e) => e);
+    expect(err).toBeInstanceOf(PageSpeedSaveError);
+    expect(err).toMatchObject({ step: 'provider_row', code: '42703' });
+    expect(err.message).toBe('Could not save the PageSpeed provider (provider_row, database error 42703).');
+    expect(`${err.message} ${err.logDetail}`).not.toContain(ADMIN_KEY);
+    expect(mockDb.api_provider_accounts ?? []).toEqual([]);
+  });
+
+  it('a rejected credential row → step credential; the row-data part of the database message is dropped', async () => {
+    mockFail.push({ table: 'api_provider_accounts', op: 'insert', error: { code: '23514', message: 'new row violates check constraint "x" DETAIL: Failing row contains (secret-ish values)' } });
+    const err = await savePageSpeedConfig({ enabled: true, apiKey: ADMIN_KEY }).catch((e) => e);
+    expect(err).toMatchObject({ step: 'credential' });
+    expect(err.logDetail).not.toMatch(/Failing row|secret-ish/);
+    expect(`${err.message} ${err.logDetail}`).not.toContain(ADMIN_KEY);
   });
 });

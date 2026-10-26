@@ -161,6 +161,7 @@ jest.mock('../../adapters/linkedin/linkedinMediaUpload', () => ({
 }));
 jest.mock('../../services/auditActorService', () => ({ insertAuditLogStrict: via('insertAuditLogStrict'), SYSTEM_USER_ID: 'system' }));
 jest.mock('../../services/pageSpeedProviderConfigService', () => ({
+  PageSpeedSaveError: class PageSpeedSaveError extends Error {},
   savePageSpeedConfig: via('savePageSpeedConfig'),
   getPageSpeedConfigSummary: async () => ({ provider: 'google_pagespeed' }),
   checkPageSpeedConfig: async () => ({ provider: 'google_pagespeed' }),

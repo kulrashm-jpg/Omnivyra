@@ -16,7 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { checkPageSpeedConfig, getPageSpeedConfigSummary, savePageSpeedConfig } from '../../../backend/services/pageSpeedProviderConfigService';
+import { checkPageSpeedConfig, getPageSpeedConfigSummary, PageSpeedSaveError, savePageSpeedConfig } from '../../../backend/services/pageSpeedProviderConfigService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { requireCapability } from '../../../backend/security/requireCapability';
@@ -84,7 +84,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
       return res.status(200).json({ success: true, config });
     } catch (error) {
+      if (error instanceof PageSpeedSaveError) {
+        // Step + database error code to the operator; the scrubbed database message to the server log only.
+        console.error('[pagespeed-config] save failed', { step: error.step, code: error.code, detail: error.logDetail });
+        return res.status(500).json({ error: error.message, step: error.step, code: error.code });
+      }
       const message = error instanceof Error && SAFE_ERROR.test(error.message) ? error.message : 'Failed to save the PageSpeed provider configuration.';
+      if (!(error instanceof Error && SAFE_ERROR.test(error.message))) console.error('[pagespeed-config] save failed', { step: 'unknown', name: error instanceof Error ? error.name : typeof error });
       return res.status(400).json({ error: message });
     }
   }
