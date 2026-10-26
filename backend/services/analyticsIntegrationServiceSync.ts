@@ -4,7 +4,7 @@ import { decryptCredential, encryptCredential } from '../auth/credentialEncrypti
 import { getAnalyticsProviderConfig } from './analyticsProviderConfigService';
 import { ownedDbTable } from '../db/writeOwner';
 
-import { type AnalyticsIntegrationRecord, type AnalyticsPropertyRecord, type AnalyticsTokenRecord, type GoogleAnalyticsConnectionStatus, type OAuthCallbackInput, type TokenExchangeResult, GA4_PROVIDER, GSC_PROVIDER, getGoogleAnalyticsOauthConfig, isExpiringSoon, getAnalyticsIntegration, getAnalyticsIntegrationForProvider, ensureAnalyticsIntegration, saveAnalyticsTokens, getAnalyticsTokenRecord, syncAnalyticsProperties, exchangeAuthorizationCode, fetchGAAccountsAndProperties, fetchSearchConsoleSites, mapGscSitesToProperties } from './analyticsIntegrationServiceProviders';
+import { type AnalyticsIntegrationRecord, type AnalyticsPropertyRecord, type AnalyticsTokenRecord, type GoogleAnalyticsConnectionStatus, type OAuthCallbackInput, type TokenExchangeResult, GA4_PROVIDER, GSC_PROVIDER, getGoogleAnalyticsOauthConfig, isExpiringSoon, getAnalyticsIntegration, getAnalyticsIntegrationForProvider, ensureAnalyticsIntegrationExists, markAnalyticsIntegrationConnected, saveAnalyticsTokens, getAnalyticsTokenRecord, syncAnalyticsProperties, exchangeAuthorizationCode, fetchGAAccountsAndProperties, fetchSearchConsoleSites, mapGscSitesToProperties } from './analyticsIntegrationServiceProviders';
 
 export async function handleGoogleOAuthCallback(
   input: OAuthCallbackInput,
@@ -53,13 +53,16 @@ export async function handleOAuthCallback(
     throw new Error('OAuth callback did not return an access token');
   }
 
-  const integration = await ensureAnalyticsIntegration(state.companyId, 'connected');
-  console.log('[GA-OAUTH][handleOAuthCallback] integration upserted', {
+  // Order matters: the row is marked connected (and any stale reauth state cleared) only after the new
+  // tokens are persisted, so a failed save never leaves a "connected" row holding old tokens.
+  const existing = await ensureAnalyticsIntegrationExists(state.companyId, GA4_PROVIDER);
+  await saveAnalyticsTokens(existing.id, token);
+  console.log('[GA-OAUTH][handleOAuthCallback] tokens saved');
+  const integration = await markAnalyticsIntegrationConnected(existing.id);
+  console.log('[GA-OAUTH][handleOAuthCallback] integration connected', {
     integration_id: integration.id,
     status: integration.status,
   });
-  await saveAnalyticsTokens(integration.id, token);
-  console.log('[GA-OAUTH][handleOAuthCallback] tokens saved');
 
   console.log('[GA-OAUTH][ga-api] fetching accounts/properties');
   const properties = await fetchGAAccountsAndProperties(token.access_token);
@@ -116,8 +119,10 @@ export async function handleSearchConsoleOAuthCallback(
     throw new Error('OAuth callback did not return an access token');
   }
 
-  const integration = await ensureAnalyticsIntegration(state.companyId, 'connected', GSC_PROVIDER);
-  await saveAnalyticsTokens(integration.id, token);
+  // Connected (and stale reauth state cleared) only after the new tokens are persisted.
+  const existing = await ensureAnalyticsIntegrationExists(state.companyId, GSC_PROVIDER);
+  await saveAnalyticsTokens(existing.id, token);
+  const integration = await markAnalyticsIntegrationConnected(existing.id);
 
   const sites = await fetchSearchConsoleSites(token.access_token);
   const syncedProperties = await syncAnalyticsProperties(integration.id, mapGscSitesToProperties(sites));

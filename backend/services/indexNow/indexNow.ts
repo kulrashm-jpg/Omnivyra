@@ -11,8 +11,12 @@
  *             422 URLs not of this host / key mismatch · 429 too many requests
  *
  * Safety:
- *   - OFF unless INDEXNOW_SUBMIT_ENABLED === 'true'; no key (INDEXNOW_API_KEY) → not_configured. No network
- *     call in either case. Nothing in the platform calls submitIndexNow yet.
+ *   - OFF unless INDEXNOW_SUBMIT_ENABLED === 'true' (exactly); no valid key (INDEXNOW_API_KEY) →
+ *     not_configured. No network call in either case.
+ *   - Caller: notifyIndexNowOfBlogChange, invoked by the admin blog routes after a successful write —
+ *     pages/api/admin/blog/index.ts (create with status published) and pages/api/admin/blog/[id].ts
+ *     (publish, edit while published incl. slug change, unpublish, delete of a published post). Nothing
+ *     else submits.
  *   - The key file is served only when INDEXNOW_PUBLISH_KEY_FILE === 'true' as well (publishing it is a
  *     separate, deliberate step from having the key in the environment).
  *   - Only URLs the site already lists in its sitemaps are eligible: the static marketing pages of

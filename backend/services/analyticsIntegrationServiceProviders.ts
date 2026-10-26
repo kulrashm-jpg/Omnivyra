@@ -347,6 +347,31 @@ export async function ensureAnalyticsIntegration(
   return data as AnalyticsIntegrationRecord;
 }
 
+/**
+ * After a successful OAuth callback (code exchanged AND tokens persisted): set status and the canonical
+ * connection state together in ONE update, clearing any stale PROVIDER_REAUTH_REQUIRED left by a revoked
+ * grant. Called only after saveAnalyticsTokens succeeded, so a failed exchange or failed persistence
+ * never marks the connection connected. If the connection-state columns (20260625) are absent the update
+ * falls back to the status alone rather than failing the reconnect.
+ */
+export async function markAnalyticsIntegrationConnected(integrationId: string): Promise<AnalyticsIntegrationRecord> {
+  const now = new Date().toISOString();
+  const update = (fields: Record<string, unknown>) => ownedDbTable('analytics_integrations')
+    .update({ status: 'connected', updated_at: now, ...fields })
+    .eq('id', integrationId)
+    .select('*')
+    .single();
+  let { data, error } = await update({ connection_state: 'CONNECTED', last_provider_error: null, last_live_check_at: now, last_live_check_status: 'ok' });
+  if (error && /connection_state|last_provider_error|last_live_check|column/i.test(error.message ?? '')) {
+    console.warn('[analytics-oauth] connection-state columns unavailable; setting status only', { integration_id: integrationId });
+    ({ data, error } = await update({}));
+  }
+  if (error) {
+    throw new Error(`Failed to mark analytics integration connected: ${error.message}`);
+  }
+  return data as AnalyticsIntegrationRecord;
+}
+
 /** Create the integration row (as 'disconnected') only if the company has none for this provider. */
 export async function ensureAnalyticsIntegrationExists(
   companyId: string,

@@ -36,6 +36,7 @@ import {
 } from '../../auth/tokenRefresh';
 import {
   getValidAccessTokenForIntegration,
+  TokenRefreshError,
 } from '../analyticsIntegrationService';
 import { logger } from '../logger';
 import {
@@ -49,7 +50,15 @@ const PROBE_JITTER_MAX_MS = 200;
 
 export interface OAuthLifecycleSweepSummary {
   social: { companies: number; checked: number; refreshed: number; skipped: number; errors: number };
-  ga4:    { integrationsChecked: number; refreshed: number; failed: number };
+  ga4:    {
+    integrationsChecked: number; refreshed: number; failed: number;
+    /** Connections whose user grant Google confirmed revoked/invalid (marked PROVIDER_REAUTH_REQUIRED). */
+    reauthRequired: number;
+    /** Refreshes refused because the PLATFORM OAuth client is misconfigured; tenant state left unchanged. */
+    platformConfigErrors: number;
+    /** Timeouts, rate limits, Google 5xx and unclassified errors; tenant state left unchanged. */
+    transientErrors: number;
+  };
   meta:   { connectionsChecked: number; extended: number; failed: number };
   states: { written: number; failed: number };
   probes: { attempted: number; ok: number; failed: number };
@@ -173,18 +182,36 @@ async function sweepGa4Integrations(summary: OAuthLifecycleSweepSummary): Promis
     } catch (err: unknown) {
       summary.ga4.failed += 1;
       const message = err instanceof Error ? err.message : String(err);
-      // invalid_grant from Google → unrecoverable. Otherwise treat as
-      // transient and stay at TOKEN_EXPIRED so the next tick retries.
-      const reauth = /invalid[_ ]grant|invalid[_ ]token|unauthorized/i.test(message);
-      const nextState: ConnectionState = reauth ? 'PROVIDER_REAUTH_REQUIRED' : 'TOKEN_EXPIRED';
-      if (await writeAnalyticsIntegrationState(row.id, nextState, {
-        at: new Date(),
-        status: reauth ? 'unauthorised' : 'server_error',
-        error: message.slice(0, 200),
-      })) summary.states.written += 1;
-      else summary.states.failed += 1;
+      // Typed outcome from refreshAccessToken — never text matching. Only a grant Google itself reports
+      // as revoked/invalid (invalid_grant) needs the company to reconnect. A platform OAuth client error
+      // (invalid_client / unauthorized_client) is ONE platform problem, not every tenant's: no tenant
+      // state is written. Timeouts, rate limits, Google 5xx and unclassified errors leave the state as
+      // it is (the token may still be valid; the next tick retries). refreshAccessToken has already
+      // recorded last_provider_error / last_live_check_* on this row in every case.
+      const outcome = err instanceof TokenRefreshError ? err.outcome : 'failed';
+      if (outcome === 'revoked') {
+        summary.ga4.reauthRequired += 1;
+        if (await writeAnalyticsIntegrationState(row.id, 'PROVIDER_REAUTH_REQUIRED', {
+          at: new Date(),
+          status: 'unauthorised',
+          error: message.slice(0, 200),
+        })) summary.states.written += 1;
+        else summary.states.failed += 1;
+      } else if (outcome === 'client_misconfigured') {
+        summary.ga4.platformConfigErrors += 1;
+      } else {
+        summary.ga4.transientErrors += 1;
+      }
     }
   });
+
+  if (summary.ga4.platformConfigErrors > 0) {
+    // One platform problem, reported once — the Google OAuth client in Super Admin needs attention.
+    logger.error('oauth_lifecycle_platform_oauth_client_error', {
+      affected_integrations: summary.ga4.platformConfigErrors,
+      action: 'Check the Google OAuth client id/secret saved in Super Admin; tenant connections were left unchanged.',
+    });
+  }
 }
 
 // ── Meta long-lived extension (best-effort, stub) ──────────────────────────
@@ -242,7 +269,7 @@ export async function runOAuthLifecycleSweep(): Promise<OAuthLifecycleSweepSumma
   const t0 = Date.now();
   const summary: OAuthLifecycleSweepSummary = {
     social: { companies: 0, checked: 0, refreshed: 0, skipped: 0, errors: 0 },
-    ga4:    { integrationsChecked: 0, refreshed: 0, failed: 0 },
+    ga4:    { integrationsChecked: 0, refreshed: 0, failed: 0, reauthRequired: 0, platformConfigErrors: 0, transientErrors: 0 },
     meta:   { connectionsChecked: 0, extended: 0, failed: 0 },
     states: { written: 0, failed: 0 },
     probes: { attempted: 0, ok: 0, failed: 0 },

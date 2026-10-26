@@ -113,7 +113,7 @@ export async function processAnalyticsIngestionJob(job: Job<AnalyticsIngestionJo
   if (type === 'oauth-refresh') {
     const summary = await runOAuthLifecycleSweep();
     console.log(
-      `[analyticsIngestionProcessor][oauth-refresh] social.refreshed=${summary.social.refreshed} social.errors=${summary.social.errors} ga4.refreshed=${summary.ga4.refreshed} ga4.failed=${summary.ga4.failed} meta.checked=${summary.meta.connectionsChecked} states.written=${summary.states.written} states.failed=${summary.states.failed} duration=${summary.durationMs}ms`,
+      `[analyticsIngestionProcessor][oauth-refresh] social.refreshed=${summary.social.refreshed} social.errors=${summary.social.errors} ga4.refreshed=${summary.ga4.refreshed} ga4.failed=${summary.ga4.failed} ga4.reauth=${summary.ga4.reauthRequired} ga4.platformConfigErrors=${summary.ga4.platformConfigErrors} ga4.transient=${summary.ga4.transientErrors} meta.checked=${summary.meta.connectionsChecked} states.written=${summary.states.written} states.failed=${summary.states.failed} duration=${summary.durationMs}ms`,
     );
     return;
   }
