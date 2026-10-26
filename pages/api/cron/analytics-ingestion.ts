@@ -7,11 +7,12 @@ import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual'
 /**
  * Vercel Cron entrypoint — runs daily at 02:00 UTC (configured in vercel.json).
  *
- * Enqueues three jobs onto the 'analytics-ingestion' BullMQ queue:
+ * Enqueues these jobs onto the 'analytics-ingestion' BullMQ queue:
  *   1. daily-growth        — social-media follower/impression snapshots
  *   2. post-polls          — process pending post_analytics_polls rows
  *   3. ga4-all-companies   — refresh GA4 canonical data for every company
  *                            with an active GA4 integration
+ *   4. gsc-all-companies   — the same for Search Console (incremental per company)
  *
  * Enqueue-only design: this endpoint MUST return quickly. GA4 ingestion
  * for a single company can take many minutes (the first observed run
@@ -70,6 +71,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       { jobId: `ga4-all-companies-${today}`, priority: 4 },
     );
     enqueued.push('ga4-all-companies');
+
+    // Search Console for every company with an active GSC property (each from its own watermark;
+    // the worker's own cron tick skips companies this job already synced).
+    await safeEnqueue(queue, 'analytics-ingestion',
+      'gsc-all-companies',
+      { type: 'gsc-all-companies' },
+      { jobId: `gsc-all-companies-${today}`, priority: 4 },
+    );
+    enqueued.push('gsc-all-companies');
 
     // Phase C — autonomous OAuth lifecycle sweep folded into the same
     // cron tick (Hobby plan caps total cron count at 2; a dedicated

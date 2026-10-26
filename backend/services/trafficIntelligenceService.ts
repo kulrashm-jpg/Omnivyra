@@ -9,8 +9,8 @@ import { isUnreadRedirect } from './crawl/reachabilityOutcome';
 import { clamp, normalizeText } from './intelligenceEngineUtils';
 // BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
 import { deriveDecisionConfidence } from './evidencePlatform';
+import { tenantProviderReliability } from './googleTenantSourceAvailability';
 // BETA-PROVIDER-003: canonical GA4 provider reliability lifts confidence on already-MEASURED session data.
-import { isGa4ProviderAvailable, ga4ProviderReliability } from './ga4ProviderBridge';
 
 type SessionRow = {
   id: string;
@@ -156,10 +156,11 @@ export async function generateTrafficIntelligenceDecisions(companyId: string): P
   // confidence scales with the session sample size backing the traffic signal.
   // BETA-PROVIDER-003: canonical_sessions is first-party GA4 data (already MEASURED). Add the GA4
   // provider's reliability factor when connected (no scoring redesign); null (unchanged) otherwise.
-  const ga4ProviderLive = isGa4ProviderAvailable();
+  // Tenant-specific: this company's own GA4 connection, property and import freshness.
+  const ga4Reliability = await tenantProviderReliability(companyId, 'ga4');
   const trafficConfidence = deriveDecisionConfidence({
     maturity: 'MEASURED',
-    providerReliability: ga4ProviderLive ? ga4ProviderReliability() : null,
+    providerReliability: ga4Reliability,
     sampleSize: sessions.length,
     dataPresent: sessions.length > 0,
   });

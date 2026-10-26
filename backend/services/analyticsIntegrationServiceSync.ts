@@ -135,93 +135,20 @@ export async function handleSearchConsoleOAuthCallback(
 }
 
 /**
- * Kick off an initial GA4 ingestion immediately after the connection is usable
- * (token saved + property activated). Fire-and-forget: the caller's HTTP
- * response must not wait on this. Errors are logged, never thrown.
- *
- * Uses a deferred dynamic import to avoid the cycle between this module and
- * ingestionScheduler (the scheduler imports getGoogleAnalyticsStatus from
- * here).
+ * Start the first import after the connection is usable (token saved + property activated). The work is
+ * queued for the worker (analyticsPostConnectImport) so a serverless function ending cannot cut it short;
+ * the HTTP response never waits on it, and errors are logged, never thrown.
  */
 export function triggerImmediateGa4Ingestion(companyId: string): void {
-  void (async () => {
-    try {
-      const { runIngestionForCompany } = await import('./ingestionScheduler');
-      const summary = await runIngestionForCompany({
-        companyId,
-        sources: ['ga4'],
-      });
-      console.log('[GA-OAUTH][initial-ingestion] completed', {
-        company_id: companyId,
-        sources: summary.sources.map((s) => ({
-          source: s.source,
-          success: s.success,
-          skipped: s.skipped ?? false,
-          error: s.error ?? null,
-        })),
-        ready: summary.ready,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const stack = err instanceof Error ? err.stack : undefined;
-      console.error('[GA-OAUTH][INITIAL_GA_INGESTION_FAILED]', {
-        company_id: companyId,
-        message,
-        stack,
-      });
-    }
-  })();
+  void import('./analyticsPostConnectImport').then((m) => m.schedulePostConnectImport(companyId, 'ga4')).catch((err) => {
+    console.error('[GA-OAUTH][INITIAL_GA_INGESTION_SCHEDULE_FAILED]', { company_id: companyId, message: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200) });
+  });
 }
 
 export function triggerImmediateGscIngestion(companyId: string): void {
-  void (async () => {
-    try {
-      const { resolveOmnivyraWebsiteCompany } = await import('./omnivyraWebsiteCompanyService');
-      const omnivyraCompany = await resolveOmnivyraWebsiteCompany().catch(() => null);
-      if (omnivyraCompany?.id === companyId) {
-        const { runOmnivyraGscIngestion } = await import('./omnivyraGscAnalyticsService');
-        const result = await runOmnivyraGscIngestion({ forceBackfill: true });
-        console.log('[GSC-OAUTH][initial-platform-ingestion] completed', {
-          company_id: companyId,
-          property_url: result.property_url,
-          status: result.status,
-          rows_ingested: result.rows_ingested,
-          retries: result.retries,
-        });
-        return;
-      }
-
-      const { runIngestionForCompany } = await import('./ingestionScheduler');
-      const { buildGscHistoricalBackfillOverride } = await import('./gscIngestionService');
-      const summary = await runIngestionForCompany({
-        companyId,
-        sources: ['gsc'],
-        overrides: {
-          gsc: buildGscHistoricalBackfillOverride(),
-        },
-        force: true,
-        reason: 'initial_gsc_90_day_backfill',
-      });
-      console.log('[GSC-OAUTH][initial-ingestion] completed', {
-        company_id: companyId,
-        sources: summary.sources.map((s) => ({
-          source: s.source,
-          success: s.success,
-          skipped: s.skipped ?? false,
-          error: s.error ?? null,
-        })),
-        ready: summary.ready,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const stack = err instanceof Error ? err.stack : undefined;
-      console.error('[GSC-OAUTH][INITIAL_GSC_INGESTION_FAILED]', {
-        company_id: companyId,
-        message,
-        stack,
-      });
-    }
-  })();
+  void import('./analyticsPostConnectImport').then((m) => m.schedulePostConnectImport(companyId, 'gsc')).catch((err) => {
+    console.error('[GSC-OAUTH][INITIAL_GSC_INGESTION_SCHEDULE_FAILED]', { company_id: companyId, message: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200) });
+  });
 }
 
 export async function saveSelectedProperty(
@@ -431,33 +358,101 @@ export async function getActiveSearchConsoleProperty(companyId: string): Promise
   return (data as AnalyticsPropertyRecord | null) ?? null;
 }
 
-export async function refreshAccessToken(integrationId: string): Promise<AnalyticsTokenRecord> {
+export type TokenRefreshOutcome = 'revoked' | 'transient' | 'client_misconfigured' | 'failed';
+
+/**
+ * Classify a failed Google token refresh. Pure.
+ *   revoked              invalid_grant: consent withdrawn, password change, token expired by policy —
+ *                        only the tenant reconnecting fixes it.
+ *   transient            429 / 5xx / network / timeout — retry later; the connection is NOT broken.
+ *   client_misconfigured invalid_client / unauthorized_client: the PLATFORM OAuth client is wrong;
+ *                        not this tenant's fault, so the tenant connection is left as it is.
+ *   failed               anything else.
+ */
+export function classifyTokenRefreshFailure(httpStatus: number | null, googleError: string | null): TokenRefreshOutcome {
+  if (googleError === 'invalid_grant') return 'revoked';
+  if (googleError === 'invalid_client' || googleError === 'unauthorized_client') return 'client_misconfigured';
+  if (httpStatus == null || httpStatus === 408 || httpStatus === 429 || httpStatus >= 500) return 'transient';
+  return 'failed';
+}
+
+export class TokenRefreshError extends Error {
+  constructor(readonly outcome: TokenRefreshOutcome, readonly httpStatus: number | null, message: string) {
+    super(message);
+    this.name = 'TokenRefreshError';
+  }
+}
+
+/** Best-effort write of the canonical connection-state columns (20260625); never fails the caller. */
+async function writeConnectionState(integrationId: string, fields: Record<string, unknown>): Promise<void> {
+  try {
+    const { error } = await ownedDbTable('analytics_integrations').update(fields).eq('id', integrationId);
+    if (error) console.warn('[analytics-token-refresh] connection-state write failed', { integration_id: integrationId, message: error.message });
+  } catch (err) {
+    console.warn('[analytics-token-refresh] connection-state write failed', { integration_id: integrationId, message: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+const providerLabel = (provider: unknown) => (provider === GSC_PROVIDER ? 'Search Console' : 'Google Analytics');
+
+export async function refreshAccessToken(
+  integrationId: string,
+  deps: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+): Promise<AnalyticsTokenRecord> {
+  const { data: integrationRow } = await ownedDbTable('analytics_integrations')
+    .select('provider')
+    .eq('id', integrationId)
+    .maybeSingle();
+  const label = providerLabel((integrationRow as { provider?: unknown } | null)?.provider);
+
   const token = await getAnalyticsTokenRecord(integrationId);
   if (!token?.refresh_token) {
-    throw new Error('GA4 refresh token is missing');
+    throw new TokenRefreshError('revoked', null, `${label} refresh token is missing — reconnect required (invalid_grant)`);
   }
 
   const credentials = await getGoogleAnalyticsOauthConfig();
 
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      client_id: credentials.client_id,
-      client_secret: credentials.client_secret,
-      grant_type: 'refresh_token',
-      refresh_token: token.refresh_token,
-    }),
-  });
+  let response: Response | null = null;
+  let googleError: string | null = null;
+  let googleDescription = '';
+  try {
+    response = await (deps.fetchImpl ?? fetch)('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: credentials.client_id,
+        client_secret: credentials.client_secret,
+        grant_type: 'refresh_token',
+        refresh_token: token.refresh_token,
+      }),
+      signal: AbortSignal.timeout(deps.timeoutMs ?? 15_000),
+    });
+  } catch (err) {
+    googleDescription = err instanceof Error && err.name === 'TimeoutError' ? 'request timed out' : 'network error';
+  }
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    await ownedDbTable('analytics_integrations')
-      .update({ status: 'error', updated_at: new Date().toISOString() })
-      .eq('id', integrationId);
-    throw new Error(`GA4 token refresh failed (${response.status}): ${body || 'unknown error'}`);
+  if (!response || !response.ok) {
+    if (response) {
+      // Only Google's error code and description — never the raw body (it can echo request fields).
+      const parsed = await response.json().catch(() => null) as { error?: unknown; error_description?: unknown } | null;
+      googleError = typeof parsed?.error === 'string' ? parsed.error.slice(0, 60) : null;
+      googleDescription = typeof parsed?.error_description === 'string' ? parsed.error_description.slice(0, 160) : response.statusText;
+    }
+    const httpStatus = response?.status ?? null;
+    const outcome = classifyTokenRefreshFailure(httpStatus, googleError);
+    const message = `${label} token refresh failed (${httpStatus ?? 'no response'}${googleError ? `, ${googleError}` : ''}): ${googleDescription || 'unknown error'}`;
+    const now = new Date().toISOString();
+    // Only a revoked grant breaks the tenant connection; transient and platform-client failures keep it
+    // usable for the next attempt (the daily OAuth sweep and the next sync retry).
+    if (outcome === 'revoked') {
+      await ownedDbTable('analytics_integrations').update({ status: 'error', updated_at: now }).eq('id', integrationId);
+    }
+    await writeConnectionState(integrationId, outcome === 'revoked'
+      ? { connection_state: 'PROVIDER_REAUTH_REQUIRED', last_provider_error: message.slice(0, 200), last_live_check_at: now, last_live_check_status: 'unauthorised' }
+      : { last_provider_error: message.slice(0, 200), last_live_check_at: now, last_live_check_status: outcome === 'transient' ? 'server_error' : 'error' });
+    throw new TokenRefreshError(outcome, httpStatus, message);
   }
 
   const refreshed = await response.json();
@@ -474,10 +469,11 @@ export async function refreshAccessToken(integrationId: string): Promise<Analyti
   await ownedDbTable('analytics_integrations')
     .update({ status: 'connected', updated_at: new Date().toISOString() })
     .eq('id', integrationId);
+  await writeConnectionState(integrationId, { connection_state: 'CONNECTED', last_provider_error: null });
 
   const updated = await getAnalyticsTokenRecord(integrationId);
   if (!updated) {
-    throw new Error('Refreshed GA4 token could not be reloaded');
+    throw new Error(`Refreshed ${label} token could not be reloaded`);
   }
   return updated;
 }
