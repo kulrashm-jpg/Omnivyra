@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { fetchAllSearchAnalyticsRows as fetchSharedSearchAnalyticsRows } from './gscSearchAnalyticsClient';
 import {
   getActiveSearchConsoleProperty,
   getGoogleSearchConsoleStatus,
@@ -16,7 +17,6 @@ const GSC_REPORTING_DELAY_DAYS = 3;
 const GSC_BACKFILL_DAYS = 90;
 const GSC_INCREMENTAL_LOOKBACK_DAYS = 7;
 const GSC_STALE_THRESHOLD_DAYS = 4;
-const GSC_ROW_LIMIT = 25_000;
 const GSC_MAX_RETRIES = 3;
 
 type SearchAnalyticsRow = {
@@ -175,69 +175,7 @@ async function resolveOmnivyraGscContext(): Promise<{
   return { company, property, accessToken };
 }
 
-async function requestSearchAnalytics(params: {
-  accessToken: string;
-  propertyUrl: string;
-  startDate: string;
-  endDate: string;
-  dimensions: string[];
-  startRow: number;
-}): Promise<{ rows: SearchAnalyticsRow[]; retries: number }> {
-  let attempt = 0;
-  let retries = 0;
-  let lastError: Error | null = null;
-
-  while (attempt <= GSC_MAX_RETRIES) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20_000);
-    try {
-      const response = await fetch(
-        `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(params.propertyUrl)}/searchAnalytics/query`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${params.accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            startDate: params.startDate,
-            endDate: params.endDate,
-            dimensions: params.dimensions,
-            rowLimit: GSC_ROW_LIMIT,
-            startRow: params.startRow,
-          }),
-          signal: controller.signal,
-        },
-      );
-      clearTimeout(timeout);
-
-      if (response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        return {
-          rows: Array.isArray(payload?.rows) ? payload.rows : [],
-          retries,
-        };
-      }
-
-      const body = await response.text().catch(() => '');
-      lastError = new Error(`Search Console API failed (${response.status}): ${body || response.statusText}`);
-      if (![408, 429, 500, 502, 503, 504].includes(response.status)) {
-        throw lastError;
-      }
-    } catch (error) {
-      clearTimeout(timeout);
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt >= GSC_MAX_RETRIES) break;
-    }
-
-    retries += 1;
-    await new Promise((resolve) => setTimeout(resolve, 500 * Math.pow(2, attempt)));
-    attempt += 1;
-  }
-
-  throw lastError ?? new Error('Search Console API failed.');
-}
-
+// Pagination + retries live in the shared client (also used by the tenant pipeline).
 async function fetchAllSearchAnalyticsRows(params: {
   accessToken: string;
   propertyUrl: string;
@@ -245,31 +183,16 @@ async function fetchAllSearchAnalyticsRows(params: {
   endDate: string;
   dimensions: string[];
 }): Promise<{ rows: SearchAnalyticsRow[]; retries: number; partialFailure: string | null }> {
-  const rows: SearchAnalyticsRow[] = [];
-  let retries = 0;
-
-  for (let startRow = 0; ; startRow += GSC_ROW_LIMIT) {
-    try {
-      const page = await requestSearchAnalytics({ ...params, startRow });
-      rows.push(...page.rows);
-      retries += page.retries;
-      console.info('[OMNIVYRA-GSC][page-fetched]', {
-        dimensions: params.dimensions,
-        start_row: startRow,
-        rows: page.rows.length,
-        retries: page.retries,
-      });
-      if (page.rows.length < GSC_ROW_LIMIT) {
-        return { rows, retries, partialFailure: null };
-      }
-    } catch (error) {
-      return {
-        rows,
-        retries,
-        partialFailure: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
+  const result = await fetchSharedSearchAnalyticsRows(params, {
+    maxRetries: GSC_MAX_RETRIES,
+    onPage: (page) => console.info('[OMNIVYRA-GSC][page-fetched]', {
+      dimensions: params.dimensions,
+      start_row: page.startRow,
+      rows: page.rows,
+      retries: page.retries,
+    }),
+  });
+  return { rows: result.rows as SearchAnalyticsRow[], retries: result.retries, partialFailure: result.partialFailure };
 }
 
 function mapFactRows(rows: SearchAnalyticsRow[]): FactRow[] {

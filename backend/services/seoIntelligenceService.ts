@@ -9,10 +9,10 @@ import { clamp, roundNumber, safeAverage } from './intelligenceEngineUtils';
 // BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
 import { deriveDecisionConfidence } from './evidencePlatform';
 // BETA-PROVIDER-002: canonical GSC provider reliability lifts confidence on already-MEASURED search data.
-import { isSearchConsoleProviderAvailable, searchConsoleProviderReliability } from './searchConsoleProviderBridge';
 // BETA-PROVIDER-004: Bing Webmaster complements GSC as a first-party search provider — blend both when live.
 import { isBingProviderAvailable, bingProviderReliability } from './bingWebmasterProviderBridge';
 import { combinedProviderReliability } from './ga4ProviderBridge';
+import { tenantProviderReliability } from './googleTenantSourceAvailability';
 
 type KeywordRow = {
   id: string;
@@ -106,12 +106,13 @@ export async function generateSeoIntelligenceDecisions(companyId: string): Promi
   // deterministically (mean of the live set) as the single providerReliability factor — confidence rises
   // from provenance alone, no scoring redesign. Without credentials this is null, so confidence is
   // unchanged (backward compatible).
-  const gscProviderLive = isSearchConsoleProviderAvailable();
+  // Tenant-specific: this company's own Search Console connection, property and import freshness.
+  const gscReliability = await tenantProviderReliability(companyId, 'gsc');
   const bingProviderLive = isBingProviderAvailable();
   const seoConfidence = deriveDecisionConfidence({
     maturity: 'MEASURED',
     providerReliability: combinedProviderReliability(
-      gscProviderLive ? searchConsoleProviderReliability() : null,
+      gscReliability,
       bingProviderLive ? bingProviderReliability() : null,
     ),
     sampleSize: metrics.length,

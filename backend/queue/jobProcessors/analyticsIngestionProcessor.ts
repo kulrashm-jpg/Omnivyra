@@ -1,7 +1,7 @@
 /**
  * Analytics Ingestion Processor
  *
- * Handles four job types on the 'analytics-ingestion' queue:
+ * Handles these job types on the 'analytics-ingestion' queue:
  *
  *   { type: 'daily-growth' }
  *     Triggered by cron at 02:00 UTC. Fetches follower/impression snapshots
@@ -17,6 +17,13 @@
  *     can run for many minutes; the cron handler returns 200 immediately
  *     after enqueue so Vercel function timeouts don't truncate the work.
  *
+ *   { type: 'gsc-all-companies' }
+ *     Same daily trigger: Search Console sync for every company with an active GSC property, each
+ *     from its own watermark (backend/services/scheduledAnalyticsSync.ts).
+ *
+ *   { type: 'analytics-post-connect-import', companyId, source }
+ *     The first import after a company connects GA4 / GSC or selects a property.
+ *
  *   { type: 'oauth-refresh' }
  *     Phase C — fold of the autonomous OAuth lifecycle sweep into the
  *     existing analytics-ingestion queue (Hobby plan has only 2 cron
@@ -28,13 +35,16 @@
 
 import type { Job } from 'bullmq';
 import { runDailyGrowthIngestion, runPendingPostPolls } from '../../jobs/analyticsIngestionJob';
-import { runIngestionForAllCompanies } from '../../services/ingestionScheduler';
+import { runScheduledAnalyticsSync } from '../../services/scheduledAnalyticsSync';
+import { runPostConnectImport } from '../../services/analyticsPostConnectImport';
 import { runOAuthLifecycleSweep } from '../../services/integrations/oauthLifecycleScheduler';
 
 export type AnalyticsIngestionJobData =
   | { type: 'daily-growth' }
   | { type: 'post-polls'; batchSize?: number }
   | { type: 'ga4-all-companies'; startDate?: string; endDate?: string }
+  | { type: 'gsc-all-companies' }
+  | { type: 'analytics-post-connect-import'; companyId: string; source: 'ga4' | 'gsc' }
   | { type: 'oauth-refresh' };
 
 export async function processAnalyticsIngestionJob(job: Job<AnalyticsIngestionJobData>): Promise<void> {
@@ -57,13 +67,30 @@ export async function processAnalyticsIngestionJob(job: Job<AnalyticsIngestionJo
     const startDate = job.data.startDate ?? sevenDaysAgo;
     const endDate = job.data.endDate ?? today;
 
-    const summary = await runIngestionForAllCompanies({
-      sources: ['ga4'],
-      overrides: { ga4: { startDate, endDate } },
-    });
+    const summary = await runScheduledAnalyticsSync('ga4', { startDate, endDate });
     console.log(
       `[analyticsIngestionProcessor][ga4-all-companies] attempted=${summary.attempted} succeeded=${summary.succeeded} failed=${summary.failed} window=${startDate}..${endDate}`,
     );
+    return;
+  }
+
+  if (type === 'gsc-all-companies') {
+    const summary = await runScheduledAnalyticsSync('gsc');
+    console.log(
+      `[analyticsIngestionProcessor][gsc-all-companies] attempted=${summary.attempted} succeeded=${summary.succeeded} failed=${summary.failed}`,
+    );
+    return;
+  }
+
+  if (type === 'analytics-post-connect-import') {
+    // Queued by the OAuth callback / property selection (analyticsIntegrationServiceSync) so the import
+    // runs on the worker, not as fire-and-forget work a serverless function may cut short.
+    const { companyId, source } = job.data;
+    if (typeof companyId !== 'string' || !companyId || (source !== 'ga4' && source !== 'gsc')) {
+      console.warn('[analyticsIngestionProcessor][analytics-post-connect-import] invalid job data');
+      return;
+    }
+    await runPostConnectImport(companyId, source);
     return;
   }
 

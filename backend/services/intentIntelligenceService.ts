@@ -5,9 +5,9 @@ import { clamp } from './intelligenceEngineUtils';
 // BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
 import { deriveDecisionConfidence } from './evidencePlatform';
 // BETA-PROVIDER-002: canonical GSC provider reliability lifts confidence on already-MEASURED GSC keyword data.
-import { isSearchConsoleProviderAvailable, searchConsoleProviderReliability } from './searchConsoleProviderBridge';
 // BETA-PROVIDER-003: the intent signal ALSO draws on first-party GA4 sessions — blend both live providers.
-import { isGa4ProviderAvailable, ga4ProviderReliability, combinedProviderReliability } from './ga4ProviderBridge';
+import { combinedProviderReliability } from './ga4ProviderBridge';
+import { tenantProviderReliability } from './googleTenantSourceAvailability';
 
 type KeywordMetric = {
   keyword_id: string;
@@ -77,13 +77,15 @@ export async function generateIntentIntelligenceDecisions(companyId: string): Pr
   // BETA-PROVIDER-002/003: the intent signal draws on BOTH first-party GSC keyword metrics and first-party
   // GA4 sessions. Blend the reliabilities of whichever providers are connected (no scoring redesign);
   // null (unchanged) when neither is configured.
-  const gscProviderLive = isSearchConsoleProviderAvailable();
-  const ga4ProviderLive = isGa4ProviderAvailable();
+  // Tenant-specific: this company's own Search Console connection, property and import freshness.
+  const gscReliability = await tenantProviderReliability(companyId, 'gsc');
+  // Tenant-specific: this company's own GA4 connection, property and import freshness.
+  const ga4Reliability = await tenantProviderReliability(companyId, 'ga4');
   const intentConfidence = deriveDecisionConfidence({
     maturity: 'MEASURED',
     providerReliability: combinedProviderReliability(
-      gscProviderLive ? searchConsoleProviderReliability() : null,
-      ga4ProviderLive ? ga4ProviderReliability() : null,
+      gscReliability,
+      ga4Reliability,
     ),
     sampleSize: metricRows.length + sessionRows.length,
     dataPresent: metricRows.length + sessionRows.length > 0,
