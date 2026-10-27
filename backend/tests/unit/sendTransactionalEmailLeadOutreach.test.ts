@@ -294,7 +294,7 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
     expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('eb4963aea1b7a6d2');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('d475707d4338b6f8');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c0683963a248bbc3');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {

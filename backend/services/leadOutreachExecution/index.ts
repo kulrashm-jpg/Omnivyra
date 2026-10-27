@@ -228,6 +228,7 @@ export {
 export {
   dispatchInternalOutreachTask,
   dispatchInternalBatch,
+  requeuedDispatchProblem,
   type DispatchOutcome,
   type DispatchOptions,
   type DispatchResult,
@@ -257,6 +258,7 @@ export {
   getOutreachTask,
   getOutreachTaskById,
   listOutreachTasksForLead,
+  listQueuedOutreachTasks,
   setOutreachTaskState,
   setOutreachTaskPersonId,
   transitionOutreachTaskState,

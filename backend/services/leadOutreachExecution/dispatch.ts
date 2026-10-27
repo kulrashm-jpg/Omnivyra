@@ -154,6 +154,19 @@ async function redispatchProblem(companyId: string, taskId: string, external: bo
   return null;
 }
 
+/**
+ * The same prior-attempt check dispatch applies to a requeued task, for callers
+ * that only need to know whether dispatching it could ever proceed (the recovery
+ * sweep skips a task that never can, rather than re-evaluating governance on it
+ * every run). Advisory only: dispatch re-checks under its own claim.
+ */
+export async function requeuedDispatchProblem(companyId: string, task: OutreachTask): Promise<string | null> {
+  if (!task.id) return 'task has no id';
+  const transport = resolveTransport(task.channel);
+  if (!transport) return `no transport serves the "${task.channel}" channel`;
+  return redispatchProblem(companyId, task.id, transport.external);
+}
+
 /** Next attempt number for a task. Sequential and gap-free per task. */
 async function nextAttemptNumber(companyId: string, taskId: string): Promise<number> {
   const attempts = await listAttempts(companyId, taskId);

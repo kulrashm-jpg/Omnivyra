@@ -430,6 +430,13 @@
         "CRON_SECRET"
       ]
     },
+    "pages/api/cron/outreach-dispatch-recovery.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
     "pages/api/cron/process-scheduled-posts.ts": {
       "kind": "machine-secret",
       "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",

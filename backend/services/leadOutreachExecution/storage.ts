@@ -205,6 +205,28 @@ export async function listOutreachTasksForLead(companyId: string, leadId: string
 }
 
 /**
+ * Tasks resting in `queued`, across tenants, oldest first, at most `limit`.
+ *
+ * The ONE cross-tenant read in WS-3, for the platform recovery sweep. It
+ * returns rows only to locate work; every action on them is taken per tenant
+ * through the company-scoped dispatch path. A read failure is reported, never
+ * an empty list, so a broken read is not mistaken for "nothing to recover".
+ */
+export async function listQueuedOutreachTasks(limit: number): Promise<{ ok: true; tasks: OutreachTask[] } | { ok: false; error: string }> {
+  const bounded = Math.max(1, Math.min(Math.floor(limit), 1000));
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable(OUTREACH_TASKS_TABLE)
+      .select('*')
+      .eq('status', 'queued')
+      .order('updated_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(bounded),
+  );
+  if (res.error || !Array.isArray(res.data)) return { ok: false, error: res.error ? errText(res.error) : 'queued tasks unreadable' };
+  return { ok: true, tasks: res.data.map(rowToOutreachTask).filter((t): t is OutreachTask => t !== null) };
+}
+
+/**
  * Record a task's CURRENT state.
  *
  * Deliberately narrow: only `status` and `deliveryStatus` are writable. There
