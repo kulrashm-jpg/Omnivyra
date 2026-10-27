@@ -5,6 +5,7 @@ import { requireCapability } from '../../../../backend/security/requireCapabilit
 import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { BLOG_PUBLISH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 import { sanitizeHtml, sanitizeContentBlocks } from '../../../../lib/security/htmlSanitizer';
+import { notifyIndexNowOfBlogChange } from '../../../../backend/services/indexNow/indexNow';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Closure-014 (D): per-route write rate limit (before authorization and any business work).
@@ -75,6 +76,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (body.published_at !== undefined) updates.published_at = body.published_at || null;
     if (body.is_featured !== undefined) updates.is_featured = !!body.is_featured;
 
+    // Public state before the change, for the IndexNow notification below.
+    const { data: before } = await supabase.from('public_blogs').select('slug, status').eq('id', id).maybeSingle();
+
     const { data, error } = await supabase
       .from('public_blogs')
       .update(updates)
@@ -86,12 +90,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (error.code === '23505') return res.status(409).json({ error: 'Slug already exists' });
       return res.status(500).json({ error: error.message });
     }
+    const wasPublic = before?.status === 'published';
+    const isPublic = data?.status === 'published';
+    if (wasPublic || isPublic) {
+      // Bounded (one attempt, 5 s), never throws; sends nothing unless INDEXNOW_SUBMIT_ENABLED=true.
+      await notifyIndexNowOfBlogChange(isPublic
+        ? { slug: String(data.slug), change: wasPublic ? 'updated' : 'added', previousSlug: wasPublic ? before?.slug ?? null : null }
+        : { slug: String(before?.slug), change: 'deleted' });
+    }
     return res.status(200).json(data);
   }
 
   if (req.method === 'DELETE') {
+    const { data: before } = await supabase.from('public_blogs').select('slug, status').eq('id', id).maybeSingle();
     const { error } = await supabase.from('public_blogs').delete().eq('id', id);
     if (error) return res.status(500).json({ error: error.message });
+    if (before?.status === 'published' && before.slug) await notifyIndexNowOfBlogChange({ slug: String(before.slug), change: 'deleted' });
     return res.status(204).end();
   }
 

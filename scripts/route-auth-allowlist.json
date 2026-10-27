@@ -584,6 +584,10 @@
       "kind": "health",
       "reason": "Build/version probe used by deploy parity checks; no tenant data."
     },
+    "pages/api/indexnow-key.ts": {
+      "kind": "public",
+      "reason": "IndexNow ownership file for search engines (Search Engine Content contract): returns the public IndexNow key only for its exact name and only when INDEXNOW_PUBLISH_KEY_FILE=true; otherwise 404. No tenant data."
+    },
     "pages/api/internal/metrics.ts": {
       "kind": "machine-secret",
       "reason": "Scheduler/worker endpoint authenticated by the INTERNAL_METRICS_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",

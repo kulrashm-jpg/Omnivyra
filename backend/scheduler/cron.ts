@@ -129,7 +129,7 @@ import { runProspectScoreEvaluationJob } from '../jobs/prospectScoreEvaluationJo
 import { runSettlementMetricsRetention, pruneRolledSettlementMetrics } from '../services/billing/payments/settlementMetricsRetention';
 import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
 import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefreshJob';
-import { runIngestionForAllCompanies } from '../services/ingestionScheduler';
+import { runScheduledAnalyticsSync } from '../services/scheduledAnalyticsSync';
 import { refreshAnalyticsEnterpriseSnapshot } from '../services/analyticsEnterpriseSnapshotService';
 import { runReadinessSnapshotJob } from '../jobs/readinessSnapshotJob';
 import { runHealthSnapshotJob } from '../jobs/healthSnapshotJob';
@@ -1695,15 +1695,17 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
     lastGa4IngestionRun = Date.now();
     console.log('[ga4Ingestion] starting run for all connected companies');
     try {
-      const result = await runIngestionForAllCompanies({ sources: ['ga4'] });
+      // Dated window (own idempotency key per day) — an undated call reused one key forever and was
+      // skipped as a duplicate after the first run.
+      const result = await runScheduledAnalyticsSync('ga4');
       console.log(
-        `[ga4Ingestion] completed attempted=${result.attempted} succeeded=${result.succeeded} failed=${result.failed}`,
+        `[ga4Ingestion] completed attempted=${result.attempted} imported=${result.succeeded} skipped=${result.skipped} failed=${result.failed}`,
       );
       for (const company of result.companies) {
         const ga4Result = company.sources.find((source) => source.source === 'ga4');
         if (ga4Result?.success || ga4Result?.skipped) {
           console.log(
-            `[ga4Ingestion] company=${company.companyId} success=${ga4Result?.success === true} skipped=${ga4Result?.skipped === true}`,
+            `[ga4Ingestion] company=${company.companyId} imported=${ga4Result?.success === true && !ga4Result?.skipped} skipped=${ga4Result?.skipped === true}${ga4Result?.skipped ? ` reason=${String(ga4Result.details?.reason ?? 'unknown')}` : ''}`,
           );
         } else {
           console.error(
@@ -1712,7 +1714,7 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
         }
       }
       const refreshedCompanies = result.companies
-        .filter((company) => company.sources.some((source) => source.source === 'ga4' && source.success))
+        .filter((company) => company.sources.some((source) => source.source === 'ga4' && source.success && !source.skipped))
         .slice(0, 10);
       await Promise.all(refreshedCompanies.map((company) =>
         refreshAnalyticsEnterpriseSnapshot(company.companyId).catch((error) => {
@@ -1724,6 +1726,18 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
       ));
     } catch (error: unknown) {
       console.error('❌ GA4 ingestion scheduler error:', formatCaughtError(error));
+    }
+    // Search Console on the same tick: per-company incremental window from its watermark; a company
+    // synced within the last 20 h (e.g. by the daily queued job) is skipped.
+    try {
+      const gsc = await runScheduledAnalyticsSync('gsc');
+      console.log(`[gscIngestion] completed attempted=${gsc.attempted} imported=${gsc.succeeded} skipped=${gsc.skipped} failed=${gsc.failed}`);
+      for (const company of gsc.companies) {
+        const r = company.sources.find((source) => source.source === 'gsc');
+        if (r && !r.success) console.error(`[gscIngestion] company=${company.companyId} failed error=${(r.error ?? 'unknown_error').slice(0, 200)}`);
+      }
+    } catch (error: unknown) {
+      console.error('❌ GSC ingestion scheduler error:', formatCaughtError(error));
     }
   }
 

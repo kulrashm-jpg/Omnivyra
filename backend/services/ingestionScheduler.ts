@@ -61,7 +61,10 @@ export type CompanyIngestionSummary = {
 
 export type MultiCompanyIngestionSummary = {
   attempted: number;
+  /** Companies whose requested sources actually imported (no failure, at least one non-skipped run). */
   succeeded: number;
+  /** Companies with nothing imported this pass (planner skip, duplicate window, already running). */
+  skipped: number;
   failed: number;
   companies: CompanyIngestionSummary[];
 };
@@ -201,6 +204,19 @@ function statusSourceForTable(source: IngestionSource): 'crawler' | 'ga' | 'gsc'
   return source === 'ga4' ? 'ga' : source;
 }
 
+/**
+ * An override that supplies data or a token stands in for the tenant's connection; a dates-only override
+ * (a sync window) does not, so the connection/property/token readiness check still applies to it.
+ */
+function carriesData(override: { rows?: unknown; accessToken?: string } | undefined): boolean {
+  return Boolean(override && (Array.isArray(override.rows) || override.accessToken));
+}
+
+function requestedWindow(source: IngestionSource, overrides: SchedulerOverrides): { startDate: string; endDate: string } | null {
+  const o = source === 'ga4' ? overrides.ga4 : source === 'gsc' ? overrides.gsc : undefined;
+  return o?.startDate && o?.endDate ? { startDate: o.startDate, endDate: o.endDate } : null;
+}
+
 export async function validateIngestionOutput(companyId: string): Promise<CompanyIngestionSummary['validation']> {
   const [pages, sessions, keywords, leads, campaigns] = await Promise.all([
     supabase.from('canonical_pages').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -309,11 +325,11 @@ export async function runIngestionForCompany(params: {
 
       const missingGa4Integration =
         source === 'ga4' &&
-        !overrides.ga4 &&
+        !carriesData(overrides.ga4) &&
         (!ga4Status?.integration || ga4Status.integration.status !== 'connected' || !ga4Status.activeProperty || !ga4Status.tokenValid);
       const missingGscIntegration =
         source === 'gsc' &&
-        !overrides.gsc &&
+        !carriesData(overrides.gsc) &&
         !integration &&
         (!gscStatus?.integration || gscStatus.integration.status !== 'connected' || !gscStatus.activeProperty || !gscStatus.tokenValid);
 
@@ -347,6 +363,7 @@ export async function runIngestionForCompany(params: {
         cursorPayload: {
           source,
           ...(params.reason ? { reason: params.reason } : {}),
+          ...(requestedWindow(source, overrides) ? { window: requestedWindow(source, overrides) } : {}),
         },
       });
 
@@ -508,15 +525,20 @@ export async function retryFailedIngestionForCompany(params: {
 export async function runIngestionForAllCompanies(params?: {
   sources?: IngestionSource[];
   overrides?: SchedulerOverrides;
+  /** Per-company plan: overrides (e.g. a window from that company's own watermark), or a reason to skip it. */
+  planFor?: (companyId: string) => Promise<{ overrides: SchedulerOverrides } | { skip: string }>;
 }): Promise<MultiCompanyIngestionSummary> {
+  const sources = params?.sources ?? ['ga4'];
+  // Companies are selected by the provider of the requested source: GA4 for 'ga4', GSC for 'gsc'.
+  const provider = sources.includes('gsc') && !sources.includes('ga4') ? 'GSC' : 'GA4';
   const { data: integrations, error } = await supabase
     .from('analytics_integrations')
     .select('id, company_id')
-    .eq('provider', 'GA4')
+    .eq('provider', provider)
     .eq('status', 'connected');
 
   if (error) {
-    throw new Error(`Failed to load connected GA4 integrations: ${error.message}`);
+    throw new Error(`Failed to load connected ${provider} integrations: ${error.message}`);
   }
 
   const integrationRows = (integrations ?? []) as Array<{ id: string; company_id: string }>;
@@ -524,6 +546,7 @@ export async function runIngestionForAllCompanies(params?: {
     return {
       attempted: 0,
       succeeded: 0,
+      skipped: 0,
       failed: 0,
       companies: [],
     };
@@ -537,7 +560,7 @@ export async function runIngestionForAllCompanies(params?: {
     .eq('is_active', true);
 
   if (propertyError) {
-    throw new Error(`Failed to load active GA4 properties: ${propertyError.message}`);
+    throw new Error(`Failed to load active ${provider} properties: ${propertyError.message}`);
   }
 
   const activeIntegrationIds = new Set(
@@ -551,20 +574,30 @@ export async function runIngestionForAllCompanies(params?: {
 
   const companies: CompanyIngestionSummary[] = [];
   let succeeded = 0;
+  let skipped = 0;
   let failed = 0;
 
   for (const companyId of companyIds) {
     try {
+      const plan = params?.planFor ? await params.planFor(companyId) : null;
+      if (plan && 'skip' in plan) {
+        companies.push({ companyId, sources: sources.map((source) => ({ source, success: true, skipped: true, details: { reason: plan.skip } })), validation: { pages: 0, sessions: 0, keywords: 0, leads: 0, campaigns: 0 }, ready: false });
+        skipped += 1;
+        continue;
+      }
       const summary = await runIngestionForCompany({
         companyId,
-        sources: params?.sources ?? ['ga4'],
-        overrides: params?.overrides,
+        sources,
+        overrides: (plan && 'overrides' in plan ? plan.overrides : undefined) ?? params?.overrides,
       });
       companies.push(summary);
-      if (summary.sources.every((source) => source.success || source.skipped)) {
-        succeeded += 1;
-      } else {
+      if (!summary.sources.every((source) => source.success || source.skipped)) {
         failed += 1;
+      } else if (summary.sources.every((source) => source.skipped)) {
+        // Nothing ran (duplicate window / already running): not a sync, not a failure.
+        skipped += 1;
+      } else {
+        succeeded += 1;
       }
     } catch (ingestionError) {
       failed += 1;
@@ -572,7 +605,7 @@ export async function runIngestionForAllCompanies(params?: {
         companyId,
         sources: [
           {
-            source: 'ga4',
+            source: sources[0],
             success: false,
             details: {},
             error: ingestionError instanceof Error ? ingestionError.message : String(ingestionError),
@@ -593,6 +626,7 @@ export async function runIngestionForAllCompanies(params?: {
   return {
     attempted: companyIds.length,
     succeeded,
+    skipped,
     failed,
     companies,
   };

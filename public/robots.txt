@@ -1,0 +1,13 @@
+# Omnivyra - crawl policy for https://www.omnivyra.com
+# Disallow only areas that are never public (API, sign-in, admin, internal tools).
+# Disallow is not access control: these routes are protected by authentication regardless.
+User-agent: *
+Disallow: /api/
+Disallow: /auth/
+Disallow: /admin
+Disallow: /super-admin
+Disallow: /internal/
+Allow: /
+
+Sitemap: https://www.omnivyra.com/sitemap.xml
+Sitemap: https://www.omnivyra.com/blog/sitemap.xml

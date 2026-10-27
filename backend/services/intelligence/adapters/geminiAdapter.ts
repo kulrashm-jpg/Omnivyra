@@ -12,7 +12,9 @@ import type { NormalizedCompletion } from '../../aiGatewayCore';
 // Product→Platform id translation is performed by the PLATFORM, never hand-written here.
 import { toPlatformProviderId } from '../../aiGatewayProviderIdentity';
 
-const DEFAULT_MODEL = 'gemini-1.5-flash';
+// Production requests to the previous default (gemini-1.5-flash, an older generation) were rejected by Google
+// (scoring-run cells "invalid_request:gemini", 26 Oct 2026). GEMINI_PROBE_MODEL still overrides.
+const DEFAULT_MODEL = 'gemini-2.5-flash';
 
 // ── PB-007 · Canonical provider identity ──────────────────────────────────────
 //

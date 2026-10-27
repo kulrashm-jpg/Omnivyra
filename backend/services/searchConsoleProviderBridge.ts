@@ -36,7 +36,10 @@ const num = (v: number | string | null | undefined): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** True when the Google Search Console OAuth credentials are present. */
+/**
+ * Legacy env check (GSC_OAUTH_CLIENT_ID / _SECRET — names the real OAuth flow never reads). Not an
+ * availability signal: use googleTenantSourceAvailability (per company) or isGooglePlatformOauthConfigured.
+ */
 export function isSearchConsoleProviderConfigured(): boolean {
   return ENV_KEYS.every((k) => Boolean(process.env[k]));
 }

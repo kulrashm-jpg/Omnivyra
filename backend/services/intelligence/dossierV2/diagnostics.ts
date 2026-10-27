@@ -65,6 +65,8 @@ export const CATALOGUE: Record<string, { capability: string; docUrl: string; pri
   gsc: { capability: 'Search Console API offers Search Analytics, Sitemaps, Sites and URL Inspection — no Links (backlinks) resource. The Links report is in the Search Console interface for verified owners.', docUrl: 'https://developers.google.com/webmaster-tools/v1/api_reference_index', price: 'No cost stated for Search Console.' },
   bing: { capability: 'Bing Webmaster API GetUrlLinks returns inbound links for a verified site.', docUrl: 'https://learn.microsoft.com/en-us/bingwebmaster/getting-access', price: 'Not confirmed on the official page.' },
   awt: { capability: 'Ahrefs Webmaster Tools: free backlink view for verified websites (up to 1,000 backlinks at once). The Ahrefs API is plan-gated (tier not confirmed).', docUrl: 'https://ahrefs.com/webmaster-tools', price: 'Free for verified sites; API on paid plans (tier not confirmed).' },
+  bwt: { capability: 'Bing Webmaster Tools API for a verified site: GetLinkCounts (pages with inbound links and their counts) and GetQueryStats (impressions, clicks, average position per query; updated weekly). API key per Bing Webmaster user, covering the sites that user can read.', docUrl: 'https://learn.microsoft.com/en-us/bingwebmaster/getting-access', price: 'No price stated on the official access page.' },
+  registry: { capability: 'Identifiers the company states on its own legal and investor pages (CIN, LEI, company number, SIREN, CNPJ, SEC CIK), confirmed where the registry can be read automatically: GLEIF, SEC EDGAR, France Sirene, Brazil CNPJ (keyless). India MCA blocks automation; UK Companies House needs a credential.', docUrl: 'https://www.gleif.org/en/lei-data/gleif-api', price: 'Free (keyless public registries).' },
   mca: { capability: 'MCA Master Data Services: public view of a company’s master details by Company name or CIN; the form has a CAPTCHA.', docUrl: 'https://www.mca.gov.in/content/mca/global/en/mca/master-data/MDS.html', price: 'Free public service.' },
 };
 
@@ -193,6 +195,41 @@ export function buildDiagnostics(ledger: Ledger, pack: ResearchPack | null): Sou
       cost: 'free', needs: f.key === 'inbound_links' ? ['permission', 'human verification'] : restricted ? ['human verification'] : [], unlocks: f.key === 'inbound_links' ? 'Linking domains and top linked pages' : restricted ? 'Registered name, status and incorporation date' : '—' });
   }
 
+  // Families this run has its own evidence for: the static wording above is replaced by what happened.
+  const bw = pack?.bingWebmaster ?? null;
+  const blRow = rows.find((r) => r.key === 'family:inbound_links');
+  if (blRow && bw && ledger.access.some((a) => a.family === 'backlinks' && a.source === 'research')) {
+    const fam = ledger.families.find((f) => f.key === 'inbound_links');
+    Object.assign(blRow, {
+      capability: CATALOGUE.bwt.capability, docUrl: CATALOGUE.bwt.docUrl, integration: 'implemented', credential: bw.status === 'invalid_key' ? 'rejected' : 'present',
+      usable: bw.status === 'measured',
+      state: bw.status === 'measured' ? (fam?.state === 'found' ? 'measured' : 'searched_not_found') : bw.status === 'site_not_authorised' ? 'permission_denied'
+        : bw.status === 'invalid_key' ? 'invalid_credential' : bw.status === 'rate_limited' ? 'rate_limited' : 'request_failed',
+      cause: bw.status === 'measured' ? '—' : bw.detail, causeConfirmed: bw.status !== 'failed',
+      impact: bw.status === 'measured' ? 'Counted: Bing’s own link index for the verified site (links Bing knows about, not every link on the web).' : 'Backlinks unknown — not zero.',
+      next: bw.status === 'measured' ? 'None.' : bw.status === 'site_not_authorised' ? 'The site owner verifies the site in Bing Webmaster Tools, or adds Omnivyra’s Bing Webmaster account as a user of the site.'
+        : bw.status === 'invalid_key' ? 'Replace the Bing Webmaster API key (Settings → API Access).' : 'Re-run the report.',
+      needs: bw.status === 'site_not_authorised' ? ['permission'] : bw.status === 'invalid_key' ? ['credential'] : [], unlocks: 'Pages with inbound links and their counts, from Bing',
+    } satisfies Partial<SourceDiagnostic>);
+  } else if (blRow) {
+    blRow.next = 'Set BING_WEBMASTER_API_KEY (free) and have the site owner verify the site in Bing Webmaster Tools; or connect Ahrefs (paid). The Search Console Links report can be exported by hand.';
+  }
+  const rg = pack?.registry ?? null;
+  const rgRow = rows.find((r) => r.key === 'family:registry');
+  if (rgRow && rg) {
+    const verified = rg.status === 'verified';
+    Object.assign(rgRow, {
+      capability: CATALOGUE.registry.capability, docUrl: CATALOGUE.registry.docUrl, integration: 'implemented', credential: 'not needed', usable: verified,
+      attempt: `${fmt(rg.checkedAt)}: ${rg.pagesRead.length} first-party page${rg.pagesRead.length === 1 ? '' : 's'} read (homepage, legal and investor pages). ${rg.detail}`,
+      state: verified ? 'measured' : rg.status === 'none_stated' ? 'searched_not_found' : rg.status === 'stated_unverified' ? (rg.unavailable.length ? 'login_restricted' : 'partial') : 'request_failed',
+      cause: rg.detail, causeConfirmed: rg.status !== 'failed',
+      impact: verified ? 'Registered identity confirmed by the registry.' : 'Registered identity not confirmed — unknown, not absent.',
+      next: verified ? 'None.' : rg.status === 'none_stated' ? 'State the registration number (CIN in India, LEI, company number) on the website’s legal or contact page, or provide it for the report.'
+        : 'Check the stated number in the national registry by hand (India’s MCA blocks automated checks), or obtain an LEI so GLEIF can confirm it.',
+      needs: verified ? [] : ['human verification'], unlocks: 'Registered legal name, status and jurisdiction',
+    } satisfies Partial<SourceDiagnostic>);
+  }
+
   // PageSpeed: the report run's own measurement first (several URLs, both form factors); the
   // research check (homepage, mobile) when the run has nothing. One application-level key serves
   // every tenant, so the fix is always the operator's — never the company's.
@@ -238,7 +275,11 @@ export function plainGap(d: SourceDiagnostic): NonNullable<SourceDiagnostic['pla
   if (d.key === 'gemini' && quota) return { why: 'Google declined the search-grounded requests with a usage-limit message.', unlock: 'Collected on the next run, which uses a Gemini model whose free tier includes search grounding.', by: 'next run', short: 'usage limit hit' };
   if (d.key === 'perplexity' && d.state === 'not_configured') return { why: 'No Perplexity API access is connected to this report.', unlock: 'Connect Perplexity API access (paid usage).', by: 'report operator', short: 'not connected' };
   if (d.key === 'meta') return { why: 'Meta’s search-grounded API is not connected to this report; the consumer app needs a signed-in account.', unlock: 'Connect Meta’s grounded API (paid usage).', by: 'report operator', short: 'not connected' };
-  if (d.key === 'family:inbound_links') return { why: 'Backlink data is released only to the verified owner of a website, and no owner-verified source is connected.', unlock: 'Verify the website in Ahrefs Webmaster Tools or Google Search Console (both free) and share access or an export of the links report.', by: 'company', short: 'needs site-owner access' };
+  if (d.key === 'family:inbound_links' && d.state === 'permission_denied') return { why: 'Bing Webmaster Tools releases link data only for sites the platform account may read, and this site is not one of them.', unlock: 'The site owner verifies the site in Bing Webmaster Tools, or adds Omnivyra’s Bing Webmaster account as a user of the site.', by: 'company', short: 'needs Bing site access' };
+  if (d.key === 'family:inbound_links' && d.state === 'invalid_credential') return { why: 'Bing Webmaster Tools rejected the platform API key.', unlock: 'Replace the Bing Webmaster API key.', by: 'report operator', short: 'Bing key refused' };
+  if (d.key === 'family:registry' && d.state === 'searched_not_found') return { why: 'The website’s homepage, legal and investor pages state no registration number (CIN, LEI, company number).', unlock: 'State the registration number on the website, or provide it for the report.', by: 'company', short: 'no registration number stated' };
+  if (d.key === 'family:registry' && d.state === 'login_restricted' && /^The company states /.test(d.cause)) return { why: 'The company states its registration number, but that registry blocks automated checks.', unlock: 'Check it in the national registry by hand, or obtain an LEI so GLEIF can confirm it automatically.', by: 'company', short: 'registry blocks automated check' };
+  if (d.key === 'family:inbound_links') return { why: 'Backlink data is released only to the verified owner of a website, and no owner-verified source is connected.', unlock: 'Verify the website in Bing Webmaster Tools (free) and add Omnivyra’s Bing Webmaster account as a user, or share an export of the Search Console links report.', by: 'company', short: 'needs site-owner access' };
   if (d.key === 'family:registry') return { why: 'The registry search needs the registered company name or CIN, and the website does not state either.', unlock: 'Provide the CIN or exact registered name; the registry record (status, incorporation date) is then looked up.', by: 'company', short: 'needs CIN or registered name' };
   if (d.key === 'pagespeed') {
     if (quota) return { why: 'Google’s speed-test service declined the request: its usage allowance was used up at that moment.', unlock: 'Measured on a re-run; an application-level Google API key in Super Admin gives a dedicated allowance.', by: 'report operator', short: 'speed-test limit hit' };

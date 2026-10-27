@@ -34,6 +34,7 @@ const TOKEN_RATES: Record<string, { in: number; out: number }> = {
   'gpt-4o':            { in: 0.00250, out: 0.01000 },
   'gpt-4.1-mini':      { in: 0.00040, out: 0.00160 },
   'gemini-1.5-flash':  { in: 0.000075, out: 0.00030 },
+  'gemini-2.5-flash':  { in: 0.00030, out: 0.00250 },
 };
 const DEFAULT_TOKEN_RATE = TOKEN_RATES['gpt-4o-mini'];
 

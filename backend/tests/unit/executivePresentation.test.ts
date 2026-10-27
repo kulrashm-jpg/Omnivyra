@@ -32,7 +32,10 @@ describe('BETA-FINAL-001 — provider activation matrix (Phase 5)', () => {
     const impl = matrix.filter((p) => p.implemented);
     expect(impl.length).toBe(8);
     expect(impl.every((p) => p.status === 'awaiting_credentials')).toBe(true);
-    expect(impl.every((p) => p.requiredEnvKeys.length > 0)).toBe(true);
+    // Env-configured providers name their env keys; Google Search Console / GA4 are configured by the
+    // platform OAuth client in Super Admin, so they name that source and no (never-read) env keys.
+    expect(impl.filter((p) => p.configurationSource === 'environment').every((p) => p.requiredEnvKeys.length > 0)).toBe(true);
+    expect(impl.filter((p) => p.configurationSource === 'super_admin_oauth_client').map((p) => [p.providerId, p.requiredEnvKeys])).toEqual([['search_console', []], ['analytics.ga4', []]]);
     expect(impl.every((p) => p.migrationPending)).toBe(true); // migration unapplied by default
     const s = summarizeActivation(matrix);
     expect(s.implemented).toBe(8);

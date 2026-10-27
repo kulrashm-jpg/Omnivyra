@@ -18,6 +18,8 @@ import type { Candidate } from '../publicResearch/competitorDiscovery';
 import type { ProviderCheck } from '../publicResearch/providerChecks';
 import type { ErrorClass, ProviderErrorEvidence } from '../publicResearch/providerErrors';
 import type { ProfileFact, ProfileStatus } from '../publicResearch/profileEvidence';
+import type { BingWebmasterEvidence } from '../publicResearch/bingWebmaster';
+import type { RegistryEvidence } from '../publicResearch/registryEvidence';
 
 export type ResearchStatus =
   | 'observed'
@@ -117,6 +119,10 @@ export type ResearchPack = {
   brandSource?: 'declared' | 'domain';
   /** True when competitor classes rest on an offering not yet verified on the website. */
   candidatesProvisional?: boolean;
+  /** Bing Webmaster Tools for the company's verified site: inbound links and Bing search performance. */
+  bingWebmaster?: BingWebmasterEvidence | null;
+  /** Company registry: identifiers the company states, their format check, and any registry confirmation. */
+  registry?: RegistryEvidence | null;
 };
 
 export type Footprint = {
@@ -226,6 +232,8 @@ export function parseResearchPack(input: unknown, domain: string | null | undefi
     profileEvidence: p.profileEvidence && typeof p.profileEvidence.status === 'string' && Array.isArray(p.profileEvidence.facts) ? p.profileEvidence : null,
     brandSource: p.brandSource === 'domain' ? 'domain' : 'declared',
     candidatesProvisional: Boolean(p.candidatesProvisional),
+    bingWebmaster: p.bingWebmaster && typeof p.bingWebmaster === 'object' && typeof p.bingWebmaster.status === 'string' ? p.bingWebmaster : null,
+    registry: p.registry && typeof p.registry === 'object' && Array.isArray(p.registry.identifiers) ? p.registry : null,
     offering: p.offering && typeof p.offering === 'object' && Array.isArray(p.offering.pages) && Array.isArray(p.offering.capabilities)
       ? { ...p.offering, selfDescription: p.offering.selfDescription ?? null, offering: p.offering.offering ?? null, pricing: p.offering.pricing ?? null, freePlan: p.offering.freePlan ?? null }
       : null,

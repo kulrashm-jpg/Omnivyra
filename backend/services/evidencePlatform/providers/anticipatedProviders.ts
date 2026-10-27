@@ -50,7 +50,8 @@ export const ANTICIPATED_PROVIDERS: EvidenceProviderDescriptor[] = [
     consumerEngines: ['seo', 'geo.strategy', 'intent'],
     requiredEvidence: ['live keyword impressions/clicks/position'],
     currentWorkaround: 'consumed via ingested keyword_metrics table (already partially wired); provider slot canonicalises the source',
-    priority: 'high', envKeys: ['GSC_OAUTH_CLIENT_ID', 'GSC_OAUTH_CLIENT_SECRET'],
+    // Platform OAuth client in Super Admin + a per-company connection — no env keys.
+    priority: 'high', envKeys: [],
   }),
   unavailable({
     providerId: 'analytics.ga4', providerName: 'Google Analytics 4', version: '0.1.0',
@@ -62,7 +63,8 @@ export const ANTICIPATED_PROVIDERS: EvidenceProviderDescriptor[] = [
     consumerEngines: ['geo', 'geo.strategy', 'traffic', 'funnel', 'distribution', 'intent'],
     requiredEvidence: ['live session + conversion analytics'],
     currentWorkaround: 'consumed via ingested canonical_sessions table',
-    priority: 'high', envKeys: ['GA4_PROPERTY_ID', 'GA4_OAUTH'],
+    // Platform OAuth client in Super Admin + a per-company connection — no env keys.
+    priority: 'high', envKeys: [],
   }),
   unavailable({
     providerId: 'bing_webmaster', providerName: 'Bing Webmaster Tools', version: '0.1.0',

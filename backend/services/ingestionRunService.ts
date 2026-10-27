@@ -136,7 +136,9 @@ export async function setDataSourceStatus(params: {
         company_id: params.companyId,
         source: params.source,
         status: params.status,
-        last_synced_at: params.lastSyncedAt ?? null,
+        // Only written when given: a 'syncing' / 'error' status must not erase when the source last
+        // synced successfully (freshness and the stale-data signal depend on it).
+        ...(params.lastSyncedAt !== undefined ? { last_synced_at: params.lastSyncedAt } : {}),
         error_message: params.errorMessage ?? null,
         ...(params.unifiedSource ? { unified_source: params.unifiedSource } : {}),
       },

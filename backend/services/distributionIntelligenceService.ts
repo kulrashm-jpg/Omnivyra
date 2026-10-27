@@ -4,8 +4,8 @@ import { archiveDecisionSourceEntityType, createDecisionObjects, type PersistedD
 import { clamp, normalizeText } from './intelligenceEngineUtils';
 // BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
 import { deriveDecisionConfidence } from './evidencePlatform';
+import { tenantProviderReliability } from './googleTenantSourceAvailability';
 // BETA-PROVIDER-003: canonical GA4 provider reliability lifts confidence on already-MEASURED session data.
-import { isGa4ProviderAvailable, ga4ProviderReliability } from './ga4ProviderBridge';
 
 type SessionRow = {
   source: string;
@@ -87,10 +87,11 @@ export async function generateDistributionIntelligenceDecisions(companyId: strin
   // analytics; confidence scales with the combined session + lead sample size.
   // BETA-PROVIDER-003: the session half of this signal is first-party GA4 data. Add the GA4 provider's
   // reliability factor when connected (no scoring redesign); null (unchanged) otherwise.
-  const ga4ProviderLive = isGa4ProviderAvailable();
+  // Tenant-specific: this company's own GA4 connection, property and import freshness.
+  const ga4Reliability = await tenantProviderReliability(companyId, 'ga4');
   const distributionConfidence = deriveDecisionConfidence({
     maturity: 'MEASURED',
-    providerReliability: ga4ProviderLive ? ga4ProviderReliability() : null,
+    providerReliability: ga4Reliability,
     sampleSize: sessionRows.length + leadRows.length,
     dataPresent: sessionRows.length > 0,
   });

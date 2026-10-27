@@ -5,6 +5,7 @@ import { requireCapability } from '../../../../backend/security/requireCapabilit
 import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { BLOG_PUBLISH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 import { sanitizeHtml, sanitizeContentBlocks } from '../../../../lib/security/htmlSanitizer';
+import { notifyIndexNowOfBlogChange } from '../../../../backend/services/indexNow/indexNow';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Closure-014 (D): per-route write rate limit (before authorization and any business work).
@@ -96,6 +97,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           return res.status(409).json({ error: 'Slug already exists' });
         }
         return res.status(500).json({ error: error.message });
+      }
+      if (inserted?.status === 'published' && inserted.slug) {
+        // Bounded (one attempt, 5 s), never throws; sends nothing unless INDEXNOW_SUBMIT_ENABLED=true.
+        await notifyIndexNowOfBlogChange({ slug: String(inserted.slug), change: 'added' });
       }
       return res.status(201).json(inserted);
     } catch (err: unknown) {

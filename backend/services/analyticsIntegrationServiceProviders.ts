@@ -150,6 +150,23 @@ const GA4_SCOPES = [
   'https://www.googleapis.com/auth/webmasters.readonly',
 ].join(' ');
 const REQUIRED_GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly';
+const REQUIRED_GA4_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
+
+/**
+ * The OAuth scopes ONE connect flow requests: the admin-configured list (or the default), minus the
+ * other product's Google scopes, plus this product's required scope. A Search Console connection no
+ * longer asks for Analytics access, and an Analytics connection no longer asks for Search Console
+ * access. GA4 and GSC are separate integration rows with separate tokens, so existing connections are
+ * unaffected (Google keeps scopes a user already granted; include_granted_scopes stays on). Pure.
+ */
+export function scopesForCapability(configured: string[], capability: 'ga4' | 'gsc'): string[] {
+  const base = configured.length > 0 ? configured : GA4_SCOPES.split(' ');
+  const otherProduct = capability === 'gsc' ? /\/auth\/analytics(\.|$)/ : /\/auth\/(webmasters|searchconsole)(\.|$)/;
+  return withRequiredScopes(
+    base.filter((scope) => !otherProduct.test(String(scope || '').trim())),
+    [capability === 'gsc' ? REQUIRED_GSC_SCOPE : REQUIRED_GA4_SCOPE],
+  );
+}
 
 function isMissingGscProviderEnum(error: unknown): boolean {
   const message = error && typeof error === 'object' && 'message' in error
@@ -328,6 +345,41 @@ export async function ensureAnalyticsIntegration(
   }
 
   return data as AnalyticsIntegrationRecord;
+}
+
+/**
+ * After a successful OAuth callback (code exchanged AND tokens persisted): set status and the canonical
+ * connection state together in ONE update, clearing any stale PROVIDER_REAUTH_REQUIRED left by a revoked
+ * grant. Called only after saveAnalyticsTokens succeeded, so a failed exchange or failed persistence
+ * never marks the connection connected. If the connection-state columns (20260625) are absent the update
+ * falls back to the status alone rather than failing the reconnect.
+ */
+export async function markAnalyticsIntegrationConnected(integrationId: string): Promise<AnalyticsIntegrationRecord> {
+  const now = new Date().toISOString();
+  const update = (fields: Record<string, unknown>) => ownedDbTable('analytics_integrations')
+    .update({ status: 'connected', updated_at: now, ...fields })
+    .eq('id', integrationId)
+    .select('*')
+    .single();
+  let { data, error } = await update({ connection_state: 'CONNECTED', last_provider_error: null, last_live_check_at: now, last_live_check_status: 'ok' });
+  if (error && /connection_state|last_provider_error|last_live_check|column/i.test(error.message ?? '')) {
+    console.warn('[analytics-oauth] connection-state columns unavailable; setting status only', { integration_id: integrationId });
+    ({ data, error } = await update({}));
+  }
+  if (error) {
+    throw new Error(`Failed to mark analytics integration connected: ${error.message}`);
+  }
+  return data as AnalyticsIntegrationRecord;
+}
+
+/** Create the integration row (as 'disconnected') only if the company has none for this provider. */
+export async function ensureAnalyticsIntegrationExists(
+  companyId: string,
+  provider: AnalyticsProvider = GA4_PROVIDER,
+): Promise<AnalyticsIntegrationRecord> {
+  const existing = await getAnalyticsIntegrationForProvider(companyId, provider);
+  if (existing) return existing;
+  return ensureAnalyticsIntegration(companyId, 'disconnected', provider);
 }
 
 export async function saveAnalyticsTokens(integrationId: string, token: TokenExchangeResult): Promise<void> {
@@ -701,7 +753,9 @@ export async function connectGoogleAnalytics(
     throw new Error('Request base URL is required to start GA4 OAuth');
   }
 
-  await ensureAnalyticsIntegration(companyId, 'disconnected');
+  // Create the row if this company has none; never demote a working connection just because a
+  // (re)connect was started — the user may abandon the consent screen.
+  await ensureAnalyticsIntegrationExists(companyId, GA4_PROVIDER);
 
   const state = encodeOAuthState({
     companyId,
@@ -717,7 +771,7 @@ export async function connectGoogleAnalytics(
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
-    scope: withRequiredScopes(credentials.scopes.length > 0 ? credentials.scopes : GA4_SCOPES.split(' '), []).join(' '),
+    scope: scopesForCapability(credentials.scopes, 'ga4').join(' '),
     state,
   });
 
@@ -737,7 +791,7 @@ export async function connectGoogleSearchConsole(
     throw new Error('Request base URL is required to start Search Console OAuth');
   }
 
-  await ensureAnalyticsIntegration(companyId, 'disconnected', GSC_PROVIDER);
+  await ensureAnalyticsIntegrationExists(companyId, GSC_PROVIDER);
 
   const state = encodeOAuthState({
     companyId,
@@ -753,7 +807,7 @@ export async function connectGoogleSearchConsole(
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
-    scope: withRequiredScopes(credentials.scopes.length > 0 ? credentials.scopes : GA4_SCOPES.split(' '), [REQUIRED_GSC_SCOPE]).join(' '),
+    scope: scopesForCapability(credentials.scopes, 'gsc').join(' '),
     state,
   });
 
