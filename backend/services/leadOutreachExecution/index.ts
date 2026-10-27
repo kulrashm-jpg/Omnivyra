@@ -270,6 +270,7 @@ export {
   listDeliveryEvidence,
   listOutcomes,
   listDecisions,
+  readAttemptHistory,
   outcomeTypesFor,
   rowToOutreachTask,
   type WriteResult,

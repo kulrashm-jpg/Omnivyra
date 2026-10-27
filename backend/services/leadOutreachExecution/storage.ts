@@ -478,6 +478,30 @@ export const listDeliveryEvidence = (companyId: string, taskId: string) => listF
 export const listOutcomes = (companyId: string, taskId: string) => listFor(OUTREACH_OUTCOMES_TABLE, companyId, taskId, 'occurred_at');
 export const listDecisions = (companyId: string, taskId: string) => listFor(OUTREACH_DECISIONS_TABLE, companyId, taskId, 'decided_at');
 
+/**
+ * Attempts and delivery evidence of one task, for decisions that must not
+ * mistake a failed read for an empty history. `listFor` returns `[]` on error,
+ * which is right for display and wrong for "has this task ever been sent?" —
+ * here a read failure is reported, never an empty history.
+ */
+export async function readAttemptHistory(
+  companyId: string,
+  taskId: string,
+): Promise<{ ok: true; attempts: Row[]; evidence: Row[] } | { ok: false; error: string }> {
+  const read = (table: string, orderCol: string) =>
+    safeDb<Row[]>(() =>
+      ownedDbTable(table)
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('task_id', taskId)
+        .order(orderCol, { ascending: true }),
+    );
+  const [attempts, evidence] = await Promise.all([read(OUTREACH_ATTEMPTS_TABLE, 'attempt_number'), read(OUTREACH_DELIVERY_TABLE, 'observed_at')]);
+  if (attempts.error || !Array.isArray(attempts.data)) return { ok: false, error: attempts.error ? errText(attempts.error) : 'attempt history unreadable' };
+  if (evidence.error || !Array.isArray(evidence.data)) return { ok: false, error: evidence.error ? errText(evidence.error) : 'delivery evidence unreadable' };
+  return { ok: true, attempts: attempts.data, evidence: evidence.data };
+}
+
 /** Outcome types recorded for a task, deduped and sorted. */
 export async function outcomeTypesFor(companyId: string, taskId: string): Promise<BusinessOutcomeType[]> {
   const rows = await listOutcomes(companyId, taskId);

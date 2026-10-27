@@ -80,7 +80,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
-import { appendDecision, getOutreachTaskById, listDecisions } from './storage';
+import { appendDecision, getOutreachTaskById, listApprovals, listDecisions } from './storage';
 import {
   evaluateGovernance,
   type CanonicalGovernanceVerdict,
@@ -570,6 +570,13 @@ export async function evaluateTaskGovernance(
       region: options.region ?? null,
       evaluatedAt,
     };
+    // A requeued task proves its approval from the append-only log. An
+    // unreadable log reads as empty, which means "no approval": fails closed.
+    if (task.status === 'queued') {
+      const approvals = await listApprovals(companyId, taskId);
+      const latest = approvals.length > 0 ? String(approvals[approvals.length - 1].decision ?? '') : '';
+      input.approvalOfRecord = latest === 'approved' || latest === 'rejected' ? latest : null;
+    }
   } catch (e) {
     recordGovernanceFailure('context_load');
     return { ok: false, evaluation: null, recorded: false, error: e instanceof Error ? e.message : String(e) };
