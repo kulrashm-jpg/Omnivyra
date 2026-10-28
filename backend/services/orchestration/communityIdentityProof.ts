@@ -32,7 +32,12 @@
  * attribution is an observation, not an assertion that a person owns an account.
  * Acting on a person's public account on that basis would be a guess, so an
  * attributed-but-unverified claim is refused (`identity_unverified`), distinctly
- * from no claim at all (`identity_unclaimed`). `external_profile` (profile URLs)
+ * from no claim at all (`identity_unclaimed`). A claim marked verified is still
+ * refused (`identity_evidence_insufficient`) unless its `evidence` carries an
+ * ACCEPTED person-level proof (identityVerification/verificationContract.ts:
+ * today only `subject_platform_oauth`, which has no writer) that still names this
+ * claim's tenant, person and account and is not stale. Operator attestation is
+ * never such a proof. `external_profile` (profile URLs)
  * is deliberately not consulted: profile-URL identity is deferred per provider
  * (socialContactResolution.ts, LI-5C Q-3).
  *
@@ -59,6 +64,7 @@ import { ownedDbTable } from '../../db/writeOwner';
 import { resolveSubjectPersonId } from '../leadOutreachExecution/personAnchor';
 import { normalizeClaimValue } from '../prospectIdentity/normalization';
 import type { SubjectRef } from '../executionSubject/subjectRef';
+import { evaluateClaimEvidence } from '../identityVerification/verificationContract';
 
 export const DISCOVERED_USERS_TABLE = 'community_ai_discovered_users';
 export const IDENTITY_CLAIMS_TABLE = 'identity_claims';
@@ -82,6 +88,7 @@ export const IDENTITY_REFUSAL_CODES = [
   'identity_ambiguous',         // more than one active claim / person for the account
   'identity_unverified',        // the account is attributed, but not verified
   'identity_mismatch',          // the verified owner of the account is another person
+  'identity_evidence_insufficient', // "verified", but the evidence is not an accepted, consistent, current person-level proof
 ] as const;
 export type IdentityRefusalCode = typeof IDENTITY_REFUSAL_CODES[number];
 
@@ -129,6 +136,8 @@ export interface IdentityClaimRow {
   verification_state: string | null;
   verified_at: string | null;
   revoked_at: string | null;
+  /** The structured justification; a verified claim must carry an accepted proof (verificationContract.ts). */
+  evidence?: unknown;
 }
 
 /** Reads, every one tenant-filtered. `undefined` = unreadable; `null` = none in this tenant. */
@@ -139,7 +148,7 @@ export interface CommunityIdentityPort {
   readActiveExternalIdClaims(organizationId: string, platform: string, normalizedValue: string): Promise<IdentityClaimRow[] | undefined>;
 }
 
-const CLAIM_COLUMNS = 'id, organization_id, person_id, claim_type, platform, normalized_value, verification_state, verified_at, revoked_at';
+const CLAIM_COLUMNS = 'id, organization_id, person_id, claim_type, platform, normalized_value, verification_state, verified_at, revoked_at, evidence';
 
 export const defaultCommunityIdentityPort: CommunityIdentityPort = {
   resolveRunPerson: (organizationId, subject) => resolveSubjectPersonId(organizationId, subject),
@@ -191,6 +200,8 @@ export async function proveActionPerson(
     subject: SubjectRef;
     action: ProofActionRow;
     expectedPersonIds?: ReadonlyArray<string | null | undefined>;
+    /** Clock for proof staleness; defaults to now. */
+    now?: Date;
   },
   port: CommunityIdentityPort = defaultCommunityIdentityPort,
 ): Promise<PersonProof> {
@@ -289,6 +300,14 @@ export async function proveActionPerson(
   }
   if (claim.person_id !== personId) {
     return refuse('identity_mismatch', 'the platform account belongs to a different person than the journey run\'s');
+  }
+  // "verified" is honoured only with an accepted person-level proof that still
+  // matches this claim: operator attestation never qualifies, a claim whose
+  // person/tenant/account changed since the proof (reassignment, copy) fails,
+  // and a proof older than MAX_PROOF_AGE_DAYS is stale.
+  const evidence = evaluateClaimEvidence(claim, input.now ?? new Date());
+  if (evidence.ok === false) {
+    return refuse('identity_evidence_insufficient', `the verified claim does not carry an accepted person-level proof (${evidence.reason})`);
   }
 
   return { ok: true, personId, claimId: claim.id, discoveredUserId, platform, providerId };
