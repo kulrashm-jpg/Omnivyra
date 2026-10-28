@@ -8,7 +8,40 @@
 --   - any rpa_retry_queue row is claimed (claim_token set): dropping the claim
 --     would make a possibly-executed row runnable again;
 --   - the prior status CHECK definition was not recorded by the migration.
+--
+-- ROLLBACK ORDER for the 20261231 chain (verified on real PostgreSQL 2026-10-28):
+--   0009 -> 0008 -> 0007 -> 0006 -> 0003 -> 0004 -> 0005 -> 0002 -> 0001 -> 0000
+-- KEEP THIS MIGRATION while anything that writes 'uncertain' is installed: the
+-- restored CHECK rejects 'uncertain', so every reap with work would then error
+-- and no lapsed claim would ever be surfaced. It therefore also refuses when:
+--   - the 20261231000009 guard trigger (which converts reaps to 'uncertain') is
+--     installed: roll back 20261231000009 first;
+--   - the installed reap_community_ai_action_leases() writes 'uncertain' (the
+--     20261231000005 body, which extension_dispatch_safety_rollback.sql KEEPS by
+--     default; only its explicitly acknowledged restore replaces it);
+--   - public.engagement_request_idempotency (20261231000008, whose precondition
+--     is this migration) exists: roll back 20261231000008 first.
 -- Run inside a transaction; every refusal aborts it.
+
+DO $$
+DECLARE
+  v_src text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_trigger
+              WHERE tgrelid = 'public.community_ai_actions'::regclass
+                AND tgname = 'trg_community_ai_actions_reap_uncertain_guard' AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'community execution safety rollback refused: the 20261231000009 reaper guard (writes uncertain) is installed; roll back 20261231000009 first';
+  END IF;
+  SELECT p.prosrc INTO v_src FROM pg_proc p
+   WHERE p.oid = to_regprocedure('public.reap_community_ai_action_leases()');
+  IF v_src IS NOT NULL AND v_src LIKE '%''uncertain''%' THEN
+    RAISE EXCEPTION 'community execution safety rollback refused: the installed lease reaper writes uncertain (20261231000005), which the prior CHECK rejects; keep this migration, or roll back 20261231000005 with its explicit restore acknowledgement first';
+  END IF;
+  IF to_regclass('public.engagement_request_idempotency') IS NOT NULL THEN
+    RAISE EXCEPTION 'community execution safety rollback refused: 20261231000008 (engagement_request_idempotency) depends on this migration; roll it back first';
+  END IF;
+END
+$$;
 
 DO $$
 DECLARE

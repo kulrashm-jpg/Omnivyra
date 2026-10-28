@@ -1,6 +1,11 @@
 -- ===========================================================================
 -- ROLLBACK for 20261231000006_community_identity_link.sql
 --
+-- ROLLBACK ORDER for the 20261231 chain (verified on real PostgreSQL 2026-10-28):
+--   0009 -> 0008 -> 0007 -> 0006 -> 0003 -> 0004 -> 0005 -> 0002 -> 0001 -> 0000
+-- Refuses while 20261231000007 is installed (its evidence guard on the link
+-- table reads the person columns this removes): roll back 20261231000007 first.
+--
 -- Refuses while any link exists: every link made under 20261231000006 depends on
 -- the person proof this removes, and removing it would leave links that a
 -- pre-20261231000006 adapter would execute without proving the person. An
@@ -13,6 +18,10 @@
 
 DO $$
 BEGIN
+  IF to_regprocedure('public.community_action_journey_links_identity_proof_guard()') IS NOT NULL
+     OR to_regclass('public.identity_verification_attestations') IS NOT NULL THEN
+    RAISE EXCEPTION 'rollback refused: 20261231000007 (identity verification) is still installed and depends on 20261231000006; roll back 20261231000007 first';
+  END IF;
   IF to_regclass('public.community_action_journey_links') IS NOT NULL
      AND EXISTS (SELECT 1 FROM public.community_action_journey_links) THEN
     RAISE EXCEPTION 'rollback refused: community_action_journey_links has rows whose person proof depends on 20261231000006';

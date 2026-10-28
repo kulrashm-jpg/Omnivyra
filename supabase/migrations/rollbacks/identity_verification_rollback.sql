@@ -1,6 +1,11 @@
 -- ===========================================================================
 -- ROLLBACK for 20261231000007_identity_verification.sql
 --
+-- ROLLBACK ORDER for the 20261231 chain (verified on real PostgreSQL 2026-10-28):
+--   0009 -> 0008 -> 0007 -> 0006 -> 0003 -> 0004 -> 0005 -> 0002 -> 0001 -> 0000
+-- Run BEFORE community_identity_link_rollback.sql (20261231000006), which
+-- refuses while this migration's objects exist.
+--
 -- Refuses while data depends on it:
 --   * any attestation row exists — it is an audit record; an operator must
 --     decide (export, then DELETE) before its table is dropped;
