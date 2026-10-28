@@ -311,12 +311,28 @@ export async function processBatch(
       const reason = verdict
         ? `${verdict.governanceType ?? verdict.decision}: ${verdict.reason}`
         : `governance unreadable: ${governance.error ?? 'unknown'}`;
+      // `error_code` is an INTEGER column (Meta's numeric code); the governance
+      // cause is text and goes in `error_message`. Writing the text code into the
+      // integer column failed the whole update, leaving the recipient `pending`.
       await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'blocked_governance', error_code: 'contact_governance', error_message: reason })
-        .eq('id', recipient.id);
+        .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${reason}` })
+        .eq('id', recipient.id)
+        .eq('status', 'pending');
       failedCount++;
       continue;
     }
+
+    // ── CLAIM before the external send (compare-and-set) ──────────────────
+    // A batch job is retried (attempts: 3) and a recipient id can reach two
+    // batches, while this loop never looked at the status it was given. Only the
+    // invocation that moves the row `pending → sending` may send it; every other
+    // one skips, so a retry can never message a recipient twice.
+    const { data: claimed } = await ownedDbTable('whatsapp_broadcast_recipients')
+      .update({ status: 'sending' })
+      .eq('id', recipient.id)
+      .eq('status', 'pending')
+      .select('id');
+    if (!Array.isArray(claimed) || claimed.length === 0) continue;
 
     try {
       const messageBody = buildMessageBody(broadcast, phone);
@@ -334,6 +350,13 @@ export async function processBatch(
           .update({ status: 'sent', wa_message_id: result.messages[0].id, sent_at: new Date().toISOString() })
           .eq('id', recipient.id);
         sentCount++;
+      } else if (res.ok) {
+        // Accepted without a message id: Meta may have sent it. Never retried
+        // automatically (`retryFailed` only re-queues `failed`).
+        await ownedDbTable('whatsapp_broadcast_recipients')
+          .update({ status: 'send_uncertain', error_message: 'provider accepted the request without a message id' })
+          .eq('id', recipient.id);
+        failedCount++;
       } else {
         const errCode    = result?.error?.code ?? res.status;
         const errMessage = result?.error?.message ?? 'Unknown error';
@@ -348,8 +371,11 @@ export async function processBatch(
         failedCount++;
       }
     } catch (err) {
+      // The request may have reached Meta before the exception (a timeout, a reset
+      // connection): the outcome is UNKNOWN, so it is recorded as uncertain and is
+      // never re-queued by `retryFailed`, which would risk a duplicate message.
       await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'failed', error_message: err instanceof Error ? err.message : 'Exception', retry_count: 1 })
+        .update({ status: 'send_uncertain', error_message: err instanceof Error ? err.message : 'Exception' })
         .eq('id', recipient.id);
       failedCount++;
     }

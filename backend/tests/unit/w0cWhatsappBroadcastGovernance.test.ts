@@ -47,8 +47,11 @@ jest.mock('../../db/writeOwner', () => ({
       if (db.failTable === table) return { data: null, error: { message: 'governance store unreadable' } };
       if (st.op === 'update') {
         db.updates.push({ table, patch: st.patch as Row });
-        rows().filter(match).forEach((r) => Object.assign(r, st.patch));
-        return { data: null, error: null };
+        // Like PostgREST's `update().select()`: the rows the update matched, so a
+        // compare-and-set claim can tell whether it won.
+        const affected = rows().filter(match);
+        affected.forEach((r) => Object.assign(r, st.patch));
+        return { data: affected.map((r) => ({ id: r.id })), error: null };
       }
       return { data: rows().filter(match), error: null };
     };
@@ -137,7 +140,10 @@ describe('W0-C — WhatsApp broadcast is governed before the external send', () 
 
     expect(fetchCalls).toHaveLength(0);
     expect(recipient().status).toBe('blocked_governance');
-    expect(String(recipient().error_code)).toBe('contact_governance');
+    // error_code is an INTEGER column (baseline.sql); the cause is text and lives
+    // in error_message. The former text write failed the update in Postgres.
+    expect(recipient().error_code).toBeNull();
+    expect(String(recipient().error_message)).toMatch(/^contact_governance: /);
     expect(String(recipient().error_message)).toContain('dnc_channel');
   });
 
@@ -193,5 +199,57 @@ describe('W0-C — WhatsApp broadcast is governed before the external send', () 
     expect(fetchCalls).toHaveLength(1);                       // only r2 went out
     expect(recipient().status).toBe('blocked_governance');
     expect(db.recipients.find((r) => r.id === 'r2')!.status).toBe('sent');
+  });
+});
+
+describe('WhatsApp send idempotency — a retry never messages a recipient twice', () => {
+  it('a retried batch skips a recipient that was already sent', async () => {
+    seed();
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(1);
+
+    await processBatch('b1', ['r1']);              // BullMQ retry / duplicate batch
+    expect(fetchCalls).toHaveLength(1);
+    expect(recipient().status).toBe('sent');
+  });
+
+  it('two concurrent batches for the same recipient send exactly once', async () => {
+    seed();
+    await Promise.all([processBatch('b1', ['r1']), processBatch('b1', ['r1'])]);
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it('a thrown request is UNCERTAIN, not failed, and is never retried', async () => {
+    seed();
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      fetchCalls.push(String(url));
+      throw new Error('socket hang up');
+    };
+    await processBatch('b1', ['r1']);
+    expect(recipient().status).toBe('send_uncertain');
+
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it('accepted without a message id is UNCERTAIN', async () => {
+    seed();
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      fetchCalls.push(String(url));
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    await processBatch('b1', ['r1']);
+    expect(recipient().status).toBe('send_uncertain');
+  });
+
+  it('a definitive provider refusal is FAILED (retryable) with the numeric code', async () => {
+    seed();
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      fetchCalls.push(String(url));
+      return { ok: false, status: 400, json: async () => ({ error: { code: 131026, message: 'undeliverable' } }) };
+    };
+    await processBatch('b1', ['r1']);
+    expect(recipient().status).toBe('failed');
+    expect(recipient().error_code).toBe(131026);
   });
 });
