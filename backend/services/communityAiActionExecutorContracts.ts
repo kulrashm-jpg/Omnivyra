@@ -16,6 +16,7 @@ import { logUsageEvent } from './usageLedgerService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
 import { ownedDbTable } from '../db/writeOwner';
+import { dmSendRefusal, isDmActionType } from './dmDispatchSafety';
 
 import type { CommandChainStep } from './communityAiActionExecutorRuntime';
 
@@ -891,14 +892,30 @@ function planDmCommandChain(action: CommunityAiAction): DmPlan | null {
   };
 }
 
-/** The DM command chain, or null (not a DM / no text / refused — see dmCommandChainRefusal). */
+/**
+ * The chain SHAPE a DM would be dispatched as, or null (not a DM / no text /
+ * shape refused). This is addressing validation only — it is NOT dispatch
+ * authority: every dispatch path must consult dmCommandChainRefusal, which
+ * also applies the DM send policy (dmDispatchSafety).
+ */
 export function buildDmCommandChain(action: CommunityAiAction): CommandChainStep[] | null {
   return planDmCommandChain(action)?.chain ?? null;
 }
 
-/** Non-null when a DM must NOT be dispatched because its target is unresolved/invalid. */
+/**
+ * Non-null when a DM must NOT be dispatched: an unresolved / invalid target
+ * (shape), or the DM send policy — no authoritative person -> thread mapping
+ * exists, and Instagram has no server-verified account tier
+ * (see dmDispatchSafety). Applies to EVERY dm action, including one with no
+ * text or no target (those used to fall through to a bare single-step DM).
+ */
 export function dmCommandChainRefusal(action: CommunityAiAction): string | null {
-  return planDmCommandChain(action)?.refusal ?? null;
+  const shapeRefusal = planDmCommandChain(action)?.refusal ?? null;
+  if (shapeRefusal) return shapeRefusal;
+  if (!isDmActionType(action.action_type)) return null;
+  // No verified tier is ever passed from here: the executor has no
+  // authoritative tier source, so Instagram DMs are always refused.
+  return dmSendRefusal({ platform: action.platform, verifiedInstagramTier: null });
 }
 
 /**

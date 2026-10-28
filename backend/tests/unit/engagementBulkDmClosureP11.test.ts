@@ -113,123 +113,61 @@ beforeEach(() => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('P1.1 DM duplicate-send protection', () => {
-  it('T1: an actionable DM dispatches exactly once', async () => {
+// SUPERSEDED for DMs (2026-10-28, product decision): DMs stay blocked without
+// an AUTHORITATIVE person -> thread mapping (backend/services/dmDispatchSafety).
+// The duplicate-send guard above is still in place for browser-mode replies
+// (engagementReplyLikeIdempotency.test.ts, "bulk in-flight guard"), but a bulk
+// DM is now refused BEFORE any action row exists — so the strongest form of
+// the P1.1 invariant holds: zero DMs, not "at most one".
+describe('P1.1 DM duplicate-send protection — bulk DMs are refused outright', () => {
+  it('T1: an actionable DM is refused — no executor call, no claimable row', async () => {
     seed('A', 'dm'); actionable.add('A');
     const r = await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    expect(r.sent).toBe(1);
-    expect(claimable()).toHaveLength(1);
+    expect(r.sent).toBe(0);
+    expect(r.outcomes.skipped_capability).toBe(1);
+    expect(executeActionMock).not.toHaveBeenCalled();
+    expect(claimable()).toHaveLength(0);
+    expect(db.community_ai_actions).toHaveLength(0);
   });
 
-  it('T2: an immediate repeat does NOT dispatch again', async () => {
+  it('T2: an immediate repeat is refused the same way', async () => {
     seed('A', 'dm'); actionable.add('A');
     await bulkReplyThreads(ORG, ['A'], textFor, USER);
-
-    // The thread is still actionable: the DM was queued, not delivered, so no
-    // outgoing message exists yet. This is precisely the window in which the
-    // duplicate used to occur.
     const second = await bulkReplyThreads(ORG, ['A'], textFor, USER);
-
     expect(second.sent).toBe(0);
-    expect(second.outcomes.skipped_already_dispatched).toBe(1);
-    expect(executeActionMock).toHaveBeenCalledTimes(1);
-    expect(claimable()).toHaveLength(1);        // the extension sees ONE command
+    expect(second.outcomes.skipped_capability).toBe(1);
+    expect(executeActionMock).not.toHaveBeenCalled();
   });
 
-  it('T3: 16 concurrent invocations yield at most one queued DM', async () => {
+  it('T3: 16 concurrent invocations yield ZERO queued DMs', async () => {
     seed('A', 'dm'); actionable.add('A');
     const runs = await Promise.all(
       Array.from({ length: 16 }, () => bulkReplyThreads(ORG, ['A'], textFor, USER)),
     );
-    // The invariant that matters is "exactly one effective DM dispatch". A
-    // browser dispatch IS its community_ai_actions row, so the number of
-    // claimable rows is the number of DMs the recipient will receive.
-    expect(claimable()).toHaveLength(1);
-    expect(db.community_ai_actions.filter((a) => a.action_type === 'dm')).toHaveLength(1);
-
-    // The read guard is not atomic, so under exact simultaneity several callers
-    // can each report sent=1 for what is one delivery. That is a reporting
-    // imprecision, not a duplicate send — recorded here rather than hidden.
-    const totalSent = runs.reduce((a, r) => a + r.sent, 0);
-    expect(totalSent).toBeGreaterThanOrEqual(1);
-  });
-
-  it('T3b: the deterministic id is per (target, bucket), not global', async () => {
-    seed('A', 'dm'); seed('B', 'dm');
-    actionable.add('A'); actionable.add('B');
-    await Promise.all([
-      bulkReplyThreads(ORG, ['A'], textFor, USER),
-      bulkReplyThreads(ORG, ['B'], textFor, USER),
-    ]);
-    // Two different recipients must never collapse onto one command.
-    expect(claimable()).toHaveLength(2);
-  });
-
-  it('T4: a dispatch failure leaves the thread retryable', async () => {
-    seed('A', 'dm'); actionable.add('A');
-    executeActionMock.mockImplementationOnce(async () => ({
-      ok: false, status: 'failed', error: 'extension offline',
-    }) as never);
-    const first = await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    expect(first.sent).toBe(0);
-    expect(first.outcomes.failed_dispatch).toBe(1);
     expect(claimable()).toHaveLength(0);
-
-    const retry = await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    expect(retry.sent).toBe(1);                 // retry is permitted
+    expect(runs.reduce((a, r) => a + r.sent, 0)).toBe(0);
   });
 
-  it('T5: a terminalised prior action does not block a later send', async () => {
-    seed('A', 'dm'); actionable.add('A');
-    db.community_ai_actions.push({
-      id: 'old', organization_id: ORG, platform: 'linkedin', action_type: 'dm',
-      target_id: 'urn:li:dm:A', execution_mode: 'browser', status: 'executed',
-    });
+  it('the DM refusal is unconditional — also on a non-actionable thread', async () => {
+    seed('A', 'dm');                            // not actionable
     const r = await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    expect(r.sent).toBe(1);                     // only UNFINISHED work blocks
+    expect(r.sent).toBe(0);
+    expect(executeActionMock).not.toHaveBeenCalled();
   });
 
-  it('T6/T8: once the extension ingests the sent DM, canonical state closes it', async () => {
-    seed('A', 'dm'); actionable.add('A');
-    await bulkReplyThreads(ORG, ['A'], textFor, USER);
-
-    // Extension confirms delivery; ingestion writes the real outbound message
-    // and terminalises the action. Closure comes from evidence, not fabrication.
-    db.community_ai_actions[0].status = 'executed';
-    actionable.delete('A');
-
-    const after = await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    expect(after.sent).toBe(0);
-    expect(after.outcomes.skipped_not_actionable).toBe(1);
-
-    actionable.add('A');                        // they reply again
-    const reopened = await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    expect(reopened.sent).toBe(1);
-  });
-
-  it('the guard is company-scoped — another tenant\'s queued DM never blocks ours', async () => {
-    seed('A', 'dm'); actionable.add('A');
-    db.community_ai_actions.push({
-      id: 'rival', organization_id: 'org_rival', platform: 'linkedin', action_type: 'dm',
-      target_id: 'urn:li:dm:A', execution_mode: 'browser', status: 'pending',
-    });
-    const r = await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    expect(r.sent).toBe(1);
-  });
-
-  it('a queued DM to a DIFFERENT target does not block this one', async () => {
-    seed('A', 'dm'); seed('B', 'dm');
+  it('a mixed batch: the comment sends, the DM is refused', async () => {
+    seed('A', 'dm'); seed('B', 'comment');
     actionable.add('A'); actionable.add('B');
-    await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    const r = await bulkReplyThreads(ORG, ['B'], textFor, USER);
+    const r = await bulkReplyThreads(ORG, ['A', 'B'], textFor, USER);
     expect(r.sent).toBe(1);
-    expect(claimable()).toHaveLength(2);        // two distinct recipients
+    expect(r.outcomes.skipped_capability).toBe(1);
+    expect(executeActionMock).toHaveBeenCalledTimes(1);
+    expect(executeActionMock.mock.calls[0][0].action_type).toBe('reply');
   });
 
-  it('no fabricated outbound message is written for a queued DM', async () => {
+  it('no fabricated outbound message is written for a refused DM', async () => {
     seed('A', 'dm'); actionable.add('A');
     await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    // DISPATCHED ≠ DELIVERED. Nothing may claim the DM was sent.
     expect(db.engagement_messages.filter((m) => m.direction === 'outgoing')).toHaveLength(0);
   });
 });

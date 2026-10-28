@@ -177,27 +177,51 @@ describe('communityAiActionExecutor — manual api-mode', () => {
     expect((result as any).command_chain).toBeUndefined();
   });
 
-  it('opens visible LinkedIn DM rows by participant name when no verified thread URL exists', async () => {
-    const result = await executeAction(
-      {
-        ...baseAction(),
-        action_type: 'dm',
-        target_id: 'Rajesh Singh',
-        suggested_text: 'Thanks Rajesh, I will check and get back to you.',
-        execution_mode: 'browser',
-        metadata: {
-          dm_thread_ready: true,
-          dm_participant_name: 'Rajesh Singh',
-          dm_last_message_preview: 'Rajesh: Hi Kuldeep, hope you are doing well!',
-        },
-      },
-      true,
-      { source: 'manual', notify: false, webhook: false },
-    );
+  // Product decision (2026-10-28): DMs stay blocked without an AUTHORITATIVE
+  // person -> thread mapping (backend/services/dmDispatchSafety). The executor
+  // refuses BEFORE dispatch (provably not acted, no command chain persisted).
+  // buildDmCommandChain is kept as the addressing-shape validator only, so the
+  // chain shapes below stay pinned for when an authoritative mapping exists.
+  const participantDm = () => ({
+    ...baseAction(),
+    action_type: 'dm',
+    target_id: 'Rajesh Singh',
+    suggested_text: 'Thanks Rajesh, I will check and get back to you.',
+    execution_mode: 'browser',
+    metadata: {
+      dm_thread_ready: true,
+      dm_participant_name: 'Rajesh Singh',
+      dm_last_message_preview: 'Rajesh: Hi Kuldeep, hope you are doing well!',
+    },
+  });
+  const threadUrlDm = () => ({
+    ...baseAction(),
+    action_type: 'dm',
+    target_id: 'https://www.linkedin.com/messaging/thread/2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA/',
+    suggested_text: 'Thanks Rajesh, I will check and get back to you.',
+    execution_mode: 'browser',
+    metadata: {
+      dm_thread_ready: true,
+      dm_thread_id: '2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA',
+      dm_thread_url: 'https://www.linkedin.com/messaging/thread/2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA/',
+    },
+  });
 
-    expect(result.status).toBe('dispatched');
-    expect(result.execution_mode).toBe('browser');
-    expect((result as any).command_chain).toEqual([
+  it.each([
+    ['participant-name', participantDm],
+    ['resolved thread URL', threadUrlDm],
+  ])('a %s LinkedIn DM is REFUSED by the executor (no authoritative mapping) — not acted', async (_label, make) => {
+    const result = await executeAction(make() as any, true, { source: 'manual', notify: false, webhook: false });
+    expect(result).toMatchObject({
+      ok: false, status: 'failed', error: 'DM_RECIPIENT_MAPPING_UNAVAILABLE', execution_mode: 'browser', may_have_acted: false,
+    });
+    expect((result as any).command_chain).toBeUndefined();
+  });
+
+  it('addressing shape (not dispatch authority): participant name -> open_thread + continue_thread', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildDmCommandChain } = require('../../services/communityAiActionExecutorContracts');
+    expect(buildDmCommandChain(participantDm())).toEqual([
       {
         action_type: 'open_thread',
         payload: {
@@ -217,27 +241,10 @@ describe('communityAiActionExecutor — manual api-mode', () => {
     ]);
   });
 
-  it('targets resolved LinkedIn DM threads before continuing the conversation', async () => {
-    const result = await executeAction(
-      {
-        ...baseAction(),
-        action_type: 'dm',
-        target_id: 'https://www.linkedin.com/messaging/thread/2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA/',
-        suggested_text: 'Thanks Rajesh, I will check and get back to you.',
-        execution_mode: 'browser',
-        metadata: {
-          dm_thread_ready: true,
-          dm_thread_id: '2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA',
-          dm_thread_url: 'https://www.linkedin.com/messaging/thread/2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA/',
-        },
-      },
-      true,
-      { source: 'manual', notify: false, webhook: false },
-    );
-
-    expect(result.status).toBe('dispatched');
-    expect(result.execution_mode).toBe('browser');
-    expect((result as any).command_chain).toEqual([
+  it('addressing shape (not dispatch authority): thread URL -> open_thread + continue_thread', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { buildDmCommandChain } = require('../../services/communityAiActionExecutorContracts');
+    expect(buildDmCommandChain(threadUrlDm())).toEqual([
       {
         action_type: 'open_thread',
         payload: {
