@@ -385,3 +385,45 @@ describe('WS-3 recovery sweep (5) — repeat, concurrency, bounds and failure is
     await expect(sweep()).rejects.toThrow(/could not be read/);
   });
 });
+
+describe('WS-3 recovery sweep (6) — dry run for non-production validation', () => {
+  it('reports what a run would dispatch and dispatches nothing, even with the flag off', async () => {
+    configureTenant();
+    const recoverable = await requeuedTask({ planTaskId: 'task-1-a', leadId: 'L1' });
+    const blocked = await requeuedTask({ planTaskId: 'task-1-b', leadId: 'L2', channel: 'email' });
+    (db.tables.outreach_attempts ??= []).push({ id: 'att-1', company_id: 'co-a', task_id: blocked, attempt_number: 1 });
+    (db.tables.outreach_delivery_evidence ??= []).push({ id: 'ev-1', company_id: 'co-a', task_id: blocked, attempt_id: 'att-1', transport_response: { outcome: 'timeout' } });
+    delete process.env[RECOVERY_SWEEP_ENABLED_ENV];
+    const decisionsBefore = (db.tables.outreach_decisions ?? []).length;
+    const writesBefore = db.queries.filter((q) => q.op !== 'select').length;
+
+    const report = await sweep({ dryRun: true });
+    expect(report).toMatchObject({ enabled: false, dryRun: true, skipped: null, scanned: 2, recoverable: 1, unrecoverable: 1, sent: 0 });
+    expect(report.wouldDispatch).toEqual([{ companyId: 'co-a', leadId: 'L1', taskIds: [recoverable] }]);
+    expect(report.outcomes).toEqual({});
+    // Nothing was written: no decision, claim, attempt, work item or state change.
+    expect(db.queries.filter((q) => q.op !== 'select').length).toBe(writesBefore);
+    expect((db.tables.outreach_decisions ?? []).length).toBe(decisionsBefore);
+    expect(await status(recoverable)).toBe('queued');
+    expect(await listInternalWorkItems('co-a', recoverable)).toHaveLength(0);
+  });
+
+  it('honours the lead cap like a real run', async () => {
+    configureTenant();
+    await requeuedTask({ planTaskId: 'task-1-a', leadId: 'L1' });
+    await requeuedTask({ planTaskId: 'task-1-b', leadId: 'L2' });
+    const report = await sweep({ dryRun: true, maxLeads: 1 });
+    expect(report.wouldDispatch).toHaveLength(1);
+    expect(report.leadsDeferred).toBe(1);
+  });
+
+  it('the global kill switch stops a dry run too', async () => {
+    configureTenant();
+    await requeuedTask();
+    process.env[KILL_ENV] = 'true';
+    db.queries = [];
+    const report = await sweep({ dryRun: true });
+    expect(report).toMatchObject({ dryRun: true, skipped: 'kill_switch', scanned: 0 });
+    expect(db.queries).toHaveLength(0);
+  });
+});

@@ -31,9 +31,9 @@ const load = () => {
   return handler;
 };
 
-const call = async (headers: Record<string, unknown>, method = 'POST') => {
+const call = async (headers: Record<string, unknown>, method = 'POST', query: Record<string, unknown> = {}) => {
   const res = mockRes();
-  await load()({ method, headers, query: {} }, res);
+  await load()({ method, headers, query }, res);
   return res;
 };
 
@@ -74,6 +74,16 @@ describe('outreach-dispatch-recovery route', () => {
     expect(res.statusCode).toBe(200);
     expect(runSweep).toHaveBeenCalledTimes(1);
     expect(res.body).toMatchObject({ success: true, enabled: false, message: 'Outreach dispatch recovery is disabled' });
+  });
+
+  it('a real run is requested unless ?dryRun=1; a dry run is reported as such', async () => {
+    await call({ authorization: 'Bearer cron-secret-test-1' });
+    expect(runSweep).toHaveBeenLastCalledWith({ dryRun: false });
+    runSweep.mockResolvedValue({ enabled: false, dryRun: true, skipped: null, sent: 0, unrecoverable: 1, leadsDeferred: 0, wouldDispatch: [{ companyId: 'c', leadId: 'l', taskIds: ['t1', 't2'] }] });
+    const res = await call({ authorization: 'Bearer cron-secret-test-1' }, 'POST', { dryRun: '1' });
+    expect(runSweep).toHaveBeenLastCalledWith({ dryRun: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ dryRun: true, message: 'Dry run: 2 task(s) would be dispatched; 1 need a human; nothing was dispatched' });
   });
 
   it('a sweep error is a 500, never a silent success', async () => {

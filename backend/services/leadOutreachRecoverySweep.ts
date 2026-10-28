@@ -32,6 +32,13 @@
  *    on. Concurrent or repeated sweeps are safe because every claim is a
  *    compare-and-set and every attempt number is unique per task.
  *  • Never approves, never enables a tenant, never reads outcomes.
+ *
+ * ─── DRY RUN (non-production validation) ───────────────────────────────────
+ * `dryRun: true` performs the same read and the same prior-attempt check and
+ * reports exactly which tasks a real run would hand to dispatch, without
+ * calling dispatch: no governance decision, claim, attempt, quota or transport.
+ * Because it writes nothing it runs even while the flag is off (the flag gates
+ * dispatch, not observation); the global kill switch still stops it.
  */
 
 import {
@@ -61,10 +68,13 @@ export interface RecoverySweepOptions {
   timeBudgetMs?: number;
   /** Injected clock (ms), for deterministic tests. */
   clock?: () => number;
+  /** Report what a real run would dispatch; dispatch is never called. */
+  dryRun?: boolean;
 }
 
 export interface RecoverySweepReport {
   enabled: boolean;
+  dryRun: boolean;
   /** Why nothing was read: the flag is off, or the global kill switch is engaged. */
   skipped: 'disabled' | 'kill_switch' | null;
   scanned: number;
@@ -80,10 +90,13 @@ export interface RecoverySweepReport {
   outcomes: Record<string, number>;
   sent: number;
   failures: Array<{ companyId: string; leadId: string; error: string }>;
+  /** Dry run only: the tasks a real run would hand to dispatch, per lead (bounded like a real run). */
+  wouldDispatch: Array<{ companyId: string; leadId: string; taskIds: string[] }>;
 }
 
-const emptyReport = (enabled: boolean, skipped: RecoverySweepReport['skipped']): RecoverySweepReport => ({
+const emptyReport = (enabled: boolean, skipped: RecoverySweepReport['skipped'], dryRun = false): RecoverySweepReport => ({
   enabled,
+  dryRun,
   skipped,
   scanned: 0,
   recoverable: 0,
@@ -94,6 +107,7 @@ const emptyReport = (enabled: boolean, skipped: RecoverySweepReport['skipped']):
   outcomes: {},
   sent: 0,
   failures: [],
+  wouldDispatch: [],
 });
 
 const positive = (v: number | undefined, fallback: number): number =>
@@ -104,8 +118,10 @@ const positive = (v: number | undefined, fallback: number): number =>
  * caller reports an error rather than "nothing to recover".
  */
 export async function runOutreachDispatchRecoverySweep(options: RecoverySweepOptions = {}): Promise<RecoverySweepReport> {
-  if (!isRecoverySweepEnabled()) return emptyReport(false, 'disabled');
-  if (isLeadOutreachGloballyDisabled()) return emptyReport(true, 'kill_switch');
+  const enabled = isRecoverySweepEnabled();
+  const dryRun = options.dryRun === true;
+  if (!enabled && !dryRun) return emptyReport(false, 'disabled');
+  if (isLeadOutreachGloballyDisabled()) return emptyReport(enabled, 'kill_switch', dryRun);
 
   const clock = options.clock ?? Date.now;
   const started = clock();
@@ -118,7 +134,7 @@ export async function runOutreachDispatchRecoverySweep(options: RecoverySweepOpt
 
   // The prior-attempt check needs the transports registered, as dispatch does.
   registerDefaultTransports();
-  const report = emptyReport(true, null);
+  const report = emptyReport(enabled, null, dryRun);
   report.scanned = queued.tasks.length;
 
   // Group the recoverable tasks per (tenant, lead), oldest first.
@@ -143,6 +159,10 @@ export async function runOutreachDispatchRecoverySweep(options: RecoverySweepOpt
       continue;
     }
     report.leadsProcessed += 1;
+    if (dryRun) {
+      report.wouldDispatch.push({ companyId: group.companyId, leadId: group.leadId, taskIds: [...group.taskIds] });
+      continue;
+    }
     try {
       const reports = await dispatchApprovedOutreachForLead(group.companyId, group.leadId, { taskIds: group.taskIds });
       for (const r of reports) {
@@ -158,6 +178,7 @@ export async function runOutreachDispatchRecoverySweep(options: RecoverySweepOpt
   }
 
   logger.info('outreach.recovery_sweep.completed', {
+    dryRun,
     scanned: report.scanned,
     recoverable: report.recoverable,
     unrecoverable: report.unrecoverable,

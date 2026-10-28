@@ -13,6 +13,10 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * never re-sends a possibly delivered message) is the dispatcher's own; see
  * backend/services/leadOutreachRecoverySweep.ts.
  *
+ * `?dryRun=1` reports what a run would dispatch without dispatching anything;
+ * it is read-only, so it works while the flag is off (for non-production
+ * validation before enabling).
+ *
  * Protected by CRON_SECRET. Bounded and idempotent — re-running only finds
  * whatever is still queued.
  */
@@ -36,15 +40,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const result = await runOutreachDispatchRecoverySweep();
+    const dryRun = String((req.query ?? {}).dryRun ?? '') === '1';
+    const result = await runOutreachDispatchRecoverySweep({ dryRun });
     return res.status(200).json({
       success: true,
       ...result,
-      message: !result.enabled
-        ? 'Outreach dispatch recovery is disabled'
-        : result.skipped === 'kill_switch'
-          ? 'Lead outreach is globally disabled; nothing was read'
-          : `${result.sent} task(s) sent; ${result.unrecoverable} need a human; ${result.leadsDeferred} lead(s) left for a later run`,
+      message: result.skipped === 'kill_switch'
+        ? 'Lead outreach is globally disabled; nothing was read'
+        : result.dryRun
+          ? `Dry run: ${result.wouldDispatch.reduce((n, g) => n + g.taskIds.length, 0)} task(s) would be dispatched; ${result.unrecoverable} need a human; nothing was dispatched`
+          : !result.enabled
+            ? 'Outreach dispatch recovery is disabled'
+            : `${result.sent} task(s) sent; ${result.unrecoverable} need a human; ${result.leadsDeferred} lead(s) left for a later run`,
     });
   } catch (err) {
     const message = (err as Error)?.message ?? 'Outreach dispatch recovery failed';
