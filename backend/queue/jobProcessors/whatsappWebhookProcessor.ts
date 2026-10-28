@@ -6,13 +6,15 @@
  *
  * Routes per event type:
  *   statuses  → updateRecipientDelivery (deliveryTracker)
- *   messages  → handleInboundMessage (messageRouter)
+ *   messages  → handleInboundMessage (messageRouter); a whole-message STOP is
+ *               first recorded as a WhatsApp unsubscribe (whatsappOptOut.ts)
  *   message_template_status_update → handleTemplateStatusWebhook (templateService)
  */
 
 import type { Job } from 'bullmq';
 import { updateRecipientDelivery } from '../../services/whatsappBroadcastService';
 import { handleTemplateStatusWebhook } from '../../services/whatsappTemplateService';
+import { detectWhatsAppOptOut, recordWhatsAppOptOut } from '../../services/whatsappOptOut';
 import { supabase } from '../../db/supabaseClient';
 
 export interface WaWebhookJob {
@@ -95,6 +97,26 @@ async function handleInboundMessage(phoneNumberId: string, message: any): Promis
     .single();
 
   if (!account) return;
+
+  // Opt-out first, so a failed thread write below can never swallow it. The
+  // conversation record is still kept: the message is stored as usual.
+  const optOut = detectWhatsAppOptOut(message?.text?.body ?? message?.button?.text ?? message?.interactive?.button_reply?.title);
+  if (optOut) {
+    const recorded = await recordWhatsAppOptOut({
+      organizationId:  account.company_id,
+      waId:            String(message.from),
+      waMessageId:     String(message.id),
+      keyword:         optOut.keyword,
+      socialAccountId: account.id ?? null,
+    });
+    if (recorded.status !== 'recorded' && recorded.status !== 'already_present') {
+      // Never the number or the text — a code, the tenant and the message id.
+      console.error('[wa-webhook-processor] opt-out NOT recorded', {
+        status: recorded.status, reason: recorded.reason, attempts: recorded.attempts,
+        companyId: account.company_id, waMessageId: message.id,
+      });
+    }
+  }
 
   const platformThreadId = `wa:${account.id}:${message.from}`;
   const windowExpiresAt  = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
