@@ -66,7 +66,30 @@ const STACK_SAFETY_SUITES = [
   'socialPostStepContract',
   'socialPublishEngineAdapter',
   'w0cWhatsappBroadcastGovernance',
+  // Added by the migration/CI/ops/session wave (integration owner, 2026-10-28).
+  'migrationRerunSafety',
+  'rpaLegacySessionInvalidation',
+  'rpaAuthTokenRedemptionPrune',
+  'engagementBulkLikeIdempotency',
+  'extensionProductionTargeting',
+  'extensionSourceRootPortability',
 ].map((n) => `backend/tests/unit/${n}.test.ts`);
+
+/**
+ * Modules and migrations INTRODUCED by this stack. A unit suite that references
+ * any of them is safety-relevant by construction, and none existed before the
+ * stack, so this cannot pull legacy suites in. Every such suite — including ones
+ * added later — must be selected by the PI gate or this gate.
+ */
+const NEW_SAFETY_MARKERS = [
+  'engagementRequestIdempotency',
+  'rpaTargetUrlPolicy',
+  'dmDispatchSafety',
+  'identityVerification/',
+  'communityIdentityProof',
+  'rpaLegacySessionFilePurge',
+  '20261231000',
+];
 
 /** Stack suites the PI gate already owns; they must stay there, not move here. */
 const STACK_PI_SUITES = [
@@ -160,6 +183,19 @@ describe('safety-test-suites selector', () => {
     for (const rel of STACK_PI_SUITES) expect(piSet.has(rel)).toBe(true);
     const uncovered = STACK_SAFETY_SUITES.filter((rel) => !piSet.has(rel) && !selected.includes(rel));
     expect(uncovered).toEqual([]);
+  });
+
+  it('every unit suite that references a module this stack introduced is gated (catches future suites)', () => {
+    const pi = spawnSync(process.execPath, [PI_SCRIPT], { cwd: ROOT, encoding: 'utf8' });
+    expect(pi.status).toBe(0);
+    const gated = new Set([...pi.stdout.split('\n').filter(Boolean), ...selected]);
+    const unitDir = path.join(ROOT, 'backend', 'tests', 'unit');
+    const referencing = fs.readdirSync(unitDir)
+      .filter((f) => /\.test\.tsx?$/.test(f))
+      .filter((f) => NEW_SAFETY_MARKERS.some((m) => fs.readFileSync(path.join(unitDir, f), 'utf8').includes(m)))
+      .map((f) => `backend/tests/unit/${f}`);
+    expect(referencing.length).toBeGreaterThan(10);           // the guard is not vacuous
+    expect(referencing.filter((rel) => !gated.has(rel))).toEqual([]);
   });
 
   it('floor guard: a selection below the floor is an error', () => {

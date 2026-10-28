@@ -92,6 +92,16 @@ const SAFETY_SUITE_REGISTRY = [
   'backend/tests/unit/socialPostStepContract.test.ts',
   'backend/tests/unit/socialPublishEngineAdapter.test.ts',
   'backend/tests/unit/publishChannelVocabulary.test.ts',
+  // Migration re-run / rollback-order safety (20261231000009)
+  'backend/tests/unit/migrationRerunSafety.test.ts',
+  // Legacy RPA session invalidation (20261231000010) and RPA login-token pruning
+  'backend/tests/unit/rpaLegacySessionInvalidation.test.ts',
+  'backend/tests/unit/rpaAuthTokenRedemptionPrune.test.ts',
+  // Bulk-like durable request identity
+  'backend/tests/unit/engagementBulkLikeIdempotency.test.ts',
+  // Extension suites made portable (OMNIVYRA_EXTENSION_ROOT) and their portability check
+  'backend/tests/unit/extensionProductionTargeting.test.ts',
+  'backend/tests/unit/extensionSourceRootPortability.test.ts',
   // Gate self-check: the regression test for this selector
   'backend/tests/unit/safetyTestSuitesSelector.test.ts',
 ];
