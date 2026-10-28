@@ -44,9 +44,10 @@
 -- Additive. NOT applied anywhere yet.
 -- ROLLBACK: supabase/migrations/rollbacks/community_identity_link_rollback.sql
 --
--- NOTE for the integration owner: 20261231000003's postcondition counts the
--- link table's foreign keys (expects 3). After this migration there are 4, so
--- re-running 20261231000003 alone after this one would fail that postcondition.
+-- NOTE: this migration adds a 4th foreign key to the link table;
+-- 20261231000003's postcondition accepts exactly 3, or 4 when that 4th is this
+-- migration's community_action_journey_links_person_fk, so a re-run of 0003
+-- after this one holds (verified on PostgreSQL, 2026-10-28).
 -- ===========================================================================
 
 -- ---------------------------------------------------------------------------

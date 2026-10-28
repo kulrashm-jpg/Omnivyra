@@ -150,7 +150,11 @@ $post$;
 
 -- Operator note (not executed here; VACUUM cannot run inside the migration
 -- transaction): the superseded plaintext tuple versions stay in the table's
--- heap until vacuumed. After applying, run
---   VACUUM (VERBOSE OFF) public.rpa_sessions;
+-- heap until removed. Plain VACUUM only marks them reusable and does NOT
+-- guarantee the bytes leave the table files; VACUUM FULL rewrites the table
+-- (ACCESS EXCLUSIVE lock — brief on this small table; check for long-open
+-- transactions first). See docs/release/orchestration-engine-adapters-migration-runbook.md.
+-- Apply this migration only after BOTH web and worker run the code that
+-- refuses plaintext (older code still writes plaintext rows).
 -- Plaintext already captured by backups / PITR / WAL archives is outside the
 -- reach of any migration and expires with their retention.
