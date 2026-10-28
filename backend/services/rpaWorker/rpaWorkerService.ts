@@ -194,7 +194,7 @@ export const executeRpaTask = async (task: RpaTask): Promise<RpaResult> => {
 
   // Target-URL policy BEFORE anything is queued or navigated.
   const target = validateRpaTarget(task);
-  if (!target.ok) {
+  if (target.ok === false) {
     return { success: false, error: target.error, may_have_acted: false };
   }
 

@@ -495,6 +495,11 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
       case 'acknowledged':
       case 'executing':
         return result(status, 'wait', 'the engine is executing the action', row.id);
+      case 'approved':
+        // After this adapter submitted it, `approved` means the engine DEFERRED it
+        // (provably not acted) and its own durable retry queue will claim and run
+        // it. Integration owner, 2026-10-28.
+        return result('deferred', 'wait', 'the engine deferred the action and will retry it itself', row.id);
       case 'failed':
         if (REAPED_CODES.has(code)) return uncertain(ctx, from, `the engine reaped the action (${code}) and it may have been performed`, row.id);
         return settle(ctx, from, 'failed', result('failed', 'needs_human', 'the engine reported the action failed', row.id));
@@ -543,6 +548,13 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
       case 'skipped':
       case 'blocked':
         return settle(ctx, 'submitting', 'failed', result(out.status, 'needs_human', `the engine ${out.status} the action: ${String(out.reason ?? errorText(out.error))}`.slice(0, 200), actionId));
+      case 'deferred':
+        // Provably not acted: the engine set the row back to `approved` and queued
+        // its own durable retry (rpa_retry_queue). Observe it; never resubmit.
+        await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'submitting', { state: 'submitted', detail: 'deferred_by_engine' });
+        return result('deferred', 'wait', 'the engine deferred the action and will retry it itself', actionId);
+      case 'uncertain':
+        return uncertain(ctx, 'submitting', `the engine reported the action may have reached the platform (${errorText(out.error)})`, actionId);
       default:
         return uncertain(ctx, 'submitting', `the engine returned an unknown status (${String(out.status)})`, actionId);
     }
@@ -694,6 +706,9 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
           correlation_id: ctx.executionTaskId,
           idempotency_key: `wf:${ctx.executionTaskId}`,
           final_text: textOf(row),
+          // This adapter holds the `approved → executing` claim; the engine's
+          // terminal write must itself be compare-and-set from it.
+          expected_from_statuses: ['executing'],
         });
       } catch (e) {
         return uncertain(ctx, 'submitting', `the engine threw after the action was claimed (${errorText(e)})`, row.id);

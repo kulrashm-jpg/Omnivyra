@@ -160,7 +160,7 @@ export async function runRpaScript(task: RpaTask, script: RpaScript, deps: RpaRu
     action_type: task.action_type,
     target_url: script.targetUrl,
   });
-  if (!target.ok) {
+  if (target.ok === false) {
     return { success: false, error: target.error, may_have_acted: false };
   }
   if (script.targetUrl !== task.target_url) {
