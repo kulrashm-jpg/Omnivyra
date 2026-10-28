@@ -109,6 +109,10 @@ const SAFETY_SUITE_REGISTRY = [
   // selector also picks it up, but only because it quotes PI path strings; the
   // registry entry is the deliberate gate.)
   'backend/tests/unit/realSchemaCiPathFilter.test.ts',
+  // Schema-parity manifest covers every object the stack's migrations create, and
+  // PREDEPLOY_STRICT_SCHEMA=1 fails closed (connection unavailable / check skipped)
+  'backend/tests/unit/verifySchemaParityCoverage.test.ts',
+  'backend/tests/unit/predeployStrictSchema.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */
