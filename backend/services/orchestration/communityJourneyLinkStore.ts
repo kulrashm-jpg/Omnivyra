@@ -30,6 +30,15 @@
  *                unique constraints are the arbiter, not these pre-checks.
  *   idempotency  linking the same (task, action) again returns the existing link
  *                (`replayed: true`); a concurrent loser reads the winner's row.
+ *   person       (20261231000006) the action must concern the run's PERSON:
+ *                `proveActionPerson` (communityIdentityProof.ts) ties the action's
+ *                platform account to the run's canonical person through ONE
+ *                active, verified `external_id` identity claim, in this tenant.
+ *                Missing, ambiguous, unverified or mismatched identity is refused
+ *                with its own code and nothing is written. The proven person and
+ *                claim are recorded on the link and re-proven by the database
+ *                guard; a replay re-proves them too, and the adapter re-proves
+ *                them at execution time.
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
@@ -40,6 +49,11 @@ import {
   defaultCommunityDeps,
   type CommunityActionRow,
 } from './communityEngineAdapter';
+import {
+  defaultCommunityIdentityPort,
+  proveActionPerson,
+  type CommunityIdentityPort,
+} from './communityIdentityProof';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -65,12 +79,16 @@ export interface CommunityJourneyLink {
   readonly executionTaskId: string;
   readonly executionInstanceId: string;
   readonly communityActionId: string;
+  /** The run's canonical person the action was proven to concern (20261231000006). */
+  readonly personId: string | null;
+  /** The verified identity claim that proved it (provenance; re-proven on use). */
+  readonly identityClaimId: string | null;
   readonly linkedBy: string | null;
   readonly createdAt: string | null;
 }
 
 type Row = Record<string, unknown>;
-const LINK_COLUMNS = 'id, organization_id, execution_task_id, execution_instance_id, community_action_id, linked_by, created_at';
+const LINK_COLUMNS = 'id, organization_id, execution_task_id, execution_instance_id, community_action_id, person_id, identity_claim_id, linked_by, created_at';
 
 const toLink = (r: Row): CommunityJourneyLink => ({
   id: String(r.id),
@@ -78,6 +96,8 @@ const toLink = (r: Row): CommunityJourneyLink => ({
   executionTaskId: String(r.execution_task_id),
   executionInstanceId: String(r.execution_instance_id),
   communityActionId: String(r.community_action_id),
+  personId: typeof r.person_id === 'string' ? r.person_id : null,
+  identityClaimId: typeof r.identity_claim_id === 'string' ? r.identity_claim_id : null,
   linkedBy: typeof r.linked_by === 'string' ? r.linked_by : null,
   createdAt: typeof r.created_at === 'string' ? r.created_at : null,
 });
@@ -106,8 +126,10 @@ export interface LinkStoreDeps {
   /** Insert; returns the row or the database error. */
   insertLink(row: {
     organization_id: string; execution_task_id: string; execution_instance_id: string;
-    community_action_id: string; linked_by: string | null;
+    community_action_id: string; person_id: string; identity_claim_id: string; linked_by: string | null;
   }): Promise<{ data: CommunityJourneyLink | null; error: unknown }>;
+  /** The authoritative person ↔ platform-account reads (communityIdentityProof.ts). */
+  identity: CommunityIdentityPort;
 }
 
 export const defaultLinkStoreDeps: LinkStoreDeps = {
@@ -135,7 +157,27 @@ export const defaultLinkStoreDeps: LinkStoreDeps = {
     const res = await ownedDbTable(COMMUNITY_JOURNEY_LINKS_TABLE).insert(row).select(LINK_COLUMNS).single();
     return { data: res.data ? toLink(res.data as unknown as Row) : null, error: res.error ?? null };
   },
+  identity: defaultCommunityIdentityPort,
 };
+
+/**
+ * Prove — or refuse with the proof's own code — that `action` concerns the person
+ * of `task`'s run. `expectedPersonId` is a person already recorded (a replayed
+ * link's), which must agree.
+ */
+async function provePerson(
+  org: string, task: ExecutionTask, action: CommunityActionRow, deps: LinkStoreDeps, expectedPersonId: string | null,
+): Promise<{ personId: string; claimId: string }> {
+  if (!deps.identity) fail('the identity reads are not configured', 'identity_unreadable');
+  const proof = await proveActionPerson({
+    organizationId: org,
+    subject: { kind: task.subjectKind, id: task.subjectId },
+    action,
+    expectedPersonIds: [expectedPersonId],
+  }, deps.identity);
+  if (proof.ok === false) fail(proof.reason, proof.code);
+  return { personId: proof.personId, claimId: proof.claimId };
+}
 
 function assertUuid(v: unknown, name: string, code: string): string {
   if (typeof v !== 'string' || !UUID.test(v)) fail(`${name} must be a uuid`, code);
@@ -178,9 +220,18 @@ export async function linkCommunityAction(
   const taskId = assertUuid(input.executionTaskId, 'executionTaskId', 'invalid_task');
   const actionId = assertUuid(input.communityActionId, 'communityActionId', 'invalid_action');
 
-  const replay = (link: CommunityJourneyLink): { link: CommunityJourneyLink; replayed: boolean } => {
+  // A replay answers "this link exists AND is still valid for the run's person":
+  // the person is re-proven, never assumed from the stored row.
+  const replay = async (link: CommunityJourneyLink): Promise<{ link: CommunityJourneyLink; replayed: boolean }> => {
     if (link.executionInstanceId !== instanceId) fail('no such execution task for this run', 'task_not_found');
     if (link.communityActionId !== actionId) fail('that execution task is already linked to a different community action', 'task_already_linked');
+    if (link.personId === null) fail('the existing link records no proven person', 'link_unproven');
+    const t = await deps.readTask(org, taskId);
+    if (t === null || t.executionInstanceId !== instanceId) fail('no such execution task for this run', 'task_not_found');
+    const a = await deps.readAction(org, actionId);
+    if (a === undefined) fail('the community action could not be read', 'action_unreadable');
+    if (a === null) fail('no such community action in this tenant', 'action_not_found');
+    await provePerson(org, t, a, deps, link.personId);
     return { link, replayed: true };
   };
 
@@ -205,11 +256,17 @@ export async function linkCommunityAction(
     fail(`a community action in "${status || 'no'}" status cannot be linked; only pending or approved actions`, 'action_not_linkable');
   }
 
+  // The action must concern the run's PERSON. Last of the pre-checks: every
+  // refusal above is cheaper and says more about the request itself.
+  const proven = await provePerson(org, task, action, deps, null);
+
   const ins = await deps.insertLink({
     organization_id: org,
     execution_task_id: taskId,
     execution_instance_id: instanceId,
     community_action_id: actionId,
+    person_id: proven.personId,
+    identity_claim_id: proven.claimId,
     linked_by: typeof input.linkedBy === 'string' && input.linkedBy.trim() !== '' ? input.linkedBy.trim().slice(0, 200) : null,
   });
   if (ins.error) {

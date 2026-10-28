@@ -19,6 +19,15 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * (`PROSPECT_ICP_MANAGE`), and — for POST, which hands an action to an executor —
  * the community role allowed to execute actions (`EXECUTE_ACTIONS`). The run is
  * bound tenant-scoped, and the store refuses a task outside that run.
+ *
+ * PERMISSION IS NOT VALIDITY. A member holding both grants may still only link an
+ * action that is PROVEN to concern the run's person: `linkCommunityAction` runs
+ * `proveActionPerson` (communityIdentityProof.ts) — the action's platform account
+ * must belong to the run's canonical person through ONE active, verified
+ * `external_id` identity claim in this tenant — and the database guard
+ * (20261231000006) re-proves it. There is no override, flag or body field that
+ * skips it: missing / ambiguous / unverified / mismatched identity is refused
+ * with its code (422; 503 when the identity record is unreadable).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
@@ -30,12 +39,22 @@ import { getExecutionInstance } from '../../../../backend/services/executionInst
 import {
   CommunityJourneyLinkError, linkCommunityAction, listInstanceLinks,
 } from '../../../../backend/services/orchestration/communityJourneyLinkStore';
+import {
+  IDENTITY_REFUSAL_CODES, TRANSIENT_IDENTITY_CODES, type IdentityRefusalCode,
+} from '../../../../backend/services/orchestration/communityIdentityProof';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 const METHODS = ['GET', 'POST'];
 
 export const statusForLinkError = (code: string): number => {
+  if ((IDENTITY_REFUSAL_CODES as readonly string[]).includes(code)) {
+    if (TRANSIENT_IDENTITY_CODES.has(code as IdentityRefusalCode)) return 503;
+    // Another tenant's account is answered like any other tenant's row.
+    if (code === 'identity_cross_tenant') return 404;
+    return 422;
+  }
+  if (code === 'link_unproven') return 409;
   if (code === 'task_not_found' || code === 'action_not_found' || code === 'not_found') return 404;
   if (code === 'cross_tenant') return 404;
   if (code === 'task_already_linked' || code === 'action_already_linked' || code === 'already_exists'

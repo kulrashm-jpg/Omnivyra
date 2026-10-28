@@ -28,6 +28,7 @@ import { WORKFLOW_STEP_CHANNELS } from '../../services/workflows/workflowStore';
 import {
   CONTRACT_ORG, CONTRACT_OTHER_ORG, contractContext, contractScenarios, expectContractResult,
 } from './helpers/engineAdapterContractKit';
+import { provenIdentity } from './helpers/communityIdentityFixture';
 import type { ExecutionResult } from '../../services/communityAiActionExecutor';
 
 const ACTION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -121,7 +122,8 @@ function world(initial: CommunityActionRow | null = approvedAction()) {
       Object.assign(row, patch, { updated_at: NOW });
       return true;
     },
-    binding: { resolve: async () => ({ kind: 'bound', actionId: ACTION_ID }) },
+    // 20261231000006: identity is proven in its own suite; here it passes.
+    binding: { resolve: async () => ({ kind: 'bound', actionId: ACTION_ID, identity: provenIdentity }) },
     async readAction(org, id) {
       await tick();
       const a = actions.get(id);

@@ -21,7 +21,11 @@
  * reads `community_action_journey_links` (20261231000003): an identity-only,
  * tenant-keyed 1:1 link an operator creates between a prepared `community` task
  * and an existing drafted action (communityJourneyLinkStore.ts). No link →
- * `no_bound_action`, `needs_human`, nothing sent.
+ * `no_bound_action`, `needs_human`, nothing sent. A bound action must also be
+ * PROVEN to concern the step's person (communityIdentityProof.ts: the action's
+ * platform account → one active, verified `external_id` identity claim → the
+ * run's canonical person), re-proven on the row right before any claim; a
+ * binding that cannot prove it → `person_identity_unbound`.
  *
  * ─── ONE REQUEST PER STEP ─────────────────────────────────────────────────
  * `execution_engine_requests` (engine `community`) holds one row per execution
@@ -70,6 +74,13 @@ import { getPlaybookById } from '../playbooks/playbookService';
 import { validateActionAgainstPlaybook } from '../playbooks/playbookValidator';
 import { checkUsageBeforeExecution } from '../usageEnforcementService';
 import type { EngineAdapter, EngineDisposition, EngineResult, EngineStepContext } from './engineAdapters';
+import {
+  defaultCommunityIdentityPort,
+  proveActionPerson,
+  TRANSIENT_IDENTITY_CODES,
+  type CommunityIdentityPort,
+  type PersonProof,
+} from './communityIdentityProof';
 
 export const ENGINE_REQUESTS_TABLE = 'execution_engine_requests';
 export const COMMUNITY_ACTIONS_TABLE = 'community_ai_actions';
@@ -177,6 +188,8 @@ export interface CommunityActionRow {
   acting_user_id?: string | null;
   metadata?: Record<string, unknown> | null;
   parent_comment_urn?: string | null;
+  /** The engine's actor link → community_ai_discovered_users (the platform account). */
+  discovered_user_id?: string | null;
 }
 
 const textOf = (row: CommunityActionRow): string | null => {
@@ -214,8 +227,15 @@ export function toEngineAction(row: CommunityActionRow): CommunityAiAction {
 
 // ── Binding: which action this step acts on ─────────────────────────────────
 
+/**
+ * Proves, on the action row the adapter is about to act on, that the action
+ * concerns this step's person (communityIdentityProof.ts). A binding that cannot
+ * supply one binds nothing executable: the adapter refuses (`person_identity_unbound`).
+ */
+export type BoundIdentityCheck = (row: CommunityActionRow) => Promise<PersonProof>;
+
 export type BindingResult =
-  | { kind: 'bound'; actionId: string }
+  | { kind: 'bound'; actionId: string; identity?: BoundIdentityCheck }
   | { kind: 'none'; reason: string }
   | { kind: 'ambiguous'; reason: string }
   | { kind: 'unavailable'; reason: string };
@@ -238,33 +258,65 @@ export const noBindingInterface: CommunityActionBinding = {
   },
 };
 
-/** Tenant-filtered read of the link: the action id, null when unlinked. Throws when unreadable. */
-export type LinkedActionReader = (organizationId: string, executionTaskId: string) => Promise<string | null>;
+/** One link as the binding needs it: the action, and the person proven at link time. */
+export interface LinkedActionRef {
+  actionId: string;
+  /** null = the link records no proven person; such a link never executes. */
+  personId: string | null;
+}
+
+/**
+ * Tenant-filtered read of the link, null when unlinked. Throws when unreadable.
+ * A bare action id (the pre-20261231000006 shape) carries no proven person.
+ */
+export type LinkedActionReader = (organizationId: string, executionTaskId: string) => Promise<LinkedActionRef | string | null>;
 
 export const readLinkedActionId: LinkedActionReader = async (organizationId, executionTaskId) => {
   const res = await ownedDbTable(COMMUNITY_JOURNEY_LINKS_TABLE)
-    .select('community_action_id')
+    .select('community_action_id, person_id')
     .eq('organization_id', organizationId)              // TENANT FIRST
     .eq('execution_task_id', executionTaskId)
     .maybeSingle();
   if (res.error) throw Object.assign(new Error('community journey link unreadable'), { code: 'link_unreadable' });
-  const id = (res.data as { community_action_id?: unknown } | null)?.community_action_id;
-  return typeof id === 'string' && id.length > 0 ? id : null;
+  const row = (res.data as { community_action_id?: unknown; person_id?: unknown } | null) ?? null;
+  const id = row?.community_action_id;
+  if (typeof id !== 'string' || id.length === 0) return null;
+  return { actionId: id, personId: typeof row?.person_id === 'string' && row.person_id.length > 0 ? row.person_id : null };
 };
 
 /**
  * The binding an operator's link supplies: exactly the one action linked to this
  * execution task in this tenant (both unique by constraint), or none. Tenant,
- * support and approval are re-checked by the adapter on the action row itself.
+ * support and approval are re-checked by the adapter on the action row itself,
+ * and so is the PERSON: the bound result carries an identity check that re-runs
+ * the link-time proof live — the run's person (re-resolved from the subject) must
+ * equal both the link's recorded person and the step context's, and the action's
+ * platform account must still be that person's through one active, verified
+ * claim. A link recording no person can never pass it.
  */
-export function createLinkedActionBinding(read: LinkedActionReader = readLinkedActionId): CommunityActionBinding {
+export function createLinkedActionBinding(
+  read: LinkedActionReader = readLinkedActionId,
+  identityPort: CommunityIdentityPort = defaultCommunityIdentityPort,
+): CommunityActionBinding {
   return {
     async resolve(ctx) {
-      const actionId = await read(ctx.organizationId, ctx.executionTaskId);
-      if (actionId === null) {
+      const linked = await read(ctx.organizationId, ctx.executionTaskId);
+      if (linked === null) {
         return { kind: 'none', reason: 'no community action is linked to this execution task; an operator must link an existing drafted action' };
       }
-      return { kind: 'bound', actionId };
+      const ref: LinkedActionRef = typeof linked === 'string' ? { actionId: linked, personId: null } : linked;
+      const identity: BoundIdentityCheck = async (row) => {
+        if (ref.personId === null) {
+          return { ok: false, code: 'person_unresolved', reason: 'the link records no proven person' };
+        }
+        return proveActionPerson({
+          organizationId: ctx.organizationId,
+          subject: ctx.subject,
+          action: row,
+          expectedPersonIds: [ref.personId, ctx.personId],
+        }, identityPort);
+      };
+      return { kind: 'bound', actionId: ref.actionId, identity };
     },
   };
 }
@@ -639,6 +691,24 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
 
       const support = classifyCommunityAction(row);
       if (support.supported === false) return result('unsupported_action', 'needs_human', `${support.code}: ${support.reason}`, row.id);
+
+      // ── The action must concern THIS step's person, proven on this row ─────
+      // Re-proven at every execution from the live identity record (a claim
+      // revoked, re-attributed or unverified after linking stops the step), on
+      // the very row the claim below acts on. Nothing claimed or sent on refusal.
+      const identityCheck = binding.identity;
+      if (typeof identityCheck !== 'function') {
+        return result('person_identity_unbound', 'needs_human', 'the binding cannot prove the action concerns this step\'s person', row.id);
+      }
+      let proof: PersonProof;
+      try {
+        proof = await identityCheck(row);
+      } catch {
+        return result('identity_unreadable', 'wait', 'the person identity could not be read', row.id);
+      }
+      if (proof.ok === false) {
+        return result(proof.code, TRANSIENT_IDENTITY_CODES.has(proof.code) ? 'wait' : 'needs_human', `${proof.code}: ${proof.reason}`.slice(0, 200), row.id);
+      }
 
       // ── The action's own lifecycle decides whether it may run now ──────────
       const status = String(row.status ?? '');

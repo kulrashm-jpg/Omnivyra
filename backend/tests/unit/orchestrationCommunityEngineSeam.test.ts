@@ -20,6 +20,7 @@ import {
   createCommunityAdapter, type CommunityActionRow, type CommunityAdapterDeps, type RequestRow,
 } from '../../services/orchestration/communityEngineAdapter';
 import { CONTRACT_ORG, contractContext, expectContractResult } from './helpers/engineAdapterContractKit';
+import { provenIdentity } from './helpers/communityIdentityFixture';
 import type { ExecutionResult } from '../../services/communityAiActionExecutor';
 
 const ACTION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -47,7 +48,8 @@ function world(engineResult: ExecutionResult, rowAfter: string) {
       req = { ...req, state: patch.state, external_ref: patch.external_ref ?? req.external_ref, detail: patch.detail ?? req.detail, updated_at: NOW };
       return true;
     },
-    binding: { resolve: async () => ({ kind: 'bound', actionId: ACTION_ID }) },
+    // 20261231000006: identity is proven in its own suite; here it passes.
+    binding: { resolve: async () => ({ kind: 'bound', actionId: ACTION_ID, identity: provenIdentity }) },
     async readAction(org, id) { return org === CONTRACT_ORG && id === ACTION_ID ? { ...row } : null; },
     async claimAction() {
       if (row.status !== 'approved') return false;
