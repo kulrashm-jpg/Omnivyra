@@ -1,5 +1,13 @@
 -- ROLLBACK for 20261231000005_extension_dispatch_safety.sql
 --
+-- ROLLBACK ORDER for the 20261231 chain (verified on real PostgreSQL 2026-10-28):
+--   0009 -> 0008 -> 0007 -> 0006 -> 0003 -> 0004 -> 0005 -> 0002 -> 0001 -> 0000
+-- Run AFTER migration_rerun_safety_rollback.sql (20261231000009) and BEFORE
+-- community_execution_safety_rollback.sql (20261231000002). Note: by default
+-- the uncertain-outcome reaper is KEPT, and 20261231000002's rollback then
+-- refuses (the prior CHECK rejects 'uncertain'): keep 20261231000002 unless the
+-- failed-marking reaper is restored below by explicit acknowledgement.
+--
 -- Refuses (raises, changing nothing) when rolling back would lose data or
 -- re-enable an unsafe state:
 --   - any rpa_auth_token_redemptions row belongs to a token that has not yet

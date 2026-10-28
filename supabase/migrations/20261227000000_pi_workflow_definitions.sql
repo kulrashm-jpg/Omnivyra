@@ -356,6 +356,44 @@ CREATE TRIGGER trg_workflow_versions_guard
 --
 -- SECURITY INVOKER, not DEFINER: the caller is service_role, which already has
 -- the privileges, and a DEFINER function would add a surface to audit for no gain.
+--
+-- RE-RUN SAFETY (2026-10-28, migration re-run safety). Later migrations REPLACE
+-- this function with a WIDER channel vocabulary (20261231000004 adds
+-- `social_post`). Re-running this file after them must never silently narrow the
+-- vocabulary. So the installed definition is captured first; after the CREATE
+-- below, if the captured vocabulary is a STRICT SUPERSET of this file's, the
+-- captured definition is re-installed verbatim (it is the later, wider one). If
+-- it is neither a subset nor a superset the migration refuses. The postcondition
+-- then requires the installed vocabulary to contain both this file's and the
+-- captured one. The scratch state lives in a session-local temporary table.
+CREATE TEMP TABLE IF NOT EXISTS wf032_publish_prior (
+  prior_def      text,
+  prior_channels text[],
+  file_channels  text[]
+);
+TRUNCATE pg_temp.wf032_publish_prior;
+
+DO $$
+DECLARE
+  v_def text;
+  v_ch  text[];
+BEGIN
+  IF to_regprocedure('public.publish_workflow_version(uuid, uuid, uuid)') IS NULL THEN
+    INSERT INTO pg_temp.wf032_publish_prior (prior_def, prior_channels) VALUES (NULL, NULL);
+    RETURN;
+  END IF;
+  v_def := pg_get_functiondef('public.publish_workflow_version(uuid, uuid, uuid)'::regprocedure);
+  SELECT array_agg(DISTINCT m[1] ORDER BY m[1]) INTO v_ch
+    FROM regexp_matches(
+           substring(v_def FROM $re$\(s\.value ->> 'channel'\) NOT IN \(([^)]*)\)$re$),
+           $re$'([a-z_]+)'$re$, 'g') AS m;
+  IF v_ch IS NULL THEN
+    RAISE EXCEPTION 'PI-WORKFLOW-DEFINITION-032: the installed publish_workflow_version has no readable channel vocabulary; refusing to replace it blindly';
+  END IF;
+  INSERT INTO pg_temp.wf032_publish_prior (prior_def, prior_channels) VALUES (v_def, v_ch);
+END
+$$;
+
 CREATE OR REPLACE FUNCTION public.publish_workflow_version(
   p_organization_id uuid,
   p_version_id      uuid,
@@ -470,6 +508,40 @@ BEGIN
 END
 $$;
 
+-- RE-RUN SAFETY: never narrow a wider vocabulary a later migration installed.
+DO $$
+DECLARE
+  v_file  text[];
+  v_prior text[];
+  v_def   text;
+BEGIN
+  SELECT array_agg(DISTINCT m[1] ORDER BY m[1]) INTO v_file
+    FROM regexp_matches(
+           substring(pg_get_functiondef('public.publish_workflow_version(uuid, uuid, uuid)'::regprocedure)
+                     FROM $re$\(s\.value ->> 'channel'\) NOT IN \(([^)]*)\)$re$),
+           $re$'([a-z_]+)'$re$, 'g') AS m;
+  IF v_file IS NULL THEN
+    RAISE EXCEPTION 'PI-WORKFLOW-DEFINITION-032: could not read this file''s channel vocabulary back';
+  END IF;
+  UPDATE pg_temp.wf032_publish_prior SET file_channels = v_file;
+  SELECT prior_def, prior_channels INTO v_def, v_prior FROM pg_temp.wf032_publish_prior;
+
+  IF v_prior IS NULL OR v_prior = v_file THEN
+    RETURN;                                  -- first install, or the same vocabulary
+  END IF;
+  IF v_prior @> v_file THEN
+    -- A later migration installed a wider vocabulary: put it back verbatim.
+    EXECUTE v_def;
+    RAISE NOTICE 'PI-WORKFLOW-DEFINITION-032: kept the installed wider publish_workflow_version vocabulary %', v_prior;
+    RETURN;
+  END IF;
+  IF NOT (v_file @> v_prior) THEN
+    RAISE EXCEPTION 'PI-WORKFLOW-DEFINITION-032: the installed publish_workflow_version vocabulary % and this file''s % are incomparable; refusing to replace it', v_prior, v_file;
+  END IF;
+  -- v_file is a strict superset: this file widens an older install. Keep it.
+END
+$$;
+
 -- The privilege convention 20261026000000 established for every public function.
 REVOKE EXECUTE ON FUNCTION public.publish_workflow_version(uuid, uuid, uuid)
   FROM PUBLIC;
@@ -563,6 +635,9 @@ COMMENT ON FUNCTION public.publish_workflow_version(uuid, uuid, uuid) IS
 DO $$
 DECLARE v text;
         n integer;
+        a text[];
+        fc text[];
+        pc text[];
 BEGIN
   -- Column sets, exactly.
   SELECT string_agg(column_name, ',' ORDER BY column_name) INTO v
@@ -664,6 +739,21 @@ BEGIN
     RAISE EXCEPTION 'PI-WORKFLOW-DEFINITION-032 postcondition: publish_workflow_version is missing';
   END IF;
 
+  -- Re-run safety: the INSTALLED vocabulary contains this file's AND whatever
+  -- was installed before this run (a re-run never narrows a later migration).
+  SELECT array_agg(DISTINCT m[1] ORDER BY m[1]) INTO a
+    FROM regexp_matches(
+           substring(pg_get_functiondef('public.publish_workflow_version(uuid, uuid, uuid)'::regprocedure)
+                     FROM $re$\(s\.value ->> 'channel'\) NOT IN \(([^)]*)\)$re$),
+           $re$'([a-z_]+)'$re$, 'g') AS m;
+  SELECT file_channels, prior_channels INTO fc, pc FROM pg_temp.wf032_publish_prior;
+  IF a IS NULL OR fc IS NULL OR NOT (a @> fc) THEN
+    RAISE EXCEPTION 'PI-WORKFLOW-DEFINITION-032 postcondition: publish_workflow_version accepts % — this file''s vocabulary % is not all accepted', a, fc;
+  END IF;
+  IF pc IS NOT NULL AND NOT (a @> pc) THEN
+    RAISE EXCEPTION 'PI-WORKFLOW-DEFINITION-032 postcondition: re-running narrowed publish_workflow_version from % to %', pc, a;
+  END IF;
+
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.workflows'::regclass)
   OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.workflow_versions'::regclass) THEN
     RAISE EXCEPTION 'PI-WORKFLOW-DEFINITION-032 postcondition: RLS is not enabled';
@@ -691,3 +781,6 @@ BEGIN
   END IF;
 END
 $$;
+
+-- Session-local scratch state of the re-run guard above.
+DROP TABLE IF EXISTS pg_temp.wf032_publish_prior;

@@ -383,7 +383,7 @@ describe('034 — isolation, proven by content', () => {
     // RE-PINNED 2026-10-28 (renumbered migration; the store validates the journey
     // policy extensions). 029's targets / 030's producer land with the lists slice.
     expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))
-      .toBe('099d274b241178c8'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): publish accepts the `internal` channel the validator allows
+      .toBe('71691e4328a27592'); // RE-PINNED 2026-10-28 (migration re-run safety): re-running 032 after 20261231000004 no longer narrows the publish vocabulary (function body unchanged)
     expect(sha('backend/services/workflows/workflowStore.ts')).toBe('79d1df2478d2fe7f'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)
   });
 

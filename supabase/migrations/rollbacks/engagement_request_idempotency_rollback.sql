@@ -1,5 +1,10 @@
 -- ROLLBACK for 20261231000008_engagement_request_idempotency.sql
 --
+-- ROLLBACK ORDER for the 20261231 chain (verified on real PostgreSQL 2026-10-28):
+--   0009 -> 0008 -> 0007 -> 0006 -> 0003 -> 0004 -> 0005 -> 0002 -> 0001 -> 0000
+-- Run BEFORE community_execution_safety_rollback.sql (20261231000002 is this
+-- migration's precondition); that rollback refuses while this table exists.
+--
 -- Refuses (raises, changing nothing) while any request record is LIVE:
 --   - 'reserved'  — a request may be between reservation and its external
 --                   call; dropping the record would let a concurrent or retried

@@ -1,5 +1,11 @@
 -- ROLLBACK for 20261231000004_social_publish_step_channel.sql
 --
+-- ROLLBACK ORDER for the 20261231 chain (verified on real PostgreSQL 2026-10-28):
+--   0009 -> 0008 -> 0007 -> 0006 -> 0003 -> 0004 -> 0005 -> 0002 -> 0001 -> 0000
+-- Independent of the community chain; listed position is the verified one.
+-- Re-running 20261227000000 afterwards keeps this 11-channel body (same
+-- vocabulary); re-running it while 20261231000004 is installed keeps social_post.
+--
 -- Restores publish_workflow_version exactly as 20261227000000 defined it (the
 -- 11-channel vocabulary, no social_post rule). Refused while any workflow
 -- version — draft or not — contains a social_post step: a published one is
