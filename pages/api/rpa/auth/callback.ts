@@ -8,7 +8,9 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * here — that goes to /api/rpa/auth/save-session so the caller can hold
  * the blob in a secure context.
  *
- * Returns: { status: 'pending' | 'registered' | 'reauth_required', last_login_at?, expires_at?, account_tier? }
+ * Returns: { status: 'pending' | 'registered' | 'reauth_required', reauth_reason?, last_login_at?, expires_at?, account_tier? }
+ * (reauth_reason: 'legacy_plaintext' | 'invalidated' — a legacy plaintext row,
+ *  or one scrubbed by migration 20261231000010; both require a new login)
  * (account_tier is reported only when server-verified; never a client claim)
  */
 
@@ -16,7 +18,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { verifyRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { isEncryptedSessionEnvelope } from '../../../../backend/services/rpaWorker/rpaSessionStore';
+import {
+  isEncryptedSessionEnvelope,
+  structuralReauthReason,
+} from '../../../../backend/services/rpaWorker/rpaSessionStore';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -51,13 +56,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    // A legacy plaintext session is refused by the worker; report it as
-    // needing re-authentication. The blob itself is never returned.
-    const encrypted = isEncryptedSessionEnvelope((data as { storage_state?: unknown }).storage_state);
+    // A legacy plaintext session, or one invalidated at rest, is refused by
+    // the worker; report it as needing re-authentication. The blob itself is
+    // never returned.
+    const storageState = (data as { storage_state?: unknown }).storage_state;
+    const encrypted = isEncryptedSessionEnvelope(storageState);
     const tierVerified = encrypted
       && ((data as { storage_state?: { account_tier_verified?: unknown } }).storage_state?.account_tier_verified === true);
     return res.status(200).json({
       status: encrypted ? 'registered' : 'reauth_required',
+      ...(encrypted ? {} : { reauth_reason: structuralReauthReason(storageState) }),
       organization_id,
       platform,
       account_tier: tierVerified ? data.account_tier : null,

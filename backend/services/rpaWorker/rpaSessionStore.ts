@@ -29,6 +29,12 @@ import { encryptCredential, decryptCredential } from '../../auth/credentialEncry
  *   - Expired row, wrong/missing key, tampered ciphertext, or tenant/platform
  *     mismatch → no session (the worker refuses with RPA_NO_SESSION).
  *   - A missing ENCRYPTION_KEY makes save THROW: nothing is stored in clear.
+ *   - Legacy plaintext rows are INVALIDATED at rest by migration
+ *     20261231000010_rpa_legacy_session_invalidation: storage_state is
+ *     replaced by the marker
+ *       { format: 'omnivyra.rpa_session.invalidated', reason: 'legacy_plaintext', invalidated_at }
+ *     A marker row is "re-login required" everywhere (worker, callback,
+ *     platform health). A new login (saveRpaSession upsert) replaces it.
  */
 
 export type PlaywrightStorageState = {
@@ -44,6 +50,20 @@ export type RpaSessionMetadata = {
 };
 
 export const RPA_SESSION_ENVELOPE_FORMAT = 'omnivyra.rpa_session.v1';
+/** storage_state of a legacy plaintext row after the at-rest invalidation. */
+export const RPA_SESSION_INVALIDATED_FORMAT = 'omnivyra.rpa_session.invalidated';
+
+/** Why a stored session cannot be used; the organization must log in again. */
+export type RpaSessionReauthReason =
+  | 'expired'
+  | 'invalidated'
+  | 'legacy_plaintext'
+  | 'undecryptable'
+  | 'binding_mismatch';
+
+export type RpaSessionRowStatus =
+  | { status: 'connected' }
+  | { status: 'reauth_required'; reason: RpaSessionReauthReason };
 
 type SessionEnvelope = {
   format: typeof RPA_SESSION_ENVELOPE_FORMAT;
@@ -64,9 +84,29 @@ export function isEncryptedSessionEnvelope(value: unknown): value is SessionEnve
     && CIPHERTEXT_SHAPE.test(v.ciphertext);
 }
 
+/** The marker written over a legacy plaintext row (no cookie material). */
+export function isInvalidatedSessionMarker(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return (value as Record<string, unknown>).format === RPA_SESSION_INVALIDATED_FORMAT;
+}
+
+/**
+ * Structural classification only (no decryption): why a non-envelope value is
+ * unusable. Never inspects or returns any field other than `format`.
+ */
+export function structuralReauthReason(value: unknown): RpaSessionReauthReason | null {
+  if (isEncryptedSessionEnvelope(value)) return null;
+  return isInvalidatedSessionMarker(value) ? 'invalidated' : 'legacy_plaintext';
+}
+
+/** Directory of the legacy plaintext copies this module used to write. */
+export function legacyRpaSessionDir(): string {
+  return process.env.RPA_SESSION_DIR || path.join(process.cwd(), 'tmp', 'rpa-sessions');
+}
+
 /** Legacy location of the plaintext copies this module used to write. */
 function legacySessionPath(organizationId: string, platform: string): string {
-  const dir = process.env.RPA_SESSION_DIR || path.join(process.cwd(), 'tmp', 'rpa-sessions');
+  const dir = legacyRpaSessionDir();
   const safeOrg = organizationId.replace(/[^a-zA-Z0-9-]/g, '_');
   const safePlatform = platform.replace(/[^a-zA-Z0-9-]/g, '_');
   return path.join(dir, `${safeOrg}__${safePlatform}.json`);
@@ -100,29 +140,83 @@ export function sealRpaSession(
   };
 }
 
+type OpenResult =
+  | { ok: true; state: PlaywrightStorageState }
+  | { ok: false; reason: RpaSessionReauthReason };
+
+/**
+ * Decrypt + binding check. Never logs; the caller decides what (non-secret)
+ * reason to report. The decrypted state is returned only on success.
+ */
+function openRpaSessionDetailed(
+  envelope: unknown,
+  organizationId: string,
+  platform: string,
+): OpenResult {
+  const structural = structuralReauthReason(envelope);
+  if (structural) return { ok: false, reason: structural };
+  let parsed: { organization_id?: unknown; platform?: unknown; state?: unknown };
+  try {
+    parsed = JSON.parse(decryptCredential((envelope as SessionEnvelope).ciphertext));
+  } catch {
+    return { ok: false, reason: 'undecryptable' };
+  }
+  if (parsed?.organization_id !== organizationId || parsed?.platform !== platform.toLowerCase()) {
+    return { ok: false, reason: 'binding_mismatch' };
+  }
+  const state = parsed.state as PlaywrightStorageState | null | undefined;
+  if (!state || typeof state !== 'object') return { ok: false, reason: 'undecryptable' };
+  return { ok: true, state };
+}
+
+const REFUSAL_CODE: Record<RpaSessionReauthReason, string> = {
+  expired: 'RPA_SESSION_EXPIRED',
+  invalidated: 'RPA_SESSION_INVALIDATED_REFUSED',
+  legacy_plaintext: 'RPA_SESSION_PLAINTEXT_REFUSED',
+  undecryptable: 'RPA_SESSION_DECRYPT_FAILED',
+  binding_mismatch: 'RPA_SESSION_BINDING_MISMATCH',
+};
+
 export function openRpaSession(
   envelope: unknown,
   organizationId: string,
   platform: string,
 ): PlaywrightStorageState | null {
-  if (!isEncryptedSessionEnvelope(envelope)) {
-    console.warn('[rpaSessionStore] RPA_SESSION_PLAINTEXT_REFUSED: re-authentication required', { organizationId, platform });
+  const r = openRpaSessionDetailed(envelope, organizationId, platform);
+  if (r.ok === false) {
+    // Only identifiers and a fixed code are logged — never the stored value.
+    console.warn(`[rpaSessionStore] ${REFUSAL_CODE[r.reason]}: re-authentication required`, { organizationId, platform });
     return null;
   }
-  let parsed: { organization_id?: unknown; platform?: unknown; state?: unknown };
-  try {
-    parsed = JSON.parse(decryptCredential(envelope.ciphertext));
-  } catch {
-    console.warn('[rpaSessionStore] RPA_SESSION_DECRYPT_FAILED', { organizationId, platform });
-    return null;
+  return r.state;
+}
+
+/**
+ * Is this stored row a usable session for (organizationId, platform)?
+ * `connected` only for an unexpired, valid encrypted envelope that decrypts
+ * with the current key AND is bound to this organization + platform (the same
+ * test the worker applies before launching a browser). Everything else is
+ * `reauth_required` with a non-secret reason. Never logs; the decrypted state
+ * is discarded before returning.
+ *
+ * Only `format`, `alg` and `ciphertext` of storage_state are consulted, so a
+ * caller may pass a projection holding just those three fields.
+ */
+export function checkRpaSessionRow(
+  row: { storage_state?: unknown; expires_at?: string | null },
+  organizationId: string,
+  platform: string,
+  nowMs: number = Date.now(),
+): RpaSessionRowStatus {
+  const structural = structuralReauthReason(row.storage_state);
+  if (structural) return { status: 'reauth_required', reason: structural };
+  if (row.expires_at) {
+    const exp = new Date(row.expires_at).getTime();
+    if (!Number.isFinite(exp) || exp < nowMs) return { status: 'reauth_required', reason: 'expired' };
   }
-  if (parsed?.organization_id !== organizationId || parsed?.platform !== platform.toLowerCase()) {
-    console.warn('[rpaSessionStore] RPA_SESSION_BINDING_MISMATCH', { organizationId, platform });
-    return null;
-  }
-  const state = parsed.state as PlaywrightStorageState | null | undefined;
-  if (!state || typeof state !== 'object') return null;
-  return state;
+  const r = openRpaSessionDetailed(row.storage_state, organizationId, platform);
+  if (r.ok === false) return { status: 'reauth_required', reason: r.reason };
+  return { status: 'connected' };
 }
 
 export async function loadRpaSession(
