@@ -45,6 +45,13 @@ const MAX_BULK_BATCH = 20;
 const DISPATCH_BUCKET_MS = 5 * 60 * 1000;
 
 /**
+ * "A send to this target may already be on its way": besides a queued
+ * (pending + browser) row, every claimed / executing / possibly-delivered
+ * state. 'uncertain' blocks a resend until a human resolves it.
+ */
+export const BROWSER_IN_FLIGHT_STATUSES = ['dispatched', 'acknowledged', 'executing', 'uncertain'];
+
+/**
  * Deterministic action id for a browser-mode dispatch.
  *
  * The read guard below blocks a SEQUENTIAL repeat, but a read-then-insert is
@@ -197,18 +204,31 @@ export async function sendReply(
   //
   //    Comments are untouched: they dispatch via 'api' and close through the
   //    self-reply mirror below, which already prevents a second send.
+  //
+  //    In flight = a queued browser row (pending + browser) OR any row that is
+  //    claimed / executing / possibly delivered: dispatched, acknowledged,
+  //    executing, or 'uncertain' (the reaper could not tell whether the
+  //    extension acted — it is never re-sent without evidence). The
+  //    deterministic action id plus the executor's never-revive rule close the
+  //    concurrent case; this read closes the sequential one.
   if (executionMode === 'browser') {
-    const { data: inFlight } = await supabase
-      .from('community_ai_actions')
-      .select('id')
-      .eq('organization_id', organizationId)
-      .eq('status', 'pending')
-      .eq('execution_mode', 'browser')
-      .eq('platform', normalizedPlatform)
-      .eq('action_type', capabilityAction)
-      .eq('target_id', targetId)
-      .limit(1)
-      .maybeSingle();
+    const inFlightQuery = (apply: (q: any) => any) =>
+      apply(
+        supabase
+          .from('community_ai_actions')
+          .select('id, status')
+          .eq('organization_id', organizationId),
+      )
+        .eq('platform', normalizedPlatform)
+        .eq('action_type', capabilityAction)
+        .eq('target_id', targetId)
+        .limit(1)
+        .maybeSingle();
+    const [{ data: queued }, { data: claimedOrUncertain }] = await Promise.all([
+      inFlightQuery((q) => q.eq('status', 'pending').eq('execution_mode', 'browser')),
+      inFlightQuery((q) => q.in('status', BROWSER_IN_FLIGHT_STATUSES)),
+    ]);
+    const inFlight = queued ?? claimedOrUncertain ?? null;
     if (inFlight) {
       void logAuditEvent({
         operation: 'INSERT',
@@ -223,6 +243,7 @@ export async function sendReply(
           thread_id: message.thread_id,
           target_id: targetId,
           prior_action_id: (inFlight as { id?: string }).id ?? null,
+          prior_status: (inFlight as { status?: string }).status ?? null,
           code: 'DISPATCH_ALREADY_IN_FLIGHT',
         },
       }).catch(() => {});
@@ -266,6 +287,15 @@ export async function sendReply(
   // 'executed' is a failure. 'sent_unverified' is specifically NOT accepted:
   // that is the simulation lane's status and must never count as sent again.
   const status = String(result.status ?? '');
+  // The deterministic id already existed (a concurrent or earlier dispatch to
+  // this target in this bucket): the executor did NOT act again.
+  if ((result as { deduplicated?: boolean }).deduplicated === true) {
+    return {
+      ok: false,
+      error: `An identical send already exists for this conversation (status=${status || 'unknown'})`,
+      outcome: 'skipped_already_dispatched',
+    };
+  }
   const dispatched = result.ok && (status === 'executed' || status === 'dispatched');
   if (!dispatched) {
     return {

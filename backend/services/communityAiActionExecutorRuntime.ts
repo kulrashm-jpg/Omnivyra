@@ -145,6 +145,13 @@ export type CommandChainStep = {
   payload?: Record<string, unknown>;
 };
 
+/**
+ * Statuses a row may be written FROM when the caller names no expected state.
+ * Every other status is terminal (executed, sent_unverified, failed, skipped,
+ * blocked, uncertain) and is never revived by a persist.
+ */
+const NON_TERMINAL_ROW_STATUSES = ['pending', 'approved', 'scheduled', 'dispatched', 'acknowledged', 'executing'];
+
 export async function persistExecutionResult(input: {
   actionId: string;
   organizationId: string;
@@ -153,6 +160,8 @@ export async function persistExecutionResult(input: {
   idempotencyKey?: string | null;
   leaseGuard?: { expectedLeaseId: string; expectedHolderId: string };
   expectedFromStatuses?: string[];
+  /** Only write while no extension holds (or ever held) a claim on the row. */
+  requireUnleased?: boolean;
   rowHint?: { platform?: string | null; action_type?: string | null; target_id?: string | null };
   final_text?: string | null;
   /**
@@ -217,6 +226,15 @@ export async function persistExecutionResult(input: {
   let q = ownedDbTable('community_ai_actions').update(update).eq('id', input.actionId);
   if (input.expectedFromStatuses && input.expectedFromStatuses.length > 0) {
     q = q.in('status', input.expectedFromStatuses);
+  } else {
+    // Default guard: a terminal row (incl. 'uncertain' — may have acted) is
+    // never revived or overwritten. Without it a deterministic action id that
+    // collided with an earlier reaped/failed row was rewritten to 'pending'
+    // and dispatched a second time.
+    q = q.in('status', NON_TERMINAL_ROW_STATUSES);
+  }
+  if (input.requireUnleased) {
+    q = q.is('dispatch_lease_id', null);
   }
   if (input.leaseGuard) {
     q = q.eq('dispatch_lease_id', input.leaseGuard.expectedLeaseId)
@@ -350,13 +368,19 @@ export const executeAction = async (
   });
 
   // auto_insert: for ad-hoc callers that synthesize an action id on the
-  // fly (engagement APIs, bulk engagement). Inserts a minimal pending row
-  // if none exists so the downstream persist path has something to update.
+  // fly (engagement APIs, bulk engagement). The row is inserted already
+  // CLAIMED ('executing') by this caller. The primary key is the
+  // serialisation point: if a row with this id already exists (a retry of the
+  // same request, a concurrent duplicate, or an earlier terminal/uncertain
+  // row for the same deterministic id) this call does NOT execute — it
+  // reports the existing row. Exactly one caller ever performs the action.
+  let insertedClaim = false;
   if (options?.persist && options?.auto_insert) {
     const { data: existing } = await ownedDbTable('community_ai_actions')
-      .select('id')
+      .select('id, status, organization_id')
       .eq('id', action.id)
       .maybeSingle();
+    let priorStatus: string | null = existing ? String((existing as { status?: string | null }).status ?? '') : null;
     if (!existing) {
       const { error: insertError } = await ownedDbTable('community_ai_actions')
         .insert({
@@ -377,17 +401,37 @@ export const executeAction = async (
           // Inserted already CLAIMED by this caller ('executing'), never as a
           // claimable 'pending' row: if a gate below refuses and the terminal
           // write then fails, no extension / scheduler can pick the row up.
-          // (A stuck 'executing' row is reaped, never re-dispatched.)
+          // (A stuck 'executing' row is reaped to 'uncertain', never re-dispatched.)
           status: 'executing',
           execution_correlation_id: correlationId,
           approved_at: new Date().toISOString(),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
-      if (insertError && !String(insertError.code || '').match(/^23505$/)) {
-        // 23505 = unique_violation (row inserted concurrently) — safe to ignore.
+      if (!insertError) {
+        insertedClaim = true;
+      } else if (String(insertError.code || '') === '23505') {
+        // 23505 = unique_violation: a concurrent caller inserted it first.
+        const { data: raced } = await ownedDbTable('community_ai_actions')
+          .select('id, status, organization_id')
+          .eq('id', action.id)
+          .maybeSingle();
+        priorStatus = raced ? String((raced as { status?: string | null }).status ?? '') : 'executing';
+      } else {
         throw new Error(`community_ai_action_auto_insert_failed:${insertError.message}`);
       }
+    }
+    if (!insertedClaim) {
+      const status = priorStatus || 'unknown';
+      return {
+        ok: status === 'executed' || status === 'sent_unverified',
+        status: status as ResultStatus,
+        deduplicated: true,
+        prior_action_id: action.id,
+        correlation_id: correlationId,
+        execution_mode: (action.execution_mode as ExecutionMode | undefined) ?? undefined,
+        response: { dedup: { reason: 'action_id_exists', prior_status: status, prior_action_id: action.id } },
+      } as ExecutionResult;
     }
   }
 
@@ -415,7 +459,10 @@ export const executeAction = async (
       expectedFromStatuses:
         Array.isArray(options?.expected_from_statuses) && options!.expected_from_statuses!.length > 0
           ? options!.expected_from_statuses
-          : undefined,
+          // A row this call inserted is held as 'executing'; the terminal write
+          // is compare-and-set from that claim (a reaped/cancelled row is never
+          // overwritten).
+          : insertedClaim ? ['executing'] : undefined,
       rowHint: {
         platform: action.platform,
         action_type: action.action_type,

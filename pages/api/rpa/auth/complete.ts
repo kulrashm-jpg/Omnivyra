@@ -6,7 +6,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * first-party desktop helper) captures cookies + localStorage after the
  * user completes platform login and POSTs the raw payload here. The
  * server converts it to a Playwright storageState and persists via
- * rpaSessionStore. No manual JSON export required.
+ * rpaSessionStore (encrypted at rest, no filesystem copy). The session_token
+ * is single-use and user-bound; `account_tier` is ignored (never trusted).
  *
  * Body:
  *   {
@@ -22,7 +23,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-import { verifyRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
+import { consumeRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
 import { saveRpaSession } from '../../../../backend/services/rpaWorker/rpaSessionStore';
 import { importSessionCapture } from '../../../../backend/services/rpaWorker/rpaSessionImporter';
 
@@ -53,12 +54,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'capture.cookies must be a non-empty array' });
     }
 
-    const verified = verifyRpaAuthToken(token);
-    if (verified.ok !== true) {
-      return res.status(401).json({ error: 'INVALID_SESSION_TOKEN', reason: verified.reason });
-    }
-
-    const { organization_id, platform } = verified.payload;
+    // Validate the payload BEFORE consuming the single-use token.
     const storageState = importSessionCapture({
       cookies: cookies as any,
       origins: Array.isArray((capture as { origins?: unknown }).origins)
@@ -70,8 +66,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'capture yielded zero valid cookies' });
     }
 
+    // Single-use, user-bound redemption: signature + expiry, the issuing user
+    // must still hold the connector-management role for the organization, and
+    // the token nonce is consumed durably BEFORE anything is written. A replay
+    // (or a concurrent second submission) is refused.
+    const verified = await consumeRpaAuthToken(token);
+    if (verified.ok === false) {
+      return res.status(verified.status).json({
+        error: verified.status === 403 ? 'FORBIDDEN_ROLE' : verified.status === 503 ? 'TOKEN_REDEMPTION_UNAVAILABLE' : 'INVALID_SESSION_TOKEN',
+        reason: verified.reason,
+      });
+    }
+
+    const { organization_id, platform } = verified.payload;
+    // A client-declared account_tier is never stored or trusted (see save-session).
     await saveRpaSession(organization_id, platform, storageState, {
-      account_tier: body.account_tier != null ? String(body.account_tier) : null,
+      account_tier: null,
       last_login_at: new Date().toISOString(),
       expires_at: body.expires_at ?? null,
       last_verified_at: new Date().toISOString(),
@@ -83,11 +93,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       platform,
       cookie_count: storageState.cookies.length,
       origin_count: (storageState.origins ?? []).length,
-      account_tier: body.account_tier ?? null,
+      account_tier: null,
+      account_tier_status: 'unverified',
+      declared_account_tier_ignored: body.account_tier != null,
     });
   } catch (err) {
     console.error('[rpa/auth/complete]', err);
-    return res.status(500).json({ error: (err as Error)?.message || 'Failed to complete RPA auth' });
+    return res.status(500).json({ error: 'Failed to complete RPA auth' });
   }
 }
 

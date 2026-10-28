@@ -31,6 +31,11 @@ import { recordSuggestionAccepted } from '../../../backend/services/aiSuggestion
 import { isDmMessageType } from '../../../lib/engagement/messageRoles';
 import { recordThreadEvent } from '../../../backend/services/engagementThreadEventService';
 import { isThreadActionable } from '../../../backend/services/engagementThreadService';
+import {
+  readClientIdempotencyKey,
+  deriveEngagementActionId,
+  replayResponseFor,
+} from '../../../backend/services/engagementRequestIdempotency';
 
 type ReplyBody = {
   organization_id?: string;
@@ -312,6 +317,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     if (!replyText) {
       return res.status(400).json({ error: 'reply_text required' });
+    }
+    const clientIdempotency = readClientIdempotencyKey(req);
+    if (clientIdempotency.ok === false) {
+      return res.status(400).json({
+        error: 'Idempotency-Key must be 8-200 characters of [A-Za-z0-9._:-]',
+        code: clientIdempotency.error,
+      });
     }
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
@@ -611,8 +623,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // a persistent "pending" row on platform failure orphans state that no
     // consumer cleans up. The row is inserted only after the platform confirms.
 
-    const actionId = crypto.randomUUID();
-
     // ── Branch: DM reply vs comment reply ─────────────────────────────
     // DMs do NOT have an API path on LinkedIn — send dispatches through
     // the extension's continue_thread handler via the browser-mode
@@ -742,6 +752,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const callerCorrelationId = (body.correlation_id || '').toString().trim() || undefined;
 
+    // ── Request-level idempotency ─────────────────────────────────────────
+    //    The action id is derived from (tenant, acting user, action, target,
+    //    Idempotency-Key | content+5-min bucket). executeAction inserts that
+    //    row already claimed and refuses to act if it already exists, so a
+    //    client retry or a concurrent double-submit performs the platform
+    //    action ONCE (see engagementRequestIdempotency).
+    const actionId = deriveEngagementActionId({
+      scope: 'engagement-reply',
+      organizationId,
+      userId: roleGate.userId ?? null,
+      actionType: isDm ? 'dm' : 'reply',
+      targetId: String(targetId),
+      clientKey: clientIdempotency.key,
+      content: replyText,
+    });
+
     const result = await executeAction(
       {
         id: actionId,
@@ -782,9 +808,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     );
 
+    // Replay: the action row already existed — nothing was sent again,
+    // and no side effect (timeline, mirror, counters, draft) runs a second time.
+    const replay = replayResponseFor(result as { deduplicated?: boolean; status?: unknown; prior_action_id?: string | null });
+    if (replay) {
+      return res.status(replay.status).json(replay.body);
+    }
+
+    const isReplayOfQueued = (result as { deduplicated?: boolean }).deduplicated === true;
+
     // Collaboration timeline: record who replied / DM'd. Attribution is
     // server-derived from the session.
-    if (result?.ok && body.thread_id) {
+    if (result?.ok && body.thread_id && !isReplayOfQueued) {
       // Timeline logging is best-effort: it must never fail a successful reply
       // (e.g. before the engagement_thread_events migration is applied).
       try {

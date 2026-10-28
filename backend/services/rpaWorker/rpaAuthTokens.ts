@@ -11,8 +11,13 @@ import { resolveSigningSecret, isSigningSecretUnavailable } from '../../auth/sig
  *      is posted back to POST /api/rpa/auth/save-session along with the
  *      session_token. Server verifies token, writes rpa_sessions.
  *
- * Tokens are self-contained HMAC — no server-side state required. 30-minute
- * TTL; per-token-nonce rebound is out of scope.
+ * Tokens are HMAC-signed and bound to (organization_id, platform, user_id).
+ * Verification (verifyRpaAuthToken) is pure. REDEMPTION (consumeRpaAuthToken)
+ * is single-use and durable: the token nonce is inserted into
+ * rpa_auth_token_redemptions (primary key) before any session is written, so a
+ * replayed or concurrently re-submitted token is refused. Redemption also
+ * re-checks that the issuing user STILL holds a role allowed to manage
+ * connectors for that organization (role revoked after issue => refused).
  */
 
 const TOKEN_TTL_MS = 30 * 60 * 1000;
@@ -95,4 +100,84 @@ export function verifyRpaAuthToken(token: string | null | undefined):
     return { ok: false, reason: 'TOKEN_EXPIRED' };
   }
   return { ok: true, payload };
+}
+
+/**
+ * Roles allowed to replace an organization's RPA browser session — the
+ * existing community connector-management capability
+ * (COMMUNITY_AI_CAPABILITIES.MANAGE_CONNECTORS). Read lazily so this module
+ * stays importable without the RBAC / DB layers (pure token tests).
+ */
+async function rpaSessionWriterRoles(): Promise<string[]> {
+  const { COMMUNITY_AI_CAPABILITIES } = await import('../rbac/communityAiCapabilities');
+  return [...COMMUNITY_AI_CAPABILITIES.MANAGE_CONNECTORS] as string[];
+}
+
+/**
+ * Server-side re-check, at redemption time, that `userId` may replace the RPA
+ * session of `organizationId`. Mirrors enforceRole: platform super admins
+ * pass; otherwise an ACTIVE company role in MANAGE_CONNECTORS is required.
+ * Fail-closed on any lookup error.
+ */
+export async function isAuthorizedRpaSessionWriter(userId: string | null | undefined, organizationId: string): Promise<boolean> {
+  if (!userId || !organizationId) return false;
+  try {
+    const rbac = await import('../rbacService');
+    if (await rbac.isSuperAdmin(userId)) return true;
+    if (await rbac.isPlatformSuperAdmin(userId)) return true;
+    const { role, error } = await rbac.getUserRole(userId, organizationId);
+    if (error || !role) return false;
+    return (await rpaSessionWriterRoles()).includes(role as string);
+  } catch {
+    return false;
+  }
+}
+
+export type RpaTokenRedemption =
+  | { ok: true; payload: Payload & { user_id: string } }
+  | { ok: false; reason: string; status: number };
+
+/**
+ * Single-use redemption of an RPA auth session token. Order matters:
+ *   1. signature / expiry (pure);
+ *   2. token must carry the issuing user (tokens minted before user binding,
+ *      or without an authenticated issuer, are refused);
+ *   3. that user must STILL be an authorized session writer for the org;
+ *   4. the nonce is consumed by INSERT into rpa_auth_token_redemptions — a
+ *      duplicate (23505) means the token was already used: refused.
+ * Only after (4) succeeds may the caller write a session. A failure after
+ * consumption burns the token (the operator restarts the flow) — fail closed.
+ */
+export async function consumeRpaAuthToken(token: string | null | undefined): Promise<RpaTokenRedemption> {
+  const verified = verifyRpaAuthToken(token);
+  if (verified.ok !== true) {
+    const reason = (verified as { reason: string }).reason;
+    return { ok: false, reason, status: reason === 'SIGNING_SECRET_UNAVAILABLE' ? 503 : 401 };
+  }
+  const payload = verified.payload;
+  if (!payload.user_id || !payload.nonce) {
+    return { ok: false, reason: 'TOKEN_NOT_USER_BOUND', status: 401 };
+  }
+  if (!(await isAuthorizedRpaSessionWriter(payload.user_id, payload.organization_id))) {
+    return { ok: false, reason: 'FORBIDDEN_ROLE', status: 403 };
+  }
+  try {
+    const { ownedDbTable } = await import('../../db/writeOwner');
+    const { error } = await ownedDbTable('rpa_auth_token_redemptions').insert({
+      nonce: payload.nonce,
+      organization_id: payload.organization_id,
+      platform: payload.platform,
+      user_id: payload.user_id,
+      token_expires_at: new Date(payload.expires_at).toISOString(),
+    });
+    if (error) {
+      if (String((error as { code?: string }).code || '') === '23505') {
+        return { ok: false, reason: 'TOKEN_ALREADY_USED', status: 401 };
+      }
+      return { ok: false, reason: 'TOKEN_REDEMPTION_UNAVAILABLE', status: 503 };
+    }
+  } catch {
+    return { ok: false, reason: 'TOKEN_REDEMPTION_UNAVAILABLE', status: 503 };
+  }
+  return { ok: true, payload: payload as Payload & { user_id: string } };
 }
