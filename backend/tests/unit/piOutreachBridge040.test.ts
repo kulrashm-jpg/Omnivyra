@@ -490,7 +490,7 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
   it('033 artefacts are byte-identical', () => {
     // RE-PINNED 2026-10-28 (see the 036/037 notes).
     expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
-      .toBe('d64fe60c9a307480');
+      .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('1319b7d86960f9c3'); // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code
     expect(sha('pages/api/execution-instances/[id].ts')).toBe('871dd7074f95e064');

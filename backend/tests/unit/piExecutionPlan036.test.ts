@@ -539,7 +539,7 @@ describe('036 — frozen artefacts are untouched', () => {
   // the enrollment-eligibility check on the invocation route.
   it('033 is byte-identical', () => {
     expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
-      .toBe('d64fe60c9a307480');
+      .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('1319b7d86960f9c3'); // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code
     expect(sha('pages/api/execution-instances/[id].ts')).toBe('871dd7074f95e064');
@@ -552,8 +552,8 @@ describe('036 — frozen artefacts are untouched', () => {
 
   it('032 is byte-identical (029/030 land with the lists slice)', () => {
     expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))
-      .toBe('eacedc57297a9682');
-    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('1655ecfe76534d8c');
+      .toBe('099d274b241178c8'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): publish accepts the `internal` channel the validator allows
+    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('2ac2bb0c09877a3c'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): stored objective/enrollment/policy are read back
   });
 
   it('036 created no Plan/Step/Task table beyond its own three', () => {

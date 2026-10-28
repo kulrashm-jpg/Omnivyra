@@ -188,7 +188,11 @@ BEGIN
   SELECT string_agg(column_name, ',' ORDER BY column_name) INTO v
     FROM information_schema.columns
    WHERE table_schema = 'public' AND table_name = 'prospect_campaigns';
-  IF v IS DISTINCT FROM 'created_at,description,id,name,organization_id,status,updated_at' THEN
+  -- A re-run after 20261231000000 sees exactly its four targeting columns too —
+  -- and only when that migration's own constraint proves it ran.
+  IF v IS DISTINCT FROM 'created_at,description,id,name,organization_id,status,updated_at'
+     AND NOT (v = 'created_at,description,icp_id,icp_version,id,min_icp_score,name,organization_id,status,targeting_mode,updated_at'
+              AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'prospect_campaigns_targeting_mode_valid')) THEN
     RAISE EXCEPTION 'PI-CAMPAIGN-IDENTITY-014 postcondition: unexpected column set %', v;
   END IF;
 
@@ -206,7 +210,9 @@ BEGIN
   SELECT string_agg(conname, ',' ORDER BY conname) INTO v
     FROM pg_constraint
    WHERE conrelid = 'public.prospect_campaigns'::regclass AND contype = 'f';
-  IF v IS DISTINCT FROM 'prospect_campaigns_organization_id_fkey' THEN
+  -- (20261231000000 adds the tenant-bound ICP-version reference of an ICP campaign.)
+  IF v IS DISTINCT FROM 'prospect_campaigns_organization_id_fkey'
+     AND v IS DISTINCT FROM 'prospect_campaigns_icp_version_tenant_fk,prospect_campaigns_organization_id_fkey' THEN
     RAISE EXCEPTION
       'PI-CAMPAIGN-IDENTITY-014 postcondition: foreign keys are % — the campaign must reference the tenant and nothing else', v;
   END IF;

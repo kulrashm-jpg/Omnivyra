@@ -137,6 +137,13 @@ BEGIN
      AND (TG_OP = 'INSERT' OR NEW.icp_id IS DISTINCT FROM OLD.icp_id OR NEW.icp_version IS DISTINCT FROM OLD.icp_version) THEN
     SELECT v.status INTO v_status FROM public.prospect_icp_versions v
      WHERE v.organization_id = NEW.organization_id AND v.icp_id = NEW.icp_id AND v.version = NEW.icp_version;
+    -- This trigger runs BEFORE the foreign key is checked: a version that does not
+    -- exist in THIS tenant (missing, or another tenant's) is a missing reference,
+    -- not an unratified one. Same SQLSTATE as the FK, so callers see one answer.
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'campaign_icp_version_not_found: no such ICP version in this tenant'
+        USING ERRCODE = '23503';
+    END IF;
     IF v_status IS DISTINCT FROM 'ratified' THEN
       RAISE EXCEPTION 'campaign_icp_not_ratified: an ICP campaign must be pinned to a ratified ICP version'
         USING ERRCODE = '23514';

@@ -498,7 +498,12 @@ BEGIN
 
   SELECT count(*) INTO n FROM pg_constraint
    WHERE conrelid = 'public.execution_instances'::regclass AND contype = 'f';
-  IF n <> 4 THEN
+  -- 4 before 20261231000000; exactly 5 after it, the fifth being its target FK
+  -- (so a re-run after that migration still holds).
+  IF n <> 4 AND NOT (n = 5 AND EXISTS (
+       SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.execution_instances'::regclass
+          AND conname = 'execution_instances_target_tenant_fk')) THEN
     RAISE EXCEPTION 'PI-033 postcondition: % foreign keys, expected 4 (the target FK lands with the campaign-targets migration)', n;
   END IF;
 

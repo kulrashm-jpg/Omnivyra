@@ -136,6 +136,35 @@ describe('20261231000000 — ICP association, tenant safety and immutability', (
   });
 });
 
+// Found by real-PostgreSQL verification (2026-10-28); see the commit for detail.
+describe('agreement between the SQL and the application', () => {
+  it('the publish function accepts exactly the channels the validator does', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { WORKFLOW_STEP_CHANNELS } = require('../../services/workflows/workflowStore') as { WORKFLOW_STEP_CHANNELS: readonly string[] };
+    const wf = read('supabase/migrations/20261227000000_pi_workflow_definitions.sql');
+    const m = /\(s\.value ->> 'channel'\) NOT IN \(([^)]*)\)/.exec(wf);
+    expect(m).not.toBeNull();
+    const sqlChannels = [...(m as RegExpExecArray)[1].matchAll(/'([a-z]+)'/g)].map((x) => x[1]).sort();
+    expect(sqlChannels).toEqual([...WORKFLOW_STEP_CHANNELS].sort());
+  });
+
+  it('a missing or foreign ICP version is "not found" (23503), decided BEFORE ratification', () => {
+    const guard = sql.slice(sql.indexOf('FUNCTION public.prospect_campaigns_targeting_guard'), sql.indexOf('CREATE TRIGGER trg_prospect_campaigns_targeting_guard'));
+    const notFound = guard.indexOf('IF NOT FOUND THEN');
+    expect(notFound).toBeGreaterThan(0);
+    expect(guard.slice(notFound, notFound + 200)).toMatch(/campaign_icp_version_not_found[\s\S]*ERRCODE = '23503'/);
+    expect(notFound).toBeLessThan(guard.indexOf("IS DISTINCT FROM 'ratified'"));
+  });
+
+  it('earlier postconditions accept exactly what 20261231 adds, so a re-run after it holds', () => {
+    const c = read('supabase/migrations/20261226000000_pi_prospect_campaigns.sql');
+    expect(c).toMatch(/created_at,description,icp_id,icp_version,id,min_icp_score,name,organization_id,status,targeting_mode,updated_at'\s+AND EXISTS \(SELECT 1 FROM pg_constraint WHERE conname = 'prospect_campaigns_targeting_mode_valid'\)/);
+    expect(c).toMatch(/'prospect_campaigns_icp_version_tenant_fk,prospect_campaigns_organization_id_fkey'/);
+    const i = read('supabase/migrations/20261228000000_pi_execution_instances.sql');
+    expect(i).toMatch(/IF n <> 4 AND NOT \(n = 5 AND EXISTS \([\s\S]{0,200}conname = 'execution_instances_target_tenant_fk'\)\) THEN/);
+  });
+});
+
 describe('rollback', () => {
   it('is transactional, refuses while journeys reference targets, and drops the deferred FK before the table', () => {
     expect(rollback).toMatch(/^BEGIN;/m);

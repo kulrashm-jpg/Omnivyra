@@ -189,21 +189,25 @@ const OCCUPIED = ['created', 'queued', 'active', 'paused'];
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
-    // `create_execution_instance`, as 20261228000000 (+ 20261231000000's FK) defines it.
+    // `create_execution_instance`, in 20261228000000's check order (verified
+    // against real PostgreSQL 2026-10-28): campaign, workflow, SUBJECT, then the
+    // target — one `target_mismatch` for every disagreement, another tenant's
+    // target included, so no caller learns whether a foreign target exists.
     rpc: async (fn: string, a: Row) => {
       await Promise.resolve();
       db.rpcCalls.push(fn);
       if (fn !== 'create_execution_instance') return err('42883', `double: no function ${fn}`);
       const org = a.p_organization_id;
-      if (a.p_target_id != null && !db.targetingInstalled) return err('23514', 'ei_create:targets_not_installed');
       if (!rowsOf('prospect_campaigns').some((c) => c.id === a.p_campaign_id && c.organization_id === org)) return err('P0001', 'ei_create:campaign_not_found');
       const wf = rowsOf('workflows').find((w) => w.id === a.p_workflow_id && w.organization_id === org);
       if (!wf) return err('P0001', 'ei_create:workflow_not_found');
       if (wf.status === 'archived') return err('P0001', 'ei_create:workflow_not_active');
+      if (!rowsOf('canonical_leads').some((l) => l.id === a.p_subject_id && l.company_id === org)) return err('P0002', 'ei_create:subject_not_found');
       if (a.p_target_id != null) {
-        const t = rowsOf('prospect_campaign_targets').find((x) => x.id === a.p_target_id && x.organization_id === org);
-        if (!t) return err('23503', 'execution_instances_target_tenant_fk');
-        if (t.campaign_id !== a.p_campaign_id || t.prospect_id !== a.p_subject_id) return err('23514', 'ei_create:target_mismatch');
+        if (!db.targetingInstalled) return err('23514', 'ei_create:targets_not_installed');
+        const t = rowsOf('prospect_campaign_targets').find((x) => x.id === a.p_target_id && x.organization_id === org
+          && x.campaign_id === a.p_campaign_id && x.prospect_id === a.p_subject_id);
+        if (!t) return err('23514', 'ei_create:target_mismatch');
       }
       db.beforeCreate?.(a);
       if (!wf.current_version_id) return err('P0001', 'ei_create:no_published_version');
@@ -845,10 +849,14 @@ describe('enrollment — selected targets become individual journeys', () => {
     const [targetA] = await listCampaignTargets(ORG_A, a.campaignId);
     const campaignB = seedCampaign(ORG_B);
     const workflowB = seedWorkflow(ORG_B);
-    rowsOf('canonical_leads').push({ id: targetA.prospectId, company_id: ORG_B });
+    const [prospectB] = seedProspects(ORG_B, 1);
+    // Another tenant's target answers exactly like a mismatched one (no existence leak).
+    expect(await codeOf(createExecutionInstance({
+      organizationId: ORG_B, campaignId: campaignB, workflowId: workflowB, subjectKind: 'prospect', subjectId: prospectB, targetId: targetA.id,
+    }))).toBe('target_mismatch');
     expect(await codeOf(createExecutionInstance({
       organizationId: ORG_B, campaignId: campaignB, workflowId: workflowB, subjectKind: 'prospect', subjectId: targetA.prospectId, targetId: targetA.id,
-    }))).toBe('cross_tenant_target');
+    }))).toBe('subject_not_found');
     const otherCampaign = seedCampaign(ORG_A);
     expect(await codeOf(createExecutionInstance({
       organizationId: ORG_A, campaignId: otherCampaign, workflowId: a.workflowId, subjectKind: 'prospect', subjectId: targetA.prospectId, targetId: targetA.id,

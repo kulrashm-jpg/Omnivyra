@@ -293,10 +293,25 @@ const toWorkflow = (r: Row): Workflow => ({
   updatedAt: String(r.updated_at),
 });
 
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * A stored definition, as written. The journey-policy parts were validated on
+ * write and a published version is immutable, so they are read back verbatim —
+ * dropping them (as this did until 2026-10-28) silently disabled enrollment
+ * conditions, frequency policy and objectives. Versions authored before
+ * orchestration simply have none.
+ */
 const toDefinition = (v: unknown): WorkflowDefinition => {
-  const obj = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  const obj = isObject(v) ? v : {};
   const steps = Array.isArray(obj.steps) ? (obj.steps as WorkflowStep[]) : [];
-  return { steps };
+  return {
+    steps,
+    ...(isObject(obj.objective) ? { objective: obj.objective as unknown as JourneyObjective } : {}),
+    ...(isObject(obj.enrollment) ? { enrollment: obj.enrollment as unknown as JourneyEnrollment } : {}),
+    ...(isObject(obj.policy) ? { policy: obj.policy as unknown as JourneyFrequencyPolicy } : {}),
+  };
 };
 
 const toVersion = (r: Row): WorkflowVersion => ({

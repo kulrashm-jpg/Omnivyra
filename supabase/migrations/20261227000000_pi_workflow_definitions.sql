@@ -422,7 +422,9 @@ BEGIN
 
   -- Every step needs a non-blank key, a channel from the closed vocabulary and a
   -- non-negative relative delay. `delay_after_previous_hours` is the WHOLE timing
-  -- vocabulary of a Version.
+  -- vocabulary of a Version. The vocabulary is WORKFLOW_STEP_CHANNELS in
+  -- workflowStore.ts, `internal` included (2026-10-28: without it a validated
+  -- internal step could never be published).
   IF EXISTS (
     SELECT 1 FROM jsonb_array_elements(v_definition -> 'steps') AS s
      WHERE jsonb_typeof(s.value) <> 'object'
@@ -431,7 +433,7 @@ BEGIN
         OR jsonb_typeof(s.value -> 'channel') <> 'string'
         OR (s.value ->> 'channel') NOT IN (
              'email', 'linkedin', 'phone', 'whatsapp', 'sms',
-             'github', 'discord', 'slack', 'community', 'content')
+             'github', 'discord', 'slack', 'community', 'content', 'internal')
         OR jsonb_typeof(s.value -> 'delay_after_previous_hours') <> 'number'
         OR (s.value ->> 'delay_after_previous_hours')::numeric < 0
   ) THEN

@@ -370,7 +370,7 @@ describe('034 — isolation, proven by content', () => {
     // RE-PINNED 2026-10-28 to the orchestration port (renumbered migration with the
     // deferred target FK; the store gained the read-only discovery/report listings).
     expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
-      .toBe('d64fe60c9a307480');
+      .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code.
     expect(sha(STORE_REL)).toBe('1319b7d86960f9c3');
     expect(sha('pages/api/execution-instances/[id].ts')).toBe('871dd7074f95e064');
@@ -383,8 +383,8 @@ describe('034 — isolation, proven by content', () => {
     // RE-PINNED 2026-10-28 (renumbered migration; the store validates the journey
     // policy extensions). 029's targets / 030's producer land with the lists slice.
     expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))
-      .toBe('eacedc57297a9682');
-    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('1655ecfe76534d8c');
+      .toBe('099d274b241178c8'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): publish accepts the `internal` channel the validator allows
+    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('2ac2bb0c09877a3c'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): stored objective/enrollment/policy are read back
   });
 
   it('the idempotency middleware itself was not modified', () => {
