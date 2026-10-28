@@ -89,6 +89,75 @@ const NEW_SAFETY_MARKERS = [
   'communityIdentityProof',
   'rpaLegacySessionFilePurge',
   '20261231000',
+  // CI-ENFORCE-001: the rest of the surface the stack introduced. Each marker
+  // below was measured to have ZERO references in backend/tests at d51360b0
+  // (pre-stack), and every suite referencing one at aa5e6966 was already
+  // selected by the PI or safety gate, so adding them changes neither selection;
+  // it only stops a future suite on these modules escaping both gates.
+  // Orchestration engine adapters, enrollment and journey modules (the
+  // orchestration/ directory itself pre-dates the stack, so files are named).
+  'orchestration/browserEngineAdapter',
+  'orchestration/campaignEnrollment',
+  'orchestration/communityEngineAdapter',
+  'orchestration/engineAdapters',
+  'orchestration/enrollment',
+  'orchestration/icpEvidence',
+  'orchestration/individualIntelligence',
+  'orchestration/journeyPolicy',
+  'orchestration/journeyReport',
+  'communityJourneyLinkStore',
+  'socialPostPublicationStatus',
+  'socialPostStepContract',
+  'socialPublishEngineAdapter',
+  'whatsappEngineAdapter',
+  // Execution / engine / journey stores and lists / campaigns (new directories).
+  'executionInstances/',
+  'executionPlans/',
+  'executionSubject/',
+  'outreachBridge/',
+  'prospectCampaigns/',
+  'prospectLists/',
+  'workflowExecution/',
+  'services/workflows/',
+  'pages/api/execution-instances',
+  'pages/api/prospect-campaigns',
+  'pages/api/prospect-lists',
+  'pages/api/workflows',
+  'pages/api/identity-verification',
+  'workflow-execution-progression',
+  // RPA login-token redemption pruning / session-writer authority (new exports
+  // of the pre-existing rpaAuthTokens module; the module name itself would pull
+  // in unrelated pre-existing suites) and the legacy-session purge script.
+  'pruneExpiredRpaAuthTokenRedemptions',
+  'RPA_TOKEN_REDEMPTION_PRUNE',
+  'consumeRpaAuthToken',
+  'isAuthorizedRpaSessionWriter',
+  'purge-legacy-rpa-session-files',
+  // Bulk-like / reply / like durable request identity (new export; the route
+  // name `bulk-like` would pull in pre-existing suites).
+  'readClientIdempotencyKey',
+  // Migrations 20261127 and 20261226-20261230, named exactly: the prefix
+  // `2026122` also matches unrelated pre-existing migrations.
+  '20261127000000',
+  '20261226000000',
+  '20261227000000',
+  '20261228000000',
+  '20261228000001',
+  '20261228000002',
+  '20261229000000',
+  '20261230000000',
+  // Stack rollbacks (supabase/migrations/rollbacks/), by exact basename stem.
+  'community_execution_safety_rollback',
+  'community_identity_link_rollback',
+  'community_journey_link_rollback',
+  'engagement_request_idempotency_rollback',
+  'extension_dispatch_safety_rollback',
+  'identity_verification_rollback',
+  'migration_rerun_safety_rollback',
+  'orchestration_campaign_targeting_rollback',
+  'orchestration_engine_requests_engines_rollback',
+  'rpa_legacy_session_invalidation_rollback',
+  'social_publish_step_channel_rollback',
 ];
 
 /** Stack suites the PI gate already owns; they must stay there, not move here. */
@@ -185,17 +254,56 @@ describe('safety-test-suites selector', () => {
     expect(uncovered).toEqual([]);
   });
 
-  it('every unit suite that references a module this stack introduced is gated (catches future suites)', () => {
+  it('every suite that references a module this stack introduced is gated (catches future suites)', () => {
     const pi = spawnSync(process.execPath, [PI_SCRIPT], { cwd: ROOT, encoding: 'utf8' });
     expect(pi.status).toBe(0);
     const gated = new Set([...pi.stdout.split('\n').filter(Boolean), ...selected]);
-    const unitDir = path.join(ROOT, 'backend', 'tests', 'unit');
-    const referencing = fs.readdirSync(unitDir)
-      .filter((f) => /\.test\.tsx?$/.test(f))
-      .filter((f) => NEW_SAFETY_MARKERS.some((m) => fs.readFileSync(path.join(unitDir, f), 'utf8').includes(m)))
-      .map((f) => `backend/tests/unit/${f}`);
+    // The default jest project's whole territory, not only backend/tests/unit:
+    // a suite added under backend/tests/integration (etc.) must not escape.
+    // realschema/ and manual/ are excluded exactly as jest.config.js and the PI
+    // selector exclude them (real-schema suites have their own workflow).
+    const testsRoot = path.join(ROOT, 'backend', 'tests');
+    const walk = (dir: string, acc: string[]): string[] => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (dir === testsRoot && (e.name === 'realschema' || e.name === 'manual')) continue;
+          walk(full, acc);
+        } else if (e.isFile() && /\.test\.tsx?$/.test(e.name)) acc.push(full);
+      }
+      return acc;
+    };
+    const referencing = walk(testsRoot, [])
+      .filter((abs) => {
+        const src = fs.readFileSync(abs, 'utf8');
+        return NEW_SAFETY_MARKERS.some((m) => src.includes(m));
+      })
+      .map((abs) => path.relative(ROOT, abs).split(path.sep).join('/'));
     expect(referencing.length).toBeGreaterThan(10);           // the guard is not vacuous
     expect(referencing.filter((rel) => !gated.has(rel))).toEqual([]);
+  });
+
+  it('every stack marker matches at least one suite unless it is listed as untested surface', () => {
+    // Guards against a typo'd marker that can never match. Markers with no
+    // referencing suite at aa5e6966 are listed here on purpose (surface with no
+    // unit suite yet); a later suite that covers one is fine and needs no edit.
+    const UNREFERENCED_TODAY = new Set([
+      'orchestration/icpEvidence',
+      'orchestration/journeyPolicy',
+      'isAuthorizedRpaSessionWriter',
+      'workflow-execution-progression',
+      'purge-legacy-rpa-session-files',
+      '20261230000000',
+    ]);
+    const unitDir = path.join(ROOT, 'backend', 'tests', 'unit');
+    const sources = fs.readdirSync(unitDir)
+      .filter((f) => /\.test\.tsx?$/.test(f) && f !== 'safetyTestSuitesSelector.test.ts')
+      .map((f) => fs.readFileSync(path.join(unitDir, f), 'utf8'));
+    const dead = NEW_SAFETY_MARKERS
+      .filter((m) => !UNREFERENCED_TODAY.has(m))
+      .filter((m) => !sources.some((s) => s.includes(m)));
+    expect(dead).toEqual([]);
+    for (const m of UNREFERENCED_TODAY) expect(NEW_SAFETY_MARKERS).toContain(m);
   });
 
   it('floor guard: a selection below the floor is an error', () => {

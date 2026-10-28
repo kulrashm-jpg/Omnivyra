@@ -104,6 +104,11 @@ const SAFETY_SUITE_REGISTRY = [
   'backend/tests/unit/extensionSourceRootPortability.test.ts',
   // Gate self-check: the regression test for this selector
   'backend/tests/unit/safetyTestSuitesSelector.test.ts',
+  // real-schema-ci.yml path-filter regression: the filter decides whether the
+  // stack's migrations and stores ever replay against real PostgreSQL. (The PI
+  // selector also picks it up, but only because it quotes PI path strings; the
+  // registry entry is the deliberate gate.)
+  'backend/tests/unit/realSchemaCiPathFilter.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */
