@@ -11,16 +11,17 @@
  *
  * ─── WHAT A STEP ACTS ON ──────────────────────────────────────────────────
  * A workflow step names a channel and a person; the engine acts on a stored
- * action (platform + action type + target id + text). NOTHING in the repository
- * links an execution task, a subject or a canonical person to a
- * `community_ai_actions` row: the row's only actor link is `discovered_user_id`
+ * action (platform + action type + target id + text). Nothing DERIVES that
+ * action from the person: the row's only actor link is `discovered_user_id`
  * → `community_ai_discovered_users`, which carries no person, and profile-URL
  * identity resolution is deliberately deferred (socialContactResolution.ts).
  * The adapter therefore NEVER derives a target (no post, comment, thread or
  * handle is guessed from the person). It acts only on the one action a
- * `CommunityActionBinding` returns for this execution task, and the default
- * binding reports that no such interface exists yet — `needs_human`, nothing
- * sent. That is the concrete missing interface; see `noBindingInterface`.
+ * `CommunityActionBinding` returns for this execution task. The default binding
+ * reads `community_action_journey_links` (20261231000003): an identity-only,
+ * tenant-keyed 1:1 link an operator creates between a prepared `community` task
+ * and an existing drafted action (communityJourneyLinkStore.ts). No link →
+ * `no_bound_action`, `needs_human`, nothing sent.
  *
  * ─── ONE REQUEST PER STEP ─────────────────────────────────────────────────
  * `execution_engine_requests` (engine `community`) holds one row per execution
@@ -72,6 +73,7 @@ import type { EngineAdapter, EngineDisposition, EngineResult, EngineStepContext 
 
 export const ENGINE_REQUESTS_TABLE = 'execution_engine_requests';
 export const COMMUNITY_ACTIONS_TABLE = 'community_ai_actions';
+export const COMMUNITY_JOURNEY_LINKS_TABLE = 'community_action_journey_links';
 
 /** A `submitting` claim older than this belonged to a sweep that died. */
 export const STALE_SUBMISSION_MS = 15 * 60 * 1000;
@@ -236,6 +238,39 @@ export const noBindingInterface: CommunityActionBinding = {
   },
 };
 
+/** Tenant-filtered read of the link: the action id, null when unlinked. Throws when unreadable. */
+export type LinkedActionReader = (organizationId: string, executionTaskId: string) => Promise<string | null>;
+
+export const readLinkedActionId: LinkedActionReader = async (organizationId, executionTaskId) => {
+  const res = await ownedDbTable(COMMUNITY_JOURNEY_LINKS_TABLE)
+    .select('community_action_id')
+    .eq('organization_id', organizationId)              // TENANT FIRST
+    .eq('execution_task_id', executionTaskId)
+    .maybeSingle();
+  if (res.error) throw Object.assign(new Error('community journey link unreadable'), { code: 'link_unreadable' });
+  const id = (res.data as { community_action_id?: unknown } | null)?.community_action_id;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+};
+
+/**
+ * The binding an operator's link supplies: exactly the one action linked to this
+ * execution task in this tenant (both unique by constraint), or none. Tenant,
+ * support and approval are re-checked by the adapter on the action row itself.
+ */
+export function createLinkedActionBinding(read: LinkedActionReader = readLinkedActionId): CommunityActionBinding {
+  return {
+    async resolve(ctx) {
+      const actionId = await read(ctx.organizationId, ctx.executionTaskId);
+      if (actionId === null) {
+        return { kind: 'none', reason: 'no community action is linked to this execution task; an operator must link an existing drafted action' };
+      }
+      return { kind: 'bound', actionId };
+    },
+  };
+}
+
+export const linkedActionBinding: CommunityActionBinding = createLinkedActionBinding();
+
 // ── Gate pre-flight: the engine's own gates, asked before anything is claimed ─
 
 export type PreflightVerdict =
@@ -393,7 +428,7 @@ export const defaultCommunityDeps: CommunityAdapterDeps = {
     return !res.error && Array.isArray(res.data) && res.data.length === 1;
   },
 
-  binding: noBindingInterface,
+  binding: linkedActionBinding,
 
   async readAction(organizationId, actionId) {
     const res = await ownedDbTable(COMMUNITY_ACTIONS_TABLE)
@@ -438,8 +473,9 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
   const result = (outcome: string, disposition: EngineDisposition, reason: string | null, externalRef: string | null): EngineResult =>
     ({ engine: 'community', outcome, disposition, reason, externalRef });
 
-  const settle = async (ctx: EngineStepContext, from: RequestState, state: RequestState, r: EngineResult): Promise<EngineResult> => {
-    await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, from, { state, detail: r.reason });
+  const settle = async (ctx: EngineStepContext, from: RequestState, state: RequestState, r: EngineResult, externalRef?: string): Promise<EngineResult> => {
+    await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, from,
+      externalRef === undefined ? { state, detail: r.reason } : { state, external_ref: externalRef, detail: r.reason });
     return r;
   };
 
@@ -465,6 +501,8 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
       case 'skipped':
       case 'blocked':
         return settle(ctx, from, 'failed', result(status, 'needs_human', `the engine ${status} the action`, row.id));
+      case 'uncertain':
+        return uncertain(ctx, from, 'the engine marked the action uncertain (it may have reached the platform)', row.id);
       default:
         return result(status || 'unknown', 'needs_human', `the action is in an unexpected state (${status || 'none'})`, row.id);
     }
@@ -610,6 +648,13 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
           // Performed already (by a person or the scheduler): observed, not repeated.
           await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'requested', { state: 'completed', external_ref: row.id, detail: 'performed_before_request' });
           return result(status, 'completed', null, row.id);
+        // Ended before this request claimed it: settled durably, never re-run.
+        case 'skipped':
+          return settle(ctx, 'requested', 'skipped', result('skipped', 'skipped', 'the community action was skipped before the journey reached it', row.id), row.id);
+        case 'failed':
+          return settle(ctx, 'requested', 'failed', result('failed', 'needs_human', 'the community action failed before the journey reached it; a person must decide', row.id), row.id);
+        case 'uncertain':
+          return settle(ctx, 'requested', 'uncertain', result('uncertain', 'needs_human', 'the community action may have reached the platform (uncertain); a person must review it; never re-executed automatically', row.id), row.id);
         default:
           return result(status || 'unknown', 'needs_human', `the action already ended ${status || 'without a status'}; it is not re-run`, row.id);
       }
