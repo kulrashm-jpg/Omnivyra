@@ -1,0 +1,90 @@
+name: Safety Verification
+
+# SAFETY-GATE-001 — bring the execution-safety unit suites under CI enforcement.
+#
+# THE GAP THIS CLOSES
+# -------------------
+# The only derived unit-suite gate (pi-verification.yml) selects suites named
+# `pi*` or mentioning a Prospect Intelligence module. The orchestration,
+# community-executor, extension-dispatch, RPA-session and engagement-idempotency
+# safety suites match neither rule, so they never ran in CI. Widening the PI
+# markers would also have swept in dozens of unrelated engagement suites, so
+# this is a SEPARATE, narrow gate: scripts/ci/safety-test-suites.js selects an
+# explicit registry plus one documented naming convention, and fails the job if
+# a registered suite is missing. See that file's header.
+#
+# WHY THERE IS NO PATH FILTER
+# ---------------------------
+# Same reason as pi-verification.yml: this job is intended to become a REQUIRED
+# context, and a required check that never runs is pending, not passed.
+#
+# NOTHING HERE REACHES PRODUCTION: no repository secrets are referenced, the
+# Supabase/Redis/provider values below are obviously-fake hermetic placeholders
+# (placeholder hosts, localhost Redis, a dummy key), and no env file is read
+# (backend/tests/setupEnv.ts never loads .env.local, and CI ships no env file).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: safety-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  safety-unit-suites:
+    name: Execution-safety unit suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Hermetic placeholders. They satisfy config/env.schema.ts (the canonical
+    # SUPABASE_SECRET_KEY / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY names, a valid
+    # REDIS_URL, a non-empty OPENAI_API_KEY and a 64-hex ENCRYPTION_KEY) and
+    # resolve to nothing. Without them several suites fail to LOAD with a
+    # ZodError before reaching a single assertion.
+    env:
+      SUPABASE_URL: https://placeholder.supabase.co
+      SUPABASE_SECRET_KEY: ci-hermetic-placeholder-secret-key
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-hermetic-placeholder-publishable-key
+      REDIS_URL: 'redis://localhost:6379'
+      OPENAI_API_KEY: 'sk-test-placeholder'
+      ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Fails (exit 1) if any registered suite is missing or the selection falls
+      # below the registry-sized floor — a shrinking selection is never a pass.
+      - name: Select the safety suite set
+        id: select
+        run: |
+          node scripts/ci/safety-test-suites.js > safety-suites.txt
+          COUNT=$(wc -l < safety-suites.txt)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Selected $COUNT safety suites"
+          node scripts/ci/safety-test-suites.js --explain
+
+      - name: Run the safety suites
+        run: |
+          # `npx jest` is avoided deliberately (see pi-verification.yml).
+          node ./node_modules/jest/bin/jest.js \
+            --runTestsByPath $(tr '\n' ' ' < safety-suites.txt) \
+            --runInBand --forceExit
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Safety verification" >> "$GITHUB_STEP_SUMMARY"
+          echo "Safety suites selected and executed: ${{ steps.select.outputs.count }}" >> "$GITHUB_STEP_SUMMARY"
