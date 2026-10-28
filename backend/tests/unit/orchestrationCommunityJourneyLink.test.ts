@@ -37,6 +37,9 @@ import type { EngineResult, EngineStepContext } from '../../services/orchestrati
 import {
   CONTRACT_ORG, CONTRACT_OTHER_ORG, contractContext, expectContractResult,
 } from './helpers/engineAdapterContractKit';
+// 20261231000006: every link must prove the run's person; this suite's actions
+// engage a platform account verified as that person (identity suite: separate).
+import { DISCOVERED_USER, identityWorld } from './helpers/communityIdentityFixture';
 
 const read = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), 'utf8');
 const tick = () => new Promise<void>((r) => setImmediate(r));
@@ -66,7 +69,7 @@ function action(over: Partial<CommunityActionRow> = {}): CommunityActionRow {
     suggested_text: 'Thanks for sharing this.', final_text: null, playbook_id: 'pb-1',
     requires_human_approval: true, risk_level: 'low', approved_at: null, status: 'pending',
     execution_mode: 'api', scheduled_at: null, execution_correlation_id: null,
-    execution_result: null, intent_classification: null, ...over,
+    execution_result: null, intent_classification: null, discovered_user_id: DISCOVERED_USER, ...over,
   };
 }
 
@@ -81,7 +84,9 @@ function db() {
   const writes: string[] = [];
   let seq = 0;
 
+  const idw = identityWorld();
   const linkDeps: LinkStoreDeps = {
+    identity: idw.port,
     async readLinkByTask(org, taskId) {
       await tick();
       return links.find((l) => l.organizationId === org && l.executionTaskId === taskId) ?? null;
@@ -113,6 +118,7 @@ function db() {
       const link: CommunityJourneyLink = {
         id: `link-${++seq}`, organizationId: row.organization_id, executionTaskId: row.execution_task_id,
         executionInstanceId: row.execution_instance_id, communityActionId: row.community_action_id,
+        personId: row.person_id, identityClaimId: row.identity_claim_id,
         linkedBy: row.linked_by, createdAt: NOW,
       };
       links.push(link);
@@ -142,8 +148,9 @@ function db() {
     },
     binding: createLinkedActionBinding(async (org, t) => {
       await tick();
-      return links.find((l) => l.organizationId === org && l.executionTaskId === t)?.communityActionId ?? null;
-    }),
+      const l = links.find((x) => x.organizationId === org && x.executionTaskId === t);
+      return l ? { actionId: l.communityActionId, personId: l.personId } : null;
+    }, idw.port),
     readAction: (org, id) => linkDeps.readAction(org, id),
     async claimAction(org, id) {
       await tick();
