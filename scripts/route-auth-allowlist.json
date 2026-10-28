@@ -472,6 +472,13 @@
         "CRON_SECRET"
       ]
     },
+    "pages/api/cron/workflow-execution-progression.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401) when the secret is unset or wrong, and is inert unless WORKFLOW_ORCHESTRATION_ENABLED is true. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
     "pages/api/domain/verification-status.ts": {
       "kind": "inline-binding",
       "reason": "Active COMPANY_ADMIN/SUPER_ADMIN membership in the target company required; the domain read filters company_id.",
