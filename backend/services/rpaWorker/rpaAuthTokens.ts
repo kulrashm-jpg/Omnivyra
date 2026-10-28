@@ -23,6 +23,24 @@ import { resolveSigningSecret, isSigningSecretUnavailable } from '../../auth/sig
 const TOKEN_TTL_MS = 30 * 60 * 1000;
 
 /**
+ * Retention for rpa_auth_token_redemptions (single-use nonce ledger).
+ *
+ * A redemption row only has to outlive the token it burns: once the token is
+ * expired, verifyRpaAuthToken refuses it (`Date.now() > payload.expires_at` →
+ * TOKEN_EXPIRED) before the nonce is ever looked at, and consumeRpaAuthToken
+ * re-checks expiry AFTER its insert (see below), so a pruned nonce can never be
+ * redeemed again. Rows are pruned only when
+ *   token_expires_at < now - RPA_TOKEN_REDEMPTION_PRUNE_MARGIN_MS   (strict)
+ * The margin absorbs clock skew between the pruning instance and a redeeming
+ * instance; it is far larger than any plausible skew and 2x the token TTL.
+ */
+export const RPA_TOKEN_REDEMPTION_PRUNE_MARGIN_MS = 60 * 60 * 1000;
+/** Hard upper bound on rows deleted by one prune call. */
+export const RPA_TOKEN_REDEMPTION_PRUNE_MAX = 500;
+/** Rows pruned best-effort, tenant-scoped, on each successful redemption. */
+export const RPA_TOKEN_REDEMPTION_PRUNE_ON_REDEEM = 20;
+
+/**
  * SEC91-B1: dedicated secret, then AUTH_SECRET — nothing else. The chain used to continue
  * into NEXTAUTH_SECRET, the Supabase service-role API key and a literal committed to this
  * repository. Production resolves AUTH_SECRET exactly as before (tokens live 30 min).
@@ -179,5 +197,63 @@ export async function consumeRpaAuthToken(token: string | null | undefined): Pro
   } catch {
     return { ok: false, reason: 'TOKEN_REDEMPTION_UNAVAILABLE', status: 503 };
   }
+  // Expiry re-check AFTER the nonce insert. Pruning deletes a nonce only once
+  // its token expired more than the margin ago, so a redemption that verified
+  // a still-valid token but reached the insert only after such a prune would
+  // otherwise succeed a second time. Any insert that lands after the token's
+  // expiry is refused here — so pruning can never re-enable a token. Fail
+  // closed: the (expired) token stays burnt.
+  if (Date.now() > payload.expires_at) {
+    return { ok: false, reason: 'TOKEN_EXPIRED', status: 401 };
+  }
+  // Bounded, tenant-scoped, best-effort retention (no cron/schedule).
+  try {
+    await pruneExpiredRpaAuthTokenRedemptions({
+      organizationId: payload.organization_id,
+      limit: RPA_TOKEN_REDEMPTION_PRUNE_ON_REDEEM,
+    });
+  } catch {
+    /* cleanup never affects the redemption */
+  }
   return { ok: true, payload: payload as Payload & { user_id: string } };
+}
+
+/**
+ * Delete redemption rows whose token expired more than
+ * RPA_TOKEN_REDEMPTION_PRUNE_MARGIN_MS ago. Bounded (limit, capped at
+ * RPA_TOKEN_REDEMPTION_PRUNE_MAX), optionally tenant-scoped, oldest first.
+ * The DELETE repeats the expiry predicate (and tenant scope), so a row can
+ * only be removed if it is prunable at delete time. Never throws on DB errors.
+ * `db` defaults to the owned write seam (service role).
+ */
+export async function pruneExpiredRpaAuthTokenRedemptions(
+  opts: {
+    organizationId?: string;
+    limit?: number;
+    nowMs?: number;
+    db?: { from: (table: string) => any };
+  } = {},
+): Promise<{ deleted: number; cutoff: string }> {
+  const now = opts.nowMs ?? Date.now();
+  const cutoff = new Date(now - RPA_TOKEN_REDEMPTION_PRUNE_MARGIN_MS).toISOString();
+  const requested = Number.isFinite(opts.limit) ? Math.floor(opts.limit as number) : 100;
+  const limit = Math.max(1, Math.min(requested, RPA_TOKEN_REDEMPTION_PRUNE_MAX));
+  try {
+    // Resolve the table accessor first: query builders are thenables, so they
+    // must never be awaited before the chain is complete.
+    const from: (t: string) => any = opts.db
+      ? (t: string) => opts.db!.from(t)
+      : (await import('../../db/writeOwner')).ownedDbTable;
+    let q = from('rpa_auth_token_redemptions').select('nonce').lt('token_expires_at', cutoff);
+    if (opts.organizationId) q = q.eq('organization_id', opts.organizationId);
+    const { data, error } = await q.order('token_expires_at', { ascending: true }).limit(limit);
+    if (error || !Array.isArray(data) || data.length === 0) return { deleted: 0, cutoff };
+    const nonces = (data as Array<{ nonce: string }>).map((r) => r.nonce).slice(0, limit);
+    let del = from('rpa_auth_token_redemptions').delete().in('nonce', nonces).lt('token_expires_at', cutoff);
+    if (opts.organizationId) del = del.eq('organization_id', opts.organizationId);
+    const { error: delErr } = await del;
+    return { deleted: delErr ? 0 : nonces.length, cutoff };
+  } catch {
+    return { deleted: 0, cutoff };
+  }
 }
