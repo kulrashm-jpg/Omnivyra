@@ -363,6 +363,30 @@ describe('D1 — expired lease / crash / timeout: uncertain, recorded, never rev
     expect(rowById().execution_result.late_results[0]).toMatchObject({ reported_status: 'failed', error_code: 'TIMEOUT' });
   });
 
+  it('reaper race with a Next-faithful response (json() returns void): exactly one response is sent', async () => {
+    // Integration owner, 2026-10-28: Next's res.json() returns void. The handler
+    // once treated that as "not handled" and sent a second 409 LEASE_MISMATCH.
+    const cmd = await claimOne();
+    rowById().dispatch_lease_expires_at = past();
+    beforePersist = () => reap();
+    currentSession = SESSION_A;
+    const sent: Array<{ status: number; body: any }> = [];
+    let status = 0;
+    const res: any = {
+      status: (c: number) => { status = c; return res; },
+      json: (b: unknown) => {
+        if (sent.length > 0) throw new Error('ERR_HTTP_HEADERS_SENT: a second response was sent');
+        sent.push({ status, body: b });
+        return undefined;
+      },
+      setHeader: () => res,
+    };
+    await actionResultHandler({ method: 'POST', headers: {}, body: { commandId: cmd.id, leaseId: cmd.lease.id, status: 'failed', result: { error_code: 'TIMEOUT' } } }, res);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ status: 200, body: { reconciliation: 'recorded' } });
+    expect(rowById().status).toBe('uncertain');
+  });
+
   it('chain intermediate success on a reaped row does NOT revive it to pending', async () => {
     mockDb.tables.community_ai_actions.push(actionRow({
       action_type: 'dm', command_chain: [{ action_type: 'open_thread' }, { action_type: 'continue_thread' }], command_chain_index: 0,

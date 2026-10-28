@@ -116,7 +116,13 @@ async function recordLateResult(res: NextApiResponse, input: LateResultInput) {
 }
 
 /** After a compare-and-set miss: if the row is now 'uncertain', record the report as evidence. */
-async function reconcileIfReaped(res: NextApiResponse, input: LateResultInput) {
+/**
+ * True when the row was reaped to `uncertain` for this holder and the late
+ * result has been recorded AND ANSWERED; the caller must then send nothing more.
+ * (A boolean, not the response: Next's `res.json()` returns void, so returning it
+ * read as "not handled" and the caller sent a second response — 2026-10-28.)
+ */
+async function reconcileIfReaped(res: NextApiResponse, input: LateResultInput): Promise<boolean> {
   const { data: current } = await supabase
     .from('community_ai_actions')
     .select('status, dispatch_lease_id, dispatch_lease_holder_id')
@@ -127,9 +133,10 @@ async function reconcileIfReaped(res: NextApiResponse, input: LateResultInput) {
   if (row?.status === 'uncertain'
     && row.dispatch_lease_id === input.leaseId
     && row.dispatch_lease_holder_id === input.holderId) {
-    return recordLateResult(res, input);
+    await recordLateResult(res, input);
+    return true;
   }
-  return null;
+  return false;
 }
 
 function deriveHolderId(session: { userId: string; orgId: string; hmacNonce: string }): string {
@@ -324,8 +331,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .select('id')
         .maybeSingle();
       if (!released) {
-        const late = await reconcileIfReaped(res, lateInput);
-        if (late) return late;
+        if (await reconcileIfReaped(res, lateInput)) return;
         return res.status(409).json({ success: false, error: 'LEASE_MISMATCH' });
       }
       // Metric event for the intermediate transition. Best-effort; the
@@ -388,8 +394,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
     if (persistOutcome.ok === false) {
-      const late = await reconcileIfReaped(res, lateInput);
-      if (late) return late;
+      if (await reconcileIfReaped(res, lateInput)) return;
       return res.status(409).json({
         success: false,
         error: 'LEASE_MISMATCH',

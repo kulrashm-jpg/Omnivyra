@@ -221,7 +221,12 @@ BEGIN
 
   SELECT count(*) INTO n FROM pg_constraint
    WHERE conrelid = 'public.community_action_journey_links'::regclass AND contype = 'f';
-  IF n <> 3 THEN
+  -- 3 before 20261231000006; exactly 4 after it, the fourth being its person FK
+  -- (so a re-run after that migration still holds). Integration owner, 2026-10-28.
+  IF n <> 3 AND NOT (n = 4 AND EXISTS (
+       SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.community_action_journey_links'::regclass
+          AND conname = 'community_action_journey_links_person_fk')) THEN
     RAISE EXCEPTION 'community journey link postcondition: % foreign keys, expected 3', n;
   END IF;
 

@@ -138,6 +138,11 @@ const PRIMITIVES = {
   isContentArchitectSession: { from: /^backend\/services\/contentArchitectService$/, level: 'platform' },
   // ── machine ──
   verifyRpaAuthToken: { from: /^backend\/services\/rpaWorker\/rpaAuthTokens$/, level: 'machine' },
+  // Strictly stronger than verifyRpaAuthToken, which it calls first (signature +
+  // expiry); then it re-checks the token user's MANAGE_CONNECTORS role and
+  // consumes the nonce (single use). Its one write IS that redemption — part of
+  // authentication, performed only after the signature verified (2026-10-28).
+  consumeRpaAuthToken: { from: /^backend\/services\/rpaWorker\/rpaAuthTokens$/, level: 'machine' },
 };
 
 // Role/permission lookups keyed by an already-established userId. They

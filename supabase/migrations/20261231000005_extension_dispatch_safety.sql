@@ -393,6 +393,15 @@ BEGIN
 END
 $$;
 
+-- Static, auditable form of the same revocation (check-migration-quality.js
+-- requires it for every SECURITY DEFINER function; integration owner, 2026-10-28).
+REVOKE EXECUTE ON FUNCTION public.reap_community_ai_action_leases() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.claim_community_ai_browser_command(uuid, uuid, text, text, integer) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.record_community_ai_late_dispatch_result(uuid, uuid, text, text, jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reap_community_ai_action_leases() TO service_role;
+GRANT EXECUTE ON FUNCTION public.claim_community_ai_browser_command(uuid, uuid, text, text, integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.record_community_ai_late_dispatch_result(uuid, uuid, text, text, jsonb) TO service_role;
+
 -- ── Postconditions ───────────────────────────────────────────────────────────
 DO $$
 DECLARE
