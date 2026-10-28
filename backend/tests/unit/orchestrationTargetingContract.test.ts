@@ -141,10 +141,15 @@ describe('agreement between the SQL and the application', () => {
   it('the publish function accepts exactly the channels the validator does', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { WORKFLOW_STEP_CHANNELS } = require('../../services/workflows/workflowStore') as { WORKFLOW_STEP_CHANNELS: readonly string[] };
-    const wf = read('supabase/migrations/20261227000000_pi_workflow_definitions.sql');
+    // The function is defined by 20261227000000 and REPLACED by later migrations
+    // (20261231000004 adds `social_post`); the applied vocabulary is the LATEST one.
+    const definers = migrations.filter((f) =>
+      /CREATE OR REPLACE FUNCTION public\.publish_workflow_version\(/.test(fs.readFileSync(path.join(MIG_DIR, f), 'utf8')));
+    expect(definers[0]).toBe('20261227000000_pi_workflow_definitions.sql');
+    const wf = read(`supabase/migrations/${definers[definers.length - 1]}`);
     const m = /\(s\.value ->> 'channel'\) NOT IN \(([^)]*)\)/.exec(wf);
     expect(m).not.toBeNull();
-    const sqlChannels = [...(m as RegExpExecArray)[1].matchAll(/'([a-z]+)'/g)].map((x) => x[1]).sort();
+    const sqlChannels = [...(m as RegExpExecArray)[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]).sort();
     expect(sqlChannels).toEqual([...WORKFLOW_STEP_CHANNELS].sort());
   });
 

@@ -53,6 +53,9 @@ import {
   type JourneyCondition, type JourneyEnrollment, type JourneyFrequencyPolicy,
   type JourneyObjective, type WhatsAppStepSettings,
 } from '../orchestration/journeyPolicy';
+import {
+  SOCIAL_POST_CHANNEL, parseSocialPostSettings, type SocialPostStepSettings,
+} from '../orchestration/socialPostStepContract';
 
 export const WORKFLOWS_TABLE = 'workflows';
 export const WORKFLOW_VERSIONS_TABLE = 'workflow_versions';
@@ -82,10 +85,20 @@ export type WorkflowVersionStatus = typeof WORKFLOW_VERSION_STATUSES[number];
  * WS-3 internal transport, which contacts nobody. It is the one channel whose
  * engine executes end to end on main today, and it was previously unreachable
  * from a workflow because it was not authorable here.
+ *
+ * `content` is UNCHANGED: share a resource WITH this prospect (person-addressed).
+ *
+ * `social_post` (orchestration, 2026-10-28): a PUBLIC, tenant-wide social post —
+ * NOT `content`. The step must name one already-released `scheduled_posts` row
+ * (`social_post.scheduled_post_id`) and only AWAITS that post's publication by
+ * the existing engine; it never creates, approves or triggers a post. See
+ * orchestration/socialPostStepContract.ts. Appended last so no existing
+ * channel's position or meaning changes.
  */
 export const WORKFLOW_STEP_CHANNELS = [
   'email', 'linkedin', 'phone', 'whatsapp', 'sms',
   'github', 'discord', 'slack', 'community', 'content', 'internal',
+  'social_post',
 ] as const;
 export type WorkflowStepChannel = typeof WORKFLOW_STEP_CHANNELS[number];
 
@@ -198,6 +211,12 @@ export interface WorkflowStep {
   readonly when?: readonly JourneyCondition[];
   /** Orchestration — engine settings, required for (and only allowed on) whatsapp steps. */
   readonly whatsapp?: WhatsAppStepSettings;
+  /**
+   * Orchestration — the approved publishing object a `social_post` step awaits.
+   * Required on (and only allowed on) social_post steps. A REFERENCE, never data:
+   * no copy, account, platform or time (those belong to the released post).
+   */
+  readonly social_post?: SocialPostStepSettings;
 }
 
 /**
@@ -591,6 +610,21 @@ export function validateWorkflowDefinition(definition: unknown): WorkflowDefinit
       ? asWorkflowError(() => validateWhatsAppSettings(s.whatsapp, key))
       : null;
 
+    // Orchestration: a social_post step references one approved publishing object
+    // and carries no authoring text (an instruction could be mistaken for copy).
+    if (s.social_post !== undefined && channel !== SOCIAL_POST_CHANNEL) {
+      fail(`step "${key}" social_post settings are only allowed on a social_post step`, 'invalid_step_engine_settings');
+    }
+    let socialPost: SocialPostStepSettings | null = null;
+    if (channel === SOCIAL_POST_CHANNEL) {
+      if (instruction !== null) {
+        fail(`step "${key}" a social_post step takes no instruction: it publishes nothing of its own`, 'invalid_step_instruction');
+      }
+      const parsed = parseSocialPostSettings(s.social_post, key);
+      if (parsed.ok === false) fail(parsed.message, parsed.code);
+      socialPost = parsed.settings;
+    }
+
     steps.push({
       key,
       channel: channel as WorkflowStepChannel,
@@ -600,6 +634,7 @@ export function validateWorkflowDefinition(definition: unknown): WorkflowDefinit
       ...(s.requires_approval === true ? { requires_approval: true } : {}),
       ...(when.length > 0 ? { when } : {}),
       ...(whatsapp === null ? {} : { whatsapp }),
+      ...(socialPost === null ? {} : { social_post: socialPost }),
     });
   }
 

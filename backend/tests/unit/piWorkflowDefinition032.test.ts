@@ -261,7 +261,9 @@ describe('032 — definition validation', () => {
       expect(validateWorkflowDefinition({ steps: [step('a', { channel, ...extra })] }).steps[0].channel)
         .toBe(channel);
     }
-    expect(WORKFLOW_STEP_CHANNELS).toHaveLength(11);
+    // 12: `social_post` (public post awaiting one released scheduled post) appended
+    // 2026-10-28 — see socialPostStepContract.test.ts.
+    expect(WORKFLOW_STEP_CHANNELS).toHaveLength(12);
   });
 
   it('refuses a non-numeric, negative or absurd delay', () => {
@@ -784,10 +786,12 @@ describe('032 — the exported vocabularies match the ratified contract', () => 
 
   it('the channel vocabulary is intent, plus the one internal team-task channel', () => {
     // ORCHESTRATION 2026-10-28 (owner confirmation pending): `internal` added — see
-    // 'refuses an unknown channel'. It contacts nobody.
+    // 'refuses an unknown channel'. It contacts nobody. `social_post` (public post
+    // awaiting one released scheduled post; NOT `content`) appended 2026-10-28.
     expect([...WORKFLOW_STEP_CHANNELS]).toEqual([
       'email', 'linkedin', 'phone', 'whatsapp', 'sms',
       'github', 'discord', 'slack', 'community', 'content', 'internal',
+      'social_post',
     ]);
   });
 });
