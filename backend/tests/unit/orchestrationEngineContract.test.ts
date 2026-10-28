@@ -9,14 +9,23 @@ import * as path from 'path';
 
 jest.mock('../../services/logger', () => ({ logger: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() } }));
 jest.mock('@/config', () => ({ config: {}, getValidatedConfig: () => ({}) }), { virtual: true });
+// Importing the RPA worker opens a BullMQ/Redis connection; no adapter here calls it.
+jest.mock('../../services/rpaWorker/rpaWorkerService', () => ({ executeRpaTask: jest.fn() }));
 
 import { ENGINE_NAMES, buildAdapterRegistry, createWs3Adapter, type EngineAdapter } from '../../services/orchestration/engineAdapters';
 import { createWhatsAppAdapter } from '../../services/orchestration/whatsappEngineAdapter';
+import { createSocialPublishAdapter } from '../../services/orchestration/socialPublishEngineAdapter';
+import { createCommunityAdapter } from '../../services/orchestration/communityEngineAdapter';
+import { createBrowserAdapter } from '../../services/orchestration/browserEngineAdapter';
 import { WORKFLOW_STEP_CHANNELS } from '../../services/workflows/workflowStore';
 
 const read = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), 'utf8');
 
-const ADAPTERS: readonly EngineAdapter[] = [createWs3Adapter(), createWhatsAppAdapter()];
+// Every adapter, whether or not the sweeper runs it (see the registration test).
+const ADAPTERS: readonly EngineAdapter[] = [
+  createWs3Adapter(), createWhatsAppAdapter(),
+  createSocialPublishAdapter(), createCommunityAdapter(), createBrowserAdapter(),
+];
 
 describe('engine contract — shared vocabulary', () => {
   it('the request ledger accepts exactly the adapter-fronted engines (all but ws3)', () => {
@@ -38,6 +47,19 @@ describe('engine contract — shared vocabulary', () => {
 
   it('two adapters claiming one channel is refused, not silently re-routed', () => {
     expect(() => buildAdapterRegistry([...ADAPTERS, { ...ADAPTERS[0], engine: 'browser' }])).toThrow(/two engine adapters claim/);
+  });
+
+  it('every engine in the vocabulary has exactly one adapter', () => {
+    expect(ADAPTERS.map((a) => a.engine).sort()).toEqual([...ENGINE_NAMES].sort());
+  });
+
+  it('the sweeper runs only adapters that can act today (ws3, whatsapp)', () => {
+    // social_publish and browser can only refuse; community has no production
+    // target binding. Registering them would add no capability, so they wait for
+    // the owner decisions their reports name (integration owner, 2026-10-28).
+    const sweeper = read('backend/services/workflowExecution/workflowProgressionSweeper.ts');
+    expect(sweeper).toMatch(/\[createWs3Adapter\(\), createWhatsAppAdapter\(\)\]/);
+    expect(sweeper).not.toMatch(/createSocialPublishAdapter|createCommunityAdapter|createBrowserAdapter/);
   });
 
   it('the widening migration is additive, guarded and has a rollback that refuses while rows depend on it', () => {

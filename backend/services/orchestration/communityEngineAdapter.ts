@@ -588,7 +588,7 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
       }
 
       const support = classifyCommunityAction(row);
-      if (!support.supported) return result('unsupported_action', 'needs_human', `${support.code}: ${support.reason}`, row.id);
+      if (support.supported === false) return result('unsupported_action', 'needs_human', `${support.code}: ${support.reason}`, row.id);
 
       // ── The action's own lifecycle decides whether it may run now ──────────
       const status = String(row.status ?? '');
@@ -623,7 +623,7 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
       } catch {
         return result('gate_unreadable', 'wait', 'the engine\'s gates could not be evaluated', row.id);
       }
-      if (!gate.allowed) return result(gate.code, gate.disposition, gate.reason, row.id);
+      if (gate.allowed === false) return result(gate.code, gate.disposition, gate.reason, row.id);
 
       // ── Claim: exactly one invocation proceeds ─────────────────────────────
       const claimed = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'requested', { state: 'submitting', external_ref: row.id });
