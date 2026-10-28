@@ -17,6 +17,32 @@
  *
  * `failed` is never chosen automatically: a failed step blocks the chain for good,
  * so it remains an explicit human settlement (PI-041-A-K D2).
+ *
+ * THE ADAPTER CONTRACT (every engine, 2026-10-28):
+ *   request         one call of `execute` per ready step; the step's task is the unit.
+ *   authorization   the engine's OWN tenant, permission, approval, consent,
+ *                   suppression, quota and kill-switch gates decide; an adapter
+ *                   never bypasses or duplicates them, and a gate refusal is
+ *                   reported (`needs_human` or `skipped`), never retried around.
+ *   idempotency     `executionTaskId` is the key. An engine without its own
+ *                   per-task record uses `execution_engine_requests` (unique per
+ *                   task; claim `requested → submitting` before calling the engine;
+ *                   `external_ref` set once). Re-running `execute` for the same
+ *                   task must never cause a second external action.
+ *   status          `outcome` is the engine's own word for what happened;
+ *                   `disposition` is how the journey settles (above).
+ *   external ref    the engine's own id for the work, or null before one exists.
+ *   timestamps      the engine's records and the request ledger carry them; the
+ *                   result carries none.
+ *   errors          classified by consequence, not by exception type:
+ *                     definitely not acted (refused, invalid, disabled) → `skipped`
+ *                       or `needs_human`, never retried around a gate;
+ *                     transiently not acted, provably before any external call → `wait`;
+ *                     MAY have acted (timeout, crash, lost response after the call)
+ *                       → `needs_human` with outcome `uncertain`; NEVER auto-retried.
+ *   unsupported     a channel or action the engine cannot perform is reported, never
+ *                   re-routed to another engine or approximated.
+ * Adapters do not throw for engine refusals; a thrown error is an adapter defect.
  */
 
 import { bridgeExecutionTask } from '../outreachBridge/outreachBridgeStore';
@@ -29,7 +55,13 @@ import {
 import type { SubjectRef } from '../executionSubject/subjectRef';
 import type { WorkflowStep } from '../workflows/workflowStore';
 
-export type EngineName = 'ws3' | 'whatsapp';
+/**
+ * Every engine an adapter may front. Owned by the integration owner: adapters add
+ * themselves here only through that owner (one shared union, one ledger CHECK —
+ * 20261231000001 — kept in step by orchestrationEngineContract.test.ts).
+ */
+export const ENGINE_NAMES = ['ws3', 'whatsapp', 'social_publish', 'community', 'browser'] as const;
+export type EngineName = typeof ENGINE_NAMES[number];
 export type EngineDisposition = 'completed' | 'skipped' | 'wait' | 'needs_human';
 
 export interface EngineStepContext {
