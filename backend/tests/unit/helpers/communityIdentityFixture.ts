@@ -25,6 +25,21 @@ export const provenIdentity = async (): Promise<PersonProof> => ({
   platform: 'linkedin', providerId: PROVIDER_ID.toLowerCase(),
 });
 
+/**
+ * The evidence a verified fixture claim carries: the ONE accepted person-level
+ * proof (identityVerification/verificationContract.ts). A fixture, not a writer —
+ * nothing in the product produces this today.
+ */
+export function subjectOAuthEvidence(
+  org: string = CONTRACT_ORG, personId: string = PROVEN_PERSON, providerId: string = PROVIDER_ID,
+  completedAt: string = new Date(Date.now() - 60_000).toISOString(),
+): Record<string, unknown> {
+  return {
+    method: 'subject_platform_oauth', provider: 'linkedin', provider_user_id: providerId,
+    subject_person_id: personId, organization_id: org, flow_id: 'flow-fixture-1', completed_at: completedAt,
+  };
+}
+
 export function identityWorld(org: string = CONTRACT_ORG) {
   const subjects = new Map<string, { org: string; personId: string | null }>([
     [`${SUBJECT.kind}:${SUBJECT.id}`, { org, personId: PROVEN_PERSON }],
@@ -35,7 +50,7 @@ export function identityWorld(org: string = CONTRACT_ORG) {
   const claims: IdentityClaimRow[] = [{
     id: VERIFIED_CLAIM, organization_id: org, person_id: PROVEN_PERSON, claim_type: 'external_id',
     platform: 'linkedin', normalized_value: PROVIDER_ID.toLowerCase(), verification_state: 'verified',
-    verified_at: '2026-10-20T00:00:00.000Z', revoked_at: null,
+    verified_at: '2026-10-20T00:00:00.000Z', revoked_at: null, evidence: subjectOAuthEvidence(org),
   }];
   const knobs = { subjectUnreadable: false, discoveredUnreadable: false, claimsUnreadable: false };
   const reads: string[] = [];

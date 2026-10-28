@@ -131,6 +131,7 @@ import {
 } from './helpers/engineAdapterContractKit';
 import {
   DISCOVERED_USER, OTHER_PERSON, PROVEN_PERSON, PROVIDER_ID, SUBJECT, VERIFIED_CLAIM, identityWorld,
+  subjectOAuthEvidence,
 } from './helpers/communityIdentityFixture';
 
 const NOW = '2026-10-28T09:00:00.000Z';
@@ -326,7 +327,7 @@ function seed(over: { claim?: Partial<Row>; du?: Partial<Row>; action?: Partial<
   tables.identity_claims = [{
     id: VERIFIED_CLAIM, organization_id: CONTRACT_ORG, person_id: PROVEN_PERSON, claim_type: 'external_id',
     platform: 'linkedin', normalized_value: PROVIDER_ID.toLowerCase(), verification_state: 'verified',
-    verified_at: '2026-10-20T00:00:00.000Z', revoked_at: null, ...over.claim,
+    verified_at: '2026-10-20T00:00:00.000Z', revoked_at: null, evidence: subjectOAuthEvidence(), ...over.claim,
   }];
   tables.community_action_journey_links = [];
 }
