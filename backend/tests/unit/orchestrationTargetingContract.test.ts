@@ -9,6 +9,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { checkPublishChannelVocabulary, publishFunctionDefiners } from './helpers/publishChannelVocabulary';
+
+/** The ratified step channel vocabulary (piWorkflowDefinition032.test.ts pins the same list and order). */
+const RATIFIED_STEP_CHANNELS = [
+  'email', 'linkedin', 'phone', 'whatsapp', 'sms',
+  'github', 'discord', 'slack', 'community', 'content', 'internal', 'social_post',
+] as const;
 
 const ROOT = process.cwd();
 const MIG_DIR = path.join(ROOT, 'supabase/migrations');
@@ -143,14 +150,21 @@ describe('agreement between the SQL and the application', () => {
     const { WORKFLOW_STEP_CHANNELS } = require('../../services/workflows/workflowStore') as { WORKFLOW_STEP_CHANNELS: readonly string[] };
     // The function is defined by 20261227000000 and REPLACED by later migrations
     // (20261231000004 adds `social_post`); the applied vocabulary is the LATEST one.
-    const definers = migrations.filter((f) =>
-      /CREATE OR REPLACE FUNCTION public\.publish_workflow_version\(/.test(fs.readFileSync(path.join(MIG_DIR, f), 'utf8')));
-    expect(definers[0]).toBe('20261227000000_pi_workflow_definitions.sql');
-    const wf = read(`supabase/migrations/${definers[definers.length - 1]}`);
-    const m = /\(s\.value ->> 'channel'\) NOT IN \(([^)]*)\)/.exec(wf);
-    expect(m).not.toBeNull();
-    const sqlChannels = [...(m as RegExpExecArray)[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]).sort();
-    expect(sqlChannels).toEqual([...WORKFLOW_STEP_CHANNELS].sort());
+    // HARDENED 2026-10-28 (social_post review): the check is strict — a malformed
+    // literal in the SQL list fails instead of being skipped, every definer must
+    // carry a list, definers are found however spelled, and the result is also
+    // pinned to the ratified list (negative tests: publishChannelVocabulary.test.ts).
+    const files = migrations.map((name) => ({ name, sql: fs.readFileSync(path.join(MIG_DIR, name), 'utf8') }));
+    const check = checkPublishChannelVocabulary(files, WORKFLOW_STEP_CHANNELS, RATIFIED_STEP_CHANNELS);
+    expect(check).toEqual({
+      ok: true,
+      latestDefiner: '20261231000004_social_publish_step_channel.sql',
+      channels: [...WORKFLOW_STEP_CHANNELS].sort(),
+    });
+    expect(publishFunctionDefiners(files)).toEqual([
+      '20261227000000_pi_workflow_definitions.sql',
+      '20261231000004_social_publish_step_channel.sql',
+    ]);
   });
 
   it('a missing or foreign ICP version is "not found" (23503), decided BEFORE ratification', () => {
