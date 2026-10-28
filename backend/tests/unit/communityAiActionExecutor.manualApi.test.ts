@@ -131,12 +131,13 @@ describe('communityAiActionExecutor — manual api-mode', () => {
     expect(result.platform_id).toBe('urn:li:comment:(123,456)');
   });
 
-  it('falls back API → browser (not simulated success) when the connector reports failure', async () => {
-    // Phase 2 contract: a failed API call is not silently recorded as
-    // executed. Instead the executor falls back to a browser dispatch so
-    // the extension can attempt the action. The row is queued via
-    // status='dispatched' + execution_mode='browser' and the original API
-    // error is preserved under response.api_error.
+  it('does NOT fall back API → browser when the connector reports an unclassified failure (may have acted)', async () => {
+    // Community execution safety contract (supersedes the Phase 2 fallback):
+    // connectors fold transport errors and timeouts into `success:false`, so
+    // an unclassified connector failure may have reached the platform. It is
+    // recorded as 'uncertain' (human review) and never re-routed to the
+    // browser, which could post a duplicate. Only a provably-not-acted
+    // refusal falls back (see communityExecutionSafety.executor.test.ts).
     mockLinkedInExecuteAction.mockResolvedValueOnce({
       success: false,
       error: 'LINKEDIN_RATE_LIMIT',
@@ -148,13 +149,16 @@ describe('communityAiActionExecutor — manual api-mode', () => {
       { source: 'manual', notify: false, webhook: false },
     );
 
-    expect(result.status).toBe('dispatched');
-    expect(result.execution_mode).toBe('browser');
-    expect(result.response?.fallback_from).toBe('api');
-    expect(result.response?.api_error).toBe('LINKEDIN_RATE_LIMIT');
+    expect(result.status).toBe('uncertain');
+    expect(result.execution_mode).toBe('api');
+    expect(result.error).toBe('LINKEDIN_RATE_LIMIT');
+    expect(result.response?.fallback_from).toBeUndefined();
+    expect((result as any).command_chain).toBeUndefined();
   });
 
-  it('queues LinkedIn DM triage as continue_thread, not start_new_dm', async () => {
+  it('refuses a LinkedIn DM with no resolved thread or recipient (never types into the open thread)', async () => {
+    // Previously emitted continue_thread {text, autoSubmit:true} with no
+    // thread, sending the message into whatever conversation was open.
     const result = await executeAction(
       {
         ...baseAction(),
@@ -167,17 +171,10 @@ describe('communityAiActionExecutor — manual api-mode', () => {
       { source: 'manual', notify: false, webhook: false },
     );
 
-    expect(result.status).toBe('dispatched');
-    expect(result.execution_mode).toBe('browser');
-    expect((result as any).command_chain).toEqual([
-      {
-        action_type: 'continue_thread',
-        payload: {
-          text: 'Thanks Rajesh, I will check and get back to you.',
-          autoSubmit: true,
-        },
-      },
-    ]);
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe('failed');
+    expect(result.error).toBe('DM_TARGET_UNRESOLVED');
+    expect((result as any).command_chain).toBeUndefined();
   });
 
   it('opens visible LinkedIn DM rows by participant name when no verified thread URL exists', async () => {

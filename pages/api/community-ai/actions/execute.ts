@@ -241,10 +241,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       persist: true,
       idempotency_key: idempotencyKey ?? undefined,
       final_text: finalText,
+      // The row was claimed above (-> 'executing'); the terminal write is
+      // compare-and-set from that claim so a reaper/cancel/other claimant
+      // change is never overwritten.
+      expected_from_statuses: ['executing'],
     }
   );
 
-  const nextStatus = result.status === 'dispatched' ? 'pending' : result.status;
+  const nextStatus =
+    result.status === 'dispatched' ? 'pending'
+    : result.status === 'deferred' ? 'approved'
+    : result.status;
 
   if (result.response?.persist_error) {
     return res.status(500).json({ error: 'TERMINAL_WRITE_FAILED', execution: result });

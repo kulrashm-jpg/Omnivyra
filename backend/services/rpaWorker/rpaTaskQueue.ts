@@ -14,6 +14,20 @@ let isProcessing = false;
 
 let currentHandler: ((task: RpaTask) => Promise<RpaResult>) | null = null;
 
+/**
+ * In-process retry is permitted ONLY for outcomes that provably did not reach
+ * the platform (the handler said `may_have_acted: false`), that are not a
+ * cancellation, and that were not deferred to the durable retry queue.
+ * Anything else — a post-submit failure, an unclassified failure, or a thrown
+ * error — may have acted and is returned to the caller as-is, never re-run.
+ */
+export const isInProcessRetryable = (result: RpaResult | null | undefined): boolean =>
+  !!result &&
+  result.success === false &&
+  result.may_have_acted === false &&
+  result.deferred !== true &&
+  result.error !== 'RPA_CANCELLED';
+
 const processQueue = async () => {
   if (isProcessing || !currentHandler) return;
   isProcessing = true;
@@ -24,16 +38,13 @@ const processQueue = async () => {
 
     try {
       const result = await currentHandler(item.task);
-      if (!result.success && item.attempts < MAX_ATTEMPTS) {
+      if (isInProcessRetryable(result) && item.attempts < MAX_ATTEMPTS) {
         queue.push({ ...item, attempts: item.attempts + 1 });
         continue;
       }
       item.resolve(result);
     } catch (error) {
-      if (item.attempts < MAX_ATTEMPTS) {
-        queue.push({ ...item, attempts: item.attempts + 1 });
-        continue;
-      }
+      // A throw is unclassified: the browser may have submitted. Never retry.
       item.reject(error);
     }
   }
