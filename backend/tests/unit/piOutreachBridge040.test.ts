@@ -492,7 +492,7 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
     expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
       .toBe('d64fe60c9a307480');
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
-      .toBe('551ef07c1f2017d0');
+      .toBe('1319b7d86960f9c3'); // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code
     expect(sha('pages/api/execution-instances/[id].ts')).toBe('871dd7074f95e064');
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
       .toBe('6c303af15da7a4bf');

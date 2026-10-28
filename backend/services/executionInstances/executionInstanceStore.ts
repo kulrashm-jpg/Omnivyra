@@ -180,6 +180,7 @@ function translateCreate(error: unknown): never {
     ['ei_create:subject_not_found', 'no such subject in this tenant', 'subject_not_found'],
     ['ei_create:target_requires_prospect', 'a campaign target may only accompany a prospect subject', 'target_requires_prospect'],
     ['ei_create:target_mismatch', 'that target does not belong to this campaign and subject', 'target_mismatch'],
+    ['ei_create:targets_not_installed', 'campaign targets are not installed (20261231000000); a target cannot be enrolled yet', 'targets_not_installed'],
   ];
   for (const [marker, text, code] of map) {
     if (message.includes(marker)) fail(text, code);

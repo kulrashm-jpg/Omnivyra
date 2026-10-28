@@ -451,14 +451,15 @@ describe('037 — frozen artefacts are untouched', () => {
     expect(sha('backend/services/executionPlans/executionPlanStore.ts'))
       .toBe('97b68e9c17758e81');
     expect(sha('pages/api/execution-instances/[id]/plan.ts')).toBe('d133ffc3c1cadc5e');
-    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('1b7c467aeb9dadf2');
+    // RE-PINNED 2026-10-28: 036 re-pinned the instance store (targets_not_installed mapping).
+    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('baea0fd927a594b8');
   });
 
   it('033, 034 and 032 are byte-identical', () => {
     expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
       .toBe('d64fe60c9a307480');
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
-      .toBe('551ef07c1f2017d0');
+      .toBe('1319b7d86960f9c3'); // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code
     expect(sha('pages/api/execution-instances/[id].ts')).toBe('871dd7074f95e064');
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
       .toBe('6c303af15da7a4bf');

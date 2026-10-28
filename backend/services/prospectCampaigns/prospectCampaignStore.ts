@@ -315,3 +315,112 @@ export async function setProspectCampaignStatus(
 ): Promise<{ campaign: ProspectCampaign | null; changed: boolean }> {
   return updateProspectCampaign({ organizationId, campaignId, status });
 }
+
+// ── Targeting (orchestration, 20261231000000) ───────────────────────────────
+
+/**
+ * How a campaign chooses its population.
+ *
+ *   manual  members of the attached lists (manual or intake lists need no ICP);
+ *   icp     members of the attached lists who are evaluated under ONE RATIFIED ICP
+ *           version (and, optionally, score at least `minIcpScore` on it).
+ *
+ * Read and written separately from the campaign row's core columns, so campaign
+ * reads keep working on a database where the targeting migration has not run:
+ * there, targeting refuses explicitly with `targeting_schema_missing`.
+ */
+export type CampaignTargetingMode = 'manual' | 'icp';
+
+export interface CampaignTargeting {
+  readonly campaignId: string;
+  readonly mode: CampaignTargetingMode;
+  readonly icpId: string | null;
+  readonly icpVersion: number | null;
+  readonly minIcpScore: number | null;
+}
+
+const TARGETING_COLUMNS = 'id, targeting_mode, icp_id, icp_version, min_icp_score';
+
+/** PostgREST / Postgres answers for a column the schema does not have. */
+const isMissingSchema = (error: unknown): boolean => {
+  const code = String((error as { code?: string } | null)?.code ?? '');
+  return code === '42703' || code === 'PGRST204' || code === '42P01';
+};
+
+const toTargeting = (r: Row): CampaignTargeting => ({
+  campaignId: String(r.id),
+  mode: r.targeting_mode === 'icp' ? 'icp' : 'manual',
+  icpId: str(r.icp_id),
+  icpVersion: typeof r.icp_version === 'number' ? r.icp_version : null,
+  minIcpScore: typeof r.min_icp_score === 'number' ? r.min_icp_score : null,
+});
+
+export async function getCampaignTargeting(
+  organizationId: string, campaignId: string,
+): Promise<CampaignTargeting | null> {
+  assertTenant(organizationId);
+  if (!UUID.test(String(campaignId ?? ''))) fail('campaignId must be a uuid', 'invalid_campaign');
+  const res = await ownedDbTable(PROSPECT_CAMPAIGNS_TABLE)
+    .select(TARGETING_COLUMNS)
+    .eq('organization_id', organizationId)     // tenant boundary — always first
+    .eq('id', campaignId)
+    .maybeSingle();
+  if (res.error) {
+    if (isMissingSchema(res.error)) fail('campaign targeting is not installed (20261231000000 has not run)', 'targeting_schema_missing');
+    translate(res.error, 'campaign targeting read failed');
+  }
+  return res.data ? toTargeting(res.data as unknown as Row) : null;
+}
+
+/**
+ * Set a campaign's targeting. An ICP campaign must name a RATIFIED ICP version of
+ * THIS tenant; the database enforces both (composite FK + ratification trigger)
+ * and freezes targeting once the campaign has selected anyone.
+ */
+export async function setCampaignTargeting(input: {
+  organizationId: string;
+  campaignId: string;
+  mode: CampaignTargetingMode;
+  icpId?: string | null;
+  icpVersion?: number | null;
+  minIcpScore?: number | null;
+}): Promise<CampaignTargeting | null> {
+  assertTenant(input.organizationId);
+  if (!UUID.test(String(input.campaignId ?? ''))) fail('campaignId must be a uuid', 'invalid_campaign');
+  let payload: Row;
+  if (input.mode === 'manual') {
+    if (input.icpId != null || input.icpVersion != null || input.minIcpScore != null) {
+      fail('a manual campaign names no ICP', 'manual_campaign_has_icp');
+    }
+    payload = { targeting_mode: 'manual', icp_id: null, icp_version: null, min_icp_score: null };
+  } else if (input.mode === 'icp') {
+    if (!UUID.test(String(input.icpId ?? ''))) fail('an ICP campaign requires icpId (uuid)', 'icp_required');
+    if (!Number.isInteger(input.icpVersion) || (input.icpVersion as number) < 1) {
+      fail('an ICP campaign requires a positive integer icpVersion', 'icp_version_required');
+    }
+    const min = input.minIcpScore ?? null;
+    if (min !== null && (typeof min !== 'number' || !(min >= 0 && min <= 1))) {
+      fail('minIcpScore must be a number in [0, 1]', 'invalid_min_icp_score');
+    }
+    payload = { targeting_mode: 'icp', icp_id: input.icpId, icp_version: input.icpVersion, min_icp_score: min };
+  } else {
+    fail('mode must be manual or icp', 'invalid_targeting_mode');
+  }
+
+  const res = await ownedDbTable(PROSPECT_CAMPAIGNS_TABLE)
+    .update(payload)
+    .eq('organization_id', input.organizationId)  // tenant boundary — always first
+    .eq('id', input.campaignId)
+    .select(TARGETING_COLUMNS);
+  if (res.error) {
+    const message = String((res.error as { message?: string }).message ?? '');
+    const code = String((res.error as { code?: string }).code ?? '');
+    if (isMissingSchema(res.error)) fail('campaign targeting is not installed (20261231000000 has not run)', 'targeting_schema_missing');
+    if (message.includes('campaign_icp_not_ratified')) fail('the ICP version is not ratified; an ICP campaign must be pinned to a ratified version', 'campaign_icp_not_ratified');
+    if (message.includes('campaign_targeting_locked')) fail('the campaign has already selected targets under its current targeting', 'campaign_targeting_locked');
+    if (code === '23503') fail('no such ICP version in this tenant', 'icp_version_not_found');
+    translate(res.error, 'campaign targeting update failed');
+  }
+  const found = rows(res.data);
+  return found.length ? toTargeting(found[0]) : null;
+}

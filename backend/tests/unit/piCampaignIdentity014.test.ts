@@ -428,7 +428,10 @@ describe('014 — the migration', () => {
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
     const dir = path.join(process.cwd(), 'supabase/migrations');
-    const CREATES = /CREATE\s+TABLE[^;]*prospect_campaigns/i;
+    // The table NAME, word-bounded: `[^;]*prospect_campaigns` also matched the
+    // prospect_campaign_lists / prospect_campaign_targets tables of 20261231 and
+    // any table that merely REFERENCES prospect_campaigns (2026-10-28).
+    const CREATES = /CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?(public\.)?prospect_campaigns\b/i;
     const owners = fs.readdirSync(dir)
       .filter((f: string) => f.endsWith('.sql'))
       .filter((f: string) => CREATES.test(fs.readFileSync(path.join(dir, f), 'utf8') as string))
