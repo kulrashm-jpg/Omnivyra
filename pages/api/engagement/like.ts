@@ -22,6 +22,11 @@ import { executeAction } from '../../../backend/services/communityAiActionExecut
 import { incrementReplyLike } from '../../../backend/services/responsePerformanceService';
 import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
+import {
+  readClientIdempotencyKey,
+  deriveEngagementActionId,
+  replayResponseFor,
+} from '../../../backend/services/engagementRequestIdempotency';
 
 type LikeBody = {
   organization_id?: string;
@@ -52,6 +57,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     if (!platform) {
       return res.status(400).json({ error: 'platform required' });
+    }
+    const clientIdempotency = readClientIdempotencyKey(req);
+    if (clientIdempotency.ok === false) {
+      return res.status(400).json({
+        error: 'Idempotency-Key must be 8-200 characters of [A-Za-z0-9._:-]',
+        code: clientIdempotency.error,
+      });
     }
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
@@ -123,7 +135,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // comment_likes is upserted only after the platform confirms — same
     // invariant as reply: local state only reflects platform-acknowledged
     // actions. Upsert is idempotent so this is safe on retry.
-    const actionId = crypto.randomUUID();
+    //
+    // Request-level idempotency: the action id is derived from (tenant,
+    // acting user, 'like', target, Idempotency-Key | 5-min bucket).
+    // executeAction inserts that row already claimed and refuses to act if it
+    // exists, so a retry or concurrent double-click likes ONCE.
+    const likeTargetId = String(message.platform_message_id ?? messageId);
+    const actionId = deriveEngagementActionId({
+      scope: 'engagement-like',
+      organizationId,
+      userId: roleGate.userId ?? null,
+      actionType: 'like',
+      targetId: likeTargetId,
+      clientKey: clientIdempotency.key,
+      content: null,
+    });
     const result = await executeAction(
       {
         id: actionId,
@@ -131,7 +157,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         organization_id: organizationId,
         platform,
         action_type: 'like',
-        target_id: message.platform_message_id ?? messageId,
+        target_id: likeTargetId,
         suggested_text: null,
         playbook_id: null,
         execution_mode: capability.mode ?? 'api',
@@ -141,6 +167,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       true,
       { source: 'manual', persist: true, auto_insert: true }
     );
+
+    // Replay: the action row already existed — nothing was liked again and no
+    // counter is incremented a second time.
+    const replay = replayResponseFor(result as { deduplicated?: boolean; status?: unknown; prior_action_id?: string | null });
+    if (replay) {
+      return res.status(replay.status).json(replay.body);
+    }
 
     if (!result.ok || result.status !== 'executed') {
       return res.status(502).json({

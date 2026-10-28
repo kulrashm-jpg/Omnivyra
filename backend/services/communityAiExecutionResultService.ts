@@ -38,6 +38,8 @@ export type CommandChainStep = {
 
 const IDEMPOTENCY_BUCKET_MS = 5 * 60 * 1000;
 const TERMINAL_ROW_STATUSES = new Set(['executed', 'sent_unverified', 'failed', 'skipped', 'blocked', 'uncertain']);
+/** Statuses a persist may write FROM when the caller names none (never a terminal one). */
+const NON_TERMINAL_ROW_STATUSES = ['pending', 'approved', 'scheduled', 'dispatched', 'acknowledged', 'executing'];
 
 const metricFailureCounters = {
   metric_insert_failed: 0,
@@ -121,6 +123,8 @@ export async function persistExecutionResult(input: {
   idempotencyKey?: string | null;
   leaseGuard?: { expectedLeaseId: string; expectedHolderId: string };
   expectedFromStatuses?: string[];
+  /** Only write while no extension holds (or ever held) a claim on the row. */
+  requireUnleased?: boolean;
   rowHint?: { platform?: string | null; action_type?: string | null; target_id?: string | null };
   final_text?: string | null;
   command_chain?: CommandChainStep[];
@@ -172,7 +176,10 @@ export async function persistExecutionResult(input: {
   }
 
   let q = ownedDbTable('community_ai_actions').update(update).eq('id', input.actionId);
-  if (input.expectedFromStatuses?.length) q = q.in('status', input.expectedFromStatuses);
+  // Default guard: a terminal row (incl. 'uncertain' — may have acted) is never
+  // revived or overwritten unless the caller names the expected from-state.
+  q = q.in('status', input.expectedFromStatuses?.length ? input.expectedFromStatuses : NON_TERMINAL_ROW_STATUSES);
+  if (input.requireUnleased) q = q.is('dispatch_lease_id', null);
   if (input.leaseGuard) {
     q = q.eq('dispatch_lease_id', input.leaseGuard.expectedLeaseId)
       .eq('dispatch_lease_holder_id', input.leaseGuard.expectedHolderId);
