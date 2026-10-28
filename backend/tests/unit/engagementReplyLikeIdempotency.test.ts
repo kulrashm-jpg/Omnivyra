@@ -76,7 +76,7 @@ const likeHandler = require('../../../pages/api/engagement/like').default;
 const replyHandler = require('../../../pages/api/engagement/reply').default;
 const { executeAction } = require('../../services/communityAiActionExecutor');
 const { sendReply } = require('../../services/bulkEngagementService');
-const { deriveEngagementActionId, readClientIdempotencyKey } = require('../../services/engagementRequestIdempotency');
+const { requestRecordId, actionIdForAttempt, computeRequestFingerprint, readClientIdempotencyKey } = require('../../services/engagementRequestIdempotency');
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const ORG = '00000000-0000-0000-0000-00000000000a';
@@ -227,9 +227,10 @@ describe('D4 — reply: retries and concurrent duplicates perform ONE reply', ()
     expect(mockConnector).toHaveBeenCalledTimes(2);
   });
 
-  it('browser DM: a retry is the queued row (202), never a second claimable row', async () => {
+  // Browser-mode REPLY (DMs are refused before dispatch — see
+  // engagementRequestIdempotencyDurable.test.ts).
+  it('browser-mode reply: a retry is the queued row (202), never a second claimable row', async () => {
     mockCapabilityMode = 'browser';
-    mockDb.tables.engagement_messages[0].message_type = 'dm';
     const a = await reply({ 'idempotency-key': 'reply-key-0002' });
     const b = await reply({ 'idempotency-key': 'reply-key-0002' });
     expect(a.statusCode).toBe(202);
@@ -238,15 +239,25 @@ describe('D4 — reply: retries and concurrent duplicates perform ONE reply', ()
   });
 });
 
-describe('D4 — key binding: tenant + user + action + target', () => {
-  const base = { scope: 'engagement-like' as const, organizationId: ORG, userId: 'u1', actionType: 'like', targetId: 't', clientKey: 'k-00000001' };
-  it('same inputs → same id; any component changes → different id', () => {
-    const id = deriveEngagementActionId(base);
-    expect(deriveEngagementActionId(base)).toBe(id);
+describe('D4 — key binding: tenant + user + scope + key; fingerprint binds the payload', () => {
+  const base = { scope: 'like' as const, organizationId: ORG, actorId: 'u1', key: 'k-00000001' };
+  it('same inputs → same record id; any component changes → different id; attempts get distinct action ids', () => {
+    const id = requestRecordId(base);
+    expect(requestRecordId(base)).toBe(id);
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    for (const over of [{ organizationId: OTHER_ORG }, { userId: 'u2' }, { actionType: 'reply' }, { targetId: 't2' }, { clientKey: 'k-00000002' }]) {
-      expect(deriveEngagementActionId({ ...base, ...over })).not.toBe(id);
+    for (const over of [{ organizationId: OTHER_ORG }, { actorId: 'u2' }, { scope: 'reply' as const }, { key: 'k-00000002' }]) {
+      expect(requestRecordId({ ...base, ...over })).not.toBe(id);
     }
+    expect(actionIdForAttempt(id, 1)).not.toBe(actionIdForAttempt(id, 2));
+    expect(actionIdForAttempt(id, 1)).toBe(actionIdForAttempt(id, 1));
+    const fp = { scope: 'reply' as const, platform: 'linkedin', messageId: 'm1', text: 'Hi', account: ORG };
+    const f = computeRequestFingerprint(fp);
+    for (const over of [{ platform: 'twitter' }, { messageId: 'm2' }, { text: 'Hi!' }, { account: OTHER_ORG }, { threadId: 't9' }]) {
+      expect(computeRequestFingerprint({ ...fp, ...over })).not.toBe(f);
+    }
+    // x is the twitter alias; CRLF / surrounding whitespace are not payload changes.
+    expect(computeRequestFingerprint({ ...fp, platform: 'x' })).toBe(computeRequestFingerprint({ ...fp, platform: 'twitter' }));
+    expect(computeRequestFingerprint({ ...fp, text: '  Hi' + String.fromCharCode(13, 10) })).toBe(f);
   });
 
   it('another user replaying the same key does not see or re-run the first user\'s action', async () => {
@@ -304,10 +315,11 @@ describe('D1 — executor: an existing action row is never executed again or rev
   });
 });
 
+// Browser-mode bulk REPLY (bulk DMs are refused before any row is written;
+// see engagementRequestIdempotencyDurable.test.ts).
 describe('D1 — bulk in-flight guard covers every possibly-delivered state', () => {
   beforeEach(() => {
     mockCapabilityMode = 'browser';
-    mockDb.tables.engagement_messages[0].message_type = 'dm';
     mockDb.tables.engagement_messages[0].platform_message_id = '2-RECIPIENTTHREADAAAA';
   });
 
@@ -321,7 +333,7 @@ describe('D1 — bulk in-flight guard covers every possibly-delivered state', ()
   ])('an existing %s (%s) row for the target blocks a new dispatch', async (status, mode) => {
     mockDb.tables.community_ai_actions.push({
       id: 'prior', organization_id: ORG, status, execution_mode: mode,
-      platform: 'linkedin', action_type: 'dm', target_id: '2-RECIPIENTTHREADAAAA',
+      platform: 'linkedin', action_type: 'reply', target_id: '2-RECIPIENTTHREADAAAA',
     });
     const r = await sendReply(ORG, 't1', 'm1', 'Hi', 'linkedin', true, 'user_1');
     expect(r.outcome).toBe('skipped_already_dispatched');
@@ -331,7 +343,7 @@ describe('D1 — bulk in-flight guard covers every possibly-delivered state', ()
   it('a terminal not-acted row (failed) does not block, and is never revived', async () => {
     mockDb.tables.community_ai_actions.push({
       id: 'prior', organization_id: ORG, status: 'failed', execution_mode: 'browser',
-      platform: 'linkedin', action_type: 'dm', target_id: '2-RECIPIENTTHREADAAAA',
+      platform: 'linkedin', action_type: 'reply', target_id: '2-RECIPIENTTHREADAAAA',
     });
     const r = await sendReply(ORG, 't1', 'm1', 'Hi', 'linkedin', true, 'user_1');
     expect(r.outcome).toBe('sent');

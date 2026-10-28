@@ -546,7 +546,7 @@ const runExecution = async (
         source: options?.source || 'unknown',
       },
     });
-    return { ok: false, status: 'skipped', reason: 'PLATFORM_POLICY' };
+    return { ok: false, status: 'skipped', reason: 'PLATFORM_POLICY', may_have_acted: false };
   }
 
   if (policy.require_human_approval && !action.approved_at) {
@@ -560,26 +560,37 @@ const runExecution = async (
         source: options?.source || 'unknown',
       },
     });
-    return { ok: false, status: 'skipped', reason: 'HUMAN_APPROVAL_REQUIRED' };
+    return { ok: false, status: 'skipped', reason: 'HUMAN_APPROVAL_REQUIRED', may_have_acted: false };
   }
 
   const validation = validateAction(action);
   if (!validation.ok) {
-    return { ok: false, status: 'failed', error: validation.error };
+    return { ok: false, status: 'failed', error: validation.error, may_have_acted: false };
   }
 
   if (requiresApproval(action, approved)) {
-    return { ok: false, status: 'failed', error: 'APPROVAL_REQUIRED' };
+    return { ok: false, status: 'failed', error: 'APPROVAL_REQUIRED', may_have_acted: false };
   }
 
   const executionMode = await resolveExecutionMode(action);
+
+  // DM send policy, for EVERY acting mode (api, rpa, browser): no authoritative
+  // person -> thread mapping exists and no Instagram tier is server-verified
+  // (dmDispatchSafety), so a DM is refused here — before any connector, RPA
+  // task or browser dispatch. 'manual' records a simulation and never acts.
+  if (executionMode !== 'manual') {
+    const dmRefusal = dmCommandChainRefusal(action);
+    if (dmRefusal) {
+      return { ok: false, status: 'failed', error: dmRefusal, execution_mode: executionMode, may_have_acted: false };
+    }
+  }
 
   let playbook = null;
   if (action.playbook_id) {
     try {
       playbook = await getPlaybookById(action.playbook_id, action.tenant_id, action.organization_id);
     } catch {
-      return { ok: false, status: 'failed', error: 'PLAYBOOK_NOT_FOUND' };
+      return { ok: false, status: 'failed', error: 'PLAYBOOK_NOT_FOUND', may_have_acted: false };
     }
 
     const historyMetrics = await loadHistoryMetrics(
@@ -602,10 +613,11 @@ const runExecution = async (
         ok: false,
         status: 'failed',
         error: playbookValidation.reason || 'PLAYBOOK_VIOLATION',
+        may_have_acted: false,
       };
     }
   } else if (executionMode !== 'manual' && options?.source !== 'manual') {
-    return { ok: false, status: 'failed', error: 'PLAYBOOK_REQUIRED' };
+    return { ok: false, status: 'failed', error: 'PLAYBOOK_REQUIRED', may_have_acted: false };
   }
 
   const enforcement = await checkUsageBeforeExecution({
@@ -618,8 +630,13 @@ const runExecution = async (
       ok: false,
       status: 'blocked',
       error: { code: 'PLAN_LIMIT_EXCEEDED', ...enforcement },
+      may_have_acted: false,
     };
   }
+
+  // Every return above is a pre-dispatch gate: nothing reached the platform,
+  // so each is marked may_have_acted:false (request idempotency releases
+  // such an attempt for a same-key retry; see engagementRequestIdempotency).
 
   // ── Execute through the resolved mode, with a single API→Browser fallback.
   let result: ExecutionResult;

@@ -34,6 +34,7 @@ import { resolveEngagementCapability } from './engagementCapabilityMap';
 import { logAuditEvent } from './auditLoggingService';
 import { isThreadActionable } from './engagementThreadService';
 import { isDmMessageType } from '../../lib/engagement/messageRoles';
+import { dmSendRefusal, DM_BLOCKED_MESSAGE } from './dmDispatchSafety';
 import { createHash } from 'crypto';
 
 const MAX_BULK_BATCH = 20;
@@ -118,6 +119,25 @@ export async function sendReply(
 
   if (!thread || thread.organization_id !== organizationId) {
     return { ok: false, error: 'Access denied', outcome: 'skipped_unauthorized' };
+  }
+
+  // ── DM send policy (dmDispatchSafety) ───────────────────────────────────
+  //    No authoritative person -> thread mapping exists and no Instagram tier
+  //    is verified server-side: a bulk DM is refused here, before any action
+  //    row is written (the executor and /api/extension/commands refuse too).
+  if (isDmMessageType((message as { message_type?: string | null }).message_type)) {
+    const dmPlatform = ((platform || '').toLowerCase() === 'x') ? 'twitter' : (platform || '').toLowerCase();
+    const dmRefusal = dmSendRefusal({ platform: dmPlatform, verifiedInstagramTier: null }) ?? 'DM_RECIPIENT_MAPPING_UNAVAILABLE';
+    void logAuditEvent({
+      operation: 'INSERT',
+      table: 'engagement_bulk_reply_rejected',
+      companyId: organizationId,
+      userId: userId ?? 'unknown',
+      success: false,
+      errorMessage: 'Bulk DM refused: no authoritative recipient mapping',
+      metadata: { platform: dmPlatform, action: 'dm', thread_id: message.thread_id, code: dmRefusal },
+    }).catch(() => {});
+    return { ok: false, error: DM_BLOCKED_MESSAGE, outcome: 'skipped_capability' };
   }
 
   // ── Send-time canonical actionability ───────────────────────────────────

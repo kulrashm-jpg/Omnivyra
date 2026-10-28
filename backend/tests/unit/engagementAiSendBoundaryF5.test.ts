@@ -36,6 +36,10 @@ interface Row { [k: string]: unknown }
 const db: Record<string, Row[]> = {
   engagement_messages: [], engagement_threads: [], engagement_authors: [],
   ai_message_drafts: [], comment_replies: [],
+  // Request idempotency (engagementRequestIdempotency): the reply route
+  // reserves a request record before dispatch; executeAction is mocked, so
+  // community_ai_actions stays empty.
+  engagement_request_idempotency: [], community_ai_actions: [],
 };
 
 function builder(table: string) {
@@ -45,12 +49,19 @@ function builder(table: string) {
     select() { return api; },
     eq(c: string, v: unknown) { filters.push([c, v]); return api; },
     in() { return api; },
+    lt() { return api; },
     order() { return api; }, limit() { return api; },
     maybeSingle() { return Promise.resolve({ data: rows()[0] ?? null, error: null }); },
     single() { return Promise.resolve({ data: rows()[0] ?? null, error: null }); },
     update(patch: Row) {
       const upd: any = {
         eq(c: string, v: unknown) { filters.push([c, v]); return upd; },
+        select() { return upd; },
+        maybeSingle() {
+          const hit = rows();
+          for (const r of hit) Object.assign(r, patch);
+          return Promise.resolve({ data: hit[0] ?? null, error: null });
+        },
         then(res: (v: unknown) => unknown) {
           for (const r of rows()) Object.assign(r, patch);
           return Promise.resolve({ error: null }).then(res);
@@ -138,6 +149,8 @@ function seed() {
     id: DRAFT, thread_id: THREAD, platform: 'linkedin', status: 'draft', generated_text: 'hi',
   }];
   db.comment_replies = [];
+  db.engagement_request_idempotency = [];
+  db.community_ai_actions = [];
 }
 
 async function send(body: Record<string, unknown>) {
@@ -262,10 +275,18 @@ describe('AI send boundary', () => {
     expect((await send(AI_SEND)).statusCode).toBe(200);
     expect(db.ai_message_drafts[0].status).toBe('sent');
 
+    // The identical request is a REPLAY of the recorded outcome (request
+    // idempotency): answered before any gate, nothing dispatched again.
     const second = await send(AI_SEND);
-    expect(second.statusCode).toBe(400);
-    expect(second.body.code).toBe('AI_DRAFT_TERMINAL');
+    expect(second.statusCode).toBe(200);
+    expect(second.body.replayed).toBe(true);
     expect(executeActionMock).toHaveBeenCalledTimes(1);      // still one dispatch
+
+    // A DIFFERENT request reusing the sent draft reaches the draft gate.
+    const third = await send({ ...AI_SEND, reply_text: 'Tuesday works — confirmed.' });
+    expect(third.statusCode).toBe(400);
+    expect(third.body.code).toBe('AI_DRAFT_TERMINAL');
+    expect(executeActionMock).toHaveBeenCalledTimes(1);
   });
 
   it('a manual (non-AI) reply is NOT blocked on an answered thread', async () => {

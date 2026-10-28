@@ -388,8 +388,11 @@ describe('D1 — expired lease / crash / timeout: uncertain, recorded, never rev
   });
 
   it('chain intermediate success on a reaped row does NOT revive it to pending', async () => {
+    // A non-DM two-step chain: DM chains are now refused before any claim
+    // (dmDispatchSafety; see engagementRequestIdempotencyDurable.test.ts), and
+    // the chain-advance rule under test is independent of the action type.
     mockDb.tables.community_ai_actions.push(actionRow({
-      action_type: 'dm', command_chain: [{ action_type: 'open_thread' }, { action_type: 'continue_thread' }], command_chain_index: 0,
+      action_type: 'reply', command_chain: [{ action_type: 'sync_comments_inbox' }, { action_type: 'reply' }], command_chain_index: 0,
     }));
     const cmd = (await poll()).body.commands[0];
     rowById().dispatch_lease_expires_at = past();
