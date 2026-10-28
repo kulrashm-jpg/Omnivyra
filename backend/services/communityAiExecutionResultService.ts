@@ -3,7 +3,10 @@ import { supabase } from '../db/supabaseClient';
 import { ownedDbTable } from '../db/writeOwner';
 
 type ExecutionMode = 'api' | 'rpa' | 'browser' | 'manual';
-type ResultStatus = 'executed' | 'sent_unverified' | 'dispatched' | 'failed' | 'skipped' | 'blocked';
+// Must stay identical in meaning to ResultStatus in
+// communityAiActionExecutorContracts.ts ('uncertain' = may have acted, review,
+// never re-executed; 'deferred' = not acted, persisted as 'approved').
+type ResultStatus = 'executed' | 'sent_unverified' | 'dispatched' | 'failed' | 'skipped' | 'blocked' | 'uncertain' | 'deferred';
 type MetricEventType =
   | 'execution_started'
   | 'execution_success'
@@ -25,6 +28,7 @@ export type LightweightExecutionResult = {
   automation_decision_log_id?: string | null;
   deduplicated?: boolean;
   prior_action_id?: string | null;
+  may_have_acted?: boolean;
 };
 
 export type CommandChainStep = {
@@ -33,7 +37,7 @@ export type CommandChainStep = {
 };
 
 const IDEMPOTENCY_BUCKET_MS = 5 * 60 * 1000;
-const TERMINAL_ROW_STATUSES = new Set(['executed', 'sent_unverified', 'failed', 'skipped', 'blocked']);
+const TERMINAL_ROW_STATUSES = new Set(['executed', 'sent_unverified', 'failed', 'skipped', 'blocked', 'uncertain']);
 
 const metricFailureCounters = {
   metric_insert_failed: 0,
@@ -122,7 +126,10 @@ export async function persistExecutionResult(input: {
   command_chain?: CommandChainStep[];
 }): Promise<{ ok: boolean; current_status?: string; error?: string; deduplicated?: boolean; prior_action_id?: string | null }> {
   const result = input.result;
-  const finalStatus = result.status === 'dispatched' ? 'pending' : result.status;
+  const finalStatus =
+    result.status === 'dispatched' ? 'pending'
+    : result.status === 'deferred' ? 'approved'
+    : result.status;
   const effectiveMode = result.execution_mode || null;
 
   const update: Record<string, unknown> = {
@@ -212,7 +219,7 @@ export async function persistExecutionResult(input: {
         platform_id: result.platform_id ?? null,
       },
     });
-  } else if (finalStatus === 'failed' || finalStatus === 'blocked' || finalStatus === 'skipped') {
+  } else if (finalStatus === 'failed' || finalStatus === 'blocked' || finalStatus === 'skipped' || finalStatus === 'uncertain') {
     await recordExecutionMetric({
       organization_id: input.organizationId,
       action_id: input.actionId,

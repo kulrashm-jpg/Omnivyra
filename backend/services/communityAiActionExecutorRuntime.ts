@@ -16,7 +16,7 @@ import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
 import { ownedDbTable } from '../db/writeOwner';
 
-import { type CommunityAiAction, type ExecutionMode, type ResultStatus, type ExecutionResult, type MetricEventType, deriveAutoIdempotencyKey, recordExecutionMetric, TERMINAL_ROW_STATUSES, validateAction, requiresApproval, loadHistoryMetrics, resolveExecutionMode, recordManualSimulation, runApiExecution, runRpaExecution, prepareBrowserDispatch, buildDmCommandChain } from './communityAiActionExecutorContracts';
+import { type CommunityAiAction, type ExecutionMode, type ResultStatus, type ExecutionResult, type MetricEventType, deriveAutoIdempotencyKey, recordExecutionMetric, TERMINAL_ROW_STATUSES, validateAction, requiresApproval, loadHistoryMetrics, resolveExecutionMode, recordManualSimulation, runApiExecution, runRpaExecution, prepareBrowserDispatch, buildDmCommandChain, dmCommandChainRefusal } from './communityAiActionExecutorContracts';
 
 export async function advanceCommandChain(input: {
   actionId: string;
@@ -164,7 +164,14 @@ export async function persistExecutionResult(input: {
   command_chain?: CommandChainStep[];
 }): Promise<{ ok: boolean; current_status?: string; error?: string; deduplicated?: boolean; prior_action_id?: string | null }> {
   const result = input.result;
-  const finalStatus = result.status === 'dispatched' ? 'pending' : result.status;
+  // 'dispatched' -> 'pending' (extension claims it under a lease).
+  // 'deferred'   -> 'approved' (provably not acted; durably queued in
+  //                 rpa_retry_queue, whose flush must claim approved ->
+  //                 executing before running it).
+  const finalStatus =
+    result.status === 'dispatched' ? 'pending'
+    : result.status === 'deferred' ? 'approved'
+    : result.status;
   const effectiveMode = result.execution_mode || null;
 
   const update: Record<string, any> = {
@@ -263,7 +270,7 @@ export async function persistExecutionResult(input: {
         platform_id: result.platform_id ?? null,
       },
     });
-  } else if (finalStatus === 'failed' || finalStatus === 'blocked' || finalStatus === 'skipped') {
+  } else if (finalStatus === 'failed' || finalStatus === 'blocked' || finalStatus === 'skipped' || finalStatus === 'uncertain') {
     await recordExecutionMetric({
       organization_id: input.organizationId,
       action_id: input.actionId,
@@ -319,6 +326,11 @@ export const executeAction = async (
     /** Audit join key: the automation_logs row id that decided this
      *  run. Threaded into execution_result.metadata for traceability. */
     automation_decision_log_id?: string;
+    /** Compare-and-set guard for the terminal row write. A caller that
+     *  claimed the row (e.g. approved -> executing) passes ['executing'] so
+     *  a row changed underneath it (reaper -> uncertain, cancel, another
+     *  claimant) is never overwritten. */
+    expected_from_statuses?: string[];
   }
 ): Promise<ExecutionResult> => {
   const correlationId = options?.correlation_id || randomUUID();
@@ -362,7 +374,11 @@ export const executeAction = async (
           playbook_id: action.playbook_id ?? null,
           tone_used: action.tone_used ?? null,
           acting_user_id: action.acting_user_id ?? null,
-          status: 'pending',
+          // Inserted already CLAIMED by this caller ('executing'), never as a
+          // claimable 'pending' row: if a gate below refuses and the terminal
+          // write then fails, no extension / scheduler can pick the row up.
+          // (A stuck 'executing' row is reaped, never re-dispatched.)
+          status: 'executing',
           execution_correlation_id: correlationId,
           approved_at: new Date().toISOString(),
           created_at: new Date().toISOString(),
@@ -396,6 +412,10 @@ export const executeAction = async (
       idempotencyKey: options?.idempotency_key ?? null,
       final_text: options?.final_text ?? null,
       command_chain: Array.isArray(chain) && chain.length > 0 ? chain : undefined,
+      expectedFromStatuses:
+        Array.isArray(options?.expected_from_statuses) && options!.expected_from_statuses!.length > 0
+          ? options!.expected_from_statuses
+          : undefined,
       rowHint: {
         platform: action.platform,
         action_type: action.action_type,
@@ -404,10 +424,15 @@ export const executeAction = async (
     });
     if (!persistOutcome.ok) {
       // Persist failed but execution itself may have happened. Surface both.
+      // A may-have-acted outcome keeps its 'uncertain' status so no caller
+      // mistakes it for a retryable failure.
       return {
         ...runResult,
         ok: false,
-        status: 'failed',
+        status:
+          runResult.status === 'uncertain' || runResult.status === 'executed' || runResult.status === 'sent_unverified'
+            ? 'uncertain'
+            : 'failed',
         error: persistOutcome.error || 'PERSIST_FAILED',
         response: { ...(runResult.response || {}), persist_error: persistOutcome.error || 'PERSIST_FAILED', current_status: persistOutcome.current_status },
       };
@@ -560,11 +585,21 @@ const runExecution = async (
       break;
     case 'rpa':
       result = await runRpaExecution(action);
+      if (result.status === 'deferred') {
+        // Remember who initiated the run so the retry flush re-applies the
+        // same playbook rule (human-initiated runs may omit a playbook).
+        result.response = { ...(result.response || {}), deferred_source: options?.source || 'unknown' };
+      }
       break;
     case 'browser': {
       // DM orchestration: synthesize multi-step chain when target is a
       // thread url / id, or a user handle. Non-DM browser dispatches
-      // stay as single-step.
+      // stay as single-step. An unresolved DM target is refused (not acted).
+      const dmRefusal = dmCommandChainRefusal(action);
+      if (dmRefusal) {
+        result = { ok: false, status: 'failed', error: dmRefusal, execution_mode: 'browser', may_have_acted: false };
+        break;
+      }
       const chain = buildDmCommandChain(action) ?? undefined;
       result = prepareBrowserDispatch(chain);
       break;
@@ -572,7 +607,11 @@ const runExecution = async (
     case 'api':
     default:
       result = await runApiExecution(action);
-      if (!result.ok) {
+      // Fallback API → Browser ONLY when the API attempt provably did not
+      // reach the platform (pre-request refusal). A may-have-acted outcome
+      // ('uncertain': timeout, throw, lost or unclassified response) is
+      // NEVER re-routed — that would risk a duplicate send.
+      if (!result.ok && result.status === 'failed' && result.may_have_acted === false) {
         // Single fallback: API → Browser. No second retry, no infinite loop.
         await recordExecutionMetric({
           organization_id: action.organization_id,
@@ -583,6 +622,13 @@ const runExecution = async (
           execution_mode: 'api',
           metadata: { api_error: result.error, fallback_to: 'browser' },
         });
+        const dmRefusal = dmCommandChainRefusal(action);
+        if (dmRefusal) {
+          // The browser path would not know whom to message: keep the
+          // (not-acted) API failure, annotated with the refusal.
+          result = { ...result, response: { ...(result.response || {}), fallback_refused: dmRefusal } };
+          break;
+        }
         const chain = buildDmCommandChain(action) ?? undefined;
         const fallback = prepareBrowserDispatch(chain);
         fallback.response = {
@@ -628,10 +674,56 @@ const runExecution = async (
       }
     }
     await emitWebhook(action, 'failed', webhook);
+  } else if (result.status === 'uncertain') {
+    // Human review required. In-app notification only: a 'failed' webhook
+    // could prompt an external system to resend.
+    if (notify) {
+      try {
+        await notifyCommunityAi({
+          tenant_id: action.tenant_id,
+          organization_id: action.organization_id,
+          action_id: action.id,
+          event_type: 'failed',
+          message: `Action outcome uncertain on ${action.platform} — review required; it will not be retried automatically`,
+        });
+      } catch (error: any) {
+        console.warn('COMMUNITY_AI_NOTIFY_FAILED', error?.message || error);
+      }
+    }
   }
 
   return result;
 };
+
+/**
+ * Atomic, tenant-scoped claim of an action row for execution:
+ * `status IN fromStatuses` -> 'executing'. Exactly one concurrent caller
+ * wins; losers get `claimed:false` and must do nothing. The winner must pass
+ * `expected_from_statuses: ['executing']` to executeAction so its terminal
+ * write is itself compare-and-set.
+ */
+export async function claimCommunityActionForExecution(input: {
+  actionId: string;
+  tenantId: string;
+  organizationId: string;
+  fromStatuses?: string[];
+}): Promise<{ claimed: boolean; error?: string }> {
+  const from = input.fromStatuses && input.fromStatuses.length > 0 ? input.fromStatuses : ['approved'];
+  if (!input.actionId || !input.tenantId || !input.organizationId) {
+    return { claimed: false, error: 'CLAIM_SCOPE_MISSING' };
+  }
+  const { data, error } = await ownedDbTable('community_ai_actions')
+    .update({ status: 'executing', updated_at: new Date().toISOString() })
+    .eq('id', input.actionId)
+    .eq('tenant_id', input.tenantId)
+    .eq('organization_id', input.organizationId)
+    .in('status', from)
+    .is('cancel_requested_at', null)
+    .select('id, status')
+    .maybeSingle();
+  if (error) return { claimed: false, error: error.message };
+  return { claimed: !!data };
+}
 
 export type { CommunityAiAction, ExecutionResult, ExecutionMode, ResultStatus, MetricEventType };
 

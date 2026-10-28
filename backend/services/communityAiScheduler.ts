@@ -4,7 +4,7 @@ import { logCommunityAiActionEvent } from './communityAiActionLogService';
 import { randomUUID } from 'crypto';
 import { notifyCommunityAi } from './communityAiNotificationService';
 import { sendCommunityAiWebhooks } from './communityAiWebhookService';
-import { persistExecutionResult } from './communityAiActionExecutor';
+import { persistExecutionResult, claimCommunityActionForExecution } from './communityAiActionExecutor';
 import { getPlaybookById } from './playbooks/playbookService';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getToken } from './platformTokenService';
@@ -115,6 +115,9 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
     if (!action.tenant_id || !action.organization_id) {
       failed += 1;
       await persistExecutionResult({
+        // Pre-claim write: only while the row is still 'approved' (never
+        // overwrites a row another claimant is executing).
+        expectedFromStatuses: ['approved'],
         actionId: action.id,
         organizationId: action.organization_id || 'unknown',
         correlationId: randomUUID(),
@@ -148,6 +151,9 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       failed += 1;
       const failure = { ok: false, status: 'failed' as const, error: 'PLAYBOOK_REQUIRED', response: { source: 'scheduler' } };
       await persistExecutionResult({
+        // Pre-claim write: only while the row is still 'approved' (never
+        // overwrites a row another claimant is executing).
+        expectedFromStatuses: ['approved'],
         actionId: action.id,
         organizationId: action.organization_id,
         correlationId: randomUUID(),
@@ -190,6 +196,9 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       failed += 1;
       const failure = { ok: false, status: 'failed' as const, error: 'PLAYBOOK_NOT_FOUND', response: { source: 'scheduler' } };
       await persistExecutionResult({
+        // Pre-claim write: only while the row is still 'approved' (never
+        // overwrites a row another claimant is executing).
+        expectedFromStatuses: ['approved'],
         actionId: action.id,
         organizationId: action.organization_id,
         correlationId: randomUUID(),
@@ -248,6 +257,9 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       ]);
       if (skipReasons.has(reason)) {
         await persistExecutionResult({
+          // Pre-claim write: only while the row is still 'approved' (never
+          // overwrites a row another claimant is executing).
+          expectedFromStatuses: ['approved'],
           actionId: action.id,
           organizationId: action.organization_id,
           correlationId: randomUUID(),
@@ -272,6 +284,9 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
         response: { source: 'scheduler' },
       };
       await persistExecutionResult({
+        // Pre-claim write: only while the row is still 'approved' (never
+        // overwrites a row another claimant is executing).
+        expectedFromStatuses: ['approved'],
         actionId: action.id,
         organizationId: action.organization_id,
         correlationId: randomUUID(),
@@ -324,6 +339,9 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
           response: { source: 'scheduler' },
         };
         await persistExecutionResult({
+          // Pre-claim write: only while the row is still 'approved' (never
+          // overwrites a row another claimant is executing).
+          expectedFromStatuses: ['approved'],
           actionId: action.id,
           organizationId: action.organization_id,
           correlationId: randomUUID(),
@@ -374,6 +392,9 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       // central pipeline owns every row write; the status CHECK still
       // permits the legacy value.
       await persistExecutionResult({
+        // Pre-claim write: only while the row is still 'approved' (never
+        // overwrites a row another claimant is executing).
+        expectedFromStatuses: ['approved'],
         actionId: action.id,
         organizationId: action.organization_id,
         correlationId: randomUUID(),
@@ -388,14 +409,30 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       continue;
     }
 
+    // Atomic, tenant-scoped claim BEFORE acting: approved -> executing.
+    // A concurrent scheduler, the manual execute route, the orchestration
+    // adapter or the RPA retry flush may race for the same row; exactly one
+    // wins and every loser does nothing.
+    const claim = await claimCommunityActionForExecution({
+      actionId: action.id,
+      tenantId: action.tenant_id,
+      organizationId: action.organization_id,
+      fromStatuses: ['approved'],
+    });
+    if (!claim.claimed) {
+      continue;
+    }
+
     // Executor owns the terminal row write (persist:true). The scheduler
     // simply observes the outcome; notify + webhook fan-out lives inside
-    // the executor so every entry point emits identically.
+    // the executor so every entry point emits identically. The terminal
+    // write is compare-and-set from the claimed 'executing' state.
     const result = await executeAction(action, true, {
       notify: true,
       webhook: true,
       source: 'scheduler',
       persist: true,
+      expected_from_statuses: ['executing'],
     });
 
     if (result.status === 'skipped' && result.reason === 'HUMAN_APPROVAL_REQUIRED') {
@@ -407,6 +444,9 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
     if (result.ok) executed += 1;
     else if (result.status !== 'skipped') failed += 1;
 
+    // 'deferred' (not acted, queued for retry) and 'uncertain' (review
+    // required) are logged under the CHECK-permitted 'failed' event type
+    // with the precise status in the payload.
     await logCommunityAiActionEvent({
       action_id: action.id,
       tenant_id: action.tenant_id,
