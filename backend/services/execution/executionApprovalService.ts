@@ -55,18 +55,56 @@ export async function getApprovalDecision(companyId: string, campaignId: string,
   }
 }
 
-/** Record an approval. Caller MUST have verified the approver holds `campaign.approve` (API-enforced). */
-export async function recordApproval(input: { companyId: string; campaignId: string; version?: string; approverId: string; reason?: string; correlationId?: string | null }): Promise<{ id: string | null }> {
-  const { data } = await ownedDbTable(T).upsert({
-    company_id: input.companyId, campaign_id: input.campaignId, version: input.version ?? 'default',
-    approved_by: input.approverId, approved_at: new Date().toISOString(), active: true, revoked_at: null, revoked_by: null,
-    reason: input.reason ?? null, correlation_id: input.correlationId ?? null,
-  }, { onConflict: 'company_id,campaign_id,version' }).select('id').maybeSingle();
-  return { id: data ? String((data as any).id) : null };
+/**
+ * A write to the approval store did not land. `message` is a stable, client-safe code;
+ * the database error is kept on `cause` for server-side diagnosis and never forms the message.
+ */
+export class ApprovalPersistenceError extends Error {
+  readonly code: 'approval_persist_failed' | 'approval_persist_unconfirmed' | 'approval_revoke_failed';
+  constructor(code: ApprovalPersistenceError['code'], cause?: unknown) {
+    super(code);
+    this.name = 'ApprovalPersistenceError';
+    this.code = code;
+    if (cause !== undefined) (this as { cause?: unknown }).cause = cause;
+  }
 }
 
-/** Revoke an approval (respected immediately by the bridge). */
+/**
+ * Record an approval. Caller MUST have verified the approver holds `campaign.approve` (API-enforced).
+ * Throws ApprovalPersistenceError when the row is not persisted — an approval that was never
+ * stored must not be reported as recorded (the bridge would refuse every dispatch while the
+ * operator believes it was approved).
+ */
+export async function recordApproval(input: { companyId: string; campaignId: string; version?: string; approverId: string; reason?: string; correlationId?: string | null }): Promise<{ id: string }> {
+  let data: unknown;
+  let error: unknown;
+  try {
+    ({ data, error } = await ownedDbTable(T).upsert({
+      company_id: input.companyId, campaign_id: input.campaignId, version: input.version ?? 'default',
+      approved_by: input.approverId, approved_at: new Date().toISOString(), active: true, revoked_at: null, revoked_by: null,
+      reason: input.reason ?? null, correlation_id: input.correlationId ?? null,
+    }, { onConflict: 'company_id,campaign_id,version' }).select('id').maybeSingle());
+  } catch (e) {
+    throw new ApprovalPersistenceError('approval_persist_failed', e);
+  }
+  if (error) throw new ApprovalPersistenceError('approval_persist_failed', error);
+  const id = data ? (data as { id?: unknown }).id : undefined;
+  if (id === undefined || id === null || String(id) === '') throw new ApprovalPersistenceError('approval_persist_unconfirmed');
+  return { id: String(id) };
+}
+
+/**
+ * Revoke an approval (respected immediately by the bridge). Throws ApprovalPersistenceError when
+ * the update fails — a revoke that did not land leaves the approval ACTIVE, so it must never be
+ * reported as done. Revoking when no active approval exists is a successful no-op.
+ */
 export async function revokeApproval(input: { companyId: string; campaignId: string; version?: string; actorId: string; reason?: string }): Promise<void> {
-  await ownedDbTable(T).update({ active: false, revoked_at: new Date().toISOString(), revoked_by: input.actorId, reason: input.reason ?? null })
-    .eq('company_id', input.companyId).eq('campaign_id', input.campaignId).eq('version', input.version ?? 'default').eq('active', true);
+  let error: unknown;
+  try {
+    ({ error } = await ownedDbTable(T).update({ active: false, revoked_at: new Date().toISOString(), revoked_by: input.actorId, reason: input.reason ?? null })
+      .eq('company_id', input.companyId).eq('campaign_id', input.campaignId).eq('version', input.version ?? 'default').eq('active', true));
+  } catch (e) {
+    throw new ApprovalPersistenceError('approval_revoke_failed', e);
+  }
+  if (error) throw new ApprovalPersistenceError('approval_revoke_failed', error);
 }
