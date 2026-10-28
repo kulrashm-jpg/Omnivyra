@@ -452,7 +452,7 @@ describe('037 — frozen artefacts are untouched', () => {
       .toBe('97b68e9c17758e81');
     expect(sha('pages/api/execution-instances/[id]/plan.ts')).toBe('d133ffc3c1cadc5e');
     // RE-PINNED 2026-10-28: 036 re-pinned the instance store (targets_not_installed mapping).
-    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('456c9a6cd24ed45a'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): 036 re-pinned for the verification fixes
+    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('35552c1aeda88641'); // RE-PINNED 2026-10-28 (social_post): 036 re-pinned workflowStore for the social_post channel
   });
 
   it('033, 034 and 032 are byte-identical', () => {
@@ -465,7 +465,7 @@ describe('037 — frozen artefacts are untouched', () => {
       .toBe('6c303af15da7a4bf');
     expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))
       .toBe('099d274b241178c8'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): publish accepts the `internal` channel the validator allows
-    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('2ac2bb0c09877a3c'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): stored objective/enrollment/policy are read back
+    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('79d1df2478d2fe7f'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)
   });
 
   it('the legacy outreach substrate is byte-identical', () => {
