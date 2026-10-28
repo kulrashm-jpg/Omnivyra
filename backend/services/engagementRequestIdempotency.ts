@@ -192,6 +192,28 @@ export function resolveRequestKey(clientKey: string | null, fingerprint: string)
   return clientKey ? { key: clientKey, source: 'client' } : { key: `derived:${fingerprint}`, source: 'derived' };
 }
 
+/**
+ * Per-item key for ONE item of a bulk request that carried a client
+ * Idempotency-Key (additive; used by /api/engagement/message/bulk-like).
+ *
+ * Every item gets its own request record, so its key must be stable for the
+ * same (bulk key, item) and distinct across items and across bulk keys:
+ *   `bulk.` + sha256(v1, bulkKey, item kind, item id)   (69 chars)
+ * which satisfies the client key shape (migration 20261231000008
+ * key_shape_check: ^[A-Za-z0-9._:-]{8,200}$). The item identity is what the
+ * CLIENT named (a message id, or a thread id for "latest message of thread"),
+ * so a retry of the same bulk request resolves to the same records; if the
+ * thread's latest message changed meanwhile, the item's fingerprint differs
+ * and the record answers 422 instead of liking a different message.
+ *
+ * Bulk requests WITHOUT a key pass `clientKey: null` per item and get the
+ * ordinary derived key (`derived:<fingerprint>`), identical to the single
+ * /like route for the same message, actor and tenant.
+ */
+export function deriveBulkItemRequestKey(bulkKey: string, item: { kind: 'message' | 'thread'; id: string }): string {
+  return `bulk.${sha256(['engagement-bulk-item-key-v1', bulkKey, item.kind, String(item.id)].join('\u001f'))}`;
+}
+
 /** Deterministic record id: the primary key is the reservation. */
 export function requestRecordId(input: { organizationId: string; actorId: string; scope: EngagementRequestScope; key: string }): string {
   return uuidFromDigest(sha256(['engagement-request-v2', input.organizationId, input.actorId, input.scope, input.key].join('\u001f')));

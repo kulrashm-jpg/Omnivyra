@@ -13,6 +13,8 @@
  * no message, no platform id, no counter, no opportunity transition.
  */
 
+import { describeWithExtensionSource } from '../helpers/extensionSourceRoot';
+
 interface Row { [k: string]: unknown }
 const db: Record<string, Row[]> = { community_ai_actions: [], engagement_messages: [] };
 
@@ -254,15 +256,19 @@ describe('re-offer rule: no client is ever re-offered a claimed command', () => 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('extension side — renewal before EVERY attempt', () => {
-  const procSrc = require('fs').readFileSync(
-    'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/core/commandProcessor.js',
-    'utf8',
-  );
-  const apiSrc = require('fs').readFileSync(
-    'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/core/apiClient.js',
-    'utf8',
-  );
+// Needs the external extension source: OMNIVYRA_EXTENSION_ROOT (see
+// backend/tests/helpers/extensionSourceRoot.ts). Unset → this block is
+// reported SKIPPED; every other block in this file still runs.
+describeWithExtensionSource(
+  'extension side — renewal before EVERY attempt',
+  [['core', 'commandProcessor.js'], ['core', 'apiClient.js'], ['manifest.json']],
+  (ext) => {
+  let procSrc = '';
+  let apiSrc = '';
+  beforeAll(() => {
+    procSrc = ext.read('core', 'commandProcessor.js');
+    apiSrc = ext.read('core', 'apiClient.js');
+  });
 
   it('renewal sits INSIDE the retry loop, not once before it', () => {
     const loopStart = procSrc.indexOf('for (let attempt = 1');
@@ -306,12 +312,8 @@ describe('extension side — renewal before EVERY attempt', () => {
   });
 
   it('the extension release version was incremented — v1.3.9 is NOT fixed', () => {
-    const manifest = JSON.parse(
-      require('fs').readFileSync(
-        'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/manifest.json',
-        'utf8',
-      ),
-    );
+    const manifest = JSON.parse(ext.read('manifest.json'));
     expect(manifest.version).not.toBe('1.3.9');
   });
-});
+  },
+);
