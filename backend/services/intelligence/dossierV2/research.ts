@@ -20,6 +20,7 @@ import type { ErrorClass, ProviderErrorEvidence } from '../publicResearch/provid
 import type { ProfileFact, ProfileStatus } from '../publicResearch/profileEvidence';
 import type { BingWebmasterEvidence } from '../publicResearch/bingWebmaster';
 import type { RegistryEvidence } from '../publicResearch/registryEvidence';
+import type { CitationIntelligence, CitationSource } from '../citations/citationTypes';
 
 export type ResearchStatus =
   | 'observed'
@@ -64,6 +65,8 @@ export type ResearchRecord = {
   mentioned?: boolean;
   cited?: boolean;
   citedDomains?: string[];
+  /** Each source the answer returned, normalized and kept apart by role (cited / retrieved / unknown); citations/citationTypes.ts. */
+  citations?: CitationSource[];
   /** Brand-name answers only: whether the answer describes this company correctly. */
   accuracy?: 'correct' | 'partly' | 'misidentified' | null;
   brandsNamed?: string[];
@@ -123,6 +126,8 @@ export type ResearchPack = {
   bingWebmaster?: BingWebmasterEvidence | null;
   /** Company registry: identifiers the company states, their format check, and any registry confirmation. */
   registry?: RegistryEvidence | null;
+  /** Cited source domains and the publication opportunities they support (citations/publicationOpportunities.ts). */
+  citationIntelligence?: CitationIntelligence | null;
 };
 
 export type Footprint = {
@@ -234,6 +239,9 @@ export function parseResearchPack(input: unknown, domain: string | null | undefi
     candidatesProvisional: Boolean(p.candidatesProvisional),
     bingWebmaster: p.bingWebmaster && typeof p.bingWebmaster === 'object' && typeof p.bingWebmaster.status === 'string' ? p.bingWebmaster : null,
     registry: p.registry && typeof p.registry === 'object' && Array.isArray(p.registry.identifiers) ? p.registry : null,
+    // Only when present and shaped: a pack stored without it parses exactly as before (no new key).
+    ...(p.citationIntelligence && typeof p.citationIntelligence === 'object' && Array.isArray(p.citationIntelligence.domains)
+      && p.citationIntelligence.opportunities && Array.isArray(p.citationIntelligence.opportunities.opportunities) ? { citationIntelligence: p.citationIntelligence } : {}),
     offering: p.offering && typeof p.offering === 'object' && Array.isArray(p.offering.pages) && Array.isArray(p.offering.capabilities)
       ? { ...p.offering, selfDescription: p.offering.selfDescription ?? null, offering: p.offering.offering ?? null, pricing: p.offering.pricing ?? null, freePlan: p.offering.freePlan ?? null }
       : null,
