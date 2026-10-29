@@ -39,6 +39,15 @@ import type {
 import { withinBudget, recordUsage, estimateCost } from '../costGovernance';
 import { getActiveScanId } from '../scanBudgetContext';
 import { extractProbeTokenUsage } from '../probeCostCapture';
+// Phase B — per-attempt observation records and the bounded repeat count.
+import {
+  clampGroundedRuns,
+  completedObservation,
+  errorClassFromError,
+  rememberAnswer,
+  unansweredObservation,
+  type VisibilityObservation,
+} from '../visibilityObservation';
 
 export type LLMAdapterConfig = {
   id: AIProviderId;
@@ -186,96 +195,134 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
     let firstFailureReason: string | null = null;
     // BETA-PHASE1-EXEC-001: the active scan budget (null outside a scan-budget context → no gating, prior behaviour).
     const scanId = getActiveScanId();
+    // Phase B — repeats apply to retrieval-grounded adapters only; a chat model
+    // always runs once. At 1 the loop below is the P0 loop: same calls, same
+    // order, same cache keys (run 0 keeps the P0 key).
+    const runs = this.retrieval_grounded ? clampGroundedRuns(probe.runs_per_query ?? 1) : 1;
+    const observations: VisibilityObservation[] = [];
+    const attempt = (query: string, runIndex: number) => ({
+      provider: this.id,
+      retrievalGrounded: this.retrieval_grounded,
+      query,
+      queryClass: probe.query_class,
+      runIndex,
+      brandName,
+      domain,
+    });
+    // Replaces P0's `break` on budget refusal: no further call or cache read is
+    // made, but every remaining attempt is RECORDED as skipped, never dropped.
+    let budgetStop: string | null = null;
 
     for (const query of probe.queries) {
-      // P0 — identity-scoped: adapters are process-wide singletons, and a category
-      // query names no company, so a key without identity served company A's
-      // verdict to company B. See `probeCacheKey`.
-      const cacheKey = probeCacheKey({ queryClass: probe.query_class, query, brandName, domain });
-      const cached = this.cache.get(cacheKey);
-      if (cached) {
-        mentions.push(cached.value);
-        logProviderCall({
-          providerId: this.id,
-          operation: 'probe',
-          status: 'cache_hit',
-          cache_age_ms: Date.now() - new Date(cached.cached_at).getTime(),
-        });
-        continue;
-      }
-
-      if (!this.limiter.tryAcquire()) {
-        firstFailureReason = firstFailureReason ?? `rate_limited:${this.id}`;
-        continue;
-      }
-
-      // Canonical budget gate: never exceed the scan's request/cost ceiling. Abort remaining paid calls
-      // safely when exhausted (cost unknown pre-call → request-count enforcement). No budget ⇒ no gating.
-      if (scanId) {
-        const gate = withinBudget(scanId, { requests: 1, cost_usd: null });
-        if (!gate.ok) {
-          firstFailureReason = firstFailureReason ?? gate.reason ?? `budget_exceeded:${this.id}`;
-          break;
+      for (let runIndex = 0; runIndex < runs; runIndex++) {
+        if (budgetStop !== null) {
+          // Scoring input is run 0 only (see below); a skipped run 0 is a P0 failure.
+          if (runIndex === 0) firstFailureReason = firstFailureReason ?? budgetStop;
+          observations.push(unansweredObservation({ ...attempt(query, runIndex), status: 'skipped_budget', errorClass: null, reason: budgetStop }));
+          continue;
         }
-      }
-
-      const startedAt = Date.now();
-      try {
-        // PA-004: transport via the overridable seam (legacy by default; a
-        // subclass may route through the Platform gateway dispatcher).
-        const json = await this.fetchCompletionJson(apiKey, query);
-        // Phase 8G-B — platform cost capture (no customer org; fire-and-forget). Separate billing ledger.
-        void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
-        // BETA-PHASE1-EXEC-001: record the paid call against the canonical scan budget (the only writer to
-        // the scan ledger — no duplicate accounting; cost is null when the provider's pricing is unknown).
-        if (scanId) {
-          const usage = extractProbeTokenUsage(this.id, json);
-          recordUsage(scanId, {
-            provider_id: this.id,
+        // P0 — identity-scoped: adapters are process-wide singletons, and a category
+        // query names no company, so a key without identity served company A's
+        // verdict to company B. See `probeCacheKey`.
+        const cacheKey = probeCacheKey({ queryClass: probe.query_class, query, brandName, domain, runIndex });
+        const cached = this.cache.get(cacheKey);
+        if (cached) {
+          // Phase B — ONLY run 0 feeds `mentions` (and so citation_rate, state and
+          // every score). Repeats are observations, never a new scoring input.
+          if (runIndex === 0) mentions.push(cached.value);
+          observations.push(completedObservation({ ...attempt(query, runIndex), mention: cached.value, cacheHit: true, knownCompetitors: probe.known_competitors }));
+          logProviderCall({
+            providerId: this.id,
             operation: 'probe',
-            request_count: 1,
-            prompt_tokens: usage.inputTokens,
-            completion_tokens: usage.outputTokens,
-            cost_usd: estimateCost({ providerId: this.id, promptTokens: usage.inputTokens, completionTokens: usage.outputTokens }),
-            cache_hit: false,
-            observed_at: new Date().toISOString(),
+            status: 'cache_hit',
+            cache_age_ms: Date.now() - new Date(cached.cached_at).getTime(),
+          });
+          continue;
+        }
+
+        if (!this.limiter.tryAcquire()) {
+          if (runIndex === 0) firstFailureReason = firstFailureReason ?? `rate_limited:${this.id}`;
+          observations.push(unansweredObservation({ ...attempt(query, runIndex), status: 'skipped_rate_limit', errorClass: 'rate_limited', reason: `rate_limited:${this.id}` }));
+          continue;
+        }
+
+        // Canonical budget gate: never exceed the scan's request/cost ceiling. Abort remaining paid calls
+        // safely when exhausted (cost unknown pre-call → request-count enforcement). No budget ⇒ no gating.
+        if (scanId) {
+          const gate = withinBudget(scanId, { requests: 1, cost_usd: null });
+          if (!gate.ok) {
+            if (runIndex === 0) firstFailureReason = firstFailureReason ?? gate.reason ?? `budget_exceeded:${this.id}`;
+            budgetStop = gate.reason ?? `budget_exceeded:${this.id}`;
+            observations.push(unansweredObservation({ ...attempt(query, runIndex), status: 'skipped_budget', errorClass: null, reason: budgetStop }));
+            continue;
+          }
+        }
+
+        const startedAt = Date.now();
+        try {
+          // PA-004: transport via the overridable seam (legacy by default; a
+          // subclass may route through the Platform gateway dispatcher).
+          const json = await this.fetchCompletionJson(apiKey, query);
+          // Phase 8G-B — platform cost capture (no customer org; fire-and-forget). Separate billing ledger.
+          void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
+          // BETA-PHASE1-EXEC-001: record the paid call against the canonical scan budget (the only writer to
+          // the scan ledger — no duplicate accounting; cost is null when the provider's pricing is unknown).
+          if (scanId) {
+            const usage = extractProbeTokenUsage(this.id, json);
+            recordUsage(scanId, {
+              provider_id: this.id,
+              operation: 'probe',
+              request_count: 1,
+              prompt_tokens: usage.inputTokens,
+              completion_tokens: usage.outputTokens,
+              cost_usd: estimateCost({ providerId: this.id, promptTokens: usage.inputTokens, completionTokens: usage.outputTokens }),
+              cache_hit: false,
+              observed_at: new Date().toISOString(),
+            });
+          }
+          const answer = this.extractAnswer(json);
+          // D1 — read the provider's structured citations BEFORE the response is
+          // reduced to a string, so the grounding evidence survives.
+          const groundedSources = this.retrieval_grounded ? this.extractGroundingSources(json) : [];
+          const observedAt = new Date().toISOString();
+          const mention = extractCitation({
+            provider: this.id,
+            query,
+            query_class: probe.query_class,
+            answer,
+            brandName,
+            domain,
+            groundedSources,
+            observedAt,
+          });
+          // Phase B — the answer text stays in process memory beside the cached
+          // mention (so a cache hit can still be read for entities); only a hash
+          // and a ≤240-char excerpt ever reach an observation.
+          rememberAnswer(mention, answer, extractProbeTokenUsage(this.id, json).model);
+          if (runIndex === 0) mentions.push(mention);
+          this.cache.set(cacheKey, mention);
+          observations.push(completedObservation({ ...attempt(query, runIndex), mention, cacheHit: false, knownCompetitors: probe.known_competitors }));
+          logProviderCall({
+            providerId: this.id,
+            operation: 'probe',
+            status: 'ok',
+            duration_ms: Date.now() - startedAt,
+          });
+        } catch (error) {
+          const reason = reasonFromError(this.id, error);
+          if (runIndex === 0) firstFailureReason = firstFailureReason ?? reason;
+          observations.push(unansweredObservation({ ...attempt(query, runIndex), status: 'failed', errorClass: errorClassFromError(error), reason }));
+          logProviderCall({
+            providerId: this.id,
+            operation: 'probe',
+            status: 'unavailable',
+            reason,
+            duration_ms: Date.now() - startedAt,
           });
         }
-        const answer = this.extractAnswer(json);
-        // D1 — read the provider's structured citations BEFORE the response is
-        // reduced to a string, so the grounding evidence survives.
-        const groundedSources = this.retrieval_grounded ? this.extractGroundingSources(json) : [];
-        const observedAt = new Date().toISOString();
-        const mention = extractCitation({
-          provider: this.id,
-          query,
-          query_class: probe.query_class,
-          answer,
-          brandName,
-          domain,
-          groundedSources,
-          observedAt,
-        });
-        mentions.push(mention);
-        this.cache.set(cacheKey, mention);
-        logProviderCall({
-          providerId: this.id,
-          operation: 'probe',
-          status: 'ok',
-          duration_ms: Date.now() - startedAt,
-        });
-      } catch (error) {
-        const reason = reasonFromError(this.id, error);
-        firstFailureReason = firstFailureReason ?? reason;
-        logProviderCall({
-          providerId: this.id,
-          operation: 'probe',
-          status: 'unavailable',
-          reason,
-          duration_ms: Date.now() - startedAt,
-        });
       }
     }
+    const runsCompleted = observations.filter((o) => o.collection_status === 'completed').length;
 
     // D1 — one decision, in one place, for every adapter that extends this base.
     const resolution = resolveProbeOutcome({
@@ -299,6 +346,9 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
         mentions: [],
         evidence: unavailableEvidence(reason),
         reason_unavailable: reason,
+        observations,
+        runs_requested: runs,
+        runs_completed: runsCompleted,
       };
     }
 
@@ -337,6 +387,9 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
       mentions,
       evidence,
       reason_unavailable: resolution.reason,
+      observations,
+      runs_requested: runs,
+      runs_completed: runsCompleted,
     };
   }
 }

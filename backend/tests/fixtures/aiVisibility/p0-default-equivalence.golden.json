@@ -1,0 +1,1526 @@
+{
+  "calls": [
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "What is Northwind Analytics?"
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "Tell me about Northwind Analytics."
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "What are the best CRM solutions?"
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "Top CRM companies in 2026."
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "Compare Northwind Analytics vs Contoso Cloud."
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.anthropic.com/v1/messages",
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 600,
+        "temperature": 0,
+        "system": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is Northwind Analytics?"
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://api.anthropic.com/v1/messages",
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 600,
+        "temperature": 0,
+        "system": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Tell me about Northwind Analytics."
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://api.anthropic.com/v1/messages",
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 600,
+        "temperature": 0,
+        "system": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What are the best CRM solutions?"
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://api.anthropic.com/v1/messages",
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 600,
+        "temperature": 0,
+        "system": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Top CRM companies in 2026."
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://api.anthropic.com/v1/messages",
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 600,
+        "temperature": 0,
+        "system": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Compare Northwind Analytics vs Contoso Cloud."
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://api.perplexity.ai/chat/completions",
+      "body": {
+        "model": "sonar",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is Northwind Analytics?"
+          }
+        ],
+        "temperature": 0
+      }
+    },
+    {
+      "url": "https://api.perplexity.ai/chat/completions",
+      "body": {
+        "model": "sonar",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Tell me about Northwind Analytics."
+          }
+        ],
+        "temperature": 0
+      }
+    },
+    {
+      "url": "https://api.perplexity.ai/chat/completions",
+      "body": {
+        "model": "sonar",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What are the best CRM solutions?"
+          }
+        ],
+        "temperature": 0
+      }
+    },
+    {
+      "url": "https://api.perplexity.ai/chat/completions",
+      "body": {
+        "model": "sonar",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Top CRM companies in 2026."
+          }
+        ],
+        "temperature": 0
+      }
+    },
+    {
+      "url": "https://api.perplexity.ai/chat/completions",
+      "body": {
+        "model": "sonar",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Compare Northwind Analytics vs Contoso Cloud."
+          }
+        ],
+        "temperature": 0
+      }
+    },
+    {
+      "url": "https://api.anthropic.com/v1/messages",
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 600,
+        "temperature": 0,
+        "system": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Top CRM companies in 2026."
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "What is Northwind Analytics?"
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "Tell me about Northwind Analytics."
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "What are the best CRM solutions?"
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "Top CRM companies in 2026."
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.openai.com/v1/chat/completions",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so."
+          },
+          {
+            "role": "user",
+            "content": "Compare Northwind Analytics vs Contoso Cloud."
+          }
+        ],
+        "temperature": 0,
+        "max_tokens": 600
+      }
+    },
+    {
+      "url": "https://api.anthropic.com/v1/messages",
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 600,
+        "temperature": 0,
+        "system": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is Northwind Analytics?"
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://api.anthropic.com/v1/messages",
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 600,
+        "temperature": 0,
+        "system": "Answer the question accurately. If you cite a brand, name it explicitly. If you do not know, say so.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Tell me about Northwind Analytics."
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://api.perplexity.ai/chat/completions",
+      "body": {
+        "model": "sonar",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What are the best CRM solutions?"
+          }
+        ],
+        "temperature": 0
+      }
+    },
+    {
+      "url": "https://api.perplexity.ai/chat/completions",
+      "body": {
+        "model": "sonar",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Top CRM companies in 2026."
+          }
+        ],
+        "temperature": 0
+      }
+    }
+  ],
+  "cacheOps": [
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "set:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "set:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "set:43200:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "set:43200:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "get:43200:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "set:43200:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "set:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "set:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "set:43200:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "get:43200:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "set:43200:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "get:21600:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "set:21600:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "get:21600:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "set:21600:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "get:21600:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "set:21600:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:21600:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "set:21600:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "get:21600:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "set:21600:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "get:43200:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "get:43200:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "get:21600:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "get:21600:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "get:21600:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:21600:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "get:21600:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "set:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "set:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "set:43200:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "set:43200:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "get:43200:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "set:43200:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "set:43200:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "get:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "set:43200:branded|brand:northwind%20analytics|domain:northwind.test|Tell me about Northwind Analytics.",
+    "get:43200:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:43200:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "get:21600:branded|brand:northwind%20analytics|domain:northwind.test|What is Northwind Analytics?",
+    "get:21600:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:21600:competitive|brand:northwind%20analytics|domain:northwind.test|Compare Northwind Analytics vs Contoso Cloud.",
+    "get:21600:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "set:21600:category|brand:northwind%20analytics|domain:northwind.test|What are the best CRM solutions?",
+    "get:21600:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026.",
+    "set:21600:category|brand:northwind%20analytics|domain:northwind.test|Top CRM companies in 2026."
+  ],
+  "first": {
+    "cells": [
+      {
+        "provider": "chatgpt",
+        "query_class": "branded",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "chatgpt",
+        "query_class": "category",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "chatgpt",
+        "query_class": "competitive",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 1,
+        "evidence": {
+          "count": 1,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "chatgpt",
+        "query_class": "expertise",
+        "state": "unavailable",
+        "observation_outcome": "no_queries",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "No queries derived for expertise."
+      },
+      {
+        "provider": "claude",
+        "query_class": "branded",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "claude",
+        "query_class": "category",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 1,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "claude",
+        "query_class": "competitive",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 1,
+        "evidence": {
+          "count": 1,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "claude",
+        "query_class": "expertise",
+        "state": "unavailable",
+        "observation_outcome": "no_queries",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "No queries derived for expertise."
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "branded",
+        "state": "measured",
+        "observation_outcome": "grounded_observation",
+        "structurally_unmeasurable": false,
+        "citation_rate": 1,
+        "mean_prominence": 1,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "answer_engine"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": null
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "category",
+        "state": "measured",
+        "observation_outcome": "grounded_observation",
+        "structurally_unmeasurable": false,
+        "citation_rate": 1,
+        "mean_prominence": 0.45,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "answer_engine"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": null
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "competitive",
+        "state": "measured",
+        "observation_outcome": "grounded_observation",
+        "structurally_unmeasurable": false,
+        "citation_rate": 1,
+        "mean_prominence": 1,
+        "observed_count": 1,
+        "evidence": {
+          "count": 1,
+          "sources": [
+            "answer_engine"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": null
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "expertise",
+        "state": "unavailable",
+        "observation_outcome": "no_queries",
+        "structurally_unmeasurable": false,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "No queries derived for expertise."
+      }
+    ],
+    "overall_score": {
+      "value": 82,
+      "state": "inferred",
+      "confidence": "medium",
+      "band": "leading",
+      "evidence": {
+        "count": 14,
+        "sources": [
+          "llm_probe",
+          "answer_engine"
+        ],
+        "freshness": {
+          "last_observed_at": "<ts>",
+          "age_hours": null
+        }
+      },
+      "benchmark": {
+        "value": null,
+        "label": null
+      }
+    },
+    "by_provider": [
+      {
+        "provider": "chatgpt",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "gemini",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "claude",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "perplexity",
+        "state": "measured",
+        "citation_rate": 1,
+        "mean_prominence": 0.817
+      },
+      {
+        "provider": "copilot",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      }
+    ],
+    "by_query_class": [
+      {
+        "query_class": "branded",
+        "state": "measured",
+        "citation_rate": 1,
+        "mean_prominence": 1
+      },
+      {
+        "query_class": "category",
+        "state": "measured",
+        "citation_rate": 1,
+        "mean_prominence": 0.45
+      },
+      {
+        "query_class": "competitive",
+        "state": "measured",
+        "citation_rate": 1,
+        "mean_prominence": 1
+      },
+      {
+        "query_class": "expertise",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      }
+    ],
+    "identity": {
+      "brand_name": "Northwind Analytics",
+      "domain": "northwind.test",
+      "resolved": true
+    },
+    "coverage": {
+      "measured_cells": 3,
+      "unavailable_cells": 3,
+      "total_cells": 12,
+      "measurable_cells": 4,
+      "structurally_unmeasurable_cells": 8
+    }
+  },
+  "second": {
+    "cells": [
+      {
+        "provider": "chatgpt",
+        "query_class": "branded",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "chatgpt",
+        "query_class": "category",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "chatgpt",
+        "query_class": "competitive",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 1,
+        "evidence": {
+          "count": 1,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "chatgpt",
+        "query_class": "expertise",
+        "state": "unavailable",
+        "observation_outcome": "no_queries",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "No queries derived for expertise."
+      },
+      {
+        "provider": "claude",
+        "query_class": "branded",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "claude",
+        "query_class": "category",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 1,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "claude",
+        "query_class": "competitive",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 1,
+        "evidence": {
+          "count": 1,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "claude",
+        "query_class": "expertise",
+        "state": "unavailable",
+        "observation_outcome": "no_queries",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "No queries derived for expertise."
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "branded",
+        "state": "measured",
+        "observation_outcome": "grounded_observation",
+        "structurally_unmeasurable": false,
+        "citation_rate": 1,
+        "mean_prominence": 1,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "answer_engine"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": null
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "category",
+        "state": "measured",
+        "observation_outcome": "grounded_observation",
+        "structurally_unmeasurable": false,
+        "citation_rate": 1,
+        "mean_prominence": 0.45,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "answer_engine"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": null
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "competitive",
+        "state": "measured",
+        "observation_outcome": "grounded_observation",
+        "structurally_unmeasurable": false,
+        "citation_rate": 1,
+        "mean_prominence": 1,
+        "observed_count": 1,
+        "evidence": {
+          "count": 1,
+          "sources": [
+            "answer_engine"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": null
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "expertise",
+        "state": "unavailable",
+        "observation_outcome": "no_queries",
+        "structurally_unmeasurable": false,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "No queries derived for expertise."
+      }
+    ],
+    "overall_score": {
+      "value": 82,
+      "state": "inferred",
+      "confidence": "medium",
+      "band": "leading",
+      "evidence": {
+        "count": 14,
+        "sources": [
+          "llm_probe",
+          "answer_engine"
+        ],
+        "freshness": {
+          "last_observed_at": "<ts>",
+          "age_hours": null
+        }
+      },
+      "benchmark": {
+        "value": null,
+        "label": null
+      }
+    },
+    "by_provider": [
+      {
+        "provider": "chatgpt",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "gemini",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "claude",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "perplexity",
+        "state": "measured",
+        "citation_rate": 1,
+        "mean_prominence": 0.817
+      },
+      {
+        "provider": "copilot",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      }
+    ],
+    "by_query_class": [
+      {
+        "query_class": "branded",
+        "state": "measured",
+        "citation_rate": 1,
+        "mean_prominence": 1
+      },
+      {
+        "query_class": "category",
+        "state": "measured",
+        "citation_rate": 1,
+        "mean_prominence": 0.45
+      },
+      {
+        "query_class": "competitive",
+        "state": "measured",
+        "citation_rate": 1,
+        "mean_prominence": 1
+      },
+      {
+        "query_class": "expertise",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      }
+    ],
+    "identity": {
+      "brand_name": "Northwind Analytics",
+      "domain": "northwind.test",
+      "resolved": true
+    },
+    "coverage": {
+      "measured_cells": 3,
+      "unavailable_cells": 3,
+      "total_cells": 12,
+      "measurable_cells": 4,
+      "structurally_unmeasurable_cells": 8
+    }
+  },
+  "third": {
+    "cells": [
+      {
+        "provider": "chatgpt",
+        "query_class": "branded",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "chatgpt",
+        "query_class": "category",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "chatgpt",
+        "query_class": "competitive",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 1,
+        "evidence": {
+          "count": 1,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "chatgpt",
+        "query_class": "expertise",
+        "state": "unavailable",
+        "observation_outcome": "no_queries",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "No queries derived for expertise."
+      },
+      {
+        "provider": "claude",
+        "query_class": "branded",
+        "state": "insufficient_signal",
+        "observation_outcome": "ungrounded_answer",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 2,
+        "evidence": {
+          "count": 2,
+          "sources": [
+            "llm_probe"
+          ],
+          "freshness": {
+            "last_observed_at": "<ts>",
+            "age_hours": "<n>"
+          }
+        },
+        "reason_unavailable": "Provider is not retrieval-grounded: its answer reflects model recall, not observed AI visibility."
+      },
+      {
+        "provider": "claude",
+        "query_class": "category",
+        "state": "unavailable",
+        "observation_outcome": "provider_failed",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "budget_exceeded:requests:7"
+      },
+      {
+        "provider": "claude",
+        "query_class": "competitive",
+        "state": "unavailable",
+        "observation_outcome": "provider_failed",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "budget_exceeded:requests:7"
+      },
+      {
+        "provider": "claude",
+        "query_class": "expertise",
+        "state": "unavailable",
+        "observation_outcome": "no_queries",
+        "structurally_unmeasurable": true,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "No queries derived for expertise."
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "branded",
+        "state": "unavailable",
+        "observation_outcome": "provider_failed",
+        "structurally_unmeasurable": false,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "budget_exceeded:requests:7"
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "category",
+        "state": "unavailable",
+        "observation_outcome": "provider_failed",
+        "structurally_unmeasurable": false,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "budget_exceeded:requests:7"
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "competitive",
+        "state": "unavailable",
+        "observation_outcome": "provider_failed",
+        "structurally_unmeasurable": false,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "budget_exceeded:requests:7"
+      },
+      {
+        "provider": "perplexity",
+        "query_class": "expertise",
+        "state": "unavailable",
+        "observation_outcome": "no_queries",
+        "structurally_unmeasurable": false,
+        "citation_rate": null,
+        "mean_prominence": null,
+        "observed_count": 0,
+        "evidence": {
+          "count": 0,
+          "sources": [],
+          "freshness": {
+            "last_observed_at": null,
+            "age_hours": null
+          }
+        },
+        "reason_unavailable": "No queries derived for expertise."
+      }
+    ],
+    "overall_score": {
+      "value": null,
+      "state": "insufficient_signal",
+      "confidence": "low",
+      "band": "insufficient",
+      "evidence": {
+        "count": 0,
+        "sources": [],
+        "freshness": {
+          "last_observed_at": null,
+          "age_hours": null
+        }
+      },
+      "benchmark": {
+        "value": null,
+        "label": null
+      }
+    },
+    "by_provider": [
+      {
+        "provider": "chatgpt",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "gemini",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "claude",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "perplexity",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "provider": "copilot",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      }
+    ],
+    "by_query_class": [
+      {
+        "query_class": "branded",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "query_class": "category",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "query_class": "competitive",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      },
+      {
+        "query_class": "expertise",
+        "state": "unavailable",
+        "citation_rate": null,
+        "mean_prominence": null
+      }
+    ],
+    "identity": {
+      "brand_name": "Northwind Analytics",
+      "domain": "northwind.test",
+      "resolved": true
+    },
+    "coverage": {
+      "measured_cells": 0,
+      "unavailable_cells": 8,
+      "total_cells": 12,
+      "measurable_cells": 4,
+      "structurally_unmeasurable_cells": 8
+    }
+  },
+  "direct": {
+    "provider": "perplexity",
+    "query_class": "category",
+    "state": "measured",
+    "observation_outcome": "grounded_observation",
+    "citation_rate": 1,
+    "mean_prominence": 0.45,
+    "mentions": [
+      {
+        "provider": "perplexity",
+        "query": "What are the best CRM solutions?",
+        "query_class": "category",
+        "appeared": true,
+        "prominence": 0.45,
+        "evidence_excerpt": "\"What are the best CRM solutions?\", Contoso Cloud leads and Northwind Analytics (northwind.test) follows.",
+        "grounded_sources": [
+          "https://northwind.test/crm",
+          "https://contoso.test/pricing",
+          "https://reviews.example.test/crm"
+        ],
+        "citation_corroborated": true,
+        "observed_at": "<ts>"
+      },
+      {
+        "provider": "perplexity",
+        "query": "Top CRM companies in 2026.",
+        "query_class": "category",
+        "appeared": true,
+        "prominence": 0.45,
+        "evidence_excerpt": "For \"Top CRM companies in 2026.\", Contoso Cloud leads and Northwind Analytics (northwind.test) follows.",
+        "grounded_sources": [
+          "https://northwind.test/crm",
+          "https://contoso.test/pricing",
+          "https://reviews.example.test/crm"
+        ],
+        "citation_corroborated": true,
+        "observed_at": "<ts>"
+      }
+    ],
+    "evidence": {
+      "count": 2,
+      "sources": [
+        "answer_engine"
+      ],
+      "freshness": {
+        "last_observed_at": "<ts>",
+        "age_hours": "<n>"
+      }
+    },
+    "reason_unavailable": null
+  },
+  "ledgerRequests": 7
+}

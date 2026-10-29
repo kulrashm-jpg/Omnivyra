@@ -165,8 +165,20 @@ export function probeCacheKey(params: {
   query: string;
   brandName?: string | null;
   domain?: string | null;
+  /**
+   * Phase B — repeated grounded runs. Run 0 (and an absent index) yields the P0
+   * key EXACTLY, so the default single run reuses the existing cache unchanged.
+   * Run i > 0 gets its own key, so a repeat is a real call, never a cached copy
+   * of run 0. The marker is attached to the (enum) query class, ahead of the
+   * free-text query, so no query text can forge another run's key.
+   */
+  runIndex?: number;
 }): string {
-  return `${params.queryClass}|${probeIdentityFingerprint(params)}|${params.query}`;
+  const run =
+    typeof params.runIndex === 'number' && Number.isFinite(params.runIndex) && params.runIndex > 0
+      ? `#run${Math.floor(params.runIndex)}`
+      : '';
+  return `${params.queryClass}${run}|${probeIdentityFingerprint(params)}|${params.query}`;
 }
 
 /** The customer-facing reason a probe was refused for want of a subject. */
