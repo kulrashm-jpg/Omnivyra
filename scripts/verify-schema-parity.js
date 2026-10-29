@@ -130,6 +130,18 @@ const REQUIRED_COLUMNS = [
   // are INFO in Phase 1 because no runtime code writes the table
   // yet — only the operator backfill script does. Phase 2 (APIs)
   // upgrades the user-mutated columns to BLOCKING.
+  //
+  // KNOWN NAME COLLISION — these INFO findings are expected in production.
+  // Production `active_leads` is the LEGACY lead-runs table
+  // (supabase/_schema/baseline.sql: run_id, company_id, bucket, …). 20260817 uses
+  // CREATE TABLE IF NOT EXISTS, so it was a no-op there, and its index on
+  // organization_id cannot build — which is also why
+  // opportunity_feed_items.active_lead_id (added later in the same file) is absent.
+  // Do NOT "fix" this with ALTER TABLE: that grafts two designs onto one table and
+  // the NOT NULL foreign keys cannot hold for existing rows. It is an owner design
+  // decision. Runtime impact today: snapshotRouteHandler reads the legacy shape and
+  // works; leadIntelligenceReadService (since 1aa7bfac, 2026-06-30) reads the new
+  // shape fail-soft and returns [] — and no runtime writer exists for either shape.
   { severity: 'INFO', table: 'active_leads', column: 'organization_id',   motivation: 'Tenant scoping for the Lead object.' },
   { severity: 'INFO', table: 'active_leads', column: 'contact_id',        motivation: 'Person anchor — half of the rollup key.' },
   { severity: 'INFO', table: 'active_leads', column: 'opportunity_type',  motivation: 'Other half of the rollup key.' },

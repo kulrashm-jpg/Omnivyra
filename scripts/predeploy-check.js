@@ -99,6 +99,11 @@ try {
 // the most common are empty after an env pull / merge.
 const fs = require('fs');
 const path = require('path');
+// Every gate below that did NOT execute, or did not come back clean, is recorded
+// here and named in the final RESULT line. A skipped gate is never reported as a
+// pass: before this, a schema-parity check that could not even connect ended in
+// "RESULT: OK", indistinguishable from one that compared every column.
+const unverified = [];
 const CRITICAL_ENV = [
   'REDIS_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'ENCRYPTION_KEY',
 ];
@@ -118,6 +123,7 @@ if (fs.existsSync(envPath)) {
   process.stdout.write(`  critical env: OK (${CRITICAL_ENV.length} vars present)\n`);
 } else {
   process.stdout.write(`  critical env: SKIPPED (no .env.local)\n`);
+  unverified.push('critical env SKIPPED (no .env.local)');
 }
 
 // ── Schema parity gate ───────────────────────────────────────────────────────
@@ -197,9 +203,20 @@ try {
   //   2 — environmental failure (missing creds, network)
   //   3 — WARN: only non-critical columns missing or ledger desync
   if (code === 2) {
+    // The message has always told operators that PREDEPLOY_STRICT_SCHEMA=1
+    // requires this gate; until now nothing on this branch read it, so strict
+    // mode could not make an unreachable database block the deploy.
+    if (strictSchema) {
+      process.stdout.write(
+        `RESULT: BLOCKED — schema parity could not run (env unavailable) and\n` +
+        `PREDEPLOY_STRICT_SCHEMA=1 is set, so this gate is required.\n`,
+      );
+      process.exit(1);
+    }
     process.stdout.write(
       `  schema parity: SKIPPED (env unavailable). Set PREDEPLOY_STRICT_SCHEMA=1 to require this gate.\n`,
     );
+    unverified.push('schema parity SKIPPED (env unavailable — no column was compared)');
   } else if (code === 1) {
     // BLOCKING-severity missing column. Block deploy unconditionally —
     // strict-mode toggle doesn't apply to blocking issues; those are
@@ -223,11 +240,13 @@ try {
       `  Review structured output above. Continuing in non-strict mode. *** DO NOT run\n` +
       `  'supabase db push' to remediate *** — see docs/migration-discipline.md.\n`,
     );
+    unverified.push('schema parity WARN (non-blocking findings or ledger desync)');
   } else {
     // Unknown exit code — surface as warning, don't block.
     process.stdout.write(
       `  schema parity: WARN — verifier exited ${code} (unrecognized). Continuing.\n`,
     );
+    unverified.push(`schema parity WARN (verifier exited ${code}, unrecognized)`);
   }
 }
 
@@ -248,6 +267,7 @@ try {
       `  render parity: SKIPPED (sharp unavailable in this shell). ` +
       `Run inside the worker image in CI for the prod-env check.\n`,
     );
+    unverified.push('render parity SKIPPED (sharp unavailable)');
   } else {
     process.stdout.write(
       `RESULT: BLOCKED — render-text parity failed. This environment cannot rasterize\n` +
@@ -279,8 +299,15 @@ if (process.env.POSTDEPLOY_PROBE === '1') {
   }
 }
 
+// Exit code is unchanged (0) so `npm run deploy:prod` keeps its behaviour; the
+// verdict text is what changes. Strict schema mode is the way to make a skipped
+// database gate block.
+const verdict = unverified.length === 0
+  ? `RESULT: PASS — every gate executed and came back clean at ${shortSha} (== origin/main).`
+  : `RESULT: OK WITH ${unverified.length} UNVERIFIED GATE(S) — NOT a full pass at ${shortSha} (== origin/main):\n` +
+    unverified.map((u) => `  - ${u}`).join('\n');
 process.stdout.write(
-  `\nRESULT: OK — clean tree at ${shortSha} (== origin/main), worker typecheck + env OK.\n\n` +
+  `\n${verdict}\n\n` +
   `Manual deploy is your action (not automated here). AFTER a verified\n` +
   `successful 'vercel --prod' deploy of omnivyra, record traceability:\n\n` +
   `  git tag -a ${tag} ${shortSha} -m "omnivyra prod deploy ${stamp}"\n` +
