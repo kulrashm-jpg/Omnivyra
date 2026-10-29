@@ -18,10 +18,13 @@
  *   IDENTICAL_AFTER_EOL_NORMALIZATION    equal after CRLF->LF and leading-BOM strip only
  *   DIFFERENT                            anything else (line list, max 50 entries)
  *   NO_REFERENCE_TEXT                    revoke8: nothing committed to compare with
+ *   REFERENCE_HASH_MISMATCH              the committed reference file does not match its
+ *                                        pinned sha256 (wrong checkout or edited file); no
+ *                                        comparison is made — fix the checkout, never the pin
  * This tool NEVER assesses semantic equivalence; that is a catalog question (B1/C1).
  *
  * Exit: 0 BYTE_IDENTICAL, 10 IDENTICAL_AFTER_EOL_NORMALIZATION, 11 DIFFERENT,
- *       12 NO_REFERENCE_TEXT, 2 usage/input error, 3 reference file does not match its pinned hash.
+ *       12 NO_REFERENCE_TEXT, 3 REFERENCE_HASH_MISMATCH, 2 usage/input error.
  */
 const fs = require('fs');
 const path = require('path');

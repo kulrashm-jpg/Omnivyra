@@ -42,8 +42,13 @@
 --   * RESOURCE EMBEDDING: PostgREST can reach an in-scope table through another
 --     path (`/rest/v1/<other>?select=*,content_quality(*)`), and views/RPCs can
 --     read in-scope tables. Q1/Q2 therefore also match the query string
---     (`request.search`, TO CONFIRM). A view/function that reads an in-scope
---     table is found with grants-acl-check.sql S12 (dependencies), not here.
+--     (`request.search`, TO CONFIRM). supabase-js builds the query string with
+--     URLSearchParams, so `,` `(` `)` `:` `!` usually arrive percent-encoded
+--     (%2C %28 %29 %3A %21); Q1/Q2 match on a DECODED copy of the query string
+--     (those five escapes only, case-insensitive). TO CONFIRM against real rows:
+--     if the platform already logs the decoded string, the replace() is a no-op.
+--     A view/function that reads an in-scope table is found with
+--     grants-acl-check.sql S12 (dependencies), not here.
 --   * Realtime (websocket) traffic is NOT in edge_logs; Q4 covers realtime_logs,
 --     which records channel joins/errors, not every postgres_changes delivery.
 --   * Direct database clients (psql, pooler URLs in scripts/workers, BI tools,
@@ -72,7 +77,10 @@ select
   timestamp_trunc(cast(t.timestamp as timestamp), day) as day,
   regexp_extract(request.path, r'^/rest/v1/(?:rpc/)?([^/?]+)') as object,
   starts_with(request.path, '/rest/v1/rpc/') as is_rpc,
-  regexp_contains(coalesce(request.search, ''), r'select=[^&]*\(') as embedded,    -- request.search: TO CONFIRM
+  regexp_contains(                                                                -- request.search: TO CONFIRM
+    replace(replace(replace(replace(replace(lower(coalesce(request.search, '')),
+      '%2c', ','), '%28', '('), '%29', ')'), '%3a', ':'), '%21', '!'),            -- URL-decoded copy (TO CONFIRM)
+    r'select=[^&]*\(') as embedded,
   request.method as method,
   coalesce(auth_payload.role, apikey_payload.role, 'unknown-key') as key_role,
   request.headers[safe_offset(0)].user_agent as user_agent,                       -- TO CONFIRM
@@ -107,7 +115,7 @@ select
   cast(t.timestamp as timestamp) as ts,
   request.method as method,
   request.path as path,
-  request.search as search,                                                     -- TO CONFIRM
+  request.search as search,                                                     -- TO CONFIRM (raw, as logged)
   coalesce(auth_payload.role, apikey_payload.role, 'unknown-key') as key_role,
   auth_payload.sub as jwt_sub,
   response.status_code as status,
@@ -131,7 +139,9 @@ where cast(t.timestamp as timestamp) >= timestamp '<SLICE_START_ISO>'
       request.path,
       r'^/rest/v1/(rpc/)?(prospect_lists|prospect_list_members|prospect_campaigns|prospect_campaign_lists|prospect_campaign_targets|workflows|workflow_versions|execution_instances|execution_plans|execution_plan_steps|execution_tasks|outreach_bridge_handoffs|execution_engine_requests|community_action_journey_links|rpa_auth_token_redemptions|identity_verification_attestations|engagement_request_idempotency|rpa_session_invalidation_audit|customer_readiness_snapshots|execution_approvals|content|content_asset|content_variant|content_revision|content_memory|content_originality|brand_memory|publication_lineage|content_quality|content_block|content_recommendation|content_approval_history|create_execution_instance|create_execution_plan|execution_step_anchor|advance_execution_plan|cancel_execution_run|bridge_execution_task|publish_workflow_version|reap_community_ai_action_leases|claim_community_ai_browser_command|record_community_ai_late_dispatch_result|community_identity_normalize_external_id)([/?]|$)')
     or regexp_contains(
-      coalesce(request.search, ''),
+      -- URL-decoded copy of the query string (%2C %28 %29 %3A %21; TO CONFIRM)
+      replace(replace(replace(replace(replace(lower(coalesce(request.search, '')),
+        '%2c', ','), '%28', '('), '%29', ')'), '%3a', ':'), '%21', '!'),
       r'(^|[=,(])(?:[a-z_]+:)?(prospect_lists|prospect_list_members|prospect_campaigns|prospect_campaign_lists|prospect_campaign_targets|workflows|workflow_versions|execution_instances|execution_plans|execution_plan_steps|execution_tasks|outreach_bridge_handoffs|execution_engine_requests|community_action_journey_links|rpa_auth_token_redemptions|identity_verification_attestations|engagement_request_idempotency|rpa_session_invalidation_audit|customer_readiness_snapshots|execution_approvals|content|content_asset|content_variant|content_revision|content_memory|content_originality|brand_memory|publication_lineage|content_quality|content_block|content_recommendation|content_approval_history)(!|\(|,|$)')
   )
   and coalesce(auth_payload.role, apikey_payload.role, 'unknown-key') != 'service_role'

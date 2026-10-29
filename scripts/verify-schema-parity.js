@@ -1388,7 +1388,7 @@ async function main() {
   // is what every other schema probe in this repository already uses. Exit 2
   // is now reserved for a genuinely absent connection string or a real
   // connection failure — never for a lookup this script chose incorrectly.
-  const dbUrl = resolveDbUrl(process.env).url;
+  const { name: dbUrlVar, url: dbUrl } = resolveDbUrl(process.env);
   if (!dbUrl) {
     process.stderr.write(JSON.stringify({
       event: 'schema_parity.error',
@@ -1411,8 +1411,23 @@ async function main() {
     process.exit(2);
   }
 
-  const db = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  // The explicit gate credential should authenticate the server. Without
+  // sslmode=verify-full the default below encrypts but does not verify, so say
+  // so (variable name only). Not fatal: disposable runs use sslmode=disable.
+  if (dbUrlVar === 'SCHEMA_PARITY_DB_URL' && !/[?&]sslmode=verify-full(&|$)/.test(dbUrl)) {
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.warning',
+      reason: 'tls_not_verified',
+      variable: dbUrlVar,
+      hint: 'Add sslmode=verify-full&sslrootcert=<CA file> to authenticate the server.',
+    }) + '\n');
+  }
+
+  // Constructed inside the try: a malformed URL is a connection failure, not an
+  // unhandled crash.
+  let db;
   try {
+    db = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
     await db.connect();
   } catch (e) {
     process.stderr.write(JSON.stringify({
@@ -1439,6 +1454,19 @@ async function main() {
       event: 'schema_parity.error',
       reason: 'session_setup_failed',
       message: (e && e.message) || String(e),
+    }) + '\n');
+    process.exit(2);
+  }
+  // Recording read-only is not enough: refuse to continue if it did not take
+  // effect (e.g. a transaction-mode pooler that does not keep session SETs).
+  if (session.tx_read_only !== 'on') {
+    await db.end().catch(() => {});
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.error',
+      reason: 'session_not_read_only',
+      role: session.role,
+      tx_read_only: session.tx_read_only,
+      hint: 'Use a direct or session-mode connection (not a transaction-mode pooler).',
     }) + '\n');
     process.exit(2);
   }

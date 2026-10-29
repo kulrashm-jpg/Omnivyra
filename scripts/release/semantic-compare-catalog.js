@@ -31,9 +31,10 @@
  * col:<c>:grantee:<r>, and the role of defacl:<r>:<schema>:<type>), never in
  * values, policy/column/schema names. API roles (anon, authenticated,
  * service_role, PUBLIC/public) and <owner> can never be mapped. A map whose
- * target already appears in a role position on the same side is refused (it
- * would merge two distinct roles). Every rewrite is listed in the result
- * (`mapped`) and announced with a WARNING line.
+ * target already appears in a role position on the same side is refused, and
+ * so are two roles mapped onto the same target on one side (either would merge
+ * two distinct roles). Every rewrite is listed in the result (`mapped`) and
+ * announced with a WARNING line; a map entry that rewrote nothing is WARNed too.
  *
  * Exit: 0 = no semantic difference, 1 = semantic differences, 2 = bad input.
  * Semantic equality is NOT byte identity of the SQL that was applied.
@@ -210,6 +211,16 @@ function compareFingerprints(leftText, rightText, opts = {}) {
     }
     if (from === to) throw new Error(`role map ${from}=${to} is a no-op`);
   }
+  // Two roles mapped onto the same target would merge them into one.
+  for (const [side, m] of [['left', leftMap], ['right', rightMap]]) {
+    const seen = new Map();
+    for (const [from, to] of m) {
+      if (seen.has(to)) {
+        throw new Error(`role map refused (${side}): ${seen.get(to)} and ${from} both map to ${to} (would merge two distinct roles)`);
+      }
+      seen.set(to, from);
+    }
+  }
   for (const [from, to] of opts.ownerMap || new Map()) {
     if (UNMAPPABLE_ROLES.has(from) || UNMAPPABLE_ROLES.has(to)) {
       throw new Error(`owner map ${from}=${to} refused: API roles and PUBLIC cannot be declared owner-equivalent`);
@@ -267,6 +278,14 @@ function compareFingerprints(leftText, rightText, opts = {}) {
     }
     for (const [k, n] of groups) {
       out.warnings.push(`role map applied (${k}) to ${n} fact(s); the result treats these as the same role — justify every mapping`);
+    }
+  }
+  // A map entry that rewrote nothing is almost always a typo; never let it pass silently.
+  for (const [side, m] of [['left', leftMap], ['right', rightMap]]) {
+    for (const [from, to] of m) {
+      if (!mapped.some((x) => x.side === side && x.from === from)) {
+        out.warnings.push(`role map ${from}=${to} (${side}) rewrote nothing; check the role name`);
+      }
     }
   }
   for (const [from, to] of ctx.ownerMap) {

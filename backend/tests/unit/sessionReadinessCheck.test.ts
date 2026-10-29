@@ -82,6 +82,22 @@ describe('session-readiness-check.sql — fails closed', () => {
     ]) expect(raw).toContain(`'${check}`);
   });
 
+  // N1: ADMIN option on any walked edge (even pg_read_all_data), database CREATE, and
+  // sequence USAGE/UPDATE are write surfaces too.
+  it('FAILs on ADMIN option anywhere on the membership walk, on database CREATE, and on writable sequences', () => {
+    const admin = sql.slice(sql.indexOf('admin_edges AS ('), sql.indexOf('writable_sequences AS ('));
+    expect(admin).toMatch(/WITH RECURSIVE e\(roleid, admin_option\) AS \(/);
+    expect(admin).toMatch(/FROM pg_auth_members am WHERE am\.member = \(SELECT oid FROM me\)/);
+    expect(admin).toMatch(/FROM pg_auth_members am JOIN e ON am\.member = e\.roleid/);
+    expect(admin).toMatch(/WHERE e\.admin_option\s*\)/);
+    expect(admin).not.toMatch(/pg_read_all_data/); // no exemption for the allowed role
+    expect(sql).toMatch(/CASE WHEN EXISTS \(SELECT 1 FROM admin_edges\) THEN 'FAIL' ELSE 'OK' END/);
+    expect(sql).toMatch(/CASE WHEN has_database_privilege\(current_database\(\), 'CREATE'\) THEN 'FAIL' ELSE 'OK' END/);
+    expect(sql).toMatch(/c\.relkind = 'S'/);
+    expect(sql).toMatch(/has_sequence_privilege\(c\.oid, 'USAGE'\) OR has_sequence_privilege\(c\.oid, 'UPDATE'\)/);
+    expect(sql).toMatch(/CASE WHEN \(SELECT n FROM writable_sequences\) = 0 THEN 'OK' ELSE 'FAIL' END/);
+  });
+
   it('exits non-zero on any FAIL: a deliberate error in the \\else branch under ON_ERROR_STOP', () => {
     expect(sql).toMatch(/bool_and\(verdict <> 'FAIL'\) AS self_check_ok/);
     expect(sql).toMatch(/\\if :self_check_ok\s+ROLLBACK;\s+\\else[\s\S]*SELECT 'self-check failed'::int;\s+\\endif/);
