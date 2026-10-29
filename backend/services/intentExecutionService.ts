@@ -167,6 +167,15 @@ const ALWAYS_RUN_JOBS = new Set([
   // reclaimed. Membership here exempts it from the inactive-company gate ONLY —
   // the usage overlay, admin override, and interval check all still apply.
   'staleExecutionSweep',
+  // CSA-002 daily readiness snapshot. Its history is ABOUT activity, so gating
+  // it on recent activity is circular — and nothing writes the activity set
+  // (recordUserActivity has no callers), so the gate never opened and
+  // customer_readiness_snapshots stayed empty. The job only reads readiness
+  // signals and inserts one row per company per UTC day (ON CONFLICT DO
+  // NOTHING), so running it on an idle platform is safe. Exempt from the
+  // inactive-company gate ONLY — the 24h interval, usage overlay and admin
+  // override still apply.
+  'readinessSnapshot',
 ]);
 
 // Frequency tier → milliseconds
