@@ -3,8 +3,8 @@
 ## Scope
 
 Release branch `feat/orchestration-engine-adapters`, rebased (2026-10-29, `--rebase-merges`, no conflicts)
-onto `main` `3e84f3aea2b12ccd006652468997fe95077e9751` (PRs #351–#354, after #349 and #350). The rebased
-tree equals `git merge-tree --write-tree 3e84f3ae 937b3d86`, and the branch diff is identical to the
+onto `main` `2044d7a3b4b748ed4fc2c41baafbad8e68d7d473` (PRs #355–#357, after #349–#354). The rebased
+tree equals `git merge-tree --write-tree 2044d7a3 e07e04cb`, and the branch diff is identical to the
 pre-rebase diff (205 files; compared with `git diff --full-index` and `git diff --raw --no-abbrev`, because
 abbreviated blob ids in plain `git diff` output can change length as the object store grows). Re-check `git ls-remote origin refs/heads/main` immediately before any release step: if
 `main` has moved again, rebase and re-run the gates first.
