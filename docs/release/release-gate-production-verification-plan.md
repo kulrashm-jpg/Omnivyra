@@ -3,9 +3,10 @@
 ## Scope
 
 Release branch `feat/orchestration-engine-adapters`, rebased (2026-10-29, `--rebase-merges`, no conflicts)
-onto `main` `acde8b7afac140358f7f4cb916d8c7239b7d613e` (PR #350). The rebased tree equals
-`git merge-tree --write-tree acde8b7a a911c118`, and the branch diff is byte-identical to the pre-rebase
-diff (205 files). Re-check `git ls-remote origin refs/heads/main` immediately before any release step: if
+onto `main` `3e84f3aea2b12ccd006652468997fe95077e9751` (PRs #351–#354, after #349 and #350). The rebased
+tree equals `git merge-tree --write-tree 3e84f3ae 937b3d86`, and the branch diff is identical to the
+pre-rebase diff (205 files; compared with `git diff --full-index` and `git diff --raw --no-abbrev`, because
+abbreviated blob ids in plain `git diff` output can change length as the object store grows). Re-check `git ls-remote origin refs/heads/main` immediately before any release step: if
 `main` has moved again, rebase and re-run the gates first.
 
 Stack migrations: `20261127000000` and `20261226000000` … `20261231000010`.
@@ -482,6 +483,37 @@ Do not revoke client access to `user_company_roles`. More than 20 policies, incl
 - **Deploy-time steps live in the runbook.** These are apply order, the deploy sequence, and rollback. The
   deploy sequence is web and worker together with an identical `ENCRYPTION_KEY`, then `…000010`, then
   `VACUUM FULL rpa_sessions`. Each step needs its own authorization.
+
+## 3. Operator evidence checklist
+
+Inputs the operator must have before starting (none of them may appear in any file, log or chat):
+
+| Input | Source | Check before use |
+|---|---|---|
+| Release commit | the release report | `git rev-parse HEAD` equals it; `git status --porcelain` empty; `git ls-remote origin refs/heads/main` equals the report's base, otherwise STOP |
+| Target project | owner, in writing | equals `klkiseupptzbecbxwrky` (owner-reported); P0 `current_database()` / host confirm it |
+| `PROD_READONLY_URL` (no password inside) + `PGPASSWORD` | owner, out of band | issued fresh per §0.1; never the `.env.local` pooler value |
+| `SCHEMA_PARITY_DB_URL` | same credential | direct or session-mode host, `sslmode=verify-full&sslrootcert=…` |
+| Supabase CA file | Supabase dashboard | path only |
+| Script hashes | §4 | `sha256sum` of every file matches |
+
+Create one evidence directory per session, named `evidence/<UTC date>-<release short SHA>/` outside the repo,
+and record for every step: UTC start time, command line (with variable names, never values), exit code,
+the script's sha256, and the output file name.
+
+| Step | Command (from the repo root) | Output file | Continue only if |
+|---|---|---|---|
+| 0 | `psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/session-readiness-check.sql` | `00-session-check.out` | exit 0, `overall` = `0 FAIL \| OK` |
+| 1 | `node scripts/release/runbook-preflight-build.js docs/release/orchestration-engine-adapters-migration-runbook.md preflight.sql` then `psql … -f preflight.sql` | `01-preflight.sql`, `01-preflight.out` | builder printed 16 blocks; sha256 `61fcb70a…`; exit 0; no STOP condition in §A1 |
+| 2 | `node scripts/verify-schema-parity.js --strict` (env per §A2) | `02-parity-baseline.json`, `02-parity-baseline.exit` | exit 1 with the expected A-baseline shape; `session.tx_read_only = on` |
+| 3 | `psql … -f scripts/release/catalog-fingerprint.sql` | `03-fingerprint.tsv` | exit 0 (otherwise discard the file) |
+| 4 | `psql … -f scripts/release/grants-acl-check.sql` | `04-grants.tsv` | exit 0 |
+| 5 (optional) | `psql … -f scripts/release/pg-stat-statements-probe.sql` | `05-pgss.out` | any result; `NOT INSPECTABLE` is recorded as such |
+| L | Logs Explorer: `api-log-queries.sql` Q1–Q5b, one day per slice | `L-<query>-<slice start>.csv` + `L-slices.tsv` (start, end, status, rows) | every slice in the retention window recorded, zeros included |
+| B0 | owner: `sql-recovery-checklist.md`, then `recovery-intake.js` | `B0-<artifact>-<n>.sql` + `.intake.json` | one outcome per artifact (RECOVERED with verdict, or UNRECOVERABLE) |
+
+After the session: the owner runs the §0.1 teardown and records that it ran. Hand the evidence directory
+over unchanged; redact only by producing a separate redacted copy, never by editing the originals.
 
 ## 4. Script identities
 
