@@ -194,6 +194,14 @@ describe('DG-010 — the rest of the signals bag is untouched', () => {
     const withoutModified = await crawlWith(doc(''));
     const strip = (s: Record<string, unknown>) => {
       const { modified_time: _ignored, ...rest } = s;
+      // Technical readiness — the domain-level site-file observations carry their own retrieval
+      // timestamps (and this suite's mock serves the page HTML for every URL), so they differ
+      // between two runs by construction. They are not page signals; the page bag is compared.
+      const site = rest.site as Record<string, unknown> | undefined;
+      if (site) {
+        const { robots: _r, llms: _l, llms_full: _f, ...legacySite } = site;
+        rest.site = legacySite;
+      }
       return rest;
     };
     expect(strip(withModified.crawl_metadata.signals)).toEqual(strip(withoutModified.crawl_metadata.signals));

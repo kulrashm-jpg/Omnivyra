@@ -379,7 +379,9 @@ const crawlSite = async (
   await crawlCompanyWebsite({ companyId: 'co-1', rootUrl, maxPages, timeoutMs: 2000 });
   const requested = safeFetch.mock.calls
     .map((call) => String(call[0]))
-    .filter((url) => !url.endsWith('/robots.txt') && !url.endsWith('/sitemap.xml'));
+    // Domain-level site files (robots.txt, sitemap.xml and, since technical readiness, llms.txt /
+    // llms-full.txt) are not page fetches.
+    .filter((url) => !/\/(robots\.txt|sitemap\.xml|llms\.txt|llms-full\.txt)$/.test(url));
   const contentTexts = inserts
     .filter((i) => i.table === 'page_content')
     .flatMap((i) => (i.rows as Array<{ content_text: string }>).map((r) => r.content_text));
