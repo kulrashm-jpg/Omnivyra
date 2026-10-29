@@ -90,7 +90,28 @@ What the stack checks cover:
 | A-baseline | before any stack migration | Stack objects are reported absent (exit 1). Record which **pre-existing** manifest entries fail: those are drift that predates this release and must be explained before anything is applied. Anything stack-related that is already present means a partial earlier apply; STOP and review it against runbook §3.3. |
 | A-post | after `…000009` is applied, and again after `…000010` | Exit 0 under strict mode. Any BLOCKING finding means STOP, and roll back by runbook §9. |
 
-PASS for A requires A-post to exit 0 under strict mode on production.
+**Known pre-existing items that keep strict mode at exit 3.** On the disposable database rebuilt at the
+release commit, the strict run found **0 stack findings and 0 BLOCKING**. It still exited 3, for two
+reasons that predate this release:
+
+- 8 WARN and 16 INFO for manifest columns on `active_leads` (15), `opportunity_feed_items`,
+  `content_performance`, `learning_intelligence`, `learning_memory` and `content_prediction`;
+- a ledger desync.
+
+Production has a known desynced ledger and a legacy table that occupies the name `active_leads`, so
+expect the same there. Strict predeploy therefore blocks until the owner either fixes those items or
+signs off on a written list of them.
+
+PASS for A requires all of the following from the A-post run on production:
+
+- `severity.blocking` = 0;
+- `structural_findings` empty. It lists every non-column finding: stack tables, indexes, functions,
+  triggers, CHECKs, RLS, privileges and `check_skipped`.
+- no `missing_columns` entry on any of the 18 stack tables;
+- every remaining WARN or INFO item, and the ledger desync, matched one-for-one against the A-baseline
+  list and accepted by the owner.
+
+A new WARN or INFO item that is not on the baseline list is a FAIL.
 
 ## B. Applied-SQL equivalence
 
