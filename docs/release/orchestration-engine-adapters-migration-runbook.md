@@ -4,6 +4,7 @@
 |---|---|
 | Stack | integrated stack `aa5e6966` (engine adapters integration), compared with `main` at `d51360b0` |
 | Scope | the 19 forward migrations and 11 rollback files this stack adds (`git diff --name-only d51360b0 aa5e6966 -- supabase/migrations`) |
+| Rebase | 2026-10-29: the branch was rebased onto `main` `c4e4e9bb` (PR #349, deployed). The diff `d51360b0..c4e4e9bb` touches only execution approvals (`executionApprovalService.ts`, migrations `20261223000000/01`, 3 tests), so every "old code (`d51360b0`)" statement below also holds for the deployed `c4e4e9bb`. The stack's migration set is unchanged (19 forward, 11 rollback). |
 | Audience | the operator/engineer performing the release with separately authorized production access |
 | Nature | READ-ONLY document. Nothing here has been run against production. Every SQL query in §3, §4, §7 and §8 was run against a disposable PostgreSQL 17.6 copy (see §12). |
 
@@ -25,8 +26,8 @@ the `supabase/migrations` directory of a clean checkout of the release commit. `
    desynced (`docs/migration-discipline.md:13-18`, `docs/PRODUCTION-DEPLOY-GOVERNANCE.md:120-122`). Apply
    **one file at a time**, in the order in §2, with the command in §4.0.
 2. **`20261127000000_pi_prospect_lists.sql` sorts BEFORE migrations that are already on `main`**
-   (`20261128000000` … `20261222000000`, 13 files). Ledger-based tooling would treat it as out of order or
-   skip it. Apply it by hand as an individual file, like every other file here.
+   (`20261128000000` … `20261223000001`, 15 files, including PR #349's two `20261223…` files, which are
+   applied in production). Ledger-based tooling would treat it as out of order or skip it. Apply it by hand as an individual file, like every other file here.
 3. **Frozen history.** `scripts/migrations/historical-baseline.txt` (353 files) and
    `scripts/migrations/ordering-baseline.txt` (frozen snapshot, floor `20261026000000`) list migrations that
    must never be edited (`scripts/check-migration-quality.js:13-19, 56-63, 72`). All 19 stack files sort

@@ -1,125 +1,228 @@
-# Release gate: consolidated read-only production verification plan
+# Release gate: production verification handoff (read-only)
 
-Scope: release branch `feat/orchestration-engine-adapters` (stack migrations `20261127000000` and
-`20261226000000` … `20261231000010`), plus the three grant/SQL candidates that the gate also covers:
-FIX3 `20261212000000`, the out-of-repo `authenticated` revoke on the 8 Phase-A content tables, and
-`close_anon` `20261026000000` (#239).
+Release branch `feat/orchestration-engine-adapters`, rebased onto `main` `c4e4e9bb`. Stack migrations:
+`20261127000000` and `20261226000000` … `20261231000010`.
 
-**Nothing in this document has been run against production.** Every check below was built and tested
-only on a disposable PostgreSQL 17.6 cluster, which proves the tooling works, not what production
-contains. The session that runs it needs separate, explicit authorization from the owner.
+The gate also covers three earlier changes that are already in production:
 
-Detail lives in:
+- FIX3 `20261212000000`.
+- The out-of-repo revoke of `authenticated` on the 8 Phase-A content tables.
+- `close_anon` `20261026000000` (#239).
 
-- `docs/release/orchestration-engine-adapters-migration-runbook.md` — deploy order, preflight P0–P13, rollback.
-- `docs/release/grants-consumer-matrix.md` — object matrix, consumer trace, effective privileges, P1–P9.
-- `docs/release/applied-sql-equivalence.md` — per-candidate evidence for applied SQL.
+**Status: NO-GO.** Nothing here has been run against production. All tooling was tested only on a
+disposable PostgreSQL 17.6 cluster, which proves that the tooling works. It does not show what
+production contains. Running this handoff needs separate, explicit authorization from the owner.
 
-## 0. Session rules
+References:
 
-- One operator, one read-only session. The connection string is held by the operator in an env var
-  (`PROD_READONLY_URL` below, and `SUPABASE_POOLER_DB_URL` for the parity script). Never paste it into
-  a file, a commit, a log, or a chat.
-- The role must have `default_transaction_read_only=on`. Every SQL file also wraps itself in
-  `BEGIN TRANSACTION READ ONLY … ROLLBACK`; check that the session reports `transaction_read_only = on`
-  before trusting any result.
-- Run from a clean checkout of the exact commit being released (after it is rebased onto the current
-  `origin/main`), so the manifests match the migrations that will ship.
-- Save every output with its UTC timestamp and the commit SHA. A check that errors, times out, or
-  returns no rows where rows are expected is **BLOCKED**, never PASS.
+- `docs/release/orchestration-engine-adapters-migration-runbook.md`: preflight P0–P13, apply order, rollback.
+- `docs/release/grants-consumer-matrix.md`: object matrix, consumer trace, facts P1–P9.
+- `docs/release/applied-sql-equivalence.md`: per-candidate SQL evidence.
 
-## 1. Checks, permissions, and pass conditions
+## 0. Access to grant (and nothing else)
 
-| # | Check | Command | Permissions | Pass condition |
-|---|---|---|---|---|
-| 1 | Migration preflight (runbook §3.2–3.3, P0–P13) | §2.1 | CONNECT; USAGE on `public`, `supabase_migrations`; SELECT on `supabase_migrations.schema_migrations`; aggregate SELECT on the tables the preflight counts | Every P-check matches the runbook's expected result; no STOP condition |
-| 2 | Strict schema parity | §2.2 | As 1, plus SELECT (or `pg_read_all_data`) on checked public tables — without it, columns are hidden and report as false BLOCKING | Before migrations: the stack's objects are reported absent and nothing else is BLOCKING. After migrations: exit 0 under `PREDEPLOY_STRICT_SCHEMA=1` |
-| 3 | Catalog fingerprint + semantic compare | §2.3 | CONNECT and catalog reads only; SELECT on the ledger table for the ledger facts | Comparator exit 0 against the expected database, or every semantic difference explained and accepted in writing by the owner |
-| 4 | ACL / grant snapshot | §2.4 | CONNECT and catalog reads only | Facts P1, P2, P4 (matrix §7) recorded; no anon privilege on any in-scope table; stack tables match the coverage expectations |
-| 5 | Supabase API-log review | §2.5 | Logs Explorer (dashboard) or Management API analytics read access — a separate grant from the DB role | Every day-slice of the full retention window run and recorded; non-service_role hits on in-scope objects explained. Zero hits are **necessary, not sufficient** |
-| 6 | Applied-SQL text recovery | §2.6 | Owner's dashboard access (SQL Editor history); optional `pg_stat_statements` read | A recovered text hashes to the committed file, or the gap is recorded as permanently unprovable |
+| # | Access | Used by | Notes |
+|---|---|---|---|
+| 1 | A **fresh** read-only PostgreSQL credential for a direct (non-PostgREST) connection | A, B, C1 | Do not reuse the stale pooler password from `.env.local`; retries risk a lockout. See the role requirements below. |
+| 2 | Supabase **Logs Explorer** read access (dashboard), or Management API analytics read | C2 | This is a separate grant from the database role. |
+| 3 | The owner's **SQL Editor history and saved snippets** in the Supabase dashboard | B0 | Only the owner or operator can read these. |
+| 4 | *(Optional)* a production **schema-only dump with ACLs** (`pg_dump --schema-only`, which keeps privileges by default) | B2 | Needed only if residual differences in B2 cannot be explained without it. It is a production read and needs its own authorization. |
 
-Extension (browser) behaviour: the 14 extension assertions remain **UNVERIFIED**; no extension
-checkout exists on the build machine and none of the checks above can verify them.
+Requirements for the database role (1):
 
-## 2. Exact commands
+- `default_transaction_read_only = on`;
+- CONNECT on the database;
+- USAGE on `public` and `supabase_migrations`;
+- SELECT on `supabase_migrations.schema_migrations`;
+- SELECT on the checked public tables, or membership of `pg_read_all_data`.
 
-### 2.1 Migration preflight
+The last item matters: without it, `information_schema.columns` hides columns, and the parity check
+reports them as false BLOCKING "absent" findings. It never reports a false pass. Catalog functions
+(`has_*_privilege`, `pg_get_functiondef`) need nothing extra.
+
+Session rules:
+
+- The connection string lives only in the operator's shell environment. Never write it to a file,
+  commit, log or chat.
+- Run from a clean checkout of the exact release commit.
+- Save every output with its UTC timestamp and the commit SHA.
+- A check that errors, times out, or returns no rows where rows are expected is **BLOCKED**, never PASS.
+
+## A. Schema parity
+
+Commands:
 
 ```
+# A1  Migration preflight (runbook §3.2–3.3). It runs in a READ ONLY transaction and ends with ROLLBACK.
 node scripts/release/runbook-preflight-build.js docs/release/orchestration-engine-adapters-migration-runbook.md preflight.sql
 psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f preflight.sql > preflight.out
-```
 
-Compare each `=== P… ===` section with the runbook's expected result.
-
-### 2.2 Strict schema parity
-
-```
-export SUPABASE_POOLER_DB_URL   # operator sets it in the shell; never written down
+# A2  Strict parity. The script reads SUPABASE_POOLER_DB_URL, then SUPABASE_DB_URL, then DATABASE_URL.
+#     Point the variable at the fresh read-only credential.
 PREDEPLOY_STRICT_SCHEMA=1 node scripts/predeploy-check.js
-# or the verifier alone:
-node scripts/verify-schema-parity.js --strict
+node scripts/verify-schema-parity.js --strict > parity.json      # same check, machine-readable
 ```
 
-Under strict mode, connection failure, missing credentials, a skipped check (missing role,
-unreadable ledger) and any catalog query error all block. Before the stack's migrations are applied,
-the stack entries are expected to fail; that run is a baseline, not a pass.
+What strict mode does:
 
-### 2.3 Catalog fingerprint and semantic comparison
+- It **blocks** on connection failure, missing credentials, a skipped check (a missing role or an
+  unreadable ledger), any catalog query error, warnings (exit 3), and unknown exit codes.
+- It never prints the password embedded in the URL. This was tested with a sentinel password across
+  refused, unresolvable and wrong-password connections.
+
+What the stack checks cover:
+
+- 18 tables and their 208 columns, plus 5 column types;
+- 45 indexes: 18 unique (BLOCKING) and 27 query-plan (WARN);
+- 27 functions, checking existence, SECURITY DEFINER, and body markers (for example, the lease reaper must
+  write `uncertain` and must not write `failed`);
+- 17 triggers and 7 CHECK vocabularies;
+- RLS on every stack table;
+- privileges:
+  - `anon` holding anything on a stack table is BLOCKING;
+  - on the 8 explicitly revoked tables, `authenticated` holding anything is BLOCKING;
+  - only `service_role` may execute the 3 SECURITY DEFINER RPCs.
+
+**Two runs with different meanings:**
+
+| Run | When | Expected result |
+|---|---|---|
+| A-baseline | before any stack migration | Stack objects are reported absent (exit 1). Record which **pre-existing** manifest entries fail: those are drift that predates this release and must be explained before anything is applied. Anything stack-related that is already present means a partial earlier apply; STOP and review it against runbook §3.3. |
+| A-post | after `…000009` is applied, and again after `…000010` | Exit 0 under strict mode. Any BLOCKING finding means STOP, and roll back by runbook §9. |
+
+PASS for A requires A-post to exit 0 under strict mode on production.
+
+## B. Applied-SQL equivalence
+
+**B0: recover the text (owner, dashboard).** Search SQL Editor history and saved snippets for:
+
+| Candidate | Search terms | Compare with (sha256 of the committed file) |
+|---|---|---|
+| FIX3 | `content_quality`, `content_approval_history`, `FIX3`, `omnivyra_touch_updated_at` | `581926201d268d5bde34b6a6b7be4ee118bac3ed8d62ef88756e7030b2d445d5` |
+| 8-table revoke | `REVOKE`, `authenticated`, `brand_memory`, `publication_lineage` | No committed text exists. The recovered text becomes the record. |
+| close_anon | `close_anon`, `REVOKE ALL`, `ALTER DEFAULT PRIVILEGES` | `62e2371990ee020d255c9415bf3a76a7063e64f874b42d92364d3d37a589fc82` |
+
+To compare, save each recovered text to a file and run `sha256sum <file>`. Then run
+`diff <(tr -d '\r' < recovered.sql) <(tr -d '\r' < supabase/migrations/<file>)`. Record whether the
+texts are **byte-identical**, identical only after normalising line endings and whitespace, or
+different (with the differing statements). If nothing is recovered, the record reads: *exact
+equivalence is unprovable from available evidence.*
+
+An unchanged file in Git does not show that it was executed as committed.
+
+**B1: production catalog fingerprint.**
 
 ```
-node scripts/release/catalog-fingerprint-build.js --check
+node scripts/release/catalog-fingerprint-build.js --check          # SQL matches the migration's object lists
 psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/catalog-fingerprint.sql > prod.tsv
-grep -P '^meta\tsession\ttransaction_read_only\ton$' prod.tsv
+grep -P '^meta\tsession\ttransaction_read_only\ton$' prod.tsv      # must match, or discard the run
+```
+
+**B2: expected snapshot and comparison.** Build the expected side on a disposable database (never on
+production):
+
+1. Replay `origin/main` migrations using the real-schema recipe (`scripts/ci/real-schema-ci.sh`).
+2. Before the replay, apply the Supabase roles and production's default privileges, taken from the C1
+   snapshot section S08.
+3. Then apply the 8-table revoke as recovered in B0, or as described in memory if nothing was recovered.
+
+Then compare:
+
+```
 psql "$EXPECTED_DISPOSABLE_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/catalog-fingerprint.sql > expected.tsv
 node scripts/release/semantic-compare-catalog.js expected.tsv prod.tsv --role-map <expected_owner>=<prod_owner>
 ```
 
-The expected side must be a disposable database restored from a production-shaped schema dump
-**with ACLs**, plus the committed migrations and the intended revoke. Building it needs a schema-only
-dump of production, which is itself a production read that needs authorization.
+The comparator exits 0 when the catalogs are equal and 1 when they differ semantically, meaning
+differences in ACLs, RLS, policies, function bodies, constraints, indexes, triggers, default privileges
+or object existence. Owner names, server metadata and MAINTAIN-only ACL differences count as noise.
+`--role-map` was verified on the disposable cluster: mapped grantees compare equal, and a real
+difference still exits 1.
 
-Semantic equivalence does not prove byte identity of the SQL that was applied.
+**Catalog equivalence cannot establish byte-for-byte identity of the historical SQL.** Only B0 can do that.
 
-### 2.4 ACL / grant snapshot
+PASS for B requires, per candidate:
+
+- B0 recorded, as recovered with a byte verdict or as "unprovable";
+- B2 exiting 0, or every semantic difference explained and accepted in writing by the owner.
+
+## C. Grants and external consumers
 
 ```
+# C1  ACL / grant / RLS / policy / publication snapshot (READ ONLY transaction, ROLLBACK)
 psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/grants-acl-check.sql > grants.out
 ```
 
-### 2.5 API-log review
+**C1** covers:
 
-Run `scripts/release/api-log-queries.sql` Q1–Q5 in Logs Explorer, one day-slice at a time over the
-full retention window. First confirm each field path in the Logs Explorer schema pane: the queries
-have never been executed. Record each slice's start, end and row count, including zeros.
+- roles (S1) and relations (S2);
+- `aclexplode`, with grantee 0 shown as PUBLIC (S3);
+- effective privileges for anon, authenticated, service_role and PUBLIC (S4);
+- column ACLs and policies;
+- functions and `proacl`;
+- `pg_default_acl` (S8) and `pg_publication_tables` (S9).
 
-Zero hits do not prove that no consumer exists. Logs miss:
+All four scopes are included: FIX3 plus the revoke, close_anon (all 177 tables, 37 views and 29
+functions taken from the migration), the stack, and PR #349.
 
-- direct-database clients;
-- traffic outside the retention window;
-- realtime deliveries;
-- anything that has not run recently.
+**C2: API logs.** In Logs Explorer, run `scripts/release/api-log-queries.sql` Q1–Q5, one day-slice at
+a time, across the **full available retention window**. The queries cover:
 
-### 2.6 Applied-SQL text
+| Query | Traffic |
+|---|---|
+| Q1–Q3 | user-token REST, RPC and GraphQL traffic |
+| Q4 | realtime |
+| Q5 | Postgres permission errors and client-role sessions |
 
-The owner checks Supabase Dashboard → SQL Editor history and saved snippets for:
+Rules for running them:
 
-- the FIX3 run;
-- the Phase-A revoke;
-- the 2026-09-13 close_anon run.
+- These queries have never been executed. Confirm each field path in the schema pane first. A query
+  error or NULL role column is a schema mismatch, not evidence.
+- Record each slice's start, end and row count, including zeros.
+- **Zero hits do not prove there are no consumers.** The logs miss direct-database clients, BI tools,
+  anything outside retention, realtime deliveries, and jobs that have not run recently.
 
-Hash each recovered text with `sha256sum` and compare it with:
+**C3: realtime publication.** C1 section S9 must show that no in-scope table is in `supabase_realtime`.
+From the repo, `credit_transactions` is the only table the app subscribes to
+(`lib/swr/creditsRealtime.ts`). Production membership is unknown until S9 is run.
 
-- FIX3: `581926201d268d5bde34b6a6b7be4ee118bac3ed8d62ef88756e7030b2d445d5`;
-- close_anon: `62e2371990ee020d255c9415bf3a76a7063e64f874b42d92364d3d37a589fc82`.
+**C4: owner confirmation, in writing.** The owner confirms that none of the following use the 10
+RLS-only stack tables, the 4 FIX3 tables or the 8 Phase-A tables:
 
-The optional `pg_stat_statements` query is in `docs/release/applied-sql-equivalence.md`.
+- external integrations (Zapier, partner keys);
+- direct database clients (psql users, scripts, workers outside this repo);
+- BI tools or spreadsheets.
 
-## 3. Owner decisions that no query answers
+**Recommendations.** These are owner decisions; nothing has been implemented, and grants and policies
+are unchanged.
 
-- Whether to add an explicit `REVOKE ALL … FROM PUBLIC, anon, authenticated` (plus a service_role
-  grant) on the 10 RLS-only stack tables and the 4 FIX3 tables (matrix §4).
-- Whether to record the Phase-A revoke as a migration, once its text is known.
-- Confirmation that there are no out-of-repo consumers (BI, spreadsheets, Zapier, partner keys,
-  manual SQL users) of the in-scope tables.
+1. **The 10 RLS-only stack tables:**
+   - add an explicit `REVOKE ALL … FROM PUBLIC, anon, authenticated` plus
+     `GRANT SELECT, INSERT, UPDATE, DELETE … TO service_role`, in a new migration;
+   - optionally retarget their 6 `auth.role()`-keyed policies to `service_role`.
+
+   The 10 tables are `prospect_lists`, `prospect_list_members`, `prospect_campaigns`, `workflows`,
+   `workflow_versions`, `execution_instances`, `execution_plans`, `execution_plan_steps`,
+   `execution_tasks` and `outreach_bridge_handoffs`.
+
+   Prerequisites: C1, C2, C3 and C4.
+2. **The 4 FIX3 tables:** the same pattern, decided separately (also after C1–C4). The 4 tables are
+   `content_quality`, `content_block`, `content_recommendation` and `content_approval_history`.
+3. **The 8-table revoke:** record it as an idempotent migration so that replays and fresh environments
+   match production. Do this after B0 recovers the exact text, or after C1 shows the resulting ACLs
+   if no text can be recovered.
+
+PASS for C requires:
+
+- C1 recorded with no anon privilege on any in-scope table;
+- C2 run across the full retention window, with every non-service_role hit explained;
+- C3 clean;
+- C4 confirmed by the owner.
+
+## Not covered by any check
+
+- The 14 browser-extension assertions remain **UNVERIFIED**. No extension checkout exists and none of
+  the checks above can verify them.
+- Apply order, the deploy sequence (web and worker together with an identical `ENCRYPTION_KEY`, then
+  `…000010`, then `VACUUM FULL rpa_sessions`) and rollback live in the runbook. Each of those steps needs
+  its own authorization.
