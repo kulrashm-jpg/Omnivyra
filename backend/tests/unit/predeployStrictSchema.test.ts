@@ -43,6 +43,10 @@ class Client {
   async end() {}
   async query(sql, params) {
     const m = require(process.env.FAKE_PG_SCRIPT);
+    if (sql.startsWith('SET default_transaction_read_only = on')) return { rows: [] };
+    if (sql.includes("current_setting('transaction_read_only')")) {
+      return { rows: [{ role: 'fake_ro', tx_read_only: 'on' }] };
+    }
     if (sql.includes('information_schema.columns')) {
       const types = new Map(m.REQUIRED_COLUMN_TYPES.map((t) => [t.table + '.' + t.column, t.udtName]));
       return { rows: m.REQUIRED_COLUMNS.map((r) => ({ table_name: r.table, column_name: r.column,
