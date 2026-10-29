@@ -71,6 +71,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { classifyLedger } = require('./lib/migrationLedger');
 
 // Lazy-load .env.local when running from a shell that didn't load it
 function loadEnvLocal() {
@@ -130,6 +131,18 @@ const REQUIRED_COLUMNS = [
   // are INFO in Phase 1 because no runtime code writes the table
   // yet — only the operator backfill script does. Phase 2 (APIs)
   // upgrades the user-mutated columns to BLOCKING.
+  //
+  // KNOWN NAME COLLISION — these INFO findings are expected in production.
+  // Production `active_leads` is the LEGACY lead-runs table
+  // (supabase/_schema/baseline.sql: run_id, company_id, bucket, …). 20260817 uses
+  // CREATE TABLE IF NOT EXISTS, so it was a no-op there, and its index on
+  // organization_id cannot build — which is also why
+  // opportunity_feed_items.active_lead_id (added later in the same file) is absent.
+  // Do NOT "fix" this with ALTER TABLE: that grafts two designs onto one table and
+  // the NOT NULL foreign keys cannot hold for existing rows. It is an owner design
+  // decision. Runtime impact today: snapshotRouteHandler reads the legacy shape and
+  // works; leadIntelligenceReadService (since 1aa7bfac, 2026-06-30) reads the new
+  // shape fail-soft and returns [] — and no runtime writer exists for either shape.
   { severity: 'INFO', table: 'active_leads', column: 'organization_id',   motivation: 'Tenant scoping for the Lead object.' },
   { severity: 'INFO', table: 'active_leads', column: 'contact_id',        motivation: 'Person anchor — half of the rollup key.' },
   { severity: 'INFO', table: 'active_leads', column: 'opportunity_type',  motivation: 'Other half of the rollup key.' },
@@ -958,44 +971,60 @@ async function main() {
     : missingWarn.length > 0    ? 'WARN'
     :                             'INFO';
 
-  // Best-effort ledger-desync probe. Counts rows in
-  // supabase_migrations.schema_migrations vs. files in
-  // supabase/migrations/. If the ratio is below threshold we flag
-  // desync — but we don't fail the verifier on desync alone since
-  // the column-existence check is the authoritative signal.
+  // Ledger probe — by VERSION identity (scripts/lib/migrationLedger.js), never by
+  // comparing row and file counts. Migrations are applied by hand and recording
+  // them is optional (docs/migration-discipline.md), and 443 files share 329
+  // versions, so the old `rows < 50% of files` ratio always fired and could never
+  // be satisfied. A missing row means UNRECORDED, not unapplied: the column /
+  // index / type checks above remain the evidence of what is live.
+  //
+  // `ledgerDesyncDetected` keeps its name (the single exit-0 condition reads it)
+  // and now means "the ledger is not demonstrably clean":
+  //   - an ORPHAN row — a recorded version with no local file — is history the
+  //     repository does not have: genuine drift;
+  //   - a ledger that could not be READ is unverified, and an unverified ledger
+  //     is never reported as clean. (Before, a failed probe left this false, so
+  //     the verifier could exit 0 having never read the ledger.)
   let ledgerDesyncDetected = false;
   let ledgerProbeNote = null;
   try {
-    // A REAL count. The previous probe selected with `head: true`, which
-    // returns no rows, then derived the count from `data.length` — so it read
-    // zero every time and reported desync unconditionally whenever more than
-    // 20 local files existed. A gate that always fires carries no signal.
     const ledgerRes = await db.query(
-      'SELECT count(*)::int AS n FROM supabase_migrations.schema_migrations');
-    const ledgerCount = ledgerRes.rows[0].n;
+      'SELECT version, name FROM supabase_migrations.schema_migrations ORDER BY version');
 
-    // Migration file count is best-effort: read the local directory. Only
-    // top-level `.sql` files are candidates — `rollbacks/` and `_`-prefixed
-    // directories are never applied, so counting them would overstate drift.
+    // Only top-level `.sql` files are candidates — `rollbacks/` and `_`-prefixed
+    // directories are never applied.
     const migrationsDir = path.join(process.cwd(), 'supabase', 'migrations');
-    let localCount = null;
-    if (fs.existsSync(migrationsDir)) {
-      localCount = fs.readdirSync(migrationsDir, { withFileTypes: true })
-        .filter((d) => d.isFile() && d.name.endsWith('.sql')).length;
-    }
-
-    if (localCount != null) {
-      ledgerProbeNote = { ledger_recorded: ledgerCount, local_files: localCount };
-      if (localCount > 20 && ledgerCount < localCount * 0.5) {
-        ledgerDesyncDetected = true;
-      }
+    if (!fs.existsSync(migrationsDir)) {
+      ledgerDesyncDetected = true;
+      ledgerProbeNote = { verified: false, reason: 'no local supabase/migrations directory to compare against', ledger_rows: ledgerRes.rows.length };
     } else {
-      ledgerProbeNote = { ledger_recorded: ledgerCount, local_files: null, skipped: 'no local migrations dir' };
+      const files = fs.readdirSync(migrationsDir, { withFileTypes: true })
+        .filter((d) => d.isFile() && d.name.endsWith('.sql'))
+        .map((d) => d.name);
+      const c = classifyLedger({ files, ledgerRows: ledgerRes.rows });
+      ledgerDesyncDetected = c.attention;
+      const cap = (list) => list.slice(0, 50);
+      ledgerProbeNote = {
+        verified: true,
+        local_files: c.local_files,
+        local_versions: c.local_versions,
+        duplicate_version_groups: c.duplicate_version_groups,
+        ledger_rows: c.ledger_rows,
+        recorded_identified: c.recorded_identified.length,
+        recorded_ambiguous: c.recorded_ambiguous,
+        orphans: c.orphans,
+        name_mismatches: c.name_mismatches,
+        unrecorded_unique: c.unrecorded_unique.length,
+        unrecorded_ambiguous_groups: c.unrecorded_ambiguous.length,
+        recorded_high_water: c.recorded_high_water,
+        unrecorded_newer_than_high_water: cap(c.unrecorded_newer_than_high_water),
+        invalid_filenames: c.invalid_filenames.length,
+      };
     }
   } catch (e) {
-    // The ledger probe is advisory; the column check above is authoritative.
-    // A probe failure is recorded, never converted into a parity verdict.
-    ledgerProbeNote = { skipped: true, reason: (e && e.message) || String(e) };
+    // Never converted into a column verdict — but never into "clean" either.
+    ledgerDesyncDetected = true;
+    ledgerProbeNote = { verified: false, reason: (e && e.message) || String(e) };
   }
 
   await db.end().catch(() => {});
@@ -1009,7 +1038,13 @@ async function main() {
     // TOTAL findings, not only absent columns — a structural finding counts
     // here too. `missing_columns` below keeps its original meaning and shape.
     missing_count: missing.length,
-    status: overall === 'INFO' && !ledgerDesyncDetected ? 'ok' : (overall === 'BLOCKING' ? 'BLOCKING' : 'WARN'),
+    // 'ok' means exactly the exit-0 condition. It used to be 'ok' whenever the worst
+    // finding was INFO, so a run with INFO findings (exit 3) published 'ok'. INFO-only
+    // findings are non-blocking and not WARN, so they report as 'INFO' — never 'ok'.
+    status: missing.length === 0 && !ledgerDesyncDetected ? 'ok'
+      : overall === 'BLOCKING' ? 'BLOCKING'
+      : (overall === 'WARN' || ledgerDesyncDetected) ? 'WARN'
+      : 'INFO',
     severity: {
       blocking: missingBlocking.length,
       warn: missingWarn.length,
@@ -1097,9 +1132,14 @@ async function main() {
     }
   }
   if (ledgerDesyncDetected) {
+    const why = ledgerProbeNote && ledgerProbeNote.verified === false
+      ? `the ledger could not be verified (${ledgerProbeNote.reason})`
+      : `${(ledgerProbeNote && ledgerProbeNote.orphans ? ledgerProbeNote.orphans.length : 0)} recorded version(s) have no local migration file`;
     process.stderr.write(
-      '\n[WARN] UNSAFE_MIGRATION_LEDGER_STATE — supabase_migrations.schema_migrations is far behind\n' +
-      '       the local supabase/migrations/ directory. Probe data: ' + JSON.stringify(ledgerProbeNote) + '\n' +
+      '\n[WARN] UNSAFE_MIGRATION_LEDGER_STATE — ' + why + '.\n' +
+      '       Probe data: ' + JSON.stringify(ledgerProbeNote) + '\n' +
+      '       An unrecorded migration is NOT necessarily unapplied (recording is optional;\n' +
+      '       the column / index / type checks above are the schema evidence).\n' +
       '       *** DO NOT RUN `supabase db push` ***\n' +
       '       Duplicate-version prefixes + already-applied DDL will cause partial / non-deterministic\n' +
       '       application. The npm run db:push wrapper now hard-blocks this state — see\n' +

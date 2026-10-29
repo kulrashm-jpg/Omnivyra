@@ -132,6 +132,34 @@ jobs:
           ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
         run: npm run test:security-gates
 
+      # Deploy-gate contracts: predeploy-check.js, the schema-parity verifier it
+      # calls, and the verifier's migration-ledger classifier
+      # (scripts/lib/migrationLedger.js). None ran in any workflow, so a regression could again let a
+      # schema check that never connected end in a passing verdict, or let strict
+      # mode stop requiring the database gate. Hermetic: the verifier suite runs the
+      # script with no reachable database, and the predeploy suite reads source only.
+      # Fail loud: a renamed or deleted suite fails here instead of vanishing.
+      - name: Deploy gate contract tests
+        env:
+          SUPABASE_URL: https://placeholder.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
+          REDIS_URL: 'redis://localhost:6379'
+          OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+          ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+        run: |
+          set -euo pipefail
+          SUITES=(
+            backend/tests/unit/predeployCheckGateHonesty.test.ts
+            backend/tests/unit/schemaParityVerifierContract.test.ts
+            backend/tests/unit/migrationLedgerClassifier.test.ts
+          )
+          for s in "${SUITES[@]}"; do
+            test -f "$s" || { echo "Gated suite missing — renamed, moved or deleted: $s"; exit 1; }
+          done
+          node ./node_modules/jest/bin/jest.js --ci --no-coverage --runTestsByPath "${SUITES[@]}"
+
       # AUTH-ENFORCEMENT Phase 1 (C-3/C-4): route-policy inventory + validation
       # warnings. Non-blocking by design in Phase 1 (docs/security/
       # AUTH-ENFORCEMENT-ARCHITECTURE.md v3 §5); ROUTE_POLICY_STRICT=1 promotes
