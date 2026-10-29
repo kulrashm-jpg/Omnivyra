@@ -148,6 +148,12 @@ describe('verify-schema-parity — ledger wiring', () => {
     expect(after).toMatch(/verified: false/);
   });
 
+  it("publishes status 'ok' only under the exit-0 condition — INFO findings report 'INFO'", () => {
+    expect(code).toMatch(/status: missing\.length === 0 && !ledgerDesyncDetected \? 'ok'/);
+    expect(code).toMatch(/: 'INFO',/);
+    expect(code).not.toMatch(/status: overall === 'INFO' && !ledgerDesyncDetected \? 'ok'/);
+  });
+
   it('keeps the single exit-0 condition gated on the ledger result', () => {
     expect(code.match(/process\.exit\(0\)/g) ?? []).toHaveLength(1);
     expect(code).toMatch(/missing\.length === 0 && !ledgerDesyncDetected[\s\S]{0,200}process\.exit\(0\)/);

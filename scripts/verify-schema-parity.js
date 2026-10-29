@@ -1038,7 +1038,13 @@ async function main() {
     // TOTAL findings, not only absent columns — a structural finding counts
     // here too. `missing_columns` below keeps its original meaning and shape.
     missing_count: missing.length,
-    status: overall === 'INFO' && !ledgerDesyncDetected ? 'ok' : (overall === 'BLOCKING' ? 'BLOCKING' : 'WARN'),
+    // 'ok' means exactly the exit-0 condition. It used to be 'ok' whenever the worst
+    // finding was INFO, so a run with INFO findings (exit 3) published 'ok'. INFO-only
+    // findings are non-blocking and not WARN, so they report as 'INFO' — never 'ok'.
+    status: missing.length === 0 && !ledgerDesyncDetected ? 'ok'
+      : overall === 'BLOCKING' ? 'BLOCKING'
+      : (overall === 'WARN' || ledgerDesyncDetected) ? 'WARN'
+      : 'INFO',
     severity: {
       blocking: missingBlocking.length,
       warn: missingWarn.length,
