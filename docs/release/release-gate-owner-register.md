@@ -29,7 +29,7 @@ Intake tool: `node scripts/release/recovery-intake.js <fix3|revoke8|close_anon> 
 | Primary window (UTC) | 2026-10-22 18:30 → 2026-10-24 18:30 |
 | Wider window (UTC) | 2026-10-12 → 2026-10-28 |
 | Search strings | `content_quality_collaboration_tenant_consistent`, `20261212000000`, `FIX3`, `content_approval_history`, `omnivyra_touch_updated_at` |
-| Local records searched (agent, 2026-10-29) | repo history and all refs, PRs #318 comments, CI artifacts, session scratchpads, `~/.bash_history`, PowerShell history — **no executed text found** |
+| Local records searched (agent, 2026-10-29) | repo history and all refs, PR #318 comments, CI artifacts, session scratchpads, `~/.bash_history`, PowerShell history, and all 574 local Claude Code session transcripts under `~/.claude/projects` (2026-10-29, read-only, credentials redacted). **No executed text and no apply record found.** In the primary window the only hit is the 2026-10-23 04:12Z commit command; the owner's 11:08Z "i applied that migration" (session `117745fb`) refers to `20261220000000`, not FIX3. **Local search: completed, no result.** |
 | Dashboard places searched (owner) | History: ☐ · Private: ☐ · Shared: ☐ · Favorites: ☐ · restored tabs: ☐ |
 | Exported file(s) / intake record(s) | |
 | Verdict | ☐ RECOVERED: `________` ☐ UNRECOVERABLE |
@@ -47,7 +47,8 @@ Tables: `brand_memory`, `content`, `content_asset`, `content_memory`, `content_o
 | Primary window (UTC) | 2026-10-23 00:00 → 2026-10-28 16:05 |
 | Wider window (UTC) | 2026-10-12 → 2026-10-28 23:59 |
 | Search strings | `REVOKE`, `FROM authenticated`, `brand_memory`, `publication_lineage`, `content_originality`, `content_variant`, `content_revision` |
-| Local records searched (agent, 2026-10-29) | same as Record 1 — **no text found** |
+| Local records searched (agent, 2026-10-29) | same sources as Record 1. **No execution record found.** Found instead: the revoke text **proposed to the owner** in session `117745fb` (three variants, 2026-10-28 13:06Z, 13:43Z and 15:25Z; the 15:25Z one adds a transaction and a self-verifying `DO` block), and the owner's own **outcome attestation** at 16:01:57Z: "`authenticated` has no `SELECT`, `INSERT`, `UPDATE`, or `DELETE` privileges on the eight Phase-A content tables; `service_role` retains all four". |
+| Candidate texts (NOT execution records) | `C:/omnivyra-archive/evidence/release-gate-20261029/revoke8-candidate-2026-10-28T130602062Z.sql` (sha256 `39c36030…`), `…134350047Z.sql` (`867d6618…`), `…152512311Z.sql` (`3d9fe0c2…`), each with a `.provenance.json`. Which variant (if any) was run is not recorded. Not run through `recovery-intake.js`, because a `NO_REFERENCE_TEXT` record would make a proposal the reference. |
 | Dashboard places searched (owner) | History: ☐ · Private: ☐ · Shared: ☐ · Favorites: ☐ · restored tabs: ☐ |
 | Exported file(s) / intake record(s) | (verdict will be `NO_REFERENCE_TEXT`; the file becomes the record) |
 | Verdict | ☐ RECOVERED (becomes the record) ☐ UNRECOVERABLE — only the resulting access lists can be checked (C1) |
@@ -62,7 +63,7 @@ Tables: `brand_memory`, `content`, `content_asset`, `content_memory`, `content_o
 | Primary window (UTC) | 2026-09-13 18:00 → 2026-09-14 00:00 |
 | Wider window (UTC) | 2026-09-10 → 2026-09-20 |
 | Search strings | `close_anon`, `20261026000000`, `REVOKE ALL`, `ALTER DEFAULT PRIVILEGES`, `FROM anon` |
-| Local records searched (agent, 2026-10-29) | as Record 1, plus a search of `~/.bash_history` (13 lines) and the PowerShell PSReadLine history (2,536 lines) for `close_anon`, `20261026000000` and `psql … -1 … -f`: **0 matches**. The applying session's scratchpad no longer exists. |
+| Local records searched (agent, 2026-10-29) | as Record 1, plus `~/.bash_history` (13 lines) and the PowerShell PSReadLine history (2,536 lines): **0 matches** for `close_anon`, `20261026000000`, `psql … -1 … -f`. Transcripts: the 1,058 records in the primary window all belong to session `9b0c8cea`, which starts at 21:33Z, after the reported 21:03Z apply, and only quotes memory; the applying session (`49da8415`) has no surviving transcript or scratchpad. Later `psql`/`close_anon` hits (09-26, 10-19, 10-28) are reads of the file. **Local search: completed, no result.** |
 | Other execution records (owner) | any terminal log or history from the machine that ran psql on 2026-09-13: ☐ |
 | Dashboard places searched (owner) | History: ☐ · Private: ☐ · Shared: ☐ · Favorites: ☐ (a hit is unlikely: it was run with psql) |
 | Exported file(s) / intake record(s) | |
@@ -135,7 +136,7 @@ Zero API-log hits do not establish that no consumers exist.
 
 | # | Prerequisite | Status | Evidence / who / date |
 |---|---|---|---|
-| 1 | Written confirmation that the target is `klkiseupptzbecbxwrky` | MISSING | |
+| 1 | Written confirmation that the target is `klkiseupptzbecbxwrky` | MISSING | The logged-in Supabase CLI (`supabase projects list`, 2026-10-29) shows the ref exists in this account, named **"drishiq2-dot's Project"** (ap-southeast-1, healthy); the other project is `lomndxmrpyudaegddpef` "omnivyra-e2e". The name does not say Omnivyra, so the owner must confirm in writing that this is Omnivyra production. |
 | 2 | Explicit authorization of the production session | MISSING | |
 | 3 | Named operator | MISSING | |
 | 4 | Fresh read-only role per plan §0.1 | MISSING | |
@@ -143,4 +144,4 @@ Zero API-log hits do not establish that no consumers exist.
 | 6 | Decision on the fallback grants if `pg_read_all_data` is refused (they change every table's ACL) | MISSING | |
 | 7 | Logs Explorer access | MISSING | |
 | 8 | Whether `log_connections` is enabled | UNVERIFIED | |
-| 9 | SQL history search outcomes (Records 1–3) | MISSING | |
+| 9 | SQL history search outcomes (Records 1–3) | PARTIAL | Local sources searched, no executed text (Records 1–3). The SQL Editor search is still the owner's. Reading saved snippets through the CLI (`supabase snippets list --project-ref klkiseupptzbecbxwrky`, Management API, read-only) was **blocked by the local permission policy as a production read**; it needs the owner's explicit approval. The CLI exposes saved snippets only, not run history. |
