@@ -61,7 +61,7 @@ jest.mock('../../services/intelligence/probeCostCapture', () => ({
   extractProbeTokenUsage: () => ({ inputTokens: 0, outputTokens: 0, model: null }),
 }));
 jest.mock('../../services/intelligence/citationExtractor', () => ({
-  extractCitation: jest.fn((args: { provider: string; query: string; query_class: string; answer: string; observedAt: string }) => ({
+  extractCitation: jest.fn((args: { provider: string; query: string; query_class: string; answer: string; observedAt: string; domain?: string | null; groundedSources?: readonly string[] }) => ({
     provider: args.provider,
     query: args.query,
     query_class: args.query_class,
@@ -69,6 +69,9 @@ jest.mock('../../services/intelligence/citationExtractor', () => ({
     prominence: 1,
     evidence_excerpt: null,
     observed_at: args.observedAt,
+    // D1 contract — the real extractor always carries the grounded sources it was given.
+    grounded_sources: [...(args.groundedSources ?? [])],
+    citation_corroborated: jest.requireActual('../../services/intelligence/aiVisibilityGrounding').isCitationCorroborated(args.domain ?? null, args.groundedSources ?? []),
   })),
 }));
 jest.mock('../../services/intelligence/queryOrchestrator', () => ({
@@ -95,7 +98,6 @@ const extractCitationMock = extractCitation as unknown as jest.Mock;
 
 const CITATIONS = ['https://a.com', 'https://b.com'];
 const CONTENT = 'Brand X ranks highly';
-const CITED_ANSWER = `${CONTENT}\nSources: ${CITATIONS.join(', ')}`;
 const PROBE = { provider: 'perplexity', query_class: 'commercial', queries: ['best crm for teams'], brandName: 'Brand X' };
 
 const withCitations = (citations: string[] = CITATIONS): NormalizedCompletion => ({
@@ -105,6 +107,19 @@ const withCitations = (citations: string[] = CITATIONS): NormalizedCompletion =>
 });
 
 const lastAnswer = (): string => extractCitationMock.mock.calls.at(-1)?.[0]?.answer ?? '';
+
+/** D1 — the grounded sources handed to the citation extractor (Perplexity's `citations[]`, verbatim). */
+const lastGroundedSources = (): readonly string[] => extractCitationMock.mock.calls.at(-1)?.[0]?.groundedSources ?? [];
+
+/**
+ * "Citations delivered". D1 moved Perplexity's citations OUT of the answer prose (the old
+ * "\nSources: …" appendix) and into `groundedSources`, so delivery now means: the prose is
+ * untouched AND every citation reaches the extractor verbatim.
+ */
+const expectCitationsDelivered = (): void => {
+  expect(lastAnswer()).toBe(CONTENT);
+  expect(lastGroundedSources()).toEqual(CITATIONS);
+};
 
 /** Capability-reconciliation diagnostic lines only (the base logs probe status too). */
 const reconcileLogs = (): Array<{ operation: string; reason?: string }> =>
@@ -252,20 +267,20 @@ describe('PB-005 — reconciliation: unknown provider', () => {
 // ── The certification invariant ───────────────────────────────────────────────
 
 describe('PB-005 — NO registry state can suppress citations', () => {
-  it.each(ALL_MODES)('gateway transport renders "Sources: …" with registry mode %s', async (mode) => {
+  it.each(ALL_MODES)('gateway transport delivers the grounded citations with registry mode %s', async (mode) => {
     mockCapabilityMode = mode;
     const result = await probeViaGateway();
     expect(result.state).toBe('measured');
     expect(result.citation_rate).toBe(1);
-    expect(lastAnswer()).toBe(CITED_ANSWER);
+    expectCitationsDelivered();
   });
 
-  it.each(ALL_MODES)('legacy transport renders "Sources: …" with registry mode %s', async (mode) => {
+  it.each(ALL_MODES)('legacy transport delivers the grounded citations with registry mode %s', async (mode) => {
     mockCapabilityMode = mode;
     const result = await probeViaLegacy();
     expect(result.state).toBe('measured');
     expect(dispatchMock).not.toHaveBeenCalled();
-    expect(lastAnswer()).toBe(CITED_ANSWER);
+    expectCitationsDelivered();
   });
 
   it.each(ALL_MODES)('reshape restores citations identically with registry mode %s', (mode) => {
@@ -279,11 +294,13 @@ describe('PB-005 — NO registry state can suppress citations', () => {
     mockCapabilityMode = mode;
     await probeViaGateway();
     const gatewayAnswer = lastAnswer();
+    const gatewaySources = lastGroundedSources();
     jest.clearAllMocks();
     process.env.PERPLEXITY_API_KEY = 'test-key';
     await probeViaLegacy();
     expect(lastAnswer()).toBe(gatewayAnswer);
-    expect(gatewayAnswer).toBe(CITED_ANSWER);
+    expect(lastGroundedSources()).toEqual(gatewaySources);
+    expectCitationsDelivered();
   });
 
   it('metadata-absent completions stay citation-free in every registry state (no fabrication)', () => {
@@ -311,14 +328,14 @@ describe('PB-005 — capability diagnostics (out-of-band only)', () => {
     expect(logs[0].reason).toContain('agreement=registry_contradicts');
     expect(logs[0].reason).toContain('drift=true');
     expect(logs[0].reason).toContain('citations_applied=true');
-    expect(lastAnswer()).toBe(CITED_ANSWER);
+    expectCitationsDelivered();
   });
 
   it('unreadable registry ⇒ registry_unavailable diagnostic, citations still delivered', async () => {
     mockCapabilityMode = 'throws';
     await probeViaGateway();
     expect(reconcileLogs()[0]?.reason).toContain('agreement=registry_unavailable');
-    expect(lastAnswer()).toBe(CITED_ANSWER);
+    expectCitationsDelivered();
   });
 
   it('no citations observed ⇒ no diagnostic even when the registry contradicts', async () => {
@@ -334,7 +351,7 @@ describe('PB-005 — capability diagnostics (out-of-band only)', () => {
     mockCapabilityMode = 'unsupported';
     await probeViaLegacy();
     expect(reconcileLogs()).toHaveLength(0);
-    expect(lastAnswer()).toBe(CITED_ANSWER);
+    expectCitationsDelivered();
   });
 
   it('a throwing logger cannot break the probe (diagnostics fully swallowed)', async () => {
@@ -345,7 +362,7 @@ describe('PB-005 — capability diagnostics (out-of-band only)', () => {
     const result = await probeViaGateway();
     expect(result.state).toBe('measured');
     expect(result.citation_rate).toBe(1);
-    expect(lastAnswer()).toBe(CITED_ANSWER);
+    expectCitationsDelivered();
     logMock.mockReset();
   });
 });

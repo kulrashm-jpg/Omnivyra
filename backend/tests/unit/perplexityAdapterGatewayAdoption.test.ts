@@ -29,7 +29,7 @@ jest.mock('../../services/intelligence/probeCostCapture', () => ({
   extractProbeTokenUsage: () => ({ inputTokens: 0, outputTokens: 0, model: null }),
 }));
 jest.mock('../../services/intelligence/citationExtractor', () => ({
-  extractCitation: jest.fn((args: { provider: string; query: string; query_class: string; answer: string; observedAt: string }) => ({
+  extractCitation: jest.fn((args: { provider: string; query: string; query_class: string; answer: string; observedAt: string; domain?: string | null; groundedSources?: readonly string[] }) => ({
     provider: args.provider,
     query: args.query,
     query_class: args.query_class,
@@ -37,6 +37,9 @@ jest.mock('../../services/intelligence/citationExtractor', () => ({
     prominence: 1,
     evidence_excerpt: null,
     observed_at: args.observedAt,
+    // D1 contract — the real extractor always carries the grounded sources it was given.
+    grounded_sources: [...(args.groundedSources ?? [])],
+    citation_corroborated: jest.requireActual('../../services/intelligence/aiVisibilityGrounding').isCitationCorroborated(args.domain ?? null, args.groundedSources ?? []),
   })),
 }));
 jest.mock('../../services/intelligence/queryOrchestrator', () => ({
@@ -69,6 +72,12 @@ const withCitations = (citations: string[], content = 'Brand X ranks highly'): N
 
 /** The last answer string handed to the citation extractor (post-`extractAnswer`). */
 const lastAnswer = (): string => extractCitationMock.mock.calls.at(-1)?.[0]?.answer ?? '';
+
+/**
+ * D1 — the grounded sources handed to the citation extractor. D1 moved Perplexity's `citations[]`
+ * OUT of the answer prose (the old "\nSources: …" appendix) and into `groundedSources`, verbatim.
+ */
+const lastGroundedSources = (): readonly string[] => extractCitationMock.mock.calls.at(-1)?.[0]?.groundedSources ?? [];
 
 const PROBE = { provider: 'perplexity', query_class: 'commercial', queries: ['best crm for teams'], brandName: 'Brand X' };
 
@@ -112,10 +121,9 @@ describe('PA-006 — flag + reshape (pure)', () => {
 describe('PA-006 — flag-gated routing + parity', () => {
   it('flag ON routes through the gateway dispatcher WITHOUT max_tokens (request parity)', async () => {
     process.env.PERPLEXITY_ADAPTER_GATEWAY_TRANSPORT = 'true';
-    dispatchMock.mockResolvedValue({
-      content: 'Brand X ranks highly',
-      usage: { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 },
-    });
+    // D1 — a grounded sonar run carries citations; without them the run is `insufficient_signal`
+    // (pinned by "probe parity (no citations)" below).
+    dispatchMock.mockResolvedValue(withCitations(['https://a.com']));
     const result = await new PerplexityAdapter().probe(PROBE as never);
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenCalledWith('perplexity', expect.objectContaining({ temperature: 0, apiKey: 'test-key' }));
@@ -131,6 +139,7 @@ describe('PA-006 — flag-gated routing + parity', () => {
     fetchProdMock.mockResolvedValue({
       json: async () => ({
         choices: [{ message: { content: 'Brand X ranks highly' } }],
+        citations: ['https://a.com'], // D1 — grounded run (see the flag ON case)
         usage: { prompt_tokens: 5, completion_tokens: 7 },
         model: 'sonar',
       }),
@@ -200,15 +209,16 @@ describe('PB-002 — metadata consumption + citation restoration (reshape, pure)
 });
 
 describe('PB-002 — citation rendering across transports', () => {
-  it('gateway path renders "Sources: …" from restored metadata citations', async () => {
+  it('gateway path delivers the restored metadata citations as grounded sources', async () => {
     process.env.PERPLEXITY_ADAPTER_GATEWAY_TRANSPORT = 'true';
     dispatchMock.mockResolvedValue(withCitations(['https://a.com', 'https://b.com']));
     const result = await new PerplexityAdapter().probe(PROBE as never);
     expect(result.state).toBe('measured');
-    expect(lastAnswer()).toBe('Brand X ranks highly\nSources: https://a.com, https://b.com');
+    expect(lastAnswer()).toBe('Brand X ranks highly'); // prose untouched — no "Sources: …" appendix
+    expect(lastGroundedSources()).toEqual(['https://a.com', 'https://b.com']);
   });
 
-  it('legacy path still renders "Sources: …" from raw response citations', async () => {
+  it('legacy path delivers the raw response citations as grounded sources', async () => {
     delete process.env.PERPLEXITY_ADAPTER_GATEWAY_TRANSPORT;
     fetchProdMock.mockResolvedValue({
       json: async () => ({
@@ -219,7 +229,8 @@ describe('PB-002 — citation rendering across transports', () => {
       }),
     });
     await new PerplexityAdapter().probe(PROBE as never);
-    expect(lastAnswer()).toBe('Brand X ranks highly\nSources: https://a.com, https://b.com');
+    expect(lastAnswer()).toBe('Brand X ranks highly'); // prose untouched — no "Sources: …" appendix
+    expect(lastGroundedSources()).toEqual(['https://a.com', 'https://b.com']);
   });
 
   it('gateway (metadata) and legacy (raw) produce an IDENTICAL cited answer — parity restored', async () => {
@@ -228,6 +239,7 @@ describe('PB-002 — citation rendering across transports', () => {
     dispatchMock.mockResolvedValue(withCitations(citations));
     await new PerplexityAdapter().probe(PROBE as never);
     const gatewayAnswer = lastAnswer();
+    const gatewaySources = lastGroundedSources();
 
     jest.clearAllMocks();
     process.env.PERPLEXITY_API_KEY = 'test-key';
@@ -235,6 +247,9 @@ describe('PB-002 — citation rendering across transports', () => {
     fetchProdMock.mockResolvedValue({ json: async () => ({ choices: [{ message: { content: 'Brand X ranks highly' } }], citations, usage: { prompt_tokens: 5, completion_tokens: 7 }, model: 'sonar' }) });
     await new PerplexityAdapter().probe(PROBE as never);
     expect(lastAnswer()).toBe(gatewayAnswer);
+    // D1 — parity now lives in the grounded sources, not the prose; both must carry the citations.
+    expect(lastGroundedSources()).toEqual(gatewaySources);
+    expect(gatewaySources).toEqual(citations);
   });
 });
 
