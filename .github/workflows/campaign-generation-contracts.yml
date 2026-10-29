@@ -21,7 +21,10 @@ name: Campaign Generation Contracts
 #   - the planner rollout resolver never writes to process.env (production
 #     hardens it as a readonly proxy whose set-trap throws — that crashed a live
 #     release once);
-#   - runtime-delegated generation paths never double-persist.
+#   - runtime-delegated generation paths never double-persist;
+#   - a campaign send approval (ES-101) that did not persist — record or
+#     revoke — is never reported as success, and the secured approval /
+#     readiness-snapshot migrations keep RLS on and client roles revoked.
 #
 # HERMETIC: every suite here is a pure unit test — no DB, no network, no LLM.
 # The env values below are deliberately FAKE placeholders whose only job is to
@@ -92,7 +95,7 @@ jobs:
       - name: Verify the gated suite inventory (no silent skips)
         run: |
           set -euo pipefail
-          EXPECTED=14
+          EXPECTED=17
           node -e "
             const fs = require('fs');
             const suites = [
@@ -103,6 +106,8 @@ jobs:
               'semanticDropVisibilityP111','plannerRolloutEnforcerP126',
               'taskProfileCapability','dayContentProfileQuality',
               'textgenRuntimeParity','blueprintProfileQuality',
+              'executionApprovalPersistence','executionApprovalRoutePersistence',
+              'remediationTablesSecuredMigrations',
             ];
             const missing = suites.filter((s) => !fs.existsSync('backend/tests/unit/' + s + '.test.ts'));
             if (missing.length) {
@@ -130,6 +135,9 @@ jobs:
             backend/tests/unit/dayContentProfileQuality.test.ts \
             backend/tests/unit/textgenRuntimeParity.test.ts \
             backend/tests/unit/blueprintProfileQuality.test.ts \
+            backend/tests/unit/executionApprovalPersistence.test.ts \
+            backend/tests/unit/executionApprovalRoutePersistence.test.ts \
+            backend/tests/unit/remediationTablesSecuredMigrations.test.ts \
             2>/dev/null | grep -c 'test\.ts')
           echo "jest discovered $FOUND suite(s); expected $EXPECTED"
           test "$FOUND" -eq "$EXPECTED"
@@ -156,6 +164,16 @@ jobs:
       # operators or, worse, publishes.
       - name: Draft-only execution + authorization
         run: npx jest backend/tests/unit/draftOnlyExecutionP117.test.ts backend/tests/unit/draftOnlyAuthorizationP117.test.ts --no-coverage --colors --ci
+
+      # ES-101 send approvals are the ONE authority the execution bridge trusts.
+      # recordApproval / revokeApproval used to ignore the database error and the
+      # route answered 201 / 200 — "approved" for an approval never stored, and
+      # "revoked" for one still ACTIVE. These suites pin the surfaced failure
+      # (stable code, no DB text, no "recorded" audit) through the real route +
+      # auth chain, and the secured migrations' RLS / revoke / postcondition
+      # contract that replaced the unsafe originals (PR #349).
+      - name: Execution approval persistence + secured table migrations
+        run: npx jest backend/tests/unit/executionApprovalPersistence.test.ts backend/tests/unit/executionApprovalRoutePersistence.test.ts backend/tests/unit/remediationTablesSecuredMigrations.test.ts --no-coverage --colors --ci
 
       # The live text scheduler's characterized behaviour (dedup, regeneration
       # budget, schedule floor, placeholder rejection) plus the drop taxonomy:
