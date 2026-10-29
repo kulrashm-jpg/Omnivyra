@@ -31,7 +31,7 @@ jest.mock('../../services/intelligence/probeCostCapture', () => ({
   extractProbeTokenUsage: () => ({ inputTokens: 0, outputTokens: 0, model: null }),
 }));
 jest.mock('../../services/intelligence/citationExtractor', () => ({
-  extractCitation: (args: { provider: string; query: string; query_class: string; answer: string; observedAt: string }) => ({
+  extractCitation: (args: { provider: string; query: string; query_class: string; answer: string; observedAt: string; domain?: string | null; groundedSources?: readonly string[] }) => ({
     provider: args.provider,
     query: args.query,
     query_class: args.query_class,
@@ -39,6 +39,9 @@ jest.mock('../../services/intelligence/citationExtractor', () => ({
     prominence: 1,
     evidence_excerpt: null,
     observed_at: args.observedAt,
+    // D1 contract — the real extractor always carries the grounded sources it was given.
+    grounded_sources: [...(args.groundedSources ?? [])],
+    citation_corroborated: jest.requireActual('../../services/intelligence/aiVisibilityGrounding').isCitationCorroborated(args.domain ?? null, args.groundedSources ?? []),
   }),
 }));
 jest.mock('../../services/intelligence/queryOrchestrator', () => ({
@@ -113,8 +116,11 @@ describe('PA-007 — flag-gated routing + stub semantics', () => {
     const result = await new CopilotAdapter().probe(PROBE as never);
     expect(fetchProdMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).not.toHaveBeenCalled();
-    expect(result.state).toBe('measured');
-    expect(result.citation_rate).toBe(1);
+    // D1 — Copilot is not retrieval-grounded (it inherits `retrieval_grounded = false`), so a
+    // completed answer is `insufficient_signal`, never `measured`, and no citation rate is claimed.
+    expect(result.state).toBe('insufficient_signal');
+    expect(result.observation_outcome).toBe('ungrounded_answer');
+    expect(result.citation_rate).toBeNull();
   });
 
   it('no Azure credential → unavailable before any transport (production stub reality)', async () => {

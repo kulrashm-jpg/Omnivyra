@@ -58,7 +58,7 @@ jest.mock('../../services/intelligence/probeCostCapture', () => ({
   extractProbeTokenUsage: () => ({ inputTokens: 0, outputTokens: 0, model: null }),
 }));
 jest.mock('../../services/intelligence/citationExtractor', () => ({
-  extractCitation: (args: { provider: string; query: string; query_class: string; answer: string; observedAt: string }) => ({
+  extractCitation: (args: { provider: string; query: string; query_class: string; answer: string; observedAt: string; domain?: string | null; groundedSources?: readonly string[] }) => ({
     provider: args.provider,
     query: args.query,
     query_class: args.query_class,
@@ -66,6 +66,9 @@ jest.mock('../../services/intelligence/citationExtractor', () => ({
     prominence: 1,
     evidence_excerpt: null,
     observed_at: args.observedAt,
+    // D1 contract — the real extractor always carries the grounded sources it was given.
+    grounded_sources: [...(args.groundedSources ?? [])],
+    citation_corroborated: jest.requireActual('../../services/intelligence/aiVisibilityGrounding').isCitationCorroborated(args.domain ?? null, args.groundedSources ?? []),
   }),
 }));
 jest.mock('../../services/intelligence/queryOrchestrator', () => ({
@@ -269,7 +272,10 @@ describe('PB-007 · dispatch parity — adapters still route with the identical 
       expect(fetchProdMock).not.toHaveBeenCalled();
       // The PRODUCT id is what surfaces on the result — translation is inbound-only.
       expect(result.provider).toBe(product);
-      expect(result.state).toBe('measured');
+      // D1 — the probe COMPLETED (not `unavailable`), but a citation-free answer is never
+      // `measured`: the chat adapters are not retrieval-grounded, and Perplexity returned no
+      // sources on this run.
+      expect(result.state).toBe('insufficient_signal');
     });
   }
 
