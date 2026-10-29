@@ -1,0 +1,154 @@
+name: Snapshot Remediation Contracts
+
+# DELIBERATELY SCOPED — NOT a whole-repo jest job.
+#
+# WHY THIS EXISTS
+# ---------------
+# PRs #351–#354 (AI-visibility identity/cache isolation, repeated observations, citation
+# intelligence, technical SEO / AI-crawler readiness) shipped with 14 new suites, and touched code that
+# 30 existing suites exercise. NONE of them ran in any workflow: the required checks covered types and
+# the production build, not these behaviours. Here they are gated:
+#   - a cached AI answer is never reused for a different company (identity-scoped cache key);
+#   - missing / failed evidence stays null with a reason, never a measured 0;
+#   - repeats default to 1 and reproduce the single-run output exactly (golden fixture);
+#   - citation sources keep cited vs retrieved apart, invent nothing, and never widen the legacy
+#     ai_cited_sources claim;
+#   - robots.txt / llms.txt / JSON-LD findings stay OUT of every score, and the crawler's legacy
+#     signals keep their values;
+#   - the crawler and the website engines that read its output are unchanged.
+#
+# NOT DUPLICATED: suites already run elsewhere are deliberately absent — the dossier / public-research
+# suites (publicResearchCollect, snapshotProfileEnrichment, bingRegistryIntegration, dossierV2*) run in
+# report-consistency.yml, and `npm run check:ssrf` runs in typecheck-baseline.yml.
+#
+# KNOWN-FAILING, NOT YET ENFORCED (they fail identically on acde8b7a, before #351–#354, and on main;
+# same test, same error, same throw site). Add each one here only after its fixture fix lands:
+#   - providerIdentityAdapterAdoption, perplexityAdapterCapabilityAdoption,
+#     perplexityAdapterGatewayAdoption, copilotAdapterGatewayAdoption — 31 tests; their mocked
+#     mentions predate the D1 grounding change (no `grounded_sources`; `insufficient_signal`
+#     where the fixture still expects `measured`);
+#   - trustGracefulDegradation — 1 test (FALLBACK RESTORED: expects Trust `measured`, gets
+#     `unavailable`).
+#
+# HERMETIC: pure unit tests — no DB, no network, no LLM. The env values are FAKE placeholders whose
+# only job is to satisfy config/env.schema.ts validateEnv() at import time (same rationale and values
+# as report-consistency.yml). Do NOT replace them with real credentials.
+
+on:
+  # No path filter, so the check is always reported (a path-filtered required check can leave a PR
+  # waiting for a status that never arrives).
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: snapshot-remediation-contracts-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot-remediation-contracts:
+    name: Snapshot remediation contracts (AI visibility, citations, crawler readiness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL: https://placeholder.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
+      REDIS_URL: 'redis://localhost:6379'
+      OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+      ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      # The ONE inventory. Both steps read it, so the checked list and the run list cannot drift.
+      EXPECTED: '44'
+      SUITES: >-
+        p0AiVisibilityIdentityCache
+        visibilityObservationDefaultEquivalence
+        visibilityObservationRepeats
+        visibilityObservationMetrics
+        citationIntelligence.sources
+        citationIntelligence.classifier
+        citationIntelligence.aggregate
+        citationIntelligence.opportunities
+        citationIntelligence.retention
+        citationIntelligence.collect
+        technicalReadinessRobots
+        technicalReadinessLlmsJsonLd
+        technicalReadinessFindings
+        technicalReadinessCrawlerSiteFiles
+        aiVisibilityProvider
+        d1AiVisibilityMeasurementIntegrity
+        d2AiIdentityProbeIntegrity
+        d2ProviderLoadFailureDiagnosis
+        openaiAdapterGatewayAdoption
+        anthropicAdapterGatewayAdoption
+        geminiAdapterGatewayAdoption
+        gatewayProviderIdentity
+        eProviderReadinessClassification
+        decisionEvidenceAdoption
+        wave5aProviderEvidenceBridge
+        unionMatrixEvidence
+        report1SnapshotComparabilityIdentity
+        knowledgeGraphDeferredLoad
+        authGAuthorityInflowOnPageAbstention
+        crawlerPageTypeContract
+        d2CrawlerReachabilityIntegrity
+        dg010CrawlerModifiedDate
+        po3SubjectIdentityExtraction
+        r1cCrawlExtractionIntegrity
+        r1cCrawlReaderIntegrity
+        report1CrawlAcquisition
+        report1CurrentDomainEvidence
+        d7SecondaryReachabilityIntegrity
+        offSiteRedirectConsumerConsistency
+        report1CheckExamples
+        report1PresenceCheckIntegrity
+        report1WebsiteChecks
+        websiteIntelligenceEngines
+        websiteIntelligenceRepository
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # FAIL LOUDLY, NEVER SILENTLY SKIP: a renamed, moved, deleted or duplicated suite fails here
+      # instead of vanishing from coverage.
+      - name: Verify the gated suite inventory (no silent skips)
+        run: |
+          set -euo pipefail
+          read -r -a NAMES <<< "$SUITES"
+          DUPES=$(printf '%s\n' "${NAMES[@]}" | sort | uniq -d)
+          if [ -n "$DUPES" ]; then echo "Duplicated in the inventory: $DUPES"; exit 1; fi
+          if [ "${#NAMES[@]}" -ne "$EXPECTED" ]; then
+            echo "Inventory drift: listed ${#NAMES[@]}, expected $EXPECTED"; exit 1
+          fi
+          PATHS=()
+          for s in "${NAMES[@]}"; do
+            p="backend/tests/unit/$s.test.ts"
+            test -f "$p" || { echo "Gated suite missing — renamed, moved or deleted: $s"; exit 1; }
+            PATHS+=("$p")
+          done
+          FOUND=$(node ./node_modules/jest/bin/jest.js --listTests --runTestsByPath "${PATHS[@]}" 2>/dev/null | grep -c 'test\.ts')
+          echo "jest discovered $FOUND suite(s); expected $EXPECTED"
+          test "$FOUND" -eq "$EXPECTED"
+
+      # `npx jest` is avoided (see pi-verification.yml); --runTestsByPath matches exact paths, so the
+      # dots in `citationIntelligence.*` are never read as a regex.
+      - name: AI visibility, citation intelligence and crawler readiness contracts
+        run: |
+          set -euo pipefail
+          read -r -a NAMES <<< "$SUITES"
+          PATHS=()
+          for s in "${NAMES[@]}"; do PATHS+=("backend/tests/unit/$s.test.ts"); done
+          node ./node_modules/jest/bin/jest.js --ci --no-coverage --colors --runTestsByPath "${PATHS[@]}"
