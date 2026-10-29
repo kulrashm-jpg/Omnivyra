@@ -90,7 +90,7 @@ export function toCitationSources(input: CitationObservationInput, ctx: Citation
   const rejected: CitationSource[] = [];
   for (const d of detailsOf(input)) {
     const r = resolve(d);
-    if (!r.ok) {
+    if (r.ok === false) {
       if (rejected.length < MAX_REJECTED_PER_ANSWER) {
         rejected.push({ ...common, citation_id: `C-${sha16(`${obs.id}|raw:${d.url}|${d.role}`)}`, url: d.url, normalized_url: null,
           url_precision: d.precision === 'host_only' ? 'host_only' : 'page', host: r.host, registrable_domain: r.host ? registrableDomain(r.host) : null,
