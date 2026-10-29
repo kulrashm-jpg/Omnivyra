@@ -77,11 +77,43 @@ export interface LeadSourceReaders {
 
 const BULK_CAP = 2000;
 
+/**
+ * A failed source read stays fail-open — the source contributes no rows and the
+ * unified view is still served — but it is no longer SILENT. Production
+ * `active_leads` is the legacy table (`company_id`, no `organization_id`), so the
+ * `activeLeads` reader below errors on every call and that source has been dark
+ * with nothing reporting it (PI-STATE-OF-PROGRAMME DEFECT-009). Reported once per
+ * table + error code per process, so a hot read path cannot flood the log.
+ */
+const reportedReadFailures = new Set<string>();
+
+function reportReadFailure(table: string, tenantCol: string, code: string, message: string): void {
+  const key = `${table}|${code}`;
+  if (reportedReadFailures.has(key)) return;
+  reportedReadFailures.add(key);
+  console.warn(
+    `[leadIntelligenceReadService] ${table} read failed (filter ${tenantCol}) — this source contributes no rows:`,
+    code,
+    message,
+  );
+}
+
+/** Test seam: forget which failures were already reported. */
+export function resetReadFailureReportsForTests(): void {
+  reportedReadFailures.clear();
+}
+
 async function readTable(table: string, tenantCol: string, companyId: string): Promise<Array<Record<string, unknown>>> {
   try {
     const { data, error } = await ownedDbTable(table).select('*').eq(tenantCol, companyId).limit(BULK_CAP);
-    return !error && Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
-  } catch {
+    if (error) {
+      const e = error as { code?: unknown; message?: unknown };
+      reportReadFailure(table, tenantCol, String(e.code ?? 'unknown'), String(e.message ?? error));
+      return [];
+    }
+    return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
+  } catch (err) {
+    reportReadFailure(table, tenantCol, 'exception', err instanceof Error ? err.message : String(err));
     return [];
   }
 }
