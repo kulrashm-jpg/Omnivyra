@@ -2,10 +2,9 @@
 
 | | |
 |---|---|
-| Stack | integrated stack `aa5e6966` (engine adapters integration), compared with `main` at `d51360b0` |
-| Scope | the 19 forward migrations and 11 rollback files this stack adds (`git diff --name-only d51360b0 aa5e6966 -- supabase/migrations`) |
-| Rebase | 2026-10-29: the branch was rebased onto `main` `c4e4e9bb` (PR #349, deployed). The diff `d51360b0..c4e4e9bb` touches only execution approvals (`executionApprovalService.ts`, migrations `20261223000000/01`, 3 tests), so every "old code (`d51360b0`)" statement below also holds for the deployed `c4e4e9bb`. The stack's migration set is unchanged (19 forward, 11 rollback). |
-| Main moved | `main` is now `acde8b7a` (PR #350: `intentExecutionService.ts`, a CI workflow and one test; no overlap with this branch, `git merge-tree` clean). Railway may already run it. Rebase and re-run the gates before any release step, and re-check the old-code statements against it. |
+| Stack | the engine-adapters release branch `feat/orchestration-engine-adapters`; originally integrated as `aa5e6966` against `main` `d51360b0` |
+| Scope | the 19 forward migrations and 11 rollback files this stack adds (`git diff --name-only acde8b7a HEAD -- supabase/migrations` on the rebased branch; `d51360b0..aa5e6966` before the rebases) |
+| Rebases | 2026-10-29: rebased onto `c4e4e9bb` (PR #349), then onto `acde8b7a` (PR #350), each with `--rebase-merges`, no conflicts, tree equal to `git merge-tree`. `d51360b0..acde8b7a` touches only execution approvals (`executionApprovalService.ts`, migrations `20261223000000/01`, 3 tests) and the readiness-snapshot intent gate (`intentExecutionService.ts` `ALWAYS_RUN_JOBS`, a CI workflow, 1 test). None of it touches RPA sessions, community actions, the lease reaper or engagement paths, so every "old code (`d51360b0`)" statement below also holds for `acde8b7a`. Which commit production actually runs is owner-reported (memory: Vercel and Railway on `c4e4e9bb`; Railway auto-deploys `main`, so it may now run `acde8b7a`) — confirm with `/api/health/version` before the deploy steps. |
 | Audience | the operator/engineer performing the release with separately authorized production access |
 | Nature | READ-ONLY document. Nothing here has been run against production. Every SQL query in §3, §4, §7 and §8 was run against a disposable PostgreSQL 17.6 copy (see §12). |
 
@@ -34,7 +33,7 @@ the `supabase/migrations` directory of a clean checkout of the release commit. `
    must never be edited (`scripts/check-migration-quality.js:13-19, 56-63, 72`). All 19 stack files sort
    after the floor and are not in either list, so the quality gate validates them.
    `node scripts/check-migration-quality.js` on `aa5e6966`: `OK — 109 new migration(s) valid; 353
-   historical frozen; ordering floor 20261026000000`, 0 violations (on the tree rebased onto `c4e4e9bb`: 111 new,
+   historical frozen; ordering floor 20261026000000`, 0 violations (on the tree rebased onto `acde8b7a`: 111 new,
    0 violations). Never edit an applied migration. Fix
    forward with a new file.
 4. **One file = one transaction.** Every forward file is free of `BEGIN`/`COMMIT`/`CONCURRENTLY`/`VACUUM`,

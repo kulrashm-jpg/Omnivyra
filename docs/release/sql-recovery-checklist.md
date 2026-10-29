@@ -18,8 +18,8 @@ All times are UTC (IST = UTC+5:30). Search the primary window first, then the ex
 
 | Artifact id | Committed text (Git) | How it was executed (evidence) | Primary window | Extended window | Search strings (try each) |
 |---|---|---|---|---|---|
-| `fix3` | `supabase/migrations/20261212000000_content_quality_collaboration_tenant_consistent.sql`. 179,332 bytes, 2,971 LF lines, no BOM, non-ASCII UTF-8 present. sha256 `581926201d268d5bde34b6a6b7be4ee118bac3ed8d62ef88756e7030b2d445d5` | Applied by the owner on 2026-10-23, as part of "applied EVERY pending migration". The tool used is not recorded. The verifier's "Success. No rows returned" is SQL Editor output, which suggests the SQL Editor. | 2026-10-22 18:30Z → 2026-10-24 18:30Z (IST 23rd–24th) | 2026-10-12 → 2026-10-28 (earliest partial drafts are dated Oct 12) | `content_quality_collaboration_tenant_consistent`, `20261212000000`, `FIX3`, `content_approval_history`, `omnivyra_touch_updated_at`, `set_content_updated_at`, `content_quality_company_idx` |
-| `fix3-verifier` (context only, not a gate artifact) | `supabase/migrations/_fix3_tenant_consistent/verification.sql` | Owner ran it; it returned "Success. No rows returned" | same as fix3, up to 2026-10-28 | — | `verification`, `_fix3`, `tenant_consistent` |
+| `fix3` | `supabase/migrations/20261212000000_content_quality_collaboration_tenant_consistent.sql`. 179,332 bytes, 2,971 LF lines, no BOM, non-ASCII UTF-8 present. sha256 `581926201d268d5bde34b6a6b7be4ee118bac3ed8d62ef88756e7030b2d445d5` | [owner-reported] Applied by the owner on 2026-10-23, as part of "applied EVERY pending migration". The tool used is not recorded. The verifier's "Success. No rows returned" is SQL Editor output, which suggests the SQL Editor. | 2026-10-22 18:30Z → 2026-10-24 18:30Z (IST 23rd–24th) | 2026-10-12 → 2026-10-28 (earliest partial drafts are dated Oct 12) | `content_quality_collaboration_tenant_consistent`, `20261212000000`, `FIX3`, `content_approval_history`, `omnivyra_touch_updated_at`, `set_content_updated_at`, `content_quality_company_idx` |
+| `fix3-verifier` (context only, not a gate artifact; `recovery-intake.js` does not accept this id — record its `sha256sum` and metadata by hand) | `supabase/migrations/_fix3_tenant_consistent/verification.sql` | Owner ran it; it returned "Success. No rows returned" | same as fix3, up to 2026-10-28 | — | `verification`, `_fix3`, `tenant_consistent` |
 | `revoke8` | **None. No committed text exists anywhere.** | The owner reported it in memory on 2026-10-28 (note last modified 16:05Z). The tool used and the exact time are not recorded. | 2026-10-23 00:00Z → 2026-10-28 16:05Z | 2026-10-12 → 2026-10-28 23:59Z | `REVOKE`, `FROM authenticated`, `brand_memory`, `publication_lineage`, `content_originality`, `content_variant`, `content_revision` |
 | `close_anon` | `supabase/migrations/20261026000000_close_anon_rls_exposure.sql`. 31,251 bytes, 759 LF lines, no BOM. sha256 `62e2371990ee020d255c9415bf3a76a7063e64f874b42d92364d3d37a589fc82` | Applied 2026-09-13 21:03:48Z with **`psql -1 -f`**, not the SQL Editor, so a hit is unlikely. Search anyway. | 2026-09-13 18:00Z → 2026-09-14 00:00Z | 2026-09-10 → 2026-09-20 | `close_anon`, `20261026000000`, `REVOKE ALL`, `ALTER DEFAULT PRIVILEGES`, `FROM anon` |
 
@@ -57,7 +57,7 @@ Otherwise, use the clipboard:
 
 | Field | Example / rule |
 |---|---|
-| artifact id | `fix3` / `revoke8` / `close_anon` / `fix3-verifier` |
+| artifact id | `fix3` / `revoke8` / `close_anon` (intake tool); `fix3-verifier` (manual record only) |
 | source list | `history` / `snippet:Private` / `snippet:Shared` / `snippet:Favorites` / `open-tab` |
 | snippet name or history entry | exactly as displayed |
 | displayed timestamp(s) | as shown, **with the timezone the UI uses**. Note whether it is "last run", "created" or "updated". |
@@ -78,7 +78,7 @@ Hand over the `.sql` file and the `.intake.json` file unchanged.
 
 ## 5. Outcome per artifact (exactly one)
 
-- **RECOVERED**, with an intake verdict: `BYTE_IDENTICAL`, `IDENTICAL_AFTER_EOL_NORMALIZATION`, `DIFFERENT` or `NO_REFERENCE_TEXT`. For revoke8 the recovered text becomes the record.
+- **RECOVERED**, with an intake verdict: `BYTE_IDENTICAL`, `IDENTICAL_AFTER_EOL_NORMALIZATION`, `DIFFERENT` or `NO_REFERENCE_TEXT`. A `REFERENCE_HASH_MISMATCH` (exit 3) means the repo checkout's committed file is not the pinned one: STOP and fix the checkout; it is not a verdict on the recovered text. For revoke8 the recovered text becomes the record.
 - **UNRECOVERABLE**: every location in §2 was searched across the extended window and nothing matched. The record reads: *"Executed SQL text unrecoverable from available evidence; exact equivalence is unprovable."* Then rely on the catalog fingerprint (plan B1/C1). Never reconstruct the text.
 
 Recovered text is evidence of what text was *available in the editor*. It does not prove that this exact text was the one executed, unless the history entry shows that it ran. Byte verdicts are about the text only. Semantic equivalence (the resulting catalog state) is a separate check (B1/C1).

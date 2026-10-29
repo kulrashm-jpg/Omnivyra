@@ -42,7 +42,7 @@ its coverage.
 ### close_anon — `20261026000000_close_anon_rls_exposure.sql`
 
 - **Applied SQL text: NOT FOUND** as a separate artifact. Applied 2026-09-13 21:03:48Z with `psql -1 -f` (memory `project_prod_rls_anon_exposure`); commit 5417d879 is 20:51:31Z the same day, i.e. before the apply; PR #239 merged 21:26:37Z. Ledger `statements` NULL.
-- Committed text: sha256 `62e2371990ee020d255c9415bf3a76a7063e64f874b42d92364d3d37a589fc82`, the only version on any ref (PR head 5417d879, merge 2dc891c03, origin/main d51360b0).
+- Committed text: sha256 `62e2371990ee020d255c9415bf3a76a7063e64f874b42d92364d3d37a589fc82`, the only version on any ref (PR head 5417d879, merge 2dc891c03, origin/main d51360b0; the same blob `ba113cb0` at `acde8b7a` and on the rebased release branch).
 - **Byte-for-byte equivalence: NOT established.** It is plausible that the applied file was the committed one (single version ever; commit precedes apply), but the working-tree file at apply time was never hashed. Mitigating evidence of the result, not the text: the migration self-verifies (step 7 aborts the transaction otherwise) and the post-apply verifier passed 23/23 with 214/214 anonymous REST refusals (memory).
 
 ## 3. Tooling (this branch)

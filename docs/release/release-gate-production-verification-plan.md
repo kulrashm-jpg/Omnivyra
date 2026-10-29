@@ -2,16 +2,16 @@
 
 ## Scope
 
-Release branch `feat/orchestration-engine-adapters`, rebased onto `main` `c4e4e9bb`.
-
-**`main` has since moved.** It is now at `acde8b7a` (PR #350, merged 2026-10-29 04:29Z). That PR
-changes three files that do not overlap with this branch, and `git merge-tree` reports no conflict.
-Before any production session, rebase onto the current `main` (which needs its own authorization),
-re-run the gates, and record the new SHAs here.
+Release branch `feat/orchestration-engine-adapters`, rebased (2026-10-29, `--rebase-merges`, no conflicts)
+onto `main` `acde8b7afac140358f7f4cb916d8c7239b7d613e` (PR #350). The rebased tree equals
+`git merge-tree --write-tree acde8b7a a911c118`, and the branch diff is byte-identical to the pre-rebase
+diff (205 files). Re-check `git ls-remote origin refs/heads/main` immediately before any release step: if
+`main` has moved again, rebase and re-run the gates first.
 
 Stack migrations: `20261127000000` and `20261226000000` … `20261231000010`.
 
-The gate also covers three earlier changes that are already in production:
+The gate also covers three earlier changes that are **reported** (owner / memory; not independently
+verified, see `applied-sql-equivalence.md`) as applied in production:
 
 - FIX3 `20261212000000`;
 - the out-of-repo revoke of `authenticated` on the 8 Phase-A content tables;
@@ -52,6 +52,9 @@ not what production contains. Running this handoff needs separate, explicit auth
     password inside the URL. psql prints the whole password on stderr if the URL has a malformed `%`
     escape.
 - **Password:** alphanumeric, 32 characters or more.
+- **Connection mode:** a direct or session-mode connection. Never the transaction-mode pooler (port 6543):
+  the verifier's session-level `SET default_transaction_read_only` does not reliably apply there, and the
+  verifier now refuses to continue (exit 2, `session_not_read_only`) when the session is not read-only.
 - **TLS:** use `sslmode=verify-full&sslrootcert=<Supabase CA file>` for psql. The node verifier's
   `pg-connection-string` treats `require`/`prefer`/`verify-ca` as verify-full against Node's CA store,
   which fails closed (exit 2). Pass the CA explicitly.
@@ -185,7 +188,8 @@ After connecting, the verifier also does the following:
 
 **What it covers for the stack:**
 
-- 18 tables and their 208 columns, plus 5 column types;
+- 18 tables with 206 columns (201 created + 5 added by `20261231000000`), plus the 2 columns added to the
+  existing `rpa_retry_queue` (208 column checks in total), and 5 column types;
 - 45 indexes: 18 unique (BLOCKING) and 27 for query plans (WARN);
 - 27 functions: existence, SECURITY DEFINER, and body markers;
 - 17 triggers and 7 CHECK vocabularies;
@@ -199,7 +203,7 @@ After connecting, the verifier also does the following:
 
 | Run | When | Expected result |
 |---|---|---|
-| A-baseline | before any stack migration | Exit 1. Missing columns are BLOCKING on the 18 stack tables (206 columns) and on the 7 columns added to existing tables. Functions, triggers, CHECKs and unique indexes are absent (BLOCKING). `reap_community_ai_action_leases` exists, so expect a body-marker finding (legacy body) rather than "absent". `community_ai_actions_status_check` lacks `uncertain`. The pre-existing items listed below are also expected. Exit 0 or 3 here means the stack is already present: STOP and reconcile with preflight P2. Any `check_skipped` finding, or an anon privilege on a table that already exists, means STOP. |
+| A-baseline | before any stack migration | Exit 1. Missing columns are BLOCKING on the 18 stack tables (206 columns) and on the 2 columns added to `rpa_retry_queue`. Functions, triggers, CHECKs and unique indexes are absent (BLOCKING). `reap_community_ai_action_leases` exists, so expect a body-marker finding (legacy body) rather than "absent". `community_ai_actions_status_check` lacks `uncertain`. The pre-existing items listed below are also expected. Exit 0 or 3 here means the stack is already present: STOP and reconcile with preflight P2. Any `check_skipped` finding, or an anon privilege on a table that already exists, means STOP. |
 | A-post | after `…000009` is applied, and again after `…000010` | Must meet the pass condition below. |
 
 **Pre-existing items expected to keep strict mode at exit 3.** On the disposable database rebuilt at the
@@ -282,7 +286,8 @@ psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/catalog-finge
 The `meta transaction_read_only` line is always `on`, because the script wraps itself in a READ ONLY
 transaction. The read-only proof is Step 0, not this line.
 
-If the credential lacks visibility, the script stops with an error; it never produces partial output.
+On any non-zero exit, discard `prod.tsv`: fact lines printed before a failing query (for example the ledger
+read) are already on stdout, so the file would be incomplete.
 
 ### B2: expected database (disposable only) and comparison
 
@@ -341,6 +346,11 @@ automatically.
 | N5 | Other Supabase-managed default privileges (reported as `info`) |
 | N6 | Ledger statements are NULL |
 | N7 | Server version |
+
+**Server versions.** `pg_get_viewdef`, `pg_get_functiondef` and policy text are formatted by the server, so
+their hashes differ across major versions. Build the expected side on the same major version as production
+(17.x, per owner report; confirm with P0). If they differ, review mismatched `viewdef_md5` / `def_md5`
+facts by hand.
 
 **Catalog equivalence establishes current semantic equivalence only. It cannot reconstruct or prove the
 historical SQL byte-for-byte.** Only B0 can do that.
