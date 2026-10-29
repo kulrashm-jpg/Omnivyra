@@ -28,7 +28,13 @@
 -- nothing else. Every edge in pg_auth_members is followed (INHERIT, SET and
 -- ADMIN options alike), because a membership granted WITH INHERIT FALSE,
 -- SET TRUE is invisible to has_table_privilege() yet still allows
--- SET ROLE <writer>.
+-- SET ROLE <writer>. No edge on that walk may carry ADMIN OPTION either, not
+-- even on pg_read_all_data: ADMIN lets the credential grant the role onward.
+--
+-- Write surfaces beyond tables are checked too: CREATE on the database
+-- (new schemas) and USAGE/UPDATE on any sequence (nextval/setval are writes).
+-- Checks 31-33 can FAIL because of a grant to PUBLIC; that is an owner
+-- decision and must never be waived silently.
 -- ============================================================================
 \set ON_ERROR_STOP on
 -- Read BEFORE the READ ONLY wrapper: inside it transaction_read_only is always on.
@@ -90,6 +96,23 @@ memberships AS (
 not_allowlisted AS (
   SELECT rolname FROM memberships WHERE rolname <> 'pg_read_all_data'
 ),
+admin_edges AS (
+  -- Same walk, keeping each edge's ADMIN option.
+  WITH RECURSIVE e(roleid, admin_option) AS (
+    SELECT am.roleid, am.admin_option FROM pg_auth_members am WHERE am.member = (SELECT oid FROM me)
+    UNION
+    SELECT am.roleid, am.admin_option FROM pg_auth_members am JOIN e ON am.member = e.roleid
+  )
+  SELECT DISTINCT r.rolname FROM e JOIN pg_roles r ON r.oid = e.roleid WHERE e.admin_option
+),
+writable_sequences AS (
+  SELECT count(*) AS n
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE c.relkind = 'S'
+     AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+     AND n.nspname NOT LIKE 'pg_toast%'
+     AND (has_sequence_privilege(c.oid, 'USAGE') OR has_sequence_privilege(c.oid, 'UPDATE'))
+),
 checks AS (
   SELECT 10 AS ord, 'session.transaction_read_only (before wrapper)' AS chk, :'pre_wrapper_tx_ro'::text AS val,
          CASE WHEN :'pre_wrapper_tx_ro' = 'on' THEN 'OK' ELSE 'FAIL' END AS verdict
@@ -135,11 +158,21 @@ checks AS (
          COALESCE((SELECT string_agg(rolname, ',' ORDER BY rolname) FROM not_allowlisted), '(none)'),
          CASE WHEN EXISTS (SELECT 1 FROM not_allowlisted) THEN 'FAIL' ELSE 'OK' END
   UNION ALL
+  SELECT 28, 'role.admin_option_on_any_membership',
+         COALESCE((SELECT string_agg(rolname, ',' ORDER BY rolname) FROM admin_edges), '(none)'),
+         CASE WHEN EXISTS (SELECT 1 FROM admin_edges) THEN 'FAIL' ELSE 'OK' END
+  UNION ALL
   SELECT 30, 'privilege.writable_tables (INSERT/UPDATE/DELETE/TRUNCATE)', (SELECT n::text FROM writable),
          CASE WHEN (SELECT n FROM writable) = 0 THEN 'OK' ELSE 'FAIL' END
   UNION ALL
   SELECT 31, 'privilege.schemas_with_CREATE', (SELECT n::text FROM create_schemas),
          CASE WHEN (SELECT n FROM create_schemas) = 0 THEN 'OK' ELSE 'FAIL' END
+  UNION ALL
+  SELECT 32, 'privilege.database_CREATE', has_database_privilege(current_database(), 'CREATE')::text,
+         CASE WHEN has_database_privilege(current_database(), 'CREATE') THEN 'FAIL' ELSE 'OK' END
+  UNION ALL
+  SELECT 33, 'privilege.writable_sequences (USAGE/UPDATE)', (SELECT n::text FROM writable_sequences),
+         CASE WHEN (SELECT n FROM writable_sequences) = 0 THEN 'OK' ELSE 'FAIL' END
   UNION ALL
   SELECT 40, 'visibility.usage_on_public', has_schema_privilege('public', 'USAGE')::text,
          CASE WHEN has_schema_privilege('public', 'USAGE') THEN 'OK' ELSE 'FAIL' END

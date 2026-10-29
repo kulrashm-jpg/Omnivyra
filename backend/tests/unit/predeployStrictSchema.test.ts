@@ -32,20 +32,20 @@ const parity = require(SCRIPT);
 // ── fake pg (preload) ───────────────────────────────────────────────────────
 // Answers every catalog query the verifier makes with a schema that satisfies
 // the manifest, then applies the faults named in FAKE_PG (comma list):
-//   connect_fail | stack_denied | ledger_fail | no_anon
+//   connect_fail | stack_denied | ledger_fail | no_anon | not_read_only | ctor_fail
 const FAKE_PG = `
 const Module = require('module');
 const origLoad = Module._load;
 const faults = new Set(String(process.env.FAKE_PG || '').split(',').filter(Boolean));
 class Client {
-  constructor() {}
+  constructor() { if (faults.has('ctor_fail')) throw new TypeError('Invalid URL (fake)'); }
   async connect() { if (faults.has('connect_fail')) throw new Error('connect ECONNREFUSED (fake)'); }
   async end() {}
   async query(sql, params) {
     const m = require(process.env.FAKE_PG_SCRIPT);
     if (sql.startsWith('SET default_transaction_read_only = on')) return { rows: [] };
     if (sql.includes("current_setting('transaction_read_only')")) {
-      return { rows: [{ role: 'fake_ro', tx_read_only: 'on' }] };
+      return { rows: [{ role: 'fake_ro', tx_read_only: faults.has('not_read_only') ? 'off' : 'on' }] };
     }
     if (sql.includes('information_schema.columns')) {
       const types = new Map(m.REQUIRED_COLUMN_TYPES.map((t) => [t.table + '.' + t.column, t.udtName]));

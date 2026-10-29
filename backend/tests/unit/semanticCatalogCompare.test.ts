@@ -234,6 +234,29 @@ describe('semantic-compare-catalog', () => {
     expect(() => cmp.compareFingerprints(base, base, { roleMapLeft: new Map([['g5_x', 'g5_x']]) })).toThrow(/no-op/);
   });
 
+  // N4: two roles mapped onto one target on the same side would merge them silently.
+  it('refuses a many-to-one role map on one side', () => {
+    const left = render([...BASE,
+      ['acl', 'rel:public.feature_flags', 'grantee:g6_a', 'SELECT'],
+      ['acl', 'rel:public.content', 'grantee:g6_b', 'SELECT']] as Row[]);
+    const right = render([...BASE,
+      ['acl', 'rel:public.feature_flags', 'grantee:g6_x', 'SELECT'],
+      ['acl', 'rel:public.content', 'grantee:g6_x', 'SELECT']] as Row[]);
+    const roleMapLeft = new Map([['g6_a', 'g6_x'], ['g6_b', 'g6_x']]);
+    expect(() => cmp.compareFingerprints(left, right, { roleMapLeft })).toThrow(/both map to g6_x/);
+    // the same pair spread across the shared map and a side map is refused too
+    expect(() => cmp.compareFingerprints(left, right, {
+      roleMap: new Map([['g6_a', 'g6_x']]), roleMapLeft: new Map([['g6_b', 'g6_x']]),
+    })).toThrow(/would merge two distinct roles/);
+  });
+
+  it('warns when a role map entry rewrote nothing (a typo is never silent)', () => {
+    const res = cmp.compareFingerprints(base, base, { roleMapRight: new Map([['g6_typo', 'g6_real']]) });
+    expect(res.equal).toBe(true);
+    expect(res.mapped).toHaveLength(0);
+    expect(res.warnings.join(' ')).toMatch(/role map g6_typo=g6_real \(right\) rewrote nothing/);
+  });
+
   it('judges default privileges of postgres/supabase_admin in public or global; others are info', () => {
     const right = render([...BASE,
       ['defacl', 'defacl:supabase_admin:storage:r', 'grantee:anon', 'SELECT'],

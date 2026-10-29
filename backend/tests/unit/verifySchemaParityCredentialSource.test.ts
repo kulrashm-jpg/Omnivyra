@@ -186,4 +186,35 @@ describe('verify-schema-parity — read-only session', () => {
     expect(queries).toHaveLength(1);
     expect((r.stdout || '') + (r.stderr || '')).not.toContain(EXPLICIT_SECRET);
   });
+
+  // N2: recording read-only is not enough — a session where it did not take effect must stop.
+  it('a session that reports transaction_read_only = off exits 2 (session_not_read_only) before any catalog query', () => {
+    const r = run({ cwd: REPO, env: { SCHEMA_PARITY_DB_URL: EXPLICIT_URL }, faults: 'not_read_only' });
+    expect(r.code).toBe(2);
+    expect(r.check).toBeNull();
+    const err = r.stderr.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.event === 'schema_parity.error');
+    expect(err).toMatchObject({ reason: 'session_not_read_only', role: 'fake_ro', tx_read_only: 'off' });
+    expect(r.log.filter((e) => 'sql' in e)).toHaveLength(2); // the SET and the read-back only
+    noSecrets(r);
+  });
+
+  it('warns (variable name only) when SCHEMA_PARITY_DB_URL does not ask for verify-full TLS; verify-full is silent', () => {
+    const r = run({ cwd: REPO, env: { SCHEMA_PARITY_DB_URL: EXPLICIT_URL }, faults: 'connect_fail' });
+    const warning = r.stderr.split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      .find((e) => e.reason === 'tls_not_verified');
+    expect(warning).toMatchObject({ event: 'schema_parity.warning', variable: 'SCHEMA_PARITY_DB_URL' });
+    expect(r.stderr).not.toContain('explicit-gate.invalid');
+    noSecrets(r);
+    const verified = run({ cwd: REPO, env: { SCHEMA_PARITY_DB_URL: `${EXPLICIT_URL}?sslmode=verify-full&sslrootcert=ca.pem` }, faults: 'connect_fail' });
+    expect(verified.stderr).not.toContain('tls_not_verified');
+  });
+
+  // N3: a malformed URL makes the pg Client constructor throw; that is a connection failure, not a crash.
+  it('a Client constructor failure (malformed URL) reports connection_failed and exits 2', () => {
+    const r = run({ cwd: REPO, env: { SCHEMA_PARITY_DB_URL: EXPLICIT_URL }, faults: 'ctor_fail' });
+    expect(r.code).toBe(2);
+    const err = r.stderr.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.event === 'schema_parity.error');
+    expect(err).toMatchObject({ reason: 'connection_failed' });
+    noSecrets(r);
+  });
 });

@@ -13,9 +13,12 @@
 -- (bootstrap schema, NOT Supabase default privileges), never on production.
 --
 -- HOW TO RUN
---   psql (preferred; shows every row; TAB-separated so `v` values containing
---   `|` stay unambiguous and two snapshots diff line by line):
---     psql "<operator-held URL>" -X -A -F $'\t' -v ON_ERROR_STOP=1 -f scripts/release/grants-acl-check.sql
+--   psql (preferred; shows every row). The script sets its own output format
+--   (unaligned, TAB-separated, header row, no footer), so no shell-specific
+--   flags are needed and the same command works in bash and PowerShell:
+--     psql "<operator-held URL>" -X -v ON_ERROR_STOP=1 -f scripts/release/grants-acl-check.sql > grants.tsv
+--   TAB separation keeps `v` values containing `|` unambiguous, and two
+--   snapshots diff line by line.
 --   Supabase SQL Editor: the editor shows one result set. Run the single
 --   `WITH … ORDER BY` statement below on its own (it is a pure SELECT); the
 --   BEGIN READ ONLY / ROLLBACK wrapper is for psql.
@@ -53,13 +56,19 @@
 --                     reach a table without naming it in an API path
 --
 -- Output is ordered by all five columns with COLLATE "C" and search_path is
--- pinned, so two runs on equal catalogs are byte-identical.
+-- pinned, so two runs on equal catalogs are byte-identical. Backslash,
+-- newline, CR and TAB inside `v` (policy expressions in S06) are escaped as
+-- \\ \n \r \t, the same way catalog-fingerprint.sql does, so every fact is
+-- exactly one line.
 -- ============================================================================
 
 \set ON_ERROR_STOP on
 \set QUIET on
 \pset pager off
 \pset footer off
+\pset format unaligned
+\pset fieldsep '\t'
+\pset tuples_only off
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET LOCAL statement_timeout = '60s';
 SET LOCAL lock_timeout = '2s';
@@ -564,7 +573,8 @@ out(section, scope, object, k, v) AS (
           OR coalesce(pol.with_check, '') ~ ('\m' || x.name || '\M'))
    WHERE x.rid IS NOT NULL
 )
-SELECT section, scope, object, k, v
+SELECT section, scope, object, k,
+       replace(replace(replace(replace(v, '\', '\\'), E'\n', '\n'), E'\r', '\r'), E'\t', '\t') AS v
   FROM out
  ORDER BY section COLLATE "C", scope COLLATE "C", object COLLATE "C", k COLLATE "C", v COLLATE "C";
 
