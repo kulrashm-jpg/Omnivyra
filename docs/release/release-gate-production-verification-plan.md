@@ -48,6 +48,56 @@ Session rules:
 - Save every output with its UTC timestamp and the commit SHA.
 - A check that errors, times out, or returns no rows where rows are expected is **BLOCKED**, never PASS.
 
+### 0.1 Issuing the credential
+
+This step is the **owner's**. It is a production write and needs its own authorization. Run it as
+`postgres` in the dashboard SQL Editor:
+
+```
+CREATE ROLE release_gate_ro LOGIN;
+ALTER ROLE release_gate_ro SET default_transaction_read_only = on;
+ALTER ROLE release_gate_ro VALID UNTIL '<end of the verification day>';
+GRANT pg_read_all_data TO release_gate_ro;
+```
+
+Then set a **fresh** password with psql `\password release_gate_ro`. The prompt keeps the password out
+of SQL history. Hand the password to the operator out of band.
+
+`pg_read_all_data` gives the role SELECT and USAGE everywhere and no write access. After the session,
+run `DROP ROLE release_gate_ro;`, which is also an owner action.
+
+Do not reuse the stale pooler password.
+
+### 0.2 First query of the session: credential self-check
+
+```
+psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/session-readiness-check.sql > session-check.out
+```
+
+The `overall` row must read `0 FAIL | OK`; on any FAIL, STOP and do not run anything else with the
+credential. psql exits 0 either way, so read the `overall` row. The self-check verifies:
+
+- read-only, both for the session and as a setting on the role;
+- not a superuser, no BYPASSRLS, no CREATEROLE, CREATEDB or REPLICATION;
+- not a member of `pg_write_all_data`;
+- **zero writable tables** and zero schemas with CREATE;
+- USAGE on `public`;
+- **no public relation whose columns are hidden** from `information_schema`, the cause of false "missing"
+  findings in parity;
+- the ledger exists, its schema is usable and it is readable;
+- the `anon`, `authenticated` and `service_role` roles exist.
+
+It cannot verify that the password is fresh; the owner attests to that.
+
+Validated on the disposable cluster with four simulated credentials:
+
+| Simulated credential | Result |
+|---|---|
+| Correct read-only role | 0 FAIL |
+| Read-only role without catalog visibility | 3 FAIL (906 relations with hidden columns, ledger schema and table unreadable) |
+| Writer | 3 FAIL |
+| Superuser | 7 FAIL |
+
 ## A. Schema parity
 
 Commands:
@@ -123,7 +173,16 @@ A new WARN or INFO item that is not on the baseline list is a FAIL.
 | 8-table revoke | `REVOKE`, `authenticated`, `brand_memory`, `publication_lineage` | No committed text exists. The recovered text becomes the record. |
 | close_anon | `close_anon`, `REVOKE ALL`, `ALTER DEFAULT PRIVILEGES` | `62e2371990ee020d255c9415bf3a76a7063e64f874b42d92364d3d37a589fc82` |
 
-To compare, save each recovered text to a file and run `sha256sum <file>`. Then run
+Export each recovered text **exactly**:
+
+- Copy the full editor buffer, or use the snippet's download option, straight into a new file.
+- Do not reformat it, trim whitespace, or let an editor normalise line endings.
+- Record the source: a history entry or a saved snippet, with its name.
+- Record any timestamp the dashboard shows, and who ran it if shown.
+
+Never fabricate or reconstruct a missing text, in particular the 8-table revoke.
+
+To compare, run `sha256sum <file>` on each saved text. Then run
 `diff <(tr -d '\r' < recovered.sql) <(tr -d '\r' < supabase/migrations/<file>)`. Record whether the
 texts are **byte-identical**, identical only after normalising line endings and whitespace, or
 different (with the differing statements). If nothing is recovered, the record reads: *exact
