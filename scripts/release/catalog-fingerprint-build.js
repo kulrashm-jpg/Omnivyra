@@ -144,6 +144,15 @@ const TEMPLATE = String.raw`-- =================================================
 -- object appears only in property "owner"; in ACLs the owner is written <owner>.
 -- Compare two outputs with scripts/release/semantic-compare-catalog.js.
 --
+-- NOT COVERED here (by design): the orchestration stack (20261127000000,
+-- 20261226000000 … 20261231000010: 18 tables, 27 functions) and PR #349
+-- (customer_readiness_snapshots, execution_approvals). Those are verified by
+-- scripts/verify-schema-parity.js --strict (existence, RLS, privileges, function
+-- markers) and scripts/release/grants-acl-check.sql (ACLs, policies,
+-- publications); a difference in them produces no fact in this file.
+-- Publication membership IS recorded here (section pub) for every publication;
+-- membership of an in-scope table is semantic, other tables are info.
+--
 -- Usage: psql -X -v ON_ERROR_STOP=1 -f scripts/release/catalog-fingerprint.sql > out.tsv
 -- ============================================================================
 \set ON_ERROR_STOP on
@@ -174,7 +183,12 @@ fp_detail(relname) AS (VALUES
 {{DETAIL}}
 ),
 fp_roles(rolname) AS (VALUES ('anon'), ('authenticated'), ('service_role'), ('public')),
-fp_privs(priv) AS (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')),
+fp_privs(priv) AS (
+  SELECT v.priv FROM (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS v(priv)
+  UNION ALL
+  -- PostgreSQL 17+: MAINTAIN (VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK TABLE) is a grantable table privilege
+  SELECT 'MAINTAIN' WHERE current_setting('server_version_num')::int >= 170000
+),
 rel AS (
   SELECT r.relname, string_agg(DISTINCT r.cand, ',' ORDER BY r.cand) AS cands, c.oid AS reloid
     FROM fp_rel r
@@ -190,7 +204,7 @@ facts(section, object, property, value) AS (
   -- meta (environment; never semantic)
   SELECT 'meta', 'session', 'transaction_read_only', current_setting('transaction_read_only')
   UNION ALL SELECT 'meta', 'session', 'server_version_num', current_setting('server_version_num')
-  UNION ALL SELECT 'meta', 'session', 'fingerprint_format', 'catalog-fingerprint/1'
+  UNION ALL SELECT 'meta', 'session', 'fingerprint_format', 'catalog-fingerprint/2'
 
   -- scope: which candidate each object belongs to
   UNION ALL SELECT 'scope', 'rel:public.' || relname, 'candidates', cands FROM rel
@@ -206,6 +220,9 @@ facts(section, object, property, value) AS (
     FROM rel r JOIN pg_class c ON c.oid = r.reloid
   UNION ALL SELECT 'rel', 'rel:public.' || r.relname, 'owner', pg_get_userbyid(c.relowner) FROM rel r JOIN pg_class c ON c.oid = r.reloid
   UNION ALL SELECT 'rel', 'rel:public.' || r.relname, 'acl_is_default', (c.relacl IS NULL)::text FROM rel r JOIN pg_class c ON c.oid = r.reloid
+  -- view / materialized view definition (owner-rights views run as their owner: a redefinition is semantic)
+  UNION ALL SELECT 'rel', 'rel:public.' || r.relname, 'viewdef_md5', md5(pg_get_viewdef(c.oid))
+    FROM rel r JOIN pg_class c ON c.oid = r.reloid WHERE c.relkind IN ('v', 'm')
 
   -- table ACL per grantee (catalog; NULL relacl expanded with acldefault; PUBLIC explicit; * = WITH GRANT OPTION)
   UNION ALL SELECT 'acl', 'rel:public.' || r.relname,
@@ -313,6 +330,17 @@ facts(section, object, property, value) AS (
     CROSS JOIN LATERAL aclexplode(d.defaclacl) a
    GROUP BY d.defaclrole, n.nspname, d.defaclobjtype, a.grantee
   UNION ALL SELECT 'defacl', 'defacl:all', 'row_count', (SELECT count(*) FROM pg_default_acl)::text
+
+  -- publications (logical replication / Supabase Realtime): flags, and every member table;
+  -- the value names the candidate scope of an in-scope public table, else out_of_scope
+  UNION ALL SELECT 'pub', 'pub:' || pb.pubname, 'flags',
+         format('all_tables=%s|insert=%s|update=%s|delete=%s|truncate=%s',
+                pb.puballtables, pb.pubinsert, pb.pubupdate, pb.pubdelete, pb.pubtruncate)
+    FROM pg_publication pb
+  UNION ALL SELECT 'pub', 'pub:' || pt.pubname, 'table:' || pt.schemaname || '.' || pt.tablename,
+         'member|scope=' || coalesce((SELECT string_agg(DISTINCT r.cand, ',' ORDER BY r.cand) FROM fp_rel r
+                                       WHERE pt.schemaname = 'public' AND r.relname = pt.tablename), 'out_of_scope')
+    FROM pg_publication_tables pt
 
   -- close_anon step 5b: TRUNCATE on any public table by anon/authenticated (expected: none)
   UNION ALL SELECT 'global', 'public_tables', 'truncate_holders',
