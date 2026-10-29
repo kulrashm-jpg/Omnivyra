@@ -17,18 +17,20 @@ name: Snapshot Remediation Contracts
 #     signals keep their values;
 #   - the crawler and the website engines that read its output are unchanged.
 #
+# Also gated, since their fixture repair (#356): providerIdentityAdapterAdoption,
+# perplexityAdapterCapabilityAdoption, perplexityAdapterGatewayAdoption and
+# copilotAdapterGatewayAdoption — the provider adoption contracts under D1 (citations delivered as
+# grounded sources on both transports, transport parity, no `measured` without grounded evidence).
+#
 # NOT DUPLICATED: suites already run elsewhere are deliberately absent — the dossier / public-research
 # suites (publicResearchCollect, snapshotProfileEnrichment, bingRegistryIntegration, dossierV2*) run in
 # report-consistency.yml, and `npm run check:ssrf` runs in typecheck-baseline.yml.
 #
-# KNOWN-FAILING, NOT YET ENFORCED (they fail identically on acde8b7a, before #351–#354, and on main;
-# same test, same error, same throw site). Add each one here only after its fixture fix lands:
-#   - providerIdentityAdapterAdoption, perplexityAdapterCapabilityAdoption,
-#     perplexityAdapterGatewayAdoption, copilotAdapterGatewayAdoption — 31 tests; their mocked
-#     mentions predate the D1 grounding change (no `grounded_sources`; `insufficient_signal`
-#     where the fixture still expects `measured`);
+# KNOWN-FAILING, NOT YET ENFORCED (fails identically on acde8b7a, before #351–#354, and on main):
 #   - trustGracefulDegradation — 1 test (FALLBACK RESTORED: expects Trust `measured`, gets
-#     `unavailable`).
+#     `unavailable`). Not a stale mock: REMEDIATION-002 (bf0dae45) deliberately excludes the
+#     platform-activity brand-trust signal from Report 1, and report1ProvenanceBoundaryOrigin asserts
+#     the opposite outcome. Add it only after an explicit decision restates that contract.
 #
 # HERMETIC: pure unit tests — no DB, no network, no LLM. The env values are FAKE placeholders whose
 # only job is to satisfy config/env.schema.ts validateEnv() at import time (same rationale and values
@@ -63,7 +65,7 @@ jobs:
       OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
       ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
       # The ONE inventory. Both steps read it, so the checked list and the run list cannot drift.
-      EXPECTED: '44'
+      EXPECTED: '48'
       SUITES: >-
         p0AiVisibilityIdentityCache
         visibilityObservationDefaultEquivalence
@@ -109,6 +111,10 @@ jobs:
         report1WebsiteChecks
         websiteIntelligenceEngines
         websiteIntelligenceRepository
+        providerIdentityAdapterAdoption
+        perplexityAdapterCapabilityAdoption
+        perplexityAdapterGatewayAdoption
+        copilotAdapterGatewayAdoption
     steps:
       - name: Checkout
         uses: actions/checkout@v4
