@@ -121,7 +121,7 @@ function runVerifier(opts: { faults?: string; strict?: boolean; envStrict?: bool
   if (!opts.noDbUrl) env.SUPABASE_POOLER_DB_URL = 'postgresql://fake:fake@127.0.0.1:1/fake';
   if (opts.envStrict) env.SCHEMA_PARITY_STRICT = '1';
   const args = ['-r', preload, SCRIPT, ...(opts.strict ? ['--strict'] : [])];
-  const r = spawnSync(process.execPath, args, { cwd: REPO, env, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSync(process.execPath, args, { cwd: REPO, env: env as unknown as NodeJS.ProcessEnv, encoding: 'utf8', timeout: 60_000 });
   const line = (r.stdout || '').split('\n').find((l) => l.includes('"schema_parity.check"'));
   return { code: r.status, stdout: r.stdout || '', stderr: r.stderr || '', check: line ? JSON.parse(line) : null };
 }
