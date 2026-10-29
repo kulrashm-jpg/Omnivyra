@@ -32,7 +32,7 @@ its coverage.
 - Committed text: sha256 `581926201d268d5bde34b6a6b7be4ee118bac3ed8d62ef88756e7030b2d445d5`, the only version on any ref (f56572826, PR #318 head c02dc55d, merge e8ea5afd, origin/main).
 - A historical variant `2ab29a6e…` exists only as a recorded hash (FIX3_ISSUE_REGISTER, Phases 90–97); it differs by comments only (non-comment sha256 `2da81396…` equal). No file with that hash survives.
 - **Byte-for-byte equivalence: NOT established.** The original applied text is missing. Even if it were the committed file, FIX3 uses dynamic `EXECUTE` (9 sites) and CREATE-vs-RECONCILE branches (OD-11: `set_content_updated_at` vs `omnivyra_touch_updated_at`), so the same text can produce different end states on different starting catalogs. Hence a catalog comparison is the useful check.
-- Proven separately (owner report, 2026-10-28): the verifier `_fix3_tenant_consistent/verification.sql` returned no rows (structural checks only).
+- Reported separately by the owner (2026-10-28; not independently verified): the verifier `_fix3_tenant_consistent/verification.sql` returned no rows (structural checks only).
 
 ### 8-table `authenticated` revoke (brand_memory, content, content_asset, content_memory, content_originality, content_revision, content_variant, publication_lineage)
 
@@ -104,7 +104,7 @@ psql "$DISPOSABLE_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/catalog-fingerpr
 node scripts/release/semantic-compare-catalog.js expected.tsv prod.tsv --role-map <expected_owner>=<prod_owner>
 ```
 
-Optional read-only text evidence, if `pg_stat_statements` is installed (utility statements such as `DO` blocks may be retained verbatim if `track_utility` is on; eviction may have removed them):
+Optional read-only text evidence, if `pg_stat_statements` is installed. Use `scripts/release/pg-stat-statements-probe.sql`, which first checks visibility: without `pg_read_all_stats` (or running as `postgres`) other users' query text is hidden and the probe prints NOT INSPECTABLE — never "absent" (the raw query below would silently match nothing). (utility statements such as `DO` blocks may be retained verbatim if `track_utility` is on; eviction may have removed them):
 
 ```sql
 BEGIN TRANSACTION READ ONLY;

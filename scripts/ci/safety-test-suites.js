@@ -113,6 +113,14 @@ const SAFETY_SUITE_REGISTRY = [
   // PREDEPLOY_STRICT_SCHEMA=1 fails closed (connection unavailable / check skipped)
   'backend/tests/unit/verifySchemaParityCoverage.test.ts',
   'backend/tests/unit/predeployStrictSchema.test.ts',
+  // Release-gate production tooling: the verifier only uses the explicit read-only
+  // credential, the session self-check fails closed, the catalog comparator never
+  // hides owner / MAINTAIN / role-mapped differences, and recovered SQL is judged
+  // byte-for-byte only.
+  'backend/tests/unit/verifySchemaParityCredentialSource.test.ts',
+  'backend/tests/unit/sessionReadinessCheck.test.ts',
+  'backend/tests/unit/semanticCatalogCompare.test.ts',
+  'backend/tests/unit/recoveryIntake.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */
