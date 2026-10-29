@@ -132,8 +132,9 @@ jobs:
           ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
         run: npm run test:security-gates
 
-      # Deploy-gate contracts: predeploy-check.js and the schema-parity verifier it
-      # calls. Neither suite ran in any workflow, so a regression could again let a
+      # Deploy-gate contracts: predeploy-check.js, the schema-parity verifier it
+      # calls, and the verifier's migration-ledger classifier
+      # (scripts/lib/migrationLedger.js). None ran in any workflow, so a regression could again let a
       # schema check that never connected end in a passing verdict, or let strict
       # mode stop requiring the database gate. Hermetic: the verifier suite runs the
       # script with no reachable database, and the predeploy suite reads source only.
@@ -152,6 +153,7 @@ jobs:
           SUITES=(
             backend/tests/unit/predeployCheckGateHonesty.test.ts
             backend/tests/unit/schemaParityVerifierContract.test.ts
+            backend/tests/unit/migrationLedgerClassifier.test.ts
           )
           for s in "${SUITES[@]}"; do
             test -f "$s" || { echo "Gated suite missing — renamed, moved or deleted: $s"; exit 1; }
