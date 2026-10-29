@@ -71,8 +71,16 @@
  * and then blocks on EVERY non-zero exit (see predeployParityDecision).
  *
  * Requires:
- *   SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in env (.env.local loaded if
- *   process.env doesn't already have them).
+ *   A direct Postgres connection string, first found of SCHEMA_PARITY_DB_URL,
+ *   SUPABASE_POOLER_DB_URL, SUPABASE_DB_URL, DATABASE_URL.
+ *   SCHEMA_PARITY_DB_URL is the release-gate credential: when it is set,
+ *   .env.local is NOT read. Otherwise .env.local in the CWD fills variables
+ *   missing from the environment (unless SUPABASE_URL and
+ *   SUPABASE_SERVICE_ROLE_KEY are both set), and a URL taken from it is
+ *   announced on stderr by variable NAME (never value).
+ *   The session is pinned to default_transaction_read_only = on with
+ *   statement/lock timeouts; `session.role` / `session.tx_read_only` in the
+ *   JSON output record which role ran the check.
  *
  * Exit codes:
  *   0 — all required columns present, all required indexes structurally sound,
@@ -1337,9 +1345,33 @@ async function observeStack(db) {
   return { roles, tables, functions, triggers, checks };
 }
 
+// URL sources, highest precedence first. SCHEMA_PARITY_DB_URL is the explicit
+// release-gate credential: when it is set, .env.local is never read, so a stale
+// or privileged URL in that file can never silently replace the operator's
+// read-only credential.
+const DB_URL_VARS = ['SCHEMA_PARITY_DB_URL', 'SUPABASE_POOLER_DB_URL', 'SUPABASE_DB_URL', 'DATABASE_URL'];
+
+function resolveDbUrl(env) {
+  for (const name of DB_URL_VARS) if (env[name]) return { name, url: env[name] };
+  return { name: null, url: null };
+}
+
 async function main() {
   const strict = isStrictMode(process.argv.slice(2), process.env);
-  loadEnvLocal();
+  if (!process.env.SCHEMA_PARITY_DB_URL) {
+    const before = new Set(DB_URL_VARS.filter((k) => process.env[k]));
+    loadEnvLocal();
+    const chosen = resolveDbUrl(process.env).name;
+    if (chosen && !before.has(chosen)) {
+      // Name only — never the value.
+      process.stderr.write(JSON.stringify({
+        event: 'schema_parity.warning',
+        reason: 'db_url_from_env_local',
+        variable: chosen,
+        hint: 'The connection string came from .env.local, not the shell. Set SCHEMA_PARITY_DB_URL to use an explicit credential.',
+      }) + '\n');
+    }
+  }
 
   // ─── WHY THIS DOES NOT GO THROUGH PostgREST ──────────────────────────────
   // It used to. `client.from('information_schema.columns')` resolves as the
@@ -1356,14 +1388,12 @@ async function main() {
   // is what every other schema probe in this repository already uses. Exit 2
   // is now reserved for a genuinely absent connection string or a real
   // connection failure — never for a lookup this script chose incorrectly.
-  const dbUrl = process.env.SUPABASE_POOLER_DB_URL
-    || process.env.SUPABASE_DB_URL
-    || process.env.DATABASE_URL;
+  const dbUrl = resolveDbUrl(process.env).url;
   if (!dbUrl) {
     process.stderr.write(JSON.stringify({
       event: 'schema_parity.error',
       reason: 'missing_credentials',
-      missing: ['SUPABASE_POOLER_DB_URL'],
+      missing: ['SCHEMA_PARITY_DB_URL', 'SUPABASE_POOLER_DB_URL'],
       hint: 'A direct Postgres connection string is required; information_schema is not reachable over PostgREST.',
     }) + '\n');
     process.exit(2);
@@ -1388,6 +1418,26 @@ async function main() {
     process.stderr.write(JSON.stringify({
       event: 'schema_parity.error',
       reason: 'connection_failed',
+      message: (e && e.message) || String(e),
+    }) + '\n');
+    process.exit(2);
+  }
+
+  // Every query below is a read. Pin the session read-only with timeouts so a
+  // privileged credential still cannot write through this script, and record
+  // which role actually ran it (name only).
+  let session;
+  try {
+    await db.query("SET default_transaction_read_only = on; SET statement_timeout = '120s'; "
+      + "SET lock_timeout = '2s'; SET application_name = 'schema-parity-verifier'");
+    const res = await db.query(
+      "SELECT current_user AS role, current_setting('transaction_read_only') AS tx_read_only");
+    session = { role: res.rows[0].role, tx_read_only: res.rows[0].tx_read_only };
+  } catch (e) {
+    await db.end().catch(() => {});
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.error',
+      reason: 'session_setup_failed',
       message: (e && e.message) || String(e),
     }) + '\n');
     process.exit(2);
@@ -1721,6 +1771,7 @@ async function main() {
     checked_indexes: REQUIRED_INDEXES.length,
     checked_column_types: REQUIRED_COLUMN_TYPES.length,
     strict,
+    session,
     checked_stack: {
       tables: STACK_TABLES.length,
       functions: STACK_FUNCTIONS.length,
@@ -1890,4 +1941,6 @@ module.exports = {
   isStrictMode,
   predeployParityDecision,
   evaluateStack,
+  DB_URL_VARS,
+  resolveDbUrl,
 };

@@ -16,11 +16,23 @@
 --
 --   psql "<operator-held URL>" -X -v ON_ERROR_STOP=1 -f scripts/release/session-readiness-check.sql
 --
--- OUTPUT: rows (check, value, verdict) with verdict OK | FAIL | INFO, ending
--- with an `overall` row. Any FAIL means STOP: do not run the other checks
+-- OUTPUT: lines "check | value | verdict" with verdict OK | FAIL | INFO, ending
+-- with an `overall` line. Any FAIL means STOP: do not run the other checks
 -- with this credential.
+--
+-- EXIT STATUS: psql exits 0 only when every check is OK/INFO. On any FAIL the
+-- script deliberately raises an error, so psql (ON_ERROR_STOP) exits 3. A
+-- connection or query error also exits non-zero. Treat any non-zero exit as STOP.
+--
+-- Role membership: the credential may be a member of pg_read_all_data and
+-- nothing else. Every edge in pg_auth_members is followed (INHERIT, SET and
+-- ADMIN options alike), because a membership granted WITH INHERIT FALSE,
+-- SET TRUE is invisible to has_table_privilege() yet still allows
+-- SET ROLE <writer>.
 -- ============================================================================
 \set ON_ERROR_STOP on
+-- Read BEFORE the READ ONLY wrapper: inside it transaction_read_only is always on.
+SELECT current_setting('transaction_read_only') AS pre_wrapper_tx_ro \gset
 BEGIN TRANSACTION READ ONLY;
 SET LOCAL statement_timeout = '30s';
 SET LOCAL lock_timeout = '2s';
@@ -65,9 +77,22 @@ ledger AS (
   SELECT (SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            WHERE n.nspname = 'supabase_migrations' AND c.relname = 'schema_migrations') AS reg
 ),
+memberships AS (
+  -- Transitive closure over pg_auth_members from the credential, ignoring the
+  -- inherit/set/admin options: any edge is a path to another role's rights.
+  WITH RECURSIVE m(roleid) AS (
+    SELECT am.roleid FROM pg_auth_members am WHERE am.member = (SELECT oid FROM me)
+    UNION
+    SELECT am.roleid FROM pg_auth_members am JOIN m ON am.member = m.roleid
+  )
+  SELECT r.rolname FROM m JOIN pg_roles r ON r.oid = m.roleid
+),
+not_allowlisted AS (
+  SELECT rolname FROM memberships WHERE rolname <> 'pg_read_all_data'
+),
 checks AS (
-  SELECT 10 AS ord, 'session.transaction_read_only' AS chk, current_setting('transaction_read_only') AS val,
-         CASE WHEN current_setting('transaction_read_only') = 'on' THEN 'OK' ELSE 'FAIL' END AS verdict
+  SELECT 10 AS ord, 'session.transaction_read_only (before wrapper)' AS chk, :'pre_wrapper_tx_ro'::text AS val,
+         CASE WHEN :'pre_wrapper_tx_ro' = 'on' THEN 'OK' ELSE 'FAIL' END AS verdict
   UNION ALL
   SELECT 11, 'role.default_transaction_read_only (session value)', current_setting('default_transaction_read_only'),
          CASE WHEN current_setting('default_transaction_read_only') = 'on' THEN 'OK' ELSE 'FAIL' END
@@ -102,6 +127,13 @@ checks AS (
                      FROM pg_roles g WHERE g.oid <> (SELECT oid FROM me)
                       AND pg_has_role(current_user, g.oid, 'MEMBER')), '(none)'),
          'INFO'
+  UNION ALL
+  -- has_table_privilege() ignores memberships held WITH INHERIT FALSE, SET TRUE
+  -- (PG16+), which still allow SET ROLE <writer>. Walk pg_auth_members directly
+  -- (every edge, whatever its options) and allow only pg_read_all_data.
+  SELECT 27, 'role.member_of_not_allowlisted (pg_auth_members, all options)',
+         COALESCE((SELECT string_agg(rolname, ',' ORDER BY rolname) FROM not_allowlisted), '(none)'),
+         CASE WHEN EXISTS (SELECT 1 FROM not_allowlisted) THEN 'FAIL' ELSE 'OK' END
   UNION ALL
   SELECT 30, 'privilege.writable_tables (INSERT/UPDATE/DELETE/TRUNCATE)', (SELECT n::text FROM writable),
          CASE WHEN (SELECT n FROM writable) = 0 THEN 'OK' ELSE 'FAIL' END
@@ -139,12 +171,18 @@ checks AS (
          CASE WHEN (SELECT count(*) FROM pg_roles WHERE rolname IN ('anon', 'authenticated', 'service_role')) = 3
               THEN 'OK' ELSE 'FAIL' END
 )
-SELECT chk AS check, val AS value, verdict
+SELECT string_agg(format('%s | %s | %s', chk, val, verdict), E'\n' ORDER BY ord) AS self_check_report,
+       bool_and(verdict <> 'FAIL') AS self_check_ok
   FROM (SELECT ord, chk, val, verdict FROM checks
         UNION ALL
         SELECT 99, 'overall', format('%s FAIL', count(*) FILTER (WHERE verdict = 'FAIL')),
                CASE WHEN count(*) FILTER (WHERE verdict = 'FAIL') = 0 THEN 'OK' ELSE 'FAIL' END
-          FROM checks) x
- ORDER BY ord;
-
+          FROM checks) x \gset
+\echo :self_check_report
+\if :self_check_ok
 ROLLBACK;
+\else
+\echo 'SELF-CHECK FAILED: STOP. Do not run anything else with this credential.'
+-- Deliberate error: with ON_ERROR_STOP psql exits 3, so a FAIL can never exit 0.
+SELECT 'self-check failed'::int;
+\endif
