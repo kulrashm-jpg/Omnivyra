@@ -127,11 +127,13 @@ psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/session-readi
 | Read-only | Read-only **before** the script's own transaction (session and role setting); fails on a missing role setting or a session that turned it off |
 | Role attributes | Not superuser; no BYPASSRLS, CREATEROLE, CREATEDB or REPLICATION |
 | Memberships | None except `pg_read_all_data`, walked directly in `pg_auth_members`. Includes SET-only, NOINHERIT, ADMIN-only and nested memberships, which `has_table_privilege` cannot see but `SET ROLE` can use. |
-| Write surface | Zero writable tables; zero schemas with CREATE |
+| ADMIN option | No ADMIN option on any membership edge, including `pg_read_all_data` (ADMIN would let the credential grant roles once read-only is turned off) |
+| Write surface | Zero writable tables; zero schemas with CREATE; no CREATE on the database; no USAGE/UPDATE on any non-system sequence (`nextval`/`setval` write) |
 | Visibility | USAGE on `public`; no public relation whose columns are hidden from `information_schema` (the cause of false "missing" parity findings) |
 | Ledger and roles | The ledger exists and is readable; `anon`, `authenticated` and `service_role` exist |
 
-**Possible false FAIL.** Check 31 (schemas with CREATE) can FAIL falsely if a schema grants CREATE to
+**Possible false FAIL.** Checks 31–33 (schema CREATE, database CREATE, sequence USAGE/UPDATE) can FAIL
+because of a grant to PUBLIC rather than to the credential, for example if a schema grants CREATE to
 PUBLIC, which is possible on a project upgraded from PG ≤ 14. That is an owner decision; never waive it
 silently.
 
@@ -182,7 +184,10 @@ After connecting, the verifier also does the following:
 
 - forces `default_transaction_read_only=on`, sets timeouts, and records `session.role` and
   `session.tx_read_only` in its JSON. Confirm both.
-- fails closed with exit 2 on a credential or connection problem. Do not retry repeatedly.
+- refuses to continue (exit 2, `session_not_read_only`) if the session did not become read-only;
+- warns (naming the variable only) when `SCHEMA_PARITY_DB_URL` lacks `sslmode=verify-full`;
+- fails closed with exit 2 on a credential or connection problem, including a malformed URL. Do not retry
+  repeatedly.
 - blocks (`check_skipped`) if a check cannot run.
 - never prints the password; this was tested with a sentinel password.
 
@@ -369,8 +374,9 @@ Without one, B cannot pass.
 ### C1: ACL, grant, RLS, policy, publication and dependency snapshot (READ ONLY, ROLLBACK)
 
 ```
-psql "$PROD_READONLY_URL" -X -A -F $'\t' -v ON_ERROR_STOP=1 -f scripts/release/grants-acl-check.sql > grants.tsv
-psql "$EXPECTED_DISPOSABLE_URL" -X -A -F $'\t' -v ON_ERROR_STOP=1 -f scripts/release/grants-acl-check.sql > expected-grants.tsv
+psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/grants-acl-check.sql > grants.tsv
+psql "$EXPECTED_DISPOSABLE_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/grants-acl-check.sql > expected-grants.tsv
+# the script sets unaligned TAB-separated output itself, so this works the same in bash and PowerShell
 diff expected-grants.tsv grants.tsv > grants.diff
 ```
 
@@ -479,13 +485,24 @@ Do not revoke client access to `user_company_roles`. More than 20 policies, incl
 
 ## 4. Script identities
 
-Record these hashes in the session. They are sha256 values at this commit.
+Record these in the session and compare before running anything. Values are sha256 of the committed files
+(LF; `.gitattributes` pins `eol=lf`, so they are stable on Windows checkouts). Any mismatch means STOP.
 
-| Script | sha256 |
+| File | sha256 |
 |---|---|
-| `scripts/verify-schema-parity.js` | `c14270aba69256bdd66f4d9d1fd250a12445258aa506d907fbfaf7c2020d0820` |
-| `scripts/release/session-readiness-check.sql` | `68c99d6324d54a2d5ba1780105f315f2b4298c1ac0644c4e8b08e295f3a1fd10` |
+| `scripts/verify-schema-parity.js` | `da3e236a209503e04bbb95098baa3608d7d91b1bee2e69a960d43d755ed47afd` |
+| `scripts/predeploy-check.js` (not used in the session) | `588ff66b4f5c0f92d0030973331c870b123ca8457125b8ec5d3558786001412d` |
+| `scripts/release/session-readiness-check.sql` | `cfe22a3d410c878b00adbd101d13292f387b3e9a72434b2a8f5e146fff05719d` |
 | `scripts/release/runbook-preflight-build.js` | `03b839668a94cf2afaaac317308bed9371b331c54a47fb94d08d81ecfa39cda6` |
-| generated `preflight.sql` | `61fcb70afbc9066cd1df1cdb6eec4620116a40a2b0359cd7afab3f8f2905bdcb` |
+| generated `preflight.sql` (16 blocks) | `61fcb70afbc9066cd1df1cdb6eec4620116a40a2b0359cd7afab3f8f2905bdcb` |
+| `scripts/release/catalog-fingerprint.sql` | `f928401fc84428dbc875087479c801da32cc94bb043811dcb58217c7e20cc7e0` |
+| `scripts/release/catalog-fingerprint-build.js` | `9849bc9c43b8f5d9313dad6fb4b64f0c7cacad6256bebd565dd163a95e842c11` |
+| `scripts/release/semantic-compare-catalog.js` | `f60e9ef68994619f085f9473d5cbaacf80d9a26916f624a9578f3ad64a9b7f91` |
+| `scripts/release/grants-acl-check.sql` | `c07a7001399eb6c34e51d826874dd12d847ba14711eeb3e633e8f80e8bcf3793` |
+| `scripts/release/api-log-queries.sql` | `5dbe01a249d256bee8d859447ceadddd86b31b546324e56c0f267ffe18188ae6` |
+| `scripts/release/pg-stat-statements-probe.sql` | `cdf50079ffda85876cbc82bf2f4d36776f505f2a204e1fe8d48d3c555ab4f2ae` |
+| `scripts/release/recovery-intake.js` | `b0353c5f5f952b09177cb5aac18e9cd1a9fc339e36912058129b5154060c88cd` |
+| FIX3 `20261212000000` (intake reference) | `581926201d268d5bde34b6a6b7be4ee118bac3ed8d62ef88756e7030b2d445d5` |
+| close_anon `20261026000000` (intake reference) | `62e2371990ee020d255c9415bf3a76a7063e64f874b42d92364d3d37a589fc82` |
 
-The full list is in the release report. Any mismatch means STOP.
+The release commit itself is recorded in the release report, since a file cannot contain its own commit SHA.
