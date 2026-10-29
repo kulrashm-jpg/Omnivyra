@@ -10,6 +10,7 @@
  */
 import { logProviderCall } from '../productionPrimitives';
 import { classifyProviderError, errorEvidence, sanitize, type ErrorClass, type ProviderErrorEvidence } from './providerErrors';
+import type { CitationDetailInput } from '../citations/citationTypes';
 
 export type AnswerSurfaceId =
   | 'chatgpt_search' | 'perplexity' | 'claude_search' | 'gemini_search' | 'google_ai_mode' | 'bing_copilot' | 'meta_ai';
@@ -21,6 +22,12 @@ export type SurfaceAnswer = {
   status: 'observed' | 'failed_source' | 'not_measured';
   text: string;
   sources: string[];
+  /**
+   * Per-source detail parsed from the same response as `sources` (which keeps its exact legacy value):
+   * the provider's title when it returned one, and whether the source was cited in the answer or only
+   * retrieved by the search. Absent on answers collected before this field existed.
+   */
+  citations?: CitationDetailInput[];
   reason: string | null;
   observedAt: string;
   geography: string;
@@ -35,7 +42,18 @@ class ProviderError extends Error {
   }
 }
 
-type Ask = (query: string, signal: AbortSignal) => Promise<{ text: string; sources: string[]; grounded: boolean }>;
+type Ask = (query: string, signal: AbortSignal) => Promise<{ text: string; sources: string[]; grounded: boolean; citations?: CitationDetailInput[] }>;
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
+/** Cited first, then retrieved-only; a URL appears once, under its first (strongest) role. */
+function details(cited: Array<{ url: unknown; title?: unknown }>, retrieved: Array<{ url: unknown; title?: unknown }>, retrievedRole: 'retrieved' | 'unknown' = 'retrieved'): CitationDetailInput[] {
+  const out = new Map<string, CitationDetailInput>();
+  const titleOf = new Map<string, string>();
+  for (const r of [...cited, ...retrieved]) { const u = str(r.url); const t = str(r.title); if (u && t && !titleOf.has(u)) titleOf.set(u, t); }
+  for (const c of cited) { const u = str(c.url); if (u && !out.has(u)) out.set(u, { url: u, title: titleOf.get(u) ?? null, role: 'cited' }); }
+  for (const r of retrieved) { const u = str(r.url); if (u && !out.has(u)) out.set(u, { url: u, title: titleOf.get(u) ?? null, role: retrievedRole }); }
+  return [...out.values()];
+}
 
 type Surface = {
   id: AnswerSurfaceId;
@@ -90,8 +108,11 @@ export const SURFACES: Surface[] = [
       }, { authorization: `Bearer ${key}` }, signal);
       const out = Array.isArray(j.output) ? j.output : [];
       const part = out.find((o: any) => o.type === 'message')?.content?.find((c: any) => c.type === 'output_text');
+      const urlCitations = (part?.annotations ?? []).filter((a: any) => a.type === 'url_citation');
       return {
         text: String(part?.text ?? ''),
+        // Annotations are attached to the answer text: cited.
+        citations: details(urlCitations.map((a: any) => ({ url: a.url, title: a.title })), []),
         sources: (part?.annotations ?? []).filter((a: any) => a.type === 'url_citation').map((a: any) => String(a.url)),
         // Counted only with a web search AND at least one checkable source (the report's definition of grounded).
         grounded: out.some((o: any) => o.type === 'web_search_call') && (part?.annotations ?? []).some((a: any) => a.type === 'url_citation'),
@@ -106,7 +127,12 @@ export const SURFACES: Surface[] = [
       }, { authorization: `Bearer ${key}` }, signal);
       const sources = [...(Array.isArray(j.citations) ? j.citations : []), ...(Array.isArray(j.search_results) ? j.search_results.map((r: any) => r?.url) : [])]
         .filter((u): u is string => typeof u === 'string');
-      return { text: String(j.choices?.[0]?.message?.content ?? ''), sources: [...new Set(sources)], grounded: sources.length > 0 };
+      // `citations` are the sources the answer cites; `search_results` not among them were only retrieved.
+      // Without a citations list the search results cannot be split, so their role is unknown.
+      const citedList: unknown[] = Array.isArray(j.citations) ? j.citations : [];
+      const results: any[] = Array.isArray(j.search_results) ? j.search_results : [];
+      const citations = details(citedList.map((u) => ({ url: u, title: results.find((r) => r?.url === u)?.title })), results.map((r) => ({ url: r?.url, title: r?.title })), citedList.length ? 'retrieved' : 'unknown');
+      return { text: String(j.choices?.[0]?.message?.content ?? ''), sources: [...new Set(sources)], grounded: sources.length > 0, citations };
     },
   },
   {
@@ -124,7 +150,12 @@ export const SURFACES: Surface[] = [
       const cited = blocks.flatMap((b) => (b.type === 'text' ? b.citations ?? [] : [])).map((c: any) => c?.url);
       const results = blocks.flatMap((b) => (b.type === 'web_search_tool_result' && Array.isArray(b.content) ? b.content : [])).map((r: any) => r?.url);
       const sources = [...new Set([...cited, ...results].filter((u): u is string => typeof u === 'string'))];
-      return { text, sources, grounded: blocks.some((b) => b.type === 'server_tool_use' || b.type === 'web_search_tool_result') && sources.length > 0 };
+      // Text-block citations are cited; search results never cited in the text were only retrieved.
+      const citations = details(
+        blocks.flatMap((b) => (b.type === 'text' ? b.citations ?? [] : [])).map((c: any) => ({ url: c?.url, title: c?.title })),
+        blocks.flatMap((b) => (b.type === 'web_search_tool_result' && Array.isArray(b.content) ? b.content : [])).map((r: any) => ({ url: r?.url, title: r?.title })),
+      );
+      return { text, sources, grounded: blocks.some((b) => b.type === 'server_tool_use' || b.type === 'web_search_tool_result') && sources.length > 0, citations };
     },
   },
   {
@@ -140,7 +171,18 @@ export const SURFACES: Surface[] = [
       // Grounding chunks carry a redirect URI and the source's domain as the title.
       const chunks: any[] = cand?.groundingMetadata?.groundingChunks ?? [];
       const sources = chunks.map((c) => (c?.web?.title && /\./.test(c.web.title) ? `https://${c.web.title}` : c?.web?.uri)).filter((u): u is string => typeof u === 'string');
-      return { text, sources: [...new Set(sources)], grounded: chunks.length > 0 };
+      // Host precision only: the chunk URI is a Google redirect and the title is the source's domain.
+      // Chunks referenced by groundingSupports back the answer text (cited); the rest were retrieved.
+      // Without groundingSupports the split is unknown.
+      const supports: any[] = Array.isArray(cand?.groundingMetadata?.groundingSupports) ? cand.groundingMetadata.groundingSupports : [];
+      const supported = new Set<number>(supports.flatMap((x) => (Array.isArray(x?.groundingChunkIndices) ? x.groundingChunkIndices : [])));
+      const citations: CitationDetailInput[] = chunks.flatMap((c, i): CitationDetailInput[] => {
+        // The URL is the provider's own (redirect) URI, never one rebuilt from the title.
+        const url = str(c?.web?.uri) ?? '';
+        if (!url && !str(c?.web?.title)) return [];
+        return [{ url, title: null, role: supports.length ? (supported.has(i) ? 'cited' : 'retrieved') : 'unknown', precision: 'host_only', domain: str(c?.web?.title) }];
+      });
+      return { text, sources: [...new Set(sources)], grounded: chunks.length > 0, citations };
     },
   },
   {
@@ -153,7 +195,7 @@ export const SURFACES: Surface[] = [
       const text = String(j.reconstructed_markdown ?? (j.text_blocks ?? []).map((b: any) => b?.snippet ?? '').join('\n'));
       const sources = (j.references ?? []).map((r: any) => r?.link).filter((u: unknown): u is string => typeof u === 'string');
       // An answer counts only with checkable sources; AI Mode does not always return them.
-      return { text, sources, grounded: sources.length > 0 };
+      return { text, sources, grounded: sources.length > 0, citations: details((j.references ?? []).map((r: any) => ({ url: r?.link, title: r?.title })), []) };
     },
   },
   {
@@ -166,7 +208,7 @@ export const SURFACES: Surface[] = [
       const blocks: any[] = j.text_blocks ?? [];
       const text = blocks.map((b) => [b?.snippet, ...(b?.list ?? []).map((l: any) => l?.snippet)].filter(Boolean).join(' ')).join('\n');
       const sources = (j.references ?? []).map((r: any) => r?.link).filter((u: unknown): u is string => typeof u === 'string');
-      return { text, sources, grounded: sources.length > 0 };
+      return { text, sources, grounded: sources.length > 0, citations: details((j.references ?? []).map((r: any) => ({ url: r?.link, title: r?.title })), []) };
     },
   },
   {
@@ -216,13 +258,13 @@ export async function askAiSurfaces(
         const r = await ask(query, AbortSignal.timeout(timeoutMs));
         logProviderCall({ providerId: `research:${sf.id}`, operation: 'probe', status: 'ok', duration_ms: Date.now() - startedAt });
         if (!r.grounded || !r.text.trim()) {
-          return { ...base, query, status: 'failed_source', text: r.text.slice(0, 6000), sources: r.sources, observedAt,
+          return { ...base, query, status: 'failed_source', text: r.text.slice(0, 6000), sources: r.sources, ...(r.citations ? { citations: r.citations } : {}), observedAt,
             reason: !r.text.trim() ? 'The tool returned no answer.'
               // Tools that report a search step are judged by it; the others only by the sources they return.
               : sf.id === 'chatgpt_search' || sf.id === 'claude_search' ? 'The tool answered without a web search or without any checkable source, so the answer is not counted.'
                 : 'The answer came back without checkable source links, so it is not counted.' };
         }
-        return { ...base, query, status: 'observed', text: r.text.slice(0, 6000), sources: r.sources, reason: null, observedAt };
+        return { ...base, query, status: 'observed', text: r.text.slice(0, 6000), sources: r.sources, ...(r.citations ? { citations: r.citations } : {}), reason: null, observedAt };
       } catch (error) {
         const ev = error instanceof ProviderError ? error.evidence : errorEvidence(null, { error: { message: error instanceof Error ? error.message : String(error) } });
         const reason = sanitize(error instanceof Error ? error.message : String(error));

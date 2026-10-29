@@ -28,6 +28,9 @@ import { searchGoogle, searchPlan } from './searchResults';
 import { resolvePageSpeedAccess } from '../../pageSpeedClient';
 import { fetchBingWebmaster } from './bingWebmaster';
 import { collectRegistryEvidence, jurisdictionsFrom } from './registryEvidence';
+import { toCitationSources } from '../citations/citationSources';
+import { buildCitationIntelligence } from '../citations/publicationOpportunities';
+import type { CitationIntelligence } from '../citations/citationTypes';
 
 /** Build the research input from the company context the report already resolved. */
 export function researchInputFromNarrative(c: {
@@ -189,13 +192,20 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
       : a.status !== 'observed' ? `${a.label}: ${a.reason ?? 'no answer'}`
         : branded ? `${a.label}: ${accuracy === 'correct' ? `describes ${input.brand} accurately` : accuracy === 'partly' ? `describes ${input.brand} but mixes in unrelated companies` : accuracy === 'misidentified' ? `confuses ${input.brand} with something else` : `answer not judged`}${r?.note ? ` (${r.note})` : ''}${cited ? `; cites ${ownHost}` : ''}`
           : `${a.label}: ${input.brand} ${mentioned ? 'named' : 'not named'}; brands named: ${r?.brands.length ? r.brands.slice(0, 8).join(', ') : 'none'}`;
+    const recordId = id('GEN');
+    // Grounded answers only: each source normalized and kept apart by role. `citedDomains` / `sourceUrl` are unchanged.
+    const citations = a.status === 'observed'
+      ? toCitationSources({ provider: a.surface, query: a.query, query_class: intent, grounded_sources: a.sources, observation_id: recordId, citations: a.citations },
+        { observed_at: a.observedAt, is_brand_question: branded, pipeline: 'public_research', method: 'Answer built by the tool from live web search, with the sources it returned' })
+      : null;
     return base({
-      id: id('GEN'), kind: a.surface, surface: a.label, intent, query: a.query, claim,
+      id: recordId, kind: a.surface, surface: a.label, intent, query: a.query, claim,
       status: a.status === 'observed' ? 'observed' : a.status === 'not_measured' ? 'not_measured' : 'failed_source',
       mentioned, cited: cited && accuracy !== 'misidentified', accuracy, brandsNamed: a.status === 'observed' ? r?.brands ?? [] : undefined,
       citedDomains, geography: a.geography, observedAt: a.observedAt,
       sourceUrl: a.sources[0] ?? '', method: 'Answer built by the tool from live web search, with the sources it returned', scope: 'One question, one time',
       ...(a.error ? { providerError: a.error } : {}),
+      ...(citations ? { citations } : {}),
       // Enough of the answer to re-check a mention or a misidentification afterwards.
       excerpt: a.text.slice(0, 4000),
     });
@@ -287,6 +297,26 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     }
   }
 
+  // Cited source domains and the publication opportunities they support. Only grounded buyer answers count,
+  // and only VALIDATED competitors are matched as competitor-owned. Never fails the pack.
+  let citationIntelligence: CitationIntelligence | null = null;
+  try {
+    const validated = competitorRecords.filter((c) => c.status === 'observed' && ['direct', 'adjacent', 'substitute'].includes(String(c.classification)) && c.name)
+      .map((c) => ({ name: String(c.name), domain: String(c.domain ?? '') }));
+    const observedSurfaces = new Set(buyer.map((g) => g.kind));
+    citationIntelligence = buildCitationIntelligence(buyer.flatMap((g) => g.citations ?? []), {
+      subject: { brand: input.brand, domains: [ownHost] },
+      competitors: validated,
+      answers: buyer.map((g) => ({ observation_id: g.id, brandsNamed: g.brandsNamed ?? null, excerpt: g.excerpt ?? null })),
+      groundedBuyerAnswers: buyer.length,
+      providersObserved: [...observedSurfaces],
+      providersNotObserved: SURFACES.filter((sf) => !observedSurfaces.has(sf.id)).map((sf) => sf.label),
+      generatedAt: collectedAt,
+    });
+  } catch {
+    citationIntelligence = null;
+  }
+
   const gaps: ResearchRecord[] = [];
   for (const sf of SURFACES) {
     const rs = answers.filter((a) => a.surface === sf.id);
@@ -363,5 +393,6 @@ export async function collectPublicResearch(input: ResearchInput, opts: { timeou
     candidateDiscovery: candidates ? { found: raw.length, checked: Math.min(raw.length, cap) } : null,
     bingWebmaster: await bingTask,
     registry: await registryTask,
+    citationIntelligence,
   };
 }
