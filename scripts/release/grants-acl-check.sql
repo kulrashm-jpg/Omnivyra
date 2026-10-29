@@ -13,8 +13,9 @@
 -- (bootstrap schema, NOT Supabase default privileges), never on production.
 --
 -- HOW TO RUN
---   psql (preferred; shows every row):
---     psql "<operator-held URL>" -X -v ON_ERROR_STOP=1 -f scripts/release/grants-acl-check.sql
+--   psql (preferred; shows every row; TAB-separated so `v` values containing
+--   `|` stay unambiguous and two snapshots diff line by line):
+--     psql "<operator-held URL>" -X -A -F $'\t' -v ON_ERROR_STOP=1 -f scripts/release/grants-acl-check.sql
 --   Supabase SQL Editor: the editor shows one result set. Run the single
 --   `WITH … ORDER BY` statement below on its own (it is a pure SELECT); the
 --   BEGIN READ ONLY / ROLLBACK wrapper is for psql.
@@ -22,7 +23,11 @@
 --   snapshot the matrix asks for.
 --
 -- OUTPUT: one result set, columns (section, scope, object, k, v), all text.
---   S1 roles          role attributes (BYPASSRLS etc.)
+--   S1 roles          role attributes (BYPASSRLS etc.) of the API/admin roles;
+--                     memberships IN the API roles and memberships HELD BY the
+--                     API roles (admin/inherit/set options on PG16+ — a
+--                     NOINHERIT membership is still usable via SET ROLE); one
+--                     row per LOGIN role (candidate direct-database consumers)
 --   S2 relation       exists / relkind / owner / RLS / FORCE RLS / raw relacl /
 --                     policy count / reloptions (security_invoker for views)
 --   S3 acl            aclexplode(relacl): one row per grantee+privilege
@@ -41,11 +46,24 @@
 --                     (in-scope objects are flagged)
 --   S10 schema        USAGE on schema public per role
 --   S11 sequence      public sequences on which anon/authenticated hold anything
+--   S12 dependency    views/materialized views (any schema) that read an
+--                     in-scope table, and policies (any schema, incl. storage)
+--                     whose USING / WITH CHECK names an in-scope table — the
+--                     indirect paths that revoking a table would break or that
+--                     reach a table without naming it in an API path
+--
+-- Output is ordered by all five columns with COLLATE "C" and search_path is
+-- pinned, so two runs on equal catalogs are byte-identical.
 -- ============================================================================
 
+\set ON_ERROR_STOP on
+\set QUIET on
+\pset pager off
+\pset footer off
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET LOCAL statement_timeout = '60s';
 SET LOCAL lock_timeout = '2s';
+SET LOCAL search_path = pg_catalog, pg_temp;
 
 WITH
 rel_objs(scope, name) AS (VALUES
@@ -322,6 +340,7 @@ rel_objs(scope, name) AS (VALUES
 -- Functions by NAME (all overloads) for fix3/stack; by exact signature for close_anon.
 fn_name_objs(scope, name) AS (VALUES
     ('fix3:function', 'set_content_updated_at'),
+    ('fix3:function', 'omnivyra_touch_updated_at'),
     ('stack:function', 'prospect_campaigns_guard'),
     ('stack:function', 'workflows_guard'),
     ('stack:function', 'workflow_versions_guard_immutable'),
@@ -406,9 +425,27 @@ out(section, scope, object, k, v) AS (
     FROM pg_roles r
    WHERE r.rolname IN ('anon', 'authenticated', 'service_role', 'postgres', 'authenticator', 'supabase_admin')
   UNION ALL
-  SELECT 'S01_roles', '-', m.member::regrole::text, 'member_of', m.roleid::regrole::text
+  -- members OF an API role (options read via to_jsonb so the query also runs before PG16)
+  SELECT 'S01_roles', '-', m.member::regrole::text, 'member_of',
+         m.roleid::regrole::text || format(' admin=%s inherit=%s set=%s', m.admin_option,
+           coalesce(to_jsonb(m) ->> 'inherit_option', 'n/a'), coalesce(to_jsonb(m) ->> 'set_option', 'n/a'))
     FROM pg_auth_members m
    WHERE m.roleid::regrole::text IN ('anon', 'authenticated', 'service_role')
+  UNION ALL
+  -- memberships HELD BY an API role (e.g. GRANT <x> TO authenticated)
+  SELECT 'S01_roles', '-', m.member::regrole::text, 'has_membership_in',
+         m.roleid::regrole::text || format(' admin=%s inherit=%s set=%s', m.admin_option,
+           coalesce(to_jsonb(m) ->> 'inherit_option', 'n/a'), coalesce(to_jsonb(m) ->> 'set_option', 'n/a'))
+    FROM pg_auth_members m
+   WHERE m.member::regrole::text IN ('anon', 'authenticated', 'service_role')
+  UNION ALL
+  -- every LOGIN role: candidate direct-database consumers (names/attributes only)
+  SELECT 'S01_roles', '-', r.rolname::text, 'login_role',
+         format('super=%s bypassrls=%s createrole=%s createdb=%s replication=%s conn_limit=%s valid_until=%s',
+                r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication,
+                r.rolconnlimit, coalesce(r.rolvaliduntil::text, '-'))
+    FROM pg_roles r
+   WHERE r.rolcanlogin
   UNION ALL
   -- S02 relation
   SELECT 'S02_relation', x.scope, x.name, 'state',
@@ -425,7 +462,7 @@ out(section, scope, object, k, v) AS (
   SELECT 'S03_acl', x.scope, x.name,
          CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
          string_agg(a.privilege_type || CASE WHEN a.is_grantable THEN '*' ELSE '' END, ',' ORDER BY a.privilege_type)
-         || ' (grantor ' || string_agg(DISTINCT pg_get_userbyid(a.grantor), ',') || ')'
+         || ' (grantor ' || string_agg(DISTINCT pg_get_userbyid(a.grantor), ',' ORDER BY pg_get_userbyid(a.grantor)) || ')'
     FROM rels x JOIN pg_class c ON c.oid = x.rid
     CROSS JOIN LATERAL aclexplode(c.relacl) a
    GROUP BY x.scope, x.name, a.grantee
@@ -467,7 +504,7 @@ out(section, scope, object, k, v) AS (
   -- S08 default privileges (entries are deltas against the built-in defaults)
   SELECT 'S08_default_acl', '-',
          format('for_role=%s schema=%s objtype=%s', pg_get_userbyid(d.defaclrole),
-                coalesce(d.defaclnamespace::regnamespace::text, '<global>'), d.defaclobjtype),
+                coalesce(nullif(d.defaclnamespace, 0::oid)::regnamespace::text, '<global>'), d.defaclobjtype),
          CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
          string_agg(a.privilege_type, ',' ORDER BY a.privilege_type)
     FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a
@@ -475,7 +512,7 @@ out(section, scope, object, k, v) AS (
   UNION ALL
   SELECT 'S08_default_acl', '-',
          format('for_role=%s schema=%s objtype=%s', pg_get_userbyid(d.defaclrole),
-                coalesce(d.defaclnamespace::regnamespace::text, '<global>'), d.defaclobjtype),
+                coalesce(nullif(d.defaclnamespace, 0::oid)::regnamespace::text, '<global>'), d.defaclobjtype),
          'raw', d.defaclacl::text
     FROM pg_default_acl d
   UNION ALL
@@ -485,7 +522,7 @@ out(section, scope, object, k, v) AS (
                 pb.pubupdate, pb.pubdelete, pb.pubtruncate)
     FROM pg_publication pb
   UNION ALL
-  SELECT 'S09_publication', coalesce((SELECT string_agg(DISTINCT x.scope, ',') FROM rels x WHERE x.name = pt.tablename), 'not-in-scope'),
+  SELECT 'S09_publication', coalesce((SELECT string_agg(DISTINCT x.scope, ',' ORDER BY x.scope) FROM rels x WHERE x.name = pt.tablename), 'not-in-scope'),
          pt.pubname::text, 'table', pt.schemaname || '.' || pt.tablename
     FROM pg_publication_tables pt
    WHERE pt.schemaname = 'public'
@@ -503,9 +540,32 @@ out(section, scope, object, k, v) AS (
     FROM pg_class s CROSS JOIN (VALUES ('anon'), ('authenticated')) cr(r)
    WHERE s.relnamespace = 'public'::regnamespace AND s.relkind = 'S'
      AND has_sequence_privilege(cr.r, s.oid, 'USAGE,SELECT,UPDATE')
+  UNION ALL
+  -- S12 dependencies: views / materialized views (any schema) whose rewrite
+  -- rule depends on an in-scope table
+  SELECT DISTINCT 'S12_dependency', x.scope, x.name,
+         'read_by_' || CASE v.relkind WHEN 'm' THEN 'matview' ELSE 'view' END,
+         v.relnamespace::regnamespace::text || '.' || v.relname
+    FROM rels x
+    JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass AND d.refobjid = x.rid
+                    AND d.classid = 'pg_rewrite'::regclass
+    JOIN pg_rewrite rw ON rw.oid = d.objid
+    JOIN pg_class v ON v.oid = rw.ev_class AND v.oid <> x.rid
+   WHERE x.rid IS NOT NULL
+  UNION ALL
+  -- S12 dependencies: policies (any schema, incl. storage) whose expression
+  -- names an in-scope table (word match on the table name; review each row)
+  SELECT DISTINCT 'S12_dependency', x.scope, x.name, 'named_in_policy',
+         pol.schemaname || '.' || pol.tablename || '.' || pol.policyname
+    FROM rels x
+    JOIN pg_policies pol
+      ON NOT (pol.schemaname = 'public' AND pol.tablename = x.name)
+     AND (coalesce(pol.qual, '') ~ ('\m' || x.name || '\M')
+          OR coalesce(pol.with_check, '') ~ ('\m' || x.name || '\M'))
+   WHERE x.rid IS NOT NULL
 )
 SELECT section, scope, object, k, v
   FROM out
- ORDER BY section, scope, object, k;
+ ORDER BY section COLLATE "C", scope COLLATE "C", object COLLATE "C", k COLLATE "C", v COLLATE "C";
 
 ROLLBACK;

@@ -15,7 +15,7 @@ const gen = require('../../../scripts/release/catalog-fingerprint-build.js');
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 
 const BASE: Array<[string, string, string, string]> = [
-  ['meta', 'session', 'fingerprint_format', 'catalog-fingerprint/1'],
+  ['meta', 'session', 'fingerprint_format', 'catalog-fingerprint/2'],
   ['meta', 'session', 'server_version_num', '170006'],
   ['meta', 'session', 'transaction_read_only', 'on'],
   ['scope', 'rel:public.content', 'candidates', 'fix3:aux,revoke8:table'],
@@ -112,21 +112,65 @@ describe('semantic-compare-catalog', () => {
     expect(res.semantic).toEqual([expect.objectContaining({ section: 'defacl', kind: 'only_left' })]);
   });
 
-  it('classifies owner names and server version as noise, keeping the result equal', () => {
-    let rows = mutate(BASE as Row[], prop('rel', 'rel:public.content', 'owner'), 'supabase_admin');
-    rows = mutate(rows, prop('fn', 'fn:public.omnivyra_touch_updated_at()', 'owner'), 'supabase_admin');
-    rows = mutate(rows, prop('meta', 'session', 'server_version_num'), '150008');
+  it('classifies the server version as noise', () => {
+    const rows = mutate(BASE as Row[], prop('meta', 'session', 'server_version_num'), '170009');
     const res = cmp.compareFingerprints(base, render(rows));
     expect(res.equal).toBe(true);
-    expect(res.noise).toHaveLength(3);
+    expect(res.noise).toHaveLength(1);
   });
 
-  it('classifies an ACL difference consisting only of MAINTAIN (PG17) as noise', () => {
+  // F-1: an owner holds every privilege, bypasses non-forced RLS and is the run-as
+  // identity of SECURITY DEFINER functions / owner-rights views.
+  it('reports an owner change (table and function) as semantic', () => {
+    let rows = mutate(BASE as Row[], prop('rel', 'rel:public.content', 'owner'), 'supabase_admin');
+    rows = mutate(rows, prop('fn', 'fn:public.omnivyra_touch_updated_at()', 'owner'), 'g5_bypassrls_role');
+    const res = cmp.compareFingerprints(base, render(rows));
+    expect(res.equal).toBe(false);
+    expect(res.semantic.map((d: any) => `${d.section}|${d.property}`).sort()).toEqual(['fn|owner', 'rel|owner']);
+    expect(res.semantic[0].reason).toMatch(/owner changed/);
+  });
+
+  it('accepts an owner difference only for a pair declared with --owner-map, and warns', () => {
+    let rows = mutate(BASE as Row[], prop('rel', 'rel:public.content', 'owner'), 'supabase_admin');
+    rows = mutate(rows, prop('fn', 'fn:public.omnivyra_touch_updated_at()', 'owner'), 'g5_other');
+    const ownerMap = new Map([['postgres', 'supabase_admin']]);
+    const res = cmp.compareFingerprints(base, render(rows), { ownerMap });
+    expect(res.noise).toEqual([expect.objectContaining({ object: 'rel:public.content', property: 'owner' })]);
+    expect(res.noise[0].reason).toMatch(/declared owner equivalence/);
+    expect(res.semantic).toEqual([expect.objectContaining({ section: 'fn', property: 'owner', right: 'g5_other' })]);
+    expect(res.warnings.join(' ')).toMatch(/owner equivalence declared: postgres \(left\) = supabase_admin \(right\)/);
+    expect(() => cmp.compareFingerprints(base, base, { ownerMap: new Map([['postgres', 'anon']]) })).toThrow(/owner map/);
+  });
+
+  // F-2: MAINTAIN is a real PG17 privilege (VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK TABLE).
+  it('reports MAINTAIN granted to a client role as semantic when both sides are PostgreSQL 17', () => {
+    const left = render([...BASE, ['eff', 'rel:public.content', 'role:anon', 'DELETE=f,INSERT=f,MAINTAIN=f']] as Row[]);
+    const right = render([...BASE,
+      ['acl', 'rel:public.content', 'grantee:anon', 'MAINTAIN'],
+      ['eff', 'rel:public.content', 'role:anon', 'DELETE=f,INSERT=f,MAINTAIN=t']] as Row[]);
+    const res = cmp.compareFingerprints(left, right);
+    expect(res.equal).toBe(false);
+    expect(res.semantic.map((d: any) => `${d.section}|${d.property}`).sort()).toEqual(['acl|grantee:anon', 'eff|role:anon']);
+  });
+
+  it('reports a MAINTAIN-only change on the owner entry as semantic when both sides are PostgreSQL 17', () => {
     const rows = mutate(BASE as Row[], prop('acl', 'rel:public.content', 'grantee:<owner>'),
       'DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE');
-    const res = cmp.compareFingerprints(base, render(rows));
+    expect(cmp.compareFingerprints(base, render(rows)).equal).toBe(false);
+  });
+
+  it('treats MAINTAIN as noise only on the owner entry when the sides straddle PostgreSQL 17', () => {
+    let rows = mutate(BASE as Row[], prop('acl', 'rel:public.content', 'grantee:<owner>'),
+      'DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE');
+    rows = mutate(rows, prop('meta', 'session', 'server_version_num'), '160004');
+    let res = cmp.compareFingerprints(base, render(rows));
     expect(res.equal).toBe(true);
-    expect(res.noise[0].reason).toMatch(/MAINTAIN/);
+    expect(res.noise.find((d: any) => d.section === 'acl').reason).toMatch(/owner MAINTAIN/);
+    expect(res.warnings.join(' ')).toMatch(/differ across 17/);
+    // a non-owner MAINTAIN grant stays semantic even across versions
+    const left = render([...BASE, ['acl', 'rel:public.content', 'grantee:anon', 'MAINTAIN']] as Row[]);
+    res = cmp.compareFingerprints(left, render(rows));
+    expect(res.semantic).toEqual([expect.objectContaining({ property: 'grantee:anon', kind: 'only_left' })]);
   });
 
   it('reports ledger differences as info, not semantic', () => {
@@ -142,12 +186,76 @@ describe('semantic-compare-catalog', () => {
     expect(res.warnings.join(' ')).toMatch(/right: fingerprint was not taken in a read-only transaction/);
   });
 
-  it('applies --role-map to object and property tokens', () => {
+  // F-3: role maps rewrite role positions only, refuse merges, and announce every rewrite.
+  it('applies a one-side role map to role positions (defacl role + grantee) and lists every rewrite', () => {
     const rows = mutate(BASE as Row[], prop('defacl', 'defacl:postgres:*:f', 'grantee:postgres'), null);
     rows.push(['defacl', 'defacl:w6super:*:f', 'grantee:w6super', 'EXECUTE']);
     expect(cmp.compareFingerprints(base, render(rows)).equal).toBe(false);
-    const roleMap = new Map([['w6super', 'postgres']]);
-    expect(cmp.compareFingerprints(base, render(rows), { roleMap }).equal).toBe(true);
+    const roleMapRight = new Map([['w6super', 'postgres']]);
+    const res = cmp.compareFingerprints(base, render(rows), { roleMapRight });
+    expect(res.equal).toBe(true);
+    expect(res.mapped).toEqual([
+      expect.objectContaining({ side: 'right', from: 'w6super', to: 'postgres', object: 'defacl:w6super:*:f', property: 'grantee:w6super' }),
+      expect.objectContaining({ side: 'right', from: 'w6super', to: 'postgres', object: 'defacl:w6super:*:f', property: 'grantee:w6super' }),
+    ]);
+    expect(res.counts.mapped).toBe(2);
+    expect(res.warnings.join(' ')).toMatch(/role map applied \(right: w6super -> postgres\) to 2 fact/);
+    expect(cmp.renderText(res, 'l', 'r')).toMatch(/WARNING: role map applied/);
+  });
+
+  it('never rewrites non-role tokens (column, policy, schema names) or values', () => {
+    const left = render([...BASE,
+      ['colacl', 'rel:public.content', 'col:g5_x:grantee:g5_x', 'SELECT'],
+      ['policy', 'rel:public.content', 'policy:g5_x:roles', 'g5_x']] as Row[]);
+    const res = cmp.compareFingerprints(left, left, { roleMapLeft: new Map([['g5_x', 'g5_y']]) });
+    expect(res.mapped).toEqual([expect.objectContaining({ property: 'col:g5_x:grantee:g5_x', from: 'g5_x', to: 'g5_y' })]);
+    // after the left-only rewrite the column grant differs; the policy row (name + value) is untouched
+    expect(res.semantic.map((d: any) => `${d.kind}|${d.property}`).sort()).toEqual([
+      'only_left|col:g5_x:grantee:g5_y',
+      'only_right|col:g5_x:grantee:g5_x',
+    ]);
+  });
+
+  it('refuses maps that would merge two roles, touch API roles, or do nothing', () => {
+    const left = render([...BASE, ['acl', 'rel:public.feature_flags', 'grantee:g5_r1', 'SELECT']] as Row[]);
+    const right = render([...BASE, ['acl', 'rel:public.feature_flags', 'grantee:g5_r2', 'SELECT']] as Row[]);
+    // without a map: two semantic facts
+    expect(cmp.compareFingerprints(left, right).semantic).toHaveLength(2);
+    // both-side map g5_r2=g5_r1: refused because g5_r1 already appears on the left side
+    expect(() => cmp.compareFingerprints(left, right, { roleMap: new Map([['g5_r2', 'g5_r1']]) })).toThrow(/already appears/);
+    // a one-side map can still equate them — but never silently
+    const res = cmp.compareFingerprints(left, right, { roleMapRight: new Map([['g5_r2', 'g5_r1']]) });
+    expect(res.equal).toBe(true);
+    expect(res.mapped).toHaveLength(1);
+    expect(res.warnings.join(' ')).toMatch(/role map applied \(right: g5_r2 -> g5_r1\)/);
+    for (const bad of [['anon', 'g5_x'], ['g5_x', 'authenticated'], ['service_role', 'g5_x'], ['g5_x', 'PUBLIC'], ['g5_x', 'public']]) {
+      expect(() => cmp.compareFingerprints(base, base, { roleMap: new Map([bad as [string, string]]) })).toThrow(/never be mapped/);
+    }
+    expect(() => cmp.compareFingerprints(base, base, { roleMapLeft: new Map([['g5_x', 'g5_x']]) })).toThrow(/no-op/);
+  });
+
+  it('judges default privileges of postgres/supabase_admin in public or global; others are info', () => {
+    const right = render([...BASE,
+      ['defacl', 'defacl:supabase_admin:storage:r', 'grantee:anon', 'SELECT'],
+      ['defacl', 'defacl:supabase_admin:public:r', 'grantee:anon', 'SELECT']] as Row[]);
+    const res = cmp.compareFingerprints(base, right);
+    expect(res.info).toEqual([expect.objectContaining({ object: 'defacl:supabase_admin:storage:r' })]);
+    expect(res.semantic).toEqual([expect.objectContaining({ object: 'defacl:supabase_admin:public:r' })]);
+  });
+
+  it('judges publication membership of in-scope tables; out-of-scope tables and flags are info', () => {
+    const right = render([...BASE,
+      ['pub', 'pub:supabase_realtime', 'flags', 'all_tables=false|insert=true|update=true|delete=true|truncate=true'],
+      ['pub', 'pub:supabase_realtime', 'table:public.content', 'member|scope=fix3:aux,revoke8:table'],
+      ['pub', 'pub:supabase_realtime', 'table:public.credit_transactions', 'member|scope=out_of_scope']] as Row[]);
+    const res = cmp.compareFingerprints(base, right);
+    expect(res.semantic).toEqual([expect.objectContaining({ property: 'table:public.content' })]);
+    expect(res.info.map((d: any) => d.property).sort()).toEqual(['flags', 'table:public.credit_transactions']);
+  });
+
+  it('rejects fingerprints of the previous format', () => {
+    const old = base.replace('catalog-fingerprint/2', 'catalog-fingerprint/1');
+    expect(() => cmp.compareFingerprints(old, base)).toThrow(/unsupported fingerprint format catalog-fingerprint\/1/);
   });
 
   it('rejects malformed input and non-fingerprint files', () => {
@@ -178,6 +286,14 @@ describe('catalog-fingerprint-build', () => {
     for (const name of [...gen.FIX3_TABLES, ...gen.PHASE_A_TABLES, ...gen.FIX3_FUNCTIONS]) {
       expect(committed).toContain(`'${name}'`);
     }
+  });
+
+  it('records MAINTAIN (PG17+), view definitions and publication membership, and states what it does not cover', () => {
+    expect(committed).toMatch(/SELECT 'MAINTAIN' WHERE current_setting\('server_version_num'\)::int >= 170000/);
+    expect(committed).toMatch(/'viewdef_md5', md5\(pg_get_viewdef\(c\.oid\)\)/);
+    expect(committed).toMatch(/FROM pg_publication_tables pt/);
+    expect(committed).toMatch(/'catalog-fingerprint\/2'/);
+    expect(committed).toMatch(/NOT COVERED here \(by design\): the orchestration stack/);
   });
 
   it('is wrapped read-only and contains no write statements', () => {
