@@ -108,6 +108,67 @@ export function resolveProbeIdentity(params: {
   return { brandName, domain, resolved: brandName.length > 0 || domain !== null };
 }
 
+/**
+ * P0 — normalise a company domain to the bare host used for identity: strips
+ * scheme, credentials, path / query / fragment, port, trailing dot(s) and a
+ * leading `www.`, and lower-cases. Returns null for empty / whitespace input.
+ *
+ * Shared by the probe cache fingerprint and the citation extractor so that
+ * `https://www.Acme.com/about` and `acme.com` are one identity everywhere.
+ */
+export function normalizeIdentityDomain(raw: string | null | undefined): string | null {
+  let s = (raw ?? '').trim().toLowerCase();
+  if (!s) return null;
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, ''); // scheme
+  s = s.split(/[/?#]/)[0]; // path, query, fragment
+  s = s.replace(/^[^@]*@/, ''); // credentials
+  s = s.replace(/:\d+$/, ''); // port
+  s = s.replace(/\.+$/, ''); // trailing dot(s)
+  s = s.replace(/^www\./, '');
+  return s.length > 0 ? s : null;
+}
+
+/** Marker for an identity part that was not supplied — never collapsed into another value. */
+const IDENTITY_ABSENT = '∅';
+
+/**
+ * P0 — CROSS-COMPANY CACHE CONTAMINATION, FIXED.
+ *
+ * The adapters are created once per process and keyed their answer cache by
+ * `query_class|query` alone. A category question ("What are the best CRM
+ * solutions?") carries no brand, so company B was handed company A's cached
+ * `CitationMention` — A's `appeared` verdict reported as B's visibility.
+ *
+ * Every cached observation is therefore scoped to the identity it was scored
+ * against: the trimmed, whitespace-collapsed, lower-cased brand label plus the
+ * normalised domain. A missing part is written as an explicit `∅`, so "brand
+ * only" and "brand + domain" can never share a key. Parts are URI-encoded, so
+ * no brand text can forge the `|` / `:` delimiters.
+ */
+export function probeIdentityFingerprint(params: {
+  brandName?: string | null;
+  domain?: string | null;
+}): string {
+  const brand = (params.brandName ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const domain = normalizeIdentityDomain(params.domain);
+  const enc = (v: string | null) => (v ? encodeURIComponent(v) : IDENTITY_ABSENT);
+  return `brand:${enc(brand || null)}|domain:${enc(domain)}`;
+}
+
+/**
+ * P0 — the answer-cache key for one probe query. Provider scoping comes from the
+ * per-adapter cache instance; this adds the query class, the identity
+ * fingerprint and the exact query text (last, because it is free text).
+ */
+export function probeCacheKey(params: {
+  queryClass: string;
+  query: string;
+  brandName?: string | null;
+  domain?: string | null;
+}): string {
+  return `${params.queryClass}|${probeIdentityFingerprint(params)}|${params.query}`;
+}
+
 /** The customer-facing reason a probe was refused for want of a subject. */
 export const NO_IDENTITY_REASON =
   'No company name or domain reached the AI visibility probe, so no answer could be attributed to this company. This is not a measured absence.';

@@ -79,7 +79,7 @@ export function registerProviderIngestionSpecs(): void {
     maxAgeHours: 24 * 7,
     providerReliability: 0.7,
     isConfigured: isAIVisibilityProviderConfigured,
-    fetch: (s: IngestionSubject, nowIso: string) => fetchAIVisibilityEvidence(s.brandName ?? '', s.category ?? null, nowIso),
+    fetch: (s: IngestionSubject, nowIso: string) => fetchAIVisibilityEvidence(s.brandName ?? '', s.category ?? null, nowIso, s.domain ?? null),
   });
 
   // Commercial outcomes & revenue — reuses CRM revenue events + GA4 conversions-with-value + leads; the

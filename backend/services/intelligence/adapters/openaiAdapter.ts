@@ -30,6 +30,7 @@ import { extractCitation } from '../citationExtractor';
 // D2 — and the single seam that decides whether we know whose visibility it is.
 import {
   NO_IDENTITY_REASON,
+  probeCacheKey,
   resolveProbeIdentity,
   resolveProbeOutcome,
 } from '../aiVisibilityGrounding';
@@ -266,7 +267,9 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
     const scanId = getActiveScanId();
 
     for (const query of probe.queries) {
-      const cacheKey = `${probe.query_class}|${query}`;
+      // P0 — identity-scoped: a cached answer is only ever reused for the SAME
+      // company (brand + normalised domain). See `probeCacheKey`.
+      const cacheKey = probeCacheKey({ queryClass: probe.query_class, query, brandName, domain });
       const cached = this.cache.get(cacheKey);
       if (cached) {
         mentions.push(cached.value);

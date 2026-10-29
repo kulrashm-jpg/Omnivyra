@@ -223,6 +223,9 @@ export async function fetchAIVisibilityEvidence(
   brandName: string,
   category: string | null,
   nowIso: string,
+  // P0 — optional (backward compatible). Previously this path never received the
+  // company domain, so own-domain mentions/citations could not be detected here.
+  domain: string | null = null,
 ): Promise<Evidence[]> {
   registerAIVisibilityProvider();
   if (!isAIVisibilityProviderConfigured()) {
@@ -233,7 +236,7 @@ export async function fetchAIVisibilityEvidence(
   }
   const providers = getAllLLMProviders(); // reuse existing real LLM adapters
   const providerIds = providers.map((p) => p.id);
-  const probes = buildAIVisibilityProbes(providerIds, brandName, category);
+  const probes = buildAIVisibilityProbes(providerIds, brandName, category, domain);
   const results: AIVisibilityProbeResult[] = [];
   for (const probe of probes) {
     const provider = providers.find((p) => p.id === probe.provider);

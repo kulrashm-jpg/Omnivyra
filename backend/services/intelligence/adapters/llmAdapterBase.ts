@@ -27,6 +27,7 @@ import { extractCitation } from '../citationExtractor';
 // D2 — and the single seam that decides whether we know whose visibility it is.
 import {
   NO_IDENTITY_REASON,
+  probeCacheKey,
   resolveProbeIdentity,
   resolveProbeOutcome,
 } from '../aiVisibilityGrounding';
@@ -187,7 +188,10 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
     const scanId = getActiveScanId();
 
     for (const query of probe.queries) {
-      const cacheKey = `${probe.query_class}|${query}`;
+      // P0 — identity-scoped: adapters are process-wide singletons, and a category
+      // query names no company, so a key without identity served company A's
+      // verdict to company B. See `probeCacheKey`.
+      const cacheKey = probeCacheKey({ queryClass: probe.query_class, query, brandName, domain });
       const cached = this.cache.get(cacheKey);
       if (cached) {
         mentions.push(cached.value);

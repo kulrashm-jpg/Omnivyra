@@ -14,7 +14,16 @@
 // property and the sources it returned. Nothing here promotes an answer.
 
 import type { AIProviderId, AIQueryClass, CitationMention } from './providerInterfaces';
-import { isCitationCorroborated } from './aiVisibilityGrounding';
+import { isCitationCorroborated, normalizeIdentityDomain } from './aiVisibilityGrounding';
+
+// P0 — token edges for mention matching (see `extractCitation`). Used with the
+// `u` flag. A brand must not be glued to a letter, digit or underscore; a domain
+// additionally must not be glued to a hyphen, nor continue into another label
+// (`acme.com.evil.io`). A preceding `.` is allowed so subdomains still match.
+const BRAND_EDGE_BEFORE = String.raw`(?<![\p{L}\p{N}_])`;
+const BRAND_EDGE_AFTER = String.raw`(?![\p{L}\p{N}_])`;
+const DOMAIN_EDGE_BEFORE = String.raw`(?<![\p{L}\p{N}_-])`;
+const DOMAIN_EDGE_AFTER = String.raw`(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}])`;
 
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -80,23 +89,45 @@ export function extractCitation(params: {
 
   // Build the candidate match set. We prefer brand-name matches over domain
   // matches (a brand mention is more authoritative than a bare URL drop).
-  const candidates: Array<{ text: string; type: 'brand' | 'domain'; weight: number }> = [];
-  if (params.brandName) {
-    candidates.push({ text: params.brandName, type: 'brand', weight: 1.0 });
+  //
+  // P0 — MATCHING RULES (narrow fix, documented):
+  //  • Brand: case-insensitive, whole-token. The edge test is "not adjacent to a
+  //    letter / digit / underscore" (Unicode-aware) instead of a `\b` word boundary, which is
+  //    identical for brands that start and end with a word character but used to
+  //    MISS brands that end in punctuation or a non-ASCII letter ("Acme Inc.",
+  //    "Yahoo!", "Café") — every such answer scored `appeared: false`.
+  //    "Acmetrics" does NOT match "Acme". "Acme Corp Industries" DOES match
+  //    "Acme": a word-bounded matcher cannot tell a similarly-named entity from
+  //    the company — a known limitation, not a claim about which entity it is.
+  //  • Domain: normalised to the bare host (scheme / `www.` / path stripped, the
+  //    same normaliser as the cache identity), so a stored `https://www.acme.com/`
+  //    still detects "acme.com" in prose. It must not be glued to a longer
+  //    label: "evil-acme.com", "notacme.com" and "acme.com.evil.io" do NOT
+  //    match; "www.acme.com" / "docs.acme.com" (true subdomains) do.
+  const candidates: Array<{ text: string; type: 'brand' | 'domain'; weight: number; pattern: RegExp }> = [];
+  const brandText = (params.brandName ?? '').trim();
+  if (brandText) {
+    candidates.push({
+      text: brandText,
+      type: 'brand',
+      weight: 1.0,
+      pattern: new RegExp(`${BRAND_EDGE_BEFORE}${escapeRegex(brandText)}${BRAND_EDGE_AFTER}`, 'iu'),
+    });
   }
-  if (params.domain) {
-    candidates.push({ text: params.domain, type: 'domain', weight: 0.6 });
-    // Also try the bare domain root (without subdomain).
-    const root = params.domain.replace(/^https?:\/\//i, '').split('/')[0];
-    if (root && root !== params.domain) {
-      candidates.push({ text: root, type: 'domain', weight: 0.55 });
-    }
+  const host = normalizeIdentityDomain(params.domain);
+  if (host) {
+    candidates.push({
+      text: host,
+      type: 'domain',
+      weight: 0.6,
+      pattern: new RegExp(`${DOMAIN_EDGE_BEFORE}${escapeRegex(host)}${DOMAIN_EDGE_AFTER}`, 'iu'),
+    });
   }
 
   let best: { position: number; mentionLength: number; weight: number } | null = null;
 
   for (const candidate of candidates) {
-    const pattern = new RegExp(`\\b${escapeRegex(candidate.text)}\\b`, 'i');
+    const pattern = candidate.pattern;
     const match = answer.match(pattern);
     if (match && typeof match.index === 'number') {
       if (!best || (match.index < best.position && candidate.weight >= best.weight)) {
