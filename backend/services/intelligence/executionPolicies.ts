@@ -29,6 +29,16 @@ export type ExecutionPolicy = {
   budget: Omit<ScanBudget, 'scan_id'>;
   /** Reuse cache aggressively (longer TTL hint to adapters). */
   preferCache: boolean;
+  /**
+   * Phase B — independent runs per query for RETRIEVAL-GROUNDED providers only
+   * (chat models always run once). Clamped to 1..5 by `clampGroundedRuns`.
+   *
+   * 1 in EVERY profile: at 1 the probe layer is byte-for-byte P0 (calls, order,
+   * cache keys, outputs). Raising it is an owner decision, after the answer
+   * engine's per-request pricing is verified (B3) — it must not be reachable
+   * from these defaults.
+   */
+  groundedRunsPerQuery: number;
 };
 
 const ALL_CLASSES: AIQueryClass[] = ['branded', 'category', 'competitive', 'expertise'];
@@ -44,6 +54,7 @@ export const POLICY_LIGHTWEIGHT: ExecutionPolicy = {
   computeForecast: false,
   budget: { max_requests: 30, max_cost_usd: 0.5 },
   preferCache: true,
+  groundedRunsPerQuery: 1,
 };
 
 export const POLICY_STANDARD: ExecutionPolicy = {
@@ -57,6 +68,7 @@ export const POLICY_STANDARD: ExecutionPolicy = {
   computeForecast: true,
   budget: { max_requests: 120, max_cost_usd: 3.0 },
   preferCache: true,
+  groundedRunsPerQuery: 1,
 };
 
 export const POLICY_DEEP: ExecutionPolicy = {
@@ -70,6 +82,7 @@ export const POLICY_DEEP: ExecutionPolicy = {
   computeForecast: true,
   budget: { max_requests: 400, max_cost_usd: 12.0 },
   preferCache: false,
+  groundedRunsPerQuery: 1,
 };
 
 export const POLICY_MANUAL_REFRESH: ExecutionPolicy = {
@@ -83,6 +96,7 @@ export const POLICY_MANUAL_REFRESH: ExecutionPolicy = {
   computeForecast: true,
   budget: { max_requests: 250, max_cost_usd: 8.0 },
   preferCache: false,
+  groundedRunsPerQuery: 1,
 };
 
 export const POLICY_DELTA_ONLY: ExecutionPolicy = {
@@ -96,6 +110,7 @@ export const POLICY_DELTA_ONLY: ExecutionPolicy = {
   computeForecast: false,
   budget: { max_requests: 25, max_cost_usd: 0.4 },
   preferCache: true,
+  groundedRunsPerQuery: 1,
 };
 
 export const EXECUTION_POLICIES: Record<ScanProfile, ExecutionPolicy> = {

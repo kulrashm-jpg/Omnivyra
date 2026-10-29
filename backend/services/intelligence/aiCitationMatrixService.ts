@@ -17,6 +17,15 @@ import { AI_PROVIDERS, AI_QUERY_CLASSES, unavailableEvidence } from './providerI
 // visibility this is?" is answered the same way everywhere.
 import { resolveProbeIdentity, type ProbeObservationOutcome } from './aiVisibilityGrounding';
 import { getAllLLMProviders } from './providerRegistry';
+// Phase B — repeated grounded runs, budget pre-flight, per-attempt observations.
+import { withinBudget } from './costGovernance';
+import { getActiveScanId } from './scanBudgetContext';
+import {
+  clampGroundedRuns,
+  type KnownCompetitor,
+  type ObservationRun,
+  type VisibilityObservation,
+} from './visibilityObservation';
 import type {
   CanonicalScore,
   ConfidenceBand,
@@ -49,6 +58,11 @@ export type AICitationMatrixCell = {
   observed_count: number;
   evidence: EvidenceTrace;
   reason_unavailable: string | null;
+  /**
+   * Phase B (additive, optional) — the probe's per-attempt records, verbatim.
+   * Not read by any score; summarised by `summarizeVisibilityObservations`.
+   */
+  observations?: VisibilityObservation[];
 };
 
 export type AICitationMatrix = {
@@ -100,13 +114,63 @@ export type AICitationMatrix = {
     measurable_cells: number;
     structurally_unmeasurable_cells: number;
   };
+  /** Phase B (additive) — requested vs effective grounded runs and how they were planned. */
+  observation_run?: ObservationRun;
+  /** Phase B (additive) — the competitor list entities were matched against (as received). */
+  known_competitors?: KnownCompetitor[];
 };
 
 export type CitationMatrixInput = {
   brandName: string | null;
   domain: string | null;
   queries: Partial<Record<AIQueryClass, string[]>>;
+  /**
+   * Phase B — `ExecutionPolicy.groundedRunsPerQuery`. Absent / 1 = P0 exactly.
+   * Applied to retrieval-grounded providers only; clamped 1..5.
+   */
+  runsPerQuery?: number;
+  /** Phase B — the competitor list the caller already has; only used to label answer entities. */
+  knownCompetitors?: KnownCompetitor[];
 };
+
+/**
+ * Phase B — the run plan. At N = 1 nothing is reordered and no pre-flight runs
+ * (P0 behaviour). At N > 1:
+ *  • planned calls = grounded providers × queries × N + other providers × queries;
+ *  • inside an active scan budget, N is lowered deterministically to the largest
+ *    value whose plan fits, and the reduction is RECORDED (never silent);
+ *  • retrieval-grounded providers are probed first, so budget exhaustion cannot
+ *    starve the only providers able to produce a measurement.
+ */
+export function planObservationRun(params: {
+  requested: unknown;
+  providers: readonly Pick<LLMVisibilityProvider, 'retrieval_grounded'>[];
+  queries: Partial<Record<AIQueryClass, string[]>>;
+  scanId: string | null;
+}): ObservationRun {
+  const requested = clampGroundedRuns(params.requested ?? 1);
+  if (requested === 1) {
+    return { runs_requested: 1, runs_effective: 1, reduction_reason: null, planned_calls: null, grounded_first: false };
+  }
+  const perProvider = AI_QUERY_CLASSES.reduce((sum, c) => sum + (params.queries[c]?.length ?? 0), 0);
+  const grounded = params.providers.filter((p) => p.retrieval_grounded).length;
+  const others = params.providers.length - grounded;
+  const plan = (n: number) => grounded * perProvider * n + others * perProvider;
+  if (grounded === 0) {
+    return { runs_requested: requested, runs_effective: 1, reduction_reason: 'no_retrieval_grounded_provider', planned_calls: plan(1), grounded_first: false };
+  }
+  let effective = requested;
+  let reason: string | null = null;
+  if (params.scanId) {
+    while (effective > 1) {
+      const gate = withinBudget(params.scanId, { requests: plan(effective), cost_usd: null });
+      if (gate.ok) break;
+      reason = gate.reason ?? 'budget_exceeded';
+      effective -= 1;
+    }
+  }
+  return { runs_requested: requested, runs_effective: effective, reduction_reason: reason, planned_calls: plan(effective), grounded_first: true };
+}
 
 function mergeEvidence(traces: EvidenceTrace[]): EvidenceTrace {
   const sources = new Set<string>();
@@ -205,14 +269,24 @@ export async function buildAICitationMatrix(
   // D2 — the subject of the whole matrix, decided once, by the same seam the
   // adapters use. Whitespace-only input is not identity.
   const identity = resolveProbeIdentity(input);
+  const run = planObservationRun({ requested: input.runsPerQuery, providers: activeProviders, queries: input.queries, scanId: getActiveScanId() });
+  const knownCompetitors = (input.knownCompetitors ?? []).filter((c) => (c?.name ?? '').trim().length > 0);
+  // Phase B — grounded-first ONLY when N > 1; at N = 1 the P0 order is kept.
+  const probeOrder = run.grounded_first
+    ? [...activeProviders.filter((p) => p.retrieval_grounded), ...activeProviders.filter((p) => !p.retrieval_grounded)]
+    : activeProviders;
 
-  for (const provider of activeProviders) {
+  for (const provider of probeOrder) {
     for (const queryClass of AI_QUERY_CLASSES) {
       const queries = input.queries[queryClass] ?? [];
       const result = await provider.probe({
         provider: provider.id,
         query_class: queryClass,
         queries,
+        // Phase B — added only when they carry information, so the default probe
+        // object is exactly P0's.
+        ...(run.runs_effective > 1 && provider.retrieval_grounded ? { runs_per_query: run.runs_effective } : {}),
+        ...(knownCompetitors.length > 0 ? { known_competitors: knownCompetitors } : {}),
         // D2 — THE DEFECT, FIXED. This producer received `{ brandName, domain }`
         // and forwarded neither, so both adapters fell back to `''` / `null`,
         // `extractCitation` built an empty candidate set, and every mention came
@@ -236,8 +310,16 @@ export async function buildAICitationMatrix(
         observed_count: citationMentionFromResult(result).filter((m) => m.appeared).length,
         evidence: result.evidence,
         reason_unavailable: result.reason_unavailable,
+        ...(Array.isArray(result.observations) ? { observations: result.observations } : {}),
       });
     }
+  }
+  // Phase B — cells are always reported in the enumerated provider order, even
+  // when grounded providers were probed first.
+  if (run.grounded_first) {
+    const rank = new Map(activeProviders.map((p, i) => [p.id, i]));
+    const classRank = new Map(AI_QUERY_CLASSES.map((c, i) => [c, i]));
+    cells.sort((a, b) => (rank.get(a.provider)! - rank.get(b.provider)!) || (classRank.get(a.query_class)! - classRank.get(b.query_class)!));
   }
 
   const overallScore = buildAggregateCanonicalScore(cells);
@@ -303,6 +385,8 @@ export async function buildAICitationMatrix(
         ? cells.filter((c) => c.structurally_unmeasurable).length
         : cells.length,
     },
+    observation_run: run,
+    known_competitors: knownCompetitors,
   };
 }
 

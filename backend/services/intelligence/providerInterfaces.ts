@@ -17,6 +17,8 @@ import type {
 import type { ProbeObservationOutcome } from './aiVisibilityGrounding';
 
 export type { ProbeObservationOutcome };
+// Phase B — per-attempt observation records (type-only; no runtime cycle).
+import type { KnownCompetitor, VisibilityObservation } from './visibilityObservation';
 
 // ── AI Visibility ─────────────────────────────────────────────────────────────
 
@@ -84,6 +86,19 @@ export type AIVisibilityProbe = {
   // any paid call. See `resolveProbeIdentity`.
   brandName: string | null;
   domain: string | null;
+  /**
+   * Phase B — independent runs per query. Honoured ONLY by retrieval-grounded
+   * adapters (clamped 1..5); every other adapter runs once. Absent = 1, which
+   * is exactly the P0 behaviour (same calls, order and cache keys). Only run 0
+   * feeds `mentions` / `citation_rate` / state, so repeats never change a score;
+   * runs 1..N-1 appear only in `observations`.
+   */
+  runs_per_query?: number;
+  /**
+   * Phase B — the competitor list the matrix already received. Used only to
+   * label entities in the answer text; no name is ever extracted outside it.
+   */
+  known_competitors?: KnownCompetitor[];
 };
 
 export type AIVisibilityProbeResult = {
@@ -109,6 +124,17 @@ export type AIVisibilityProbeResult = {
   mentions: CitationMention[];
   evidence: EvidenceTrace;
   reason_unavailable: string | null;
+  /**
+   * Phase B (additive, optional) — one record per query × run ATTEMPT,
+   * including failed and skipped attempts. Absent on probes refused before any
+   * attempt (no provider / no queries / no identity) and on results produced
+   * before Phase B. Never an input to `citation_rate` or any score.
+   */
+  observations?: VisibilityObservation[];
+  /** Phase B — runs per query this adapter scheduled (1 unless retrieval-grounded). */
+  runs_requested?: number;
+  /** Phase B — attempts that returned an answer (fresh or cached). */
+  runs_completed?: number;
 };
 
 export interface LLMVisibilityProvider {
