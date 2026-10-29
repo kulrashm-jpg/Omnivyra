@@ -4,6 +4,16 @@ import { ownedDbTable } from '../db/writeOwner';
 // CKRE-001 §1 — boundary instrumentation for the Website Intelligence crawl
 // (reuses the AUTH-001 event infra; correlation ties to the company journey).
 import { emitCrawlEvent, resolveCrawlCorrelationId } from './crawl/crawlEventService';
+// Technical readiness — additive evidence: JSON-LD validation (pure, no fetch) and the outcome-
+// preserving site-file probe (robots.txt status/rules, llms.txt, llms-full.txt).
+import { validateJsonLdBlocks, type JsonLdValidation } from './technicalReadiness/jsonLdValidation';
+import {
+  probeLlmsFiles,
+  probeSiteFile,
+  robotsObservationFromProbe,
+  type LlmsTxtObservation,
+  type RobotsObservation,
+} from './technicalReadiness/siteFilesProbe';
 // D2 — canonical reachability vocabulary. One classifier, used by the crawler and
 // by the checks that read what it wrote.
 import {
@@ -101,8 +111,27 @@ export interface PageSignals {
     security: { hsts: boolean; csp: boolean; x_frame_options: boolean; x_content_type_options: boolean };
     security_header_count: number;
   } | null;
+  /**
+   * Technical readiness — additive, optional. Absence means "not measured by this crawl" (every
+   * row crawled before these existed), never "none found".
+   *   • `jsonld_validation` — syntax + required-property check of this page's JSON-LD blocks.
+   *   • `canonical_href`    — the `<link rel="canonical">` href as written (null: no tag).
+   *   • `x_robots_tag`      — the `X-Robots-Tag` response header (null: header absent).
+   */
+  jsonld_validation?: JsonLdValidation;
+  canonical_href?: string | null;
+  x_robots_tag?: string | null;
   /** Domain-level signals attached to the root page only (robots.txt / sitemap.xml). */
-  site?: { robots_txt: boolean; sitemap_xml: boolean; sitemap_url_count: number };
+  site?: {
+    robots_txt: boolean;
+    sitemap_xml: boolean;
+    sitemap_url_count: number;
+    /** Technical readiness (additive) — robots.txt fetch outcome, status and bounded parsed rules. */
+    robots?: RobotsObservation;
+    /** Technical readiness (additive) — llms.txt / llms-full.txt presence and structure. */
+    llms?: LlmsTxtObservation;
+    llms_full?: LlmsTxtObservation;
+  };
 }
 
 export interface CrawlPageResult {
@@ -548,7 +577,20 @@ function extractPageSignals(rawHtml: string, metaTags: Record<string, string>, h
     // PO-3 — Organization-scoped identity. Parsed, never regexed; see the field docs.
     ...extractOrganizationIdentity(ldBlocks),
     response,
+    // Technical readiness — additive evidence from the SAME markup + headers (no extra request).
+    jsonld_validation: validateJsonLdBlocks(ldBlocks),
+    canonical_href: extractCanonicalHref(rawHtml),
+    x_robots_tag: headers ? (hv('x-robots-tag')?.slice(0, 300) ?? null) : null,
   };
+}
+
+/** The href of the first `<link rel="canonical">`, as written (≤500 chars); null when absent. */
+function extractCanonicalHref(rawHtml: string): string | null {
+  const tag = /<link\b[^>]*\brel=["']?canonical["']?[^>]*>/i.exec(rawHtml)?.[0];
+  if (!tag) return null;
+  const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+  const value = (href?.[1] ?? href?.[2] ?? href?.[3] ?? '').trim();
+  return value ? decodeHtmlEntities(value).slice(0, 500) : null;
 }
 
 /** BETA-ROADMAP-EXEC-002 — fetch robots.txt + sitemap.xml once per domain (2 cheap GETs; degrades to absent). */
@@ -566,17 +608,28 @@ async function fetchSiteFiles(rootUrl: string, timeoutMs: number): Promise<PageS
       return (await readCapped(r)).toString('utf8');
     } catch { return null; }
   };
-  const robots = await getUrl(`${origin}/robots.txt`);
+  // Technical readiness — robots.txt goes through the outcome-preserving probe (same UA, same
+  // 10 MiB cap, same timeout). The legacy string below is derived EXACTLY as `getUrl` derived it:
+  // the body of a 200–399 response that was read, otherwise null — so `robots_txt`, the declared
+  // sitemap lookup and every legacy boolean keep their values.
+  const robotsProbe = await probeSiteFile(`${origin}/robots.txt`, { timeoutMs, maxBytes: 10 * 1024 * 1024, userAgent: 'OmnivyraBot/1.0 (+https://omnivyra.com)' });
+  // The two NEW requests (llms.txt, llms-full.txt) run concurrently with the legacy sitemap chain,
+  // so they add no sequential latency. They never throw.
+  const llmsPromise = probeLlmsFiles(origin, timeoutMs, 'OmnivyraBot/1.0 (+https://omnivyra.com)').catch(() => null);
+  const robots = robotsProbe.status != null && robotsProbe.status >= 200 && robotsProbe.status < 400 ? robotsProbe.body : null;
   let sitemap = await getUrl(`${origin}/sitemap.xml`);
   // robots.txt may point at a differently-named sitemap.
   if (sitemap == null && robots) {
     const declared = /Sitemap:\s*(\S+)/i.exec(robots)?.[1];
     if (declared) { sitemap = await getUrl(declared); }
   }
+  const llms = await llmsPromise;
   return {
     robots_txt: robots != null && robots.trim().length > 0,
     sitemap_xml: sitemap != null && /<(?:urlset|sitemapindex)\b/i.test(sitemap),
     sitemap_url_count: sitemap ? (sitemap.match(/<loc>/gi) || []).length : 0,
+    robots: robotsObservationFromProbe(robotsProbe),
+    ...(llms ? { llms: llms.llms, llms_full: llms.llms_full } : {}),
   };
 }
 
