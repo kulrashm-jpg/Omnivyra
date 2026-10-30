@@ -71,7 +71,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { classifyLedger } = require('./lib/migrationLedger');
+const crypto = require('crypto');
+const { classifyLedger, HISTORICAL_VERSION_MAP } = require('./lib/migrationLedger');
 
 // Lazy-load .env.local when running from a shell that didn't load it
 function loadEnvLocal() {
@@ -988,8 +989,9 @@ async function main() {
   let ledgerDesyncDetected = false;
   let ledgerProbeNote = null;
   try {
+    // statements_md5 is the fingerprint HISTORICAL_VERSION_MAP pins; never the text.
     const ledgerRes = await db.query(
-      'SELECT version, name FROM supabase_migrations.schema_migrations ORDER BY version');
+      "SELECT version, name, md5(array_to_string(statements, E'\\n')) AS statements_md5 FROM supabase_migrations.schema_migrations ORDER BY version");
 
     // Only top-level `.sql` files are candidates — `rollbacks/` and `_`-prefixed
     // directories are never applied.
@@ -1001,7 +1003,13 @@ async function main() {
       const files = fs.readdirSync(migrationsDir, { withFileTypes: true })
         .filter((d) => d.isFile() && d.name.endsWith('.sql'))
         .map((d) => d.name);
-      const c = classifyLedger({ files, ledgerRows: ledgerRes.rows });
+      // Hash only the files the historical version map pins.
+      const fileDigests = {};
+      for (const { file } of HISTORICAL_VERSION_MAP) {
+        const p = path.join(migrationsDir, file);
+        if (fs.existsSync(p)) fileDigests[file] = crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+      }
+      const c = classifyLedger({ files, ledgerRows: ledgerRes.rows, fileDigests });
       ledgerDesyncDetected = c.attention;
       const cap = (list) => list.slice(0, 50);
       ledgerProbeNote = {
@@ -1012,6 +1020,8 @@ async function main() {
         ledger_rows: c.ledger_rows,
         recorded_identified: c.recorded_identified.length,
         recorded_ambiguous: c.recorded_ambiguous,
+        recorded_by_version_map: c.recorded_by_version_map,
+        version_map_violations: c.version_map_violations,
         orphans: c.orphans,
         name_mismatches: c.name_mismatches,
         unrecorded_unique: c.unrecorded_unique.length,
@@ -1134,7 +1144,8 @@ async function main() {
   if (ledgerDesyncDetected) {
     const why = ledgerProbeNote && ledgerProbeNote.verified === false
       ? `the ledger could not be verified (${ledgerProbeNote.reason})`
-      : `${(ledgerProbeNote && ledgerProbeNote.orphans ? ledgerProbeNote.orphans.length : 0)} recorded version(s) have no local migration file`;
+      : `${(ledgerProbeNote && ledgerProbeNote.orphans ? ledgerProbeNote.orphans.length : 0)} recorded version(s) have no local migration file, ` +
+        `${(ledgerProbeNote && ledgerProbeNote.version_map_violations ? ledgerProbeNote.version_map_violations.length : 0)} historical version-map exception(s) failed their evidence check`;
     process.stderr.write(
       '\n[WARN] UNSAFE_MIGRATION_LEDGER_STATE — ' + why + '.\n' +
       '       Probe data: ' + JSON.stringify(ledgerProbeNote) + '\n' +
