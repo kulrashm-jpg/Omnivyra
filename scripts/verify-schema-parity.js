@@ -127,46 +127,67 @@ const REQUIRED_COLUMNS = [
   // scheduled_posts — idempotency for retries / resumes (BLOCKING: scheduler INSERTs reference it)
   { severity: 'BLOCKING', table: 'scheduled_posts',     column: 'idempotency_key',     motivation: 'INSERT … ON CONFLICT (idempotency_key) DO NOTHING — without it, retries duplicate posts.' },
 
-  // active_leads — Phase 1 of the Active Leads object model
-  // (migration 20260817_active_leads_object_model.sql). Entries
-  // are INFO in Phase 1 because no runtime code writes the table
-  // yet — only the operator backfill script does. Phase 2 (APIs)
-  // upgrades the user-mutated columns to BLOCKING.
+  // ── active_leads — the 20260817 Active Leads object model (19 expectations) ──
   //
-  // KNOWN NAME COLLISION — these INFO findings are expected in production.
-  // Production `active_leads` is the LEGACY lead-runs table
+  // KNOWN NAME COLLISION. Production `active_leads` is the LEGACY lead-runs table
   // (supabase/_schema/baseline.sql: run_id, company_id, bucket, …). 20260817 uses
   // CREATE TABLE IF NOT EXISTS, so it was a no-op there, and its index on
   // organization_id cannot build — which is also why
   // opportunity_feed_items.active_lead_id (added later in the same file) is absent.
-  // Do NOT "fix" this with ALTER TABLE: that grafts two designs onto one table and
-  // the NOT NULL foreign keys cannot hold for existing rows. It is an owner design
-  // decision. Runtime impact today: snapshotRouteHandler reads the legacy shape and
-  // works; leadIntelligenceReadService (since 1aa7bfac, 2026-06-30) reads the new
-  // shape fail-soft and returns [] — and no runtime writer exists for either shape.
-  { severity: 'INFO', table: 'active_leads', column: 'organization_id',   motivation: 'Tenant scoping for the Lead object.' },
-  { severity: 'INFO', table: 'active_leads', column: 'contact_id',        motivation: 'Person anchor — half of the rollup key.' },
-  { severity: 'INFO', table: 'active_leads', column: 'opportunity_type',  motivation: 'Other half of the rollup key.' },
-  { severity: 'INFO', table: 'active_leads', column: 'status',            motivation: 'Spec status enum (new/reviewing/contacted/qualified/won/lost/dismissed/snoozed).' },
-  { severity: 'INFO', table: 'active_leads', column: 'owner_user_id',     motivation: 'Spec: assigned owner; nullable = unassigned.' },
-  { severity: 'INFO', table: 'active_leads', column: 'intent_score',      motivation: 'Rollup score from attached signals.' },
-  { severity: 'INFO', table: 'active_leads', column: 'icp_score',         motivation: 'Rollup score from attached signals.' },
-  { severity: 'INFO', table: 'active_leads', column: 'confidence_score',  motivation: 'Rollup score from attached signals.' },
-  { severity: 'INFO', table: 'active_leads', column: 'total_score',       motivation: 'Rollup score from attached signals — primary triage sort.' },
-  { severity: 'INFO', table: 'active_leads', column: 'source_platforms',  motivation: 'Deduped platform union across attached signals.' },
-  { severity: 'INFO', table: 'active_leads', column: 'signal_count',      motivation: 'Denormalized signal count for list rendering.' },
-  { severity: 'INFO', table: 'active_leads', column: 'first_seen_at',     motivation: 'Spec: First Seen.' },
-  { severity: 'INFO', table: 'active_leads', column: 'last_seen_at',      motivation: 'Spec: Last Seen.' },
-  { severity: 'INFO', table: 'active_leads', column: 'last_activity_at',  motivation: 'Spec: Last Activity — primary triage sort.' },
-  { severity: 'INFO', table: 'active_leads', column: 'company_name',      motivation: 'Spec: Company (v1 plain text).' },
-  { severity: 'INFO', table: 'active_leads', column: 'snoozed_until',     motivation: 'Snooze expiry; unsnooze pass flips status back to reviewing.' },
-  { severity: 'INFO', table: 'active_leads', column: 'status_changed_at', motivation: 'Status audit.' },
-  { severity: 'INFO', table: 'active_leads', column: 'status_changed_by', motivation: 'Status audit attribution.' },
-
-  // opportunity_feed_items — attachment column added by the
-  // same migration. INFO in Phase 1; Phase 2 upgrades to BLOCKING
-  // (auto-attach trigger / service path).
-  { severity: 'INFO', table: 'opportunity_feed_items', column: 'active_lead_id', motivation: 'Link to active_leads. NULL = not yet rolled up.' },
+  // Do NOT "fix" this with ALTER TABLE: that grafts two designs onto one table.
+  //
+  // DISPOSITION (prospect provenance contract, 2026-10-30 —
+  // docs/architecture/PROSPECT-PROVENANCE-CONTRACT.md). The 19 expectations
+  // originally listed here (all INFO, added in 0d7090ff with 20260817) are
+  // resolved as follows. Severity of every OTHER entry in this manifest is
+  // untouched by this change.
+  //
+  // REPLACED (5) — the capability is real, its storage moved to the canonical,
+  // append-only contribution ledger `prospect_source_contributions`, whose
+  // entries further down carry the expectation at BLOCKING:
+  //   active_leads.organization_id           → prospect_source_contributions.organization_id
+  //   active_leads.contact_id                → prospect_source_contributions.contact_id
+  //   active_leads.source_platforms          → prospect_source_contributions.platform
+  //   active_leads.first_seen_at             → prospect_source_contributions.observed_at
+  //   opportunity_feed_items.active_lead_id  → prospect_source_contributions.opportunity_feed_item_id
+  //
+  // RETIRED (8) — intent_score, icp_score, confidence_score, total_score,
+  // signal_count, last_seen_at, last_activity_at, company_name. Evidence note:
+  //   - production (read-only, orchestrator-verified 2026-10-30): 0 rows and 0
+  //     writes in active_leads, active_lead_runs and opportunity_feed_items;
+  //   - no runtime writer of the 20260817 shape exists (only the operator script
+  //     scripts/operator/db/backfill-active-leads.ts, which fails at its first
+  //     query in production on opportunity_feed_items.active_lead_id);
+  //   - the only runtime reader (leadIntelligenceReadService, filter on
+  //     organization_id) has never returned a row: in production the filter is
+  //     42703 and the read fails soft to [];
+  //   - 20260817_active_leads_object_model.sql was never applied in production
+  //     and never recorded in the ledger;
+  //   - intent_score / first_seen_at / last_seen_at "passed" only because the
+  //     legacy table has same-named columns of a different meaning (0–100
+  //     NOT NULL DEFAULT 0; nullable run sightings) — false greens;
+  //   - canonical equivalents already exist: the four scores are
+  //     prospect_score_evaluations.score_intent / score_icp / confidence /
+  //     score_overall (0..1 — see ScoreScale in lib/prospectProvenance/contract.ts;
+  //     never compared with the legacy 0–100 scale implicitly); company_name is
+  //     prospect_accounts.name via unified_persons.account_id; signal_count,
+  //     last_seen_at and last_activity_at are derivable from contributions
+  //     (count / max(observed_at)).
+  //
+  // REMAINING (6) — the opportunity-WORKFLOW columns below stay PRESENT at INFO.
+  // They describe triage workflow (status, owner, snooze, status audit), not
+  // provenance, and their fate depends on the prospect lifecycle mapping.
+  // TODO(prospect-provenance / Agent 5 lifecycle mapping): reconcile each of these
+  // six against the lifecycle model (prospect_lifecycle_transitions / opportunity
+  // workflow tables) and REPLACE or RETIRE them with evidence. Until then they
+  // remain INFO findings in production (the legacy table has none of them), so
+  // strict predeploy stays honestly non-green on this block.
+  { severity: 'INFO', table: 'active_leads', column: 'opportunity_type',  motivation: 'Roll-up key of the 20260817 design. TODO(Agent 5 lifecycle mapping): signal type is reachable per item via opportunity_feed_items.opportunity_type.' },
+  { severity: 'INFO', table: 'active_leads', column: 'status',            motivation: 'Spec status enum (new/reviewing/contacted/qualified/won/lost/dismissed/snoozed). TODO(Agent 5 lifecycle mapping).' },
+  { severity: 'INFO', table: 'active_leads', column: 'owner_user_id',     motivation: 'Spec: assigned owner; nullable = unassigned. TODO(Agent 5 lifecycle mapping).' },
+  { severity: 'INFO', table: 'active_leads', column: 'snoozed_until',     motivation: 'Snooze expiry; unsnooze pass flips status back to reviewing. TODO(Agent 5 lifecycle mapping).' },
+  { severity: 'INFO', table: 'active_leads', column: 'status_changed_at', motivation: 'Status audit. TODO(Agent 5 lifecycle mapping).' },
+  { severity: 'INFO', table: 'active_leads', column: 'status_changed_by', motivation: 'Status audit attribution. TODO(Agent 5 lifecycle mapping).' },
 
   // opportunity_feed_items — PR-OPA-1 verbatim signal excerpt for the
   // "What was said" UI block. WARN: missing column means new rows
@@ -376,6 +397,18 @@ const REQUIRED_COLUMNS = [
   { severity: 'BLOCKING', table: 'source_records', column: 'ingestion_run_id',  motivation: 'A7P-C9 (20261022000000) — in the insert payload on that same unguarded path. NOTE: this entry detects the column being ABSENT; it cannot detect 20261022000000\'s uuid→text conversion, which the column-existence probe is structurally blind to. Production writers already supply non-UUID values, so an unconverted column fails at insert with 22P02, not 42703.' },
   { severity: 'WARN', table: 'source_records', column: 'payload_hash',       motivation: 'Change detection for a re-seen provider record; part of the LI-2 create, so the anchor above already detects an unapplied migration.' },
   { severity: 'WARN', table: 'source_records', column: 'observation_count',  motivation: 'How many times a record has been re-seen; read-modify-written on the conflict path.' },
+  // Prospect provenance (contract 2026-10-30). Added to an EXISTING table by a
+  // LATER migration, so each column is individually missable under a partial
+  // ledger (rule (a) above) and needs its own entry. BLOCKING on the same footing
+  // as organization_id / ingestion_run_id: the contract makes every ingestion
+  // path set them EXPLICITLY in the source_records insert payload, which runs on
+  // the unguarded persistObservation port — an absent column is PGRST204/42703
+  // at INSERT, after a billed provider call, for every ingestion.
+  // ASSUMPTION until the ingestion workstreams land: if an ingestion path ends
+  // up NOT naming a column in its payload, that column belongs at WARN.
+  { severity: 'BLOCKING', table: 'source_records', column: 'source_category', motivation: 'Provenance contract: the discovery classification (12-value vocabulary, CHECK-constrained). Named in every ingestion path\'s source_records insert; absent, ingestion throws at INSERT on the unguarded persistObservation port.' },
+  { severity: 'BLOCKING', table: 'source_records', column: 'platform',        motivation: 'Provenance contract: the originating platform/provider (linkedin, reddit, apollo, hubspot…). Same insert payload, same unguarded path.' },
+  { severity: 'BLOCKING', table: 'source_records', column: 'source_url',      motivation: 'Provenance contract: where the original evidence lives. Same insert payload, same unguarded path.' },
 
   // ── prospect_icps / prospect_icp_versions — D1 (20261012000000) ──────────
   // BLOCKING, despite `getRatifiedIcp` returning null for "nothing ratified".
@@ -583,6 +616,59 @@ const REQUIRED_COLUMNS = [
   // not to be fail-open, these two belong at BLOCKING.
   { severity: 'WARN', table: 'integration_credentials', column: 'company_id',   motivation: 'A3M (20261014000000): the tenant a provider credential belongs to. Predicate on readTenantProviderCredentials; absent, no tenant can own an enrichment provider key and every source falls back to the platform-wide env var — the A3V defect this migration exists to close.' },
   { severity: 'WARN', table: 'integration_credentials', column: 'provider_key', motivation: 'A3M (20261014000000): which provider the credential is for. Second half of the (company_id, provider_key, credential_key) tenant credential identity.' },
+
+  // ══ Prospect provenance (contract 2026-10-30) ═════════════════════════════
+  //
+  // docs/architecture/PROSPECT-PROVENANCE-CONTRACT.md; names are contract
+  // (lib/prospectProvenance/contract.ts PROVENANCE_DB).
+  //
+  // ── prospect_source_contributions — append-only per-lead source ledger ────
+  // BLOCKING. The table is created by ONE migration, so organization_id is the
+  // anchor that detects it being unapplied; the remaining entries are the five
+  // expectations REPLACED from the retired active_leads block (contact_id,
+  // platform, observed_at, opportunity_feed_item_id, and organization_id itself)
+  // plus the contract identity columns. Why BLOCKING and not WARN like the
+  // fail-open Writer block: backend/services/prospectProvenance/contributionWriter.ts
+  // is the ONLY write path, it INSERTs a payload naming every one of these
+  // columns, and it RETURNS the failure (it neither swallows nor degrades) —
+  // so an absent table or column fails every provenance write, and an
+  // observation's originating source and observed_at cannot be reconstructed
+  // later. Losing provenance permanently is the failure the owner requirement
+  // forbids, not a degrade.
+  //
+  // RELEASE CONSEQUENCE (intended): until the provenance migration is applied in
+  // production these entries are BLOCKING findings, the verifier exits 1 and
+  // predeploy BLOCKS. See docs/architecture/PROSPECT-PROVENANCE-RELEASE-CHECKLIST.md.
+  { severity: 'BLOCKING', table: 'prospect_source_contributions', column: 'organization_id',          motivation: 'Tenant (= companies.id) and the anchor detecting the provenance migration being unapplied. REPLACES active_leads.organization_id.' },
+  { severity: 'BLOCKING', table: 'prospect_source_contributions', column: 'canonical_lead_id',        motivation: 'The prospect a contribution belongs to (composite FK to canonical_leads(id, company_id)); part of uq_psc_org_lead_external_ref.' },
+  { severity: 'BLOCKING', table: 'prospect_source_contributions', column: 'contribution_role',        motivation: 'originating | contributing — the column the one-originating partial index is predicated on.' },
+  { severity: 'BLOCKING', table: 'prospect_source_contributions', column: 'source_category',          motivation: 'Discovery classification (12-value CHECK vocabulary); never inferred from the display source.' },
+  { severity: 'BLOCKING', table: 'prospect_source_contributions', column: 'external_ref',             motivation: 'Namespaced <provider>:<id>; the per-lead idempotency key in uq_psc_org_lead_external_ref.' },
+  { severity: 'BLOCKING', table: 'prospect_source_contributions', column: 'observed_at',              motivation: 'When the SOURCE observed the prospect (not ingestion time). REPLACES active_leads.first_seen_at (the lead-level origin time is the originating contribution\'s observed_at).' },
+  { severity: 'BLOCKING', table: 'prospect_source_contributions', column: 'contact_id',               motivation: 'The platform handle that produced the signal (composite FK to contacts). REPLACES active_leads.contact_id.' },
+  { severity: 'BLOCKING', table: 'prospect_source_contributions', column: 'platform',                 motivation: 'Originating platform/provider per contribution. REPLACES active_leads.source_platforms (the deduped union is derivable).' },
+  { severity: 'BLOCKING', table: 'prospect_source_contributions', column: 'opportunity_feed_item_id', motivation: 'Typed signal → lead link (composite FK to opportunity_feed_items; must survive the feed item\'s retention delete). REPLACES opportunity_feed_items.active_lead_id.' },
+
+  // ── lead_intelligence — the durable unified lead store (20260629000000) ───
+  // The only landing point for MarketPulse / community / engagement / website /
+  // CRM adoption (adoptLead), and the store the unified reader lists. WARN, by
+  // the same rule as the Writer block above: every path is FAIL-OPEN —
+  // leadIntelligenceRepository.upsertCanonicalLead returns null on error,
+  // listCanonicalLeads / getCanonicalLead return [] / null, and adoption is
+  // fire-and-forget. An absent column therefore makes every adoption write fail
+  // SILENTLY (the upsert names all of these columns; PostgREST rejects the whole
+  // row) and the unified view loses those sources — a degrade that no request
+  // surfaces, which is exactly why the gate must report it, but not a throw on a
+  // tenant request, so not BLOCKING. Single-migration table: company_id is the
+  // anchor; the others are the provenance columns the reader projects
+  // (rowToView) and the predicates / order key it filters on.
+  { severity: 'WARN', table: 'lead_intelligence', column: 'company_id',        motivation: 'Tenant predicate on every lead_intelligence read and the anchor detecting the table being absent; in the adoption upsert payload.' },
+  { severity: 'WARN', table: 'lead_intelligence', column: 'dedupe_key',        motivation: 'Half of the upsert conflict target (company_id, dedupe_key); absent, every adoption upsert fails and is swallowed.' },
+  { severity: 'WARN', table: 'lead_intelligence', column: 'source',            motivation: 'Display source (CanonicalLeadSource) — the provenance label the unified view, stats.bySource and exports group by; `.eq(\'source\')` filter.' },
+  { severity: 'WARN', table: 'lead_intelligence', column: 'source_table',      motivation: 'Originating table of the adopted lead (sourceRef.table in the unified view).' },
+  { severity: 'WARN', table: 'lead_intelligence', column: 'source_id',         motivation: 'Originating row id of the adopted lead (sourceRef.id in the unified view).' },
+  { severity: 'WARN', table: 'lead_intelligence', column: 'occurred_at',       motivation: 'When the source event happened; the order() key of listCanonicalLeads.' },
+  { severity: 'WARN', table: 'lead_intelligence', column: 'unified_person_id', motivation: 'Person anchor; `.eq(\'unified_person_id\')` predicate on listCanonicalLeads.' },
 ];
 
 // ══ GAP-B — the indexes that ARE the idempotency mechanism ════════════════
@@ -676,6 +762,30 @@ const REQUIRED_INDEXES = [
     keys: ['organization_id', 'channel', 'governance_type', 'person_id', 'target_normalized'],
     motivation:
       'LI-3B (20261003000000) canonical governance key, PARTIAL on `revoked_at IS NULL` (ADR §13) — which is why recordContactGovernance INSERTs and catches 23505 rather than using ON CONFLICT, since PostgREST cannot infer a partial index and gets 42P10. Without it a repeated unsubscribe webhook writes a second live row; resolveByCanonicalKey then `.limit(1)`s an arbitrary one, and revokeContactGovernance — which revokes by id — reports `revoked: true` while a duplicate live row keeps the person suppressed. A consent restoration that silently does not take effect is a compliance record that lies.',
+  },
+  // Prospect provenance (contract 2026-10-30; names are contract —
+  // lib/prospectProvenance/contract.ts PROVENANCE_DB). contributionWriter.ts
+  // INSERTs and branches on 23505 by constraint NAME, exactly like the three
+  // above, so both indexes are the "silently persists wrong state" kind.
+  {
+    severity: 'BLOCKING',
+    table: 'prospect_source_contributions',
+    index: 'uq_psc_org_lead_external_ref',
+    unique: true,
+    partial: false,
+    keys: ['organization_id', 'canonical_lead_id', 'external_ref'],
+    motivation:
+      'Provenance idempotency: one contribution per (tenant, lead, namespaced source event). recordSourceContribution maps a 23505 naming this index to `duplicate`; without it a retried or re-synced source event APPENDS a second contribution to an append-only ledger that can never be cleaned by UPDATE/DELETE (service_role has neither), and counts of contributing sources become fiction. Nothing errors.',
+  },
+  {
+    severity: 'BLOCKING',
+    table: 'prospect_source_contributions',
+    index: 'uq_psc_one_originating_per_lead',
+    unique: true,
+    partial: true,
+    keys: ['canonical_lead_id', 'contribution_role'],
+    motivation:
+      'Exactly ONE originating contribution per canonical lead, PARTIAL on `contribution_role = \'originating\'` — which is why the writer INSERTs and catches 23505 (PostgREST cannot infer a partial index; ON CONFLICT answers 42P10). Without it a race, or a resync that believes it created the lead, records a SECOND originator and "where was this prospect first discovered" has two answers. A non-partial index of this name would instead forbid every second contribution. Nothing errors in either case.',
   },
 ];
 

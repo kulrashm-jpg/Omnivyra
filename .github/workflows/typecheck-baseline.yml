@@ -154,6 +154,9 @@ jobs:
             backend/tests/unit/predeployCheckGateHonesty.test.ts
             backend/tests/unit/schemaParityVerifierContract.test.ts
             backend/tests/unit/migrationLedgerClassifier.test.ts
+            # Prospect provenance manifest change: runtime exit contract (stubbed
+            # pg), strict-mode mapping, no-downgrade snapshot, ledger pin.
+            backend/tests/unit/piProvSchemaGateContract.test.ts
           )
           for s in "${SUITES[@]}"; do
             test -f "$s" || { echo "Gated suite missing — renamed, moved or deleted: $s"; exit 1; }

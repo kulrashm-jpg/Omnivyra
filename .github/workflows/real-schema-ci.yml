@@ -30,6 +30,17 @@ on:
       - 'pages/api/outreach/**'
       - 'backend/services/identityResolutionService.ts'
       - 'backend/queue/jobProcessors/whatsappWebhookProcessor.ts'
+      # Prospect provenance programme: the unified lead store/reader and the
+      # provenance contract + contribution writer. The pi_prov_* realschema
+      # suites are already covered by 'backend/tests/realschema/**' above; they
+      # are listed explicitly so a later narrowing of that entry cannot
+      # silently drop them.
+      - 'lib/leadIntelligence/**'
+      - 'lib/prospectProvenance/**'
+      - 'backend/services/leadIntelligence/**'
+      - 'backend/services/prospectProvenance/**'
+      - 'pages/api/lead-intelligence/**'
+      - 'backend/tests/realschema/pi_prov_*'
       - 'jest.realschema.config.js'
       - '.github/workflows/real-schema-ci.yml'
   push:
