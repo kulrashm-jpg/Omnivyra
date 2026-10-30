@@ -731,12 +731,15 @@ describe('WS-4B attest · the administrator must explicitly confirm', () => {
     },
   );
 
+  // Each row is an [override, label] pair: the label is what `%s` prints in
+  // the case name, so the callback declares both tuple elements even though
+  // only the override is read in the body.
   it.each([
     [{ candidateAuthorId: undefined }, 'an absent candidate'],
     [{ candidateAuthorId: 'not-a-uuid' }, 'a malformed candidate'],
     [{ statement: undefined }, 'an absent statement'],
     [{ statement: '   ' }, 'a blank statement'],
-  ])('%#: %s is a 400 and nothing is written', async (over) => {
+  ])('%#: %s is a 400 and nothing is written', async (over, _label) => {
     const res = await attest(over as Record<string, unknown>);
 
     expect(res._status).toBe(400);
@@ -863,6 +866,7 @@ describe('WS-4B registry GET · the tenant’s own rows, and an unreadable one i
     expect(res._json.entries).toEqual([]);
   });
 
+  // [answer, label] rows again: the label is the `%s` in the case name.
   it.each([
     [{ ok: false, reason: 'store_unavailable', detail: 'down' }, 'a refusal'],
     [undefined, 'an unreadable shape'],
@@ -876,7 +880,7 @@ describe('WS-4B registry GET · the tenant’s own rows, and an unreadable one i
     // repository returns; they exercise an envelope it never emits.
     [{ legible: false, detail: 'relation does not exist', identities: [] }, 'a declared failure carrying an empty array'],
     [{ legible: false, detail: 'schema cache miss' }, 'a declared failure with no array at all'],
-  ])('%#: %s is 503 and NEVER an empty 200', async (answer) => {
+  ])('%#: %s is 503 and NEVER an empty 200', async (answer, _label) => {
     listActiveAttestedIdentities.mockResolvedValue(answer);
 
     const res = await registry({ method: 'GET' });

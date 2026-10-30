@@ -1008,7 +1008,11 @@ describe('WS-3G · the capture seam, wired to the verification', () => {
       // carried but not yet read, and NOTHING is stored on a refusal.
       expect(res).toMatchObject({ ok: false, refusal: 'inadmissible_evidence' });
       expect(recorded).toEqual([]);
-      const rejections = (res as { rejections: Array<{ field: string; reason: string }> }).rejections;
+      // Narrowed by the discriminant, not cast: the refusal half of
+      // `RecordProblemObservationResult` carries `rejections` as a
+      // `readonly ProblemObservationRejection[]`, and the cast this replaces
+      // re-declared it as a MUTABLE array — a shape the union never has.
+      const rejections = res.ok === false ? res.rejections : [];
       expect(rejections.some((r) => r.field === 'origin' && /engagement_messages/.test(r.reason))).toBe(true);
     }
   });

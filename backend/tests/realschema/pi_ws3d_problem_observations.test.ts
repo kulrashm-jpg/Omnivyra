@@ -1,18 +1,21 @@
 /**
  * PI WS-3D — `prospect_problem_observations`, against real PostgreSQL.
  *
- * ─── THIS SUITE HAS NOT BEEN RUN ──────────────────────────────────────────
- * It is AUTHORED AND UNEXECUTED. The environment it was written in has no
- * PostgreSQL server and no Docker daemon, and the embedded-Postgres harness is
- * not present in this checkout, so `backend/tests/realschema/setup.ts` cannot
- * connect. Migration `20270105000000_pi_prospect_problem_observations.sql` is
- * likewise AUTHORED AND UNAPPLIED — in this environment, in any local database
- * and in production. Nothing below has been observed to pass, and no claim in
- * this file should be read as evidence until it has been run against a database
- * with that migration applied.
+ * ─── WHAT THIS SUITE REQUIRES ─────────────────────────────────────────────
+ * Every assertion below reads the live catalog or a real SQLSTATE, so the suite
+ * is only meaningful against a database that already has migration
+ * `20270105000000_pi_prospect_problem_observations.sql` applied. It is the
+ * applied migration that is under test here, not our description of it.
  *
- * It is included anyway because the properties it covers cannot be covered any
- * other way, and the alternative to an unrun suite is no suite at all:
+ * `backend/tests/realschema/setup.ts` requires `W6_DB_URL` and REFUSES any
+ * managed host, so the database must be a disposable one — a local PostgreSQL
+ * built by `scripts/ci/real-schema-ci.sh`, or an ephemeral CI instance. Point
+ * it at a hosted project and the harness throws instead of connecting; leave
+ * `W6_DB_URL` unset and it fails loudly rather than degrading into a suite that
+ * proves nothing. Treat a run as evidence only for the database it ran against.
+ *
+ * The properties it covers cannot be covered any other way, because each one is
+ * a fact about the server rather than about our code:
  *
  *   · nine CHECK constraints, including the one-subject pairing that makes
  *     `entity_type` and the populated leg agree;
