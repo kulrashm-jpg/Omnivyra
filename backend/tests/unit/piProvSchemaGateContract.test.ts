@@ -453,6 +453,12 @@ const ACTIVE_LEADS_TO_LIFECYCLE: Array<[string, string, string]> = [
   ['owner_user_id', 'opportunity_assignments', 'assigned_to_user_id'],
   ['snoozed_until', 'opportunity_dispositions', 'snoozed_until'],
 ];
+/**
+ * Closure-D (20270109000003): no column entry — the migration adds triggers
+ * and FKs only, which a column probe cannot see. Its one manifest addition is
+ * the index uq_opp_assignment_one_active (pinned below).
+ */
+const CLOSURE_D_ENTRIES: string[] = [];
 const ACTIVE_LEADS_RETIRED = ['intent_score', 'icp_score', 'confidence_score', 'total_score', 'signal_count', 'last_seen_at', 'last_activity_at', 'company_name'];
 const ACTIVE_LEADS_REPLACED = ['organization_id', 'contact_id', 'source_platforms', 'first_seen_at'];
 
@@ -474,6 +480,7 @@ describe('manifest — no global severity downgrade', () => {
       ...ACTIVE_LEADS_TO_LIFECYCLE.map(([, t, c]) => `${t}.${c}`),
       ...PSC_REDACTIONS_BLOCKING.map((c) => `prospect_source_contribution_redactions.${c}`),
       ...MP_OBSERVATIONS_WARN.map((c) => `marketpulse_signal_observations.${c}`),
+      ...CLOSURE_D_ENTRIES,
     ]);
     const baseline = new Set(BASELINE_ENTRIES.map(([t, c]) => `${t}.${c}`));
     const unexpected = COLUMNS
@@ -506,7 +513,21 @@ describe('manifest — no global severity downgrade', () => {
     expect(TYPES).toEqual([
       expect.objectContaining({ severity: 'BLOCKING', table: 'source_records', column: 'ingestion_run_id', udtName: 'text' }),
     ]);
-    expect(INDEXES).toHaveLength(5);
+    expect(INDEXES).toHaveLength(6);
+  });
+
+  it('closure-D adds no column entry and exactly one index: uq_opp_assignment_one_active (BLOCKING, unique, partial)', () => {
+    expect(CLOSURE_D_ENTRIES).toEqual([]);
+    const start = verifierSource.indexOf('// ── closure-D (lifecycle governance) ──');
+    const colEnd = verifierSource.indexOf('// ── end closure-D ──', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(verifierSource.slice(start, colEnd)).not.toMatch(/severity:/);
+    expect(INDEXES.filter((i) => i.table.startsWith('opportunity_'))).toEqual([
+      expect.objectContaining({
+        severity: 'BLOCKING', table: 'opportunity_assignments', index: 'uq_opp_assignment_one_active',
+        unique: true, partial: true, keys: ['opportunity_feed_item_id', 'role'],
+      }),
+    ]);
   });
 });
 

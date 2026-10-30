@@ -9,10 +9,14 @@
 import { ownedDbTable } from '../db/writeOwner';
 import {
   deriveOpportunitySnooze,
+  isSnoozeTerminalState,
+  OpportunitySnoozeRefusedError,
   snoozeHistory,
+  snoozeRefusalFromDbError,
   validateSnoozeDeadline,
   type OpportunitySnoozeState,
 } from '../../lib/prospectOpportunity/snooze';
+import { readCurrentLifecycleState } from './opportunityLifecycleService';
 import type {
   AssignmentRole,
   Disposition,
@@ -293,6 +297,15 @@ export async function listDispositionsForOpportunity(
 // write is an INSERT, so the disposition rows are the snooze history.
 // Tenant: the composite FK `opp_dispositions_item_tenant_fk` rejects a snooze
 // of another tenant's item with 23503.
+//
+// Terminal (closure-D, 20270109000003): a snooze is refused when the
+// opportunity's current lifecycle state is converted, dismissed or archived
+// (SNOOZE_TERMINAL_LIFECYCLE_STATES). Checked here first, then enforced by the
+// database guard `trg_opp_disposition_snooze_guard`; both surface as
+// OpportunitySnoozeRefusedError('terminal'). No lifecycle history ("missing")
+// is not terminal — the same answer the guard gives. An UNREADABLE lifecycle
+// is refused here (fail closed) with reason 'lifecycle_unreadable'.
+// Dispositions are append-only in the database since 20270109000003.
 
 export async function snoozeOpportunity(args: {
   organizationId: string;
@@ -306,6 +319,13 @@ export async function snoozeOpportunity(args: {
   metadata?: Record<string, unknown>;
 }): Promise<OpportunityDisposition> {
   const until = validateSnoozeDeadline(args.until, args.now ?? new Date().toISOString());
+  const lifecycle = await readCurrentLifecycleState(args.organizationId, args.opportunityFeedItemId);
+  if (lifecycle.kind === 'unreadable') {
+    throw new OpportunitySnoozeRefusedError('lifecycle_unreadable', null, 'application', `${lifecycle.reason}:${lifecycle.detail}`);
+  }
+  if (lifecycle.kind === 'present' && isSnoozeTerminalState(lifecycle.state)) {
+    throw new OpportunitySnoozeRefusedError('terminal', lifecycle.state, 'application');
+  }
   const { data, error } = await ownedDbTable('opportunity_dispositions')
     .insert({
       organization_id: args.organizationId,
@@ -318,6 +338,11 @@ export async function snoozeOpportunity(args: {
     })
     .select('*')
     .single();
+  if (error) {
+    // The database guard is the authority when a terminal transition raced the read above.
+    const refused = snoozeRefusalFromDbError(error);
+    if (refused) throw refused;
+  }
   if (error || !data) throw new Error(`snooze_insert_failed:${error?.message ?? 'unknown'}`);
   return data as OpportunityDisposition;
 }

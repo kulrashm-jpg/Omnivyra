@@ -711,6 +711,15 @@ const REQUIRED_COLUMNS = [
   { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'signal_id',       motivation: 'Link to the global marketpulse_signals row (insert-only; never carries tenant content after creation).' },
   { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'observation_key', motivation: 'Idempotency key in uq_mpso_company_signal_observation (company_id, signal_id, observation_key).' },
   { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'observed_at',     motivation: 'When THIS tenant observed the signal.' },
+
+  // ── closure-D (lifecycle governance) ──
+  // 20270109000003_pi_opportunity_governance.sql adds NO column: it adds two
+  // trigger functions (snooze-terminal guard, append-only dispositions) and two
+  // composite FKs over columns that exist since 20260520. A column probe cannot
+  // see triggers or FKs, so no column entry would detect it unapplied; the one
+  // structural expectation closure-D adds is the 20270108000000 index in
+  // REQUIRED_INDEXES below. Deliberately empty rather than padded.
+  // ── end closure-D ──
 ];
 
 // ══ GAP-B — the indexes that ARE the idempotency mechanism ════════════════
@@ -829,6 +838,18 @@ const REQUIRED_INDEXES = [
     motivation:
       'Exactly ONE originating contribution per canonical lead, PARTIAL on `contribution_role = \'originating\'` — which is why the writer INSERTs and catches 23505 (PostgREST cannot infer a partial index; ON CONFLICT answers 42P10). Without it a race, or a resync that believes it created the lead, records a SECOND originator and "where was this prospect first discovered" has two answers. A non-partial index of this name would instead forbid every second contribution. Nothing errors in either case.',
   },
+  // ── closure-D (lifecycle governance) ──
+  {
+    severity: 'BLOCKING',
+    table: 'opportunity_assignments',
+    index: 'uq_opp_assignment_one_active',
+    unique: true,
+    partial: true,
+    keys: ['opportunity_feed_item_id', 'role'],
+    motivation:
+      'ONE active owner per (opportunity, role), PARTIAL on `unassigned_at IS NULL` (20270108000000; re-proved by 20270109000003 $verify$). assignOpportunity closes the active row then INSERTs and retries on 23505; without the index two concurrent assignments both close nothing and both insert, leaving TWO active owners — the legacy constraint opp_assignment_unique_active treats NULL unassigned_at as distinct, so it never fires. Nothing errors. A non-partial index of this name would instead forbid keeping any assignment history.',
+  },
+  // ── end closure-D ──
 ];
 
 // ══ GAP-C — a TYPE CONVERSION the column probe is structurally blind to ═══
