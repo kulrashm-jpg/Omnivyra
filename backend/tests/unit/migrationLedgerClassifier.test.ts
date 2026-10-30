@@ -10,8 +10,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import * as crypto from 'crypto';
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { classifyLedger, versionOf, versionProblem } = require('../../../scripts/lib/migrationLedger');
+const { classifyLedger, versionOf, versionProblem, HISTORICAL_VERSION_MAP } = require('../../../scripts/lib/migrationLedger');
 
 const REPO = path.resolve(__dirname, '../../..');
 
@@ -126,14 +128,123 @@ describe('classifyLedger — against the real migration directory', () => {
   });
 });
 
+describe('HISTORICAL_VERSION_MAP — three evidence-backed exceptions, nothing else', () => {
+  type Entry = { recorded_version: string; recorded_name: string; recorded_statements_md5: string; file: string; file_sha256: string; evidence: string };
+  const MAP: Entry[] = HISTORICAL_VERSION_MAP;
+  const migrationsDir = path.join(REPO, 'supabase', 'migrations');
+  const realFiles = fs.readdirSync(migrationsDir, { withFileTypes: true })
+    .filter((d) => d.isFile() && d.name.endsWith('.sql'))
+    .map((d) => d.name);
+  const realDigests = Object.fromEntries(MAP.map((e) => [
+    e.file, crypto.createHash('sha256').update(fs.readFileSync(path.join(migrationsDir, e.file))).digest('hex'),
+  ]));
+  const rowFor = (e: Entry) => ({ version: e.recorded_version, name: e.recorded_name, statements_md5: e.recorded_statements_md5 });
+  const [title, runtime, lock] = MAP;
+
+  it('holds exactly the three approved mappings, each with its evidence type', () => {
+    expect(MAP.map((e) => [e.recorded_version, e.recorded_name, e.file, e.evidence])).toEqual([
+      ['20260525141657', 'thread_title_column', '20260807_thread_title_column.sql', 'statement_identical_comment_stripped'],
+      ['20260525223113', 'thread_runtime_executions', '20260808_thread_runtime_executions.sql', 'statement_executable_subset'],
+      ['20260601022203', 'fix_creator_execution_lock_ambiguous_columns', '20260676_fix_creator_execution_lock_ambiguous_columns.sql', 'end_state_function_definitions'],
+    ]);
+    expect(Object.isFrozen(HISTORICAL_VERSION_MAP)).toBe(true);
+  });
+
+  it('pins the real files: each exists and hashes to its pinned digest', () => {
+    for (const e of MAP) {
+      expect(realFiles).toContain(e.file);
+      expect(realDigests[e.file]).toBe(e.file_sha256);
+      expect(versionOf(e.file)).not.toBe(e.recorded_version);
+    }
+  });
+
+  it('accepts all three rows against the real migration directory, and nothing else changes', () => {
+    const c = classifyLedger({ files: realFiles, ledgerRows: MAP.map(rowFor), fileDigests: realDigests });
+    expect(c.recorded_by_version_map.map((m: { version: string; evidence: string }) => [m.version, m.evidence])).toEqual([
+      ['20260525141657', 'statement_identical_comment_stripped'],
+      ['20260525223113', 'statement_executable_subset'],
+      ['20260601022203', 'end_state_function_definitions'],
+    ]);
+    expect(c.orphans).toEqual([]);
+    expect(c.version_map_violations).toEqual([]);
+    expect(c.attention).toBe(false);
+    // An accepted file is recorded under another version — no longer listed as unrecorded.
+    const unrecordedFiles = [
+      ...c.unrecorded_unique.map((u: { file: string }) => u.file),
+      ...c.unrecorded_ambiguous.flatMap((g: { files: string[] }) => g.files),
+    ];
+    for (const e of MAP) expect(unrecordedFiles).not.toContain(e.file);
+  });
+
+  it('never matches by name alone: same name under a different version stays an orphan', () => {
+    const c = classifyLedger({
+      files: realFiles, fileDigests: realDigests,
+      ledgerRows: [{ version: '20260525141658', name: title.recorded_name, statements_md5: title.recorded_statements_md5 }],
+    });
+    expect(c.recorded_by_version_map).toEqual([]);
+    expect(c.orphans).toEqual([{ version: '20260525141658', name: 'thread_title_column' }]);
+    expect(c.attention).toBe(true);
+  });
+
+  const rejects = (label: string, input: object, problem: RegExp) => {
+    it(`rejects ${label}`, () => {
+      const c = classifyLedger(input);
+      expect(c.recorded_by_version_map).toEqual([]);
+      expect(c.version_map_violations).toHaveLength(1);
+      expect(c.version_map_violations[0].problem).toMatch(problem);
+      expect(c.attention).toBe(true);
+    });
+  };
+
+  rejects('a different recorded name',
+    { files: realFiles, fileDigests: realDigests, ledgerRows: [{ ...rowFor(runtime), name: 'thread_runtime_execution' }] },
+    /recorded name/);
+  rejects('a changed recorded statement fingerprint',
+    { files: realFiles, fileDigests: realDigests, ledgerRows: [{ ...rowFor(runtime), statements_md5: '0'.repeat(32) }] },
+    /fingerprint changed/);
+  rejects('a row whose statement fingerprint was not read',
+    { files: realFiles, fileDigests: realDigests, ledgerRows: [{ version: lock.recorded_version, name: lock.recorded_name }] },
+    /fingerprint unavailable/);
+  rejects('a missing mapped file (e.g. renamed to a different file name)',
+    { files: realFiles.filter((f) => f !== lock.file).concat('20260676_fix_creator_execution_lock.sql'), fileDigests: realDigests, ledgerRows: [rowFor(lock)] },
+    /is missing/);
+  rejects('a changed mapped file',
+    { files: realFiles, fileDigests: { ...realDigests, [title.file]: 'f'.repeat(64) }, ledgerRows: [rowFor(title)] },
+    /changed \(sha256/);
+  rejects('a mapped file that was not hashed',
+    { files: realFiles, fileDigests: {}, ledgerRows: [rowFor(title)] },
+    /was not hashed/);
+  rejects('a duplicate version: a repository file now carries the recorded version',
+    { files: realFiles.concat(`${title.recorded_version}_thread_title_column.sql`), fileDigests: realDigests, ledgerRows: [rowFor(title)] },
+    /carries the recorded version/);
+  rejects('a mapped file that is ALSO recorded under its own version',
+    { files: realFiles, fileDigests: realDigests, ledgerRows: [rowFor(lock), { version: '20260676', name: 'fix_creator_execution_lock_ambiguous_columns' }] },
+    /also recorded under its own version/);
+
+  it('keeps an unrelated orphan a warning when every mapping holds', () => {
+    const c = classifyLedger({
+      files: realFiles, fileDigests: realDigests,
+      ledgerRows: [...MAP.map(rowFor), { version: '20260101000000', name: 'unrelated_history' }],
+    });
+    expect(c.recorded_by_version_map).toHaveLength(3);
+    expect(c.orphans).toEqual([{ version: '20260101000000', name: 'unrelated_history' }]);
+    expect(c.attention).toBe(true);
+  });
+});
+
 describe('verify-schema-parity — ledger wiring', () => {
   const source = fs.readFileSync(path.join(REPO, 'scripts', 'verify-schema-parity.js'), 'utf8');
   const code = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/[^\n]*$/gm, ' ');
 
-  it('reads ledger identities (version, name), not a row count', () => {
-    expect(code).toMatch(/SELECT version, name FROM supabase_migrations\.schema_migrations/);
+  it('reads ledger identities (version, name, statement fingerprint), not a row count', () => {
+    expect(code).toMatch(/SELECT version, name, md5\(array_to_string\(statements, E'\\\\n'\)\) AS statements_md5 FROM supabase_migrations\.schema_migrations/);
     expect(code).not.toMatch(/count\(\*\)::int AS n FROM supabase_migrations\.schema_migrations/);
-    expect(code).toMatch(/classifyLedger\(\{ files, ledgerRows: ledgerRes\.rows \}\)/);
+    expect(code).toMatch(/classifyLedger\(\{ files, ledgerRows: ledgerRes\.rows, fileDigests \}\)/);
+  });
+
+  it('hashes exactly the files the historical version map pins', () => {
+    expect(code).toMatch(/for \(const \{ file \} of HISTORICAL_VERSION_MAP\)/);
+    expect(code).toMatch(/createHash\('sha256'\)\.update\(fs\.readFileSync\(p\)\)/);
   });
 
   it('no longer compares ledger rows with a fraction of the file count', () => {
@@ -141,7 +252,7 @@ describe('verify-schema-parity — ledger wiring', () => {
   });
 
   it('never reports an unreadable ledger as clean', () => {
-    const at = code.indexOf("'SELECT version, name FROM supabase_migrations.schema_migrations");
+    const at = code.indexOf('"SELECT version, name, md5(array_to_string(statements');
     const catchAt = code.indexOf('} catch (e) {', at);
     const after = code.slice(catchAt, catchAt + 200);
     expect(after).toMatch(/ledgerDesyncDetected = true/);
