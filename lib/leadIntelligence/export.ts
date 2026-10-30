@@ -25,6 +25,9 @@ export function prospectCompanyName(view: CanonicalLeadView): string {
   return firstStr(
     meta.company_name, meta.company, meta.account_name,
     obj(meta.metadata).company_name, obj(meta.lead_metadata).company_name, obj(meta.lead_metadata).account_name,
+    // Account-only canonical prospect: the account resolved from its originating
+    // source record (`source_records.account_id` → `prospect_accounts`).
+    view.account?.name, view.account?.domain,
   );
 }
 
@@ -68,6 +71,12 @@ export interface LeadExportRow {
   contributors: string;
   /** loaded | unavailable | not_applicable — `unavailable` means "not readable", not "none". */
   provenance_status: string;
+  /**
+   * Records of the SAME signal folded into this lead (signal merge):
+   * `<source label>@<occurredAt>`, `; `-separated. Labels and times only — no
+   * ids, keys, URLs, identity or payload of the linked record.
+   */
+  linked_sources: string;
 }
 
 /**
@@ -146,7 +155,7 @@ export function toExportRow(
   };
 }
 
-type ProvenanceColumns = Pick<LeadExportRow, 'origin_category' | 'origin_platform' | 'origin_observed_at' | 'origin_source_url' | 'contributors' | 'provenance_status'>;
+type ProvenanceColumns = Pick<LeadExportRow, 'origin_category' | 'origin_platform' | 'origin_observed_at' | 'origin_source_url' | 'contributors' | 'provenance_status' | 'linked_sources'>;
 
 function provenanceColumns(view: CanonicalLeadView, disclosure: ExportDisclosure): ProvenanceColumns {
   const sources = view.sources ?? [];
@@ -163,6 +172,9 @@ function provenanceColumns(view: CanonicalLeadView, disclosure: ExportDisclosure
       .map((c) => `${c.role}:${c.sourceCategory}${c.platform ? `/${c.platform}` : ''}@${c.observedAt}`)
       .join('; '),
     provenance_status: s(view.provenanceStatus ?? 'not_applicable'),
+    linked_sources: (view.linkedRecords ?? [])
+      .map((r) => `${r.sourceLabel}${r.occurredAt ? `@${r.occurredAt}` : ''}`)
+      .join('; '),
   };
 }
 
@@ -170,6 +182,7 @@ const COLUMNS: Array<keyof LeadExportRow> = [
   'identity', 'company', 'source', 'campaign', 'journey', 'timeline_summary',
   'buying_intent', 'content_interests', 'recommended_next_action', 'ai_summary', 'status', 'metadata',
   'origin_category', 'origin_platform', 'origin_observed_at', 'origin_source_url', 'contributors', 'provenance_status',
+  'linked_sources',
 ];
 
 function csvCell(v: string): string {

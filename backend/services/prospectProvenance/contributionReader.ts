@@ -51,6 +51,19 @@ type QueryResult = { data: unknown; error: { code?: string; message?: string } |
 export interface ContributionQueryPort {
   byLeads(organizationId: string, leadIds: string[], limit: number): Promise<QueryResult>;
   originating(organizationId: string, limit: number): Promise<QueryResult>;
+  /** Contributions referencing any of `ids` in one typed signal column (signal merge). Optional for older test ports. */
+  bySignalRefs?(organizationId: string, column: SignalRefColumn, ids: string[], limit: number): Promise<QueryResult>;
+}
+
+/** The typed signal-reference columns the signal merge reads by. */
+export const SIGNAL_REF_COLUMNS = ['opportunity_feed_item_id', 'lead_signal_id', 'engagement_message_id'] as const;
+export type SignalRefColumn = (typeof SIGNAL_REF_COLUMNS)[number];
+
+/** Ids to look up per typed signal column. */
+export interface SignalRefQuery {
+  opportunityFeedItemIds?: string[];
+  leadSignalIds?: string[];
+  engagementMessageIds?: string[];
 }
 
 export const CONTRIBUTION_COLUMNS = [
@@ -69,6 +82,17 @@ const defaultPort: ContributionQueryPort = {
       .select(CONTRIBUTION_COLUMNS)
       .eq('organization_id', organizationId)
       .in('canonical_lead_id', leadIds)
+      .order('canonical_lead_id', { ascending: true })
+      .order('observed_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(limit);
+    return { data, error };
+  },
+  async bySignalRefs(organizationId, column, ids, limit) {
+    const { data, error } = await ownedDbTable(PROVENANCE_DB.table)
+      .select(CONTRIBUTION_COLUMNS)
+      .eq('organization_id', organizationId)
+      .in(column, ids)
       .order('canonical_lead_id', { ascending: true })
       .order('observed_at', { ascending: true })
       .order('id', { ascending: true })
@@ -238,5 +262,57 @@ export async function readOriginatingContributions(
   if (r.status !== 'ok') return { ...result, status: r.status };
   result.truncated = r.truncated;
   absorb(organizationId, r.rows.filter((row) => row.contribution_role === 'originating'), null, result.byLead);
+  return finish(result);
+}
+
+/**
+ * Contributions of ONE tenant that reference any of the given typed signal ids
+ * (feed items, lead signals, engagement messages) — the input of the signal
+ * merge. One read per (column, chunk of ≤ CHUNK ids); no ids ⇒ no read. Tenant
+ * re-checked in memory and the returned row must really carry a requested id in
+ * that column (a row that does not is dropped and reported). Never throws; an
+ * unreadable store yields `status !== 'ok'` with no contributions.
+ */
+export async function readContributionsBySignalRefs(
+  organizationId: string,
+  refs: SignalRefQuery,
+  deps: { port?: ContributionQueryPort } = {},
+): Promise<ContributionReadResult> {
+  const port = deps.port ?? defaultPort;
+  const query = port.bySignalRefs ?? defaultPort.bySignalRefs!;
+  const result: ContributionReadResult = { status: 'ok', byLead: new Map(), truncated: false, reads: 0 };
+  if (!organizationId) return result;
+  const plan: Array<[SignalRefColumn, string[] | undefined]> = [
+    ['opportunity_feed_item_id', refs.opportunityFeedItemIds],
+    ['lead_signal_id', refs.leadSignalIds],
+    ['engagement_message_id', refs.engagementMessageIds],
+  ];
+  const seen = new Set<string>();
+  for (const [column, raw] of plan) {
+    const ids = [...new Set((raw ?? []).filter((x) => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim()))].sort();
+    if (ids.length === 0) continue;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const wanted = new Set(chunk.map((x) => x.toLowerCase()));
+      result.reads += 1;
+      const r = await run(`bySignalRefs:${column}`, () => query(organizationId, column, chunk, READ_CAP + 1));
+      if (r.status !== 'ok') return { status: r.status, byLead: new Map(), truncated: false, reads: result.reads };
+      result.truncated = result.truncated || r.truncated;
+      const rows = r.rows.filter((row) => {
+        const v = str(row[column]);
+        if (v && wanted.has(v.toLowerCase())) return true;
+        reportOnce('foreign_signal_row', 'returned a row without a requested signal reference — dropped');
+        return false;
+      });
+      // A contribution can match on two columns (feed item + its lead signal): absorb once.
+      const fresh = rows.filter((row) => {
+        const id = str(row.id);
+        if (!id || seen.has(id)) return !id;
+        seen.add(id);
+        return true;
+      });
+      absorb(organizationId, fresh, null, result.byLead);
+    }
+  }
   return finish(result);
 }

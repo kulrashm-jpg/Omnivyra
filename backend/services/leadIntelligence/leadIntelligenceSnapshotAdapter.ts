@@ -38,12 +38,19 @@ export const leadPlugin: IntelligencePlugin<D> = {
     const leadsReady = !!readiness?.checks?.find((c: any) => c.id === 'leads')?.done;
     const updatedAt = readiness?.generatedAt ?? null;
     // Per-source and per-origin breakdown, so the report keeps where leads came from.
-    const breakdown = stats as { bySource?: Record<string, number>; byOriginCategory?: Record<string, number>; truncated?: boolean; truncatedSources?: string[] };
+    const breakdown = stats as {
+      bySource?: Record<string, number>; byOriginCategory?: Record<string, number>; truncated?: boolean; truncatedSources?: string[];
+      signalMerge?: { status: string; merged: number; ambiguous: number };
+    };
+    const merge = breakdown.signalMerge;
     const pipelineFindings = [
       `${total} leads in pipeline`,
       ...Object.entries(breakdown.bySource ?? {}).map(([s, n]) => `${n} from ${s}`),
       ...Object.entries(breakdown.byOriginCategory ?? {}).filter(([c]) => c !== 'unknown').map(([c, n]) => `${n} originated via ${c}`),
       ...(breakdown.truncated ? [`Counts may be incomplete (capped: ${(breakdown.truncatedSources ?? []).join(', ')})`] : []),
+      // Signal merge: a signal seen both as a durable lead and as a canonical prospect is counted ONCE.
+      ...(merge?.status === 'ok' && merge.merged > 0 ? [`${merge.merged} signal record(s) linked to their canonical prospect (counted once)`] : []),
+      ...(merge?.status === 'unavailable' ? ['Signal linking unavailable — a signal may be counted both as a lead and as a prospect'] : []),
     ];
 
     const modules: PluginModule[] = [

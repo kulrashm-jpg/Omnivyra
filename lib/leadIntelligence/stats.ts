@@ -7,6 +7,7 @@
  */
 
 import type { CanonicalLeadView, CanonicalLeadSource } from './types';
+import { sourcesOfView, type SignalMergeStatus } from './query';
 
 export interface LeadStats {
   total: number;
@@ -29,6 +30,8 @@ export interface LeadStats {
   truncatedSources?: string[];
   /** `unavailable` ⇒ origins come from row hints only (provenance store unreadable). */
   provenance?: 'ok' | 'unavailable' | 'not_requested';
+  /** Signal merge outcome — every count above counts a merged lead ONCE. Set by the read service. */
+  signalMerge?: SignalMergeStatus;
 }
 
 const intentOf = (v: CanonicalLeadView): number => v.scores.intent ?? v.scores.total ?? 0;
@@ -63,7 +66,8 @@ export function computeLeadStats(views: CanonicalLeadView[]): LeadStats {
  * source-agnostic (it just renders whatever this view returns).
  */
 export function activeLeadsCompatibilityFilter(views: CanonicalLeadView[]): CanonicalLeadView[] {
-  return views.filter((v) => v.source === 'community');
+  // A canonical prospect that absorbed a community signal (signal merge) stays in scope.
+  return views.filter((v) => sourcesOfView(v).includes('community'));
 }
 
 /** Convenience: source counts limited to a set (e.g. dashboard "leads by channel"). */
