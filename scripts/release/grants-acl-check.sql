@@ -54,6 +54,38 @@
 --                     whose USING / WITH CHECK names an in-scope table — the
 --                     indirect paths that revoking a table would break or that
 --                     reach a table without naming it in an API path
+--   S13 population    EVERY table/partitioned table/view/matview/foreign table
+--                     in the API-exposed schemas (authenticator's
+--                     pgrst.db_schemas if set, else public + graphql_public;
+--                     public always), one row per role anon / authenticated /
+--                     authenticator / service_role / PUBLIC: direct ACL grant,
+--                     effective privileges, RLS, FORCE RLS, permissive
+--                     policies applying to the role per command, restrictive
+--   S14 column_privilege  population-wide attacl grants to anon /
+--                     authenticated / PUBLIC, and privileges held ONLY via
+--                     columns (has_any_column_privilege without the table one)
+--   S15 assert        ABSOLUTE assertions, status = first word of v:
+--                     PASS / FAIL / REVIEW (owner decision) / ABSENT, plus a
+--                     `summary` row. They judge this database on its own, so
+--                     an exposure that the expected copy and production share
+--                     (invisible to the C1 diff) still FAILs:
+--                     a  anon holds no INSERT/UPDATE/DELETE/TRUNCATE/TRIGGER/
+--                        MAINTAIN (or column INSERT/UPDATE) on any in-scope
+--                        relation, and population-wide (count row + one FAIL
+--                        row per offending relation); anon vs the plan's §C1
+--                        per-scope expectation
+--                     b  authenticated holds nothing on the 8 Phase-A tables
+--                     c  authenticated on the 4 FIX3 tables: REVIEW + list
+--                     d  pg_default_acl of postgres / supabase_admin granting
+--                        to anon / authenticated / PUBLIC: REVIEW
+--   S16 secdef        SECURITY DEFINER functions in exposed schemas: EXECUTE
+--                     for PUBLIC / anon / authenticated, proconfig search_path;
+--                     in-scope tables named in client-executable bodies (the
+--                     path S12 cannot see; static text, not dynamic SQL)
+--   S17 graphql       pg_graphql installed?, graphql / graphql_public schema
+--                     USAGE and resolver EXECUTE per client role
+--   S13-S17 never fail the run (exit 0): read the S15 `summary` row and every
+--   FAIL / REVIEW row.
 --
 -- Output is ordered by all five columns with COLLATE "C" and search_path is
 -- pinned, so two runs on equal catalogs are byte-identical. Backslash,
@@ -427,6 +459,223 @@ privs(p) AS (
   UNION ALL
   SELECT 'MAINTAIN' WHERE current_setting('server_version_num')::int >= 170000
 ),
+-- ---------------------------------------------------------------------------
+-- S13-S17 inputs: the WHOLE API-exposed population, not only the lists above.
+-- Exposed schemas: PostgREST's in-database setting `pgrst.db_schemas` on role
+-- authenticator (database-specific entry wins over the global one) when it is
+-- set; otherwise Supabase's default (public, graphql_public). `public` is
+-- always included because every in-scope list lives there.
+exp_cfg AS (
+  SELECT (SELECT substr(c, length('pgrst.db_schemas=') + 1)
+            FROM pg_db_role_setting s
+            CROSS JOIN LATERAL unnest(s.setconfig) c
+           WHERE s.setrole = (SELECT oid FROM pg_roles WHERE rolname = 'authenticator')
+             AND s.setdatabase IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))
+             AND c LIKE 'pgrst.db\_schemas=%'
+           ORDER BY s.setdatabase DESC
+           LIMIT 1) AS raw
+),
+exp_names(name, src) AS (
+  SELECT btrim(n, ' "'), 'pgrst.db_schemas'
+    FROM exp_cfg CROSS JOIN LATERAL unnest(string_to_array(exp_cfg.raw, ',')) n
+   WHERE exp_cfg.raw IS NOT NULL
+  UNION ALL
+  SELECT n, 'default(no pgrst.db_schemas)'
+    FROM exp_cfg CROSS JOIN unnest(ARRAY['public', 'graphql_public']) n
+   WHERE exp_cfg.raw IS NULL
+  UNION ALL
+  SELECT 'public', 'always'
+),
+exp_schemas AS (
+  SELECT e.name, string_agg(DISTINCT e.src, '+' ORDER BY e.src) AS src, to_regnamespace(quote_ident(e.name))::oid AS nsp
+    FROM exp_names e
+   WHERE e.name <> ''
+   GROUP BY e.name
+),
+-- every table / partitioned table / view / matview / foreign table in an exposed schema
+pop_rels AS MATERIALIZED (
+  SELECT c.oid AS rid, n.nspname::text AS nsp, c.relname::text AS rel, c.relkind, c.relowner,
+         coalesce(c.relacl, acldefault('r', c.relowner)) AS acl,
+         c.relrowsecurity, c.relforcerowsecurity
+    FROM exp_schemas e
+    JOIN pg_class c ON c.relnamespace = e.nsp
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+),
+-- roles checked population-wide; PUBLIC is grantee 0 (has_table_privilege
+-- accepts the pseudo-role name 'public'). Absent roles are reported, not errors.
+roles13(rname, roid) AS (
+  SELECT r.rolname::text, r.oid
+    FROM pg_roles r
+   WHERE r.rolname IN ('anon', 'authenticated', 'authenticator', 'service_role')
+  UNION ALL
+  SELECT 'PUBLIC', 0::oid
+),
+eff13 AS MATERIALIZED (
+  SELECT x.rid, r.rname, r.roid,
+         array_agg(pv.p ORDER BY pv.p) FILTER (WHERE CASE WHEN r.roid = 0 THEN has_table_privilege('public', x.rid, pv.p)
+                                                          ELSE has_table_privilege(r.roid, x.rid, pv.p) END) AS eff
+    FROM pop_rels x CROSS JOIN roles13 r CROSS JOIN privs pv
+   GROUP BY x.rid, r.rname, r.roid
+),
+direct13 AS (
+  SELECT x.rid, a.grantee,
+         string_agg(a.privilege_type || CASE WHEN a.is_grantable THEN '*' ELSE '' END, ',' ORDER BY a.privilege_type) AS direct
+    FROM pop_rels x CROSS JOIN LATERAL aclexplode(x.acl) a
+   WHERE a.grantee IN (SELECT roid FROM roles13)
+   GROUP BY x.rid, a.grantee
+),
+-- policies that apply to the role: polroles holds the role or 0 (PUBLIC);
+-- cmd '*' (ALL) counts toward every command
+pol13 AS (
+  SELECT p.polrelid AS rid, r.roid,
+         count(*) FILTER (WHERE p.polpermissive AND p.polcmd IN ('*', 'r')) AS sel,
+         count(*) FILTER (WHERE p.polpermissive AND p.polcmd IN ('*', 'a')) AS ins,
+         count(*) FILTER (WHERE p.polpermissive AND p.polcmd IN ('*', 'w')) AS upd,
+         count(*) FILTER (WHERE p.polpermissive AND p.polcmd IN ('*', 'd')) AS del,
+         count(*) FILTER (WHERE NOT p.polpermissive) AS restrictive
+    FROM pg_policy p
+    JOIN pop_rels x ON x.rid = p.polrelid
+    JOIN roles13 r ON 0::oid = ANY (p.polroles) OR r.roid = ANY (p.polroles)
+   GROUP BY p.polrelid, r.roid
+),
+-- column-only privileges (held on some column without the table-level
+-- privilege): they survive a table-level REVOKE
+colonly13 AS MATERIALIZED (
+  SELECT x.rid, r.rname,
+         array_agg(cp.p ORDER BY cp.p) AS colonly
+    FROM pop_rels x
+    CROSS JOIN (SELECT rname, roid FROM roles13 WHERE rname IN ('anon', 'authenticated')) r
+    CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES')) cp(p)
+   WHERE has_any_column_privilege(r.roid, x.rid, cp.p)
+     AND NOT has_table_privilege(r.roid, x.rid, cp.p)
+   GROUP BY x.rid, r.rname
+),
+anon_write(p) AS (VALUES ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('TRIGGER'), ('MAINTAIN')),
+-- per exposed relation: anon's privileges (table-level + column-only marked "(column)")
+anon_pop AS (
+  SELECT x.rid, x.nsp, x.rel, h.held, h.write_held
+    FROM pop_rels x
+    LEFT JOIN eff13 e ON e.rid = x.rid AND e.rname = 'anon'
+    LEFT JOIN colonly13 c ON c.rid = x.rid AND c.rname = 'anon'
+    CROSS JOIN LATERAL (
+      SELECT string_agg(DISTINCT q.p, ',' ORDER BY q.p) AS held,
+             string_agg(DISTINCT q.p, ',' ORDER BY q.p) FILTER (WHERE split_part(q.p, '(', 1) IN (SELECT p FROM anon_write)) AS write_held
+        FROM (SELECT unnest(coalesce(e.eff, '{}')) AS p
+              UNION ALL SELECT unnest(coalesce(c.colonly, '{}')) || '(column)') q) h
+   WHERE EXISTS (SELECT 1 FROM roles13 WHERE rname = 'anon')
+),
+-- in-scope relations (lists above) joined to the population results
+scoped AS (
+  SELECT x.scope, x.name, x.rid, ap.held AS anon_held, ap.write_held AS anon_write_held,
+         ap.held_unexpected_public_read,
+         coalesce((SELECT e.eff FROM eff13 e WHERE e.rid = x.rid AND e.rname = 'authenticated'), '{}') AS auth_eff,
+         coalesce((SELECT c.colonly FROM colonly13 c WHERE c.rid = x.rid AND c.rname = 'authenticated'), '{}') AS auth_col
+    FROM rels x
+    LEFT JOIN LATERAL (
+      SELECT a.held, a.write_held,
+             (SELECT string_agg(t, ',' ORDER BY t) FROM unnest(string_to_array(a.held, ',')) t
+               WHERE t NOT IN ('SELECT', 'MAINTAIN')) AS held_unexpected_public_read
+        FROM anon_pop a WHERE a.rid = x.rid) ap ON true
+),
+-- S15 absolute assertions. Status is the first word of v: PASS / FAIL /
+-- REVIEW (owner decision, not hardcoded here) / ABSENT. They do NOT compare
+-- against another database, so an exposure shared by the expected copy and
+-- production still FAILs.
+asrt(section, scope, object, k, v) AS (
+  -- (a) anon holds no write privilege (table-level, or column-level INSERT/UPDATE) on any in-scope relation
+  SELECT 'S15_assert', s.scope, s.name, 'a.anon_no_write',
+         CASE WHEN s.rid IS NULL THEN 'ABSENT'
+              WHEN s.anon_write_held IS NULL THEN 'PASS'
+              ELSE 'FAIL anon holds ' || s.anon_write_held END
+    FROM scoped s
+  UNION ALL
+  -- (a') anon versus the per-scope expectation in the plan's §C1: none, except
+  -- SELECT(+MAINTAIN) on the 4 public-read tables; Phase-A / dependency /
+  -- realtime control are recorded as found (REVIEW)
+  SELECT 'S15_assert', s.scope, s.name, 'a.anon_expected',
+         CASE WHEN s.rid IS NULL THEN 'ABSENT'
+              WHEN s.anon_held IS NULL THEN 'PASS'
+              WHEN s.scope IN ('fix3:phase_a_revoked', 'fix3:dependency', 'control:realtime')
+                THEN 'REVIEW anon holds ' || s.anon_held
+              WHEN s.scope = 'close_anon:public_read' AND s.held_unexpected_public_read IS NULL
+                   AND s.anon_held ~ '\mMAINTAIN\M'
+                THEN 'REVIEW anon holds ' || s.anon_held || ' (SELECT expected, MAINTAIN needs owner review, plan C1)'
+              WHEN s.scope = 'close_anon:public_read' AND s.held_unexpected_public_read IS NULL
+                THEN 'PASS anon holds ' || s.anon_held
+              WHEN s.scope = 'close_anon:public_read'
+                THEN 'FAIL anon holds ' || s.held_unexpected_public_read
+              ELSE 'FAIL anon holds ' || s.anon_held END
+    FROM scoped s
+  UNION ALL
+  -- (b) authenticated holds none of the table privileges on the 8 Phase-A tables
+  SELECT 'S15_assert', s.scope, s.name, 'b.authenticated_has_nothing',
+         CASE WHEN s.rid IS NULL THEN 'ABSENT'
+              WHEN cardinality(s.auth_eff) + cardinality(s.auth_col) = 0 THEN 'PASS'
+              ELSE 'FAIL authenticated holds ' || concat_ws(',', nullif(array_to_string(s.auth_eff, ','), ''),
+                                                           nullif(array_to_string(s.auth_col, '(column),') || '(column)', '(column)')) END
+    FROM scoped s
+   WHERE s.scope = 'fix3:phase_a_revoked'
+  UNION ALL
+  -- (c) authenticated on the 4 FIX3 tables: reported for the owner decision (D-G), never auto-judged
+  SELECT 'S15_assert', s.scope, s.name, 'c.authenticated_privileges',
+         CASE WHEN s.rid IS NULL THEN 'ABSENT'
+              WHEN cardinality(s.auth_eff) + cardinality(s.auth_col) = 0 THEN 'PASS none'
+              ELSE format('REVIEW authenticated holds %s rls=%s force_rls=%s policies_for_authenticated=%s',
+                          concat_ws(',', nullif(array_to_string(s.auth_eff, ','), ''),
+                                    nullif(array_to_string(s.auth_col, '(column),') || '(column)', '(column)')),
+                          c.relrowsecurity, c.relforcerowsecurity,
+                          (SELECT count(*) FROM pg_policy p WHERE p.polrelid = s.rid
+                              AND (0::oid = ANY (p.polroles) OR (SELECT oid FROM pg_roles WHERE rolname = 'authenticated') = ANY (p.polroles))))
+         END
+    FROM scoped s LEFT JOIN pg_class c ON c.oid = s.rid
+   WHERE s.scope = 'fix3:table'
+  UNION ALL
+  -- (a) population-wide: every exposed relation on which anon holds a write privilege
+  SELECT 'S15_assert', 'population:' || a.nsp, a.rel, 'a.anon_no_write', 'FAIL anon holds ' || a.write_held
+    FROM anon_pop a WHERE a.write_held IS NOT NULL
+  UNION ALL
+  SELECT 'S15_assert', 'population', '-', 'a.anon_no_write:count',
+         format('%s %s of %s exposed relations', CASE WHEN count(a.write_held) = 0 THEN 'PASS' ELSE 'FAIL' END,
+                count(a.write_held), count(*))
+    FROM anon_pop a
+  UNION ALL
+  SELECT 'S15_assert', 'population', '-', 'a.anon_any_privilege:count',
+         format('%s %s of %s exposed relations', CASE WHEN count(a.held) = 0 THEN 'PASS' ELSE 'REVIEW' END,
+                count(a.held), count(*))
+    FROM anon_pop a
+  UNION ALL
+  -- (d) default ACLs of postgres / supabase_admin that grant anything to anon, authenticated or PUBLIC
+  SELECT 'S15_assert', '-',
+         format('for_role=%s schema=%s objtype=%s', pg_get_userbyid(d.defaclrole),
+                coalesce(nullif(d.defaclnamespace, 0::oid)::regnamespace::text, '<global>'), d.defaclobjtype),
+         'd.default_acl_client_grant:' || CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+         'REVIEW ' || string_agg(a.privilege_type, ',' ORDER BY a.privilege_type)
+    FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+   WHERE pg_get_userbyid(d.defaclrole) IN ('postgres', 'supabase_admin')
+     AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) IN ('anon', 'authenticated'))
+   GROUP BY d.defaclrole, d.defaclnamespace, d.defaclobjtype, a.grantee
+  UNION ALL
+  -- (d) no global function default for the creator role = the built-in default (PUBLIC EXECUTE) applies
+  SELECT 'S15_assert', '-', 'for_role=' || r.rolname || ' schema=<global> objtype=f', 'd.default_acl_client_grant:PUBLIC',
+         'REVIEW EXECUTE (built-in default: no global function entry)'
+    FROM pg_roles r
+   WHERE r.rolname IN ('postgres', 'supabase_admin')
+     AND NOT EXISTS (SELECT 1 FROM pg_default_acl d
+                      WHERE d.defaclrole = r.oid AND d.defaclnamespace = 0 AND d.defaclobjtype = 'f')
+),
+-- S16 SECURITY DEFINER functions in exposed schemas (PostgREST /rpc, pg_graphql)
+sd16 AS MATERIALIZED (
+  SELECT p.oid AS fid, n.nspname::text AS nsp, p.oid::regprocedure::text AS sig, p.proowner, p.prosrc,
+         (SELECT substr(c, length('search_path=') + 1) FROM unnest(p.proconfig) c WHERE c LIKE 'search\_path=%' LIMIT 1) AS sp,
+         has_function_privilege('public', p.oid, 'EXECUTE') AS x_public,
+         EXISTS (SELECT 1 FROM roles13 r WHERE r.rname = 'anon' AND has_function_privilege(r.roid, p.oid, 'EXECUTE')) AS x_anon,
+         EXISTS (SELECT 1 FROM roles13 r WHERE r.rname = 'authenticated' AND has_function_privilege(r.roid, p.oid, 'EXECUTE')) AS x_auth
+    FROM exp_schemas e
+    JOIN pg_proc p ON p.pronamespace = e.nsp
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE p.prosecdef
+),
 out(section, scope, object, k, v) AS (
   -- S01 roles
   SELECT 'S01_roles', '-', r.rolname::text, 'attrs',
@@ -572,6 +821,106 @@ out(section, scope, object, k, v) AS (
      AND (coalesce(pol.qual, '') ~ ('\m' || x.name || '\M')
           OR coalesce(pol.with_check, '') ~ ('\m' || x.name || '\M'))
    WHERE x.rid IS NOT NULL
+  UNION ALL
+  -- S13 exposed schemas and where the list came from
+  SELECT 'S13_population', '-', e.name, 'exposed_schema',
+         format('source=%s exists=%s', e.src, e.nsp IS NOT NULL)
+    FROM exp_schemas e
+  UNION ALL
+  SELECT 'S13_population', '-', r.rname, 'role_absent', 'not checked: role does not exist'
+    FROM (VALUES ('anon'), ('authenticated'), ('authenticator'), ('service_role')) r(rname)
+   WHERE NOT EXISTS (SELECT 1 FROM roles13 x WHERE x.rname = r.rname)
+  UNION ALL
+  -- S13 one row per exposed relation x role: direct ACL grant (incl. grant
+  -- option '*'), effective privileges (PUBLIC + inherited memberships), RLS,
+  -- FORCE RLS, and permissive policies that apply to the role per command
+  SELECT 'S13_population', x.nsp, x.rel, e.rname,
+         format('relkind=%s rls=%s force_rls=%s direct=%s effective=%s pol_sel/ins/upd/del=%s/%s/%s/%s pol_restrictive=%s',
+                x.relkind, x.relrowsecurity, x.relforcerowsecurity,
+                coalesce(d.direct, 'NONE'), coalesce(array_to_string(e.eff, ','), 'NONE'),
+                coalesce(pl.sel, 0), coalesce(pl.ins, 0), coalesce(pl.upd, 0), coalesce(pl.del, 0), coalesce(pl.restrictive, 0))
+    FROM pop_rels x
+    JOIN eff13 e ON e.rid = x.rid
+    LEFT JOIN direct13 d ON d.rid = x.rid AND d.grantee = e.roid
+    LEFT JOIN pol13 pl ON pl.rid = x.rid AND pl.roid = e.roid
+  UNION ALL
+  -- S14 column-level grants (attacl) to anon / authenticated / PUBLIC across the population
+  SELECT 'S14_column_privilege', x.nsp, x.rel || '.' || att.attname,
+         CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+         string_agg(a.privilege_type, ',' ORDER BY a.privilege_type)
+    FROM pop_rels x
+    JOIN pg_attribute att ON att.attrelid = x.rid AND att.attnum > 0 AND NOT att.attisdropped AND att.attacl IS NOT NULL
+    CROSS JOIN LATERAL aclexplode(att.attacl) a
+   WHERE a.grantee = 0 OR pg_get_userbyid(a.grantee) IN ('anon', 'authenticated')
+   GROUP BY x.nsp, x.rel, att.attname, a.grantee
+  UNION ALL
+  -- S14 privileges held only through columns (has_any_column_privilege without the table privilege)
+  SELECT 'S14_column_privilege', x.nsp, x.rel, c.rname, 'column_only=' || array_to_string(c.colonly, ',')
+    FROM colonly13 c JOIN pop_rels x ON x.rid = c.rid
+  UNION ALL
+  SELECT 'S14_column_privilege', 'population', '-', r.rname,
+         format('relations_with_column_only_privilege=%s', (SELECT count(*) FROM colonly13 c WHERE c.rname = r.rname))
+    FROM roles13 r WHERE r.rname IN ('anon', 'authenticated')
+  UNION ALL
+  -- S15 assertions
+  SELECT a.section, a.scope, a.object, a.k, a.v FROM asrt a
+  UNION ALL
+  SELECT 'S15_assert', '-', '-', 'summary',
+         format('FAIL=%s REVIEW=%s PASS=%s ABSENT=%s',
+                count(*) FILTER (WHERE a.v LIKE 'FAIL%'), count(*) FILTER (WHERE a.v LIKE 'REVIEW%'),
+                count(*) FILTER (WHERE a.v LIKE 'PASS%'), count(*) FILTER (WHERE a.v LIKE 'ABSENT%'))
+    FROM asrt a
+  UNION ALL
+  -- S16 SECURITY DEFINER functions in exposed schemas: who can execute, search_path pinned or not
+  SELECT 'S16_secdef', f.nsp, f.sig, 'execute',
+         format('%s public=%s anon=%s authenticated=%s owner=%s search_path=%s',
+                CASE WHEN f.x_public OR f.x_anon OR f.x_auth THEN 'REVIEW' ELSE 'PASS' END,
+                f.x_public, f.x_anon, f.x_auth, pg_get_userbyid(f.proowner), coalesce(f.sp, 'MISSING'))
+    FROM sd16 f
+  UNION ALL
+  -- S16 the indirect path S12 cannot see: a client-executable SECURITY DEFINER
+  -- body that names an in-scope table after FROM/JOIN/INTO/UPDATE/TABLE
+  -- (static text only; dynamic SQL via format()/EXECUTE is not resolved)
+  SELECT DISTINCT 'S16_secdef', x.scope, x.name, 'body_names_table:' || f.sig,
+         format('REVIEW public=%s anon=%s authenticated=%s', f.x_public, f.x_anon, f.x_auth)
+    FROM sd16 f
+    JOIN rels x ON x.rid IS NOT NULL
+     AND f.prosrc ~* ('(from|join|into|update|table)\s+(public\.)?"?' || x.name || '\M')
+   WHERE f.x_public OR f.x_anon OR f.x_auth
+  UNION ALL
+  SELECT 'S16_secdef', 'population', '-', 'client_executable:count',
+         format('%s of %s SECURITY DEFINER functions in exposed schemas (missing search_path among them: %s)',
+                count(*) FILTER (WHERE f.x_public OR f.x_anon OR f.x_auth), count(*),
+                count(*) FILTER (WHERE (f.x_public OR f.x_anon OR f.x_auth) AND f.sp IS NULL))
+    FROM sd16 f
+  UNION ALL
+  -- S17 pg_graphql: installed? /graphql/v1 reflects whatever S13 shows the
+  -- role may read/write, so any S13 privilege is also a GraphQL exposure
+  SELECT 'S17_graphql', '-', 'pg_graphql', 'extension',
+         coalesce((SELECT 'INSTALLED version=' || x.extversion || ' schema=' || x.extnamespace::regnamespace::text
+                     FROM pg_extension x WHERE x.extname = 'pg_graphql'), 'NOT_INSTALLED')
+  UNION ALL
+  SELECT 'S17_graphql', '-', g.s, 'schema',
+         CASE WHEN n.oid IS NULL THEN 'ABSENT' ELSE 'exists' END
+    FROM (VALUES ('graphql'), ('graphql_public')) g(s)
+    LEFT JOIN pg_namespace n ON n.nspname = g.s
+  UNION ALL
+  SELECT 'S17_graphql', '-', n.nspname::text, 'usage:' || r.rname,
+         (CASE WHEN r.roid = 0 THEN has_schema_privilege('public', n.oid, 'USAGE')
+               ELSE has_schema_privilege(r.roid, n.oid, 'USAGE') END)::text
+    FROM pg_namespace n CROSS JOIN roles13 r
+   WHERE n.nspname IN ('graphql', 'graphql_public') AND r.rname <> 'service_role'
+  UNION ALL
+  SELECT 'S17_graphql', '-', p.oid::regprocedure::text, 'execute:' || r.rname,
+         CASE WHEN (CASE WHEN r.roid = 0 THEN has_function_privilege('public', p.oid, 'EXECUTE')
+                         ELSE has_function_privilege(r.roid, p.oid, 'EXECUTE') END)
+              THEN CASE WHEN EXISTS (SELECT 1 FROM pg_extension x WHERE x.extname = 'pg_graphql')
+                        THEN 'REVIEW true (GraphQL endpoint usable by this role)' ELSE 'true (extension absent)' END
+              ELSE 'false' END
+    FROM pg_proc p CROSS JOIN roles13 r
+   WHERE p.pronamespace IN (SELECT oid FROM pg_namespace WHERE nspname IN ('graphql', 'graphql_public'))
+     AND p.proname IN ('graphql', 'resolve')
+     AND r.rname IN ('anon', 'authenticated', 'PUBLIC')
 )
 SELECT section, scope, object, k,
        replace(replace(replace(replace(v, '\', '\\'), E'\n', '\n'), E'\r', '\r'), E'\t', '\t') AS v

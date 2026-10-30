@@ -87,7 +87,10 @@ class Client {
     }
     if (sql.includes('schema_migrations')) {
       if (faults.has('ledger_fail')) throw new Error('permission denied for schema supabase_migrations (fake)');
-      return { rows: [{ n: 100000 }] };
+      // The verifier reads the ledger by version identity (SELECT version, name;
+      // scripts/lib/migrationLedger.js). An empty ledger has no orphans: every
+      // local file is UNRECORDED, which is not drift — so the catalog conforms.
+      return { rows: [] };
     }
     throw new Error('fake pg: unexpected query');
   }
@@ -147,10 +150,14 @@ describe('verify-schema-parity — strict mode (fake catalog, no network)', () =
     expect(s.code).toBe(1);
   });
 
-  it('a ledger probe that cannot run: non-strict unchanged (exit 0, note); strict BLOCKS (exit 1)', () => {
+  it('a ledger probe that cannot run: non-strict WARN (exit 3, unverified — never clean); strict BLOCKS (exit 1)', () => {
+    // An unreadable ledger is never reported as clean (#358): non-strict exits 3
+    // with ledger_probe.verified === false; strict escalates it to BLOCKING.
     const d = runVerifier({ faults: 'ledger_fail' });
-    expect(d.code).toBe(0);
-    expect(d.check.ledger_probe.skipped).toBe(true);
+    expect(d.code).toBe(3);
+    expect(d.check.status).toBe('WARN');
+    expect(d.check.ledger_desync_detected).toBe(true);
+    expect(d.check.ledger_probe.verified).toBe(false);
     const s = runVerifier({ strict: true, faults: 'ledger_fail' });
     expect(s.code).toBe(1);
     expect(s.check.structural_findings).toEqual(expect.arrayContaining([
@@ -225,11 +232,13 @@ function runPredeploySection(verifierExit: number | null, strictEnv: boolean) {
   if (begin < 0 || end < 0) throw new Error('schema-parity gate markers not found');
   const section = src.slice(begin, end);
   const commands: string[] = [];
+  // Declared before the section in the real script; the section pushes to it.
+  const unverified: string[] = [];
   let out = '';
   let exitCode: number | null = null;
   class Exit extends Error {}
   const sandbox = {
-    require, path, __dirname: path.dirname(PREDEPLOY),
+    require, path, __dirname: path.dirname(PREDEPLOY), unverified,
     execSync: (cmd: string) => {
       commands.push(cmd);
       if (verifierExit === 0) return '';
@@ -248,7 +257,7 @@ function runPredeploySection(verifierExit: number | null, strictEnv: boolean) {
   } catch (e) {
     if (!(e instanceof Exit)) throw e;
   }
-  return { exitCode, out, commands };
+  return { exitCode, out, commands, unverified };
 }
 
 describe('predeploy-check.js schema-parity gate section (vm, stubbed execSync)', () => {
@@ -274,6 +283,20 @@ describe('predeploy-check.js schema-parity gate section (vm, stubbed execSync)',
     const r3 = runPredeploySection(3, false);
     expect(r3.exitCode).toBeNull();
     expect(r3.out).toContain('schema parity: WARN');
+  });
+
+  it('non-strict continues are recorded as unverified gates (never a silent pass)', () => {
+    expect(runPredeploySection(2, false).unverified).toEqual([
+      'schema parity SKIPPED (env unavailable — no column was compared)',
+    ]);
+    expect(runPredeploySection(3, false).unverified).toEqual([
+      'schema parity WARN (non-blocking findings or ledger desync)',
+    ]);
+    expect(runPredeploySection(9, false).unverified).toEqual([
+      'schema parity WARN (verifier exited 9, unrecognized)',
+    ]);
+    expect(runPredeploySection(0, false).unverified).toEqual([]);
+    expect(runPredeploySection(0, true).unverified).toEqual([]);
   });
 
   it('exit 1 blocks in both modes; exit 0 passes in both', () => {

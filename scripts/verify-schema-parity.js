@@ -1771,13 +1771,13 @@ async function main() {
   // run (e.g. no SELECT on supabase_migrations.schema_migrations) is a
   // BLOCKING `check_skipped` finding under --strict; outside strict it stays
   // advisory exactly as before.
-  if (strict && ledgerProbeNote && ledgerProbeNote.skipped) {
+  if (strict && ledgerProbeNote && ledgerProbeNote.verified === false) {
     missing.push({
       kind: 'check_skipped',
       severity: 'BLOCKING',
       table: null,
       object: 'ledger probe',
-      reason: `migration ledger probe did not run: ${typeof ledgerProbeNote.skipped === 'string' ? ledgerProbeNote.skipped : ledgerProbeNote.reason}`,
+      reason: `migration ledger probe did not run: ${ledgerProbeNote.reason}`,
       motivation: 'STRICT: a required check that could not run is a failure.',
     });
   }

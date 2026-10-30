@@ -22,25 +22,44 @@ const source = fs.readFileSync(SCRIPT, 'utf8');
 /** Comments stripped, so prose describing a defect can never satisfy a guard. */
 const code = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/[^\n]*$/gm, ' ');
 
-/** The `if (code === 2) { … }` branch of the schema-parity handler. */
-function exit2Branch(): string {
-  const start = code.indexOf('if (code === 2)');
-  const end = code.indexOf('} else if (code === 1)', start);
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { predeployParityDecision } = require(path.join(REPO, 'scripts', 'verify-schema-parity.js'));
+
+/**
+ * The schema-parity handler maps the verifier exit through the decision table
+ * (`predeployParityDecision`, beside the verifier). Returns the source slice
+ * between two branch heads of that handler.
+ */
+function gateBranch(startMarker: string, endMarker: string): string {
+  const start = code.indexOf(startMarker);
+  const end = code.indexOf(endMarker, start);
   expect(start).toBeGreaterThan(-1);
   expect(end).toBeGreaterThan(start);
   return code.slice(start, end);
 }
+/** The `action === 'block'` branch: every blocking decision ends here. */
+const blockBranch = () => gateBranch(
+  "schemaDecision.action === 'block'", "schemaDecision.reason === 'skipped_env_unavailable'");
+/** The non-strict exit-2 branch (decision reason `skipped_env_unavailable`). */
+const exit2SkipBranch = () => gateBranch(
+  "schemaDecision.reason === 'skipped_env_unavailable'", "schemaDecision.reason === 'warn'");
 
 describe('predeploy-check — skipped gates are never a pass', () => {
   it('strict schema mode blocks when the database check cannot run (exit 2)', () => {
-    const branch = exit2Branch();
-    expect(branch).toMatch(/if\s*\(\s*strictSchema\s*\)/);
+    // Decision: strict + exit 2 is a block (not a continue/skip) …
+    expect(predeployParityDecision(2, true)).toEqual({ action: 'block', reason: 'strict_env_unavailable' });
+    expect(predeployParityDecision(2, false).action).toBe('continue');
+    // … the strict flag reaches the decision …
+    expect(code).toMatch(/predeployParityDecision\(\s*schemaParityCode\s*,\s*strictSchema\s*\)/);
+    // … and the block branch reports BLOCKED, names the reason, and exits 1.
+    const branch = blockBranch();
+    expect(branch).toMatch(/strict_env_unavailable/);
     expect(branch).toMatch(/RESULT: BLOCKED/);
     expect(branch).toMatch(/process\.exit\(1\)/);
   });
 
   it('a non-strict skip is recorded as unverified, not silently continued', () => {
-    expect(exit2Branch()).toMatch(/unverified\.push\(/);
+    expect(exit2SkipBranch()).toMatch(/unverified\.push\(/);
   });
 
   it('every SKIPPED gate message is paired with an unverified entry', () => {

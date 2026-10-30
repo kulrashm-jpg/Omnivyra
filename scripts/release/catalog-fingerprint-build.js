@@ -153,6 +153,13 @@ const TEMPLATE = String.raw`-- =================================================
 -- Publication membership IS recorded here (section pub) for every publication;
 -- membership of an in-scope table is semantic, other tables are info.
 --
+-- Line endings (format /3): def_md5 hashes pg_get_functiondef() raw, so CR bytes
+-- kept in prosrc by a CRLF submission (e.g. the SQL Editor) change it.
+-- def_md5_lf hashes the same text with every CRLF PAIR replaced by LF (a lone CR
+-- is kept); the comparator reports "raw differs, _lf equal" as eol_only.
+-- View and policy text is deparsed by the server and carries CR only inside
+-- string literals, where it is a value: it is never normalized.
+--
 -- Usage: psql -X -v ON_ERROR_STOP=1 -f scripts/release/catalog-fingerprint.sql > out.tsv
 -- ============================================================================
 \set ON_ERROR_STOP on
@@ -204,7 +211,7 @@ facts(section, object, property, value) AS (
   -- meta (environment; never semantic)
   SELECT 'meta', 'session', 'transaction_read_only', current_setting('transaction_read_only')
   UNION ALL SELECT 'meta', 'session', 'server_version_num', current_setting('server_version_num')
-  UNION ALL SELECT 'meta', 'session', 'fingerprint_format', 'catalog-fingerprint/2'
+  UNION ALL SELECT 'meta', 'session', 'fingerprint_format', 'catalog-fingerprint/3'
 
   -- scope: which candidate each object belongs to
   UNION ALL SELECT 'scope', 'rel:public.' || relname, 'candidates', cands FROM rel
@@ -301,6 +308,7 @@ facts(section, object, property, value) AS (
     FROM fn f JOIN pg_proc p ON p.oid = f.fnoid
     CROSS JOIN LATERAL (VALUES
       ('def_md5', md5(pg_get_functiondef(p.oid))),
+      ('def_md5_lf', md5(replace(pg_get_functiondef(p.oid), E'\r\n', E'\n'))),
       ('prosecdef', p.prosecdef::text),
       ('provolatile', p.provolatile::text),
       ('proleakproof', p.proleakproof::text),

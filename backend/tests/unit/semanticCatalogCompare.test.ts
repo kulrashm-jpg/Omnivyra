@@ -15,7 +15,7 @@ const gen = require('../../../scripts/release/catalog-fingerprint-build.js');
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 
 const BASE: Array<[string, string, string, string]> = [
-  ['meta', 'session', 'fingerprint_format', 'catalog-fingerprint/2'],
+  ['meta', 'session', 'fingerprint_format', 'catalog-fingerprint/3'],
   ['meta', 'session', 'server_version_num', '170006'],
   ['meta', 'session', 'transaction_read_only', 'on'],
   ['scope', 'rel:public.content', 'candidates', 'fix3:aux,revoke8:table'],
@@ -276,15 +276,190 @@ describe('semantic-compare-catalog', () => {
     expect(res.info.map((d: any) => d.property).sort()).toEqual(['flags', 'table:public.credit_transactions']);
   });
 
-  it('rejects fingerprints of the previous format', () => {
-    const old = base.replace('catalog-fingerprint/2', 'catalog-fingerprint/1');
-    expect(() => cmp.compareFingerprints(old, base)).toThrow(/unsupported fingerprint format catalog-fingerprint\/1/);
+  it('rejects fingerprints of a previous format', () => {
+    const old = base.replace('catalog-fingerprint/3', 'catalog-fingerprint/2');
+    expect(() => cmp.compareFingerprints(old, base)).toThrow(/unsupported fingerprint format catalog-fingerprint\/2/);
   });
 
   it('rejects malformed input and non-fingerprint files', () => {
     expect(() => cmp.parseFingerprint('a\tb\tc\n')).toThrow(/4 TAB-separated/);
     expect(() => cmp.parseFingerprint('rel\tx\ty\tz\n')).toThrow(/fingerprint_format/);
     expect(() => cmp.parseFingerprint(base + base)).toThrow(/duplicate fact/);
+  });
+});
+
+const BASE_TEXT = render(BASE as Row[]);
+
+// Line endings: SQL submitted with CRLF keeps CR bytes in prosrc, so def_md5 differs;
+// def_md5_lf (CRLF pairs -> LF, lone CR kept) separates line-ending-only differences.
+describe('semantic-compare-catalog: CRLF (eol_only)', () => {
+  const FN = 'fn:public.omnivyra_touch_updated_at()';
+  const withLf = (raw: string, lf: string) => mutate(
+    [...BASE, ['fn', FN, 'def_md5_lf', 'lf-0']] as Row[], prop('fn', FN, 'def_md5'), raw,
+  ).map((r) => (r[0] === 'fn' && r[2] === 'def_md5_lf' ? [r[0], r[1], r[2], lf] as Row : r));
+  const lfBase = render(withLf('b6c3', 'lf-0'));
+
+  it('(a) classifies a CRLF-only body difference as eol_only: blocking by default, accepted only explicitly', () => {
+    const right = render(withLf('crlf-raw', 'lf-0'));
+    let res = cmp.compareFingerprints(lfBase, right);
+    expect(res.semantic).toEqual([]);
+    expect(res.eol_only).toEqual([expect.objectContaining({ section: 'fn', object: FN, property: 'def_md5', kind: 'changed' })]);
+    expect(res.eol_only[0].reason).toMatch(/CRLF-vs-LF.*string literal/);
+    expect(res.equal).toBe(false);
+    expect(res.pass).toBe(false);
+    expect(res.warnings.join(' ')).toMatch(/eol_only differences \(1\) are blocking/);
+    res = cmp.compareFingerprints(lfBase, right, { acceptEolOnly: true });
+    expect(res.equal).toBe(true);
+    expect(res.eol_only).toHaveLength(1); // still listed
+    expect(res.warnings.join(' ')).toMatch(/ACCEPTED by --accept-eol-only/);
+    expect(cmp.renderText(res, 'l', 'r')).toMatch(/== EOL_ONLY ==/);
+  });
+
+  it('(b) keeps a real body change semantic even when the bodies also differ in CRLF', () => {
+    const right = render(withLf('crlf-raw-changed', 'lf-changed'));
+    const res = cmp.compareFingerprints(lfBase, right, { acceptEolOnly: true });
+    expect(res.eol_only).toEqual([]);
+    expect(res.semantic.map((d: any) => d.property).sort()).toEqual(['def_md5', 'def_md5_lf']);
+    expect(res.equal).toBe(false);
+  });
+
+  it('(c) keeps a lone-CR difference semantic (only CRLF pairs are normalized, so _lf differs)', () => {
+    // a lone CR survives replace(E'\r\n', E'\n'), so the generator emits a different def_md5_lf
+    const right = render(withLf('lone-cr-raw', 'lone-cr-lf'));
+    const res = cmp.compareFingerprints(lfBase, right, { acceptEolOnly: true });
+    expect(res.eol_only).toEqual([]);
+    expect(res.semantic.map((d: any) => d.property).sort()).toEqual(['def_md5', 'def_md5_lf']);
+  });
+
+  it('never claims eol_only when the _lf companion is missing on either side', () => {
+    const right = render(mutate(BASE as Row[], prop('fn', FN, 'def_md5'), 'crlf-raw'));
+    const res = cmp.compareFingerprints(lfBase, right, { acceptEolOnly: true });
+    expect(res.eol_only).toEqual([]);
+    expect(res.semantic.map((d: any) => `${d.property}|${d.kind}`).sort()).toEqual(['def_md5_lf|only_left', 'def_md5|changed']);
+  });
+
+  it('never treats a view-definition or policy difference as eol_only', () => {
+    const left = render([...BASE, ['rel', 'rel:public.content', 'viewdef_md5', 'v1']] as Row[]);
+    const right = render([...BASE, ['rel', 'rel:public.content', 'viewdef_md5', 'v2']] as Row[]);
+    const res = cmp.compareFingerprints(left, right, { acceptEolOnly: true });
+    expect(res.semantic).toEqual([expect.objectContaining({ property: 'viewdef_md5' })]);
+    const p = mutate(BASE as Row[], prop('policy', 'rel:public.content', 'policy:content_company_rw:qual'), "(x = 'a\\r\\nb'::text)");
+    expect(cmp.compareFingerprints(BASE_TEXT, render(p), { acceptEolOnly: true }).semantic).toHaveLength(1);
+  });
+});
+
+// N3: FIX3 STEP 7 adopts an existing updated_at executor or CREATEs set_content_updated_at().
+// A CREATE adds a real function (EXECUTE to PUBLIC by default): REVIEW, never noise.
+describe('semantic-compare-catalog: N3 CREATE-vs-adopt (review)', () => {
+  const SET = 'fn:public.set_content_updated_at()';
+  const OMNI = 'fn:public.omnivyra_touch_updated_at()';
+  const trg = (fn: string) => ['trg', 'rel:public.content_block', 'trg:content_block_set_updated_at',
+    `O|CREATE TRIGGER content_block_set_updated_at BEFORE UPDATE ON public.content_block FOR EACH ROW EXECUTE FUNCTION ${fn}()`] as Row;
+  const common = [...BASE, ['scope', SET, 'candidates', 'fix3:updated_at_executor'], ['fn', OMNI, 'exists', 'true']] as Row[];
+  // expected: adopted omnivyra_touch_updated_at; production: created set_content_updated_at
+  const adopt = render([...common, ['fn', SET, 'exists', 'false'], trg('public.omnivyra_touch_updated_at')]);
+  const create = render([...common,
+    ['fn', SET, 'exists', 'true'],
+    ['fn', SET, 'def_md5', 'c0de'],
+    ['fn', SET, 'owner', 'postgres'],
+    ['fn', SET, 'prosecdef', 'false'],
+    ['fnacl', SET, 'grantee:PUBLIC', 'EXECUTE'],
+    ['fnacl', SET, 'grantee:<owner>', 'EXECUTE'],
+    ['eff', SET, 'role:anon', 'EXECUTE=t'],
+    ['eff', SET, 'role:authenticated', 'EXECUTE=t'],
+    trg('public.set_content_updated_at')]);
+
+  it('(e) reports the CREATE-vs-adopt branch as REVIEW (blocking), naming the EXECUTE holders, never as noise', () => {
+    const res = cmp.compareFingerprints(adopt, create);
+    expect(res.noise).toEqual([]);
+    expect(res.semantic).toEqual([]);
+    expect(res.review.map((d: any) => `${d.section}|${d.object}|${d.property}|${d.kind}`).sort()).toEqual([
+      `eff|${SET}|role:anon|only_right`,
+      `eff|${SET}|role:authenticated|only_right`,
+      `fnacl|${SET}|grantee:<owner>|only_right`,
+      `fnacl|${SET}|grantee:PUBLIC|only_right`,
+      `fn|${SET}|def_md5|only_right`,
+      `fn|${SET}|exists|changed`,
+      `fn|${SET}|owner|only_right`,
+      `fn|${SET}|prosecdef|only_right`,
+      'trg|rel:public.content_block|trg:content_block_set_updated_at|changed',
+    ]);
+    const exists = res.review.find((d: any) => d.property === 'exists');
+    expect(exists.reason).toMatch(/N3 .*exists only on the right side.*EXECUTABLE by anon, authenticated on the right side/);
+    expect(res.equal).toBe(false);
+    expect(res.pass).toBe(false);
+    expect(cmp.renderText(res, 'l', 'r')).toMatch(/== REVIEW ==/);
+  });
+
+  it('keeps a body change of an executor that exists on both sides semantic (not review)', () => {
+    const right = create.replace(`fn\t${SET}\tdef_md5\tc0de`, `fn\t${SET}\tdef_md5\tbeef`);
+    const res = cmp.compareFingerprints(create, right);
+    expect(res.review).toEqual([]);
+    expect(res.semantic).toEqual([expect.objectContaining({ object: SET, property: 'def_md5' })]);
+  });
+
+  it('keeps any other trigger change semantic', () => {
+    const right = adopt.replace('BEFORE UPDATE', 'AFTER UPDATE');
+    const res = cmp.compareFingerprints(adopt, right);
+    expect(res.review).toEqual([]);
+    expect(res.semantic).toEqual([expect.objectContaining({ section: 'trg' })]);
+  });
+});
+
+// B2 invariants: absolute checks on one side, so an exposure shared by expected and
+// production still fails (equality alone cannot see it).
+describe('semantic-compare-catalog: invariants', () => {
+  const SET = 'fn:public.set_content_updated_at()';
+  const exposed = render([...BASE,
+    ['fn', SET, 'exists', 'true'],
+    ['eff', SET, 'role:authenticated', 'EXECUTE=t']] as Row[]);
+  const rules = cmp.parseInvariants([
+    '# set_content_updated_at must not be callable by authenticated',
+    `absent\teff\t${SET}\trole:authenticated\tEXECUTE=t`,
+    'expect\trel\trel:public.feature_flags\trelrowsecurity\ttrue',
+  ].join('\n'));
+
+  it('(d) FAILS an invariant violated on BOTH sides even though the comparison is equal', () => {
+    const res = cmp.compareFingerprints(exposed, exposed, { invariants: rules });
+    expect(res.equal).toBe(true);
+    expect(res.invariants_ok).toBe(false);
+    expect(res.pass).toBe(false);
+    expect(res.counts.invariant_failures).toBe(1);
+    expect(res.invariants[0]).toMatchObject({ side: 'right', kind: 'absent', status: 'fail', key_matches: 1 });
+    expect(res.invariants[0].offending).toEqual([expect.objectContaining({ object: SET, value: 'EXECUTE=t' })]);
+    expect(res.invariants[1]).toMatchObject({ kind: 'expect', status: 'pass' });
+    expect(cmp.renderText(res, 'l', 'r')).toMatch(/INVARIANTS: VIOLATED/);
+    // --invariants-side both evaluates each side
+    expect(cmp.compareFingerprints(exposed, exposed, { invariants: rules, invariantsSide: 'both' }).counts.invariant_failures).toBe(2);
+  });
+
+  it('passes when the invariant holds, and supports invariants-only mode on one fingerprint', () => {
+    const res = cmp.compareFingerprints(BASE_TEXT, BASE_TEXT, { invariants: rules });
+    expect(res.pass).toBe(true);
+    expect(res.warnings.join(' ')).toMatch(/matched no fact at all \(vacuous pass/);
+    const one = cmp.checkInvariants(exposed, rules, { label: 'prod.tsv' });
+    expect(one.pass).toBe(false);
+    expect(one.invariants[0].side).toBe('prod.tsv');
+  });
+
+  it('fails an expect rule that matches nothing or has a non-matching value; supports wildcards and regex', () => {
+    const r = cmp.parseInvariants([
+      'expect\trel\trel:public.no_such_table\trelrowsecurity\ttrue',
+      'absent\teff\trel:public.*\trole:anon\t~(^|,)[A-Z]+=t',
+      'expect\trel\trel:public.*\trelrowsecurity\ttrue',
+    ].join('\n'));
+    const right = render([...BASE, ['eff', 'rel:public.content', 'role:anon', 'DELETE=f,SELECT=t']] as Row[]);
+    const res = cmp.compareFingerprints(BASE_TEXT, mutate(right.trim().split('\n').map((l) => l.split('\t') as Row),
+      prop('rel', 'rel:public.feature_flags', 'relrowsecurity'), 'false').map((x) => x.join('\t')).join('\n') + '\n', { invariants: r });
+    expect(res.invariants.map((x: any) => x.status)).toEqual(['fail', 'fail', 'fail']);
+    expect(res.invariants[2].offending).toEqual([expect.objectContaining({ object: 'rel:public.feature_flags' })]);
+  });
+
+  it('rejects malformed or empty invariant files', () => {
+    expect(() => cmp.parseInvariants('absent\teff\tx\ty\n')).toThrow(/5 TAB-separated/);
+    expect(() => cmp.parseInvariants('maybe\teff\tx\ty\tz\n')).toThrow(/absent or expect/);
+    expect(() => cmp.parseInvariants('# only a comment\n')).toThrow(/no invariants/);
+    expect(() => cmp.parseInvariants('absent\teff\tx\ty\t~(\n')).toThrow(/bad regex/);
   });
 });
 
@@ -315,8 +490,16 @@ describe('catalog-fingerprint-build', () => {
     expect(committed).toMatch(/SELECT 'MAINTAIN' WHERE current_setting\('server_version_num'\)::int >= 170000/);
     expect(committed).toMatch(/'viewdef_md5', md5\(pg_get_viewdef\(c\.oid\)\)/);
     expect(committed).toMatch(/FROM pg_publication_tables pt/);
-    expect(committed).toMatch(/'catalog-fingerprint\/2'/);
+    expect(committed).toMatch(/'catalog-fingerprint\/3'/);
     expect(committed).toMatch(/NOT COVERED here \(by design\): the orchestration stack/);
+  });
+
+  it('records a CRLF-normalized function hash next to the raw one, and never normalizes view text', () => {
+    expect(committed).toMatch(/\('def_md5', md5\(pg_get_functiondef\(p\.oid\)\)\),/);
+    // only CRLF pairs; a lone CR stays in the hashed text
+    expect(committed).toMatch(/\('def_md5_lf', md5\(replace\(pg_get_functiondef\(p\.oid\), E'\\r\\n', E'\\n'\)\)\),/);
+    expect(committed).not.toMatch(/replace\(pg_get_viewdef/);
+    expect(committed).not.toMatch(/E'\\r', E''/);
   });
 
   it('is wrapped read-only and contains no write statements', () => {

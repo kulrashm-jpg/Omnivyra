@@ -6,7 +6,8 @@ Release branch `feat/orchestration-engine-adapters`, rebased (2026-10-29, `--reb
 onto `main` `2044d7a3b4b748ed4fc2c41baafbad8e68d7d473` (PRs #355–#357, after #349–#354). The rebased
 tree equals `git merge-tree --write-tree 2044d7a3 e07e04cb`, and the branch diff is identical to the
 pre-rebase diff (205 files; compared with `git diff --full-index` and `git diff --raw --no-abbrev`, because
-abbreviated blob ids in plain `git diff` output can change length as the object store grows). Re-check `git ls-remote origin refs/heads/main` immediately before any release step: if
+abbreviated blob ids in plain `git diff` output can change length as the object store grows).
+*Update 2026-10-30:* the release candidate is integrated onto `main` `09a2cf49a57e8000cf64cbf5476df9887bf28c8f` (adds #358–#361, including the PI migrations `20270105000000`/`20270106000000` and the historical ledger version map); the release commit and its tree are recorded in the release report, since this file is part of that tree. The paragraph above describes the earlier rebase. Re-check `git ls-remote origin refs/heads/main` immediately before any release step: if
 `main` has moved again, rebase and re-run the gates first.
 
 Stack migrations: `20261127000000` and `20261226000000` … `20261231000010`.
@@ -39,7 +40,7 @@ not what production contains. Running this handoff needs separate, explicit auth
 | 1 | A **fresh** read-only PostgreSQL credential (§0.1) | A, B1, C1 | Never reuse the stale pooler password from `.env.local`: retries risk a lockout. |
 | 2 | Supabase **Logs Explorer** read access, or Management API analytics read | C2 | A separate grant from the database role. |
 | 3 | The owner's **SQL Editor history and saved snippets** | B0 | Only the owner can read these. |
-| 4 | *(Optional)* `pg_read_all_stats` for the credential, or the owner running the probe as `postgres` | B0 | Without it, `pg_stat_statements` text is hidden, and the probe reports NOT INSPECTABLE. |
+| 4 | *(Optional)* the owner running the probe as `postgres` on a separate owner connection. Do not grant `pg_read_all_stats` to the read-only credential: Step 0 stops on any membership other than `pg_read_all_data` | B0 | Without it, `pg_stat_statements` text is hidden, and the probe reports NOT INSPECTABLE. |
 
 **Workstation rules.** These apply to every step.
 
@@ -219,6 +220,8 @@ release tree, the run found 0 stack findings and 0 BLOCKING. It still exited 3 b
   `content_performance`, `learning_intelligence`, `learning_memory` and `content_prediction`;
 - a ledger desync.
 
+*Update 2026-10-30:* since #361, a ledger desync is reported only for orphan rows (a recorded version with no repo file) or a historical-version-map violation. With #360 and #361 on `main`, production should not desync if its three legacy rows match the map (check them first with the read-only ledger query in the release evidence package). If production still reports a desync, record the exact rows and stop for owner review; do not accept it as an expected item.
+
 A limited read-only login and a superuser produced byte-identical results. Production has a desynced
 ledger and a legacy table occupying `active_leads`, so expect these items there too. The owner must sign
 off a written list of them.
@@ -263,10 +266,10 @@ Rules:
   available evidence**.
 - close_anon was applied with `psql -1 -f` on 2026-09-13, so an SQL Editor hit for it is unlikely.
 
-**Optional statement-text probe.** Run this as `postgres`, or with `pg_read_all_stats`:
+**Optional statement-text probe.** The owner runs this as `postgres` on a separate connection (not the read-only credential, which cannot see other roles' statement text and must not be given `pg_read_all_stats`). `$OWNER_PG_URL` carries no password; the password comes from `PGPASSWORD` or a pgpass file, never the command line:
 
 ```
-psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/pg-stat-statements-probe.sql > pgss.out
+psql "$OWNER_PG_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/pg-stat-statements-probe.sql > pgss.out
 ```
 
 If the probe prints `NOT INSPECTABLE`, the text could not be seen. That is never evidence that the
@@ -281,7 +284,9 @@ psql "$PROD_READONLY_URL" -X -v ON_ERROR_STOP=1 -f scripts/release/catalog-finge
 
 **What it covers:**
 
-- the close_anon, FIX3 and revoke8 objects, in format `catalog-fingerprint/2`;
+- the close_anon, FIX3 and revoke8 objects, in format `catalog-fingerprint/3` (adds `def_md5_lf`, the
+  function-definition hash with CRLF pairs replaced by LF; a raw-only difference is reported as `eol_only`,
+  which still blocks unless `--accept-eol-only` is passed);
 - ACLs, effective privileges (including MAINTAIN on PG17), RLS, policies, owners, function bodies, and
   view-definition hashes;
 - publication membership;
@@ -339,6 +344,9 @@ node scripts/release/semantic-compare-catalog.js expected.tsv prod.tsv --json > 
 - `--owner-map` is the only way to declare two owners equivalent, and it prints a warning.
 - `--role-map` (and `-left` / `-right`) rewrites only role positions. It refuses API roles, PUBLIC and
   merges, and lists every rewrite. Do not use it without an owner-approved reason.
+- `eol_only` (exit 1): a function's raw `def_md5` differs but `def_md5_lf` (CRLF pairs replaced by LF) is equal. It is listed and blocks unless `--accept-eol-only` is passed, which the owner must approve in writing, because a CRLF inside a string literal changes runtime values.
+- `review` (exit 1): one side has an `updated_at` executor the other lacks, or the `content_block` trigger runs a different executor (FIX3's create-versus-adopt branch). It names who can EXECUTE the extra function. It is not noise.
+- `--invariants <file>` evaluates absolute rules (`absent` / `expect`) on production (`--invariants-side` to change), so an exposure shared by both databases still fails. An `absent` rule that matches no fact passes with a "vacuous pass" warning. An invariants file must be committed and pinned in §4 before it is used.
 
 **Unavoidable environment noise.** List every item and accept it in writing; nothing is suppressed
 automatically.
@@ -393,6 +401,11 @@ scopes: FIX3 plus the revoke, close_anon (177 tables, 37 views, 29 functions), t
 | S08 | Default privileges |
 | S09 | Publications |
 | S12 | Views and policies that depend on in-scope tables |
+| S13 | Every relation in the API-exposed schemas × anon, authenticated, authenticator, service_role, PUBLIC: direct grant, effective privilege (all 8 types; MAINTAIN on PG17), RLS, FORCE, applicable policies per command |
+| S14 | Column-level grants and privileges held only through columns |
+| S15 | Absolute assertions (P10): PASS / FAIL / REVIEW / ABSENT rows and one `summary` row. They do not depend on any comparison, so an exposure shared by the expected and production databases still FAILs |
+| S16 | SECURITY DEFINER functions in exposed schemas: EXECUTE for PUBLIC/anon/authenticated, `search_path` set or not, in-scope tables named in their bodies |
+| S17 | pg_graphql: installed or not, schema USAGE and resolver EXECUTE per role |
 
 Filter `release_gate_ro` out of S01 and S03.
 
@@ -507,7 +520,7 @@ the script's sha256, and the output file name.
 | 1 | `node scripts/release/runbook-preflight-build.js docs/release/orchestration-engine-adapters-migration-runbook.md preflight.sql` then `psql … -f preflight.sql` | `01-preflight.sql`, `01-preflight.out` | builder printed 16 blocks; sha256 `61fcb70a…`; exit 0; no STOP condition in §A1 |
 | 2 | `node scripts/verify-schema-parity.js --strict` (env per §A2) | `02-parity-baseline.json`, `02-parity-baseline.exit` | exit 1 with the expected A-baseline shape; `session.tx_read_only = on` |
 | 3 | `psql … -f scripts/release/catalog-fingerprint.sql` | `03-fingerprint.tsv` | exit 0 (otherwise discard the file) |
-| 4 | `psql … -f scripts/release/grants-acl-check.sql` | `04-grants.tsv` | exit 0 |
+| 4 | `psql … -f scripts/release/grants-acl-check.sql` | `04-grants.tsv` | exit 0; record the `S15` `summary` row and every FAIL/REVIEW row. FAIL rows do not stop the session (they are the evidence for Decisions D–G). The script exits 0 even when assertions FAIL, so exit 0 alone is not a C1 pass: C1 passes only when FAIL=0, or each FAIL row is accepted in writing by the owner. |
 | 5 (optional) | `psql … -f scripts/release/pg-stat-statements-probe.sql` | `05-pgss.out` | any result; `NOT INSPECTABLE` is recorded as such |
 | L | Logs Explorer: `api-log-queries.sql` Q1–Q5b, one day per slice | `L-<query>-<slice start>.csv` + `L-slices.tsv` (start, end, status, rows) | every slice in the retention window recorded, zeros included |
 | B0 | owner: `sql-recovery-checklist.md`, then `recovery-intake.js` | `B0-<artifact>-<n>.sql` + `.intake.json` | one outcome per artifact (RECOVERED with verdict, or UNRECOVERABLE) |
@@ -522,15 +535,15 @@ Record these in the session and compare before running anything. Values are sha2
 
 | File | sha256 |
 |---|---|
-| `scripts/verify-schema-parity.js` | `da3e236a209503e04bbb95098baa3608d7d91b1bee2e69a960d43d755ed47afd` |
-| `scripts/predeploy-check.js` (not used in the session) | `588ff66b4f5c0f92d0030973331c870b123ca8457125b8ec5d3558786001412d` |
+| `scripts/verify-schema-parity.js` | `97dfe3a2d424fbd84eccbf17d586aecdfc95e1650f3a926a02f6cc3f36bed54e` |
+| `scripts/predeploy-check.js` (not used in the session) | `b95a358917742d0b4401b90e0e755ab55e076a83c472f8d236d9ae4c0e3d9f72` |
 | `scripts/release/session-readiness-check.sql` | `cfe22a3d410c878b00adbd101d13292f387b3e9a72434b2a8f5e146fff05719d` |
 | `scripts/release/runbook-preflight-build.js` | `03b839668a94cf2afaaac317308bed9371b331c54a47fb94d08d81ecfa39cda6` |
 | generated `preflight.sql` (16 blocks) | `61fcb70afbc9066cd1df1cdb6eec4620116a40a2b0359cd7afab3f8f2905bdcb` |
-| `scripts/release/catalog-fingerprint.sql` | `f928401fc84428dbc875087479c801da32cc94bb043811dcb58217c7e20cc7e0` |
-| `scripts/release/catalog-fingerprint-build.js` | `9849bc9c43b8f5d9313dad6fb4b64f0c7cacad6256bebd565dd163a95e842c11` |
-| `scripts/release/semantic-compare-catalog.js` | `f60e9ef68994619f085f9473d5cbaacf80d9a26916f624a9578f3ad64a9b7f91` |
-| `scripts/release/grants-acl-check.sql` | `c07a7001399eb6c34e51d826874dd12d847ba14711eeb3e633e8f80e8bcf3793` |
+| `scripts/release/catalog-fingerprint.sql` | `a2d73bd0a59d7836aae71936902992e17d0bfca0c2e09f945c14c198444e34c9` |
+| `scripts/release/catalog-fingerprint-build.js` | `f2bb2301627a652745d5af5e30766bbe228a04db119ebf343a105a8d05a1ffae` |
+| `scripts/release/semantic-compare-catalog.js` | `7800c1e247ca80f4477b02121853874089d9d19a81c551163847b4e43a1d918b` |
+| `scripts/release/grants-acl-check.sql` | `bb7d04f768d1f14c81ebfbc3c9730b6d389650c1fe3dec1c8fa90f6ef14435ee` |
 | `scripts/release/api-log-queries.sql` | `5dbe01a249d256bee8d859447ceadddd86b31b546324e56c0f267ffe18188ae6` |
 | `scripts/release/pg-stat-statements-probe.sql` | `cdf50079ffda85876cbc82bf2f4d36776f505f2a204e1fe8d48d3c555ab4f2ae` |
 | `scripts/release/recovery-intake.js` | `b0353c5f5f952b09177cb5aac18e9cd1a9fc339e36912058129b5154060c88cd` |
