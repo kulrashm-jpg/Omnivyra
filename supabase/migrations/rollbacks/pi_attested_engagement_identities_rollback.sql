@@ -1,0 +1,26 @@
+-- Rollback for 20270106000000_pi_attested_engagement_identities.sql
+--
+-- Drops the attested engagement identity registry. One new table, one trigger,
+-- two indexes and one policy, all created by that migration and nothing else,
+-- so DROP TABLE removes exactly what it added.
+--
+-- ─── WHAT ROLLING BACK COSTS, STATED PLAINLY ──────────────────────────────
+-- The registry holds NEGATIVE evidence: an active row means "never admit this
+-- identity's words as a prospect's own statement". With the relation absent the
+-- repository reports `store_unavailable` and `legible: false` on every call —
+-- which is the FAIL-CLOSED answer, not "nothing is owned". Callers must keep
+-- treating it that way: a caller that reads an unavailable registry as an empty
+-- one would re-admit a tenant's own marketing copy as prospect evidence, which
+-- is exactly the defect the registry was introduced to end.
+--
+-- Rolling back therefore DESTROYS administrator attestations, including the
+-- revocation history that records a withdrawn claim. There is no re-derivation:
+-- the OAuth tables are a different identity namespace (see the migration
+-- header), so nothing can reconstruct these rows. Export the table before
+-- running this if the statements still matter.
+--
+-- DROP TABLE removes the dependent trigger, both indexes and the policy with
+-- the table; they are not named again here, and nothing else in the schema
+-- depends on this relation.
+
+DROP TABLE IF EXISTS public.attested_engagement_identities;
