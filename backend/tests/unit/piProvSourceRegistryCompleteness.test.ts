@@ -167,10 +167,10 @@ describe('provenance source registry — taxonomy / display mapping', () => {
 const PRODUCERS = [
   'backend/services/prospectProvenance/ingestion/sourceProfiles.ts',
   'backend/services/prospectProvenance/communityBridge.ts',
+  // pi_enrichment (owner decision 5): the producer, wired from enrichment persistence.
+  'backend/services/prospectProvenance/ingestion/enrichmentContribution.ts',
 ];
-const KNOWN_GAPS: Partial<Record<SourceCategory, string>> = {
-  pi_enrichment: 'profile is defined in sourceProfiles.ts, but enrichment persistence (backend/services/enrichment/providers/persistence.ts) does not yet record a contribution',
-};
+const KNOWN_GAPS: Partial<Record<SourceCategory, string>> = {};
 
 describe('provenance source registry — every category has a production producer', () => {
   const producerSource = PRODUCERS.map((p) => fs.readFileSync(path.join(REPO, p), 'utf8')).join('\n');
@@ -183,8 +183,16 @@ describe('provenance source registry — every category has a production produce
     expect(producerSource).toContain(`'${category}'`);
   });
 
-  it('the known-gap list is exactly the categories still unwired', () => {
-    expect(Object.keys(KNOWN_GAPS).sort()).toEqual(['pi_enrichment']);
+  it('the known-gap list is exactly the categories still unwired (none)', () => {
+    expect(Object.keys(KNOWN_GAPS).sort()).toEqual([]);
+  });
+
+  it('pi_enrichment is reached from the enrichment persistence port, not merely defined', () => {
+    const persistence = fs.readFileSync(
+      path.join(REPO, 'backend', 'services', 'enrichment', 'providers', 'persistence.ts'), 'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    expect(persistence).toContain("from '../../prospectProvenance/ingestion/enrichmentContribution'");
+    expect(persistence).toMatch(/await recordContribution\(/);
   });
 });
 

@@ -119,6 +119,12 @@ export interface ExecuteEnrichmentPorts {
     payloadHash: string | null;
     observedAt: string | null;
     correlationId: string;
+    /**
+     * PROVENANCE — the canonical prospect this enrichment is for, when the
+     * caller knows it. Optional and additive: it only selects which prospect
+     * the provider is recorded as a contributing source of.
+     */
+    prospectId?: string | null;
   }): Promise<{ sourceRecordId: string; canonicalWithheld: readonly { attribute: string; reason: string }[] }>;
 
   now(): string;
@@ -309,6 +315,7 @@ export async function executeEnrichment(
     // observation time, and recording it as such would age evidence wrongly.
     observedAt: usable.find((f) => f.observedAt)?.observedAt ?? null,
     correlationId: request.correlationId,
+    prospectId: request.prospectId ?? null,
   });
 
   const normalized = normalizeEnrichmentResult({

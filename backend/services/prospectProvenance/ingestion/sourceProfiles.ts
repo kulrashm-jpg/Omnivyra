@@ -43,10 +43,26 @@ export const PI_ADAPTER_PROFILES: Readonly<Record<string, IngestionSourceProfile
   manual: { sourceCategory: 'manual', platform: null, refProvider: 'manual' },
 });
 
-/** Apollo enrichment of an existing prospect (not wired by Agent 2; see report). */
-export const PI_ENRICHMENT_PROFILE: IngestionSourceProfile = Object.freeze({
-  sourceCategory: 'pi_enrichment', platform: 'apollo', refProvider: 'apollo',
-});
+/**
+ * Provider enrichment of an EXISTING prospect (`enrichment/providers/persistence.ts`).
+ *
+ * Enrichment never originates a prospect: it is always recorded as a
+ * `contributing` source. The platform is the provider that answered, and the
+ * reference namespace is `enrichment_<provider>` — deliberately NOT the
+ * provider's discovery namespace (`apollo:`), so an enrichment observation can
+ * never collide with, or be mistaken for, the discovery event that originated
+ * the prospect. Returns null for a provider id that cannot form a valid
+ * namespace (never sanitised into a guessed one).
+ */
+export function piEnrichmentProfile(providerId: string | null | undefined): IngestionSourceProfile | null {
+  const provider = String(providerId ?? '').trim().toLowerCase();
+  const refProvider = `enrichment_${provider}`;
+  if (!provider || !/^[a-z][a-z0-9_]{0,39}$/.test(provider) || !/^[a-z][a-z0-9_]{0,39}$/.test(refProvider)) return null;
+  return Object.freeze({ sourceCategory: 'pi_enrichment', platform: provider, refProvider });
+}
+
+/** Apollo enrichment profile (the only enrichment provider live today). */
+export const PI_ENRICHMENT_PROFILE: IngestionSourceProfile = piEnrichmentProfile('apollo')!;
 
 /**
  * The legacy CRM importer (`crmIngestionService`). It does not know which CRM

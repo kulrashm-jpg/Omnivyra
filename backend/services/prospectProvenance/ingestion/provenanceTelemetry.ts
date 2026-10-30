@@ -15,7 +15,8 @@ export type ProvenancePath =
   | 'inbound_lead'
   | 'legacy_crm'
   | 'pi_ingestion'
-  | 'marketpulse';
+  | 'marketpulse'
+  | 'pi_enrichment';
 
 /** `succeeded`/`inserted`/`duplicate`/`skipped` are healthy; `failed`/`error` are failures. */
 export type ProvenanceOutcome =
