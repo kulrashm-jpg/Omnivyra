@@ -449,7 +449,7 @@ describe('acceptance #1 — one prospect, three sources, three contributions (re
       const enr = c.find((r: any) => r.source_category === 'pi_enrichment');
       expect(enr).toMatchObject({
         organization_id: ORG_A, canonical_lead_id: d.prospectId, contribution_role: 'contributing',
-        platform: 'apollo', external_ref: `enrichment_apollo:account:${d.accountId}`, ingestion_run_id: 'enrich-corr-acc1',
+        platform: 'apollo', external_ref: expect.stringMatching(new RegExp(`^enrichment_apollo:account:${d.accountId}:[0-9a-f]{16}$`)), ingestion_run_id: 'enrich-corr-acc1',
       });
       expect(enr.observed_at).toBeInstanceOf(Date);
       const enrSr = (await q(`SELECT * FROM public.source_records WHERE id=$1`, [enr.source_record_id])).rows[0];
@@ -509,7 +509,8 @@ describe('acceptance #1 — one prospect, three sources, three contributions (re
 
       const c = await contributionsOf(ORG_A);
       expect(c).toHaveLength(3);
-      expect(new Set(c.map((r: any) => r.external_ref))).toEqual(new Set([
+      // closure C: the enrichment ref is content-addressed (`…:<16-hex fingerprint>`).
+      expect(new Set(c.map((r: any) => String(r.external_ref).replace(/:[0-9a-f]{16}$/, '')))).toEqual(new Set([
         `apollo:${APOLLO_PERSON_ID}`, `enrichment_apollo:account:${d.accountId}`, `community:${feed.id}`,
       ]));
       expect(new Set(c.map((r: any) => r.source_category))).toEqual(new Set(['pi_discovery', 'pi_enrichment', 'community']));

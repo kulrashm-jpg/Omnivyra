@@ -79,3 +79,40 @@ and then the legacy raw key, so a resync never creates a duplicate prospect.
 ## Scores
 Every score carries its scale (`unit` 0..1 or `percent` 0..100). Conversion is explicit
 (`toUnitScore`); different scales are never compared implicitly.
+
+## Enrichment contributions and score availability (closure C)
+Code: `backend/services/prospectProvenance/ingestion/enrichmentContribution.ts`,
+`lib/prospectProvenance/scoreSemantics.ts`; migration `20270109000002_pi_qualification_score_nullable.sql`.
+
+**Enrichment is never an originator.** It records `contributing` rows only (`source_category =
+'pi_enrichment'`, `platform = <provider>`), never writes `canonical_leads` and never touches the
+originating contribution or the prospect's original `source`/`created_at`.
+
+**Refresh (content-addressed `external_ref`).** `enrichment_<provider>:<subject>:<entityId>:<fp>`, where
+`<fp>` = first 16 hex of sha256 over the normalised `(subject, attribute, value)` set the provider
+returned (trimmed, whitespace-collapsed, case-folded; arrays de-duplicated and sorted; empty values
+ignored). Provider time, payload hash, confidence and correlation id are not inputs. The idempotency key
+stays `(organization_id, canonical_lead_id, external_ref)`:
+- identical refresh ⇒ same ref ⇒ `duplicate` (nothing new);
+- materially different observation ⇒ new ref ⇒ a new `contributing` row; earlier rows remain (history).
+
+Values are hashed, never stored: `evidence` holds attribute names, `observationFingerprint`,
+`payloadHash`, `evidenceLevel`, `accountLink`.
+
+**Applicability.**
+| Evidence | Attaches to | Never |
+|---|---|---|
+| Person (`subject = person`) | The caller's prospect only if `canonical_leads.unified_person_id` = that person; without a caller prospect, the tenant's single prospect anchored to the person | A prospect anchored to another person; any prospect when the person has several (`ambiguous_prospect`) |
+| Account (`subject = account`) | Prospects whose account link is **evidenced**: (1) the prospect's originating contribution's `source_records.account_id` = the account, or (2) its person's `unified_persons.account_id` = the account, or (3) a current (`ended_at IS NULL`) `person_account_relationships` row for its person and the account. Caller prospect ⇒ that prospect if evidenced; no caller prospect ⇒ every evidenced prospect (cap 50) | Unevidenced prospects (`account_link_unevidenced`); a partial fan-out (over cap or incomplete read ⇒ nothing, `too_many_account_prospects`) |
+
+Account evidence carries `evidence.evidenceLevel = 'account'`, `personId = null` and `accountLink` (which
+of the three rules matched). Readers must present it as company-level evidence, never as a fact about the
+person. All lookups are tenant-filtered.
+
+**Score availability.** NULL = unscored/unavailable; 0 = genuinely scored zero; missing is never
+converted to 0. `canonical_leads.qualification_score` is nullable with no default from `20270109000002`
+(range CHECK 0..100 kept). Existing rows are not backfilled. Rule for rows that may hold the old default:
+a stored 0 counts as a score only when `lead_metadata.qualificationScoring` is present (a scorer that can
+emit 0 must stamp it); a bare 0 is reported as unscored (`legacy_default`). Writers omit or write NULL when
+unscored (WS-1 resolver omits; CRM writes NULL when the row has no usable revenue). Readers exclude unscored
+leads from averages and intent bands (`intentBands.unscored`), export "not scored", and never show 0%.

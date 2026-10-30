@@ -18,6 +18,7 @@ import type {
 import { buildAttributionContract } from './attribution';
 import { resolveCanonicalSource, PI_DISCOVERY_PROVIDERS } from './sourceTaxonomy';
 import { toUnitScore, type ScoreScale } from '../prospectProvenance/contract';
+import { effectiveQualificationScore } from '../prospectProvenance/scoreSemantics';
 
 type Row = Record<string, unknown>;
 const s = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : v == null ? null : String(v));
@@ -68,7 +69,8 @@ export const SOURCE_SCORE_SCALES: Readonly<Record<string, ScoreScale>> = Object.
 const TOTAL_FIELDS = ['total_score', 'qualification_score', 'opportunity_score', 'lead_score'] as const;
 
 function readScore(row: Row, field: string, sourceScores: SourceScore[]): number | null {
-  const raw = row[field];
+  // closure C: NULL = unscored; a legacy-default 0 (no scoring marker) is unscored too — never a 0 score.
+  const raw = field === 'qualification_score' ? effectiveQualificationScore(row[field], row.lead_metadata) : row[field];
   const value = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN;
   if (!Number.isFinite(value)) return null;
   const scale = SOURCE_SCORE_SCALES[field] ?? 'unit';

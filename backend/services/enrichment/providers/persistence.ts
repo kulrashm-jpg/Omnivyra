@@ -256,6 +256,10 @@ export function makePersistObservation(
         ingestedAt: new Date().toISOString(),
         correlationId: input.correlationId,
         attributes: input.fields.map((f) => f.attribute),
+        // Content-addresses the contribution (closure C): an identical refresh
+        // is a duplicate, a materially different one a new contributing row.
+        // Hashed only — the values are never written into the evidence.
+        observedValues: input.fields.map((f) => ({ subject: f.subject, attribute: f.attribute, value: f.value })),
         payloadHash: input.payloadHash ?? null,
       });
     } catch {

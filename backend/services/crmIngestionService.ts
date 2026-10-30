@@ -191,13 +191,30 @@ async function upsertCanonicalUser(
  * that first and then the LEGACY raw key, so the prospects production already
  * holds (raw keys) are matched, never duplicated.
  */
+/**
+ * The CRM qualification score (percent, 0..100), or null when UNSCORED.
+ *
+ * closure C: the score is derived from the CRM's revenue only. A row with no
+ * usable revenue gives the scorer nothing to score, so it is unscored (NULL) —
+ * it used to be stamped 40, a value no evidence supported. A row WITH revenue
+ * keeps the existing rule exactly (floor 40, revenue/100, cap 100), so this
+ * scorer never emits 0 and needs no `qualificationScoring` marker.
+ */
+export function crmQualificationScore(revenue: unknown): number | null {
+  if (revenue === null || revenue === undefined || (typeof revenue === 'string' && revenue.trim() === '')) return null;
+  const n = typeof revenue === 'number' ? revenue : Number(revenue);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(100, Math.max(40, Math.round(n / 100)));
+}
+
 async function upsertCanonicalLead(params: {
   companyId: string;
   userId: string;
   leadKey: string;
   source: string;
   createdAt: string;
-  qualificationScore: number;
+  /** closure C: null = unscored (the CRM gave no revenue to score from). */
+  qualificationScore: number | null;
   row: CrmLeadRecord;
   unifiedPersonId: string;
 }): Promise<{ id: string; created: boolean; matchedKey: 'namespaced' | 'legacy' | null; prospectKey: string }> {
@@ -229,10 +246,19 @@ async function upsertCanonicalLead(params: {
       qualification_score: params.qualificationScore,
     };
     if (!existing.unified_person_id) update.unified_person_id = params.unifiedPersonId;
-    const { error } = await ownedDbTable('canonical_leads')
+    let { error } = await ownedDbTable('canonical_leads')
       .update(update)
       .eq('id', existing.id)
       .eq('company_id', params.companyId);
+    if (error?.code === '23502' && params.qualificationScore === null) {
+      // closure C deploy tolerance: before 20270109000002 the column is NOT NULL.
+      // Keep the stored value rather than fail the import; never write a fake 0.
+      const { qualification_score: _unscored, ...withoutScore } = update;
+      ({ error } = await ownedDbTable('canonical_leads')
+        .update(withoutScore)
+        .eq('id', existing.id)
+        .eq('company_id', params.companyId));
+    }
     if (error) {
       throw new Error(`Failed to update CRM lead: ${error.message}`);
     }
@@ -250,7 +276,10 @@ async function upsertCanonicalLead(params: {
     unified_person_id: params.unifiedPersonId,
     source: params.source,
     created_at: params.createdAt,
-    qualification_score: params.qualificationScore,
+    // closure C: an unscored row OMITS the column — NULL once 20270109000002 is
+    // applied (no default); before it, the old default 0, which readers treat as
+    // the legacy default (unscored), never as a score.
+    ...(params.qualificationScore === null ? {} : { qualification_score: params.qualificationScore }),
     external_lead_key: keys.namespaced,
     lead_status: params.row.status ?? null,
     lead_metadata: params.row.metadata ?? {},
@@ -435,7 +464,7 @@ async function ingestCrmRows(
 
     const userId = await upsertCanonicalUser(companyId, row, userKey, identity.unifiedPersonId);
 
-    const qualificationScore = row.revenue != null ? Math.min(100, Math.max(40, Math.round(safeNumber(row.revenue, 0) / 100))) : 40;
+    const qualificationScore = crmQualificationScore(row.revenue);
 
     const canonicalLead = await upsertCanonicalLead({
       companyId,

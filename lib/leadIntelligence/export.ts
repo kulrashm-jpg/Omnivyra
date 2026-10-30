@@ -111,7 +111,13 @@ export const DISCLOSE_NOTHING: ExportDisclosure = { email: false, phone: false, 
 export const EXPORT_WITHHELD = '[withheld: contact governance]';
 
 const s = (v: unknown): string => (v == null ? '' : String(v));
-const intentOf = (v: CanonicalLeadView): number => v.scores.intent ?? v.scores.total ?? 0;
+const intentOf = (v: CanonicalLeadView): number | null => v.scores.intent ?? v.scores.total ?? null;
+/** closure C: an unscored lead exports as "not scored", never "0%". */
+export const EXPORT_NOT_SCORED = 'not scored';
+const intentLabel = (v: CanonicalLeadView): string => {
+  const i = intentOf(v);
+  return i === null ? EXPORT_NOT_SCORED : `${Math.round(i * 100)}%`;
+};
 
 export function toExportRow(
   view: CanonicalLeadView,
@@ -139,7 +145,7 @@ export function toExportRow(
     campaign: s(view.campaign),
     journey: s(view.attribution.originalSource ? `${view.attribution.originalSource} → ${view.source}` : view.source),
     timeline_summary: s(extras?.timelineSummary ?? view.occurredAt),
-    buying_intent: `${Math.round(intentOf(view) * 100)}%`,
+    buying_intent: intentLabel(view),
     content_interests: s((extras?.contentInterests ?? []).join('; ') || view.content),
     recommended_next_action: disclosure.action ? recommendNextAction(view) : EXPORT_WITHHELD,
     // W0-B. Redacting `identity` alone is NOT an egress control: the generated

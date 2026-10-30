@@ -66,12 +66,16 @@ export async function generateDistributionIntelligenceDecisions(companyId: strin
   }
 
   const leadRows = (leads ?? []) as LeadRow[];
-  const byLeadSource = new Map<string, { count: number; qualityTotal: number }>();
+  const byLeadSource = new Map<string, { count: number; qualityTotal: number; scoredCount: number }>();
   for (const lead of leadRows) {
     const source = normalizeText(lead.source) || 'unknown';
-    const current = byLeadSource.get(source) ?? { count: 0, qualityTotal: 0 };
+    const current = byLeadSource.get(source) ?? { count: 0, qualityTotal: 0, scoredCount: 0 };
     current.count += 1;
-    current.qualityTotal += Number(lead.qualification_score ?? 0);
+    // closure C: an unscored (NULL) lead is excluded from quality, never counted as 0.
+    if (lead.qualification_score != null && Number.isFinite(Number(lead.qualification_score))) {
+      current.qualityTotal += Number(lead.qualification_score);
+      current.scoredCount += 1;
+    }
     byLeadSource.set(source, current);
   }
 
@@ -155,7 +159,7 @@ export async function generateDistributionIntelligenceDecisions(companyId: strin
     });
   }
 
-  const weakLeadSource = [...byLeadSource.entries()].find((entry) => entry[1].count >= 5 && (entry[1].qualityTotal / entry[1].count) < 45);
+  const weakLeadSource = [...byLeadSource.entries()].find((entry) => entry[1].scoredCount >= 5 && (entry[1].qualityTotal / entry[1].scoredCount) < 45);
   if (weakLeadSource) {
     decisions.push({
       company_id: companyId,
@@ -169,7 +173,7 @@ export async function generateDistributionIntelligenceDecisions(companyId: strin
       evidence: {
         source: weakLeadSource[0],
         lead_count: weakLeadSource[1].count,
-        average_quality: weakLeadSource[1].qualityTotal / weakLeadSource[1].count,
+        average_quality: weakLeadSource[1].qualityTotal / weakLeadSource[1].scoredCount,
       },
       impact_traffic: 20,
       impact_conversion: 58,

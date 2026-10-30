@@ -66,7 +66,7 @@ describe('Phase 7 — Lead Intelligence Workspace', () => {
     expect(s.total).toBe(2);
     expect(s.bySource).toEqual({ website: 1, community: 1 });
     expect(s.byStatus).toEqual({ new: 1, reviewing: 1 });
-    expect(s.intentBands).toEqual({ high: 1, medium: 0, low: 1 });
+    expect(s.intentBands).toEqual({ high: 1, medium: 0, low: 1, unscored: 0 }); // closure C: unscored is its own band
     expect(s.withIdentity).toBe(2);
     expect(s.withCampaign).toBe(1);
   });
