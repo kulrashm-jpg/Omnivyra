@@ -264,7 +264,7 @@ describe('account applicability (evidenced only, marked account-level)', () => {
     }
     // Repeat is idempotent across the whole fan-out.
     const again = await recordEnrichmentContribution(acc);
-    expect((again as { targets: Array<{ outcome: { status: string } }> }).targets.every((t) => t.outcome.status === 'duplicate')).toBe(true);
+    expect((again as unknown as { targets: Array<{ outcome: { status: string } }> }).targets.every((t) => t.outcome.status === 'duplicate')).toBe(true);
     expect(store).toHaveLength(4);
   });
 

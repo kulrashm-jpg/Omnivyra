@@ -282,7 +282,12 @@ describe('closure A — complete erasure of a person (real PG)', () => {
     // Without the erasure the person cannot even be deleted (lead_intelligence is RESTRICT).
     expect(await attempt('DELETE FROM public.unified_persons WHERE id=$1', [g.person])).toBe('23503');
 
-    const r = await asServiceRole(() => erase(ORG_A, g.person));
+    // The function's JSON result, as the assertions below read it.
+    type ErasureResult = {
+      redacted: number; already_redacted: number; contribution_ids: string[];
+      canonical_lead_ids: string[]; counts: Record<string, number>;
+    };
+    const r = (await asServiceRole(() => erase(ORG_A, g.person))) as ErasureResult;
     expect(r.redacted).toBe(2);
     expect(r.already_redacted).toBe(0);
     expect([...r.contribution_ids].sort()).toEqual([g.contribution, g.contributionAccount].sort());
