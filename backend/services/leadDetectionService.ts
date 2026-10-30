@@ -141,6 +141,11 @@ export async function processMessageForLeads(input: {
   intent?: string | null;
   sentiment?: string | null;
   thread_context?: string | null;
+  /**
+   * Campaign/content attribution known to the caller (A4). Carried into the
+   * signal's metadata so the canonical lead keeps it; optional and additive.
+   */
+  campaign_context?: { scheduled_post_id?: string | null } | null;
 }): Promise<{ detected: boolean; lead_intent?: string }> {
   if (input.content == null || String(input.content).trim().length === 0) {
     return { detected: false };
@@ -182,7 +187,7 @@ export async function processMessageForLeads(input: {
   const [{ data: message }, { data: thread }, { data: author }] = await Promise.all([
     supabase
       .from('engagement_messages')
-      .select('content, platform')
+      .select('content, platform, platform_created_at')
       .eq('organization_id', input.organization_id)
       .eq('id', input.message_id)
       .maybeSingle(),
@@ -209,6 +214,9 @@ export async function processMessageForLeads(input: {
   if (!platform) {
     throw new Error(`Missing platform for engagement lead signal message ${input.message_id}`);
   }
+  const messageCreatedAt =
+    ((message as { platform_created_at?: string | null } | null)?.platform_created_at ?? null) || null;
+  const scheduledPostId = (input.campaign_context?.scheduled_post_id ?? '').toString().trim() || null;
 
   const writeResult = await writeLeadSignal({
     debugContext: 'leadDetectionService.processMessageForLeads',
@@ -232,6 +240,11 @@ export async function processMessageForLeads(input: {
       metadata: {
         lead_intent: signal.lead_intent,
         author_id: input.author_id ?? null,
+        // A4 provenance: when the PLATFORM observed the message (the signal's
+        // detected_at is detection time), and the campaign post it answered.
+        // Absent values are omitted rather than stored as null.
+        ...(messageCreatedAt ? { message_created_at: messageCreatedAt } : {}),
+        ...(scheduledPostId ? { scheduled_post_id: scheduledPostId } : {}),
       },
     },
   });

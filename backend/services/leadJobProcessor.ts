@@ -15,6 +15,7 @@ import { qualifyPredictiveLead } from './leadPredictiveQualifier';
 import { shouldRejectPost } from './leadNoiseFilter';
 import { generateIntentClusters } from './leadClusterService';
 import { writeLeadSignal } from './canonicalLeadSignalService';
+import { bridgeScheduledDetectionSignal } from './prospectProvenance/communityBridge';
 import { deductCreditsIfValueAwaited } from './creditExecutionService';
 import { logUsageEvent } from './usageLedgerService';
 
@@ -243,7 +244,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
             };
           }
 
-          await writeLeadSignal({
+          const signalWrite = await writeLeadSignal({
             debugContext: 'leadJobProcessor.processLeadJobV1',
             canonical: {
               organization_id: companyId,
@@ -263,6 +264,17 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
               metadata: canonicalMetadata,
             },
           });
+
+          // A4 — scheduled detection previously stopped at lead_signals. The
+          // persisted signal now goes through the provenance bridge into the
+          // canonical prospect model (category social_listening, run id = this
+          // job). Gated by the existing PI ingestion gate (closed ⇒ no canonical
+          // write); never throws; awaited so signals from one author in one job
+          // converge on one person/prospect instead of racing.
+          const writtenSignalId = signalWrite?.canonical?.id ?? null;
+          if (writtenSignalId) {
+            await bridgeScheduledDetectionSignal(companyId, writtenSignalId);
+          }
 
           totalFound++;
           platformFound++;
