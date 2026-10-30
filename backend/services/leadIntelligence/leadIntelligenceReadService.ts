@@ -34,6 +34,16 @@
  * re-keyed: the durable row's persisted key resolves to the merged lead as an
  * alias (`getLeadProfile`, audiences). Unreadable store ⇒ no merge, reported.
  *
+ * PROSPECT ALIASES (closure-B): a canonical prospect ABSORBED into another by a
+ * persisted alias (`prospect_aliases`, written only on verified identity
+ * evidence — identityReconciliation.ts) is ONE lead with its survivor. ONE read
+ * per collect (tenant-filtered) folds it into the survivor BEFORE the signal
+ * merge (`mergeProspectAliases`), signal links naming the absorbed prospect are
+ * resolved onto the survivor, and the survivor's provenance includes every
+ * absorbed prospect's contributions (append-only rows, never moved). The
+ * absorbed prospect's key resolves to the survivor (aliasKeys). Unreadable
+ * store => no fold, reported (`prospectAliasMerge.status = 'unavailable'`).
+ *
  * ACCOUNT-ONLY PROSPECTS: a canonical prospect without a person shows the account
  * of its originating contribution's source record (accountReader; ≤2 reads per
  * page, tenant-filtered, fail-open + observable).
@@ -47,6 +57,8 @@ import {
   sortLeads,
   dedupeViews,
   mergeSignalLinkedViews,
+  mergeProspectAliases,
+  type ProspectAliasMergeStatus,
   canonicalProspectIdOf,
   signalRefOf,
   viewHasLeadKey,
@@ -109,6 +121,8 @@ import {
   type SignalRefQuery,
 } from '../prospectProvenance/contributionReader';
 import { readAccountsForSourceRecords, type AccountReadResult } from '../prospectProvenance/accountReader';
+import { readProspectAliases, type ProspectAliasReadResult } from '../prospectProvenance/prospectAliasStore';
+import { aliasIndexOf, terminalSurvivorOf, type ProspectAlias } from '../../../lib/prospectProvenance/prospectAliases';
 import type { ProvenanceContribution } from '../../../lib/prospectProvenance/contract';
 // W0-B — the canonical contact-governance evaluator and a tenant-scoped read of
 // its records. `mayContact` is pure; the read is the only I/O this adds.
@@ -131,6 +145,12 @@ export interface LeadSourceReaders {
   signalLinks?(companyId: string, refs: SignalRefQuery): Promise<ContributionReadResult>;
   /** Accounts of the given source records (account-only prospects). Defaults to the account reader. */
   accounts?(companyId: string, sourceRecordIds: string[]): Promise<AccountReadResult>;
+  /**
+   * closure-B: every prospect alias of the tenant. The default reader set reads
+   * `prospect_aliases`; an INJECTED reader set opts in by supplying it (absent =>
+   * the alias store is not consulted: `prospectAliasMerge.status = 'not_requested'`).
+   */
+  prospectAliases?(companyId: string): Promise<ProspectAliasReadResult>;
 }
 
 const BULK_CAP = 2000;
@@ -218,11 +238,44 @@ export const defaultLeadSourceReaders: LeadSourceReaders = {
   originatingContributions: (companyId) => readOriginatingContributions(companyId),
   signalLinks: (companyId, refs) => readContributionsBySignalRefs(companyId, refs),
   accounts: (companyId, ids) => readAccountsForSourceRecords(companyId, ids),
+  prospectAliases: (companyId) => readProspectAliases(companyId),
 };
 
-interface Collected { views: CanonicalLeadView[]; truncatedSources: string[]; signalMerge: SignalMergeStatus }
+interface Collected {
+  views: CanonicalLeadView[];
+  truncatedSources: string[];
+  signalMerge: SignalMergeStatus;
+  prospectAliasMerge: ProspectAliasMergeStatus;
+}
 
 const NO_MERGE: SignalMergeStatus = { status: 'not_requested', merged: 0, ambiguous: 0 };
+const NO_ALIAS_MERGE: ProspectAliasMergeStatus = { status: 'not_requested', merged: 0 };
+
+/**
+ * closure-B: fold absorbed prospects into their survivor. ONE tenant-filtered
+ * read, only when the tenant has a canonical prospect in the set. Never throws.
+ */
+async function mergeAliases(
+  companyId: string,
+  views: CanonicalLeadView[],
+  readers: LeadSourceReaders,
+): Promise<{ views: CanonicalLeadView[]; status: ProspectAliasMergeStatus; aliases: ProspectAlias[]; truncated: boolean }> {
+  const none = { views, status: NO_ALIAS_MERGE, aliases: [] as ProspectAlias[], truncated: false };
+  if (!readers.prospectAliases) return none;
+  if (!views.some((v) => v.organizationId === companyId && canonicalProspectIdOf(v) !== null)) return none;
+  let read: ProspectAliasReadResult;
+  try {
+    read = await readers.prospectAliases(companyId);
+  } catch (err) {
+    reportReadFailure('prospect_aliases', 'organization_id', 'exception', err instanceof Error ? err.message : String(err));
+    return { ...none, status: { status: 'unavailable', merged: 0 } };
+  }
+  if (read.status !== 'ok') return { ...none, status: { status: 'unavailable', merged: 0 } };
+  // Defence in depth: only this tenant's aliases are ever followed.
+  const aliases = read.aliases.filter((a) => a.organizationId === companyId);
+  const merged = mergeProspectAliases(views, aliases);
+  return { views: merged.views, status: { status: 'ok', merged: merged.merged }, aliases, truncated: read.truncated };
+}
 
 /** Flatten a tenant's contribution read into typed signal links (feed item / lead signal / engagement message). */
 export function signalLinksOf(companyId: string, read: ContributionReadResult): SignalLink[] {
@@ -247,6 +300,7 @@ async function mergeSignals(
   companyId: string,
   views: CanonicalLeadView[],
   readers: LeadSourceReaders,
+  aliases: ProspectAlias[] = [],
 ): Promise<{ views: CanonicalLeadView[]; signalMerge: SignalMergeStatus; truncated: boolean }> {
   const own = views.filter((v) => v.organizationId === companyId);
   if (!own.some((v) => canonicalProspectIdOf(v) !== null)) return { views, signalMerge: NO_MERGE, truncated: false };
@@ -268,7 +322,13 @@ async function mergeSignals(
   if (result.status !== 'ok') {
     return { views, signalMerge: { status: 'unavailable', merged: 0, ambiguous: 0 }, truncated: false };
   }
-  const merged = mergeSignalLinkedViews(views, signalLinksOf(companyId, result));
+  // A link naming an ABSORBED prospect belongs to its survivor (closure-B).
+  let links = signalLinksOf(companyId, result);
+  if (aliases.length > 0) {
+    const index = aliasIndexOf(companyId, aliases);
+    links = links.map((l) => ({ ...l, canonicalLeadId: terminalSurvivorOf(index, l.canonicalLeadId) }));
+  }
+  const merged = mergeSignalLinkedViews(views, links);
   if (merged.ambiguous > 0) reportAmbiguousSignals(companyId, merged.ambiguous);
   return {
     views: merged.views,
@@ -304,15 +364,22 @@ async function collectViews(companyId: string, readers: LeadSourceReaders): Prom
     ...legacyLeads.map((r) => projectExistingRow('website', r, { readFrom: 'leads' })),
     ...canonical.map((r) => projectExistingRow('crm', r, { readFrom: CANONICAL_TABLE })),
   ];
-  // Signal merge BEFORE scoring/filtering/paging, so every count, page, export and
-  // audience sees a merged lead exactly once.
-  const merged = await mergeSignals(companyId, dedupeViews(views), readers);
+  // Alias merge, then signal merge, BEFORE scoring/filtering/paging, so every
+  // count, page, export and audience sees a merged lead exactly once.
+  const aliased = await mergeAliases(companyId, dedupeViews(views), readers);
+  if (aliased.truncated) truncatedSources.push('prospect_aliases');
+  const merged = await mergeSignals(companyId, aliased.views, readers, aliased.aliases);
   if (merged.truncated) truncatedSources.push('prospect_source_contributions');
   // G3 (LC-102): guarantee every view carries a canonical score from the ONE scorer.
   // Durable rows are already materialized at write; legacy/unbackfilled rows are
   // materialized here so List, Detail, Filters and Sorting all agree. No-op for
   // source-scored leads and when the kill-switch is off.
-  return { views: merged.views.map(ensureMaterializedScores), truncatedSources, signalMerge: merged.signalMerge };
+  return {
+    views: merged.views.map(ensureMaterializedScores),
+    truncatedSources,
+    signalMerge: merged.signalMerge,
+    prospectAliasMerge: aliased.status,
+  };
 }
 
 /* ── Provenance attachment ─────────────────────────────────────────────────── */
@@ -343,6 +410,29 @@ function originFrom(c: ProvenanceContribution | undefined, fallback: LeadOrigin 
   return fallback ?? null;
 }
 
+/**
+ * A survivor's own contributions plus every absorbed prospect's (closure-B). The
+ * survivor's originating contribution stays first (it is the lead's origin);
+ * everything else - including an absorbed prospect's own originating row, kept
+ * as recorded - follows by (observedAt, id). Rows are never re-labelled.
+ */
+function survivorSources(own: ProvenanceContribution[], absorbed: ProvenanceContribution[]): ProvenanceContribution[] {
+  if (absorbed.length === 0) return own;
+  const first = own.find((c) => c.role === 'originating') ?? null;
+  const seen = new Set<string>(first ? [first.id] : []);
+  const rest: ProvenanceContribution[] = [];
+  for (const c of [...own, ...absorbed]) {
+    if (seen.has(c.id)) continue;
+    seen.add(c.id);
+    rest.push(c);
+  }
+  rest.sort((a, b) => {
+    if (a.observedAt !== b.observedAt) return a.observedAt < b.observedAt ? -1 : 1;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  return first ? [first, ...rest] : rest;
+}
+
 function withProvenance(v: CanonicalLeadView, read: ContributionReadResult | null): CanonicalLeadView {
   const id = canonicalLeadIdOf(v);
   if (!id || !read) {
@@ -351,8 +441,11 @@ function withProvenance(v: CanonicalLeadView, read: ContributionReadResult | nul
   if (read.status !== 'ok') {
     return { ...v, sources: [], evidence: [], provenanceStatus: 'unavailable', origin: v.origin ?? null };
   }
-  const sources = read.byLead.get(id) ?? [];
-  const origin = originFrom(sources.find((c) => c.role === 'originating'), v.origin);
+  const own = read.byLead.get(id) ?? [];
+  const absorbed = (v.absorbedProspectIds ?? []).flatMap((a) => read.byLead.get(a) ?? []);
+  const sources = survivorSources(own, absorbed);
+  // The lead's origin is the SURVIVOR's originating contribution (never an absorbed one).
+  const origin = originFrom(own.find((c) => c.role === 'originating'), v.origin);
   return {
     ...v,
     sources,
@@ -384,6 +477,8 @@ async function attachProvenance(
 ): Promise<{ views: CanonicalLeadView[]; status: 'ok' | 'unavailable' | 'not_requested'; truncated: boolean }> {
   const ids = views.map(canonicalLeadIdOf).filter((x): x is string => x !== null);
   if (ids.length === 0) return { views: views.map((v) => withAccount(withProvenance(v, null), null)), status: 'not_requested', truncated: false };
+  // Absorbed prospects' contributions are the survivor's sources (closure-B).
+  for (const v of views) for (const a of v.absorbedProspectIds ?? []) if (!ids.includes(a)) ids.push(a);
   const read = readers.contributions ?? defaultLeadSourceReaders.contributions!;
   const result = await safeRead(() => read(companyId, ids));
   const withSources = views.map((v) => withProvenance(v, result));
@@ -449,6 +544,7 @@ async function pageWithProvenance(
     truncatedSources,
     provenance: attached.status,
     signalMerge: collected.signalMerge,
+    prospectAliasMerge: collected.prospectAliasMerge,
   };
 }
 
@@ -468,6 +564,7 @@ export interface AllLeadsResult {
   truncatedSources: string[];
   provenance: 'ok' | 'unavailable' | 'not_requested';
   signalMerge?: SignalMergeStatus;
+  prospectAliasMerge?: ProspectAliasMergeStatus;
 }
 
 /**
@@ -489,14 +586,14 @@ export async function listAllLeads(
     return {
       rows, total: rows.length,
       truncated: collected.truncatedSources.length > 0, truncatedSources: collected.truncatedSources, provenance: 'not_requested',
-      signalMerge: collected.signalMerge,
+      signalMerge: collected.signalMerge, prospectAliasMerge: collected.prospectAliasMerge,
     };
   }
   const attached = await attachProvenance(query.companyId, rows, readers);
   const truncatedSources = attached.truncated ? [...collected.truncatedSources, 'prospect_source_contributions'] : collected.truncatedSources;
   return {
     rows: attached.views, total: rows.length, truncated: truncatedSources.length > 0, truncatedSources, provenance: attached.status,
-    signalMerge: collected.signalMerge,
+    signalMerge: collected.signalMerge, prospectAliasMerge: collected.prospectAliasMerge,
   };
 }
 
@@ -637,6 +734,44 @@ export async function getLeadProfile(
   };
 }
 
+export interface LeadKeyResolution {
+  /** The canonical (representative) key of the lead. */
+  leadKey: string;
+  /** Every other persisted key of the SAME lead (absorbed prospects, folded signal views), sorted. */
+  aliasKeys: string[];
+}
+
+/**
+ * closure-B (operations history continuity). Resolve persisted lead keys — a
+ * canonical key, a durable signal key, an absorbed prospect's key — to the ONE
+ * lead they denote in THIS tenant: its canonical key plus all its alias keys.
+ * ONE collect for any number of keys (the same merged set every list/profile
+ * sees). A key that names no lead of this tenant is absent from the result;
+ * another tenant's key never resolves (every view is tenant-filtered).
+ */
+export async function resolveLeadKeyAliases(
+  companyId: string,
+  leadKeys: string[],
+  readers: LeadSourceReaders = defaultLeadSourceReaders,
+): Promise<Map<string, LeadKeyResolution>> {
+  const out = new Map<string, LeadKeyResolution>();
+  const wanted = [...new Set((leadKeys ?? []).filter((k) => typeof k === 'string' && k.length > 0))];
+  if (!companyId || wanted.length === 0) return out;
+  const { views } = await collectViews(companyId, readers);
+  const own = views.filter((v) => v.organizationId === companyId);
+  const byKey = new Map<string, CanonicalLeadView>();
+  // A lead's own key wins over another lead's alias (same precedence as getLeadProfile).
+  for (const v of own) { const k = leadKeyFor(v); if (!byKey.has(k)) byKey.set(k, v); }
+  for (const v of own) for (const a of v.aliasKeys ?? []) if (!byKey.has(a)) byKey.set(a, v);
+  for (const key of wanted) {
+    const v = byKey.get(key);
+    if (!v) continue;
+    const canonical = leadKeyFor(v);
+    out.set(key, { leadKey: canonical, aliasKeys: [...new Set(v.aliasKeys ?? [])].filter((k) => k !== canonical).sort() });
+  }
+  return out;
+}
+
 const aux = async (table: string, col: string, val: string, tenant: string, limit: number): Promise<Array<Record<string, unknown>>> => {
   if (!val) return [];
   try {
@@ -773,7 +908,7 @@ export async function exportLeads(
   // ≤100 canonical prospect ids.
   const collected: Collected = query.companyId
     ? await collectViews(query.companyId, readers)
-    : { views: [], truncatedSources: [], signalMerge: NO_MERGE };
+    : { views: [], truncatedSources: [], signalMerge: NO_MERGE, prospectAliasMerge: NO_ALIAS_MERGE };
   const attached = await attachProvenance(query.companyId, sortLeads(filterLeads(collected.views, query), query.sort), readers);
   const all = { rows: attached.views };
   const truncatedSources = attached.truncated ? [...collected.truncatedSources, 'prospect_source_contributions'] : collected.truncatedSources;

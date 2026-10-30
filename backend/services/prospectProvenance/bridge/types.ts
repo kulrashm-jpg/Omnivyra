@@ -78,6 +78,14 @@ export interface BridgeOutcome {
   identityStatus?: 'verified' | 'unverified';
   /** True when THIS call attached the verified person to a prospect that had none. */
   personAttached?: boolean;
+  /**
+   * closure-B identity reconciliation for a VERIFIED author (`identityReconciliation.ts`):
+   * its status (`reconciled`, `no_change`, …), or `not_run` when the author is
+   * unverified or the dependency is not wired.
+   */
+  reconciliation?: string;
+  /** The terminal survivor when the prospect chosen by key/handle is an absorbed alias. */
+  aliasOf?: string | null;
   contribution?: SourceContributionResult['status'];
   contributionRole?: string | null;
   roleDowngraded?: boolean;
@@ -103,6 +111,18 @@ export interface BridgeDeps {
    * prospect is found again without a person.
    */
   findProspectsForHandle: (organizationId: string, platform: string, normalizedPlatformUserId: string) => Promise<string[]>;
+  /**
+   * closure-B: reconcile every prospect of a VERIFIED social identity onto one
+   * survivor (aliases; append-only). OPTIONAL — absent ⇒ not run (older fakes).
+   * Must never throw; a failure leaves the bridge's own selection unchanged.
+   */
+  reconcileVerifiedIdentity?: (organizationId: string, platform: string, platformUserId: string) =>
+    Promise<{ status: string; survivorId: string | null }>;
+  /**
+   * closure-B: the terminal survivor of each prospect id (itself when not an
+   * alias), tenant-scoped. OPTIONAL — absent ⇒ ids are used as-is.
+   */
+  resolveSurvivors?: (organizationId: string, prospectIds: string[]) => Promise<Map<string, string>>;
   /** `prospectResolution.attachPersonToProspect` — sets the person only where none is set. */
   attachPersonToProspect: (organizationId: string, prospectId: string, personId: string) => Promise<{ attached: boolean; reason: string }>;
   resolveOrCreateProspect: (

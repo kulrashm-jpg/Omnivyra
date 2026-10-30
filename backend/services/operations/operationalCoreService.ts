@@ -16,6 +16,18 @@
  *
  * Human-before-AI: tasks carry an `origin` (human | ai_suggested | ai_executed) so a
  * future AI wave reuses this exact model without a parallel task engine.
+ *
+ * ALIAS-AWARE HISTORY (closure-B). One lead can be known by several persisted
+ * keys: its canonical key, the durable signal view folded into it (signal
+ * merge) and any canonical prospect absorbed into it (verified-identity
+ * reconciliation). Notes / statuses / assignments / tasks saved under an OLD key
+ * stay where they were written (nothing is re-keyed); a ref may carry
+ * `aliasEntityIds`, and every READ then covers the canonical key AND its
+ * aliases, while every WRITE goes to the canonical `entityId` only.
+ * `resolveOperationalAliases` fills the aliases for `canonical_lead` refs from
+ * the unified read service, tenant-scoped (the resolver only ever sees
+ * `ref.companyId`, and every query is `.eq('company_id')`). It is fail-open: an
+ * unresolvable key keeps the ref exactly as given.
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
@@ -29,7 +41,10 @@ export type OperationalEntityType = 'canonical_lead' | 'opportunity' | 'audience
 export interface OperationalEntityRef {
   companyId: string;
   entityType: OperationalEntityType;
+  /** The canonical key: every write lands here. */
   entityId: string;
+  /** closure-B: other persisted keys of the SAME entity in the SAME tenant; reads cover them, writes never use them. */
+  aliasEntityIds?: string[];
 }
 export interface Actor { userId: string | null }
 
@@ -63,9 +78,78 @@ async function recordTimeline(ref: OperationalEntityRef, eventType: string, acto
 const scope = <T>(q: T, ref: OperationalEntityRef): T =>
   (q as any).eq('company_id', ref.companyId).eq('entity_type', ref.entityType).eq('entity_id', ref.entityId);
 
+/** The canonical key first, then its aliases (deduped). */
+const keysOf = (ref: OperationalEntityRef): string[] =>
+  [...new Set([ref.entityId, ...(ref.aliasEntityIds ?? [])].filter((k) => typeof k === 'string' && k.length > 0))];
+
+const hasAliases = (ref: OperationalEntityRef): boolean => keysOf(ref).length > 1;
+
+/** READ scope: the canonical key AND its aliases, same tenant, same entity type. */
+const scopeRead = <T>(q: T, ref: OperationalEntityRef): T =>
+  hasAliases(ref)
+    ? (q as any).eq('company_id', ref.companyId).eq('entity_type', ref.entityType).in('entity_id', keysOf(ref))
+    : scope(q, ref);
+
+/**
+ * One row out of several keys' rows: the canonical key's row when it has one
+ * (it is the current state), else the most recent by `at`.
+ */
+function pickEffective(rows: Array<Record<string, unknown>>, ref: OperationalEntityRef, at: string): Record<string, unknown> | null {
+  if (rows.length === 0) return null;
+  const own = rows.find((r) => r.entity_id === ref.entityId);
+  if (own) return own;
+  return [...rows].sort((a, b) => String(b[at] ?? '').localeCompare(String(a[at] ?? '')))[0];
+}
+
+/** Resolves persisted lead keys to { canonical key, alias keys } in ONE tenant. */
+export type LeadKeyAliasResolver = (companyId: string, keys: string[]) => Promise<Map<string, { leadKey: string; aliasKeys: string[] }>>;
+
+const defaultLeadKeyAliasResolver: LeadKeyAliasResolver = async (companyId, keys) => {
+  const { resolveLeadKeyAliases } = await import('../leadIntelligence/leadIntelligenceReadService');
+  return resolveLeadKeyAliases(companyId, keys);
+};
+
+/**
+ * closure-B: canonicalise `canonical_lead` refs — `entityId` becomes the lead's
+ * canonical key and `aliasEntityIds` its other persisted keys (the key the
+ * caller passed is always kept among them). ONE resolution per company for any
+ * number of refs. Other entity types, unresolvable keys and any resolver failure
+ * leave the ref unchanged. Never crosses tenants: each company's keys are
+ * resolved with that company only.
+ */
+export async function resolveOperationalAliases(
+  refs: OperationalEntityRef[],
+  resolve: LeadKeyAliasResolver = defaultLeadKeyAliasResolver,
+): Promise<OperationalEntityRef[]> {
+  const byCompany = new Map<string, string[]>();
+  for (const r of refs) {
+    if (r.entityType !== 'canonical_lead' || !r.companyId || !r.entityId) continue;
+    const list = byCompany.get(r.companyId);
+    if (list) list.push(r.entityId); else byCompany.set(r.companyId, [r.entityId]);
+  }
+  const resolved = new Map<string, { leadKey: string; aliasKeys: string[] }>();
+  for (const [companyId, keys] of byCompany) {
+    try {
+      const m = await resolve(companyId, keys);
+      for (const [k, v] of m) resolved.set(`${companyId}|${k}`, v);
+    } catch { /* fail-open: refs of this company stay as given */ }
+  }
+  return refs.map((r) => {
+    const hit = r.entityType === 'canonical_lead' ? resolved.get(`${r.companyId}|${r.entityId}`) : undefined;
+    if (!hit || !hit.leadKey) return r;
+    const aliases = [...new Set([...(r.aliasEntityIds ?? []), ...hit.aliasKeys, r.entityId])].filter((k) => k !== hit.leadKey).sort();
+    return { ...r, entityId: hit.leadKey, aliasEntityIds: aliases };
+  });
+}
+
 /* ── Status / lifecycle ─────────────────────────────────────────────────────── */
 
 export async function getStatus(ref: OperationalEntityRef): Promise<{ status: string; changed_at: string } | null> {
+  if (hasAliases(ref)) {
+    const { data } = await scopeRead(ownedDbTable(S).select('status, changed_at, entity_id'), ref).limit(50);
+    const row = pickEffective(Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [], ref, 'changed_at');
+    return row ? { status: String(row.status), changed_at: String(row.changed_at) } : null;
+  }
   const { data } = await scope(ownedDbTable(S).select('status, changed_at'), ref).maybeSingle();
   return data ? { status: String((data as any).status), changed_at: String((data as any).changed_at) } : null;
 }
@@ -90,6 +174,11 @@ export async function setStatus(ref: OperationalEntityRef, actor: Actor, status:
 /* ── Assignment / ownership ─────────────────────────────────────────────────── */
 
 export async function getAssignment(ref: OperationalEntityRef): Promise<{ assignee_id: string | null; assigned_at: string } | null> {
+  if (hasAliases(ref)) {
+    const { data } = await scopeRead(ownedDbTable(A).select('assignee_id, assigned_at, entity_id').eq('active', true), ref).limit(50);
+    const row = pickEffective(Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [], ref, 'assigned_at');
+    return row ? { assignee_id: (row.assignee_id as string | null) ?? null, assigned_at: String(row.assigned_at) } : null;
+  }
   const { data } = await scope(ownedDbTable(A).select('assignee_id, assigned_at').eq('active', true), ref).maybeSingle();
   return data ? { assignee_id: (data as any).assignee_id ?? null, assigned_at: String((data as any).assigned_at) } : null;
 }
@@ -117,7 +206,8 @@ export async function unassign(ref: OperationalEntityRef, actor: Actor, reason?:
 }
 
 async function deactivateActiveAssignment(ref: OperationalEntityRef): Promise<void> {
-  await scope(ownedDbTable(A).update({ active: false, unassigned_at: now() }).eq('active', true), ref);
+  // Covers the aliases too: one lead has at most ONE active assignment, whichever key it was made under.
+  await scopeRead(ownedDbTable(A).update({ active: false, unassigned_at: now() }).eq('active', true), ref);
 }
 
 export async function listAssignmentsForUser(companyId: string, userId: string): Promise<Array<Record<string, unknown>>> {
@@ -142,7 +232,7 @@ export async function addNote(ref: OperationalEntityRef, actor: Actor, input: No
 }
 
 export async function listNotes(ref: OperationalEntityRef): Promise<Array<Record<string, unknown>>> {
-  const { data } = await scope(ownedDbTable(N).select('*').is('deleted_at', null), ref).order('pinned', { ascending: false }).order('created_at', { ascending: false }).limit(500);
+  const { data } = await scopeRead(ownedDbTable(N).select('*').is('deleted_at', null), ref).order('pinned', { ascending: false }).order('created_at', { ascending: false }).limit(500);
   return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
 }
 
@@ -186,7 +276,7 @@ export async function updateTask(companyId: string, taskId: string, actor: Actor
 }
 
 export async function listTasks(ref: OperationalEntityRef): Promise<Array<Record<string, unknown>>> {
-  const { data } = await scope(ownedDbTable(T).select('*'), ref).order('created_at', { ascending: false }).limit(500);
+  const { data } = await scopeRead(ownedDbTable(T).select('*'), ref).order('created_at', { ascending: false }).limit(500);
   return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
 }
 

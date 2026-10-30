@@ -711,6 +711,19 @@ const REQUIRED_COLUMNS = [
   { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'signal_id',       motivation: 'Link to the global marketpulse_signals row (insert-only; never carries tenant content after creation).' },
   { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'observation_key', motivation: 'Idempotency key in uq_mpso_company_signal_observation (company_id, signal_id, observation_key).' },
   { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'observed_at',     motivation: 'When THIS tenant observed the signal.' },
+
+  // ── closure-B (identity/aliases) ──
+  // prospect_aliases (20270109000001) — verified-identity reconciliation. WARN,
+  // by the fail-open rule: identityReconciliation never throws and maps a
+  // missing table (42P01/PGRST205) to `unavailable` (no alias written, the
+  // bridge/discovery outcome unchanged), and readProspectAliases degrades to
+  // "no alias" (an absorbed prospect stays visible as its own lead) — a silent
+  // degrade the gate must report, not a throw on a tenant request.
+  { severity: 'WARN', table: 'prospect_aliases', column: 'organization_id',  motivation: 'Tenant of the alias and the anchor detecting 20270109000001 unapplied; absent, reconciliation is unavailable and absorbed prospects stay separate leads.' },
+  { severity: 'WARN', table: 'prospect_aliases', column: 'alias_lead_id',    motivation: 'The absorbed prospect (composite FK to canonical_leads(id, company_id)); part of uq_prospect_alias_org_alias.' },
+  { severity: 'WARN', table: 'prospect_aliases', column: 'survivor_lead_id', motivation: 'The terminal survivor the reader resolves the absorbed prospect onto (composite FK to canonical_leads(id, company_id)).' },
+  { severity: 'WARN', table: 'prospect_aliases', column: 'reason',           motivation: 'Why the alias exists (CHECK: verified_identity); the audit half of the reconciliation.' },
+  // ── end closure-B ──
 ];
 
 // ══ GAP-B — the indexes that ARE the idempotency mechanism ════════════════
