@@ -74,6 +74,12 @@ export interface EnrichmentRequest {
   /** Correlates the attempt across logs, cost and provenance. */
   readonly correlationId: string;
   /**
+   * PROVENANCE — the canonical prospect (`canonical_leads.id`) this request
+   * serves, when the caller knows it. Optional and additive; never sent to a
+   * provider. Used only to record the provider as a contributing source.
+   */
+  readonly prospectId?: string | null;
+  /**
    * A3M — the TENANT's provider credential, resolved and injected by the
    * executor immediately before the call.
    *

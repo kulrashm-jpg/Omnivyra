@@ -360,6 +360,8 @@ export async function executePlannedField(
     purpose: text(input.purpose)
       ?? `enrichment plan ${plan.version}: ${field.state} ${field.subject}.${field.attribute}`,
     correlationId,
+    // Provenance only: which prospect the provider contributes to.
+    prospectId: plan.prospectId,
   };
 
   const recorded = await executeEnrichmentRecorded(request, providerId, ports, {

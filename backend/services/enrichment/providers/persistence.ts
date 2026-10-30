@@ -36,6 +36,8 @@ import {
 } from '../../prospectIdentity/accountResolution';
 import type { ExecuteEnrichmentPorts } from './execute';
 import type { ProviderField } from './contract';
+import { piEnrichmentProfile } from '../../prospectProvenance/ingestion/sourceProfiles';
+import { recordEnrichmentContribution } from '../../prospectProvenance/ingestion/enrichmentContribution';
 
 /** Account outcomes that must NOT be attached to a person. */
 export const UNSAFE_ACCOUNT_OUTCOMES: readonly AccountOutcome[] = ['ambiguous', 'insufficient_evidence'];
@@ -192,18 +194,31 @@ export function toAttributeBags(fields: readonly ProviderField[]): AttributeBags
 }
 
 /**
- * The default `persistObservation` port: hand the observation to LI-2.
+ * The default `persistObservation` port: hand the observation to LI-2, then
+ * record the provider as a CONTRIBUTING source of the prospect.
  *
  * The provider's raw payload is passed through so `source_records.raw_payload`
  * carries it — `ingestSourceRecord` redacts credential-shaped keys before it is
  * stored, so the redaction rule lives in one place rather than being restated
  * per adapter.
+ *
+ * PROVENANCE (owner decision 5, 2026-10-30). The enrichment source record is
+ * typed `source_category = 'pi_enrichment'`, `platform = <provider>` — written
+ * on INSERT only by the boundary, and it is a DIFFERENT source record from the
+ * one that originated the prospect (its id is `<provider>:<subject>:<entity>`),
+ * so the originating record is never touched. The contribution is then recorded
+ * with `leadCreated: false` (contributing only) via
+ * `recordEnrichmentContribution`, which never throws and never writes
+ * `canonical_leads`: a provenance failure is counted and logged and the
+ * enrichment result is returned exactly as before.
  */
 export function makePersistObservation(
   ingest: typeof ingestSourceRecord = ingestSourceRecord,
+  recordContribution: typeof recordEnrichmentContribution = recordEnrichmentContribution,
 ): ExecuteEnrichmentPorts['persistObservation'] {
   return async (input) => {
     const { personAttributes, accountAttributes } = toAttributeBags(input.fields);
+    const profile = piEnrichmentProfile(input.providerId);
 
     const record: ProviderSourceRecord = {
       organizationId: input.organizationId,
@@ -221,9 +236,32 @@ export function makePersistObservation(
       accountAttributes,
       // Provider-stated confidence only. Never a number we invented to fill it.
       confidence: input.fields.find((f) => typeof f.confidence === 'number')?.confidence ?? null,
+      // Typed provenance — only when the provider id forms a valid namespace.
+      ...(profile ? { sourceCategory: profile.sourceCategory, platform: profile.platform } : {}),
     };
 
     const result = await ingest(record);
+
+    // Never fatal: the helper counts/logs its own outcome and does not throw.
+    // Guarded anyway so an injected recorder cannot break a persisted enrichment.
+    try {
+      await recordContribution({
+        organizationId: input.organizationId,
+        providerId: input.providerId,
+        subject: input.subject,
+        entityId: input.entityId,
+        prospectId: input.prospectId ?? null,
+        sourceRecordId: result.sourceRecordId ?? null,
+        observedAt: input.observedAt,
+        ingestedAt: new Date().toISOString(),
+        correlationId: input.correlationId,
+        attributes: input.fields.map((f) => f.attribute),
+        payloadHash: input.payloadHash ?? null,
+      });
+    } catch {
+      /* recordEnrichmentContribution already records every failure it can see */
+    }
+
     return {
       sourceRecordId: result.sourceRecordId,
       canonicalWithheld: result.canonicalWithheld,
