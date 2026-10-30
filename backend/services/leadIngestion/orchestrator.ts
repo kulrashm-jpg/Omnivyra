@@ -502,6 +502,22 @@ export async function ingestNormalizedRecord(
     });
   }
 
+  // ── IDENTITY RECONCILIATION (closure-B) ─────────────────────────────────
+  // A community author may have been seen (person-less, handle-anchored
+  // prospect) before this discovery resolved the person. When that handle is
+  // VERIFIED to this person by the existing rule (one active, linked
+  // identity_claims external_id row in this tenant), the prospects of that one
+  // identity are folded onto ONE survivor by an append-only alias — nothing is
+  // deleted, re-keyed or re-originated. Lazily loaded and fail-open: it never
+  // fails the record (the evidence above is durable), and it reports its own
+  // failures. No verified handle ⇒ one read, no write.
+  if (personId && prospectId) {
+    try {
+      const { reconcileVerifiedPersonIdentities } = await import('../prospectProvenance/identityReconciliation');
+      await reconcileVerifiedPersonIdentities(record.organizationId, personId);
+    } catch { /* fail-open: reconciliation reports its own outcome */ }
+  }
+
   // ── DUPLICATE PARKING ───────────────────────────────────────────────────
   // LI-4C surfaces duplicates for review. It NEVER merges, and this call does
   // not change that: it parks candidates and reports how many.

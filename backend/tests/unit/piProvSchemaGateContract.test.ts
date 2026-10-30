@@ -446,6 +446,13 @@ const CLOSURE_A_ENTRIES: Array<[string, string, Severity]> = [
   ['prospect_provenance_erasures', 'requested_by', 'BLOCKING'],
   ['prospect_provenance_erasures', 'table_counts', 'BLOCKING'],
 ];
+/** closure-B (20270109000001): prospect aliases — fail-open reconciliation writer and reader. */
+const CLOSURE_B_ENTRIES: Array<[string, string, Severity]> = [
+  ['prospect_aliases', 'organization_id', 'WARN'],
+  ['prospect_aliases', 'alias_lead_id', 'WARN'],
+  ['prospect_aliases', 'survivor_lead_id', 'WARN'],
+  ['prospect_aliases', 'reason', 'WARN'],
+];
 /**
  * No active_leads expectation is pending any more: owner decision D-4
  * (2026-10-30) made snooze opportunity-level, carried by
@@ -500,6 +507,7 @@ describe('manifest — no global severity downgrade', () => {
       ...CLOSURE_D_ENTRIES,
       ...CLOSURE_A_ENTRIES.map(([t, c]) => `${t}.${c}`),
       ...CLOSURE_C_ENTRIES.map(([t, c]) => `${t}.${c}`),
+      ...CLOSURE_B_ENTRIES.map(([t, c]) => `${t}.${c}`),
     ]);
     const baseline = new Set(BASELINE_ENTRIES.map(([t, c]) => `${t}.${c}`));
     const unexpected = COLUMNS
@@ -686,6 +694,22 @@ describe('manifest — provenance and lead_intelligence coverage', () => {
     expect(mine).toHaveLength(PSC_REDACTIONS_BLOCKING.length + MP_OBSERVATIONS_WARN.length);
     expect(INDEXES.some((i) => i.table === 'prospect_source_contribution_redactions'
       || i.table === 'marketpulse_signal_observations')).toBe(false);
+  });
+
+  it.each(CLOSURE_B_ENTRIES)('closure-B: %s.%s is %s (fail-open alias store)', (table, column, severity) => {
+    expect(sevOf(table, column)).toBe(severity);
+  });
+
+  it('closure-B adds exactly its 4 column entries, inside its marked block, and no index or type entry', () => {
+    expect(COLUMNS.filter((c) => c.table === 'prospect_aliases')).toHaveLength(CLOSURE_B_ENTRIES.length);
+    expect(INDEXES.some((i) => i.table === 'prospect_aliases')).toBe(false);
+    expect(TYPES.some((t) => t.table === 'prospect_aliases')).toBe(false);
+    const start = verifierSource.indexOf('// ── closure-B (identity/aliases) ──');
+    const end = verifierSource.indexOf('// ── end closure-B ──');
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const block = verifierSource.slice(start, end);
+    for (const [t, c] of CLOSURE_B_ENTRIES) expect(block).toContain(`table: '${t}', column: '${c}'`);
   });
 
   it('requires both contract-named provenance indexes with the right uniqueness and partiality', () => {

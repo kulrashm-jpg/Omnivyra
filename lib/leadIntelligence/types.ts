@@ -170,8 +170,13 @@ export interface LinkedLeadRecord {
   content: string | null;
   scores: CanonicalLeadScores;
   attribution: CanonicalAttribution;
-  /** The typed signal reference both records share. */
-  matchedOn: { kind: SignalRefKind; ref: string };
+  /**
+   * What links the record to the representative: the typed signal reference both
+   * records share, or `prospect_alias` (closure-B) — the record is a canonical
+   * prospect ABSORBED into this one by a persisted, verified-identity alias
+   * (`ref` = the absorbed prospect id).
+   */
+  matchedOn: { kind: SignalRefKind | 'prospect_alias'; ref: string };
 }
 
 /**
@@ -261,6 +266,12 @@ export interface CanonicalLeadView {
    * stays the representative's own key; a lookup by any alias resolves here.
    */
   aliasKeys?: string[];
+  /**
+   * closure-B. Canonical prospects absorbed into this one by a persisted alias
+   * (`prospect_aliases`, verified identity). Their contributions are read and
+   * shown as this lead's sources; their keys are in `aliasKeys`. Sorted.
+   */
+  absorbedProspectIds?: string[];
   /** Account of an account-only canonical prospect (read side; see LeadAccount). */
   account?: LeadAccount | null;
   accountStatus?: LeadAccountStatus;

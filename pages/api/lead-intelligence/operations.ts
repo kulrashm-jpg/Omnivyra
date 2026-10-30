@@ -13,6 +13,13 @@ import type { OperationalEntityRef, OperationalEntityType } from '../../../backe
  * GET  ?company_id&entity_id[&entity_type]           → operational overlay (status/assignee/notes/tasks)
  * GET  ?company_id&assignee=<userId>                 → that user's active assignment queue
  * POST { action, ... }                               → mutation (see ACTIONS below)
+ *
+ * ALIAS-AWARE (closure-B): a `canonical_lead` entity_id is resolved, within THIS
+ * company only, to the lead's canonical key plus every other persisted key of
+ * the same lead (a durable signal key folded into it, an absorbed prospect's
+ * key). The GET overlay then returns status / assignee / notes / tasks saved
+ * under ANY of those keys, and every mutation writes under the canonical key.
+ * A key that resolves to no lead is used exactly as given (unchanged behaviour).
  */
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
 const arr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
@@ -36,28 +43,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (assignee) return res.status(200).json({ assignments: await ops.listAssignmentsForUser(companyId, assignee) });
       const entityId = str(req.query.entity_id);
       if (!entityId) return res.status(400).json({ error: 'entity_id or assignee required' });
-      return res.status(200).json(await ops.getOperationalOverlay(refOf(companyId, entityId, str(req.query.entity_type))));
+      const [ref] = await ops.resolveOperationalAliases([refOf(companyId, entityId, str(req.query.entity_type))]);
+      return res.status(200).json(await ops.getOperationalOverlay(ref));
     }
 
     if (req.method === 'POST') {
       const b = req.body || {};
       const action = str(b.action);
-      const ref = (id?: string) => refOf(companyId, id ?? str(b.entity_id) ?? '', str(b.entity_type));
-      const entities = (): OperationalEntityRef[] => arr(b.entity_ids).map((id) => refOf(companyId, id, str(b.entity_type)));
+      const ref = async (id?: string): Promise<OperationalEntityRef> =>
+        (await ops.resolveOperationalAliases([refOf(companyId, id ?? str(b.entity_id) ?? '', str(b.entity_type))]))[0];
+      const entities = async (): Promise<OperationalEntityRef[]> =>
+        ops.resolveOperationalAliases(arr(b.entity_ids).map((id) => refOf(companyId, id, str(b.entity_type))));
 
       switch (action) {
-        case 'set_status':   return res.status(200).json(await ops.setStatus(ref(), actor, String(b.status), str(b.reason)));
-        case 'assign':       { await ops.assign(ref(), actor, String(b.assignee_id)); return res.status(200).json({ ok: true }); }
-        case 'unassign':     { await ops.unassign(ref(), actor, str(b.reason)); return res.status(200).json({ ok: true }); }
-        case 'add_note':     return res.status(201).json(await ops.addNote(ref(), actor, { body: String(b.body), bodyFormat: b.body_format, mentions: arr(b.mentions), pinned: !!b.pinned }));
+        case 'set_status':   return res.status(200).json(await ops.setStatus(await ref(), actor, String(b.status), str(b.reason)));
+        case 'assign':       { await ops.assign(await ref(), actor, String(b.assignee_id)); return res.status(200).json({ ok: true }); }
+        case 'unassign':     { await ops.unassign(await ref(), actor, str(b.reason)); return res.status(200).json({ ok: true }); }
+        case 'add_note':     return res.status(201).json(await ops.addNote(await ref(), actor, { body: String(b.body), bodyFormat: b.body_format, mentions: arr(b.mentions), pinned: !!b.pinned }));
         case 'pin_note':     { await ops.setNotePinned(companyId, String(b.note_id), actor, !!b.pinned); return res.status(200).json({ ok: true }); }
         case 'delete_note':  { await ops.deleteNote(companyId, String(b.note_id), actor); return res.status(200).json({ ok: true }); }
-        case 'create_task':  return res.status(201).json(await ops.createTask(ref(), actor, { taskType: b.task_type, title: String(b.title), description: str(b.description), ownerId: b.owner_id ?? null, dueAt: b.due_at ?? null, priority: b.priority, origin: b.origin }));
+        case 'create_task':  return res.status(201).json(await ops.createTask(await ref(), actor, { taskType: b.task_type, title: String(b.title), description: str(b.description), ownerId: b.owner_id ?? null, dueAt: b.due_at ?? null, priority: b.priority, origin: b.origin }));
         case 'update_task':  { await ops.updateTask(companyId, String(b.task_id), actor, { status: str(b.status), title: str(b.title), description: str(b.description), ownerId: b.owner_id, dueAt: b.due_at, priority: str(b.priority) }); return res.status(200).json({ ok: true }); }
-        case 'bulk_set_status':  return res.status(200).json(await ops.bulkSetStatus(entities(), actor, String(b.status), str(b.reason)));
-        case 'bulk_assign':      return res.status(200).json(await ops.bulkAssign(entities(), actor, String(b.assignee_id)));
-        case 'bulk_archive':     return res.status(200).json(await ops.bulkArchive(entities(), actor, str(b.reason)));
-        case 'bulk_create_task': return res.status(200).json(await ops.bulkCreateTask(entities(), actor, { taskType: b.task_type, title: String(b.title), description: str(b.description), priority: b.priority, origin: b.origin }));
+        case 'bulk_set_status':  return res.status(200).json(await ops.bulkSetStatus(await entities(), actor, String(b.status), str(b.reason)));
+        case 'bulk_assign':      return res.status(200).json(await ops.bulkAssign(await entities(), actor, String(b.assignee_id)));
+        case 'bulk_archive':     return res.status(200).json(await ops.bulkArchive(await entities(), actor, str(b.reason)));
+        case 'bulk_create_task': return res.status(200).json(await ops.bulkCreateTask(await entities(), actor, { taskType: b.task_type, title: String(b.title), description: str(b.description), priority: b.priority, origin: b.origin }));
         default: return res.status(400).json({ error: 'unknown_action' });
       }
     }

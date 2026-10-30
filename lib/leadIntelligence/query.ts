@@ -13,6 +13,12 @@ import type {
   SignalRefKind,
 } from './types';
 import { leadKeyFor } from './leadKey';
+import {
+  aliasIndexOf,
+  terminalSurvivorOf,
+  absorbedInto,
+  type ProspectAlias,
+} from '../prospectProvenance/prospectAliases';
 
 export interface LeadFilters {
   source?: CanonicalLeadSource | CanonicalLeadSource[];
@@ -52,6 +58,20 @@ export interface LeadQueryResult {
   provenance?: 'ok' | 'unavailable' | 'not_requested';
   /** Signal merge (durable signal views folded into canonical prospects). Set by the read service. */
   signalMerge?: SignalMergeStatus;
+  /** Prospect alias merge (closure-B: absorbed prospects folded into their survivor). Set by the read service. */
+  prospectAliasMerge?: ProspectAliasMergeStatus;
+}
+
+/**
+ * Outcome of the prospect-alias merge for one collect:
+ *   ok            — aliases were read; `merged` absorbed prospects were folded into their survivor;
+ *   unavailable   — the alias store could not be read: nothing was folded, so an
+ *                   absorbed prospect may still appear as its own lead;
+ *   not_requested — nothing to fold (no canonical prospect, or the reader set has no alias reader).
+ */
+export interface ProspectAliasMergeStatus {
+  status: 'ok' | 'unavailable' | 'not_requested';
+  merged: number;
 }
 
 /**
@@ -177,7 +197,7 @@ export interface SignalMergeResult {
 const SCORE_FIELDS = ['intent', 'urgency', 'icp', 'confidence', 'total'] as const;
 const LAST = '￿';
 
-function toLinkedRecord(v: CanonicalLeadView, matchedOn: { kind: SignalRefKind; ref: string }): LinkedLeadRecord {
+function toLinkedRecord(v: CanonicalLeadView, matchedOn: LinkedLeadRecord['matchedOn']): LinkedLeadRecord {
   return {
     leadKey: leadKeyFor(v),
     source: v.source,
@@ -287,6 +307,76 @@ export function mergeSignalLinkedViews(views: CanonicalLeadView[], links: Signal
     out.push(add ? foldLinked(v, add) : v);
   });
   return { views: out, merged: folded.size, ambiguous };
+}
+
+/* ── Prospect alias merge (closure-B, identity reconciliation) ─────────────────
+ *
+ * A canonical prospect ABSORBED into another by a persisted alias
+ * (`prospect_aliases`; written only on verified identity evidence) is the SAME
+ * lead as its survivor. MERGE RULE: canonical view A folds into canonical view S iff
+ *   1. an alias of A's tenant resolves A (terminally, cycle-safe) to S, and
+ *   2. S is present in the view set, in the SAME tenant.
+ * S stays the representative (key, source, identity unchanged); A becomes a
+ * `LinkedLeadRecord` (`matchedOn.kind = 'prospect_alias'`) and A's key an alias
+ * key. Every survivor carries `absorbedProspectIds` (ALL its absorbed prospects,
+ * present in the set or not) so the read service attaches their contributions.
+ * An alias whose survivor is not present (capped read) folds nothing — A stays
+ * visible. Rows/aliases of another tenant are never followed. Deterministic,
+ * idempotent and order-independent.
+ */
+export interface ProspectAliasMergeResult {
+  views: CanonicalLeadView[];
+  /** Absorbed prospect views folded into their survivor. */
+  merged: number;
+}
+
+export function mergeProspectAliases(views: CanonicalLeadView[], aliases: readonly ProspectAlias[]): ProspectAliasMergeResult {
+  if (aliases.length === 0) return { views, merged: 0 };
+  const indexes = new Map<string, Map<string, string>>();
+  const indexFor = (org: string): Map<string, string> => {
+    let ix = indexes.get(org);
+    if (!ix) { ix = aliasIndexOf(org, aliases); indexes.set(org, ix); }
+    return ix;
+  };
+  // Survivors present in the set, per tenant (first occurrence wins; dedupe ran before).
+  const at = new Map<string, number>();
+  views.forEach((v, i) => {
+    const id = canonicalProspectIdOf(v);
+    if (!id) return;
+    const k = `${v.organizationId}|${normRef(id)}`;
+    if (!at.has(k)) at.set(k, i);
+  });
+  if (at.size === 0) return { views, merged: 0 };
+
+  const incoming = new Map<number, LinkedLeadRecord[]>();
+  const folded = new Set<number>();
+  views.forEach((v, i) => {
+    const id = canonicalProspectIdOf(v);
+    if (!id) return;
+    const terminal = terminalSurvivorOf(indexFor(v.organizationId), id);
+    if (terminal === normRef(id)) return;
+    const rep = at.get(`${v.organizationId}|${terminal}`);
+    if (rep === undefined || rep === i) return; // survivor not present ⇒ stays its own lead
+    if (views[rep].organizationId !== v.organizationId) return; // defence in depth
+    const list = incoming.get(rep);
+    const rec = toLinkedRecord(v, { kind: 'prospect_alias', ref: normRef(id) });
+    if (list) list.push(rec); else incoming.set(rep, [rec]);
+    folded.add(i);
+  });
+
+  const out: CanonicalLeadView[] = [];
+  views.forEach((v, i) => {
+    if (folded.has(i)) return;
+    const id = canonicalProspectIdOf(v);
+    const absorbed = id ? absorbedInto(indexFor(v.organizationId), id) : [];
+    const add = incoming.get(i);
+    let next = add ? foldLinked(v, add) : v;
+    if (absorbed.length > 0) {
+      next = { ...next, absorbedProspectIds: [...new Set([...(next.absorbedProspectIds ?? []), ...absorbed])].sort() };
+    }
+    out.push(next);
+  });
+  return { views: out, merged: folded.size };
 }
 
 /** Every display source a (possibly merged) view represents: its own first, then linked ones. */

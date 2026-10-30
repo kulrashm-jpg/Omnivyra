@@ -35,6 +35,18 @@
  *   later verification links the person to the existing handle-only prospect
  *   without creating a second one.
  *
+ * --- IDENTITY RECONCILIATION (closure-B) ---------------------------------
+ * When the author is VERIFIED and the reconciliation dependencies are wired
+ * (production `defaultBridgeDeps`), BEFORE selection the bridge reconciles every
+ * prospect of that verified identity onto one survivor
+ * (`identityReconciliation.ts`: aliases, append-only), and selection then
+ * resolves every candidate id to its terminal survivor. So a handle-only
+ * prospect created before verification and a discovery prospect of the same
+ * person converge on ONE canonical prospect, whichever came first. A prospect
+ * found by its own key that has been absorbed keeps its own (originating)
+ * contribution — replays stay idempotent — but is never given the person, and a
+ * verified person is never attached to a second prospect.
+ *
  * --- NO IDENTITY, NO PROSPECT --------------------------------------------
  * An event without (platform, platform user id) is skipped: without even a
  * handle a prospect could never be joined to anything, and every later post by
@@ -99,21 +111,44 @@ export async function bridgeSourceEvent(
     const personId: string | null = verdict.status === 'verified' ? verdict.personId : null;
     const identityStatus: 'verified' | 'unverified' = personId ? 'verified' : 'unverified';
 
+    // -- IDENTITY RECONCILIATION (closure-B; verified authors only) --------
+    let reconciliation = 'not_run';
+    if (personId && deps.reconcileVerifiedIdentity) {
+      try {
+        reconciliation = (await deps.reconcileVerifiedIdentity(org, handle.platform, handle.platformUserId)).status;
+      } catch {
+        reconciliation = 'failed'; // never fails the bridge; selection below is unchanged by it
+      }
+    }
+    /** Terminal survivors of `ids` (deduped, order kept). Falls back to `ids` when unwired or unreadable. */
+    const survivorsOf = async (ids: string[]): Promise<string[]> => {
+      if (!deps.resolveSurvivors || ids.length === 0) return ids;
+      try {
+        const m = await deps.resolveSurvivors(org, ids);
+        return [...new Set(ids.map((id) => m.get(id) ?? id))];
+      } catch {
+        return ids;
+      }
+    };
+
     // -- PROSPECT (WS-1) ---------------------------------------------------
     const at = deps.now();
     let prospectId: string | null;
     let leadCreated: boolean;
     let prospectPath: NonNullable<BridgeOutcome['prospectPath']>;
-    const idFields = { personId, identityStatus };
+    let aliasOf: string | null = null;
+    const idFields = { personId, identityStatus, reconciliation };
     try {
       prospectId = await deps.findProspectByKey(org, externalRef, event.prospectSource);
       if (prospectId) {
         leadCreated = true;
         prospectPath = 'own_key';
+        const [terminal] = await survivorsOf([prospectId]);
+        if (terminal && terminal !== prospectId) aliasOf = terminal;
       } else {
         let anchored: string[] = [];
         if (personId) {
-          anchored = await deps.findProspectsForPerson(org, personId);
+          anchored = await survivorsOf(await deps.findProspectsForPerson(org, personId));
           if (anchored.length > 1) {
             return done({ status: 'skipped', reason: 'ambiguous_person_prospects', ...idFields });
           }
@@ -123,7 +158,7 @@ export async function bridgeSourceEvent(
           leadCreated = false;
           prospectPath = 'existing_person';
         } else {
-          const byHandle = await deps.findProspectsForHandle(org, handle.platform, handle.platformUserId);
+          const byHandle = await survivorsOf(await deps.findProspectsForHandle(org, handle.platform, handle.platformUserId));
           if (byHandle.length > 1) {
             return done({ status: 'skipped', reason: 'ambiguous_handle_prospects', ...idFields });
           }
@@ -164,12 +199,19 @@ export async function bridgeSourceEvent(
     }
 
     // -- LINK A VERIFIED PERSON (never re-anchors; never creates) ----------
+    // Never onto an absorbed alias, and (when reconciliation is wired) never onto
+    // a prospect while the same verified person already anchors another one.
     let personAttached = false;
-    if (personId && prospectPath !== 'existing_person') {
+    if (personId && prospectPath !== 'existing_person' && !aliasOf) {
       try {
-        personAttached = (await deps.attachPersonToProspect(org, prospectId, personId)).attached;
+        let personElsewhere = false;
+        if (prospectPath === 'own_key' && deps.resolveSurvivors) {
+          const others = (await survivorsOf(await deps.findProspectsForPerson(org, personId))).filter((id) => id !== prospectId);
+          personElsewhere = others.length > 0;
+        }
+        if (!personElsewhere) personAttached = (await deps.attachPersonToProspect(org, prospectId, personId)).attached;
       } catch (e) {
-        return done({ status: 'failed', reason: `person_attach_failed:${(e as Error).message}`, ...idFields, prospectId, leadCreated, prospectPath });
+        return done({ status: 'failed', reason: `person_attach_failed:${(e as Error).message}`, ...idFields, prospectId, leadCreated, prospectPath, aliasOf });
       }
     }
 
@@ -230,7 +272,7 @@ export async function bridgeSourceEvent(
       },
       sourceMetadata: event.sourceMetadata,
     });
-    const common = { ...idFields, personAttached, prospectId, sourceRecordId, leadCreated, prospectPath };
+    const common = { ...idFields, personAttached, prospectId, sourceRecordId, leadCreated, prospectPath, aliasOf };
     if (result.status === 'error') {
       return done({ status: 'failed', reason: `contribution_failed:${result.code ?? 'unknown'}`, ...common, contribution: 'error' });
     }
