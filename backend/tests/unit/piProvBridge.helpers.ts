@@ -9,15 +9,20 @@
 import { recordSourceContribution } from '../../services/prospectProvenance/contributionWriter';
 import { PROVENANCE_DB } from '../../../lib/prospectProvenance/contract';
 import type { BridgeDeps } from '../../services/prospectProvenance/bridge/types';
+import { resolveVerifiedSocialPerson, normalizedSocialIdentity } from '../../services/prospectProvenance/bridge/verifiedIdentity';
 
 type Row = Record<string, unknown>;
 
 export interface FakeWorld {
   deps: BridgeDeps;
   gateOpen: Set<string>;
-  persons: Array<{ id: string; org: string; keys: string }>;
-  prospects: Array<{ id: string; org: string; key: string; personId: string | null; source: string }>;
-  sourceRecords: Array<{ id: string; org: string; provider: string; recordId: string; personId: string; observedAt: string; runId: string | null; raw: Row }>;
+  /**
+   * identity_claims rows (external_id). Only rows with a personId and no
+   * revokedAt VERIFY a handle — the same filter as shadowResolver.matchClaims.
+   */
+  claims: Array<{ org: string; platform: string; value: string; personId: string | null; revokedAt?: string | null }>;
+  prospects: Array<{ id: string; org: string; key: string; personId: string | null; source: string; metadata: Row }>;
+  sourceRecords: Array<{ id: string; org: string; provider: string; recordId: string; personId: string | null; observedAt: string; runId: string | null; raw: Row }>;
   contributions: Row[];
   signals: Row[];
   calls: string[];
@@ -29,7 +34,7 @@ export function makeWorld(): FakeWorld {
   const id = (p: string) => `${p}-${++seq}`;
   const w: FakeWorld = {
     gateOpen: new Set(),
-    persons: [],
+    claims: [],
     prospects: [],
     sourceRecords: [],
     contributions: [],
@@ -58,14 +63,18 @@ export function makeWorld(): FakeWorld {
 
   w.deps = {
     gate: async (org) => { w.calls.push('gate'); return w.gateOpen.has(org) ? { allowed: true, reason: 'tenant_flag:enabled' } : { allowed: false, reason: 'tenant_flag:flag_not_found' }; },
-    resolvePerson: async ({ companyId, externalKeys }) => {
-      w.calls.push('resolvePerson'); maybeFail('resolvePerson');
-      const keys = JSON.stringify(externalKeys);
-      const found = w.persons.find((p) => p.org === companyId && p.keys === keys);
-      if (found) return { unifiedPersonId: found.id };
-      const p = { id: id('person'), org: companyId, keys };
-      w.persons.push(p);
-      return { unifiedPersonId: p.id };
+    // The REAL verification rule over a fake, tenant-keyed identity_claims store.
+    resolveVerifiedPerson: async (org, platform, platformUserId) => {
+      w.calls.push('resolveVerifiedPerson'); maybeFail('resolveVerifiedPerson');
+      return resolveVerifiedSocialPerson(org, [{ platform, platformUserId }], async (o, cands) => {
+        const ids = [...new Set(cands.flatMap((c) => {
+          const n = normalizedSocialIdentity(c.platform, c.value);
+          return w.claims
+            .filter((k) => k.org === o && n && k.platform === n.platform && k.value === n.platformUserId && k.personId && !k.revokedAt)
+            .map((k) => k.personId as string);
+        }))];
+        return { personId: ids.length === 1 ? ids[0] : null, outcome: ids.length === 0 ? 'unresolved' : ids.length > 1 ? 'ambiguous' : 'matched_claim', candidatePersonIds: ids };
+      });
     },
     findProspectByKey: async (org, key) => {
       w.calls.push('findProspectByKey');
@@ -75,11 +84,25 @@ export function makeWorld(): FakeWorld {
       w.calls.push('findProspectsForPerson');
       return w.prospects.filter((p) => p.org === org && p.personId === personId).map((p) => p.id).slice(0, 2);
     },
+    findProspectsForHandle: async (org, platform, handle) => {
+      w.calls.push('findProspectsForHandle');
+      return w.prospects.filter((p) => {
+        const si = (p.metadata?.sourceIdentity ?? {}) as Row;
+        return p.org === org && si.platform === platform && si.platformUserId === handle;
+      }).map((p) => p.id).slice(0, 2);
+    },
+    attachPersonToProspect: async (org, prospectId, personId) => {
+      w.calls.push('attachPersonToProspect'); maybeFail('attachPersonToProspect');
+      const p = w.prospects.find((x) => x.org === org && x.id === prospectId);
+      if (!p || p.personId) return { attached: false, reason: 'prospect not found in this tenant, or already anchored to a person' };
+      p.personId = personId;
+      return { attached: true, reason: 'person attached to prospect' };
+    },
     resolveOrCreateProspect: async (org, cand) => {
       w.calls.push('resolveOrCreateProspect'); maybeFail('resolveOrCreateProspect');
       const existing = w.prospects.find((p) => p.org === org && p.key === cand.externalLeadKey);
       if (existing) return { prospectId: existing.id, outcome: 'matched' };
-      const p = { id: id('lead'), org, key: cand.externalLeadKey, personId: cand.personId, source: cand.source };
+      const p = { id: id('lead'), org, key: cand.externalLeadKey, personId: cand.personId, source: cand.source, metadata: cand.metadata ?? {} };
       w.prospects.push(p);
       return { prospectId: p.id, outcome: 'created' };
     },
@@ -135,7 +158,7 @@ export function engagementSignal(org: string, over: Row = {}): Row {
   return {
     id: 'esig-1', organization_id: org, source_type: 'engagement', source_id: 'msg-1', thread_id: 'thread-1',
     platform: 'linkedin', platform_user_id: 'li_bob', detected_at: '2026-10-29T11:00:00.000Z', contact_id: 'contact-9',
-    migration_source: 'native', contact_key: 'linkedin:li_bob',
+    migration_source: 'native', contact_key: 'linkedin:li_bob', intent_score: 0.85, total_score: 0.85, confidence_score: 0.9,
     metadata: { lead_intent: 'buying_intent', author_id: 'author-1', scheduled_post_id: 'sp-77', message_created_at: '2026-10-29T08:30:00.000Z' },
     ...over,
   };
@@ -164,7 +187,9 @@ export function makeFakeDb(handler: DbHandler) {
       eq: chain((k, v) => op.filters.push([String(k), v])),
       is: chain((k, v) => op.filters.push([String(k), v])),
       in: chain((k, v) => op.filters.push([String(k), v])),
-      neq: chain(), order: chain(), limit: chain(), contains: chain(),
+      contains: chain((k, v) => op.filters.push([`contains:${String(k)}`, v])),
+      not: chain((k, o2, v) => op.filters.push([`not:${String(k)}:${String(o2)}`, v])),
+      neq: chain(), order: chain(), limit: chain(),
       single: () => run('single'),
       maybeSingle: () => run('maybeSingle'),
       then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => run('many').then(res, rej),

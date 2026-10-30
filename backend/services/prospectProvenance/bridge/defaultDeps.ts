@@ -3,7 +3,9 @@
  *
  *   gate                    leadIngestion/orchestrator.resolveLeadIngestionGate
  *                           (ENABLE_LEAD_INGESTION kill switch AND tenant `lead_ingestion` flag)
- *   resolvePerson           identityResolutionService.resolveUnifiedPerson (W1, sole person authority)
+ *   resolveVerifiedPerson   verifiedIdentity.resolveVerifiedSocialPerson → shadowResolver (READ-ONLY;
+ *                           never creates a person — owner decision 2026-10-30)
+ *   attachPersonToProspect  prospectIdentity/prospectResolution.attachPersonToProspect (never re-anchors)
  *   findProspectByKey       prospectIdentity/prospectResolution.resolveProspectShadow (read-only)
  *   resolveOrCreateProspect prospectIdentity/prospectResolution.resolveOrCreateProspect (WS-1)
  *   ingestSourceRecord      prospectIdentity/ingestionBoundary.ingestSourceRecord (LI-2, sole evidence store)
@@ -16,7 +18,7 @@
  *   2. With the gate closed (production default) the bridge does no I/O beyond
  *      the free kill-switch check, and loads nothing else.
  *
- * The two reads below (`findProspectsForPerson`, `loadLeadSignal`) are
+ * The three reads below (`findProspectsForPerson`, `findProspectsForHandle`, `loadLeadSignal`) are
  * tenant-filtered reads, not writers. `findProspectsForPerson` is proposed for
  * `prospectResolution.ts` (owned by Agent 2) — see the A4 report.
  */
@@ -31,9 +33,9 @@ export function defaultBridgeDeps(): BridgeDeps {
       const { resolveLeadIngestionGate } = await import('../../leadIngestion/orchestrator');
       return resolveLeadIngestionGate(organizationId);
     },
-    resolvePerson: async (input) => {
-      const { resolveUnifiedPerson } = await import('../../identityResolutionService');
-      return resolveUnifiedPerson(input);
+    resolveVerifiedPerson: async (organizationId, platform, platformUserId) => {
+      const { resolveVerifiedSocialPerson } = await import('./verifiedIdentity');
+      return resolveVerifiedSocialPerson(organizationId, [{ platform, platformUserId }]);
     },
     findProspectByKey: async (organizationId, externalLeadKey, source) => {
       const { resolveProspectShadow } = await import('../../prospectIdentity/prospectResolution');
@@ -50,6 +52,21 @@ export function defaultBridgeDeps(): BridgeDeps {
         .limit(2);
       if (error) throw new Error(`canonical_leads person lookup failed: ${error.message}`);
       return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+    },
+    findProspectsForHandle: async (organizationId, platform, normalizedPlatformUserId) => {
+      const { ownedDbTable } = await import('../../../db/writeOwner');
+      const { data, error } = await ownedDbTable('canonical_leads')
+        .select('id')
+        .eq('company_id', organizationId)       // tenant boundary — never optional
+        .contains('lead_metadata', { sourceIdentity: { platform, platformUserId: normalizedPlatformUserId } })
+        .order('created_at', { ascending: true })
+        .limit(2);
+      if (error) throw new Error(`canonical_leads handle lookup failed: ${error.message}`);
+      return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+    },
+    attachPersonToProspect: async (organizationId, prospectId, personId) => {
+      const { attachPersonToProspect } = await import('../../prospectIdentity/prospectResolution');
+      return attachPersonToProspect(organizationId, prospectId, personId);
     },
     resolveOrCreateProspect: async (organizationId, candidate, at) => {
       const { resolveOrCreateProspect } = await import('../../prospectIdentity/prospectResolution');

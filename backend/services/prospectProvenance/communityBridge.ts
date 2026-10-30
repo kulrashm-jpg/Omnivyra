@@ -24,8 +24,21 @@
  * switch, default OFF) AND the tenant's `lead_ingestion` feature flag (default
  * absent ⇒ OFF; evaluation errors ⇒ OFF). No flag is added or changed here.
  * Gate closed ⇒ no canonical write of any kind (not even a read beyond the
- * gate itself). Lead Intelligence adoption (`adoptLead`) is NOT gated by this
- * and keeps running exactly as before.
+ * gate itself). Lead Intelligence adoption of COMMUNITY feed items is NOT gated
+ * by this and keeps running as before. Lead Intelligence adoption of ENGAGEMENT
+ * signals IS gated by both controls (owner decision 3) — see
+ * `admitEngagementSignal`, which the engagement writer calls.
+ *
+ * --- IDENTITY (owner decision 2) -------------------------------------------
+ * No person is ever created from a bare social handle (bridge/verifiedIdentity.ts).
+ * A community / listening prospect may exist WITHOUT a person; its contribution
+ * carries platform, handle, originating feed record, source URL, observed time,
+ * evidence and tenant.
+ *
+ * --- NEW PROSPECTS (owner decision 3) --------------------------------------
+ * Community / listening / scheduled-detection events may create a prospect
+ * (discovery sources). An engagement event may only ENRICH an existing one,
+ * unless it passes the explicit rule in bridge/engagementQualification.ts.
  *
  * ─── NEVER THROWS ─────────────────────────────────────────────────────────
  * All entry points return a `BridgeOutcome` and never throw; outcomes are
@@ -35,9 +48,14 @@ import { isSourceCategory, type SourceCategory } from '../../../lib/prospectProv
 import { bridgeSourceEvent } from './bridge/bridgeCore';
 import { defaultBridgeDeps } from './bridge/defaultDeps';
 import { observeBridgeOutcome } from './bridge/observability';
-import type { BridgeDeps, BridgeKind, BridgeOutcome, BridgeSourceEvent, ObservedAtBasis } from './bridge/types';
+import { qualifyEngagementForNewProspect, type EngagementQualification } from './bridge/engagementQualification';
+import type { BridgeDeps, BridgeKind, BridgeOutcome, BridgeSourceEvent, GateDecisionLike, ObservedAtBasis } from './bridge/types';
 
 export type { BridgeOutcome } from './bridge/types';
+export { qualifyEngagementForNewProspect, ENGAGEMENT_NEW_PROSPECT_MIN_INTENT, ENGAGEMENT_QUALIFICATION_RULE } from './bridge/engagementQualification';
+
+/** Discovery sources (community / listening) may create a prospect; the rule name is recorded as evidence. */
+const DISCOVERY_NEW_PROSPECT = { allowed: true, rule: 'discovery_source', reason: 'discovery_source' } as const;
 export { getBridgeCounters, resetBridgeCounters } from './bridge/observability';
 
 type Row = Record<string, unknown>;
@@ -163,7 +181,12 @@ export function buildCommunityFeedEvent(feed: Row, signal: Row | null): BuildRes
       provider: 'community',
       sourceRecordKey: id,
       prospectSource: 'community',
-      identity: { platform: str(feed.platform), platformUserId: feedAuthorPlatformUserId(feed) ?? str(sig.platform_user_id) },
+      identity: {
+        platform: str(feed.platform),
+        platformUserId: feedAuthorPlatformUserId(feed) ?? str(sig.platform_user_id),
+        authorHandle: str(author.author_handle) ?? str(sigMeta.author_handle),
+      },
+      newProspect: { ...DISCOVERY_NEW_PROSPECT },
       platform: lower(feed.platform),
       sourceUrl: contentUrl,
       observedAt: observed.observedAt,
@@ -208,6 +231,7 @@ export function buildCommunityFeedEvent(feed: Row, signal: Row | null): BuildRes
         opportunity_feed_item: feed,
         lead_signal: signal ? {
           id: sig.id, source_type: sig.source_type, source_id: sig.source_id, platform: sig.platform,
+          platform_user_id: sig.platform_user_id ?? null,
           detected_at: sig.detected_at, contact_id: sig.contact_id, metadata: sigMeta,
         } : null,
       },
@@ -225,7 +249,7 @@ export function buildCommunityFeedEvent(feed: Row, signal: Row | null): BuildRes
  *   sourceUrl     metadata.content_url (none today: messages carry no URL on the signal)
  *   run id        none (engagement ingestion has no run entity)
  */
-export function buildEngagementSignalEvent(signal: Row): BuildResult {
+export function buildEngagementSignalEvent(signal: Row, qualification: EngagementQualification = qualifyEngagementForNewProspect(signal)): BuildResult {
   const org = str(signal.organization_id);
   const id = str(signal.id);
   const messageId = str(signal.source_id);
@@ -247,7 +271,9 @@ export function buildEngagementSignalEvent(signal: Row): BuildResult {
       provider: 'engagement',
       sourceRecordKey: messageId,
       prospectSource: 'engagement',
-      identity: { platform, platformUserId: str(signal.platform_user_id) },
+      identity: { platform, platformUserId: str(signal.platform_user_id), authorHandle: str(meta.author_handle) },
+      // Engagement may ENRICH any existing prospect; it CREATES one only when qualified.
+      newProspect: { allowed: qualification.qualified, rule: qualification.rule, reason: qualification.reason },
       platform: lower(platform),
       sourceUrl: str(meta.content_url),
       observedAt: observed.observedAt,
@@ -262,13 +288,14 @@ export function buildEngagementSignalEvent(signal: Row): BuildResult {
         leadIntent: str(meta.lead_intent),
         // Campaign/content attribution (previously dropped at engagementNormalizationService).
         scheduledPostId: str(meta.scheduled_post_id),
-        scores: { scale: 'unit', total: num(signal.total_score), confidence: num(signal.confidence_score) },
+        scores: { scale: 'unit', intent: num(signal.intent_score), total: num(signal.total_score), confidence: num(signal.confidence_score) },
       },
       sourceMetadata: { migrationSource: str(signal.migration_source), contactKey: str(signal.contact_key) },
       rawPayload: {
         lead_signal: {
           id, source_type: signal.source_type, source_id: messageId, thread_id: signal.thread_id,
-          platform: signal.platform, detected_at: signal.detected_at, contact_id: signal.contact_id, metadata: meta,
+          platform: signal.platform, platform_user_id: signal.platform_user_id ?? null,
+          detected_at: signal.detected_at, contact_id: signal.contact_id, metadata: meta,
         },
       },
     },
@@ -311,7 +338,8 @@ export function buildScheduledDetectionEvent(signal: Row): BuildResult {
       provider: 'lead_detection',
       sourceRecordKey: id,
       prospectSource: 'listening',
-      identity: { platform, platformUserId: str(signal.platform_user_id) },
+      identity: { platform, platformUserId: str(signal.platform_user_id), authorHandle: str(meta.author_handle) },
+      newProspect: { ...DISCOVERY_NEW_PROSPECT },
       platform: lower(platform),
       sourceUrl: url,
       observedAt: observed.observedAt,
@@ -335,6 +363,7 @@ export function buildScheduledDetectionEvent(signal: Row): BuildResult {
       rawPayload: {
         lead_signal: {
           id, source_type: signal.source_type, source_id: sourceId, platform: signal.platform,
+          platform_user_id: signal.platform_user_id ?? null,
           detected_at: signal.detected_at, contact_id: signal.contact_id, metadata: meta,
         },
       },
@@ -389,11 +418,19 @@ export async function bridgeCommunityFeedItem(feed: Row, deps: BridgeDeps = defa
 }
 
 /** Bridge one engagement lead signal row (as written by `writeLeadSignal`, with its id). */
-export async function bridgeEngagementSignal(signal: Row, deps: BridgeDeps = defaultBridgeDeps()): Promise<BridgeOutcome> {
+export async function bridgeEngagementSignal(
+  signal: Row,
+  deps: BridgeDeps = defaultBridgeDeps(),
+  options: { gateDecision?: GateDecisionLike } = {},
+): Promise<BridgeOutcome> {
   const kind: BridgeKind = 'engagement_signal';
   try {
     const org = str(signal?.organization_id);
-    const g = await gateFor(kind, org, deps);
+    const g = options.gateDecision
+      ? (options.gateDecision.allowed
+        ? { decision: options.gateDecision }
+        : { outcome: rejected(kind, org, `gate_closed:${options.gateDecision.reason}`) })
+      : await gateFor(kind, org, deps);
     if ('outcome' in g) return g.outcome;
     const built = buildEngagementSignalEvent(signal);
     if (built.ok === false) return rejected(kind, org, built.reason, 'failed');
@@ -401,6 +438,50 @@ export async function bridgeEngagementSignal(signal: Row, deps: BridgeDeps = def
   } catch (e) {
     return rejected(kind, str(signal?.organization_id), `unexpected:${(e as Error)?.message}`, 'failed');
   }
+}
+
+/** What the engagement writer should do with one engagement signal. */
+export interface EngagementAdmission {
+  /** The PI ingestion gate for the signal's tenant (kill switch AND tenant flag). */
+  gate: GateDecisionLike;
+  /** The bridge outcome (always present; `skipped: gate_closed` when the gate is closed). */
+  bridge: BridgeOutcome;
+  /** The explicit new-prospect qualification of this signal. */
+  qualification: EngagementQualification;
+  /**
+   * May the signal be ADOPTED into Lead Intelligence (`adoptLead('engagement')`)?
+   * Only when the gate is open AND it either enriched an existing prospect /
+   * created a qualified one (`bridged`) or itself qualifies. An unqualified
+   * engagement with no prospect to enrich creates NOTHING, anywhere.
+   */
+  adopt: boolean;
+  adoptReason: 'gate_closed' | 'bridged' | 'qualified' | 'not_qualified_no_existing_prospect';
+}
+
+/**
+ * Engagement admission (owner decision 3): ONE gate evaluation (the existing
+ * `resolveLeadIngestionGate` through the bridge's deps seam) governs BOTH the
+ * canonical bridge and Lead Intelligence adoption of this engagement signal.
+ * Never throws.
+ */
+export async function admitEngagementSignal(signal: Row, deps: BridgeDeps = defaultBridgeDeps()): Promise<EngagementAdmission> {
+  const qualification = qualifyEngagementForNewProspect(signal ?? {});
+  const org = str(signal?.organization_id);
+  let gate: GateDecisionLike;
+  if (!org) {
+    gate = { allowed: false, reason: 'organization_required' };
+  } else {
+    try {
+      gate = await deps.gate(org);
+    } catch (e) {
+      gate = { allowed: false, reason: `gate_error:${(e as Error)?.message}` };
+    }
+  }
+  const bridge = await bridgeEngagementSignal(signal, deps, { gateDecision: gate });
+  if (!gate.allowed) return { gate, bridge, qualification, adopt: false, adoptReason: 'gate_closed' };
+  if (bridge.status === 'bridged') return { gate, bridge, qualification, adopt: true, adoptReason: 'bridged' };
+  if (qualification.qualified) return { gate, bridge, qualification, adopt: true, adoptReason: 'qualified' };
+  return { gate, bridge, qualification, adopt: false, adoptReason: 'not_qualified_no_existing_prospect' };
 }
 
 /**

@@ -1,8 +1,8 @@
 /**
  * A4 — with the REAL PI ingestion gate (`resolveLeadIngestionGate`) and the real
- * bridge wiring, a closed gate means NO canonical write of any kind, while Lead
- * Intelligence adoption (`adoptLead…`) keeps running for both the community feed
- * and (after the D-1 fix) engagement signals.
+ * bridge wiring, a closed gate means NO canonical write of any kind. Lead
+ * Intelligence adoption keeps running for the community feed, but ENGAGEMENT
+ * adoption is gated by both controls (owner decision 3, 2026-10-30) and does not run.
  *
  * Production default: ENABLE_LEAD_INGESTION unset ⇒ kill switch off; tenant
  * `lead_ingestion` flag absent ⇒ off. Neither is changed by this work.
@@ -84,9 +84,9 @@ describe.each([
 ])('gate closed — %s', (_label, value) => {
   beforeEach(() => { if (value === undefined) delete process.env[FLAG]; else process.env[FLAG] = value; });
 
-  it('adoptLead still runs for community AND engagement, and nothing canonical is touched', async () => {
+  it('community adoption still runs, engagement adoption does NOT, and nothing canonical is touched', async () => {
     await runBoth();
-    expect(adopt.mock.calls.map((c) => c[0])).toEqual(['community', 'engagement']);
+    expect(adopt.mock.calls.map((c) => c[0])).toEqual(['community']);
     const touched = mockDbRef.current!.ops.map((o) => o.table);
     for (const t of CANONICAL_TABLES) expect(touched).not.toContain(t);
     // the bridge did run, and was refused by the gate — observable, not silent

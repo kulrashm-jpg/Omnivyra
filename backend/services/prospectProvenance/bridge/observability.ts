@@ -41,6 +41,8 @@ export function observeBridgeOutcome(outcome: BridgeOutcome): BridgeOutcome {
     sourceRecordId: outcome.sourceRecordId ?? null,
     leadCreated: outcome.leadCreated ?? null,
     prospectPath: outcome.prospectPath ?? null,
+    identityStatus: outcome.identityStatus ?? null,
+    personAttached: outcome.personAttached ?? null,
     contribution: outcome.contribution ?? null,
     contributionRole: outcome.contributionRole ?? null,
     roleDowngraded: outcome.roleDowngraded ?? null,

@@ -1,5 +1,8 @@
 // Verify the facade REUSES the existing identity resolver (no duplication) + emits to the caller sink.
+// The pure normalizers stay real: the identity port uses them to decide contact
+// evidence vs a bare social handle (owner decision 2026-10-30).
 jest.mock('../../services/identityResolutionService', () => ({
+  ...jest.requireActual('../../services/identityResolutionService'),
   resolveUnifiedPerson: jest.fn(async () => ({ unifiedPersonId: 'up_real', matchedBy: 'email', created: false })),
 }));
 import { resolveUnifiedPerson } from '../../services/identityResolutionService';
