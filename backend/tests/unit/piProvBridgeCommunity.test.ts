@@ -70,10 +70,12 @@ describe('community feed → canonical prospect: evidence preserved', () => {
 
     const out = await bridgeCommunityFeedItem(feedItem(ORG_A), w.deps);
 
-    expect(out).toMatchObject({ status: 'bridged', reason: 'recorded', leadCreated: true, prospectPath: 'created', contribution: 'inserted', contributionRole: 'originating', externalRef: 'community:feed-1' });
-    expect(w.prospects).toEqual([expect.objectContaining({ org: ORG_A, key: 'community:feed-1', source: 'community', personId: out.personId })]);
-    expect(w.persons).toEqual([expect.objectContaining({ org: ORG_A, keys: JSON.stringify({ 'reddit:user': 'u_alice' }) })]);
-    expect(w.sourceRecords).toEqual([expect.objectContaining({ org: ORG_A, provider: 'community', recordId: 'feed-1', runId: 'exec-1', observedAt: '2026-10-29T09:00:00.000Z' })]);
+    expect(out).toMatchObject({ status: 'bridged', reason: 'recorded', leadCreated: true, prospectPath: 'created', contribution: 'inserted', contributionRole: 'originating', externalRef: 'community:feed-1', identityStatus: 'unverified', personId: null });
+    // Unverified handle: the prospect exists WITHOUT a person, anchored to the normalised social identity.
+    expect(w.prospects).toEqual([expect.objectContaining({ org: ORG_A, key: 'community:feed-1', source: 'community', personId: null })]);
+    expect(w.prospects[0].metadata).toMatchObject({ sourceIdentity: { platform: 'reddit', platformUserId: 'u_alice' }, identityStatus: 'unverified' });
+    expect(w.calls).not.toContain('attachPersonToProspect');
+    expect(w.sourceRecords).toEqual([expect.objectContaining({ org: ORG_A, provider: 'community', recordId: 'feed-1', runId: 'exec-1', observedAt: '2026-10-29T09:00:00.000Z', personId: null })]);
 
     expect(w.contributions).toHaveLength(1);
     const c = w.contributions[0];
@@ -102,6 +104,8 @@ describe('community feed → canonical prospect: evidence preserved', () => {
       opportunityType: 'buying_intent',
       signalSourceId: 't3_abc',
       scores: { scale: 'unit', opportunity: 0.8, confidence: 0.7, urgency: 0.4 },
+      sourceIdentity: { platform: 'reddit', platformUserId: 'u_alice', authorHandle: 'alice', normalized: { platform: 'reddit', platformUserId: 'u_alice' } },
+      identityVerification: { status: 'unverified', reason: 'unresolved' },
     });
   });
 
@@ -122,14 +126,14 @@ describe('community feed → canonical prospect: evidence preserved', () => {
 });
 
 describe('idempotency', () => {
-  it('a replay of the same feed item converges: one person, one prospect, one source record, one contribution', async () => {
+  it('a replay of the same feed item converges: one prospect, one source record, one contribution', async () => {
     const w = makeWorld();
     w.gateOpen.add(ORG_A);
     w.signals.push(listeningSignal(ORG_A));
     const first = await bridgeCommunityFeedItem(feedItem(ORG_A), w.deps);
     const second = await bridgeCommunityFeedItem(feedItem(ORG_A), w.deps);
     expect(second).toMatchObject({ status: 'bridged', reason: 'already_recorded', contribution: 'duplicate', prospectId: first.prospectId, prospectPath: 'own_key' });
-    expect([w.persons.length, w.prospects.length, w.sourceRecords.length, w.contributions.length]).toEqual([1, 1, 1, 1]);
+    expect([w.prospects.length, w.sourceRecords.length, w.contributions.length]).toEqual([1, 1, 1]);
   });
 
   it('a retry after a failed source-record write still records the ORIGINATING contribution', async () => {
@@ -152,7 +156,7 @@ describe('idempotency', () => {
     w.gateOpen.add(ORG_A);
     const first = await bridgeCommunityFeedItem(feedItem(ORG_A), w.deps);
     const second = await bridgeCommunityFeedItem(feedItem(ORG_A, { id: 'feed-2', signal_id: 'sig-2' }), w.deps);
-    expect(second).toMatchObject({ status: 'bridged', prospectPath: 'existing_person', leadCreated: false, contributionRole: 'contributing', prospectId: first.prospectId });
+    expect(second).toMatchObject({ status: 'bridged', prospectPath: 'existing_handle', leadCreated: false, contributionRole: 'contributing', prospectId: first.prospectId });
     expect(w.prospects).toHaveLength(1);
     expect(w.contributions.map((c) => [c.external_ref, c.contribution_role])).toEqual([
       ['community:feed-1', 'originating'], ['community:feed-2', 'contributing'],
@@ -162,9 +166,10 @@ describe('idempotency', () => {
   it('when the person already has two prospects the bridge refuses rather than choosing or adding a third', async () => {
     const w = makeWorld();
     w.gateOpen.add(ORG_A);
-    const { unifiedPersonId } = await w.deps.resolvePerson({ companyId: ORG_A, externalKeys: { 'reddit:user': 'u_alice' } });
-    w.prospects.push({ id: 'l1', org: ORG_A, key: 'apollo:1', personId: unifiedPersonId, source: 'apollo' });
-    w.prospects.push({ id: 'l2', org: ORG_A, key: 'csv:2', personId: unifiedPersonId, source: 'csv' });
+    const unifiedPersonId = 'person-verified';
+    w.claims.push({ org: ORG_A, platform: 'reddit', value: 'u_alice', personId: unifiedPersonId });
+    w.prospects.push({ id: 'l1', org: ORG_A, key: 'apollo:1', personId: unifiedPersonId, source: 'apollo', metadata: {} });
+    w.prospects.push({ id: 'l2', org: ORG_A, key: 'csv:2', personId: unifiedPersonId, source: 'csv', metadata: {} });
     const out = await bridgeCommunityFeedItem(feedItem(ORG_A), w.deps);
     expect(out).toMatchObject({ status: 'skipped', reason: 'ambiguous_person_prospects' });
     expect(w.prospects).toHaveLength(2);
@@ -180,7 +185,7 @@ describe('tenant isolation', () => {
     w.signals.push(listeningSignal(ORG_A), listeningSignal(ORG_B));
     const a = await bridgeCommunityFeedItem(feedItem(ORG_A), w.deps);
     const b = await bridgeCommunityFeedItem(feedItem(ORG_B, { id: 'feed-b' }), w.deps);
-    expect(a.personId).not.toBe(b.personId);
+    expect([a.personId, b.personId]).toEqual([null, null]);
     expect(a.prospectId).not.toBe(b.prospectId);
     expect(b).toMatchObject({ prospectPath: 'created', contributionRole: 'originating' });
     for (const c of w.contributions) {
@@ -229,7 +234,7 @@ describe('identity and failure posture', () => {
   it('failures are returned and counted, never thrown', async () => {
     const w = makeWorld();
     w.gateOpen.add(ORG_A);
-    w.failNext.resolvePerson = new Error('db down');
+    w.failNext.resolveVerifiedPerson = new Error('db down');
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     await expect(bridgeCommunityFeedItem(feedItem(ORG_A), w.deps)).resolves.toMatchObject({ status: 'failed', reason: 'identity_failed:db down' });
     w.failNext.loadLeadSignal = new Error('timeout');
@@ -261,7 +266,7 @@ describe('engagement signal → canonical prospect', () => {
     w.gateOpen.add(ORG_A);
     const viaFeed = await bridgeCommunityFeedItem(feedItem(ORG_A, { platform: 'linkedin', author_metadata: { platform_user_id: 'li_bob' } }), w.deps);
     const viaEngagement = await bridgeEngagementSignal(engagementSignal(ORG_A), w.deps);
-    expect(viaEngagement).toMatchObject({ prospectId: viaFeed.prospectId, prospectPath: 'existing_person', contributionRole: 'contributing' });
+    expect(viaEngagement).toMatchObject({ prospectId: viaFeed.prospectId, prospectPath: 'existing_handle', contributionRole: 'contributing' });
   });
 });
 

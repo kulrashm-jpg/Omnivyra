@@ -10,7 +10,7 @@ jest.mock('../../services/leadIntelligence/leadIntelligenceRepository', () => ({
   upsertCanonicalLead: (...a: unknown[]) => upsertCanonicalLead(...a),
   appendLeadEvent: (...a: unknown[]) => appendLeadEvent(...(a as [])),
 }));
-jest.mock('../../services/identityResolutionService', () => ({ resolveUnifiedPerson: jest.fn(async () => ({ unifiedPersonId: 'up-1', matchedBy: 'email' })) }));
+jest.mock('../../services/identityResolutionService', () => ({ ...jest.requireActual('../../services/identityResolutionService'), resolveUnifiedPerson: jest.fn(async () => ({ unifiedPersonId: 'up-1', matchedBy: 'email' })) }));
 const warn = jest.fn();
 jest.mock('../../services/logger', () => ({ logger: { warn: (...a: unknown[]) => warn(...a), info: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
 

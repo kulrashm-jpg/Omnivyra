@@ -2,7 +2,7 @@ import { supabase } from '../db/supabaseClient';
 import { logLeadSignalEvent } from '../utils/leadSignalLogger';
 import { ownedDbTable } from '../db/writeOwner';
 import { adoptLeadAsync } from './leadIntelligence/leadIntelligenceRuntime';
-import { bridgeEngagementSignal } from './prospectProvenance/communityBridge';
+import { admitEngagementSignal } from './prospectProvenance/communityBridge';
 import { resolveSocialContactIdentity } from './prospectIdentity/socialContactResolution';
 import { logger } from './logger';
 
@@ -207,7 +207,8 @@ export async function writeLeadSignal(input: LeadSignalWriteInput): Promise<Lead
   // never has one, so engagement adoption never ran. The decision is now taken
   // from the INPUT, and the adopted row is the persisted signal row itself
   // (tenant, platform, platform_user_id, contact_id, thread, metadata), not the
-  // write receipt.
+  // write receipt. Since 2026-10-30 it is GATED by the PI ingestion gate and the
+  // engagement qualification rule (see adoptAndBridgeEngagementSignal).
   if (input.canonical.source_type === 'engagement' && detail.id && detail.row) {
     await adoptAndBridgeEngagementSignal(detail.row, detail.written);
   }
@@ -215,29 +216,34 @@ export async function writeLeadSignal(input: LeadSignalWriteInput): Promise<Lead
 }
 
 /**
- * Engagement signal → Lead Intelligence (when the row was written), then → the
- * canonical PI prospect model through the provenance bridge (only when the
- * existing PI ingestion gate allows the tenant; the bridge checks it).
+ * Engagement signal → canonical PI prospect (bridge), then → Lead Intelligence.
  *
- * Awaited and ordered: adoption and the bridge resolve the same author through
- * W1, which has no unique index on external keys, so running them concurrently
- * could mint two persons. Awaiting also keeps the work alive in request-scoped
- * callers (`/api/engagement/detect-leads`), where a detached promise can be cut
- * off after the response.
+ * GATED (owner decision 3, 2026-10-30): BOTH steps run only when the existing PI
+ * ingestion gate allows the tenant — `resolveLeadIngestionGate` =
+ * `ENABLE_LEAD_INGESTION` AND the tenant `lead_ingestion` flag — evaluated ONCE
+ * by `admitEngagementSignal`. Gate closed ⇒ no adoption, no canonical write.
+ *
+ * Gate open: the bridge ENRICHES an existing prospect, or creates one only when
+ * the signal passes the explicit qualification rule
+ * (prospectProvenance/bridge/engagementQualification.ts). Adoption follows the
+ * same decision: an unqualified signal with no prospect to enrich is not adopted.
+ *
+ * Neither step creates a person from the author's handle (owner decision 2).
  *
  * Adoption runs only when this call WROTE the row (insert, or the higher-score
  * update): an unchanged re-detection must not append another timeline event.
  * The bridge runs whenever the signal exists — it is idempotent, so a retry can
  * heal a contribution an earlier attempt failed to record.
  *
- * Neither step throws (adoptLeadAsync is fail-open; the bridge returns an
- * observed outcome). The guard keeps the signal write — already durable —
- * from ever being reported as failed because of them.
+ * Awaited: keeps the work alive in request-scoped callers
+ * (`/api/engagement/detect-leads`). Neither step throws (the bridge returns an
+ * observed outcome; adoptLeadAsync is fail-open). The guard keeps the signal
+ * write — already durable — from ever being reported as failed because of them.
  */
 async function adoptAndBridgeEngagementSignal(row: Record<string, unknown>, written: boolean): Promise<void> {
   try {
-    if (written) await adoptLeadAsync('engagement', row);
-    await bridgeEngagementSignal(row);
+    const admission = await admitEngagementSignal(row);
+    if (written && admission.adopt) await adoptLeadAsync('engagement', row);
   } catch (error) {
     console.warn('[leadSignals] engagement adoption/bridge guard tripped', {
       signalId: row?.id ?? null,

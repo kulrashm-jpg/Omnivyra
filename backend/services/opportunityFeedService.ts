@@ -576,19 +576,19 @@ export async function recordOpportunityFromSignal(
  * Lead Intelligence adoption, then the provenance bridge — in that order, and
  * awaited (this runs in the listening worker, sequentially per signal).
  *
- * ORDER matters: both resolve the author through W1 with the same
- * `<platform>:user` key, and W1 has no unique index on external keys, so running
- * them concurrently could mint two persons for one author. Serialising also
- * means two signals from one author in one execution converge on one person and
- * one prospect.
+ * Serialised: two signals from one author in one execution converge on one
+ * prospect (the bridge finds the first one by the author's normalised social
+ * identity). Neither step creates a person from the author's handle (owner
+ * decision 2026-10-30): adoption's identity port and the bridge only LINK a
+ * verified person (prospectProvenance/bridge/verifiedIdentity.ts).
  *
  * Neither step can throw: `adoptLeadAsync` is fail-open and the bridge returns
  * an observed outcome. The guard below exists so that even a defect there can
  * never cost the tenant the feed item that is already durable.
  *
  * The adoption row lifts `author_metadata.platform_user_id` to the top level
- * (`withCommunityAuthorIdentity`), so the community adapter finally sees the
- * author id it previously dropped; every original key is preserved.
+ * (`withCommunityAuthorIdentity`), so the community adapter keeps the author id
+ * as identity EVIDENCE on the lead; every original key is preserved.
  */
 async function adoptAndBridgeCommunityFeedItem(feedItem: Record<string, unknown>): Promise<void> {
   try {

@@ -128,7 +128,7 @@ describe('community feed: adoptLead keeps working, then the bridge runs', () => 
 
   it('a bridge failure never breaks the feed write', async () => {
     mockDbRef.current = producerDb();
-    mockWorldRef.current!.failNext.resolvePerson = new Error('db down');
+    mockWorldRef.current!.failNext.resolveVerifiedPerson = new Error('db down');
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     const res = await recordOpportunityFromSignal({
       organizationId: ORG_A, signalId: 'sig-1', listeningExecutionId: 'exec-1', raw: rawSignal as never,
@@ -141,7 +141,7 @@ describe('community feed: adoptLead keeps working, then the bridge runs', () => 
   });
 });
 
-describe('D-1 regression: engagement signals now adopt (and bridge)', () => {
+describe('D-1 regression: engagement signals adopt (and bridge) — gate open, qualified', () => {
   const input = {
     organization_id: ORG_A, source_type: 'engagement' as const, source_id: 'msg-1', thread_id: 'thread-1',
     platform: 'LinkedIn', platform_user_id: 'li_bob', content_text: 'pricing?', intent_score: 0.8, total_score: 0.8,
@@ -161,7 +161,8 @@ describe('D-1 regression: engagement signals now adopt (and bridge)', () => {
       platform_user_id: 'li_bob', contact_id: 'contact-9', thread_id: 'thread-1',
       metadata: expect.objectContaining({ scheduled_post_id: 'sp-77' }),
     });
-    expect(mockOrder).toEqual(['adopt:engagement', 'bridge']);
+    // one gate evaluation governs both; the bridge runs first, adoption follows its decision
+    expect(mockOrder).toEqual(['bridge', 'adopt:engagement']);
     expect(mockWorldRef.current!.contributions[0]).toMatchObject({
       source_category: 'engagement', engagement_message_id: 'msg-1', lead_signal_id: 'esig-1', contact_id: 'contact-9',
     });
