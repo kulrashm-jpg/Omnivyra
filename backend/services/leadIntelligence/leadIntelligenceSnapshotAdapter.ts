@@ -37,12 +37,20 @@ export const leadPlugin: IntelligencePlugin<D> = {
     const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
     const leadsReady = !!readiness?.checks?.find((c: any) => c.id === 'leads')?.done;
     const updatedAt = readiness?.generatedAt ?? null;
+    // Per-source and per-origin breakdown, so the report keeps where leads came from.
+    const breakdown = stats as { bySource?: Record<string, number>; byOriginCategory?: Record<string, number>; truncated?: boolean; truncatedSources?: string[] };
+    const pipelineFindings = [
+      `${total} leads in pipeline`,
+      ...Object.entries(breakdown.bySource ?? {}).map(([s, n]) => `${n} from ${s}`),
+      ...Object.entries(breakdown.byOriginCategory ?? {}).filter(([c]) => c !== 'unknown').map(([c, n]) => `${n} originated via ${c}`),
+      ...(breakdown.truncated ? [`Counts may be incomplete (capped: ${(breakdown.truncatedSources ?? []).join(', ')})`] : []),
+    ];
 
     const modules: PluginModule[] = [
       { key: 'buying_intent', label: 'Buying Intent', source: 'buyingIntent', score: total > 0 ? Math.round((bands.high * 100 + bands.medium * 50 + bands.low * 20) / total) : null, status: 'unavailable', available: total > 0, findings: total > 0 ? [`${bands.high} high-intent of ${total} leads`] : ['No leads captured yet'], lastUpdated: updatedAt },
       { key: 'identity', label: 'Identity Resolution', source: 'customerIdentityRepository', score: total > 0 ? pct(Number(stats.withIdentity ?? 0)) : null, status: 'unavailable', available: total > 0, findings: [`${stats.withIdentity ?? 0}/${total} identity-resolved`], lastUpdated: updatedAt },
       { key: 'attribution', label: 'Attribution', source: 'attributionRepository', score: total > 0 ? pct(Number(stats.withCampaign ?? 0)) : null, status: 'unavailable', available: total > 0, findings: [`${stats.withCampaign ?? 0}/${total} campaign-attributed`], lastUpdated: updatedAt },
-      { key: 'pipeline', label: 'Pipeline', source: 'leadIntelligenceReadService', score: total > 0 ? Math.min(100, total * 4) : 0, status: 'partial', available: true, findings: [`${total} leads in pipeline`], lastUpdated: updatedAt },
+      { key: 'pipeline', label: 'Pipeline', source: 'leadIntelligenceReadService', score: total > 0 ? Math.min(100, total * 4) : 0, status: 'partial', available: true, findings: pipelineFindings, lastUpdated: updatedAt },
       { key: 'lead_readiness', label: 'Lead Readiness', source: 'activationReadinessService', score: leadsReady ? 100 : 50, status: leadsReady ? 'ready' : 'partial', available: true, findings: [leadsReady ? 'Lead capture active' : 'Lead capture not configured'], lastUpdated: updatedAt },
     ];
     for (const m of modules) if (m.key !== 'lead_readiness' && m.key !== 'pipeline') m.status = statusFromScore(m.score);

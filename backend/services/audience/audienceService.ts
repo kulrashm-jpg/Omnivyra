@@ -16,7 +16,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
-import { searchLeads } from '../leadIntelligence/leadIntelligenceReadService';
+import { listAllLeads } from '../leadIntelligence/leadIntelligenceReadService';
 import { leadKeyFor, type CanonicalLeadView } from '../../../lib/leadIntelligence';
 import { evaluateRules, isNonEmptyRules, type RuleGroup, type EvalContext } from '../../../lib/audience/segmentation';
 
@@ -88,7 +88,9 @@ async function loadOperationalMap(companyId: string): Promise<Map<string, { stat
 async function evaluateMembers(companyId: string, rules: RuleGroup): Promise<EvaluatedMember[]> {
   if (!isNonEmptyRules(rules)) return [];
   const [{ rows }, opMap] = await Promise.all([
-    searchLeads({ companyId, page: { limit: 5000, offset: 0 } }),
+    // The whole set. `searchLeads` clamps a page to 500, so audiences used to
+    // evaluate only 500 leads and the stale pass then deactivated the rest.
+    listAllLeads({ companyId }),
     loadOperationalMap(companyId),
   ]);
   const out: EvaluatedMember[] = [];
@@ -145,20 +147,25 @@ export async function explainMembership(companyId: string, audienceId: string, e
 
 /* ── Audience intelligence (aggregate existing intelligence; no new scorer) ──── */
 
-export interface AudienceIntelligence { members: number; avgIntent: number; intentBands: { high: number; medium: number; low: number }; bySource: Record<string, number> }
+export interface AudienceIntelligence { members: number; avgIntent: number; intentBands: { high: number; medium: number; low: number }; bySource: Record<string, number>; byOriginCategory: Record<string, number> }
 
 function buildAudienceIntelligence(members: EvaluatedMember[]): AudienceIntelligence {
   const bands = { high: 0, medium: 0, low: 0 };
   const bySource: Record<string, number> = {};
+  const byOriginCategory: Record<string, number> = {};
   let intentSum = 0;
-  const norm = (v: unknown): number => { const n = typeof v === 'number' ? v : Number(v); return !Number.isFinite(n) ? 0 : (n > 1 ? Math.min(1, n / 100) : Math.max(0, n)); };
+  // View scores are unit (0..1) by contract — adapters convert explicitly with
+  // toUnitScore — so no scale is guessed here.
+  const norm = (v: unknown): number => { const n = typeof v === 'number' ? v : Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0; };
   for (const m of members) {
     const intent = norm(m.view.scores.intent ?? m.view.scores.total ?? 0);
     intentSum += intent;
     if (intent >= 0.7) bands.high++; else if (intent >= 0.4) bands.medium++; else bands.low++;
     bySource[m.view.source] = (bySource[m.view.source] ?? 0) + 1;
+    const origin = m.view.origin?.category ?? 'unknown';
+    byOriginCategory[origin] = (byOriginCategory[origin] ?? 0) + 1;
   }
-  return { members: members.length, avgIntent: members.length ? Number((intentSum / members.length).toFixed(3)) : 0, intentBands: bands, bySource };
+  return { members: members.length, avgIntent: members.length ? Number((intentSum / members.length).toFixed(3)) : 0, intentBands: bands, bySource, byOriginCategory };
 }
 
 export async function getAudienceIntelligence(companyId: string, audienceId: string): Promise<AudienceIntelligence> {

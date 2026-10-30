@@ -138,6 +138,9 @@ export async function bridgeSourceEvent(
         personId,
         observedAt: event.observedAt,
         ingestionRunId: event.ingestionRunId,
+        sourceCategory: event.sourceCategory,
+        platform: event.platform,
+        sourceUrl: event.sourceUrl,
       }, at);
       sourceRecordId = sr.sourceRecordId;
     } catch (e) {

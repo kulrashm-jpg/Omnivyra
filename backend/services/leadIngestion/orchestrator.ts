@@ -35,6 +35,9 @@ import { resolveUnifiedPerson } from '../identityResolutionService';
 import { resolveOrCreateAccount, attachPersonToAccount } from '../prospectIdentity/accountResolution';
 import { resolveOrCreateProspect } from '../prospectIdentity/prospectResolution';
 import { piProspectCandidateKeys, recordPiIngestionContribution } from '../prospectProvenance/ingestion/piIngestionContribution';
+import type { ProviderSourceRecord } from '../prospectIdentity/ingestionBoundary';
+
+type ProviderSourceCategory = ProviderSourceRecord['sourceCategory'];
 import { planProspectEnrichment, type EnrichmentPorts } from '../enrichment/service';
 import { ingestionEnrichmentCoverage } from './enrichmentCoverage';
 import { detectAndParkDuplicates } from '../prospectIdentity/personDuplicates';
@@ -351,8 +354,8 @@ export async function ingestNormalizedRecord(
   // duplicated. Provider knowledge stays in the provenance helper.
   let prospectId: string | null = null;
   let prospect: Awaited<ReturnType<typeof resolveOrCreateProspect>> | null = null;
+  const keys = piProspectCandidateKeys(record.source, record.externalId);
   try {
-    const keys = piProspectCandidateKeys(record.source, record.externalId);
     prospect = await resolveOrCreateProspect(record.organizationId, {
       externalLeadKey: keys.externalLeadKey,
       namespacedExternalLeadKey: keys.namespacedExternalLeadKey,
@@ -432,6 +435,8 @@ export async function ingestNormalizedRecord(
       } : undefined,
       accountAttributes: record.entityType === 'account' ? toAccountAttributeInput(record.account) : undefined,
       confidence: record.confidence ?? null,
+      sourceCategory: (keys.provenance?.sourceCategory ?? null) as ProviderSourceCategory,
+      platform: keys.provenance?.platform ?? null,
     }, at);
   } catch (e) {
     return fail(externalId, 'provenance_failed', e);

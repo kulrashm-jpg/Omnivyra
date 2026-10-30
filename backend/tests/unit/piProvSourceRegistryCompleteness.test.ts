@@ -14,10 +14,9 @@
  * and the vocabulary must agree everywhere it is written down (contract doc,
  * code, schema-parity manifest).
  *
- * PENDING MARKERS. (b), (c) and (d) do not exist on this branch; they are
- * `test.todo` entries named per category so that the integration step flips
- * each one into a real assertion. Nothing here is skipped silently: a pending
- * item is visible in every jest summary as "todo".
+ * (b), (c) and (d) were pending markers on the gates branch and are real
+ * assertions on the integration branch. A category with no production producer
+ * is a named KNOWN_GAP with its reason — never a silent omission.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -36,6 +35,7 @@ import {
   recordSourceContribution,
   validateContributionInput,
 } from '../../../backend/services/prospectProvenance/contributionWriter';
+import { SOURCE_CATEGORY_LABELS, provenanceLabel } from '../../../lib/leadIntelligence/sourceTaxonomy';
 
 const REPO = path.resolve(__dirname, '../../..');
 const ORG = '11111111-1111-4111-8111-111111111111';
@@ -143,21 +143,66 @@ describe('provenance source registry — every category has a fixture the writer
   });
 });
 
-// ─── Pending: built by other workstreams; flipped at integration ─────────────
+// ─── Display, ingestion and schema coverage (flipped at integration) ─────────
 
-describe('provenance source registry — taxonomy / display mapping (PENDING: reader workstream, Agent 3)', () => {
-  for (const category of SOURCE_CATEGORIES) {
-    test.todo(`${category}: maps to exactly one CanonicalLeadSource display value (not 'other') and has a display label`);
-  }
+describe('provenance source registry — taxonomy / display mapping', () => {
+  it.each([...SOURCE_CATEGORIES])('%s has its own display label and never displays as "Other"', (category) => {
+    const label = SOURCE_CATEGORY_LABELS[category];
+    expect(typeof label).toBe('string');
+    expect(label.trim().length).toBeGreaterThan(0);
+    expect(provenanceLabel(category).toLowerCase()).not.toBe('other');
+  });
+
+  it('labels are distinct, so no category is silently shown as another', () => {
+    const labels = SOURCE_CATEGORIES.map((c) => SOURCE_CATEGORY_LABELS[c]);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
 });
 
-describe('provenance source registry — ingestion path (PENDING: ingestion workstreams, Agents 2 / 4)', () => {
-  for (const category of SOURCE_CATEGORIES) {
-    test.todo(`${category}: a non-test ingestion path calls recordSourceContribution with sourceCategory '${category}' (or documents why none exists — e.g. 'website' is historical compatibility)`);
-  }
+/**
+ * Production modules that assign a source_category. A category with no producer
+ * must be listed in KNOWN_GAPS with the reason, so a gap is a visible decision,
+ * never a silent omission. Adding the wiring forces this list to shrink.
+ */
+const PRODUCERS = [
+  'backend/services/prospectProvenance/ingestion/sourceProfiles.ts',
+  'backend/services/prospectProvenance/communityBridge.ts',
+];
+const KNOWN_GAPS: Partial<Record<SourceCategory, string>> = {
+  pi_enrichment: 'profile is defined in sourceProfiles.ts, but enrichment persistence (backend/services/enrichment/providers/persistence.ts) does not yet record a contribution',
+};
+
+describe('provenance source registry — every category has a production producer', () => {
+  const producerSource = PRODUCERS.map((p) => fs.readFileSync(path.join(REPO, p), 'utf8')).join('\n');
+
+  it.each([...SOURCE_CATEGORIES])('%s is assigned by a production ingestion module, or is a documented gap', (category) => {
+    if (KNOWN_GAPS[category]) {
+      expect(KNOWN_GAPS[category]!.length).toBeGreaterThan(20);
+      return;
+    }
+    expect(producerSource).toContain(`'${category}'`);
+  });
+
+  it('the known-gap list is exactly the categories still unwired', () => {
+    expect(Object.keys(KNOWN_GAPS).sort()).toEqual(['pi_enrichment']);
+  });
 });
 
-describe('provenance source registry — migration CHECK constraint (PENDING: migration workstream, Agent 1)', () => {
-  test.todo('the prospect_source_contributions source_category CHECK lists exactly SOURCE_CATEGORIES');
-  test.todo('the source_records source_category CHECK lists exactly SOURCE_CATEGORIES (nullable)');
+describe('provenance source registry — migration CHECK constraints list exactly SOURCE_CATEGORIES', () => {
+  const sql = fs.readFileSync(path.join(REPO, 'supabase', 'migrations', '20270107000000_pi_prospect_source_contributions.sql'), 'utf8');
+  const listAfter = (marker: RegExp): string[] => {
+    const at = sql.search(marker);
+    expect(at).toBeGreaterThanOrEqual(0);
+    const open = sql.indexOf('(', sql.indexOf(' IN', at) + 1);
+    const close = sql.indexOf(')', open);
+    return (sql.slice(open + 1, close).match(/'([a-z_]+)'/g) ?? []).map((q) => q.slice(1, -1));
+  };
+
+  it('prospect_source_contributions.source_category CHECK', () => {
+    expect(listAfter(/CHECK \(source_category IN \(/).sort()).toEqual([...SOURCE_CATEGORIES].sort());
+  });
+
+  it('source_records.source_category CHECK (nullable)', () => {
+    expect(listAfter(/CHECK \(source_category IS NULL OR source_category IN \(/).sort()).toEqual([...SOURCE_CATEGORIES].sort());
+  });
 });

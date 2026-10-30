@@ -177,17 +177,28 @@ const REQUIRED_COLUMNS = [
   // REMAINING (6) — the opportunity-WORKFLOW columns below stay PRESENT at INFO.
   // They describe triage workflow (status, owner, snooze, status audit), not
   // provenance, and their fate depends on the prospect lifecycle mapping.
-  // TODO(prospect-provenance / Agent 5 lifecycle mapping): reconcile each of these
-  // six against the lifecycle model (prospect_lifecycle_transitions / opportunity
-  // workflow tables) and REPLACE or RETIRE them with evidence. Until then they
-  // remain INFO findings in production (the legacy table has none of them), so
-  // strict predeploy stays honestly non-green on this block.
-  { severity: 'INFO', table: 'active_leads', column: 'opportunity_type',  motivation: 'Roll-up key of the 20260817 design. TODO(Agent 5 lifecycle mapping): signal type is reachable per item via opportunity_feed_items.opportunity_type.' },
-  { severity: 'INFO', table: 'active_leads', column: 'status',            motivation: 'Spec status enum (new/reviewing/contacted/qualified/won/lost/dismissed/snoozed). TODO(Agent 5 lifecycle mapping).' },
-  { severity: 'INFO', table: 'active_leads', column: 'owner_user_id',     motivation: 'Spec: assigned owner; nullable = unassigned. TODO(Agent 5 lifecycle mapping).' },
-  { severity: 'INFO', table: 'active_leads', column: 'snoozed_until',     motivation: 'Snooze expiry; unsnooze pass flips status back to reviewing. TODO(Agent 5 lifecycle mapping).' },
-  { severity: 'INFO', table: 'active_leads', column: 'status_changed_at', motivation: 'Status audit. TODO(Agent 5 lifecycle mapping).' },
-  { severity: 'INFO', table: 'active_leads', column: 'status_changed_by', motivation: 'Status audit attribution. TODO(Agent 5 lifecycle mapping).' },
+  //
+  // RECONCILED against docs/architecture/PROSPECT-OPPORTUNITY-LIFECYCLE.md (owner
+  // direction: a per-contact, per-opportunity-type model; opportunity workflow is
+  // separate from source attribution). Five of the six already live, per
+  // opportunity, in workflow tables that exist in production (verified read-only
+  // 2026-10-30: present, 0 rows), so the expectation moves to the real column:
+  //   opportunity_type   → opportunity_feed_items.opportunity_type
+  //   status             → opportunity_lifecycle_states.state (latest row per item)
+  //   owner_user_id      → opportunity_assignments.assigned_to_user_id (role 'owner', unassigned_at IS NULL)
+  //   status_changed_at  → opportunity_lifecycle_states.transitioned_at
+  //   status_changed_by  → opportunity_lifecycle_states.actor_user_id
+  // WARN: the opportunity workflow writes them; a missing column degrades workflow.
+  { severity: 'WARN', table: 'opportunity_feed_items',       column: 'opportunity_type',    motivation: 'Per-opportunity type (replaces active_leads.opportunity_type roll-up key).' },
+  { severity: 'WARN', table: 'opportunity_lifecycle_states', column: 'state',               motivation: 'Per-opportunity status history (replaces active_leads.status).' },
+  { severity: 'WARN', table: 'opportunity_lifecycle_states', column: 'transitioned_at',     motivation: 'When the status changed (replaces active_leads.status_changed_at).' },
+  { severity: 'WARN', table: 'opportunity_lifecycle_states', column: 'actor_user_id',       motivation: 'Who changed the status (replaces active_leads.status_changed_by).' },
+  { severity: 'WARN', table: 'opportunity_assignments',      column: 'assigned_to_user_id', motivation: 'Per-opportunity owner (replaces active_leads.owner_user_id).' },
+  // snoozed_until has NO home in the existing schema. Whether snooze is a stored
+  // field, an operational follow-up task, or not a feature is an open OWNER
+  // decision (lifecycle doc D-4). Until decided it stays an INFO finding, so
+  // strict predeploy stays honestly non-green on this one column.
+  { severity: 'INFO', table: 'active_leads', column: 'snoozed_until',     motivation: 'Snooze expiry. OPEN OWNER DECISION D-4 (lifecycle doc): stored field, follow-up task, or not a feature.' },
 
   // opportunity_feed_items — PR-OPA-1 verbatim signal excerpt for the
   // "What was said" UI block. WARN: missing column means new rows

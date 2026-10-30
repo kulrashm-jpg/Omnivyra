@@ -151,6 +151,9 @@ export const engagementAdapter: SourceAdapter = (row) =>
 export const communityAdapter: SourceAdapter = (row) =>
   assemble('community', row, {
     table: 'opportunity_feed_items',
+    // The feed stores the author's platform id inside author_metadata, not at the
+    // top level; without it a community lead never resolves to a person.
+    identity: { platformUserId: s(obj(row.author_metadata).platform_user_id) },
     attributionExtra: { opportunity_type: s(row.opportunity_type), detected_reason: s(row.detected_reason) },
     status: s(row.status),
   });

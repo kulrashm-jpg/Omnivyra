@@ -101,6 +101,7 @@ import {
   authoritativeProvidersFor, normalizeProviderKey, resolveAttributeAuthority,
   type AttributeAuthority,
 } from './attributeAuthority';
+import { isSourceCategory, type SourceCategory } from '../../../lib/prospectProvenance/contract';
 
 export const INGESTION_BOUNDARY_VERSION = 'b1b.1';
 
@@ -138,6 +139,14 @@ export interface ProviderSourceRecord {
   accountAttributes?: AccountAttributes;
   /** Provider-stated confidence for this record's claims, 0..1. */
   confidence?: number | null;
+  /**
+   * Typed provenance (lib/prospectProvenance/contract.ts). Written on INSERT only —
+   * a later observation never rewrites where the record originally came from — and
+   * only when supplied, so callers that do not pass them never name the columns.
+   */
+  sourceCategory?: SourceCategory | null;
+  platform?: string | null;
+  sourceUrl?: string | null;
 }
 
 export type SourceRecordOutcome = 'created' | 'unchanged' | 'changed';
@@ -208,6 +217,20 @@ function requireTenant(organizationId: string): void {
   }
 }
 
+/** Only the typed provenance columns the caller supplied; an unknown category is a contract violation. */
+function typedProvenanceColumns(input: ProviderSourceRecord): Record<string, string> {
+  const cols: Record<string, string> = {};
+  if (input.sourceCategory != null) {
+    if (!isSourceCategory(input.sourceCategory)) {
+      throw new Error(`ingestionBoundary: unknown sourceCategory '${String(input.sourceCategory)}'`);
+    }
+    cols.source_category = input.sourceCategory;
+  }
+  if (input.platform?.trim()) cols.platform = input.platform.trim().toLowerCase();
+  if (input.sourceUrl?.trim()) cols.source_url = input.sourceUrl.trim();
+  return cols;
+}
+
 /**
  * Persist the source record. Identity is
  * (organization_id, provider, entity_type, source_record_id), enforced by a
@@ -248,6 +271,7 @@ export async function upsertSourceRecord(
     first_seen_at: now,
     last_seen_at: now,
     ingested_at: now,
+    ...typedProvenanceColumns(input),
   };
 
   const insert = await ownedDbTable('source_records').insert(row).select('id').single();

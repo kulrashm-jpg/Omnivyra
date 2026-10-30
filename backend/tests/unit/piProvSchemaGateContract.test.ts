@@ -306,12 +306,12 @@ describe('verify-schema-parity — runtime exit contract (stubbed pg, no databas
     expect(r.check!.ledger_probe.verified).toBe(false);
   });
 
-  it('the post-migration production shape (only the 6 workflow INFO entries absent) exits 3, not 0', () => {
-    // After the provenance migration is applied, production still lacks the six
-    // active_leads workflow columns kept pending Agent 5's lifecycle mapping.
+  it('the post-migration production shape (only active_leads.snoozed_until absent) exits 3, not 0', () => {
+    // After the provenance migration is applied, the one remaining expectation
+    // production lacks is snoozed_until — an open owner decision (lifecycle D-4).
     const r = runVerifier(without(fullSchema(), (t) => t === 'active_leads'));
     expect(r.code).toBe(3);
-    expect(r.check!.severity).toEqual({ blocking: 0, warn: 0, info: 6 });
+    expect(r.check!.severity).toEqual({ blocking: 0, warn: 0, info: 1 });
   });
 
   it('only the fully present + clean-ledger case ever exits 0 across every scenario above', () => {
@@ -358,7 +358,7 @@ describe('predeploy-check — strict schema mode maps the verifier exit codes (s
   });
 
   it('end to end: an unrelated INFO finding → verifier 3 → strict predeploy 1', () => {
-    const v = runVerifier(without(fullSchema(), (t, c) => t === 'active_leads' && c === 'status'));
+    const v = runVerifier(without(fullSchema(), (t, c) => t === 'active_leads' && c === 'snoozed_until'));
     expect(v.code).toBe(3);
     expect(runPredeploySchemaBlock(v.code, true).exit).toBe(1);
   });
@@ -431,7 +431,16 @@ const PSC_BLOCKING = ['organization_id', 'canonical_lead_id', 'contribution_role
   'external_ref', 'observed_at', 'contact_id', 'platform', 'opportunity_feed_item_id'];
 const SOURCE_RECORDS_NEW = ['source_category', 'platform', 'source_url'];
 const LEAD_INTELLIGENCE_WARN = ['company_id', 'dedupe_key', 'source', 'source_table', 'source_id', 'occurred_at', 'unified_person_id'];
-const ACTIVE_LEADS_PENDING = ['opportunity_type', 'status', 'owner_user_id', 'snoozed_until', 'status_changed_at', 'status_changed_by'];
+/** Open owner decision (lifecycle doc D-4); stays INFO until decided. */
+const ACTIVE_LEADS_PENDING = ['snoozed_until'];
+/** Workflow fields that already live per opportunity in production workflow tables. */
+const ACTIVE_LEADS_TO_LIFECYCLE: Array<[string, string, string]> = [
+  ['opportunity_type', 'opportunity_feed_items', 'opportunity_type'],
+  ['status', 'opportunity_lifecycle_states', 'state'],
+  ['status_changed_at', 'opportunity_lifecycle_states', 'transitioned_at'],
+  ['status_changed_by', 'opportunity_lifecycle_states', 'actor_user_id'],
+  ['owner_user_id', 'opportunity_assignments', 'assigned_to_user_id'],
+];
 const ACTIVE_LEADS_RETIRED = ['intent_score', 'icp_score', 'confidence_score', 'total_score', 'signal_count', 'last_seen_at', 'last_activity_at', 'company_name'];
 const ACTIVE_LEADS_REPLACED = ['organization_id', 'contact_id', 'source_platforms', 'first_seen_at'];
 
@@ -450,6 +459,7 @@ describe('manifest — no global severity downgrade', () => {
       ...PSC_BLOCKING.map((c) => `prospect_source_contributions.${c}`),
       ...SOURCE_RECORDS_NEW.map((c) => `source_records.${c}`),
       ...LEAD_INTELLIGENCE_WARN.map((c) => `lead_intelligence.${c}`),
+      ...ACTIVE_LEADS_TO_LIFECYCLE.map(([, t, c]) => `${t}.${c}`),
     ]);
     const baseline = new Set(BASELINE_ENTRIES.map(([t, c]) => `${t}.${c}`));
     const unexpected = COLUMNS
@@ -464,7 +474,7 @@ describe('manifest — no global severity downgrade', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('INFO is used only by the six pending active_leads workflow entries', () => {
+  it('INFO is used only by the pending active_leads entry (snoozed_until)', () => {
     const info = COLUMNS.filter((c) => c.severity === 'INFO').map((c) => `${c.table}.${c.column}`).sort();
     expect(info).toEqual(ACTIVE_LEADS_PENDING.map((c) => `active_leads.${c}`).sort());
   });
@@ -525,15 +535,21 @@ describe('manifest — active_leads REPLACE / RETIRE / pending disposition', () 
     }
   });
 
-  it.each(ACTIVE_LEADS_PENDING)('active_leads.%s stays PRESENT at INFO with a lifecycle TODO', (column) => {
+  it.each(ACTIVE_LEADS_TO_LIFECYCLE)('active_leads.%s is REPLACED by %s.%s at WARN', (from, table, column) => {
+    expect(sevOf('active_leads', from)).toBeUndefined();
+    expect(sevOf(table, column)).toBe('WARN');
+  });
+
+  it.each(ACTIVE_LEADS_PENDING)('active_leads.%s stays PRESENT at INFO as an open owner decision', (column) => {
     const entry = COLUMNS.find((c) => c.table === 'active_leads' && c.column === column);
     expect(entry).toBeDefined();
     expect(entry!.severity).toBe('INFO');
-    expect(entry!.motivation).toContain('TODO(Agent 5 lifecycle mapping)');
+    expect(entry!.motivation).toContain('OPEN OWNER DECISION D-4');
   });
 
   it('accounts for all 19 original expectations exactly once', () => {
-    expect(ACTIVE_LEADS_REPLACED.length + 1 + ACTIVE_LEADS_RETIRED.length + ACTIVE_LEADS_PENDING.length).toBe(19);
+    expect(ACTIVE_LEADS_REPLACED.length + 1 + ACTIVE_LEADS_RETIRED.length
+      + ACTIVE_LEADS_TO_LIFECYCLE.length + ACTIVE_LEADS_PENDING.length).toBe(19);
   });
 });
 

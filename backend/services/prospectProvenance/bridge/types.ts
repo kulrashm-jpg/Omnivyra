@@ -93,6 +93,9 @@ export interface BridgeDeps {
     personId: string;
     observedAt: string;
     ingestionRunId: string | null;
+    sourceCategory: SourceCategory;
+    platform: string | null;
+    sourceUrl: string | null;
   }, at: string) => Promise<{ sourceRecordId: string }>;
   recordContribution: (input: SourceContributionInput) => Promise<SourceContributionResult>;
   /** Tenant-scoped read of one lead_signals row. */
