@@ -13,7 +13,12 @@ export interface LeadStats {
   total: number;
   bySource: Record<string, number>;
   byStatus: Record<string, number>;
-  intentBands: { high: number; medium: number; low: number };
+  /**
+   * Intent bands over SCORED views only. `unscored` counts views with no intent
+   * and no total score (closure C: NULL is unscored, never banded as low).
+   * Optional so pre-existing literals stay valid; always set by computeLeadStats.
+   */
+  intentBands: { high: number; medium: number; low: number; unscored?: number };
   withIdentity: number;
   withCampaign: number;
   /**
@@ -34,12 +39,12 @@ export interface LeadStats {
   signalMerge?: SignalMergeStatus;
 }
 
-const intentOf = (v: CanonicalLeadView): number => v.scores.intent ?? v.scores.total ?? 0;
+const intentOf = (v: CanonicalLeadView): number | null => v.scores.intent ?? v.scores.total ?? null;
 
 export function computeLeadStats(views: CanonicalLeadView[]): LeadStats {
   const bySource: Record<string, number> = {};
   const byStatus: Record<string, number> = {};
-  const intentBands = { high: 0, medium: 0, low: 0 };
+  const intentBands = { high: 0, medium: 0, low: 0, unscored: 0 };
   const byOriginCategory: Record<string, number> = {};
   const bySourceLabel: Record<string, number> = {};
   let withIdentity = 0;
@@ -53,7 +58,8 @@ export function computeLeadStats(views: CanonicalLeadView[]): LeadStats {
     const status = v.status ?? 'unknown';
     byStatus[status] = (byStatus[status] ?? 0) + 1;
     const i = intentOf(v);
-    if (i >= 0.7) intentBands.high += 1; else if (i >= 0.4) intentBands.medium += 1; else intentBands.low += 1;
+    if (i === null) intentBands.unscored += 1;
+    else if (i >= 0.7) intentBands.high += 1; else if (i >= 0.4) intentBands.medium += 1; else intentBands.low += 1;
     if (v.unifiedPersonId || v.identity.email || v.identity.phone) withIdentity += 1;
     if (v.campaign) withCampaign += 1;
   }

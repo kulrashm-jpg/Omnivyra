@@ -217,9 +217,13 @@ async function resolveSubject(
  * partial unique index (`23505`) and we re-resolve rather than retrying
  * blindly, so two workers converge on one Prospect.
  *
- * `qualification_score` is deliberately left to its column default of 0 and is
- * never written here: scoring belongs to WS-6, and a resolver that seeded a
- * score would put a second scoring authority in the identity layer.
+ * `qualification_score` is deliberately OMITTED and never written here:
+ * scoring belongs to WS-6, and a resolver that seeded a score would put a
+ * second scoring authority in the identity layer. closure C: since
+ * 20270109000002 the column has no default, so an omitted score is NULL
+ * (unscored). Before that migration the old default 0 lands, which readers
+ * treat as the legacy default — unscored — never as a 0 score
+ * (lib/prospectProvenance/scoreSemantics.ts).
  */
 export async function resolveOrCreateProspect(
   organizationId: string,

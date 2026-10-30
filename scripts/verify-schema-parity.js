@@ -733,6 +733,20 @@ const REQUIRED_COLUMNS = [
   { severity: 'BLOCKING', table: 'prospect_provenance_erasures', column: 'requested_by',    motivation: 'Who/what requested the erasure.' },
   { severity: 'BLOCKING', table: 'prospect_provenance_erasures', column: 'table_counts',    motivation: 'Rows changed per table — proof of scope without retaining any value or hash.' },
   // ── end closure-A ──
+  // ── closure-C (enrichment/scoring) ──
+  // canonical_leads.qualification_score: NO manifest change — the verifier checks
+  // existence only, and 20270109000002 changes nullability/default, not existence.
+  // BLOCKING: listProspects' literal select now reads the scoring marker
+  // `lead_metadata->qualificationScoring` and throws on error.
+  { severity: 'BLOCKING', table: 'canonical_leads', column: 'lead_metadata', motivation: 'closure C: listProspects selects lead_metadata->qualificationScoring (legacy-default-0 rule); a missing column 500s the prospect list.' },
+  // WARN, fail-open: the enrichment applicability readers (enrichmentContribution.ts)
+  // turn a read error into a counted `pi_enrichment:error` outcome, never a failed enrichment.
+  { severity: 'WARN', table: 'source_records', column: 'account_id', motivation: 'closure C: account evidence attaches only where the originating source record names the account.' },
+  { severity: 'WARN', table: 'person_account_relationships', column: 'organization_id', motivation: 'closure C: tenant predicate of the current-relationship account link.' },
+  { severity: 'WARN', table: 'person_account_relationships', column: 'person_id', motivation: 'closure C: person leg of the current-relationship account link.' },
+  { severity: 'WARN', table: 'person_account_relationships', column: 'account_id', motivation: 'closure C: account leg of the current-relationship account link.' },
+  { severity: 'WARN', table: 'person_account_relationships', column: 'ended_at', motivation: 'closure C: only CURRENT relationships (ended_at IS NULL) evidence an account link.' },
+  // ── end closure-C ──
 ];
 
 // ══ GAP-B — the indexes that ARE the idempotency mechanism ════════════════

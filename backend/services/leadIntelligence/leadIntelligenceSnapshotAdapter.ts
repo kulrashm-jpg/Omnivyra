@@ -34,6 +34,9 @@ export const leadPlugin: IntelligencePlugin<D> = {
     ]);
     const total = Number(stats.total ?? 0);
     const bands = stats.intentBands ?? { high: 0, medium: 0, low: 0 };
+    // closure C: intent is judged over SCORED leads only; unscored leads are reported, never counted as low.
+    const scoredLeads = bands.high + bands.medium + bands.low;
+    const unscoredLeads = Number((bands as { unscored?: number }).unscored ?? 0);
     const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
     const leadsReady = !!readiness?.checks?.find((c: any) => c.id === 'leads')?.done;
     const updatedAt = readiness?.generatedAt ?? null;
@@ -54,7 +57,7 @@ export const leadPlugin: IntelligencePlugin<D> = {
     ];
 
     const modules: PluginModule[] = [
-      { key: 'buying_intent', label: 'Buying Intent', source: 'buyingIntent', score: total > 0 ? Math.round((bands.high * 100 + bands.medium * 50 + bands.low * 20) / total) : null, status: 'unavailable', available: total > 0, findings: total > 0 ? [`${bands.high} high-intent of ${total} leads`] : ['No leads captured yet'], lastUpdated: updatedAt },
+      { key: 'buying_intent', label: 'Buying Intent', source: 'buyingIntent', score: scoredLeads > 0 ? Math.round((bands.high * 100 + bands.medium * 50 + bands.low * 20) / scoredLeads) : null, status: 'unavailable', available: scoredLeads > 0, findings: total === 0 ? ['No leads captured yet'] : scoredLeads === 0 ? [`None of ${total} leads is scored yet`] : [`${bands.high} high-intent of ${scoredLeads} scored leads`, ...(unscoredLeads > 0 ? [`${unscoredLeads} lead(s) not scored`] : [])], lastUpdated: updatedAt },
       { key: 'identity', label: 'Identity Resolution', source: 'customerIdentityRepository', score: total > 0 ? pct(Number(stats.withIdentity ?? 0)) : null, status: 'unavailable', available: total > 0, findings: [`${stats.withIdentity ?? 0}/${total} identity-resolved`], lastUpdated: updatedAt },
       { key: 'attribution', label: 'Attribution', source: 'attributionRepository', score: total > 0 ? pct(Number(stats.withCampaign ?? 0)) : null, status: 'unavailable', available: total > 0, findings: [`${stats.withCampaign ?? 0}/${total} campaign-attributed`], lastUpdated: updatedAt },
       { key: 'pipeline', label: 'Pipeline', source: 'leadIntelligenceReadService', score: total > 0 ? Math.min(100, total * 4) : 0, status: 'partial', available: true, findings: pipelineFindings, lastUpdated: updatedAt },
@@ -65,7 +68,7 @@ export const leadPlugin: IntelligencePlugin<D> = {
     const inputs: RawRecommendationInput[] = [];
     const push = (key: string, text: string, source: string, module: string, impactLevel: 'high' | 'medium' | 'low', confidence: number) => inputs.push({ key, text, source, module, impactLevel, confidence });
     if (total === 0) push('no_opportunity', 'Capture leads — the pipeline is empty.', 'leadIntelligenceReadService', 'pipeline', 'high', 0.9);
-    if (total > 0 && bands.high / total < 0.2) push('low_buying_intent', 'Nurture leads toward higher buying intent.', 'buyingIntent', 'buying_intent', 'medium', 0.8);
+    if (scoredLeads > 0 && bands.high / scoredLeads < 0.2) push('low_buying_intent', 'Nurture leads toward higher buying intent.', 'buyingIntent', 'buying_intent', 'medium', 0.8);
     if (total > 0 && Number(stats.withIdentity ?? 0) / total < 0.5) push('no_engagement', 'Enrich lead identity and engagement signals.', 'customerIdentityRepository', 'identity', 'medium', 0.75);
     if (total > 0 && Number(stats.withCampaign ?? 0) / total < 0.5) push('no_follow_up', 'Strengthen campaign attribution and follow-up.', 'attributionRepository', 'attribution', 'medium', 0.75);
     for (const c of (readiness?.checks ?? [])) if (!c.done) push(c.id ?? 'readiness', c.nextActionLabel ?? '', 'activationReadinessService', 'lead_readiness', 'high', 0.9);

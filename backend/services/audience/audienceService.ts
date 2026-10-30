@@ -179,25 +179,39 @@ export async function explainMembership(companyId: string, audienceId: string, e
 
 /* ── Audience intelligence (aggregate existing intelligence; no new scorer) ──── */
 
-export interface AudienceIntelligence { members: number; avgIntent: number; intentBands: { high: number; medium: number; low: number }; bySource: Record<string, number>; byOriginCategory: Record<string, number> }
+/**
+ * closure C: `avgIntent` and the high/medium/low bands cover SCORED members only;
+ * `intentBands.unscored` counts members with no score (never averaged in as 0).
+ * `avgIntent` is 0 when no member is scored — read it together with `scoredMembers`.
+ */
+export interface AudienceIntelligence { members: number; scoredMembers: number; avgIntent: number; intentBands: { high: number; medium: number; low: number; unscored: number }; bySource: Record<string, number>; byOriginCategory: Record<string, number> }
 
-function buildAudienceIntelligence(members: EvaluatedMember[]): AudienceIntelligence {
-  const bands = { high: 0, medium: 0, low: 0 };
+export function buildAudienceIntelligence(members: EvaluatedMember[]): AudienceIntelligence {
+  const bands = { high: 0, medium: 0, low: 0, unscored: 0 };
   const bySource: Record<string, number> = {};
   const byOriginCategory: Record<string, number> = {};
   let intentSum = 0;
+  let scored = 0;
   // View scores are unit (0..1) by contract — adapters convert explicitly with
   // toUnitScore — so no scale is guessed here.
-  const norm = (v: unknown): number => { const n = typeof v === 'number' ? v : Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0; };
+  const norm = (v: unknown): number | null => {
+    if (v === null || v === undefined || v === '') return null;
+    const n = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+  };
   for (const m of members) {
-    const intent = norm(m.view.scores.intent ?? m.view.scores.total ?? 0);
-    intentSum += intent;
-    if (intent >= 0.7) bands.high++; else if (intent >= 0.4) bands.medium++; else bands.low++;
+    const intent = norm(m.view.scores.intent ?? m.view.scores.total ?? null);
+    if (intent === null) bands.unscored++;
+    else {
+      intentSum += intent;
+      scored++;
+      if (intent >= 0.7) bands.high++; else if (intent >= 0.4) bands.medium++; else bands.low++;
+    }
     bySource[m.view.source] = (bySource[m.view.source] ?? 0) + 1;
     const origin = m.view.origin?.category ?? 'unknown';
     byOriginCategory[origin] = (byOriginCategory[origin] ?? 0) + 1;
   }
-  return { members: members.length, avgIntent: members.length ? Number((intentSum / members.length).toFixed(3)) : 0, intentBands: bands, bySource, byOriginCategory };
+  return { members: members.length, scoredMembers: scored, avgIntent: scored ? Number((intentSum / scored).toFixed(3)) : 0, intentBands: bands, bySource, byOriginCategory };
 }
 
 export async function getAudienceIntelligence(companyId: string, audienceId: string): Promise<AudienceIntelligence> {

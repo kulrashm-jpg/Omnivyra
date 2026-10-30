@@ -452,6 +452,15 @@ const CLOSURE_A_ENTRIES: Array<[string, string, Severity]> = [
  * opportunity_dispositions.snoozed_until (20270108000000).
  */
 const ACTIVE_LEADS_PENDING: string[] = [];
+/** closure C (enrichment/scoring): listProspects' scoring-marker read + fail-open enrichment applicability reads. */
+const CLOSURE_C_ENTRIES: Array<[string, string, Severity]> = [
+  ['canonical_leads', 'lead_metadata', 'BLOCKING'],
+  ['source_records', 'account_id', 'WARN'],
+  ['person_account_relationships', 'organization_id', 'WARN'],
+  ['person_account_relationships', 'person_id', 'WARN'],
+  ['person_account_relationships', 'account_id', 'WARN'],
+  ['person_account_relationships', 'ended_at', 'WARN'],
+];
 /** Workflow fields that live per opportunity in the opportunity workflow tables. */
 const ACTIVE_LEADS_TO_LIFECYCLE: Array<[string, string, string]> = [
   ['opportunity_type', 'opportunity_feed_items', 'opportunity_type'],
@@ -490,6 +499,7 @@ describe('manifest — no global severity downgrade', () => {
       ...MP_OBSERVATIONS_WARN.map((c) => `marketpulse_signal_observations.${c}`),
       ...CLOSURE_D_ENTRIES,
       ...CLOSURE_A_ENTRIES.map(([t, c]) => `${t}.${c}`),
+      ...CLOSURE_C_ENTRIES.map(([t, c]) => `${t}.${c}`),
     ]);
     const baseline = new Set(BASELINE_ENTRIES.map(([t, c]) => `${t}.${c}`));
     const unexpected = COLUMNS
@@ -497,6 +507,14 @@ describe('manifest — no global severity downgrade', () => {
       .map((c) => `${c.table}.${c.column}`)
       .filter((k) => !baseline.has(k) && !allowedNew.has(k));
     expect(unexpected).toEqual([]);
+  });
+
+  it.each(CLOSURE_C_ENTRIES)('closure C: %s.%s is pinned at %s', (table, column, severity) => {
+    expect(sevOf(table, column)).toBe(severity);
+  });
+
+  it('closure C: canonical_leads.qualification_score stays BLOCKING (existence-only; nullability is a migration postcondition)', () => {
+    expect(sevOf('canonical_leads', 'qualification_score')).toBe('BLOCKING');
   });
 
   it('no manifest key is listed twice', () => {

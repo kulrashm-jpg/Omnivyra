@@ -66,6 +66,7 @@ jest.mock('../../services/logger', () => ({ logger: { warn: (...a: unknown[]) =>
 import {
   recordEnrichmentContribution,
   enrichmentExternalRef,
+  enrichmentObservationFingerprint,
 } from '../../services/prospectProvenance/ingestion/enrichmentContribution';
 import { piEnrichmentProfile, PI_ENRICHMENT_PROFILE } from '../../services/prospectProvenance/ingestion/sourceProfiles';
 import {
@@ -102,6 +103,8 @@ const base = {
 };
 
 const snapshot = (v: unknown) => JSON.parse(JSON.stringify(v));
+// closure C: every recorded ref is content-addressed by the observed values.
+const EMPTY_FP = enrichmentObservationFingerprint([]);
 
 beforeEach(() => {
   db.tables = { canonical_leads: [{ ...ORIGINAL_LEAD, lead_metadata: snapshot(ORIGINAL_LEAD.lead_metadata) }] };
@@ -139,7 +142,7 @@ describe('acceptance #6 — enrichment contributes and preserves the originating
     expect(store[1]).toMatchObject({
       organizationId: ORG, canonicalLeadId: LEAD, leadCreated: false, role: 'contributing',
       sourceCategory: 'pi_enrichment', platform: 'apollo',
-      externalRef: `enrichment_apollo:person:${PERSON}`, sourceRecordId: 'sr-enrich-1',
+      externalRef: `enrichment_apollo:person:${PERSON}:${EMPTY_FP}`, sourceRecordId: 'sr-enrich-1',
       observedAt: '2026-10-29T00:00:00.000Z', ingestionRunId: 'corr-1',
       evidence: expect.objectContaining({ subject: 'person', personId: PERSON, accountId: null, attributes: ['job_title'], payloadHash: 'h1' }),
       sourceMetadata: expect.objectContaining({ observedAtBasis: 'source', prospectResolvedBy: 'caller' }),
@@ -156,7 +159,7 @@ describe('acceptance #6 — enrichment contributes and preserves the originating
     expect(store.filter((r) => r.role === 'originating')).toHaveLength(0);
   });
 
-  it('idempotent: a retry and a later refresh converge on one contribution (duplicate)', async () => {
+  it('idempotent: a retry and an IDENTICAL later refresh converge on one contribution (duplicate)', async () => {
     await recordEnrichmentContribution({ ...base, prospectId: LEAD });
     const retry = await recordEnrichmentContribution({ ...base, prospectId: LEAD });
     const refresh = await recordEnrichmentContribution({ ...base, prospectId: LEAD, observedAt: '2026-11-30T00:00:00.000Z', payloadHash: 'h2' });
@@ -172,10 +175,13 @@ describe('acceptance #6 — enrichment contributes and preserves the originating
   });
 
   it('an account subject records against the given prospect with the account as evidence', async () => {
-    await recordEnrichmentContribution({ ...base, prospectId: LEAD, subject: 'account', entityId: ACCOUNT });
+    await recordEnrichmentContribution(
+      { ...base, prospectId: LEAD, subject: 'account', entityId: ACCOUNT },
+      { readProspectAccountLink: async () => 'person_primary_account' },
+    );
     expect(store[1]).toMatchObject({
-      externalRef: `enrichment_apollo:account:${ACCOUNT}`,
-      evidence: expect.objectContaining({ subject: 'account', accountId: ACCOUNT, personId: null }),
+      externalRef: `enrichment_apollo:account:${ACCOUNT}:${EMPTY_FP}`,
+      evidence: expect.objectContaining({ subject: 'account', evidenceLevel: 'account', accountId: ACCOUNT, personId: null, accountLink: 'person_primary_account' }),
     });
   });
 });
@@ -200,9 +206,11 @@ describe('which prospect — never guessed', () => {
     expect(store).toHaveLength(1);
   });
 
-  it('account subject without a prospect id ⇒ skipped:no_prospect (no fan-out)', async () => {
-    expect(await recordEnrichmentContribution({ ...base, subject: 'account', entityId: ACCOUNT }))
-      .toEqual({ status: 'skipped', reason: 'no_prospect' });
+  it('account subject without a prospect id and no EVIDENCED prospect ⇒ skipped:no_prospect (no blind fan-out)', async () => {
+    expect(await recordEnrichmentContribution(
+      { ...base, subject: 'account', entityId: ACCOUNT },
+      { findAccountProspects: async () => ({ targets: [], complete: true }) },
+    )).toEqual({ status: 'skipped', reason: 'no_prospect' });
   });
 
   it('unusable provider id or missing source record ⇒ skipped, counted', async () => {
