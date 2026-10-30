@@ -281,6 +281,10 @@ export async function syncFromPostComments(
               intent: null,
               sentiment: null,
               thread_context: null,
+              // A4: the campaign post these comments answer. Previously dropped
+              // here; now carried onto the lead signal's metadata and from there
+              // into the canonical lead's provenance evidence.
+              campaign_context: { scheduled_post_id: context.scheduled_post_id ?? null },
             })
           )
           .catch((err) => console.warn('[engagementNormalization] processMessageForLeads async error', err?.message));
