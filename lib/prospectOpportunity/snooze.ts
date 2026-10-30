@@ -19,12 +19,15 @@
  *   - `none`    : anything else.
  *   - Rows of another tenant or another opportunity are ignored here; the
  *     callers filter by tenant and the composite FK makes them unstorable.
- *   - Snooze never reads or changes the lifecycle status.
+ *   - Snooze never CHANGES the lifecycle status. Writing a snooze is refused
+ *     when the status is snooze-terminal (SNOOZE_TERMINAL_LIFECYCLE_STATES,
+ *     20270109000003); deriving one never consults the status.
  *
  * PURE: no database, no clock (`asOf` is always passed in), no randomness.
  */
 
 import type { OpportunityDisposition } from '../../backend/types/opportunityWorkflow';
+import type { LifecycleState } from '../../backend/types/opportunityLifecycle';
 
 export type OpportunitySnoozeState =
   | {
@@ -83,6 +86,67 @@ export function snoozeHistory(rows: readonly OpportunityDisposition[], subject: 
   return dispositionsOf(rows, subject)
     .filter((d) => d.disposition === 'revisit_later')
     .sort((a, b) => compareDispositionsLatestFirst(b, a));
+}
+
+// ---------------------------------------------------------------------------
+// Snooze-terminal states (closure-D, migration 20270109000003)
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle states in which an opportunity can NOT be snoozed: it is no longer
+ * being worked, so "come back to this later" has no meaning. A subset of the
+ * existing 9-state vocabulary (no new state). Three senses of "terminal" exist
+ * in the repo and this is deliberately named for its purpose:
+ *   - transition graph (backend/types/opportunityLifecycle.ts): converted and
+ *     archived; dismissed may be reopened to triaged;
+ *   - account deletion (FR-A38, isResolvedForAccountDeletion): archived only;
+ *   - snooze (here): converted, dismissed, archived. A dismissed opportunity
+ *     must be reopened (dismissed -> triaged) before it can be snoozed.
+ * The database guard `trg_opp_disposition_snooze_guard` lists the same three;
+ * a unit test pins the two lists equal.
+ */
+export const SNOOZE_TERMINAL_LIFECYCLE_STATES = ['converted', 'dismissed', 'archived'] as const satisfies readonly LifecycleState[];
+
+export function isSnoozeTerminalState(state: unknown): boolean {
+  return typeof state === 'string' && (SNOOZE_TERMINAL_LIFECYCLE_STATES as readonly string[]).includes(state);
+}
+
+/** The constraint name the database guard raises (SQLSTATE 23514). */
+export const SNOOZE_TERMINAL_CONSTRAINT = 'opp_disposition_snooze_not_terminal';
+
+export type SnoozeRefusalReason = 'terminal' | 'lifecycle_unreadable';
+
+/**
+ * One error for "this opportunity may not be snoozed", whether the service
+ * refused before writing or the database refused the insert. `message` is
+ * `snooze_refused_terminal:<state>` or `snooze_refused_lifecycle_unreadable:<detail>`.
+ */
+export class OpportunitySnoozeRefusedError extends Error {
+  constructor(
+    public readonly reason: SnoozeRefusalReason,
+    public readonly state: LifecycleState | null,
+    public readonly source: 'application' | 'database',
+    detail?: string,
+  ) {
+    super(reason === 'terminal'
+      ? `snooze_refused_terminal:${state ?? 'unknown'}`
+      : `snooze_refused_lifecycle_unreadable:${detail ?? 'unknown'}`);
+    this.name = 'OpportunitySnoozeRefusedError';
+  }
+}
+
+/**
+ * Maps the database guard's refusal to the application error. Recognised only
+ * when BOTH the SQLSTATE is 23514 and the message carries the constraint name,
+ * so the revisit_later CHECK (also 23514) is never mistaken for it.
+ */
+export function snoozeRefusalFromDbError(error: unknown): OpportunitySnoozeRefusedError | null {
+  const e = (error ?? {}) as { code?: unknown; message?: unknown };
+  const message = typeof e.message === 'string' ? e.message : '';
+  if (e.code !== '23514' || !message.includes(SNOOZE_TERMINAL_CONSTRAINT)) return null;
+  const m = / is ([a-z_]+);/.exec(message);
+  const state = m && isSnoozeTerminalState(m[1]) ? (m[1] as LifecycleState) : null;
+  return new OpportunitySnoozeRefusedError('terminal', state, 'database');
 }
 
 /** Validates a requested deadline: a real instant strictly after `now`. */

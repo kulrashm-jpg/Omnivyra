@@ -272,6 +272,46 @@ P3 (G2, only if D-4 chooses a stored snooze): `snoozed_until timestamptz` on the
 
 P4 (G5): section 7 option (b).
 
+## 9a. Governance closure (closure-D, migration `20270109000003_pi_opportunity_governance.sql`)
+
+Depends on `20270107000000` (`uq_opportunity_feed_items_id_org`) and `20270108000000` (snooze carrier, dispositions/assignments tenant FKs, `uq_opp_assignment_one_active`). No new status vocabulary.
+
+**Snooze-terminal states.** `converted`, `dismissed`, `archived` (`SNOOZE_TERMINAL_LIFECYCLE_STATES`, `lib/prospectOpportunity/snooze.ts`). There are three senses of "terminal" in the repo, and they are kept apart:
+
+| Sense | States | Where |
+|---|---|---|
+| Transition graph | `converted`, `archived` (`dismissed` reopens to `triaged`) | `ALLOWED_LIFECYCLE_TRANSITIONS` |
+| Account deletion (FR-A38) | `archived` only | `isResolvedForAccountDeletion` |
+| Snooze (this closure) | `converted`, `dismissed`, `archived` | `SNOOZE_TERMINAL_LIFECYCLE_STATES`, `trg_opp_disposition_snooze_guard` |
+
+A dismissed opportunity has to be reopened (`dismissed -> triaged`) before it can be snoozed.
+
+- **Application.** `snoozeOpportunity` reads the current state and throws `OpportunitySnoozeRefusedError` before writing anything:
+  - `terminal`: the state is snooze-terminal;
+  - `lifecycle_unreadable`: the state cannot be read (fail closed).
+  - No history at all (`missing`) is not terminal.
+- **Database.** A BEFORE INSERT trigger runs only when `snoozed_until IS NOT NULL`:
+  - It raises `23514`, constraint `opp_disposition_snooze_not_terminal`. The service maps this to the same error with `source: 'database'`.
+  - The current state is the latest row by `transitioned_at`. On a tie, a terminal row wins (fail closed; see b21 L3b).
+  - The trigger takes `FOR UPDATE` on the feed item, and a lifecycle insert's FK check holds `FOR KEY SHARE`. A snooze that races a terminal transition therefore sees that transition once it commits.
+- **What is still allowed.** An untimed `revisit_later` (including unsnooze) and every other disposition can still be recorded on a terminal opportunity. Expiry is still computed from time alone; no scheduled job is involved.
+
+**Append-only dispositions.** `opp_disposition_block_update` / `opp_disposition_block_delete` (BEFORE, row-level) raise `42501 … append-only`. `classifyLifecycleGuardError` classifies that as `append_only_violation`. Unlike the lifecycle guard, they let through exactly the referential actions:
+
+- **DELETE** is allowed only when it is nested in a trigger (`pg_trigger_depth() > 1`) and the row's feed item or tenant is already gone. That is the ON DELETE CASCADE from `opportunity_feed_items` (a retention hard delete) or from `companies` (a tenant delete).
+- **UPDATE** is allowed only when it is the nested ON DELETE SET NULL of `set_by_user_id` for a user that has been deleted, with every other column unchanged.
+
+Consequences:
+- Retention never targets dispositions. A feed-item delete still cascades through them.
+- `RETENTION_PROTECTED_CHILDREN` is unchanged. A feed item that has lifecycle rows is still refused by the *lifecycle* guard, exactly as before.
+- Not covered: `TRUNCATE`, and a superuser/owner who disables the trigger. The lifecycle guard has the same gap.
+
+**Tenant FKs (G4 closed for all four workflow tables).** `opp_lifecycle_item_tenant_fk` and `opp_notes_item_tenant_fk` are composite `(opportunity_feed_item_id, organization_id) -> opportunity_feed_items(id, organization_id)` ON DELETE CASCADE, alongside the two from 20270108. The preflight stops the migration if any cross-tenant row already exists.
+
+Remaining tenant gaps, not closed here:
+- `opportunity_tags` and `escalations` still have only single-column FKs.
+- User columns (`assigned_to_user_id`, `author_user_id`, `set_by_user_id`, `actor_user_id`) reference `users` with no tenant-membership constraint, so a user of another tenant can be stored. That has to be enforced by the API layer.
+
 ## 10. Status vocabularies (verbatim). None is new.
 
 | Where | Values | Enforced |
