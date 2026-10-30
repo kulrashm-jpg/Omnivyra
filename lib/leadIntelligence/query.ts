@@ -33,22 +33,69 @@ export interface LeadQueryResult {
   total: number;
   limit: number;
   offset: number;
+  /**
+   * True when at least one source read hit its row cap, so `total` (and every
+   * count derived from it) may undercount. Set by the read service.
+   */
+  truncated?: boolean;
+  /** Which source reads hit their cap (e.g. `canonical_leads`). */
+  truncatedSources?: string[];
+  /** Provenance store status for this page: `unavailable` ⇒ `sources` are empty, not proven absent. */
+  provenance?: 'ok' | 'unavailable' | 'not_requested';
 }
 
 const lc = (v: unknown): string => String(v ?? '').toLowerCase();
 const intentOf = (v: CanonicalLeadView): number => v.scores.intent ?? v.scores.total ?? 0;
 const meta = (v: CanonicalLeadView, k: string): string => lc((v.attribution.sourceMetadata ?? {})[k]);
 
-/** Stable dedupe across durable + legacy bridge reads (same source row → one view). */
+/**
+ * The identity a view is deduped on. Mirrors `leadKeyFor` exactly: `??` over the
+ * RAW values first, lower-cased after. (The previous `lc(email) ?? lc(contactId)`
+ * never reached `contactId`, because `lc` returns '' — never null.)
+ */
+export function dedupeKeyFor(v: CanonicalLeadView): string | null {
+  if (v.sourceRef?.id) return `${v.source}|${v.sourceRef.table}|${v.sourceRef.id}`;
+  const ident = lc(v.unifiedPersonId ?? v.identity?.email ?? v.identity?.contactId ?? '');
+  // No row id and no identity: nothing proves two such rows are the same lead,
+  // so they are never collapsed (collapsing would silently drop a lead).
+  if (!ident) return null;
+  return `${v.source}|${ident}|${v.occurredAt ?? ''}`;
+}
+
+function mergeById<T extends { id: string }>(a: T[] | undefined, b: T[] | undefined): T[] | undefined {
+  if (!b?.length) return a;
+  if (!a?.length) return b;
+  const seen = new Set(a.map((x) => x.id));
+  return [...a, ...b.filter((x) => !seen.has(x.id))];
+}
+
+/**
+ * Stable dedupe across durable + legacy bridge reads (same source row → one view;
+ * the FIRST occurrence wins, so durable rows listed first win).
+ *
+ * Guarantees: distinct canonical prospects (distinct `sourceRef` ids) never share
+ * a key, so they are never merged; when two views of the SAME row collapse, the
+ * loser's provenance `sources` / `evidence` are unioned into the winner, never dropped.
+ */
 export function dedupeViews(views: CanonicalLeadView[]): CanonicalLeadView[] {
-  const seen = new Map<string, CanonicalLeadView>();
+  const at = new Map<string, number>();
+  const out: CanonicalLeadView[] = [];
+  const evKey = (e: { contributionId: string; kind: string; ref: string }) => `${e.contributionId}|${e.kind}|${e.ref}`;
   for (const v of views) {
-    const key = v.sourceRef?.id
-      ? `${v.source}|${v.sourceRef.table}|${v.sourceRef.id}`
-      : `${v.source}|${v.unifiedPersonId ?? lc(v.identity.email) ?? lc(v.identity.contactId)}|${v.occurredAt ?? ''}`;
-    if (!seen.has(key)) seen.set(key, v);
+    const key = dedupeKeyFor(v);
+    if (key === null) { out.push(v); continue; }
+    const idx = at.get(key);
+    if (idx === undefined) { at.set(key, out.length); out.push(v); continue; }
+    if (!v.sources?.length && !v.evidence?.length) continue;
+    const winner = out[idx];
+    const have = new Set((winner.evidence ?? []).map(evKey));
+    out[idx] = {
+      ...winner,
+      sources: mergeById(winner.sources, v.sources),
+      evidence: [...(winner.evidence ?? []), ...(v.evidence ?? []).filter((e) => !have.has(evKey(e)))],
+    };
   }
-  return [...seen.values()];
+  return out;
 }
 
 function matchesFilters(v: CanonicalLeadView, f: LeadFilters): boolean {

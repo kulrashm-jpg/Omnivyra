@@ -33,7 +33,6 @@ const view = (over: Partial<CanonicalLeadView> = {}): CanonicalLeadView => ({
 function readersWith(views: CanonicalLeadView[]): LeadSourceReaders {
   return {
     durable: async () => views,
-    activeLeads: async () => [],
     leads: async () => [],
     canonicalLeads: async () => [],
   };

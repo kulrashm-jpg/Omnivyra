@@ -13,13 +13,14 @@ import type {
   CanonicalLeadSource,
   CanonicalIdentityHints,
   CanonicalLeadScores,
+  SourceScore,
 } from './types';
 import { buildAttributionContract } from './attribution';
-import { resolveCanonicalSource } from './sourceTaxonomy';
+import { resolveCanonicalSource, PI_DISCOVERY_PROVIDERS } from './sourceTaxonomy';
+import { toUnitScore, type ScoreScale } from '../prospectProvenance/contract';
 
 type Row = Record<string, unknown>;
 const s = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : v == null ? null : String(v));
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
 function tenantOf(row: Row): string {
@@ -45,14 +46,52 @@ function identityFrom(row: Row, extra: Partial<CanonicalIdentityHints> = {}): Ca
   };
 }
 
+/**
+ * Declared scale of every source score column the adapters read. Conversion is
+ * explicit (`toUnitScore`); scales are never compared implicitly.
+ *   qualification_score — canonical_leads, CHECK 0..100           ⇒ percent
+ *   opportunity_score   — opportunity_feed_items, CHECK 0..1      ⇒ unit
+ *   the rest            — 0..1 by the existing read-model convention ⇒ unit
+ */
+export const SOURCE_SCORE_SCALES: Readonly<Record<string, ScoreScale>> = Object.fromEntries([
+  ['intent_score', 'unit'],
+  ['urgency_score', 'unit'],
+  ['icp_score', 'unit'],
+  ['confidence_score', 'unit'],
+  ['total_score', 'unit'],
+  ['opportunity_score', 'unit'],
+  ['qualification_score', 'percent'],
+  ['lead_score', 'unit'],
+] as Array<[string, ScoreScale]>);
+
+/** Precedence for `scores.total` (first present wins). */
+const TOTAL_FIELDS = ['total_score', 'qualification_score', 'opportunity_score', 'lead_score'] as const;
+
+function readScore(row: Row, field: string, sourceScores: SourceScore[]): number | null {
+  const raw = row[field];
+  const value = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN;
+  if (!Number.isFinite(value)) return null;
+  const scale = SOURCE_SCORE_SCALES[field] ?? 'unit';
+  let unit: number | null;
+  try { unit = toUnitScore(value, scale); } catch { unit = null; } // out of range for its scale → no score, kept in sourceScores
+  sourceScores.push({ field, value, scale, unit });
+  return unit;
+}
+
 function scoresFrom(row: Row): CanonicalLeadScores {
-  return {
-    intent: num(row.intent_score),
-    urgency: num(row.urgency_score),
-    icp: num(row.icp_score),
-    confidence: num(row.confidence_score),
-    total: num(row.total_score) ?? num(row.qualification_score) ?? num(row.lead_score),
-  };
+  const sourceScores: SourceScore[] = [];
+  const intent = readScore(row, 'intent_score', sourceScores);
+  const urgency = readScore(row, 'urgency_score', sourceScores);
+  const icp = readScore(row, 'icp_score', sourceScores);
+  const confidence = readScore(row, 'confidence_score', sourceScores);
+  let total: number | null = null;
+  for (const f of TOTAL_FIELDS) {
+    const v = readScore(row, f, sourceScores);
+    if (total === null && v !== null) total = v;
+  }
+  const out: CanonicalLeadScores = { intent, urgency, icp, confidence, total, scale: 'unit' };
+  if (sourceScores.length) out.sourceScores = sourceScores;
+  return out;
 }
 
 function assemble(
@@ -65,6 +104,7 @@ function assemble(
     occurredAt?: unknown;
     status?: unknown;
     display?: CanonicalLeadInput['display'];
+    origin?: CanonicalLeadInput['origin'];
   },
 ): CanonicalLeadInput {
   const identity = identityFrom(row, opts.identity);
@@ -79,6 +119,7 @@ function assemble(
     occurredAt: s(opts.occurredAt ?? row.detected_at ?? row.created_at ?? row.occurred_at ?? row.converted_at),
     display: opts.display ?? { name: s(row.name), title: s(row.title), contentText: s(row.content_text ?? row.content) },
     sourceRef: { table: opts.table, id: s(row.id) },
+    ...(opts.origin ? { origin: opts.origin } : {}),
   };
 }
 
@@ -102,7 +143,11 @@ export const socialAdapter: SourceAdapter = (row) => assemble('social', row, { t
 export const engagementAdapter: SourceAdapter = (row) =>
   assemble('engagement', row, { table: 'lead_signals', attributionExtra: { channel: 'engagement' } });
 
-/** `opportunity_feed_items` / `active_leads` (community listening). */
+/**
+ * `opportunity_feed_items` (community listening). `sourceRef.table` is a
+ * persisted label (lead keys, audience memberships) — never renamed.
+ * `opportunity_score` (0..1) is the feed's qualification score → `scores.total`.
+ */
 export const communityAdapter: SourceAdapter = (row) =>
   assemble('community', row, {
     table: 'opportunity_feed_items',
@@ -127,7 +172,14 @@ export const crmAdapter: SourceAdapter = (row) => {
     unifiedSourceCategory: s(us.category),
     unifiedSourceOrigin: s(us.origin),
   });
-  return assemble(resolved === 'website' || resolved === 'other' ? 'crm' : resolved, row, { table: 'canonical_leads' });
+  const raw = (s(row.source) ?? '').toLowerCase();
+  // A prospect created by a PI discovery provider (Apollo) is not a CRM lead. Its
+  // display SOURCE stays the persisted value (keys/memberships depend on it); the
+  // origin hint makes it DISPLAY as prospect discovery (sourceTaxonomy.displayLabelFor).
+  const origin = PI_DISCOVERY_PROVIDERS.has(raw)
+    ? { category: 'pi_discovery' as const, platform: raw, observedAt: s(row.created_at) }
+    : undefined;
+  return assemble(resolved === 'website' || resolved === 'other' ? 'crm' : resolved, row, { table: 'canonical_leads', origin });
 };
 
 /* ── Generic adapters (a lead row carrying a known source) ───────────────── */

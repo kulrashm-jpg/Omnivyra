@@ -35,7 +35,6 @@ const view: CanonicalLeadView = {
 
 const readers: LeadSourceReaders = {
   durable: async () => [view],
-  activeLeads: async () => [],
   leads: async () => [],
   canonicalLeads: async () => [],
 };

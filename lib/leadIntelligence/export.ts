@@ -8,6 +8,41 @@
 import type { CanonicalLeadView } from './types';
 import { recommendNextAction, summarizeLead } from './recommendations';
 
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+const firstStr = (...vals: unknown[]): string => {
+  for (const v of vals) if (typeof v === 'string' && v.trim()) return v.trim();
+  return '';
+};
+
+/**
+ * The PROSPECT's company, from the source's own fields only. Never the tenant
+ * (`organizationId` is the company that OWNS the lead — the previous fallback
+ * printed the tenant's own id as the prospect's company) and never the email
+ * domain (that would leak part of a withheld endpoint).
+ */
+export function prospectCompanyName(view: CanonicalLeadView): string {
+  const meta = obj(view.attribution.sourceMetadata);
+  return firstStr(
+    meta.company_name, meta.company, meta.account_name,
+    obj(meta.metadata).company_name, obj(meta.lead_metadata).company_name, obj(meta.lead_metadata).account_name,
+  );
+}
+
+/**
+ * A provenance URL safe to put in a file: http(s) only, no credentials, no query
+ * string or fragment (tracking tokens, emails in parameters), and nothing that
+ * still carries an `@` (mailto-like or user@host paths). Anything else → ''.
+ */
+export function sanitizeSourceUrl(raw: string | null | undefined): string {
+  if (!raw) return '';
+  let u: URL;
+  try { u = new URL(raw); } catch { return ''; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return '';
+  if (u.username || u.password) return '';
+  const out = `${u.protocol}//${u.host}${u.pathname}`;
+  return out.includes('@') ? '' : out;
+}
+
 export interface LeadExportRow {
   identity: string;
   company: string;
@@ -21,6 +56,18 @@ export interface LeadExportRow {
   ai_summary: string;
   status: string;
   metadata: string;
+  // ── Provenance (appended so existing column positions are unchanged) ──────
+  /** `source_category` of the originating contribution (or the row-level origin hint). */
+  origin_category: string;
+  origin_platform: string;
+  /** When the originating source observed the prospect (source time, not ingestion). */
+  origin_observed_at: string;
+  /** Sanitised evidence URL of the originating contribution; governed like the raw payload. */
+  origin_source_url: string;
+  /** Every contribution: `role:category[/platform]@observedAt`, `; `-separated. No ids, URLs or payload. */
+  contributors: string;
+  /** loaded | unavailable | not_applicable — `unavailable` means "not readable", not "none". */
+  provenance_status: string;
 }
 
 /**
@@ -38,6 +85,14 @@ export interface ExportDisclosure {
   readonly phone: boolean;
   /** May an ACTIONABLE recommendation be disclosed? */
   readonly action: boolean;
+  /**
+   * May the provenance evidence URL be disclosed? OPTIONAL and absent ⇒ DENY,
+   * like the rest of this type. A source URL points at the person's own post /
+   * profile, so it is personal data: the read service grants it only when
+   * governance is readable, every present endpoint is permitted and no
+   * all-channel restriction applies to the person.
+   */
+  readonly sourceUrl?: boolean;
 }
 
 /** Fail-closed default: discloses no endpoint and no action. */
@@ -70,7 +125,7 @@ export function toExportRow(
         : (view.identity.platform ?? view.unifiedPersonId);
   return {
     identity: s(endpoint),
-    company: s(meta.company_name ?? meta.company ?? view.organizationId),
+    company: prospectCompanyName(view),
     source: s(view.sourceLabel),
     campaign: s(view.campaign),
     journey: s(view.attribution.originalSource ? `${view.attribution.originalSource} → ${view.source}` : view.source),
@@ -87,12 +142,34 @@ export function toExportRow(
     ai_summary: anyEndpoint ? summarizeLead(view) : EXPORT_WITHHELD,
     status: s(view.status),
     metadata: anyEndpoint ? JSON.stringify(meta) : EXPORT_WITHHELD,
+    ...provenanceColumns(view, disclosure),
+  };
+}
+
+type ProvenanceColumns = Pick<LeadExportRow, 'origin_category' | 'origin_platform' | 'origin_observed_at' | 'origin_source_url' | 'contributors' | 'provenance_status'>;
+
+function provenanceColumns(view: CanonicalLeadView, disclosure: ExportDisclosure): ProvenanceColumns {
+  const sources = view.sources ?? [];
+  const originating = sources.find((c) => c.role === 'originating') ?? null;
+  const url = sanitizeSourceUrl(originating?.sourceUrl);
+  return {
+    origin_category: s(view.origin?.category),
+    origin_platform: s(view.origin?.platform),
+    origin_observed_at: s(view.origin?.observedAt),
+    // Fail closed: only an explicit grant discloses it; a present-but-withheld
+    // URL says so rather than looking absent.
+    origin_source_url: !url ? '' : disclosure.sourceUrl === true ? url : EXPORT_WITHHELD,
+    contributors: sources
+      .map((c) => `${c.role}:${c.sourceCategory}${c.platform ? `/${c.platform}` : ''}@${c.observedAt}`)
+      .join('; '),
+    provenance_status: s(view.provenanceStatus ?? 'not_applicable'),
   };
 }
 
 const COLUMNS: Array<keyof LeadExportRow> = [
   'identity', 'company', 'source', 'campaign', 'journey', 'timeline_summary',
   'buying_intent', 'content_interests', 'recommended_next_action', 'ai_summary', 'status', 'metadata',
+  'origin_category', 'origin_platform', 'origin_observed_at', 'origin_source_url', 'contributors', 'provenance_status',
 ];
 
 function csvCell(v: string): string {

@@ -15,6 +15,20 @@ export interface LeadStats {
   intentBands: { high: number; medium: number; low: number };
   withIdentity: number;
   withCampaign: number;
+  /**
+   * Per discovery-origin breakdown (`prospect_source_contributions.source_category`
+   * of the ORIGINATING contribution, or a row-level origin hint). Views with no
+   * known origin are counted under `unknown`. Always set by `computeLeadStats`;
+   * optional so pre-existing literals stay valid.
+   */
+  byOriginCategory?: Record<string, number>;
+  /** Display-label breakdown (e.g. "Prospect discovery · Apollo" vs "CRM"). */
+  bySourceLabel?: Record<string, number>;
+  /** True when a source read hit its cap — every count may undercount. Set by the read service. */
+  truncated?: boolean;
+  truncatedSources?: string[];
+  /** `unavailable` ⇒ origins come from row hints only (provenance store unreadable). */
+  provenance?: 'ok' | 'unavailable' | 'not_requested';
 }
 
 const intentOf = (v: CanonicalLeadView): number => v.scores.intent ?? v.scores.total ?? 0;
@@ -23,11 +37,16 @@ export function computeLeadStats(views: CanonicalLeadView[]): LeadStats {
   const bySource: Record<string, number> = {};
   const byStatus: Record<string, number> = {};
   const intentBands = { high: 0, medium: 0, low: 0 };
+  const byOriginCategory: Record<string, number> = {};
+  const bySourceLabel: Record<string, number> = {};
   let withIdentity = 0;
   let withCampaign = 0;
 
   for (const v of views) {
     bySource[v.source] = (bySource[v.source] ?? 0) + 1;
+    const origin = v.origin?.category ?? 'unknown';
+    byOriginCategory[origin] = (byOriginCategory[origin] ?? 0) + 1;
+    bySourceLabel[v.sourceLabel] = (bySourceLabel[v.sourceLabel] ?? 0) + 1;
     const status = v.status ?? 'unknown';
     byStatus[status] = (byStatus[status] ?? 0) + 1;
     const i = intentOf(v);
@@ -35,7 +54,7 @@ export function computeLeadStats(views: CanonicalLeadView[]): LeadStats {
     if (v.unifiedPersonId || v.identity.email || v.identity.phone) withIdentity += 1;
     if (v.campaign) withCampaign += 1;
   }
-  return { total: views.length, bySource, byStatus, intentBands, withIdentity, withCampaign };
+  return { total: views.length, bySource, byStatus, intentBands, withIdentity, withCampaign, byOriginCategory, bySourceLabel };
 }
 
 /**

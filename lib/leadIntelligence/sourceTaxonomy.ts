@@ -9,7 +9,8 @@
  * standalone case.
  */
 
-import type { CanonicalLeadSource } from './types';
+import type { CanonicalLeadSource, LeadOrigin } from './types';
+import type { SourceCategory } from '../prospectProvenance/contract';
 
 export const CANONICAL_LEAD_SOURCES: readonly CanonicalLeadSource[] = [
   'website', 'blog', 'social', 'engagement', 'community', 'marketpulse',
@@ -112,4 +113,61 @@ export function resolveCanonicalSource(signals: SourceSignals): CanonicalLeadSou
   if (SOCIAL_PLATFORMS.has(norm(signals.platform))) return 'social';
 
   return 'other';
+}
+
+/* ── Provenance display (prospect_source_contributions.source_category) ───────
+ * `source_category` is the discovery classification; it is NOT a
+ * `CanonicalLeadSource` and is never mapped onto one (that vocabulary is
+ * persisted in dedupe keys, lead keys and audience memberships). These helpers
+ * only produce DISPLAY labels.
+ */
+
+export const SOURCE_CATEGORY_LABELS: Record<SourceCategory, string> = {
+  marketpulse: 'MarketPulse',
+  social_listening: 'Social listening',
+  community: 'Community',
+  engagement: 'Engagement',
+  inbound_form: 'Inbound form',
+  inbound_webhook: 'Inbound webhook',
+  manual: 'Manual',
+  crm: 'CRM',
+  csv: 'CSV import',
+  pi_discovery: 'Prospect discovery',
+  pi_enrichment: 'Prospect enrichment',
+  website: 'Website',
+};
+
+/**
+ * Raw `canonical_leads.source` values written by prospect-intelligence discovery
+ * providers. Such a prospect is NOT a CRM lead: before this, `apollo` resolved to
+ * `other` and `crmAdapter` folded it into `crm`, so it was displayed as "CRM".
+ */
+export const PI_DISCOVERY_PROVIDERS: ReadonlySet<string> = new Set(['apollo']);
+
+const PLATFORM_LABELS: Record<string, string> = { apollo: 'Apollo', hubspot: 'HubSpot', linkedin: 'LinkedIn', reddit: 'Reddit', salesforce: 'Salesforce', zoho: 'Zoho' };
+
+export function platformLabel(platform: string | null | undefined): string | null {
+  const p = String(platform ?? '').trim().toLowerCase();
+  if (!p) return null;
+  return PLATFORM_LABELS[p] ?? p.charAt(0).toUpperCase() + p.slice(1);
+}
+
+/** "Prospect discovery · Apollo", "Community · Reddit", "CRM". */
+export function provenanceLabel(category: SourceCategory, platform?: string | null): string {
+  const base = SOURCE_CATEGORY_LABELS[category] ?? category;
+  const plat = platformLabel(platform);
+  return plat && plat.toLowerCase() !== base.toLowerCase() ? `${base} · ${plat}` : base;
+}
+
+/**
+ * The label a view is DISPLAYED with. The display source (`CanonicalLeadSource`)
+ * is kept for keys/filters; the label prefers the known discovery origin, so a
+ * `pi_discovery` / `pi_enrichment` origin is never shown as "CRM". Any other
+ * origin keeps the display-source label (no silent re-labelling of working sources).
+ */
+export function displayLabelFor(source: CanonicalLeadSource, origin?: LeadOrigin | null): string {
+  if (origin?.category === 'pi_discovery' || origin?.category === 'pi_enrichment') {
+    return provenanceLabel(origin.category, origin.platform);
+  }
+  return CANONICAL_LEAD_SOURCE_LABELS[source] ?? String(source);
 }
