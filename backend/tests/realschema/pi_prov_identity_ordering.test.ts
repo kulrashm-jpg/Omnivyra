@@ -418,7 +418,11 @@ async function expectOneCanonicalProspect(org: string, o: Ordered): Promise<void
   expect(aliases).toEqual([expect.objectContaining({
     organization_id: org, alias_lead_id: o.absorbed, survivor_lead_id: o.survivor, reason: 'verified_identity', rule_version: 'cb.reconcile.1',
   })]);
-  expect(aliases[0].evidence).toMatchObject({ platform: 'reddit', platformUserId: HANDLE, personId: o.personId, verification: 'linked_identity_claim' });
+  expect(aliases[0].evidence).toMatchObject({ platform: 'reddit', verification: 'linked_identity_claim' });
+  // Alias rows are append-only, so they must never hold erasable personal data.
+  expect(aliases[0].evidence).not.toHaveProperty('platformUserId');
+  expect(aliases[0].evidence).not.toHaveProperty('personId');
+  expect(JSON.stringify(aliases[0].evidence)).not.toContain(HANDLE);
 
   // Every contribution preserved where it was written; exactly one originating per lead.
   const c = await contributionsOf(org);

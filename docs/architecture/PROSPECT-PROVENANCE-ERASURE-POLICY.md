@@ -145,6 +145,7 @@ A person or lead of another tenant ⇒ 42501 before anything is written.
 | `contact_governance_records` (incl. re-anchored `target_normalized`) | Suppression must stay enforceable after erasure (ADR §16, PG-001). Holding the address is the legal basis for not contacting it again. |
 | outreach history (`outreach_tasks`, `outreach_decisions`, delivery evidence), `canonical_revenue_events`, `unified_touchpoints`, `visitor_sessions`, `expected_event_instances`, legacy `leads` | Owned by other tracks; SET NULL edges by design (`personErasure.ts` header). Not provenance. Residual personal data there is out of scope and recorded as a gap. |
 | `marketpulse_signal_observations` | Tenant market signals, not keyed to a person. |
+| `prospect_aliases` (20270109000001) | Holds no personal data by construction: `evidence` records only the rule versions, the verification result and the platform — never the handle or the person id (enforced in `identityReconciliation.ts` and asserted by `piProvIdentityReconciliation` and `pi_prov_identity_ordering`). The rows are append-only (UPDATE refused), so this is the only way they can never retain erasable data. Lead ids are random and survive as audit of the merge; they cascade away if a lead is deleted. |
 
 ## Hashing decision
 

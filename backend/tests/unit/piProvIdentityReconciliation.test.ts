@@ -225,8 +225,12 @@ describe('reconcileVerifiedSocialIdentity', () => {
     expect(r).toMatchObject({ status: 'reconciled', survivorId: 'disc', aliased: ['comm'], personAttached: false, personId: 'x' });
     expect(w.aliases).toEqual([expect.objectContaining({
       organizationId: ORG_A, aliasLeadId: 'comm', survivorLeadId: 'disc', reason: 'verified_identity', ruleVersion: IDENTITY_RECONCILIATION_RULE,
-      evidence: expect.objectContaining({ platform: 'reddit', platformUserId: 'ada', personId: 'x', verification: 'linked_identity_claim' }),
+      evidence: expect.objectContaining({ platform: 'reddit', verification: 'linked_identity_claim' }),
     })]);
+    // Alias rows are append-only: they must never hold erasable personal data.
+    expect(w.aliases[0].evidence).not.toHaveProperty('platformUserId');
+    expect(w.aliases[0].evidence).not.toHaveProperty('personId');
+    expect(JSON.stringify(w.aliases[0].evidence)).not.toContain('ada');
     // The absorbed prospect is NOT given the person (no second anchor).
     expect(w.prospects.find((p) => p.id === 'comm')!.personId).toBeNull();
 

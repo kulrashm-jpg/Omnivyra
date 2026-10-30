@@ -39,7 +39,8 @@
  * ─── WHAT IT WRITES (append-only) ─────────────────────────────────────────
  *   - one `prospect_aliases` row per absorbed prospect → the survivor
  *     (reason `verified_identity`, rule version, evidence: verification rule,
- *     platform, normalised handle, person id). Existing aliases are never
+ *     platform — never the handle or the person id, so an append-only alias
+ *     can never retain erasable personal data). Existing aliases are never
  *     re-pointed; a replay is a `duplicate`.
  *   - `attachPersonToProspect(survivor, X)` only when the survivor has no
  *     person (WS-1's existing writer; it never re-anchors).
@@ -343,8 +344,10 @@ export async function reconcileVerifiedSocialIdentity(
           verificationRule: VERIFIED_IDENTITY_RULE_VERSION,
           verification: verdict.reason,
           platform: h.platform,
-          platformUserId: h.platformUserId,
-          personId,
+          // No handle and no person id: alias rows are append-only (UPDATE is
+          // refused), so anything personal stored here could never be erased.
+          // The verifying claim and the person are erased by the provenance
+          // erasure path; the alias only records that a verified merge happened.
           survivorSelection: 'person_anchored>has_aliases>earliest_created>id',
         },
       });
