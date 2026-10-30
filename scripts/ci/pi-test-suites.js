@@ -45,7 +45,11 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const SCAN_ROOT = path.join(ROOT, 'backend', 'tests');
 
 // Directories that have their own jest project; see header.
-const EXCLUDED_DIRS = new Set(['realschema', 'manual']);
+// `integration` (added 2026-10-30, prospect provenance): backend/tests/globalTeardown.ts
+// REFUSES to run any suite under tests/integration unless SUPABASE_URL is a local
+// instance, so in this hermetic job such a suite can only fail. No suite selected
+// before this change lived there (every selected path was under backend/tests/unit).
+const EXCLUDED_DIRS = new Set(['realschema', 'manual', 'integration']);
 
 /**
  * PI module markers. These are the Prospect Intelligence service directories
@@ -64,6 +68,17 @@ const PI_MARKERS = [
   'pages/api/prospects',
   'pages/api/outreach',
   'pages/api/prospect-sources',
+  // Prospect provenance contract + contribution writer (2026-10-30). New suites
+  // are named piProv* and already match by name; this marker also catches a
+  // suite that exercises the contract under any other name.
+  'prospectProvenance',
+  // The unified lead view (lead_intelligence store, reader, routes) — the read
+  // side of prospect provenance. Before 2026-10-30 no suite exercising it ran in
+  // any required job. Wired after a full local run of every suite these three
+  // markers newly select: 48 suites / 374 tests green.
+  'lib/leadIntelligence',
+  'services/leadIntelligence/',
+  'api/lead-intelligence/',
 ];
 
 const isTestFile = (name) => /\.test\.tsx?$/.test(name);
