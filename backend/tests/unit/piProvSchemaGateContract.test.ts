@@ -438,6 +438,14 @@ const LEAD_INTELLIGENCE_WARN = ['company_id', 'dedupe_key', 'source', 'source_ta
 const PSC_REDACTIONS_BLOCKING = ['organization_id', 'contribution_id', 'reason', 'values_sha256'];
 /** Workstream E (20270108000001): per-tenant MarketPulse observations — fail-open writer. */
 const MP_OBSERVATIONS_WARN = ['company_id', 'signal_id', 'observation_key', 'observed_at'];
+/** Closure A (20270109000000): erasure audit events — erasure fails closed without them. */
+const CLOSURE_A_ENTRIES: Array<[string, string, Severity]> = [
+  ['prospect_provenance_erasures', 'organization_id', 'BLOCKING'],
+  ['prospect_provenance_erasures', 'subject_kind', 'BLOCKING'],
+  ['prospect_provenance_erasures', 'reason', 'BLOCKING'],
+  ['prospect_provenance_erasures', 'requested_by', 'BLOCKING'],
+  ['prospect_provenance_erasures', 'table_counts', 'BLOCKING'],
+];
 /**
  * No active_leads expectation is pending any more: owner decision D-4
  * (2026-10-30) made snooze opportunity-level, carried by
@@ -481,6 +489,7 @@ describe('manifest — no global severity downgrade', () => {
       ...PSC_REDACTIONS_BLOCKING.map((c) => `prospect_source_contribution_redactions.${c}`),
       ...MP_OBSERVATIONS_WARN.map((c) => `marketpulse_signal_observations.${c}`),
       ...CLOSURE_D_ENTRIES,
+      ...CLOSURE_A_ENTRIES.map(([t, c]) => `${t}.${c}`),
     ]);
     const baseline = new Set(BASELINE_ENTRIES.map(([t, c]) => `${t}.${c}`));
     const unexpected = COLUMNS
@@ -639,6 +648,18 @@ describe('manifest — provenance and lead_intelligence coverage', () => {
 
   it.each(MP_OBSERVATIONS_WARN)('marketpulse_signal_observations.%s is WARN (fail-open writer)', (column) => {
     expect(sevOf('marketpulse_signal_observations', column)).toBe('WARN');
+  });
+
+  it.each(CLOSURE_A_ENTRIES)('closure A: %s.%s is %s (erasure fails closed)', (table, column, severity) => {
+    expect(sevOf(table, column)).toBe(severity);
+  });
+
+  it('closure A adds exactly its entries for prospect_provenance_erasures, inside its delimited block, and no index', () => {
+    expect(COLUMNS.filter((c) => c.table === 'prospect_provenance_erasures')).toHaveLength(CLOSURE_A_ENTRIES.length);
+    expect(INDEXES.some((i) => i.table === 'prospect_provenance_erasures')).toBe(false);
+    const block = verifierSource.slice(verifierSource.indexOf('// ── closure-A (privacy) ──'),
+      verifierSource.indexOf('// ── end closure-A ──'));
+    for (const [, column] of CLOSURE_A_ENTRIES) expect(block).toContain(`column: '${column}'`);
   });
 
   it('workstream E adds exactly its 8 column entries and no index or type entry', () => {

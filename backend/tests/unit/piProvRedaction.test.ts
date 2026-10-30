@@ -173,29 +173,29 @@ describe('redactContributionsForPerson', () => {
   });
 });
 
-describe('erasePerson — acceptance #10 wiring', () => {
-  it('redacts the person\'s prospects\' contributions BEFORE deleting the person, and reports it', async () => {
+describe('erasePerson — acceptance #10 wiring (since closure A: the complete erasure function)', () => {
+  // Closure A (20270109000000) moved person erasure from the contribution-only
+  // function to `pi_erase_prospect_provenance`, which is person-keyed in the
+  // database and ALWAYS called. Full coverage: piProvErasureComplete.test.ts.
+  const ERASED = { erasure_id: 'e1', redacted: 2, already_redacted: 0, contribution_ids: ['c1', 'c2'],
+    canonical_lead_ids: [LEAD_1, LEAD_2], counts: { prospect_source_contributions: 2 } };
+
+  it('erases the provenance of the person BEFORE deleting the person, and reports it', async () => {
+    state.rpcResult = { data: ERASED, error: null };
     const res = await erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'subject request', requestedBy: 'admin:u9' });
     expect(state.observed.indexOf('redact')).toBeGreaterThan(-1);
     expect(state.observed.indexOf('redact')).toBeLessThan(state.observed.indexOf('delete_person'));
-    expect(state.rpcCalls[0].args).toMatchObject({
-      p_organization_id: ORG_A, p_reason: 'person erased: subject request', p_requested_by: 'admin:u9',
-    });
+    expect(state.rpcCalls[0]).toMatchObject({ fn: 'pi_erase_prospect_provenance', args: {
+      p_organization_id: ORG_A, p_person_id: PERSON, p_reason: 'person erased: subject request', p_requested_by: 'admin:u9',
+    } });
     expect(res.deleted).toBe(true);
-    expect(res.provenanceRedaction).toMatchObject({ status: 'redacted', redacted: 2 });
+    expect(res.provenanceRedaction).toMatchObject({ status: 'erased', erasureId: 'e1', redacted: 2 });
   });
 
   it('requester defaults to person_erasure', async () => {
+    state.rpcResult = { data: ERASED, error: null };
     await erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' });
     expect(state.rpcCalls[0].args.p_requested_by).toBe('person_erasure');
-  });
-
-  it('a person with no prospects: no RPC, erasure proceeds exactly as before', async () => {
-    state.leads = [];
-    const res = await erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' });
-    expect(state.rpcCalls).toEqual([]);
-    expect(res.deleted).toBe(true);
-    expect(res.provenanceRedaction).toEqual({ status: 'nothing_to_redact', reason: 'no_leads', canonicalLeadIds: [] });
   });
 
   it.each([

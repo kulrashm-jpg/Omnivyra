@@ -149,6 +149,9 @@ export interface RedactPersonContributionsInput {
 }
 
 /**
+ * @deprecated since 20270109000000 — person erasure uses `eraseProspectProvenance`
+ * (complete graph, person-keyed in the database). Kept for its existing callers/tests.
+ *
  * Redact every contribution of every canonical prospect linked to a person.
  *
  * MUST run before the person row is deleted: `canonical_leads.unified_person_id`
@@ -185,4 +188,122 @@ export async function redactContributionsForPerson(
     requestedBy: input.requestedBy,
   });
   return { ...result, canonicalLeadIds };
+}
+
+// ── Closure A: COMPLETE erasure (20270109000000) ───────────────────────────
+
+/**
+ * `public.pi_erase_prospect_provenance(org, person, leads, reason, requested_by)`
+ * — one transaction over the whole provenance/evidence graph of the person
+ * and/or the named canonical prospects (contributions, person source records
+ * and assertions, contacts, lead signals, feed items, engagement threads and
+ * messages and their text copies, lead_intelligence(+events,+profiles),
+ * canonical_leads metadata, canonical_users). Per-table policy:
+ * docs/architecture/PROSPECT-PROVENANCE-ERASURE-POLICY.md.
+ */
+export const ERASURE_FUNCTION = 'pi_erase_prospect_provenance';
+
+export interface EraseProvenanceInput {
+  organizationId: string;
+  /** The person whose graph is erased (tenant-checked in the database). */
+  personId?: string | null;
+  /** Canonical prospects to erase in addition to the person's own. */
+  canonicalLeadIds?: string[];
+  reason: string;
+  requestedBy: string;
+}
+
+export interface EraseProvenanceResult {
+  status: 'erased';
+  /** The `prospect_provenance_erasures` audit event. */
+  erasureId: string;
+  redacted: number;
+  alreadyRedacted: number;
+  contributionIds: string[];
+  canonicalLeadIds: string[];
+  /** Rows changed per table by THIS call (all zero on a repeat). */
+  counts: Record<string, number>;
+}
+
+/**
+ * Erase a tenant's provenance graph for a person and/or prospects.
+ *
+ * FAILS CLOSED, without exception: every error — including the function not
+ * being deployed — throws, because the alternative is an erasure that reports
+ * success while personal data survives. There is no fallback to the older
+ * contribution-only function: it would leave source records, contacts,
+ * signals and engagement text behind.
+ */
+export async function eraseProspectProvenance(input: EraseProvenanceInput): Promise<EraseProvenanceResult> {
+  const organizationId = input.organizationId?.trim();
+  if (!organizationId) {
+    throw new ProvenanceRedactionError('organizationId is required — erasure is never tenant-less', 'tenant_required');
+  }
+  if (!input.reason?.trim()) {
+    throw new ProvenanceRedactionError('reason is required — an unexplained erasure is an unusable audit record', 'reason_required');
+  }
+  if (!input.requestedBy?.trim()) {
+    throw new ProvenanceRedactionError('requestedBy is required', 'requested_by_required');
+  }
+  const personId = input.personId?.trim() || null;
+  const leadIds = [...new Set((input.canonicalLeadIds ?? []).map((id) => String(id ?? '').trim()))];
+  // Lead ids are validated here (an array literal is built from them); the
+  // person id is passed through and typed by the database (a malformed one is
+  // a 22P02 error, which fails closed like any other).
+  if (leadIds.some((id) => !UUID.test(id))) {
+    throw new ProvenanceRedactionError('every canonical lead id must be a uuid', 'invalid_subject_id');
+  }
+  if (personId === null && leadIds.length === 0) {
+    throw new ProvenanceRedactionError('a person or at least one canonical lead is required', 'subject_required');
+  }
+
+  const res = await ownedDbRpc(ERASURE_FUNCTION, {
+    p_organization_id: organizationId,
+    p_person_id: personId,
+    p_canonical_lead_ids: leadIds,
+    p_reason: input.reason.trim(),
+    p_requested_by: input.requestedBy.trim(),
+  });
+
+  if (res.error) {
+    const code = errCode(res.error);
+    if (code && FUNCTION_MISSING.has(code)) {
+      throw new ProvenanceRedactionError(
+        `the erasure function is not deployed (apply 20270109000000): ${res.error.message}`,
+        'erasure_unavailable',
+      );
+    }
+    if (code === '42501') {
+      throw new ProvenanceRedactionError(
+        `erasure refused: the person or a requested lead belongs to another tenant (${res.error.message})`,
+        'cross_tenant',
+      );
+    }
+    throw new ProvenanceRedactionError(
+      `provenance erasure failed (${code ?? 'unknown'}): ${res.error.message}`,
+      code ?? 'erasure_failed',
+    );
+  }
+
+  const data = (res.data ?? {}) as {
+    erasure_id?: unknown; redacted?: unknown; already_redacted?: unknown;
+    contribution_ids?: unknown; canonical_lead_ids?: unknown; counts?: unknown;
+  };
+  if (typeof data.erasure_id !== 'string' || !data.erasure_id) {
+    // A success without an audit event is not a provable erasure.
+    throw new ProvenanceRedactionError('the erasure function returned no erasure event id', 'erasure_unconfirmed');
+  }
+  const counts: Record<string, number> = {};
+  if (data.counts && typeof data.counts === 'object') {
+    for (const [k, v] of Object.entries(data.counts as Record<string, unknown>)) counts[k] = Number(v ?? 0);
+  }
+  return {
+    status: 'erased',
+    erasureId: data.erasure_id,
+    redacted: Number(data.redacted ?? 0),
+    alreadyRedacted: Number(data.already_redacted ?? 0),
+    contributionIds: Array.isArray(data.contribution_ids) ? data.contribution_ids.map(String) : [],
+    canonicalLeadIds: Array.isArray(data.canonical_lead_ids) ? data.canonical_lead_ids.map(String) : [],
+    counts,
+  };
 }

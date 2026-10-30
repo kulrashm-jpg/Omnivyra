@@ -127,6 +127,12 @@ function deletePerson(companyId: string, id: string): Row[] {
 }
 
 jest.mock('../../db/writeOwner', () => ({
+  // Closure A (20270109000000): erasure always calls the complete provenance
+  // erasure before the delete; this suite is about governance, so it succeeds.
+  ownedDbRpc: async () => ({
+    data: { erasure_id: 'e1', redacted: 0, already_redacted: 0, contribution_ids: [], canonical_lead_ids: [], counts: {} },
+    error: null,
+  }),
   ownedDbTable: (name: string) => {
     const tableOf = (): Row[] =>
       name === 'contact_governance_records' ? governance
