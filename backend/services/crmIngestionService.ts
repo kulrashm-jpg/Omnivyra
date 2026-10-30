@@ -357,6 +357,9 @@ async function recordCrmProspectProvenance(params: {
       provider: params.provider,
       entityType: 'person',
       sourceRecordId: params.sourceRecordId,
+      // Typed provenance on the source record, matching the CRM contribution.
+      sourceCategory: 'crm',
+      platform: params.provider,
       // The prospect-shaped subset, verbatim. `redactSecrets` and the payload
       // hash are applied by the boundary itself, so change detection and
       // credential stripping are not re-implemented here.

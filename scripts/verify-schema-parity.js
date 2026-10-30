@@ -174,9 +174,9 @@ const REQUIRED_COLUMNS = [
   //     last_seen_at and last_activity_at are derivable from contributions
   //     (count / max(observed_at)).
   //
-  // REMAINING (6) — the opportunity-WORKFLOW columns below stay PRESENT at INFO.
-  // They describe triage workflow (status, owner, snooze, status audit), not
-  // provenance, and their fate depends on the prospect lifecycle mapping.
+  // REMAINING (6) — the opportunity-WORKFLOW columns (status, owner, snooze,
+  // status audit). They describe triage workflow, not provenance; all six are
+  // reconciled below onto the per-opportunity workflow tables.
   //
   // RECONCILED against docs/architecture/PROSPECT-OPPORTUNITY-LIFECYCLE.md (owner
   // direction: a per-contact, per-opportunity-type model; opportunity workflow is
