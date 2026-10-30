@@ -34,6 +34,7 @@ import { ingestSourceRecord } from '../prospectIdentity/ingestionBoundary';
 import { resolveUnifiedPerson } from '../identityResolutionService';
 import { resolveOrCreateAccount, attachPersonToAccount } from '../prospectIdentity/accountResolution';
 import { resolveOrCreateProspect } from '../prospectIdentity/prospectResolution';
+import { piProspectCandidateKeys, recordPiIngestionContribution } from '../prospectProvenance/ingestion/piIngestionContribution';
 import { planProspectEnrichment, type EnrichmentPorts } from '../enrichment/service';
 import { ingestionEnrichmentCoverage } from './enrichmentCoverage';
 import { detectAndParkDuplicates } from '../prospectIdentity/personDuplicates';
@@ -344,10 +345,18 @@ export async function ingestNormalizedRecord(
   // WS-1 refuses to synthesise an identity key precisely because a fabricated
   // one would mint a new Prospect on every replay. Only a genuine resolver
   // error fails the record, matching how employer resolution already behaves.
+  //
+  // The provider-namespaced key (`apollo:<id>`) is tried first and the legacy
+  // raw key second, so prospects created before namespacing are matched, not
+  // duplicated. Provider knowledge stays in the provenance helper.
   let prospectId: string | null = null;
+  let prospect: Awaited<ReturnType<typeof resolveOrCreateProspect>> | null = null;
   try {
-    const prospect = await resolveOrCreateProspect(record.organizationId, {
-      externalLeadKey: record.externalId,
+    const keys = piProspectCandidateKeys(record.source, record.externalId);
+    prospect = await resolveOrCreateProspect(record.organizationId, {
+      externalLeadKey: keys.externalLeadKey,
+      namespacedExternalLeadKey: keys.namespacedExternalLeadKey,
+      provenance: keys.provenance,
       source: record.source,
       personId,
       email: record.person?.email ?? null,
@@ -467,6 +476,25 @@ export async function ingestNormalizedRecord(
       // record rather than proceeding with a half-known employer.
       return fail(externalId, 'provenance_failed', e);
     }
+  }
+
+  // ── SOURCE CONTRIBUTION ─────────────────────────────────────────────────
+  // Lead-level provenance: which source originated this prospect and which
+  // contributed later. Never fails the record — the helper counts and logs
+  // its own outcome — because the evidence above is already durable.
+  if (prospect) {
+    await recordPiIngestionContribution({
+      organizationId: record.organizationId,
+      adapterSource: record.source,
+      externalId: record.externalId,
+      prospect,
+      sourceRecordId: ingestion.sourceRecordId,
+      observedAt: record.observedAt ?? null,
+      ingestedAt: at,
+      ingestionRunId: options.ingestionRunId ?? null,
+      personId,
+      accountId,
+    });
   }
 
   // ── DUPLICATE PARKING ───────────────────────────────────────────────────

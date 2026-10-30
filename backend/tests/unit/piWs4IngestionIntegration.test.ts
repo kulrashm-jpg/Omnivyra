@@ -201,7 +201,9 @@ describe('WS-4 — intake actually reaches the WS-1 resolver', () => {
     expect(out.prospectId).toBeTruthy();
     expect(leadWrites()).toHaveLength(1);
     expect(leadWrites()[0].payload.company_id).toBe(ORG_A);
-    expect(leadWrites()[0].payload.external_lead_key).toBe('CRM-1');
+    // New prospects are keyed by a provider-namespaced ref (owner rule: external
+    // ids are namespaced by source); legacy raw keys are still matched on lookup.
+    expect(leadWrites()[0].payload.external_lead_key).toBe('crm:CRM-1');
   });
 
   it('2b. the Prospect is anchored to the resolved person', async () => {
