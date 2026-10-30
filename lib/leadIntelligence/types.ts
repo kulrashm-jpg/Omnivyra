@@ -131,6 +131,70 @@ export interface LeadEvidenceRef {
  */
 export type LeadProvenanceStatus = 'loaded' | 'unavailable' | 'not_applicable';
 
+/**
+ * The typed signal kinds a provenance contribution references, which are also
+ * the rows a durable `lead_intelligence` view can be keyed by (its persisted
+ * `sourceRef.table`). This is the ONLY basis for merging a durable view into a
+ * canonical prospect — never a person id (unverified identities create a
+ * prospect without a person).
+ */
+export type SignalRefKind = 'opportunity_feed_item' | 'lead_signal' | 'engagement_message';
+
+/**
+ * A tenant-scoped link "canonical prospect X has a contribution referencing
+ * signal (kind, ref)". Built by the read service from the tenant-filtered
+ * contribution reader; consumed by the pure merge in `query.ts`.
+ */
+export interface SignalLink {
+  organizationId: string;
+  canonicalLeadId: string;
+  kind: SignalRefKind;
+  ref: string;
+}
+
+/**
+ * A durable / bridged view that represents the SAME underlying discovery as a
+ * canonical prospect, folded into that prospect (the representative). Nothing is
+ * deleted: the underlying row still exists and its persisted key keeps working
+ * as an alias (`CanonicalLeadView.aliasKeys`).
+ */
+export interface LinkedLeadRecord {
+  /** `leadKeyFor` of the linked view — persisted in audience memberships / operational rows / deep links. */
+  leadKey: string;
+  source: CanonicalLeadSource;
+  sourceLabel: string;
+  sourceRef: SourceRef | null;
+  occurredAt: string | null;
+  status: string | null;
+  campaign: string | null;
+  content: string | null;
+  scores: CanonicalLeadScores;
+  attribution: CanonicalAttribution;
+  /** The typed signal reference both records share. */
+  matchedOn: { kind: SignalRefKind; ref: string };
+}
+
+/**
+ * The account a canonical prospect belongs to, read from its ORIGINATING
+ * contribution's source record (`source_records.account_id` →
+ * `prospect_accounts`). Set for account-only prospects (no person).
+ */
+export interface LeadAccount {
+  id: string;
+  name: string | null;
+  domain: string | null;
+  via: 'originating_source_record';
+}
+
+/**
+ *   loaded         — the account was resolved;
+ *   not_found      — the originating source record carries no (readable) account;
+ *   unavailable    — the source-record / account store could not be read;
+ *   not_applicable — not an account-only canonical prospect, or no originating
+ *                    source record is known.
+ */
+export type LeadAccountStatus = 'loaded' | 'not_found' | 'unavailable' | 'not_applicable';
+
 /** Display-level origin of a view: the discovery classification when it is known. */
 export interface LeadOrigin {
   category: SourceCategory | null;
@@ -186,6 +250,20 @@ export interface CanonicalLeadView {
   provenanceStatus?: LeadProvenanceStatus;
   /** Discovery origin: from the originating contribution when loaded, else a row-level hint. */
   origin?: LeadOrigin | null;
+  /**
+   * Signal merge (owner decision 4). Durable/bridged views of the SAME signal
+   * this canonical prospect's contributions reference, folded in so the prospect
+   * is ONE lead carrying every source. Sorted by (occurredAt, leadKey).
+   */
+  linkedRecords?: LinkedLeadRecord[];
+  /**
+   * Persisted keys of the linked records (sorted, unique). `leadKeyFor(view)`
+   * stays the representative's own key; a lookup by any alias resolves here.
+   */
+  aliasKeys?: string[];
+  /** Account of an account-only canonical prospect (read side; see LeadAccount). */
+  account?: LeadAccount | null;
+  accountStatus?: LeadAccountStatus;
 }
 
 /* ── Hexagonal ports (reuse existing infrastructure; never duplicated here) ── */

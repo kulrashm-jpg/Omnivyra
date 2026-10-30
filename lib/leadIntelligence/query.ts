@@ -4,7 +4,15 @@
  * never filter or page source-specifically. Pure + deterministic.
  */
 
-import type { CanonicalLeadView, CanonicalLeadSource } from './types';
+import type {
+  CanonicalLeadView,
+  CanonicalLeadSource,
+  CanonicalLeadScores,
+  LinkedLeadRecord,
+  SignalLink,
+  SignalRefKind,
+} from './types';
+import { leadKeyFor } from './leadKey';
 
 export interface LeadFilters {
   source?: CanonicalLeadSource | CanonicalLeadSource[];
@@ -42,6 +50,21 @@ export interface LeadQueryResult {
   truncatedSources?: string[];
   /** Provenance store status for this page: `unavailable` ⇒ `sources` are empty, not proven absent. */
   provenance?: 'ok' | 'unavailable' | 'not_requested';
+  /** Signal merge (durable signal views folded into canonical prospects). Set by the read service. */
+  signalMerge?: SignalMergeStatus;
+}
+
+/**
+ * Outcome of the signal merge for one collect:
+ *   ok            — links were read; `merged` views were folded, `ambiguous` left separate;
+ *   unavailable   — the provenance store could not be read: nothing was merged, so a
+ *                   signal may still appear both as a durable lead and as a prospect;
+ *   not_requested — nothing to merge (no canonical prospect or no signal-keyed view).
+ */
+export interface SignalMergeStatus {
+  status: 'ok' | 'unavailable' | 'not_requested';
+  merged: number;
+  ambiguous: number;
 }
 
 const lc = (v: unknown): string => String(v ?? '').toLowerCase();
@@ -98,8 +121,189 @@ export function dedupeViews(views: CanonicalLeadView[]): CanonicalLeadView[] {
   return out;
 }
 
+/* ── Signal merge (owner decision 4) ─────────────────────────────────────────
+ *
+ * A community / engagement signal can surface twice: as a durable
+ * `lead_intelligence` view keyed by the signal row (`opportunity_feed_items`,
+ * `lead_signals`) AND as a canonical prospect whose provenance contribution
+ * references the same signal. They are ONE logical lead.
+ *
+ * MERGE RULE. A non-canonical view V and a canonical prospect P merge iff
+ *   1. V.sourceRef.table is a signal table (SIGNAL_TABLE_KINDS) with an id, and
+ *   2. a tenant-scoped contribution of P references that SAME (kind, id), and
+ *   3. V, P and the link all belong to the same tenant, and
+ *   4. exactly ONE canonical prospect present in the view set carries that
+ *      reference (two or more ⇒ ambiguous ⇒ nothing merges; zero ⇒ V stays).
+ * The canonical prospect is the representative: its key, source and identity are
+ * unchanged. V is folded in as a `LinkedLeadRecord` and V's persisted key becomes
+ * an alias. Canonical prospects are never merged with each other, and nothing is
+ * matched on a person id. Deterministic, idempotent and order-independent: the
+ * outcome depends only on the SET of views and links.
+ */
+
+export const CANONICAL_PROSPECT_TABLE = 'canonical_leads';
+
+/** Persisted `sourceRef.table` label → the contribution signal reference it corresponds to. */
+export const SIGNAL_TABLE_KINDS: Readonly<Record<string, SignalRefKind>> = Object.freeze({
+  opportunity_feed_items: 'opportunity_feed_item',
+  lead_signals: 'lead_signal',
+  engagement_messages: 'engagement_message',
+});
+
+const normRef = (v: unknown): string => String(v ?? '').trim().toLowerCase();
+
+/** The canonical prospect id a view represents, or null (not a canonical prospect). */
+export function canonicalProspectIdOf(v: Pick<CanonicalLeadView, 'sourceRef'>): string | null {
+  return v.sourceRef?.table === CANONICAL_PROSPECT_TABLE && v.sourceRef.id ? v.sourceRef.id : null;
+}
+
+/** The signal a NON-canonical view is keyed by, or null. */
+export function signalRefOf(v: Pick<CanonicalLeadView, 'sourceRef'>): { kind: SignalRefKind; ref: string } | null {
+  const table = v.sourceRef?.table;
+  const id = v.sourceRef?.id;
+  if (!table || !id || table === CANONICAL_PROSPECT_TABLE) return null;
+  const kind = SIGNAL_TABLE_KINDS[table];
+  return kind ? { kind, ref: normRef(id) } : null;
+}
+
+export interface SignalMergeResult {
+  views: CanonicalLeadView[];
+  /** Views folded into a canonical prospect. */
+  merged: number;
+  /** Views left separate because their signal is referenced by more than one prospect. */
+  ambiguous: number;
+}
+
+const SCORE_FIELDS = ['intent', 'urgency', 'icp', 'confidence', 'total'] as const;
+const LAST = '￿';
+
+function toLinkedRecord(v: CanonicalLeadView, matchedOn: { kind: SignalRefKind; ref: string }): LinkedLeadRecord {
+  return {
+    leadKey: leadKeyFor(v),
+    source: v.source,
+    sourceLabel: v.sourceLabel,
+    sourceRef: v.sourceRef,
+    occurredAt: v.occurredAt,
+    status: v.status,
+    campaign: v.campaign,
+    content: v.content,
+    scores: v.scores,
+    attribution: v.attribution,
+    matchedOn,
+  };
+}
+
+function compareLinked(a: LinkedLeadRecord, b: LinkedLeadRecord): number {
+  const at = a.occurredAt ?? LAST;
+  const bt = b.occurredAt ?? LAST;
+  if (at !== bt) return at < bt ? -1 : 1;
+  return a.leadKey < b.leadKey ? -1 : a.leadKey > b.leadKey ? 1 : 0;
+}
+
+/** Fold linked records into the representative. Pure; idempotent (records are unioned by key). */
+function foldLinked(rep: CanonicalLeadView, incoming: LinkedLeadRecord[]): CanonicalLeadView {
+  const byKey = new Map<string, LinkedLeadRecord>();
+  for (const r of [...(rep.linkedRecords ?? []), ...incoming]) if (!byKey.has(r.leadKey)) byKey.set(r.leadKey, r);
+  const records = [...byKey.values()].sort(compareLinked);
+  const ownKey = leadKeyFor(rep);
+  const aliasKeys = [...new Set([...(rep.aliasKeys ?? []), ...records.map((r) => r.leadKey)])]
+    .filter((k) => k !== ownKey)
+    .sort();
+  const firstOf = <T>(pick: (r: LinkedLeadRecord) => T | null | undefined): T | null => {
+    for (const r of records) {
+      const x = pick(r);
+      if (x !== null && x !== undefined && (x as unknown) !== '') return x;
+    }
+    return null;
+  };
+  // Gap-fill ONLY what the representative lacks (null/absent) — never overwrite it.
+  const scores: CanonicalLeadScores = { ...rep.scores };
+  for (const f of SCORE_FIELDS) {
+    if (scores[f] === null || scores[f] === undefined) {
+      const x = firstOf((r) => r.scores?.[f]);
+      if (x !== null) scores[f] = x;
+    }
+  }
+  return {
+    ...rep,
+    scores,
+    campaign: rep.campaign ?? firstOf((r) => r.campaign),
+    content: rep.content ?? firstOf((r) => r.content),
+    linkedRecords: records,
+    aliasKeys,
+  };
+}
+
+/**
+ * Fold every durable/bridged view into the canonical prospect that references
+ * the same signal (see MERGE RULE above). Views are expected to be deduped
+ * already (`dedupeViews`). Input arrays and views are never mutated.
+ */
+export function mergeSignalLinkedViews(views: CanonicalLeadView[], links: SignalLink[]): SignalMergeResult {
+  // Representatives: canonical prospects present in the set, per tenant.
+  const reps = new Map<string, number>();
+  views.forEach((v, i) => {
+    const id = canonicalProspectIdOf(v);
+    if (!id) return;
+    const k = `${v.organizationId}|${normRef(id)}`;
+    if (!reps.has(k)) reps.set(k, i);
+  });
+  if (reps.size === 0 || links.length === 0) return { views, merged: 0, ambiguous: 0 };
+
+  // (tenant, kind, ref) → representatives carrying it (only prospects present in the set).
+  const bySignal = new Map<string, Set<number>>();
+  for (const l of links) {
+    if (!l || !l.organizationId || !l.canonicalLeadId || !l.ref) continue;
+    const rep = reps.get(`${l.organizationId}|${normRef(l.canonicalLeadId)}`);
+    if (rep === undefined) continue;
+    const k = `${l.organizationId}|${l.kind}|${normRef(l.ref)}`;
+    const set = bySignal.get(k);
+    if (set) set.add(rep); else bySignal.set(k, new Set([rep]));
+  }
+
+  const incoming = new Map<number, LinkedLeadRecord[]>();
+  const folded = new Set<number>();
+  let ambiguous = 0;
+  views.forEach((v, i) => {
+    if (canonicalProspectIdOf(v)) return; // prospects never merge with each other
+    const sig = signalRefOf(v);
+    if (!sig) return;
+    const candidates = bySignal.get(`${v.organizationId}|${sig.kind}|${sig.ref}`);
+    if (!candidates || candidates.size === 0) return;
+    if (candidates.size > 1) { ambiguous += 1; return; }
+    const rep = [...candidates][0];
+    if (views[rep].organizationId !== v.organizationId) return; // defence in depth
+    const rec = toLinkedRecord(v, sig);
+    const list = incoming.get(rep);
+    if (list) list.push(rec); else incoming.set(rep, [rec]);
+    folded.add(i);
+  });
+  if (folded.size === 0) return { views, merged: 0, ambiguous };
+
+  const out: CanonicalLeadView[] = [];
+  views.forEach((v, i) => {
+    if (folded.has(i)) return;
+    const add = incoming.get(i);
+    out.push(add ? foldLinked(v, add) : v);
+  });
+  return { views: out, merged: folded.size, ambiguous };
+}
+
+/** Every display source a (possibly merged) view represents: its own first, then linked ones. */
+export function sourcesOfView(v: CanonicalLeadView): CanonicalLeadSource[] {
+  const out: CanonicalLeadSource[] = [v.source];
+  for (const r of v.linkedRecords ?? []) if (!out.includes(r.source)) out.push(r.source);
+  return out;
+}
+
+/** True when `key` is the view's own key or one of its aliases (merged linked records). */
+export function viewHasLeadKey(v: CanonicalLeadView, key: string): boolean {
+  return leadKeyFor(v) === key || (v.aliasKeys ?? []).includes(key);
+}
+
 function matchesFilters(v: CanonicalLeadView, f: LeadFilters): boolean {
-  if (f.source) { const set = Array.isArray(f.source) ? f.source : [f.source]; if (!set.includes(v.source)) return false; }
+  // A merged lead matches a source filter through any source it carries.
+  if (f.source) { const set = Array.isArray(f.source) ? f.source : [f.source]; if (!sourcesOfView(v).some((x) => set.includes(x))) return false; }
   if (f.campaign && lc(v.campaign) !== lc(f.campaign)) return false;
   if (f.content && !lc(v.content).includes(lc(f.content))) return false;
   if (f.status && lc(v.status) !== lc(f.status)) return false;
@@ -115,6 +319,8 @@ function matchesSearch(v: CanonicalLeadView, q: string): boolean {
   const hay = [
     v.identity.email, v.identity.phone, v.identity.unifiedPersonId, v.identity.platform, v.identity.contactId,
     v.source, v.sourceLabel, v.campaign, v.content, v.status, meta(v, 'name'), meta(v, 'company_name'), meta(v, 'opportunity_type'),
+    v.account?.name,
+    ...(v.linkedRecords ?? []).flatMap((r) => [r.source, r.sourceLabel, r.campaign, r.content]),
   ].map(lc).join(' ');
   return hay.includes(lc(q));
 }

@@ -84,8 +84,40 @@ async function loadOperationalMap(companyId: string): Promise<Map<string, { stat
   return map;
 }
 
+/**
+ * The membership key for a (possibly merged) lead. A lead that absorbed a durable
+ * signal record (signal merge) keeps resolving through that record's persisted key:
+ * if this audience already holds a membership under the lead's own key, that key
+ * is used; otherwise under one of its alias keys (first in sorted order), that
+ * alias is used; otherwise the lead's own key. Persisted keys are never rewritten,
+ * and a merged lead is ONE member.
+ */
+export function membershipKeyFor(view: CanonicalLeadView, existing: ReadonlySet<string> = new Set()): string {
+  const own = leadKeyFor(view);
+  if (existing.has(own)) return own;
+  for (const alias of view.aliasKeys ?? []) if (existing.has(alias)) return alias;
+  return own;
+}
+
+/** Operational overlay of a lead: under its own key, else under any alias key (merged durable record). */
+function operationalFor<T>(view: CanonicalLeadView, entityId: string, opMap: Map<string, T>): T | undefined {
+  const hit = opMap.get(entityId) ?? opMap.get(leadKeyFor(view));
+  if (hit) return hit;
+  for (const alias of view.aliasKeys ?? []) { const a = opMap.get(alias); if (a) return a; }
+  return undefined;
+}
+
+/** Entity ids already holding a membership of this audience (alias-stable membership keys). One read; fail-open. */
+async function loadMembershipKeys(companyId: string, audienceId: string): Promise<Set<string>> {
+  try {
+    const { data } = await ownedDbTable(M).select('entity_id').eq('company_id', companyId).eq('audience_id', audienceId)
+      .eq('entity_type', 'canonical_lead').limit(20000);
+    return new Set(((data as Array<{ entity_id?: unknown }>) ?? []).map((r) => String(r.entity_id ?? '')).filter(Boolean));
+  } catch { return new Set(); }
+}
+
 /** Evaluate an audience's rules over the unified lead views. Pure of persistence. */
-async function evaluateMembers(companyId: string, rules: RuleGroup): Promise<EvaluatedMember[]> {
+async function evaluateMembers(companyId: string, rules: RuleGroup, existingKeys: ReadonlySet<string> = new Set()): Promise<EvaluatedMember[]> {
   if (!isNonEmptyRules(rules)) return [];
   const [{ rows }, opMap] = await Promise.all([
     // The whole set. `searchLeads` clamps a page to 500, so audiences used to
@@ -95,8 +127,8 @@ async function evaluateMembers(companyId: string, rules: RuleGroup): Promise<Eva
   ]);
   const out: EvaluatedMember[] = [];
   for (const view of rows) {
-    const entityId = leadKeyFor(view);
-    const ctx: EvalContext = { view, operational: opMap.get(entityId) };
+    const entityId = membershipKeyFor(view, existingKeys);
+    const ctx: EvalContext = { view, operational: operationalFor(view, entityId, opMap) };
     const r = evaluateRules(ctx, rules);
     if (r.matched) out.push({ entityId, view, matchedRules: r.matchedRules, evidence: r.evidence, confidence: r.confidence });
   }
@@ -118,7 +150,7 @@ export async function evaluateAudience(companyId: string, audienceId: string): P
   const audience = await getAudience(companyId, audienceId);
   if (!audience) throw new AudienceError('not_found', 404);
   const runAt = now();
-  const members = await evaluateMembers(companyId, audience.rules as RuleGroup);
+  const members = await evaluateMembers(companyId, audience.rules as RuleGroup, await loadMembershipKeys(companyId, audienceId));
 
   for (const m of members) {
     await ownedDbTable(M).upsert({

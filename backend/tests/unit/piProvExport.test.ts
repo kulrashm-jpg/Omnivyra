@@ -74,7 +74,7 @@ describe('export — provenance columns', () => {
   it('appends the columns: existing positions are unchanged', () => {
     const header = toCsv([toExportRow(view(), undefined, ALL)]).split('\n')[0];
     expect(header).toBe('identity,company,source,campaign,journey,timeline_summary,buying_intent,content_interests,recommended_next_action,ai_summary,status,metadata,'
-      + 'origin_category,origin_platform,origin_observed_at,origin_source_url,contributors,provenance_status');
+      + 'origin_category,origin_platform,origin_observed_at,origin_source_url,contributors,provenance_status,linked_sources');
   });
 
   it('contributors never carry external ids, URLs or evidence payload', () => {
