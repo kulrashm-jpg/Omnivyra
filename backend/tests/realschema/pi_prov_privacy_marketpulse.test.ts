@@ -11,7 +11,7 @@
  *       observation key is per tenant; service_role cannot UPDATE/DELETE.
  *   #10 Privacy redaction preserves the audit trail — after the redaction the
  *       contribution exists, its personal URL / evidence / metadata are gone, a
- *       tombstone exists with hash + reason (and never the values),
+ *       tombstone exists with reason (value hash retired by 20270109000000) (and never the values),
  *       service_role still cannot UPDATE/DELETE contributions directly,
  *       cross-tenant redaction is refused with nothing changed, the call is
  *       idempotent, and the tombstone survives the contribution's deletion.
@@ -172,16 +172,12 @@ describe('acceptance #8 — MarketPulse tenant isolation (real PG)', () => {
 });
 
 describe('acceptance #10 — privacy redaction preserves the audit trail (real PG)', () => {
-  it('as service_role: contribution survives, personal data gone, tombstone with hash + reason, never the values', () => inRollback(async () => {
+  it('as service_role: contribution survives, personal data gone, tombstone with reason (no value hash since 20270109000000), never the values', () => inRollback(async () => {
     await seedTenants();
     const person = await newPerson(ORG_A);
     const lead = await newLead(ORG_A, { personId: person });
     const c = await contribution(ORG_A, lead);
     const before = await pscRow(c);
-    const expectedHash = (await db.query(
-      `SELECT encode(sha256(convert_to(jsonb_build_object('source_url', source_url, 'evidence', evidence,
-                                                         'source_metadata', source_metadata)::text, 'UTF8')), 'hex') h
-         FROM ${PSC} WHERE id=$1`, [c])).rows[0].h;
 
     const r = await asServiceRole(() => redact(ORG_A, [lead]));
     expect(r).toEqual({ redacted: 1, already_redacted: 0, contribution_ids: [c] });
@@ -190,20 +186,23 @@ describe('acceptance #10 — privacy redaction preserves the audit trail (real P
     expect(after).toBeDefined();                                       // never deleted
     expect(after.source_url).toBeNull();
     const [t] = await tombs('contribution_id=$1', [c]);
-    expect(after.evidence).toEqual({ redacted: true, redaction_id: t.id });
-    expect(after.source_metadata).toEqual({ redacted: true, redaction_id: t.id });
+    // Closure A (20270109000000): the marker also names the erasure event, and
+    // the linkable external_ref is replaced by a non-linkable marker.
+    expect(after.evidence).toEqual({ redacted: true, redaction_id: t.id, erasure_id: t.erasure_id });
+    expect(after.source_metadata).toEqual({ redacted: true, redaction_id: t.id, erasure_id: t.erasure_id });
+    expect(after.external_ref).toBe(`redacted:${c}`);
     // Everything that is not personal is untouched.
     for (const k of ['id', 'organization_id', 'canonical_lead_id', 'contribution_role', 'source_category',
-      'external_ref', 'platform', 'observed_at', 'created_at', 'ingestion_run_id']) {
+      'platform', 'observed_at', 'created_at', 'ingestion_run_id']) {
       expect(after[k]).toEqual(before[k]);
     }
 
     expect(t).toMatchObject({
       organization_id: ORG_A, contribution_id: c, canonical_lead_id: lead,
-      reason: 'person erased: subject request', requested_by: 'person_erasure', values_sha256: expectedHash,
+      reason: 'person erased: subject request', requested_by: 'person_erasure', values_sha256: null,
     });
     expect(t.redacted_fields).toEqual([
-      'source_url', 'evidence.authorHandle', 'evidence.excerpt', 'source_metadata.contactKey', 'source_metadata.language',
+      'external_ref', 'source_url', 'evidence.authorHandle', 'evidence.excerpt', 'source_metadata.contactKey', 'source_metadata.language',
     ]);
     // The tombstone carries no redacted VALUE anywhere.
     const serialized = JSON.stringify(t);
@@ -262,7 +261,7 @@ describe('acceptance #10 — privacy redaction preserves the audit trail (real P
     expect(await pscRow(c2)).toEqual(before2);
   }));
 
-  it('idempotent: a second call redacts nothing, writes no second tombstone and keeps the first hash', () => inRollback(async () => {
+  it('idempotent: a second call redacts nothing, writes no second tombstone', () => inRollback(async () => {
     await seedTenants();
     const lead = await newLead(ORG_A);
     await contribution(ORG_A, lead, 'community:1');
@@ -292,7 +291,7 @@ describe('acceptance #10 — privacy redaction preserves the audit trail (real P
     const t = await tombs('canonical_lead_id=$1', [lead]);
     expect(t).toHaveLength(1);
     expect(t[0]).toMatchObject({ contribution_id: null, organization_id: ORG_A, reason: 'person erased: subject request' });
-    expect(t[0].values_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(t[0].values_sha256).toBeNull();   // value hashing retired by 20270109000000
   }));
 
   it('argument validation: NULL tenant / blank reason / blank requester are 22023; empty lead list is a no-op', () => inRollback(async () => {

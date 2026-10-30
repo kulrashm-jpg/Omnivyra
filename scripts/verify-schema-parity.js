@@ -700,7 +700,7 @@ const REQUIRED_COLUMNS = [
   { severity: 'BLOCKING', table: 'prospect_source_contribution_redactions', column: 'organization_id', motivation: 'Tenant of the tombstone and the anchor detecting 20270108000001 unapplied; absent, person erasure with provenance fails closed.' },
   { severity: 'BLOCKING', table: 'prospect_source_contribution_redactions', column: 'contribution_id', motivation: 'Redacted contribution (composite FK, SET NULL (contribution_id)); uq_pscr_contribution makes redaction idempotent.' },
   { severity: 'BLOCKING', table: 'prospect_source_contribution_redactions', column: 'reason',          motivation: 'Why the contribution was redacted (the audit half of owner decision 8).' },
-  { severity: 'BLOCKING', table: 'prospect_source_contribution_redactions', column: 'values_sha256',   motivation: 'sha256 of the redacted values (never the values); proves what was removed.' },
+  { severity: 'BLOCKING', table: 'prospect_source_contribution_redactions', column: 'values_sha256',   motivation: 'RETIRED by 20270109000000 (always NULL, CHECK pscr_values_sha256_retired); still inserted as NULL by the erasure function, so its absence fails erasure closed.' },
 
   // ── marketpulse_signal_observations — per-tenant MarketPulse view (20270108000001)
   // WARN, by the fail-open rule: recordMarketPulseObservation returns an
@@ -711,6 +711,20 @@ const REQUIRED_COLUMNS = [
   { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'signal_id',       motivation: 'Link to the global marketpulse_signals row (insert-only; never carries tenant content after creation).' },
   { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'observation_key', motivation: 'Idempotency key in uq_mpso_company_signal_observation (company_id, signal_id, observation_key).' },
   { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'observed_at',     motivation: 'When THIS tenant observed the signal.' },
+
+  // ── closure-A (privacy) ──
+  // prospect_provenance_erasures — the per-call erasure audit event
+  // (20270109000000). BLOCKING: pi_erase_prospect_provenance inserts this row
+  // in the same transaction as the erasure, and person erasure FAILS CLOSED on
+  // any error (including an undeployed function): absent, no person can be
+  // erased. organization_id is the anchor detecting 20270109000000 unapplied;
+  // the rest is the minimum the audit record must prove (who/why/what/how many).
+  { severity: 'BLOCKING', table: 'prospect_provenance_erasures', column: 'organization_id', motivation: 'Tenant of the erasure event and the anchor detecting 20270109000000 unapplied; absent, every person erasure fails closed.' },
+  { severity: 'BLOCKING', table: 'prospect_provenance_erasures', column: 'subject_kind',    motivation: 'person | prospect — what kind of subject the erasure covered.' },
+  { severity: 'BLOCKING', table: 'prospect_provenance_erasures', column: 'reason',          motivation: 'Why the erasure happened (the audit half of owner decision 8).' },
+  { severity: 'BLOCKING', table: 'prospect_provenance_erasures', column: 'requested_by',    motivation: 'Who/what requested the erasure.' },
+  { severity: 'BLOCKING', table: 'prospect_provenance_erasures', column: 'table_counts',    motivation: 'Rows changed per table — proof of scope without retaining any value or hash.' },
+  // ── end closure-A ──
 ];
 
 // ══ GAP-B — the indexes that ARE the idempotency mechanism ════════════════
