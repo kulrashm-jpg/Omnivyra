@@ -233,11 +233,11 @@ describe('verify-schema-parity — runtime exit contract (stubbed pg, no databas
     expect(r.check!.checked_indexes).toBe(INDEXES.length);
   });
 
-  it('an unrelated missing INFO column still exits 3 (status INFO, never ok)', () => {
-    const r = runVerifier(without(fullSchema(), (t, c) => t === 'active_leads' && c === 'snoozed_until'));
+  it('an unrelated missing WARN workflow column still exits 3 (status WARN, never ok)', () => {
+    const r = runVerifier(without(fullSchema(), (t, c) => t === 'opportunity_dispositions' && c === 'snoozed_until'));
     expect(r.code).toBe(3);
-    expect(r.check!.status).toBe('INFO');
-    expect(r.check!.severity).toEqual({ blocking: 0, warn: 0, info: 1 });
+    expect(r.check!.status).toBe('WARN');
+    expect(r.check!.severity).toEqual({ blocking: 0, warn: 1, info: 0 });
   });
 
   it('a missing lead_intelligence provenance column is a WARN finding → exit 3', () => {
@@ -306,12 +306,15 @@ describe('verify-schema-parity — runtime exit contract (stubbed pg, no databas
     expect(r.check!.ledger_probe.verified).toBe(false);
   });
 
-  it('the post-migration production shape (only active_leads.snoozed_until absent) exits 3, not 0', () => {
-    // After the provenance migration is applied, the one remaining expectation
-    // production lacks is snoozed_until — an open owner decision (lifecycle D-4).
-    const r = runVerifier(without(fullSchema(), (t) => t === 'active_leads'));
+  it('production before 20270108000000 (only opportunity_dispositions.snoozed_until absent) exits 3, not 0', () => {
+    // Owner decision D-4 (2026-10-30): snooze is opportunity-level and its carrier
+    // is opportunity_dispositions.snoozed_until. Until that migration is applied
+    // the column is a WARN finding; the manifest no longer expects anything on
+    // the legacy-name-colliding active_leads table.
+    expect(COLUMNS.filter((c) => c.table === 'active_leads')).toEqual([]);
+    const r = runVerifier(without(fullSchema(), (t, c) => t === 'opportunity_dispositions' && c === 'snoozed_until'));
     expect(r.code).toBe(3);
-    expect(r.check!.severity).toEqual({ blocking: 0, warn: 0, info: 1 });
+    expect(r.check!.severity).toEqual({ blocking: 0, warn: 1, info: 0 });
   });
 
   it('only the fully present + clean-ledger case ever exits 0 across every scenario above', () => {
@@ -357,8 +360,8 @@ describe('predeploy-check — strict schema mode maps the verifier exit codes (s
     expect(r.out).toMatch(/schema parity: OK/);
   });
 
-  it('end to end: an unrelated INFO finding → verifier 3 → strict predeploy 1', () => {
-    const v = runVerifier(without(fullSchema(), (t, c) => t === 'active_leads' && c === 'snoozed_until'));
+  it('end to end: an unrelated WARN finding → verifier 3 → strict predeploy 1', () => {
+    const v = runVerifier(without(fullSchema(), (t, c) => t === 'opportunity_dispositions' && c === 'snoozed_until'));
     expect(v.code).toBe(3);
     expect(runPredeploySchemaBlock(v.code, true).exit).toBe(1);
   });
@@ -431,15 +434,20 @@ const PSC_BLOCKING = ['organization_id', 'canonical_lead_id', 'contribution_role
   'external_ref', 'observed_at', 'contact_id', 'platform', 'opportunity_feed_item_id'];
 const SOURCE_RECORDS_NEW = ['source_category', 'platform', 'source_url'];
 const LEAD_INTELLIGENCE_WARN = ['company_id', 'dedupe_key', 'source', 'source_table', 'source_id', 'occurred_at', 'unified_person_id'];
-/** Open owner decision (lifecycle doc D-4); stays INFO until decided. */
-const ACTIVE_LEADS_PENDING = ['snoozed_until'];
-/** Workflow fields that already live per opportunity in production workflow tables. */
+/**
+ * No active_leads expectation is pending any more: owner decision D-4
+ * (2026-10-30) made snooze opportunity-level, carried by
+ * opportunity_dispositions.snoozed_until (20270108000000).
+ */
+const ACTIVE_LEADS_PENDING: string[] = [];
+/** Workflow fields that live per opportunity in the opportunity workflow tables. */
 const ACTIVE_LEADS_TO_LIFECYCLE: Array<[string, string, string]> = [
   ['opportunity_type', 'opportunity_feed_items', 'opportunity_type'],
   ['status', 'opportunity_lifecycle_states', 'state'],
   ['status_changed_at', 'opportunity_lifecycle_states', 'transitioned_at'],
   ['status_changed_by', 'opportunity_lifecycle_states', 'actor_user_id'],
   ['owner_user_id', 'opportunity_assignments', 'assigned_to_user_id'],
+  ['snoozed_until', 'opportunity_dispositions', 'snoozed_until'],
 ];
 const ACTIVE_LEADS_RETIRED = ['intent_score', 'icp_score', 'confidence_score', 'total_score', 'signal_count', 'last_seen_at', 'last_activity_at', 'company_name'];
 const ACTIVE_LEADS_REPLACED = ['organization_id', 'contact_id', 'source_platforms', 'first_seen_at'];
@@ -474,9 +482,10 @@ describe('manifest — no global severity downgrade', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('INFO is used only by the pending active_leads entry (snoozed_until)', () => {
+  it('INFO is used by no entry now that the last pending active_leads entry (snoozed_until) is decided', () => {
     const info = COLUMNS.filter((c) => c.severity === 'INFO').map((c) => `${c.table}.${c.column}`).sort();
     expect(info).toEqual(ACTIVE_LEADS_PENDING.map((c) => `active_leads.${c}`).sort());
+    expect(info).toEqual([]);
   });
 
   it('baseline structural entries (indexes, declared types) are unchanged', () => {
@@ -540,11 +549,13 @@ describe('manifest — active_leads REPLACE / RETIRE / pending disposition', () 
     expect(sevOf(table, column)).toBe('WARN');
   });
 
-  it.each(ACTIVE_LEADS_PENDING)('active_leads.%s stays PRESENT at INFO as an open owner decision', (column) => {
-    const entry = COLUMNS.find((c) => c.table === 'active_leads' && c.column === column);
-    expect(entry).toBeDefined();
-    expect(entry!.severity).toBe('INFO');
-    expect(entry!.motivation).toContain('OPEN OWNER DECISION D-4');
+  it('active_leads.snoozed_until is DECIDED (D-4): carried by opportunity_dispositions.snoozed_until, not active_leads', () => {
+    expect(sevOf('active_leads', 'snoozed_until')).toBeUndefined();
+    const entry = COLUMNS.find((c) => c.table === 'opportunity_dispositions' && c.column === 'snoozed_until');
+    expect(entry).toMatchObject({ severity: 'WARN' });
+    expect(entry!.motivation).toContain('20270108000000');
+    expect(verifierSource).toContain('DECIDED (owner, 2026-10-30; lifecycle doc D-4)');
+    expect(fs.existsSync(path.join(REPO, 'supabase', 'migrations', '20270108000000_pi_opportunity_snooze.sql'))).toBe(true);
   });
 
   it('accounts for all 19 original expectations exactly once', () => {

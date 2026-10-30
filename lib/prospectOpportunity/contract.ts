@@ -24,10 +24,11 @@
  *   - It does not attach an opportunity to a prospect by guesswork. An
  *     opportunity belongs to a prospect only when one of the prospect's own
  *     contributions cites it (`opportunity_feed_item_id`).
- *   - It does not model snooze. No existing column carries a snooze deadline,
- *     so `snoozedUntil` is always null and the gap is declared in
- *     ROLLUP_FIELD_MAP. `revisit_later` is surfaced as a disposition and is NOT
- *     reinterpreted as a snooze.
+ *   - It does not invent snooze. Snooze is OPPORTUNITY-level (owner decision
+ *     2026-10-30) and its only carrier is `opportunity_dispositions.snoozed_until`
+ *     (20270108000000): a `revisit_later` disposition WITH a deadline. An
+ *     untimed `revisit_later` is NOT a snooze. The rules live in ./snooze.ts.
+ *     Snooze never changes `status`.
  *
  * Grain today: an opportunity is an `opportunity_feed_items` row (one classified
  * community signal). That grain is retention-deleted and exists only for
@@ -47,6 +48,7 @@ import type {
   LifecycleUnreadableReason,
 } from '../../backend/services/opportunityLifecycleService';
 import type { ProvenanceContribution } from '../prospectProvenance/contract';
+import { compareDispositionsLatestFirst, deriveOpportunitySnooze, type OpportunitySnoozeState } from './snooze';
 
 // ── Field map: the never-applied 20260817 `active_leads` roll-up → existing carriers ──
 
@@ -96,9 +98,9 @@ export const ROLLUP_FIELD_MAP: Readonly<Record<string, RollupFieldMapping>> = {
     note: 'One active owner is NOT enforced by the database (UNIQUE with nullable unassigned_at); the view reports contradictions.',
   },
   snoozed_until: {
-    carrier: null,
-    status: 'gap',
-    note: "No column carries a snooze deadline. opportunity_dispositions 'revisit_later' has no timestamp.",
+    carrier: "opportunity_dispositions.snoozed_until (latest disposition per opportunity_feed_item_id, revisit_later only)",
+    status: 'mapped',
+    note: 'Opportunity-level (owner decision 2026-10-30). Typed deadline on a revisit_later disposition (20270108000000); expires by time; never a prospect field and never a lifecycle state.',
   },
   status_changed_at: {
     carrier: 'opportunity_lifecycle_states.transitioned_at (latest row)',
@@ -139,6 +141,12 @@ export interface ProspectOpportunityInputs {
   lifecycle: Readonly<Record<string, LifecycleReadResult>>;
   assignments: readonly OpportunityAssignment[];
   dispositions: readonly OpportunityDisposition[];
+  /**
+   * The instant snooze is evaluated at. Optional so the projection stays
+   * clock-free: without it `snooze` is null and only the stored
+   * `snoozedUntil` is reported.
+   */
+  asOf?: string;
 }
 
 // ── Output ─────────────────────────────────────────────────────────────────
@@ -171,8 +179,14 @@ export interface ProspectOpportunityView {
   platform: string;
   status: OpportunityStatus;
   owner: OpportunityOwner;
-  /** Always null: no existing carrier (ROLLUP_FIELD_MAP.snoozed_until is a gap). */
-  snoozedUntil: null;
+  /**
+   * The stored deadline of the opportunity's current snooze: its LATEST
+   * disposition is `revisit_later` with a non-null `snoozed_until`. Reported
+   * whether or not it has passed; see `snooze` for the evaluated state.
+   */
+  snoozedUntil: string | null;
+  /** Snooze evaluated at `inputs.asOf`; null when no `asOf` was supplied. */
+  snooze: OpportunitySnoozeState | null;
   latestDisposition: { disposition: Disposition; at: string; by: string | null; reason: string | null } | null;
   /** Ids of the prospect's contributions that cite THIS opportunity's signal. */
   citingContributionIds: string[];
@@ -289,9 +303,12 @@ export function buildProspectOpportunities(input: ProspectOpportunityInputs): Pr
     activeOwners.set(a.opportunity_feed_item_id, [...(activeOwners.get(a.opportunity_feed_item_id) ?? []), a]);
   }
   const latestDisposition = new Map<string, OpportunityDisposition>();
-  for (const d of [...input.dispositions].sort(byTimeThenId<OpportunityDisposition>((x) => x.created_at))) {
+  const ownDispositions: OpportunityDisposition[] = [];
+  // Same ordering as the snooze rules (created_at, then id), oldest first, so
+  // the last one set per item is the latest.
+  for (const d of [...input.dispositions].sort((a, b) => compareDispositionsLatestFirst(b, a))) {
     if (d.organization_id !== org) { anomalies.push({ kind: 'cross_tenant_row', table: 'opportunity_dispositions', id: d.id }); continue; }
-    if (items.has(d.opportunity_feed_item_id)) latestDisposition.set(d.opportunity_feed_item_id, d);
+    if (items.has(d.opportunity_feed_item_id)) { latestDisposition.set(d.opportunity_feed_item_id, d); ownDispositions.push(d); }
   }
 
   // 4. One view per opportunity, deterministic order: type, then created_at, then id.
@@ -310,7 +327,10 @@ export function buildProspectOpportunities(input: ProspectOpportunityInputs): Pr
         platform: f.platform,
         status: statusOf(input.lifecycle[f.id], org, f.id),
         owner: ownerOf(activeOwners.get(f.id) ?? []),
-        snoozedUntil: null,
+        snoozedUntil: d && d.disposition === 'revisit_later' && d.snoozed_until ? d.snoozed_until : null,
+        snooze: input.asOf === undefined
+          ? null
+          : deriveOpportunitySnooze(ownDispositions, { organizationId: org, opportunityFeedItemId: f.id }, input.asOf),
         latestDisposition: d ? { disposition: d.disposition, at: d.created_at, by: d.set_by_user_id, reason: d.reason } : null,
         citingContributionIds: [...(citations.get(f.id) ?? [])].sort(),
       };

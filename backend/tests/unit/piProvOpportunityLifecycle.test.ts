@@ -197,16 +197,75 @@ describe('buildProspectOpportunities — status never invented', () => {
     }
   });
 
-  it('snooze has no carrier: snoozedUntil is null and revisit_later is a disposition only', () => {
+  it('an UNTIMED revisit_later is a disposition only, never a snooze', () => {
     const input = acceptanceInput();
     input.dispositions = [
       disposition('d1', F1, 'qualified', '2026-10-03T00:00:00Z'),
       disposition('d2', F1, 'revisit_later', '2026-10-04T00:00:00Z'),
     ];
+    input.asOf = '2026-10-04T12:00:00Z';
     const [bi] = buildProspectOpportunities(input).opportunities;
     expect(bi.snoozedUntil).toBeNull();
+    expect(bi.snooze).toEqual({ kind: 'none' });
     expect(bi.latestDisposition).toEqual({ disposition: 'revisit_later', at: '2026-10-04T00:00:00Z', by: U1, reason: null });
     expect(bi.status).toMatchObject({ kind: 'present', state: 'qualified' });
+  });
+});
+
+describe('buildProspectOpportunities — opportunity-level snooze', () => {
+  const timed = (id: string, itemId: string, at: string, until: string): OpportunityDisposition =>
+    ({ ...disposition(id, itemId, 'revisit_later', at), snoozed_until: until });
+
+  it('snoozes one opportunity of the prospect and leaves the other, and both statuses, untouched', () => {
+    const input = acceptanceInput();
+    input.dispositions = [timed('s1', F1, '2026-10-04T00:00:00Z', '2026-10-20T00:00:00Z')];
+    input.asOf = '2026-10-10T00:00:00Z';
+    const [bi, hs] = buildProspectOpportunities(input).opportunities;
+    expect(bi.snoozedUntil).toBe('2026-10-20T00:00:00Z');
+    expect(bi.snooze).toMatchObject({ kind: 'active', until: '2026-10-20T00:00:00Z', dispositionId: 's1', setBy: U1 });
+    expect(hs.snoozedUntil).toBeNull();
+    expect(hs.snooze).toEqual({ kind: 'none' });
+    expect(bi.status).toMatchObject({ kind: 'present', state: 'qualified' });
+    expect(hs.status).toMatchObject({ kind: 'present', state: 'triaged' });
+    expect(bi.owner).toMatchObject({ userId: U1 });
+  });
+
+  it('expires by time alone, with the stored deadline still reported', () => {
+    const input = acceptanceInput();
+    input.dispositions = [timed('s1', F1, '2026-10-04T00:00:00Z', '2026-10-20T00:00:00Z')];
+    input.asOf = '2026-10-20T00:00:00Z';
+    const [bi] = buildProspectOpportunities(input).opportunities;
+    expect(bi.snoozedUntil).toBe('2026-10-20T00:00:00Z');
+    expect(bi.snooze).toMatchObject({ kind: 'expired', until: '2026-10-20T00:00:00Z' });
+  });
+
+  it('is superseded by any later disposition', () => {
+    const input = acceptanceInput();
+    input.dispositions = [
+      timed('s1', F1, '2026-10-04T00:00:00Z', '2026-10-20T00:00:00Z'),
+      disposition('d2', F1, 'qualified', '2026-10-05T00:00:00Z'),
+    ];
+    input.asOf = '2026-10-10T00:00:00Z';
+    const [bi] = buildProspectOpportunities(input).opportunities;
+    expect(bi.snoozedUntil).toBeNull();
+    expect(bi.snooze).toEqual({ kind: 'none' });
+  });
+
+  it('is null (not evaluated) without asOf: the projection stays clock-free', () => {
+    const input = acceptanceInput();
+    input.dispositions = [timed('s1', F1, '2026-10-04T00:00:00Z', '2026-10-20T00:00:00Z')];
+    const [bi] = buildProspectOpportunities(input).opportunities;
+    expect(bi.snoozedUntil).toBe('2026-10-20T00:00:00Z');
+    expect(bi.snooze).toBeNull();
+  });
+
+  it('a snooze row of another tenant on the same item is reported and ignored', () => {
+    const input = acceptanceInput();
+    input.dispositions = [{ ...timed('sx', F1, '2026-10-04T00:00:00Z', '2026-10-20T00:00:00Z'), organization_id: OTHER_ORG }];
+    input.asOf = '2026-10-10T00:00:00Z';
+    const r = buildProspectOpportunities(input);
+    expect(r.opportunities[0].snooze).toEqual({ kind: 'none' });
+    expect(r.anomalies).toContainEqual({ kind: 'cross_tenant_row', table: 'opportunity_dispositions', id: 'sx' });
   });
 });
 
@@ -272,7 +331,10 @@ describe('ROLLUP_FIELD_MAP — the 20260817 roll-up fields', () => {
       expect(m).toBeDefined();
       expect(m.status === 'gap' ? m.carrier === null : typeof m.carrier === 'string').toBe(true);
     }
-    expect(ROLLUP_FIELD_MAP.snoozed_until.status).toBe('gap');
+    // Owner decision 2026-10-30: snooze is opportunity-level, carried by the disposition row.
+    expect(ROLLUP_FIELD_MAP.snoozed_until).toMatchObject({ status: 'mapped' });
+    expect(ROLLUP_FIELD_MAP.snoozed_until.carrier).toContain('opportunity_dispositions.snoozed_until');
+    expect(Object.values(ROLLUP_FIELD_MAP).filter((m) => m.status === 'gap')).toEqual([]);
     expect(ROLLUP_FIELD_MAP.status.status).toBe('mapped_different_vocabulary');
   });
 });
