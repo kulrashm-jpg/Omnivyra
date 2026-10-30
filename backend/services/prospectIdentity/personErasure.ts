@@ -88,6 +88,11 @@ import {
   type PersonContactPoint,
   type PersonErasurePlan,
 } from './erasurePlan';
+import {
+  redactContributionsForPerson,
+  ProvenanceRedactionError,
+  type RedactContributionsResult,
+} from '../prospectProvenance/redaction';
 
 // The planner's surface stays importable from here, unchanged: `index.ts` and
 // the WS-F tests reach erasure through this module and must not have to know
@@ -119,6 +124,11 @@ export interface ErasePersonInput {
   reason: string;
   /** Injected, never read from a clock — the same discipline as `mayContact`. */
   now?: string;
+  /**
+   * Who asked for the erasure (actor id or system label). Recorded on every
+   * provenance redaction tombstone. Defaults to `person_erasure`.
+   */
+  requestedBy?: string;
 }
 
 export interface ErasePersonResult {
@@ -135,6 +145,13 @@ export interface ErasePersonResult {
    * the caller is expected to log or alarm on a non-empty array.
    */
   suppressionsLostToErasure: GovernanceErasureAction[];
+  /**
+   * Owner decision 8 — privacy redaction of the contributions of every
+   * canonical prospect linked to the person (source_url / evidence /
+   * source_metadata), each with an audit tombstone. Contributions are never
+   * deleted.
+   */
+  provenanceRedaction: RedactContributionsResult & { canonicalLeadIds: string[] };
 }
 
 /**
@@ -240,7 +257,27 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
   //    person is not deleted.
   await clearPersonEvidenceAccountLinks(input.organizationId, input.personId);
 
-  // 6. The erasure itself.
+  // 6. Owner decision 8 — redact the provenance of the person's canonical
+  //    prospects, while `canonical_leads.unified_person_id` still links them
+  //    (it is ON DELETE SET NULL). One transaction in the database; tombstoned,
+  //    never deleted; idempotent, so a retry after a later failure is safe.
+  //    FAIL CLOSED: a failure throws and the person is not deleted.
+  let provenanceRedaction: ErasePersonResult['provenanceRedaction'];
+  try {
+    provenanceRedaction = await redactContributionsForPerson({
+      organizationId: input.organizationId,
+      personId: input.personId,
+      reason: `person erased: ${input.reason}`,
+      requestedBy: input.requestedBy?.trim() || ERASURE_SOURCE,
+    });
+  } catch (err) {
+    throw new PersonErasureError(
+      `could not redact the person's prospect provenance: ${(err as Error).message}`,
+      err instanceof ProvenanceRedactionError ? `provenance_${err.code}` : 'provenance_redaction_failed',
+    );
+  }
+
+  // 7. The erasure itself.
   const deleted = await deletePersonRow(input.organizationId, input.personId);
 
   return {
@@ -251,6 +288,7 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
     reanchored,
     revoked,
     suppressionsLostToErasure: plan.actions.filter((a) => a.disposition === 'unenforceable'),
+    provenanceRedaction,
   };
 }
 

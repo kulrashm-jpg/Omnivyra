@@ -680,6 +680,29 @@ const REQUIRED_COLUMNS = [
   { severity: 'WARN', table: 'lead_intelligence', column: 'source_id',         motivation: 'Originating row id of the adopted lead (sourceRef.id in the unified view).' },
   { severity: 'WARN', table: 'lead_intelligence', column: 'occurred_at',       motivation: 'When the source event happened; the order() key of listCanonicalLeads.' },
   { severity: 'WARN', table: 'lead_intelligence', column: 'unified_person_id', motivation: 'Person anchor; `.eq(\'unified_person_id\')` predicate on listCanonicalLeads.' },
+
+  // ── prospect_source_contribution_redactions — privacy tombstones (20270108000001)
+  // BLOCKING. Person erasure (personErasure.ts → prospectProvenance/redaction.ts)
+  // calls pi_redact_prospect_source_contributions, which writes these columns in
+  // the same transaction as the redaction, and the erasure FAILS CLOSED on any
+  // error: absent, erasure of any person with provenance throws and the person
+  // is NOT erased (a compliance path stops). Single-migration table:
+  // organization_id is the anchor; the others are what the function inserts
+  // and what makes the record auditable and idempotent.
+  { severity: 'BLOCKING', table: 'prospect_source_contribution_redactions', column: 'organization_id', motivation: 'Tenant of the tombstone and the anchor detecting 20270108000001 unapplied; absent, person erasure with provenance fails closed.' },
+  { severity: 'BLOCKING', table: 'prospect_source_contribution_redactions', column: 'contribution_id', motivation: 'Redacted contribution (composite FK, SET NULL (contribution_id)); uq_pscr_contribution makes redaction idempotent.' },
+  { severity: 'BLOCKING', table: 'prospect_source_contribution_redactions', column: 'reason',          motivation: 'Why the contribution was redacted (the audit half of owner decision 8).' },
+  { severity: 'BLOCKING', table: 'prospect_source_contribution_redactions', column: 'values_sha256',   motivation: 'sha256 of the redacted values (never the values); proves what was removed.' },
+
+  // ── marketpulse_signal_observations — per-tenant MarketPulse view (20270108000001)
+  // WARN, by the fail-open rule: recordMarketPulseObservation returns an
+  // outcome and never throws (42P01/PGRST205 → skipped), so an absent table
+  // degrades silently to the pre-existing behaviour (tenant content only on the
+  // adopted lead snapshot) rather than failing a MarketPulse run.
+  { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'company_id',      motivation: 'Tenant of the observation and the anchor detecting 20270108000001 unapplied; absent, tenant observations are silently skipped.' },
+  { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'signal_id',       motivation: 'Link to the global marketpulse_signals row (insert-only; never carries tenant content after creation).' },
+  { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'observation_key', motivation: 'Idempotency key in uq_mpso_company_signal_observation (company_id, signal_id, observation_key).' },
+  { severity: 'WARN', table: 'marketpulse_signal_observations', column: 'observed_at',     motivation: 'When THIS tenant observed the signal.' },
 ];
 
 // ══ GAP-B — the indexes that ARE the idempotency mechanism ════════════════
