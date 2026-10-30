@@ -4,6 +4,7 @@ import { useCompanyContext } from '@/components/CompanyContext';
 import { apiFetch } from '@/lib/apiFetch';
 import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 import { ChevronDown, ChevronRight, Building2, Brain, Activity, Save } from 'lucide-react';
+import OwnedIdentitiesPanel from '@/components/prospects/OwnedIdentitiesPanel';
 
 type AccessResponse = {
   companyId: string;
@@ -465,6 +466,19 @@ export default function CompanyAdminAccessPage() {
                     })}
                   </div>
                 )}
+              </section>
+
+              {/*
+                WS-4E — owned engagement identities. Company-admin governance
+                configuration, on the company-admin governance page. The panel
+                consumes the already-shipped `/api/prospect-identity/owned-
+                identit*` routes, adds no API and no capability, and claims no
+                authorization of its own: the `PROSPECT_INGEST` check inside
+                each route is the only authority, and this gate decides only
+                whether the panel renders.
+              */}
+              <section className="rounded-xl border border-slate-200 p-4">
+                <OwnedIdentitiesPanel companyId={data?.companyId ?? null} />
               </section>
             </div>
           )}
