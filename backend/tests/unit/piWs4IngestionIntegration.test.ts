@@ -156,8 +156,15 @@ describe('WS-4 — the CRM unified_source finding (NOT an application defect)', 
     // so the migration stays unapplied and the legacy write is gone. The count
     // drops to three and is paired with the explicit negatives below, rather
     // than this assertion simply being deleted.
+    //
+    // PROSPECT PROVENANCE (2026-10-30), deliberately: production's
+    // `canonical_leads` is verified (read-only) to have NO `unified_source`
+    // column, so that write could only fail. It is removed and the value is
+    // carried on the CRM contribution's `source_metadata.unifiedSource`. The
+    // revenue-event and adoptLead writes remain, so the count drops to two.
     const lines = src.split('\n').filter((l: string) => /^\s*unified_source:/.test(l));
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(2);
+    expect(src).toContain('unifiedSource,');
   });
 
   it('003-B-R1: the CRM path no longer writes the legacy `leads` table', () => {

@@ -509,6 +509,11 @@ export async function runDiscoveryExecution(input: {
         organizationId,
         source: row.providerKey,
         records: records as Array<Record<string, unknown>>,
+        // PROVENANCE: the execution id is the run correlation, so each
+        // `source_records.ingestion_run_id` (and each pi_discovery contribution)
+        // names the search that discovered it. Previously null: the search →
+        // prospect link was lost.
+        ingestionRunId: executionId,
         now: now(),
       });
       ingestedThisPage = result.succeeded;

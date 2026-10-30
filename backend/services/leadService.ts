@@ -10,6 +10,11 @@ import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 import { trackEvent } from './telemetry/telemetryDispatcher';
 import { getLegacyLeads } from './leadIntelligence/legacyLeadCompat';
 import { constantTimeEqual } from '../security/constantTimeEqual';
+import {
+  classifyInboundLead,
+  scheduleInboundLeadProvenance,
+} from './prospectProvenance/ingestion/inboundLeadProvenance';
+import type { InboundLeadMode } from './prospectProvenance/ingestion/sourceProfiles';
 
 export type FieldType = 'text' | 'email' | 'phone';
 
@@ -142,6 +147,12 @@ export interface CreateLeadInput {
   visitor_session_id?: string | null;
   attribution?: Record<string, unknown>;
   consent_state?: string | null;
+  /**
+   * PROVENANCE: the entry point's explicit inbound mode. Not persisted on
+   * `leads`. Optional — when absent the mode is classified structurally
+   * (form_id / integration_id / visitor_session_id), never from `source`.
+   */
+  provenance_mode?: InboundLeadMode;
 }
 
 export async function createLead(companyId: string, input: CreateLeadInput): Promise<Lead> {
@@ -189,6 +200,19 @@ export async function createLead(companyId: string, input: CreateLeadInput): Pro
   // (website/forms/manual/webhook resolved from the row's source). Additive,
   // fire-and-forget, fail-open: never changes capture behaviour or the response.
   adoptLead('website', data as unknown as Record<string, unknown>);
+  // PROVENANCE — canonical prospect + source record + contribution, behind the
+  // PI lead-ingestion gate (closed by default ⇒ no read, no write). Detached via
+  // keep-alive, never throws, never delays the response; failures are counted.
+  void scheduleInboundLeadProvenance(
+    companyId,
+    data as unknown as Record<string, unknown>,
+    classifyInboundLead({
+      mode: input.provenance_mode,
+      form_id: input.form_id,
+      integration_id: input.integration_id,
+      visitor_session_id: input.visitor_session_id,
+    }),
+  );
   return data as Lead;
 }
 

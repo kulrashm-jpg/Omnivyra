@@ -14,6 +14,7 @@ import type { CanonicalLeadSource } from '../../../lib/leadIntelligence';
 import { createLeadIntelligenceIngestor, type LeadIntelligenceIngestor } from './leadIntelligenceFacade';
 import { createUnifiedPersonIdentityPort } from './leadIntelligencePorts';
 import { durableLeadIntelligenceSink } from './durableLeadIntelligenceSink';
+import { recordProvenanceOutcome, runDetached } from '../prospectProvenance/ingestion/provenanceTelemetry';
 
 let ingestor: LeadIntelligenceIngestor | null = null;
 export function getLeadIntelligenceIngestor(): LeadIntelligenceIngestor {
@@ -25,7 +26,12 @@ export function getLeadIntelligenceIngestor(): LeadIntelligenceIngestor {
   return ingestor;
 }
 
-/** Awaitable adoption — routes a source row through the facade. Fail-open. */
+/**
+ * Awaitable adoption — routes a source row through the facade. Fail-open for the
+ * CALLER (never throws), but never silent: a failure is logged
+ * (`prospect_provenance_side_effect_failed`, path `lead_adoption`) and counted
+ * (`getProvenanceIngestionCounters()['lead_adoption:failed']`).
+ */
 export async function adoptLeadAsync(
   source: CanonicalLeadSource,
   row: Record<string, unknown>,
@@ -33,19 +39,31 @@ export async function adoptLeadAsync(
 ): Promise<void> {
   try {
     await (override ?? getLeadIntelligenceIngestor()).ingestFromSource(source, row);
-  } catch {
-    /* fail-open: adoption must never affect existing behaviour */
+    recordProvenanceOutcome('lead_adoption', 'succeeded', { source });
+  } catch (e) {
+    /* fail-open: adoption must never affect existing behaviour — but it is observable */
+    recordProvenanceOutcome('lead_adoption', 'failed', {
+      source,
+      organizationId: (row?.organization_id ?? row?.company_id ?? null) as string | null,
+      sourceRowId: (row?.id ?? null) as string | null,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 
 /**
  * Fire-and-forget adoption — the call every module adds after its existing write.
  * Never throws, never awaited in the request path.
+ *
+ * Registered through the repository's keep-alive (`lib/runtime/keepAlive`, via
+ * `runDetached`): on Vercel the work is handed to the request's `waitUntil`, so
+ * the durable twin of a website lead is no longer at risk of being frozen after
+ * the response is sent; elsewhere it simply runs detached as before.
  */
 export function adoptLead(
   source: CanonicalLeadSource,
   row: Record<string, unknown>,
   override?: LeadIntelligenceIngestor,
 ): void {
-  void adoptLeadAsync(source, row, override);
+  void runDetached('lead_adoption', () => adoptLeadAsync(source, row, override), { source });
 }

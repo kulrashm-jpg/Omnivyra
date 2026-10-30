@@ -8,6 +8,7 @@ import { calculateContextQualityMetadata, type CompanyContextQualityMetadata } f
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 // WAVE-1 (AI-CONTRACT-000 §P6): honest provenance — no fabricated evidence.
 import { classifyProvenance } from './ai/safety/marketProvenance';
+import { MARKETPULSE_PROFILE, toNamespacedRef } from './prospectProvenance/ingestion/sourceProfiles';
 
 export type MarketPulseSignalCategory =
   | 'regulation'
@@ -440,23 +441,94 @@ function scoreCompanyRelevance(params: {
   };
 }
 
+/** Where THIS tenant's observation of a signal came from. All optional. */
+export interface MarketPulseObservationProvenance {
+  /** `market_pulse_runs.id` that produced the finding. */
+  runId?: string | null;
+  /** `market_pulse_findings.id` the signal was built from. */
+  findingId?: string | null;
+  /** When the tenant's run observed it (source time). */
+  observedAt?: string | null;
+  /** Evidence location, when the finding carried one. */
+  sourceUrl?: string | null;
+}
+
+/**
+ * PROVENANCE — persist the GLOBAL signal row WITHOUT overwriting it.
+ *
+ * `marketpulse_signals` has no tenant column and is unique on `duplicate_key`.
+ * The previous `upsert(onConflict: 'duplicate_key')` let any tenant's run
+ * REPLACE the shared row's title/summary/scores/timestamps — i.e. one tenant's
+ * processing overwrote the evidence another tenant's relevance row and lead
+ * snapshot point at. Now: INSERT; on `23505` read the existing row and leave it
+ * untouched. The first observation is immutable; each tenant's own observation
+ * is carried in its own per-tenant rows (relevance + the adopted lead snapshot).
+ *
+ * This is also the safe form for the index itself: `idx_marketpulse_signals_
+ * duplicate_key` is PARTIAL (`WHERE duplicate_key IS NOT NULL`), and PostgREST
+ * cannot infer a partial index for ON CONFLICT (42P10) — the trap the WS-1/LI-2
+ * writers document — so the old upsert could not have relied on it.
+ */
+async function persistSharedSignalWithoutOverwrite(
+  signal: MarketPulseSignal,
+): Promise<{ row: MarketPulseSignal & { id: string }; inserted: boolean }> {
+  const insertSignal = await ownedDbTable('marketpulse_signals')
+    .insert(signal)
+    .select('*')
+    .single();
+  if (!insertSignal.error && insertSignal.data) {
+    return { row: insertSignal.data as MarketPulseSignal & { id: string }, inserted: true };
+  }
+  if ((insertSignal.error as { code?: string } | null)?.code === '23505' && signal.duplicate_key) {
+    const existing = await ownedDbTable('marketpulse_signals')
+      .select('*')
+      .eq('duplicate_key', signal.duplicate_key)
+      .limit(1)
+      .maybeSingle();
+    if (!existing.error && existing.data) {
+      return { row: existing.data as MarketPulseSignal & { id: string }, inserted: false };
+    }
+  }
+  throw new Error(insertSignal.error?.message || 'Failed to persist MarketPulse signal');
+}
+
 export async function persistMarketPulseSignalForCompany(params: {
   companyId: string;
   signal: MarketPulseSignal;
   impacts: MarketPulseSignalImpact[];
   profile?: CompanyProfileLike | null;
+  provenance?: MarketPulseObservationProvenance;
 }) {
-  const insertSignal = await ownedDbTable('marketpulse_signals')
-    .upsert(params.signal, { onConflict: 'duplicate_key' })
-    .select('*')
-    .single();
-  if (insertSignal.error || !insertSignal.data) {
-    throw new Error(insertSignal.error?.message || 'Failed to persist MarketPulse signal');
-  }
-  const signal = insertSignal.data as MarketPulseSignal & { id: string };
+  const shared = await persistSharedSignalWithoutOverwrite(params.signal);
+  // THIS tenant's observation: its own content over the shared row's identity.
+  // Scoring and the adopted snapshot use it exactly as they used the (formerly
+  // overwritten) shared row, so this tenant's results are unchanged — but the
+  // shared row other tenants reference is no longer mutated.
+  const signal = { ...shared.row, ...params.signal, id: shared.row.id } as MarketPulseSignal & { id: string };
+  const observedAt = params.provenance?.observedAt ?? params.signal.published_at ?? new Date().toISOString();
+  const sourceUrl = params.provenance?.sourceUrl ?? params.signal.source_url ?? null;
   // Phase 3 — route every persisted MarketPulse buying signal through the canonical
   // facade (additive; existing MarketPulse behaviour is unchanged). Fail-open.
-  adoptLead('marketpulse', { ...(signal as unknown as Record<string, unknown>), company_id: params.companyId });
+  // PROVENANCE: the snapshot is THIS tenant's evidence, timed at THIS tenant's
+  // observation, with an explicit category and a namespaced reference (no
+  // `canonical_leads` row exists for a market event, so there is no
+  // contribution to write — see the Agent-2 report).
+  adoptLead('marketpulse', {
+    ...(signal as unknown as Record<string, unknown>),
+    created_at: observedAt,
+    company_id: params.companyId,
+    provenance: {
+      source_category: MARKETPULSE_PROFILE.sourceCategory,
+      platform: MARKETPULSE_PROFILE.platform,
+      external_ref: toNamespacedRef(MARKETPULSE_PROFILE.refProvider, shared.row.id),
+      observed_at: observedAt,
+      source_url: sourceUrl,
+      run_id: params.provenance?.runId ?? null,
+      finding_id: params.provenance?.findingId ?? null,
+      shared_signal_created: shared.inserted,
+      shared_signal_created_at: (shared.row as { created_at?: string }).created_at ?? null,
+    },
+  });
 
   const existingImpacts = await ownedDbTable('marketpulse_signal_impacts').select('id').eq('signal_id', signal.id).limit(1);
   if (!existingImpacts.data?.length && params.impacts.length > 0) {
