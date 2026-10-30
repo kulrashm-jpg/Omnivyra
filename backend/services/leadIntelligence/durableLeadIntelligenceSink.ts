@@ -9,7 +9,10 @@ import { upsertCanonicalLead, appendLeadEvent } from './leadIntelligenceReposito
 export const durableLeadIntelligenceSink: LeadIntelligenceSink = {
   async emit(lead: CanonicalLead): Promise<void> {
     const res = await upsertCanonicalLead(lead);
-    if (!res) return; // unapplied table / write failure → fail-open (adoption unaffected)
+    // Unapplied table / write failure. Previously a silent return; now surfaced
+    // to `adoptLeadAsync`, which keeps the CALLER fail-open but logs and counts
+    // the dropped lead (no silent drop).
+    if (!res) throw new Error(`lead_intelligence upsert returned no row (source ${lead.source})`);
     await appendLeadEvent(lead.organizationId, res.id, {
       origin: lead.sourceRef?.table ?? 'ingest',
       source: lead.source,
