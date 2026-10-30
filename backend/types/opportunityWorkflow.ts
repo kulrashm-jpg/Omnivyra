@@ -57,4 +57,10 @@ export type OpportunityDisposition = {
   set_by_user_id: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
+  /**
+   * Opportunity-level snooze deadline (20270108000000). Only ever set on a
+   * `revisit_later` row (DB CHECK). Optional because rows read before that
+   * migration is applied do not carry the column.
+   */
+  snoozed_until?: string | null;
 };

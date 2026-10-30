@@ -194,11 +194,19 @@ const REQUIRED_COLUMNS = [
   { severity: 'WARN', table: 'opportunity_lifecycle_states', column: 'transitioned_at',     motivation: 'When the status changed (replaces active_leads.status_changed_at).' },
   { severity: 'WARN', table: 'opportunity_lifecycle_states', column: 'actor_user_id',       motivation: 'Who changed the status (replaces active_leads.status_changed_by).' },
   { severity: 'WARN', table: 'opportunity_assignments',      column: 'assigned_to_user_id', motivation: 'Per-opportunity owner (replaces active_leads.owner_user_id).' },
-  // snoozed_until has NO home in the existing schema. Whether snooze is a stored
-  // field, an operational follow-up task, or not a feature is an open OWNER
-  // decision (lifecycle doc D-4). Until decided it stays an INFO finding, so
-  // strict predeploy stays honestly non-green on this one column.
-  { severity: 'INFO', table: 'active_leads', column: 'snoozed_until',     motivation: 'Snooze expiry. OPEN OWNER DECISION D-4 (lifecycle doc): stored field, follow-up task, or not a feature.' },
+  // snoozed_until — DECIDED (owner, 2026-10-30; lifecycle doc D-4): snooze is an
+  // OPPORTUNITY-level workflow property, carried by the existing disposition
+  // model as a typed deadline on a `revisit_later` row (migration
+  // 20270108000000_pi_opportunity_snooze.sql: nullable timestamptz, CHECK
+  // revisit_later-only, partial expiry index, composite tenant FK). The
+  // expectation therefore moves off the legacy-name-colliding active_leads
+  // table onto the real carrier:
+  //   snoozed_until      → opportunity_dispositions.snoozed_until
+  // WARN, like its sibling workflow columns: only the snooze writer inserts it
+  // (every other disposition write omits it), so its absence degrades snooze
+  // and nothing else. Until 20270108000000 is applied in production this is a
+  // WARN finding, so strict predeploy stays honestly non-green.
+  { severity: 'WARN', table: 'opportunity_dispositions',     column: 'snoozed_until',       motivation: 'Opportunity-level snooze deadline on a revisit_later disposition (replaces active_leads.snoozed_until; owner decision D-4, 20270108000000).' },
 
   // opportunity_feed_items — PR-OPA-1 verbatim signal excerpt for the
   // "What was said" UI block. WARN: missing column means new rows
