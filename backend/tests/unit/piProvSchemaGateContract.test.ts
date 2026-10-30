@@ -434,6 +434,10 @@ const PSC_BLOCKING = ['organization_id', 'canonical_lead_id', 'contribution_role
   'external_ref', 'observed_at', 'contact_id', 'platform', 'opportunity_feed_item_id'];
 const SOURCE_RECORDS_NEW = ['source_category', 'platform', 'source_url'];
 const LEAD_INTELLIGENCE_WARN = ['company_id', 'dedupe_key', 'source', 'source_table', 'source_id', 'occurred_at', 'unified_person_id'];
+/** Workstream E (20270108000001): privacy tombstones — erasure fails closed without them. */
+const PSC_REDACTIONS_BLOCKING = ['organization_id', 'contribution_id', 'reason', 'values_sha256'];
+/** Workstream E (20270108000001): per-tenant MarketPulse observations — fail-open writer. */
+const MP_OBSERVATIONS_WARN = ['company_id', 'signal_id', 'observation_key', 'observed_at'];
 /**
  * No active_leads expectation is pending any more: owner decision D-4
  * (2026-10-30) made snooze opportunity-level, carried by
@@ -468,6 +472,8 @@ describe('manifest — no global severity downgrade', () => {
       ...SOURCE_RECORDS_NEW.map((c) => `source_records.${c}`),
       ...LEAD_INTELLIGENCE_WARN.map((c) => `lead_intelligence.${c}`),
       ...ACTIVE_LEADS_TO_LIFECYCLE.map(([, t, c]) => `${t}.${c}`),
+      ...PSC_REDACTIONS_BLOCKING.map((c) => `prospect_source_contribution_redactions.${c}`),
+      ...MP_OBSERVATIONS_WARN.map((c) => `marketpulse_signal_observations.${c}`),
     ]);
     const baseline = new Set(BASELINE_ENTRIES.map(([t, c]) => `${t}.${c}`));
     const unexpected = COLUMNS
@@ -604,6 +610,22 @@ describe('manifest — provenance and lead_intelligence coverage', () => {
 
   it.each(LEAD_INTELLIGENCE_WARN)('lead_intelligence.%s is WARN (fail-open store)', (column) => {
     expect(sevOf('lead_intelligence', column)).toBe('WARN');
+  });
+
+  it.each(PSC_REDACTIONS_BLOCKING)('prospect_source_contribution_redactions.%s is BLOCKING (erasure fails closed)', (column) => {
+    expect(sevOf('prospect_source_contribution_redactions', column)).toBe('BLOCKING');
+  });
+
+  it.each(MP_OBSERVATIONS_WARN)('marketpulse_signal_observations.%s is WARN (fail-open writer)', (column) => {
+    expect(sevOf('marketpulse_signal_observations', column)).toBe('WARN');
+  });
+
+  it('workstream E adds exactly its 8 column entries and no index or type entry', () => {
+    const mine = COLUMNS.filter((c) => c.table === 'prospect_source_contribution_redactions'
+      || c.table === 'marketpulse_signal_observations');
+    expect(mine).toHaveLength(PSC_REDACTIONS_BLOCKING.length + MP_OBSERVATIONS_WARN.length);
+    expect(INDEXES.some((i) => i.table === 'prospect_source_contribution_redactions'
+      || i.table === 'marketpulse_signal_observations')).toBe(false);
   });
 
   it('requires both contract-named provenance indexes with the right uniqueness and partiality', () => {
