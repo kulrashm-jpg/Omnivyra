@@ -12,7 +12,9 @@ import { buildLeadUnderstanding, projectLead, type BuildInput } from './projecti
 import { isLeadUnderstandingEnabled } from './flags';
 
 /** Canonical dimension → legacy field. opportunity/priority have no legacy counterpart (not compared). */
-const LEGACY_MAP: Partial<Record<ScoreDimension, keyof CanonicalLeadScores>> = { intent: 'intent', icp: 'icp', urgency: 'urgency' };
+/** The numeric legacy score fields (CanonicalLeadScores also carries `scale` and `sourceScores`). */
+type LegacyScoreField = 'intent' | 'icp' | 'urgency';
+const LEGACY_MAP: Partial<Record<ScoreDimension, LegacyScoreField>> = { intent: 'intent', icp: 'icp', urgency: 'urgency' };
 
 /** Compare a canonical understanding to the legacy scores. Abstain-vs-abstain counts as agreement. */
 export function compareToLegacy(u: LeadUnderstanding, legacy: CanonicalLeadScores, opts: { tolerance?: number } = {}): ShadowComparison {
@@ -23,7 +25,7 @@ export function compareToLegacy(u: LeadUnderstanding, legacy: CanonicalLeadScore
     const agree = (canonical == null && legacyVal == null) || (delta != null && delta <= tol);
     divergences.push({ dimension, canonical, legacy: legacyVal, delta, agree });
   };
-  for (const [dim, field] of Object.entries(LEGACY_MAP) as Array<[ScoreDimension, keyof CanonicalLeadScores]>) {
+  for (const [dim, field] of Object.entries(LEGACY_MAP) as Array<[ScoreDimension, LegacyScoreField]>) {
     cmp(dim, u.score.dimensions[dim].value, legacy[field] ?? null);
   }
   cmp('overall', u.score.overall, legacy.total ?? null);

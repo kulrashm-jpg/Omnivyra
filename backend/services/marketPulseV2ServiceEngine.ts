@@ -566,6 +566,13 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
         signal,
         impacts,
         profile: (run.context_snapshot?.profile ?? null) as Record<string, unknown> | null,
+        // Owner decision 6 — this tenant's observation is keyed by ITS finding
+        // (idempotent per finding) and carries its run. observedAt is left to the
+        // existing fallback (the signal's published_at), so timing is unchanged.
+        provenance: {
+          runId,
+          findingId: (insertedRow.id as string | undefined) ?? null,
+        },
       });
       await synthesizeMarketPulseIntelligence(companyId);
       await synthesizeMarketPulseBusinessImpact(companyId);

@@ -720,13 +720,14 @@ describe('L10 — tenant isolation at the lifecycle boundary', () => {
             AND array_length(c.conkey, 1) > 1`,
       );
 
-      // The finding either way: no composite tenant foreign key exists, so the
-      // insert is NOT refused by the schema. Tenant correctness at this
-      // boundary rests on the application predicate, which the two tests above
-      // exercise. If a composite key is ever added, this expectation changes
-      // and the test will say so.
-      expect(Number(composite.rows[0].c)).toBe(0);
-      expect(err).toBeNull();
+      // Closure-D (20270109000003) added the composite tenant key
+      // `opp_lifecycle_item_tenant_fk`, as this measurement anticipated
+      // ("if a composite key is ever added, this expectation changes"): the
+      // schema now refuses the cross-tenant citation itself (23503), in
+      // addition to the application predicate the two tests above exercise.
+      expect(Number(composite.rows[0].c)).toBe(1);
+      expect(err?.code).toBe('23503');
+      expect(err?.message).toContain('opp_lifecycle_item_tenant_fk');
     });
   });
 });

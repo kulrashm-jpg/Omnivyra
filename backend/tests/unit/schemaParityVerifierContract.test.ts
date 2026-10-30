@@ -404,6 +404,59 @@ describe('verify-schema-parity — structural dependencies (GAP-B / GAP-C)', () 
   });
 });
 
+/**
+ * Prospect provenance (contract 2026-10-30) — source-level coverage pins, in the
+ * same idiom as GAP-007 above. The runtime proofs (stubbed pg, strict predeploy
+ * mapping, no-downgrade snapshot, ledger pin) live in
+ * piProvSchemaGateContract.test.ts.
+ */
+describe('verify-schema-parity — prospect provenance + lead_intelligence coverage', () => {
+  const entry = (table: string, column: string) =>
+    new RegExp(
+      `severity:\\s*'(BLOCKING|WARN|INFO)',\\s*table:\\s*'${table}',\\s*column:\\s*'${column}'`,
+    );
+
+  it.each([
+    ['prospect_source_contributions', 'organization_id'],
+    ['prospect_source_contributions', 'canonical_lead_id'],
+    ['prospect_source_contributions', 'contribution_role'],
+    ['prospect_source_contributions', 'source_category'],
+    ['prospect_source_contributions', 'external_ref'],
+    ['prospect_source_contributions', 'observed_at'],
+    ['prospect_source_contributions', 'contact_id'],
+    ['prospect_source_contributions', 'platform'],
+    ['prospect_source_contributions', 'opportunity_feed_item_id'],
+    ['source_records', 'source_category'],
+    ['source_records', 'platform'],
+    ['source_records', 'source_url'],
+  ])('classifies %s.%s BLOCKING', (table, column) => {
+    const m = source.match(entry(table, column));
+    expect(m).not.toBeNull();
+    expect((m as RegExpMatchArray)[1]).toBe('BLOCKING');
+  });
+
+  it.each(['company_id', 'dedupe_key', 'source', 'source_table', 'source_id', 'occurred_at', 'unified_person_id'])(
+    'covers lead_intelligence.%s at WARN (fail-open durable store)', (column) => {
+      const m = source.match(entry('lead_intelligence', column));
+      expect(m).not.toBeNull();
+      expect((m as RegExpMatchArray)[1]).toBe('WARN');
+    },
+  );
+
+  it('requires both provenance indexes, idempotency NON-partial and one-originating PARTIAL', () => {
+    expect(source).toMatch(/index: 'uq_psc_org_lead_external_ref',[\s\S]{0,60}unique: true,\s*\n\s*partial: false/);
+    expect(source).toMatch(/index: 'uq_psc_one_originating_per_lead',[\s\S]{0,60}unique: true,\s*\n\s*partial: true/);
+  });
+
+  it('no longer expects the retired / replaced 20260817 columns', () => {
+    for (const column of ['organization_id', 'contact_id', 'source_platforms', 'first_seen_at', 'intent_score',
+      'icp_score', 'confidence_score', 'total_score', 'signal_count', 'last_seen_at', 'last_activity_at', 'company_name']) {
+      expect(source).not.toMatch(entry('active_leads', column));
+    }
+    expect(source).not.toMatch(entry('opportunity_feed_items', 'active_lead_id'));
+  });
+});
+
 describe('verify-schema-parity — runtime exit-code contract', () => {
   it('exits 2, never 0, when no connection string is available', () => {
     const r = run({ ...NO_DB, SCHEMA_PARITY_SKIP_ENV_FILE: '1' });

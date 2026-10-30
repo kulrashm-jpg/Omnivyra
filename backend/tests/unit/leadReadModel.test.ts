@@ -21,7 +21,14 @@ describe('Canonical Lead Intelligence read model', () => {
     expect(v.source).toBe('community');
     expect(v.organizationId).toBe('org1');
     expect(v.scores.total).toBe(0.9);
+    // `table` is the PERSISTED label (lead keys, audience memberships) — it is
+    // never renamed, whatever table the row was physically read from.
     expect(v.sourceRef).toEqual({ table: 'opportunity_feed_items', id: 'o1' });
+  });
+
+  it('records the physical table separately from the persisted sourceRef label', () => {
+    const v = projectExistingRow('community', { id: 'o1', organization_id: 'org1' }, { readFrom: 'active_leads' });
+    expect(v.sourceRef).toEqual({ table: 'opportunity_feed_items', id: 'o1', readFrom: 'active_leads' });
   });
 
   it('in-memory reader filters by org + source', () => {

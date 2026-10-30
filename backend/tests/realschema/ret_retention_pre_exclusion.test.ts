@@ -465,7 +465,14 @@ describe('R4 — both DELETE paths are scoped to the authoritative tenant', () =
       // Protection the tenant-scoped probe cannot see, because the lifecycle
       // row belongs to the OTHER tenant. The guard still fires on the cascade,
       // so the batch is refused and the per-item pass runs.
+      // Since 20270109000003 (closure-D) such a row is unstorable: the
+      // composite FK opp_lifecycle_item_tenant_fk refuses it (23503). The
+      // fixture therefore models a row that PRE-DATES that FK, by suspending
+      // FK enforcement for this one insert only (replica role skips RI
+      // triggers; superuser test DB, rolled back with the scenario).
+      await q(`SET LOCAL session_replication_role = replica`);
       await lifecycleRow(F.lifecycle, ORG_B, F.feedElig1);
+      await q(`SET LOCAL session_replication_role = origin`);
 
       const result = await run();
 

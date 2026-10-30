@@ -428,7 +428,6 @@ describe('INT-001 Phase 4 — read integration', () => {
   const readServiceLeadRow = { id: 'L1', company_id: 'co1', email: 'cto@bigcorp.com', source: 'form_embed' };
   const readers: LeadSourceReaders = {
     durable: async () => [],
-    activeLeads: async () => [],
     leads: async () => [readServiceLeadRow],
     canonicalLeads: async () => [],
   };

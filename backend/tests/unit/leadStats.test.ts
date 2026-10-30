@@ -21,7 +21,7 @@ describe('Repository-owned lead stats + compatibility', () => {
     expect(s.total).toBe(4);
     expect(s.bySource).toEqual({ website: 1, community: 2, crm: 1 });
     expect(s.byStatus).toEqual({ new: 2, reviewing: 1, qualified: 1 });
-    expect(s.intentBands).toEqual({ high: 2, medium: 1, low: 1 });
+    expect(s.intentBands).toEqual({ high: 2, medium: 1, low: 1, unscored: 0 }); // closure C: unscored is its own band
     expect(s.withIdentity).toBe(2);
     expect(s.withCampaign).toBe(1);
   });

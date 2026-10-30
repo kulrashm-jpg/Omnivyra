@@ -13,6 +13,8 @@ import { normalizeSource, type UnifiedSource } from './sourceNormalizationServic
 import { ownedDbTable } from '../db/writeOwner';
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 import { ingestSourceRecord } from './prospectIdentity/ingestionBoundary';
+import { LEGACY_CRM_PROFILE, prospectKeyCandidates, toNamespacedRef } from './prospectProvenance/ingestion/sourceProfiles';
+import { recordObservedContribution, sourceObservedAt } from './prospectProvenance/ingestion/recordContribution';
 
 export interface CrmLeadRecord {
   externalId?: string | null;
@@ -107,10 +109,12 @@ function buildCrmIdentityExternalKeys(row: CrmLeadRecord): IdentityExternalKeys 
  * obsolete CRM writer rather than restore legacy schema so it can keep running —
  * so that migration stays unapplied, deliberately.
  *
- * The same column on the CANONICAL tables is untouched and still required:
- * `upsertCanonicalLead`, `upsertRevenueEvent` and the `adoptLead` facade all
- * still set it, and `lib/leadIntelligence/adapters.ts` still reads it off
- * `canonical_leads`. Only the `leads` write was obsolete.
+ * PROVENANCE (2026-10-30): production's `canonical_leads` has no
+ * `unified_source` column either (10 columns, verified read-only), so
+ * `upsertCanonicalLead` no longer writes it — the write could only fail. The
+ * information is not dropped: it travels on the CRM `prospect_source_contributions`
+ * row as `source_metadata.unifiedSource`, and still on the `adoptLead` row.
+ * `upsertRevenueEvent` is unchanged.
  *
  * ─── WHAT WENT WITH IT, DELIBERATELY ──────────────────────────────────────
  * The dedupe on (company_id, email, source); a SECOND identity call
@@ -172,53 +176,119 @@ async function upsertCanonicalUser(
   return (data as { id: string }).id;
 }
 
+/**
+ * Create the canonical CRM lead, or update ONLY the CRM's mutable state on one
+ * that already exists.
+ *
+ * PROVENANCE (2026-10-30): a resync must not replace the prospect's original
+ * `source`, `created_at` (discovery time) or originating evidence
+ * (`lead_metadata`). Those are written on INSERT only; an existing row receives
+ * the CRM's current `lead_status` and `qualification_score`, and its person
+ * anchor only when it has none. What the resync said is recorded as a
+ * `contributing` contribution by the caller instead.
+ *
+ * Keys: new rows are written under the namespaced key (`crm:<id>`); lookup tries
+ * that first and then the LEGACY raw key, so the prospects production already
+ * holds (raw keys) are matched, never duplicated.
+ */
+/**
+ * The CRM qualification score (percent, 0..100), or null when UNSCORED.
+ *
+ * closure C: the score is derived from the CRM's revenue only. A row with no
+ * usable revenue gives the scorer nothing to score, so it is unscored (NULL) —
+ * it used to be stamped 40, a value no evidence supported. A row WITH revenue
+ * keeps the existing rule exactly (floor 40, revenue/100, cap 100), so this
+ * scorer never emits 0 and needs no `qualificationScoring` marker.
+ */
+export function crmQualificationScore(revenue: unknown): number | null {
+  if (revenue === null || revenue === undefined || (typeof revenue === 'string' && revenue.trim() === '')) return null;
+  const n = typeof revenue === 'number' ? revenue : Number(revenue);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(100, Math.max(40, Math.round(n / 100)));
+}
+
 async function upsertCanonicalLead(params: {
   companyId: string;
   userId: string;
   leadKey: string;
   source: string;
   createdAt: string;
-  qualificationScore: number;
+  /** closure C: null = unscored (the CRM gave no revenue to score from). */
+  qualificationScore: number | null;
   row: CrmLeadRecord;
-  unifiedSource: UnifiedSource;
   unifiedPersonId: string;
-}): Promise<string> {
+}): Promise<{ id: string; created: boolean; matchedKey: 'namespaced' | 'legacy' | null; prospectKey: string }> {
+  const keys = prospectKeyCandidates(LEGACY_CRM_PROFILE.refProvider, params.leadKey)!;
+
+  const findByKey = async (key: string): Promise<{ id: string; unified_person_id: string | null } | null> => {
+    const { data: existing, error: existingError } = await ownedDbTable('canonical_leads')
+      .select('id, unified_person_id')
+      .eq('company_id', params.companyId)
+      .eq('external_lead_key', key)
+      .maybeSingle();
+    if (existingError) {
+      throw new Error(`Failed to check CRM lead: ${existingError.message}`);
+    }
+    const found = existing as { id?: string; unified_person_id?: string | null } | null;
+    return found?.id ? { id: found.id, unified_person_id: found.unified_person_id ?? null } : null;
+  };
+
+  let existing = await findByKey(keys.namespaced);
+  let matchedKey: 'namespaced' | 'legacy' | null = existing ? 'namespaced' : null;
+  if (!existing && keys.legacy) {
+    existing = await findByKey(keys.legacy);
+    if (existing) matchedKey = 'legacy';
+  }
+
+  if (existing) {
+    const update: Record<string, unknown> = {
+      lead_status: params.row.status ?? null,
+      qualification_score: params.qualificationScore,
+    };
+    if (!existing.unified_person_id) update.unified_person_id = params.unifiedPersonId;
+    let { error } = await ownedDbTable('canonical_leads')
+      .update(update)
+      .eq('id', existing.id)
+      .eq('company_id', params.companyId);
+    if (error?.code === '23502' && params.qualificationScore === null) {
+      // closure C deploy tolerance: before 20270109000002 the column is NOT NULL.
+      // Keep the stored value rather than fail the import; never write a fake 0.
+      const { qualification_score: _unscored, ...withoutScore } = update;
+      ({ error } = await ownedDbTable('canonical_leads')
+        .update(withoutScore)
+        .eq('id', existing.id)
+        .eq('company_id', params.companyId));
+    }
+    if (error) {
+      throw new Error(`Failed to update CRM lead: ${error.message}`);
+    }
+    return {
+      id: existing.id,
+      created: false,
+      matchedKey,
+      prospectKey: matchedKey === 'legacy' && keys.legacy ? keys.legacy : keys.namespaced,
+    };
+  }
+
   const payload = {
     company_id: params.companyId,
     user_id: params.userId,
     unified_person_id: params.unifiedPersonId,
     source: params.source,
     created_at: params.createdAt,
-    qualification_score: params.qualificationScore,
-    external_lead_key: params.leadKey,
+    // closure C: an unscored row OMITS the column — NULL once 20270109000002 is
+    // applied (no default); before it, the old default 0, which readers treat as
+    // the legacy default (unscored), never as a score.
+    ...(params.qualificationScore === null ? {} : { qualification_score: params.qualificationScore }),
+    external_lead_key: keys.namespaced,
     lead_status: params.row.status ?? null,
     lead_metadata: params.row.metadata ?? {},
-    unified_source: params.unifiedSource,
   };
-
-  const { data: existing, error: existingError } = await ownedDbTable('canonical_leads')
-    .select('id')
-    .eq('company_id', params.companyId)
-    .eq('external_lead_key', params.leadKey)
-    .maybeSingle();
-
-  if (existingError) {
-    throw new Error(`Failed to check CRM lead: ${existingError.message}`);
-  }
-
-  if (existing?.id) {
-    const { error } = await ownedDbTable('canonical_leads').update(payload).eq('id', existing.id);
-    if (error) {
-      throw new Error(`Failed to update CRM lead: ${error.message}`);
-    }
-    return existing.id;
-  }
-
   const { data, error } = await ownedDbTable('canonical_leads').insert(payload).select('id').single();
   if (error) {
     throw new Error(`Failed to insert CRM lead: ${error.message}`);
   }
-  return (data as { id: string }).id;
+  return { id: (data as { id: string }).id, created: true, matchedKey: null, prospectKey: keys.namespaced };
 }
 
 async function upsertRevenueEvent(params: {
@@ -309,13 +379,16 @@ async function recordCrmProspectProvenance(params: {
   sourceRecordId: string;
   observedAt: string | null;
   ingestionRunId?: string | null;
-}): Promise<void> {
+}): Promise<string | null> {
   try {
-    await ingestSourceRecord({
+    const result = await ingestSourceRecord({
       organizationId: params.companyId,          // TENANT — never the prospect's employer
       provider: params.provider,
       entityType: 'person',
       sourceRecordId: params.sourceRecordId,
+      // Typed provenance on the source record, matching the CRM contribution.
+      sourceCategory: 'crm',
+      platform: params.provider,
       // The prospect-shaped subset, verbatim. `redactSecrets` and the payload
       // hash are applied by the boundary itself, so change detection and
       // credential stripping are not re-implemented here.
@@ -336,8 +409,10 @@ async function recordCrmProspectProvenance(params: {
       // never overwrites, so no provider precedence is introduced here.
       personAttributes: { fullName: params.row.name ?? null },
     });
+    return (result as { sourceRecordId?: string } | undefined)?.sourceRecordId ?? null;
   } catch (err) {
     console.warn('[crmIngestion] prospect provenance skipped:', (err as Error)?.message);
+    return null;
   }
 }
 
@@ -377,7 +452,7 @@ async function ingestCrmRows(
     // does not, `leadKey` is the deterministic row identity the service already
     // computes for this record — a hash, not a row number and not an email —
     // which is exactly what the LI-2 contract asks of a file-shaped source.
-    await recordCrmProspectProvenance({
+    const crmSourceRecordId = await recordCrmProspectProvenance({
       companyId,
       row,
       provider: source,
@@ -389,9 +464,9 @@ async function ingestCrmRows(
 
     const userId = await upsertCanonicalUser(companyId, row, userKey, identity.unifiedPersonId);
 
-    const qualificationScore = row.revenue != null ? Math.min(100, Math.max(40, Math.round(safeNumber(row.revenue, 0) / 100))) : 40;
+    const qualificationScore = crmQualificationScore(row.revenue);
 
-    const leadId = await upsertCanonicalLead({
+    const canonicalLead = await upsertCanonicalLead({
       companyId,
       userId,
       leadKey,
@@ -399,8 +474,39 @@ async function ingestCrmRows(
       createdAt,
       qualificationScore,
       row,
-      unifiedSource,
       unifiedPersonId: identity.unifiedPersonId,
+    });
+    const leadId = canonicalLead.id;
+
+    // PROVENANCE: originating when THIS row created the prospect, contributing
+    // on every resync. Never throws (failures are logged + counted), so the
+    // revenue pipeline below is unaffected.
+    const observed = sourceObservedAt(row.createdAt, new Date().toISOString());
+    await recordObservedContribution('legacy_crm', {
+      organizationId: companyId,
+      canonicalLeadId: leadId,
+      leadCreated: canonicalLead.created,
+      sourceCategory: LEGACY_CRM_PROFILE.sourceCategory,
+      externalRef: toNamespacedRef(LEGACY_CRM_PROFILE.refProvider, row.externalId?.trim() || leadKey),
+      sourceRecordId: crmSourceRecordId,
+      platform: LEGACY_CRM_PROFILE.platform,
+      observedAt: observed.observedAt,
+      ingestionRunId: options.ingestionRunId ?? null,
+      evidence: {
+        crmExternalId: row.externalId ?? null,
+        externalLeadKey: canonicalLead.prospectKey,
+        sourceRecordId: crmSourceRecordId,
+        canonicalUserId: userId,
+      },
+      sourceMetadata: {
+        path: 'legacy_crm_ingestion',
+        crmLeadSource: source,
+        crmStatus: row.status ?? null,
+        unifiedSource,
+        observedAtBasis: observed.observedAtBasis,
+        prospectMatchedBy: canonicalLead.matchedKey,
+        ...(row.campaignId ? { campaignId: row.campaignId } : {}),
+      },
     });
 
     // Phase 3 — route every imported CRM lead through the canonical facade

@@ -52,8 +52,10 @@
  *
  * It does not delete a governance record, ever. It does not weaken, narrow or
  * drop a suppression that it can still enforce. It does not touch outreach
- * history, delivery evidence, decisions or source records — those carry their
- * own SET NULL edges and survive by design. It sets no retention period:
+ * history, delivery evidence or decisions — those carry their own SET NULL
+ * edges and survive by design. Source records and the other provenance /
+ * evidence rows are REDACTED in place (never deleted) by step 6; the per-table
+ * policy is docs/architecture/PROSPECT-PROVENANCE-ERASURE-POLICY.md. It sets no retention period:
  * retention is undecided and inventing one here would decide it silently.
  *
  * It does not surface a residual identifier. The re-anchored records carry the
@@ -88,6 +90,11 @@ import {
   type PersonContactPoint,
   type PersonErasurePlan,
 } from './erasurePlan';
+import {
+  eraseProspectProvenance,
+  ProvenanceRedactionError,
+  type EraseProvenanceResult,
+} from '../prospectProvenance/redaction';
 
 // The planner's surface stays importable from here, unchanged: `index.ts` and
 // the WS-F tests reach erasure through this module and must not have to know
@@ -119,6 +126,11 @@ export interface ErasePersonInput {
   reason: string;
   /** Injected, never read from a clock — the same discipline as `mayContact`. */
   now?: string;
+  /**
+   * Who asked for the erasure (actor id or system label). Recorded on every
+   * provenance redaction tombstone. Defaults to `person_erasure`.
+   */
+  requestedBy?: string;
 }
 
 export interface ErasePersonResult {
@@ -135,6 +147,15 @@ export interface ErasePersonResult {
    * the caller is expected to log or alarm on a non-empty array.
    */
   suppressionsLostToErasure: GovernanceErasureAction[];
+  /**
+   * Owner decision 8, completed by closure A (20270109000000) — erasure of the
+   * person's whole provenance/evidence graph (contributions incl. external_ref,
+   * person source records and assertions, contacts, signals, feed items,
+   * engagement text, lead_intelligence, prospect metadata), one transaction,
+   * with an audit event (`erasureId`) that holds no value and no person id.
+   * Rows are redacted, not deleted. See PROSPECT-PROVENANCE-ERASURE-POLICY.md.
+   */
+  provenanceRedaction: EraseProvenanceResult;
 }
 
 /**
@@ -240,7 +261,31 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
   //    person is not deleted.
   await clearPersonEvidenceAccountLinks(input.organizationId, input.personId);
 
-  // 6. The erasure itself.
+  // 6. Owner decision 8 / closure A — erase the person's provenance graph
+  //    while every link to the person still exists (canonical_leads, contacts,
+  //    threads, source_records and canonical_users are ON DELETE SET NULL;
+  //    lead_intelligence is RESTRICT and is unlinked by the function). ALWAYS
+  //    called, not only when the person has prospects: source records,
+  //    contacts and engagement threads exist without one. One transaction in
+  //    the database; idempotent, so a retry after a later failure is safe.
+  //    FAIL CLOSED: any failure (including an undeployed function) throws and
+  //    the person is not deleted.
+  let provenanceRedaction: ErasePersonResult['provenanceRedaction'];
+  try {
+    provenanceRedaction = await eraseProspectProvenance({
+      organizationId: input.organizationId,
+      personId: input.personId,
+      reason: `person erased: ${input.reason}`,
+      requestedBy: input.requestedBy?.trim() || ERASURE_SOURCE,
+    });
+  } catch (err) {
+    throw new PersonErasureError(
+      `could not redact the person's prospect provenance: ${(err as Error).message}`,
+      err instanceof ProvenanceRedactionError ? `provenance_${err.code}` : 'provenance_redaction_failed',
+    );
+  }
+
+  // 7. The erasure itself.
   const deleted = await deletePersonRow(input.organizationId, input.personId);
 
   return {
@@ -251,6 +296,7 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
     reanchored,
     revoked,
     suppressionsLostToErasure: plan.actions.filter((a) => a.disposition === 'unenforceable'),
+    provenanceRedaction,
   };
 }
 

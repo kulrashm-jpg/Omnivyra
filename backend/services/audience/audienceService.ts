@@ -16,7 +16,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
-import { searchLeads } from '../leadIntelligence/leadIntelligenceReadService';
+import { listAllLeads } from '../leadIntelligence/leadIntelligenceReadService';
 import { leadKeyFor, type CanonicalLeadView } from '../../../lib/leadIntelligence';
 import { evaluateRules, isNonEmptyRules, type RuleGroup, type EvalContext } from '../../../lib/audience/segmentation';
 
@@ -84,17 +84,51 @@ async function loadOperationalMap(companyId: string): Promise<Map<string, { stat
   return map;
 }
 
+/**
+ * The membership key for a (possibly merged) lead. A lead that absorbed a durable
+ * signal record (signal merge) keeps resolving through that record's persisted key:
+ * if this audience already holds a membership under the lead's own key, that key
+ * is used; otherwise under one of its alias keys (first in sorted order), that
+ * alias is used; otherwise the lead's own key. Persisted keys are never rewritten,
+ * and a merged lead is ONE member.
+ */
+export function membershipKeyFor(view: CanonicalLeadView, existing: ReadonlySet<string> = new Set()): string {
+  const own = leadKeyFor(view);
+  if (existing.has(own)) return own;
+  for (const alias of view.aliasKeys ?? []) if (existing.has(alias)) return alias;
+  return own;
+}
+
+/** Operational overlay of a lead: under its own key, else under any alias key (merged durable record). */
+function operationalFor<T>(view: CanonicalLeadView, entityId: string, opMap: Map<string, T>): T | undefined {
+  const hit = opMap.get(entityId) ?? opMap.get(leadKeyFor(view));
+  if (hit) return hit;
+  for (const alias of view.aliasKeys ?? []) { const a = opMap.get(alias); if (a) return a; }
+  return undefined;
+}
+
+/** Entity ids already holding a membership of this audience (alias-stable membership keys). One read; fail-open. */
+async function loadMembershipKeys(companyId: string, audienceId: string): Promise<Set<string>> {
+  try {
+    const { data } = await ownedDbTable(M).select('entity_id').eq('company_id', companyId).eq('audience_id', audienceId)
+      .eq('entity_type', 'canonical_lead').limit(20000);
+    return new Set(((data as Array<{ entity_id?: unknown }>) ?? []).map((r) => String(r.entity_id ?? '')).filter(Boolean));
+  } catch { return new Set(); }
+}
+
 /** Evaluate an audience's rules over the unified lead views. Pure of persistence. */
-async function evaluateMembers(companyId: string, rules: RuleGroup): Promise<EvaluatedMember[]> {
+async function evaluateMembers(companyId: string, rules: RuleGroup, existingKeys: ReadonlySet<string> = new Set()): Promise<EvaluatedMember[]> {
   if (!isNonEmptyRules(rules)) return [];
   const [{ rows }, opMap] = await Promise.all([
-    searchLeads({ companyId, page: { limit: 5000, offset: 0 } }),
+    // The whole set. `searchLeads` clamps a page to 500, so audiences used to
+    // evaluate only 500 leads and the stale pass then deactivated the rest.
+    listAllLeads({ companyId }),
     loadOperationalMap(companyId),
   ]);
   const out: EvaluatedMember[] = [];
   for (const view of rows) {
-    const entityId = leadKeyFor(view);
-    const ctx: EvalContext = { view, operational: opMap.get(entityId) };
+    const entityId = membershipKeyFor(view, existingKeys);
+    const ctx: EvalContext = { view, operational: operationalFor(view, entityId, opMap) };
     const r = evaluateRules(ctx, rules);
     if (r.matched) out.push({ entityId, view, matchedRules: r.matchedRules, evidence: r.evidence, confidence: r.confidence });
   }
@@ -116,7 +150,7 @@ export async function evaluateAudience(companyId: string, audienceId: string): P
   const audience = await getAudience(companyId, audienceId);
   if (!audience) throw new AudienceError('not_found', 404);
   const runAt = now();
-  const members = await evaluateMembers(companyId, audience.rules as RuleGroup);
+  const members = await evaluateMembers(companyId, audience.rules as RuleGroup, await loadMembershipKeys(companyId, audienceId));
 
   for (const m of members) {
     await ownedDbTable(M).upsert({
@@ -145,20 +179,39 @@ export async function explainMembership(companyId: string, audienceId: string, e
 
 /* ── Audience intelligence (aggregate existing intelligence; no new scorer) ──── */
 
-export interface AudienceIntelligence { members: number; avgIntent: number; intentBands: { high: number; medium: number; low: number }; bySource: Record<string, number> }
+/**
+ * closure C: `avgIntent` and the high/medium/low bands cover SCORED members only;
+ * `intentBands.unscored` counts members with no score (never averaged in as 0).
+ * `avgIntent` is 0 when no member is scored — read it together with `scoredMembers`.
+ */
+export interface AudienceIntelligence { members: number; scoredMembers: number; avgIntent: number; intentBands: { high: number; medium: number; low: number; unscored: number }; bySource: Record<string, number>; byOriginCategory: Record<string, number> }
 
-function buildAudienceIntelligence(members: EvaluatedMember[]): AudienceIntelligence {
-  const bands = { high: 0, medium: 0, low: 0 };
+export function buildAudienceIntelligence(members: EvaluatedMember[]): AudienceIntelligence {
+  const bands = { high: 0, medium: 0, low: 0, unscored: 0 };
   const bySource: Record<string, number> = {};
+  const byOriginCategory: Record<string, number> = {};
   let intentSum = 0;
-  const norm = (v: unknown): number => { const n = typeof v === 'number' ? v : Number(v); return !Number.isFinite(n) ? 0 : (n > 1 ? Math.min(1, n / 100) : Math.max(0, n)); };
+  let scored = 0;
+  // View scores are unit (0..1) by contract — adapters convert explicitly with
+  // toUnitScore — so no scale is guessed here.
+  const norm = (v: unknown): number | null => {
+    if (v === null || v === undefined || v === '') return null;
+    const n = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+  };
   for (const m of members) {
-    const intent = norm(m.view.scores.intent ?? m.view.scores.total ?? 0);
-    intentSum += intent;
-    if (intent >= 0.7) bands.high++; else if (intent >= 0.4) bands.medium++; else bands.low++;
+    const intent = norm(m.view.scores.intent ?? m.view.scores.total ?? null);
+    if (intent === null) bands.unscored++;
+    else {
+      intentSum += intent;
+      scored++;
+      if (intent >= 0.7) bands.high++; else if (intent >= 0.4) bands.medium++; else bands.low++;
+    }
     bySource[m.view.source] = (bySource[m.view.source] ?? 0) + 1;
+    const origin = m.view.origin?.category ?? 'unknown';
+    byOriginCategory[origin] = (byOriginCategory[origin] ?? 0) + 1;
   }
-  return { members: members.length, avgIntent: members.length ? Number((intentSum / members.length).toFixed(3)) : 0, intentBands: bands, bySource };
+  return { members: members.length, scoredMembers: scored, avgIntent: scored ? Number((intentSum / scored).toFixed(3)) : 0, intentBands: bands, bySource, byOriginCategory };
 }
 
 export async function getAudienceIntelligence(companyId: string, audienceId: string): Promise<AudienceIntelligence> {

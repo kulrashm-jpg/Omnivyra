@@ -37,7 +37,8 @@ import type {
 import { SIGNAL_EXCERPT_MAX_LENGTH, TYPE_VALUE_MULTIPLIER } from '../types/opportunityFeed';
 import type { RawSignal } from '../types/listeningConnector';
 import type { ModerationDecision } from './moderation/moderationGateService';
-import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
+import { adoptLeadAsync } from './leadIntelligence/leadIntelligenceRuntime';
+import { bridgeCommunityFeedItem, withCommunityAuthorIdentity } from './prospectProvenance/communityBridge';
 
 // ---------------------------------------------------------------------------
 // PR-OPA-6 — Value-aware priority ranking
@@ -557,7 +558,9 @@ export async function recordOpportunityFromSignal(
 
   // Phase 3 — a newly classified community opportunity also becomes a canonical
   // Lead Intelligence record (Active Leads continues to roll these up). Fail-open.
-  adoptLead('community', feedItem as unknown as Record<string, unknown>);
+  // Then (A4) the same item is bridged into the canonical PI prospect model with
+  // its provenance — only when the existing PI ingestion gate allows the tenant.
+  await adoptAndBridgeCommunityFeedItem(feedItem as unknown as Record<string, unknown>);
 
   return {
     feed_item: feedItem,
@@ -567,6 +570,36 @@ export async function recordOpportunityFromSignal(
       matched_keywords: classification.matched_keywords,
     },
   };
+}
+
+/**
+ * Lead Intelligence adoption, then the provenance bridge — in that order, and
+ * awaited (this runs in the listening worker, sequentially per signal).
+ *
+ * Serialised: two signals from one author in one execution converge on one
+ * prospect (the bridge finds the first one by the author's normalised social
+ * identity). Neither step creates a person from the author's handle (owner
+ * decision 2026-10-30): adoption's identity port and the bridge only LINK a
+ * verified person (prospectProvenance/bridge/verifiedIdentity.ts).
+ *
+ * Neither step can throw: `adoptLeadAsync` is fail-open and the bridge returns
+ * an observed outcome. The guard below exists so that even a defect there can
+ * never cost the tenant the feed item that is already durable.
+ *
+ * The adoption row lifts `author_metadata.platform_user_id` to the top level
+ * (`withCommunityAuthorIdentity`), so the community adapter keeps the author id
+ * as identity EVIDENCE on the lead; every original key is preserved.
+ */
+async function adoptAndBridgeCommunityFeedItem(feedItem: Record<string, unknown>): Promise<void> {
+  try {
+    await adoptLeadAsync('community', withCommunityAuthorIdentity(feedItem));
+    await bridgeCommunityFeedItem(feedItem);
+  } catch (err) {
+    console.warn('[opportunityFeed] adoption/bridge guard tripped', {
+      feedItemId: feedItem?.id ?? null,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function buildDetectedReason(type: OpportunityType, matched: string[]): string {

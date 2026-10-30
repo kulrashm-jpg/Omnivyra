@@ -80,6 +80,20 @@ export interface ProspectCandidate {
   fullName?: string | null;
   /** Free-form source detail, preserved as provenance on both rows. */
   metadata?: Record<string, unknown>;
+  /**
+   * PROVENANCE (prospect-provenance contract): the NAMESPACED identity key
+   * (`<provider>:<id>`). Optional and additive. When present it is tried FIRST,
+   * then `externalLeadKey` is tried as the LEGACY raw key — production's
+   * existing `external_lead_key` values are raw, so a resync must still converge
+   * on them rather than mint a duplicate. A new prospect is created under the
+   * namespaced key. When absent, resolution is exactly as before.
+   */
+  namespacedExternalLeadKey?: string | null;
+  /**
+   * Provenance classification stamped into `lead_metadata.provenance` when, and
+   * only when, this call CREATES the prospect. Never written onto an existing row.
+   */
+  provenance?: { sourceCategory: string; platform: string | null; externalRef: string } | null;
 }
 
 export interface ProspectResolution {
@@ -89,6 +103,8 @@ export interface ProspectResolution {
   outcome: ProspectOutcome;
   externalLeadKey: string | null;
   reason: string;
+  /** Which key matched an existing prospect (only with `namespacedExternalLeadKey`). */
+  matchedKey?: 'namespaced' | 'legacy';
 }
 
 const clean = (v: unknown): string | null => {
@@ -117,7 +133,10 @@ export async function resolveProspectShadow(
 ): Promise<ProspectResolution> {
   if (!organizationId?.trim()) throw new Error('organizationId is required for prospect resolution');
 
-  const key = clean(candidate.externalLeadKey);
+  const legacyKey = clean(candidate.externalLeadKey);
+  const namespacedKey = clean(candidate.namespacedExternalLeadKey);
+  // The key a NEW prospect would be created under.
+  const key = namespacedKey ?? legacyKey;
   const base = { organizationId, externalLeadKey: key, subjectId: null };
 
   if (!key) {
@@ -126,9 +145,21 @@ export async function resolveProspectShadow(
   }
 
   const found = await findByExternalKey(organizationId, key);
-  return found
-    ? { ...base, prospectId: found, outcome: 'matched', reason: 'matched an existing prospect by the source key' }
-    : { ...base, prospectId: null, outcome: 'insufficient_evidence', reason: 'no existing prospect matches this source key' };
+  if (found) {
+    return { ...base, prospectId: found, outcome: 'matched',
+      reason: 'matched an existing prospect by the source key',
+      ...(namespacedKey ? { matchedKey: 'namespaced' as const } : {}) };
+  }
+
+  // Legacy compatibility: rows written before namespacing carry the raw key.
+  if (namespacedKey && legacyKey && legacyKey !== namespacedKey) {
+    const legacy = await findByExternalKey(organizationId, legacyKey);
+    if (legacy) {
+      return { ...base, externalLeadKey: legacyKey, prospectId: legacy, outcome: 'matched',
+        reason: 'matched an existing prospect by its legacy (un-namespaced) source key', matchedKey: 'legacy' };
+    }
+  }
+  return { ...base, prospectId: null, outcome: 'insufficient_evidence', reason: 'no existing prospect matches this source key' };
 }
 
 /**
@@ -186,9 +217,13 @@ async function resolveSubject(
  * partial unique index (`23505`) and we re-resolve rather than retrying
  * blindly, so two workers converge on one Prospect.
  *
- * `qualification_score` is deliberately left to its column default of 0 and is
- * never written here: scoring belongs to WS-6, and a resolver that seeded a
- * score would put a second scoring authority in the identity layer.
+ * `qualification_score` is deliberately OMITTED and never written here:
+ * scoring belongs to WS-6, and a resolver that seeded a score would put a
+ * second scoring authority in the identity layer. closure C: since
+ * 20270109000002 the column has no default, so an omitted score is NULL
+ * (unscored). Before that migration the old default 0 lands, which readers
+ * treat as the legacy default — unscored — never as a 0 score
+ * (lib/prospectProvenance/scoreSemantics.ts).
  */
 export async function resolveOrCreateProspect(
   organizationId: string,
@@ -223,6 +258,7 @@ export async function resolveOrCreateProspect(
       createdBy: WS1_SOURCE,
       observedAt: at,
       ...(candidate.metadata ?? {}),
+      ...(candidate.provenance ? { provenance: candidate.provenance } : {}),
     },
   };
 

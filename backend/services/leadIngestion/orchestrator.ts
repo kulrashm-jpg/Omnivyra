@@ -34,6 +34,10 @@ import { ingestSourceRecord } from '../prospectIdentity/ingestionBoundary';
 import { resolveUnifiedPerson } from '../identityResolutionService';
 import { resolveOrCreateAccount, attachPersonToAccount } from '../prospectIdentity/accountResolution';
 import { resolveOrCreateProspect } from '../prospectIdentity/prospectResolution';
+import { piProspectCandidateKeys, recordPiIngestionContribution } from '../prospectProvenance/ingestion/piIngestionContribution';
+import type { ProviderSourceRecord } from '../prospectIdentity/ingestionBoundary';
+
+type ProviderSourceCategory = ProviderSourceRecord['sourceCategory'];
 import { planProspectEnrichment, type EnrichmentPorts } from '../enrichment/service';
 import { ingestionEnrichmentCoverage } from './enrichmentCoverage';
 import { detectAndParkDuplicates } from '../prospectIdentity/personDuplicates';
@@ -344,10 +348,18 @@ export async function ingestNormalizedRecord(
   // WS-1 refuses to synthesise an identity key precisely because a fabricated
   // one would mint a new Prospect on every replay. Only a genuine resolver
   // error fails the record, matching how employer resolution already behaves.
+  //
+  // The provider-namespaced key (`apollo:<id>`) is tried first and the legacy
+  // raw key second, so prospects created before namespacing are matched, not
+  // duplicated. Provider knowledge stays in the provenance helper.
   let prospectId: string | null = null;
+  let prospect: Awaited<ReturnType<typeof resolveOrCreateProspect>> | null = null;
+  const keys = piProspectCandidateKeys(record.source, record.externalId);
   try {
-    const prospect = await resolveOrCreateProspect(record.organizationId, {
-      externalLeadKey: record.externalId,
+    prospect = await resolveOrCreateProspect(record.organizationId, {
+      externalLeadKey: keys.externalLeadKey,
+      namespacedExternalLeadKey: keys.namespacedExternalLeadKey,
+      provenance: keys.provenance,
       source: record.source,
       personId,
       email: record.person?.email ?? null,
@@ -423,6 +435,8 @@ export async function ingestNormalizedRecord(
       } : undefined,
       accountAttributes: record.entityType === 'account' ? toAccountAttributeInput(record.account) : undefined,
       confidence: record.confidence ?? null,
+      sourceCategory: (keys.provenance?.sourceCategory ?? null) as ProviderSourceCategory,
+      platform: keys.provenance?.platform ?? null,
     }, at);
   } catch (e) {
     return fail(externalId, 'provenance_failed', e);
@@ -467,6 +481,41 @@ export async function ingestNormalizedRecord(
       // record rather than proceeding with a half-known employer.
       return fail(externalId, 'provenance_failed', e);
     }
+  }
+
+  // ── SOURCE CONTRIBUTION ─────────────────────────────────────────────────
+  // Lead-level provenance: which source originated this prospect and which
+  // contributed later. Never fails the record — the helper counts and logs
+  // its own outcome — because the evidence above is already durable.
+  if (prospect) {
+    await recordPiIngestionContribution({
+      organizationId: record.organizationId,
+      adapterSource: record.source,
+      externalId: record.externalId,
+      prospect,
+      sourceRecordId: ingestion.sourceRecordId,
+      observedAt: record.observedAt ?? null,
+      ingestedAt: at,
+      ingestionRunId: options.ingestionRunId ?? null,
+      personId,
+      accountId,
+    });
+  }
+
+  // ── IDENTITY RECONCILIATION (closure-B) ─────────────────────────────────
+  // A community author may have been seen (person-less, handle-anchored
+  // prospect) before this discovery resolved the person. When that handle is
+  // VERIFIED to this person by the existing rule (one active, linked
+  // identity_claims external_id row in this tenant), the prospects of that one
+  // identity are folded onto ONE survivor by an append-only alias — nothing is
+  // deleted, re-keyed or re-originated. Lazily loaded and fail-open: it never
+  // fails the record (the evidence above is durable), and it reports its own
+  // failures. No verified handle ⇒ one read, no write.
+  if (personId && prospectId) {
+    try {
+      const { reconcileVerifiedPersonIdentities } = await import('../prospectProvenance/identityReconciliation');
+      await reconcileVerifiedPersonIdentities(record.organizationId, personId);
+    } catch { /* fail-open: reconciliation reports its own outcome */ }
   }
 
   // ── DUPLICATE PARKING ───────────────────────────────────────────────────

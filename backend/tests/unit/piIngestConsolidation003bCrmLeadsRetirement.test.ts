@@ -180,8 +180,10 @@ describe('003-B-R1 — CRM ingestion retires the legacy leads write', () => {
 
   it('every table it writes is a canonical one', () => {
     const written = Array.from(new Set(ops.filter((o) => o.op !== 'select').map((o) => o.table)));
+    // PROSPECT PROVENANCE (2026-10-30): the append-only contribution table is the
+    // one deliberate addition, written only through the provenance writer.
     for (const t of written) {
-      expect(['canonical_users', 'canonical_leads', 'canonical_revenue_events']).toContain(t);
+      expect(['canonical_users', 'canonical_leads', 'canonical_revenue_events', 'prospect_source_contributions']).toContain(t);
     }
   });
 
@@ -190,7 +192,7 @@ describe('003-B-R1 — CRM ingestion retires the legacy leads write', () => {
     // `.eq('company_id', …)`; the service-level assertion lives in 001-A. Here we
     // prove no write escaped to a table outside the tenant-scoped canonical set.
     expect(writesTo('leads')).toEqual([]);
-    expect(tablesTouched().every((t) => t.startsWith('canonical_'))).toBe(true);
+    expect(tablesTouched().every((t) => t.startsWith('canonical_') || t === 'prospect_source_contributions')).toBe(true);
   });
 });
 

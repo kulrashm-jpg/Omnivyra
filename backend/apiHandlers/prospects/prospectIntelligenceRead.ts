@@ -40,6 +40,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
+import { QUALIFICATION_SCORE_MARKER, readQualificationScore } from '../../../lib/prospectProvenance/scoreSemantics';
 import { readProspectEngagementIntelligence } from '../../services/engagement/prospectEngagementIntelligence';
 import { aggregateAccountIntelligence } from '../../services/prospectIdentity/accountIntelligence';
 import { buildProspectIntelligenceContext } from '../../services/leadUnderstanding/prospectContext';
@@ -124,10 +125,10 @@ export interface ProspectListRow {
   readonly externalLeadKey: string | null;
   readonly createdAt: string | null;
   /**
-   * `canonical_leads.qualification_score`. Reported VERBATIM, including its
-   * column default of 0 — WS-1 never writes it, so a 0 here means "no scoring
-   * authority has written a score", which `scored` states explicitly rather
-   * than leaving a reader to infer a bad prospect.
+   * `canonical_leads.qualification_score`, reported VERBATIM (NULL stays null).
+   * `scored` states availability (closure C, lib/prospectProvenance/scoreSemantics):
+   * NULL is unscored; a 0 counts as a score only with the `qualificationScoring`
+   * marker — a bare 0 is the pre-20270109000002 column default, not a verdict.
    */
   readonly qualificationScore: number | null;
   readonly scored: boolean;
@@ -169,7 +170,7 @@ export async function listProspects(input: {
   const offset = Math.max(0, Math.trunc(input.offset ?? 0));
 
   const { data, error } = await ownedDbTable('canonical_leads')
-    .select('id, unified_person_id, source, external_lead_key, created_at, qualification_score')
+    .select(`id, unified_person_id, source, external_lead_key, created_at, qualification_score, ${QUALIFICATION_SCORE_MARKER}:lead_metadata->${QUALIFICATION_SCORE_MARKER}`)
     .eq('company_id', input.organizationId)          // tenant boundary — never optional
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
@@ -185,10 +186,9 @@ export async function listProspects(input: {
       externalLeadKey: text(r.external_lead_key),
       createdAt: text(r.created_at),
       qualificationScore: score,
-      // WS-1's resolver deliberately never writes this column, and WS-6's
-      // scoring runtime is dark. A stored 0 is therefore the column default,
-      // not a verdict.
-      scored: score !== null && score > 0,
+      // closure C: NULL ⇒ unscored; a bare 0 ⇒ legacy default ⇒ unscored;
+      // a marked 0 or any value > 0 ⇒ scored.
+      scored: readQualificationScore(r.qualification_score, { [QUALIFICATION_SCORE_MARKER]: r[QUALIFICATION_SCORE_MARKER] }).state === 'scored',
     };
   });
 

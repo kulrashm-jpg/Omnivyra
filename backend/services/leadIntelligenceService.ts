@@ -129,7 +129,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
           lead_id: lead.id,
           source,
           inferred_quality_score: quality,
-          qualification_score: Number(lead.qualification_score ?? 0),
+          qualification_score: lead.qualification_score == null ? null : Number(lead.qualification_score),
         },
         impact_traffic: 10,
         impact_conversion: clamp(55 - Math.round(quality / 2), 0, 100),
@@ -231,6 +231,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
     convertingLeadCount: number;
     totalRevenue: number;
     totalQualification: number;
+    scoredLeadCount: number;
     representativeLeadId: string;
   }>();
 
@@ -241,6 +242,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
       convertingLeadCount: 0,
       totalRevenue: 0,
       totalQualification: 0,
+      scoredLeadCount: 0,
       representativeLeadId: lead.id,
     };
     const leadRevenue = (revenueByLeadId.get(lead.id) ?? []).reduce(
@@ -249,7 +251,11 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
     );
 
     current.leadCount += 1;
-    current.totalQualification += Number(lead.qualification_score ?? 0);
+    // closure C: unscored (NULL) leads are excluded from the average, never counted as 0.
+    if (lead.qualification_score != null && Number.isFinite(Number(lead.qualification_score))) {
+      current.totalQualification += Number(lead.qualification_score);
+      current.scoredLeadCount += 1;
+    }
     current.totalRevenue += leadRevenue;
     if (leadRevenue > 0) {
       current.convertingLeadCount += 1;
@@ -261,7 +267,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
   for (const [source, stats] of sourceAggregate.entries()) {
     const conversionRate = stats.leadCount > 0 ? stats.convertingLeadCount / stats.leadCount : 0;
     const revenuePerLead = stats.leadCount > 0 ? stats.totalRevenue / stats.leadCount : 0;
-    const avgQualification = stats.leadCount > 0 ? stats.totalQualification / stats.leadCount : 0;
+    const avgQualification = stats.scoredLeadCount > 0 ? stats.totalQualification / stats.scoredLeadCount : null;
 
     if (stats.totalRevenue > 0 && conversionRate >= 0.25) {
       decisions.push({
@@ -314,7 +320,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
           source_lead_count: stats.leadCount,
           converting_lead_count: stats.convertingLeadCount,
           conversion_rate: roundNumber(conversionRate),
-          avg_qualification_score: roundNumber(avgQualification, 2),
+          avg_qualification_score: avgQualification === null ? null : roundNumber(avgQualification, 2),
         },
         impact_traffic: 0,
         impact_conversion: 62,
@@ -334,7 +340,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
       });
     }
 
-    if (stats.leadCount >= 2 && avgQualification >= 55 && stats.totalRevenue === 0) {
+    if (stats.leadCount >= 2 && avgQualification !== null && avgQualification >= 55 && stats.totalRevenue === 0) {
       decisions.push({
         company_id: companyId,
         report_tier: 'deep' as const,

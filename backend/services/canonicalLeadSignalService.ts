@@ -1,7 +1,8 @@
 import { supabase } from '../db/supabaseClient';
 import { logLeadSignalEvent } from '../utils/leadSignalLogger';
 import { ownedDbTable } from '../db/writeOwner';
-import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
+import { adoptLeadAsync } from './leadIntelligence/leadIntelligenceRuntime';
+import { admitEngagementSignal } from './prospectProvenance/communityBridge';
 import { resolveSocialContactIdentity } from './prospectIdentity/socialContactResolution';
 import { logger } from './logger';
 
@@ -127,9 +128,9 @@ function isMissingColumn(error: { message?: string; code?: string } | null | und
 async function retryCanonicalLeadSignalWrite(
   input: CanonicalLeadSignalInput,
   attemptContext: string
-): Promise<{ id: string | null; inserted: boolean }> {
+): Promise<CanonicalLeadSignalWriteDetail> {
   try {
-    return await upsertCanonicalLeadSignal(input);
+    return await upsertCanonicalLeadSignalDetailed(input);
   } catch (error) {
     console.error('[leadSignals] canonical write failed', {
       context: attemptContext,
@@ -152,7 +153,7 @@ async function retryCanonicalLeadSignalWrite(
   }
 
   try {
-    return await upsertCanonicalLeadSignal(input);
+    return await upsertCanonicalLeadSignalDetailed(input);
   } catch (error) {
     console.error('[leadSignals] canonical write failed', {
       context: attemptContext,
@@ -197,13 +198,58 @@ export async function writeLeadSignal(input: LeadSignalWriteInput): Promise<Lead
     details: {},
   });
 
-  const canonical = await retryCanonicalLeadSignalWrite(input.canonical, context);
+  const detail = await retryCanonicalLeadSignalWrite(input.canonical, context);
+  const canonical = { id: detail.id, inserted: detail.inserted };
   // Phase 3 — engagement signals route through the canonical facade (listening
   // signals reach it via the community opportunity feed). Additive, fail-open.
-  if ((canonical as { source_type?: string } | null)?.source_type === 'engagement') {
-    adoptLead('engagement', canonical as unknown as Record<string, unknown>);
+  //
+  // D-1 FIX. The previous guard read `source_type` off `{ id, inserted }`, which
+  // never has one, so engagement adoption never ran. The decision is now taken
+  // from the INPUT, and the adopted row is the persisted signal row itself
+  // (tenant, platform, platform_user_id, contact_id, thread, metadata), not the
+  // write receipt. Since 2026-10-30 it is GATED by the PI ingestion gate and the
+  // engagement qualification rule (see adoptAndBridgeEngagementSignal).
+  if (input.canonical.source_type === 'engagement' && detail.id && detail.row) {
+    await adoptAndBridgeEngagementSignal(detail.row, detail.written);
   }
   return { mode, canonical };
+}
+
+/**
+ * Engagement signal → canonical PI prospect (bridge), then → Lead Intelligence.
+ *
+ * GATED (owner decision 3, 2026-10-30): BOTH steps run only when the existing PI
+ * ingestion gate allows the tenant — `resolveLeadIngestionGate` =
+ * `ENABLE_LEAD_INGESTION` AND the tenant `lead_ingestion` flag — evaluated ONCE
+ * by `admitEngagementSignal`. Gate closed ⇒ no adoption, no canonical write.
+ *
+ * Gate open: the bridge ENRICHES an existing prospect, or creates one only when
+ * the signal passes the explicit qualification rule
+ * (prospectProvenance/bridge/engagementQualification.ts). Adoption follows the
+ * same decision: an unqualified signal with no prospect to enrich is not adopted.
+ *
+ * Neither step creates a person from the author's handle (owner decision 2).
+ *
+ * Adoption runs only when this call WROTE the row (insert, or the higher-score
+ * update): an unchanged re-detection must not append another timeline event.
+ * The bridge runs whenever the signal exists — it is idempotent, so a retry can
+ * heal a contribution an earlier attempt failed to record.
+ *
+ * Awaited: keeps the work alive in request-scoped callers
+ * (`/api/engagement/detect-leads`). Neither step throws (the bridge returns an
+ * observed outcome; adoptLeadAsync is fail-open). The guard keeps the signal
+ * write — already durable — from ever being reported as failed because of them.
+ */
+async function adoptAndBridgeEngagementSignal(row: Record<string, unknown>, written: boolean): Promise<void> {
+  try {
+    const admission = await admitEngagementSignal(row);
+    if (written && admission.adopt) await adoptLeadAsync('engagement', row);
+  } catch (error) {
+    console.warn('[leadSignals] engagement adoption/bridge guard tripped', {
+      signalId: row?.id ?? null,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 async function resolveContactId(input: CanonicalLeadSignalInput): Promise<string | null> {
@@ -330,9 +376,26 @@ async function syncThreadContact(threadId: string | null | undefined, contactId:
   throw new Error(error.message || 'Failed to sync thread contact');
 }
 
+/** Internal write receipt: the public `{ id, inserted }` plus what adoption needs. */
+type CanonicalLeadSignalWriteDetail = {
+  id: string | null;
+  inserted: boolean;
+  /** True when this call inserted or updated the row (false: an existing row with an equal/higher score). */
+  written: boolean;
+  /** The persisted payload with its id (null when no id came back). */
+  row: Record<string, unknown> | null;
+};
+
 export async function upsertCanonicalLeadSignal(
   input: CanonicalLeadSignalInput
 ): Promise<{ id: string | null; inserted: boolean }> {
+  const { id, inserted } = await upsertCanonicalLeadSignalDetailed(input);
+  return { id, inserted };
+}
+
+async function upsertCanonicalLeadSignalDetailed(
+  input: CanonicalLeadSignalInput
+): Promise<CanonicalLeadSignalWriteDetail> {
   const detectedAt = input.detected_at ?? new Date().toISOString();
   const platform = input.platform.trim().toLowerCase();
   const platformUserId = (input.platform_user_id ?? '').trim() || null;
@@ -383,7 +446,16 @@ export async function upsertCanonicalLeadSignal(
     (nextScore === existingScore && nextConfidence > existingConfidence);
 
   if (!shouldUpdate) {
-    return { id: existingRow?.id ?? null, inserted: false };
+    const existingId = existingRow?.id ?? null;
+    return {
+      id: existingId,
+      inserted: false,
+      written: false,
+      // The stored row may carry an older payload; for the bridge only the
+      // identity/reference fields matter and those are keyed by the same
+      // (organization_id, source_type, source_id).
+      row: existingId ? { ...payload, id: existingId } : null,
+    };
   }
 
   const { data, error } = await ownedDbTable('lead_signals')
@@ -397,5 +469,6 @@ export async function upsertCanonicalLeadSignal(
 
   await syncThreadContact(input.thread_id ?? null, contactId);
 
-  return { id: (data as { id?: string | null })?.id ?? null, inserted: !existingRow };
+  const id = (data as { id?: string | null })?.id ?? null;
+  return { id, inserted: !existingRow, written: true, row: id ? { ...payload, id } : null };
 }

@@ -8,6 +8,8 @@
  * so the domain stays testable and reuses existing infrastructure.
  */
 
+import type { ContributionRole, ProvenanceContribution, ScoreScale, SourceCategory } from '../prospectProvenance/contract';
+
 /** The canonical lead-source taxonomy — every incoming lead resolves to exactly one. */
 export type CanonicalLeadSource =
   | 'website'
@@ -58,18 +60,151 @@ export interface CanonicalAttribution {
   sourceMetadata: Record<string, unknown>;
 }
 
+/**
+ * A raw source score as it was read, with its declared scale. Kept so a converted
+ * value can always be traced back; scales are never compared implicitly.
+ */
+export interface SourceScore {
+  /** Source column, e.g. `qualification_score`, `opportunity_score`. */
+  field: string;
+  value: number;
+  scale: ScoreScale;
+  /** `toUnitScore(value, scale)`; null when the value is out of range for its scale. */
+  unit: number | null;
+}
+
+/**
+ * Canonical scores. Every numeric field is on the UNIT scale (0..1); adapters
+ * convert explicitly with `toUnitScore` at the boundary. `scale` is set by the
+ * adapters; views produced before the provenance contract (durable rows, test
+ * fixtures) omit it and are unit by the same convention.
+ */
 export interface CanonicalLeadScores {
   intent?: number | null;
   urgency?: number | null;
   icp?: number | null;
   confidence?: number | null;
   total?: number | null;
+  scale?: 'unit';
+  /** The source columns these values were derived from, with their declared scales. */
+  sourceScores?: SourceScore[];
 }
 
-/** Pointer to the originating legacy row — the bridge (no data is copied/migrated). */
+/**
+ * Pointer to the originating legacy row — the bridge (no data is copied/migrated).
+ *
+ * `table` is a PERSISTED identity: it feeds `dedupeViews`, `leadKeyFor` (profile
+ * deep links) and `audience_memberships.entity_id`. It is a LABEL and is never
+ * renamed (community rows are labelled `opportunity_feed_items`). `readFrom` is
+ * the table the row was physically read from when the reader knows it; it is
+ * informational only and never part of any key.
+ */
 export interface SourceRef {
   table: string;
   id: string | null;
+  readFrom?: string;
+}
+
+/**
+ * One piece of evidence behind a canonical prospect, flattened from its
+ * provenance contributions (typed signal references, source records, URLs).
+ */
+export interface LeadEvidenceRef {
+  contributionId: string;
+  role: ContributionRole;
+  sourceCategory: SourceCategory;
+  platform: string | null;
+  observedAt: string;
+  kind: 'source_url' | 'source_record' | 'lead_signal' | 'opportunity_feed_item' | 'engagement_message' | 'contact';
+  /** The id or URL the evidence lives at. */
+  ref: string;
+}
+
+/**
+ * Per-view provenance status:
+ *   loaded         — contributions were read for this canonical prospect (may be empty
+ *                    for a prospect created before provenance existed);
+ *   unavailable    — the provenance store could not be read (e.g. table not yet
+ *                    applied); `sources`/`evidence` are empty, NOT proven absent;
+ *   not_applicable — the view is not a canonical prospect (website form lead,
+ *                    durable community/marketpulse lead, …).
+ */
+export type LeadProvenanceStatus = 'loaded' | 'unavailable' | 'not_applicable';
+
+/**
+ * The typed signal kinds a provenance contribution references, which are also
+ * the rows a durable `lead_intelligence` view can be keyed by (its persisted
+ * `sourceRef.table`). This is the ONLY basis for merging a durable view into a
+ * canonical prospect — never a person id (unverified identities create a
+ * prospect without a person).
+ */
+export type SignalRefKind = 'opportunity_feed_item' | 'lead_signal' | 'engagement_message';
+
+/**
+ * A tenant-scoped link "canonical prospect X has a contribution referencing
+ * signal (kind, ref)". Built by the read service from the tenant-filtered
+ * contribution reader; consumed by the pure merge in `query.ts`.
+ */
+export interface SignalLink {
+  organizationId: string;
+  canonicalLeadId: string;
+  kind: SignalRefKind;
+  ref: string;
+}
+
+/**
+ * A durable / bridged view that represents the SAME underlying discovery as a
+ * canonical prospect, folded into that prospect (the representative). Nothing is
+ * deleted: the underlying row still exists and its persisted key keeps working
+ * as an alias (`CanonicalLeadView.aliasKeys`).
+ */
+export interface LinkedLeadRecord {
+  /** `leadKeyFor` of the linked view — persisted in audience memberships / operational rows / deep links. */
+  leadKey: string;
+  source: CanonicalLeadSource;
+  sourceLabel: string;
+  sourceRef: SourceRef | null;
+  occurredAt: string | null;
+  status: string | null;
+  campaign: string | null;
+  content: string | null;
+  scores: CanonicalLeadScores;
+  attribution: CanonicalAttribution;
+  /**
+   * What links the record to the representative: the typed signal reference both
+   * records share, or `prospect_alias` (closure-B) — the record is a canonical
+   * prospect ABSORBED into this one by a persisted, verified-identity alias
+   * (`ref` = the absorbed prospect id).
+   */
+  matchedOn: { kind: SignalRefKind | 'prospect_alias'; ref: string };
+}
+
+/**
+ * The account a canonical prospect belongs to, read from its ORIGINATING
+ * contribution's source record (`source_records.account_id` →
+ * `prospect_accounts`). Set for account-only prospects (no person).
+ */
+export interface LeadAccount {
+  id: string;
+  name: string | null;
+  domain: string | null;
+  via: 'originating_source_record';
+}
+
+/**
+ *   loaded         — the account was resolved;
+ *   not_found      — the originating source record carries no (readable) account;
+ *   unavailable    — the source-record / account store could not be read;
+ *   not_applicable — not an account-only canonical prospect, or no originating
+ *                    source record is known.
+ */
+export type LeadAccountStatus = 'loaded' | 'not_found' | 'unavailable' | 'not_applicable';
+
+/** Display-level origin of a view: the discovery classification when it is known. */
+export interface LeadOrigin {
+  category: SourceCategory | null;
+  platform: string | null;
+  observedAt: string | null;
 }
 
 export interface CanonicalLeadInput {
@@ -82,6 +217,8 @@ export interface CanonicalLeadInput {
   occurredAt?: string | null;
   display?: { name?: string | null; title?: string | null; contentText?: string | null };
   sourceRef?: SourceRef;
+  /** Row-level origin hint (e.g. a canonical prospect whose raw source is a discovery provider). */
+  origin?: LeadOrigin;
 }
 
 export interface CanonicalLead extends CanonicalLeadInput {
@@ -106,6 +243,38 @@ export interface CanonicalLeadView {
   occurredAt: string | null;
   sourceRef: SourceRef | null;
   attribution: CanonicalAttribution;
+  /**
+   * Provenance (read side). Optional in the type so pre-contract constructors keep
+   * compiling; the read service ALWAYS sets all four on every row it returns.
+   * `source` / `sourceLabel` stay the display vocabulary; these carry the truth.
+   */
+  /** Complete contribution history (originating first, then contributing by observedAt). */
+  sources?: ProvenanceContribution[];
+  /** Evidence references flattened from `sources`. */
+  evidence?: LeadEvidenceRef[];
+  provenanceStatus?: LeadProvenanceStatus;
+  /** Discovery origin: from the originating contribution when loaded, else a row-level hint. */
+  origin?: LeadOrigin | null;
+  /**
+   * Signal merge (owner decision 4). Durable/bridged views of the SAME signal
+   * this canonical prospect's contributions reference, folded in so the prospect
+   * is ONE lead carrying every source. Sorted by (occurredAt, leadKey).
+   */
+  linkedRecords?: LinkedLeadRecord[];
+  /**
+   * Persisted keys of the linked records (sorted, unique). `leadKeyFor(view)`
+   * stays the representative's own key; a lookup by any alias resolves here.
+   */
+  aliasKeys?: string[];
+  /**
+   * closure-B. Canonical prospects absorbed into this one by a persisted alias
+   * (`prospect_aliases`, verified identity). Their contributions are read and
+   * shown as this lead's sources; their keys are in `aliasKeys`. Sorted.
+   */
+  absorbedProspectIds?: string[];
+  /** Account of an account-only canonical prospect (read side; see LeadAccount). */
+  account?: LeadAccount | null;
+  accountStatus?: LeadAccountStatus;
 }
 
 /* ── Hexagonal ports (reuse existing infrastructure; never duplicated here) ── */

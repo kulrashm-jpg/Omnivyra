@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { ownedDbTable } from '../db/writeOwner';
 import {
   getCompanyContextIntelligence,
@@ -8,6 +9,7 @@ import { calculateContextQualityMetadata, type CompanyContextQualityMetadata } f
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 // WAVE-1 (AI-CONTRACT-000 §P6): honest provenance — no fabricated evidence.
 import { classifyProvenance } from './ai/safety/marketProvenance';
+import { MARKETPULSE_PROFILE, toNamespacedRef } from './prospectProvenance/ingestion/sourceProfiles';
 
 export type MarketPulseSignalCategory =
   | 'regulation'
@@ -440,23 +442,203 @@ function scoreCompanyRelevance(params: {
   };
 }
 
+/** Where THIS tenant's observation of a signal came from. All optional. */
+export interface MarketPulseObservationProvenance {
+  /** `market_pulse_runs.id` that produced the finding. */
+  runId?: string | null;
+  /** `market_pulse_findings.id` the signal was built from. */
+  findingId?: string | null;
+  /** When the tenant's run observed it (source time). */
+  observedAt?: string | null;
+  /** Evidence location, when the finding carried one. */
+  sourceUrl?: string | null;
+}
+
+export const MARKETPULSE_OBSERVATIONS_TABLE = 'marketpulse_signal_observations';
+
+export type MarketPulseObservationOutcome =
+  | { status: 'inserted'; id: string; observationKey: string }
+  | { status: 'already_present'; observationKey: string }
+  /** The table is not deployed yet (42P01 / PGRST205). */
+  | { status: 'skipped'; observationKey: string }
+  | { status: 'error'; observationKey: string; code: string | null; message: string };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const asUuid = (v: unknown): string | null => (typeof v === 'string' && UUID_RE.test(v.trim()) ? v.trim() : null);
+
+/**
+ * The idempotency key of one tenant's observation of one signal:
+ * `finding:<id>` when the producing finding is known, else `run:<id>`, else a
+ * content hash of what the tenant observed (title, summary, observed_at), so a
+ * retry of the same observation converges on one row.
+ */
+export function marketPulseObservationKey(input: {
+  findingId?: string | null;
+  runId?: string | null;
+  title: string;
+  summary: string;
+  observedAt: string;
+}): string {
+  const finding = input.findingId?.trim();
+  if (finding) return `finding:${finding}`;
+  const run = input.runId?.trim();
+  if (run) return `run:${run}`;
+  const digest = createHash('sha256')
+    .update(`${input.title}|${input.summary}|${input.observedAt}`)
+    .digest('hex');
+  return `content:${digest}`;
+}
+
+/**
+ * TENANT ISOLATION (owner decision 6). Writes THIS tenant's view of a global
+ * signal to `marketpulse_signal_observations` — INSERT only; a 23505 on
+ * `uq_mpso_company_signal_observation` is a healthy retry. The row is keyed by
+ * (company_id, signal_id, observation_key), so another tenant's processing of
+ * the same signal can never touch it, and nothing here writes the shared row.
+ *
+ * Fail-open, like the adoption it sits beside: an outcome is returned and
+ * logged, never thrown, so MarketPulse relevance scoring is unaffected.
+ */
+export async function recordMarketPulseObservation(input: {
+  companyId: string;
+  signalId: string;
+  signal: MarketPulseSignal;
+  observedAt: string;
+  sourceUrl: string | null;
+  provenance?: MarketPulseObservationProvenance;
+}): Promise<MarketPulseObservationOutcome> {
+  const observationKey = marketPulseObservationKey({
+    findingId: input.provenance?.findingId ?? null,
+    runId: input.provenance?.runId ?? null,
+    title: input.signal.title,
+    summary: input.signal.summary,
+    observedAt: input.observedAt,
+  });
+  // The tenant's own computed signal, minus the shared id (it is signal_id).
+  const snapshot: Record<string, unknown> = { ...(input.signal as Record<string, unknown>) };
+  delete snapshot.id;
+  try {
+    const res = await ownedDbTable(MARKETPULSE_OBSERVATIONS_TABLE)
+      .insert({
+        company_id: input.companyId,
+        signal_id: input.signalId,
+        observation_key: observationKey,
+        run_id: asUuid(input.provenance?.runId),
+        finding_id: asUuid(input.provenance?.findingId),
+        observed_at: input.observedAt,
+        title: input.signal.title,
+        summary: input.signal.summary,
+        source_url: input.sourceUrl,
+        snapshot,
+      })
+      .select('id')
+      .single();
+    if (!res.error && res.data) {
+      return { status: 'inserted', id: String((res.data as { id: unknown }).id), observationKey };
+    }
+    const code = (res.error as { code?: string } | null)?.code ?? null;
+    if (code === '23505') return { status: 'already_present', observationKey };
+    if (code === '42P01' || code === 'PGRST205') {
+      console.warn('[marketpulse-intelligence] observation table not deployed; tenant observation skipped', { code });
+      return { status: 'skipped', observationKey };
+    }
+    const message = res.error?.message ?? 'insert returned no row';
+    console.warn('[marketpulse-intelligence] failed to record tenant observation', { code, message });
+    return { status: 'error', observationKey, code, message };
+  } catch (err) {
+    const message = (err as Error)?.message ?? String(err);
+    console.warn('[marketpulse-intelligence] failed to record tenant observation', { message });
+    return { status: 'error', observationKey, code: null, message };
+  }
+}
+
+/**
+ * PROVENANCE — persist the GLOBAL signal row WITHOUT overwriting it.
+ *
+ * `marketpulse_signals` has no tenant column and is unique on `duplicate_key`.
+ * The previous `upsert(onConflict: 'duplicate_key')` let any tenant's run
+ * REPLACE the shared row's title/summary/scores/timestamps — i.e. one tenant's
+ * processing overwrote the evidence another tenant's relevance row and lead
+ * snapshot point at. Now: INSERT; on `23505` read the existing row and leave it
+ * untouched. The first observation is immutable; each tenant's own observation
+ * is carried in its own per-tenant rows (relevance + the adopted lead snapshot).
+ *
+ * This is also the safe form for the index itself: `idx_marketpulse_signals_
+ * duplicate_key` is PARTIAL (`WHERE duplicate_key IS NOT NULL`), and PostgREST
+ * cannot infer a partial index for ON CONFLICT (42P10) — the trap the WS-1/LI-2
+ * writers document — so the old upsert could not have relied on it.
+ */
+async function persistSharedSignalWithoutOverwrite(
+  signal: MarketPulseSignal,
+): Promise<{ row: MarketPulseSignal & { id: string }; inserted: boolean }> {
+  const insertSignal = await ownedDbTable('marketpulse_signals')
+    .insert(signal)
+    .select('*')
+    .single();
+  if (!insertSignal.error && insertSignal.data) {
+    return { row: insertSignal.data as MarketPulseSignal & { id: string }, inserted: true };
+  }
+  if ((insertSignal.error as { code?: string } | null)?.code === '23505' && signal.duplicate_key) {
+    const existing = await ownedDbTable('marketpulse_signals')
+      .select('*')
+      .eq('duplicate_key', signal.duplicate_key)
+      .limit(1)
+      .maybeSingle();
+    if (!existing.error && existing.data) {
+      return { row: existing.data as MarketPulseSignal & { id: string }, inserted: false };
+    }
+  }
+  throw new Error(insertSignal.error?.message || 'Failed to persist MarketPulse signal');
+}
+
 export async function persistMarketPulseSignalForCompany(params: {
   companyId: string;
   signal: MarketPulseSignal;
   impacts: MarketPulseSignalImpact[];
   profile?: CompanyProfileLike | null;
+  provenance?: MarketPulseObservationProvenance;
 }) {
-  const insertSignal = await ownedDbTable('marketpulse_signals')
-    .upsert(params.signal, { onConflict: 'duplicate_key' })
-    .select('*')
-    .single();
-  if (insertSignal.error || !insertSignal.data) {
-    throw new Error(insertSignal.error?.message || 'Failed to persist MarketPulse signal');
-  }
-  const signal = insertSignal.data as MarketPulseSignal & { id: string };
+  const shared = await persistSharedSignalWithoutOverwrite(params.signal);
+  // THIS tenant's observation: its own content over the shared row's identity.
+  // Scoring and the adopted snapshot use it exactly as they used the (formerly
+  // overwritten) shared row, so this tenant's results are unchanged — but the
+  // shared row other tenants reference is no longer mutated.
+  const signal = { ...shared.row, ...params.signal, id: shared.row.id } as MarketPulseSignal & { id: string };
+  const observedAt = params.provenance?.observedAt ?? params.signal.published_at ?? new Date().toISOString();
+  const sourceUrl = params.provenance?.sourceUrl ?? params.signal.source_url ?? null;
+  // Owner decision 6 — THIS tenant's observation goes to its own row in
+  // `marketpulse_signal_observations`; the shared row above is never written
+  // again. Additive and fail-open: the outcome is returned, never thrown.
+  const observation = await recordMarketPulseObservation({
+    companyId: params.companyId,
+    signalId: shared.row.id,
+    signal: params.signal,
+    observedAt,
+    sourceUrl,
+    provenance: params.provenance,
+  });
   // Phase 3 — route every persisted MarketPulse buying signal through the canonical
   // facade (additive; existing MarketPulse behaviour is unchanged). Fail-open.
-  adoptLead('marketpulse', { ...(signal as unknown as Record<string, unknown>), company_id: params.companyId });
+  // PROVENANCE: the snapshot is THIS tenant's evidence, timed at THIS tenant's
+  // observation, with an explicit category and a namespaced reference (no
+  // `canonical_leads` row exists for a market event, so there is no
+  // contribution to write — see the Agent-2 report).
+  adoptLead('marketpulse', {
+    ...(signal as unknown as Record<string, unknown>),
+    created_at: observedAt,
+    company_id: params.companyId,
+    provenance: {
+      source_category: MARKETPULSE_PROFILE.sourceCategory,
+      platform: MARKETPULSE_PROFILE.platform,
+      external_ref: toNamespacedRef(MARKETPULSE_PROFILE.refProvider, shared.row.id),
+      observed_at: observedAt,
+      source_url: sourceUrl,
+      run_id: params.provenance?.runId ?? null,
+      finding_id: params.provenance?.findingId ?? null,
+      shared_signal_created: shared.inserted,
+      shared_signal_created_at: (shared.row as { created_at?: string }).created_at ?? null,
+    },
+  });
 
   const existingImpacts = await ownedDbTable('marketpulse_signal_impacts').select('id').eq('signal_id', signal.id).limit(1);
   if (!existingImpacts.data?.length && params.impacts.length > 0) {
@@ -497,7 +679,7 @@ export async function persistMarketPulseSignalForCompany(params: {
     .select('*')
     .single();
   if (relevanceResult.error) throw new Error(`Failed to persist MarketPulse relevance: ${relevanceResult.error.message}`);
-  return { signal, impacts: params.impacts, relevance: relevanceResult.data };
+  return { signal, impacts: params.impacts, relevance: relevanceResult.data, observation };
 }
 
 export async function getAdaptiveMarketPulseFeed(companyId: string, digestType: string = 'executive') {
