@@ -125,6 +125,30 @@ jest.mock('../../db/writeOwner', () => ({
     };
     return b;
   },
+  // Person erasure always runs the provenance-erasure function first (it fails
+  // closed without it), so the real erasePerson needs the real RPC seam too.
+  // Same adapter as b1b_arbitration, except arrays reach pg as arrays (uuid[]),
+  // not JSON text.
+  ownedDbRpc: async (fn: string, args: Record<string, unknown>) => {
+    const { db: client } = require('./setup') as { db: { query: Function } };
+    const keys = Object.keys(args);
+    const params = keys.map((k) => {
+      const v = args[k];
+      return v !== null && typeof v === 'object' && !Array.isArray(v) ? JSON.stringify(v) : v;
+    });
+    const named = keys.map((k, i) => `${k} => $${i + 1}`).join(', ');
+    await client.query('SAVEPOINT pg_rpc');
+    try {
+      const res = await client.query(
+        `SELECT public."${fn}"(${named}) AS result`, params,
+      ) as { rows: Array<{ result: unknown }> };
+      await client.query('RELEASE SAVEPOINT pg_rpc');
+      return { data: res.rows[0]?.result ?? null, error: null };
+    } catch (err) {
+      await client.query('ROLLBACK TO SAVEPOINT pg_rpc');
+      return { data: null, error: err };
+    }
+  },
 }));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
