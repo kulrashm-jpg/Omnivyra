@@ -142,7 +142,18 @@ export async function getPrimaryRelationship(
 export type CreateRelationshipResult =
   | { readonly created: true; readonly relationship: PersonAccountRelationship }
   | { readonly created: false; readonly reason: 'already_current'; readonly relationship: PersonAccountRelationship }
-  | { readonly created: false; readonly reason: 'rejected'; readonly detail: string };
+  | {
+    readonly created: false;
+    readonly reason: 'rejected';
+    readonly detail: string;
+    /**
+     * The SQLSTATE, when the transport reported one. Carried so a caller can
+     * tell an unapplied table from a genuine refusal without re-parsing a
+     * message — `isRelationIllegible` below is the one place that judgement is
+     * made, and it needs the code to make it exactly.
+     */
+    readonly code?: string;
+  };
 
 /**
  * Record a relationship. NEVER primary.
@@ -196,7 +207,7 @@ export async function createRelationship(input: {
   }
   const detail = (error as { message?: string } | null)?.message ?? 'unknown error';
   logger.warn('relationship_create_rejected', { code, detail });
-  return { created: false, reason: 'rejected', detail };
+  return { created: false, reason: 'rejected', detail, code };
 }
 
 /**
@@ -258,4 +269,134 @@ export async function endRelationship(input: {
   });
   if (error) return { ok: false, detail: error.message };
   return { ok: true, relationshipId: String(data) };
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// PI WAVE-2B — ACCOUNT-SCOPED, DEGRADE-SAFE READS.
+//
+// Everything above throws when the read fails, which is correct for a writer:
+// a mutation that cannot read its own state must not proceed. A READER on the
+// intelligence path cannot behave that way, and neither can it be wired blind.
+//
+// `20261122000000` IS NOT KNOWN TO BE APPLIED IN PRODUCTION. If it is not, this
+// table does not exist, and a reader that let the error propagate would turn
+// every account aggregation into a 500; a reader that swallowed it into `[]`
+// would be worse still, because "no rows" and "no table" would arrive at the
+// caller as the same answer and the caller would report a person with a
+// perfectly good employer pointer as having no relationship. That is the exact
+// confusion of UNKNOWN with NEGATIVE this read exists to prevent.
+//
+// So the result is a TRI-STATE the caller cannot collapse by accident, and the
+// caller decides what an unreadable table means for its own answer.
+// ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The table is not there. PostgREST reports a missing relation either as its
+ * own schema-cache code (`PGRST205`) or as PostgreSQL's `42P01`; a missing
+ * COLUMN (`42703`) means the migration landed in a shape this reader does not
+ * recognise, which is equally "no usable evidence here". The message test is
+ * the last resort, for a transport that forwards no code.
+ */
+export const isRelationIllegible = (err: { code?: string; message?: string } | null): boolean => {
+  if (!err) return false;
+  if (err.code === '42P01' || err.code === '42703' || err.code === 'PGRST205') return true;
+  return Boolean(err.message
+    && /does not exist|could not find the table|schema cache/i.test(err.message));
+};
+
+/**
+ * Relationship evidence for ONE account, or the reason there is none to read.
+ *
+ * `legible: false` is NOT an empty roster. It says the question could not be
+ * asked, and a caller that renders it as "this person has no relationship to
+ * this account" is stating something the data never said.
+ */
+export type AccountRelationshipEvidence =
+  | { readonly legible: true; readonly relationships: readonly PersonAccountRelationship[] }
+  | {
+    readonly legible: false;
+    readonly reason: 'relation_absent' | 'read_failed';
+    readonly detail: string;
+  };
+
+/**
+ * Every relationship row for one ACCOUNT, in one tenant. Never throws.
+ *
+ * TENANT AND ACCOUNT ARE BOTH PREDICATES, AND BOTH ARE RE-CHECKED ON THE ROWS.
+ * The query filters on them; the filter below re-asserts them. That is not
+ * belt-and-braces for its own sake — this is the read that decides whether a
+ * person is attributed to an account, so a row for a different account must be
+ * incapable of reaching a caller even if the query were later edited wrongly.
+ */
+export async function readAccountRelationshipEvidence(
+  organizationId: string,
+  accountId: string,
+): Promise<AccountRelationshipEvidence> {
+  requireTenant(organizationId, 'readAccountRelationshipEvidence');
+  if (!accountId?.trim()) {
+    throw new Error('readAccountRelationshipEvidence: accountId is required');
+  }
+
+  let data: unknown;
+  let error: { code?: string; message?: string } | null = null;
+  try {
+    const res = await ownedDbTable('person_account_relationships')
+      .select(SELECT_COLS)
+      .eq('organization_id', organizationId)
+      .eq('account_id', accountId);
+    data = res.data;
+    error = (res.error as { code?: string; message?: string } | null) ?? null;
+  } catch (thrown) {
+    // A client that throws instead of returning an error is the same situation.
+    error = { message: thrown instanceof Error ? thrown.message : String(thrown) };
+  }
+
+  if (error) {
+    const absent = isRelationIllegible(error);
+    if (absent) {
+      logger.warn('relationship_evidence_relation_absent', { detail: error.message });
+    }
+    return {
+      legible: false,
+      reason: absent ? 'relation_absent' : 'read_failed',
+      detail: error.message ?? 'unknown error',
+    };
+  }
+
+  const rows = (data as unknown as Row[] | null) ?? [];
+  const relationships = rows
+    .map(toRelationship)
+    // Re-assert both boundaries on the DATA, not just in the query.
+    .filter((r) => r.organizationId === organizationId && r.accountId === accountId);
+  return { legible: true, relationships };
+}
+
+/**
+ * The ONE relationship that describes a person's standing at this account.
+ *
+ * A person may legitimately hold several rows for one account over time — an
+ * employment that ended and a later one that did not. Order is therefore
+ * decided here, once, rather than by whichever caller looked first:
+ *
+ *   1. the CURRENT primary (the relationship they are pursued through),
+ *   2. any other CURRENT relationship,
+ *   3. the most recently ENDED one — which is evidence of a FINISHED
+ *      relationship, a negative fact, and must not be discarded into silence.
+ *
+ * Returns null only when the person holds no row for this account at all.
+ */
+export function pickAccountRelationship(
+  relationships: readonly PersonAccountRelationship[],
+): PersonAccountRelationship | null {
+  const current = relationships.filter((r) => r.endedAt === null);
+  const primary = current.find((r) => r.isPrimary);
+  if (primary) return primary;
+  if (current.length > 0) {
+    // Deterministic among equals: `started_at` then id, never arrival order.
+    return [...current].sort((a, b) =>
+      (b.startedAt ?? '').localeCompare(a.startedAt ?? '') || a.id.localeCompare(b.id))[0];
+  }
+  const ended = [...relationships].sort((a, b) =>
+    (b.endedAt ?? '').localeCompare(a.endedAt ?? '') || a.id.localeCompare(b.id));
+  return ended[0] ?? null;
 }

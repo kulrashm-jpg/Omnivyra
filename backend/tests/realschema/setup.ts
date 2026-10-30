@@ -65,6 +65,34 @@ export async function attempt(sql: string, params: unknown[] = []): Promise<stri
   }
 }
 
+/**
+ * Perform a statement FOR ITS EFFECT, keeping it; return 'ok' or the SQLSTATE.
+ *
+ * `attempt()` above is a PROBE: it rolls back to its savepoint on both the
+ * success and the failure path, so the database is unchanged whether the
+ * statement was accepted or refused. That is exactly right for "would this row
+ * be admitted", and exactly wrong for "it was admitted — now observe what it
+ * did". A DELETE run through `attempt()` reports 'ok' and then un-deletes
+ * itself, so any CASCADE assertion made afterwards reads the pre-delete state
+ * and can never pass.
+ *
+ * Use this one when the statement's EFFECT is the thing under test. The failure
+ * path still rolls back, because a failed statement aborts the transaction and
+ * the savepoint is what makes it usable again. The enclosing `inRollback()`
+ * discards the effect at the end of the test either way.
+ */
+export async function effect(sql: string, params: unknown[] = []): Promise<string> {
+  await db.query('SAVEPOINT e');
+  try {
+    await db.query(sql, params);
+    await db.query('RELEASE SAVEPOINT e');
+    return 'ok';
+  } catch (err: any) {
+    await db.query('ROLLBACK TO SAVEPOINT e');
+    return err.code ?? 'unknown';
+  }
+}
+
 /** Seed the two synthetic tenants. Caller must already be inside inRollback(). */
 export async function seedTenants(): Promise<void> {
   for (const [id, name] of [[ORG_A, 'W6 Tenant A'], [ORG_B, 'W6 Tenant B']]) {

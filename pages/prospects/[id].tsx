@@ -20,6 +20,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '@/components/CompanyContext';
 import ProspectIntelligencePanel from '@/components/prospects/ProspectIntelligencePanel';
+import ProblemObservationsPanel from '@/components/prospects/ProblemObservationsPanel';
 
 export default function ProspectDetailPage() {
   const router = useRouter();
@@ -45,8 +46,22 @@ export default function ProspectDetailPage() {
             </Link>
           </header>
 
+          {/* Two SIBLING panels, not one.
+
+              `ProspectIntelligencePanel` reads the detail payload and its `Card`
+              contract requires a `Section<T>` from that payload, so putting observed
+              problems inside it would mean a new section in `getProspectDetail` and a
+              `PROSPECT_API_VERSION` bump. This feature consumes an EXISTING
+              subresource route instead, which is the rule that route's own header
+              states, so it reads itself and the version does not move. The outer
+              `space-y-6` already spaces a second panel correctly. */}
           {prospectId
-            ? <ProspectIntelligencePanel companyId={selectedCompanyId ?? ''} prospectId={prospectId} />
+            ? (
+              <>
+                <ProspectIntelligencePanel companyId={selectedCompanyId ?? ''} prospectId={prospectId} />
+                <ProblemObservationsPanel companyId={selectedCompanyId ?? ''} prospectId={prospectId} />
+              </>
+            )
             : <p className="text-sm text-gray-500">No prospect selected.</p>}
         </div>
       </main>
