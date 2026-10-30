@@ -35,10 +35,9 @@ const durableView = (id: string): CanonicalLeadView => ({
 });
 
 function readers(over: Partial<LeadSourceReaders> = {}): { r: LeadSourceReaders; calls: Record<string, number> } {
-  const calls = { durable: 0, activeLeads: 0, leads: 0, canonicalLeads: 0 };
+  const calls = { durable: 0, leads: 0, canonicalLeads: 0 };
   const r: LeadSourceReaders = {
     durable: async (c) => { calls.durable += 1; return over.durable ? over.durable(c) : []; },
-    activeLeads: async (c) => { calls.activeLeads += 1; return over.activeLeads ? over.activeLeads(c) : []; },
     leads: async (c) => { calls.leads += 1; return over.leads ? over.leads(c) : []; },
     canonicalLeads: async (c) => { calls.canonicalLeads += 1; return over.canonicalLeads ? over.canonicalLeads(c) : []; },
   };
@@ -49,9 +48,13 @@ describe('Lead Intelligence read service', () => {
   it('merges durable ∪ legacy into one unified result', async () => {
     const { r } = readers({
       durable: async () => [durableView('d1')],
-      activeLeads: async () => [{ id: 'o1', organization_id: 'co1', opportunity_type: 'buying_intent', contact_id: 'c1', total_score: 0.5, status: 'new' }],
       leads: async () => [{ id: 'l1', company_id: 'co1', email: 'x@b.com', source: 'form_embed' }],
-      canonicalLeads: async () => [{ id: 'cl1', company_id: 'co1', email: 'y@b.com', source: 'hubspot', unified_source: { category: 'crm' } }],
+      // A canonical prospect whose persisted source is `community` (the legacy
+      // `active_leads` reader that used to supply community rows is removed).
+      canonicalLeads: async () => [
+        { id: 'cl1', company_id: 'co1', email: 'y@b.com', source: 'hubspot', unified_source: { category: 'crm' } },
+        { id: 'cl2', company_id: 'co1', contact_id: 'c1', source: 'community', qualification_score: 50 },
+      ],
     });
     const res = await searchLeads({ companyId: 'co1' }, r);
     expect(res.total).toBe(4);
@@ -61,7 +64,7 @@ describe('Lead Intelligence read service', () => {
   it('anti-N+1: each source is read exactly once per query', async () => {
     const { r, calls } = readers({ leads: async () => Array.from({ length: 100 }, (_, i) => ({ id: `l${i}`, company_id: 'co1', email: `${i}@b.com`, source: 'form_embed' })) });
     await searchLeads({ companyId: 'co1' }, r);
-    expect(calls).toEqual({ durable: 1, activeLeads: 1, leads: 1, canonicalLeads: 1 });
+    expect(calls).toEqual({ durable: 1, leads: 1, canonicalLeads: 1 });
   });
 
   it('dedupes durable vs legacy (durable wins)', async () => {

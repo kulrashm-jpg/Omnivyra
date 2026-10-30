@@ -46,7 +46,11 @@ describe('Source adapters + routing', () => {
   it('crm adapter uses unified_source when present', () => {
     const i = crmAdapter({ id: 'cl1', company_id: 'co1', source: 'hubspot', unified_source: { category: 'crm', origin: 'integration' }, qualification_score: 80, unified_person_id: 'up1' });
     expect(i.source).toBe('crm');
-    expect(i.scores?.total).toBe(80);
+    // canonical_leads.qualification_score is 0..100 (CHECK): converted explicitly
+    // to the unit scale, with the raw value and its scale kept alongside.
+    expect(i.scores?.total).toBe(0.8);
+    expect(i.scores?.scale).toBe('unit');
+    expect(i.scores?.sourceScores).toEqual([{ field: 'qualification_score', value: 80, scale: 'percent', unit: 0.8 }]);
     expect(i.identity.unifiedPersonId).toBe('up1');
   });
 

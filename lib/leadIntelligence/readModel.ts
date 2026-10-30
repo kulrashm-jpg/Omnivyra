@@ -8,14 +8,14 @@
  */
 
 import type { CanonicalLead, CanonicalLeadInput, CanonicalLeadView, CanonicalLeadSource } from './types';
-import { CANONICAL_LEAD_SOURCE_LABELS } from './sourceTaxonomy';
+import { displayLabelFor } from './sourceTaxonomy';
 import { routeToCanonicalInput } from './adapters';
 
 function viewFromInput(input: CanonicalLeadInput, unifiedPersonId: string | null): CanonicalLeadView {
   return {
     organizationId: input.organizationId,
     source: input.source,
-    sourceLabel: CANONICAL_LEAD_SOURCE_LABELS[input.source],
+    sourceLabel: displayLabelFor(input.source, input.origin),
     unifiedPersonId,
     identity: input.identity,
     scores: input.scores ?? {},
@@ -27,6 +27,7 @@ function viewFromInput(input: CanonicalLeadInput, unifiedPersonId: string | null
     occurredAt: input.occurredAt ?? null,
     sourceRef: input.sourceRef ?? null,
     attribution: input.attribution,
+    ...(input.origin ? { origin: input.origin } : {}),
   };
 }
 
@@ -34,10 +35,20 @@ export function toCanonicalLeadView(lead: CanonicalLead): CanonicalLeadView {
   return viewFromInput(lead, lead.unifiedPersonId);
 }
 
-/** Bridge: project a legacy source row into the canonical view (no DB identity call). */
-export function projectExistingRow(source: CanonicalLeadSource, row: Record<string, unknown>): CanonicalLeadView {
+/**
+ * Bridge: project a legacy source row into the canonical view (no DB identity call).
+ * `opts.readFrom` records the table the row was physically read from on
+ * `sourceRef.readFrom`; the persisted `sourceRef.table` label is never changed.
+ */
+export function projectExistingRow(
+  source: CanonicalLeadSource,
+  row: Record<string, unknown>,
+  opts: { readFrom?: string } = {},
+): CanonicalLeadView {
   const input = routeToCanonicalInput(source, row);
-  return viewFromInput(input, input.identity.unifiedPersonId ?? null);
+  const view = viewFromInput(input, input.identity.unifiedPersonId ?? null);
+  if (opts.readFrom && view.sourceRef) view.sourceRef = { ...view.sourceRef, readFrom: opts.readFrom };
+  return view;
 }
 
 /** In-memory read store — a real reference reader (tests + buffering); durable reader is a port. */

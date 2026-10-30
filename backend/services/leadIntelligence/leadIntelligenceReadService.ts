@@ -7,9 +7,23 @@
  * filtering, search, sort, pagination and export live HERE (and the pure query/
  * export libs); consumers never touch fragmented sources or filter source-specifically.
  *
- * Anti-N+1: each source is read ONCE in bulk per query (4 reads total, parallel),
- * never per-lead. Tenant isolation: every reader is company-scoped + the query
- * re-filters by company_id. Fail-open: any source error degrades to [] (never throws).
+ * Anti-N+1: each source is read ONCE in bulk per query (3 reads, parallel), never
+ * per-lead; provenance for canonical prospects is ONE more read per page (per
+ * chunk of ≤100 lead ids — see contributionReader). Tenant isolation: every
+ * reader is company-scoped + the query re-filters by company_id. Fail-open: any
+ * source error degrades to [] (never throws) and is REPORTED once.
+ *
+ * Sources: `lead_intelligence` (durable), `leads` (website/form capture),
+ * `canonical_leads` (PI canonical prospects, CRM) + `prospect_source_contributions`
+ * (their complete provenance, attached as `sources[]` / `evidence[]`). The legacy
+ * `active_leads` reader was REMOVED: production `active_leads` is the legacy shape
+ * with no `organization_id`, so the read failed with 42703 on every call and
+ * contributed nothing (PI-STATE-OF-PROGRAMME DEFECT-009). Community signals reach
+ * this view through `lead_intelligence` (adoptLead('community')) and, as canonical
+ * prospects, through their provenance contributions.
+ *
+ * Caps are VISIBLE: each bulk read has a deterministic order and reads cap+1 rows;
+ * hitting a cap sets `truncated` / `truncatedSources` on the result and logs once.
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
@@ -17,7 +31,11 @@ import {
   projectExistingRow,
   applyLeadQuery,
   filterLeads,
+  sortLeads,
   dedupeViews,
+  displayLabelFor,
+  type LeadEvidenceRef,
+  type LeadOrigin,
   toExportRow,
   toCsv,
   toExcelXml,
@@ -63,26 +81,38 @@ import {
   type CompanyIntelligenceProfile,
 } from '../../../lib/leadIntelligence';
 import { listCanonicalLeads } from './leadIntelligenceRepository';
+import {
+  readContributionsForLeads,
+  readOriginatingContributions,
+  type ContributionReadResult,
+} from '../prospectProvenance/contributionReader';
+import type { ProvenanceContribution } from '../../../lib/prospectProvenance/contract';
 // W0-B — the canonical contact-governance evaluator and a tenant-scoped read of
 // its records. `mayContact` is pure; the read is the only I/O this adds.
 import { mayContact } from '../prospectIdentity/contactGovernance';
 import { loadTenantGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
 
+type Row = Record<string, unknown>;
+/** A bulk read's rows; `truncated` is set when the read hit its cap. */
+export type SourceRows<T = Row> = T[] & { truncated?: boolean };
+
 export interface LeadSourceReaders {
-  durable(companyId: string): Promise<CanonicalLeadView[]>;
-  activeLeads(companyId: string): Promise<Array<Record<string, unknown>>>;
-  leads(companyId: string): Promise<Array<Record<string, unknown>>>;
-  canonicalLeads(companyId: string): Promise<Array<Record<string, unknown>>>;
+  durable(companyId: string): Promise<SourceRows<CanonicalLeadView>>;
+  leads(companyId: string): Promise<SourceRows>;
+  canonicalLeads(companyId: string): Promise<SourceRows>;
+  /** Provenance of canonical prospects (tenant-filtered). Defaults to the contribution reader. */
+  contributions?(companyId: string, canonicalLeadIds: string[]): Promise<ContributionReadResult>;
+  /** Originating contribution of every canonical prospect of the tenant (stats). */
+  originatingContributions?(companyId: string): Promise<ContributionReadResult>;
 }
 
 const BULK_CAP = 2000;
+const DURABLE_CAP = 1000; // listCanonicalLeads clamps to 1000 (newest first)
+const CANONICAL_TABLE = 'canonical_leads';
 
 /**
  * A failed source read stays fail-open — the source contributes no rows and the
- * unified view is still served — but it is no longer SILENT. Production
- * `active_leads` is the legacy table (`company_id`, no `organization_id`), so the
- * `activeLeads` reader below errors on every call and that source has been dark
- * with nothing reporting it (PI-STATE-OF-PROGRAMME DEFECT-009). Reported once per
+ * unified view is still served — but it is never SILENT. Reported once per
  * table + error code per process, so a hot read path cannot flood the log.
  */
 const reportedReadFailures = new Set<string>();
@@ -98,20 +128,45 @@ function reportReadFailure(table: string, tenantCol: string, code: string, messa
   );
 }
 
+/** A capped read: reported once per table + tenant per process. */
+function reportTruncation(table: string, companyId: string, cap: number): void {
+  const key = `truncated|${table}|${companyId}`;
+  if (reportedReadFailures.has(key)) return;
+  reportedReadFailures.add(key);
+  console.warn(
+    `[leadIntelligenceReadService] ${table} read hit its cap of ${cap} rows for tenant ${companyId} — results are truncated (newest kept)`,
+  );
+}
+
 /** Test seam: forget which failures were already reported. */
 export function resetReadFailureReportsForTests(): void {
   reportedReadFailures.clear();
 }
 
-async function readTable(table: string, tenantCol: string, companyId: string): Promise<Array<Record<string, unknown>>> {
+function capped<T>(rows: T[], cap: number, table: string, companyId: string): SourceRows<T> {
+  const out = (rows.length > cap ? rows.slice(0, cap) : rows) as SourceRows<T>;
+  if (rows.length > cap) {
+    out.truncated = true;
+    reportTruncation(table, companyId, cap);
+  }
+  return out;
+}
+
+/** Deterministic, capped bulk read: newest first, id as the tie-break; reads cap+1 to detect truncation. */
+async function readTable(table: string, tenantCol: string, companyId: string): Promise<SourceRows> {
   try {
-    const { data, error } = await ownedDbTable(table).select('*').eq(tenantCol, companyId).limit(BULK_CAP);
+    const { data, error } = await ownedDbTable(table)
+      .select('*')
+      .eq(tenantCol, companyId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
+      .limit(BULK_CAP + 1);
     if (error) {
       const e = error as { code?: unknown; message?: unknown };
       reportReadFailure(table, tenantCol, String(e.code ?? 'unknown'), String(e.message ?? error));
       return [];
     }
-    return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
+    return capped(Array.isArray(data) ? (data as Row[]) : [], BULK_CAP, table, companyId);
   } catch (err) {
     reportReadFailure(table, tenantCol, 'exception', err instanceof Error ? err.message : String(err));
     return [];
@@ -119,31 +174,146 @@ async function readTable(table: string, tenantCol: string, companyId: string): P
 }
 
 export const defaultLeadSourceReaders: LeadSourceReaders = {
-  durable: (companyId) => listCanonicalLeads({ companyId, limit: 1000 }).then((r) => r).catch(() => []),
-  activeLeads: (companyId) => readTable('active_leads', 'organization_id', companyId),
+  durable: async (companyId) => {
+    const rows: SourceRows<CanonicalLeadView> = await listCanonicalLeads({ companyId, limit: DURABLE_CAP })
+      .catch(() => [] as CanonicalLeadView[]);
+    // The repository clamps at 1000 and cannot read cap+1: a FULL page is
+    // reported as (possibly) truncated rather than assumed complete.
+    if (rows.length >= DURABLE_CAP) {
+      rows.truncated = true;
+      reportTruncation('lead_intelligence', companyId, DURABLE_CAP);
+    }
+    return rows;
+  },
   leads: (companyId) => readTable('leads', 'company_id', companyId),
-  canonicalLeads: (companyId) => readTable('canonical_leads', 'company_id', companyId),
+  canonicalLeads: (companyId) => readTable(CANONICAL_TABLE, 'company_id', companyId),
+  contributions: (companyId, ids) => readContributionsForLeads(companyId, ids),
+  originatingContributions: (companyId) => readOriginatingContributions(companyId),
 };
 
+interface Collected { views: CanonicalLeadView[]; truncatedSources: string[] }
+
 /** Bulk-read every source once, bridge to unified views, dedupe (durable wins). */
-async function collectViews(companyId: string, readers: LeadSourceReaders): Promise<CanonicalLeadView[]> {
-  const [durable, active, legacyLeads, canonical] = await Promise.all([
+async function collectViews(companyId: string, readers: LeadSourceReaders): Promise<Collected> {
+  const [durable, legacyLeads, canonical] = await Promise.all([
     readers.durable(companyId),
-    readers.activeLeads(companyId),
     readers.leads(companyId),
     readers.canonicalLeads(companyId),
   ]);
+  const truncatedSources = [
+    durable.truncated ? 'lead_intelligence' : null,
+    legacyLeads.truncated ? 'leads' : null,
+    canonical.truncated ? CANONICAL_TABLE : null,
+  ].filter((x): x is string => x !== null);
   const views: CanonicalLeadView[] = [
     ...durable, // durable first → wins on dedupe
-    ...active.map((r) => projectExistingRow('community', r)),
-    ...legacyLeads.map((r) => projectExistingRow('website', r)),
-    ...canonical.map((r) => projectExistingRow('crm', r)),
+    ...legacyLeads.map((r) => projectExistingRow('website', r, { readFrom: 'leads' })),
+    ...canonical.map((r) => projectExistingRow('crm', r, { readFrom: CANONICAL_TABLE })),
   ];
   // G3 (LC-102): guarantee every view carries a canonical score from the ONE scorer.
   // Durable rows are already materialized at write; legacy/unbackfilled rows are
   // materialized here so List, Detail, Filters and Sorting all agree. No-op for
   // source-scored leads and when the kill-switch is off.
-  return dedupeViews(views).map(ensureMaterializedScores);
+  return { views: dedupeViews(views).map(ensureMaterializedScores), truncatedSources };
+}
+
+/* ── Provenance attachment ─────────────────────────────────────────────────── */
+
+const NO_PROVENANCE: ContributionReadResult = { status: 'error', byLead: new Map(), truncated: false, reads: 0 };
+
+/** The canonical prospect id a view represents, or null (not a canonical prospect). */
+export function canonicalLeadIdOf(v: CanonicalLeadView): string | null {
+  return v.sourceRef?.table === CANONICAL_TABLE && v.sourceRef.id ? v.sourceRef.id : null;
+}
+
+/** Flatten a contribution's typed references into evidence refs (deterministic order). */
+export function evidenceOf(c: ProvenanceContribution): LeadEvidenceRef[] {
+  const base = { contributionId: c.id, role: c.role, sourceCategory: c.sourceCategory, platform: c.platform, observedAt: c.observedAt };
+  const refs: Array<[LeadEvidenceRef['kind'], string | null | undefined]> = [
+    ['source_url', c.sourceUrl],
+    ['source_record', c.sourceRecordId],
+    ['lead_signal', c.signalRefs.leadSignalId],
+    ['opportunity_feed_item', c.signalRefs.opportunityFeedItemId],
+    ['engagement_message', c.signalRefs.engagementMessageId],
+    ['contact', c.signalRefs.contactId],
+  ];
+  return refs.filter(([, ref]) => !!ref).map(([kind, ref]) => ({ ...base, kind, ref: String(ref) }));
+}
+
+function originFrom(c: ProvenanceContribution | undefined, fallback: LeadOrigin | null | undefined): LeadOrigin | null {
+  if (c) return { category: c.sourceCategory, platform: c.platform, observedAt: c.observedAt };
+  return fallback ?? null;
+}
+
+function withProvenance(v: CanonicalLeadView, read: ContributionReadResult | null): CanonicalLeadView {
+  const id = canonicalLeadIdOf(v);
+  if (!id || !read) {
+    return { ...v, sources: [], evidence: [], provenanceStatus: 'not_applicable', origin: v.origin ?? null };
+  }
+  if (read.status !== 'ok') {
+    return { ...v, sources: [], evidence: [], provenanceStatus: 'unavailable', origin: v.origin ?? null };
+  }
+  const sources = read.byLead.get(id) ?? [];
+  const origin = originFrom(sources.find((c) => c.role === 'originating'), v.origin);
+  return {
+    ...v,
+    sources,
+    evidence: sources.flatMap(evidenceOf),
+    provenanceStatus: 'loaded',
+    origin,
+    sourceLabel: displayLabelFor(v.source, origin),
+  };
+}
+
+async function safeRead(fn: () => Promise<ContributionReadResult>): Promise<ContributionReadResult> {
+  try {
+    return await fn();
+  } catch (err) {
+    // An injected reader that throws is treated exactly like an unreadable store.
+    reportReadFailure('prospect_source_contributions', 'organization_id', 'exception', err instanceof Error ? err.message : String(err));
+    return NO_PROVENANCE;
+  }
+}
+
+/**
+ * Attach provenance to a set of views (normally ONE page): one read per chunk of
+ * canonical prospect ids, tenant-filtered. Never throws.
+ */
+async function attachProvenance(
+  companyId: string,
+  views: CanonicalLeadView[],
+  readers: LeadSourceReaders,
+): Promise<{ views: CanonicalLeadView[]; status: 'ok' | 'unavailable' | 'not_requested'; truncated: boolean }> {
+  const ids = views.map(canonicalLeadIdOf).filter((x): x is string => x !== null);
+  if (ids.length === 0) return { views: views.map((v) => withProvenance(v, null)), status: 'not_requested', truncated: false };
+  const read = readers.contributions ?? defaultLeadSourceReaders.contributions!;
+  const result = await safeRead(() => read(companyId, ids));
+  return {
+    views: views.map((v) => withProvenance(v, result)),
+    status: result.status === 'ok' ? 'ok' : 'unavailable',
+    truncated: result.truncated,
+  };
+}
+
+/** Paginated query + provenance for exactly the returned page. */
+async function pageWithProvenance(
+  companyId: string,
+  collected: Collected,
+  query: LeadQuery,
+  readers: LeadSourceReaders,
+): Promise<LeadQueryResult> {
+  const page = applyLeadQuery(collected.views, query);
+  const attached = await attachProvenance(companyId, page.rows, readers);
+  const truncatedSources = attached.truncated
+    ? [...collected.truncatedSources, 'prospect_source_contributions']
+    : collected.truncatedSources;
+  return {
+    ...page,
+    rows: attached.views,
+    truncated: truncatedSources.length > 0,
+    truncatedSources,
+    provenance: attached.status,
+  };
 }
 
 /** The unified, paginated, filtered, searched lead read. */
@@ -151,8 +321,42 @@ export async function searchLeads(query: LeadQuery, readers: LeadSourceReaders =
   const limit = Math.max(1, Math.min(query.page?.limit ?? 50, 500));
   const offset = Math.max(0, query.page?.offset ?? 0);
   if (!query.companyId) return { rows: [], total: 0, limit, offset };
-  const views = await collectViews(query.companyId, readers);
-  return applyLeadQuery(views, query);
+  const collected = await collectViews(query.companyId, readers);
+  return pageWithProvenance(query.companyId, collected, query, readers);
+}
+
+export interface AllLeadsResult {
+  rows: CanonicalLeadView[];
+  total: number;
+  truncated: boolean;
+  truncatedSources: string[];
+  provenance: 'ok' | 'unavailable' | 'not_requested';
+}
+
+/**
+ * The WHOLE filtered, sorted set — for consumers that must see every lead
+ * (audience evaluation). `searchLeads` clamps a page at 500, so a caller asking it
+ * for 5000 silently got 500. Provenance is opt-in here (chunked, ≤100 ids/read);
+ * without it the provenance fields are left unset because nothing was read.
+ */
+export async function listAllLeads(
+  query: LeadQuery,
+  opts: { withProvenance?: boolean } = {},
+  readers: LeadSourceReaders = defaultLeadSourceReaders,
+): Promise<AllLeadsResult> {
+  if (!query.companyId) return { rows: [], total: 0, truncated: false, truncatedSources: [], provenance: 'not_requested' };
+  const collected = await collectViews(query.companyId, readers);
+  const rows = sortLeads(filterLeads(collected.views, query), query.sort);
+  if (!opts.withProvenance) {
+    // Provenance fields are left UNSET (not "not_applicable"): nothing was read.
+    return {
+      rows, total: rows.length,
+      truncated: collected.truncatedSources.length > 0, truncatedSources: collected.truncatedSources, provenance: 'not_requested',
+    };
+  }
+  const attached = await attachProvenance(query.companyId, rows, readers);
+  const truncatedSources = attached.truncated ? [...collected.truncatedSources, 'prospect_source_contributions'] : collected.truncatedSources;
+  return { rows: attached.views, total: rows.length, truncated: truncatedSources.length > 0, truncatedSources, provenance: attached.status };
 }
 
 /**
@@ -161,9 +365,36 @@ export async function searchLeads(query: LeadQuery, readers: LeadSourceReaders =
  * no consumer-side aggregation. Reuses the single bulk collect (anti-N+1).
  */
 export async function getLeadStats(query: LeadQuery, readers: LeadSourceReaders = defaultLeadSourceReaders): Promise<LeadStats> {
-  if (!query.companyId) return { total: 0, bySource: {}, byStatus: {}, intentBands: { high: 0, medium: 0, low: 0 }, withIdentity: 0, withCampaign: 0 };
-  const views = await collectViews(query.companyId, readers);
-  return computeLeadStats(filterLeads(views, query));
+  if (!query.companyId) {
+    return { total: 0, bySource: {}, byStatus: {}, intentBands: { high: 0, medium: 0, low: 0 }, withIdentity: 0, withCampaign: 0, byOriginCategory: {}, bySourceLabel: {} };
+  }
+  const collected = await collectViews(query.companyId, readers);
+  const filtered = filterLeads(collected.views, query);
+  const truncatedSources = [...collected.truncatedSources];
+  // Per-origin breakdown: ONE tenant-wide read of originating contributions,
+  // only when the filtered set contains canonical prospects.
+  let provenance: LeadStats['provenance'] = 'not_requested';
+  let views = filtered;
+  if (filtered.some((v) => canonicalLeadIdOf(v) !== null)) {
+    const read = readers.originatingContributions ?? defaultLeadSourceReaders.originatingContributions!;
+    const result = await safeRead(() => read(query.companyId));
+    provenance = result.status === 'ok' ? 'ok' : 'unavailable';
+    if (result.truncated) truncatedSources.push('prospect_source_contributions');
+    if (result.status === 'ok') {
+      views = filtered.map((v) => {
+        const id = canonicalLeadIdOf(v);
+        if (!id) return v;
+        const origin = originFrom(result.byLead.get(id)?.find((c) => c.role === 'originating'), v.origin);
+        return { ...v, origin, sourceLabel: displayLabelFor(v.source, origin) };
+      });
+    }
+  }
+  return {
+    ...computeLeadStats(views),
+    truncated: truncatedSources.length > 0,
+    truncatedSources,
+    provenance,
+  };
 }
 
 /**
@@ -174,8 +405,8 @@ export async function getActiveLeadsView(query: LeadQuery, readers: LeadSourceRe
   const limit = Math.max(1, Math.min(query.page?.limit ?? 50, 500));
   const offset = Math.max(0, query.page?.offset ?? 0);
   if (!query.companyId) return { rows: [], total: 0, limit, offset };
-  const views = activeLeadsCompatibilityFilter(await collectViews(query.companyId, readers));
-  return applyLeadQuery(views, query);
+  const collected = await collectViews(query.companyId, readers);
+  return pageWithProvenance(query.companyId, { ...collected, views: activeLeadsCompatibilityFilter(collected.views) }, query, readers);
 }
 
 /**
@@ -192,9 +423,21 @@ export async function getLeadProfile(
   readers: LeadSourceReaders = defaultLeadSourceReaders,
 ): Promise<LeadProfile | null> {
   if (!companyId || !leadKey) return null;
-  const views = await collectViews(companyId, readers);
-  const view = views.find((v) => v.organizationId === companyId && leadKeyFor(v) === leadKey) ?? null;
-  if (!view) return null;
+  const { views } = await collectViews(companyId, readers);
+  const found = views.find((v) => v.organizationId === companyId && leadKeyFor(v) === leadKey) ?? null;
+  if (!found) return null;
+  const view = (await attachProvenance(companyId, [found], readers)).views[0];
+
+  // Every provenance contribution is its own timeline event (when each source
+  // observed the prospect): the originating source and every later contributor.
+  const contributionEvents: TimelineEvent[] = (view.sources ?? []).map((c) => ({
+    origin: 'prospect_source_contributions',
+    source: view.source,
+    entityId: c.id,
+    eventType: c.role === 'originating' ? 'source_originated' : 'source_contributed',
+    occurredAt: c.observedAt,
+    metadata: { sourceCategory: c.sourceCategory, platform: c.platform, externalRef: c.externalRef, sourceUrl: c.sourceUrl },
+  }));
 
   const leadEvent: TimelineEvent = {
     origin: view.sourceRef?.table ?? view.source,
@@ -224,7 +467,7 @@ export async function getLeadProfile(
     crm: crmProjection(view),
     engagement: engagementProjection(view),
     analytics: analyticsProjection(view),
-    timeline: buildTimeline([leadEvent]),
+    timeline: buildTimeline([leadEvent, ...contributionEvents]),
     summary: summarizeLead(view),
     recommendedNextAction: recommendNextAction(view),
   };
@@ -344,7 +587,7 @@ export async function getCompanyIntelligence(
 ): Promise<CompanyIntelligenceProfile | null> {
   if (!companyId || !companyKey) return null;
   const key = companyKey.toLowerCase();
-  const views = await collectViews(companyId, readers);
+  const { views } = await collectViews(companyId, readers);
   const matched = views.filter((v) => v.organizationId === companyId && resolveCompanyKey(v) === key);
   if (matched.length === 0) return null;
   const contacts = matched.map((view) => ({ view, buyingIntent: buildBuyingIntentProfile({ view }) }));
@@ -360,7 +603,17 @@ export async function exportLeads(
   format: 'csv' | 'excel',
   readers: LeadSourceReaders = defaultLeadSourceReaders,
 ): Promise<LeadExportResult> {
-  const all = await searchLeads({ ...query, page: { limit: 5000, offset: 0 } }, readers);
+  // The WHOLE filtered set, sorted deterministically. (This used `searchLeads`
+  // with limit 5000, but the page limit clamps at 500, so every export larger
+  // than 500 rows was silently cut to 500.) Provenance is attached in chunks of
+  // ≤100 canonical prospect ids.
+  const collected = query.companyId ? await collectViews(query.companyId, readers) : { views: [], truncatedSources: [] };
+  const attached = await attachProvenance(query.companyId, sortLeads(filterLeads(collected.views, query), query.sort), readers);
+  const all = { rows: attached.views };
+  const truncatedSources = attached.truncated ? [...collected.truncatedSources, 'prospect_source_contributions'] : collected.truncatedSources;
+  if (truncatedSources.length > 0) {
+    console.warn(`[leadIntelligenceReadService] export for tenant ${query.companyId} is truncated — capped sources: ${truncatedSources.join(', ')}`);
+  }
 
   // ── W0-B. GOVERNED EGRESS ────────────────────────────────────────────────
   // An export is a send in every respect that matters to the person in it: it
@@ -409,9 +662,23 @@ export async function exportLeads(
     };
     const email = view.identity.email ? permits('email', view.identity.email) : false;
     const phone = view.identity.phone ? permits('phone', view.identity.phone) : false;
+    // The provenance evidence URL points at the person's own post / profile.
+    // Granted only when every PRESENT endpoint is permitted AND no all-channel
+    // (`*`) restriction applies to the person. The probe channel below names no
+    // real channel, so only `*` records can match it ("every channel, including
+    // channels that do not exist yet").
+    const everyEndpointPermitted = (!view.identity.email || email) && (!view.identity.phone || phone);
+    const blockedEverywhere = !!personId && mayContact({
+      organizationId: query.companyId,
+      personId,
+      targetNormalized: null,
+      channel: 'provenance_export',
+      now,
+      records: governance.records,
+    }).decision !== 'allowed';
     // An actionable recommendation is an instruction to contact. It is withheld
     // unless at least one channel actually permits contact.
-    return { email, phone, action: email || phone };
+    return { email, phone, action: email || phone, sourceUrl: everyEndpointPermitted && !blockedEverywhere };
   };
 
   const rows = all.rows.map((v) => toExportRow(v, undefined, discloseFor(v)));
