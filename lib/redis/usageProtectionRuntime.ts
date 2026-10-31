@@ -254,8 +254,8 @@ function nextUtcMidnight(): string {
 // A delta is REJECTED (and the reference re-based to the current reading)
 // when the counter went backwards (reset / failover / another node) or when
 // it implies more than REDIS_USAGE_MAX_PLAUSIBLE_CMDS_PER_SEC (default
-// 10,000/s — above any Upstash plan's sustained throughput) over the elapsed
-// time. Rejections log `redis_usage_baseline_reset` (numbers only). A genuine
+// 2,000/s, see DEFAULT_MAX_PLAUSIBLE_CMDS_PER_SEC) over the elapsed time; an
+// implausible interval still contributes its clamped share (review M-2). Rejections log `redis_usage_baseline_reset` (numbers only). A genuine
 // high rate is still accumulated interval by interval and escalates exactly as
 // before. The legacy NX baseline key is still written (older deployments read
 // it) and reported as `legacyDailyUsed` for comparison, but no longer drives
@@ -268,14 +268,40 @@ let _legacyDailyUsed = 0;
 let _localLast: { total: number; ts: number } | null = null;
 let _localAccum = { date: '', used: 0 };
 
+// OPS-C (review M-2): an implausible interval is CLAMPED, not discarded, and a
+// run of them is itself a signal.
+//
+// Default cap 2,000 commands/s. One clamped 5-minute interval can then add at
+// most 600,000 commands = 12% of the 5,000,000/day default, so a single
+// counter discontinuity (production 2026-10-30: one 14.4M jump) can never by
+// itself reach critical (95%). A genuine sustained runaway above the cap still
+// accumulates 600k per 5-minute poll and reaches 95% of 5M within 8 polls
+// (40 min), and after 3 consecutive implausible polls the level is raised to
+// at least `warning` (redis_usage_anomaly_persistent). Raise the cap with
+// REDIS_USAGE_MAX_PLAUSIBLE_CMDS_PER_SEC on a larger plan, keeping
+// cap × poll interval well under 95% of the daily limit.
+export const DEFAULT_MAX_PLAUSIBLE_CMDS_PER_SEC = 2_000;
+export const ANOMALY_STREAK_WARN = 3;
+const ANOMALY_STREAK_KEY = 'omnivyra:usage:anomaly_streak';
+const ANOMALY_STREAK_TTL_S = 30 * 60;
+let _anomalyStreak = 0;
+
 export function maxPlausibleCommandsPerSec(): number {
   const v = Number(process.env.REDIS_USAGE_MAX_PLAUSIBLE_CMDS_PER_SEC);
-  return Number.isFinite(v) && v > 0 ? v : 10_000;
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_MAX_PLAUSIBLE_CMDS_PER_SEC;
 }
 
 export type CounterDeltaVerdict =
   | { accept: true; delta: number }
-  | { accept: false; reason: 'no_previous' | 'counter_backwards' | 'implausible_rate'; delta: number };
+  | { accept: false; reason: 'no_previous' | 'counter_backwards'; delta: number }
+  /** `credited` = min(delta, maxPerSec × elapsedS): what the interval may contribute. */
+  | { accept: false; reason: 'implausible_rate'; delta: number; credited: number };
+
+/** Commands an evaluated interval adds to the daily total (0 for no_previous / backwards). */
+export function creditedCommands(v: CounterDeltaVerdict): number {
+  if (v.accept === true) return (v as { delta: number }).delta;
+  return 'credited' in v ? (v as { credited: number }).credited : 0;
+}
 
 type RejectedCounterDelta = Extract<CounterDeltaVerdict, { accept: false }>;
 
@@ -294,7 +320,9 @@ export function evaluateCounterDelta(args: {
   // Elapsed floors at 1 s; an unknown timestamp is treated as one poll interval.
   const elapsedMs = args.prevTs !== null && args.prevTs > 0 ? args.now - args.prevTs : 300_000;
   const elapsedS = Math.max(1, elapsedMs / 1000);
-  if (delta / elapsedS > args.maxPerSec) return { accept: false, reason: 'implausible_rate', delta };
+  if (delta / elapsedS > args.maxPerSec) {
+    return { accept: false, reason: 'implausible_rate', delta, credited: Math.floor(Math.min(delta, args.maxPerSec * elapsedS)) };
+  }
   return { accept: true, delta };
 }
 
@@ -317,6 +345,27 @@ function logBaselineReset(reason: string, delta: number, elapsedS: number | null
   }));
 }
 
+/**
+ * Consecutive implausible intervals, shared across pollers through a TTL'd
+ * Redis counter (falls back to the in-process count). An accepted interval
+ * ends the streak; no_previous / counter_backwards leave it unchanged.
+ */
+async function trackAnomalyStreak(redis: IORedis, v: CounterDeltaVerdict): Promise<void> {
+  if (isRejectedDelta(v) && v.reason === 'implausible_rate') {
+    try {
+      _anomalyStreak = Number(await redis.incr(ANOMALY_STREAK_KEY)) || _anomalyStreak + 1;
+      await redis.expire(ANOMALY_STREAK_KEY, ANOMALY_STREAK_TTL_S);
+    } catch {
+      _anomalyStreak += 1;
+    }
+  } else if (!isRejectedDelta(v)) {
+    if (_anomalyStreak > 0) {
+      try { await redis.del(ANOMALY_STREAK_KEY); } catch { /* expires anyway */ }
+    }
+    _anomalyStreak = 0;
+  }
+}
+
 async function accumulateDailyUsage(redis: IORedis, cur: number): Promise<number> {
   const now = Date.now();
   const today = todayUtc();
@@ -328,11 +377,15 @@ async function accumulateDailyUsage(redis: IORedis, cur: number): Promise<number
     const prev = parseLast(prevRaw);
     const v = evaluateCounterDelta({ prevTotal: prev.total, prevTs: prev.ts, cur, now, maxPerSec });
     let used: number;
-    if (!isRejectedDelta(v)) {
-      used = Number(await redis.incrby(accumKey, v.delta));
+    if (isRejectedDelta(v) && v.reason !== 'no_previous') {
+      logBaselineReset(v.reason, v.delta, prev.ts ? Math.round((now - prev.ts) / 1000) : null);
+    }
+    await trackAnomalyStreak(redis, v);
+    const credit = creditedCommands(v);
+    if (credit > 0) {
+      used = Number(await redis.incrby(accumKey, credit));
       await redis.expire(accumKey, USAGE_KEY_TTL_S);
     } else {
-      if (v.reason !== 'no_previous') logBaselineReset(v.reason, v.delta, prev.ts ? Math.round((now - prev.ts) / 1000) : null);
       const raw = await redis.get(accumKey);
       used = raw === null ? 0 : Number(raw) || 0;
     }
@@ -343,8 +396,10 @@ async function accumulateDailyUsage(redis: IORedis, cur: number): Promise<number
     // Redis bookkeeping failed — same rules, in-process.
     if (_localAccum.date !== today) _localAccum = { date: today, used: 0 };
     const v = evaluateCounterDelta({ prevTotal: _localLast?.total ?? null, prevTs: _localLast?.ts ?? null, cur, now, maxPerSec });
-    if (!isRejectedDelta(v)) _localAccum.used += v.delta;
-    else if (v.reason !== 'no_previous') logBaselineReset(v.reason, v.delta, _localLast ? Math.round((now - _localLast.ts) / 1000) : null);
+    if (isRejectedDelta(v) && v.reason !== 'no_previous') logBaselineReset(v.reason, v.delta, _localLast ? Math.round((now - _localLast.ts) / 1000) : null);
+    if (isRejectedDelta(v) && v.reason === 'implausible_rate') _anomalyStreak += 1;
+    else if (!isRejectedDelta(v)) _anomalyStreak = 0;
+    _localAccum.used += creditedCommands(v);
     _localLast = { total: cur, ts: now };
     return _localAccum.used;
   }
@@ -722,6 +777,20 @@ async function pollWithRetry(getRedis: () => IORedis, attempt: number = 0): Prom
     _requests     = await computeRequestUsage(redis, totalCommandsProcessed);
     _effectivePct = Math.max(_memory.usagePct, _requests.usagePct);
     _level        = classify(_effectivePct / 100);
+    // OPS-C (M-2): a persistent run of implausible intervals is surfaced even
+    // when the clamped total is still low — at least `warning` (alert only;
+    // warning blocks nothing).
+    if (_anomalyStreak >= ANOMALY_STREAK_WARN) {
+      if (_level === 'normal') _level = 'warning';
+      console.warn(JSON.stringify({
+        level: 'WARN',
+        event: 'redis_usage_anomaly_persistent',
+        consecutive_implausible_polls: _anomalyStreak,
+        effective_level: _level,
+        requests_pct: _requests.usagePct,
+        max_plausible_per_sec: maxPlausibleCommandsPerSec(),
+      }));
+    }
     _checkedAt    = new Date().toISOString();
 
     // Level transition handling
