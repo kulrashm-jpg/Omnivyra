@@ -23,6 +23,16 @@
  * The connection string points at 127.0.0.1:1 and SUPABASE_URL/KEY are
  * placeholders, so `.env.local` is never loaded and no socket is ever opened —
  * the fake Client never connects to anything.
+ *
+ * ORCH-STACK (orchestration-engine-adapters verifier). The verifier also pins
+ * its session read-only and reads an ORCH-STACK catalog (roles, table RLS and
+ * privileges, functions, triggers, CHECKs), and folds STACK_* columns/indexes/
+ * types into its manifests at load. The stub answers those queries ONLY from
+ * the spec — never from the verifier's manifest — so every stack check is
+ * actually evaluated (the "ORCH-STACK fixture" block below fails if the stub
+ * is made to answer a conforming catalog regardless of the spec). The
+ * provenance expectations above stay exact on the LITERAL manifest; the stack
+ * is pinned separately by literal counts and names (ORCH_STACK_PIN).
  */
 import { execFileSync } from 'child_process';
 import * as crypto from 'crypto';
@@ -59,6 +69,36 @@ const COLUMNS = manifestArray<ColumnReq>('REQUIRED_COLUMNS');
 const INDEXES = manifestArray<IndexReq>('REQUIRED_INDEXES');
 const TYPES = manifestArray<TypeReq>('REQUIRED_COLUMN_TYPES');
 
+// ─── ORCH-STACK: independent pins (literals — NOT derived from the verifier) ─
+// A shrink of the literal provenance manifest and a shrink of the stack are
+// detected separately: checked_* must equal literal + these numbers.
+const ORCH_STACK_PIN = {
+  tables: 18, columns: 208 /* 201 table columns + 7 added */, types: 5,
+  indexes: 45, uniqueIndexes: 18, functions: 27, triggers: 17, checks: 7,
+} as const;
+const ORCH_STACK_TABLE_NAMES = [
+  'prospect_lists', 'prospect_list_members', 'prospect_campaigns', 'workflows', 'workflow_versions',
+  'execution_instances', 'execution_plans', 'execution_plan_steps', 'execution_tasks',
+  'outreach_bridge_handoffs', 'execution_engine_requests', 'prospect_campaign_lists',
+  'prospect_campaign_targets', 'community_action_journey_links', 'rpa_auth_token_redemptions',
+  'identity_verification_attestations', 'engagement_request_idempotency', 'rpa_session_invalidation_audit',
+];
+
+interface StackFn { name: string; args: string; secdef: boolean; exec?: string; bodyContains?: string[] }
+// The verifier module, required ONLY to build the conforming fixture and to
+// prove the fold leaves the literal entries untouched. Never used by the stub.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const RUNTIME = require(VERIFIER) as {
+  REQUIRED_COLUMNS: ColumnReq[]; REQUIRED_INDEXES: IndexReq[]; REQUIRED_COLUMN_TYPES: TypeReq[];
+  STACK_TABLES: Array<{ table: string; columns: string[]; serviceRoleGrants?: string[] }>;
+  STACK_ADDED_COLUMNS: Array<{ table: string; column: string }>;
+  STACK_COLUMN_TYPES: Array<{ table: string; column: string; udtName: string }>;
+  STACK_INDEXES: Array<IndexReq & { predicate?: string[] }>;
+  STACK_FUNCTIONS: StackFn[];
+  STACK_TRIGGERS: Array<{ table: string; trigger: string; fn: string }>;
+  STACK_CHECKS: Array<{ table: string; constraint: string; contains: string[] }>;
+};
+
 const sevOf = (table: string, column: string): Severity | undefined =>
   COLUMNS.find((c) => c.table === table && c.column === column)?.severity;
 
@@ -72,6 +112,35 @@ class Client {
   async connect() {}
   async end() {}
   async query(sql, params) {
+    // Session pin: the verifier refuses to run unless read-only took effect.
+    if (sql.startsWith('SET default_transaction_read_only = on')) return { rows: [] };
+    if (sql.includes("current_setting('transaction_read_only')")) {
+      return { rows: [{ role: 'pi_prov_stub', tx_read_only: 'on' }] };
+    }
+    // ORCH-STACK catalog — answered from spec.stack ONLY, filtered by the
+    // names the verifier asks for, exactly like the real catalog would be.
+    const st = spec.stack;
+    if (sql.includes('FROM pg_roles')) {
+      return { rows: params[0].filter((r) => st.roles.includes(r)).map((rolname) => ({ rolname })) };
+    }
+    if (sql.includes('has_table_privilege')) {
+      const rows = [];
+      for (const t of st.tables) {
+        if (!params[0].includes(t.relname)) continue;
+        for (const role of params[1]) for (const priv of params[2]) {
+          rows.push({ relname: t.relname, relrowsecurity: t.relrowsecurity, rolname: role, priv,
+            granted: (t.priv[role] || []).includes(priv) });
+        }
+      }
+      return { rows };
+    }
+    if (sql.includes('relrowsecurity FROM pg_class')) {
+      return { rows: st.tables.filter((t) => params[0].includes(t.relname))
+        .map((t) => ({ relname: t.relname, relrowsecurity: t.relrowsecurity })) };
+    }
+    if (sql.includes('FROM pg_proc')) return { rows: st.functions.filter((f) => params[0].includes(f.proname)) };
+    if (sql.includes('FROM pg_trigger')) return { rows: st.triggers.filter((t) => params[0].includes(t.tgname)) };
+    if (sql.includes('FROM pg_constraint')) return { rows: st.checks.filter((c) => params[0].includes(c.conname)) };
     if (sql.includes('information_schema.columns')) {
       const t = new Set(params[0]);
       return { rows: spec.columns.filter((r) => t.has(r.table_name)) };
@@ -110,22 +179,60 @@ interface Spec {
   indexes: Array<{ table_name: string; index_name: string; is_unique: boolean; is_partial: boolean; definition: string }>;
   ledger: Array<{ version: string; name: string; statements_md5: string }>;
   ledgerError?: string;
+  stack: StackCatalog;
+}
+
+/** The ORCH-STACK catalog the stub serves (shapes of the verifier's catalog queries). */
+interface StackCatalog {
+  roles: string[];
+  tables: Array<{ relname: string; relrowsecurity: boolean; priv: Record<string, string[]> }>;
+  functions: Array<{ proname: string; args: string; prosecdef: boolean; def: string;
+    anon: boolean; authenticated: boolean; service_role: boolean; public_exec: boolean }>;
+  triggers: Array<{ relname: string; tgname: string; tgenabled: string; proname: string }>;
+  checks: Array<{ relname: string; conname: string; def: string }>;
+}
+
+/** A conforming ORCH-STACK catalog: RLS on, client roles hold nothing, service_role may act. */
+function conformingStack(): StackCatalog {
+  return {
+    roles: ['anon', 'authenticated', 'service_role'],
+    tables: RUNTIME.STACK_TABLES.map((t) => ({
+      relname: t.table, relrowsecurity: true,
+      priv: { anon: [], authenticated: [], service_role: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+    })),
+    functions: RUNTIME.STACK_FUNCTIONS.map((f) => ({
+      proname: f.name, args: f.args, prosecdef: f.secdef,
+      def: `CREATE OR REPLACE FUNCTION public.${f.name}(${f.args}) AS $$ ${(f.bodyContains ?? []).join(' ')} $$`,
+      anon: false, authenticated: false, service_role: true, public_exec: false,
+    })),
+    triggers: RUNTIME.STACK_TRIGGERS.map((t) => ({ relname: t.table, tgname: t.trigger, tgenabled: 'O', proname: t.fn })),
+    checks: RUNTIME.STACK_CHECKS.map((c) => ({ relname: c.table, conname: c.constraint, def: `CHECK (${c.contains.join(' ')})` })),
+  };
 }
 
 /** A database on which every manifest requirement holds and the ledger is clean. */
 function fullSchema(): Spec {
-  const udt = (t: string, c: string) => TYPES.find((x) => x.table === t && x.column === c)?.udtName ?? 'text';
+  const allTypes = [...TYPES, ...RUNTIME.STACK_COLUMN_TYPES];
+  const udt = (t: string, c: string) => allTypes.find((x) => x.table === t && x.column === c)?.udtName ?? 'text';
+  const stackColumns = [
+    ...RUNTIME.STACK_TABLES.flatMap((t) => t.columns.map((column) => ({ table: t.table, column }))),
+    ...RUNTIME.STACK_ADDED_COLUMNS.map((c) => ({ table: c.table, column: c.column })),
+  ];
+  const indexDef = (i: IndexReq & { predicate?: string[] }) =>
+    `CREATE ${i.unique ? 'UNIQUE ' : ''}INDEX ${i.index} ON public.${i.table} USING btree (${i.keys.join(', ')})`
+    + `${i.partial ? ` WHERE (${(i.predicate ?? ['predicate']).join(' AND ')})` : ''}`;
   return {
-    columns: COLUMNS.map((c) => ({
+    columns: [...COLUMNS, ...stackColumns].map((c) => ({
       table_name: c.table, column_name: c.column, data_type: udt(c.table, c.column), udt_name: udt(c.table, c.column),
     })),
-    indexes: INDEXES.map((i) => ({
+    indexes: [...INDEXES, ...RUNTIME.STACK_INDEXES].map((i) => ({
       table_name: i.table,
       index_name: i.index,
       is_unique: i.unique,
       is_partial: i.partial,
-      definition: `CREATE ${i.unique ? 'UNIQUE ' : ''}INDEX ${i.index} ON public.${i.table} USING btree (${i.keys.join(', ')})${i.partial ? ' WHERE (predicate)' : ''}`,
+      definition: indexDef(i),
     })),
+    stack: conformingStack(),
     // The three historical version-map exceptions, recorded exactly as production has them.
     ledger: (HISTORICAL_VERSION_MAP as Array<{ recorded_version: string; recorded_name: string; recorded_statements_md5: string }>)
       .map((e) => ({ version: e.recorded_version, name: e.recorded_name, statements_md5: e.recorded_statements_md5 })),
@@ -192,6 +299,14 @@ function runPredeploySchemaBlock(verifierExit: number, strict: boolean):
   let out = '';
   const unverified: string[] = [];
   const context = {
+    // The block require()s the verifier for predeployParityDecision. Only that
+    // one module is resolvable — still no git, no network, no database.
+    require: (p: string) => {
+      if (path.resolve(p) !== path.resolve(VERIFIER)) throw new Error(`predeploy block may not require ${p}`);
+      return require(VERIFIER);
+    },
+    path,
+    __dirname: path.dirname(PREDEPLOY),
     unverified,
     execSync: (cmd: string) => {
       commands.push(cmd);
@@ -229,8 +344,9 @@ describe('verify-schema-parity — runtime exit contract (stubbed pg, no databas
     expect(r.check!.ledger_desync_detected).toBe(false);
     // The three historical exceptions were exercised and accepted.
     expect(r.check!.ledger_probe.recorded_by_version_map).toHaveLength(3);
-    expect(r.check!.checked_columns).toBe(COLUMNS.length);
-    expect(r.check!.checked_indexes).toBe(INDEXES.length);
+    // Literal provenance manifest, exactly, PLUS the independently pinned stack.
+    expect(r.check!.checked_columns).toBe(COLUMNS.length + ORCH_STACK_PIN.columns);
+    expect(r.check!.checked_indexes).toBe(INDEXES.length + ORCH_STACK_PIN.indexes);
   });
 
   it('an unrelated missing WARN workflow column still exits 3 (status WARN, never ok)', () => {
@@ -364,6 +480,124 @@ describe('predeploy-check — strict schema mode maps the verifier exit codes (s
     const v = runVerifier(without(fullSchema(), (t, c) => t === 'opportunity_dispositions' && c === 'snoozed_until'));
     expect(v.code).toBe(3);
     expect(runPredeploySchemaBlock(v.code, true).exit).toBe(1);
+  });
+});
+
+// ─── ORCH-STACK fixture: evaluated, never assumed ───────────────────────────
+// Every test here FAILS if the stub is made tautological (answers a conforming
+// catalog from the verifier's own manifest regardless of the spec), and the
+// pins fail if either manifest shrinks without this file changing.
+
+describe('ORCH-STACK — independent pins and a non-tautological fake catalog', () => {
+  const kinds = (r: VerifierRun) => (r.check!.structural_findings as Array<{ kind: string; object: string | null }>)
+    .map((f) => `${f.kind}:${f.object}`);
+
+  it('the stub never consults the verifier module (answers come from the spec only)', () => {
+    expect(STUB_SOURCE).not.toMatch(/verify-schema-parity|PI_PROV_GATE_VERIFIER|STACK_/);
+    expect(STUB_SOURCE).toMatch(/const st = spec\.stack;/);
+  });
+
+  it('stack manifest sizes equal the literal pins (a shrink is a reviewed change)', () => {
+    expect(RUNTIME.STACK_TABLES.map((t) => t.table)).toEqual(ORCH_STACK_TABLE_NAMES);
+    expect(RUNTIME.STACK_TABLES).toHaveLength(ORCH_STACK_PIN.tables);
+    expect(RUNTIME.STACK_TABLES.reduce((n, t) => n + t.columns.length, 0) + RUNTIME.STACK_ADDED_COLUMNS.length)
+      .toBe(ORCH_STACK_PIN.columns);
+    expect(RUNTIME.STACK_COLUMN_TYPES).toHaveLength(ORCH_STACK_PIN.types);
+    expect(RUNTIME.STACK_INDEXES).toHaveLength(ORCH_STACK_PIN.indexes);
+    expect(RUNTIME.STACK_INDEXES.filter((i) => i.unique)).toHaveLength(ORCH_STACK_PIN.uniqueIndexes);
+    expect(RUNTIME.STACK_FUNCTIONS).toHaveLength(ORCH_STACK_PIN.functions);
+    expect(RUNTIME.STACK_TRIGGERS).toHaveLength(ORCH_STACK_PIN.triggers);
+    expect(RUNTIME.STACK_CHECKS).toHaveLength(ORCH_STACK_PIN.checks);
+  });
+
+  it('the runtime fold appends the stack AFTER the literal entries and changes none of them', () => {
+    expect(RUNTIME.REQUIRED_COLUMNS.slice(0, COLUMNS.length)).toEqual(COLUMNS);
+    expect(RUNTIME.REQUIRED_INDEXES.slice(0, INDEXES.length)).toEqual(INDEXES);
+    expect(RUNTIME.REQUIRED_COLUMN_TYPES.slice(0, TYPES.length)).toEqual(TYPES);
+    expect(RUNTIME.REQUIRED_COLUMNS).toHaveLength(COLUMNS.length + ORCH_STACK_PIN.columns);
+    expect(RUNTIME.REQUIRED_INDEXES).toHaveLength(INDEXES.length + ORCH_STACK_PIN.indexes);
+    expect(RUNTIME.REQUIRED_COLUMN_TYPES).toHaveLength(TYPES.length + ORCH_STACK_PIN.types);
+  });
+
+  it('a clean run reports every stack dimension it checked', () => {
+    const r = runVerifier(fullSchema());
+    expect(r.code).toBe(0);
+    expect(r.check!.checked_column_types).toBe(TYPES.length + ORCH_STACK_PIN.types);
+    expect(r.check!.checked_stack).toEqual({
+      tables: ORCH_STACK_PIN.tables, functions: ORCH_STACK_PIN.functions,
+      triggers: ORCH_STACK_PIN.triggers, check_constraints: ORCH_STACK_PIN.checks,
+    });
+    expect(r.check!.session).toEqual({ role: 'pi_prov_stub', tx_read_only: 'on' });
+  });
+
+  it('an EMPTY stack catalog (migrations unapplied) is BLOCKING, never a pass', () => {
+    const spec = fullSchema();
+    spec.stack = { roles: ['anon', 'authenticated', 'service_role'], tables: [], functions: [], triggers: [], checks: [] };
+    const r = runVerifier(spec);
+    expect(r.code).toBe(1);
+    expect(r.check!.status).toBe('BLOCKING');
+    const k = kinds(r);
+    expect(k.filter((x) => x.startsWith('function:'))).toHaveLength(ORCH_STACK_PIN.functions);
+    expect(k.filter((x) => x.startsWith('trigger:'))).toHaveLength(ORCH_STACK_PIN.triggers);
+    expect(k.filter((x) => x.startsWith('check_constraint:'))).toHaveLength(ORCH_STACK_PIN.checks);
+  });
+
+  it('a stack column absent (outreach_bridge_handoffs.person_id) is BLOCKING', () => {
+    const r = runVerifier(without(fullSchema(), (t, c) => t === 'outreach_bridge_handoffs' && c === 'person_id'));
+    expect(r.code).toBe(1);
+    expect(r.check!.missing_columns).toEqual([
+      expect.objectContaining({ severity: 'BLOCKING', table: 'outreach_bridge_handoffs', column: 'person_id' }),
+    ]);
+  });
+
+  it('RLS disabled on a stack table is BLOCKING', () => {
+    const spec = fullSchema();
+    spec.stack.tables.find((t) => t.relname === 'outreach_bridge_handoffs')!.relrowsecurity = false;
+    const r = runVerifier(spec);
+    expect(r.code).toBe(1);
+    expect(kinds(r)).toEqual(['table_rls:outreach_bridge_handoffs']);
+  });
+
+  it('authenticated holding a privilege on a REVOKE-ALL stack table is BLOCKING', () => {
+    const spec = fullSchema();
+    spec.stack.tables.find((t) => t.relname === 'execution_engine_requests')!.priv.authenticated = ['SELECT'];
+    const r = runVerifier(spec);
+    expect(r.code).toBe(1);
+    expect(kinds(r)).toEqual(['table_privilege:execution_engine_requests']);
+  });
+
+  it('service_role lacking an explicit GRANT is BLOCKING', () => {
+    const spec = fullSchema();
+    spec.stack.tables.find((t) => t.relname === 'rpa_auth_token_redemptions')!.priv.service_role = ['SELECT', 'INSERT'];
+    const r = runVerifier(spec);
+    expect(r.code).toBe(1);
+    expect(kinds(r)).toEqual(['table_privilege:rpa_auth_token_redemptions']);
+  });
+
+  it('the unsafe reaper body (status = \'failed\') is BLOCKING', () => {
+    const spec = fullSchema();
+    const f = spec.stack.functions.find((x) => x.proname === 'reap_community_ai_action_leases')!;
+    f.def += " UPDATE x SET status = 'failed'";
+    const r = runVerifier(spec);
+    expect(r.code).toBe(1);
+    expect(kinds(r)).toEqual(['function_body:reap_community_ai_action_leases()']);
+  });
+
+  it('a disabled guard trigger is BLOCKING', () => {
+    const spec = fullSchema();
+    spec.stack.triggers.find((t) => t.tgname === 'trg_outreach_bridge_handoffs_guard')!.tgenabled = 'D';
+    const r = runVerifier(spec);
+    expect(r.code).toBe(1);
+    expect(kinds(r)).toEqual(['trigger:trg_outreach_bridge_handoffs_guard']);
+  });
+
+  it("a CHECK vocabulary lacking 'uncertain' is BLOCKING", () => {
+    const spec = fullSchema();
+    const c = spec.stack.checks.find((x) => x.conname === 'community_ai_actions_status_check')!;
+    c.def = c.def.replace("'uncertain'", '');
+    const r = runVerifier(spec);
+    expect(r.code).toBe(1);
+    expect(kinds(r)).toEqual(['check_constraint:community_ai_actions_status_check']);
   });
 });
 
