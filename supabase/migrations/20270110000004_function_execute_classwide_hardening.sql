@@ -47,6 +47,26 @@
 --   creates it), so a replay cannot preflight it: it is NOT in this migration;
 --   $verify$ reports any such leftover in a NOTICE.
 --
+-- ─── X-1: prospect_score_evaluations_immutable() has TWO reviewed states ──
+--   This migration never changes that function's body, flag or search_path,
+--   but privacy/erasure 20270112000002 does (CREATE OR REPLACE): it becomes
+--   SECURITY DEFINER with search_path = '' so the trigger can consult the
+--   owner-only erasure authorization (pi_erasure_authorization_held) whatever
+--   role fires it. Version order applies this file BEFORE 20270112000002, but
+--   a re-run (or an out-of-order apply) sees the post-erasure state. Its
+--   manifest row therefore carries secdef = NULL and cfg = NULL, a sentinel
+--   allowed for this one signature only, and both blocks accept EXACTLY:
+--     S1 (20261031000000)  INVOKER, search_path=public, pg_temp, and a body
+--                          with no erasure bypass;
+--     S2 (20270112000002)  SECURITY DEFINER, search_path="", owned by the
+--                          owner of public.prospect_score_evaluations, and a
+--                          body that consults the 'score_evaluations'
+--                          authorization.
+--   Any third state (unpinned definer, another owner, another bypass, NULL
+--   proconfig) is refused, null-safely (COALESCE(..., false); review J3-8).
+--   The ACL checks (no PUBLIC, anon or authenticated EXECUTE; owner keeps
+--   EXECUTE) apply to both states unchanged.
+--
 -- Re-runnable: REVOKE/GRANT/ALTER ... SET are idempotent; $preflight$ accepts an
 -- already-pinned function only when it carries exactly the value pinned here.
 -- Rollback: supabase/migrations/rollbacks/function_execute_classwide_hardening_rollback.sql
@@ -86,7 +106,7 @@ BEGIN
     ('public.pi_prospect_alias_guard()', 'T', false, false, '{"search_path=public, pg_temp"}'::text[], 2),
     ('public.prevent_company_context_snapshot_mutation()', 'T', false, true, '{"search_path=pg_catalog, public"}'::text[], 1),
     ('public.prospect_icp_versions_guard_immutable()', 'T', false, true, '{"search_path=pg_catalog, public"}'::text[], 1),
-    ('public.prospect_score_evaluations_immutable()', 'T', false, false, '{"search_path=public, pg_temp"}'::text[], 1),
+    ('public.prospect_score_evaluations_immutable()', 'T', NULL::boolean, false, NULL::text[], 1),  -- X-1: two reviewed states, see header
     ('public.public_blogs_updated_at()', 'T', false, false, '{"search_path=public, extensions"}'::text[], 1),
     ('public.raise_audit_immutable()', 'T', false, true, '{"search_path=pg_catalog, public"}'::text[], 1),
     ('public.raise_ledger_immutable()', 'T', false, true, '{"search_path=pg_catalog, public"}'::text[], 46),
@@ -207,7 +227,26 @@ BEGIN
     IF (r.cls = 'T') <> (SELECT prorettype = 'trigger'::regtype FROM pg_proc WHERE oid = v_oid) THEN
       RAISE EXCEPTION 'SEC-B preflight: % expected class % but its return type disagrees', r.sig, r.cls;
     END IF;
-    IF (SELECT prosecdef FROM pg_proc WHERE oid = v_oid) IS DISTINCT FROM r.secdef THEN
+    IF r.secdef IS NULL THEN
+      -- X-1 sentinel: legal for exactly one signature (see header).
+      IF r.sig <> 'public.prospect_score_evaluations_immutable()' OR r.cfg IS NOT NULL OR r.pin THEN
+        RAISE EXCEPTION 'SEC-B preflight: % has a NULL reviewed state; only prospect_score_evaluations_immutable() may', r.sig;
+      END IF;
+      -- X-1 state predicate (identical text in $verify$; the realschema suite asserts that).
+      IF NOT COALESCE((SELECT
+             (NOT p.prosecdef
+              AND p.proconfig = '{"search_path=public, pg_temp"}'::text[]
+              AND position('pi_erasure_authorization_held' IN p.prosrc) = 0)
+          OR (p.prosecdef
+              AND p.proconfig = '{"search_path=\"\""}'::text[]
+              AND p.proowner = (SELECT c.relowner FROM pg_class c WHERE c.oid = to_regclass('public.prospect_score_evaluations'))
+              AND position('public.pi_erasure_authorization_held(''score_evaluations''' IN p.prosrc) > 0)
+           FROM pg_proc p WHERE p.oid = v_oid), false) THEN
+        RAISE EXCEPTION 'SEC-B preflight: % is in neither reviewed state (S1 INVOKER/search_path=public, pg_temp from 20261031000000; S2 SECURITY DEFINER/search_path="" owned by the table owner from 20270112000002) - found secdef %, proconfig %, owner %; refusing',
+          r.sig, (SELECT prosecdef FROM pg_proc WHERE oid = v_oid), (SELECT proconfig FROM pg_proc WHERE oid = v_oid),
+          (SELECT proowner::regrole FROM pg_proc WHERE oid = v_oid);
+      END IF;
+    ELSIF (SELECT prosecdef FROM pg_proc WHERE oid = v_oid) IS DISTINCT FROM r.secdef THEN
       RAISE EXCEPTION 'SEC-B preflight: % SECURITY DEFINER flag differs from the reviewed state (expected %)', r.sig, r.secdef;
     END IF;
     -- A function about to be pinned must still be unpinned (or already carry exactly
@@ -552,7 +591,7 @@ BEGIN
     ('public.pi_prospect_alias_guard()', 'T', false, false, '{"search_path=public, pg_temp"}'::text[], 2),
     ('public.prevent_company_context_snapshot_mutation()', 'T', false, true, '{"search_path=pg_catalog, public"}'::text[], 1),
     ('public.prospect_icp_versions_guard_immutable()', 'T', false, true, '{"search_path=pg_catalog, public"}'::text[], 1),
-    ('public.prospect_score_evaluations_immutable()', 'T', false, false, '{"search_path=public, pg_temp"}'::text[], 1),
+    ('public.prospect_score_evaluations_immutable()', 'T', NULL::boolean, false, NULL::text[], 1),  -- X-1: two reviewed states, see header
     ('public.public_blogs_updated_at()', 'T', false, false, '{"search_path=public, extensions"}'::text[], 1),
     ('public.raise_audit_immutable()', 'T', false, true, '{"search_path=pg_catalog, public"}'::text[], 1),
     ('public.raise_ledger_immutable()', 'T', false, true, '{"search_path=pg_catalog, public"}'::text[], 46),
@@ -662,11 +701,31 @@ BEGIN
   LOOP
     v_oid := to_regprocedure(r.sig);
     SELECT p.prosecdef, p.proconfig, p.proowner, p.proacl INTO v_p FROM pg_proc p WHERE p.oid = v_oid;
-    IF v_p.prosecdef IS DISTINCT FROM r.secdef THEN
-      RAISE EXCEPTION 'SEC-B postcondition: % SECURITY DEFINER flag changed', r.sig;
-    END IF;
-    IF v_p.proconfig IS DISTINCT FROM r.cfg THEN
-      RAISE EXCEPTION 'SEC-B postcondition: % proconfig is %, expected %', r.sig, v_p.proconfig, r.cfg;
+    IF r.secdef IS NULL THEN
+      -- X-1 sentinel: legal for exactly one signature (see header).
+      IF r.sig <> 'public.prospect_score_evaluations_immutable()' OR r.cfg IS NOT NULL OR r.pin THEN
+        RAISE EXCEPTION 'SEC-B postcondition: % has a NULL reviewed state; only prospect_score_evaluations_immutable() may', r.sig;
+      END IF;
+      -- X-1 state predicate (identical text in $preflight$; the realschema suite asserts that).
+      IF NOT COALESCE((SELECT
+             (NOT p.prosecdef
+              AND p.proconfig = '{"search_path=public, pg_temp"}'::text[]
+              AND position('pi_erasure_authorization_held' IN p.prosrc) = 0)
+          OR (p.prosecdef
+              AND p.proconfig = '{"search_path=\"\""}'::text[]
+              AND p.proowner = (SELECT c.relowner FROM pg_class c WHERE c.oid = to_regclass('public.prospect_score_evaluations'))
+              AND position('public.pi_erasure_authorization_held(''score_evaluations''' IN p.prosrc) > 0)
+           FROM pg_proc p WHERE p.oid = v_oid), false) THEN
+        RAISE EXCEPTION 'SEC-B postcondition: % is in neither reviewed state (secdef %, proconfig %, owner %)',
+          r.sig, v_p.prosecdef, v_p.proconfig, v_p.proowner::regrole;
+      END IF;
+    ELSE
+      IF v_p.prosecdef IS DISTINCT FROM r.secdef THEN
+        RAISE EXCEPTION 'SEC-B postcondition: % SECURITY DEFINER flag changed', r.sig;
+      END IF;
+      IF v_p.proconfig IS DISTINCT FROM r.cfg THEN
+        RAISE EXCEPTION 'SEC-B postcondition: % proconfig is %, expected %', r.sig, v_p.proconfig, r.cfg;
+      END IF;
     END IF;
     -- PUBLIC never holds a privilege on any listed function.
     IF EXISTS (SELECT 1 FROM aclexplode(COALESCE(v_p.proacl, acldefault('f', v_p.proowner))) x WHERE x.grantee = 0) THEN
