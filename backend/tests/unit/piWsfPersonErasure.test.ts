@@ -127,12 +127,37 @@ function deletePerson(companyId: string, id: string): Row[] {
 }
 
 jest.mock('../../db/writeOwner', () => ({
-  // Closure A (20270109000000): erasure always calls the complete provenance
-  // erasure before the delete; this suite is about governance, so it succeeds.
-  ownedDbRpc: async () => ({
-    data: { erasure_id: 'e1', redacted: 0, already_redacted: 0, contribution_ids: [], canonical_lead_ids: [], counts: {} },
-    error: null,
-  }),
+  // Erasure ledger (20270112000003): open → mark 3/4/5 → finalize (steps 6+7 in
+  // one transaction). This suite is about governance, so provenance succeeds;
+  // finalize performs the delete through the SAME simulated `unified_persons`
+  // DELETE below (FK actions + CHECK/index evaluation), so every DEFECT-008/010
+  // expectation still runs against it, and per-test overrides still apply.
+  ownedDbRpc: async (fn: string, args: Record<string, unknown>) => {
+    if (fn === 'pi_person_erasure_open') {
+      const p = persons.find((x) => x.id === args.p_person_id);
+      if (!p) return { data: null, error: { code: 'P0002', message: 'person_erasure:person_not_found' } };
+      if (p.company_id !== args.p_organization_id) {
+        return { data: null, error: { code: '42501', message: 'person_erasure:person_belongs_to_another_tenant' } };
+      }
+      return { data: { request_id: `req:${String(args.p_organization_id)}:${String(args.p_person_id)}`, lease_token: 'lease-1', resumed: false }, error: null };
+    }
+    if (fn === 'pi_person_erasure_mark') return { data: null, error: null };
+    if (fn === 'pi_person_erasure_finalize') {
+      const [, org, personId] = String(args.p_request_id).split(':');
+      const wo = jest.requireMock('../../db/writeOwner') as { ownedDbTable: (n: string) => any };
+      const del = await wo.ownedDbTable('unified_persons').delete().eq('company_id', org).eq('id', personId).select('id');
+      if (del.error) {
+        const con = /constraint "([^"]+)"/.exec(String(del.error.message))?.[1] ?? 'unknown';
+        return { data: null, error: { code: del.error.code, message: `person_erasure:delete_blocked_by ${con} (${del.error.message})` } };
+      }
+      return {
+        data: { deleted: (del.data ?? []).length > 0,
+          provenance: { erasure_id: 'e1', redacted: 0, already_redacted: 0, contribution_ids: [], canonical_lead_ids: [], counts: {} } },
+        error: null,
+      };
+    }
+    return { data: null, error: { code: 'PGRST202', message: `unexpected rpc ${fn}` } };
+  },
   ownedDbTable: (name: string) => {
     const tableOf = (): Row[] =>
       name === 'contact_governance_records' ? governance
@@ -678,8 +703,10 @@ describe('PI/WS-F — tenant isolation, idempotency, fail-closed', () => {
   });
 
   it('tenant A cannot erase tenant B\'s person', async () => {
-    const res = await erasePerson({ organizationId: ORG_A, personId: PERSON_B, reason: 'dsar', now: NOW });
-    expect(res.deleted).toBe(false);
+    // A6-10: the ledger refuses another tenant's person (42501) before anything
+    // is written — the same answer pi_erase_prospect_provenance already gave.
+    await expect(erasePerson({ organizationId: ORG_A, personId: PERSON_B, reason: 'dsar', now: NOW }))
+      .rejects.toMatchObject({ code: 'cross_tenant' });
     expect(persons.some((p) => p.id === PERSON_B)).toBe(true);
   });
 

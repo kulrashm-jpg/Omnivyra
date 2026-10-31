@@ -21,6 +21,8 @@ const state = {
   persons: [] as Row[],
   rpcCalls: [] as Array<{ fn: string; args: Row }>,
   rpcResult: { data: null as unknown, error: null as { code?: string; message: string } | null },
+  openResult: { data: null as unknown, error: null as { code?: string; message: string } | null },
+  markResult: { data: null as unknown, error: null as { code?: string; message: string } | null },
   observed: [] as string[],
 };
 
@@ -28,6 +30,10 @@ jest.mock('../../db/writeOwner', () => ({
   ownedDbRpc: async (fn: string, args: Row) => {
     state.rpcCalls.push({ fn, args });
     state.observed.push(`rpc:${fn}`);
+    // A6-10 ledger calls made by erasePerson; everything else answers rpcResult.
+    if (fn === 'pi_person_erasure_open') return state.openResult;
+    if (fn === 'pi_person_erasure_mark') return state.markResult;
+    if (fn === 'pi_person_erasure_finalize') return state.rpcResult;
     return state.rpcResult;
   },
   ownedDbTable: (table: string) => {
@@ -76,6 +82,8 @@ beforeEach(() => {
   state.persons = [{ id: PERSON, company_id: ORG_A }];
   state.rpcCalls = [];
   state.rpcResult = { data: OK, error: null };
+  state.openResult = { data: { request_id: 'r0000000-0000-4000-8000-000000000001', lease_token: 'l0000000-0000-4000-8000-000000000001', resumed: false }, error: null };
+  state.markResult = { data: null, error: null };
   state.observed = [];
 });
 
@@ -135,38 +143,117 @@ describe('eraseProspectProvenance', () => {
   });
 });
 
-describe('erasePerson — wired to the complete erasure', () => {
-  it('erases the provenance graph BEFORE the person delete, for a person with no prospects too', async () => {
-    state.rpcResult = { data: { ...OK, redacted: 0, already_redacted: 0, contribution_ids: [], canonical_lead_ids: [] }, error: null };
+describe('erasePerson — wired to the complete erasure through the A6-10 ledger', () => {
+  const FIN = { deleted: true, provenance: { ...OK, redacted: 0, already_redacted: 0, contribution_ids: [], canonical_lead_ids: [] } };
+  const fns = () => state.rpcCalls.map((c) => c.fn);
+
+  it('opens the request, marks steps 3/4/5, then finalizes (steps 6+7 in ONE database call) — never a client-side delete', async () => {
+    state.rpcResult = { data: FIN, error: null };
     const res = await erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'subject request', requestedBy: 'admin:u9' });
-    const rpcAt = state.observed.indexOf(`rpc:${ERASURE_FUNCTION}`);
-    expect(rpcAt).toBeGreaterThan(-1);
-    expect(rpcAt).toBeLessThan(state.observed.indexOf('delete:unified_persons'));
-    expect(state.rpcCalls[0].args).toEqual({
-      p_organization_id: ORG_A, p_person_id: PERSON, p_canonical_lead_ids: [],
-      p_reason: 'person erased: subject request', p_requested_by: 'admin:u9',
-    });
+    expect(fns()).toEqual(['pi_person_erasure_open', 'pi_person_erasure_mark', 'pi_person_erasure_mark', 'pi_person_erasure_mark', 'pi_person_erasure_finalize']);
+    expect(state.rpcCalls[0].args).toEqual({ p_organization_id: ORG_A, p_person_id: PERSON, p_reason: 'subject request', p_requested_by: 'admin:u9' });
+    expect(state.rpcCalls.slice(1, 4).map((c) => c.args.p_step)).toEqual(['governance_reanchored', 'governance_revoked', 'evidence_links_cleared']);
+    expect(state.rpcCalls[4].args).toEqual({ p_organization_id: ORG_A, p_request_id: 'r0000000-0000-4000-8000-000000000001', p_lease_token: 'l0000000-0000-4000-8000-000000000001' });
+    expect(state.rpcCalls.slice(1, 4).every((c) => c.args.p_lease_token === 'l0000000-0000-4000-8000-000000000001')).toBe(true);
+    expect(fns()).not.toContain(ERASURE_FUNCTION);            // step 6 runs INSIDE finalize
+    expect(state.observed).not.toContain('delete:unified_persons'); // step 7 runs INSIDE finalize
     expect(res.deleted).toBe(true);
+    expect(res.requestId).toBe('r0000000-0000-4000-8000-000000000001');
     expect(res.provenanceRedaction).toMatchObject({ status: 'erased', erasureId: OK.erasure_id });
   });
 
   it.each([
-    [{ code: 'PGRST202', message: 'Could not find the function' }, 'provenance_erasure_unavailable'],
-    [{ code: '42501', message: 'other tenant' }, 'provenance_cross_tenant'],
-    [{ code: 'P0001', message: 'injected failure inside the transaction' }, 'provenance_P0001'],
-  ])('FAIL CLOSED: the person is NOT deleted and the error surfaces (%#)', async (error, code) => {
+    [{ code: 'PGRST202', message: 'Could not find the function' }, 'erasure_ledger_unavailable'],
+    [{ code: '23503', message: 'person_erasure:delete_blocked_by unified_persons_merge_tenant_fk (x)' }, 'merge_survivor'],
+    [{ code: '23502', message: 'person_erasure:delete_blocked_by leads.unified_person_id (null value)' }, 'delete_blocked'],
+    [{ code: '23503', message: 'person_erasure:delete_blocked_by outreach_bridge_handoffs_person_fk (x)' }, 'delete_blocked'],
+    [{ code: '55000', message: 'person_erasure:live_person_governance_remains (1)' }, 'governance_changed_retry'],
+    [{ code: 'P0001', message: 'injected failure inside the transaction' }, 'P0001'],
+  ])('FAIL CLOSED: a finalize error surfaces by NAME and is recorded on the request (%#)', async (error, code) => {
     state.rpcResult = { data: null, error };
     const p = erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' });
     await expect(p).rejects.toBeInstanceOf(PersonErasureError);
     await expect(p).rejects.toMatchObject({ code });
-    expect(state.observed).not.toContain('delete:unified_persons');
+    const failed = state.rpcCalls.filter((c) => c.fn === 'pi_person_erasure_mark' && c.args.p_step === 'failed');
+    expect(failed.length).toBeGreaterThan(0);
+    expect(failed[0].args.p_error_code).toBe(code);
     expect(state.persons).toHaveLength(1);
   });
 
-  it('FAIL CLOSED on an unconfirmed success (no erasure event)', async () => {
-    state.rpcResult = { data: {}, error: null };
+  it('a 23503 from anything but the merge FK is NOT reported as a merge survivor (A6-10)', async () => {
+    state.rpcResult = { data: null, error: { code: '23503', message: 'person_erasure:delete_blocked_by outreach_bridge_handoffs_person_fk (x)' } };
+    await expect(erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' })).rejects.not.toMatchObject({ code: 'merge_survivor' });
+  });
+
+  it('FAIL CLOSED on an unconfirmed success (no provenance erasure event)', async () => {
+    state.rpcResult = { data: { deleted: true, provenance: {} }, error: null };
     await expect(erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' }))
       .rejects.toMatchObject({ code: 'provenance_erasure_unconfirmed' });
+  });
+
+  it('a person that no longer exists is "nothing to erase" (P0002 from open): no step runs, deleted=false', async () => {
+    state.openResult = { data: null, error: { code: 'P0002', message: 'person_erasure:person_not_found' } };
+    const res = await erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' });
+    expect(res.deleted).toBe(false);
+    expect(res.requestId).toBeNull();
+    expect(fns()).toEqual(['pi_person_erasure_open']);
+  });
+
+  it.each([
+    [{ code: '42501', message: 'other tenant' }, 'cross_tenant'],
+    [{ code: '42883', message: 'function does not exist' }, 'erasure_ledger_unavailable'],
+  ])('open refusal stops before any write (%#)', async (error, code) => {
+    state.openResult = { data: null, error };
+    await expect(erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' })).rejects.toMatchObject({ code });
+    expect(fns()).toEqual(['pi_person_erasure_open']);
+  });
+
+  it('a step marker that cannot be written stops the erasure before finalize', async () => {
+    state.markResult = { data: null, error: { code: '55000', message: 'person_erasure:request_already_completed' } };
+    await expect(erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' })).rejects.toBeInstanceOf(PersonErasureError);
+    expect(fns()).not.toContain('pi_person_erasure_finalize');
     expect(state.persons).toHaveLength(1);
+  });
+
+  it('a resumed request is reported as such', async () => {
+    state.openResult = { data: { request_id: 'r0000000-0000-4000-8000-000000000001', lease_token: 'l0000000-0000-4000-8000-000000000001', resumed: true }, error: null };
+    state.rpcResult = { data: FIN, error: null };
+    const res = await erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' });
+    expect(res.resumed).toBe(true);
+  });
+
+  it('a concurrent erasure of the same person is refused at open (lease held) — no step runs', async () => {
+    state.openResult = { data: null, error: { code: '55P03', message: 'person_erasure:in_progress' } };
+    await expect(erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' }))
+      .rejects.toMatchObject({ code: 'erasure_in_progress' });
+    expect(fns()).toEqual(['pi_person_erasure_open']);
+  });
+
+  it('a lost lease during a step marker stops before finalize', async () => {
+    state.markResult = { data: null, error: { code: '55P03', message: 'person_erasure:lease_lost' } };
+    await expect(erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' }))
+      .rejects.toMatchObject({ code: 'erasure_lease_lost' });
+    expect(fns()).not.toContain('pi_person_erasure_finalize');
+  });
+
+  it('person deleted outside the ledger is surfaced, never treated as success', async () => {
+    state.rpcResult = { data: null, error: { code: '55000', message: 'person_erasure:person_vanished_outside_ledger' } };
+    await expect(erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' }))
+      .rejects.toMatchObject({ code: 'person_vanished_outside_ledger' });
+  });
+
+  it('only a CODE reaches the ledger on failure — a message with personal data is never recorded', async () => {
+    state.rpcResult = { data: null, error: { code: undefined as unknown as string, message: 'Jane Doe <jane@x.test> failed' } };
+    await expect(erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' })).rejects.toBeInstanceOf(PersonErasureError);
+    const failed = state.rpcCalls.filter((c) => c.fn === 'pi_person_erasure_mark' && c.args.p_step === 'failed');
+    expect(failed).toHaveLength(1);
+    expect(String(failed[0].args.p_error_code)).toMatch(/^[A-Za-z0-9_.:-]{1,80}$/);
+    expect(JSON.stringify(failed[0].args)).not.toMatch(/jane|Doe/i);
+  });
+
+  it('finalize counts (legacy leads detached, score evaluations redacted, policies) are reported', async () => {
+    state.rpcResult = { data: { ...FIN, finalize_counts: { legacy_leads_detached: 2, score_evaluations_redacted: 3, legacy_lead_fields: 'retain' } }, error: null };
+    const res = await erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' });
+    expect(res.finalizeCounts).toEqual({ legacy_leads_detached: 2, score_evaluations_redacted: 3, legacy_lead_fields: 'retain' });
   });
 });
