@@ -36,6 +36,7 @@ import {
 } from '../../lib/content/compositionAssetRouting';
 import { slotFor } from '../../lib/content/compositionAssetRouting';
 import { sharp } from './creatorAssetRendererContracts';
+import { isImageRejectedError, reportImageFailure, transformUntrustedImage } from '../../lib/security/safeImageDecode';
 
 /** One resolved layer, in the exact shape the renderer's composites array takes. */
 export interface ComposeLayer {
@@ -52,7 +53,9 @@ export type ComposeRejectionReason =
   | 'asset_not_ready'
   | 'slot_missing_placement'
   | 'slot_placement_invalid'
-  | 'bytes_unavailable';
+  | 'bytes_unavailable'
+  /** The stored bytes are not an allowed, well-formed raster image (SEC-SHARP-001). */
+  | 'bytes_rejected';
 
 export interface ComposeRejection {
   referenceId: string;
@@ -132,10 +135,23 @@ export async function buildComposeLayers(input: {
     // `fit` is passed through as declared. `contain` keeps every source pixel;
     // substituting one for the other silently changes whether the asset is
     // cropped, which is exactly the guarantee the mode encodes.
-    const resized = await sharp(bytes, { failOn: 'none' })
-      .resize({ width: boxWidth, height: boxHeight, fit: placement.fit ?? 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .png()
-      .toBuffer();
+    // SEC-SHARP-001: user-uploaded bytes. The recorded MIME came from the
+    // client, so the bytes themselves are checked before libvips sees them.
+    let resized: Buffer;
+    try {
+      resized = await transformUntrustedImage(bytes, (image) => image
+        .resize({ width: boxWidth, height: boxHeight, fit: placement.fit ?? 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .png()
+        .toBuffer(), { sharp });
+    } catch (error) {
+      // Rejected input → a slot rejection (warn). Anything else is an internal
+      // error: logged at error with its stack and rethrown, the same contract
+      // this lane had before the gate (an unexpected sharp failure threw).
+      reportImageFailure(error, { callSite: 'compose.slot_asset', companyId: input.companyId });
+      if (!isImageRejectedError(error)) throw error;
+      reject('bytes_rejected', `The stored object is not an allowed image (${error.reason}).`);
+      continue;
+    }
 
     layers.push({ input: resized, top, left, assetId: asset.id, ordinal: reference.ordinal });
   }

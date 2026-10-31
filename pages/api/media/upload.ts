@@ -18,6 +18,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import { MAX_IMAGE_UPLOAD_BYTES, uploadMedia, validateMedia } from '../../../backend/services/mediaService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { sniffSafeImageMime } from '../../../lib/security/safeImageDecode';
+import { sniffMimeFromBytes } from '../../../backend/services/mediaUploadValidationService';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 import fs from 'fs';
 
@@ -27,6 +29,30 @@ export const config = {
     bodyParser: false,
   },
 };
+
+/** Leading top-level atoms of legacy QuickTime files that carry no `ftyp` box. */
+const QUICKTIME_LEADING_ATOMS = new Set(['moov', 'mdat', 'wide', 'free', 'skip', 'pnot']);
+
+/**
+ * True when the bytes positively look like the declared non-image type:
+ * `application/pdf` needs the `%PDF-` header; `video/*` and `audio/*` need
+ * the repo sniffer to report the same category (legacy QuickTime atoms are
+ * accepted for a declared QuickTime type only). Anything else is refused.
+ */
+function nonImageBytesMatchDeclaredType(bytes: Buffer, declaredMimeType: string): boolean {
+  const claimed = declaredMimeType.trim().toLowerCase().split(';')[0].trim();
+  if (claimed === 'application/pdf') {
+    return bytes.subarray(0, 5).toString('latin1') === '%PDF-';
+  }
+  const category = claimed.split('/')[0];
+  if (category !== 'video' && category !== 'audio') return false;
+  const sniffed = sniffMimeFromBytes(bytes.subarray(0, 32));
+  if (sniffed) return sniffed.split('/')[0] === category;
+  if (claimed === 'video/quicktime' || claimed === 'video/mov') {
+    return bytes.length >= 8 && QUICKTIME_LEADING_ATOMS.has(bytes.subarray(4, 8).toString('latin1'));
+  }
+  return false;
+}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -134,9 +160,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Invalid file' });
     }
 
-    const mimeType = uploadedFile.mimetype || 'application/octet-stream';
+    const declaredMimeType = uploadedFile.mimetype || 'application/octet-stream';
+    const declaresImage = declaredMimeType.toLowerCase().startsWith('image/');
     if (
-      mimeType.toLowerCase().startsWith('image/')
+      declaresImage
       && uploadedFile.size > MAX_IMAGE_UPLOAD_BYTES
     ) {
       const maximumMb = MAX_IMAGE_UPLOAD_BYTES / 1024 / 1024;
@@ -152,6 +179,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Read file
     const fileBuffer = fs.readFileSync(uploadedFile.filepath);
     const fileName = uploadedFile.originalFilename || uploadedFile.newFilename;
+
+    // SEC-SHARP-001: the multipart Content-Type is chosen by the client. For an
+    // image, the stored type (and everything downstream that trusts it, e.g.
+    // composition registration and the renderer) must come from the bytes.
+    // Only PNG / JPEG / WebP / GIF are accepted; SVG, AVIF/HEIC, TIFF or bytes
+    // that are not an image at all are refused before anything is stored.
+    let mimeType = declaredMimeType;
+    if (declaresImage) {
+      const sniffedMimeType = sniffSafeImageMime(fileBuffer);
+      if (!sniffedMimeType) {
+        const reason = 'Uploaded file is not a supported image (PNG, JPEG, WebP or GIF).';
+        return res.status(400).json({
+          error: reason,
+          message: reason,
+          details: [reason],
+          warnings: [],
+        });
+      }
+      mimeType = sniffedMimeType;
+    }
 
     // Get file metadata (if available)
     const metadata: any = {};
@@ -180,6 +227,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         message: reason,
         details: validation.errors,
         warnings: validation.warnings,
+      });
+    }
+
+    // SEC-SHARP-001 (R-C1): a declared NON-image type must be backed by bytes
+    // of that category. The object is stored with this type in a public bucket,
+    // and Next's image optimizer (/_next/image) ignores the stored type: it
+    // detects TIFF and similar formats from the bytes and hands them to sharp.
+    if (!declaresImage && !nonImageBytesMatchDeclaredType(fileBuffer, declaredMimeType)) {
+      const reason = 'Uploaded file content does not match the declared type.';
+      return res.status(400).json({
+        error: reason,
+        message: reason,
+        details: [reason],
+        warnings: [],
       });
     }
 

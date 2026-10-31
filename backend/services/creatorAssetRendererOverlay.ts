@@ -76,6 +76,7 @@ import {
 } from '../../lib/creator-templates';
 import { registerCuratedSystemTemplates } from '../../lib/creator-outcomes/curatedSystemTemplatesFull';
 import { ensureRenderFonts } from './creatorRenderFonts';
+import { fetchUntrustedImageBytes, reportImageFailure, transformUntrustedImage } from '../../lib/security/safeImageDecode';
 
 // FONT PARITY (PHASE 14J): configure fontconfig to discover the vendored fonts
 // BEFORE sharp loads. Every infographic render path — render-inline,
@@ -771,7 +772,7 @@ export async function loadBrandMark(input: {
   }
   try {
     return await getCachedRenderBuffer(cacheKey, async () => {
-      const buffer = await bufferFromRemoteImage(brandMark.source);
+      const buffer = await fetchUntrustedImageBytes(() => bufferFromRemoteImage(brandMark.source));
       // Operator feedback: "we should logo embed transparent
       // background" + "logo is looking patchwork". The brightness +
       // saturation modulate was tinting the logo and the backing
@@ -780,16 +781,23 @@ export async function loadBrandMark(input: {
       // sharpen so edges stay crisp at small footprint. No tint, no
       // tone shift, no flattening; the PNG composite onto the
       // background keeps the logo's native transparency.
-      return sharp(buffer, { failOn: 'none' })
+      // SEC-SHARP-001: the logo URL is tenant-chosen (their website), so the
+      // bytes go through the untrusted-image gate: PNG/JPEG/WebP/GIF only by
+      // magic bytes, pixel cap, failOn 'error', pipeline timeout.
+      return transformUntrustedImage(buffer, (image) => image
         .resize({ width: input.placement.maxWidth, height: input.placement.maxHeight, fit: 'inside', withoutEnlargement: true })
         .ensureAlpha()
         .sharpen({ sigma: 0.5 })
         .png()
-        .toBuffer();
+        .toBuffer(), { sharp });
     });
-  } catch {
+  } catch (error) {
     // Remote logo failed to load — skip the mark rather than substituting
     // initials. A missing logo is preferable to a placeholder monogram.
+    // A refused image (SVG, AVIF, oversized, malformed) or a failed download
+    // degrades the same way and is logged at warn; any other error is a bug and
+    // is logged at error with its stack. Never silent.
+    reportImageFailure(error, { callSite: 'creator.brand_mark', companyId: input.brandKit.companyId || null });
     return null;
   }
 }

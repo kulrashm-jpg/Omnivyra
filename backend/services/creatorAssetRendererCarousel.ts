@@ -88,6 +88,7 @@ ensureRenderFonts();
 import { existingNoveltySeed } from './creator/creatorNoveltyPlan';
 import { resolveIndependentPalette, applyIndependentPaletteToBrandKit, resolveRenderPaletteMode } from './creator/creatorPaletteMode';
 import { sharp, PDFDocument, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, type OverlayQualityReport, safeObject, resolveCarouselRenderStyle, resolveCarouselTemplateArc, carouselOverlayBaseStyle, renderBackgroundPng, classifyPdfStorageFailure, USER_MESSAGE_FOR_PDF_FALLBACK, compactText, getCachedRenderBuffer, unsupportedFamilyConditionDegradation } from './creatorAssetRendererContracts';
+import { reportImageFailure, transformUntrustedImage } from '../../lib/security/safeImageDecode';
 import { buildOverlaySvg, loadBrandMark } from './creatorAssetRendererOverlay';
 import { resolveUserBackgroundBytes, carouselUserBackgroundEnabled } from './creator/userBackgroundReference';
 import { uploadRenderedPng, uploadRenderedFile } from './creatorAssetRendererMedia';
@@ -760,12 +761,15 @@ export async function composeStructuredDeckAsset(
     try {
       const bytes = resolved.bytes;
       return await getCachedRenderBuffer(resolved.cacheKey, async () =>
-        sharp(bytes, { failOn: 'none' })
+        transformUntrustedImage(bytes, (image) => image
           .resize(width, height, { fit: 'cover' })
           .png()
-          .toBuffer());
-    } catch {
-      // Undecodable bytes must never cost the user their deck.
+          .toBuffer(), { sharp }));
+    } catch (error) {
+      // Undecodable bytes must never cost the user their deck: fall open to
+      // the gradient. Rejections log at warn; anything else (a bug) at error
+      // with its stack, so a fall-open can never hide an internal failure.
+      reportImageFailure(error, { callSite: 'creator.carousel_user_background', companyId: options.companyId || null });
       return null;
     }
   })();
