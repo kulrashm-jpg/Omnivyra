@@ -267,6 +267,9 @@ describe('SEC-A1 canonical_leads / canonical_users client privileges', () => {
       for (const t of neighbours) {
         await db.query(`CREATE POLICY sec_a1_test_open ON public."${t}" TO anon, authenticated USING (true) WITH CHECK (true)`);
       }
+      // SEC-B (20270110000003) also revokes client EXECUTE on this function. This test isolates
+      // the TABLE layer, so the function grant is reopened inside the rolled-back transaction.
+      await db.query(`GRANT EXECUTE ON FUNCTION public.merge_unified_persons(uuid, uuid, text, text) TO anon, authenticated, service_role`);
       const winner = await newPerson(ORG_A);
       const loser = await newPerson(ORG_A);
       const call = (c: { role: string; claims: Claims }) => req(c.role, c.claims,
