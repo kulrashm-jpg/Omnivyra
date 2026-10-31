@@ -212,9 +212,9 @@ async function evaluateCvHeuristics(
     };
   }
 
-  let sharp: typeof import('sharp');
+  let sharp: typeof import('sharp').default;
   try {
-    sharp = require('sharp') as typeof import('sharp');
+    sharp = require('sharp') as typeof import('sharp').default;
   } catch {
     // sharp unavailable — degrade to image-unavailable handling.
     return {
