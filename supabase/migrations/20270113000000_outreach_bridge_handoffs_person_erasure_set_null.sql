@@ -47,6 +47,28 @@
 --      also refuses a NULL person).
 -- Column set, indexes, RLS, grants, trigger name/table/function and the guard's
 -- SECURITY INVOKER: unchanged, so the ORCH-STACK verifier manifest needs no edit.
+--
+-- J1 A6-1 (edited in place on privacy/a6-10-bridge-fixes; this migration is
+-- unapplied everywhere). "Nested + person already gone" is true for EVERY delete
+-- of the person, not only an erasure: merge_unified_persons() (20260506000002)
+-- re-points seven tables and then DELETEs the loser, and with the admission
+-- above it silently detached every handoff of the loser from a human who still
+-- exists as the winner (before A6-10 the NO ACTION FK made that merge fail).
+-- The admission therefore ALSO requires the erasure flow's explicit signal:
+-- public.pi_erasure_authorization_held('bridge_handoffs', tenant, person)
+-- (privacy/erasure-remediation 20270112000000; pi_person_erasure_finalize
+-- authorizes that scope around its DELETE). Fail closed: if that function is
+-- absent, or the invoking role cannot execute it, nothing is admitted. Any other
+-- delete of a person with handoffs - a merge, operator SQL - fails as it did
+-- before A6-10 (SQLSTATE 23503, foreign_key_violation), naming the handoff.
+-- Merging a loser that has handoffs is deliberately NOT re-pointed: a handoff
+-- is an immutable attribution record, and re-pointing it would need its own
+-- authorized path (an owner decision). Recommended: re-point or erase first.
+--
+-- DEPENDENCY (J1): this migration lands only AFTER (1) the authorized rebase of
+-- the candidate stack onto main and (2) privacy/erasure-remediation(-fixes).
+-- Applied without 20270112000000 it is still safe (fail closed), but no bridged
+-- person is erasable until the erasure ledger exists.
 
 BEGIN;
 
@@ -76,6 +98,7 @@ AS $$
 DECLARE
   v_legacy_company uuid;
   v_task record;
+  v_erasure boolean := false;
 BEGIN
   IF TG_OP = 'UPDATE' THEN
     -- A6-10: the ONE permitted change is the erasure of the person link by
@@ -89,7 +112,20 @@ BEGIN
        AND NEW.person_id IS NULL
        AND (to_jsonb(NEW) - 'person_id') = (to_jsonb(OLD) - 'person_id')
        AND NOT EXISTS (SELECT 1 FROM public.unified_persons p WHERE p.id = OLD.person_id) THEN
-      RETURN NEW;
+      -- J1 A6-1: ...and only when the PERSON-ERASURE flow authorized it for this
+      -- tenant and person in this transaction. Fail closed when the erasure
+      -- ledger is absent (42883) or the invoker may not ask (42501).
+      BEGIN
+        v_erasure := public.pi_erasure_authorization_held('bridge_handoffs', OLD.organization_id, OLD.person_id);
+      EXCEPTION WHEN undefined_function OR insufficient_privilege THEN
+        v_erasure := false;
+      END;
+      IF v_erasure IS TRUE THEN
+        RETURN NEW;
+      END IF;
+      RAISE EXCEPTION
+        'outreach_bridge_handoffs: handoff % references a person that is being deleted outside the person-erasure flow (e.g. merge_unified_persons); only an erasure may clear a handoff''s person', OLD.id
+        USING ERRCODE = '23503';
     END IF;
     RAISE EXCEPTION
       'outreach_bridge_handoffs: handoff % is an immutable historical record', OLD.id;
@@ -187,7 +223,8 @@ BEGIN
   IF position('to_jsonb(NEW) - ''person_id''' IN v_def) = 0
      OR position('pg_trigger_depth() > 1' IN v_def) = 0
      OR position('a handoff requires a resolved person' IN v_def) = 0
-     OR position('is an immutable historical record' IN v_def) = 0 THEN
+     OR position('is an immutable historical record' IN v_def) = 0
+     OR position('pi_erasure_authorization_held(''bridge_handoffs''' IN v_def) = 0 THEN
     RAISE EXCEPTION 'A6-10/B postcondition: the guard body is not the A6-10 version';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
@@ -196,6 +233,9 @@ BEGIN
                     AND p.proname = 'outreach_bridge_handoffs_guard'
                     AND t.tgenabled <> 'D') THEN
     RAISE EXCEPTION 'A6-10/B postcondition: trg_outreach_bridge_handoffs_guard missing or disabled';
+  END IF;
+  IF to_regprocedure('public.pi_erasure_authorization_held(text, uuid, uuid)') IS NULL THEN
+    RAISE NOTICE 'A6-10/B: pi_erasure_authorization_held is absent (privacy/erasure-remediation not applied): every delete of a person with handoffs is refused until it is (fail closed)';
   END IF;
 END
 $verify$;

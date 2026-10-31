@@ -77,6 +77,27 @@ async function bridgedProspectPerson(org: string, runs: number): Promise<{ p: st
   return { p, prospect, handoffs, tasks };
 }
 
+/** Is the erasure ledger's authorization signal present (privacy/erasure-remediation 20270112000000)? */
+const erasureAvailable = async (): Promise<boolean> =>
+  (await one(`SELECT to_regprocedure('public.pi_erasure_authorization_held(text, uuid, uuid)') IS NOT NULL AS ok`)).ok;
+
+/** What pi_person_erasure_finalize does around its DELETE (J1 A6-1): authorize scope bridge_handoffs. */
+async function authorizeErasure(org: string, person: string): Promise<void> {
+  await db.query(`SELECT public.pi_erasure_authorize('bridge_handoffs',$1,$2)`, [org, person]);
+}
+
+/**
+ * Without the erasure ledger the guard fails closed: a person with handoffs
+ * cannot be deleted at all. Returns true when the caller should stop (base
+ * without 20270112000000), after asserting exactly that.
+ */
+async function failClosedWithoutErasure(person: string): Promise<boolean> {
+  if (await erasureAvailable()) return false;
+  expect(await attempt('DELETE FROM public.unified_persons WHERE id=$1', [person])).not.toBe('ok');
+  expect(await count('SELECT count(*) n FROM public.unified_persons WHERE id=$1', [person])).toBe(1);
+  return true;
+}
+
 const snapWithoutPerson = async (ids: string[]) => (await db.query(
   `SELECT id, to_jsonb(h) - 'person_id' j, person_id FROM public.outreach_bridge_handoffs h WHERE id = ANY($1) ORDER BY id`, [ids])).rows;
 
@@ -99,6 +120,8 @@ describe('A6-10 option B — erasing a bridged person', () => {
       const s = await bridgedProspectPerson(ORG_A, 3);
       const before = await snapWithoutPerson(s.handoffs);
       expect(before.every((r: any) => r.person_id === s.p)).toBe(true);
+      if (await failClosedWithoutErasure(s.p)) return;
+      await authorizeErasure(ORG_A, s.p);
       expect(await asServiceRole('DELETE FROM public.unified_persons WHERE id=$1 AND company_id=$2', [s.p, ORG_A], true)).toBe('ok');
       const after = await snapWithoutPerson(s.handoffs);
       expect(after).toHaveLength(3);
@@ -120,6 +143,8 @@ describe('A6-10 option B — erasing a bridged person', () => {
       // tenant-first delete scoped to A cannot reach B's person
       await asServiceRole('DELETE FROM public.unified_persons WHERE id=$1 AND company_id=$2', [b.p, ORG_A], true);
       expect(await count('SELECT count(*) n FROM public.unified_persons WHERE id=$1', [b.p])).toBe(1);
+      if (await failClosedWithoutErasure(a.p)) return;
+      await authorizeErasure(ORG_A, a.p);
       await asServiceRole('DELETE FROM public.unified_persons WHERE id=$1 AND company_id=$2', [a.p, ORG_A], true);
       const afterB = (await db.query(`SELECT to_jsonb(h) j FROM public.outreach_bridge_handoffs h WHERE organization_id=$1 ORDER BY id`, [ORG_B])).rows;
       expect(afterB).toEqual(beforeB);
@@ -134,6 +159,8 @@ describe('A6-10 option B — erasing a bridged person', () => {
       await grantServiceRole();
       const s = await bridgedProspectPerson(ORG_A, 1);
       expect(await attempt(BRIDGE, [ORG_A, s.tasks[0], s.p])).toBe('23505');
+      if (await failClosedWithoutErasure(s.p)) return;
+      await authorizeErasure(ORG_A, s.p);
       await db.query('DELETE FROM public.unified_persons WHERE id=$1', [s.p]);
       const r2 = await db.query('DELETE FROM public.unified_persons WHERE id=$1', [s.p]);
       expect(r2.rowCount).toBe(0);
@@ -165,6 +192,8 @@ describe('A6-10 option B — erasing a bridged person', () => {
       const t2 = (await chain(ORG_A, 'prospect', s.prospect, 1))[0];
       expect(await attempt(BRIDGE, [ORG_A, t2, null])).toBe('P0001');
       // once erased, the row is immutable again (NULL -> person refused)
+      if (await failClosedWithoutErasure(s.p)) return;
+      await authorizeErasure(ORG_A, s.p);
       await db.query('DELETE FROM public.unified_persons WHERE id=$1', [s.p]);
       expect(await attempt('UPDATE public.outreach_bridge_handoffs SET person_id=$2 WHERE id=$1', [h, other])).not.toBe('ok');
     });
@@ -178,12 +207,87 @@ describe('A6-10 option B — erasing a bridged person', () => {
       const tasks = await chain(ORG_A, 'lead', lead, 1);
       await one(BRIDGE, [ORG_A, tasks[0], p]);
       const nn = await one(`SELECT is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name='leads' AND column_name='unified_person_id'`);
-      if (nn.is_nullable === 'NO') {
-        expect(await attempt('DELETE FROM public.unified_persons WHERE id=$1', [p])).toBe('23502');
-      } else {
-        // after the rebase onto privacy/erasure-remediation the plain delete is refused by leads_person_or_erased
-        expect(await attempt('DELETE FROM public.unified_persons WHERE id=$1', [p])).toBe('23514');
+      // A plain delete is refused: by leads.unified_person_id NOT NULL (23502) on this base,
+      // by leads_person_or_erased (23514) after the rebase, or - whichever FK action runs
+      // first - by the handoff guard (23503, J1 A6-1: not an erasure).
+      const code = await attempt('DELETE FROM public.unified_persons WHERE id=$1', [p]);
+      expect(nn.is_nullable === 'NO' ? ['23502', '23503'] : ['23514', '23503']).toContain(code);
+      expect(await count('SELECT count(*) n FROM public.unified_persons WHERE id=$1', [p])).toBe(1);
+    });
+  });
+});
+
+describe('J1 A6-1 — only the person-erasure flow may detach handoffs (merge and plain deletes fail as before)', () => {
+  it('merge_unified_persons of a loser with handoffs FAILS (23503); handoffs, loser and winner unchanged', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const s = await bridgedProspectPerson(ORG_A, 2);
+      const winner = await newPerson(ORG_A);
+      const before = (await db.query('SELECT id, person_id FROM public.outreach_bridge_handoffs WHERE id = ANY($1) ORDER BY id', [s.handoffs])).rows;
+      expect(await attempt(`SELECT public.merge_unified_persons($1,$2,'dup','j1-test')`, [winner, s.p])).toBe('23503');
+      expect((await db.query('SELECT id, person_id FROM public.outreach_bridge_handoffs WHERE id = ANY($1) ORDER BY id', [s.handoffs])).rows).toEqual(before);
+      expect(await count('SELECT count(*) n FROM public.unified_persons WHERE id = ANY($1)', [[s.p, winner]])).toBe(2);
+    });
+  });
+
+  it('a plain DELETE of a bridged person (superuser or service_role) without the erasure signal is refused (23503)', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      await grantServiceRole();
+      const s = await bridgedProspectPerson(ORG_A, 1);
+      expect(await attempt('DELETE FROM public.unified_persons WHERE id=$1', [s.p])).toBe('23503');
+      expect(await asServiceRole('DELETE FROM public.unified_persons WHERE id=$1', [s.p])).toBe('23503');
+      expect((await one('SELECT person_id FROM public.outreach_bridge_handoffs WHERE id=$1', [s.handoffs[0]])).person_id).toBe(s.p);
+    });
+  });
+
+  it('the authorization is bound to its person and tenant: authorizing ANOTHER person (or tenant) does not admit the delete', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const s = await bridgedProspectPerson(ORG_A, 1);
+      if (await failClosedWithoutErasure(s.p)) return;
+      const other = await newPerson(ORG_A);
+      await authorizeErasure(ORG_A, other);
+      await authorizeErasure(ORG_B, s.p);
+      expect(await attempt('DELETE FROM public.unified_persons WHERE id=$1', [s.p])).toBe('23503');
+      await authorizeErasure(ORG_A, s.p);
+      expect(await attempt('DELETE FROM public.unified_persons WHERE id=$1', [s.p])).toBe('ok');
+    });
+  });
+
+  it('FAIL CLOSED: with pi_erasure_authorization_held absent, even a planted authorization row admits nothing', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const s = await bridgedProspectPerson(ORG_A, 1);
+      if (await erasureAvailable()) {
+        await authorizeErasure(ORG_A, s.p);
+        await db.query('DROP FUNCTION public.pi_erasure_authorization_held(text, uuid, uuid)');
       }
+      expect(await attempt('DELETE FROM public.unified_persons WHERE id=$1', [s.p])).toBe('23503');
+      expect((await one('SELECT person_id FROM public.outreach_bridge_handoffs WHERE id=$1', [s.handoffs[0]])).person_id).toBe(s.p);
+    });
+  });
+
+  it('end to end: pi_person_erasure_finalize (when present) erases a bridged prospect person and keeps the handoffs, person_id NULL', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const s = await bridgedProspectPerson(ORG_A, 2);
+      const hasLedger = (await one(`SELECT to_regprocedure('public.pi_person_erasure_finalize(uuid, uuid, uuid)') IS NOT NULL AS ok`)).ok;
+      if (!hasLedger) {
+        expect(await attempt('DELETE FROM public.unified_persons WHERE id=$1', [s.p])).not.toBe('ok');
+        return;
+      }
+      const before = await snapWithoutPerson(s.handoffs);
+      const r = (await one(`SELECT public.pi_person_erasure_open($1,$2,'dsar','dsar-operator') r`, [ORG_A, s.p])).r;
+      for (const step of ['governance_reanchored', 'governance_revoked', 'evidence_links_cleared']) {
+        await db.query('SELECT public.pi_person_erasure_mark($1,$2,$3,$4,0,NULL)', [ORG_A, r.request_id, r.lease_token, step]);
+      }
+      const fin = (await one('SELECT public.pi_person_erasure_finalize($1,$2,$3) r', [ORG_A, r.request_id, r.lease_token])).r;
+      expect(fin.deleted).toBe(true);
+      const after = await snapWithoutPerson(s.handoffs);
+      expect(after.every((x: any) => x.person_id === null)).toBe(true);
+      expect(after.map((x: any) => x.j)).toEqual(before.map((x: any) => x.j));
+      expect(await count('SELECT count(*) n FROM public.pi_erasure_authorizations')).toBe(0);
     });
   });
 });
