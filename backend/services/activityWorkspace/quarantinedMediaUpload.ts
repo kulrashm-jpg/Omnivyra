@@ -282,8 +282,8 @@ async function inspectDeliveryObject(objectPath: string): Promise<DeliveryInfo> 
 
 async function quarantineObjectStillPresent(objectPath: string): Promise<boolean | null> {
   const info = await inspectQuarantinedObject(objectPath);
-  if (info.ok) return true;
-  return info.missing ? false : null;
+  if (info.ok === false) return info.missing ? false : null;
+  return true;
 }
 
 export type DeliveryMatch =
@@ -312,7 +312,9 @@ export type DeliveryMatch =
 export async function verifyExistingDeliveryObject(objectPath: string, validated: QuarantineValidationSuccess): Promise<DeliveryMatch> {
   const info = await inspectDeliveryObject(objectPath);
   if (info.exists === false) return { verdict: 'absent' };
-  if (info.exists === null) return { verdict: 'unverifiable', reason: `delivery metadata unavailable: ${info.message}` };
+  // strict:false does not narrow this union on its null literal; only the
+  // unverifiable branch carries `message`, so narrow on that property instead.
+  if ('message' in info) return { verdict: 'unverifiable', reason: `delivery metadata unavailable: ${info.message}` };
   if (info.size !== validated.sizeBytes) return { verdict: 'mismatch', reason: 'size_differs' };
   if (info.contentType !== normalizeMime(validated.mime)) return { verdict: 'mismatch', reason: 'content_type_differs' };
 

@@ -114,8 +114,8 @@ async function main() {
       if (error || !data?.signedUrl) return null;
       // ssrf-ok: signed URL minted by our own client for a listed key
       const all = await fetchBounded(data.signedUrl, maxBytes, 'fail');
-      if (all.ok) return all.bytes;
-      return all.reason === 'too_large' ? 'too_large' : null;
+      if (all.ok === false) return all.reason === 'too_large' ? 'too_large' : null;
+      return all.bytes;
     },
     provenanceKeys,
     ...(flag('--no-decode') ? {} : {
