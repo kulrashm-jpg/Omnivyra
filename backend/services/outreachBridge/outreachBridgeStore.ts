@@ -25,7 +25,8 @@
  *   plan_task_id  the `execution_task_id`: globally unique and run-dimensioned.
  *                 Nothing is fabricated and no `task-<order>-<slug>` is minted.
  *                 It is NOT the bridge identity.
- *   person_id     the resolved canonical person. Mandatory.
+ *   person_id     the resolved canonical person. Mandatory at handoff; NULL only after the
+ *                 person was erased (A6-10 option B, 20270113000000).
  *
  * ─── THE BRIDGE GRANTS NO PERMISSION ─────────────────────────────────────
  * It never calls `mayContact`, never evaluates a gate, never converts `blocked`
@@ -99,7 +100,8 @@ export interface OutreachBridgeHandoff {
   readonly executionPlanStepId: string;
   readonly subjectKind: 'lead' | 'prospect';
   readonly subjectId: string;
-  readonly personId: string;
+  /** NULL only after the person was erased (A6-10 option B: ON DELETE SET NULL). */
+  readonly personId: string | null;
   readonly executionMode: WorkflowExecutionMode;
   readonly workflowRequiresApproval: boolean;
   readonly policySource: 'authored' | 'legacy_default';
@@ -124,7 +126,7 @@ const toHandoff = (r: Row): OutreachBridgeHandoff => ({
   executionPlanStepId: String(r.execution_plan_step_id),
   subjectKind: String(r.subject_kind) as 'lead' | 'prospect',
   subjectId: String(r.subject_id),
-  personId: String(r.person_id),
+  personId: r.person_id == null ? null : String(r.person_id),
   executionMode: String(r.execution_mode) as WorkflowExecutionMode,
   workflowRequiresApproval: r.workflow_requires_approval === true,
   policySource: String(r.policy_source) as 'authored' | 'legacy_default',
