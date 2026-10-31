@@ -41,7 +41,7 @@
 --   No function body, owner, SECURITY DEFINER/INVOKER flag, trigger, table,
 --   policy or table grant. No function outside schema public, no
 --   extension-owned function. The three opportunity trigger functions belong to
---   20270110000001 (SEC A2) and are not repeated here. pi_authority_providers_ok
+--   20270111000001 (SEC A2) and are not repeated here. pi_authority_providers_ok
 --   (CHECK helper, already explicit grants) is left as is.
 --   public.set_content_updated_at() exists in production only (no migration
 --   creates it), so a replay cannot preflight it: it is NOT in this migration;

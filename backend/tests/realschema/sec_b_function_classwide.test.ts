@@ -1,7 +1,7 @@
 /**
  * SEC B — class-wide function EXECUTE + search_path hardening against real PostgreSQL.
  *
- * Migration exercised: 20270110000003_function_execute_classwide_hardening.sql
+ * Migration exercised: 20270111000003_function_execute_classwide_hardening.sql
  * (override with SEC_B_MIGRATION_FILE=<path> for the mutant run; a no-op file
  * must make every security assertion here FAIL).
  *
@@ -167,7 +167,7 @@ const PROD: Row[] = [
 ];
 
 const MIGRATION = process.env.SEC_B_MIGRATION_FILE
-  || path.join(__dirname, '..', '..', '..', 'supabase', 'migrations', '20270110000003_function_execute_classwide_hardening.sql');
+  || path.join(__dirname, '..', '..', '..', 'supabase', 'migrations', '20270111000003_function_execute_classwide_hardening.sql');
 
 const q = (sql: string, params: unknown[] = []) => db.query(sql, params);
 const UNRESOLVABLE = 'public.get_engagement_thread_message_distance(uuid,uuid)';

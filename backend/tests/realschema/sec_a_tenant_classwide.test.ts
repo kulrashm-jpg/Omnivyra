@@ -1,6 +1,6 @@
 /**
  * SEC-A (class-wide) — real-schema cover for
- * 20270110000002_tenant_tables_client_privileges_revoked.
+ * 20270111000002_tenant_tables_client_privileges_revoked.
  *
  * The CI replay is ACL-free, so the installed state proves nothing on its own.
  * Every test first recreates production's pre-fix state for the 50 tables —
@@ -22,7 +22,7 @@ import { db, inRollback, seedTenants, ORG_A, ORG_B } from './setup';
 const ROOT = path.resolve(__dirname, '../../..');
 const stripTx = (sql: string) => sql.replace(/^\s*(BEGIN|COMMIT);\s*$/gim, '');
 const MIGRATION = stripTx(fs.readFileSync(process.env.SEC_A_MIGRATION_FILE
-  || path.join(ROOT, 'supabase/migrations/20270110000002_tenant_tables_client_privileges_revoked.sql'), 'utf8'));
+  || path.join(ROOT, 'supabase/migrations/20270111000002_tenant_tables_client_privileges_revoked.sql'), 'utf8'));
 const ROLLBACK = stripTx(fs.readFileSync(
   path.join(ROOT, 'supabase/migrations/rollbacks/tenant_tables_client_privileges_revoked_rollback.sql'), 'utf8'));
 

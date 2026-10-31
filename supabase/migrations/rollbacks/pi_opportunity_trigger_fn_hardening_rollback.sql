@@ -1,4 +1,4 @@
--- Rollback for 20270110000001_pi_opportunity_trigger_fn_hardening.sql.
+-- Rollback for 20270111000001_pi_opportunity_trigger_fn_hardening.sql.
 --
 -- Restores the privileges and configuration production had on 2026-10-30
 -- (read-only evidence, coordinator query #14):
@@ -17,11 +17,11 @@ BEGIN;
 
 ALTER FUNCTION public.trg_opp_lifecycle_block_mutation() RESET search_path;
 
--- grant-ok: rollback restores the pre-20270110000001 production ACL exactly.
+-- grant-ok: rollback restores the pre-20270111000001 production ACL exactly.
 GRANT EXECUTE ON FUNCTION public.trg_opp_lifecycle_block_mutation() TO PUBLIC, anon, authenticated;
--- grant-ok: rollback restores the pre-20270110000001 production ACL exactly.
+-- grant-ok: rollback restores the pre-20270111000001 production ACL exactly.
 GRANT EXECUTE ON FUNCTION public.trg_opp_disposition_block_mutation() TO authenticated;
--- grant-ok: rollback restores the pre-20270110000001 production ACL exactly.
+-- grant-ok: rollback restores the pre-20270111000001 production ACL exactly.
 GRANT EXECUTE ON FUNCTION public.trg_opp_disposition_snooze_guard() TO authenticated;
 
 DO $verify$

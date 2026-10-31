@@ -1,6 +1,6 @@
 /**
  * SEC-A1 — real-schema cover for
- * 20270110000000_canonical_leads_users_client_privileges_revoked.
+ * 20270111000000_canonical_leads_users_client_privileges_revoked.
  *
  * The replay database is ACL-free (the baseline is dumped --no-privileges and no
  * replayed migration grants anything on these tables), so the INSTALLED state
@@ -23,7 +23,7 @@ import { db, inRollback, seedTenants, newPerson, ORG_A, ORG_B } from './setup';
 const ROOT = path.resolve(__dirname, '../../..');
 const stripTx = (sql: string) => sql.replace(/^\s*(BEGIN|COMMIT);\s*$/gim, '');
 const MIGRATION = stripTx(fs.readFileSync(process.env.SEC_A1_MIGRATION_FILE
-  || path.join(ROOT, 'supabase/migrations/20270110000000_canonical_leads_users_client_privileges_revoked.sql'), 'utf8'));
+  || path.join(ROOT, 'supabase/migrations/20270111000000_canonical_leads_users_client_privileges_revoked.sql'), 'utf8'));
 const ROLLBACK = stripTx(fs.readFileSync(
   path.join(ROOT, 'supabase/migrations/rollbacks/canonical_leads_users_client_privileges_revoked_rollback.sql'), 'utf8'));
 
@@ -267,7 +267,7 @@ describe('SEC-A1 canonical_leads / canonical_users client privileges', () => {
       for (const t of neighbours) {
         await db.query(`CREATE POLICY sec_a1_test_open ON public."${t}" TO anon, authenticated USING (true) WITH CHECK (true)`);
       }
-      // SEC-B (20270110000003) also revokes client EXECUTE on this function. This test isolates
+      // SEC-B (20270111000003) also revokes client EXECUTE on this function. This test isolates
       // the TABLE layer, so the function grant is reopened inside the rolled-back transaction.
       await db.query(`GRANT EXECUTE ON FUNCTION public.merge_unified_persons(uuid, uuid, text, text) TO anon, authenticated, service_role`);
       const winner = await newPerson(ORG_A);

@@ -1,4 +1,4 @@
--- Rollback for 20270110000002_tenant_tables_client_privileges_revoked.sql.
+-- Rollback for 20270111000002_tenant_tables_client_privileges_revoked.sql.
 --
 -- Restores production's pre-change CLIENT ACL on the 50 tables exactly as
 -- captured read-only on 2026-10-31T04:08Z (evidence/prod-relations.json):

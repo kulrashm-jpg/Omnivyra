@@ -1,7 +1,7 @@
 /**
  * SEC A2 — opportunity trigger-function hardening against real PostgreSQL.
  *
- * Migration exercised: 20270110000001_pi_opportunity_trigger_fn_hardening.sql
+ * Migration exercised: 20270111000001_pi_opportunity_trigger_fn_hardening.sql
  * (REVOKE ALL FROM PUBLIC, anon, authenticated on the three opportunity
  * trigger functions; search_path pinned on trg_opp_lifecycle_block_mutation),
  * on top of 20260520 (lifecycle append-only) and 20270109000003 (snooze guard,

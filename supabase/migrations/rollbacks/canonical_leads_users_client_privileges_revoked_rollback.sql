@@ -1,4 +1,4 @@
--- Rollback for 20270110000000_canonical_leads_users_client_privileges_revoked.sql.
+-- Rollback for 20270111000000_canonical_leads_users_client_privileges_revoked.sql.
 --
 -- Restores production's pre-change ACL on canonical_leads and canonical_users
 -- exactly as captured read-only on 2026-10-30T20:12Z:

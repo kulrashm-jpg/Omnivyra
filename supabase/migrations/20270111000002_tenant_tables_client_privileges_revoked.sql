@@ -5,7 +5,7 @@
 -- ============================================================================
 --
 -- SCOPE: exactly 50 tables, listed below by class. Nothing else is touched.
--- Separate from SEC-A1 (20270110000000, canonical_leads / canonical_users),
+-- Separate from SEC-A1 (20270111000000, canonical_leads / canonical_users),
 -- which this migration neither repeats nor depends on.
 --
 -- PRODUCTION STATE (read-only evidence captured 2026-10-31T04:08Z)
