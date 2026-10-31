@@ -179,7 +179,8 @@ async function seed(): Promise<Fx> {
 
 const MINE = `IN ('${ORG_A}','${ORG_B}')`;
 /** Run every statement for every client; returns {client: [results]}. */
-async function matrix(stmts: Array<{ sql: string; k?: string; raw?: boolean }>): Promise<Record<string, string[]>> {
+type Stmt = { sql: string; k?: string; raw?: boolean };
+async function matrix(stmts: Stmt[]): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = {};
   for (const c of CLIENTS) {
     const row: string[] = [];
@@ -222,7 +223,7 @@ describe('SEC-A class-wide client privileges (50 tables)', () => {
     await inRollback(async () => {
       await productionPreFix();
       await seed();
-      const stmts = [
+      const stmts: Stmt[] = [
         { sql: `SELECT company_id k FROM public.campaigns WHERE company_id ${MINE}` },
         { sql: `INSERT INTO public.campaigns (id, name, company_id) VALUES (gen_random_uuid(), 'x', '${ORG_A}') RETURNING company_id k` },
         { sql: `INSERT INTO public.campaigns (id, name, company_id) VALUES (gen_random_uuid(), 'x', '${ORG_B}') RETURNING company_id k` },
@@ -318,7 +319,7 @@ describe('SEC-A class-wide client privileges (50 tables)', () => {
     await inRollback(async () => {
       await productionPreFix();
       await seed();
-      const stmts = [
+      const stmts: Stmt[] = [
         { sql: `SELECT user_id k FROM public.notifications WHERE user_id IN ('${ME}','${OTHER}')` },
         { sql: `UPDATE public.notifications SET is_read = true WHERE user_id IN ('${ME}','${OTHER}') RETURNING user_id k` },
         { sql: `SELECT user_id k FROM public.user_preferences WHERE user_id IN ('${ME}','${OTHER}')` },

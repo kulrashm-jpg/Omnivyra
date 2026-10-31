@@ -10,6 +10,9 @@
  * Drives the REAL poll() against a fake Redis (INFO + the usage keys). No
  * network. Each test loads a fresh copy of the module (module-level state).
  */
+
+export {};
+
 // writeAdminAlert writes <cwd>/.redis-usage-alert.json — never from tests.
 jest.mock('fs', () => {
   const actual = jest.requireActual('fs');

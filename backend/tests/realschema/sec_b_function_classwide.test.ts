@@ -169,7 +169,9 @@ const PROD: Row[] = [
 const MIGRATION = process.env.SEC_B_MIGRATION_FILE
   || path.join(__dirname, '..', '..', '..', 'supabase', 'migrations', '20270111000003_function_execute_classwide_hardening.sql');
 
-const q = (sql: string, params: unknown[] = []) => db.query(sql, params);
+// `pg` ships no type declarations here, so db.query is `any`; name the result shape so
+// asRole<R>() infers R from it instead of collapsing to unknown.
+const q = (sql: string, params: unknown[] = []): Promise<{ rows: any[] }> => db.query(sql, params);
 const UNRESOLVABLE = 'public.get_engagement_thread_message_distance(uuid,uuid)';
 const T = PROD.filter((r) => r[1] === 'T');
 const B = PROD.filter((r) => r[1] === 'B');
