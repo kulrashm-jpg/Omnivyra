@@ -147,6 +147,17 @@ export interface ErasePersonInput {
    * provenance redaction tombstone. Defaults to `person_erasure`.
    */
   requestedBy?: string;
+  /**
+   * Optional caller hook, run after steps 3-5 are marked and immediately
+   * before finalize (steps 6-7), while this call holds the request's lease and
+   * the person row still exists. The erasure API uses it to capture the
+   * completion-verification inventory (20270115000000). It receives the
+   * request handle so a database-side hook can prove it is the lease holder.
+   * A hook that throws fails the attempt CLOSED exactly like a step failure:
+   * the request is marked failed (code only), the lease is released, and
+   * finalize is not reached.
+   */
+  beforeFinalize?: (request: { requestId: string; leaseToken: string; resumed: boolean }) => Promise<void>;
 }
 
 export interface ErasePersonResult {
@@ -340,6 +351,13 @@ async function runErasureSteps(
   //    person is not deleted.
   await clearPersonEvidenceAccountLinks(input.organizationId, input.personId);
   await markErasureStep(input.organizationId, request, 'evidence_links_cleared');
+
+  // Caller hook (see ErasePersonInput.beforeFinalize). Lease held, person
+  // present, steps 3-5 marked. A throw propagates to erasePerson's handler,
+  // which records the code and releases the lease.
+  if (input.beforeFinalize) {
+    await input.beforeFinalize({ requestId: request.requestId, leaseToken: request.leaseToken, resumed: request.resumed });
+  }
 
   // 6 + 7. ONE database transaction (`pi_person_erasure_finalize`):
   //    6   the provenance erasure (owner decision 8 / closure A, unchanged
