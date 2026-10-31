@@ -41,9 +41,13 @@ import {
   isQueueAllowed,
   getQueueFanOutMultiplier,
   storeOverflow,
+  storeOverflowDetailed,
+  retractOverflow,
   registerOverflowDrain,
   type OverflowEntry,
+  type OverflowStoreResult,
 } from '../../lib/redis/usageProtection';
+import { PROTECTED_ADD, type ProtectedAddResult } from './protectedAdd';
 import { startMetricsPersistence } from '../../lib/instrumentation/metricsPersistence';
 import { getSystemMetrics }        from '../../lib/instrumentation/systemMetrics';
 import { estimateCost }            from '../../lib/instrumentation/costEngine';
@@ -460,6 +464,16 @@ export function getUsageProtectionReady(): Promise<void> {
 //
 // Critical queues (posting, publish) are never blocked.
 
+/**
+ * OPS-C: park one entry and report the outcome. Falls back to the boolean
+ * storeOverflow when the detailed variant is unavailable (a partial test mock
+ * of the usage-protection module), treating a stored entry as 'stored'.
+ */
+function parkInOverflow(queueName: string, entry: OverflowEntry): OverflowStoreResult {
+  if (typeof storeOverflowDetailed === 'function') return storeOverflowDetailed(queueName, entry);
+  return storeOverflow(queueName, entry) ? 'stored' : 'dropped';
+}
+
 export function applyQueueProtection(queue: Queue): Queue {
   const origAdd     = queue.add.bind(queue);
   const origAddBulk = queue.addBulk.bind(queue);
@@ -471,20 +485,40 @@ export function applyQueueProtection(queue: Queue): Queue {
     if (jobs.length > 0) await origAddBulk(jobs as Parameters<typeof origAddBulk>[0]);
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (queue as any).add = async (...args: any[]) => {
+  // OPS-C: the outcome-reporting add (see ./protectedAdd). The patched `add`
+  // below delegates to it and keeps its historical `null` for every
+  // non-accepted outcome, so direct callers are unaffected.
+  const protectedAdd = async (name: string, data: unknown, opts?: Record<string, unknown>): Promise<ProtectedAddResult> => {
     if (!isQueueAllowed(queue.name)) {
-      const entry: OverflowEntry = { name: args[0] as string, data: args[1], opts: args[2] };
-      const stored = storeOverflow(queue.name, entry);
+      const entry: OverflowEntry = { name, data, opts };
+      const outcome = parkInOverflow(queue.name, entry);
+      const stored = outcome !== 'dropped';
       console.error(JSON.stringify({
         level:   'ERROR',
-        event:   stored ? 'queue_job_overflowed' : 'queue_job_dropped',
+        event:   outcome === 'dropped' ? 'queue_job_dropped' : outcome === 'coalesced' ? 'queue_job_overflow_coalesced' : 'queue_job_overflowed',
         queue:   queue.name,
-        job:     args[0],
+        job:     name,
         stored,
         reason:  'critical_redis_usage',
       }));
-      return null;
+      if (outcome === 'dropped') return { kind: 'overflow_dropped' };
+      if (outcome === 'coalesced') return { kind: 'overflow_coalesced' };
+      return {
+        kind: 'overflow_stored',
+        retract: () => (typeof retractOverflow === 'function' ? retractOverflow(queue.name, entry) : false),
+      };
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const job = await (origAdd as any)(name, data, opts);
+    return { kind: 'added', job: (job ?? null) as { id?: string | null } | null };
+  };
+  Object.defineProperty(queue, PROTECTED_ADD, { value: protectedAdd, enumerable: false, configurable: true, writable: true });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (queue as any).add = async (...args: any[]) => {
+    if (!isQueueAllowed(queue.name)) {
+      const r = await protectedAdd(args[0] as string, args[1], args[2]);
+      return r.kind === 'added' ? r.job : null;
     }
     return origAdd(...args);
   };
@@ -494,10 +528,11 @@ export function applyQueueProtection(queue: Queue): Queue {
     const jobs: OverflowEntry[] = args[0];
 
     if (!isQueueAllowed(queue.name)) {
-      // Store all blocked bulk jobs in the overflow buffer
+      // Store all blocked bulk jobs in the overflow buffer (coalesced = an
+      // identical jobId is already parked, so it is covered, not dropped).
       let storedCount = 0;
       for (const j of jobs) {
-        const stored = storeOverflow(queue.name, j as OverflowEntry);
+        const stored = parkInOverflow(queue.name, j as OverflowEntry) !== 'dropped';
         if (stored) storedCount++;
       }
       console.error(JSON.stringify({
@@ -519,7 +554,7 @@ export function applyQueueProtection(queue: Queue): Queue {
       const deferred = jobs.slice(capped.length);
       let storedCount = 0;
       for (const j of deferred) {
-        const stored = storeOverflow(queue.name, j as OverflowEntry);
+        const stored = parkInOverflow(queue.name, j as OverflowEntry) !== 'dropped';
         if (stored) storedCount++;
       }
       console.warn(JSON.stringify({

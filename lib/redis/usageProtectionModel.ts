@@ -146,6 +146,17 @@ export interface OverflowEntry {
 
 export type DrainCallback = (queueName: string, jobs: OverflowEntry[]) => Promise<void>;
 
+/**
+ * OPS-C: what happened to a job offered to the overflow buffer.
+ *   stored    — parked; replayed by the drain when usage falls below throttle.
+ *   coalesced — a job with the same BullMQ jobId is already parked. BullMQ
+ *               would ignore the second add of that jobId anyway, so parking
+ *               it twice only burns buffer capacity (the safety-net cron
+ *               re-offers jobId 'drain' every 5 minutes).
+ *   dropped   — the buffer is full; nothing was stored.
+ */
+export type OverflowStoreResult = 'stored' | 'coalesced' | 'dropped';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants / thresholds
 // ─────────────────────────────────────────────────────────────────────────────

@@ -64,7 +64,7 @@ import { config, envIsExplicit } from '@/config';
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { type UsageLevel, type MemoryUsage, type RequestUsage, type RedisUsageStatus, type OverflowEntry, type DrainCallback, WARN_PCT, THROTTLE_PCT, CRITICAL_PCT, NOTIFY_COOLDOWN_MS, CRITICAL_STARVATION_WARN_MS, CRITICAL_QUEUES, NON_ESSENTIAL_CRON_JOBS } from './usageProtectionModel';
+import { type UsageLevel, type MemoryUsage, type RequestUsage, type RedisUsageStatus, type OverflowEntry, type DrainCallback, type OverflowStoreResult, WARN_PCT, THROTTLE_PCT, CRITICAL_PCT, NOTIFY_COOLDOWN_MS, CRITICAL_STARVATION_WARN_MS, CRITICAL_QUEUES, NON_ESSENTIAL_CRON_JOBS } from './usageProtectionModel';
 
 let _memory: MemoryUsage = { usedBytes: 0, maxBytes: 0, usagePct: 0 };
 let _requests: RequestUsage = {
@@ -162,6 +162,11 @@ function getOverflowCap(): number {
 
 const _overflow    = new Map<string, OverflowEntry[]>();
 const _drainCbs    = new Map<string, DrainCallback>();
+// OPS-C: when each parked entry was parked (oldest-age metric). A side map, so
+// the entries handed to the drain's addBulk stay exactly { name, data, opts }.
+const _overflowParkedAt = new WeakMap<OverflowEntry, number>();
+let _totalJobsCoalesced = 0;
+let _totalJobsRetracted = 0;
 
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -179,13 +184,21 @@ const POLL_ERROR_LOG_COOLDOWN_MS = 60_000;  // rate limit: log max once per minu
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+// OPS-C: where the memory denominator came from on the last poll. With
+// 'default' the memory axis divides by an assumed 256 MB, so a larger Upstash
+// database reads as "critical" without being anywhere near its real limit.
+type LimitSource = 'info' | 'admin' | 'env' | 'default';
+let _maxBytesSource: LimitSource = 'default';
+let _dailyLimitSource: 'admin' | 'env' | 'default' = 'default';
+
 function resolveMaxBytes(infoMax: number): number {
-  if (infoMax > 0) return infoMax;
-  if (_adminMaxMemBytes > 0) return _adminMaxMemBytes;
+  if (infoMax > 0) { _maxBytesSource = 'info'; return infoMax; }
+  if (_adminMaxMemBytes > 0) { _maxBytesSource = 'admin'; return _adminMaxMemBytes; }
   // Schema applies the 256 MB default when REDIS_MAX_BYTES is unset, so this
   // returns the same final value as the inline fallback below either way.
   const envMax = config.REDIS_MAX_BYTES;
-  if (envMax > 0) return envMax;
+  if (envMax > 0) { _maxBytesSource = envIsExplicit('REDIS_MAX_BYTES') ? 'env' : 'default'; return envMax; }
+  _maxBytesSource = 'default';
   return 256 * 1024 * 1024;  // 256 MB — Upstash free-tier ceiling
 }
 
@@ -230,6 +243,7 @@ async function computeRequestUsage(redis: IORedis, totalCommandsProcessed: numbe
   const dailyLimit = _adminDailyLimit > 0
     ? _adminDailyLimit
     : parseInt(process.env.UPSTASH_DAILY_REQUEST_LIMIT ?? '5000000', 10);
+  _dailyLimitSource = _adminDailyLimit > 0 ? 'admin' : (process.env.UPSTASH_DAILY_REQUEST_LIMIT ? 'env' : 'default');
   const dailyUsed  = Math.max(0, totalCommandsProcessed - baseline);
   return {
     dailyUsed,
@@ -248,10 +262,31 @@ async function computeRequestUsage(redis: IORedis, totalCommandsProcessed: numbe
  * Returns true if stored, false if the buffer is full (job truly dropped).
  */
 export function storeOverflow(queueName: string, entry: OverflowEntry): boolean {
+  return storeOverflowDetailed(queueName, entry) !== 'dropped';
+}
+
+function overflowJobId(entry: OverflowEntry): string | null {
+  const id = entry?.opts?.jobId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/**
+ * OPS-C: store with the outcome spelled out (see OverflowStoreResult).
+ * An entry whose BullMQ jobId is already parked for the same queue is
+ * coalesced instead of stored twice: BullMQ ignores a second add of an
+ * existing jobId, so the duplicate could never run — it would only consume
+ * buffer capacity that real, distinct work needs.
+ */
+export function storeOverflowDetailed(queueName: string, entry: OverflowEntry): OverflowStoreResult {
   let buf = _overflow.get(queueName);
   if (!buf) {
     buf = [];
     _overflow.set(queueName, buf);
+  }
+  const jobId = overflowJobId(entry);
+  if (jobId !== null && buf.some((e) => overflowJobId(e) === jobId)) {
+    _totalJobsCoalesced++;
+    return 'coalesced';
   }
   if (buf.length >= getOverflowCap()) {
     console.error(JSON.stringify({
@@ -263,11 +298,73 @@ export function storeOverflow(queueName: string, entry: OverflowEntry): boolean 
       reason: 'overflow_cap_reached_job_dropped',
     }));
     _totalJobsDropped++;  // BUG#14 fix: count truly dropped jobs separately
-    return false;
+    return 'dropped';
   }
   buf.push(entry);
+  _overflowParkedAt.set(entry, Date.now());
   _totalJobsBlocked++;
+  return 'stored';
+}
+
+/**
+ * OPS-C: take back ONE parked entry (by identity) that its producer has
+ * decided to report as "not accepted". Without this, a producer that answers
+ * its caller with a failure (HTTP 429, a thrown QueueFullError) would still
+ * have the job replayed later by the drain: reported failed, then executed.
+ * Returns false when the entry is no longer parked (already drained).
+ */
+export function retractOverflow(queueName: string, entry: OverflowEntry): boolean {
+  const buf = _overflow.get(queueName);
+  if (!buf) return false;
+  const idx = buf.indexOf(entry);
+  if (idx < 0) return false;
+  buf.splice(idx, 1);
+  _overflowParkedAt.delete(entry);
+  _totalJobsRetracted++;
   return true;
+}
+
+/** OPS-C: age in ms of the oldest parked entry per queue (queues with parked entries only). */
+export function overflowOldestAgeMs(now: number = Date.now()): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, buf] of _overflow.entries()) {
+    let oldest = Infinity;
+    for (const e of buf) {
+      const t = _overflowParkedAt.get(e);
+      if (typeof t === 'number' && t < oldest) oldest = t;
+    }
+    if (buf.length > 0 && Number.isFinite(oldest)) out[k] = Math.max(0, now - oldest);
+  }
+  return out;
+}
+
+/** OPS-C: overflow counters for structured health events (no payloads). */
+export function getOverflowCounters(): {
+  parked: number; coalesced: number; retracted: number; dropped: number; buffered: number;
+} {
+  return {
+    parked: _totalJobsBlocked,
+    coalesced: _totalJobsCoalesced,
+    retracted: _totalJobsRetracted,
+    dropped: _totalJobsDropped,
+    buffered: totalOverflowed(),
+  };
+}
+
+/** Test seam: empty every buffer and counter. Never called by production code. */
+export function __resetOverflowForTests(): void {
+  _overflow.clear();
+  _drainCbs.clear();
+  _totalJobsBlocked = 0;
+  _totalJobsDropped = 0;
+  _totalJobsCoalesced = 0;
+  _totalJobsRetracted = 0;
+}
+
+/** Test seam: force the protection level without a Redis poll. Never called by production code. */
+export function __setUsageLevelForTests(level: UsageLevel): void {
+  _level = level;
+  _prevLevel = level;
 }
 
 /**
@@ -297,6 +394,21 @@ export function overflowByQueue(): Record<string, number> {
   return out;
 }
 
+/**
+ * OPS-C: replay parked jobs whenever usage is below throttle, not only on the
+ * single elevated→normal transition. Before this, (a) a critical→warning
+ * recovery left the buffer parked until a later warning→normal transition,
+ * and (b) a FAILED drain re-buffered its jobs but nothing ever retried it
+ * until the level elevated and recovered again. isQueueAllowed() already
+ * admits every queue below critical, and the drain re-adds under the original
+ * jobIds, so replaying more often cannot duplicate a job.
+ */
+export async function drainOverflowIfBelowThrottle(): Promise<void> {
+  if (_level !== 'normal' && _level !== 'warning') return;
+  if (totalOverflowed() === 0) return;
+  await drainAllOverflows();
+}
+
 async function drainAllOverflows(): Promise<void> {
   for (const [queueName, buf] of _overflow.entries()) {
     if (buf.length === 0) continue;
@@ -306,6 +418,7 @@ async function drainAllOverflows(): Promise<void> {
     const snapshot = buf.splice(0);  // atomic clear
     try {
       await cb(queueName, snapshot);
+      for (const e of snapshot) _overflowParkedAt.delete(e);
       console.log(JSON.stringify({
         level:  'INFO',
         event:  'queue_overflow_drained',
@@ -516,6 +629,9 @@ async function pollWithRetry(getRedis: () => IORedis, attempt: number = 0): Prom
       _notifiedAt = Date.now();
     }
 
+    // OPS-C: replay parked jobs (and retry failed drains) on every poll below throttle.
+    await drainOverflowIfBelowThrottle();
+
     // Periodic alert refresh at elevated levels
     if (_level !== 'normal' && Date.now() - _notifiedAt > NOTIFY_COOLDOWN_MS) {
       _notifiedAt = Date.now();
@@ -542,6 +658,20 @@ async function pollWithRetry(getRedis: () => IORedis, attempt: number = 0): Prom
       usageLevel: _level,
       memoryPct: _memory.usagePct,
       requestsPct: _requests.usagePct,
+      // OPS-C: the inputs behind the level, so an operator can tell WHICH axis
+      // is critical and whether its denominator is real or a default.
+      // Numbers only — no keys, no payloads.
+      usedMb: Math.round(_memory.usedBytes / 1024 / 1024),
+      maxMb: Math.round(_memory.maxBytes / 1024 / 1024),
+      maxSource: _maxBytesSource,
+      dailyUsed: _requests.dailyUsed,
+      dailyLimit: _requests.dailyLimit,
+      dailyLimitSource: _dailyLimitSource,
+      overflowBuffered: totalOverflowed(),
+      overflowOldestAgeMs: Object.values(overflowOldestAgeMs()).reduce((m, v) => Math.max(m, v), 0),
+      overflowCoalesced: _totalJobsCoalesced,
+      overflowRetracted: _totalJobsRetracted,
+      overflowDropped: _totalJobsDropped,
     }));
 
   } catch (err) {

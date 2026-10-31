@@ -109,7 +109,11 @@ describe('safeEnqueue contract', () => {
   });
 
   it('returns null rather than throwing when the queue is full', () => {
-    expect(src).toMatch(/if\s*\(err instanceof QueueFullError\)\s*\{\s*return null/);
+    // OPS-C: depth backpressure is now the explicit 'rejected_backpressure'
+    // outcome, which safeEnqueue maps to null with every other non-accepted
+    // outcome (behaviour pinned in ops_c_safeEnqueueContract.test.ts).
+    expect(src).toMatch(/if\s*\(err instanceof QueueFullError\)\s*\{\s*return \{ status: 'rejected_backpressure'/);
+    expect(src).toMatch(/default:\s*return null;\s*\}\s*\}\s*$/);
   });
 
   it('documents the exempt recovery paths', () => {
@@ -145,7 +149,8 @@ describe('direct queue.add ratchet', () => {
       'backend/adapters/commandCenter/creatorContentAdapter.ts',
       'backend/adapters/engagement/responseAdapter.ts',
       'backend/queue/intelligencePollingQueue.ts',
-      'backend/scheduler/cron.ts',
+      // OPS-C: cron.ts's safety-net triggers moved to backend/queue/safetyNetTrigger.ts.
+      'backend/queue/safetyNetTrigger.ts',
       'backend/scheduler/schedulerIntelligenceJobs.ts',
       'backend/scheduler/schedulerPostQueueControl.ts',
       'backend/scheduler/schedulerService.ts',
@@ -161,7 +166,7 @@ describe('direct queue.add ratchet', () => {
     ];
     for (const rel of converted) {
       const src = fs.readFileSync(path.join(REPO, rel), 'utf8');
-      expect({ file: rel, usesSafeEnqueue: src.includes('safeEnqueue(') || src.includes('enqueueOrThrow(') }).toEqual({
+      expect({ file: rel, usesSafeEnqueue: src.includes('safeEnqueue(') || src.includes('enqueueOrThrow(') || src.includes('enqueueWithOutcome(') }).toEqual({
         file: rel,
         usesSafeEnqueue: true,
       });
