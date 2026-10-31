@@ -144,7 +144,7 @@ describe('runRevalidation copy-to-review (non-destructive)', () => {
 describe('J1 H3-4 - objects of unknown or excessive size are never read whole', () => {
   it('an image with NO size in the listing is flagged size_unknown (needs review) and is never fully read', async () => {
     const io = memoryIO([{ obj: { ...o('c/a/image/nosize.png', 'image/png'), size: null }, bytes: PNG }], { provenance: ['c/a/image/nosize.png'] });
-    const readAll = jest.spyOn(io, 'readAll' as never);
+    const readAll = jest.spyOn(io as any, 'readAll');
     const r = await runRevalidation(io);
     expect(r.objects[0].flags).toContain('size_unknown');
     expect(readAll).not.toHaveBeenCalled();
