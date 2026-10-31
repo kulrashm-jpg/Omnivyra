@@ -279,6 +279,41 @@ describe('SEC-A class-wide client privileges (50 tables)', () => {
     });
   });
 
+  it('F-1 reports: only_admin_can_create_free_reports WITH CHECK (is_free = false OR …) lets anon/authenticated INSERT into ANY tenant pre-fix; post-fix privilege-denied', async () => {
+    await inRollback(async () => {
+      await productionPreFix();
+      await seed();
+      /** Insert as a client (no RETURNING: that would also need a SELECT policy), then count as the superuser. */
+      const lands = async (role: string, claims: Claims): Promise<string> => {
+        await db.query('SAVEPOINT f1');
+        try {
+          await db.query(`SET LOCAL ROLE ${role}`);
+          await db.query(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify(claims)]);
+          await db.query(`INSERT INTO public.reports (company_id, user_id, domain, is_free) VALUES ($1, $2, 'sec-a-f1.example', false)`,
+            [ORG_B, OTHER]);
+          await db.query('RESET ROLE');
+          const { rows } = await db.query(`SELECT count(*)::int n FROM public.reports WHERE company_id = $1 AND domain = 'sec-a-f1.example'`, [ORG_B]);
+          return `landed:${rows[0].n}`;
+        } catch (e: any) {
+          return `ERR ${e.code}: ${e.message}`;
+        } finally {
+          await db.query('ROLLBACK TO SAVEPOINT f1');
+        }
+      };
+      const observe = async () => ({
+        anon: await lands('anon', CLIENTS[0].claims),
+        session: await lands('authenticated', SESSION), // ME is a member of A only, never of B
+      });
+      // Pre-fix (production ACL + policies): a row lands in tenant B with no auth at all.
+      expect(await observe()).toEqual({ anon: 'landed:1', session: 'landed:1' });
+      await db.query(MIGRATION);
+      expect(await observe()).toEqual({
+        anon: 'ERR 42501: permission denied for table reports',
+        session: 'ERR 42501: permission denied for table reports',
+      });
+    });
+  });
+
   it('own-row(uid) + identity core: own rows only pre-fix (unused by the app); post-fix denied; service_role unaffected', async () => {
     await inRollback(async () => {
       await productionPreFix();
