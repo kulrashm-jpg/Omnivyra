@@ -375,7 +375,7 @@ describe('database constraints behind the workflow (20270108000000)', () => {
         [ORG_B, fA, u])).toBe('23503:opp_assignments_item_tenant_fk');
       await expect(snoozeOpportunity({
         organizationId: ORG_B, opportunityFeedItemId: fA, until: new Date(Date.now() + 86_400_000).toISOString(), setByUserId: null, reason: null,
-      })).rejects.toThrow(/snooze_insert_failed:.*opp_dispositions_item_tenant_fk/);
+      })).rejects.toThrow(/^opportunity_not_found$/); // OPS-C e14b462a: FK 23503 on the item maps to OpportunityNotInTenantError
       await expect(assignOpportunity({ organizationId: ORG_B, opportunityFeedItemId: fA, assignedToUserId: u, assignedByUserId: null, role: 'owner' }))
         .rejects.toThrow(/assignment_insert_failed:.*opp_assignments_item_tenant_fk/);
     });
