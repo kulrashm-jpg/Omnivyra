@@ -46,6 +46,15 @@ jobs:
       - name: Migration quality gate
         run: node scripts/check-migration-quality.js
 
+      # F-D1 (2026-10-31): generated/schema-column-manifest.json is committed and
+      # shipped verbatim (bootFingerprint reads it; /api/health/version reports its
+      # manifest_hash). Nothing regenerates it at build time, and it sat stale from
+      # 2026-05-20 to 2026-10-31. Fail the PR when a migration changes the
+      # users/companies column attribution without the regenerated file.
+      # Deterministic, read-only, no DB/network; never writes.
+      - name: Schema manifest freshness
+        run: node scripts/generate-schema-manifest.js --check
+
       # HARDEN-005A: fail the build if new code makes a raw dynamic-URL outbound
       # request that bypasses the centralized SSRF layer (lib/security/safeFetch).
       # STEP 3AH-91 (F3): also scans lib/** server modules and flags template
@@ -157,6 +166,8 @@ jobs:
             # Prospect provenance manifest change: runtime exit contract (stubbed
             # pg), strict-mode mapping, no-downgrade snapshot, ledger pin.
             backend/tests/unit/piProvSchemaGateContract.test.ts
+            # F-D1: schema manifest --check contract (stale ⇒ exit 1, never writes).
+            backend/tests/unit/schemaManifestCheck.test.ts
           )
           for s in "${SUITES[@]}"; do
             test -f "$s" || { echo "Gated suite missing — renamed, moved or deleted: $s"; exit 1; }

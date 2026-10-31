@@ -3,23 +3,34 @@
  * generate-schema-manifest — writes a machine-readable catalog of the
  * auth-spine schema surface to `generated/schema-column-manifest.json`.
  *
- * Consumers
+ * Consumers (verified 2026-10-31)
  * ─────────
- * - `scripts/check-schema-drift.js` could load it instead of re-parsing
- *   migrations on every CI run (not wired today; the drift checker is
- *   self-contained for simplicity).
- * - `pages/api/health/schema.ts` and the readiness endpoint use it to
- *   report which migration would add a missing column.
- * - Future diagnostics tooling — anything that needs "what does this
- *   table look like, declaratively, in this repo's migrations?".
+ * - `backend/security/startup/bootFingerprint.ts` reads `manifest_hash` at
+ *   runtime; it is reported as `schema_manifest_hash` by
+ *   `/api/health/version`, `/api/health/readiness` and the super-admin
+ *   operations center, and it is an input to the boot `fingerprint` digest.
+ * - Nothing else reads the file. `scripts/check-schema-drift.js` and
+ *   `pages/api/health/schema.ts` are self-contained.
  *
  * The manifest is intentionally derived (not hand-edited). Re-run after
- * every migration change:
+ * every migration change that touches a watched table:
  *
- *   npm run generate:schema-manifest
+ *   node scripts/generate-schema-manifest.js
  *
- * CI invokes it as part of the prebuild step so the JSON is always fresh
- * in deployed artifacts.
+ * NOTHING runs this automatically — not prebuild, not the worker image, not
+ * CI. (An earlier header claimed "CI invokes it as part of the prebuild
+ * step"; that was never true, which is how the committed file went stale.)
+ * The committed file IS what ships, so CI instead verifies it is current:
+ *
+ *   node scripts/generate-schema-manifest.js --check
+ *
+ * `--check` never writes. It recomputes the migration-derived part of the
+ * manifest (the `manifest_hash` input: table, column, source_migration, plus
+ * lifecycle_critical) and exits 1 if the committed file disagrees, 2 if the
+ * file is missing or unreadable, 0 if current. `first_consumer` is a code
+ * line pointer that moves with unrelated edits; it is not part of the hash
+ * and is not gated (pass `--consumers` to print, never fail on, its drift).
+ * `--manifest <path>` checks a different file (used by the contract test).
  */
 
 'use strict';
@@ -114,7 +125,11 @@ function readMigrationManifest() {
 
 function walk(dir, results) {
   if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  // Sorted so "first consumer" does not depend on the filesystem's readdir
+  // order (NTFS is name-ordered, ext4 is not).
+  const entries = fs.readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
     if (entry.name === 'node_modules' || entry.name === '.next' || entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) walk(full, results);
@@ -204,7 +219,9 @@ function findFirstConsumers(projectionConstants) {
               const col = raw.trim().split(/\s+/)[0];
               const key = `${table}.${col}`;
               if (!consumers.has(key)) {
-                consumers.set(key, { file: path.relative(REPO_ROOT, file), line: line + 1 });
+                // POSIX separators so the committed file is identical whether
+                // it was generated on Windows or Linux.
+                consumers.set(key, { file: path.relative(REPO_ROOT, file).split(path.sep).join('/'), line: line + 1 });
               }
             }
           }
@@ -233,7 +250,92 @@ function hashManifest(manifest) {
   return crypto.createHash('sha256').update(entries.join('\n')).digest('hex');
 }
 
+// ── --check (read-only CI gate) ─────────────────────────────────────────────
+
+function argValue(name) {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : null;
+}
+
+/** The hash-relevant identity of one column row. */
+function columnKey(c) {
+  return `${c.table}.${c.column}=${c.source_migration}|critical=${c.lifecycle_critical === true}`;
+}
+
+function runCheck() {
+  const target = argValue('--manifest') ? path.resolve(argValue('--manifest')) : OUTPUT_FILE;
+  const rel = path.relative(REPO_ROOT, target).split(path.sep).join('/');
+  let committed;
+  try {
+    committed = JSON.parse(fs.readFileSync(target, 'utf8'));
+  } catch (e) {
+    console.error(`schema-manifest --check: cannot read ${rel}: ${e && e.message ? e.message : e}`);
+    return 2;
+  }
+
+  const manifest = readMigrationManifest();
+  const expectedHash = hashManifest(manifest);
+  const expected = [];
+  for (const [table, cols] of [...manifest.entries()].sort()) {
+    for (const [column, src] of [...cols.entries()].sort()) {
+      expected.push({ table, column, source_migration: src, lifecycle_critical: LIFECYCLE_CRITICAL_COLUMNS.has(column) });
+    }
+  }
+  const committedCols = Array.isArray(committed.columns) ? committed.columns : [];
+  const want = new Set(expected.map(columnKey));
+  const have = new Set(committedCols.map(columnKey));
+  const missing = [...want].filter((k) => !have.has(k)).sort();
+  const extra = [...have].filter((k) => !want.has(k)).sort();
+  const watchedOk = JSON.stringify(committed.watched_tables) === JSON.stringify([...WATCHED_TABLES].sort());
+
+  // The committed hash must match both the migrations AND the committed rows,
+  // so a hand-edited hash or hand-edited rows cannot pass.
+  const committedRowsHash = (() => {
+    const m = new Map();
+    for (const c of committedCols) {
+      if (!m.has(c.table)) m.set(c.table, new Map());
+      m.get(c.table).set(c.column, c.source_migration);
+    }
+    return hashManifest(m);
+  })();
+
+  const problems = [];
+  if (committed.manifest_hash !== expectedHash) {
+    problems.push(`manifest_hash ${String(committed.manifest_hash).slice(0, 16)}… != regenerated ${expectedHash.slice(0, 16)}…`);
+  }
+  if (committedRowsHash !== committed.manifest_hash) {
+    problems.push('manifest_hash does not match the committed columns (hand-edited?)');
+  }
+  if (!watchedOk) problems.push(`watched_tables ${JSON.stringify(committed.watched_tables)} != ${JSON.stringify([...WATCHED_TABLES].sort())}`);
+  if (committedCols.length !== expected.length) problems.push(`${committedCols.length} committed columns != ${expected.length} regenerated`);
+  for (const k of missing) problems.push(`missing/changed: ${k}`);
+  for (const k of extra) problems.push(`stale/extra:     ${k}`);
+
+  if (process.argv.includes('--consumers')) {
+    const consumers = findFirstConsumers(loadProjectionConstants());
+    let drift = 0;
+    for (const c of committedCols) {
+      const now = consumers.get(`${c.table}.${c.column}`) ?? null;
+      if (JSON.stringify(now) !== JSON.stringify(c.first_consumer ?? null)) drift++;
+    }
+    console.log(`schema-manifest --check: first_consumer drift on ${drift} row(s) (advisory, never fails)`);
+  }
+
+  if (problems.length > 0) {
+    console.error(`schema-manifest --check: FAIL — ${rel} is stale (${problems.length} problem(s)):`);
+    for (const p of problems.slice(0, 50)) console.error(`  - ${p}`);
+    console.error('Regenerate with `node scripts/generate-schema-manifest.js` and commit the result.');
+    console.error('Note: the new manifest_hash is reported by /api/health/version after the next deploy.');
+    return 1;
+  }
+  console.log(`schema-manifest --check: OK — ${rel} is current (${expected.length} columns, manifest_hash ${expectedHash.slice(0, 16)}…)`);
+  return 0;
+}
+
 function main() {
+  if (process.argv.includes('--check')) {
+    process.exit(runCheck());
+  }
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   const manifest = readMigrationManifest();
   const projectionConstants = loadProjectionConstants();
