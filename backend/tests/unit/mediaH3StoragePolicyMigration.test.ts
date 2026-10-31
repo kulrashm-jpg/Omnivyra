@@ -23,10 +23,16 @@ const EXPECTED_POLICIES = [
 ];
 
 describe('MEDIA-H3 storage policy migration', () => {
-  it('exists exactly once, with a matching rollback of the same version', () => {
+  it('exists exactly once, with a matching rollback named by the forward migration', () => {
     expect(migrationFile).toHaveLength(1);
     expect(rollbackFile).toHaveLength(1);
-    expect(rollbackFile[0].slice(0, 14)).toBe(migrationFile[0].slice(0, 14));
+    // Rollbacks follow the repo convention `<slug>_rollback.sql` with NO 14-digit
+    // prefix: check-migration-quality treats a prefixed rollback as a duplicate
+    // version of its forward migration. The pairing is pinned by the forward
+    // migration's header naming the rollback path instead.
+    expect(rollbackFile[0]).toBe('media_h3_storage_quarantine_policies_rollback.sql');
+    const header = fs.readFileSync(path.join(MIGRATIONS, migrationFile[0]), 'utf8');
+    expect(header).toContain(`supabase/migrations/rollbacks/${rollbackFile[0]}`);
   });
 
   it('does not share its 14-digit version with any other migration', () => {
