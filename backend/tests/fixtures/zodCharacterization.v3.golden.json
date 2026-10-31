@@ -1,0 +1,5404 @@
+{
+  "zod": "3.25.76",
+  "cases": {
+    "action.valid": {
+      "success": true,
+      "data": {
+        "id": "act_1",
+        "instruction_code": "CTA_FIX",
+        "action_category": "content",
+        "impact": 50,
+        "impact_explanation": "because",
+        "priority_score": 7,
+        "expected_score_gain": {
+          "seo": 1
+        },
+        "confidence": 0.8,
+        "confidence_label": "High",
+        "confidence_per_action": 0.7,
+        "title": "t",
+        "description": "d",
+        "steps": [
+          "s1"
+        ],
+        "owner": "marketing",
+        "effort_level": "low",
+        "timeline_days": 3,
+        "action_type": "x",
+        "payload": {
+          "a": 1
+        },
+        "status_source": "system"
+      }
+    },
+    "action.explainability-default": {
+      "success": true,
+      "data": {
+        "id": "act_1",
+        "instruction_code": "CTA_FIX",
+        "action_category": "content",
+        "impact": 50,
+        "impact_explanation": "because",
+        "priority_score": 7,
+        "expected_score_gain": {
+          "seo": 1
+        },
+        "confidence": 0.8,
+        "confidence_label": "High",
+        "confidence_per_action": 0.7,
+        "title": "t",
+        "description": "d",
+        "steps": [
+          "s1"
+        ],
+        "owner": "marketing",
+        "effort_level": "low",
+        "timeline_days": 3,
+        "action_type": "x",
+        "payload": {
+          "a": 1
+        },
+        "status_source": "system",
+        "explainability": {
+          "source_signals": [],
+          "reasoning": "r"
+        }
+      }
+    },
+    "action.unknown-keys-stripped": {
+      "success": true,
+      "data": {
+        "id": "act_1",
+        "instruction_code": "CTA_FIX",
+        "action_category": "content",
+        "impact": 50,
+        "impact_explanation": "because",
+        "priority_score": 7,
+        "expected_score_gain": {
+          "seo": 1
+        },
+        "confidence": 0.8,
+        "confidence_label": "High",
+        "confidence_per_action": 0.7,
+        "title": "t",
+        "description": "d",
+        "steps": [
+          "s1"
+        ],
+        "owner": "marketing",
+        "effort_level": "low",
+        "timeline_days": 3,
+        "action_type": "x",
+        "payload": {
+          "a": 1
+        },
+        "status_source": "system"
+      }
+    },
+    "action.instruction-free-text-trimmed": {
+      "success": true,
+      "data": "CUSTOM_CODE"
+    },
+    "action.instruction-known": {
+      "success": true,
+      "data": "CTA_FIX"
+    },
+    "action.instruction-blank": {
+      "success": false,
+      "issues": [
+        {
+          "path": "",
+          "message": "String must contain at least 1 character(s)",
+          "custom": false
+        }
+      ]
+    },
+    "action.instruction-number": {
+      "success": false,
+      "issues": [
+        {
+          "path": "",
+          "message": "Invalid input",
+          "custom": false
+        }
+      ]
+    },
+    "action.impact-over": {
+      "success": false,
+      "issues": [
+        {
+          "path": "impact",
+          "message": "Number must be less than or equal to 100",
+          "custom": false
+        }
+      ]
+    },
+    "action.timeline-float": {
+      "success": false,
+      "issues": [
+        {
+          "path": "timeline_days",
+          "message": "Expected integer, received float",
+          "custom": false
+        }
+      ]
+    },
+    "action.timeline-zero": {
+      "success": false,
+      "issues": [
+        {
+          "path": "timeline_days",
+          "message": "Number must be greater than or equal to 1",
+          "custom": false
+        }
+      ]
+    },
+    "action.steps-empty": {
+      "success": false,
+      "issues": [
+        {
+          "path": "steps",
+          "message": "Array must contain at least 1 element(s)",
+          "custom": false
+        }
+      ]
+    },
+    "action.steps-blank": {
+      "success": false,
+      "issues": [
+        {
+          "path": "steps.0",
+          "message": "String must contain at least 1 character(s)",
+          "custom": false
+        }
+      ]
+    },
+    "action.payload-array": {
+      "success": false,
+      "issues": [
+        {
+          "path": "payload",
+          "message": "Expected object, received array",
+          "custom": false
+        }
+      ]
+    },
+    "action.payload-null": {
+      "success": false,
+      "issues": [
+        {
+          "path": "payload",
+          "message": "Expected object, received null",
+          "custom": false
+        }
+      ]
+    },
+    "action.confidence-label-bad": {
+      "success": false,
+      "issues": [
+        {
+          "path": "confidence_label",
+          "message": "Invalid enum value. Expected 'High' | 'Medium' | 'Low', received 'high'",
+          "custom": false
+        }
+      ]
+    },
+    "action.priority-infinity": {
+      "success": true,
+      "data": {
+        "id": "act_1",
+        "instruction_code": "CTA_FIX",
+        "action_category": "content",
+        "impact": 50,
+        "impact_explanation": "because",
+        "priority_score": {
+          "$num": "Infinity"
+        },
+        "expected_score_gain": {
+          "seo": 1
+        },
+        "confidence": 0.8,
+        "confidence_label": "High",
+        "confidence_per_action": 0.7,
+        "title": "t",
+        "description": "d",
+        "steps": [
+          "s1"
+        ],
+        "owner": "marketing",
+        "effort_level": "low",
+        "timeline_days": 3,
+        "action_type": "x",
+        "payload": {
+          "a": 1
+        },
+        "status_source": "system"
+      }
+    },
+    "action.priority-nan": {
+      "success": false,
+      "issues": [
+        {
+          "path": "priority_score",
+          "message": "Expected number, received nan",
+          "custom": false
+        }
+      ]
+    },
+    "action.target-block-blank": {
+      "success": false,
+      "issues": [
+        {
+          "path": "target_block_id",
+          "message": "String must contain at least 1 character(s)",
+          "custom": false
+        }
+      ]
+    },
+    "action.status-undefined-key": {
+      "success": true,
+      "data": {
+        "id": "act_1",
+        "instruction_code": "CTA_FIX",
+        "action_category": "content",
+        "impact": 50,
+        "impact_explanation": "because",
+        "priority_score": 7,
+        "expected_score_gain": {
+          "seo": 1
+        },
+        "confidence": 0.8,
+        "confidence_label": "High",
+        "confidence_per_action": 0.7,
+        "title": "t",
+        "description": "d",
+        "steps": [
+          "s1"
+        ],
+        "owner": "marketing",
+        "effort_level": "low",
+        "timeline_days": 3,
+        "action_type": "x",
+        "payload": {
+          "a": 1
+        },
+        "status": {
+          "$undef": true
+        },
+        "status_source": "system"
+      }
+    },
+    "action.not-object": {
+      "success": false,
+      "issues": [
+        {
+          "path": "",
+          "message": "Expected object, received string",
+          "custom": false
+        }
+      ]
+    },
+    "report.valid": {
+      "success": true,
+      "data": {
+        "api_version": "v1",
+        "company_id": "c1",
+        "snapshot_report": {
+          "company_id": "c1",
+          "report_type": "snapshot",
+          "generated_at": "2026-01-01T00:00:00Z",
+          "diagnosis": {},
+          "narratives": []
+        },
+        "performance_report": {
+          "company_id": "c1",
+          "report_type": "performance",
+          "generated_at": "2026-01-01T00:00:00Z",
+          "diagnosis": {},
+          "narratives": []
+        },
+        "growth_report": {
+          "company_id": "c1",
+          "report_type": "growth",
+          "generated_at": "2026-01-01T00:00:00Z",
+          "diagnosis": {},
+          "narratives": []
+        },
+        "strategic_report": {
+          "company_id": "c1",
+          "report_type": "strategic",
+          "generated_at": "2026-01-01T00:00:00Z",
+          "diagnosis": {},
+          "narratives": []
+        },
+        "top_priorities": [
+          {
+            "id": "act_1",
+            "instruction_code": "CTA_FIX",
+            "action_category": "content",
+            "impact": 50,
+            "impact_explanation": "because",
+            "priority_score": 7,
+            "expected_score_gain": {
+              "seo": 1
+            },
+            "confidence": 0.8,
+            "confidence_label": "High",
+            "confidence_per_action": 0.7,
+            "title": "t",
+            "description": "d",
+            "steps": [
+              "s1"
+            ],
+            "owner": "marketing",
+            "effort_level": "low",
+            "timeline_days": 3,
+            "action_type": "x",
+            "payload": {
+              "a": 1
+            },
+            "status_source": "system"
+          }
+        ],
+        "delta": {
+          "new_insights": [],
+          "resolved_issues": [],
+          "priority_shifts": []
+        }
+      }
+    },
+    "report.bad-version-and-type": {
+      "success": false,
+      "issues": [
+        {
+          "path": "api_version",
+          "message": "Invalid literal value, expected \"v1\"",
+          "custom": false
+        },
+        {
+          "path": "snapshot_report.report_type",
+          "message": "Invalid enum value. Expected 'snapshot' | 'performance' | 'growth' | 'strategic', received 'weekly'",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.company_id.v4": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.write.company_id.v4": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open",
+        "last_changed_by": "system"
+      }
+    },
+    "decision.contract.company_id.nonrfc": {
+      "success": true,
+      "data": {
+        "company_id": "12345678-1234-1234-1234-123456789012",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.write.company_id.nonrfc": {
+      "success": true,
+      "data": {
+        "company_id": "12345678-1234-1234-1234-123456789012",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open",
+        "last_changed_by": "system"
+      }
+    },
+    "decision.contract.company_id.v0": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-0c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.write.company_id.v0": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-0c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open",
+        "last_changed_by": "system"
+      }
+    },
+    "decision.contract.company_id.nil": {
+      "success": true,
+      "data": {
+        "company_id": "00000000-0000-0000-0000-000000000000",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.write.company_id.nil": {
+      "success": true,
+      "data": {
+        "company_id": "00000000-0000-0000-0000-000000000000",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open",
+        "last_changed_by": "system"
+      }
+    },
+    "decision.contract.company_id.max": {
+      "success": true,
+      "data": {
+        "company_id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.write.company_id.max": {
+      "success": true,
+      "data": {
+        "company_id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open",
+        "last_changed_by": "system"
+      }
+    },
+    "decision.contract.company_id.upper": {
+      "success": true,
+      "data": {
+        "company_id": "3F1C2B9A-7D4E-4C1A-9B2F-0A1B2C3D4E5F",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.write.company_id.upper": {
+      "success": true,
+      "data": {
+        "company_id": "3F1C2B9A-7D4E-4C1A-9B2F-0A1B2C3D4E5F",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open",
+        "last_changed_by": "system"
+      }
+    },
+    "decision.contract.company_id.nodash": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.write.company_id.nodash": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.company_id.braces": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.write.company_id.braces": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.company_id.short": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.write.company_id.short": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.company_id.word": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.write.company_id.word": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.company_id.padded": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.write.company_id.padded": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.company_id.number": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Expected string, received number",
+          "custom": false
+        }
+      ]
+    },
+    "decision.write.company_id.number": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Expected string, received number",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.valid-trim-default": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.contract.global-with-entity": {
+      "success": false,
+      "issues": [
+        {
+          "path": "entity_id",
+          "message": "Global decision objects must not include entity_id.",
+          "custom": true
+        }
+      ]
+    },
+    "decision.contract.global-null-entity": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "global",
+        "entity_id": null,
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.contract.global-absent-entity": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "global",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.contract.page-no-entity": {
+      "success": false,
+      "issues": [
+        {
+          "path": "entity_id",
+          "message": "Non-global decision objects must include entity_id.",
+          "custom": true
+        }
+      ]
+    },
+    "decision.contract.empty-payload": {
+      "success": false,
+      "issues": [
+        {
+          "path": "action_payload",
+          "message": "Decision objects must include action_payload.",
+          "custom": true
+        }
+      ]
+    },
+    "decision.contract.evidence-array": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": [
+          {
+            "a": 1
+          },
+          {
+            "b": 2
+          }
+        ],
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.contract.evidence-string": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence",
+          "message": "Invalid input",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.evidence-array-of-scalars": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence",
+          "message": "Invalid input",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.status-explicit": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "resolved"
+      }
+    },
+    "decision.contract.status-bad": {
+      "success": false,
+      "issues": [
+        {
+          "path": "status",
+          "message": "Invalid enum value. Expected 'open' | 'resolved' | 'ignored', received 'closed'",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.score-out-of-range": {
+      "success": false,
+      "issues": [
+        {
+          "path": "impact_traffic",
+          "message": "Number must be greater than or equal to 0",
+          "custom": false
+        },
+        {
+          "path": "confidence_score",
+          "message": "Number must be less than or equal to 1",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.score-infinity": {
+      "success": false,
+      "issues": [
+        {
+          "path": "priority_score",
+          "message": "Number must be less than or equal to 100",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.blank-title": {
+      "success": false,
+      "issues": [
+        {
+          "path": "title",
+          "message": "String must contain at least 1 character(s)",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.dirty-field-plus-refine": {
+      "success": false,
+      "issues": [
+        {
+          "path": "company_id",
+          "message": "Invalid uuid",
+          "custom": false
+        },
+        {
+          "path": "entity_id",
+          "message": "Global decision objects must not include entity_id.",
+          "custom": true
+        },
+        {
+          "path": "action_payload",
+          "message": "Decision objects must include action_payload.",
+          "custom": true
+        }
+      ]
+    },
+    "decision.contract.type-error-plus-refine": {
+      "success": false,
+      "issues": [
+        {
+          "path": "title",
+          "message": "Expected string, received number",
+          "custom": false
+        }
+      ]
+    },
+    "decision.contract.unknown-keys": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open"
+      }
+    },
+    "decision.contract.not-object": {
+      "success": false,
+      "issues": [
+        {
+          "path": "",
+          "message": "Expected object, received null",
+          "custom": false
+        }
+      ]
+    },
+    "decision.write.valid-defaults": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open",
+        "last_changed_by": "system"
+      }
+    },
+    "decision.write.empty-evidence": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence",
+          "message": "Decision objects must include evidence.",
+          "custom": true
+        }
+      ]
+    },
+    "decision.write.empty-evidence-object": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence",
+          "message": "Decision objects must include evidence.",
+          "custom": true
+        }
+      ]
+    },
+    "decision.write.last-changed-by": {
+      "success": true,
+      "data": {
+        "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "report_tier": "snapshot",
+        "source_service": "seoService",
+        "entity_type": "page",
+        "entity_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "issue_type": "thin_content",
+        "title": "Title",
+        "description": "desc",
+        "evidence": {
+          "a": 1
+        },
+        "impact_traffic": 10,
+        "impact_conversion": 20,
+        "impact_revenue": 30,
+        "priority_score": 40,
+        "effort_score": 50,
+        "confidence_score": 0.5,
+        "recommendation": "do it",
+        "action_type": "fix",
+        "action_payload": {
+          "k": "v"
+        },
+        "status": "open",
+        "last_changed_by": "user"
+      }
+    },
+    "decision.write.last-changed-by-bad": {
+      "success": false,
+      "issues": [
+        {
+          "path": "last_changed_by",
+          "message": "Invalid enum value. Expected 'system' | 'user', received 'admin'",
+          "custom": false
+        }
+      ]
+    },
+    "decision.write.all-refines": {
+      "success": false,
+      "issues": [
+        {
+          "path": "entity_id",
+          "message": "Global decision objects must not include entity_id.",
+          "custom": true
+        },
+        {
+          "path": "evidence",
+          "message": "Decision objects must include evidence.",
+          "custom": true
+        },
+        {
+          "path": "action_payload",
+          "message": "Decision objects must include action payload.",
+          "custom": true
+        }
+      ]
+    },
+    "guard.array.id.v4": {
+      "success": true,
+      "value": 1
+    },
+    "guard.array.id.nonrfc": {
+      "success": true,
+      "value": 1
+    },
+    "guard.array.id.v0": {
+      "success": true,
+      "value": 1
+    },
+    "guard.array.id.nil": {
+      "success": true,
+      "value": 1
+    },
+    "guard.array.id.max": {
+      "success": true,
+      "value": 1
+    },
+    "guard.array.id.upper": {
+      "success": true,
+      "value": 1
+    },
+    "guard.array.id.nodash": {
+      "success": false,
+      "threw": "svc returned non-decision output."
+    },
+    "guard.array.id.braces": {
+      "success": false,
+      "threw": "svc returned non-decision output."
+    },
+    "guard.array.id.short": {
+      "success": false,
+      "threw": "svc returned non-decision output."
+    },
+    "guard.array.id.word": {
+      "success": false,
+      "threw": "svc returned non-decision output."
+    },
+    "guard.array.id.padded": {
+      "success": false,
+      "threw": "svc returned non-decision output."
+    },
+    "guard.array.id.number": {
+      "success": false,
+      "threw": "svc returned non-decision output."
+    },
+    "guard.array.empty": {
+      "success": true,
+      "value": 0
+    },
+    "guard.array.extra-keys": {
+      "success": true,
+      "value": 1
+    },
+    "guard.array.missing-field": {
+      "success": false,
+      "threw": "svc returned non-decision output."
+    },
+    "guard.array.score-infinity": {
+      "success": true,
+      "value": 1
+    },
+    "guard.array.not-array": {
+      "success": false,
+      "threw": "svc returned non-decision output."
+    },
+    "guard.view.valid": {
+      "success": true,
+      "value": [
+        "company_id",
+        "report_tier",
+        "entity_scope",
+        "summary",
+        "decisions"
+      ]
+    },
+    "guard.view.nonrfc-company": {
+      "success": true,
+      "value": [
+        "company_id",
+        "report_tier",
+        "entity_scope",
+        "summary",
+        "decisions"
+      ]
+    },
+    "guard.view.bad-tier": {
+      "success": false,
+      "threw": "svc returned non-decision report output."
+    },
+    "pulse.coerce-mixed": {
+      "success": true,
+      "value": [
+        {
+          "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+          "pulse_key": "k",
+          "issue_type": "i",
+          "action_type": "a",
+          "decision_count": 3,
+          "avg_impact_traffic": 1.5,
+          "avg_impact_conversion": 2.25,
+          "avg_impact_revenue": 0,
+          "avg_confidence_score": 0,
+          "max_execution_score": 1,
+          "latest_decision_at": "2026-01-01"
+        }
+      ]
+    },
+    "pulse.coerce-nan": {
+      "success": false,
+      "threw": "insightViewService.listMarketPulseView returned non-view output."
+    },
+    "pulse.coerce-infinity": {
+      "success": true,
+      "value": [
+        {
+          "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+          "pulse_key": "k",
+          "issue_type": "i",
+          "action_type": "a",
+          "decision_count": {
+            "$num": "Infinity"
+          },
+          "avg_impact_traffic": 1.5,
+          "avg_impact_conversion": 2.25,
+          "avg_impact_revenue": 0,
+          "avg_confidence_score": 0,
+          "max_execution_score": 1,
+          "latest_decision_at": "2026-01-01"
+        }
+      ]
+    },
+    "pulse.coerce-array": {
+      "success": true,
+      "value": [
+        {
+          "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+          "pulse_key": "k",
+          "issue_type": "i",
+          "action_type": "a",
+          "decision_count": 7,
+          "avg_impact_traffic": 1.5,
+          "avg_impact_conversion": 2.25,
+          "avg_impact_revenue": 0,
+          "avg_confidence_score": 0,
+          "max_execution_score": 1,
+          "latest_decision_at": "2026-01-01"
+        }
+      ]
+    },
+    "pulse.coerce-undefined": {
+      "success": false,
+      "threw": "insightViewService.listMarketPulseView returned non-view output."
+    },
+    "pulse.coerce-bigint-string": {
+      "success": true,
+      "value": [
+        {
+          "company_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+          "pulse_key": "k",
+          "issue_type": "i",
+          "action_type": "a",
+          "decision_count": 12345678901234567000,
+          "avg_impact_traffic": 1.5,
+          "avg_impact_conversion": 2.25,
+          "avg_impact_revenue": 0,
+          "avg_confidence_score": 0,
+          "max_execution_score": 1,
+          "latest_decision_at": "2026-01-01"
+        }
+      ]
+    },
+    "pulse.nonrfc-company": {
+      "success": true,
+      "value": [
+        {
+          "company_id": "12345678-1234-1234-1234-123456789012",
+          "pulse_key": "k",
+          "issue_type": "i",
+          "action_type": "a",
+          "decision_count": 3,
+          "avg_impact_traffic": 1.5,
+          "avg_impact_conversion": 2.25,
+          "avg_impact_revenue": 0,
+          "avg_confidence_score": 0,
+          "max_execution_score": 1,
+          "latest_decision_at": "2026-01-01"
+        }
+      ]
+    },
+    "pulse.bad-company": {
+      "success": false,
+      "threw": "insightViewService.listMarketPulseView returned non-view output."
+    },
+    "pulse.null-data": {
+      "success": true,
+      "value": []
+    },
+    "plan.valid": {
+      "success": true,
+      "data": {
+        "mode": "generate_plan",
+        "snapshot_hash": "h",
+        "omnivyre_decision": {
+          "status": "ok",
+          "raw": {
+            "anything": true
+          }
+        },
+        "plan": {
+          "weeks": [
+            {
+              "week": 1,
+              "theme": "t",
+              "daily": [
+                {
+                  "day": "Mon",
+                  "objective": "o",
+                  "content": "c",
+                  "platforms": {
+                    "linkedin": "post"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "plan.platform-non-string": {
+      "success": false,
+      "issues": [
+        {
+          "path": "plan.weeks.0.daily.0.platforms.linkedin",
+          "message": "Expected string, received number",
+          "custom": false
+        }
+      ]
+    },
+    "plan.platforms-array": {
+      "success": false,
+      "issues": [
+        {
+          "path": "plan.weeks.0.daily.0.platforms",
+          "message": "Expected object, received array",
+          "custom": false
+        }
+      ]
+    },
+    "plan.platforms-empty": {
+      "success": true,
+      "data": {
+        "mode": "generate_plan",
+        "snapshot_hash": "h",
+        "omnivyre_decision": {
+          "status": "ok",
+          "raw": {
+            "anything": true
+          }
+        },
+        "plan": {
+          "weeks": [
+            {
+              "week": 1,
+              "theme": "t",
+              "daily": [
+                {
+                  "day": "Mon",
+                  "objective": "o",
+                  "content": "c",
+                  "platforms": {}
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "plan.decision-error": {
+      "success": false,
+      "issues": [
+        {
+          "path": "omnivyre_decision.error.status",
+          "message": "Expected number, received string",
+          "custom": false
+        }
+      ]
+    },
+    "optimize.valid": {
+      "success": true,
+      "data": {
+        "optimized_week_plan": {
+          "theme": "t",
+          "content_types": {
+            "li": [
+              "post"
+            ]
+          },
+          "frequency_per_platform": {
+            "li": 3
+          }
+        },
+        "change_summary": "s",
+        "confidence": 0.4
+      }
+    },
+    "optimize.empty-plan": {
+      "success": true,
+      "data": {
+        "optimized_week_plan": {},
+        "change_summary": "s",
+        "confidence": 1
+      }
+    },
+    "optimize.bad-record-values": {
+      "success": false,
+      "issues": [
+        {
+          "path": "optimized_week_plan.content_types.li",
+          "message": "Expected array, received string",
+          "custom": false
+        },
+        {
+          "path": "optimized_week_plan.frequency_per_platform.li",
+          "message": "Expected number, received string",
+          "custom": false
+        }
+      ]
+    },
+    "optimize.missing-all": {
+      "success": false,
+      "issues": [
+        {
+          "path": "optimized_week_plan",
+          "message": "Required",
+          "custom": false
+        },
+        {
+          "path": "change_summary",
+          "message": "Required",
+          "custom": false
+        },
+        {
+          "path": "confidence",
+          "message": "Required",
+          "custom": false
+        }
+      ]
+    },
+    "parser.blueprint-valid": {
+      "success": true,
+      "value": {
+        "weeks": [
+          {
+            "week": 1,
+            "phase_label": "p",
+            "primary_objective": "o",
+            "platform_allocation": {
+              "linkedin": 2
+            },
+            "content_type_mix": [
+              "post"
+            ],
+            "cta_type": "Soft CTA",
+            "total_weekly_content_count": 2,
+            "weekly_kpi_focus": "Bookings",
+            "platform_content_breakdown": {
+              "linkedin": [
+                {
+                  "type": "post",
+                  "count": 2
+                }
+              ]
+            }
+          }
+        ],
+        "format": "blueprint"
+      }
+    },
+    "parser.blueprint-strict-extra-key": {
+      "success": true,
+      "value": {
+        "weeks": [
+          {
+            "week": 1,
+            "phase_label": "p",
+            "primary_objective": "o",
+            "platform_allocation": {
+              "linkedin": 2
+            },
+            "content_type_mix": [
+              "post"
+            ],
+            "cta_type": "Soft CTA",
+            "total_weekly_content_count": 2,
+            "weekly_kpi_focus": "Bookings",
+            "theme": "p",
+            "topics_to_cover": [
+              "p"
+            ]
+          }
+        ],
+        "format": "blueprint"
+      }
+    },
+    "parser.blueprint-strict-top-extra": {
+      "success": true,
+      "value": {
+        "weeks": [
+          {
+            "week": 1,
+            "phase_label": "p",
+            "primary_objective": "o",
+            "platform_allocation": {
+              "linkedin": 2
+            },
+            "content_type_mix": [
+              "post"
+            ],
+            "cta_type": "Soft CTA",
+            "total_weekly_content_count": 2,
+            "weekly_kpi_focus": "Bookings",
+            "theme": "p",
+            "topics_to_cover": [
+              "p"
+            ]
+          }
+        ],
+        "format": "blueprint"
+      }
+    },
+    "parser.blueprint-bad-cta": {
+      "success": true,
+      "value": {
+        "weeks": [
+          {
+            "week": 1,
+            "phase_label": "p",
+            "primary_objective": "o",
+            "platform_allocation": {
+              "linkedin": 2
+            },
+            "content_type_mix": [
+              "post"
+            ],
+            "cta_type": "None",
+            "total_weekly_content_count": 2,
+            "weekly_kpi_focus": "Bookings",
+            "theme": "p",
+            "topics_to_cover": [
+              "p"
+            ]
+          }
+        ],
+        "format": "blueprint"
+      }
+    },
+    "parser.blueprint-allocation-string": {
+      "success": true,
+      "value": {
+        "weeks": [
+          {
+            "week": 1,
+            "phase_label": "p",
+            "primary_objective": "o",
+            "platform_allocation": {
+              "linkedin": 2
+            },
+            "content_type_mix": [
+              "post"
+            ],
+            "cta_type": "Soft CTA",
+            "total_weekly_content_count": 2,
+            "weekly_kpi_focus": "Bookings",
+            "theme": "p",
+            "topics_to_cover": [
+              "p"
+            ]
+          }
+        ],
+        "format": "blueprint"
+      }
+    },
+    "parser.legacy-valid": {
+      "success": true,
+      "value": {
+        "weeks": [
+          {
+            "week": 1,
+            "phase_label": "t",
+            "primary_objective": "",
+            "platform_allocation": {},
+            "content_type_mix": [],
+            "cta_type": "None",
+            "total_weekly_content_count": 0,
+            "weekly_kpi_focus": "Reach growth",
+            "theme": "t",
+            "daily": [
+              {
+                "day": "Mon",
+                "objective": "o",
+                "content": "c",
+                "platforms": {
+                  "x": "y"
+                }
+              }
+            ]
+          }
+        ],
+        "format": "legacy"
+      }
+    },
+    "parser.neither": {
+      "success": true,
+      "value": {
+        "weeks": [
+          {
+            "week": 1,
+            "phase_label": "Week 1",
+            "primary_objective": "",
+            "platform_allocation": {
+              "linkedin": 1
+            },
+            "content_type_mix": [
+              "post"
+            ],
+            "cta_type": "None",
+            "total_weekly_content_count": 1,
+            "weekly_kpi_focus": "Reach growth",
+            "theme": "Week 1",
+            "topics_to_cover": [
+              "Week 1"
+            ]
+          }
+        ],
+        "format": "blueprint"
+      }
+    },
+    "parser.not-json": {
+      "success": false,
+      "threw": "Invalid structured plan schema"
+    },
+    "parser.huge-number": {
+      "success": true,
+      "value": {
+        "weeks": [
+          {
+            "week": {
+              "$num": "Infinity"
+            },
+            "phase_label": "p",
+            "primary_objective": "o",
+            "platform_allocation": {},
+            "content_type_mix": [],
+            "cta_type": "None",
+            "total_weekly_content_count": 0,
+            "weekly_kpi_focus": "Bookings"
+          }
+        ],
+        "format": "blueprint"
+      }
+    },
+    "parser.refined-valid": {
+      "success": true,
+      "value": {
+        "week": 1,
+        "day": "Mon",
+        "objective": "o",
+        "content": "c",
+        "platforms": {
+          "li": "x"
+        }
+      }
+    },
+    "parser.refined-bad-platform": {
+      "success": false,
+      "threw": "Invalid refined day schema"
+    },
+    "parser.custom-valid": {
+      "success": true,
+      "value": {
+        "day": "Mon",
+        "platforms": {
+          "li": "x"
+        }
+      }
+    },
+    "parser.custom-bad": {
+      "success": true,
+      "value": {
+        "day": "Mon",
+        "platforms": {}
+      }
+    },
+    "extraction.mixed": {
+      "success": true,
+      "value": {
+        "company_name": {
+          "value": "Acme",
+          "source": "website",
+          "confidence": "High"
+        },
+        "industry": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "category": {
+          "value": null,
+          "source": "inferred",
+          "confidence": "Low"
+        },
+        "website_url": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "social_profiles": {
+          "linkedin": {
+            "value": "u",
+            "values": "v",
+            "source": "social",
+            "confidence": "High"
+          },
+          "facebook": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "instagram": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "x": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "youtube": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "tiktok": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "reddit": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "pinterest": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "whatsapp": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "blog": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          }
+        },
+        "geography": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "products_services": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "target_audience": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "brand_voice": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "goals": {
+          "value": {
+            "$undef": true
+          },
+          "source": "social",
+          "confidence": "Low"
+        },
+        "competitors": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "unique_value_proposition": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "content_themes": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "business_model": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "provider_type": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "solution_domains": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "missing_fields": [
+          "a"
+        ]
+      }
+    },
+    "extraction.null": {
+      "success": true,
+      "value": {
+        "company_name": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "industry": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "category": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "website_url": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "social_profiles": {
+          "linkedin": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "facebook": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "instagram": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "x": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "youtube": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "tiktok": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "reddit": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "pinterest": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "whatsapp": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          },
+          "blog": {
+            "value": null,
+            "source": "missing",
+            "confidence": "Low"
+          }
+        },
+        "geography": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "products_services": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "target_audience": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "brand_voice": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "goals": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "competitors": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "unique_value_proposition": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "content_themes": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "business_model": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "provider_type": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "solution_domains": {
+          "value": null,
+          "source": "missing",
+          "confidence": "Low"
+        },
+        "missing_fields": []
+      }
+    },
+    "day.valid": {
+      "success": true,
+      "data": {
+        "headline": "h",
+        "caption": "c",
+        "hook": "k",
+        "callToAction": "cta",
+        "hashtags": [
+          "#a"
+        ],
+        "tone": "t",
+        "reasoning": "r"
+      }
+    },
+    "day.optional-null": {
+      "success": false,
+      "issues": [
+        {
+          "path": "script",
+          "message": "Expected string, received null",
+          "custom": false
+        }
+      ]
+    },
+    "day.missing-tone": {
+      "success": false,
+      "issues": [
+        {
+          "path": "tone",
+          "message": "Required",
+          "custom": false
+        }
+      ]
+    },
+    "day.hashtags-string": {
+      "success": false,
+      "issues": [
+        {
+          "path": "hashtags",
+          "message": "Expected array, received string",
+          "custom": false
+        }
+      ]
+    },
+    "env.base-defaults": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.unknown-key-stripped": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.ENABLE_AUTO_WORKERS.undefined": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.ENABLE_AUTO_WORKERS.0": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": false,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.ENABLE_AUTO_WORKERS.1": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.ENABLE_AUTO_WORKERS.true": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.ENABLE_AUTO_WORKERS.false": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": false,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.ENABLE_AUTO_WORKERS.yes": {
+      "success": false,
+      "issues": [
+        {
+          "path": "ENABLE_AUTO_WORKERS",
+          "message": "Invalid enum value. Expected '0' | '1' | 'true' | 'false', received 'yes'",
+          "custom": false
+        }
+      ]
+    },
+    "env.ENABLE_AUTO_WORKERS.TRUE": {
+      "success": false,
+      "issues": [
+        {
+          "path": "ENABLE_AUTO_WORKERS",
+          "message": "Invalid enum value. Expected '0' | '1' | 'true' | 'false', received 'TRUE'",
+          "custom": false
+        }
+      ]
+    },
+    "env.META_DEBUG.undefined": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.USE_MOCK_PLATFORMS.undefined": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.META_DEBUG.TRUE": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": true,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.USE_MOCK_PLATFORMS.TRUE": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": true,
+        "Mode": "platform"
+      }
+    },
+    "env.META_DEBUG.FALSE": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.USE_MOCK_PLATFORMS.FALSE": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.META_DEBUG.0": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.USE_MOCK_PLATFORMS.0": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.META_DEBUG.nope": {
+      "success": false,
+      "issues": [
+        {
+          "path": "META_DEBUG",
+          "message": "Invalid enum value. Expected 'true' | 'false' | 'TRUE' | 'FALSE' | '0' | '1', received 'nope'",
+          "custom": false
+        }
+      ]
+    },
+    "env.USE_MOCK_PLATFORMS.nope": {
+      "success": false,
+      "issues": [
+        {
+          "path": "USE_MOCK_PLATFORMS",
+          "message": "Invalid enum value. Expected 'true' | 'false' | 'TRUE' | 'FALSE' | '0' | '1', received 'nope'",
+          "custom": false
+        }
+      ]
+    },
+    "env.SUPABASE_URL.http_loopback": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.http_loopback": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "http://127.0.0.1:54321",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.http_loopback": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "http://127.0.0.1:54321",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.https_host": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "https://abc.supabase.co",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.https_host": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "https://abc.supabase.co",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.https_host": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "https://abc.supabase.co",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.not_url": {
+      "success": false,
+      "issues": [
+        {
+          "path": "SUPABASE_URL",
+          "message": "SUPABASE_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "env.APP_URL.not_url": {
+      "success": false,
+      "issues": [
+        {
+          "path": "APP_URL",
+          "message": "APP_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "extension.profile_url.not_url": {
+      "success": false,
+      "issues": [
+        {
+          "path": "author.profile_url",
+          "message": "Invalid url",
+          "custom": false
+        }
+      ]
+    },
+    "env.SUPABASE_URL.host_port_no_scheme": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "localhost:3000",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.host_port_no_scheme": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "localhost:3000",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.host_port_no_scheme": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "localhost:3000",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.mailto": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "mailto:a@b.co",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.mailto": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "mailto:a@b.co",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.mailto": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "mailto:a@b.co",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.padded": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": " https://padded.example.com ",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.padded": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": " https://padded.example.com ",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.padded": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": " https://padded.example.com ",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.scheme_only": {
+      "success": false,
+      "issues": [
+        {
+          "path": "SUPABASE_URL",
+          "message": "SUPABASE_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "env.APP_URL.scheme_only": {
+      "success": false,
+      "issues": [
+        {
+          "path": "APP_URL",
+          "message": "APP_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "extension.profile_url.scheme_only": {
+      "success": false,
+      "issues": [
+        {
+          "path": "author.profile_url",
+          "message": "Invalid url",
+          "custom": false
+        }
+      ]
+    },
+    "env.SUPABASE_URL.space_in_host": {
+      "success": false,
+      "issues": [
+        {
+          "path": "SUPABASE_URL",
+          "message": "SUPABASE_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "env.APP_URL.space_in_host": {
+      "success": false,
+      "issues": [
+        {
+          "path": "APP_URL",
+          "message": "APP_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "extension.profile_url.space_in_host": {
+      "success": false,
+      "issues": [
+        {
+          "path": "author.profile_url",
+          "message": "Invalid url",
+          "custom": false
+        }
+      ]
+    },
+    "env.SUPABASE_URL.javascript": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "javascript:alert(1)",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.javascript": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "javascript:alert(1)",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.javascript": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "javascript:alert(1)",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.file": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "file:///etc/passwd",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.file": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "file:///etc/passwd",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.file": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "file:///etc/passwd",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.ipv6": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://[::1]:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.ipv6": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "http://[::1]:54321",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.ipv6": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "http://[::1]:54321",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.upper": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "HTTP://UPPER.EXAMPLE.COM/Path",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.upper": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "HTTP://UPPER.EXAMPLE.COM/Path",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.upper": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "HTTP://UPPER.EXAMPLE.COM/Path",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.idn": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "https://例え.jp/x",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.idn": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "https://例え.jp/x",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.idn": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "https://例え.jp/x",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.empty": {
+      "success": false,
+      "issues": [
+        {
+          "path": "SUPABASE_URL",
+          "message": "SUPABASE_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "env.APP_URL.empty": {
+      "success": false,
+      "issues": [
+        {
+          "path": "APP_URL",
+          "message": "APP_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "extension.profile_url.empty": {
+      "success": false,
+      "issues": [
+        {
+          "path": "author.profile_url",
+          "message": "Invalid url",
+          "custom": false
+        }
+      ]
+    },
+    "env.SUPABASE_URL.redis": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "redis://127.0.0.1:6379",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.APP_URL.redis": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "APP_URL": "redis://127.0.0.1:6379",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "extension.profile_url.redis": {
+      "success": true,
+      "data": {
+        "thread_id": "t",
+        "comment_id": "c",
+        "comment_text": "x",
+        "author": {
+          "name": "n",
+          "profile_url": "redis://127.0.0.1:6379",
+          "profile_id": "p"
+        },
+        "created_at": 1
+      }
+    },
+    "env.SUPABASE_URL.relative": {
+      "success": false,
+      "issues": [
+        {
+          "path": "SUPABASE_URL",
+          "message": "SUPABASE_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "env.APP_URL.relative": {
+      "success": false,
+      "issues": [
+        {
+          "path": "APP_URL",
+          "message": "APP_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "extension.profile_url.relative": {
+      "success": false,
+      "issues": [
+        {
+          "path": "author.profile_url",
+          "message": "Invalid url",
+          "custom": false
+        }
+      ]
+    },
+    "env.SUPABASE_URL.missing": {
+      "success": false,
+      "issues": [
+        {
+          "path": "SUPABASE_URL",
+          "message": "Required",
+          "custom": false
+        }
+      ]
+    },
+    "env.NEXT_PUBLIC_APP_URL.bad": {
+      "success": false,
+      "issues": [
+        {
+          "path": "NEXT_PUBLIC_APP_URL",
+          "message": "NEXT_PUBLIC_APP_URL must be a valid URL",
+          "custom": false
+        }
+      ]
+    },
+    "env.NEXT_PUBLIC_APP_URL.set": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://app.example.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.ENCRYPTION_KEY.upper": {
+      "success": false,
+      "issues": [
+        {
+          "path": "ENCRYPTION_KEY",
+          "message": "ENCRYPTION_KEY must be 64 hex characters",
+          "custom": false
+        }
+      ]
+    },
+    "env.ENCRYPTION_KEY.short": {
+      "success": false,
+      "issues": [
+        {
+          "path": "ENCRYPTION_KEY",
+          "message": "ENCRYPTION_KEY must be 64 hex characters",
+          "custom": false
+        }
+      ]
+    },
+    "env.ENCRYPTION_KEY.missing": {
+      "success": false,
+      "issues": [
+        {
+          "path": "ENCRYPTION_KEY",
+          "message": "Required",
+          "custom": false
+        }
+      ]
+    },
+    "env.OAUTH_STATE_HMAC_KEY.bad": {
+      "success": false,
+      "issues": [
+        {
+          "path": "OAUTH_STATE_HMAC_KEY",
+          "message": "OAUTH_STATE_HMAC_KEY must be 64 hex characters when set",
+          "custom": false
+        }
+      ]
+    },
+    "env.OAUTH_STATE_HMAC_KEY.ok": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "OAUTH_STATE_HMAC_KEY": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.SUPABASE_SECRET_KEY.empty": {
+      "success": false,
+      "issues": [
+        {
+          "path": "SUPABASE_SECRET_KEY",
+          "message": "SUPABASE_SECRET_KEY cannot be empty (SUPABASE_SERVICE_ROLE_KEY is still accepted during the API-key migration)",
+          "custom": false
+        }
+      ]
+    },
+    "env.OPENAI_API_KEY.empty": {
+      "success": false,
+      "issues": [
+        {
+          "path": "OPENAI_API_KEY",
+          "message": "OPENAI_API_KEY cannot be empty",
+          "custom": false
+        }
+      ]
+    },
+    "env.PUBLISHABLE.empty": {
+      "success": false,
+      "issues": [
+        {
+          "path": "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+          "message": "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY cannot be empty (NEXT_PUBLIC_SUPABASE_ANON_KEY is still accepted during the API-key migration)",
+          "custom": false
+        }
+      ]
+    },
+    "env.REDIS_PORT.0": {
+      "success": false,
+      "issues": [
+        {
+          "path": "REDIS_PORT",
+          "message": "Number must be greater than or equal to 1",
+          "custom": false
+        }
+      ]
+    },
+    "env.REDIS_PORT.65536": {
+      "success": false,
+      "issues": [
+        {
+          "path": "REDIS_PORT",
+          "message": "Number must be less than or equal to 65535",
+          "custom": false
+        }
+      ]
+    },
+    "env.REDIS_PORT.6380": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6380,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.REDIS_PORT.6380.5": {
+      "success": false,
+      "issues": [
+        {
+          "path": "REDIS_PORT",
+          "message": "Expected integer, received float",
+          "custom": false
+        }
+      ]
+    },
+    "env.REDIS_PORT.NaN": {
+      "success": false,
+      "issues": [
+        {
+          "path": "REDIS_PORT",
+          "message": "Expected number, received nan",
+          "custom": false
+        }
+      ]
+    },
+    "env.COST_REQUEST_THRESHOLD_USD.Infinity": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": {
+          "$num": "Infinity"
+        },
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.COST_REQUEST_THRESHOLD_USD.-Infinity": {
+      "success": false,
+      "issues": [
+        {
+          "path": "COST_REQUEST_THRESHOLD_USD",
+          "message": "Number must be greater than or equal to 0",
+          "custom": false
+        }
+      ]
+    },
+    "env.COST_REQUEST_THRESHOLD_USD.-1": {
+      "success": false,
+      "issues": [
+        {
+          "path": "COST_REQUEST_THRESHOLD_USD",
+          "message": "Number must be greater than or equal to 0",
+          "custom": false
+        }
+      ]
+    },
+    "env.COST_REQUEST_THRESHOLD_USD.0": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 0,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.COST_REQUEST_THRESHOLD_USD.2.5": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 2.5,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.COST_REQUEST_THRESHOLD_USD.NaN": {
+      "success": false,
+      "issues": [
+        {
+          "path": "COST_REQUEST_THRESHOLD_USD",
+          "message": "Expected number, received nan",
+          "custom": false
+        }
+      ]
+    },
+    "env.OPENAI_TIMEOUT.low": {
+      "success": false,
+      "issues": [
+        {
+          "path": "OPENAI_TIMEOUT",
+          "message": "Number must be greater than or equal to 1000",
+          "custom": false
+        }
+      ]
+    },
+    "env.BOLT_WORKER_CONCURRENCY.float": {
+      "success": false,
+      "issues": [
+        {
+          "path": "BOLT_WORKER_CONCURRENCY",
+          "message": "Expected integer, received float",
+          "custom": false
+        }
+      ]
+    },
+    "env.BOLT_WORKER_CONCURRENCY.int": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "BOLT_WORKER_CONCURRENCY": 4,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.INTERNAL_METRICS_SECRET.empty": {
+      "success": false,
+      "issues": [
+        {
+          "path": "INTERNAL_METRICS_SECRET",
+          "message": "String must contain at least 1 character(s)",
+          "custom": false
+        }
+      ]
+    },
+    "env.OMNIVYRA_ENV.bad": {
+      "success": false,
+      "issues": [
+        {
+          "path": "OMNIVYRA_ENV",
+          "message": "Invalid enum value. Expected 'development' | 'staging' | 'production', received 'qa'",
+          "custom": false
+        }
+      ]
+    },
+    "env.NODE_ENV.test": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "test",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "redis://127.0.0.1:6399",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "hybrid",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "standalone"
+      }
+    },
+    "env.REDIS_URL.missing": {
+      "success": false,
+      "issues": [
+        {
+          "path": "REDIS_URL",
+          "message": "Required",
+          "custom": false
+        }
+      ]
+    },
+    "env.REDIS_URL.normalized": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "rediss://default:pw@host.example.com:6380",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.REDIS_URL.rejected-by-transform": {
+      "success": true,
+      "data": {
+        "NODE_ENV": "production",
+        "SUPABASE_URL": "http://127.0.0.1:54321",
+        "SUPABASE_SECRET_KEY": "placeholder-secret",
+        "NEXT_PUBLIC_SUPABASE_URL": "http://127.0.0.1:54321",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "placeholder-publishable",
+        "REDIS_URL": "http://not-redis",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_MAX_BYTES": 268435456,
+        "UPSTASH_DAILY_REQUEST_LIMIT": 5000000,
+        "REDIS_OVERFLOW_CAP_PER_QUEUE": 200,
+        "REDIS_WAIT_MS": 5000,
+        "OPENAI_API_KEY": "placeholder-openai",
+        "OPENAI_RESPONSES_MODEL": "gpt-4o-mini",
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "OPENAI_TIMEOUT": 60000,
+        "MAX_LLM_CONCURRENCY": 5,
+        "ENCRYPTION_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "NEXT_PUBLIC_APP_URL": "https://www.omnivyra.com",
+        "OMNIVYRA_ENV": "production",
+        "OMNIVYRA_AI_MODE": "responses",
+        "ENABLE_AUTO_WORKERS": true,
+        "COST_REQUEST_THRESHOLD_USD": 1,
+        "META_DEBUG": false,
+        "USE_MOCK_PLATFORMS": false,
+        "Mode": "platform"
+      }
+    },
+    "env.everything-missing": {
+      "success": false,
+      "issues": [
+        {
+          "path": "SUPABASE_URL",
+          "message": "Required",
+          "custom": false
+        },
+        {
+          "path": "SUPABASE_SECRET_KEY",
+          "message": "Required",
+          "custom": false
+        },
+        {
+          "path": "NEXT_PUBLIC_SUPABASE_URL",
+          "message": "Required",
+          "custom": false
+        },
+        {
+          "path": "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+          "message": "Required",
+          "custom": false
+        },
+        {
+          "path": "REDIS_URL",
+          "message": "Required",
+          "custom": false
+        },
+        {
+          "path": "OPENAI_API_KEY",
+          "message": "Required",
+          "custom": false
+        },
+        {
+          "path": "ENCRYPTION_KEY",
+          "message": "Required",
+          "custom": false
+        }
+      ]
+    },
+    "env.not-object": {
+      "success": false,
+      "issues": [
+        {
+          "path": "",
+          "message": "Required",
+          "custom": false
+        }
+      ]
+    },
+    "extension.event.valid-strips": {
+      "success": true,
+      "data": {
+        "platform": "linkedin",
+        "event_type": "comment",
+        "platform_message_id": "m1",
+        "data": {
+          "a": 1
+        },
+        "timestamp": 1700000000000
+      }
+    },
+    "extension.event.data-array": {
+      "success": false,
+      "issues": [
+        {
+          "path": "data",
+          "message": "Expected object, received array",
+          "custom": false
+        }
+      ]
+    },
+    "extension.query.defaults": {
+      "success": true,
+      "data": {
+        "limit": 10
+      }
+    },
+    "extension.query.coerce": {
+      "success": true,
+      "data": {
+        "platform": "youtube",
+        "limit": 5.5
+      }
+    },
+    "extension.query.bool": {
+      "success": true,
+      "data": {
+        "limit": 1
+      }
+    },
+    "extension.validate.strips": {
+      "success": true,
+      "data": {}
+    },
+    "extension.validate.null": {
+      "success": false,
+      "issues": [
+        {
+          "path": "",
+          "message": "Expected object, received null",
+          "custom": false
+        }
+      ]
+    },
+    "extension.command_id.v4": {
+      "success": true,
+      "data": {
+        "command_id": "3f1c2b9a-7d4e-4c1a-9b2f-0a1b2c3d4e5f",
+        "status": "success",
+        "result": {
+          "success": true
+        }
+      }
+    },
+    "extension.command_id.nonrfc": {
+      "success": true,
+      "data": {
+        "command_id": "12345678-1234-1234-1234-123456789012",
+        "status": "success",
+        "result": {
+          "success": true
+        }
+      }
+    },
+    "extension.command_id.v0": {
+      "success": true,
+      "data": {
+        "command_id": "3f1c2b9a-7d4e-0c1a-9b2f-0a1b2c3d4e5f",
+        "status": "success",
+        "result": {
+          "success": true
+        }
+      }
+    },
+    "extension.command_id.nil": {
+      "success": true,
+      "data": {
+        "command_id": "00000000-0000-0000-0000-000000000000",
+        "status": "success",
+        "result": {
+          "success": true
+        }
+      }
+    },
+    "extension.command_id.max": {
+      "success": true,
+      "data": {
+        "command_id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "status": "success",
+        "result": {
+          "success": true
+        }
+      }
+    },
+    "extension.command_id.upper": {
+      "success": true,
+      "data": {
+        "command_id": "3F1C2B9A-7D4E-4C1A-9B2F-0A1B2C3D4E5F",
+        "status": "success",
+        "result": {
+          "success": true
+        }
+      }
+    },
+    "extension.command_id.nodash": {
+      "success": false,
+      "issues": [
+        {
+          "path": "command_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "extension.command_id.braces": {
+      "success": false,
+      "issues": [
+        {
+          "path": "command_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "extension.command_id.short": {
+      "success": false,
+      "issues": [
+        {
+          "path": "command_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "extension.command_id.word": {
+      "success": false,
+      "issues": [
+        {
+          "path": "command_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "extension.command_id.padded": {
+      "success": false,
+      "issues": [
+        {
+          "path": "command_id",
+          "message": "Invalid uuid",
+          "custom": false
+        }
+      ]
+    },
+    "extension.command_id.number": {
+      "success": false,
+      "issues": [
+        {
+          "path": "command_id",
+          "message": "Expected string, received number",
+          "custom": false
+        }
+      ]
+    },
+    "controller.events.valid": {
+      "success": false,
+      "value": {
+        "status": 401,
+        "error": "Unauthorized"
+      }
+    },
+    "controller.events.undefined_body": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Required"
+      }
+    },
+    "controller.events.null_body": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected object, received null"
+      }
+    },
+    "controller.events.string_body": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected object, received string"
+      }
+    },
+    "controller.events.array_body": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected object, received array"
+      }
+    },
+    "controller.events.empty": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Required"
+      }
+    },
+    "controller.events.bad_platform": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Invalid enum value. Expected 'linkedin' | 'youtube', received 'tiktok'"
+      }
+    },
+    "controller.events.platform_number": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected 'linkedin' | 'youtube', received number"
+      }
+    },
+    "controller.events.missing_event_type": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Required"
+      }
+    },
+    "controller.events.bad_event_type": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Invalid enum value. Expected 'comment' | 'dm' | 'mention' | 'like' | 'share' | 'reply', received 'click'"
+      }
+    },
+    "controller.events.empty_message_id": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: String must contain at least 1 character(s)"
+      }
+    },
+    "controller.events.message_id_number": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected string, received number"
+      }
+    },
+    "controller.events.data_string": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected object, received string"
+      }
+    },
+    "controller.events.data_null": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected object, received null"
+      }
+    },
+    "controller.events.data_array": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected object, received array"
+      }
+    },
+    "controller.events.data_missing": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Required"
+      }
+    },
+    "controller.events.ts_string": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected number, received string"
+      }
+    },
+    "controller.events.ts_zero": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Number must be greater than 0"
+      }
+    },
+    "controller.events.ts_negative": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Number must be greater than 0"
+      }
+    },
+    "controller.events.ts_float": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected integer, received float"
+      }
+    },
+    "controller.events.ts_nan": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected number, received nan"
+      }
+    },
+    "controller.events.ts_infinity": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected integer, received float"
+      }
+    },
+    "controller.events.ts_bool": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected number, received boolean"
+      }
+    },
+    "controller.events.ts_null": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected number, received null"
+      }
+    },
+    "controller.events.two_errors": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Invalid enum value. Expected 'linkedin' | 'youtube', received 'x'"
+      }
+    },
+    "controller.commands.empty": {
+      "success": false,
+      "value": {
+        "status": 401,
+        "error": "Unauthorized"
+      }
+    },
+    "controller.commands.limit_ok": {
+      "success": false,
+      "value": {
+        "status": 401,
+        "error": "Unauthorized"
+      }
+    },
+    "controller.commands.limit_abc": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Invalid query: Expected number, received nan"
+      }
+    },
+    "controller.commands.limit_zero": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Invalid query: Number must be greater than or equal to 1"
+      }
+    },
+    "controller.commands.limit_blank": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Invalid query: Number must be greater than or equal to 1"
+      }
+    },
+    "controller.commands.limit_101": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Invalid query: Number must be less than or equal to 100"
+      }
+    },
+    "controller.commands.limit_array": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Invalid query: Expected number, received nan"
+      }
+    },
+    "controller.commands.limit_float": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Invalid query: Number must be greater than or equal to 1"
+      }
+    },
+    "controller.commands.platform_bad": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Invalid query: Invalid enum value. Expected 'linkedin' | 'youtube', received 'tiktok'"
+      }
+    },
+    "controller.commands.platform_array": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Invalid query: Expected 'linkedin' | 'youtube', received array"
+      }
+    },
+    "controller.result.valid": {
+      "success": false,
+      "value": {
+        "status": 401,
+        "error": "Unauthorized"
+      }
+    },
+    "controller.result.nonrfc": {
+      "success": false,
+      "value": {
+        "status": 401,
+        "error": "Unauthorized"
+      }
+    },
+    "controller.result.nil": {
+      "success": false,
+      "value": {
+        "status": 401,
+        "error": "Unauthorized"
+      }
+    },
+    "controller.result.bad_uuid": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Invalid uuid"
+      }
+    },
+    "controller.result.missing_uuid": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Required"
+      }
+    },
+    "controller.result.uuid_number": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected string, received number"
+      }
+    },
+    "controller.result.bad_status": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Invalid enum value. Expected 'success' | 'failed', received 'pending'"
+      }
+    },
+    "controller.result.missing_result": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Required"
+      }
+    },
+    "controller.result.result_success_string": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected boolean, received string"
+      }
+    },
+    "controller.result.platform_response_string": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected object, received string"
+      }
+    },
+    "controller.result.message_number": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Expected string, received number"
+      }
+    },
+    "controller.result.empty": {
+      "success": false,
+      "value": {
+        "status": 400,
+        "error": "Validation error: Required"
+      }
+    },
+    "bjc.valid": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2026-10-01T10:00:00Z",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:ee12ddfd4506b266dd302e677572e94d1521c24c996e0c382b6edff474cb0fb0"
+      }
+    },
+    "bjc.captured_at.z": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2026-10-01T10:00:00Z",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:ee12ddfd4506b266dd302e677572e94d1521c24c996e0c382b6edff474cb0fb0"
+      }
+    },
+    "bjc.captured_at.millis": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2026-10-01T10:00:00.123Z",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:0c7a86fe83b46741ff4478c96fea1e4df3fcff6b9ad2eda4b161e8c2535149a4"
+      }
+    },
+    "bjc.captured_at.micros": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2026-10-01T10:00:00.123456Z",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:f92cc51041b9eae58662fb9a999078b6e9c5714ce4a968b3498ee6f855a00a42"
+      }
+    },
+    "bjc.captured_at.colon_offset": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2026-10-01T10:00:00+05:30",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:322db17db3161a4bfcc5926f803012831c387ed992744c1a5d089a97c063b49c"
+      }
+    },
+    "bjc.captured_at.compact_offset": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2026-10-01T10:00:00+0530",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:e3225bed6a2e07d3dcdef7eada945fd402a9bc0bae270ada8b3441c04023889a"
+      }
+    },
+    "bjc.captured_at.hour_offset": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.captured_at",
+          "message": "Invalid datetime",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.captured_at.neg_offset": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2026-10-01T10:00:00-08:00",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:824344f8d1d9e88ad1c028f91cb0f22cbc1cc45150ac02b2a74630c7b6ffc225"
+      }
+    },
+    "bjc.captured_at.no_seconds": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2026-10-01T10:00Z",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:affb0a723f6b2db2fb470e96689ff8a34448338c5cb0e146e5ecee0fdd10cb17"
+      }
+    },
+    "bjc.captured_at.no_zone": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.captured_at",
+          "message": "Invalid datetime",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.captured_at.lower_z": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.captured_at",
+          "message": "Invalid datetime",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.captured_at.feb30": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.captured_at",
+          "message": "Invalid datetime",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.captured_at.leap": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2024-02-29T10:00:00Z",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:8624b7c35c684ad24afc11eea2e4ca979c06131905c30c9b27d5de9a39e4a733"
+      }
+    },
+    "bjc.captured_at.nonleap": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.captured_at",
+          "message": "Invalid datetime",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.captured_at.hour24": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.captured_at",
+          "message": "Invalid datetime",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.captured_at.space_sep": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.captured_at",
+          "message": "Invalid datetime",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.captured_at.date_only": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.captured_at",
+          "message": "Invalid datetime",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.captured_at.offset_99": {
+      "success": true,
+      "data": {
+        "schema": "bjc/1",
+        "request_id": "req-1",
+        "work_item": "OMNI-1",
+        "invoked_by": "human:tester",
+        "acceptance_criterion": {
+          "id": "AC-1",
+          "statement": "GET /api/health returns 200",
+          "kind": "OBJECTIVE",
+          "required_evidence": [
+            "test_run"
+          ]
+        },
+        "invariants": [
+          {
+            "id": "INV-1",
+            "statement": "No route skips auth",
+            "source": "invariants.md@abc123"
+          }
+        ],
+        "deterministic_summary": "jest health suite",
+        "evidence": [
+          {
+            "id": "EV-1",
+            "kind": "test_run",
+            "ref": "backend/tests/unit/health.test.ts@3d643f5c",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "produced_by": "jest@29",
+            "result": "PASS",
+            "captured_at": "2026-10-01T10:00:00+99:00",
+            "ac_ids": [
+              "AC-1"
+            ]
+          }
+        ],
+        "model": "jev-test-1",
+        "input_hash": "sha256:87a82498cf7cb4cee749b558bb5c72bfee214aec74c0845fede3fd1e878ed21c"
+      }
+    },
+    "bjc.captured_at.padded": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.captured_at",
+          "message": "Invalid datetime",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.strict-top": {
+      "success": false,
+      "issues": [
+        {
+          "path": "",
+          "message": "Unrecognized key(s) in object: 'extra'",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.strict-ac": {
+      "success": false,
+      "issues": [
+        {
+          "path": "acceptance_criterion",
+          "message": "Unrecognized key(s) in object: 'extra'",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.bad-enum": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.kind",
+          "message": "Invalid enum value. Expected 'test_run' | 'typecheck' | 'build' | 'ci_run' | 'commit' | 'diff_excerpt' | 'log_excerpt' | 'manual_observation', received 'screenshot'",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.bad-regex": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.id",
+          "message": "Invalid",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.too-many-ac-ids": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.ac_ids",
+          "message": "Array must contain at most 20 element(s)",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.empty-ac-ids": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0.ac_ids",
+          "message": "Array must contain at least 1 element(s)",
+          "custom": false
+        }
+      ]
+    },
+    "bjc.context-pass": {
+      "success": false,
+      "issues": [
+        {
+          "path": "evidence.0",
+          "message": "context evidence kind commit must have result N/A",
+          "custom": true
+        }
+      ]
+    },
+    "bjc.objective-no-evidence": {
+      "success": false,
+      "issues": [
+        {
+          "path": "",
+          "message": "OBJECTIVE acceptance criterion must name required deterministic evidence",
+          "custom": true
+        }
+      ]
+    },
+    "bjc.duplicate-ids": {
+      "success": false,
+      "issues": [
+        {
+          "path": "",
+          "message": "evidence and invariant ids must be unique",
+          "custom": true
+        }
+      ]
+    },
+    "judge.regex-and-enum": {
+      "success": true,
+      "value": {
+        "status": "REQUEST_REJECTED",
+        "error": {
+          "code": "INVALID_REQUEST",
+          "message": "request failed validation (evidence.0.id:invalid_string; evidence.0.kind:invalid_enum_value)"
+        }
+      }
+    },
+    "judge.datetime": {
+      "success": true,
+      "value": {
+        "status": "REQUEST_REJECTED",
+        "error": {
+          "code": "INVALID_REQUEST",
+          "message": "request failed validation (evidence.0.captured_at:invalid_string)"
+        }
+      }
+    },
+    "judge.strict-and-type": {
+      "success": true,
+      "value": {
+        "status": "REQUEST_REJECTED",
+        "error": {
+          "code": "INVALID_REQUEST",
+          "message": "request failed validation (model:invalid_type; $:unrecognized_keys)"
+        }
+      }
+    },
+    "judge.too-big-and-small": {
+      "success": true,
+      "value": {
+        "status": "REQUEST_REJECTED",
+        "error": {
+          "code": "INVALID_REQUEST",
+          "message": "request failed validation (evidence.0.ref:too_small; evidence.0.ac_ids:too_small)"
+        }
+      }
+    },
+    "judge.literal-like-enum": {
+      "success": true,
+      "value": {
+        "status": "REQUEST_REJECTED",
+        "error": {
+          "code": "INVALID_REQUEST",
+          "message": "request failed validation (acceptance_criterion.kind:invalid_enum_value)"
+        }
+      }
+    },
+    "judge.custom": {
+      "success": true,
+      "value": {
+        "status": "REQUEST_REJECTED",
+        "error": {
+          "code": "INVALID_REQUEST",
+          "message": "request failed validation (evidence.0:custom)"
+        }
+      }
+    }
+  }
+}

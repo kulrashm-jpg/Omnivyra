@@ -13,7 +13,8 @@ import { fromRecommendationPlan, blueprintWeekToLegacyWeekPlan } from './campaig
 
 type WeekPlanItem = WeeklyPlan[number];
 
-const optimizedWeekSchema = z.object({
+/** Exported for the zod characterization suite only. */
+export const optimizedWeekSchema = z.object({
   optimized_week_plan: z
     .object({
       theme: z.string().optional(),
