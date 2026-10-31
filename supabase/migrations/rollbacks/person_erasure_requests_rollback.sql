@@ -49,7 +49,7 @@ BEGIN
      OR position('''legacy_lead_fields'', ''retain''' IN
           (SELECT prosrc FROM pg_proc WHERE oid = 'public.pi_person_erasure_legacy_lead_policy(uuid, uuid)'::regprocedure)) = 0 THEN
     RAISE EXCEPTION '20270112000003 rollback refused: pi_person_erasure_legacy_lead_policy is not the '
-      '20270112000003 retain default - run rollbacks/20270112000004_erasure_legacy_lead_redaction_rollback.sql first';
+      '20270112000003 retain default - run rollbacks/erasure_legacy_lead_redaction_rollback.sql (20270112000004) first';
   END IF;
   IF to_regprocedure('public.pi_person_erasure_decision_ref_policy(uuid, uuid)') IS NULL
      OR position('''outreach_decision_person_ref'', ''retain''' IN
@@ -57,7 +57,7 @@ BEGIN
      OR position('pi_erasure_authorization_held' IN
           (SELECT prosrc FROM pg_proc WHERE oid = 'public.ws3_reject_mutation()'::regprocedure)) > 0 THEN
     RAISE EXCEPTION '20270112000003 rollback refused: 20270112000005 is still in force - run '
-      'rollbacks/20270112000005_outreach_decisions_erasure_person_ref_rollback.sql first';
+      'rollbacks/outreach_decisions_erasure_person_ref_rollback.sql (20270112000005) first';
   END IF;
 
   -- Serialise against a concurrent open/finalize, then count.
