@@ -234,8 +234,120 @@ function nextUtcMidnight(): string {
   return d.toISOString();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// OPS-C: requests axis from per-poll deltas, not one absolute baseline
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Production 2026-10-30 (worker 3a38f8fc): requestsPct read 287.9% all day
+// while the counter rose ~1,000 commands per 5-minute poll (~6% of the daily
+// cap). The day's baseline — SET NX by the first poll of the UTC day — sat
+// ~14.4M below the total_commands_processed the worker read: a counter
+// discontinuity or a baseline taken from another node/process. Because
+// dailyUsed was `counter - baseline`, ONE bad reading pinned the level at
+// critical for the rest of the day and blocked every non-critical queue.
+//
+// Now dailyUsed is the sum of the PLAUSIBLE per-interval deltas:
+//   omnivyra:usage:last          "<counter>|<epochMs>"   (GETSET — atomic swap,
+//                                                          so concurrent pollers
+//                                                          partition the timeline)
+//   omnivyra:usage:accum:<date>  INCRBY of each accepted delta (TTL 49 h)
+// A delta is REJECTED (and the reference re-based to the current reading)
+// when the counter went backwards (reset / failover / another node) or when
+// it implies more than REDIS_USAGE_MAX_PLAUSIBLE_CMDS_PER_SEC (default
+// 10,000/s — above any Upstash plan's sustained throughput) over the elapsed
+// time. Rejections log `redis_usage_baseline_reset` (numbers only). A genuine
+// high rate is still accumulated interval by interval and escalates exactly as
+// before. The legacy NX baseline key is still written (older deployments read
+// it) and reported as `legacyDailyUsed` for comparison, but no longer drives
+// the level.
+
+const USAGE_LAST_KEY = 'omnivyra:usage:last';
+const USAGE_KEY_TTL_S = 49 * 3600;
+let _legacyDailyUsed = 0;
+// In-process fallback when the Redis bookkeeping itself fails.
+let _localLast: { total: number; ts: number } | null = null;
+let _localAccum = { date: '', used: 0 };
+
+export function maxPlausibleCommandsPerSec(): number {
+  const v = Number(process.env.REDIS_USAGE_MAX_PLAUSIBLE_CMDS_PER_SEC);
+  return Number.isFinite(v) && v > 0 ? v : 10_000;
+}
+
+export type CounterDeltaVerdict =
+  | { accept: true; delta: number }
+  | { accept: false; reason: 'no_previous' | 'counter_backwards' | 'implausible_rate'; delta: number };
+
+/** Pure: is the step from (prevTotal @ prevTs) to (cur @ now) a believable command count? */
+export function evaluateCounterDelta(args: {
+  prevTotal: number | null; prevTs: number | null; cur: number; now: number; maxPerSec: number;
+}): CounterDeltaVerdict {
+  if (args.prevTotal === null || !Number.isFinite(args.prevTotal)) return { accept: false, reason: 'no_previous', delta: 0 };
+  const delta = args.cur - args.prevTotal;
+  if (delta < 0) return { accept: false, reason: 'counter_backwards', delta };
+  // Elapsed floors at 1 s; an unknown timestamp is treated as one poll interval.
+  const elapsedMs = args.prevTs !== null && args.prevTs > 0 ? args.now - args.prevTs : 300_000;
+  const elapsedS = Math.max(1, elapsedMs / 1000);
+  if (delta / elapsedS > args.maxPerSec) return { accept: false, reason: 'implausible_rate', delta };
+  return { accept: true, delta };
+}
+
+function parseLast(raw: string | null): { total: number | null; ts: number | null } {
+  if (!raw) return { total: null, ts: null };
+  const [t, ts] = String(raw).split('|');
+  const total = Number(t);
+  const at = Number(ts);
+  return { total: Number.isFinite(total) ? total : null, ts: Number.isFinite(at) && at > 0 ? at : null };
+}
+
+function logBaselineReset(reason: string, delta: number, elapsedS: number | null): void {
+  console.warn(JSON.stringify({
+    level: 'WARN',
+    event: 'redis_usage_baseline_reset',
+    reason,
+    delta,
+    elapsed_s: elapsedS,
+    max_plausible_per_sec: maxPlausibleCommandsPerSec(),
+  }));
+}
+
+async function accumulateDailyUsage(redis: IORedis, cur: number): Promise<number> {
+  const now = Date.now();
+  const today = todayUtc();
+  const accumKey = `omnivyra:usage:accum:${today}`;
+  const maxPerSec = maxPlausibleCommandsPerSec();
+  try {
+    const prevRaw = await redis.getset(USAGE_LAST_KEY, `${cur}|${now}`);
+    await redis.expire(USAGE_LAST_KEY, USAGE_KEY_TTL_S);
+    const prev = parseLast(prevRaw);
+    const v = evaluateCounterDelta({ prevTotal: prev.total, prevTs: prev.ts, cur, now, maxPerSec });
+    let used: number;
+    if (v.accept) {
+      used = Number(await redis.incrby(accumKey, v.delta));
+      await redis.expire(accumKey, USAGE_KEY_TTL_S);
+    } else {
+      if (v.reason !== 'no_previous') logBaselineReset(v.reason, v.delta, prev.ts ? Math.round((now - prev.ts) / 1000) : null);
+      const raw = await redis.get(accumKey);
+      used = raw === null ? 0 : Number(raw) || 0;
+    }
+    _localLast = { total: cur, ts: now };
+    _localAccum = { date: today, used };
+    return used;
+  } catch {
+    // Redis bookkeeping failed — same rules, in-process.
+    if (_localAccum.date !== today) _localAccum = { date: today, used: 0 };
+    const v = evaluateCounterDelta({ prevTotal: _localLast?.total ?? null, prevTs: _localLast?.ts ?? null, cur, now, maxPerSec });
+    if (v.accept) _localAccum.used += v.delta;
+    else if (v.reason !== 'no_previous') logBaselineReset(v.reason, v.delta, _localLast ? Math.round((now - _localLast.ts) / 1000) : null);
+    _localLast = { total: cur, ts: now };
+    return _localAccum.used;
+  }
+}
+
 async function computeRequestUsage(redis: IORedis, totalCommandsProcessed: number): Promise<RequestUsage> {
-  const baseline   = await loadDailyBaseline(redis, totalCommandsProcessed);
+  // Legacy absolute baseline: still maintained for older deployments and
+  // reported for comparison only.
+  const baseline = await loadDailyBaseline(redis, totalCommandsProcessed);
+  _legacyDailyUsed = Math.max(0, totalCommandsProcessed - baseline);
   // Default is 5,000,000 commands/day — the hard cap we operate under. ALWAYS
   // set UPSTASH_DAILY_REQUEST_LIMIT explicitly in your .env to match the plan
   // you actually paid for; this default is only the fallback when neither the
@@ -244,7 +356,7 @@ async function computeRequestUsage(redis: IORedis, totalCommandsProcessed: numbe
     ? _adminDailyLimit
     : parseInt(process.env.UPSTASH_DAILY_REQUEST_LIMIT ?? '5000000', 10);
   _dailyLimitSource = _adminDailyLimit > 0 ? 'admin' : (process.env.UPSTASH_DAILY_REQUEST_LIMIT ? 'env' : 'default');
-  const dailyUsed  = Math.max(0, totalCommandsProcessed - baseline);
+  const dailyUsed = Math.max(0, await accumulateDailyUsage(redis, totalCommandsProcessed));
   return {
     dailyUsed,
     dailyLimit,
@@ -667,6 +779,7 @@ async function pollWithRetry(getRedis: () => IORedis, attempt: number = 0): Prom
       dailyUsed: _requests.dailyUsed,
       dailyLimit: _requests.dailyLimit,
       dailyLimitSource: _dailyLimitSource,
+      legacyDailyUsed: _legacyDailyUsed,
       overflowBuffered: totalOverflowed(),
       overflowOldestAgeMs: Object.values(overflowOldestAgeMs()).reduce((m, v) => Math.max(m, v), 0),
       overflowCoalesced: _totalJobsCoalesced,
