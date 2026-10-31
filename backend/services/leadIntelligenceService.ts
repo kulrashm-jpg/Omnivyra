@@ -8,12 +8,19 @@ import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { clamp, normalizeText, roundNumber } from './intelligenceEngineUtils';
 // BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
 import { deriveDecisionConfidence } from './evidencePlatform';
+import {
+  QUALIFICATION_SCORE_MARKER,
+  readQualificationScore,
+  type QualificationScoreReading,
+} from '../../lib/prospectProvenance/scoreSemantics';
 
 type CanonicalLeadRow = {
   id: string;
   source: string;
   qualification_score: number | null;
   created_at: string;
+  /** `lead_metadata->qualificationScoring` (closure-C marker); absent on older rows. */
+  [QUALIFICATION_SCORE_MARKER]?: unknown;
 };
 
 type RevenueEventRow = {
@@ -23,9 +30,31 @@ type RevenueEventRow = {
   created_at: string;
 };
 
-function inferLeadQuality(lead: CanonicalLeadRow): number {
-  const score = Number(lead.qualification_score ?? 35);
-  return clamp(Math.round(score), 0, 100);
+/**
+ * OPS-C (was `Number(lead.qualification_score ?? 35)`): an unscored lead had a
+ * FABRICATED quality of 35 — below the 45 "low quality" threshold — so every
+ * unscored lead produced a `low_quality_lead` decision ("scored 35/100") and,
+ * after 14 days, a `high_dropoff_lead`, and pulled its source's average under
+ * 45 (`unqualified_lead_source`). Quality is now read through the canonical
+ * score semantics (closure C, lib/prospectProvenance/scoreSemantics):
+ *   NULL / non-numeric       ⇒ 'unscored'        (value null)
+ *   bare 0 without marker    ⇒ 'legacy_default'  (value null — the old column default)
+ *   marked 0, or any n > 0   ⇒ 'scored'          (value clamped to 0..100)
+ * Quality-threshold decisions are taken ONLY for scored leads; unknown is
+ * never compared against a threshold as if it were measured.
+ */
+export interface LeadQualityReading {
+  state: QualificationScoreReading['state'];
+  /** 0..100 when state === 'scored'; otherwise null. */
+  value: number | null;
+}
+
+export function inferLeadQuality(lead: Pick<CanonicalLeadRow, 'qualification_score'> & { [QUALIFICATION_SCORE_MARKER]?: unknown }): LeadQualityReading {
+  const reading = readQualificationScore(lead.qualification_score, {
+    [QUALIFICATION_SCORE_MARKER]: lead[QUALIFICATION_SCORE_MARKER],
+  });
+  if (reading.state !== 'scored' || reading.value === null) return { state: reading.state, value: null };
+  return { state: 'scored', value: clamp(Math.round(reading.value), 0, 100) };
 }
 
 function ageInDays(createdAt: string): number {
@@ -40,7 +69,7 @@ async function loadCanonicalLeadRevenueContext(companyId: string): Promise<{
   const since = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
   const { data: canonicalLeads, error: leadsError } = await supabase
     .from('canonical_leads')
-    .select('id, source, qualification_score, created_at')
+    .select(`id, source, qualification_score, created_at, ${QUALIFICATION_SCORE_MARKER}:lead_metadata->${QUALIFICATION_SCORE_MARKER}`)
     .eq('company_id', companyId)
     .gte('created_at', since)
     .order('created_at', { ascending: false })
@@ -89,13 +118,18 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
     return [];
   }
 
-  const qualityBySource = new Map<string, { total: number; count: number }>();
+  // Source quality is averaged over SCORED leads only; `unscored` counts the rest.
+  const qualityBySource = new Map<string, { total: number; count: number; unscored: number }>();
   for (const lead of canonicalLeads) {
     const source = normalizeText(lead.source) || 'unknown';
-    const score = inferLeadQuality(lead);
-    const current = qualityBySource.get(source) ?? { total: 0, count: 0 };
-    current.total += score;
-    current.count += 1;
+    const quality = inferLeadQuality(lead);
+    const current = qualityBySource.get(source) ?? { total: 0, count: 0, unscored: 0 };
+    if (quality.value === null) {
+      current.unscored += 1;
+    } else {
+      current.total += quality.value;
+      current.count += 1;
+    }
     qualityBySource.set(source, current);
   }
 
@@ -111,11 +145,12 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
 
   const decisions = [];
   for (const lead of canonicalLeads) {
-    const quality = inferLeadQuality(lead);
+    const qualityReading = inferLeadQuality(lead);
+    const quality = qualityReading.value;
     const leadAgeDays = ageInDays(lead.created_at);
     const source = normalizeText(lead.source) || 'unknown';
 
-    if (quality < 45) {
+    if (quality !== null && quality < 45) {
       decisions.push({
         company_id: companyId,
         report_tier: 'deep' as const,
@@ -130,6 +165,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
           source,
           inferred_quality_score: quality,
           qualification_score: lead.qualification_score == null ? null : Number(lead.qualification_score),
+          qualification_score_state: qualityReading.state,
         },
         impact_traffic: 10,
         impact_conversion: clamp(55 - Math.round(quality / 2), 0, 100),
@@ -149,7 +185,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
       });
     }
 
-    if (leadAgeDays >= 14 && quality < 60) {
+    if (quality !== null && leadAgeDays >= 14 && quality < 60) {
       decisions.push({
         company_id: companyId,
         report_tier: 'deep' as const,
@@ -163,6 +199,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
           lead_id: lead.id,
           source,
           inferred_quality_score: quality,
+          qualification_score_state: qualityReading.state,
           age_days: leadAgeDays,
         },
         impact_traffic: 5,
@@ -197,7 +234,10 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
         evidence: {
           lead_id: lead.id,
           source,
+          // source_lead_count stays the number of leads the average is over
+          // (scored leads); unscored leads are reported separately.
           source_lead_count: sourceStats.count,
+          source_unscored_lead_count: sourceStats.unscored,
           source_avg_quality: Math.round(sourceStats.total / sourceStats.count),
         },
         impact_traffic: 0,
@@ -251,9 +291,14 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
     );
 
     current.leadCount += 1;
-    // closure C: unscored (NULL) leads are excluded from the average, never counted as 0.
-    if (lead.qualification_score != null && Number.isFinite(Number(lead.qualification_score))) {
-      current.totalQualification += Number(lead.qualification_score);
+    // closure C: unscored (NULL) leads — and the legacy-default bare 0 — are
+    // excluded from the average, never counted as 0 (OPS-C: the legacy 0 was
+    // previously counted here as a genuine zero).
+    const aggQuality = readQualificationScore(lead.qualification_score, {
+      [QUALIFICATION_SCORE_MARKER]: lead[QUALIFICATION_SCORE_MARKER],
+    }).value;
+    if (aggQuality !== null) {
+      current.totalQualification += aggQuality;
       current.scoredLeadCount += 1;
     }
     current.totalRevenue += leadRevenue;
