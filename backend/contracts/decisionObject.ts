@@ -31,11 +31,11 @@ export const DecisionObjectEvidenceSchema = z.union([
 ]);
 
 export const DecisionObjectInputSchema = z.object({
-  company_id: z.string().uuid(),
+  company_id: z.guid(),
   report_tier: DecisionObjectReportTierSchema,
   source_service: z.string().trim().min(1),
   entity_type: DecisionObjectEntityTypeSchema,
-  entity_id: z.string().uuid().nullable().optional(),
+  entity_id: z.guid().nullable().optional(),
   issue_type: z.string().trim().min(1),
   title: z.string().trim().min(1),
   description: z.string().trim().min(1),
@@ -56,7 +56,7 @@ export const DecisionObjectInputSchema = z.object({
 
   if (isGlobal && hasEntity) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       path: ['entity_id'],
       message: 'Global decision objects must not include entity_id.',
     });
@@ -64,7 +64,7 @@ export const DecisionObjectInputSchema = z.object({
 
   if (!isGlobal && !hasEntity) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       path: ['entity_id'],
       message: 'Non-global decision objects must include entity_id.',
     });
@@ -72,7 +72,7 @@ export const DecisionObjectInputSchema = z.object({
 
   if (Object.keys(value.action_payload ?? {}).length === 0) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       path: ['action_payload'],
       message: 'Decision objects must include action_payload.',
     });

@@ -48,13 +48,26 @@ describe('puppeteer-core / @sparticuz/chromium pairing', () => {
     expect(gte(pptr.version, '25.13.0')).toBe(true);
   });
 
-  it('the zod nested under chromium-bidi is >= 4.6.6 (GHSA-mrhx-c7xc-m3w5)', () => {
-    const candidates = [
-      'node_modules/chromium-bidi/node_modules/zod/package.json',
-      'node_modules/puppeteer-core/node_modules/chromium-bidi/node_modules/zod/package.json',
-    ].filter((p) => fs.existsSync(path.join(REPO, p)));
-    expect(candidates.length).toBeGreaterThan(0);
-    for (const p of candidates) expect(gte(readJson(p).version, '4.6.6')).toBe(true);
+  it('the zod that chromium-bidi resolves is >= 4.6.6 (GHSA-mrhx-c7xc-m3w5)', () => {
+    // Node resolution: from the chromium-bidi package directory, the first
+    // node_modules/zod walking up. Before security/zod4 that was a nested copy;
+    // with the root on zod 4 npm dedupes it to the root install.
+    const resolveZodFrom = (pkgDir: string): string | null => {
+      for (let dir = pkgDir; ; dir = path.dirname(dir)) {
+        const p = path.join(dir, 'node_modules', 'zod', 'package.json');
+        if (fs.existsSync(p)) return p;
+        if (path.dirname(dir) === dir || path.relative(REPO, dir).startsWith('..')) return null;
+      }
+    };
+    const bidiDirs = ['node_modules/chromium-bidi', 'node_modules/puppeteer-core/node_modules/chromium-bidi']
+      .map((p) => path.join(REPO, p))
+      .filter((p) => fs.existsSync(path.join(p, 'package.json')));
+    expect(bidiDirs.length).toBeGreaterThan(0);
+    for (const dir of bidiDirs) {
+      const zodPkg = resolveZodFrom(dir);
+      expect(zodPkg).not.toBeNull();
+      expect(gte(JSON.parse(fs.readFileSync(zodPkg!, 'utf8')).version, '4.6.6')).toBe(true);
+    }
   });
 
   it('puppeteer target Chrome major is within 2 majors of the @sparticuz Chromium major', () => {

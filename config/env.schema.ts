@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod';
+import { v3Url } from '@/lib/validation/zodV3Compat';
 import { normalizeRedisUrl, maskRedisUrl } from '@/lib/redis/sanitizer';
 import { resolveSupabaseSecretKey } from '@/backend/db/supabaseKeys';
 import { resolveSupabasePublishableKey } from '@/lib/supabase/publishableKey';
@@ -66,9 +67,7 @@ export const envSchema = z.object({
   NEXT_RUNTIME: z.enum(['nodejs', 'edge']).optional(),
   
   // ── Supabase (required) ────────────────────────────────────────────────────
-  SUPABASE_URL: z
-    .string()
-    .url('SUPABASE_URL must be a valid URL')
+  SUPABASE_URL: v3Url('SUPABASE_URL must be a valid URL')
     .describe('Supabase project URL'),
   
   // Canonical server credential (Supabase new API-key model). Populated by the
@@ -86,9 +85,7 @@ export const envSchema = z.object({
     .optional()
     .describe('DEPRECATED legacy Supabase service role key — superseded by SUPABASE_SECRET_KEY'),
   
-  NEXT_PUBLIC_SUPABASE_URL: z
-    .string()
-    .url('NEXT_PUBLIC_SUPABASE_URL must be a valid URL')
+  NEXT_PUBLIC_SUPABASE_URL: v3Url('NEXT_PUBLIC_SUPABASE_URL must be a valid URL')
     .describe('Public Supabase URL (client-side)'),
   
   // Canonical browser credential (Supabase new API-key model). Populated by the
@@ -240,13 +237,11 @@ export const envSchema = z.object({
     .describe('Secret for the internal metrics API and the x-cron-secret cron routes. Optional; those routes fail closed when unset.'),
   
   // ── App configuration ──────────────────────────────────────────────────────
-  NEXT_PUBLIC_APP_URL: z
-    .string()
-    .url('NEXT_PUBLIC_APP_URL must be a valid URL')
+  NEXT_PUBLIC_APP_URL: v3Url('NEXT_PUBLIC_APP_URL must be a valid URL')
     .default('https://www.omnivyra.com')
     .describe('Public app URL'),
 
-  APP_URL: z.string().url('APP_URL must be a valid URL').optional(),
+  APP_URL: v3Url('APP_URL must be a valid URL').optional(),
   
   OMNIVYRA_ENV: z
     .enum(['development', 'staging', 'production'])
@@ -261,12 +256,16 @@ export const envSchema = z.object({
   ENABLE_AUTO_WORKERS: z
     .enum(['0', '1', 'true', 'false'])
     .transform((v) => v === '1' || v === 'true')
-    .default('true')
+    // zod 4: .default() short-circuits with an OUTPUT value; .prefault() feeds the
+    // input through the enum + transform exactly like zod 3's .default() did.
+    .prefault('true')
     .describe('Auto-start workers in development'),
 
+  // zod 3's z.number().min(0) accepted +Infinity; zod 4's z.number() rejects
+  // non-finite values. Number('Infinity') / Number('1e999') from the env must
+  // keep booting exactly as before, so +Infinity is admitted explicitly.
   COST_REQUEST_THRESHOLD_USD: z
-    .number()
-    .min(0)
+    .union([z.number().min(0), z.literal(Infinity)])
     .default(1)
     .describe('Per-request cost anomaly threshold in USD'),
 
@@ -275,7 +274,7 @@ export const envSchema = z.object({
   META_DEBUG: z
     .enum(['true', 'false', 'TRUE', 'FALSE', '0', '1'])
     .transform((v) => v === 'true' || v === 'TRUE' || v === '1')
-    .default('false'),
+    .prefault('false'),
 
   CHROME_PATH: z.string().optional(),
   CHROMIUM_PATH: z.string().optional(),
@@ -284,7 +283,7 @@ export const envSchema = z.object({
   USE_MOCK_PLATFORMS: z
     .enum(['true', 'false', 'TRUE', 'FALSE', '0', '1'])
     .transform((v) => v === 'true' || v === 'TRUE' || v === '1')
-    .default('false')
+    .prefault('false')
     .describe('Use mock platform adapters'),
   
   Mode: z
