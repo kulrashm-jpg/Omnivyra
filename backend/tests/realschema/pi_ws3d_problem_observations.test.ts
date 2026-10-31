@@ -118,6 +118,30 @@ async function newSourceRecord(org: string, ref = 'REC-1'): Promise<string> {
 }
 
 /**
+ * A recording operator. `users` needs only `email`; `id` defaults to
+ * `gen_random_uuid()` and every other NOT NULL column carries a default that
+ * already satisfies `users_status_check`, `users_auth_level_check` and
+ * `users_user_type_check`.
+ *
+ * The address is RANDOMISED because `users_email_key` is UNIQUE and other
+ * real-schema suites commit fixed-address rows in a `beforeAll`; a fixed
+ * address here would be a 23505 that depended on the order jest happened to
+ * pick.
+ *
+ * Created inside the caller's `inRollback()`, so it is discarded with the rest
+ * of the fixture. Deliberately NOT `SELECT id FROM public.users LIMIT 1`: this
+ * suite runs against a schema-only baseline, so a looked-up recorder is null
+ * and any assertion guarded on one never runs at all.
+ */
+async function newUser(tag: string): Promise<string> {
+  const { rows } = await db.query(
+    'INSERT INTO public.users (email) VALUES ($1) RETURNING id',
+    [`ppo-${tag}-${Math.random().toString(36).slice(2, 10)}@example.test`],
+  );
+  return rows[0].id;
+}
+
+/**
  * The privileges `role` actually holds on this relation, alphabetically.
  *
  * Read from `pg_class.relacl` via `aclexplode`, and deliberately NOT from
@@ -296,6 +320,73 @@ describe('WS-3D — schema shape', () => {
     expect(source).toMatch(/ON DELETE RESTRICT/);
   });
 
+  it('carries NO foreign key into public.users — the DEFECT-008 edge is gone', async () => {
+    // DEFECT-008. 20270105000000 declared
+    //   recorded_by_user_id uuid REFERENCES public.users (id) ON DELETE SET NULL
+    // beside `ppo_origin_actor`, which requires a human-origin row to name a
+    // recorder. Deleting that recorder made PostgreSQL perform the referential
+    // action as an UPDATE; an UPDATE re-evaluates every table CHECK on the row;
+    // the CHECK failed 23514 and ABORTED THE PARENT DELETE, so the operator
+    // became undeletable. 20270110000000 drops the foreign key and keeps the
+    // CHECK — the next describe proves the pairing is still enforced.
+    const { rows } = await db.query(
+      `SELECT con.conname,
+              p.relname AS parent,
+              con.confdeltype,
+              -- Cast to text: attname is of type name, and node-postgres has
+              -- no array parser for it, so without the cast this comes back as
+              -- the literal string '{a,b}' and every array assertion below
+              -- would be comparing against a string.
+              (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                 FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                 JOIN pg_attribute a
+                   ON a.attrelid = con.conrelid AND a.attnum = k.attnum) AS cols
+         FROM pg_constraint con
+         JOIN pg_class s ON s.oid = con.conrelid
+         JOIN pg_class p ON p.oid = con.confrelid
+        WHERE con.contype='f' AND s.relname=$1
+        ORDER BY con.conname`, [PPO]);
+
+    const fks = rows as Array<{ parent: string; confdeltype: string; cols: string[] }>;
+
+    // Asserted by COLUMN and by PARENT, never by constraint name: the dropped
+    // key was declared inline and auto-named, so a name-only check would miss
+    // the same key re-added under any other name.
+    for (const fk of fks) {
+      expect(fk.cols).not.toContain('recorded_by_user_id');
+      expect(fk.parent).not.toBe('users');
+    }
+
+    // ...and NOTHING ELSE went with it. Whole-set equality, so a drop that took
+    // a tenant leg too must fail here rather than pass quietly.
+    expect(fks.map((fk) => `${fk.cols.join(',')} -> ${fk.parent} [${fk.confdeltype}]`).sort())
+      .toEqual([
+        'account_id,organization_id -> prospect_accounts [c]',
+        'organization_id -> companies [c]',
+        'person_id,organization_id -> unified_persons [c]',
+        'source_record_id,organization_id -> source_records [r]',
+      ]);
+
+    // One legitimate single-column key survives — the tenant key to companies —
+    // so "no single-column foreign keys" would be the wrong assertion and is
+    // deliberately not made.
+    expect(fks.filter((fk) => fk.cols.length === 1)).toHaveLength(1);
+
+    // The COLUMN survives the key. The attribution is the data; the foreign key
+    // was only a referential action on it.
+    const { rows: col } = await db.query(
+      `SELECT a.attnotnull, a.atthasdef, format_type(a.atttypid, a.atttypmod) AS type
+         FROM pg_attribute a
+        WHERE a.attrelid = $1::regclass AND a.attname = 'recorded_by_user_id'
+          AND NOT a.attisdropped`, [`public.${PPO}`]);
+    expect(col).toHaveLength(1);
+    const actor = col[0] as { attnotnull: boolean; atthasdef: boolean; type: string };
+    expect(actor.type).toBe('uuid');
+    // Nullable, because provider origin requires the null.
+    expect(actor.attnotnull).toBe(false);
+    expect(actor.atthasdef).toBe(false);
+  });
+
   it('the idempotency indexes are PARTIAL, subject-aware and time-free', async () => {
     // PARTIALITY IS LOAD-BEARING. Exactly one subject leg is populated, so a
     // single index over both legs would compare a NULL in every row; under the
@@ -411,6 +502,68 @@ describe('WS-3D — the CHECKs refuse every malformed row', () => {
           origin: 'human', recorded_by_user_id: userId,
         }))).toBe('ok');
       }
+    });
+  });
+
+  it('ppo_origin_actor survived the DEFECT-008 fix: same definition, same columns, validated', async () => {
+    // 20270110000000 drops the actor foreign key and keeps this CHECK. If
+    // removing the referential edge had also relaxed the pairing, an anonymous
+    // human-origin observation would become storable — attributed speech with
+    // nobody attesting it, which is the one thing this column exists to
+    // prevent. The migration proves invariance against its own pre-drop
+    // capture; this is the standing contract.
+    const def = await constraintDef('ppo_origin_actor');
+    expect(def).not.toBeNull();
+    expect(def).toMatch(/origin = 'human'/);
+    expect(def).toMatch(/recorded_by_user_id IS NOT NULL/);
+    expect(def).toMatch(/origin = 'provider'/);
+    expect(def).toMatch(/recorded_by_user_id IS NULL/);
+
+    const { rows } = await db.query(
+      `SELECT con.convalidated,
+              (SELECT array_agg(a.attname::text ORDER BY a.attname)
+                 FROM unnest(con.conkey) AS k(attnum)
+                 JOIN pg_attribute a
+                   ON a.attrelid = con.conrelid AND a.attnum = k.attnum) AS cols
+         FROM pg_constraint con JOIN pg_class s ON s.oid = con.conrelid
+        WHERE con.contype='c' AND s.relname=$1 AND con.conname='ppo_origin_actor'`, [PPO]);
+    expect(rows).toHaveLength(1);
+    const chk = rows[0] as { convalidated: boolean; cols: string[] };
+    // Validated, so it is enforced rather than merely declared.
+    expect(chk.convalidated).toBe(true);
+    expect(chk.cols).toEqual(['origin', 'recorded_by_user_id']);
+  });
+
+  it('with the foreign key gone, the human/recorder pairing is still refused in every invalid shape', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      // Its OWN recorder. The test above this one reaches for a pre-existing
+      // users row and guards on it; against a schema-only baseline that row
+      // does not exist, so those guarded lines never run. These do.
+      const u = await newUser('check');
+
+      // human origin, no recorder — an attested statement is never anonymous.
+      expect(await tryInsert(row(ORG_A, p, { origin: 'human' }))).toBe('23514');
+      // provider origin WITH a recorder — an import dressed as an attestation.
+      expect(await tryInsert(row(ORG_A, p, { recorded_by_user_id: u }))).toBe('23514');
+      // an origin outside the vocabulary, with and without a recorder.
+      expect(await tryInsert(row(ORG_A, p, { origin: 'robot' }))).toBe('23514');
+      expect(await tryInsert(row(ORG_A, p, { origin: 'robot', recorded_by_user_id: u }))).toBe('23514');
+      expect(await tryInsert(row(ORG_A, p, { origin: '' }))).toBe('23514');
+
+      // ...and both LEGAL shapes are still legal. A 23503 here would mean the
+      // foreign key is back; a 23514 would mean the CHECK was over-tightened.
+      expect(await tryInsert(row(ORG_A, p, { origin: 'human', recorded_by_user_id: u }))).toBe('ok');
+      expect(await tryInsert(row(ORG_A, p))).toBe('ok');
+
+      // The recorder no longer has to EXIST. This is the trade the fix makes
+      // knowingly: referential integrity on the actor is given up so that a
+      // user stays deletable, and the recorded id outlives the account — which
+      // is the correct behaviour for an append-only attestation.
+      expect(await tryInsert(row(ORG_A, p, {
+        origin: 'human', recorded_by_user_id: '00000000-0000-4000-8000-0000000000ff',
+      }))).toBe('ok');
     });
   });
 
@@ -686,6 +839,109 @@ describe('WS-3D — erasure: the words go with the subject', () => {
       // The statement is not the source record's to destroy, and the words must
       // stay re-readable.
       expect(await attempt('DELETE FROM public.source_records WHERE id=$1', [sr])).toBe('23503');
+    });
+  });
+});
+
+describe('WS-3D — DEFECT-008: deleting the recording operator does not take the statement with it', () => {
+  it('the human-origin observation survives its recorder\'s deletion, attribution intact', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const sr = await newSourceRecord(ORG_A, 'REC-DEL');
+      const u = await newUser('owner');
+      const id = await insert(row(ORG_A, p, {
+        origin: 'human',
+        recorded_by_user_id: u,
+        source_record_id: sr,
+        origin_record_id: 'call-del-1',
+      }));
+
+      const before = (await db.query(
+        `SELECT statement, statement_hash, statement_language, origin, origin_store,
+                origin_record_id, source_record_id, recorded_by_user_id, confidence, observed_at
+           FROM public.${PPO} WHERE id=$1`, [id])).rows[0];
+      expect(before.recorded_by_user_id).toBe(u);
+
+      // `effect`, never `attempt`. `attempt()` rolls back to its savepoint on
+      // the SUCCESS path too, so the DELETE would report 'ok' and then
+      // un-delete itself: "the user is gone" could not pass, and "the
+      // observation survives" would be reading the pre-delete state. See the
+      // docblock on `effect` in ./setup.
+      expect(await effect('DELETE FROM public.users WHERE id=$1', [u])).toBe('ok');
+
+      // 1. the user is actually gone — before the fix this DELETE aborted with
+      //    23514 and the row stayed.
+      expect((await db.query(
+        'SELECT count(*)::int n FROM public.users WHERE id=$1', [u])).rows[0].n).toBe(0);
+
+      // 2. the observation survives: no CASCADE, no SET NULL, no abort.
+      const after = (await db.query(
+        `SELECT statement, statement_hash, statement_language, origin, origin_store,
+                origin_record_id, source_record_id, recorded_by_user_id, confidence, observed_at
+           FROM public.${PPO} WHERE id=$1`, [id])).rows[0];
+      expect(after).toBeDefined();
+
+      // 3. the attribution still names the ORIGINAL uuid. This is the point of
+      //    the fix: the row records WHO recorded the statement, and that does
+      //    not stop being true when the account is closed. A referential SET
+      //    NULL would have erased it.
+      expect(after.recorded_by_user_id).toBe(u);
+
+      // 4. ppo_origin_actor is satisfied BY THE STORED ROW, not merely
+      //    declared — this is the arm the referential UPDATE used to break.
+      expect(after.origin).toBe('human');
+      expect((await db.query(
+        `SELECT count(*)::int n FROM public.${PPO}
+          WHERE id=$1
+            AND ((origin='human'    AND recorded_by_user_id IS NOT NULL)
+              OR (origin='provider' AND recorded_by_user_id IS NULL))`, [id])).rows[0].n).toBe(1);
+
+      // 5. the words and the provenance are unchanged.
+      expect(after.statement).toBe(before.statement);
+      expect(after.statement_hash).toBe(h(STATEMENT));
+      expect(after.statement_language).toBe('en');
+      expect(after.origin_store).toBe('crm_call_notes');
+      expect(after.origin_record_id).toBe('call-del-1');
+      expect(after.source_record_id).toBe(sr);
+      expect(String(after.confidence)).toBe(String(before.confidence));
+      expect(new Date(after.observed_at).toISOString()).toBe(OBSERVED_AT);
+    });
+  });
+
+  it('a provider-origin observation with no recorder behaves exactly as before', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const sr = await newSourceRecord(ORG_A, 'REC-PROV');
+      // A user exists and is deleted, and this row has nothing to do with
+      // either — the control for the test above.
+      const unrelated = await newUser('unrelated');
+      const id = await insert(row(ORG_A, p, {
+        source_record_id: sr, origin_record_id: 'call-prov-1',
+      }));
+
+      const stored = (await db.query(
+        `SELECT origin, recorded_by_user_id FROM public.${PPO} WHERE id=$1`, [id])).rows[0];
+      expect(stored.origin).toBe('provider');
+      expect(stored.recorded_by_user_id).toBeNull();
+
+      expect(await effect('DELETE FROM public.users WHERE id=$1', [unrelated])).toBe('ok');
+      const after = (await db.query(
+        `SELECT origin, recorded_by_user_id, statement, source_record_id
+           FROM public.${PPO} WHERE id=$1`, [id])).rows[0];
+      expect(after.origin).toBe('provider');
+      expect(after.recorded_by_user_id).toBeNull();
+      expect(after.statement).toBe(STATEMENT);
+      expect(after.source_record_id).toBe(sr);
+
+      // The SUBJECT legs are untouched by this fix: deleting the person still
+      // CASCADEs the words away, which is the behaviour erasure depends on.
+      // Pinned here beside the actor case so the two are never confused —
+      // dropping the ACTOR key must not have reached the SUBJECT keys.
+      expect(await effect('DELETE FROM public.unified_persons WHERE id=$1', [p])).toBe('ok');
+      expect((await db.query(
+        `SELECT count(*)::int n FROM public.${PPO} WHERE id=$1`, [id])).rows[0].n).toBe(0);
     });
   });
 });
