@@ -122,8 +122,41 @@ if (fs.existsSync(envPath)) {
   }
   process.stdout.write(`  critical env: OK (${CRITICAL_ENV.length} vars present)\n`);
 } else {
-  process.stdout.write(`  critical env: SKIPPED (no .env.local)\n`);
-  unverified.push('critical env SKIPPED (no .env.local)');
+  // A release checkout must not carry a copy of .env.local. When the file is
+  // absent the same four names are checked in the process environment (set by
+  // the operator's wrapper from a secure source). Names only — never values.
+  const isSet = (k) => typeof process.env[k] === 'string'
+    && process.env[k].trim().replace(/^["']|["']$/g, '') !== '';
+  const present = CRITICAL_ENV.filter(isSet);
+  if (present.length === 0) {
+    process.stdout.write(`  critical env: SKIPPED (no .env.local, none set in process env)\n`);
+    unverified.push('critical env SKIPPED (no .env.local)');
+  } else if (present.length < CRITICAL_ENV.length) {
+    const missing = CRITICAL_ENV.filter((k) => !isSet(k));
+    process.stdout.write(
+      `RESULT: BLOCKED — process env missing/empty critical var(s): ${missing.join(', ')}\n`,
+    );
+    process.exit(1);
+  } else {
+    process.stdout.write(`  critical env: OK (${CRITICAL_ENV.length} vars present in process env; no .env.local)\n`);
+  }
+}
+
+// ── Schema manifest freshness ────────────────────────────────────────────────
+// generated/schema-column-manifest.json is committed and shipped as-is; its
+// manifest_hash is what /api/health/version reports. Nothing regenerates it at
+// build time, so a stale file ships a hash that describes old migrations.
+// Read-only (no DB, no network, never writes).
+process.stdout.write(`Checking schema manifest freshness...\n`);
+try {
+  execSync('node scripts/generate-schema-manifest.js --check', { stdio: 'inherit' });
+  process.stdout.write(`  schema manifest: CURRENT\n`);
+} catch {
+  process.stdout.write(
+    `RESULT: BLOCKED — generated/schema-column-manifest.json is stale. Run\n` +
+    `'node scripts/generate-schema-manifest.js', commit, merge, then redeploy.\n`,
+  );
+  process.exit(1);
 }
 
 // ── Schema parity gate ───────────────────────────────────────────────────────
