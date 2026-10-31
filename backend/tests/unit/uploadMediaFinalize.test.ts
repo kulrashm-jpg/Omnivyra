@@ -20,7 +20,11 @@ function createRes() {
 }
 
 let supabaseRows: Record<string, unknown> = {};
-const storageCalls = { upload: [] as any[], remove: [] as string[][], download: [] as string[] };
+const storageCalls = { upload: [] as any[], remove: [] as string[][], download: [] as string[], move: [] as any[] };
+// MEDIA-H3 fixture: finalize now reads the STORED object's metadata (info) from
+// the private quarantine bucket and promotes it with a server-side move. The
+// stored content type defaults to the declared type used by these cases.
+let mockStoredInfo: { size: number; contentType: string } = { size: 1024, contentType: 'video/mp4' };
 const ownedUpdates: Array<{ table: string; payload: Record<string, any> }> = [];
 let mockValidatorReturn: any = { valid: true, validated_at: 'now', details: {} };
 
@@ -47,6 +51,8 @@ jest.mock('../../db/supabaseClient', () => ({
           return { data: { arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) }, error: null };
         }),
         remove: jest.fn(async (paths: string[]) => { storageCalls.remove.push(paths); return { data: null, error: null }; }),
+        info: jest.fn(async () => ({ data: { ...mockStoredInfo }, error: null })),
+        move: jest.fn(async (from: string, to: string, opts: any) => { storageCalls.move.push({ from, to, opts }); return { data: { message: 'ok' }, error: null }; }),
       })),
     },
   },
@@ -115,6 +121,8 @@ describe('upload-media-finalize API', () => {
     storageCalls.upload.length = 0;
     storageCalls.remove.length = 0;
     storageCalls.download.length = 0;
+    storageCalls.move.length = 0;
+    mockStoredInfo = { size: 1024, contentType: 'video/mp4' };
     ownedUpdates.length = 0;
     mockValidatorReturn = { valid: true, validated_at: 'now', details: {} };
   });
@@ -140,6 +148,8 @@ describe('upload-media-finalize API', () => {
     expect(content.upload_source).toBe('tus_upload');
     // No orphan cleanup — the storage object is the final asset.
     expect(storageCalls.remove).toHaveLength(0);
+    // MEDIA-H3: it became the final asset by a server-side promotion.
+    expect(storageCalls.move).toEqual([{ from: 'company-1/plan-1/video/abc.mp4', to: 'company-1/plan-1/video/abc.mp4', opts: { destinationBucket: 'media-uploads' } }]);
   });
 
   test('missing storage_path → 400', async () => {

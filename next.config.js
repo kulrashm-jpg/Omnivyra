@@ -54,16 +54,17 @@ const nextConfig = {
     'pg',           // Direct Postgres client
   ],
   images: {
+    // MEDIA-H3: no Supabase Storage entry. /_next/image decodes whatever bytes
+    // an allowed URL serves (it ignores the stored Content-Type), and no
+    // next/image consumer renders a stored object (every <Image src> is a
+    // root-relative literal; guarded by nextConfigNoSupabaseImageHost.test.ts).
+    // This supersedes patch D (hostname narrowing), which kept the tenant's own
+    // public bucket reachable by the optimizer.
     remotePatterns: [
       {
         protocol: 'https',
         hostname: 'images.unsplash.com',
         pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: '*.supabase.co',
-        pathname: '/storage/v1/object/public/**',
       },
     ],
   },
