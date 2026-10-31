@@ -1,5 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
-import { safeEnqueue } from '../middleware/queueBackpressure';
+import { enqueueOrThrow } from '../middleware/queueBackpressure';
 // R2-IMPL B1 — the ONE publish-authorization predicate, shared with
 // publishProcessor so cron eligibility and publish-time authorization agree.
 import { authorizePostPublish } from '../../lib/campaign/publishAuthorization';
@@ -320,7 +320,7 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
             priority: (post as any).priority || 0,
           });
 
-          await safeEnqueue(
+          await enqueueOrThrow(
             queue,
             'publish',
             'publish',
@@ -374,6 +374,6 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
  */
 export async function enqueueEngagementPolling(): Promise<void> {
   const queue = getEngagementPollingQueue();
-  await safeEnqueue(queue, 'engagement-polling', 'poll', {}, { jobId: `engagement-poll-${Date.now()}` });
+  await enqueueOrThrow(queue, 'engagement-polling', 'poll', {}, { jobId: `engagement-poll-${Date.now()}` });
   console.log('✅ Engagement polling job enqueued');
 }
