@@ -405,8 +405,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     })
     .eq('id', id);
   if (writeError) {
-    // Roll the promoted object back out of the public bucket.
-    await removeDeliveryObject(storagePath);
+    // Roll the promoted object back out of the public bucket — but only if THIS
+    // request promoted it. An alreadyPromoted object belongs to a concurrent
+    // finalize whose row write may have succeeded; deleting it would leave that
+    // row with a dangling public reference.
+    if (!promotion.alreadyPromoted) await removeDeliveryObject(storagePath);
     return res.status(500).json({ error: `Failed to record upload: ${writeError.message}` });
   }
 

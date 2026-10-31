@@ -247,4 +247,25 @@ describe('idempotency, replay and failure safety', () => {
   });
 });
 
+// H-3 independent review (Agent A) — concurrency cases added by the reviewer (not independently reviewed).
+describe('concurrent finalize of the same session (review additions)', () => {
+  it('two concurrent finalizes: both succeed, exactly one delivery object, no 503 for the loser', async () => {
+    mockMem.put(Q, KEY, MP4, 'video/mp4');
+    const [a, b] = await Promise.all([finalize(body()), finalize(body())]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect(deliveryKeys()).toEqual([`${D}/${KEY}`]);
+    expect(mockMem.has(Q, KEY)).toBe(false);
+  });
+  it('DB write failure in the request that found the session ALREADY promoted does not delete the winner\'s public object', async () => {
+    // The winner promoted and recorded the row; this request still saw the pre-promotion row.
+    mockMem.put(D, KEY, MP4, 'video/mp4');
+    mockMem.put(Q, KEY, MP4, 'video/mp4');
+    mockWriteError = { message: 'write failed' };
+    const r = await finalize(body());
+    expect(r.statusCode).toBe(500);
+    expect(mockMem.has(D, KEY)).toBe(true);
+    expect(mockMem.has(Q, KEY)).toBe(false);
+  });
+});
+
 export {};

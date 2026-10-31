@@ -267,8 +267,11 @@ export async function promoteQuarantinedMedia(input: {
       errorMessage = error?.message ?? null;
     }
     if (!errorMessage) return { ok: true, deliveryPath: objectPath, alreadyPromoted: false };
-    // A concurrent finalize of the same session already promoted it.
-    if (/exist|duplicate|409/i.test(errorMessage) && await deliveryObjectExists(objectPath)) {
+    // A concurrent finalize of the same session already promoted it. The key is
+    // server-minted and only a promotion of this session writes it, so an
+    // existing delivery object means "already promoted" whatever the error text
+    // (the losing move of a race reports the SOURCE as missing, not a conflict).
+    if (await deliveryObjectExists(objectPath)) {
       await discardQuarantinedObject(objectPath);
       return { ok: true, deliveryPath: objectPath, alreadyPromoted: true };
     }
