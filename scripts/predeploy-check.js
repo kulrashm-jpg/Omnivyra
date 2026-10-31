@@ -81,7 +81,15 @@ if (sha !== originMain) {
 // incident: lib/blog/runBlogGeneration.ts type errors from in-progress WIP.)
 process.stdout.write(`Running worker typecheck (tsc -p tsconfig.worker.json)...\n`);
 try {
-  execSync('npx tsc -p tsconfig.worker.json --noEmit', { stdio: 'pipe', encoding: 'utf8' });
+  // The local compiler directly, not `npx`: npm machinery in a checkout whose
+  // node_modules is a junction to a shared install can rewrite that install's
+  // hidden lockfile. Same compiler the CI step resolves (node_modules/.bin/tsc).
+  // `--incremental false` so no .tsbuildinfo is written (tsconfig.json sets
+  // incremental: true).
+  execSync(
+    `"${process.execPath}" node_modules/typescript/bin/tsc -p tsconfig.worker.json --noEmit --incremental false`,
+    { stdio: 'pipe', encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  );
   process.stdout.write(`  worker typecheck: OK\n`);
 } catch (e) {
   const out = `${e.stdout || ''}${e.stderr || ''}`.trim();
