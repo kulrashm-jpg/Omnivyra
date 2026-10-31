@@ -277,6 +277,13 @@ export type CounterDeltaVerdict =
   | { accept: true; delta: number }
   | { accept: false; reason: 'no_previous' | 'counter_backwards' | 'implausible_rate'; delta: number };
 
+type RejectedCounterDelta = Extract<CounterDeltaVerdict, { accept: false }>;
+
+/** Explicit guard: boolean-literal discriminants do not narrow without strictNullChecks. */
+function isRejectedDelta(v: CounterDeltaVerdict): v is RejectedCounterDelta {
+  return v.accept === false;
+}
+
 /** Pure: is the step from (prevTotal @ prevTs) to (cur @ now) a believable command count? */
 export function evaluateCounterDelta(args: {
   prevTotal: number | null; prevTs: number | null; cur: number; now: number; maxPerSec: number;
@@ -321,7 +328,7 @@ async function accumulateDailyUsage(redis: IORedis, cur: number): Promise<number
     const prev = parseLast(prevRaw);
     const v = evaluateCounterDelta({ prevTotal: prev.total, prevTs: prev.ts, cur, now, maxPerSec });
     let used: number;
-    if (v.accept) {
+    if (!isRejectedDelta(v)) {
       used = Number(await redis.incrby(accumKey, v.delta));
       await redis.expire(accumKey, USAGE_KEY_TTL_S);
     } else {
@@ -336,7 +343,7 @@ async function accumulateDailyUsage(redis: IORedis, cur: number): Promise<number
     // Redis bookkeeping failed — same rules, in-process.
     if (_localAccum.date !== today) _localAccum = { date: today, used: 0 };
     const v = evaluateCounterDelta({ prevTotal: _localLast?.total ?? null, prevTs: _localLast?.ts ?? null, cur, now, maxPerSec });
-    if (v.accept) _localAccum.used += v.delta;
+    if (!isRejectedDelta(v)) _localAccum.used += v.delta;
     else if (v.reason !== 'no_previous') logBaselineReset(v.reason, v.delta, _localLast ? Math.round((now - _localLast.ts) / 1000) : null);
     _localLast = { total: cur, ts: now };
     return _localAccum.used;
