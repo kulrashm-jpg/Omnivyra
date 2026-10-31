@@ -16,7 +16,7 @@
  *      bucket or the key, and cannot overwrite an existing object.
  *   2. The browser uploads with TUS to `/storage/v1/upload/resumable/sign`
  *      using `x-signature: <token>`. No storage policy grants anon or
- *      authenticated writes to either bucket (migration 20270110000000).
+ *      authenticated writes to either bucket (migration 20270111000000).
  *   3. `POST .../upload-media-finalize` re-authorizes, then validates the
  *      STORED bytes and the STORED metadata (size, content type) — never the
  *      client's claim — and only then MOVES the object into the delivery bucket

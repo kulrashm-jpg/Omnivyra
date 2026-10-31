@@ -1,4 +1,4 @@
--- ROLLBACK for 20270110000000_media_h3_storage_quarantine_policies.sql
+-- ROLLBACK for 20270111000000_media_h3_storage_quarantine_policies.sql
 --
 -- Removes the four MEDIA-H3 restrictive policies. It does NOT delete the
 -- `media-quarantine` bucket or its objects (they may hold uploads awaiting

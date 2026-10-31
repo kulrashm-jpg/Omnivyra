@@ -4,7 +4,7 @@
 -- authorization, against the verified target project, after a preview check
 -- that a SIGNED resumable upload (x-signature) still succeeds (see
 -- H3-UPLOAD-SECURITY-REMEDIATION.md). Rollback:
--- supabase/migrations/rollbacks/20270110000000_media_h3_storage_quarantine_policies_rollback.sql
+-- supabase/migrations/rollbacks/20270111000000_media_h3_storage_quarantine_policies_rollback.sql
 --
 -- Model
 --   media-quarantine  PRIVATE. Browser bytes land here, at a server-minted key
