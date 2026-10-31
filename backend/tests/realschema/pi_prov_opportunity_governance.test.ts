@@ -278,9 +278,9 @@ describe('cross-tenant references are refused by PostgreSQL (23503)', () => {
       await expect(initialiseLifecycleForOpportunity({ organizationId: ORG_B, opportunityFeedItemId: fA }))
         .rejects.toThrow(/lifecycle_init_failed:.*opp_lifecycle_item_tenant_fk/);
       await expect(addOpportunityNote({ organizationId: ORG_B, opportunityFeedItemId: fA, authorUserId: null, body: 'x', visibility: 'internal' }))
-        .rejects.toThrow(/note_insert_failed:.*opp_notes_item_tenant_fk/);
+        .rejects.toThrow(/^opportunity_not_found$/); // OPS-C e14b462a: FK 23503 on the item maps to OpportunityNotInTenantError
       await expect(snoozeOpportunity({ organizationId: ORG_B, opportunityFeedItemId: fA, until: LATER(), setByUserId: null, reason: null }))
-        .rejects.toThrow(/snooze_insert_failed:.*opp_dispositions_item_tenant_fk/);
+        .rejects.toThrow(/^opportunity_not_found$/); // OPS-C e14b462a
       for (const t of ['opportunity_lifecycle_states', 'opportunity_notes', 'opportunity_dispositions']) {
         expect(Number((await q(`SELECT count(*) n FROM public.${t} WHERE opportunity_feed_item_id = $1`, [fA])).rows[0].n)).toBe(0);
       }

@@ -23,6 +23,8 @@ import {
   addOpportunityNote,
   addOpportunityTag,
   assignOpportunity,
+  checkOpportunityInTenant,
+  OpportunityNotInTenantError,
   listAssignmentsForOpportunity,
   listAssignmentsForUser,
   listDispositionsForOpportunity,
@@ -42,6 +44,28 @@ import {
 } from '../../../backend/types/opportunityWorkflow';
 import { publishRealtime } from '../../../backend/services/realtimePublisherService';
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
+import { recordRawCounter } from '../../../backend/observability';
+
+/**
+ * OPS-C: the single answer for "this opportunity is not yours". Cross-tenant
+ * and nonexistent items get the SAME status and body, so the response never
+ * reveals whether another tenant's opportunity exists.
+ */
+function opportunityNotFound(res: NextApiResponse) {
+  return res.status(404).json({ error: 'Opportunity not found', code: 'OPPORTUNITY_NOT_FOUND' });
+}
+
+/** Audit line for a denied tenant binding (same shape as CAMPAIGN_TENANT_MISMATCH). */
+function auditOpportunityDenial(req: NextApiRequest, args: { companyId: string; userId: string; kind: string; reason: 'pre_check' | 'fk_violation' }) {
+  console.warn('OPPORTUNITY_TENANT_MISMATCH', {
+    path: req.url,
+    companyId: args.companyId,
+    userId: args.userId,
+    kind: args.kind,
+    reason: args.reason,
+  });
+  try { recordRawCounter('authz.opportunity_tenant_denied', 1, { route: 'active-leads/workflow', reason: args.reason }); } catch { /* fail-safe */ }
+}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
@@ -91,6 +115,26 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   if (roleError || !role) return res.status(403).json({ error: roleError ?? 'FORBIDDEN_ROLE' });
   if (!hasCommunityAiCapability(role, 'MANAGE_LISTENING_CAPABILITIES')) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+  }
+  // OPS-C: bind the opportunity to the authorized company BEFORE any write.
+  // Membership was answered above (403); an item outside this company — or
+  // one that does not exist — is a 404, never a database error.
+  let binding: Awaited<ReturnType<typeof checkOpportunityInTenant>>;
+  try {
+    binding = await checkOpportunityInTenant(companyId, opportunityId);
+  } catch {
+    binding = 'lookup_error';
+  }
+  if (binding === 'lookup_error') {
+    return res.status(503).json({
+      error: 'Opportunity check is temporarily unavailable. Please try again.',
+      code: 'OPPORTUNITY_LOOKUP_ERROR',
+      retryable: true,
+    });
+  }
+  if (binding === 'not_found') {
+    auditOpportunityDenial(req, { companyId, userId: ctx.userId, kind, reason: 'pre_check' });
+    return opportunityNotFound(res);
   }
   try {
     let result: unknown = null;
@@ -167,6 +211,12 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     });
     return res.status(200).json({ ok: true, [kind]: result });
   } catch (err: any) {
+    // OPS-C: a residual item-FK 23503 (item removed after the pre-check) is
+    // the same controlled 404 as the pre-check, never a 500.
+    if (err instanceof OpportunityNotInTenantError) {
+      auditOpportunityDenial(req, { companyId, userId: ctx.userId, kind, reason: 'fk_violation' });
+      return opportunityNotFound(res);
+    }
     console.error('[workflow POST] failed:', err?.message);
     return res.status(500).json({ error: err?.message ?? 'Workflow write failed' });
   }
