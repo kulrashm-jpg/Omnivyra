@@ -753,22 +753,25 @@ const DELIBERATE_V4_DELTAS: Record<string, (o: Outcome) => void> = {
     expect(o.success).toBe(false);
     expect(o.issues!.map((i) => i.path)).toEqual(['priority_score']);
   },
-  'decision.contract.score-infinity': (o) => {
-    expect(o.success).toBe(false);
-    expect(o.issues!.map((i) => i.path)).toEqual(['priority_score']);
-  },
   'guard.array.score-infinity': (o) => {
     expect(o).toEqual({ success: false, threw: 'svc returned non-decision output.' });
   },
   'pulse.coerce-infinity': (o) => {
     expect(o).toEqual({ success: false, threw: 'insightViewService.listMarketPulseView returned non-view output.' });
   },
-  'controller.events.ts_infinity': (o) => {
-    // zod 3: int() rejected Infinity as "Expected integer, received float"; zod 4
-    // rejects it one step earlier (type check). Still a 400 with the v3 type message.
-    expect(o).toEqual({ success: false, value: { status: 400, error: 'Validation error: Expected number, received number' } });
+  // JSON.parse('1e999') === Infinity. zod 3 accepted the blueprint as-is; zod 4
+  // rejects it and the parser's existing repair path rebuilds the week (the
+  // week number itself is not zod-validated on that path).
+  'parser.huge-number': (o) => {
+    expect(o.success).toBe(true);
+    const v = o.value as any;
+    expect(v.format).toBe('blueprint');
+    expect(v.weeks).toHaveLength(1);
+    expect(v.weeks[0].platform_allocation).toEqual({ linkedin: 1 });
   },
 };
+/** Deltas where zod 3 ACCEPTED and zod 4 rejects (the parser delta stays an acceptance). */
+const V4_REJECTS_V3_ACCEPTED = ['action.priority-infinity', 'guard.array.score-infinity', 'pulse.coerce-infinity'];
 
 // ─── run ─────────────────────────────────────────────────────────────────────
 
@@ -827,5 +830,23 @@ describe(`zod characterization (zod ${ZOD_VERSION})`, () => {
       expect(golden.cases[id]).toBeDefined();
       expect(results[id]).not.toEqual(golden.cases[id]);
     }
+    for (const id of V4_REJECTS_V3_ACCEPTED) {
+      expect(golden.cases[id].success).toBe(true);
+      expect(results[id].success).toBe(false);
+    }
+  });
+
+  // zod 4's .int() is a SAFE-integer check; zod 3's was Number.isInteger only, so
+  // integers beyond 2^53-1 were accepted. No legitimate value at these sites is
+  // that large (and none can be represented exactly). Not in the v3 golden;
+  // asserted here as zod 4 behaviour so the tightening stays visible.
+  it('zod 4 tightening: .int() rejects unsafe integers', () => {
+    if (ZOD_MAJOR < 4) return;
+    const huge = 2 ** 60;
+    expect(sp(envSchema, { ...ENV_BASE, REDIS_MAX_BYTES: huge }).success).toBe(false);
+    expect(sp(ActionPayloadSchema, actionPayload({ timeline_days: huge })).success).toBe(false);
+    expect(sp(ExtensionEventRequestSchema, event({ timestamp: huge })).success).toBe(false);
+    expect(sp(envSchema, { ...ENV_BASE, REDIS_MAX_BYTES: Number.MAX_SAFE_INTEGER }).success).toBe(true);
+    expect(sp(ExtensionEventRequestSchema, event({ timestamp: 1700000000000 })).success).toBe(true);
   });
 });
