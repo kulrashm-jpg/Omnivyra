@@ -264,7 +264,7 @@ async function loadRequest(organizationId: string, requestId: string): Promise<L
     .eq('id', requestId)
     .maybeSingle();
   if (res.error) throw new Error(`erasure ledger read failed (${safeCode(errCode(res.error), 'unknown')})`);
-  return (res.data as LedgerRow | null) ?? null;
+  return (res.data as unknown as LedgerRow | null) ?? null;
 }
 
 async function loadOpenRequestForPerson(organizationId: string, personId: string): Promise<LedgerRow | null> {
@@ -274,7 +274,7 @@ async function loadOpenRequestForPerson(organizationId: string, personId: string
     .eq('status', 'pending')
     .maybeSingle();
   if (res.error) throw new Error(`erasure ledger read failed (${safeCode(errCode(res.error), 'unknown')})`);
-  return (res.data as LedgerRow | null) ?? null;
+  return (res.data as unknown as LedgerRow | null) ?? null;
 }
 
 async function loadVerifications(organizationId: string, requestIds: string[]): Promise<Map<string, VerificationRow>> {
@@ -421,7 +421,7 @@ export async function listErasureRequests(
     .order('created_at', { ascending: false })
     .limit(limit);
   if (res.error) throw new Error(`erasure ledger read failed (${safeCode(errCode(res.error), 'unknown')})`);
-  const rows = (res.data ?? []) as LedgerRow[];
+  const rows = (res.data ?? []) as unknown as LedgerRow[];
   const verifications = await loadVerifications(organizationId, rows.map((r) => r.id));
   const nowMs = now();
 
