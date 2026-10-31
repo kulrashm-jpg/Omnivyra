@@ -1,6 +1,6 @@
 -- ROLLBACK for 20270111000000_media_h3_storage_quarantine_policies.sql
 --
--- Removes the four MEDIA-H3 restrictive policies. It does NOT delete the
+-- Removes the five MEDIA-H3 restrictive policies. It does NOT delete the
 -- `media-quarantine` bucket or its objects (they may hold uploads awaiting
 -- finalize; deleting a bucket with objects fails anyway). Rolling back the
 -- policies while the H-3 application code is deployed is safe for the app (it
@@ -19,5 +19,6 @@ BEGIN
   EXECUTE 'DROP POLICY IF EXISTS media_h3_deny_client_update ON storage.objects';
   EXECUTE 'DROP POLICY IF EXISTS media_h3_deny_client_delete ON storage.objects';
   EXECUTE 'DROP POLICY IF EXISTS media_h3_deny_client_quarantine_select ON storage.objects';
+  EXECUTE 'DROP POLICY IF EXISTS media_h3_deny_client_delivery_select ON storage.objects';
 END
 $media_h3_rb$;

@@ -75,5 +75,18 @@ BEGIN
       AS RESTRICTIVE FOR SELECT TO anon, authenticated
       USING (bucket_id <> 'media-quarantine')
   $p$;
+  -- H-3 review (Agent A): no client role may LIST/query media-uploads rows.
+  -- Public object URLs (/object/public/..., /render/image/public/...) are
+  -- served by storage-api as superuser after checking buckets.public, so they
+  -- do not need a client SELECT policy. A permissive dashboard SELECT policy
+  -- (the common "Public can read" example) otherwise lets anyone enumerate
+  -- every tenant's object keys via /object/list/media-uploads, defeating the
+  -- unguessable object names that are the only read control on this bucket.
+  EXECUTE 'DROP POLICY IF EXISTS media_h3_deny_client_delivery_select ON storage.objects';
+  EXECUTE $p$
+    CREATE POLICY media_h3_deny_client_delivery_select ON storage.objects
+      AS RESTRICTIVE FOR SELECT TO anon, authenticated
+      USING (bucket_id <> 'media-uploads')
+  $p$;
 END
 $media_h3$;
