@@ -30,7 +30,9 @@
 --                only by the erasure flow (pi_erasure_authorizations, scope
 --                'legacy_leads', for this lead's tenant AND person), and only
 --                as the sole change in that statement. Once erased, a lead can
---                never be re-linked to a person (no re-identification by relink).
+--                never be re-linked to a person (no re-identification by relink)
+--                and never moved to another tenant (J1 ER-3: company_id is
+--                frozen for every role, service_role included).
 --   4. pi_erasure_detach_legacy_leads(org, person) — owner-only (no client
 --      role can execute it); called by pi_person_erasure_finalize in the same
 --      transaction as the person delete. The FK's SET NULL then nulls the link.
@@ -85,6 +87,12 @@ BEGIN
     IF NEW.unified_person_id IS NOT NULL
        AND NEW.unified_person_id IS DISTINCT FROM OLD.unified_person_id THEN
       RAISE EXCEPTION 'leads: lead % belonged to an erased person and cannot be re-linked', OLD.id
+        USING ERRCODE = '23514';
+    END IF;
+    -- J1 ER-3: an erased lead stays in the tenant it was erased in (no role may
+    -- move it; the erasure ledger and provenance event are keyed by that tenant).
+    IF NEW.company_id IS DISTINCT FROM OLD.company_id THEN
+      RAISE EXCEPTION 'leads: lead % belonged to an erased person and cannot change tenant', OLD.id
         USING ERRCODE = '23514';
     END IF;
     RETURN NEW;

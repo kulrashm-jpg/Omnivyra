@@ -25,6 +25,12 @@ async function erase(org: string, person: string): Promise<any> {
 }
 
 describe('outreach_decisions person reference — owner-selectable nulling at erasure', () => {
+  it('J1 ER-1: ws3_reject_mutation keeps the SEC-B search_path pin (pg_catalog, public) and stays SECURITY INVOKER', async () => {
+    const f = await one(`SELECT proconfig, prosecdef FROM pg_proc WHERE oid = 'public.ws3_reject_mutation()'::regprocedure`);
+    expect(f.proconfig).toEqual(['search_path=pg_catalog, public']);
+    expect(f.prosecdef).toBe(false);
+  });
+
   it('the erased person\'s decisions lose person_id only; everything else identical; others untouched', async () => {
     await inRollback(async () => {
       await seedTenants();

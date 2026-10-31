@@ -606,3 +606,94 @@ describe('ledger — concurrent requests for the same erasure (two sessions)', (
     expect(await count(`SELECT count(*) n FROM public.contact_governance_records WHERE organization_id=$1 AND source='person_erasure'`, [ORG_C], c1)).toBe(1);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// J1 review fixes (ER-3, ER-4, A6-1 integration)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('J1 fixes — erased-lead tenant freeze, provenance reason, inconsistency cap, bridge scope', () => {
+  it('ER-3: an erased lead cannot be moved to another tenant (superuser and service_role)', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const l = await legacyLead(ORG_A, p);
+      await eraseFully(ORG_A, p);
+      expect(await attempt('UPDATE public.leads SET company_id=$2 WHERE id=$1', [l, ORG_B])).toBe('23514');
+      // SELECT too: an UPDATE ... WHERE id reads the row (without it the refusal would be a 42501, not the guard).
+      await db.query('GRANT SELECT, UPDATE ON public.leads TO service_role');
+      expect(await asServiceRole('UPDATE public.leads SET name=name WHERE id=$1', [l])).toBe('ok');
+      expect(await asServiceRole('UPDATE public.leads SET company_id=$2 WHERE id=$1', [l, ORG_B])).toBe('23514');
+      expect((await one('SELECT company_id FROM public.leads WHERE id=$1', [l])).company_id).toBe(ORG_A);
+    });
+  });
+
+  it('ER-3: a LIVE lead may still change tenant as before (the freeze applies only after erasure)', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const l = await legacyLead(ORG_A, p);
+      // Only the erasure guard is under test here: the tenant-composite FK would refuse
+      // a person of tenant A on a lead of tenant B, so the person moves with it.
+      const pb = await newPerson(ORG_B);
+      expect(await attempt('UPDATE public.leads SET company_id=$2, unified_person_id=$3 WHERE id=$1', [l, ORG_B, pb])).toBe('ok');
+    });
+  });
+
+  it('ER-4(a): the caller\'s free-text reason is NOT copied into the provenance erasure event', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const req: Req = (await one(`SELECT public.pi_person_erasure_open($1,$2,'Jane Roe asked on the phone','dsar-operator') r`, [ORG_A, p])).r;
+      await appSteps(ORG_A, p, req);
+      const fin = await finalize(ORG_A, req);
+      const ev = await one('SELECT reason, to_jsonb(e) j FROM public.prospect_provenance_erasures e WHERE id=$1', [fin.provenance_erasure_id]);
+      expect(ev.reason).toBe(`person erased: erasure request ${req.request_id}`);
+      expect(JSON.stringify(ev.j)).not.toMatch(/jane|phone/i);
+    });
+  });
+
+  it('ER-4(b): the 1000-row cap applies to the stamped-leads arm only, not to the whole report', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const crashed = await newPerson(ORG_A);
+      const r = await open(ORG_A, crashed);
+      await db.query(`UPDATE public.person_erasure_requests SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE id=$1`, [r.request_id]);
+      // 1001 impossible-through-the-flow rows (stamped + person present), planted with triggers off.
+      await db.query('SET LOCAL session_replication_role = replica');
+      await db.query(
+        `INSERT INTO public.leads (company_id, name, email, unified_person_id, person_erased_at)
+         SELECT $1, 'x', 'x' || g || '@example.test', $2, now() FROM generate_series(1, 1001) g`, [ORG_A, p]);
+      await db.query('SET LOCAL session_replication_role = origin');
+      const rows = (await db.query('SELECT request_id, problem FROM public.pi_person_erasure_inconsistencies($1)', [ORG_A])).rows;
+      expect(rows.filter((x: any) => x.problem === 'legacy_lead_stamped_but_person_present')).toHaveLength(1000);
+      expect(rows).toContainEqual({ request_id: r.request_id, problem: 'lease_expired_without_outcome' });
+      expect(rows).toHaveLength(1001);
+    });
+  });
+
+  it('A6-1 integration: finalize holds scope bridge_handoffs for exactly the erased person DURING the delete, and releases it', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const p = await newPerson(ORG_A);
+      const other = await newPerson(ORG_A);
+      await db.query('CREATE TEMP TABLE j1_bridge_scope (person uuid, held boolean, held_other boolean)');
+      await db.query(`CREATE FUNCTION pg_temp.j1_capture() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          INSERT INTO j1_bridge_scope VALUES (OLD.id,
+            public.pi_erasure_authorization_held('bridge_handoffs', OLD.company_id, OLD.id),
+            public.pi_erasure_authorization_held('bridge_handoffs', OLD.company_id, '${other}'::uuid));
+          RETURN OLD;
+        END $$`);
+      await db.query('CREATE TRIGGER zz_j1_capture BEFORE DELETE ON public.unified_persons FOR EACH ROW EXECUTE FUNCTION pg_temp.j1_capture()');
+      expect((await eraseFully(ORG_A, p)).deleted).toBe(true);
+      expect((await db.query('SELECT person, held, held_other FROM j1_bridge_scope')).rows).toEqual([{ person: p, held: true, held_other: false }]);
+      expect(await count('SELECT count(*) n FROM public.pi_erasure_authorizations')).toBe(0);
+      // a plain delete of a person (merge, operator SQL) holds no such scope
+      await db.query('DELETE FROM j1_bridge_scope');
+      await db.query('DELETE FROM public.unified_persons WHERE id=$1', [other]);
+      expect((await db.query('SELECT held FROM j1_bridge_scope')).rows).toEqual([{ held: false }]);
+      await db.query('DROP TRIGGER zz_j1_capture ON public.unified_persons');
+    });
+  });
+});

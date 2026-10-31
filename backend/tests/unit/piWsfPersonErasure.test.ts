@@ -59,6 +59,8 @@ let assertionUpdateError: { code?: string; message: string } | null = null;
 /** Ordered record of the steps the double observed, for the ordering case. */
 let observed: string[] = [];
 let nextId = 1;
+/** J1 ER-2: every pi_person_erasure_mark call (step + count). */
+const mockMarkCalls: Array<Record<string, unknown>> = [];
 
 /**
  * `contact_governance_has_anchor`.
@@ -141,7 +143,7 @@ jest.mock('../../db/writeOwner', () => ({
       }
       return { data: { request_id: `req:${String(args.p_organization_id)}:${String(args.p_person_id)}`, lease_token: 'lease-1', resumed: false }, error: null };
     }
-    if (fn === 'pi_person_erasure_mark') return { data: null, error: null };
+    if (fn === 'pi_person_erasure_mark') { mockMarkCalls.push(args); return { data: null, error: null }; }
     if (fn === 'pi_person_erasure_finalize') {
       const [, org, personId] = String(args.p_request_id).split(':');
       const wo = jest.requireMock('../../db/writeOwner') as { ownedDbTable: (n: string) => any };
@@ -280,6 +282,7 @@ import { loadGovernanceRecords } from '../../services/prospectIdentity/contactGo
 import { mayContact } from '../../services/prospectIdentity/contactGovernance';
 
 beforeEach(() => {
+  mockMarkCalls.length = 0;
   governance = [];
   claims = [];
   persons = [
@@ -740,6 +743,23 @@ describe('PI/WS-F — tenant isolation, idempotency, fail-closed', () => {
     expect(res.reanchored).toEqual([
       expect.objectContaining({ target: 'dup@x.test', newRecordId: existing.id, outcome: 'already_present' }),
     ]);
+  });
+
+  it('J1 ER-2: the governance_reanchored mark counts only records THIS attempt created (a resumed run does not re-count already_present)', async () => {
+    seedClaim(ORG_A, PERSON_A, 'email', 'dup@x.test');
+    seedClaim(ORG_A, PERSON_A, 'email', 'fresh@x.test');
+    await recordContactGovernance({
+      organizationId: ORG_A, governanceType: 'unsubscribe', channel: 'email',
+      target: 'dup@x.test', source: 'webhook:ses',
+    });
+    await recordContactGovernance({
+      organizationId: ORG_A, governanceType: 'unsubscribe', channel: 'email',
+      personId: PERSON_A, source: 'manual',
+    });
+    const res = await erasePerson({ organizationId: ORG_A, personId: PERSON_A, reason: 'dsar', now: NOW });
+    expect(res.reanchored.map((r) => r.outcome).sort()).toEqual(['already_present', 'created']);
+    const mark = mockMarkCalls.find((a) => a.p_step === 'governance_reanchored');
+    expect(mark?.p_count).toBe(1);
   });
 
   it('the person is NOT deleted when carrying an instruction forward fails', async () => {

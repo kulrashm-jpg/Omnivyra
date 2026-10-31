@@ -308,7 +308,16 @@ async function runErasureSteps(
       }
     }
   }
-  await markErasureStep(input.organizationId, request, 'governance_reanchored', reanchored.length);
+  // J1 ER-2: the ledger ADDS this count across attempts (reanchored_count +
+  // p_count). A resumed attempt finds the records an earlier attempt created as
+  // `already_present`; counting those again over-summed. Report only what THIS
+  // attempt created, so the ledger total is the number of carried-forward
+  // records the erasure request created. (Step 4 already reports only rows it
+  // newly revoked: rows revoked by an earlier attempt are skipped as history.)
+  await markErasureStep(
+    input.organizationId, request, 'governance_reanchored',
+    reanchored.filter((r) => r.outcome === 'created').length,
+  );
 
   // 4. Close out the person-anchored originals. Revoked, never deleted — and
   //    revocation is what removes them from `uq_contact_governance_identity`,

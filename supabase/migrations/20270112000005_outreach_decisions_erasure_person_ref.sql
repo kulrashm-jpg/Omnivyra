@@ -26,6 +26,16 @@
 -- identity_anchor / identity_degraded are left as written: they say HOW the
 -- decision was anchored, not WHO, and outreach_decisions_identity_coherent
 -- constrains them, not person_id.
+--
+-- J1 ER-1 (edited in place on privacy/erasure-remediation-fixes; this migration
+-- is unapplied everywhere). CREATE OR REPLACE resets proconfig, so the
+-- replacement carries the SAME pin SEC-B (20270110000003, sec/integration) sets
+-- with ALTER FUNCTION ... SET search_path = pg_catalog, public. Every non-catalog
+-- reference in the body is schema-qualified (public.pi_erasure_authorization_held);
+-- to_jsonb / ~* resolve in pg_catalog. $verify$ asserts the pin. Applied after
+-- SEC-B (the version order) or before it (ledger desync), the final proconfig
+-- is search_path=pg_catalog, public either way, which is what SEC-B's
+-- preflight/postcondition expect for this function.
 
 BEGIN;
 
@@ -40,7 +50,9 @@ BEGIN
 END
 $preflight$;
 
-CREATE OR REPLACE FUNCTION public.ws3_reject_mutation() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION public.ws3_reject_mutation() RETURNS trigger
+SET search_path = pg_catalog, public
+AS $$
 DECLARE
   v_ok boolean := false;
 BEGIN
@@ -101,6 +113,14 @@ BEGIN
    WHERE p.proname = 'ws3_reject_mutation' AND NOT t.tgisinternal;
   IF n < 5 THEN
     RAISE EXCEPTION 'decision-ref postcondition: ws3_reject_mutation triggers missing (found %)', n;
+  END IF;
+  -- J1 ER-1: the SEC-B search_path pin survives the CREATE OR REPLACE.
+  IF (SELECT proconfig FROM pg_proc WHERE oid = 'public.ws3_reject_mutation()'::regprocedure)
+       IS DISTINCT FROM ARRAY['search_path=pg_catalog, public'] THEN
+    RAISE EXCEPTION 'decision-ref postcondition: ws3_reject_mutation search_path is not pinned to pg_catalog, public';
+  END IF;
+  IF (SELECT prosecdef FROM pg_proc WHERE oid = 'public.ws3_reject_mutation()'::regprocedure) THEN
+    RAISE EXCEPTION 'decision-ref postcondition: ws3_reject_mutation must stay SECURITY INVOKER';
   END IF;
 END
 $verify$;

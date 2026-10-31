@@ -31,8 +31,18 @@
 -- the caller's reason, attempt count, step timestamps, counts, the provenance
 -- erasure event id, the retention policy each hook applied, the last error CODE
 -- (an SQLSTATE or a fixed label, never a message). A completed request holds NO
--- person id (CHECK). The caller must not put personal data into `reason` (the
--- same contract as prospect_provenance_erasures.reason, which receives it too).
+-- person id (CHECK). The caller must not put personal data into `reason`;
+-- J1 ER-4: the free text is NOT copied into prospect_provenance_erasures any
+-- more - that record receives the fixed text 'person erased: erasure request
+-- <request id>' (the id resolves to this ledger row, where the bounded reason
+-- stays under owner-only access). `requested_by` is a ROLE/OPERATOR LABEL
+-- (e.g. 'dsar-operator', 'privacy-team'), never a personal identifier; it is
+-- still passed to the provenance event as its actor label.
+--
+-- J1 A6-1 integration: finalize also authorizes scope 'bridge_handoffs' for the
+-- person around the DELETE, so the A6-10 handoff guard (20270113000000, landing
+-- after this) can tell an erasure from any other delete of the person (e.g.
+-- merge_unified_persons). Without A6-10 the scope is unused and harmless.
 
 BEGIN;
 
@@ -333,7 +343,7 @@ BEGIN
   -- step 6
   v_prov := public.pi_erase_prospect_provenance(
     p_organization_id, v_person, ARRAY[]::uuid[],
-    'person erased: ' || v_req.reason, v_req.requested_by);
+    'person erased: erasure request ' || v_req.id::text, v_req.requested_by);   -- J1 ER-4: no free text
   IF v_prov IS NULL OR (v_prov ->> 'erasure_id') IS NULL THEN
     RAISE EXCEPTION 'person_erasure:provenance_returned_no_event' USING ERRCODE = 'P0001';
   END IF;
@@ -345,6 +355,9 @@ BEGIN
            || public.pi_person_erasure_decision_ref_policy(p_organization_id, v_person); -- 6e
 
   -- step 7, SAME transaction. Any failure re-raises and rolls back 6..6e.
+  -- 'bridge_handoffs': the erasure signal the A6-10 handoff guard requires to
+  -- admit its ON DELETE SET NULL (J1 A6-1); released right after the delete.
+  PERFORM public.pi_erasure_authorize('bridge_handoffs', p_organization_id, v_person);
   BEGIN
     DELETE FROM public.unified_persons p WHERE p.company_id = p_organization_id AND p.id = v_person;
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -357,6 +370,7 @@ BEGIN
     RAISE EXCEPTION 'person_erasure:delete_blocked_by %', v_con
       USING ERRCODE = v_state, CONSTRAINT = v_con;
   END;
+  PERFORM public.pi_erasure_release('bridge_handoffs', p_organization_id, v_person);
   IF v_n <> 1 THEN
     RAISE EXCEPTION 'person_erasure:person_not_deleted' USING ERRCODE = 'P0002';
   END IF;
@@ -407,12 +421,13 @@ AS $fn$
      AND NOT EXISTS (SELECT 1 FROM public.prospect_provenance_erasures e
                       WHERE e.id = r.provenance_erasure_id AND e.organization_id = r.organization_id)
   UNION ALL
-  -- a lead stamped erased whose person still exists (cannot arise through finalize)
-  SELECT NULL::uuid, 'legacy_lead_stamped_but_person_present'
-    FROM public.leads l
-   WHERE l.company_id = p_organization_id AND l.person_erased_at IS NOT NULL
-     AND l.unified_person_id IS NOT NULL
-   LIMIT 1000;
+  -- a lead stamped erased whose person still exists (cannot arise through finalize).
+  -- J1 ER-4(b): the cap applies to THIS arm only, not to the whole UNION.
+  (SELECT NULL::uuid, 'legacy_lead_stamped_but_person_present'
+     FROM public.leads l
+    WHERE l.company_id = p_organization_id AND l.person_erased_at IS NOT NULL
+      AND l.unified_person_id IS NOT NULL
+    LIMIT 1000);
 $fn$;
 
 DO $grants_fn$
