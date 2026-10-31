@@ -12,6 +12,8 @@ const mockMem = createMemoryStorage(['media-uploads']);
 let mockRows: Record<string, any> = {};
 const mockWrites: Array<Record<string, any>> = [];
 let mockWriteError: { message: string } | null = null;
+/** J1 H3-2: runs when a row write is attempted (models a concurrent request committing first). */
+let mockOnWrite: (() => void) | null = null;
 let mockUser: { id: string } | null = { id: 'user-a' };
 let mockAuthorized = true;
 
@@ -35,6 +37,7 @@ jest.mock('../../db/writeOwner', () => ({
       update: (p: any) => { payload = p; return api; },
       eq: () => api,
       then(resolve: any) {
+        if (mockOnWrite) mockOnWrite();
         if (payload && !mockWriteError) mockWrites.push(payload);
         return Promise.resolve({ data: null, error: mockWriteError }).then(resolve);
       },
@@ -90,6 +93,7 @@ beforeEach(() => {
   mockRows = { daily_content_plans: row(), campaigns: { company_id: 'company-a' } };
   mockWrites.length = 0;
   mockWriteError = null;
+  mockOnWrite = null;
   mockUser = { id: 'user-a' };
   mockAuthorized = true;
   (global as any).fetch = jest.fn(mockMem.fetchImpl);
@@ -247,6 +251,23 @@ describe('idempotency, replay and failure safety', () => {
   });
 });
 
+/** Makes the next quarantine move lose a race: a concurrent winner moves Q/KEY to D/KEY first. */
+function winnerMovesFirst(key = KEY) {
+  const realFrom = mockMem.storage.from;
+  mockMem.storage.from = (b: string) => {
+    const api = realFrom(b);
+    if (b !== Q) return api;
+    return {
+      ...api,
+      async move(from: string, to: string, opts?: { destinationBucket?: string }) {
+        mockMem.storage.from = realFrom;
+        await realFrom(Q).move(key, key, { destinationBucket: D });
+        return realFrom(Q).move(from, to, opts);
+      },
+    } as typeof api;
+  };
+}
+
 // H-3 independent review (Agent A) — concurrency cases added by the reviewer (not independently reviewed).
 describe('concurrent finalize of the same session (review additions)', () => {
   it('two concurrent finalizes: both succeed, exactly one delivery object, no 503 for the loser', async () => {
@@ -258,13 +279,66 @@ describe('concurrent finalize of the same session (review additions)', () => {
   });
   it('DB write failure in the request that found the session ALREADY promoted does not delete the winner\'s public object', async () => {
     // The winner promoted and recorded the row; this request still saw the pre-promotion row.
-    mockMem.put(D, KEY, MP4, 'video/mp4');
+    // J1 H3-1: modelled as the real race - this request validated the quarantined
+    // object, then the winner's MOVE consumed it before this request's move.
     mockMem.put(Q, KEY, MP4, 'video/mp4');
+    winnerMovesFirst();
     mockWriteError = { message: 'write failed' };
     const r = await finalize(body());
     expect(r.statusCode).toBe(500);
     expect(mockMem.has(D, KEY)).toBe(true);
     expect(mockMem.has(Q, KEY)).toBe(false);
+  });
+});
+
+describe('J1 H3-1 - an object pre-planted at the delivery key is never adopted', () => {
+  it('ATTACK: valid file in quarantine + arbitrary bytes pre-planted at media-uploads/<key> -> 409, nothing recorded or scheduled, planted object untouched', async () => {
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { autoScheduleReadyCreatorRowById } = jest.requireMock('../../services/creator/creatorRowScheduler');
+    (autoScheduleReadyCreatorRowById as jest.Mock).mockClear();
+    mockMem.put(Q, KEY, MP4, 'video/mp4');
+    const planted = Buffer.concat([HTML, Buffer.alloc(200, 7)]);
+    mockMem.put(D, KEY, planted, 'video/mp4'); // written with the publishable key before 20270111000000
+    const r = await finalize(body());
+    expect(r.statusCode).toBe(409);
+    expect(r.body.code).toBe('UPLOAD_DELIVERY_CONFLICT');
+    expect(mockWrites).toEqual([]);
+    expect(autoScheduleReadyCreatorRowById).not.toHaveBeenCalled();
+    expect(mockMem.objects.get(`${D}/${KEY}`)?.bytes.equals(planted)).toBe(true);
+    expect(mockMem.events.some((e) => e.startsWith(`remove:${D}:`))).toBe(false);
+    expect(errSpy.mock.calls.some((c) => String(c[0]).includes('[security][media-h3]') && (c[1] as any)?.event === 'media_h3_delivery_conflict')).toBe(true);
+  });
+  it('ATTACK: planted object with the SAME size, type and head bytes as the validated file (only the tail differs) -> 409', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockMem.put(Q, KEY, MP4, 'video/mp4');
+    const planted = Buffer.from(MP4); planted[planted.length - 1] ^= 0xff;
+    mockMem.put(D, KEY, planted, 'video/mp4');
+    const r = await finalize(body());
+    expect(r.statusCode).toBe(409);
+    expect(mockWrites).toEqual([]);
+  });
+});
+
+describe('J1 H3-2 - the winner never deletes an object a committed row references', () => {
+  it('this request promoted, its row write failed, but a concurrent finalize committed a row pointing at the key -> delivery object kept', async () => {
+    mockMem.put(Q, KEY, MP4, 'video/mp4');
+    mockWriteError = { message: 'write failed' };
+    mockOnWrite = () => {
+      mockRows.daily_content_plans = row({
+        creator_lifecycle_state: 'ready_for_schedule', upload_quarantine_promoted: true,
+        upload_storage_bucket: D, upload_storage_object_path: KEY, upload_consumed_object_paths: [KEY],
+      });
+    };
+    const r = await finalize(body());
+    expect(r.statusCode).toBe(500);
+    expect(mockMem.has(D, KEY)).toBe(true);
+  });
+  it('row write failed and NO committed row references the key -> delivery object rolled back (unchanged behaviour)', async () => {
+    mockMem.put(Q, KEY, MP4, 'video/mp4');
+    mockWriteError = { message: 'write failed' };
+    const r = await finalize(body());
+    expect(r.statusCode).toBe(500);
+    expect(mockMem.has(D, KEY)).toBe(false);
   });
 });
 

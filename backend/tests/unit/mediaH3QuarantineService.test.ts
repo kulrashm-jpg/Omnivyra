@@ -15,7 +15,7 @@ jest.mock('../../db/supabaseClient', () => ({ supabase: { storage: { from: (b: s
 import {
   QUARANTINE_BUCKET, DELIVERY_BUCKET, MAX_QUARANTINE_BYTES,
   mintQuarantineObjectPath, validateQuarantinedMedia, promoteQuarantinedMedia,
-  appendConsumedObjectPath, CONSUMED_SESSIONS_CAP,
+  appendConsumedObjectPath, CONSUMED_SESSIONS_CAP, sha256Hex,
 } from '../../services/activityWorkspace/quarantinedMediaUpload';
 import { isActivityObjectPath } from '../../services/activityWorkspace/activityObjectPath';
 
@@ -51,7 +51,7 @@ describe('validateQuarantinedMedia — stored bytes and stored metadata, never t
   it('genuine mp4 → ok, size from storage (not the client)', async () => {
     mockMem.put(QUARANTINE_BUCKET, KEY, MP4, 'video/mp4');
     const r = await validate('video/mp4');
-    expect(r).toEqual({ ok: true, category: 'video', mime: 'video/mp4', sizeBytes: MP4.length });
+    expect(r).toEqual({ ok: true, category: 'video', mime: 'video/mp4', sizeBytes: MP4.length, headSha256: sha256Hex(MP4.subarray(0, 32)) });
     // Read through a short-lived signed URL with a Range header — the bucket is private.
     expect(mockMem.events.some((e) => e.startsWith(`sign:${QUARANTINE_BUCKET}:${KEY}:60`))).toBe(true);
   });
@@ -169,9 +169,10 @@ describe('promoteQuarantinedMedia', () => {
     expect(await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any })).toMatchObject({ ok: true, alreadyPromoted: false });
   });
   it('a concurrent duplicate (delivery already holds the key) → ok, alreadyPromoted, quarantine leftover discarded, no overwrite', async () => {
-    mockMem.put(DELIVERY_BUCKET, KEY, MP4, 'video/mp4');
+    // J1 H3-1: the real race - validated here, then a concurrent winner's MOVE consumed the source.
     mockMem.put(QUARANTINE_BUCKET, KEY, MP4, 'video/mp4');
     const v = await validate('video/mp4');
+    await mockMem.storage.from(QUARANTINE_BUCKET).move(KEY, KEY, { destinationBucket: DELIVERY_BUCKET });
     expect(await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any })).toEqual({ ok: true, deliveryPath: KEY, alreadyPromoted: true });
     expect(mockMem.has(QUARANTINE_BUCKET, KEY)).toBe(false);
   });
@@ -184,6 +185,82 @@ describe('promoteQuarantinedMedia', () => {
     expect(p.ok).toBe(true);
     expect(mockMem.objects.get(`${DELIVERY_BUCKET}/${IMG}`)?.bytes.equals((v as any).normalized)).toBe(true);
     expect(mockMem.has(QUARANTINE_BUCKET, IMG)).toBe(false);
+  });
+});
+
+describe('J1 H3-1 - promotion never adopts a delivery object it did not validate', () => {
+  const IMG = 'company-a/plan-a/image/1700000000000-0123456789abcdef0123456789abcdef.png';
+  const conflictLogged = (spy: jest.SpyInstance) =>
+    spy.mock.calls.some((c) => String(c[0]).includes('[security][media-h3]') && (c[1] as any)?.event === 'media_h3_delivery_conflict');
+
+  it('ATTACK (video): valid quarantined file + arbitrary bytes pre-planted at the delivery key -> conflict, planted bytes untouched, quarantine kept private', async () => {
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockMem.put(QUARANTINE_BUCKET, KEY, MP4, 'video/mp4');
+    mockMem.put(DELIVERY_BUCKET, KEY, RANDOM, 'video/mp4');
+    const v = await validate('video/mp4');
+    expect(v.ok).toBe(true);
+    const p = await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any });
+    expect(p).toMatchObject({ ok: false, conflict: true });
+    expect(mockMem.objects.get(`${DELIVERY_BUCKET}/${KEY}`)?.bytes.equals(RANDOM)).toBe(true);
+    expect(mockMem.has(QUARANTINE_BUCKET, KEY)).toBe(true);
+    expect(mockMem.events.some((e) => e.startsWith(`remove:${DELIVERY_BUCKET}:`))).toBe(false);
+    expect(conflictLogged(errSpy)).toBe(true);
+  });
+  it('ATTACK (video): identical size + type + head, different tail, quarantine source not consumed -> conflict', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockMem.put(QUARANTINE_BUCKET, KEY, MP4, 'video/mp4');
+    const planted = Buffer.from(MP4); planted[planted.length - 1] ^= 0xff;
+    mockMem.put(DELIVERY_BUCKET, KEY, planted, 'video/mp4');
+    const v = await validate('video/mp4');
+    const p = await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any });
+    expect(p).toMatchObject({ ok: false, conflict: true, reason: expect.stringContaining('quarantine_source_not_consumed') });
+  });
+  it('ATTACK (video): quarantine source gone but delivery head bytes differ -> conflict', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockMem.put(QUARANTINE_BUCKET, KEY, MP4, 'video/mp4');
+    const v = await validate('video/mp4');
+    mockMem.objects.delete(`${QUARANTINE_BUCKET}/${KEY}`);
+    const planted = Buffer.from(MP4); planted[0] = 0x7f;
+    mockMem.put(DELIVERY_BUCKET, KEY, planted, 'video/mp4');
+    expect(await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any })).toMatchObject({ ok: false, conflict: true, reason: expect.stringContaining('head_sha256_differs') });
+  });
+  it.each([
+    ['different size', Buffer.concat([MP4, Buffer.alloc(1)]), 'video/mp4', 'size_differs'],
+    ['different content type', MP4, 'text/html', 'content_type_differs'],
+  ])('ATTACK (video): %s at the delivery key -> conflict', async (_n, bytes, type, reason) => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockMem.put(QUARANTINE_BUCKET, KEY, MP4, 'video/mp4');
+    mockMem.put(DELIVERY_BUCKET, KEY, bytes as Buffer, type as string);
+    const v = await validate('video/mp4');
+    expect(await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any })).toMatchObject({ ok: false, conflict: true, reason: expect.stringContaining(reason as string) });
+  });
+  it('ATTACK (image): planted bytes of the same length and type but a different sha256 -> conflict', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const png = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#fff' } }).png().toBuffer();
+    mockMem.put(QUARANTINE_BUCKET, IMG, png, 'image/png');
+    const v = await validate('image/png', 'image', IMG);
+    expect(v.ok).toBe(true);
+    const planted = Buffer.from((v as any).normalized); planted[planted.length - 5] ^= 0xff;
+    mockMem.put(DELIVERY_BUCKET, IMG, planted, 'image/png');
+    expect(await promoteQuarantinedMedia({ objectPath: IMG, validated: v as any })).toMatchObject({ ok: false, conflict: true, reason: expect.stringContaining('sha256_differs') });
+    expect(mockMem.objects.get(`${DELIVERY_BUCKET}/${IMG}`)?.bytes.equals(planted)).toBe(true);
+  });
+  it('image race: delivery already holds exactly the re-encoded bytes -> alreadyPromoted', async () => {
+    const png = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#fff' } }).png().toBuffer();
+    mockMem.put(QUARANTINE_BUCKET, IMG, png, 'image/png');
+    const v = await validate('image/png', 'image', IMG);
+    mockMem.put(DELIVERY_BUCKET, IMG, Buffer.from((v as any).normalized), 'image/png');
+    expect(await promoteQuarantinedMedia({ objectPath: IMG, validated: v as any })).toEqual({ ok: true, deliveryPath: IMG, alreadyPromoted: true });
+    expect(mockMem.has(QUARANTINE_BUCKET, IMG)).toBe(false);
+  });
+  it('delivery metadata unreadable after a failed move -> transient failure (not adopted, not a conflict)', async () => {
+    mockMem.put(QUARANTINE_BUCKET, KEY, MP4, 'video/mp4');
+    const v = await validate('video/mp4');
+    mockMem.put(DELIVERY_BUCKET, KEY, MP4, 'video/mp4');
+    mockMem.faults.info = 'upstream timeout';
+    const p = await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any });
+    expect(p.ok).toBe(false);
+    expect((p as any).conflict).toBeUndefined();
   });
 });
 

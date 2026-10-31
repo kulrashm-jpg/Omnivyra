@@ -66,3 +66,36 @@ describe('MEDIA-H3 storage policy migration', () => {
     expect(rollback).toMatch(/to_regclass\('storage\.objects'\) IS NULL/);
   });
 });
+
+/**
+ * J1 H3-1 deployment guard (documentation-as-test). The H-3 code must not ship
+ * before 20270111000000 is applied. What enforces that today:
+ *   - the PRIVATE `media-quarantine` bucket is created ONLY by this migration,
+ *     so before it is applied `upload-media-authorize` cannot mint a signed
+ *     upload token (503; mediaH3UploadAuthorize.test.ts) and finalize finds no
+ *     quarantined object (404): the new flow is inert, it does not fail open;
+ *   - the rollback deliberately keeps the bucket and drops only the deny
+ *     policies, so AFTER a rollback the flow keeps running while clients may
+ *     again write `media-uploads`. That window is what J1 H3-1 exploited; the
+ *     in-code control for it is verifyExistingDeliveryObject (finalize refuses a
+ *     delivery object that is not the validated one).
+ * There is no runtime probe of the storage policies (the app has no read access
+ * to pg_policies through PostgREST); the release checklist must apply the
+ * migration first. J1-FIXES.md records this.
+ */
+describe('J1 H3-1 deployment guard: code-before-migration is inert, rollback window is covered in code', () => {
+  it('no other migration creates the media-quarantine bucket', () => {
+    const creators = fs.readdirSync(MIGRATIONS)
+      .filter((f) => f.endsWith('.sql'))
+      .filter((f) => /INSERT INTO storage\.buckets[\s\S]*?'media-quarantine'/i.test(fs.readFileSync(path.join(MIGRATIONS, f), 'utf8')));
+    expect(creators).toEqual(migrationFile);
+  });
+  it('the rollback keeps the bucket (so the in-code delivery check is the control after a rollback)', () => {
+    const rollbackSql = fs.readFileSync(path.join(ROLLBACKS, rollbackFile[0]), 'utf8');
+    expect(rollbackSql).not.toMatch(/storage\.buckets/i);
+    const service = fs.readFileSync(path.resolve(__dirname, '../../services/activityWorkspace/quarantinedMediaUpload.ts'), 'utf8');
+    expect(service).toMatch(/export async function verifyExistingDeliveryObject/);
+    expect(service).toMatch(/const match = await verifyExistingDeliveryObject\(objectPath, validated\)/);
+  });
+});
+

@@ -19,6 +19,8 @@
  *   unrecognized_bytes    bytes match no allowed signature at all
  *   undecodable           image bytes are refused by the safe decoder gate
  *   read_failed           head bytes could not be read (transient; re-run)
+ *   size_unknown          storage reports no size (J1 H3-4): never treated as 0,
+ *                         never fully downloaded; needs review
  */
 import { nonImageBytesMatchDeclaredType } from '../../../lib/security/mediaByteSignature';
 import { sniffSafeImageMime } from '../../../lib/security/safeImageDecode';
@@ -36,8 +38,13 @@ export type RevalidationIO = {
   bucketIsPublic(bucket: string): Promise<boolean | null>;
   /** First `n` bytes, or null on read failure. */
   readHead(bucket: string, name: string, n: number): Promise<Buffer | null>;
-  /** Full bytes for small images only (decode check); null on failure. */
-  readAll?(bucket: string, name: string): Promise<Buffer | null>;
+  /**
+   * Full bytes for small images only (decode check), read with a HARD cap of
+   * `maxBytes` (J1 H3-4): an implementation must stop reading and return
+   * 'too_large' once more than `maxBytes` bytes arrive, whatever the listing
+   * claimed. null on read failure.
+   */
+  readAll?(bucket: string, name: string, maxBytes: number): Promise<Buffer | null | 'too_large'>;
   /** Set of object keys that carry H-3 provenance. */
   provenanceKeys(): Promise<Set<string>>;
   /** Optional decode probe for images (throws/false = undecodable). */
@@ -48,7 +55,7 @@ export type RevalidationIO = {
 
 export type ObjectFlag =
   | 'has_provenance' | 'no_provenance' | 'publicly_accessible'
-  | 'format_mismatch' | 'unrecognized_bytes' | 'undecodable' | 'read_failed';
+  | 'format_mismatch' | 'unrecognized_bytes' | 'undecodable' | 'read_failed' | 'size_unknown';
 
 export type ObjectReport = {
   name: string;
@@ -74,7 +81,7 @@ export type RevalidationReport = {
 
 export const HEAD_BYTES = 32;
 export const DECODE_MAX_BYTES = 25 * 1024 * 1024;
-const ALL_FLAGS: ObjectFlag[] = ['has_provenance', 'no_provenance', 'publicly_accessible', 'format_mismatch', 'unrecognized_bytes', 'undecodable', 'read_failed'];
+const ALL_FLAGS: ObjectFlag[] = ['has_provenance', 'no_provenance', 'publicly_accessible', 'format_mismatch', 'unrecognized_bytes', 'undecodable', 'read_failed', 'size_unknown'];
 
 function norm(m: string | null): string {
   return String(m ?? '').trim().toLowerCase().split(';')[0].trim();
@@ -108,7 +115,7 @@ export function classifyBytes(head: Buffer, storedMime: string | null): { sniffe
 }
 
 export function needsReview(flags: ObjectFlag[]): boolean {
-  return flags.some((f) => f === 'no_provenance' || f === 'format_mismatch' || f === 'unrecognized_bytes' || f === 'undecodable');
+  return flags.some((f) => f === 'no_provenance' || f === 'format_mismatch' || f === 'unrecognized_bytes' || f === 'undecodable' || f === 'size_unknown');
 }
 
 export async function runRevalidation(io: RevalidationIO, options: {
@@ -146,6 +153,9 @@ export async function runRevalidation(io: RevalidationIO, options: {
       byPrefix[prefix] = (byPrefix[prefix] ?? 0) + 1;
       const flags: ObjectFlag[] = [provenance.has(obj.name) ? 'has_provenance' : 'no_provenance'];
       if (bucketPublic !== false) flags.push('publicly_accessible');
+      // J1 H3-4: an unknown size is NOT 0. Flag it for review; it is never fully read.
+      const sizeKnown = typeof obj.size === 'number' && Number.isFinite(obj.size) && obj.size >= 0;
+      if (!sizeKnown) flags.push('size_unknown');
       let sniffed: string | null = null;
       const head = await io.readHead(bucket, obj.name, HEAD_BYTES);
       if (!head) {
@@ -154,14 +164,20 @@ export async function runRevalidation(io: RevalidationIO, options: {
         const c = classifyBytes(head, obj.mimetype);
         sniffed = c.sniffed;
         flags.push(...c.flags);
-        if (sniffed?.startsWith('image/') && io.imageDecodes && io.readAll && (obj.size ?? 0) <= DECODE_MAX_BYTES) {
-          const all = await io.readAll(bucket, obj.name);
-          let decodes = false;
-          if (all) { try { decodes = await io.imageDecodes(all); } catch { decodes = false; } }
-          if (!all) flags.push('read_failed');
-          else if (!decodes) flags.push('undecodable');
-        } else if (sniffed?.startsWith('image/') && (obj.size ?? 0) > DECODE_MAX_BYTES) {
+        if (sniffed?.startsWith('image/') && sizeKnown && (obj.size as number) > DECODE_MAX_BYTES) {
           flags.push('undecodable');
+        } else if (sniffed?.startsWith('image/') && sizeKnown && io.imageDecodes && io.readAll) {
+          const all = await io.readAll(bucket, obj.name, DECODE_MAX_BYTES);
+          if (all === 'too_large' || (Buffer.isBuffer(all) && all.length > DECODE_MAX_BYTES)) {
+            // More bytes than the listing claimed and than the decode cap: never decoded.
+            flags.push('undecodable');
+          } else if (!all) {
+            flags.push('read_failed');
+          } else {
+            let decodes = false;
+            try { decodes = await io.imageDecodes(all); } catch { decodes = false; }
+            if (!decodes) flags.push('undecodable');
+          }
         }
       }
       for (const f of flags) counts[f] += 1;

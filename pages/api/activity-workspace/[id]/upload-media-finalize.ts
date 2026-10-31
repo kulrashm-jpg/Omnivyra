@@ -108,6 +108,25 @@ async function deletePriorDeliveredObject(objectPath: string): Promise<void> {
   await removeDeliveryObject(objectPath);
 }
 
+/**
+ * J1 H3-2 - does the committed row reference `objectPath` as its delivered
+ * object? true also when the row cannot be read (fail safe: keep the object).
+ */
+async function committedRowReferencesObject(id: string, objectPath: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('daily_content_plans')
+      .select('content')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !data) return true;
+    const content = safeObject((data as { content?: unknown }).content);
+    return content.upload_storage_bucket === UPLOAD_BUCKET && content.upload_storage_object_path === objectPath;
+  } catch {
+    return true;
+  }
+}
+
 function extractStorageObjectPath(publicUrl: string | null | undefined): string | null {
   if (!publicUrl) return null;
   try {
@@ -383,7 +402,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 
   // ── Promote: quarantine → delivery (same key). Failure keeps it private. ─
-  const promotion = await promoteQuarantinedMedia({ objectPath: storagePath, validated: checked });
+  const promotion = await promoteQuarantinedMedia({ objectPath: storagePath, validated: checked, companyId });
+  if (promotion.ok === false && promotion.conflict === true) {
+    // J1 H3-1: an object already sits at the delivery key and it is not the
+    // object validated above (logged as a security event by the service).
+    // Nothing is recorded or scheduled; the foreign object is left untouched.
+    return res.status(409).json({
+      error: 'The upload could not be published: the delivery location holds a different object.',
+      code: 'UPLOAD_DELIVERY_CONFLICT',
+      retryable: false,
+    });
+  }
   if (promotion.ok === false) {
     console.warn('[upload-media-finalize] promotion failed; object stays quarantined', {
       daily_plan_id: id, objectPath: storagePath, reason: promotion.reason,
@@ -409,7 +438,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // request promoted it. An alreadyPromoted object belongs to a concurrent
     // finalize whose row write may have succeeded; deleting it would leave that
     // row with a dangling public reference.
-    if (!promotion.alreadyPromoted) await removeDeliveryObject(storagePath);
+    //
+    // J1 H3-2: even when THIS request promoted it, a concurrent finalize of the
+    // same session (alreadyPromoted=true there) may have committed a row that
+    // points at it. Re-read the row and delete only when no committed row
+    // references the key. If the re-read fails, keep the object (an orphan is
+    // recoverable; a dangling public reference on a committed row is not).
+    if (!promotion.alreadyPromoted && !(await committedRowReferencesObject(id, storagePath))) {
+      await removeDeliveryObject(storagePath);
+    }
     return res.status(500).json({ error: `Failed to record upload: ${writeError.message}` });
   }
 

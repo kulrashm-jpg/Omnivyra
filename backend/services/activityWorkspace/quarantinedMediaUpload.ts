@@ -27,8 +27,10 @@
  * recognised, and promotion is a single server-side move (no byte copy through
  * the app for multi-GB videos).
  */
+import { createHash } from 'node:crypto';
 import { supabase } from '../../db/supabaseClient';
 import { unguessableObjectStem } from '../../../lib/security/objectNames';
+import { readBodyBounded } from '../../../lib/security/boundedBodyRead';
 import { nonImageBytesMatchDeclaredType } from '../../../lib/security/mediaByteSignature';
 import {
   SAFE_IMAGE_DEFAULT_MAX_BYTES,
@@ -92,6 +94,15 @@ export type QuarantineValidationSuccess = {
   sizeBytes: number;
   /** Present for images: the re-encoded bytes that replace the upload. */
   normalized?: Buffer;
+  /**
+   * J1 H3-1 - fingerprint of what THIS validation approved, used to decide
+   * whether an object already sitting at the delivery key is the validated one.
+   *   images:     sha256 of the full re-encoded bytes (`normalized`)
+   *   non-images: sha256 of the first HEAD_BYTES stored bytes that passed the
+   *               signature check (multi-GB videos are never fully read here)
+   */
+  sha256?: string;
+  headSha256?: string;
 };
 
 export type QuarantineValidationResult = QuarantineValidationSuccess | QuarantineValidationFailure;
@@ -130,8 +141,17 @@ export async function inspectQuarantinedObject(objectPath: string): Promise<Stor
  * Falls back to a full download only for small objects.
  */
 export async function readQuarantinedHead(objectPath: string, byteCount: number, storedSize: number): Promise<Buffer | null> {
+  const viaRange = await readHeadViaSignedRange(QUARANTINE_BUCKET, objectPath, byteCount);
+  if (viaRange) return viaRange;
+  if (storedSize > FULL_DOWNLOAD_FALLBACK_MAX_BYTES) return null;
+  const full = await downloadQuarantined(objectPath);
+  return full ? full.subarray(0, byteCount) : null;
+}
+
+/** Range read of the first `byteCount` bytes of `bucket/objectPath` through a 60 s signed URL; null on failure. */
+async function readHeadViaSignedRange(bucket: string, objectPath: string, byteCount: number): Promise<Buffer | null> {
   try {
-    const { data, error } = await supabase.storage.from(QUARANTINE_BUCKET).createSignedUrl(objectPath, 60);
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(objectPath, 60);
     const signedUrl = data?.signedUrl;
     if (!error && signedUrl) {
       const controller = new AbortController();
@@ -144,18 +164,18 @@ export async function readQuarantinedHead(objectPath: string, byteCount: number,
           signal: controller.signal,
         });
         if (resp.status === 206 || resp.status === 200) {
-          return Buffer.from(await resp.arrayBuffer()).subarray(0, byteCount);
+          // Bounded: a server that ignores Range (200 + full body) is cut off at byteCount.
+          const head = await readBodyBounded(resp as never, byteCount, 'truncate');
+          return head.ok ? head.bytes : null;
         }
       } finally {
         clearTimeout(timeout);
       }
     }
   } catch (e) {
-    console.warn('[media-quarantine] range read failed', { objectPath, message: (e as Error)?.message });
+    console.warn('[media-quarantine] range read failed', { bucket, objectPath, message: (e as Error)?.message });
   }
-  if (storedSize > FULL_DOWNLOAD_FALLBACK_MAX_BYTES) return null;
-  const full = await downloadQuarantined(objectPath);
-  return full ? full.subarray(0, byteCount) : null;
+  return null;
 }
 
 async function downloadQuarantined(objectPath: string): Promise<Buffer | null> {
@@ -213,7 +233,7 @@ export async function validateQuarantinedMedia(input: {
       const normalized = await transformUntrustedImage(bytes, (image) => image.toFormat(sniffed.split('/')[1] as Parameters<typeof image.toFormat>[0]).toBuffer(), {
         ...(input.sharp ? { sharp: input.sharp } : {}),
       });
-      return { ok: true, category: 'image', mime: sniffed, sizeBytes: normalized.length, normalized };
+      return { ok: true, category: 'image', mime: sniffed, sizeBytes: normalized.length, normalized, sha256: sha256Hex(normalized) };
     } catch (error) {
       reportImageFailure(error, { callSite: 'activity.upload_finalize', companyId: input.companyId ?? null });
       if (isImageRejectedError(error)) return fail(415, 'UPLOAD_IMAGE_REJECTED', error.userMessage, true);
@@ -226,20 +246,96 @@ export async function validateQuarantinedMedia(input: {
   if (!nonImageBytesMatchDeclaredType(head, declared)) {
     return fail(415, 'UPLOAD_MIME_SPOOF', `File bytes do not match the declared type "${declared}".`, true);
   }
-  return { ok: true, category: input.expectedCategory, mime: declared, sizeBytes: info.size };
+  return { ok: true, category: input.expectedCategory, mime: declared, sizeBytes: info.size, headSha256: sha256Hex(head) };
+}
+
+export function sha256Hex(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 export type PromotionResult =
   | { ok: true; deliveryPath: string; alreadyPromoted: boolean }
-  | { ok: false; reason: string };
+  /**
+   * `conflict: true` = an object already sits at the delivery key and it is NOT
+   * the object this request validated (J1 H3-1). Never record or schedule it.
+   */
+  | { ok: false; reason: string; conflict?: boolean };
 
-async function deliveryObjectExists(objectPath: string): Promise<boolean> {
+type DeliveryInfo = { exists: true; size: number; contentType: string } | { exists: false } | { exists: null; message: string };
+
+async function inspectDeliveryObject(objectPath: string): Promise<DeliveryInfo> {
   try {
     const { data, error } = await supabase.storage.from(DELIVERY_BUCKET).info(objectPath);
-    return !error && !!data;
-  } catch {
-    return false;
+    if (error || !data) {
+      const message = error?.message ?? 'no metadata';
+      return looksMissing(message) ? { exists: false } : { exists: null, message };
+    }
+    const d = data as { size?: unknown; contentType?: unknown; metadata?: Record<string, unknown> | null };
+    const size = Number(d.size ?? d.metadata?.size ?? NaN);
+    const contentType = normalizeMime(d.contentType ?? d.metadata?.mimetype ?? '');
+    if (!Number.isFinite(size)) return { exists: null, message: 'delivery size unavailable' };
+    return { exists: true, size, contentType };
+  } catch (error) {
+    return { exists: null, message: (error as Error)?.message ?? 'info failed' };
   }
+}
+
+async function quarantineObjectStillPresent(objectPath: string): Promise<boolean | null> {
+  const info = await inspectQuarantinedObject(objectPath);
+  if (info.ok) return true;
+  return info.missing ? false : null;
+}
+
+export type DeliveryMatch =
+  | { verdict: 'match' }
+  | { verdict: 'absent' }
+  | { verdict: 'mismatch'; reason: string }
+  | { verdict: 'unverifiable'; reason: string };
+
+/**
+ * J1 H3-1 - is the object ALREADY at the delivery key the object this request
+ * validated? Existence alone proves nothing: until migration 20270111000000 is
+ * applied (and if it is ever rolled back while this code stays), a client could
+ * write arbitrary bytes straight into `media-uploads/<key>` before finalize.
+ *
+ *   all objects: stored size and stored content type equal the validated ones.
+ *   images:      the delivered bytes are downloaded (bounded: the size equality
+ *                above pins them to the re-encoded length) and their sha256 must
+ *                equal the sha256 of THIS request's re-encoded output.
+ *   non-images:  promotion is a server-side MOVE, which consumes the quarantine
+ *                source. A delivery object that coexists with this session's
+ *                quarantine source was therefore not produced by moving it, so
+ *                it is a mismatch. The first HEAD_BYTES must also hash to what
+ *                passed the signature check. (A full-content hash of a multi-GB
+ *                video would need a full read; residual documented in J1-FIXES.)
+ */
+export async function verifyExistingDeliveryObject(objectPath: string, validated: QuarantineValidationSuccess): Promise<DeliveryMatch> {
+  const info = await inspectDeliveryObject(objectPath);
+  if (info.exists === false) return { verdict: 'absent' };
+  if (info.exists === null) return { verdict: 'unverifiable', reason: `delivery metadata unavailable: ${info.message}` };
+  if (info.size !== validated.sizeBytes) return { verdict: 'mismatch', reason: 'size_differs' };
+  if (info.contentType !== normalizeMime(validated.mime)) return { verdict: 'mismatch', reason: 'content_type_differs' };
+
+  if (validated.normalized) {
+    const expected = validated.sha256 ?? sha256Hex(validated.normalized);
+    let bytes: Buffer | null = null;
+    try {
+      const { data, error } = await supabase.storage.from(DELIVERY_BUCKET).download(objectPath);
+      if (!error && data) bytes = Buffer.from(await data.arrayBuffer());
+    } catch {
+      bytes = null;
+    }
+    if (!bytes) return { verdict: 'unverifiable', reason: 'delivery bytes could not be read' };
+    return sha256Hex(bytes) === expected ? { verdict: 'match' } : { verdict: 'mismatch', reason: 'sha256_differs' };
+  }
+
+  const sourcePresent = await quarantineObjectStillPresent(objectPath);
+  if (sourcePresent === null) return { verdict: 'unverifiable', reason: 'quarantine state unavailable' };
+  if (sourcePresent) return { verdict: 'mismatch', reason: 'quarantine_source_not_consumed' };
+  if (!validated.headSha256) return { verdict: 'unverifiable', reason: 'no validated fingerprint' };
+  const head = await readHeadViaSignedRange(DELIVERY_BUCKET, objectPath, HEAD_BYTES);
+  if (!head) return { verdict: 'unverifiable', reason: 'delivery head could not be read' };
+  return sha256Hex(head) === validated.headSha256 ? { verdict: 'match' } : { verdict: 'mismatch', reason: 'head_sha256_differs' };
 }
 
 /**
@@ -250,6 +346,7 @@ async function deliveryObjectExists(objectPath: string): Promise<boolean> {
 export async function promoteQuarantinedMedia(input: {
   objectPath: string;
   validated: QuarantineValidationSuccess;
+  companyId?: string | null;
 }): Promise<PromotionResult> {
   const { objectPath, validated } = input;
   try {
@@ -267,14 +364,32 @@ export async function promoteQuarantinedMedia(input: {
       errorMessage = error?.message ?? null;
     }
     if (!errorMessage) return { ok: true, deliveryPath: objectPath, alreadyPromoted: false };
-    // A concurrent finalize of the same session already promoted it. The key is
-    // server-minted and only a promotion of this session writes it, so an
-    // existing delivery object means "already promoted" whatever the error text
-    // (the losing move of a race reports the SOURCE as missing, not a conflict).
-    if (await deliveryObjectExists(objectPath)) {
+    // The write failed. An object already at the key MAY be a concurrent
+    // finalize of the same session (the losing move of a race reports the
+    // SOURCE as missing, not a conflict) - but only if it is the object THIS
+    // request validated (J1 H3-1). Existence alone is not proof.
+    const match = await verifyExistingDeliveryObject(objectPath, validated);
+    if (match.verdict === 'match') {
       await discardQuarantinedObject(objectPath);
       return { ok: true, deliveryPath: objectPath, alreadyPromoted: true };
     }
+    if (match.verdict === 'mismatch') {
+      // Security event. The foreign delivery object is NOT deleted here: this
+      // request did not write it, and a false mismatch (e.g. a re-encode that is
+      // not byte-identical across processes) must never delete an object that a
+      // committed row may reference. It is left for the operator and the
+      // media-uploads revalidation report. The quarantined copy stays private.
+      console.error('[security][media-h3] object at the delivery key is not the validated object; refusing promotion', {
+        event: 'media_h3_delivery_conflict',
+        objectPath,
+        companyId: input.companyId ?? null,
+        reason: match.reason,
+        validatedSize: validated.sizeBytes,
+        validatedMime: validated.mime,
+      });
+      return { ok: false, reason: `delivery object conflict: ${match.reason}`, conflict: true };
+    }
+    if (match.verdict === 'unverifiable') return { ok: false, reason: `${errorMessage}; ${match.reason}` };
     return { ok: false, reason: errorMessage };
   } catch (error) {
     return { ok: false, reason: (error as Error)?.message ?? 'promotion failed' };

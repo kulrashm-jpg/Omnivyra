@@ -30,6 +30,7 @@ import {
   type StoredObject,
 } from '../../backend/services/activityWorkspace/mediaUploadsRevalidation';
 import { transformUntrustedImage } from '../../lib/security/safeImageDecode';
+import { fetchBounded } from '../../lib/security/boundedBodyRead';
 
 const argv = process.argv.slice(2);
 const flag = (name: string) => argv.includes(name);
@@ -102,16 +103,19 @@ async function main() {
     async readHead(bucket, name, n) {
       const { data, error } = await supabase.storage.from(bucket).createSignedUrl(name, 60);
       if (error || !data?.signedUrl) return null;
-      try {
-        // ssrf-ok: signed URL minted by our own client for a listed key
-        const resp = await fetch(data.signedUrl, { headers: { range: `bytes=0-${n - 1}` } });
-        if (resp.status !== 200 && resp.status !== 206) return null;
-        return Buffer.from(await resp.arrayBuffer()).subarray(0, n);
-      } catch { return null; }
+      // ssrf-ok: signed URL minted by our own client for a listed key.
+      // J1 H3-5a: bounded read - a 200 with the full body is cut off at n bytes.
+      const head = await fetchBounded(data.signedUrl, n, 'truncate');
+      return head.ok ? head.bytes : null;
     },
-    async readAll(bucket, name) {
-      const { data, error } = await supabase.storage.from(bucket).download(name);
-      return error || !data ? null : Buffer.from(await data.arrayBuffer());
+    async readAll(bucket, name, maxBytes) {
+      // J1 H3-4: never `download()` (unbounded). Range + hard byte cap; abort beyond it.
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(name, 60);
+      if (error || !data?.signedUrl) return null;
+      // ssrf-ok: signed URL minted by our own client for a listed key
+      const all = await fetchBounded(data.signedUrl, maxBytes, 'fail');
+      if (all.ok) return all.bytes;
+      return all.reason === 'too_large' ? 'too_large' : null;
     },
     provenanceKeys,
     ...(flag('--no-decode') ? {} : {

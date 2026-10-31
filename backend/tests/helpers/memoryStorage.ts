@@ -86,7 +86,9 @@ export function createMemoryStorage(publicBuckets: string[]) {
   const fetchImpl = async (url: string, init?: { headers?: Record<string, string> }) => {
     const { status, body } = serve(String(url), init?.headers?.range);
     events.push(`fetch:${status}:${url}`);
-    return { status, ok: status >= 200 && status < 300, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) };
+    // A real fetch Response (stream body + Content-Length): bounded readers
+    // (lib/security/boundedBodyRead) read it the way they read storage-api.
+    return new Response(status === 204 ? null : new Uint8Array(body), { status, headers: { 'content-length': String(body.length) } });
   };
 
   return {
