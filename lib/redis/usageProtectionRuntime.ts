@@ -64,7 +64,7 @@ import { config, envIsExplicit } from '@/config';
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { type UsageLevel, type MemoryUsage, type RequestUsage, type RedisUsageStatus, type OverflowEntry, type DrainCallback, WARN_PCT, THROTTLE_PCT, CRITICAL_PCT, NOTIFY_COOLDOWN_MS, CRITICAL_STARVATION_WARN_MS, CRITICAL_QUEUES, NON_ESSENTIAL_CRON_JOBS } from './usageProtectionModel';
+import { type UsageLevel, type MemoryUsage, type RequestUsage, type RedisUsageStatus, type OverflowEntry, type DrainCallback, type OverflowStoreResult, WARN_PCT, THROTTLE_PCT, CRITICAL_PCT, NOTIFY_COOLDOWN_MS, CRITICAL_STARVATION_WARN_MS, CRITICAL_QUEUES, NON_ESSENTIAL_CRON_JOBS } from './usageProtectionModel';
 
 let _memory: MemoryUsage = { usedBytes: 0, maxBytes: 0, usagePct: 0 };
 let _requests: RequestUsage = {
@@ -162,6 +162,11 @@ function getOverflowCap(): number {
 
 const _overflow    = new Map<string, OverflowEntry[]>();
 const _drainCbs    = new Map<string, DrainCallback>();
+// OPS-C: when each parked entry was parked (oldest-age metric). A side map, so
+// the entries handed to the drain's addBulk stay exactly { name, data, opts }.
+const _overflowParkedAt = new WeakMap<OverflowEntry, number>();
+let _totalJobsCoalesced = 0;
+let _totalJobsRetracted = 0;
 
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -179,13 +184,21 @@ const POLL_ERROR_LOG_COOLDOWN_MS = 60_000;  // rate limit: log max once per minu
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+// OPS-C: where the memory denominator came from on the last poll. With
+// 'default' the memory axis divides by an assumed 256 MB, so a larger Upstash
+// database reads as "critical" without being anywhere near its real limit.
+type LimitSource = 'info' | 'admin' | 'env' | 'default';
+let _maxBytesSource: LimitSource = 'default';
+let _dailyLimitSource: 'admin' | 'env' | 'default' = 'default';
+
 function resolveMaxBytes(infoMax: number): number {
-  if (infoMax > 0) return infoMax;
-  if (_adminMaxMemBytes > 0) return _adminMaxMemBytes;
+  if (infoMax > 0) { _maxBytesSource = 'info'; return infoMax; }
+  if (_adminMaxMemBytes > 0) { _maxBytesSource = 'admin'; return _adminMaxMemBytes; }
   // Schema applies the 256 MB default when REDIS_MAX_BYTES is unset, so this
   // returns the same final value as the inline fallback below either way.
   const envMax = config.REDIS_MAX_BYTES;
-  if (envMax > 0) return envMax;
+  if (envMax > 0) { _maxBytesSource = envIsExplicit('REDIS_MAX_BYTES') ? 'env' : 'default'; return envMax; }
+  _maxBytesSource = 'default';
   return 256 * 1024 * 1024;  // 256 MB — Upstash free-tier ceiling
 }
 
@@ -221,8 +234,182 @@ function nextUtcMidnight(): string {
   return d.toISOString();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// OPS-C: requests axis from per-poll deltas, not one absolute baseline
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Production 2026-10-30 (worker 3a38f8fc): requestsPct read 287.9% all day
+// while the counter rose ~1,000 commands per 5-minute poll (~6% of the daily
+// cap). The day's baseline — SET NX by the first poll of the UTC day — sat
+// ~14.4M below the total_commands_processed the worker read: a counter
+// discontinuity or a baseline taken from another node/process. Because
+// dailyUsed was `counter - baseline`, ONE bad reading pinned the level at
+// critical for the rest of the day and blocked every non-critical queue.
+//
+// Now dailyUsed is the sum of the PLAUSIBLE per-interval deltas:
+//   omnivyra:usage:last          "<counter>|<epochMs>"   (GETSET — atomic swap,
+//                                                          so concurrent pollers
+//                                                          partition the timeline)
+//   omnivyra:usage:accum:<date>  INCRBY of each accepted delta (TTL 49 h)
+// A delta is REJECTED (and the reference re-based to the current reading)
+// when the counter went backwards (reset / failover / another node) or when
+// it implies more than REDIS_USAGE_MAX_PLAUSIBLE_CMDS_PER_SEC (default
+// 2,000/s, see DEFAULT_MAX_PLAUSIBLE_CMDS_PER_SEC) over the elapsed time; an
+// implausible interval still contributes its clamped share (review M-2). Rejections log `redis_usage_baseline_reset` (numbers only). A genuine
+// high rate is still accumulated interval by interval and escalates exactly as
+// before. The legacy NX baseline key is still written (older deployments read
+// it) and reported as `legacyDailyUsed` for comparison, but no longer drives
+// the level.
+
+const USAGE_LAST_KEY = 'omnivyra:usage:last';
+const USAGE_KEY_TTL_S = 49 * 3600;
+let _legacyDailyUsed = 0;
+// In-process fallback when the Redis bookkeeping itself fails.
+let _localLast: { total: number; ts: number } | null = null;
+let _localAccum = { date: '', used: 0 };
+
+// OPS-C (review M-2): an implausible interval is CLAMPED, not discarded, and a
+// run of them is itself a signal.
+//
+// Default cap 2,000 commands/s. One clamped 5-minute interval can then add at
+// most 600,000 commands = 12% of the 5,000,000/day default, so a single
+// counter discontinuity (production 2026-10-30: one 14.4M jump) can never by
+// itself reach critical (95%). A genuine sustained runaway above the cap still
+// accumulates 600k per 5-minute poll and reaches 95% of 5M within 8 polls
+// (40 min), and after 3 consecutive implausible polls the level is raised to
+// at least `warning` (redis_usage_anomaly_persistent). Raise the cap with
+// REDIS_USAGE_MAX_PLAUSIBLE_CMDS_PER_SEC on a larger plan, keeping
+// cap × poll interval well under 95% of the daily limit.
+export const DEFAULT_MAX_PLAUSIBLE_CMDS_PER_SEC = 2_000;
+export const ANOMALY_STREAK_WARN = 3;
+const ANOMALY_STREAK_KEY = 'omnivyra:usage:anomaly_streak';
+const ANOMALY_STREAK_TTL_S = 30 * 60;
+let _anomalyStreak = 0;
+
+export function maxPlausibleCommandsPerSec(): number {
+  const v = Number(process.env.REDIS_USAGE_MAX_PLAUSIBLE_CMDS_PER_SEC);
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_MAX_PLAUSIBLE_CMDS_PER_SEC;
+}
+
+export type CounterDeltaVerdict =
+  | { accept: true; delta: number }
+  | { accept: false; reason: 'no_previous' | 'counter_backwards'; delta: number }
+  /** `credited` = min(delta, maxPerSec × elapsedS): what the interval may contribute. */
+  | { accept: false; reason: 'implausible_rate'; delta: number; credited: number };
+
+/** Commands an evaluated interval adds to the daily total (0 for no_previous / backwards). */
+export function creditedCommands(v: CounterDeltaVerdict): number {
+  if (v.accept === true) return (v as { delta: number }).delta;
+  return 'credited' in v ? (v as { credited: number }).credited : 0;
+}
+
+type RejectedCounterDelta = Extract<CounterDeltaVerdict, { accept: false }>;
+
+/** Explicit guard: boolean-literal discriminants do not narrow without strictNullChecks. */
+function isRejectedDelta(v: CounterDeltaVerdict): v is RejectedCounterDelta {
+  return v.accept === false;
+}
+
+/** Pure: is the step from (prevTotal @ prevTs) to (cur @ now) a believable command count? */
+export function evaluateCounterDelta(args: {
+  prevTotal: number | null; prevTs: number | null; cur: number; now: number; maxPerSec: number;
+}): CounterDeltaVerdict {
+  if (args.prevTotal === null || !Number.isFinite(args.prevTotal)) return { accept: false, reason: 'no_previous', delta: 0 };
+  const delta = args.cur - args.prevTotal;
+  if (delta < 0) return { accept: false, reason: 'counter_backwards', delta };
+  // Elapsed floors at 1 s; an unknown timestamp is treated as one poll interval.
+  const elapsedMs = args.prevTs !== null && args.prevTs > 0 ? args.now - args.prevTs : 300_000;
+  const elapsedS = Math.max(1, elapsedMs / 1000);
+  if (delta / elapsedS > args.maxPerSec) {
+    return { accept: false, reason: 'implausible_rate', delta, credited: Math.floor(Math.min(delta, args.maxPerSec * elapsedS)) };
+  }
+  return { accept: true, delta };
+}
+
+function parseLast(raw: string | null): { total: number | null; ts: number | null } {
+  if (!raw) return { total: null, ts: null };
+  const [t, ts] = String(raw).split('|');
+  const total = Number(t);
+  const at = Number(ts);
+  return { total: Number.isFinite(total) ? total : null, ts: Number.isFinite(at) && at > 0 ? at : null };
+}
+
+function logBaselineReset(reason: string, delta: number, elapsedS: number | null): void {
+  console.warn(JSON.stringify({
+    level: 'WARN',
+    event: 'redis_usage_baseline_reset',
+    reason,
+    delta,
+    elapsed_s: elapsedS,
+    max_plausible_per_sec: maxPlausibleCommandsPerSec(),
+  }));
+}
+
+/**
+ * Consecutive implausible intervals, shared across pollers through a TTL'd
+ * Redis counter (falls back to the in-process count). An accepted interval
+ * ends the streak; no_previous / counter_backwards leave it unchanged.
+ */
+async function trackAnomalyStreak(redis: IORedis, v: CounterDeltaVerdict): Promise<void> {
+  if (isRejectedDelta(v) && v.reason === 'implausible_rate') {
+    try {
+      _anomalyStreak = Number(await redis.incr(ANOMALY_STREAK_KEY)) || _anomalyStreak + 1;
+      await redis.expire(ANOMALY_STREAK_KEY, ANOMALY_STREAK_TTL_S);
+    } catch {
+      _anomalyStreak += 1;
+    }
+  } else if (!isRejectedDelta(v)) {
+    if (_anomalyStreak > 0) {
+      try { await redis.del(ANOMALY_STREAK_KEY); } catch { /* expires anyway */ }
+    }
+    _anomalyStreak = 0;
+  }
+}
+
+async function accumulateDailyUsage(redis: IORedis, cur: number): Promise<number> {
+  const now = Date.now();
+  const today = todayUtc();
+  const accumKey = `omnivyra:usage:accum:${today}`;
+  const maxPerSec = maxPlausibleCommandsPerSec();
+  try {
+    const prevRaw = await redis.getset(USAGE_LAST_KEY, `${cur}|${now}`);
+    await redis.expire(USAGE_LAST_KEY, USAGE_KEY_TTL_S);
+    const prev = parseLast(prevRaw);
+    const v = evaluateCounterDelta({ prevTotal: prev.total, prevTs: prev.ts, cur, now, maxPerSec });
+    let used: number;
+    if (isRejectedDelta(v) && v.reason !== 'no_previous') {
+      logBaselineReset(v.reason, v.delta, prev.ts ? Math.round((now - prev.ts) / 1000) : null);
+    }
+    await trackAnomalyStreak(redis, v);
+    const credit = creditedCommands(v);
+    if (credit > 0) {
+      used = Number(await redis.incrby(accumKey, credit));
+      await redis.expire(accumKey, USAGE_KEY_TTL_S);
+    } else {
+      const raw = await redis.get(accumKey);
+      used = raw === null ? 0 : Number(raw) || 0;
+    }
+    _localLast = { total: cur, ts: now };
+    _localAccum = { date: today, used };
+    return used;
+  } catch {
+    // Redis bookkeeping failed — same rules, in-process.
+    if (_localAccum.date !== today) _localAccum = { date: today, used: 0 };
+    const v = evaluateCounterDelta({ prevTotal: _localLast?.total ?? null, prevTs: _localLast?.ts ?? null, cur, now, maxPerSec });
+    if (isRejectedDelta(v) && v.reason !== 'no_previous') logBaselineReset(v.reason, v.delta, _localLast ? Math.round((now - _localLast.ts) / 1000) : null);
+    if (isRejectedDelta(v) && v.reason === 'implausible_rate') _anomalyStreak += 1;
+    else if (!isRejectedDelta(v)) _anomalyStreak = 0;
+    _localAccum.used += creditedCommands(v);
+    _localLast = { total: cur, ts: now };
+    return _localAccum.used;
+  }
+}
+
 async function computeRequestUsage(redis: IORedis, totalCommandsProcessed: number): Promise<RequestUsage> {
-  const baseline   = await loadDailyBaseline(redis, totalCommandsProcessed);
+  // Legacy absolute baseline: still maintained for older deployments and
+  // reported for comparison only.
+  const baseline = await loadDailyBaseline(redis, totalCommandsProcessed);
+  _legacyDailyUsed = Math.max(0, totalCommandsProcessed - baseline);
   // Default is 5,000,000 commands/day — the hard cap we operate under. ALWAYS
   // set UPSTASH_DAILY_REQUEST_LIMIT explicitly in your .env to match the plan
   // you actually paid for; this default is only the fallback when neither the
@@ -230,7 +417,8 @@ async function computeRequestUsage(redis: IORedis, totalCommandsProcessed: numbe
   const dailyLimit = _adminDailyLimit > 0
     ? _adminDailyLimit
     : parseInt(process.env.UPSTASH_DAILY_REQUEST_LIMIT ?? '5000000', 10);
-  const dailyUsed  = Math.max(0, totalCommandsProcessed - baseline);
+  _dailyLimitSource = _adminDailyLimit > 0 ? 'admin' : (process.env.UPSTASH_DAILY_REQUEST_LIMIT ? 'env' : 'default');
+  const dailyUsed = Math.max(0, await accumulateDailyUsage(redis, totalCommandsProcessed));
   return {
     dailyUsed,
     dailyLimit,
@@ -248,10 +436,31 @@ async function computeRequestUsage(redis: IORedis, totalCommandsProcessed: numbe
  * Returns true if stored, false if the buffer is full (job truly dropped).
  */
 export function storeOverflow(queueName: string, entry: OverflowEntry): boolean {
+  return storeOverflowDetailed(queueName, entry) !== 'dropped';
+}
+
+function overflowJobId(entry: OverflowEntry): string | null {
+  const id = entry?.opts?.jobId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/**
+ * OPS-C: store with the outcome spelled out (see OverflowStoreResult).
+ * An entry whose BullMQ jobId is already parked for the same queue is
+ * coalesced instead of stored twice: BullMQ ignores a second add of an
+ * existing jobId, so the duplicate could never run — it would only consume
+ * buffer capacity that real, distinct work needs.
+ */
+export function storeOverflowDetailed(queueName: string, entry: OverflowEntry): OverflowStoreResult {
   let buf = _overflow.get(queueName);
   if (!buf) {
     buf = [];
     _overflow.set(queueName, buf);
+  }
+  const jobId = overflowJobId(entry);
+  if (jobId !== null && buf.some((e) => overflowJobId(e) === jobId)) {
+    _totalJobsCoalesced++;
+    return 'coalesced';
   }
   if (buf.length >= getOverflowCap()) {
     console.error(JSON.stringify({
@@ -263,11 +472,73 @@ export function storeOverflow(queueName: string, entry: OverflowEntry): boolean 
       reason: 'overflow_cap_reached_job_dropped',
     }));
     _totalJobsDropped++;  // BUG#14 fix: count truly dropped jobs separately
-    return false;
+    return 'dropped';
   }
   buf.push(entry);
+  _overflowParkedAt.set(entry, Date.now());
   _totalJobsBlocked++;
+  return 'stored';
+}
+
+/**
+ * OPS-C: take back ONE parked entry (by identity) that its producer has
+ * decided to report as "not accepted". Without this, a producer that answers
+ * its caller with a failure (HTTP 429, a thrown QueueFullError) would still
+ * have the job replayed later by the drain: reported failed, then executed.
+ * Returns false when the entry is no longer parked (already drained).
+ */
+export function retractOverflow(queueName: string, entry: OverflowEntry): boolean {
+  const buf = _overflow.get(queueName);
+  if (!buf) return false;
+  const idx = buf.indexOf(entry);
+  if (idx < 0) return false;
+  buf.splice(idx, 1);
+  _overflowParkedAt.delete(entry);
+  _totalJobsRetracted++;
   return true;
+}
+
+/** OPS-C: age in ms of the oldest parked entry per queue (queues with parked entries only). */
+export function overflowOldestAgeMs(now: number = Date.now()): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, buf] of _overflow.entries()) {
+    let oldest = Infinity;
+    for (const e of buf) {
+      const t = _overflowParkedAt.get(e);
+      if (typeof t === 'number' && t < oldest) oldest = t;
+    }
+    if (buf.length > 0 && Number.isFinite(oldest)) out[k] = Math.max(0, now - oldest);
+  }
+  return out;
+}
+
+/** OPS-C: overflow counters for structured health events (no payloads). */
+export function getOverflowCounters(): {
+  parked: number; coalesced: number; retracted: number; dropped: number; buffered: number;
+} {
+  return {
+    parked: _totalJobsBlocked,
+    coalesced: _totalJobsCoalesced,
+    retracted: _totalJobsRetracted,
+    dropped: _totalJobsDropped,
+    buffered: totalOverflowed(),
+  };
+}
+
+/** Test seam: empty every buffer and counter. Never called by production code. */
+export function __resetOverflowForTests(): void {
+  _overflow.clear();
+  _drainCbs.clear();
+  _totalJobsBlocked = 0;
+  _totalJobsDropped = 0;
+  _totalJobsCoalesced = 0;
+  _totalJobsRetracted = 0;
+}
+
+/** Test seam: force the protection level without a Redis poll. Never called by production code. */
+export function __setUsageLevelForTests(level: UsageLevel): void {
+  _level = level;
+  _prevLevel = level;
 }
 
 /**
@@ -297,6 +568,21 @@ export function overflowByQueue(): Record<string, number> {
   return out;
 }
 
+/**
+ * OPS-C: replay parked jobs whenever usage is below throttle, not only on the
+ * single elevated→normal transition. Before this, (a) a critical→warning
+ * recovery left the buffer parked until a later warning→normal transition,
+ * and (b) a FAILED drain re-buffered its jobs but nothing ever retried it
+ * until the level elevated and recovered again. isQueueAllowed() already
+ * admits every queue below critical, and the drain re-adds under the original
+ * jobIds, so replaying more often cannot duplicate a job.
+ */
+export async function drainOverflowIfBelowThrottle(): Promise<void> {
+  if (_level !== 'normal' && _level !== 'warning') return;
+  if (totalOverflowed() === 0) return;
+  await drainAllOverflows();
+}
+
 async function drainAllOverflows(): Promise<void> {
   for (const [queueName, buf] of _overflow.entries()) {
     if (buf.length === 0) continue;
@@ -306,6 +592,7 @@ async function drainAllOverflows(): Promise<void> {
     const snapshot = buf.splice(0);  // atomic clear
     try {
       await cb(queueName, snapshot);
+      for (const e of snapshot) _overflowParkedAt.delete(e);
       console.log(JSON.stringify({
         level:  'INFO',
         event:  'queue_overflow_drained',
@@ -490,6 +777,20 @@ async function pollWithRetry(getRedis: () => IORedis, attempt: number = 0): Prom
     _requests     = await computeRequestUsage(redis, totalCommandsProcessed);
     _effectivePct = Math.max(_memory.usagePct, _requests.usagePct);
     _level        = classify(_effectivePct / 100);
+    // OPS-C (M-2): a persistent run of implausible intervals is surfaced even
+    // when the clamped total is still low — at least `warning` (alert only;
+    // warning blocks nothing).
+    if (_anomalyStreak >= ANOMALY_STREAK_WARN) {
+      if (_level === 'normal') _level = 'warning';
+      console.warn(JSON.stringify({
+        level: 'WARN',
+        event: 'redis_usage_anomaly_persistent',
+        consecutive_implausible_polls: _anomalyStreak,
+        effective_level: _level,
+        requests_pct: _requests.usagePct,
+        max_plausible_per_sec: maxPlausibleCommandsPerSec(),
+      }));
+    }
     _checkedAt    = new Date().toISOString();
 
     // Level transition handling
@@ -515,6 +816,9 @@ async function pollWithRetry(getRedis: () => IORedis, attempt: number = 0): Prom
       await writeAdminAlert(redis, recovered);
       _notifiedAt = Date.now();
     }
+
+    // OPS-C: replay parked jobs (and retry failed drains) on every poll below throttle.
+    await drainOverflowIfBelowThrottle();
 
     // Periodic alert refresh at elevated levels
     if (_level !== 'normal' && Date.now() - _notifiedAt > NOTIFY_COOLDOWN_MS) {
@@ -542,6 +846,21 @@ async function pollWithRetry(getRedis: () => IORedis, attempt: number = 0): Prom
       usageLevel: _level,
       memoryPct: _memory.usagePct,
       requestsPct: _requests.usagePct,
+      // OPS-C: the inputs behind the level, so an operator can tell WHICH axis
+      // is critical and whether its denominator is real or a default.
+      // Numbers only — no keys, no payloads.
+      usedMb: Math.round(_memory.usedBytes / 1024 / 1024),
+      maxMb: Math.round(_memory.maxBytes / 1024 / 1024),
+      maxSource: _maxBytesSource,
+      dailyUsed: _requests.dailyUsed,
+      dailyLimit: _requests.dailyLimit,
+      dailyLimitSource: _dailyLimitSource,
+      legacyDailyUsed: _legacyDailyUsed,
+      overflowBuffered: totalOverflowed(),
+      overflowOldestAgeMs: Object.values(overflowOldestAgeMs()).reduce((m, v) => Math.max(m, v), 0),
+      overflowCoalesced: _totalJobsCoalesced,
+      overflowRetracted: _totalJobsRetracted,
+      overflowDropped: _totalJobsDropped,
     }));
 
   } catch (err) {

@@ -23,6 +23,9 @@ export function getEngagementSignalQueue(): Queue {
       defaultJobOptions: {
         attempts: 2,
         removeOnComplete: { count: 1000 },
+        // OPS-C: failed jobs were retained forever (no removeOnFail). Keep a
+        // week for inspection, bounded by count, like the other queues.
+        removeOnFail: { age: 7 * 24 * 3600, count: 5000 },
       },
     });
     instrumentQueue(engagementSignalQueue);

@@ -21,7 +21,7 @@
  */
 
 import { validateCronEnv } from '../utils/validateEnv';
-import { safeEnqueue } from '../middleware/queueBackpressure';
+import { triggerSafetyNetDrain } from '../queue/safetyNetTrigger';
 import { config } from '@/config';
 import { CronGuard } from '../utils/cronGuard';
 import { cronInstr } from '../utils/cronInstrumentation';
@@ -657,21 +657,35 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
   // path missed any rows (e.g. transient Redis error). The worker process in
   // main.ts does the actual work — cron only fires the trigger.
   if (redisReadyForQueues) {
+    // OPS-C: triggerSafetyNetDrain never throws. A trigger the Redis usage
+    // guard parks is kept for the overflow replay (coalesced on jobId
+    // 'drain'); any other non-accepted outcome is retried by the next tick,
+    // because the durable work is the DB rows, not the trigger job.
     scheduleWorker(
       async () => {
-        await safeEnqueue(getLeadThreadRecomputeQueue(), 'lead-thread-recompute', 'recompute', {}, { jobId: 'drain', delay: 200 });
-        return {};
+        const r = await triggerSafetyNetDrain({
+          label: 'leadThreadRecompute-safetynet',
+          getQueue: getLeadThreadRecomputeQueue,
+          queueName: 'lead-thread-recompute',
+          jobName: 'recompute',
+        });
+        return { retry_next_tick: r.retry_next_tick, failed: r.failed };
       },
       LEAD_THREAD_RECOMPUTE_SAFETYNET_MS, 'leadThreadRecompute-safetynet',
-      []
+      ['retry_next_tick', 'failed']
     );
     scheduleWorker(
       async () => {
-        await safeEnqueue(getConversationMemoryRebuildQueue(), 'conversation-memory-rebuild', 'rebuild', {}, { jobId: 'drain', delay: 200 });
-        return {};
+        const r = await triggerSafetyNetDrain({
+          label: 'conversationMemory-safetynet',
+          getQueue: getConversationMemoryRebuildQueue,
+          queueName: 'conversation-memory-rebuild',
+          jobName: 'rebuild',
+        });
+        return { retry_next_tick: r.retry_next_tick, failed: r.failed };
       },
       CONVERSATION_MEMORY_SAFETYNET_MS, 'conversationMemory-safetynet',
-      []
+      ['retry_next_tick', 'failed']
     );
   } else {
     console.warn('[cron] Redis-backed lead/memory safety-net enqueues skipped because Redis is unavailable.');
