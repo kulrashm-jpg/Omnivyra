@@ -103,7 +103,7 @@ async function main() {
     async readHead(bucket, name, n) {
       const { data, error } = await supabase.storage.from(bucket).createSignedUrl(name, 60);
       if (error || !data?.signedUrl) return null;
-      // ssrf-ok: signed URL minted by our own client for a listed key.
+      // Signed URL minted by our own client for a listed key; fetchBounded goes through the SSRF layer (safeFetch).
       // J1 H3-5a: bounded read - a 200 with the full body is cut off at n bytes.
       const head = await fetchBounded(data.signedUrl, n, 'truncate');
       return head.ok ? head.bytes : null;
@@ -112,7 +112,7 @@ async function main() {
       // J1 H3-4: never `download()` (unbounded). Range + hard byte cap; abort beyond it.
       const { data, error } = await supabase.storage.from(bucket).createSignedUrl(name, 60);
       if (error || !data?.signedUrl) return null;
-      // ssrf-ok: signed URL minted by our own client for a listed key
+      // Signed URL minted by our own client for a listed key; fetchBounded goes through the SSRF layer (safeFetch).
       const all = await fetchBounded(data.signedUrl, maxBytes, 'fail');
       if (all.ok === false) return all.reason === 'too_large' ? 'too_large' : null;
       return all.bytes;

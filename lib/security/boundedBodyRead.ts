@@ -71,19 +71,34 @@ export async function readBodyBounded(resp: BodyLike, limit: number, mode: 'trun
  * GET `url` with `Range: bytes=0-<limit>` (one byte beyond the cap, so an
  * over-cap object is detected) and read at most `limit` bytes of the body
  * whatever status/Range handling the server applies. mode as readBodyBounded.
+ *
+ * The runtime path goes through the SSRF layer (lib/security/safeFetch:
+ * scheme/host/private-range validation, DNS pinning, per-hop redirect
+ * re-validation). Its own byte cap is disabled here (MAX_SAFE_INTEGER) so the
+ * bounded stream read below stays the single size policy ('fail' must report
+ * too_large, 'truncate' must return the head of an over-cap 200). An injected
+ * fetchImpl is a unit-test seam only.
  */
 export async function fetchBounded(
   url: string,
   limit: number,
   mode: 'truncate' | 'fail',
-  fetchImpl: (url: string, init: { headers: Record<string, string>; signal?: AbortSignal }) => Promise<BodyLike & { status: number }> = fetch as never,
+  fetchImpl?: (url: string, init: { headers: Record<string, string>; signal?: AbortSignal }) => Promise<BodyLike & { status: number }>,
   timeoutMs = 30_000,
 ): Promise<BoundedRead> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const last = mode === 'truncate' ? Math.max(0, limit - 1) : limit;
-    const resp = await fetchImpl(url, { headers: { range: `bytes=0-${last}` }, signal: controller.signal });
+    const init = { headers: { range: `bytes=0-${last}` }, signal: controller.signal };
+    let resp: BodyLike & { status: number };
+    if (fetchImpl) {
+      // ssrf-ok: injected fetchImpl is a unit-test seam (no runtime caller passes one - scripts/ops/media-uploads-revalidate.ts does not); the runtime path is the safeFetch branch below.
+      resp = await fetchImpl(url, init);
+    } else {
+      const { safeFetch } = await import('./safeFetch');
+      resp = (await safeFetch(url, init, { maxBytes: Number.MAX_SAFE_INTEGER, timeoutMs, metricLabel: 'bounded-body-read' })) as unknown as BodyLike & { status: number };
+    }
     if (resp.status !== 200 && resp.status !== 206) return { ok: false, reason: 'read_failed' };
     return await readBodyBounded(resp, limit, mode);
   } catch {
