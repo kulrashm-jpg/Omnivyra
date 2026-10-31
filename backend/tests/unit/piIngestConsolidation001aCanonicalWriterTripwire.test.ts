@@ -53,7 +53,8 @@ const SANCTIONED: Record<string, readonly string[]> = {
   unified_persons: [
     'backend/services/identityResolutionService.ts',      // W1, the sole resolve-or-create authority
     'backend/services/prospectIdentity/accountResolution.ts', // W4 back-link only
-    'backend/services/prospectIdentity/personErasure.ts', // erasure, by design
+    // personErasure.ts no longer deletes from TypeScript: the delete runs inside
+    // pi_person_erasure_finalize (20270112000003), in one transaction with step 6.
     'lib/identity/identityGateway.ts',                    // OPEN QUESTION: a writer outside prospectIdentity/*
   ],
   prospect_accounts: [

@@ -72,7 +72,7 @@
  * through this module alone.
  */
 
-import { ownedDbTable } from '../../db/writeOwner';
+import { ownedDbRpc, ownedDbTable } from '../../db/writeOwner';
 import type { GovernanceRecord, GovernanceType } from './contactGovernance';
 import { ALL_CHANNELS } from './contactGovernance';
 import {
@@ -90,11 +90,7 @@ import {
   type PersonContactPoint,
   type PersonErasurePlan,
 } from './erasurePlan';
-import {
-  eraseProspectProvenance,
-  ProvenanceRedactionError,
-  type EraseProvenanceResult,
-} from '../prospectProvenance/redaction';
+import type { EraseProvenanceResult } from '../prospectProvenance/redaction';
 
 // The planner's surface stays importable from here, unchanged: `index.ts` and
 // the WS-F tests reach erasure through this module and must not have to know
@@ -116,6 +112,26 @@ export type {
 
 /** Provenance stamped on every record this module creates. */
 export const ERASURE_SOURCE = 'person_erasure';
+
+/**
+ * The erasure-request ledger (20270112000003). Every erasure runs under ONE
+ * request per person, leased to one runner: a retry or a duplicate request
+ * resumes it, and a CONCURRENT one is refused (`erasure_in_progress`) instead
+ * of running steps 3–5 twice in parallel. Steps 3–5 are marked as they commit;
+ * steps 6 and 7 run in ONE database transaction (`pi_person_erasure_finalize`),
+ * so a failed delete also rolls back the provenance redaction, the legacy-lead
+ * detach and the score-evaluation redaction — there is no state in which the
+ * graph is redacted while the person row still holds the name.
+ */
+export const ERASURE_LEDGER_OPEN = 'pi_person_erasure_open';
+export const ERASURE_LEDGER_MARK = 'pi_person_erasure_mark';
+export const ERASURE_LEDGER_FINALIZE = 'pi_person_erasure_finalize';
+
+/** PostgREST / PostgreSQL codes for "the function does not exist". */
+const FUNCTION_MISSING = new Set(['PGRST202', '42883']);
+
+/** A ledger error code is a fixed label or an SQLSTATE — never a message (no PII in the ledger). */
+const SAFE_CODE = /^[A-Za-z0-9_.:-]{1,80}$/;
 
 const errCode = (e: unknown): string | undefined => (e as { code?: string } | null)?.code;
 
@@ -155,7 +171,18 @@ export interface ErasePersonResult {
    * with an audit event (`erasureId`) that holds no value and no person id.
    * Rows are redacted, not deleted. See PROSPECT-PROVENANCE-ERASURE-POLICY.md.
    */
-  provenanceRedaction: EraseProvenanceResult;
+  /** NULL only when there was nothing left to erase (`deleted: false`, no request opened). */
+  provenanceRedaction: EraseProvenanceResult | null;
+  /** The `person_erasure_requests` row this call ran under (NULL when nothing was left to erase). */
+  requestId: string | null;
+  /** True when this call resumed an open request (a retry after a failure, or a crashed runner's lease expired). */
+  resumed: boolean;
+  /**
+   * What finalize did besides provenance: legacy leads detached, score
+   * evaluations redacted, and the retention policy each owner-selectable hook
+   * applied. NULL when nothing was left to erase.
+   */
+  finalizeCounts: Record<string, unknown> | null;
 }
 
 /**
@@ -180,7 +207,48 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
     throw new PersonErasureError('reason is required — an unexplained erasure is an unusable audit record', 'reason_required');
   }
   const now = input.now ?? new Date().toISOString();
+  const requestedBy = input.requestedBy?.trim() || ERASURE_SOURCE;
 
+  // 0. Open — or RESUME — the erasure request. Tenant-checked and serialised on
+  //    the person row in the database. A person that no longer exists is
+  //    answered as "nothing to erase", never as a failure: a completed request
+  //    holds no person id, so a repeat cannot be told from an unknown id.
+  const request = await openErasureRequest(input.organizationId, input.personId, input.reason, requestedBy);
+  if (request === null) {
+    return {
+      personId: input.personId,
+      organizationId: input.organizationId,
+      deleted: false,
+      plan: planPersonErasure({ organizationId: input.organizationId, personId: input.personId, records: [], contactPoints: [] }),
+      reanchored: [],
+      revoked: [],
+      suppressionsLostToErasure: [],
+      provenanceRedaction: null,
+      requestId: null,
+      resumed: false,
+      finalizeCounts: null,
+    };
+  }
+
+  try {
+    return await runErasureSteps(input, now, request);
+  } catch (err) {
+    // Best effort: record a CODE (never a message) on the open request and
+    // release the lease, so a retry resumes at once. The retry always re-runs
+    // steps 3–5 (idempotent) and finalize re-checks everything.
+    const code = err instanceof PersonErasureError && SAFE_CODE.test(err.code) ? err.code : 'unexpected';
+    await markErasureStep(input.organizationId, request, 'failed', undefined, code).catch(() => undefined);
+    throw err;
+  }
+}
+
+interface ErasureRequestHandle { requestId: string; leaseToken: string; resumed: boolean }
+
+async function runErasureSteps(
+  input: ErasePersonInput,
+  now: string,
+  request: ErasureRequestHandle,
+): Promise<ErasePersonResult> {
   // 1. Contact points FIRST. `identity_claims.person_id` is ON DELETE CASCADE
   //    (W4, 20260923000000), so after the delete this evidence no longer exists.
   const contactPoints = await loadContactPoints(input.organizationId, input.personId);
@@ -240,6 +308,16 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
       }
     }
   }
+  // J1 ER-2: the ledger ADDS this count across attempts (reanchored_count +
+  // p_count). A resumed attempt finds the records an earlier attempt created as
+  // `already_present`; counting those again over-summed. Report only what THIS
+  // attempt created, so the ledger total is the number of carried-forward
+  // records the erasure request created. (Step 4 already reports only rows it
+  // newly revoked: rows revoked by an earlier attempt are skipped as history.)
+  await markErasureStep(
+    input.organizationId, request, 'governance_reanchored',
+    reanchored.filter((r) => r.outcome === 'created').length,
+  );
 
   // 4. Close out the person-anchored originals. Revoked, never deleted — and
   //    revocation is what removes them from `uq_contact_governance_identity`,
@@ -255,38 +333,28 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
     });
     if (res.revoked) revoked.push(a.recordId);
   }
+  await markErasureStep(input.organizationId, request, 'governance_revoked', revoked.length);
 
   // 5. Drop the historical employer leg from this person's own evidence, while
   //    `person_id` still identifies it. Fail closed: a failure throws and the
   //    person is not deleted.
   await clearPersonEvidenceAccountLinks(input.organizationId, input.personId);
+  await markErasureStep(input.organizationId, request, 'evidence_links_cleared');
 
-  // 6. Owner decision 8 / closure A — erase the person's provenance graph
-  //    while every link to the person still exists (canonical_leads, contacts,
-  //    threads, source_records and canonical_users are ON DELETE SET NULL;
-  //    lead_intelligence is RESTRICT and is unlinked by the function). ALWAYS
-  //    called, not only when the person has prospects: source records,
-  //    contacts and engagement threads exist without one. One transaction in
-  //    the database; idempotent, so a retry after a later failure is safe.
-  //    FAIL CLOSED: any failure (including an undeployed function) throws and
-  //    the person is not deleted.
-  let provenanceRedaction: ErasePersonResult['provenanceRedaction'];
-  try {
-    provenanceRedaction = await eraseProspectProvenance({
-      organizationId: input.organizationId,
-      personId: input.personId,
-      reason: `person erased: ${input.reason}`,
-      requestedBy: input.requestedBy?.trim() || ERASURE_SOURCE,
-    });
-  } catch (err) {
-    throw new PersonErasureError(
-      `could not redact the person's prospect provenance: ${(err as Error).message}`,
-      err instanceof ProvenanceRedactionError ? `provenance_${err.code}` : 'provenance_redaction_failed',
-    );
-  }
-
-  // 7. The erasure itself.
-  const deleted = await deletePersonRow(input.organizationId, input.personId);
+  // 6 + 7. ONE database transaction (`pi_person_erasure_finalize`):
+  //    6   the provenance erasure (owner decision 8 / closure A, unchanged
+  //        function, ALWAYS called while every link to the person still exists);
+  //    6b  legacy `leads` of the person are stamped `person_erased_at`, so the
+  //        FK's SET NULL is admissible (20270112000001) — the leads survive;
+  //    6c  the person's `prospect_score_evaluations` are redacted through the
+  //        one sanctioned path of the append-only trigger (20270112000002);
+  //    6d/6e the owner-selectable retention hooks (default: retain);
+  //    7   the tenant-first delete.
+  //    If anything fails, all of it rolls back and the person is exactly as it
+  //    was before step 6. The function also refuses while a LIVE person-anchored
+  //    governance record remains (one written after step 4), so the delete never
+  //    SET-NULLs a live instruction. FAIL CLOSED: any failure throws.
+  const { deleted, provenanceRedaction, finalizeCounts } = await finalizeErasure(input.organizationId, request);
 
   return {
     personId: input.personId,
@@ -297,6 +365,135 @@ export async function erasePerson(input: ErasePersonInput): Promise<ErasePersonR
     revoked,
     suppressionsLostToErasure: plan.actions.filter((a) => a.disposition === 'unenforceable'),
     provenanceRedaction,
+    requestId: request.requestId,
+    resumed: request.resumed,
+    finalizeCounts,
+  };
+}
+
+// ─── erasure-request ledger calls ──────────────────────────────────────────
+
+const LEDGER_MISSING_HINT = 'apply 20270112000000..20270112000003';
+
+async function openErasureRequest(
+  organizationId: string, personId: string, reason: string, requestedBy: string,
+): Promise<ErasureRequestHandle | null> {
+  const res = await ownedDbRpc(ERASURE_LEDGER_OPEN, {
+    p_organization_id: organizationId,
+    p_person_id: personId,
+    p_reason: reason.trim(),
+    p_requested_by: requestedBy,
+  });
+  if (res.error) {
+    const code = errCode(res.error);
+    const message = String(res.error.message ?? '');
+    if (code === 'P0002') return null;                       // nothing of the person is left
+    if (code && FUNCTION_MISSING.has(code)) {
+      throw new PersonErasureError(`the erasure ledger is not deployed (${LEDGER_MISSING_HINT}): ${message}`, 'erasure_ledger_unavailable');
+    }
+    if (code === '42501') {
+      throw new PersonErasureError('erasure refused: the person belongs to another tenant', 'cross_tenant');
+    }
+    if (code === '55P03') {
+      throw new PersonErasureError('another erasure of this person is in progress; retry after it finishes or its lease expires', 'erasure_in_progress');
+    }
+    throw new PersonErasureError(`could not open the erasure request (${code ?? 'unknown'}): ${message}`, code ?? 'erasure_request_failed');
+  }
+  const data = (res.data ?? {}) as { request_id?: unknown; lease_token?: unknown; resumed?: unknown };
+  if (typeof data.request_id !== 'string' || !data.request_id
+      || typeof data.lease_token !== 'string' || !data.lease_token) {
+    throw new PersonErasureError('the erasure ledger returned no request id / lease', 'erasure_request_unconfirmed');
+  }
+  return { requestId: data.request_id, leaseToken: data.lease_token, resumed: data.resumed === true };
+}
+
+async function markErasureStep(
+  organizationId: string, request: ErasureRequestHandle,
+  step: 'governance_reanchored' | 'governance_revoked' | 'evidence_links_cleared' | 'failed',
+  count?: number, errorCode?: string,
+): Promise<void> {
+  const res = await ownedDbRpc(ERASURE_LEDGER_MARK, {
+    p_organization_id: organizationId,
+    p_request_id: request.requestId,
+    p_lease_token: request.leaseToken,
+    p_step: step,
+    p_count: count ?? null,
+    p_error_code: errorCode ?? null,
+  });
+  if (res.error) {
+    // A marker that cannot be written fails closed: finalize refuses without
+    // markers 3–5, and the retry re-runs the idempotent steps.
+    const code = errCode(res.error);
+    throw new PersonErasureError(
+      `could not record erasure step ${step}: ${res.error.message}`,
+      code === '55P03' ? 'erasure_lease_lost' : (code ?? 'erasure_mark_failed'),
+    );
+  }
+}
+
+async function finalizeErasure(
+  organizationId: string, request: ErasureRequestHandle,
+): Promise<{ deleted: boolean; provenanceRedaction: EraseProvenanceResult; finalizeCounts: Record<string, unknown> | null }> {
+  const res = await ownedDbRpc(ERASURE_LEDGER_FINALIZE, {
+    p_organization_id: organizationId,
+    p_request_id: request.requestId,
+    p_lease_token: request.leaseToken,
+  });
+  if (res.error) {
+    const code = errCode(res.error);
+    const message = String(res.error.message ?? '');
+    if (code && FUNCTION_MISSING.has(code)) {
+      throw new PersonErasureError(`the erasure ledger is not deployed (${LEDGER_MISSING_HINT}): ${message}`, 'erasure_ledger_unavailable');
+    }
+    // The function names the blocker; map by NAME, never by SQLSTATE alone
+    // (a 23503 used to be reported as a merge survivor whatever blocked it).
+    const blocker = /delete_blocked_by (\S+)/.exec(message)?.[1];
+    if (blocker && /^unified_persons_merge_/.test(blocker)) {
+      throw new PersonErasureError(
+        'the person is the survivor of a merge and cannot be erased until the merged people are resolved',
+        'merge_survivor',
+      );
+    }
+    if (blocker) {
+      throw new PersonErasureError(`person delete blocked by ${blocker} (${code}); nothing was erased`, 'delete_blocked');
+    }
+    if (/live_person_governance_remains/.test(message)) {
+      throw new PersonErasureError('a live person-anchored governance record appeared after step 4; retry the erasure', 'governance_changed_retry');
+    }
+    if (/person_vanished_outside_ledger/.test(message)) {
+      throw new PersonErasureError('the person was deleted outside the erasure ledger; an operator must review the request', 'person_vanished_outside_ledger');
+    }
+    if (code === '55P03') {
+      throw new PersonErasureError('the erasure lease was taken over by another runner', 'erasure_lease_lost');
+    }
+    throw new PersonErasureError(`erasure finalize failed (${code ?? 'unknown'}): ${message}`, code ?? 'erasure_finalize_failed');
+  }
+  const data = (res.data ?? {}) as {
+    deleted?: unknown; provenance?: Record<string, unknown> | null; provenance_erasure_id?: unknown;
+    finalize_counts?: Record<string, unknown> | null;
+  };
+  const p = data.provenance ?? {};
+  const erasureId = typeof p.erasure_id === 'string' ? p.erasure_id
+    : (typeof data.provenance_erasure_id === 'string' ? data.provenance_erasure_id : '');
+  if (!erasureId) {
+    throw new PersonErasureError('the erasure finalize returned no provenance erasure event', 'provenance_erasure_unconfirmed');
+  }
+  const counts: Record<string, number> = {};
+  if (p.counts && typeof p.counts === 'object') {
+    for (const [k, v] of Object.entries(p.counts as Record<string, unknown>)) counts[k] = Number(v ?? 0);
+  }
+  return {
+    deleted: data.deleted === true,
+    provenanceRedaction: {
+      status: 'erased',
+      erasureId,
+      redacted: Number(p.redacted ?? 0),
+      alreadyRedacted: Number(p.already_redacted ?? 0),
+      contributionIds: Array.isArray(p.contribution_ids) ? (p.contribution_ids as unknown[]).map(String) : [],
+      canonicalLeadIds: Array.isArray(p.canonical_lead_ids) ? (p.canonical_lead_ids as unknown[]).map(String) : [],
+      counts,
+    },
+    finalizeCounts: data.finalize_counts && typeof data.finalize_counts === 'object' ? data.finalize_counts : null,
   };
 }
 
@@ -399,7 +596,7 @@ async function loadPersonAnchoredGovernance(organizationId: string, personId: st
  *   - only `account_id` is set. No value, hash, subject or source identifier
  *     is rewritten.
  *
- * FAIL CLOSED. A failure here throws, so `deletePersonRow` is never reached and
+ * FAIL CLOSED. A failure here throws, so `pi_person_erasure_finalize` is never reached and
  * the person survives with their evidence intact — the same direction every
  * other step in this module fails in. Erasure remains NON-TRANSACTIONAL across
  * tables (see note 3 in the header): a failure after this step succeeds leaves
@@ -427,33 +624,6 @@ async function clearPersonEvidenceAccountLinks(
   return ((res.data ?? []) as Array<unknown>).length;
 }
 
-async function deletePersonRow(organizationId: string, personId: string): Promise<boolean> {
-  const res = await ownedDbTable('unified_persons')
-    .delete()
-    .eq('company_id', organizationId)         // TENANT FIRST — never erase another tenant's person
-    .eq('id', personId)
-    .select('id');
-
-  if (res.error) {
-    const code = errCode(res.error);
-    // `unified_persons_merge_tenant_fk` is ON DELETE NO ACTION (LI-4C, ADR §15):
-    // a survivor cannot be deleted while another person is merged into it. That
-    // is the documented, intended behaviour, and merging is disabled today — but
-    // a raw 23503 would tell a caller nothing about why.
-    if (code === '23503') {
-      throw new PersonErasureError(
-        'the person is the survivor of a merge and cannot be erased until the merged people are resolved',
-        'merge_survivor',
-      );
-    }
-    throw new PersonErasureError(
-      `person delete failed (${code}): ${res.error.message}`,
-      code ?? 'delete_failed',
-    );
-  }
-  return ((res.data ?? []) as unknown[]).length > 0;
-}
-
 /**
  * KNOWN LIMITATIONS, recorded rather than hidden:
  *
@@ -471,11 +641,19 @@ async function deletePersonRow(organizationId: string, personId: string): Promis
  *    writer runs. The governance writer normalises again on the way in, so a
  *    divergence would surface as a mismatch rather than a silent bad target.
  *
- * 3. Erasure is not transactional across the two tables. Steps 3 and 4 are
- *    ordered so that a failure leaves suppression STRONGER than before (extra
- *    target records, originals still live) and the person present. A retry is
- *    safe: re-anchoring is idempotent by 23505 and revocation is guarded by
- *    `.is('revoked_at', null)`.
+ * 3. Erasure is not ONE transaction. Steps 3 (one INSERT per carried-forward
+ *    target), 4 (one UPDATE per revoked record) and 5 each commit on their own;
+ *    steps 6–7 commit together in `pi_person_erasure_finalize`. Steps 3 and 4
+ *    are ordered so that a failure leaves suppression STRONGER than before
+ *    (extra target records, originals still live) and the person present.
+ *    Every step is idempotent (re-anchoring by 23505, revocation by
+ *    `.is('revoked_at', null)`, step 5 matches nothing twice, step 6 reports
+ *    zero counts), the ledger request is RESUMED by a retry and leased to one
+ *    runner at a time, so a retry is always safe and always re-runs 3–5 (a
+ *    record written between attempts must be carried forward too). Between a
+ *    failed attempt and its retry the person row exists with its name and its
+ *    provenance unredacted; only governance has moved (carried forward /
+ *    revoked), which keeps suppression enforced.
  *
  * 4. This module does not decide a retention period for anything. Retention is
  *    an open policy question and a default invented here would answer it.
