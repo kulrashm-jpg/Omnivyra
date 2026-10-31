@@ -8,7 +8,8 @@
  *
  *   extractAttachmentRowState   → builds AttachmentRowState from a daily row
  *   postUploadMedia             → POST /upload-media          (URL / link)
- *   postUploadFileResumable     → TUS → /upload-media-finalize (file, resumable)
+ *   postUploadFileResumable     → /upload-media-authorize → TUS (signed, private
+ *                                 quarantine) → /upload-media-finalize (file, resumable)
  *   postUploadFileDirect        → POST /upload-media-direct    (file, multipart)
  *   postReschedule/postUnschedule, resume/discard helpers
  *
@@ -23,7 +24,6 @@ import {
   isAttachmentRequiredFormat,
   normalizeCreatorFormat,
 } from '@/lib/shared/creatorGovernanceRegistry';
-import { bearerAuthorization } from '@/lib/httpAuthHeaders';
 import type {
   AttachmentRowState,
   UploadMediaResult,
@@ -293,9 +293,49 @@ export async function postUnschedule(input: { dailyPlanId: string; reason?: stri
 }
 
 /**
- * Resumable upload via tus-js-client → Supabase TUS endpoint, then
- * finalize via our Next.js API. Falls back to the multipart direct path
- * automatically when Supabase config isn't available in the browser.
+ * MEDIA-H3 — the server-issued upload authorization the browser needs before
+ * any byte is sent. The browser never chooses the bucket or the object key and
+ * never writes with the publishable key's own (anon) privileges.
+ */
+export type UploadAuthorization = {
+  bucket: string;
+  object_path: string;
+  token: string;
+  upload_session_id: string;
+  resumable_endpoint: string;
+};
+
+export async function requestUploadAuthorization(input: {
+  dailyPlanId: string;
+  file: File;
+}): Promise<{ ok: true; auth: UploadAuthorization } | { ok: false; message: string; status?: number }> {
+  try {
+    const res = await fetch(`/api/activity-workspace/${encodeURIComponent(input.dailyPlanId)}/upload-media-authorize`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mime_type: input.file.type || 'application/octet-stream', size_bytes: input.file.size }),
+    });
+    const data = await res.json().catch(() => ({} as any));
+    if (!res.ok) {
+      return { ok: false, status: res.status, message: typeof data?.error === 'string' ? data.error : `HTTP ${res.status}` };
+    }
+    const fields = ['bucket', 'object_path', 'token', 'upload_session_id', 'resumable_endpoint'] as const;
+    if (!fields.every((f) => typeof data?.[f] === 'string' && data[f].length > 0)) {
+      return { ok: false, message: 'Upload authorization response was incomplete.' };
+    }
+    return { ok: true, auth: data as UploadAuthorization };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Upload authorization failed.' };
+  }
+}
+
+/**
+ * Resumable upload: server authorization → tus-js-client to Supabase's SIGNED
+ * resumable endpoint (private quarantine bucket, server-minted key, no
+ * overwrite) → finalize via our Next.js API, which validates the stored bytes
+ * and only then publishes them. Falls back to the multipart direct path when
+ * Supabase config isn't available in the browser.
  */
 export async function postUploadFileResumable(input: {
   dailyPlanId: string;
@@ -318,16 +358,16 @@ export async function postUploadFileResumable(input: {
     return postUploadFileDirect(input);
   }
 
-  const subdir = input.file.type.startsWith('video/')
-    ? 'video'
-    : input.file.type.startsWith('audio/')
-      ? 'audio'
-      : input.file.type.startsWith('image/')
-        ? 'image'
-        : 'misc';
-  const sessionId = `${input.dailyPlanId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const ext = (input.file.type.split('/')[1] || 'bin').replace(/[^a-z0-9]+/gi, '');
-  const objectPath = `${input.dailyPlanId}/${subdir}/${sessionId}.${ext}`;
+  if (input.signal?.aborted) {
+    return { ok: false, aborted: true, message: 'Upload aborted before send.' };
+  }
+  const authorization = await requestUploadAuthorization({ dailyPlanId: input.dailyPlanId, file: input.file });
+  if (authorization.ok === false) {
+    return { ok: false, message: authorization.message };
+  }
+  const { auth } = authorization;
+  const sessionId = auth.upload_session_id;
+  const objectPath = auth.object_path;
 
   const PERSIST_KEY = `creator-upload-resume:${input.dailyPlanId}`;
 
@@ -400,17 +440,19 @@ export async function postUploadFileResumable(input: {
     }
 
     upload = new tusModule.Upload(input.file, {
-      endpoint: `${supabaseUrl}/storage/v1/upload/resumable`,
+      endpoint: `${supabaseUrl}${auth.resumable_endpoint}`,
       retryDelays: [0, 1000, 3000, 5000, 10000],
       chunkSize: 6 * 1024 * 1024,
       removeFingerprintOnSuccess: true,
+      // MEDIA-H3: the signed token authorizes exactly one key in the private
+      // quarantine bucket. No bearer credential and no x-upsert (no overwrite).
       headers: {
-        authorization: bearerAuthorization(supabasePublishableKey),
-        'x-upsert': 'true',
+        apikey: supabasePublishableKey,
+        'x-signature': auth.token,
       },
       uploadDataDuringCreation: true,
       metadata: {
-        bucketName: 'media-uploads',
+        bucketName: auth.bucket,
         objectName: objectPath,
         contentType: input.file.type || 'application/octet-stream',
         cacheControl: '3600',

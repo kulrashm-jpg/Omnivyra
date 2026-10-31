@@ -31,6 +31,13 @@ jest.mock('../../db/supabaseClient', () => {
     }),
     getPublicUrl: jest.fn((p: string) => { mockEvents.push(`storage:url:${p}`); return { data: { publicUrl: `https://supabase.test/storage/v1/object/public/${bucket}/${p}` } }; }),
     upload: jest.fn(async () => { mockEvents.push('storage:upload'); return { data: null, error: null }; }),
+    // MEDIA-H3 fixture: finalize inspects the stored object (quarantine) and
+    // promotes it with a server-side move. Both are storage calls, so they land
+    // in the same ordered event log and every "no storage call" assertion
+    // below covers them too.
+    info: jest.fn(async (p: string) => { mockEvents.push(`storage:info:${bucket}:${p}`); return { data: { size: 1000, contentType: 'video/mp4' }, error: null }; }),
+    createSignedUrl: jest.fn(async (p: string) => { mockEvents.push(`storage:sign:${bucket}:${p}`); return { data: { signedUrl: `https://supabase.test/storage/v1/object/sign/${bucket}/${p}?token=t` }, error: null }; }),
+    move: jest.fn(async (from: string, to: string, opts: any) => { mockEvents.push(`storage:move:${bucket}:${from}->${opts?.destinationBucket}:${to}`); return { data: { message: 'ok' }, error: null }; }),
   });
   const supabase = {
     ...h.fakeSupabase,

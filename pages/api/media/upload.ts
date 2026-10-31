@@ -19,7 +19,7 @@ import formidable from 'formidable';
 import { MAX_IMAGE_UPLOAD_BYTES, uploadMedia, validateMedia } from '../../../backend/services/mediaService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { sniffSafeImageMime } from '../../../lib/security/safeImageDecode';
-import { sniffMimeFromBytes } from '../../../backend/services/mediaUploadValidationService';
+import { nonImageBytesMatchDeclaredType } from '../../../lib/security/mediaByteSignature';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 import fs from 'fs';
 
@@ -29,30 +29,6 @@ export const config = {
     bodyParser: false,
   },
 };
-
-/** Leading top-level atoms of legacy QuickTime files that carry no `ftyp` box. */
-const QUICKTIME_LEADING_ATOMS = new Set(['moov', 'mdat', 'wide', 'free', 'skip', 'pnot']);
-
-/**
- * True when the bytes positively look like the declared non-image type:
- * `application/pdf` needs the `%PDF-` header; `video/*` and `audio/*` need
- * the repo sniffer to report the same category (legacy QuickTime atoms are
- * accepted for a declared QuickTime type only). Anything else is refused.
- */
-function nonImageBytesMatchDeclaredType(bytes: Buffer, declaredMimeType: string): boolean {
-  const claimed = declaredMimeType.trim().toLowerCase().split(';')[0].trim();
-  if (claimed === 'application/pdf') {
-    return bytes.subarray(0, 5).toString('latin1') === '%PDF-';
-  }
-  const category = claimed.split('/')[0];
-  if (category !== 'video' && category !== 'audio') return false;
-  const sniffed = sniffMimeFromBytes(bytes.subarray(0, 32));
-  if (sniffed) return sniffed.split('/')[0] === category;
-  if (claimed === 'video/quicktime' || claimed === 'video/mov') {
-    return bytes.length >= 8 && QUICKTIME_LEADING_ATOMS.has(bytes.subarray(4, 8).toString('latin1'));
-  }
-  return false;
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
