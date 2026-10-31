@@ -430,6 +430,16 @@ AS $fn$
     LIMIT 1000);
 $fn$;
 
+-- Static form of the client-role revokes below, for check-migration-quality
+-- (it reads top-level statements only). No privilege change: the DO block
+-- already revokes the same roles; anon/authenticated exist on every target.
+REVOKE ALL ON FUNCTION public.pi_person_erasure_open(uuid, uuid, text, text, integer) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.pi_person_erasure_mark(uuid, uuid, uuid, text, integer, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.pi_person_erasure_finalize(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.pi_person_erasure_inconsistencies(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.pi_person_erasure_legacy_lead_policy(uuid, uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.pi_person_erasure_decision_ref_policy(uuid, uuid) FROM PUBLIC, anon, authenticated;
+
 DO $grants_fn$
 DECLARE r text; f text;
 BEGIN

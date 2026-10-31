@@ -72,6 +72,11 @@ BEGIN
 END
 $fn$;
 
+-- Static form of the client-role revokes below, for check-migration-quality
+-- (it reads top-level statements only). No privilege change: the DO block
+-- already revokes the same roles; anon/authenticated exist on every target.
+REVOKE ALL ON FUNCTION public.pi_person_erasure_legacy_lead_policy(uuid, uuid) FROM PUBLIC, anon, authenticated;
+
 DO $revoke_fn$
 DECLARE r text;
 BEGIN

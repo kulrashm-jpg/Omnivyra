@@ -120,6 +120,12 @@ BEGIN
 END
 $fn$;
 
+-- Static form of the client-role revokes below, for check-migration-quality
+-- (it reads top-level statements only). No privilege change: the DO block
+-- already revokes the same roles; anon/authenticated exist on every target.
+REVOKE ALL ON FUNCTION public.prospect_score_evaluations_immutable() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.pi_erasure_redact_score_evaluations(uuid, uuid) FROM PUBLIC, anon, authenticated;
+
 DO $revoke_fn$
 DECLARE r text;
 BEGIN
