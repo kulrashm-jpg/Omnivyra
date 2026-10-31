@@ -20,8 +20,8 @@ export const optimizedWeekSchema = z.object({
       theme: z.string().optional(),
       trend_influence: z.array(z.string()).optional(),
       platforms: z.array(z.string()).optional(),
-      content_types: z.record(z.array(z.string())).optional(),
-      frequency_per_platform: z.record(z.number()).optional(),
+      content_types: z.record(z.string(), z.array(z.string())).optional(),
+      frequency_per_platform: z.record(z.string(), z.number()).optional(),
       existing_content_used: z.array(z.string()).optional(),
       new_content_needed: z.array(z.string()).optional(),
     })

@@ -7,6 +7,7 @@
 
 import { z } from 'zod';
 import { EventType, PlatformType } from '../types/extension.types';
+import { v3MessageErrorMap, v3Url } from '../../../lib/validation/zodV3Compat';
 
 // ============================================================================
 // ENUM VALIDATORS
@@ -35,7 +36,7 @@ export const ExtensionEventRequestSchema = z.object({
   platform: PlatformSchema.describe('Target platform'),
   event_type: EventTypeSchema.describe('Type of engagement event'),
   platform_message_id: z.string().min(1).describe('Unique ID from platform (for dedup)'),
-  data: z.record(z.unknown()).describe('Platform-specific raw data'),
+  data: z.record(z.string(), z.unknown()).describe('Platform-specific raw data'),
   timestamp: z.number().int().positive().describe('Unix timestamp in ms'),
 });
 
@@ -72,7 +73,7 @@ export type GetCommandsQuery = z.infer<typeof GetCommandsQuerySchema>;
  * Validates command execution result
  */
 export const CommandResultRequestSchema = z.object({
-  command_id: z.string().uuid().describe('UUID of executed command'),
+  command_id: z.guid().describe('UUID of executed command'),
   status: z
     .enum(['success', 'failed'])
     .describe('Execution status'),
@@ -80,7 +81,7 @@ export const CommandResultRequestSchema = z.object({
     .object({
       success: z.boolean(),
       message: z.string().optional(),
-      platform_response: z.record(z.unknown()).optional(),
+      platform_response: z.record(z.string(), z.unknown()).optional(),
       error: z.string().optional(),
     })
     .describe('Execution details'),
@@ -137,7 +138,7 @@ export const LinkedinCommentEventDataSchema = z.object({
   comment_text: z.string().describe('Comment content'),
   author: z.object({
     name: z.string(),
-    profile_url: z.string().url(),
+    profile_url: v3Url(),
     profile_id: z.string(),
   }),
   created_at: z.number().describe('Unix timestamp'),
@@ -153,7 +154,7 @@ export const YoutubeCommentEventDataSchema = z.object({
   author: z.object({
     name: z.string(),
     channel_id: z.string(),
-    channel_url: z.string().url(),
+    channel_url: v3Url(),
   }),
   created_at: z.number().describe('Unix timestamp'),
 });
@@ -169,7 +170,7 @@ export const YoutubeCommentEventDataSchema = z.object({
 export function validateEventRequest(
   data: unknown
 ): ExtensionEventRequest {
-  return ExtensionEventRequestSchema.parse(data);
+  return ExtensionEventRequestSchema.parse(data, { error: v3MessageErrorMap });
 }
 
 /**
@@ -178,7 +179,7 @@ export function validateEventRequest(
 export function validateCommandResultRequest(
   data: unknown
 ): CommandResultRequest {
-  return CommandResultRequestSchema.parse(data);
+  return CommandResultRequestSchema.parse(data, { error: v3MessageErrorMap });
 }
 
 /**
@@ -187,7 +188,7 @@ export function validateCommandResultRequest(
 export function validateSessionRequest(
   data: unknown
 ): ValidateSessionRequest {
-  return ValidateSessionRequestSchema.parse(data);
+  return ValidateSessionRequestSchema.parse(data, { error: v3MessageErrorMap });
 }
 
 /**
@@ -196,5 +197,5 @@ export function validateSessionRequest(
 export function validateGetCommandsQuery(
   data: unknown
 ): GetCommandsQuery {
-  return GetCommandsQuerySchema.parse(data);
+  return GetCommandsQuerySchema.parse(data, { error: v3MessageErrorMap });
 }

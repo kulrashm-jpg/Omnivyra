@@ -18,7 +18,7 @@ const dailyPlanSchema = z.object({
   day: z.string(),
   objective: z.string(),
   content: z.string(),
-  platforms: z.record(z.string()),
+  platforms: z.record(z.string(), z.string()),
 });
 
 const weeklyPlanSchema = z.object({

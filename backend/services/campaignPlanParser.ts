@@ -9,7 +9,7 @@ const dailyPlanSchema = z.object({
   day: z.string(),
   objective: z.string(),
   content: z.string(),
-  platforms: z.record(z.string()),
+  platforms: z.record(z.string(), z.string()),
   hashtags: z.array(z.string()).optional(),
   seo_keywords: z.array(z.string()).optional(),
   meta_title: z.string().optional(),
@@ -73,7 +73,7 @@ const refinedDaySchema = z.object({
   day: z.string(),
   objective: z.string(),
   content: z.string(),
-  platforms: z.record(z.string()),
+  platforms: z.record(z.string(), z.string()),
   hashtags: z.array(z.string()).optional(),
   seo_keywords: z.array(z.string()).optional(),
   meta_title: z.string().optional(),
@@ -87,7 +87,7 @@ const refinedDaySchema = z.object({
 
 const platformCustomizationSchema = z.object({
   day: z.string(),
-  platforms: z.record(z.string()),
+  platforms: z.record(z.string(), z.string()),
 });
 
 const BLUEPRINT_SCHEMA_DESC = `
