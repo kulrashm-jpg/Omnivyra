@@ -227,7 +227,9 @@ describe('next.config.js under the installed Next', () => {
     const patterns = nextConfig.images.remotePatterns;
     const ok = (u: string) => hasRemoteMatch([], patterns, new URL(u));
     expect(ok('https://images.unsplash.com/photo-1')).toBe(true);
-    expect(ok('https://abcdefghijklmnopqrst.supabase.co/storage/v1/object/public/b/x.png')).toBe(true);
+    // MEDIA-H3 (16fdec2a) removed the Supabase Storage entry: the optimizer must
+    // not fetch stored objects, public or signed (nextConfigNoSupabaseImageHost).
+    expect(ok('https://abcdefghijklmnopqrst.supabase.co/storage/v1/object/public/b/x.png')).toBe(false);
     expect(ok('https://abcdefghijklmnopqrst.supabase.co/storage/v1/object/sign/b/x.png')).toBe(false);
     expect(ok('http://images.unsplash.com/photo-1')).toBe(false);
     expect(ok('https://evil.example.com/storage/v1/object/public/b/x.png')).toBe(false);
