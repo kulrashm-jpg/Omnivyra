@@ -15,6 +15,10 @@
  * These tests drive the ROUTE and assert what `uploadMedia` is asked to store.
  */
 
+// A module, not a script: its top-level names (route, AUTH_USER, ...) must not
+// collide with other suites' globals in the backend-tests type surface.
+export {};
+
 jest.mock('@/config', () => ({ config: {}, getValidatedConfig: () => ({}) }));
 
 const AUTH_USER = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
