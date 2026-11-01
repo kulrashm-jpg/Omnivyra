@@ -48,6 +48,7 @@
  * timeouts and crashes in the engine cannot change it.
  */
 
+import { BROWSER_CAPABILITIES } from './engineCapabilities';
 import type { EngineAdapter, EngineResult, EngineStepContext } from './engineAdapters';
 
 /** Operations of the browser engine a journey step may request. None. */
@@ -116,6 +117,7 @@ export function createBrowserAdapter(): EngineAdapter {
   return {
     engine: 'browser',
     channels: BROWSER_ADAPTER_CHANNELS,
+    capabilities: BROWSER_CAPABILITIES,
     async execute(ctx): Promise<EngineResult> {
       // `needs_human`, not `skipped`: an unsupported step must stay visible to a
       // person rather than silently advance the journey as if it were declined.

@@ -365,7 +365,7 @@ beforeEach(() => {
   };
   // The tenant's WS-3 governance configuration (tenant enablement is WS-3's switch).
   (db.tables.outreach_governance_config ??= []).push({
-    company_id: ORG_A, enabled: true, kill_switch: false, enabled_channels: [INTERNAL_CHANNEL],
+    company_id: ORG_A, enabled: true, kill_switch: false, enabled_channels: [INTERNAL_CHANNEL, 'whatsapp'],
     restricted_regions: [], daily_limit_tenant: null, daily_limit_lead: null,
   });
 });

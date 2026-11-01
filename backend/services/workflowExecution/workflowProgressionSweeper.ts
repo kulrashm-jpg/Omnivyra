@@ -11,14 +11,16 @@
  *   1. reads the individual's facts (individualIntelligence.ts — canonical sources);
  *   2. ends the journey if the person responded or PI closed the prospect
  *      (journeyResponses.ts) — no further step, and any unsent WS-3 task is cancelled;
- *   3. applies the step's IMPLICIT channel permission and its authored `when`
+ *   3. asks the central gate (journeyGovernance.ts) on a contact channel — a tenant or
+ *      platform control holds the step, whichever engine would have served it;
+ *   4. applies the step's choice group, IMPLICIT channel permission and authored `when`
  *      conditions — if they do not hold, the step is SKIPPED: "no suitable
  *      action for this person" is a recorded decision, and the journey continues;
- *   4. applies the version's frequency policy — if the person was contacted too
- *      recently, the step WAITS (it is retried by a later sweep);
- *   5. hands the step to the channel's engine adapter (engineAdapters.ts), which
+ *   5. applies the version's frequency policy and execution window — too recent or
+ *      out of hours, the step WAITS (it is retried by a later sweep);
+ *   6. hands the step to the channel's engine adapter (engineAdapters.ts), which
  *      asks the EXISTING engine to act; the engine's own gates stay authoritative;
- *   6. settles the step from the engine's disposition: `completed` or `skipped`
+ *   7. settles the step from the engine's disposition: `completed` or `skipped`
  *      advance the journey; `wait` and `needs_human` leave it ready.
  *
  * Every decision is then recorded durably (journeyDecisionLog.ts) and the tenant's
@@ -28,7 +30,8 @@
  * It never approves, never overrides an opt-out or suppression, never retries an
  * action that may already have happened, and never chooses `failed` (an absorbing
  * state reserved for a person). A response can only END a journey: no step is ever
- * chosen, added or reordered because of one. Stopping contact narrows what a workflow
+ * added or reordered because of one, and a choice group chooses among steps the frozen
+ * version already holds, on facts read live. Stopping contact narrows what a workflow
  * does, which is why it needs no authoring and no autonomy policy.
  *
  * ─── CONCURRENCY ──────────────────────────────────────────────────────────
@@ -36,11 +39,13 @@
  * WS-3 bridge and the engine-request ledger are unique per execution task; and
  * engines claim before sending. Two sweeps over the same run converge.
  */
-import { advanceExecutionRun, cancelExecutionRun, getReadyStep, transitionPlanStep } from './stepProgressionStore';
+import {
+  advanceExecutionRun, BLOCKING_STEP_STATES, getReadyStep, listProgressionSteps, transitionPlanStep,
+} from './stepProgressionStore';
 import {
   getPlanForInstance, lastCompletedActionAtForSubject, listInstanceTasks,
 } from '../executionPlans/executionPlanStore';
-import { listExecutionInstanceIdsInStates } from '../executionInstances/executionInstanceStore';
+import { listExecutionInstanceIdsInStates, setExecutionInstanceState } from '../executionInstances/executionInstanceStore';
 import { ownedDbTable } from '../../db/writeOwner';
 import { recordProgressionSweep } from '../leadOutreachExecution/telemetry';
 import { logger } from '../logger';
@@ -55,13 +60,14 @@ import {
 } from '../orchestration/individualIntelligence';
 import {
   channelPermissionFact, evaluateConditions, hoursBetween, isProspectClosedToJourneys,
-  NON_CONTACT_CHANNELS, type JourneyCondition,
+  isWithinExecutionWindow, NON_CONTACT_CHANNELS, type JourneyCondition,
 } from '../orchestration/journeyPolicy';
 import { assessJourneyExit, durableJourneyResponsePort, type JourneyResponsePort } from '../orchestration/journeyResponses';
 import { recordJourneyDecisions, type JourneyDecisionInput } from '../orchestration/journeyDecisionLog';
 import { feedRecentOutcomesToLifecycle, feedWhatsAppReplyToLifecycle, type LifecycleFeedbackReport } from '../orchestration/journeyFeedback';
-import { listInstanceHandoffs } from '../outreachBridge/outreachBridgeStore';
-import { getOutreachTaskById, transitionOutreachTaskState } from '../leadOutreachExecution';
+import { exitJourney, withdrawUnsentTasks } from '../orchestration/journeyExit';
+import { channelRefusal } from '../orchestration/journeyGovernance';
+import { COMMUNITY_CAPABILITIES } from '../orchestration/engineCapabilities';
 import { ensureProspectLifecycleOpen } from '../prospectLifecycle/lifecycleWriter';
 import type { WorkflowDefinition, WorkflowStep } from '../workflows/workflowStore';
 
@@ -85,6 +91,12 @@ export const SWEEP_LIMITS = {
   /** The occupied runs a sweep rotates its window across; beyond this is reported. */
   instanceWindowPerTenant: 1000,
 } as const;
+
+/**
+ * A step held this long by an engine, or left `running` by a person, is reported to a
+ * person. It is only ever reported: nothing is retried, settled or expired because of it.
+ */
+export const STUCK_AFTER_HOURS = 24 * 7;
 
 /** The cadence the rotation assumes. A different cadence only changes how fast it cycles. */
 export const SWEEP_ROTATION_MS = 15 * 60 * 1000;
@@ -195,6 +207,8 @@ export interface SweeperDeps {
   readonly recordDecisions?: typeof recordJourneyDecisions;
   readonly feedLifecycle?: typeof feedRecentOutcomesToLifecycle;
   readonly openLifecycle?: typeof ensureProspectLifecycleOpen;
+  /** The central tenant and platform gate. */
+  readonly channelGate?: typeof channelRefusal;
 }
 
 /**
@@ -205,6 +219,7 @@ export interface SweeperDeps {
 const communityAdapter: EngineAdapter = {
   engine: 'community',
   channels: ['community'],
+  capabilities: COMMUNITY_CAPABILITIES,
   execute: async (ctx) =>
     (await import('../orchestration/communityEngineAdapter')).createCommunityAdapter().execute(ctx),
 };
@@ -221,23 +236,6 @@ function readSnapshot(snapshot: unknown, stepKey: string): { step: WorkflowStep 
   const def = (snapshot && typeof snapshot === 'object' ? snapshot : null) as WorkflowDefinition | null;
   const steps = Array.isArray(def?.steps) ? def!.steps : [];
   return { step: steps.find((s) => s && s.key === stepKey) ?? null, definition: def };
-}
-
-/**
- * End a journey: cancel its workflow records through the existing RPC, then withdraw
- * any WS-3 task that has not started sending, so nobody approves or dispatches a moot
- * message. A task already dispatching or sent is left to its engine. Each withdrawal
- * is a compare-and-set, so losing a race to a dispatch is not a failure.
- */
-async function exitJourney(organizationId: string, executionInstanceId: string): Promise<void> {
-  await cancelExecutionRun({ organizationId, executionInstanceId });
-  for (const h of await listInstanceHandoffs(organizationId, executionInstanceId)) {
-    const task = await getOutreachTaskById(organizationId, h.outreachTaskId);
-    const status = task?.status;
-    if (status === 'pending' || status === 'awaiting_approval' || status === 'approved' || status === 'queued') {
-      await transitionOutreachTaskState(organizationId, h.outreachTaskId, status, 'cancelled');
-    }
-  }
 }
 
 /**
@@ -339,7 +337,33 @@ export async function advanceAndDispatchWorkflowExecution(
 
       // A linear chain has a single frontier, so this is the whole ready set.
       const ready = await getReadyStep(organizationId, plan.id);
-      if (ready === null) continue;
+      if (ready === null) {
+        // A failed or cancelled step blocks the chain for good, but the database ends a
+        // run only once every step has settled, so this run would stay occupied forever:
+        // re-enrolment refused, and a sweep scan spent on it each cycle.
+        const planSteps = await listProgressionSteps(organizationId, plan.id);
+        const blocking = planSteps.find((s) => (BLOCKING_STEP_STATES as readonly string[]).includes(s.state));
+        if (blocking !== undefined) {
+          await setExecutionInstanceState({ organizationId, instanceId: executionInstanceId, lifecycleState: 'failed' });
+          await withdrawUnsentTasks(organizationId, executionInstanceId);
+          counters.journeys_exited += 1;
+          decisions.push({
+            executionInstanceId, planStepId: null, stepKey: null, channel: null, engine: null,
+            decision: 'exited', outcome: `step_${blocking.state}`, reasons: [`step ${blocking.stepKey} is ${blocking.state}; later steps cannot run`],
+          });
+          continue;
+        }
+        const running = planSteps.find((s) => s.state === 'running');
+        const heldFor = running?.startedAt == null ? null : hoursBetween(running.startedAt, now);
+        if (running !== undefined && heldFor !== null && heldFor >= STUCK_AFTER_HOURS) {
+          counters.tasks_needing_human += 1;
+          decisions.push({
+            executionInstanceId, planStepId: running.id, stepKey: running.stepKey, channel: running.channel, engine: null,
+            decision: 'needs_human', outcome: 'running_step_unattended', reasons: [`marked running ${heldFor.toFixed(0)}h ago and never settled`],
+          });
+        }
+        continue;
+      }
 
       const tasks = await listInstanceTasks(organizationId, executionInstanceId);
       const task = tasks.find((t) => t.planStepId === ready.id) ?? null;
@@ -425,8 +449,37 @@ export async function advanceAndDispatchWorkflowExecution(
         }
       }
 
-      // ── 4. Implicit permission + authored conditions → skip when unmet. ──
+      // ── 4. Tenant and platform controls: held, whichever engine serves this. ──
+      if (!NON_CONTACT_CHANNELS.includes(channel)) {
+        const refusal = await (options.deps?.channelGate ?? channelRefusal)(organizationId, channel);
+        if (refusal !== null) {
+          counters.tasks_waiting += 1;
+          decide({ engine: adapter.engine, decision: 'waiting', outcome: refusal, reasons: [`${channel} is not available: ${refusal}`] });
+          continue;
+        }
+      }
+
+      // ── 5. Choice group, implicit permission, authored conditions → skip when unmet. ──
+      if (typeof step?.choice_group === 'string') {
+        const group = step.choice_group;
+        const groupKeys = (Array.isArray(definition?.steps) ? definition!.steps : []).filter((s) => s.choice_group === group).map((s) => s.key);
+        const earlier = (await listProgressionSteps(organizationId, plan.id))
+          .filter((s) => s.stepOrder < ready.stepOrder && groupKeys.includes(s.stepKey));
+        const chosen = earlier.find((s) => s.state === 'completed');
+        if (chosen !== undefined) {
+          await settleStep(organizationId, ready.id, 'skipped', counters, issues);
+          decide({ engine: adapter.engine, decision: 'skipped', outcome: 'branch_not_taken', reasons: [`choice group ${group} already acted through ${chosen.stepKey}`] });
+          continue;
+        }
+      }
       const permission = channelPermissionFact(channel);
+      // A new contact channel with nothing that can say no would contact everyone. An engine
+      // serving it is held until its permission source exists; the step stays with a person.
+      if (permission === null && !NON_CONTACT_CHANNELS.includes(channel)) {
+        counters.tasks_needing_human += 1;
+        decide({ engine: adapter.engine, decision: 'needs_human', outcome: 'no_permission_source', reasons: [`nothing can read a person's permission for ${channel}`] });
+        continue;
+      }
       const required: JourneyCondition[] = [
         ...(permission === null ? [] : [{ fact: permission, op: 'eq' as const, value: true }]),
         ...(step?.when ?? []),
@@ -438,7 +491,7 @@ export async function advanceAndDispatchWorkflowExecution(
         continue;
       }
 
-      // ── 5. Frequency policy across this tenant's journeys for the person. ──
+      // ── 6. Frequency policy and execution window. ─────────────────────────
       const gap = definition?.policy?.min_hours_between_actions;
       if (typeof gap === 'number' && gap > 0 && !NON_CONTACT_CHANNELS.includes(channel)) {
         const last = await lastCompletedActionAtForSubject(organizationId, subject.kind, subject.id);
@@ -450,7 +503,14 @@ export async function advanceAndDispatchWorkflowExecution(
         }
       }
 
-      // ── 6. The engine acts; its disposition settles the step. ─────────────
+      const window = definition?.policy?.execution_window;
+      if (window !== undefined && !NON_CONTACT_CHANNELS.includes(channel) && !isWithinExecutionWindow(window, now, facts.timezone ?? null)) {
+        counters.tasks_deferred_frequency += 1;
+        decide({ engine: adapter.engine, decision: 'deferred', outcome: 'outside_execution_window', reasons: [`outside ${window.start_hour}:00-${window.end_hour}:00`] });
+        continue;
+      }
+
+      // ── 7. The engine acts; its disposition settles the step. ─────────────
       let r: EngineResult;
       try {
         r = await adapter.execute({
@@ -479,9 +539,16 @@ export async function advanceAndDispatchWorkflowExecution(
           issues.push({ scope: 'task', organizationId, id: task.id, code: `needs_human:${r.outcome}`, message: r.reason ?? r.outcome });
           decide({ engine: r.engine, decision: 'needs_human', outcome: r.outcome, reasons });
           break;
-        default:
+        default: {
+          const waited = ready.readyAt === null ? null : hoursBetween(ready.readyAt, now);
+          if (waited !== null && waited >= STUCK_AFTER_HOURS) {
+            counters.tasks_needing_human += 1;
+            decide({ engine: r.engine, decision: 'needs_human', outcome: 'stuck_waiting', reasons: [`${r.outcome} for ${waited.toFixed(0)}h`, ...reasons] });
+            break;
+          }
           counters.tasks_waiting += 1;
           decide({ engine: r.engine, decision: 'waiting', outcome: r.outcome, reasons });
+        }
       }
     } catch (e) {
       counters.errors += 1;

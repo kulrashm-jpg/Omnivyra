@@ -38,7 +38,8 @@
 import { ownedDbTable } from '../../db/writeOwner';
 import { createBroadcast, enqueueBroadcast, expandRecipients } from '../whatsappBroadcastService';
 import { normalizePhone } from '../identityResolutionService';
-import { isLeadOutreachGloballyDisabled, loadTenantGovernanceConfig } from '../leadOutreachExecution/governanceService';
+import { WHATSAPP_CAPABILITIES } from './engineCapabilities';
+import { channelRefusal } from './journeyGovernance';
 import type { EngineAdapter, EngineDisposition, EngineResult, EngineStepContext } from './engineAdapters';
 
 export const ENGINE_REQUESTS_TABLE = 'execution_engine_requests';
@@ -166,14 +167,7 @@ export const defaultWhatsAppDeps: WhatsAppAdapterDeps = {
 
   hasApproval: async () => false,
 
-  async channelRefusal(organizationId) {
-    if (isLeadOutreachGloballyDisabled()) return 'global_kill_switch';
-    const config = await loadTenantGovernanceConfig(organizationId);   // a failed read reads as unconfigured
-    if (!config.configured || !config.enabled) return 'tenant_not_enabled';
-    if (config.killSwitch) return 'tenant_kill_switch';
-    if (!config.enabledChannels.includes('whatsapp')) return 'channel_not_enabled';
-    return null;
-  },
+  channelRefusal: (organizationId) => channelRefusal(organizationId, 'whatsapp'),
 };
 
 const E164 = /^\+\d{8,15}$/;
@@ -216,6 +210,7 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
   return {
     engine: 'whatsapp',
     channels: ['whatsapp'],
+    capabilities: WHATSAPP_CAPABILITIES,
     async execute(ctx) {
       const template = ctx.step?.whatsapp?.template_name ?? null;
       if (!template) return result('no_template', 'needs_human', 'the step has no whatsapp.template_name', null);

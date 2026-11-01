@@ -55,6 +55,7 @@ export const JOURNEY_FACT_TYPES = {
   has_phone: 'boolean',                   // unified_persons.primary_phone present
   email_permitted: 'boolean',             // mayContact(email) allowed
   whatsapp_permitted: 'boolean',          // mayContact(whatsapp) allowed
+  community_permitted: 'boolean',         // mayContact(community) allowed
 } as const;
 export type JourneyFact = keyof typeof JOURNEY_FACT_TYPES;
 export type JourneyFactValue = string | number | boolean;
@@ -157,6 +158,7 @@ export function channelPermissionFact(channel: string): JourneyFact | null {
   switch (channel) {
     case 'email': return 'email_permitted';
     case 'whatsapp': return 'whatsapp_permitted';
+    case 'community': return 'community_permitted';
     default: return null;
   }
 }
@@ -199,9 +201,25 @@ export interface JourneyEnrollment {
   readonly conditions: readonly JourneyCondition[];
 }
 
+/**
+ * When a contact step may act. Hours are local to the person when their timezone is
+ * known and valid, otherwise local to `timezone`, which is therefore required.
+ * Narrowing only: outside the window a step waits and nothing is skipped.
+ */
+export interface JourneyExecutionWindow {
+  readonly timezone: string;
+  /** 0-23, inclusive. */
+  readonly start_hour: number;
+  /** 1-24, exclusive. Must be after start_hour. */
+  readonly end_hour: number;
+  /** 0 = Sunday. Absent means every day. */
+  readonly weekdays?: readonly number[];
+}
+
 export interface JourneyFrequencyPolicy {
   /** Minimum hours between two executed actions for the same individual (any of this tenant's journeys). */
   readonly min_hours_between_actions?: number;
+  readonly execution_window?: JourneyExecutionWindow;
 }
 
 /**
@@ -256,7 +274,73 @@ export function validateFrequencyPolicy(raw: unknown): JourneyFrequencyPolicy | 
   if (gap !== undefined && (typeof gap !== 'number' || !Number.isFinite(gap) || gap < 0 || gap > MAX_GAP_HOURS)) {
     fail(`policy.min_hours_between_actions must be a number in [0, ${MAX_GAP_HOURS}]`, 'invalid_policy');
   }
-  return gap === undefined ? {} : { min_hours_between_actions: gap as number };
+  const window = validateExecutionWindow(o.execution_window);
+  return {
+    ...(gap === undefined ? {} : { min_hours_between_actions: gap as number }),
+    ...(window === undefined ? {} : { execution_window: window }),
+  };
+}
+
+const isValidTimezone = (tz: string): boolean => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export function validateExecutionWindow(raw: unknown): JourneyExecutionWindow | undefined {
+  if (raw === undefined) return undefined;
+  const o = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null) as Record<string, unknown> | null;
+  if (o === null) fail('policy.execution_window must be an object', 'invalid_execution_window');
+  const tz = str(o.timezone);
+  if (tz === null || !isValidTimezone(tz)) fail('policy.execution_window.timezone must be a valid IANA timezone', 'invalid_execution_window');
+  const { start_hour: start, end_hour: end, weekdays } = o;
+  if (typeof start !== 'number' || !Number.isInteger(start) || start < 0 || start > 23) {
+    fail('policy.execution_window.start_hour must be an integer in [0, 23]', 'invalid_execution_window');
+  }
+  if (typeof end !== 'number' || !Number.isInteger(end) || end <= start || end > 24) {
+    fail('policy.execution_window.end_hour must be an integer after start_hour, at most 24', 'invalid_execution_window');
+  }
+  if (weekdays !== undefined && (!Array.isArray(weekdays) || weekdays.length === 0
+    || weekdays.some((d) => typeof d !== 'number' || !Number.isInteger(d) || d < 0 || d > 6))) {
+    fail('policy.execution_window.weekdays must be a non-empty array of 0-6', 'invalid_execution_window');
+  }
+  return {
+    timezone: tz, start_hour: start, end_hour: end,
+    ...(weekdays === undefined ? {} : { weekdays: [...(weekdays as number[])] }),
+  };
+}
+
+const WEEKDAY_INDEX: Readonly<Record<string, number>> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+/** An unparseable instant is outside every window: not knowing the time is not permission. */
+export function isWithinExecutionWindow(window: JourneyExecutionWindow, nowIso: string, personTimezone: string | null): boolean {
+  const at = new Date(nowIso);
+  if (!Number.isFinite(at.getTime())) return false;
+  const zone = personTimezone !== null && isValidTimezone(personTimezone) ? personTimezone : window.timezone;
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'short', hour: 'numeric', hourCycle: 'h23' }).formatToParts(at);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value);
+  const day = WEEKDAY_INDEX[parts.find((p) => p.type === 'weekday')?.value ?? ''];
+  if (!Number.isInteger(hour) || day === undefined) return false;
+  if (window.weekdays !== undefined && !window.weekdays.includes(day)) return false;
+  return hour >= window.start_hour && hour < window.end_hour;
+}
+
+/**
+ * A choice group turns consecutive steps into an ordered list of candidates: the first
+ * whose conditions hold and whose engine acts is the action taken, and the rest are
+ * skipped. This is how a journey branches on what is known about a person. Steps stay
+ * materialized up front in a linear plan, so the database clock, the frozen version
+ * and every settled-state rule apply unchanged.
+ */
+export function validateChoiceGroup(raw: unknown, stepKey: string): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(raw)) {
+    fail(`step "${stepKey}" choice_group must match ^[a-z0-9_-]{1,64}$`, 'invalid_choice_group');
+  }
+  return raw;
 }
 
 export function validateWhatsAppSettings(raw: unknown, stepKey: string): WhatsAppStepSettings {

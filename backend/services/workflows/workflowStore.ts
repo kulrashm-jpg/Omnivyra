@@ -48,7 +48,7 @@
 import { ownedDbTable } from '../../db/writeOwner';
 import { supabase } from '../../db/supabaseClient';
 import {
-  validateConditions, validateEnrollment, validateFrequencyPolicy, validateObjective,
+  validateChoiceGroup, validateConditions, validateEnrollment, validateFrequencyPolicy, validateObjective,
   validateWhatsAppSettings, JourneyPolicyError,
   type JourneyCondition, type JourneyEnrollment, type JourneyFrequencyPolicy,
   type JourneyObjective, type WhatsAppStepSettings,
@@ -209,6 +209,8 @@ export interface WorkflowStep {
    * action for this person" is a decision, not a failure. Absent = always applies.
    */
   readonly when?: readonly JourneyCondition[];
+  /** Orchestration — consecutive steps of a group are candidates; the first to act wins. */
+  readonly choice_group?: string;
   /** Orchestration — engine settings, required for (and only allowed on) whatsapp steps. */
   readonly whatsapp?: WhatsAppStepSettings;
   /**
@@ -534,6 +536,8 @@ export function validateWorkflowDefinition(definition: unknown): WorkflowDefinit
 
   const steps: WorkflowStep[] = [];
   const seen = new Set<string>();
+  const closedChoiceGroups = new Set<string>();
+  let openChoiceGroup: string | null = null;
   for (const raw of obj.steps as unknown[]) {
     const s = (raw && typeof raw === 'object' ? raw : null) as Record<string, unknown> | null;
     if (s === null || Array.isArray(s)) fail('every step must be an object', 'invalid_step');
@@ -603,6 +607,13 @@ export function validateWorkflowDefinition(definition: unknown): WorkflowDefinit
 
     // Orchestration: per-individual applicability and engine settings.
     const when = asWorkflowError(() => validateConditions(s.when, `step "${key}" when`));
+    const choiceGroup = asWorkflowError(() => validateChoiceGroup(s.choice_group, key));
+    // Non-adjacent members would let unrelated steps run between the candidates.
+    if (choiceGroup !== undefined && closedChoiceGroups.has(choiceGroup)) {
+      fail(`choice_group "${choiceGroup}" must be consecutive steps`, 'invalid_choice_group');
+    }
+    if (openChoiceGroup !== null && openChoiceGroup !== choiceGroup) closedChoiceGroups.add(openChoiceGroup);
+    openChoiceGroup = choiceGroup ?? null;
     if (s.whatsapp !== undefined && channel !== 'whatsapp') {
       fail(`step "${key}" whatsapp settings are only allowed on a whatsapp step`, 'invalid_step_engine_settings');
     }
@@ -633,6 +644,7 @@ export function validateWorkflowDefinition(definition: unknown): WorkflowDefinit
       execution_mode: executionMode as WorkflowExecutionMode,
       ...(s.requires_approval === true ? { requires_approval: true } : {}),
       ...(when.length > 0 ? { when } : {}),
+      ...(choiceGroup === undefined ? {} : { choice_group: choiceGroup }),
       ...(whatsapp === null ? {} : { whatsapp }),
       ...(socialPost === null ? {} : { social_post: socialPost }),
     });

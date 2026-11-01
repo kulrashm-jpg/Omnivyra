@@ -37,15 +37,17 @@ export interface IndividualFactsResult {
   readonly gaps: readonly string[];
   /** True only when PI's lifecycle was read and this prospect has no ledger yet. */
   readonly prospectLedgerAbsent: boolean;
+  /** The person's own timezone, when known. Not a journey fact: it only places a window. */
+  readonly timezone?: string | null;
 }
 
 /** Injected seams, so the journey engine is testable without a database. */
 export interface IndividualIntelligencePort {
   resolvePerson(organizationId: string, subject: SubjectRef): Promise<{ ok: boolean; personId: string | null }>;
-  readPersonContacts(organizationId: string, personId: string): Promise<{ email: string | null; phone: string | null } | null>;
+  readPersonContacts(organizationId: string, personId: string): Promise<{ email: string | null; phone: string | null; timezone?: string | null } | null>;
   readLeadIntelligence(organizationId: string, leadId: string): Promise<{ intentBand: string | null; qualificationBand: string | null; confidence: number | null } | null>;
   readProspectScore(organizationId: string, prospectId: string): Promise<{ intent: number | null; overall: number | null; confidence: number | null } | null>;
-  channelPermission(organizationId: string, personId: string | null, channel: 'email' | 'whatsapp', target: string | null, now: string): Promise<boolean | null>;
+  channelPermission(organizationId: string, personId: string | null, channel: 'email' | 'whatsapp' | 'community', target: string | null, now: string): Promise<boolean | null>;
   /** PI's current state; null when the prospect has no ledger yet. A port without it has no lifecycle source. */
   readProspectState?(organizationId: string, prospectId: string): Promise<string | null>;
 }
@@ -58,13 +60,15 @@ export const durableIntelligencePort: IndividualIntelligencePort = {
 
   async readPersonContacts(organizationId, personId) {
     const res = await ownedDbTable('unified_persons')
-      .select('primary_email, primary_phone')
+      .select('primary_email, primary_phone, timezone')
       .eq('company_id', organizationId)          // TENANT FIRST
       .eq('id', personId)
       .maybeSingle();
     if (res.error) return null;
     const row = (res.data ?? null) as Record<string, unknown> | null;
-    return row === null ? { email: null, phone: null } : { email: text(row.primary_email), phone: text(row.primary_phone) };
+    return row === null
+      ? { email: null, phone: null, timezone: null }
+      : { email: text(row.primary_email), phone: text(row.primary_phone), timezone: text(row.timezone) };
   },
 
   async readLeadIntelligence(organizationId, leadId) {
@@ -139,6 +143,7 @@ export async function loadIndividualFacts(
 
   let email: string | null = null;
   let phone: string | null = null;
+  let timezone: string | null = null;
   if (personId !== null) {
     const contacts = await port.readPersonContacts(organizationId, personId).catch(() => null);
     if (contacts === null) {
@@ -146,6 +151,7 @@ export async function loadIndividualFacts(
     } else {
       email = contacts.email;
       phone = contacts.phone;
+      timezone = contacts.timezone ?? null;
       facts.has_email = email !== null;
       facts.has_phone = phone !== null;
     }
@@ -162,6 +168,16 @@ export async function loadIndividualFacts(
     const allowed = await port.channelPermission(organizationId, personId, channel, target, now).catch(() => null);
     if (allowed === null) gaps.push(`${channel}_permission_unreadable`);
     else facts[channel === 'email' ? 'email_permitted' : 'whatsapp_permitted'] = allowed;
+  }
+
+  // Community has no address of its own: a platform account stands behind a proof the
+  // engine re-checks, so the person is what is permitted or not.
+  if (personId === null) {
+    gaps.push('community_permission_unanchored');
+  } else {
+    const allowed = await port.channelPermission(organizationId, personId, 'community', null, now).catch(() => null);
+    if (allowed === null) gaps.push('community_permission_unreadable');
+    else facts.community_permitted = allowed;
   }
 
   if (subject.kind === 'lead') {
@@ -193,5 +209,5 @@ export async function loadIndividualFacts(
     }
   }
 
-  return { facts, personId, gaps, prospectLedgerAbsent };
+  return { facts, personId, gaps, prospectLedgerAbsent, timezone };
 }

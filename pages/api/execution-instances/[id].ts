@@ -27,11 +27,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * `AUTOMATION_EXECUTE` was checked and rejected.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { withdrawUnsentTasks } from '../../../backend/services/orchestration/journeyExit';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { PROSPECT_ICP_MANAGE } from '../../../shared/contracts/security';
 import {
-  getExecutionInstance, setExecutionInstanceState, ExecutionInstanceError,
+  getExecutionInstance, setExecutionInstanceState, ExecutionInstanceError, TERMINAL_LIFECYCLE_STATES,
   LIFECYCLE_STATES, type LifecycleState,
 } from '../../../backend/services/executionInstances/executionInstanceStore';
 
@@ -86,6 +87,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       instanceId,
       lifecycleState: lifecycleState as LifecycleState,
     });
+    // A run that ended must not leave a task someone can still approve and send.
+    if (updated && (TERMINAL_LIFECYCLE_STATES as readonly string[]).includes(updated.lifecycleState)) {
+      await withdrawUnsentTasks(companyId, updated.id);
+    }
     if (!updated) return res.status(404).json({ error: 'no such execution instance' });
     return res.status(200).json({ instance: updated });
   } catch (e) {
