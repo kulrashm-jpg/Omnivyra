@@ -17,6 +17,7 @@
  * backend/tests/realschema/pi_prov_privacy_marketpulse.test.ts.
  */
 type Row = Record<string, unknown>;
+const PERSON_ID_IN_MOCK = 'person-1';
 
 const state = {
   leads: [] as Row[],
@@ -30,7 +31,17 @@ const state = {
 jest.mock('../../db/writeOwner', () => ({
   ownedDbRpc: async (fn: string, args: Row) => {
     state.rpcCalls.push({ fn, args });
+    // A6-10 ledger: erasePerson opens/marks a request, then finalize runs steps 6+7 in one call.
+    if (fn === 'pi_person_erasure_open') return { data: { request_id: 'req-1', lease_token: 'lease-1', resumed: false }, error: null };
+    if (fn === 'pi_person_erasure_mark') return { data: null, error: null };
     state.observed.push('redact');
+    if (fn === 'pi_person_erasure_finalize') {
+      if (state.rpcResult.error) return state.rpcResult;
+      state.observed.push('delete_person');
+      const before = state.persons.length;
+      state.persons = state.persons.filter((p) => !(p.id === PERSON_ID_IN_MOCK && p.company_id === args.p_organization_id));
+      return { data: { deleted: before !== state.persons.length, provenance: state.rpcResult.data }, error: null };
+    }
     return state.rpcResult;
   },
   ownedDbTable: (table: string) => {
@@ -173,21 +184,22 @@ describe('redactContributionsForPerson', () => {
   });
 });
 
-describe('erasePerson — acceptance #10 wiring (since closure A: the complete erasure function)', () => {
-  // Closure A (20270109000000) moved person erasure from the contribution-only
-  // function to `pi_erase_prospect_provenance`, which is person-keyed in the
-  // database and ALWAYS called. Full coverage: piProvErasureComplete.test.ts.
+describe('erasePerson — acceptance #10 wiring (closure A, through the A6-10 ledger)', () => {
+  // The complete erasure (pi_erase_prospect_provenance) now runs INSIDE
+  // pi_person_erasure_finalize, in the same transaction as the person delete.
+  // Full coverage: piProvErasureComplete.test.ts.
   const ERASED = { erasure_id: 'e1', redacted: 2, already_redacted: 0, contribution_ids: ['c1', 'c2'],
     canonical_lead_ids: [LEAD_1, LEAD_2], counts: { prospect_source_contributions: 2 } };
 
-  it('erases the provenance of the person BEFORE deleting the person, and reports it', async () => {
+  it('erases the provenance of the person BEFORE deleting the person (one finalize call), and reports it', async () => {
     state.rpcResult = { data: ERASED, error: null };
     const res = await erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'subject request', requestedBy: 'admin:u9' });
     expect(state.observed.indexOf('redact')).toBeGreaterThan(-1);
     expect(state.observed.indexOf('redact')).toBeLessThan(state.observed.indexOf('delete_person'));
-    expect(state.rpcCalls[0]).toMatchObject({ fn: 'pi_erase_prospect_provenance', args: {
-      p_organization_id: ORG_A, p_person_id: PERSON, p_reason: 'person erased: subject request', p_requested_by: 'admin:u9',
+    expect(state.rpcCalls[0]).toMatchObject({ fn: 'pi_person_erasure_open', args: {
+      p_organization_id: ORG_A, p_person_id: PERSON, p_reason: 'subject request', p_requested_by: 'admin:u9',
     } });
+    expect(state.rpcCalls[state.rpcCalls.length - 1]).toMatchObject({ fn: 'pi_person_erasure_finalize', args: { p_organization_id: ORG_A, p_request_id: 'req-1', p_lease_token: 'lease-1' } });
     expect(res.deleted).toBe(true);
     expect(res.provenanceRedaction).toMatchObject({ status: 'erased', erasureId: 'e1', redacted: 2 });
   });
@@ -199,8 +211,8 @@ describe('erasePerson — acceptance #10 wiring (since closure A: the complete e
   });
 
   it.each([
-    [{ code: '42501', message: 'other tenant' }, 'provenance_cross_tenant'],
-    [{ code: '57014', message: 'timeout' }, 'provenance_57014'],
+    [{ code: 'P0001', message: 'injected' }, 'P0001'],
+    [{ code: '57014', message: 'timeout' }, '57014'],
   ])('FAIL CLOSED: a redaction failure aborts the erasure with the person intact (%#)', async (error, code) => {
     state.rpcResult = { data: null, error };
     const p = erasePerson({ organizationId: ORG_A, personId: PERSON, reason: 'r' });

@@ -37,6 +37,18 @@ import { buildAuditRecord, type AuditSink } from './audit';
 export const DEFAULT_TIMEOUT_MS = 8000;
 const MAX_ATTEMPTS = 2; // spec §2.5: one retry, retryable failures only
 
+/**
+ * The INVALID_REQUEST message names each issue by its zod 3 code, which is part
+ * of the BJC response contract. zod 4 renamed two of them: string format/regex
+ * failures (`invalid_string` -> `invalid_format`) and enum mismatches
+ * (`invalid_enum_value`, or `invalid_type` for a non-string -> `invalid_value`).
+ */
+function v3IssueCode(issue: { code: string; input?: unknown }): string {
+  if (issue.code === 'invalid_format') return 'invalid_string';
+  if (issue.code === 'invalid_value') return typeof issue.input === 'string' ? 'invalid_enum_value' : 'invalid_type';
+  return issue.code;
+}
+
 export interface JudgeDeps {
   /** null when no API key is configured — the call then fails visibly as MISSING_API_KEY. */
   transport: JevTransport | null;
@@ -107,10 +119,12 @@ export async function judge(rawRequest: unknown, deps: JudgeDeps): Promise<BjcRe
     if (raw.schema !== CONTRACT_VERSION) {
       finish('REQUEST_REJECTED', 'SCHEMA_VERSION_MISMATCH', `request schema must be ${CONTRACT_VERSION}`);
     } else {
-      const parsed = bjcRequestSchema.safeParse(rawRequest);
+      // reportInput: the issue input is read only to name the zod 3 code; it is
+      // never emitted.
+      const parsed = bjcRequestSchema.safeParse(rawRequest, { reportInput: true });
       if (!parsed.success) {
         // Path + code only: zod messages can echo submitted values.
-        const issues = parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.') || '$'}:${i.code}`);
+        const issues = parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.') || '$'}:${v3IssueCode(i)}`);
         finish('REQUEST_REJECTED', 'INVALID_REQUEST', `request failed validation (${issues.join('; ')})`);
       } else {
         const ids = parsed.data;

@@ -86,6 +86,13 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 export const INPUT_HASH_RE = /^sha256:[0-9a-f]{64}$/;
 const MODEL_ID = /^[a-z0-9][a-z0-9._-]{1,63}$/;
+/**
+ * zod 3.25.76 `z.string().datetime({ offset: true })`, verbatim (leap-year aware date,
+ * optional seconds, `Z` or a `+hh[:]mm` offset). zod 4's ISO datetime requires seconds
+ * and a colon offset, which would reject evidence timestamps this contract accepted.
+ */
+const V3_DATETIME_OFFSET =
+  /^((\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\d|3[01])|(0[469]|11)-(0[1-9]|[12]\d|30)|(02)-(0[1-9]|1\d|2[0-8])))T([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d+)?)?(Z|([+-]\d{2}:?\d{2}))$/;
 
 const evidenceSchema = z
   .object({
@@ -95,7 +102,7 @@ const evidenceSchema = z
     sha256: z.string().regex(SHA256_HEX),
     produced_by: z.string().min(1).max(120),
     result: z.enum(['PASS', 'FAIL', 'N/A']),
-    captured_at: z.string().datetime({ offset: true }),
+    captured_at: z.string().regex(V3_DATETIME_OFFSET, 'Invalid datetime'),
     ac_ids: z.array(z.string().regex(/^AC-\d{1,4}$/)).min(1).max(20),
     excerpt: z.string().max(LIMITS.maxExcerptChars).optional(),
   })
@@ -103,7 +110,7 @@ const evidenceSchema = z
   .superRefine((ev, ctx) => {
     const contextOnly = (CONTEXT_EVIDENCE_KINDS as readonly string[]).includes(ev.kind);
     if (contextOnly && ev.result !== 'N/A') {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `context evidence kind ${ev.kind} must have result N/A` });
+      ctx.addIssue({ code: 'custom', message: `context evidence kind ${ev.kind} must have result N/A` });
     }
   });
 
@@ -142,11 +149,11 @@ export const bjcRequestSchema = z
   .superRefine((req, ctx) => {
     const ac = req.acceptance_criterion;
     if (ac.kind === 'OBJECTIVE' && ac.required_evidence.length === 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'OBJECTIVE acceptance criterion must name required deterministic evidence' });
+      ctx.addIssue({ code: 'custom', message: 'OBJECTIVE acceptance criterion must name required deterministic evidence' });
     }
     const ids = [...req.evidence.map((e) => e.id), ...req.invariants.map((i) => i.id)];
     if (new Set(ids).size !== ids.length) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'evidence and invariant ids must be unique' });
+      ctx.addIssue({ code: 'custom', message: 'evidence and invariant ids must be unique' });
     }
   });
 

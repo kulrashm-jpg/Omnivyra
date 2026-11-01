@@ -2,13 +2,19 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 /**
  * POST /api/activity-workspace/[id]/upload-media-finalize
  *
- * Finalize step for TUS-based resumable uploads. The client streams the
- * file directly to Supabase Storage via `tus-js-client` (over the
- * Supabase TUS endpoint, `/storage/v1/upload/resumable`). Once TUS
- * reports success, the client POSTs to this endpoint with the resulting
- * storage object path; the server then performs the EXACT same validate
- * + FSM transition + FK + scheduled_post handoff that
- * `upload-media-direct.ts` does post-storage.
+ * Finalize step for TUS-based resumable uploads.
+ *
+ * MEDIA-H3: the browser no longer writes to the public bucket. It uploads,
+ * under a server-issued signed upload token (`upload-media-authorize`), to a
+ * server-minted key in the PRIVATE `media-quarantine` bucket. This route
+ * re-authorizes the caller, validates the STORED object (stored size, stored
+ * content type, magic bytes; images are decoded and re-encoded through
+ * safeImageDecode), and only then MOVES it to the delivery bucket
+ * (`media-uploads`, same key). Invalid objects are deleted from quarantine
+ * and never become public. The row records the delivery reference the server
+ * derived, never a client-supplied URL. A duplicate finalize of an already
+ * promoted session is idempotent; a session that was replaced is refused.
+ * A promotion failure leaves the object private for a retry.
  *
  * This deliberately avoids duplicating the upload pipeline logic. The
  * storage write itself is delegated to TUS; the post-write contract is
@@ -16,7 +22,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *
  * Body (JSON):
  *   {
- *     storage_path: string;          // path within media-uploads bucket
+ *     storage_path: string;          // key within the media-quarantine bucket (server-minted)
  *     mime_type: string;
  *     size_bytes: number;
  *     source?: 'user_upload' | 'direct_upload' | 'tus_upload';
@@ -25,10 +31,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *     upload_session_id?: string;
  *   }
  *
- * Rejection paths: identical to `upload-media-direct.ts` — same MIME
- * spoof / category / concurrency / lifecycle / FSM gates. The MIME
- * sniff still runs server-side (we download the first chunk from the
- * uploaded object).
+ * Rejection paths: category / stored-type / signature / size / concurrency /
+ * lifecycle / FSM gates. Unknown bytes are refused (strict signature check).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -51,14 +55,29 @@ import {
 import {
   validateMediaUpload,
   resolveExpectedCategory,
-  sniffMimeFromBytes,
-  compareSniffedToClientMime,
 } from '@/backend/services/mediaUploadValidationService';
 import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
 import { isActivityObjectPath } from '@/backend/services/activityWorkspace/activityObjectPath';
+import {
+  DELIVERY_BUCKET,
+  MAX_QUARANTINE_BYTES,
+  validateQuarantinedMedia,
+  promoteQuarantinedMedia,
+  discardQuarantinedObject,
+  removeDeliveryObject,
+  readConsumedObjectPaths,
+  appendConsumedObjectPath,
+  authorizedMimeForObjectPath,
+} from '@/backend/services/activityWorkspace/quarantinedMediaUpload';
 
-const UPLOAD_BUCKET = 'media-uploads';
-const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+/** Delivery bucket (public). Only the server writes here, after validation. */
+const UPLOAD_BUCKET = DELIVERY_BUCKET;
+const MAX_FILE_BYTES = MAX_QUARANTINE_BYTES;
+const PROMOTED_STATES = new Set<string>([
+  CREATOR_LIFECYCLE_STATES.MEDIA_UPLOADED,
+  CREATOR_LIFECYCLE_STATES.READY_FOR_SCHEDULE,
+  CREATOR_LIFECYCLE_STATES.SCHEDULED,
+]);
 
 type FinalizeBody = {
   storage_path?: unknown;
@@ -82,14 +101,76 @@ function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-async function deleteStorageObject(objectPath: string): Promise<void> {
+/**
+ * Rejections before promotion delete the caller's QUARANTINED object only.
+ *
+ * F-H3-1 / J3-1: exits decided by the REQUEST alone (declared size, declared
+ * type, expected_revision) never delete: a second, deliberately bad finalize
+ * of the same key must not be able to remove the quarantine source out from
+ * under an honest in-flight finalize. Such objects stay private (F-H3-7).
+ */
+const deleteStorageObject = discardQuarantinedObject;
+
+/**
+ * F-H3-1 - a committed row that records `objectPath` as this activity's
+ * PROMOTED delivery object. Only a request whose own move (or byte-identical
+ * image upload) succeeded can commit such a row, so it is the proof that a
+ * non-image object already at the delivery key is the validated one. Unlike
+ * committedRowReferencesObject this is fail-closed: a read error is "no".
+ */
+async function readCommittedPromotion(id: string, objectPath: string): Promise<Record<string, unknown> | null> {
   try {
-    const { error } = await supabase.storage.from(UPLOAD_BUCKET).remove([objectPath]);
-    if (error) {
-      console.warn('[upload-media-finalize] orphan cleanup failed', { objectPath, error: error.message });
-    }
-  } catch (error) {
-    console.warn('[upload-media-finalize] orphan cleanup threw', { objectPath, message: (error as Error)?.message });
+    const { data, error } = await supabase
+      .from('daily_content_plans')
+      .select('content')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !data) return null;
+    const content = safeObject((data as { content?: unknown }).content);
+    return content.upload_quarantine_promoted === true
+      && content.upload_storage_bucket === UPLOAD_BUCKET
+      && content.upload_storage_object_path === objectPath
+      && PROMOTED_STATES.has(readLifecycleState(content))
+      ? content
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Bounded wait for a concurrent winner's row commit (F-H3-1). */
+const PROMOTION_PROOF_ATTEMPTS = 5;
+const PROMOTION_PROOF_DELAY_MS = 250;
+async function awaitCommittedPromotion(id: string, objectPath: string): Promise<Record<string, unknown> | null> {
+  for (let attempt = 0; attempt < PROMOTION_PROOF_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, PROMOTION_PROOF_DELAY_MS));
+    const committed = await readCommittedPromotion(id, objectPath);
+    if (committed) return committed;
+  }
+  return null;
+}
+
+/** Replacement of a prior DELIVERED object of this activity. */
+async function deletePriorDeliveredObject(objectPath: string): Promise<void> {
+  await removeDeliveryObject(objectPath);
+}
+
+/**
+ * J1 H3-2 - does the committed row reference `objectPath` as its delivered
+ * object? true also when the row cannot be read (fail safe: keep the object).
+ */
+async function committedRowReferencesObject(id: string, objectPath: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('daily_content_plans')
+      .select('content')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !data) return true;
+    const content = safeObject((data as { content?: unknown }).content);
+    return content.upload_storage_bucket === UPLOAD_BUCKET && content.upload_storage_object_path === objectPath;
+  } catch {
+    return true;
   }
 }
 
@@ -101,72 +182,6 @@ function extractStorageObjectPath(publicUrl: string | null | undefined): string 
     if (idx === -1) return null;
     return url.pathname.slice(idx + UPLOAD_BUCKET.length + 2);
   } catch {
-    return null;
-  }
-}
-
-/**
- * Fetch the first N bytes of an uploaded object for server-side MIME
- * sniffing. Uses an HTTP `Range: bytes=0-(N-1)` request so a 2 GB upload
- * does NOT trigger a full download just to read the magic bytes.
- *
- * Fallback order:
- *   1. Range request against the bucket's public URL — 206 Partial Content.
- *   2. Range request that the server quietly honors with 200 (some CDNs
- *      drop the Range header but still return only the requested bytes
- *      when they can; we slice the response defensively).
- *   3. Full `download()` via supabase-js — last resort.
- *
- * If a 416 / unsupported-range response comes back, we transparently
- * fall through to `download()` so MIME sniffing still runs on legacy
- * storage backends.
- *
- * Returns null on any unrecoverable failure; the caller treats that as
- * "could not sniff" — same as the prior behavior.
- */
-async function fetchFirstBytes(objectPath: string, byteCount: number): Promise<Buffer | null> {
-  // ── Try range fetch against the public URL first ──────────────────────
-  try {
-    const { data: urlData } = supabase.storage.from(UPLOAD_BUCKET).getPublicUrl(objectPath);
-    const publicUrl = urlData?.publicUrl;
-    if (publicUrl) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      // ssrf-ok: publicUrl is a Supabase storage public URL (fixed host, server-derived object path)
-      const resp = await fetch(publicUrl, {
-        method: 'GET',
-        headers: {
-          range: `bytes=0-${byteCount - 1}`,
-          accept: '*/*',
-        },
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      if (resp.status === 206 || resp.status === 200) {
-        const arr = await resp.arrayBuffer();
-        const buf = Buffer.from(arr);
-        // Defensive slice: even if the server ignored the Range header
-        // we only consume `byteCount` bytes for sniffing.
-        return buf.slice(0, byteCount);
-      }
-      // 416 / 403 / 404 → fall through to full download
-    }
-  } catch (e) {
-    console.warn('[upload-media-finalize] range fetch failed; falling back to download', {
-      objectPath, message: (e as Error)?.message,
-    });
-  }
-
-  // ── Fallback: full download (legacy path; rarely hot) ─────────────────
-  try {
-    const { data, error } = await supabase.storage.from(UPLOAD_BUCKET).download(objectPath);
-    if (error || !data) return null;
-    const arrayBuffer = await data.arrayBuffer();
-    return Buffer.from(arrayBuffer).slice(0, byteCount);
-  } catch (e) {
-    console.warn('[upload-media-finalize] first-bytes fetch failed entirely', {
-      objectPath, message: (e as Error)?.message,
-    });
     return null;
   }
 }
@@ -212,12 +227,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // is theirs to delete.
   const { data: rowData, error: rowError } = await supabase
     .from('daily_content_plans')
-    .select('id, campaign_id, content_type, content, content_status, platform')
+    .select('id, campaign_id, content_type, content, content_status, platform, updated_at')
     .eq('id', id)
     .maybeSingle();
   if (rowError) return res.status(500).json({ error: 'Failed to load row.' });
   if (!rowData) return res.status(404).json({ error: `Row not found: ${id}` });
-  const row = rowData as { id: string; campaign_id: string; content_type: string; content: unknown };
+  const row = rowData as { id: string; campaign_id: string; content_type: string; content: unknown; updated_at?: string | null };
 
   // ── Resolve company + authorize ───────────────────────────────────────
   let companyId: string | null = null;
@@ -243,7 +258,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── Authorized: size + attachment-required gates (orphan cleanup allowed) ─
   if (sizeBytes > MAX_FILE_BYTES) {
-    await deleteStorageObject(storagePath);
+    // A CLAIM by the caller (the stored size is checked in validation): no delete (F-H3-1).
     return res.status(413).json({ error: `Uploaded file exceeds ${MAX_FILE_BYTES} bytes.` });
   }
   const contentType = normalizeCreatorFormat(row.content_type || '');
@@ -260,35 +275,76 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(409).json({ error: `No upload category for content_type "${contentType}".`, code: 'UPLOAD_NOT_VALID_FOR_FORMAT' });
   }
 
-  // ── MIME category check + server-side sniff against first bytes ───────
+  // ── Declared MIME category check (the stored object is checked below) ─
   const matchesCategory =
     (expectedCategory === 'video' && mimeBase.startsWith('video/')) ||
     (expectedCategory === 'audio' && mimeBase.startsWith('audio/')) ||
     (expectedCategory === 'image' && mimeBase.startsWith('image/'));
   if (!matchesCategory) {
-    await deleteStorageObject(storagePath);
+    // Caller-declared: no delete (F-H3-1).
     return res.status(415).json({
       error: `Uploaded MIME "${mimeBase}" does not match expected category "${expectedCategory}" for "${contentType}".`,
       code: 'UPLOAD_MIME_MISMATCH',
     });
   }
-  const firstBytes = await fetchFirstBytes(storagePath, 32);
-  if (firstBytes) {
-    const sniffed = sniffMimeFromBytes(firstBytes);
-    const sniffResult = compareSniffedToClientMime({ sniffed, claimed: mimeBase });
-    if (!sniffResult.ok) {
-      const failure = sniffResult as { ok: false; sniffed: string; claimed: string; reason: string };
-      await deleteStorageObject(storagePath);
-      return res.status(415).json({
-        error: failure.reason,
-        code: 'UPLOAD_MIME_SPOOF',
-        claimed_mime: failure.claimed,
-        sniffed_mime: failure.sniffed,
-      });
-    }
+  // F-H3-2: the type is bound to the key minted at authorize (its extension).
+  // Any other declared type is refused, so the stored content type, which
+  // validation pins to the declared type, always agrees with the key. No
+  // delete: the declared type is the caller's (F-H3-1).
+  const authorizedMime = authorizedMimeForObjectPath(storagePath);
+  if (!authorizedMime || authorizedMime !== mimeBase) {
+    return res.status(415).json({
+      error: 'The declared type is not the type this upload was authorized for.',
+      code: 'UPLOAD_TYPE_NOT_AUTHORIZED',
+    });
+  }
+  // ── Duplicate / replayed finalize (idempotent, never re-promoted) ──────
+  const currentContentEarly = safeObject(row.content);
+  const alreadyPromotedHere = currentContentEarly.upload_quarantine_promoted === true
+    && currentContentEarly.upload_storage_bucket === UPLOAD_BUCKET
+    && currentContentEarly.upload_storage_object_path === storagePath
+    && PROMOTED_STATES.has(readLifecycleState(currentContentEarly));
+  if (alreadyPromotedHere) {
+    // A re-upload with a still-valid token to the consumed key stays private and is dropped.
+    await deleteStorageObject(storagePath);
+    return res.status(200).json({
+      success: true,
+      idempotent_replay: true,
+      from: readLifecycleState(currentContentEarly),
+      to: readLifecycleState(currentContentEarly),
+      daily_plan_id: id,
+      content_type: contentType,
+      uploaded_media_url: currentContentEarly.uploaded_media_url ?? null,
+      upload_source: currentContentEarly.upload_source ?? source,
+      uploaded_mime_type: currentContentEarly.uploaded_mime_type ?? null,
+      uploaded_size_bytes: currentContentEarly.uploaded_size_bytes ?? null,
+      storage: { bucket: UPLOAD_BUCKET, object_path: storagePath },
+    });
+  }
+  if (readConsumedObjectPaths(currentContentEarly).includes(storagePath)) {
+    await deleteStorageObject(storagePath);
+    return res.status(409).json({
+      error: 'This upload session was already finalized and replaced. Start a new upload.',
+      code: 'UPLOAD_SESSION_CONSUMED',
+    });
   }
 
-  // ── Resolve the public URL + validate ─────────────────────────────────
+  // ── Validate the STORED object in quarantine (bytes + stored metadata) ─
+  const checked = await validateQuarantinedMedia({
+    objectPath: storagePath,
+    declaredMime: mimeBase,
+    expectedCategory,
+    companyId,
+  });
+  if (checked.ok === false) {
+    const failure = checked;
+    if (failure.discard) await deleteStorageObject(storagePath);
+    return res.status(failure.status).json({ error: failure.reason, code: failure.code });
+  }
+  const validatedMime = checked.mime;
+  const validatedSize = checked.sizeBytes;
+
+  // ── Delivery reference (derived by the server; not yet public) ────────
   const { data: publicUrlData } = supabase.storage.from(UPLOAD_BUCKET).getPublicUrl(storagePath);
   const publicUrl = publicUrlData?.publicUrl || '';
   if (!publicUrl) {
@@ -299,8 +355,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const validation = await validateMediaUpload({
     mediaUrl: publicUrl,
     contentType,
-    mimeType: mimeBase,
-    sizeBytes,
+    mimeType: validatedMime,
+    sizeBytes: validatedSize,
     skipLiveness: true,
   });
 
@@ -310,7 +366,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (expectedRevision !== null) {
     const actualRevision = readLifecycleRevision(currentContent);
     if (expectedRevision !== actualRevision) {
-      await deleteStorageObject(storagePath);
+      // Caller-supplied revision: no delete (F-H3-1). The object stays private.
       return res.status(409).json({
         error: `Row revision changed since fetch: expected ${expectedRevision}, actual ${actualRevision}.`,
         code: 'CONCURRENT_UPLOAD_CONFLICT',
@@ -370,12 +426,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const uploadPatch: Record<string, unknown> = {
     uploaded_media_url: publicUrl,
     upload_source: source,
-    uploaded_mime_type: mimeBase,
-    uploaded_size_bytes: sizeBytes,
+    uploaded_mime_type: validatedMime,
+    uploaded_size_bytes: validatedSize,
     upload_validated_at: validation.validated_at,
     upload_validation: validation,
     upload_storage_bucket: UPLOAD_BUCKET,
     upload_storage_object_path: storagePath,
+    // MEDIA-H3: this delivery object exists only because the server validated
+    // and promoted it; the key is consumed and can never be promoted again.
+    upload_quarantine_promoted: true,
+    upload_consumed_object_paths: appendConsumedObjectPath(currentContent, storagePath),
     upload_error: null,
     upload_attempted_object_path: null,
     tus_upload_url: tusUploadUrl || null,
@@ -399,18 +459,98 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     reason: 'auto_transition_after_tus_finalize',
   });
 
-  const { error: writeError } = await ownedDbTable('daily_content_plans')
+  // ── Promote: quarantine → delivery (same key). Failure keeps it private. ─
+  const promotion = await promoteQuarantinedMedia({ objectPath: storagePath, validated: checked, companyId });
+  if (promotion.ok === false && promotion.conflict === true) {
+    // J1 H3-1: an object already sits at the delivery key and it is not the
+    // object validated above (logged as a security event by the service).
+    // Nothing is recorded or scheduled; the foreign object is left untouched.
+    return res.status(409).json({
+      error: 'The upload could not be published: the delivery location holds a different object.',
+      code: 'UPLOAD_DELIVERY_CONFLICT',
+      retryable: false,
+    });
+  }
+  if (promotion.ok === false && promotion.unproven === true) {
+    // F-H3-1: a non-image object sits at the delivery key and this request's
+    // move did not put it there. Accept it only if a concurrent winner has
+    // COMMITTED a row recording this key as promoted (that winner's move is the
+    // proof); otherwise refuse, retryably, and record nothing.
+    const committed = await awaitCommittedPromotion(id, storagePath);
+    if (committed) {
+      return res.status(200).json({
+        success: true,
+        idempotent_replay: true,
+        from: readLifecycleState(committed),
+        to: readLifecycleState(committed),
+        daily_plan_id: id,
+        content_type: contentType,
+        uploaded_media_url: committed.uploaded_media_url ?? null,
+        upload_source: committed.upload_source ?? source,
+        uploaded_mime_type: committed.uploaded_mime_type ?? null,
+        uploaded_size_bytes: committed.uploaded_size_bytes ?? null,
+        storage: { bucket: UPLOAD_BUCKET, object_path: storagePath },
+      });
+    }
+    console.error('[security][media-h3] delivery object not provably promoted by the server; refusing to adopt it', {
+      event: 'media_h3_delivery_unproven', daily_plan_id: id, objectPath: storagePath, companyId, reason: promotion.reason,
+    });
+    return res.status(503).json({
+      error: 'The upload could not be confirmed as published. Please retry finalize.',
+      code: 'UPLOAD_PROMOTION_UNCONFIRMED',
+      retryable: true,
+    });
+  }
+  if (promotion.ok === false) {
+    console.warn('[upload-media-finalize] promotion failed; object stays quarantined', {
+      daily_plan_id: id, objectPath: storagePath, reason: promotion.reason,
+    });
+    return res.status(503).json({
+      error: 'The upload was validated but could not be published. Please retry finalize.',
+      code: 'UPLOAD_PROMOTION_FAILED',
+      retryable: true,
+    });
+  }
+
+  // F-H3-6: compare-and-swap on the row read at the start (updated_at), so a
+  // concurrent finalize of a DIFFERENT session that committed in between is not
+  // silently overwritten. `count: 'exact'` reports the matched rows; 0 = lost.
+  let rowWrite = ownedDbTable('daily_content_plans')
     .update({
       content: JSON.stringify(toReady.content),
       content_status: toReady.contentStatus,
       failure_reason: null,
       failure_type: null,
       updated_at: new Date().toISOString(),
-    })
+    }, { count: 'exact' })
     .eq('id', id);
-  if (writeError) {
-    await deleteStorageObject(storagePath);
-    return res.status(500).json({ error: `Failed to record upload: ${writeError.message}` });
+  if (typeof row.updated_at === 'string') rowWrite = rowWrite.eq('updated_at', row.updated_at);
+  else if (row.updated_at === null) rowWrite = rowWrite.is('updated_at', null);
+  const { error: writeError, count: writeCount } = await rowWrite;
+  const lostRace = !writeError && typeof writeCount === 'number' && writeCount === 0;
+  if (writeError || lostRace) {
+    // Roll the promoted object back out of the public bucket — but only if THIS
+    // request promoted it. An alreadyPromoted object belongs to a concurrent
+    // finalize whose row write may have succeeded; deleting it would leave that
+    // row with a dangling public reference.
+    //
+    // J1 H3-2: even when THIS request promoted it, a concurrent finalize of the
+    // same session (alreadyPromoted=true there) may have committed a row that
+    // points at it. Re-read the row and delete only when no committed row
+    // references the key. If the re-read fails, keep the object (an orphan is
+    // recoverable; a dangling public reference on a committed row is not).
+    if (!promotion.alreadyPromoted && !(await committedRowReferencesObject(id, storagePath))) {
+      await removeDeliveryObject(storagePath);
+    }
+    if (lostRace) {
+      return res.status(409).json({
+        error: 'The row changed while this upload was being finalized. Reload and retry.',
+        code: 'CONCURRENT_UPLOAD_CONFLICT',
+      });
+    }
+    // F-H3-8: the database error stays in the server log, never in the response.
+    console.error('[upload-media-finalize] row write failed', { daily_plan_id: id, objectPath: storagePath, message: writeError?.message });
+    return res.status(500).json({ error: 'Failed to record upload.', code: 'UPLOAD_RECORD_FAILED' });
   }
 
   // Post-upload auto-schedule: schedule THIS row now (insert scheduled_posts +
@@ -425,7 +565,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // name an arbitrary object in the bucket).
   const priorObjectPath = extractStorageObjectPath(priorUploadedUrl);
   if (priorObjectPath && priorObjectPath !== storagePath && isActivityObjectPath(priorObjectPath, id, companyId)) {
-    void deleteStorageObject(priorObjectPath);
+    void deletePriorDeliveredObject(priorObjectPath);
   }
 
   return res.status(200).json({
@@ -438,8 +578,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     content_type: contentType,
     uploaded_media_url: publicUrl,
     upload_source: source,
-    uploaded_mime_type: mimeBase,
-    uploaded_size_bytes: sizeBytes,
+    uploaded_mime_type: validatedMime,
+    uploaded_size_bytes: validatedSize,
     scheduled: didSchedule,
     scheduled_post_id: scheduleResult.scheduledPostId,
     schedule_status: scheduleResult.status,

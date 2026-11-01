@@ -31,6 +31,7 @@ import {
   ORGANIZATION_TRANSFER,
   OUTREACH_PLATFORM_MANAGE,
   PLATFORM_CONTROLS_MANAGE,
+  PROSPECT_PERSON_ERASE,
   BLOG_PUBLISH_MANAGE,
   CRON_CONFIG_MANAGE,
   INTELLIGENCE_OVERRIDE_MANAGE,
@@ -112,6 +113,10 @@ const POLICIES: ReadonlyArray<StepUpRequirement> = [
 
   // Automation transfer.
   { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: AUTOMATION_TRANSFER,   reason: 'Confirm with a passkey on a trusted device to transfer automation ownership.' },
+
+  // Prospect person erasure — irreversible deletion of personal data, same
+  // tier as the other irreversible deletes (identity records, organization).
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: PROSPECT_PERSON_ERASE, reason: 'Confirm with a passkey on a trusted device to erase a person. This cannot be undone.' },
 
   // MFA revoke (revoking your own factor — risky if account is compromised).
   { ...PHISHING_RESISTANT_TENMIN,         capability: MFA_REVOKE,            reason: 'Confirm with a passkey to revoke a security factor.' },

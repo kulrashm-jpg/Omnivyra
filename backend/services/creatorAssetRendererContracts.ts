@@ -89,7 +89,7 @@ import { STYLE_CARD_SPECS } from './creatorAssetRendererText';
 import { buildOverlaySvg } from './creatorAssetRendererOverlay';
 import { type ImageSubtypeHint } from './creatorAssetRendererMedia';
 
-export const sharp = require('sharp') as typeof import('sharp');
+export const sharp = require('sharp') as typeof import('sharp').default;
 // Loaded only in the server renderer for deterministic downloadable PDF assets.
 export const PDFDocument = require('pdfkit');
 

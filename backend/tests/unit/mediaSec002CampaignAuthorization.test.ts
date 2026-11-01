@@ -124,10 +124,10 @@ jest.mock('formidable', () => ({
 jest.mock('fs', () => ({
   __esModule: true,
   default: {
-    readFileSync: jest.fn(() => Buffer.from('fake-png')),
+    readFileSync: jest.fn(() => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
     unlinkSync: jest.fn((p: string) => { (global as any).__unlinked.push(p); }),
   },
-  readFileSync: jest.fn(() => Buffer.from('fake-png')),
+  readFileSync: jest.fn(() => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
   unlinkSync: jest.fn((p: string) => { (global as any).__unlinked.push(p); }),
 }));
 

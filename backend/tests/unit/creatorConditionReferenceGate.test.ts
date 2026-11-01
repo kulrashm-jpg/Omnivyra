@@ -57,8 +57,9 @@ const objects = new Map<string, Buffer>();
 let storageReads = 0;
 const assets: Array<Record<string, unknown>> = [];
 const refs: Array<Record<string, unknown>> = [];
+// Well-formed 1x1 PNG: the compose lane decodes with failOn 'error' (SEC-SHARP-001).
 const SOURCE_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==',
   'base64',
 );
 

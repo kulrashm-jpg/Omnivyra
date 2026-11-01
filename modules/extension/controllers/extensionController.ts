@@ -75,7 +75,7 @@ export class ExtensionController {
         if (error instanceof ZodError) {
           res.status(400).json({
             success: false,
-            error: `Validation error: ${error.errors[0].message}`,
+            error: `Validation error: ${error.issues[0].message}`,
             timestamp: Date.now(),
           } as ExtensionApiResponse<never>);
           return;
@@ -161,7 +161,7 @@ export class ExtensionController {
         if (error instanceof ZodError) {
           res.status(400).json({
             success: false,
-            error: `Invalid query: ${error.errors[0].message}`,
+            error: `Invalid query: ${error.issues[0].message}`,
             timestamp: Date.now(),
           } as ExtensionApiResponse<never>);
           return;
@@ -236,7 +236,7 @@ export class ExtensionController {
         if (error instanceof ZodError) {
           res.status(400).json({
             success: false,
-            error: `Validation error: ${error.errors[0].message}`,
+            error: `Validation error: ${error.issues[0].message}`,
             timestamp: Date.now(),
           } as ExtensionApiResponse<never>);
           return;

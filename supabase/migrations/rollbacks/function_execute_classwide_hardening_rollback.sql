@@ -150,8 +150,18 @@ GRANT EXECUTE ON FUNCTION public.omnivyra_validate_decision_object_entity() TO P
 GRANT EXECUTE ON FUNCTION public.prevent_company_context_snapshot_mutation() TO PUBLIC, anon, authenticated;
 -- grant-ok: rollback restores the pre-20270111000003 production ACL of prospect_icp_versions_guard_immutable exactly.
 GRANT EXECUTE ON FUNCTION public.prospect_icp_versions_guard_immutable() TO PUBLIC, anon, authenticated;
--- grant-ok: rollback restores the pre-20270111000003 production ACL of prospect_score_evaluations_immutable exactly.
-GRANT EXECUTE ON FUNCTION public.prospect_score_evaluations_immutable() TO authenticated;
+-- X-1: privacy/erasure 20270112000002 makes this function SECURITY DEFINER (search_path='')
+-- and revokes authenticated itself. In that state the pre-20270111000003 ACL has no
+-- authenticated grant, so the production grant below is restored only while the
+-- function is still the INVOKER original (state S1). Never re-widen a definer.
+DO $x1_pse_grant$
+BEGIN
+  IF NOT (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = 'public.prospect_score_evaluations_immutable()'::regprocedure) THEN
+    -- grant-ok: rollback restores the pre-20270111000003 production ACL of prospect_score_evaluations_immutable exactly (INVOKER state only).
+    GRANT EXECUTE ON FUNCTION public.prospect_score_evaluations_immutable() TO authenticated;
+  END IF;
+END
+$x1_pse_grant$;
 -- grant-ok: rollback restores the pre-20270111000003 production ACL of public_blogs_updated_at exactly.
 GRANT EXECUTE ON FUNCTION public.public_blogs_updated_at() TO PUBLIC, anon, authenticated;
 -- grant-ok: rollback restores the pre-20270111000003 production ACL of raise_audit_immutable exactly.
@@ -500,7 +510,9 @@ BEGIN
   ) AS t(sig, anon_x, auth_x, public_x, was_pinned)
   LOOP
     IF has_function_privilege('anon', r.sig::regprocedure, 'EXECUTE') <> r.anon_x
-       OR has_function_privilege('authenticated', r.sig::regprocedure, 'EXECUTE') <> r.auth_x THEN
+       OR has_function_privilege('authenticated', r.sig::regprocedure, 'EXECUTE') <> (r.auth_x AND NOT (
+            r.sig = 'public.prospect_score_evaluations_immutable()'  -- X-1: no grant back to a definer
+            AND (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = r.sig::regprocedure))) THEN
       RAISE EXCEPTION 'SEC-B rollback: client EXECUTE on % not restored to the production state', r.sig;
     END IF;
     IF r.public_x <> EXISTS (SELECT 1 FROM pg_proc p, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) x

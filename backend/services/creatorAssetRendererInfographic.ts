@@ -89,6 +89,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
 import { sharp, unsupportedFamilyConditionDegradation, type RenderedMediaBundle, type RenderOptions, getCachedRenderBuffer, safeObject, escapeXml, balanceTextLines, renderWrappedBodyText, blueprintIdForRender, curatedDesignTemplate, resolveInfographicRenderStyle, compactText, buildAccessibleAltText, resolveRenderSize, fitTextToBox } from './creatorAssetRendererContracts';
+import { fetchUntrustedImageBytes, reportImageFailure, transformUntrustedImage } from '../../lib/security/safeImageDecode';
 import { emitCreatorEvent, CREATOR_EVENTS } from './creatorOperationalTelemetryService';
 import { resolveInfographicBackgroundBytes } from './creator/infographicUserBackground';
 import { loadBrandMark, scaleBrandPlacement } from './creatorAssetRendererOverlay';
@@ -476,12 +477,13 @@ export async function renderInfographicAsset(
       try {
         const bytes = resolved.bytes;
         backgroundImageBuffer = await getCachedRenderBuffer(resolved.cacheKey, async () =>
-          sharp(bytes, { failOn: 'none' })
+          transformUntrustedImage(bytes, (image) => image
             .resize(width, height, { fit: 'cover' })
             .png()
-            .toBuffer());
+            .toBuffer(), { sharp }));
         userBackgroundApplied = Boolean(backgroundImageBuffer);
-      } catch {
+      } catch (error) {
+        reportImageFailure(error, { callSite: 'creator.infographic_user_background', companyId: options.companyId || null });
         // Decode or resize failed on bytes we were allowed to read. Same
         // contract as the URL path: fall open to gradient, disclose below.
         backgroundImageBuffer = null;
@@ -499,13 +501,15 @@ export async function renderInfographicAsset(
     try {
       const cacheKey = `infographic-bg:${backgroundConfig.imageUrl}:${width}x${height}`;
       backgroundImageBuffer = await getCachedRenderBuffer(cacheKey, async () => {
-        const raw = await bufferFromRemoteImage(backgroundConfig.imageUrl as string);
-        return sharp(raw, { failOn: 'none' })
+        const raw = await fetchUntrustedImageBytes(() => bufferFromRemoteImage(backgroundConfig.imageUrl as string));
+        return transformUntrustedImage(raw, (image) => image
           .resize(width, height, { fit: 'cover' })
           .png()
-          .toBuffer();
+          .toBuffer(), { sharp });
       });
-    } catch {
+    } catch (error) {
+      // Fetch failure / rejected bytes → warn; internal error → error + stack.
+      reportImageFailure(error, { callSite: 'creator.infographic_background_url', companyId: options.companyId || null });
       backgroundImageBuffer = null; // fail-open to gradient
     }
   }

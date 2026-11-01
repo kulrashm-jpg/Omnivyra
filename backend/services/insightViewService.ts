@@ -12,7 +12,7 @@ const DecisionFeatureViewNameSchema = z.enum([
 ]);
 
 const MarketPulseRowSchema = z.object({
-  company_id: z.string().uuid(),
+  company_id: z.guid(),
   pulse_key: z.string(),
   issue_type: z.string(),
   action_type: z.string(),

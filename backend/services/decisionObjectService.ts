@@ -20,11 +20,11 @@ function isNonEmptyJson(value: Record<string, unknown> | Array<Record<string, un
 }
 
 export const DecisionObjectWriteSchema = z.object({
-  company_id: z.string().uuid(),
+  company_id: z.guid(),
   report_tier: DecisionReportTierSchema,
   source_service: z.string().trim().min(1),
   entity_type: DecisionObjectEntityTypeSchema,
-  entity_id: z.string().uuid().nullable().optional(),
+  entity_id: z.guid().nullable().optional(),
   issue_type: z.string().trim().min(1),
   title: z.string().trim().min(1),
   description: z.string().trim().min(1),
@@ -46,7 +46,7 @@ export const DecisionObjectWriteSchema = z.object({
 
   if (isGlobal && hasEntity) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       path: ['entity_id'],
       message: 'Global decision objects must not include entity_id.',
     });
@@ -54,7 +54,7 @@ export const DecisionObjectWriteSchema = z.object({
 
   if (!isGlobal && !hasEntity) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       path: ['entity_id'],
       message: 'Non-global decision objects must include entity_id.',
     });
@@ -62,7 +62,7 @@ export const DecisionObjectWriteSchema = z.object({
 
   if (!isNonEmptyJson(value.evidence)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       path: ['evidence'],
       message: 'Decision objects must include evidence.',
     });
@@ -70,7 +70,7 @@ export const DecisionObjectWriteSchema = z.object({
 
   if (Object.keys(value.action_payload).length === 0) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       path: ['action_payload'],
       message: 'Decision objects must include action payload.',
     });
