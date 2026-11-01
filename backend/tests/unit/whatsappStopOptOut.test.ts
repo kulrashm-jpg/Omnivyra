@@ -39,6 +39,9 @@ jest.mock('../../db/supabaseClient', () => {
         return { data: null, error: null };
       },
       then: (res: (v: unknown) => unknown) => {
+        if (table === 'social_accounts') {
+          return Promise.resolve({ data: db.accounts.filter((a) => filters.every(([c, v]) => a[c] === v)), error: null }).then(res);
+        }
         if (table === 'engagement_messages' && payload) db.messages.push(payload);
         return Promise.resolve({ data: null, error: null }).then(res);
       },
@@ -79,7 +82,7 @@ const inbound = (text: string, over: Row = {}): Row => ({
 });
 
 beforeEach(() => {
-  db.accounts = [{ id: 'sa-1', company_id: 'co-a', phone_number_id: PHONE_NUMBER_ID }];
+  db.accounts = [{ id: 'sa-1', company_id: 'co-a', platform: 'whatsapp', is_active: true, phone_number_id: PHONE_NUMBER_ID }];
   db.threads = [];
   db.messages = [];
   db.failThreads = false;
@@ -157,7 +160,8 @@ describe('inbound STOP through the real webhook processor', () => {
 
   it('a failed thread write cannot swallow the opt-out', async () => {
     db.failThreads = true;
-    await processWhatsAppWebhookJob(job([inbound('STOP')]));
+    // WA-6: the job now fails so the message is retried; the opt-out is already in.
+    await expect(processWhatsAppWebhookJob(job([inbound('STOP')]))).rejects.toThrow(/1 event\(s\) failed: inbound/);
     expect(recordContactGovernance).toHaveBeenCalledTimes(1);
     expect(db.messages).toHaveLength(0);
   });
