@@ -2,7 +2,9 @@
 
 **Neither engine is authorized or built.** This shows they could arrive through the existing contracts. Any implementation needs a separate scope and authorization decision. There are no empty engines, placeholder production adapters or speculative tables, and `ENGINE_NAMES` stays at five.
 
-Written against orchestration's contract v0.1 draft, uncommitted at the time. The test passed 21 of 21 against a temporary copy; it is held at `proposals/outreachFutureEngineCompatibility.test.ts.txt` until v0.1 commits, then moves to `backend/tests/unit/`.
+Written against orchestration's contract v0.1 (77e90518). The fixtures-only test is `backend/tests/unit/outreachFutureEngineCompatibility.test.ts`.
+
+**Permission is the extension point.** The sweeper now holds a step on any contact channel with no `channelPermissionFact` as `needs_human`/`no_permission_source`. So registering an adapter contacts nobody until a permission source exists for that channel, and the test pins this for `sms` and `phone`.
 
 ## What exists
 
