@@ -31,6 +31,7 @@ const start = jest.fn();
 const retry = jest.fn();
 const getOne = jest.fn();
 const list = jest.fn();
+const schemaReady = jest.fn(async (..._a: unknown[]) => true);
 jest.mock('../../services/prospectIdentity/personErasureRequests', () => {
   const actual = jest.requireActual('../../services/prospectIdentity/personErasureRequests');
   return {
@@ -39,6 +40,7 @@ jest.mock('../../services/prospectIdentity/personErasureRequests', () => {
     retryErasureRequest: (...a: unknown[]) => { order.push('service'); return retry(...a); },
     getErasureRequest: (...a: unknown[]) => getOne(...a),
     listErasureRequests: (...a: unknown[]) => list(...a),
+    erasureSchemaReady: (...a: unknown[]) => { order.push('schema'); return schemaReady(...a); },
   };
 });
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: jest.fn(), ownedDbRpc: jest.fn() }));
@@ -81,6 +83,7 @@ beforeEach(() => {
   capabilityOk.mockImplementation(async () => ({ ok: true, principal: { userId: 'u-1', sessionId: 's-1', supabaseUid: 'sb-1' } }));
   start.mockResolvedValue({ kind: 'request', errorCode: null, view: view('COMPLETED') });
   retry.mockResolvedValue({ kind: 'request', errorCode: null, view: view('COMPLETED') });
+  schemaReady.mockImplementation(async () => true);
 });
 
 describe('authentication and authorization', () => {
@@ -102,9 +105,9 @@ describe('authentication and authorization', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('order: membership, then capability, then the service', async () => {
+  it('order: membership, then capability, then the schema gate, then the service', async () => {
     await call(collection);
-    expect(order).toEqual(['tenant', 'capability', 'service']);
+    expect(order).toEqual(['tenant', 'capability', 'schema', 'service']);
   });
 
   it('the capability is prospect.person.erase, bound to the VERIFIED tenant id; step-up on POST, not on GET', async () => {
@@ -235,5 +238,39 @@ describe('audit — one event per attempt, keyed by REQUEST id, no personal data
     await call(single, { body: { action: 'retry' } });
     expect(retry.mock.calls[0]).toEqual([ORG, REQ, 'erasure-api:company_admin']);
     expect(audit.mock.calls[0][0]).toMatchObject({ resourceId: REQ, reason: 'person_erasure:COMPLETED' });
+  });
+});
+
+
+describe('deploy-order gate (review M-1): 503 ERASURE_SCHEMA_NOT_READY, erasePerson never reached', () => {
+  it('POST start: schema not ready → 503, not retryable, the service never runs, the attempt is audited', async () => {
+    schemaReady.mockResolvedValue(false);
+    const r = await call(collection);
+    expect(r.code).toBe(503);
+    expect(r.body).toEqual({ error: 'ERASURE_SCHEMA_NOT_READY', retryable: false });
+    expect(start).not.toHaveBeenCalled();
+    expect(order).toEqual(['tenant', 'capability', 'schema']);
+    expect(schemaReady).toHaveBeenCalledWith(ORG);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect((audit.mock.calls[0][0] as { reason: string }).reason).toBe('person_erasure:schema_not_ready');
+  });
+
+  it('POST retry: schema not ready → 503 and the retry (resume) never runs', async () => {
+    schemaReady.mockResolvedValue(false);
+    const r = await call(single, { body: { action: 'retry' } });
+    expect(r.code).toBe(503);
+    expect(r.body.error).toBe('ERASURE_SCHEMA_NOT_READY');
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('the gate runs only for writes, after authorization and validation: GETs and refused requests never probe', async () => {
+    list.mockResolvedValue({ requests: [], inconsistencies: [] });
+    await call(collection, { method: 'GET' });
+    getOne.mockResolvedValue(view('COMPLETED'));
+    await call(single, { method: 'GET' });
+    await call(collection, { body: { personId: 'abc', reasonCode: 'data_subject_request' } });
+    capabilityOk.mockResolvedValue({ ok: false });
+    await call(collection);
+    expect(schemaReady).not.toHaveBeenCalled();
   });
 });

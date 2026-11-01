@@ -193,6 +193,19 @@ same trade-off applies to `source_records.source_record_id`, `contacts.platform_
   survivor, or any blocker, which is NAMED in the error — everything rolls back: the person is left as
   before step 6, never "graph redacted, name kept". This supersedes the earlier ordering trade-off.
   A completed request holds no person id (CHECK) and records only codes, never messages.
+- **Deploy order (erasure API, review M-1).** The migrations 20270112000000..05 and
+  20270115000000 (inventory capture + completion verification) are applied, in version order,
+  BEFORE the erasure API (`pages/api/prospect-identity/erasure-requests/*`) is reachable; rollbacks
+  run the other way round (application first, then 15 -> 05..00). `erasePerson` commits steps 3-5
+  before its `beforeFinalize` hook captures the verification inventory, so an attempt against a
+  schema without 20270115000000 would leave a PARTIALLY_COMPLETED request (governance revoked,
+  evidence links cleared, person not deleted). The API therefore probes the schema first
+  (`erasureSchemaReady`: `pi_person_erasure_verify` and `pi_person_erasure_capture_inventory` must
+  answer `request_not_found` for the nil request id, `pi_person_erasure_inconsistencies` must read)
+  and answers **503 `ERASURE_SCHEMA_NOT_READY`** without calling `erasePerson` when it cannot
+  prove the schema is there. 20270115000000's preflight requires 20270112000001..03; 04/05 only
+  replace policy functions 03 already defines and are not observable through the probe, so the
+  version-order apply above is still required.
 
 ## Open gaps (owner decisions)
 

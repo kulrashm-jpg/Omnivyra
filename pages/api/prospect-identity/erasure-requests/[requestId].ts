@@ -25,6 +25,7 @@ import { requireCapability } from '../../../../backend/security/requireCapabilit
 import { PROSPECT_PERSON_ERASE } from '../../../../shared/contracts/security';
 import {
   getErasureRequest,
+  erasureSchemaReady,
   isUuid,
   retryErasureRequest,
 } from '../../../../backend/services/prospectIdentity/personErasureRequests';
@@ -67,6 +68,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
   if (body.action !== 'retry') return res.status(400).json({ error: "action must be 'retry'" });
+
+  // Deploy-order gate (review M-1): never start or resume an erasure the
+  // schema cannot verify; erasePerson is not called.
+  if (!(await erasureSchemaReady(tenant.organizationId))) {
+    const notReady = { kind: 'schema_not_ready' as const };
+    await auditErasureOutcome(req, guard.principal, tenant.organizationId, notReady);
+    const { status, body: payload } = erasureHttpResponse(notReady);
+    return res.status(status).json(payload);
+  }
 
   const outcome = await retryErasureRequest(tenant.organizationId, requestId, requestedByLabel(tenant));
   await auditErasureOutcome(req, guard.principal, tenant.organizationId, outcome);

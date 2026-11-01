@@ -30,11 +30,20 @@
 --   UNION ALL SELECT 'inventories', count(*) FROM public.person_erasure_inventories;
 --
 -- ─── APPLICATION ───────────────────────────────────────────────────────────
--- The erasure API (pages/api/prospect-identity/erasure-requests/*) then fails
--- CLOSED: the inventory capture before finalize answers "function missing", the
--- attempt is marked failed and NOTHING is erased; status reads report
--- verification as unavailable and never COMPLETED. Roll the application back
--- first (or together) if erasure must keep working.
+-- Roll the application back FIRST (or make the erasure API unreachable) before
+-- running this file. The erasure API (pages/api/prospect-identity/erasure-
+-- requests/*) checks for this migration's functions before it starts or resumes
+-- an erasure (erasureSchemaReady) and answers 503 ERASURE_SCHEMA_NOT_READY
+-- without calling erasePerson once they are gone. An application build WITHOUT
+-- that gate is NOT harmless here: erasePerson runs steps 3-5 (governance
+-- re-anchor, revocation of the originals, evidence-link clearing) BEFORE its
+-- beforeFinalize hook captures the inventory, so each attempt would commit
+-- those steps, then fail at the capture ("function missing" ->
+-- verification_unavailable) and leave a PARTIALLY_COMPLETED request: governance
+-- revoked and evidence links cleared, the person NOT deleted (the irreversible
+-- steps 6-7 never run). Status reads report verification as unavailable and
+-- never COMPLETED. Deploy order is the mirror image: 20270112000000..05 and
+-- 20270115000000 are applied BEFORE the erasure API is reachable.
 
 BEGIN;
 

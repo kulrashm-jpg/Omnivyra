@@ -46,6 +46,7 @@ import {
   ERASURE_REFERENCE_RE,
   ERASURE_REFERENCE_SHAPE,
   erasureReason,
+  erasureSchemaReady,
   isUuid,
   listErasureRequests,
   startPersonErasure,
@@ -100,6 +101,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (reference !== undefined && reference !== null
       && (typeof reference !== 'string' || !ERASURE_REFERENCE_RE.test(reference))) {
     return res.status(400).json({ error: `reference must be ${ERASURE_REFERENCE_SHAPE}` });
+  }
+
+  // Deploy-order gate (review M-1): never start or resume an erasure the
+  // schema cannot verify; erasePerson is not called.
+  if (!(await erasureSchemaReady(tenant.organizationId))) {
+    const notReady = { kind: 'schema_not_ready' as const };
+    await auditErasureOutcome(req, guard.principal, tenant.organizationId, notReady);
+    const { status, body: payload } = erasureHttpResponse(notReady);
+    return res.status(status).json(payload);
   }
 
   const outcome = await startPersonErasure({

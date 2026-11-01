@@ -581,3 +581,28 @@ it('fixture sanity: newLead helper still links a prospect to a person (shared ha
     expect((await one('SELECT unified_person_id FROM public.canonical_leads WHERE id=$1', [l])).unified_person_id).toBe(p);
   });
 });
+
+
+describe('deploy-order gate (review M-1): erasureSchemaReady against the real schema', () => {
+  it('the full chain is ready; the probes leave no ledger row behind', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      expect(await svc.erasureSchemaReady(ORG_A)).toBe(true);
+      expect(Number((await one('SELECT count(*) n FROM public.person_erasure_requests')).n)).toBe(0);
+      expect(Number((await one('SELECT count(*) n FROM public.person_erasure_inventories')).n)).toBe(0);
+      expect(Number((await one('SELECT count(*) n FROM public.person_erasure_verifications')).n)).toBe(0);
+    });
+  });
+
+  it.each([
+    ['20270115000000 verification missing', 'DROP FUNCTION public.pi_person_erasure_verify(uuid, uuid)'],
+    ['20270115000000 inventory capture missing', 'DROP FUNCTION public.pi_person_erasure_capture_inventory(uuid, uuid, uuid)'],
+    ['20270112000003 ledger read missing', 'DROP FUNCTION public.pi_person_erasure_inconsistencies(uuid)'],
+  ])('%s → not ready', async (_label, drop) => {
+    await inRollback(async () => {
+      await seedTenants();
+      await db.query(drop);
+      expect(await svc.erasureSchemaReady(ORG_A)).toBe(false);
+    });
+  });
+});

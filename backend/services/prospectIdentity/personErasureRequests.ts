@@ -152,6 +152,7 @@ export interface ErasureRequestView {
 }
 
 export type ErasureOutcome =
+  | { kind: 'schema_not_ready' }
   | { kind: 'subject_not_found' }
   | { kind: 'request_not_found' }
   | { kind: 'ledger_unavailable' }
@@ -265,6 +266,42 @@ export async function verifyErasureRequest(organizationId: string, requestId: st
           : /not_completed/.test(msg) ? 'not_completed' : 'verification_failed',
     );
   }
+}
+
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * DEPLOY-ORDER GATE (review M-1). `erasePerson` runs steps 3-5 (governance
+ * re-anchor, revoke, evidence-link clearing) BEFORE its `beforeFinalize` hook
+ * captures the verification inventory. If 20270115000000 (inventory capture +
+ * completion verification) is not applied, every attempt would leave a
+ * PARTIALLY_COMPLETED request: governance revoked and links cleared, person not
+ * deleted. So the API asks this BEFORE starting or resuming an erasure and
+ * answers 503 ERASURE_SCHEMA_NOT_READY without calling erasePerson.
+ *
+ * Side-effect-free probes through the same service-role seam:
+ *   - pi_person_erasure_verify / pi_person_erasure_capture_inventory (20270115000000)
+ *     with the nil request id: both refuse with P0002 request_not_found as their
+ *     FIRST statement when they exist; a missing function answers PGRST202/42883;
+ *   - pi_person_erasure_inconsistencies (20270112000003): a read.
+ * 20270115000000's own preflight refuses to apply without 20270112000001..03.
+ * 20270112000004/05 only replace policy functions 03 already defines, so their
+ * presence is not observable here: the deploy order (all of 20270112000000..05
+ * and 20270115000000 applied, in version order, BEFORE the API is reachable)
+ * is documented in docs/architecture/PROSPECT-PROVENANCE-ERASURE-POLICY.md.
+ * Anything other than the expected answer (including a transient error) is NOT
+ * ready: fail closed, nothing is started.
+ */
+export async function erasureSchemaReady(organizationId: string): Promise<boolean> {
+  const notFound = (res: { error: unknown }) => errCode(res.error) === 'P0002';
+  const verify = await ownedDbRpc('pi_person_erasure_verify', { p_organization_id: organizationId, p_request_id: NIL_UUID });
+  if (!notFound(verify)) return false;
+  const capture = await ownedDbRpc('pi_person_erasure_capture_inventory', {
+    p_organization_id: organizationId, p_request_id: NIL_UUID, p_lease_token: NIL_UUID,
+  });
+  if (!notFound(capture)) return false;
+  const inc = await ownedDbRpc('pi_person_erasure_inconsistencies', { p_organization_id: organizationId });
+  return !inc.error;
 }
 
 async function loadRequest(organizationId: string, requestId: string): Promise<LedgerRow | null> {

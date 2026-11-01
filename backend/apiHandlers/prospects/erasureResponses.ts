@@ -32,6 +32,9 @@ export function erasureHttpResponse(outcome: ErasureOutcome): { status: number; 
       return { status: 404, body: { error: 'subject_not_found' } };
     case 'request_not_found':
       return { status: 404, body: { error: 'request_not_found' } };
+    case 'schema_not_ready':
+      // Deploy-order gate (erasureSchemaReady): nothing was started.
+      return { status: 503, body: { error: 'ERASURE_SCHEMA_NOT_READY', retryable: false } };
     case 'ledger_unavailable':
       return { status: 503, body: { error: 'erasure_unavailable', retryable: false } };
     case 'request': {

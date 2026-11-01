@@ -251,3 +251,54 @@ describe('views never expose a person id after completion', () => {
     expect(svc.toView(completed(), null, NOW).personId).toBeNull();
   });
 });
+
+
+describe('erasureSchemaReady — deploy-order gate (review M-1)', () => {
+  const missing = { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } };
+  const notFound = { data: null, error: { code: 'P0002', message: 'person_erasure:request_not_found' } };
+  const NIL = '00000000-0000-0000-0000-000000000000';
+
+  it('ready only when both 20270115000000 functions answer request_not_found to the nil id and the ledger read works', async () => {
+    rpcResults.pi_person_erasure_verify = [notFound];
+    rpcResults.pi_person_erasure_capture_inventory = [notFound];
+    rpcResults.pi_person_erasure_inconsistencies = [{ data: [], error: null }];
+    expect(await svc.erasureSchemaReady(ORG)).toBe(true);
+    expect(rpcCalls.map((c) => c.fn)).toEqual(['pi_person_erasure_verify', 'pi_person_erasure_capture_inventory', 'pi_person_erasure_inconsistencies']);
+    expect(rpcCalls[0].args).toEqual({ p_organization_id: ORG, p_request_id: NIL });
+    expect(rpcCalls[1].args).toEqual({ p_organization_id: ORG, p_request_id: NIL, p_lease_token: NIL });
+    expect(rpcCalls[2].args).toEqual({ p_organization_id: ORG });
+  });
+
+  it('20270115000000 not applied (verify missing) → not ready, nothing else probed', async () => {
+    rpcResults.pi_person_erasure_verify = [missing];
+    expect(await svc.erasureSchemaReady(ORG)).toBe(false);
+    expect(rpcCalls.map((c) => c.fn)).toEqual(['pi_person_erasure_verify']);
+  });
+
+  it('inventory capture missing → not ready', async () => {
+    rpcResults.pi_person_erasure_verify = [notFound];
+    rpcResults.pi_person_erasure_capture_inventory = [{ data: null, error: { code: '42883', message: 'function does not exist' } }];
+    expect(await svc.erasureSchemaReady(ORG)).toBe(false);
+  });
+
+  it('ledger (20270112000003) missing → not ready', async () => {
+    rpcResults.pi_person_erasure_verify = [notFound];
+    rpcResults.pi_person_erasure_capture_inventory = [notFound];
+    rpcResults.pi_person_erasure_inconsistencies = [missing];
+    expect(await svc.erasureSchemaReady(ORG)).toBe(false);
+  });
+
+  it('fails closed on anything unexpected: a transient error, or a probe that unexpectedly succeeds', async () => {
+    rpcResults.pi_person_erasure_verify = [{ data: null, error: { code: '08006', message: 'connection failure' } }];
+    expect(await svc.erasureSchemaReady(ORG)).toBe(false);
+    rpcResults.pi_person_erasure_verify = [{ data: { outcome: 'clean' }, error: null }];
+    expect(await svc.erasureSchemaReady(ORG)).toBe(false);
+  });
+
+  it('the probe never calls erasePerson and reads no table', async () => {
+    rpcResults.pi_person_erasure_verify = [missing];
+    await svc.erasureSchemaReady(ORG);
+    expect(erasePerson).not.toHaveBeenCalled();
+    expect(tableCalls).toHaveLength(0);
+  });
+});
