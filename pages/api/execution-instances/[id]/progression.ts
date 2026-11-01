@@ -51,11 +51,12 @@ import { PROSPECT_ICP_MANAGE } from '../../../../shared/contracts/security';
 import { getExecutionInstance } from '../../../../backend/services/executionInstances/executionInstanceStore';
 import { getPlanForInstance } from '../../../../backend/services/executionPlans/executionPlanStore';
 import {
-  advanceExecutionRun, cancelExecutionRun, transitionPlanStep,
+  advanceExecutionRun, transitionPlanStep,
   listProgressionSteps, getReadyStep, StepProgressionError,
   STEP_STATES, type StepState,
 } from '../../../../backend/services/workflowExecution/stepProgressionStore';
-import { listJourneyDecisions } from '../../../../backend/services/orchestration/journeyDecisionLog';
+import { listJourneyDecisions, recordJourneyDecisions, type JourneyDecisionInput } from '../../../../backend/services/orchestration/journeyDecisionLog';
+import { exitJourney } from '../../../../backend/services/orchestration/journeyExit';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -69,6 +70,12 @@ const statusFor = (code: string): number => {
   if (code === 'no_plan' || code === 'plan_not_ready') return 409;
   return 400;
 };
+
+/** Records who settled what. True means the action stands with no record of it, and the caller is told. */
+async function recordPersonDecision(companyId: string, actorUserId: unknown, d: JourneyDecisionInput): Promise<boolean> {
+  const recorded = await recordJourneyDecisions(companyId, [{ ...d, reasons: [`actor:${String(actorUserId)}`] }]);
+  return recorded.failed > 0;
+}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!METHODS.includes(req.method ?? '')) {
@@ -126,13 +133,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           error: `state must be one of ${STEP_STATES.join(' | ')}`,
         });
       }
+      // THE SECOND BIND. The store scopes by tenant only, so a step of another run in
+      // this tenant would otherwise be movable through this run's path.
+      const plan = await getPlanForInstance(companyId, instanceId);
+      const belongs = plan === null ? undefined : (await listProgressionSteps(companyId, plan.id)).find((s) => s.id === stepId);
+      if (!belongs) return res.status(404).json({ error: 'no such step in this run' });
       const step = await transitionPlanStep({
         organizationId: companyId,            // the VERIFIED tenant, never the body's
         stepId,
         state: state as StepState,
       });
       if (!step) return res.status(409).json({ error: 'that step moved concurrently' });
-      return res.status(200).json({ step });
+      const settled = await recordPersonDecision(companyId, guard.principal.userId, {
+        executionInstanceId: instanceId, planStepId: step.id, stepKey: step.stepKey, channel: step.channel, engine: null,
+        decision: step.state === 'completed' ? 'executed' : 'skipped', outcome: `human_${step.state}`, reasons: [],
+      });
+      return res.status(200).json({ step, auditFailed: settled });
     }
 
     const action = str(body.action);
@@ -141,12 +157,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (action === 'cancel') {
-      const cancelledSteps = await cancelExecutionRun({
-        organizationId: companyId,
-        executionInstanceId: instanceId,      // the BOUND run, from the path
+      // The BOUND run, from the path. Also withdraws what has not started sending: a run
+      // a person cancelled must not leave a task someone can still approve and send.
+      const cancelledSteps = await exitJourney(companyId, instanceId);
+      const auditFailed = await recordPersonDecision(companyId, guard.principal.userId, {
+        executionInstanceId: instanceId, planStepId: null, stepKey: null, channel: null, engine: null,
+        decision: 'exited', outcome: 'cancelled_by_person', reasons: [],
       });
       return res.status(200).json({
         cancelledSteps,
+        auditFailed,
         instance: await getExecutionInstance(companyId, instanceId),
       });
     }

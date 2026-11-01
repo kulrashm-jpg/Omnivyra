@@ -58,6 +58,7 @@
  * request `uncertain` → `needs_human`. It is never retried automatically.
  */
 
+import { COMMUNITY_CAPABILITIES } from './engineCapabilities';
 import { ownedDbTable } from '../../db/writeOwner';
 import { normalizePlatform } from '../../constants/platforms';
 import {
@@ -615,6 +616,7 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
   return {
     engine: 'community',
     channels: ['community'],
+    capabilities: COMMUNITY_CAPABILITIES,
     async execute(ctx) {
       if (ctx.channel !== 'community') {
         return result('unsupported_channel', 'needs_human', `the community engine does not serve the "${ctx.channel}" channel`, null);

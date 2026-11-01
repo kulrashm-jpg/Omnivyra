@@ -51,11 +51,14 @@ import {
   getOutreachTaskById,
   submitForApproval,
 } from '../leadOutreachExecution';
+import { readAttemptHistory } from '../leadOutreachExecution/storage';
 import { dispatchWorkflowEmailTask, ensureWorkflowTransports } from '../emailEngine/workflowEmailDispatch';
 import { resolveEmailRecipient } from '../emailEngine/emailExecutionContext';
 import { renderEmailContent } from '../emailEngine/emailContentGenerator';
 import type { SubjectRef } from '../executionSubject/subjectRef';
 import type { WorkflowStep } from '../workflows/workflowStore';
+import type { EngineCapabilityDeclaration } from './executionContract';
+import { WS3_CAPABILITIES } from './engineCapabilities';
 
 /**
  * Every engine an adapter may front. Owned by the integration owner: adapters add
@@ -93,6 +96,8 @@ export interface EngineResult {
 export interface EngineAdapter {
   readonly engine: EngineName;
   readonly channels: readonly string[];
+  /** The contract declaration (executionContract.ts). Must match `channels`. */
+  readonly capabilities?: EngineCapabilityDeclaration;
   execute(ctx: EngineStepContext): Promise<EngineResult>;
 }
 
@@ -110,6 +115,8 @@ export interface Ws3AdapterDeps {
   resolveRecipient: typeof resolveEmailRecipient;
   renderContent: typeof renderEmailContent;
   sendEmail: typeof dispatchWorkflowEmailTask;
+  /** Absent in a fake that never requeues. */
+  readAttempts?: typeof readAttemptHistory;
 }
 
 export const defaultWs3Deps: Ws3AdapterDeps = {
@@ -121,7 +128,22 @@ export const defaultWs3Deps: Ws3AdapterDeps = {
   resolveRecipient: resolveEmailRecipient,
   renderContent: renderEmailContent,
   sendEmail: dispatchWorkflowEmailTask,
+  readAttempts: readAttemptHistory,
 };
+
+/**
+ * Did a provider already refuse this task? WS-3 returns a refused task to `queued` and
+ * treats the refusal as "not sent", which is right for a person retrying it and wrong for
+ * a clock: every sweep would call the provider again with the same request. So the sweep
+ * stops at the first refusal and leaves the step with a person. `disabled` never reached
+ * a provider and stays free to go once the transport is enabled.
+ */
+async function providerAlreadyRefused(deps: Ws3AdapterDeps, organizationId: string, taskId: string): Promise<boolean | null> {
+  if (deps.readAttempts === undefined) return false;
+  const history = await deps.readAttempts(organizationId, taskId);
+  if (history.ok === false) return null;
+  return history.evidence.some((e) => (e.transport_response as Record<string, unknown> | null)?.outcome === 'rejected');
+}
 
 const SKIP_FOR_THIS_PERSON = new Set(['email_missing', 'email_invalid', 'personalization_missing']);
 
@@ -179,6 +201,7 @@ export function createWs3Adapter(deps: Ws3AdapterDeps = defaultWs3Deps): EngineA
   return {
     engine: 'ws3',
     channels: ['internal', 'email'],
+    capabilities: WS3_CAPABILITIES,
     async execute(ctx) {
       const isEmail = ctx.channel === 'email';
       if (isEmail) {
@@ -213,6 +236,9 @@ export function createWs3Adapter(deps: Ws3AdapterDeps = defaultWs3Deps): EngineA
           return result('awaiting_approval', 'wait', 'awaiting human approval', taskId);
         case 'approved':
         case 'queued': {
+          const refused = await providerAlreadyRefused(deps, ctx.organizationId, taskId);
+          if (refused === null) return result('attempts_unreadable', 'wait', 'the attempt history could not be read', taskId);
+          if (refused) return result('provider_refused_prior_attempt', 'needs_human', 'the provider refused this message; a person decides what happens next', taskId);
           let out;
           if (isEmail) {
             try {

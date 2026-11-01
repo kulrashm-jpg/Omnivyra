@@ -71,6 +71,7 @@ export const durableJourneyResponsePort: JourneyResponsePort = {
       .select('created_at')
       .eq('organization_id', organizationId)
       .in('execution_task_id', taskIds)
+      .in('state', ['submitted', 'completed', 'uncertain'])
       .order('created_at', { ascending: true })
       .limit(1);
     if (requests.error) throw unreadable('engine requests');

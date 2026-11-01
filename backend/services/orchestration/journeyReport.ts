@@ -48,6 +48,8 @@ export interface VersionReport {
   readonly engines: Record<string, Record<string, number>>;
   /** Decision → count, across this version's runs. */
   readonly decisions: Record<string, number>;
+  /** Why journeys ended, by code. */
+  readonly exits: Record<string, number>;
   /** Steps still waiting on a person: the operator's queue. Codes only. */
   readonly needsHuman: ReadonlyArray<{ executionInstanceId: string; stepKey: string | null; outcome: string | null; reasons: readonly string[] }>;
   /** Individuals who reached the version's success outcome, and the share of those enrolled. */
@@ -110,6 +112,7 @@ export async function buildJourneyReport(input: {
     const engines: Record<string, Record<string, number>> = {};
     const successOutcome = v.definition.objective?.success_outcome ?? null;
     const decisionCounts: Record<string, number> = {};
+    const exits: Record<string, number> = {};
     const needsHuman: Array<VersionReport['needsHuman'][number]> = [];
     let reached = 0;
 
@@ -125,7 +128,15 @@ export async function buildJourneyReport(input: {
       }
       const ready = planSteps.find((s) => s.state === 'ready') ?? null;
       const runDecisions = await listJourneyDecisions(input.organizationId, run.id);
-      for (const d of runDecisions) bump(decisionCounts, d.decision);
+      let personReached = false;
+      for (const d of runDecisions) {
+        bump(decisionCounts, d.decision);
+        if (d.decision === 'exited' && d.outcome !== null) bump(exits, d.outcome);
+        // WS-3 and WhatsApp report their engine's own record below.
+        if (d.engine !== null && d.engine !== 'ws3' && d.engine !== 'whatsapp') bump(engines[d.engine] ??= {}, d.outcome ?? d.decision);
+        // A response that ended the journey is attainment, whichever engine carried it.
+        if (d.decision === 'exited' && successOutcome !== null && d.outcome === successOutcome) personReached = true;
+      }
       // Only the latest word on the step that is still open is the queue.
       const latest = ready === null ? null : runDecisions.filter((d) => d.planStepId === ready.id).pop() ?? null;
       if (latest !== null && latest.decision === 'needs_human') {
@@ -133,7 +144,6 @@ export async function buildJourneyReport(input: {
       }
 
       // WS-3: one handoff per bridged task; its outreach task status is the engine outcome.
-      let personReached = false;
       for (const h of await listInstanceHandoffs(input.organizationId, run.id)) {
         const task = await getOutreachTaskById(input.organizationId, h.outreachTaskId);
         bump(engines.ws3 ??= {}, String(task?.status ?? 'unreadable'));
@@ -164,6 +174,7 @@ export async function buildJourneyReport(input: {
       steps: [...steps.values()],
       engines,
       decisions: decisionCounts,
+      exits,
       needsHuman,
       attainment: {
         reached,

@@ -145,8 +145,11 @@ describe('WhatsApp engine, the controls that stand before any broadcast', () => 
     await inRollback(async () => {
       await scene([wa('intro')]);
       await db.query(sql, [ORG_A]);
-      // A disabled tenant is not swept at all, so its adapter is asked directly by the sweep of one tenant.
-      const r = await sweep(waAdapters());
+      // The central gate holds the step and it stays eligible once the control clears.
+      const held = await sweep(waAdapters());
+      expect(held.decisions[0]).toMatchObject({ decision: 'waiting', outcome: code });
+      // The engine's own gate still stands behind it: not a second authority, but not removed.
+      const r = await advanceAndDispatchWorkflowExecution(ORG_A, { now: new Date().toISOString(), deps: { adapters: waAdapters(), channelGate: async () => null } });
       expect(r.decisions[0]).toMatchObject({ decision: 'needs_human', outcome: code });
       expect(mockJobs).toHaveLength(0);
       expect(Number((await one('SELECT count(*) n FROM public.whatsapp_broadcasts')).n)).toBe(0);
@@ -384,7 +387,7 @@ describe('Community engine: the real adapter, link store and proof on the real s
   it('with no link, nothing is claimed or sent: the step goes to a person', async () => {
     await inRollback(async () => {
       await seedTenants();
-      await enableOutreach(ORG_A, []);
+      await enableOutreach(ORG_A, ['community']);
       const actor = await newUser();
       const { prospectId } = await newProspect(ORG_A, {});
       const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [humanStep('reply', 'community')] });
@@ -398,7 +401,7 @@ describe('Community engine: the real adapter, link store and proof on the real s
   it('a link to an unverified identity is refused by the database, so this engine cannot act today', async () => {
     await inRollback(async () => {
       await seedTenants();
-      await enableOutreach(ORG_A, []);
+      await enableOutreach(ORG_A, ['community']);
       const actor = await newUser();
       const { prospectId, personId } = await newProspect(ORG_A, {});
       const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [humanStep('reply', 'community')] });
@@ -419,7 +422,7 @@ describe('Channels with no engine', () => {
   it('a linkedin step and the browser adapter: visibly unsupported, nothing acts', async () => {
     await inRollback(async () => {
       await seedTenants();
-      await enableOutreach(ORG_A, []);
+      await enableOutreach(ORG_A, ['community']);
       const actor = await newUser();
       const { prospectId } = await newProspect(ORG_A, {});
       await enrol(ORG_A, actor, prospectId, { steps: [humanStep('dm', 'linkedin')] });

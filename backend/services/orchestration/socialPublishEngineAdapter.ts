@@ -45,6 +45,7 @@
  * referencing step `skipped`.
  */
 
+import { SOCIAL_PUBLISH_CAPABILITIES } from './engineCapabilities';
 import { ownedDbTable } from '../../db/writeOwner';
 import type { EngineAdapter, EngineResult, EngineStepContext } from './engineAdapters';
 import { SOCIAL_POST_CHANNEL, parseSocialPostSettings } from './socialPostStepContract';
@@ -120,6 +121,7 @@ export function createSocialPublishAdapter(deps: SocialPublishAdapterDeps = defa
   return {
     engine: 'social_publish',
     channels: SOCIAL_PUBLISH_CHANNELS,
+    capabilities: SOCIAL_PUBLISH_CAPABILITIES,
     async execute(ctx: EngineStepContext): Promise<EngineResult> {
       // 1. The step must carry a structurally valid reference. A snapshot that
       //    predates the field, or a hand-written step, is refused — never guessed.
