@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getContentQueue } from '../../../backend/queue/contentGenerationQueues';
-import { safeEnqueue } from '../../../backend/middleware/queueBackpressure';
+import { enqueueOrThrow } from '../../../backend/middleware/queueBackpressure';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 
 /**
@@ -51,21 +51,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const queue = getContentQueue('analytics-ingestion');
 
-    await safeEnqueue(queue, 'analytics-ingestion',
+    await enqueueOrThrow(queue, 'analytics-ingestion',
       'daily-growth',
       { type: 'daily-growth' },
       { jobId: `daily-growth-${today}`, priority: 2 },
     );
     enqueued.push('daily-growth');
 
-    await safeEnqueue(queue, 'analytics-ingestion',
+    await enqueueOrThrow(queue, 'analytics-ingestion',
       'post-polls',
       { type: 'post-polls', batchSize: 100 },
       { jobId: `post-polls-${Date.now()}`, priority: 3 },
     );
     enqueued.push('post-polls');
 
-    await safeEnqueue(queue, 'analytics-ingestion',
+    await enqueueOrThrow(queue, 'analytics-ingestion',
       'ga4-all-companies',
       { type: 'ga4-all-companies', startDate: sevenDaysAgo, endDate: today },
       { jobId: `ga4-all-companies-${today}`, priority: 4 },
@@ -74,7 +74,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // Search Console for every company with an active GSC property (each from its own watermark;
     // the worker's own cron tick skips companies this job already synced).
-    await safeEnqueue(queue, 'analytics-ingestion',
+    await enqueueOrThrow(queue, 'analytics-ingestion',
       'gsc-all-companies',
       { type: 'gsc-all-companies' },
       { jobId: `gsc-all-companies-${today}`, priority: 4 },
@@ -86,7 +86,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // /api/cron/integrations-health is a follow-up after plan upgrade).
     // Refreshes expiring social tokens, GA4 access tokens, and writes
     // canonical connection_state across the integration tables.
-    await safeEnqueue(queue, 'analytics-ingestion',
+    await enqueueOrThrow(queue, 'analytics-ingestion',
       'oauth-refresh',
       { type: 'oauth-refresh' },
       { jobId: `oauth-refresh-${today}`, priority: 5 },

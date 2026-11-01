@@ -28,6 +28,68 @@ import type {
 } from '../types/opportunityWorkflow';
 
 // ---------------------------------------------------------------------------
+// Tenant binding of the opportunity (OPS-C)
+// ---------------------------------------------------------------------------
+//
+// Every workflow write names an organization AND an opportunity feed item. The
+// route authorizes the organization; nothing checked that the ITEM belongs to
+// it. For assignments and dispositions the composite FK
+// (opportunity_feed_item_id, organization_id) → opportunity_feed_items rejects
+// a cross-tenant item with 23503, which surfaced as HTTP 500. Notes and tags
+// have only a single-column FK onto the item, so a cross-tenant note/tag was
+// ACCEPTED: a row in tenant A pointing at tenant B's opportunity.
+//
+// checkOpportunityInTenant() is the tenant-scoped pre-check; the write paths
+// additionally translate a residual item-FK 23503 (an item deleted between
+// the check and the write) into OpportunityNotInTenantError.
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type OpportunityTenantCheck = 'owned' | 'not_found' | 'lookup_error';
+
+/**
+ * Is `opportunityFeedItemId` an opportunity of `organizationId`?
+ *   owned        — the item exists in this tenant.
+ *   not_found    — it does not exist, belongs to another tenant, or is not a
+ *                  well-formed id. Deliberately ONE answer: the caller must
+ *                  not learn whether another tenant's item exists.
+ *   lookup_error — the read failed; never treated as owned.
+ */
+export async function checkOpportunityInTenant(
+  organizationId: string,
+  opportunityFeedItemId: string,
+): Promise<OpportunityTenantCheck> {
+  if (!organizationId || !UUID_RE.test(String(opportunityFeedItemId ?? ''))) return 'not_found';
+  const { data, error } = await ownedDbTable('opportunity_feed_items')
+    .select('id')
+    .eq('id', opportunityFeedItemId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  if (error) return 'lookup_error';
+  return data ? 'owned' : 'not_found';
+}
+
+/** The item named by a workflow write is not an opportunity of the organization. */
+export class OpportunityNotInTenantError extends Error {
+  readonly code = 'OPPORTUNITY_NOT_FOUND';
+  constructor() {
+    super('opportunity_not_found');
+    this.name = 'OpportunityNotInTenantError';
+  }
+}
+
+/**
+ * True for a foreign-key violation on the opportunity item reference (the
+ * composite tenant FK, or the single-column item FK). Another 23503 — e.g. an
+ * unknown assignee user — is NOT this.
+ */
+export function isOpportunityItemFkViolation(error: { code?: string; message?: string; details?: string } | null | undefined): boolean {
+  if (!error || error.code !== '23503') return false;
+  const text = `${error.message ?? ''} ${error.details ?? ''}`;
+  return /item_tenant_fk|opportunity_feed_item|opportunity_feed_items/i.test(text);
+}
+
+// ---------------------------------------------------------------------------
 // Assignments
 // ---------------------------------------------------------------------------
 
@@ -81,6 +143,7 @@ export async function assignOpportunity(args: {
       .select('*')
       .single();
     if (!error && data) return data as OpportunityAssignment;
+    if (isOpportunityItemFkViolation(error)) throw new OpportunityNotInTenantError();
     if (error?.code === '23505') {
       // A concurrent assignment in the same role became active between our
       // close and our insert.
@@ -158,6 +221,7 @@ export async function addOpportunityNote(args: {
     })
     .select('*')
     .single();
+  if (isOpportunityItemFkViolation(error)) throw new OpportunityNotInTenantError();
   if (error || !data) throw new Error(`note_insert_failed:${error?.message ?? 'unknown'}`);
   return data as OpportunityNote;
 }
@@ -200,6 +264,7 @@ export async function addOpportunityTag(args: {
     })
     .select('*')
     .single();
+  if (isOpportunityItemFkViolation(error)) throw new OpportunityNotInTenantError();
   if (error) {
     // 23505 race — tag already exists. Return existing.
     if (error.code === '23505') {
@@ -269,6 +334,7 @@ export async function setOpportunityDisposition(args: {
     })
     .select('*')
     .single();
+  if (isOpportunityItemFkViolation(error)) throw new OpportunityNotInTenantError();
   if (error || !data) throw new Error(`disposition_insert_failed:${error?.message ?? 'unknown'}`);
   return data as OpportunityDisposition;
 }
@@ -342,6 +408,7 @@ export async function snoozeOpportunity(args: {
     // The database guard is the authority when a terminal transition raced the read above.
     const refused = snoozeRefusalFromDbError(error);
     if (refused) throw refused;
+    if (isOpportunityItemFkViolation(error)) throw new OpportunityNotInTenantError();
   }
   if (error || !data) throw new Error(`snooze_insert_failed:${error?.message ?? 'unknown'}`);
   return data as OpportunityDisposition;
