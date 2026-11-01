@@ -15,6 +15,7 @@ const db = {
   tables: {} as Record<string, Row[]>,
   nextId: 1,
   failTable: null as string | null,
+  failDispatchingRead: false,
   queries: [] as Array<{ table: string; op: string; filters: Array<[string, unknown]>; payload: Row | null }>,
 };
 
@@ -27,6 +28,7 @@ jest.mock('../../db/writeOwner', () => ({
     const matches = (r: Row) =>
       st.filters.every(([c, v]) => {
         if (c.startsWith('__gte__')) return String(r[c.slice(7)] ?? '') >= String(v);
+        if (c.startsWith('__lt__')) return String(r[c.slice(6)] ?? '') < String(v);
         if (c.startsWith('__is__')) return (r[c.slice(6)] ?? null) === v;
         return r[c] === v;
       });
@@ -35,6 +37,7 @@ jest.mock('../../db/writeOwner', () => ({
       await Promise.resolve(); // yield — concurrent sweeps genuinely interleave
       db.queries.push({ table, op: st.op, filters: [...st.filters], payload: st.payload });
       if (db.failTable === table) return { data: null, error: { code: '08006', message: 'connection failure' } };
+      if (db.failDispatchingRead && st.op === 'select' && st.filters.some(([c, v]) => c === 'status' && v === 'dispatching')) return { data: null, error: { code: '08006', message: 'connection failure' } };
 
       if (st.op === 'insert') {
         const row = st.payload as Row;
@@ -67,6 +70,7 @@ jest.mock('../../db/writeOwner', () => ({
       update: (row: Row) => { st.op = 'update'; st.payload = row; return b; },
       eq: (c: string, v: unknown) => { st.filters.push([c, v]); return b; },
       gte: (c: string, v: unknown) => { st.filters.push([`__gte__${c}`, v]); return b; },
+      lt: (c: string, v: unknown) => { st.filters.push([`__lt__${c}`, v]); return b; },
       is: (c: string, v: unknown) => { st.filters.push([`__is__${c}`, v]); return b; },
       order: () => b,
       limit: (n: number) => { st.limit = n; return exec('many'); },
@@ -171,6 +175,76 @@ beforeEach(() => {
 
 afterAll(() => {
   delete process.env[RECOVERY_SWEEP_ENABLED_ENV];
+});
+
+describe('G-4 — a stuck dispatching task is reported to a person, and nothing else happens to it', () => {
+  const T0 = Date.parse(NOW);
+  const CLOCK = { clock: () => T0 };
+  const stuck = async (minutesAgo: number, over: Partial<NewOutreachTask> = {}): Promise<string> => {
+    const id = await approvedTask(over);
+    const row = db.tables.outreach_tasks.find((r) => r.id === id)!;
+    Object.assign(row, { status: 'dispatching', updated_at: new Date(T0 - minutesAgo * 60_000).toISOString() });
+    return id;
+  };
+
+  it('reports a task older than the bound, tenant and id, and leaves it untouched', async () => {
+    configureTenant();
+    const id = await stuck(16);
+    const before = JSON.stringify(db.tables);
+    db.queries = [];
+
+    const report = await sweep(CLOCK);
+
+    expect(report.staleDispatching).toBe(1);
+    expect(report.staleDispatchingTasks).toEqual([
+      { companyId: 'co-a', taskId: id, since: new Date(T0 - 16 * 60_000).toISOString() },
+    ]);
+    expect(report).toMatchObject({ scanned: 0, sent: 0 });
+    expect(db.queries.filter((q) => q.op !== 'select')).toEqual([]);
+    expect(JSON.stringify(db.tables)).toBe(before);
+    expect(await status(id)).toBe('dispatching');
+    expect(await listAttempts('co-a', id)).toHaveLength(0);
+  });
+
+  it('a dispatch younger than the bound may be in flight, so it is not reported', async () => {
+    configureTenant();
+    await stuck(14);
+    expect((await sweep(CLOCK)).staleDispatching).toBe(0);
+  });
+
+  it('a dry run reports it too, with the flag off', async () => {
+    configureTenant();
+    const id = await stuck(60);
+    delete process.env[RECOVERY_SWEEP_ENABLED_ENV];
+    const report = await sweep({ ...CLOCK, dryRun: true });
+    expect(report.staleDispatchingTasks.map((t) => t.taskId)).toEqual([id]);
+    expect(await status(id)).toBe('dispatching');
+  });
+
+  it('a sweep that read nothing says unknown, not zero', async () => {
+    delete process.env[RECOVERY_SWEEP_ENABLED_ENV];
+    expect((await sweep(CLOCK)).staleDispatching).toBeNull();
+  });
+
+  it('a failed read leaves the count unknown, not zero, and the recovery still runs', async () => {
+    configureTenant();
+    const id = await requeuedTask();
+    db.failDispatchingRead = true;
+    const report = await sweep(CLOCK);
+    db.failDispatchingRead = false;
+
+    expect(report.staleDispatching).toBeNull();
+    expect(report.sent).toBe(1);
+    expect(await status(id)).toBe('sent');
+  });
+
+  it('the listed tasks are bounded; the count is not cut to the list', async () => {
+    configureTenant();
+    for (let i = 0; i < 22; i += 1) await stuck(30, { planTaskId: `task-${i}` });
+    const report = await sweep(CLOCK);
+    expect(report.staleDispatching).toBe(22);
+    expect(report.staleDispatchingTasks).toHaveLength(20);
+  });
 });
 
 describe('WS-3 recovery sweep (1) — disabled by default', () => {
@@ -293,12 +367,14 @@ describe('WS-3 recovery sweep (4) — tenant isolation', () => {
     expect(await status(b, 'co-b')).toBe('queued');
     expect(await listInternalWorkItems('co-b', b)).toHaveLength(0);
 
-    // The one unscoped read is the queued-task scan; every other query names a tenant.
+    // The two unscoped reads are the queued-task scan and the stale-dispatching
+    // report (G-4); every other query names a tenant.
     const scoped = (q: (typeof db.queries)[number]) =>
       q.op === 'insert' ? typeof q.payload?.company_id === 'string' : q.filters.some(([c]) => c === 'company_id');
     const unscoped = db.queries.filter((q) => !scoped(q));
-    expect(unscoped.length).toBeGreaterThan(0);
-    for (const q of unscoped) expect(q).toMatchObject({ table: 'outreach_tasks', op: 'select', filters: [['status', 'queued']] });
+    expect(unscoped).toHaveLength(2);
+    expect(unscoped[0]).toMatchObject({ table: 'outreach_tasks', op: 'select', filters: [['status', 'queued']] });
+    expect(unscoped[1]).toMatchObject({ table: 'outreach_tasks', op: 'select', filters: [['status', 'dispatching'], ['__lt__updated_at', expect.any(String)]] });
     // No tenant's task is ever read or written under another tenant's id.
     const touchedB = db.queries.filter((q) => q.filters.some(([c, v]) => (c === 'id' || c === 'task_id') && v === b) || q.payload?.task_id === b);
     expect(touchedB.length).toBeGreaterThan(0);

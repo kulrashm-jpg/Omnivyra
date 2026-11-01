@@ -259,6 +259,7 @@ export {
   getOutreachTaskById,
   listOutreachTasksForLead,
   listQueuedOutreachTasks,
+  listStaleDispatchingOutreachTasks,
   setOutreachTaskState,
   setOutreachTaskPersonId,
   transitionOutreachTaskState,

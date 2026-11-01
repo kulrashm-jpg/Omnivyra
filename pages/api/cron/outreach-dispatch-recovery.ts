@@ -15,7 +15,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  * `?dryRun=1` reports what a run would dispatch without dispatching anything;
  * it is read-only, so it works while the flag is off (for non-production
- * validation before enabling).
+ * validation before enabling). Both report tasks stuck in `dispatching` as
+ * `staleDispatching`, for a person: such a task may have been sent, so nothing
+ * here acts on it.
  *
  * Protected by CRON_SECRET. Bounded and idempotent — re-running only finds
  * whatever is still queued.
