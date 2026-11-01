@@ -45,14 +45,15 @@
  * Adapters do not throw for engine refusals; a thrown error is an adapter defect.
  */
 
-import { ownedDbTable } from '../../db/writeOwner';
 import { bridgeExecutionTask } from '../outreachBridge/outreachBridgeStore';
 import {
   dispatchInternalOutreachTask,
   getOutreachTaskById,
-  registerDefaultTransports,
   submitForApproval,
 } from '../leadOutreachExecution';
+import { dispatchWorkflowEmailTask, ensureWorkflowTransports } from '../emailEngine/workflowEmailDispatch';
+import { resolveEmailRecipient } from '../emailEngine/emailExecutionContext';
+import { renderEmailContent } from '../emailEngine/emailContentGenerator';
 import type { SubjectRef } from '../executionSubject/subjectRef';
 import type { WorkflowStep } from '../workflows/workflowStore';
 
@@ -105,8 +106,10 @@ export interface Ws3AdapterDeps {
   submitForApproval: typeof submitForApproval;
   dispatch: typeof dispatchInternalOutreachTask;
   registerTransports: () => void;
-  /** The person's canonical address: null when they have none, undefined when unreadable. */
-  readPersonEmail(organizationId: string, personId: string): Promise<string | null | undefined>;
+  /** The certified Email Engine: recipient, render and the send path. */
+  resolveRecipient: typeof resolveEmailRecipient;
+  renderContent: typeof renderEmailContent;
+  sendEmail: typeof dispatchWorkflowEmailTask;
 }
 
 export const defaultWs3Deps: Ws3AdapterDeps = {
@@ -114,18 +117,41 @@ export const defaultWs3Deps: Ws3AdapterDeps = {
   getTask: getOutreachTaskById,
   submitForApproval,
   dispatch: dispatchInternalOutreachTask,
-  registerTransports: () => registerDefaultTransports(),
-  async readPersonEmail(organizationId, personId) {
-    const res = await ownedDbTable('unified_persons')
-      .select('primary_email')
-      .eq('company_id', organizationId)                  // TENANT FIRST
-      .eq('id', personId)
-      .maybeSingle();
-    if (res.error) return undefined;                     // unreadable ≠ absent
-    const v = (res.data as Record<string, unknown> | null)?.primary_email;
-    return typeof v === 'string' && v.trim() ? v.trim() : null;
-  },
+  registerTransports: () => ensureWorkflowTransports(),
+  resolveRecipient: resolveEmailRecipient,
+  renderContent: renderEmailContent,
+  sendEmail: dispatchWorkflowEmailTask,
 };
+
+const SKIP_FOR_THIS_PERSON = new Set(['email_missing', 'email_invalid', 'personalization_missing']);
+
+/**
+ * Could this person be emailed this step? "No address" and "no value for a placeholder
+ * the step uses" are facts about the person, so the step is skipped; anything else is
+ * an authoring or data defect a person must look at. A failed read decides nothing.
+ */
+async function emailPreflight(
+  deps: Ws3AdapterDeps,
+  ctx: EngineStepContext,
+): Promise<{ code: string; disposition: EngineDisposition; reason: string } | null> {
+  const instruction = ctx.step?.instruction ?? null;
+  if (instruction === null || instruction.trim() === '') {
+    return { code: 'no_authored_content', disposition: 'needs_human', reason: 'the email step authored no instruction' };
+  }
+  if (ctx.personId === null) {
+    return { code: 'person_unresolved', disposition: 'skipped', reason: 'no canonical person to email' };
+  }
+  try {
+    const recipient = await deps.resolveRecipient(ctx.organizationId, ctx.personId);
+    deps.renderContent({ instruction, personalization: recipient.personalization });
+    return null;
+  } catch (e) {
+    const code = errCode(e);
+    if (SKIP_FOR_THIS_PERSON.has(code)) return { code, disposition: 'skipped', reason: code };
+    if (code === 'recipient_error') return { code, disposition: 'wait', reason: 'the person could not be read' };
+    return { code, disposition: 'needs_human', reason: code };
+  }
+}
 
 /**
  * WS-3: the existing bridge materializes exactly one `outreach_tasks` row per
@@ -139,10 +165,12 @@ export const defaultWs3Deps: Ws3AdapterDeps = {
  * policy the owner has not authorized; until then every WS-3 action is
  * human-approved. This is the one place the conflict is resolved, explicitly.
  *
- * EMAIL. Refused BEFORE anything is bridged unless the step carries its authored
- * message, so a task never reaches a person's approval queue with nothing to send.
- * The recipient is read from the person's canonical address at dispatch, passed to
- * the engine and never stored here: WS-3 governance evaluates that exact address.
+ * EMAIL goes through the certified Email Engine (backend/services/emailEngine): the
+ * authored step `instruction` is the content, the canonical person is the recipient,
+ * and what was sent is recorded before the provider is called. The same recipient and
+ * render checks run here BEFORE anything is bridged, so a task never reaches a person's
+ * approval queue when it could not be sent. The engine's own refusal still stands at
+ * send time: this is an early answer, not a second authority.
  */
 export function createWs3Adapter(deps: Ws3AdapterDeps = defaultWs3Deps): EngineAdapter {
   const result = (outcome: string, disposition: EngineDisposition, reason: string | null, externalRef: string | null): EngineResult =>
@@ -153,17 +181,9 @@ export function createWs3Adapter(deps: Ws3AdapterDeps = defaultWs3Deps): EngineA
     channels: ['internal', 'email'],
     async execute(ctx) {
       const isEmail = ctx.channel === 'email';
-      const content = isEmail ? ctx.step?.email ?? null : null;
-      if (isEmail && content === null) {
-        return result('no_authored_content', 'needs_human', 'the email step has no authored subject and body', null);
-      }
-      let recipient: string | null = null;
       if (isEmail) {
-        if (ctx.personId === null) return result('person_unresolved', 'skipped', 'no canonical person to email', null);
-        const address = await deps.readPersonEmail(ctx.organizationId, ctx.personId);
-        if (address === undefined) return result('email_unreadable', 'wait', 'the person could not be read', null);
-        if (address === null) return result('no_email_address', 'skipped', 'the person has no email address', null);
-        recipient = address;
+        const refusal = await emailPreflight(deps, ctx);
+        if (refusal !== null) return result(refusal.code, refusal.disposition, refusal.reason, null);
       }
 
       deps.registerTransports();
@@ -193,11 +213,22 @@ export function createWs3Adapter(deps: Ws3AdapterDeps = defaultWs3Deps): EngineA
           return result('awaiting_approval', 'wait', 'awaiting human approval', taskId);
         case 'approved':
         case 'queued': {
-          const out = await deps.dispatch(ctx.organizationId, taskId, {
-            ...(ctx.now === undefined ? {} : { now: ctx.now }),
-            ...(recipient === null ? {} : { recipient }),
-            ...(content === null ? {} : { content }),
-          });
+          let out;
+          if (isEmail) {
+            try {
+              ({ dispatch: out } = await deps.sendEmail({
+                organizationId: ctx.organizationId,
+                executionTaskId: ctx.executionTaskId,
+                ...(ctx.now === undefined ? {} : { now: ctx.now }),
+              }));
+            } catch (e) {
+              // A refusal before the dispatcher ran: no attempt, nothing sent.
+              const code = errCode(e);
+              return result(code, 'needs_human', code, taskId);
+            }
+          } else {
+            out = await deps.dispatch(ctx.organizationId, taskId, ctx.now === undefined ? {} : { now: ctx.now });
+          }
           const outcome = String(out.outcome);
           if (outcome === 'sent') return result('sent', 'completed', null, taskId);
           if (outcome === 'blocked_governance' || outcome === 'blocked_prior_attempt' || outcome === 'failed' || outcome === 'rejected' || outcome === 'timeout') {

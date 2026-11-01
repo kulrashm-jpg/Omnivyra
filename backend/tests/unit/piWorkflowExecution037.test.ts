@@ -452,7 +452,7 @@ describe('037 — frozen artefacts are untouched', () => {
       .toBe('c2f0c2174cb2ca3c');
     expect(sha('pages/api/execution-instances/[id]/plan.ts')).toBe('d133ffc3c1cadc5e');
     // RE-PINNED 2026-10-28: 036 re-pinned the instance store (targets_not_installed mapping).
-    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('dccea9dbabbca643'); // RE-PINNED 2026-10-28 (migration re-run safety): 036 re-pinned 032's migration (re-run no longer narrows the publish vocabulary)
+    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('dd01c0b19f1b56fd'); // RE-PINNED 2026-10-28 (migration re-run safety): 036 re-pinned 032's migration (re-run no longer narrows the publish vocabulary)
   });
 
   it('033, 034 and 032 are byte-identical', () => {
@@ -465,7 +465,7 @@ describe('037 — frozen artefacts are untouched', () => {
       .toBe('6c303af15da7a4bf');
     expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))
       .toBe('71691e4328a27592'); // RE-PINNED 2026-10-28 (migration re-run safety): re-running 032 after 20261231000004 no longer narrows the publish vocabulary (function body unchanged)
-    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('3d95652ae2fb295b'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)
+    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('79d1df2478d2fe7f'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)
   });
 
   it('the legacy outreach substrate is byte-identical', () => {

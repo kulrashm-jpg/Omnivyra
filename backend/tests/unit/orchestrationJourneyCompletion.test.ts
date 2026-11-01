@@ -13,7 +13,8 @@ import { assessJourneyExit, JOURNEY_EXIT_OUTCOMES, type JourneyResponsePort } fr
 import { journeyDecisionKey } from '../../services/orchestration/journeyDecisionLog';
 import { isProspectClosedToJourneys, NON_CONTACT_CHANNELS } from '../../services/orchestration/journeyPolicy';
 import { loadIndividualFacts, PROSPECT_STATE_UNREADABLE_GAP, type IndividualIntelligencePort } from '../../services/orchestration/individualIntelligence';
-import { validateWorkflowDefinition, type WorkflowStep } from '../../services/workflows/workflowStore';
+import type { WorkflowStep } from '../../services/workflows/workflowStore';
+import { renderEmailContent as renderContent } from '../../services/emailEngine/emailContentGenerator';
 import { createEmailTransport } from '../../services/leadOutreachExecution/emailTransport';
 
 const ORG = '00000000-0000-4000-8000-00000000000a';
@@ -47,109 +48,129 @@ describe('sweep rotation', () => {
 });
 
 describe('the WS-3 adapter on an email step', () => {
-  const content = { subject: 'Hello', body: 'Authored body' };
-  const step = (email?: { subject: string; body: string }) =>
-    ({ key: 's', channel: 'email', delay_after_previous_hours: 0, execution_mode: 'human', ...(email ? { email } : {}) }) as WorkflowStep;
+  const INSTRUCTION = 'Hello {{first_name}}';
+  const step = (instruction?: string) =>
+    ({ key: 's', channel: 'email', delay_after_previous_hours: 0, execution_mode: 'human', ...(instruction ? { instruction } : {}) }) as WorkflowStep;
   const ctx = (over: Record<string, unknown> = {}) => ({
     organizationId: ORG, executionInstanceId: 'i', executionTaskId: 't', planStepId: 'p', channel: 'email',
-    subject: { kind: 'prospect', id: 'x' }, step: step(content), personId: 'person', ...over,
+    subject: { kind: 'prospect', id: 'x' }, step: step(INSTRUCTION), personId: 'person', ...over,
   }) as never;
+  const coded = (code: string) => Object.assign(new Error(code), { code });
   const deps = (over: Partial<Ws3AdapterDeps> = {}): Ws3AdapterDeps => ({
     bridge: jest.fn(async () => ({ handoff: { outreachTaskId: 'task' } })) as never,
     getTask: jest.fn(async () => ({ id: 'task', status: 'approved' })) as never,
     submitForApproval: jest.fn(async () => ({ ok: true })) as never,
     dispatch: jest.fn(async () => ({ outcome: 'sent', reason: null })) as never,
     registerTransports: jest.fn(),
-    readPersonEmail: jest.fn(async () => 'person@example.test'),
+    resolveRecipient: jest.fn(async () => ({ personId: 'person', email: 'p@example.test', sourceOfTruth: null, personalization: { first_name: 'Ana' } })) as never,
+    renderContent,
+    sendEmail: jest.fn(async () => ({ dispatch: { outcome: 'sent', reason: null } })) as never,
     ...over,
   });
 
-  it('refuses before bridging when the step has no authored message', async () => {
+  it('refuses before bridging when the step authored nothing', async () => {
     const d = deps();
-    const r = await createWs3Adapter(d).execute(ctx({ step: step() }));
-    expect(r).toMatchObject({ outcome: 'no_authored_content', disposition: 'needs_human' });
+    expect(await createWs3Adapter(d).execute(ctx({ step: step() }))).toMatchObject({ outcome: 'no_authored_content', disposition: 'needs_human' });
     expect(d.bridge).not.toHaveBeenCalled();
   });
 
-  it('skips a person with no address and waits on an unreadable one, before bridging', async () => {
-    const none = deps({ readPersonEmail: jest.fn(async () => null) });
-    expect(await createWs3Adapter(none).execute(ctx())).toMatchObject({ outcome: 'no_email_address', disposition: 'skipped' });
-    const unread = deps({ readPersonEmail: jest.fn(async () => undefined) });
-    expect(await createWs3Adapter(unread).execute(ctx())).toMatchObject({ outcome: 'email_unreadable', disposition: 'wait' });
-    const anon = deps();
-    expect(await createWs3Adapter(anon).execute(ctx({ personId: null }))).toMatchObject({ outcome: 'person_unresolved', disposition: 'skipped' });
-    for (const d of [none, unread, anon]) expect(d.bridge).not.toHaveBeenCalled();
+  it.each([
+    ['email_missing', 'skipped'], ['email_invalid', 'skipped'], ['recipient_error', 'wait'], ['person_not_found', 'needs_human'],
+  ])('recipient refusal %s settles %s, before bridging', async (code, disposition) => {
+    const d = deps({ resolveRecipient: jest.fn(async () => { throw coded(code); }) as never });
+    expect(await createWs3Adapter(d).execute(ctx())).toMatchObject({ outcome: code, disposition });
+    expect(d.bridge).not.toHaveBeenCalled();
   });
 
-  it('dispatches with the canonical address and the authored message', async () => {
+  it('a person missing a placeholder value is skipped; a placeholder nobody may use goes to a person', async () => {
+    const none = deps({ resolveRecipient: jest.fn(async () => ({ personId: 'person', email: 'p@example.test', sourceOfTruth: null, personalization: {} })) as never });
+    expect(await createWs3Adapter(none).execute(ctx())).toMatchObject({ outcome: 'personalization_missing', disposition: 'skipped' });
+    const bad = deps();
+    expect(await createWs3Adapter(bad).execute(ctx({ step: step('Hi {{ssn}}') }))).toMatchObject({ outcome: 'unauthorized_personalization', disposition: 'needs_human' });
+    for (const d of [none, bad]) expect(d.bridge).not.toHaveBeenCalled();
+  });
+
+  it('no canonical person is skipped', async () => {
+    expect(await createWs3Adapter(deps()).execute(ctx({ personId: null }))).toMatchObject({ outcome: 'person_unresolved', disposition: 'skipped' });
+  });
+
+  it('sends through the certified engine, never the plain dispatcher', async () => {
     const d = deps();
     const r = await createWs3Adapter(d).execute(ctx({ now: '2026-11-01T00:00:00.000Z' }));
     expect(r).toMatchObject({ outcome: 'sent', disposition: 'completed' });
-    expect(d.dispatch).toHaveBeenCalledWith(ORG, 'task', { now: '2026-11-01T00:00:00.000Z', recipient: 'person@example.test', content });
+    expect(d.sendEmail).toHaveBeenCalledWith({ organizationId: ORG, executionTaskId: 't', now: '2026-11-01T00:00:00.000Z' });
+    expect(d.dispatch).not.toHaveBeenCalled();
   });
 
-  it('leaves an internal step exactly as it was: no address, no content', async () => {
+  it('an engine refusal before dispatch goes to a person', async () => {
+    const d = deps({ sendEmail: jest.fn(async () => { throw coded('handoff_not_found'); }) as never });
+    expect(await createWs3Adapter(d).execute(ctx())).toMatchObject({ outcome: 'handoff_not_found', disposition: 'needs_human' });
+  });
+
+  it('leaves an internal step on the plain dispatcher, with no recipient read', async () => {
     const d = deps();
     await createWs3Adapter(d).execute(ctx({ channel: 'internal', step: { ...step(), channel: 'internal' } }));
-    expect(d.readPersonEmail).not.toHaveBeenCalled();
+    expect(d.resolveRecipient).not.toHaveBeenCalled();
+    expect(d.sendEmail).not.toHaveBeenCalled();
     expect(d.dispatch).toHaveBeenCalledWith(ORG, 'task', {});
   });
 });
 
-describe('the authored email contract', () => {
-  const base = { key: 's', channel: 'email', delay_after_previous_hours: 0, execution_mode: 'human' };
-
-  it('round-trips through validation so it reaches the frozen snapshot', () => {
-    const def = validateWorkflowDefinition({ steps: [{ ...base, email: { subject: ' Hi ', body: 'Body' } }] });
-    expect(def.steps[0].email).toEqual({ subject: 'Hi', body: 'Body' });
-  });
-
-  it('is optional while drafting, and refused where it means nothing', () => {
-    expect(validateWorkflowDefinition({ steps: [base] }).steps[0].email).toBeUndefined();
-    expect(() => validateWorkflowDefinition({ steps: [{ ...base, channel: 'internal', email: { subject: 'a', body: 'b' } }] }))
-      .toThrow(/only allowed on an email step/);
-  });
-
-  it.each([
-    [{ subject: '', body: 'b' }],
-    [{ subject: 'a', body: '' }],
-    [{ subject: 'x'.repeat(201), body: 'b' }],
-    [{ subject: 'a', body: 'x'.repeat(4001) }],
-    [{ subject: 'a', body: 'b', to: 'someone@example.test' }],
-    ['not an object'],
-  ])('refuses %j', (email) => {
-    expect(() => validateWorkflowDefinition({ steps: [{ ...base, email }] })).toThrow();
-  });
-});
-
-describe('the email transport', () => {
+describe('the email transport hooks', () => {
   const OLD = { ...process.env };
   beforeAll(() => {
-    process.env.LEAD_OUTREACH_EMAIL_ENABLED = 'true';
     process.env.OUTREACH_UNSUBSCRIBE_TOKEN_KEYS = `k1:${'s'.repeat(64)}`;
     process.env.NEXT_PUBLIC_APP_URL = 'https://app.example.test';
   });
   afterAll(() => { process.env = OLD; });
 
-  const send = async (extra: Record<string, unknown>) => {
+  const run = async (options: Record<string, unknown>) => {
     const calls: Array<Record<string, unknown>> = [];
     const transport = createEmailTransport(
       { name: 'stub', send: async (r: Record<string, unknown>) => { calls.push(r); return { accepted: true, messageId: 'm' }; } } as never,
-      { enabled: () => true },
+      { enabled: () => true, ...options } as never,
     );
-    await transport.send({
+    const result = await transport.send({
       task: { companyId: ORG, action: 'send_intro', explanation: null } as never,
-      attemptId: 'a', attemptNumber: 1, idempotencyKey: 'k', recipient: 'p@example.test', at: '2026-11-01T00:00:00.000Z', ...extra,
+      attemptId: 'a', attemptNumber: 1, idempotencyKey: 'k', recipient: 'p@example.test', at: '2026-11-01T00:00:00.000Z',
     } as never);
-    return calls[0];
+    return { result, call: calls[0] };
   };
+  const rendered = { subject: 'Hello Ana', body: 'Hello Ana', personalizationInputs: { first_name: 'Ana' }, contentSource: 'src' };
 
-  it('sends the authored message when one is supplied', async () => {
-    expect(await send({ content: { subject: 'Authored', body: 'Words' } })).toMatchObject({ subject: 'Authored', body: 'Words' });
+  it('hands over the rendered strings, after recording them', async () => {
+    const order: string[] = [];
+    const { call } = await run({
+      content: async () => { order.push('render'); return rendered; },
+      recordContent: async () => { order.push('record'); },
+    });
+    expect(order).toEqual(['render', 'record']);
+    expect(call).toMatchObject({ subject: 'Hello Ana', body: 'Hello Ana' });
   });
 
-  it('other callers keep the placeholder path unchanged', async () => {
-    expect(await send({})).toMatchObject({ subject: 'send_intro', body: 'send_intro' });
+  it('a failed render never falls back to the placeholder, and nothing is sent', async () => {
+    const { result, call } = await run({ content: async () => { throw new Error('no'); } });
+    expect(call).toBeUndefined();
+    expect(result.response).toEqual({ reason: 'content_unavailable' });
+  });
+
+  it('what cannot be recorded is not sent', async () => {
+    const { result, call } = await run({ content: async () => rendered, recordContent: async () => { throw new Error('db'); } });
+    expect(call).toBeUndefined();
+    expect(result.response).toEqual({ reason: 'content_evidence_unrecorded' });
+  });
+
+  it('with no hooks, the harness path keeps its placeholder', async () => {
+    expect((await run({})).call).toMatchObject({ subject: 'send_intro', body: 'send_intro' });
+  });
+});
+
+describe('application callers compose the certified engine', () => {
+  const fs = require('fs') as typeof import('fs');
+  it.each(['backend/services/leadOutreachActivation.ts', 'backend/services/leadOutreachRecoverySweep.ts'])('%s', (file) => {
+    const calls = fs.readFileSync(file, 'utf8').match(/registerDefaultTransports\([^)]*\)/g) ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) expect(c).toContain("email: 'engine'");
   });
 });
 

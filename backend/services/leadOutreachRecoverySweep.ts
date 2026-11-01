@@ -133,7 +133,7 @@ export async function runOutreachDispatchRecoverySweep(options: RecoverySweepOpt
   if (queued.ok === false) throw new Error(`queued outreach tasks could not be read: ${queued.error}`);
 
   // The prior-attempt check needs the transports registered, as dispatch does.
-  registerDefaultTransports();
+  registerDefaultTransports({ email: 'engine' });
   const report = emptyReport(enabled, null, dryRun);
   report.scanned = queued.tasks.length;
 

@@ -13,6 +13,18 @@
 import { createEmailTransport, type EmailProviderPort } from './emailTransport';
 import { internalTransport } from './internalTransport';
 import { registerTransport } from './transport';
+import { emailContentHook, emailContentEvidenceHook } from '../emailEngine/emailSendPath';
+
+/**
+ * PI-041-A-E — the email composition. The registry is one process-global map, last
+ * registration wins, so every application caller must choose `engine` (a test pins
+ * this). `engine` renders the authored step and records it before the provider, and
+ * fails closed for a task with no 040 handoff. `placeholder` derives text from the
+ * task's action and exists only for the WS-3 certification harnesses, whose fixtures
+ * have no handoff; unlike the parked original it stays the default so they run
+ * unchanged.
+ */
+export type EmailComposition = 'engine' | 'placeholder';
 
 /**
  * Register the transports this milestone ships.
@@ -22,7 +34,14 @@ import { registerTransport } from './transport';
  * calling a provider unless `LEAD_OUTREACH_EMAIL_ENABLED=true`. Registration
  * therefore makes the channel *routable*, not *live*.
  */
-export function registerDefaultTransports(options: { emailProvider?: EmailProviderPort } = {}): void {
+export function registerDefaultTransports(
+  options: { email?: EmailComposition; emailProvider?: EmailProviderPort } = {},
+): void {
   registerTransport(internalTransport);
-  registerTransport(createEmailTransport(options.emailProvider));
+  registerTransport(options.email === 'engine'
+    ? createEmailTransport(options.emailProvider, {
+      content: emailContentHook(),
+      recordContent: emailContentEvidenceHook(),
+    })
+    : createEmailTransport(options.emailProvider));
 }

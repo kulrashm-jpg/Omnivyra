@@ -153,6 +153,7 @@ const { advanceAndDispatchWorkflowExecution } = require('../../services/workflow
 const { listJourneyDecisions } = require('../../services/orchestration/journeyDecisionLog');
 const { whatsappReplyFingerprint } = require('../../services/orchestration/journeyFeedback');
 const ws3 = require('../../services/leadOutreachExecution');
+const { dispatchWorkflowEmailTask, ensureWorkflowTransports } = require('../../services/emailEngine/workflowEmailDispatch');
 const { ensureProspectLifecycleOpen, recordProspectTransition } = require('../../services/prospectLifecycle');
 /* eslint-enable @typescript-eslint/no-var-requires */
 
@@ -170,7 +171,8 @@ const provider = {
 };
 const adapters = () => [createWs3Adapter({
   ...defaultWs3Deps,
-  registerTransports: () => ws3.registerDefaultTransports({ emailProvider: provider }),
+  registerTransports: () => ensureWorkflowTransports({ emailProvider: provider }),
+  sendEmail: (input: Row) => dispatchWorkflowEmailTask({ ...input, emailProvider: provider }),
 })];
 const sweep = (org: string = ORG_A) =>
   advanceAndDispatchWorkflowExecution(org, { now: new Date().toISOString(), deps: { adapters: adapters() } });
@@ -178,11 +180,11 @@ const sweep = (org: string = ORG_A) =>
 async function newUser(): Promise<string> {
   return String((await one('INSERT INTO public.users (email) VALUES ($1) RETURNING id', [`orch-${rnd()}@example.test`])).id);
 }
-async function newProspect(org: string, contact: { email?: string; phone?: string } = {}): Promise<{ prospectId: string; personId: string }> {
+async function newProspect(org: string, contact: { email?: string; phone?: string; firstName?: string | null } = {}): Promise<{ prospectId: string; personId: string }> {
   const key = `orch-${rnd()}`;
   const personId = String((await one(
-    'INSERT INTO public.unified_persons (company_id, primary_email, primary_phone) VALUES ($1,$2,$3) RETURNING id',
-    [org, contact.email ?? null, contact.phone ?? null],
+    'INSERT INTO public.unified_persons (company_id, primary_email, primary_phone, first_name) VALUES ($1,$2,$3,$4) RETURNING id',
+    [org, contact.email ?? null, contact.phone ?? null, contact.firstName === undefined ? 'Ana' : contact.firstName],
   )).id);
   const u = await one(`INSERT INTO public.canonical_users (company_id, user_type, device, external_user_key)
     VALUES ($1,'known','desktop',$2) RETURNING id`, [org, `${key}-u`]);
@@ -203,7 +205,7 @@ async function enableOutreach(org: string, channels: string[]): Promise<void> {
 }
 const human = (key: string, channel: string, extra: Row = {}) =>
   ({ key, channel, delay_after_previous_hours: 0, execution_mode: 'human', ...extra });
-const EMAIL_STEP = (key: string) => human(key, 'email', { email: { subject: `Subject ${key}`, body: `Body of ${key}` } });
+const EMAIL_STEP = (key: string) => human(key, 'email', { instruction: `Hello {{first_name}}, about ${key}\nBody of ${key}` });
 
 async function enrol(org: string, actor: string, prospectId: string, definition: Row): Promise<{ instanceId: string; workflowId: string; report: Row }> {
   const l = await lists.createProspectList(store, { organizationId: org, name: `list-${rnd()}`, actorUserId: actor });
@@ -265,7 +267,12 @@ describe('one person, list to lifecycle', () => {
       expect((await ws3.approveOutreachTask(ORG_A, tasks[0].id, { approverUserId: actor })).ok).toBe(true);
       r = await sweep();
       expect(r.issues).toEqual([]);
-      expect(sent).toEqual([{ to: 'person@example.test', subject: 'Subject intro', body: 'Body of intro' }]);
+      expect(sent).toEqual([{ to: 'person@example.test', subject: 'Hello Ana, about intro', body: 'Hello Ana, about intro\nBody of intro' }]);
+
+      // The certified engine recorded exactly what was handed over, against the attempt.
+      const evidence = await one('SELECT e.rendered_subject, e.rendered_body, e.personalization_inputs FROM public.email_outreach_content_evidence e JOIN public.outreach_attempts a ON a.id = e.outreach_attempt_id WHERE a.task_id = $1', [tasks[0].id]);
+      expect(evidence).toMatchObject({ rendered_subject: sent[0].subject, rendered_body: sent[0].body });
+      expect(evidence.personalization_inputs).toMatchObject({ first_name: 'Ana' });
       expect(r.counters.steps_settled).toBe(1);
 
       // The follow-up is due and queued for approval.
@@ -330,6 +337,21 @@ describe('one person, list to lifecycle', () => {
       const r = await sweep();
       expect(r.lifecycleFeedback.written).toBe(1);
       expect((await lifecycle(ORG_A, prospectId)).at(-1)).toMatchObject({ state: 'engaged' });
+    });
+  });
+
+  it('a person with no value for a placeholder is skipped, never sent "Hello ,"', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      await enableOutreach(ORG_A, ['email']);
+      const actor = await newUser();
+      const { prospectId } = await newProspect(ORG_A, { email: 'n@example.test', firstName: null });
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [EMAIL_STEP('only')] });
+      await sweep();
+      expect(sent).toHaveLength(0);
+      expect(await handoffTasks(instanceId)).toEqual([]);
+      const d = await listJourneyDecisions(ORG_A, instanceId);
+      expect(d.find((x: Row) => x.decision === 'skipped')).toMatchObject({ outcome: 'personalization_missing' });
     });
   });
 

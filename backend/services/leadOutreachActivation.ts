@@ -132,7 +132,7 @@ export interface ActivationReport {
  * `registerTransport` is a keyed `Map.set` (transport.ts:91-93).
  */
 function ensureTransports(): void {
-  registerDefaultTransports();
+  registerDefaultTransports({ email: 'engine' });
 }
 
 /**

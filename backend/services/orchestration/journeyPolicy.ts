@@ -213,16 +213,6 @@ export interface WhatsAppStepSettings {
   readonly template_name: string;
 }
 
-/**
- * The message an email step sends: tenant-authored, frozen with the version. Without
- * it the WS-3 adapter refuses the step, because the transport's fallback is a
- * placeholder built from the task's action code and must never reach a person.
- */
-export interface EmailStepSettings {
-  readonly subject: string;
-  readonly body: string;
-}
-
 const str = (v: unknown): string | null => {
   if (typeof v !== 'string') return null;
   const t = v.trim();
@@ -281,19 +271,6 @@ export function validateWhatsAppSettings(raw: unknown, stepKey: string): WhatsAp
     fail(`step "${stepKey}" whatsapp accepts only template_name`, 'invalid_whatsapp_template');
   }
   return { template_name: template };
-}
-
-export function validateEmailSettings(raw: unknown, stepKey: string): EmailStepSettings {
-  const o = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null) as Record<string, unknown> | null;
-  if (o === null) fail(`step "${stepKey}" email must be { subject, body }`, 'invalid_email_content');
-  const subject = str(o.subject);
-  if (subject === null || subject.length > 200) fail(`step "${stepKey}" email.subject is 1-200 characters`, 'invalid_email_content');
-  const body = str(o.body);
-  if (body === null || body.length > 4000) fail(`step "${stepKey}" email.body is 1-4000 characters`, 'invalid_email_content');
-  if (Object.keys(o).some((k) => k !== 'subject' && k !== 'body')) {
-    fail(`step "${stepKey}" email accepts only subject and body`, 'invalid_email_content');
-  }
-  return { subject, body };
 }
 
 /** Hours between two ISO instants; null if either is unparseable. */

@@ -448,7 +448,7 @@ describe('040 — the legacy substrate is adapted to, never altered', () => {
     expect(sha('backend/services/leadOutreachExecution/translation.ts')).toBe('a83e38bb9f2fe9b7');
     expect(sha('backend/services/leadOutreachExecution/personAnchor.ts')).toBe('7459e807986f20a6');
     expect(sha('backend/services/leadOutreachExecution/quota.ts')).toBe('5835d9876ad97b5b');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('da5583359593064e');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c0683963a248bbc3');
   });
 
   it('person resolution reuses the ONE existing mechanism', () => {

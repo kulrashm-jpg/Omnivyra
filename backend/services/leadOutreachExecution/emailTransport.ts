@@ -150,7 +150,34 @@ const looksLikeEmail = (v: string | null): v is string =>
  */
 export function createEmailTransport(
   provider: EmailProviderPort = supabaseEdgeEmailProvider,
-  options: { timeoutMs?: number; enabled?: () => boolean; unsubscribeBaseUrl?: () => string | undefined } = {},
+  options: {
+    timeoutMs?: number;
+    enabled?: () => boolean;
+    unsubscribeBaseUrl?: () => string | undefined;
+    /**
+     * PI-041-A — the certified Email Engine's render. Omitted, the placeholder
+     * derivation below is unchanged. Invoked inside `send`, after the flag, recipient
+     * and unsubscribe gates, because the recorded strings must be the ones handed over.
+     */
+    content?: (request: TransportRequest) => Promise<{
+      subject: string;
+      body: string;
+      personalizationInputs: Record<string, unknown>;
+      contentSource: string;
+    }>;
+    /**
+     * PI-041-A — persist the exact rendered content against this attempt, BEFORE the
+     * provider. A failure aborts the send: what cannot be recorded must not be sent.
+     */
+    recordContent?: (evidence: {
+      organizationId: string;
+      outreachAttemptId: string;
+      renderedSubject: string;
+      renderedBody: string;
+      personalizationInputs: Record<string, unknown>;
+      contentSource: string;
+    }) => Promise<void>;
+  } = {},
 ): OutreachTransport {
   const timeoutMs = options.timeoutMs ?? EMAIL_TIMEOUT_MS;
   const enabled = options.enabled ?? isEmailTransportEnabled;
@@ -205,8 +232,51 @@ export function createEmailTransport(
         };
       }
 
-      const subject = trim(request.content?.subject ?? request.task.action, 200) || 'Following up';
-      const body = trim(request.content?.body ?? request.task.explanation, 4000) || subject;
+      let subject = trim(request.task.action, 200) || 'Following up';
+      let body = trim(request.task.explanation, 4000) || subject;
+      let personalizationInputs: Record<string, unknown> = {};
+      let contentSource: string | null = null;
+
+      if (options.content) {
+        try {
+          const rendered = await options.content(request);
+          subject = rendered.subject;
+          body = rendered.body;
+          personalizationInputs = rendered.personalizationInputs ?? {};
+          contentSource = rendered.contentSource;
+        } catch (error) {
+          // Never a fallback to the placeholder: that would send text nobody authored.
+          return {
+            ...base, outcome: 'rejected', deliveryStatus: 'failed',
+            response: { reason: 'content_unavailable' },
+            error: error instanceof Error ? error.message : 'email content could not be rendered',
+          };
+        }
+      }
+
+      if (options.recordContent && request.attemptId !== null && contentSource !== null) {
+        try {
+          await options.recordContent({
+            organizationId: request.task.companyId,
+            outreachAttemptId: request.attemptId,
+            renderedSubject: subject,
+            renderedBody: body,
+            personalizationInputs,
+            contentSource,
+          });
+        } catch (error) {
+          // Evidence first, send second. Refusing here loses a send; the reverse would
+          // lose the only record of what a real person received.
+          return {
+            ...base, outcome: 'rejected', deliveryStatus: 'failed',
+            response: { reason: 'content_evidence_unrecorded' },
+            error: error instanceof Error
+              ? `content evidence could not be recorded: ${error.message}`
+              : 'content evidence could not be recorded',
+          };
+        }
+      }
+
       const startedMs = Date.now();
 
       try {

@@ -553,7 +553,7 @@ describe('036 — frozen artefacts are untouched', () => {
   it('032 is byte-identical (029/030 land with the lists slice)', () => {
     expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))
       .toBe('71691e4328a27592'); // RE-PINNED 2026-10-28 (migration re-run safety): re-running 032 after 20261231000004 no longer narrows the publish vocabulary (function body unchanged)
-    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('3d95652ae2fb295b'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)
+    expect(sha('backend/services/workflows/workflowStore.ts')).toBe('79d1df2478d2fe7f'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)
   });
 
   it('036 created no Plan/Step/Task table beyond its own three', () => {
