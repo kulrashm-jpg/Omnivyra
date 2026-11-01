@@ -205,6 +205,28 @@ export async function listOutreachTasksForLead(companyId: string, leadId: string
 }
 
 /**
+ * Tasks resting in `queued`, across tenants, oldest first, at most `limit`.
+ *
+ * The ONE cross-tenant read in WS-3, for the platform recovery sweep. It
+ * returns rows only to locate work; every action on them is taken per tenant
+ * through the company-scoped dispatch path. A read failure is reported, never
+ * an empty list, so a broken read is not mistaken for "nothing to recover".
+ */
+export async function listQueuedOutreachTasks(limit: number): Promise<{ ok: true; tasks: OutreachTask[] } | { ok: false; error: string }> {
+  const bounded = Math.max(1, Math.min(Math.floor(limit), 1000));
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable(OUTREACH_TASKS_TABLE)
+      .select('*')
+      .eq('status', 'queued')
+      .order('updated_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(bounded),
+  );
+  if (res.error || !Array.isArray(res.data)) return { ok: false, error: res.error ? errText(res.error) : 'queued tasks unreadable' };
+  return { ok: true, tasks: res.data.map(rowToOutreachTask).filter((t): t is OutreachTask => t !== null) };
+}
+
+/**
  * Record a task's CURRENT state.
  *
  * Deliberately narrow: only `status` and `deliveryStatus` are writable. There
@@ -477,6 +499,30 @@ export const listAttempts = (companyId: string, taskId: string) => listFor(OUTRE
 export const listDeliveryEvidence = (companyId: string, taskId: string) => listFor(OUTREACH_DELIVERY_TABLE, companyId, taskId, 'observed_at');
 export const listOutcomes = (companyId: string, taskId: string) => listFor(OUTREACH_OUTCOMES_TABLE, companyId, taskId, 'occurred_at');
 export const listDecisions = (companyId: string, taskId: string) => listFor(OUTREACH_DECISIONS_TABLE, companyId, taskId, 'decided_at');
+
+/**
+ * Attempts and delivery evidence of one task, for decisions that must not
+ * mistake a failed read for an empty history. `listFor` returns `[]` on error,
+ * which is right for display and wrong for "has this task ever been sent?" —
+ * here a read failure is reported, never an empty history.
+ */
+export async function readAttemptHistory(
+  companyId: string,
+  taskId: string,
+): Promise<{ ok: true; attempts: Row[]; evidence: Row[] } | { ok: false; error: string }> {
+  const read = (table: string, orderCol: string) =>
+    safeDb<Row[]>(() =>
+      ownedDbTable(table)
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('task_id', taskId)
+        .order(orderCol, { ascending: true }),
+    );
+  const [attempts, evidence] = await Promise.all([read(OUTREACH_ATTEMPTS_TABLE, 'attempt_number'), read(OUTREACH_DELIVERY_TABLE, 'observed_at')]);
+  if (attempts.error || !Array.isArray(attempts.data)) return { ok: false, error: attempts.error ? errText(attempts.error) : 'attempt history unreadable' };
+  if (evidence.error || !Array.isArray(evidence.data)) return { ok: false, error: evidence.error ? errText(evidence.error) : 'delivery evidence unreadable' };
+  return { ok: true, attempts: attempts.data, evidence: evidence.data };
+}
 
 /** Outcome types recorded for a task, deduped and sorted. */
 export async function outcomeTypesFor(companyId: string, taskId: string): Promise<BusinessOutcomeType[]> {

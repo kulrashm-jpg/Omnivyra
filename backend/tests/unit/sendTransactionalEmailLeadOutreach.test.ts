@@ -288,11 +288,13 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // Only the provider side of PI-041-A-O was adopted. The Email Engine, and the
     // transport hooks that compose it, depend on tables that are not on main.
     // WP3 / L5 changed the transport (it now mints the unsubscribe link) and is
-    // re-pinned here; dispatch is unchanged.
+    // re-pinned here. Dispatch was re-pinned when it learned to claim a task an
+    // earlier dispatch returned to `queued` (ws3RequeuedDispatch.test.ts); the
+    // provider-facing request it builds is unchanged.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
     expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('eb4963aea1b7a6d2');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('3c366bcc862b7bd4');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c0683963a248bbc3');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {

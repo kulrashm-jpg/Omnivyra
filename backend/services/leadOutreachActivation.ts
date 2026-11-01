@@ -83,6 +83,12 @@ export interface ActivationOptions {
   /** Translate and report without writing anything. */
   previewOnly?: boolean;
   /**
+   * Restrict dispatch to these task ids; the lead's other tasks are neither
+   * dispatched nor reported. The recovery sweep uses it so a run touches only
+   * the requeued tasks it found, never a lead's other approved tasks.
+   */
+  taskIds?: readonly string[];
+  /**
    * Injected intelligence-read port. `getPersistedLeadIntelligence` already
    * takes one; threading it through keeps this entry point testable without a
    * database, the same way every WS-3 module takes its ports.
@@ -169,10 +175,13 @@ const TERMINAL = new Set(['sent', 'delivered', 'failed', 'rejected', 'cancelled'
 /**
  * Dispatch the lead's tasks that are already approved.
  *
- * Approval is NOT performed here. A task in any state other than `approved` is
- * reported and left alone — `evaluateEligibility` would refuse it anyway
- * (governance.ts:194-202), and pre-empting that refusal in the caller would put
- * a second copy of the eligibility rule outside the governance engine.
+ * Approval is NOT performed here. A task in any state other than `approved` or
+ * `queued` is reported and left alone — `evaluateEligibility` would refuse it
+ * anyway, and pre-empting that refusal in the caller would put a second copy of
+ * the eligibility rule outside the governance engine. A `queued` task is one an
+ * earlier dispatch deferred or failed; it is handed to the dispatcher, which
+ * re-dispatches it only with an approval on record and no prior attempt that
+ * may have reached the recipient.
  */
 export async function dispatchApprovedOutreachForLead(
   companyId: string,
@@ -182,7 +191,8 @@ export async function dispatchApprovedOutreachForLead(
   ensureTransports();
 
   const permitted = new Set(options.channels ?? DEFAULT_ACTIVATION_CHANNELS);
-  const tasks = await listOutreachTasksForLead(companyId, leadId);
+  const selected = options.taskIds ? new Set(options.taskIds) : null;
+  const tasks = (await listOutreachTasksForLead(companyId, leadId)).filter((t) => selected === null || (t?.id != null && selected.has(String(t.id))));
   const reports: ActivationTaskReport[] = [];
 
   for (const task of tasks) {
@@ -195,7 +205,7 @@ export async function dispatchApprovedOutreachForLead(
       reports.push({ taskId, channel, status, action: 'terminal' });
       continue;
     }
-    if (status !== 'approved') {
+    if (status !== 'approved' && status !== 'queued') {
       reports.push({ taskId, channel, status, action: 'not_approved' });
       continue;
     }

@@ -147,6 +147,13 @@ export interface GovernanceEvaluationInput {
   region: string | null;
   /** Injected instant — the evaluator never reads a clock. */
   evaluatedAt: string;
+  /**
+   * The latest recorded approval decision for the task, resolved by the caller
+   * from the append-only approval log. Consulted only for a `queued` task:
+   * `queued` is reachable without approval (pending → queued), so the status
+   * alone never proves a human approved it. Absent / null = no approval on record.
+   */
+  approvalOfRecord?: 'approved' | 'rejected' | null;
 }
 
 const allow = (
@@ -287,13 +294,20 @@ export function evaluateRegion(input: GovernanceEvaluationInput): GateEvaluation
   return allow('region', 'region.permitted', normalized ? `${normalized} is not restricted` : 'no regional restrictions configured', { region: normalized, restrictedRegions: restricted }, { scope: 'region' });
 }
 
-/** Task eligibility: only an APPROVED task may proceed. */
+/**
+ * Task eligibility: only an APPROVED task may proceed — either still in
+ * `approved`, or returned to `queued` by an earlier dispatch (quota deferral,
+ * transport failure) with an approval on record.
+ */
 export function evaluateEligibility(input: GovernanceEvaluationInput): GateEvaluation {
   const { task } = input;
   const evidence = { status: task.status, requiresApproval: task.requiresApproval };
 
   if (task.status === 'approved') {
     return allow('approval', 'eligibility.approved', 'the task is approved and eligible to proceed', evidence, { scope: 'task' });
+  }
+  if (task.status === 'queued' && input.approvalOfRecord === 'approved') {
+    return allow('approval', 'eligibility.requeued_after_approval', 'the task was approved and returned to queued by an earlier dispatch; it may be dispatched again', { ...evidence, approvalOfRecord: 'approved' }, { scope: 'task' });
   }
   return block('approval', 'eligibility.not_approved', `a task in "${task.status}" is not eligible; only an approved task may proceed`, evidence, { scope: 'task' });
 }

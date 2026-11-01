@@ -33,6 +33,7 @@ import {
   getOutreachTaskById,
   setOutreachTaskState,
   listAttempts,
+  readAttemptHistory,
   transitionOutreachTaskState,
 } from './storage';
 import { evaluateTaskGovernance, loadTenantGovernanceConfig, type EvaluateOptions } from './governanceService';
@@ -63,6 +64,7 @@ export type DispatchOutcome =
   | 'deferred_governance'
   | 'deferred_quota'
   | 'skipped_already_dispatched'
+  | 'blocked_prior_attempt'
   | 'skipped_transport_disabled'
   | 'rejected'
   | 'timeout'
@@ -123,6 +125,48 @@ const result = (
   ...over,
 });
 
+/** Transport outcomes that prove nothing left for the recipient. */
+const NOT_SENT_OUTCOMES: readonly string[] = ['rejected', 'disabled'];
+
+/**
+ * Null when a task returned to `queued` may be dispatched again; otherwise why
+ * not. Every earlier attempt must have evidence, none may have been accepted,
+ * and on an external transport each must have ended in an outcome that proves
+ * nothing was sent — a timeout or provider error may have delivered, and a new
+ * attempt carries a new idempotency key the provider cannot dedupe against.
+ * An internal transport's outcome is authoritative (one work item per attempt).
+ * An unreadable history refuses: a requeued task is never re-sent blind.
+ */
+async function redispatchProblem(companyId: string, taskId: string, external: boolean): Promise<string | null> {
+  const history = await readAttemptHistory(companyId, taskId);
+  if (history.ok === false) return `attempt history is unreadable (${history.error}); a requeued task is never re-sent blind`;
+  for (const attempt of history.attempts) {
+    const outcomes = history.evidence
+      .filter((e) => attempt.id != null && e.attempt_id === attempt.id)
+      .map((e) => String((e.transport_response as Record<string, unknown> | null)?.outcome ?? ''));
+    const n = String(attempt.attempt_number ?? '?');
+    if (outcomes.length === 0) return `attempt ${n} has no delivery evidence, so whether it reached the recipient is unknown`;
+    if (outcomes.includes('accepted')) return `attempt ${n} was accepted; a task is never sent twice`;
+    if (external && !outcomes.every((o) => NOT_SENT_OUTCOMES.includes(o))) {
+      return `attempt ${n} ended "${outcomes.join(', ')}" on an external transport; the provider may have sent it, so it is not dispatched again automatically`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The same prior-attempt check dispatch applies to a requeued task, for callers
+ * that only need to know whether dispatching it could ever proceed (the recovery
+ * sweep skips a task that never can, rather than re-evaluating governance on it
+ * every run). Advisory only: dispatch re-checks under its own claim.
+ */
+export async function requeuedDispatchProblem(companyId: string, task: OutreachTask): Promise<string | null> {
+  if (!task.id) return 'task has no id';
+  const transport = resolveTransport(task.channel);
+  if (!transport) return `no transport serves the "${task.channel}" channel`;
+  return redispatchProblem(companyId, task.id, transport.external);
+}
+
 /** Next attempt number for a task. Sequential and gap-free per task. */
 async function nextAttemptNumber(companyId: string, taskId: string): Promise<number> {
   const attempts = await listAttempts(companyId, taskId);
@@ -182,21 +226,41 @@ export async function dispatchInternalOutreachTask(
   }
 
   // ── 2. CLAIM the task — compare-and-set, so only one dispatcher proceeds ──
-  const claimedQueued = await transitionOutreachTaskState(companyId, task.id, 'approved', 'queued');
-  if (!claimedQueued.ok) {
-    recordDispatchOutcome('failed');
-    return result(taskId, 'failed', claimedQueued.error ?? 'could not queue task', startedMs, { governance: evaluation });
-  }
-  if (!claimedQueued.changed) {
-    // Someone else already moved it, or it was never approved.
-    const current = await getOutreachTaskById(companyId, taskId);
-    recordDispatchOutcome('skipped');
-    return result(taskId, 'skipped_already_dispatched', `task is not approved (now ${current?.status ?? 'unknown'})`, startedMs, {
-      status: current?.status ?? null, governance: evaluation,
-    });
+  // A task an earlier dispatch returned to `queued` (quota deferral, transport
+  // failure) is claimed from there, but only when no earlier attempt can have
+  // reached the recipient. Governance has already proved its approval.
+  const requeued = evaluation.gates.some((g) => g.rule === 'eligibility.requeued_after_approval');
+  if (requeued) {
+    const problem = await redispatchProblem(companyId, task.id, transport.external);
+    if (problem !== null) {
+      recordDispatchOutcome('blocked');
+      return result(taskId, 'blocked_prior_attempt', problem, startedMs, { status: 'queued', governance: evaluation });
+    }
+  } else {
+    const claimedQueued = await transitionOutreachTaskState(companyId, task.id, 'approved', 'queued');
+    if (!claimedQueued.ok) {
+      recordDispatchOutcome('failed');
+      return result(taskId, 'failed', claimedQueued.error ?? 'could not queue task', startedMs, { governance: evaluation });
+    }
+    if (!claimedQueued.changed) {
+      // Someone else already moved it, or it was never approved.
+      const current = await getOutreachTaskById(companyId, taskId);
+      recordDispatchOutcome('skipped');
+      return result(taskId, 'skipped_already_dispatched', `task is not approved (now ${current?.status ?? 'unknown'})`, startedMs, {
+        status: current?.status ?? null, governance: evaluation,
+      });
+    }
   }
 
   const claimedDispatching = await transitionOutreachTaskState(companyId, task.id, 'queued', 'dispatching');
+  if (requeued && claimedDispatching.ok && !claimedDispatching.changed) {
+    // Another dispatcher claimed the requeued task first.
+    const current = await getOutreachTaskById(companyId, taskId);
+    recordDispatchOutcome('skipped');
+    return result(taskId, 'skipped_already_dispatched', `task was claimed by another dispatcher (now ${current?.status ?? 'unknown'})`, startedMs, {
+      status: current?.status ?? null, governance: evaluation,
+    });
+  }
   if (!claimedDispatching.ok || !claimedDispatching.changed) {
     recordDispatchOutcome('failed');
     return result(taskId, 'failed', 'could not claim task for dispatch', startedMs, { status: 'queued', governance: evaluation });
