@@ -291,10 +291,13 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // re-pinned here. Dispatch was re-pinned when it learned to claim a task an
     // earlier dispatch returned to `queued` (ws3RequeuedDispatch.test.ts); the
     // provider-facing request it builds is unchanged.
+    // RE-PINNED 2026-11-02: an invoke error that may have acted is no longer `rejected`
+    // (G-1), a disabled transport stops dispatch before it writes (G-8), and comments no
+    // longer claim idempotency at the provider (G-3). The posted payload is unchanged.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
-    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('a7ebe6619dd2a314');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c0683963a248bbc3');
+    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('c6e86299a89dc60f');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c2a131f6aa8fa709');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {
