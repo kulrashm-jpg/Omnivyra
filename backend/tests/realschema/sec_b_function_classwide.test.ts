@@ -197,8 +197,29 @@ function nullCall(sig: string): string {
   return `SELECT ${m[1]}(${args.join(', ')})`;
 }
 
+/**
+ * prospect_score_evaluations_immutable() in its PRODUCTION pre-SEC-B state (S1, the
+ * 20261031000000 INVOKER original). A replay that also carries privacy/erasure
+ * 20270112000002 (the release candidate does) has it in S2: SECURITY DEFINER,
+ * search_path = ''. This SEC-B file reviews S1 only and refuses S2 in its
+ * $preflight$ (see sec_b_x1_pse_two_states), so re-applying it - which every test
+ * here does - needs the state production had before SEC-B. No-op on a replay
+ * without erasure 02. Inside the test transaction; nothing persists.
+ */
+const PSE_S1_DEF = (() => {
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'supabase', 'migrations', '20261031000000_pi_score_evaluations.sql'), 'utf8');
+  const m = /CREATE OR REPLACE FUNCTION public\.prospect_score_evaluations_immutable\(\)[\s\S]*?\n\$\$;/.exec(src);
+  if (!m) throw new Error('no prospect_score_evaluations_immutable() definition in 20261031000000');
+  return m[0];
+})();
+async function pseProductionState(): Promise<void> {
+  const { rows } = await q(`SELECT prosecdef FROM pg_proc WHERE oid = 'public.prospect_score_evaluations_immutable()'::regprocedure`);
+  if (rows[0]?.prosecdef === true) await q(PSE_S1_DEF);
+}
+
 /** Step 1 + 2: production state for every listed function, then the migration. */
 async function prodStateThenMigration(): Promise<void> {
+  await pseProductionState();
   const emu: string[] = [];
   for (const [sig, , pin, anon, auth, pub] of PROD) {
     emu.push(`REVOKE ALL ON FUNCTION ${sig} FROM PUBLIC, anon, authenticated`);
@@ -310,6 +331,7 @@ describe('catalog end state after the migration (from the production state)', ()
 
   it('SECURITY DEFINER/INVOKER, owners and every other function are untouched', async () => {
     await inRollback(async () => {
+      await pseProductionState(); // the pre-SEC-B production state is the reference
       const snap = `SELECT p.oid::regprocedure::text AS f, p.prosecdef, p.proowner::regrole::text AS owner, p.prosrc
                       FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace ORDER BY 1`;
       const before = (await q(snap)).rows;
