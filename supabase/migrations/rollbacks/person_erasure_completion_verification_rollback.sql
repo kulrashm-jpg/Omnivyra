@@ -1,21 +1,71 @@
 -- ROLLBACK for 20270115000000_person_erasure_completion_verification.sql
 --
--- Removes the erasure completion-verification layer only. The erasure ledger
--- (20270112000003) and every erasure already performed are untouched.
+-- ─── ORDER ─────────────────────────────────────────────────────────────────
+-- Reverse version order, one transaction per file:
+--   20270115000000 (this file) → (20270113000000 A6-10 bridge, if applied) →
+--   20270112000005 → 20270112000004 → 20270112000003 → 20270112000002 →
+--   20270112000001 → 20270112000000.
 --
--- CONSEQUENCES, stated rather than discovered:
---   * the erasure API (pages/api/prospect-identity/erasure-requests/*) then
---     fails CLOSED: the inventory capture before finalize answers "function
---     missing", the attempt is marked failed and NOTHING is erased; status
---     reads report verification as unavailable and never COMPLETED. Roll the
---     application back first (or together) if erasure must keep working.
---   * verification history (outcomes and counts, no personal data) is dropped.
---   * any inventory still held for a residual request (it holds the erased
---     person's uuid and ids of rows that kept personal data) is dropped too, so
---     re-verification of that request is no longer possible.
+-- ─── WHAT IT REMOVES (everything 20270115000000 created; nothing existed before) ─
+--   functions  pi_person_erasure_verify(uuid, uuid)
+--              pi_person_erasure_capture_inventory(uuid, uuid, uuid)
+--   tables     person_erasure_verifications, person_erasure_inventories (with
+--              their index, policy, constraints and grants)
+-- The erasure ledger (20270112000003) and every erasure already performed are
+-- untouched.
+--
+-- ─── IT REFUSES WHEN EITHER TABLE HOLDS ANY ROW ────────────────────────────
+-- person_erasure_verifications is the record of what each completed erasure
+-- left behind (outcome, checks and counts; no personal data).
+-- person_erasure_inventories is held for a residual request until a clean
+-- re-verification (it holds the erased person's uuid and the ids of rows that
+-- kept personal data); without it that request can never be re-verified.
+-- Dropping either non-empty table destroys that evidence, and a rollback never
+-- deletes data. Once erasure verification data exists the only way off this
+-- migration is FORWARD-FIX (a new migration), or an export under the owner's
+-- retention decision first — not deleting rows to make this file pass.
+-- MEASURE FIRST:
+--
+--   SELECT 'verifications' AS t, count(*) FROM public.person_erasure_verifications
+--   UNION ALL SELECT 'inventories', count(*) FROM public.person_erasure_inventories;
+--
+-- ─── APPLICATION ───────────────────────────────────────────────────────────
+-- The erasure API (pages/api/prospect-identity/erasure-requests/*) then fails
+-- CLOSED: the inventory capture before finalize answers "function missing", the
+-- attempt is marked failed and NOTHING is erased; status reads report
+-- verification as unavailable and never COMPLETED. Roll the application back
+-- first (or together) if erasure must keep working.
+
 BEGIN;
+
+DO $rollback_guard$
+DECLARE
+  v_verifications bigint := 0;
+  v_inventories   bigint := 0;
+BEGIN
+  -- Serialise against a concurrent capture/verify, then count.
+  IF to_regclass('public.person_erasure_verifications') IS NOT NULL THEN
+    LOCK TABLE public.person_erasure_verifications IN ACCESS EXCLUSIVE MODE;
+    SELECT count(*) INTO v_verifications FROM public.person_erasure_verifications;
+  END IF;
+  IF to_regclass('public.person_erasure_inventories') IS NOT NULL THEN
+    LOCK TABLE public.person_erasure_inventories IN ACCESS EXCLUSIVE MODE;
+    SELECT count(*) INTO v_inventories FROM public.person_erasure_inventories;
+  END IF;
+  IF v_verifications > 0 OR v_inventories > 0 THEN
+    RAISE EXCEPTION
+      '20270115000000 rollback refused: person_erasure_verifications holds % row(s) and '
+      'person_erasure_inventories holds % row(s) of erasure verification evidence. Dropping them '
+      'would destroy it, and a rollback never deletes data. Stay on the migration and forward-fix, '
+      'or export under the owner''s retention decision first (see this file''s header).',
+      v_verifications, v_inventories;
+  END IF;
+END
+$rollback_guard$;
+
 DROP FUNCTION IF EXISTS public.pi_person_erasure_verify(uuid, uuid);
 DROP FUNCTION IF EXISTS public.pi_person_erasure_capture_inventory(uuid, uuid, uuid);
 DROP TABLE IF EXISTS public.person_erasure_verifications;
 DROP TABLE IF EXISTS public.person_erasure_inventories;
+
 COMMIT;
