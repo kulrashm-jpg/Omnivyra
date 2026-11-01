@@ -1,4 +1,4 @@
--- ROLLBACK for 20270111000000_media_h3_storage_quarantine_policies.sql
+-- ROLLBACK for 20270111000004_media_h3_storage_quarantine_policies.sql
 --
 -- DO NOT RUN WHILE THE H-3 APPLICATION CODE IS LIVE. OWNER-GATED.
 -- Rolling these policies back while H-3 code is deployed RE-OPENS DIRECT

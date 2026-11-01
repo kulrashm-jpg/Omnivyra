@@ -311,7 +311,7 @@ describe('J1 H3-1 - an object pre-planted at the delivery key is never adopted',
     (autoScheduleReadyCreatorRowById as jest.Mock).mockClear();
     mockMem.put(Q, KEY, MP4, 'video/mp4');
     const planted = Buffer.concat([HTML, Buffer.alloc(200, 7)]);
-    mockMem.put(D, KEY, planted, 'video/mp4'); // written with the publishable key before 20270111000000
+    mockMem.put(D, KEY, planted, 'video/mp4'); // written with the publishable key before 20270111000004
     const r = await finalize(body());
     expect(r.statusCode).toBe(409);
     expect(r.body.code).toBe('UPLOAD_DELIVERY_CONFLICT');

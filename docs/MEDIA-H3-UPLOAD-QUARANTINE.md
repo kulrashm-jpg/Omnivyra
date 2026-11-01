@@ -17,7 +17,7 @@ Browser (resumable/TUS) uploads never write to the public `media-uploads` bucket
 Code: `backend/services/activityWorkspace/quarantinedMediaUpload.ts`,
 `pages/api/activity-workspace/[id]/upload-media-{authorize,finalize}.ts`.
 
-## Migration `20270111000000_media_h3_storage_quarantine_policies.sql`
+## Migration `20270111000004_media_h3_storage_quarantine_policies.sql`
 
 - Owner-gated. Apply WITH or BEFORE the H-3 application code, against the
   verified target project.

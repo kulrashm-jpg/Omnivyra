@@ -75,7 +75,7 @@ describe('MEDIA-H3 storage policy migration', () => {
 
 /**
  * J1 H3-1 deployment guard (documentation-as-test). The H-3 code must not ship
- * before 20270111000000 is applied. What enforces that today:
+ * before 20270111000004 is applied. What enforces that today:
  *   - the PRIVATE `media-quarantine` bucket is created ONLY by this migration,
  *     so before it is applied `upload-media-authorize` cannot mint a signed
  *     upload token (503; mediaH3UploadAuthorize.test.ts) and finalize finds no
