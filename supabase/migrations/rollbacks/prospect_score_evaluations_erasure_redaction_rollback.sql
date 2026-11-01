@@ -22,7 +22,7 @@
 --     the owner (or the built-in acldefault, EXECUTE to PUBLIC) plus any
 --     schema-public entry for the owner. This file recomputes that ACL from the
 --     catalog and re-grants it exactly. If SEC-B
---     (20270110000003_function_execute_classwide_hardening) is in force it had
+--     (20270110000004_function_execute_classwide_hardening; renumbered from 20270110000003) is in force it had
 --     already revoked PUBLIC, anon and authenticated from this function, so
 --     those three are NOT re-granted. SEC-B witness:
 --     public.ws3_protect_task_provenance() pinned to "pg_catalog, public" (same
