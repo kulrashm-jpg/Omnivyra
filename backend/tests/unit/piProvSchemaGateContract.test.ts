@@ -74,7 +74,7 @@ const TYPES = manifestArray<TypeReq>('REQUIRED_COLUMN_TYPES');
 // detected separately: checked_* must equal literal + these numbers.
 const ORCH_STACK_PIN = {
   tables: 20, columns: 228 /* 221 table columns + 7 added */, types: 5,
-  indexes: 48, uniqueIndexes: 18, functions: 29, triggers: 19, checks: 7,
+  indexes: 49, uniqueIndexes: 19, functions: 29, triggers: 19, checks: 7,
 } as const;
 const ORCH_STACK_TABLE_NAMES = [
   'prospect_lists', 'prospect_list_members', 'prospect_campaigns', 'workflows', 'workflow_versions',

@@ -294,6 +294,8 @@ const wa = {
 const waDeps: WhatsAppAdapterDeps = {
   // The REAL request-ledger functions, over the database double (which emulates the
   // migration's unique key and guard trigger). Only the engine calls are doubles.
+  hasApproval: async () => true,       // the approval decision is not what this slice tests
+  channelRefusal: async () => null,
   getOrCreateRequest: defaultWhatsAppDeps.getOrCreateRequest,
   transitionRequest: defaultWhatsAppDeps.transitionRequest,
   async findBroadcastByName(org, name) { return wa.broadcasts.find((b) => b.org === org && b.name === name)?.id ?? null; },

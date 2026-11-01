@@ -175,7 +175,7 @@ describe('application callers compose the certified engine', () => {
 });
 
 describe('what ends a journey', () => {
-  const port = (outcomes: string[], reply: { messageId: string; threadId: string } | null = null): JourneyResponsePort => ({
+  const port = (outcomes: string[], reply: { outcome: 'replied' | 'unsubscribed'; messageId: string; threadId: string } | null = null): JourneyResponsePort => ({
     ws3Outcomes: async () => outcomes,
     whatsappReply: async () => reply,
   });
@@ -189,8 +189,13 @@ describe('what ends a journey', () => {
   });
 
   it('a WhatsApp reply ends it, carrying the message identity for PI', async () => {
-    const reply = { messageId: 'wamid.1', threadId: 'th' };
+    const reply = { outcome: 'replied' as const, messageId: 'wamid.1', threadId: 'th' };
     expect(await assessJourneyExit(ORG, 'i', 'p', port([], reply))).toEqual({ exit: true, outcome: 'replied', whatsappReply: reply });
+  });
+
+  it('a WhatsApp opt-out ends it as an unsubscribe, not a reply', async () => {
+    const stop = { outcome: 'unsubscribed' as const, messageId: 'wamid.2', threadId: 'th' };
+    expect(await assessJourneyExit(ORG, 'i', 'p', port([], stop))).toMatchObject({ exit: true, outcome: 'unsubscribed' });
   });
 
   it('an unreadable source throws: "we could not tell" is never "carry on"', async () => {

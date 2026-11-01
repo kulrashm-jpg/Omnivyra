@@ -444,9 +444,10 @@ export async function retryFailed(broadcastId: string): Promise<void> {
 // ── Update delivery status (called by deliveryTracker) ───────────────────────
 
 export async function updateRecipientDelivery(update: RecipientDeliveryUpdate): Promise<void> {
+  // No status_at: that column is on engagement_messages. Writing it here failed every
+  // delivery update, silently, because the result below reads as 'no such recipient'.
   const updateData: Record<string, unknown> = {
     status:    update.status,
-    status_at: new Date().toISOString(),
   };
 
   if (update.status === 'delivered') updateData.delivered_at = new Date().toISOString();

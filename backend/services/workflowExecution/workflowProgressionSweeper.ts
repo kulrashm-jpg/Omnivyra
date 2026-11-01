@@ -394,6 +394,7 @@ export async function advanceAndDispatchWorkflowExecution(
             const fed = await feedWhatsAppReplyToLifecycle({
               organizationId, prospectId: subject.id, now,
               messageId: exit.whatsappReply.messageId, threadId: exit.whatsappReply.threadId,
+              outcome: exit.whatsappReply.outcome,
             });
             if (fed.wrote) counters.lifecycle_transitions_written += 1;
           } catch (e) {

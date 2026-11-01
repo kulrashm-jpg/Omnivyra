@@ -23,12 +23,18 @@ import { listInstanceHandoffs } from '../outreachBridge/outreachBridgeStore';
 import { outcomeTypesFor } from '../leadOutreachExecution/storage';
 import { listInstanceTasks } from '../executionPlans/executionPlanStore';
 import { normalizePhone } from '../identityResolutionService';
+import { detectWhatsAppOptOut } from '../whatsappOptOut';
 import { ENGINE_REQUESTS_TABLE } from './whatsappEngineAdapter';
 
 /** The responses that end a journey. `opened` and `clicked` are not responses to act on. */
 export const JOURNEY_EXIT_OUTCOMES = ['replied', 'meeting_booked', 'converted', 'rejected', 'unsubscribed'] as const;
 
+/** How far a sweep reads inbound messages. An opt-out anywhere in them outranks a reply. */
+const MAX_INBOUND_READ = 50;
+
 export interface WhatsAppReply {
+  /** A STOP is not engagement: PI must close this prospect, not call them engaged. */
+  readonly outcome: 'replied' | 'unsubscribed';
   /** `engagement_messages.platform_message_id`: the reply's stable identity. */
   readonly messageId: string;
   readonly threadId: string;
@@ -37,7 +43,7 @@ export interface WhatsAppReply {
 export interface JourneyResponsePort {
   /** Business outcome types recorded for this run's WS-3 tasks. */
   ws3Outcomes(organizationId: string, executionInstanceId: string): Promise<readonly string[]>;
-  /** The earliest inbound WhatsApp message since this run first messaged the person. */
+  /** An inbound WhatsApp message since this run first messaged the person: an opt-out if any, else the earliest. */
   whatsappReply(organizationId: string, executionInstanceId: string, personId: string | null): Promise<WhatsAppReply | null>;
 }
 
@@ -102,15 +108,19 @@ export const durableJourneyResponsePort: JourneyResponsePort = {
     if (threadIds.length === 0) return null;
 
     const messages = await ownedDbTable('engagement_messages')
-      .select('thread_id, platform_message_id')
+      .select('thread_id, platform_message_id, content')
       .in('thread_id', threadIds)
       .eq('direction', 'inbound')
       .gte('created_at', String(since))
       .order('created_at', { ascending: true })
-      .limit(1);
+      .limit(MAX_INBOUND_READ);
     if (messages.error) throw unreadable('engagement messages');
-    const m = ((messages.data ?? []) as unknown as Array<Record<string, unknown>>)[0];
-    return m ? { messageId: String(m.platform_message_id), threadId: String(m.thread_id) } : null;
+    const found = (messages.data ?? []) as unknown as Array<Record<string, unknown>>;
+    const stop = found.find((m) => detectWhatsAppOptOut(m.content) !== null);
+    const m = stop ?? found[0];
+    return m
+      ? { outcome: stop ? 'unsubscribed' : 'replied', messageId: String(m.platform_message_id), threadId: String(m.thread_id) }
+      : null;
   },
 };
 
@@ -132,6 +142,6 @@ export async function assessJourneyExit(
   if (hit) return { exit: true, outcome: hit, whatsappReply: null };
   const reply = await port.whatsappReply(organizationId, executionInstanceId, personId);
   return reply
-    ? { exit: true, outcome: 'replied', whatsappReply: reply }
+    ? { exit: true, outcome: reply.outcome, whatsappReply: reply }
     : { exit: false, outcome: null, whatsappReply: null };
 }

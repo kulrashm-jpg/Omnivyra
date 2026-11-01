@@ -91,8 +91,8 @@ export const whatsappReplyFingerprint = (messageId: string): string =>
   `wa-reply-${crypto.createHash('sha256').update(messageId).digest('hex').slice(0, 32)}`;
 
 /**
- * One WhatsApp reply on a journey about a prospect. The transition is the interpreter's
- * answer to `replied`, nothing of this module's own. No code, thread text or number is
+ * One WhatsApp reply or opt-out on a journey about a prospect. The transition is the
+ * interpreter's answer to that outcome, nothing of this module's own. No code, thread text or number is
  * stored: the evidence names the thread and message.
  */
 export async function feedWhatsAppReplyToLifecycle(input: {
@@ -100,6 +100,7 @@ export async function feedWhatsAppReplyToLifecycle(input: {
   prospectId: string;
   messageId: string;
   threadId: string;
+  outcome: 'replied' | 'unsubscribed';
   now: string;
 }): Promise<{ wrote: boolean; refusal: string | null }> {
   const current = await readCurrentProspectState(input.organizationId, input.prospectId);
@@ -107,7 +108,7 @@ export async function feedWhatsAppReplyToLifecycle(input: {
   const reading = interpretOutcome({
     outcome: {
       id: fingerprint,
-      type: 'replied',
+      type: input.outcome,
       provenance: {
         organizationId: input.organizationId,
         source: 'provider',

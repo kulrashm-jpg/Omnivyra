@@ -14,6 +14,14 @@
  * (`wf:<executionTaskId>`), so if a sweep dies after creating it but before
  * recording it, the next sweep ADOPTS that broadcast instead of creating a second.
  *
+ * ─── APPROVAL AND TENANT CONTROLS, BEFORE ANYTHING IS CREATED ─────────────
+ * This engine has no approval gate or tenant kill switch of its own: its send path
+ * evaluates contact governance only. So both are checked here, before a broadcast can
+ * exist. No approval record exists for a WhatsApp step yet, so the default answer is
+ * "not approved" for EVERY execution mode: autonomous dispatch is not authorized, and
+ * `autonomous` on a step does not change that. The tenant approval capability plugs
+ * in behind `hasApproval`. Tests that exercise the send path inject it, by name.
+ *
  * ─── WHAT IT CHECKS ITSELF ────────────────────────────────────────────────
  * Only what the engine cannot know: that the person has a phone number in
  * E.164 form (the form the opt-out record and the governance gate share), and
@@ -30,6 +38,7 @@
 import { ownedDbTable } from '../../db/writeOwner';
 import { createBroadcast, enqueueBroadcast, expandRecipients } from '../whatsappBroadcastService';
 import { normalizePhone } from '../identityResolutionService';
+import { isLeadOutreachGloballyDisabled, loadTenantGovernanceConfig } from '../leadOutreachExecution/governanceService';
 import type { EngineAdapter, EngineDisposition, EngineResult, EngineStepContext } from './engineAdapters';
 
 export const ENGINE_REQUESTS_TABLE = 'execution_engine_requests';
@@ -60,6 +69,10 @@ export interface WhatsAppAdapterDeps {
   expandRecipients: typeof expandRecipients;
   enqueueBroadcast: typeof enqueueBroadcast;
   readRecipientStatus(broadcastId: string): Promise<string | null>;
+  /** Is there a human approval on record for this task? See the module header. */
+  hasApproval(organizationId: string, executionTaskId: string): Promise<boolean>;
+  /** The WS-3 tenant controls, null when the channel may be used; otherwise why not. */
+  channelRefusal(organizationId: string): Promise<string | null>;
 }
 
 const rowOf = (r: Record<string, unknown>): RequestRow => ({
@@ -150,6 +163,17 @@ export const defaultWhatsAppDeps: WhatsAppAdapterDeps = {
     if (res.error || !Array.isArray(res.data) || res.data.length === 0) return null;
     return String((res.data[0] as Record<string, unknown>).status);
   },
+
+  hasApproval: async () => false,
+
+  async channelRefusal(organizationId) {
+    if (isLeadOutreachGloballyDisabled()) return 'global_kill_switch';
+    const config = await loadTenantGovernanceConfig(organizationId);   // a failed read reads as unconfigured
+    if (!config.configured || !config.enabled) return 'tenant_not_enabled';
+    if (config.killSwitch) return 'tenant_kill_switch';
+    if (!config.enabledChannels.includes('whatsapp')) return 'channel_not_enabled';
+    return null;
+  },
 };
 
 const E164 = /^\+\d{8,15}$/;
@@ -230,6 +254,13 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
           break;
         default:
           return result(row.state, 'needs_human', 'unknown request state', row.external_ref);
+      }
+
+      // ── Controls and approval: nothing may be created without both ─────────
+      const refusal = await deps.channelRefusal(ctx.organizationId);
+      if (refusal !== null) return result(refusal, 'needs_human', `whatsapp is not available: ${refusal}`, null);
+      if (!(await deps.hasApproval(ctx.organizationId, ctx.executionTaskId))) {
+        return result('approval_required', 'needs_human', 'no human approval is on record for this step', null);
       }
 
       // ── Preconditions only the orchestrator can check ─────────────────────

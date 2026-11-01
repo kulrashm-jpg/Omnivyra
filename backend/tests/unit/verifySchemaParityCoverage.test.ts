@@ -25,7 +25,7 @@ const inSeries = (f: string): boolean => {
   const m = f.match(/^(\d{14})_.*\.sql$/);
   if (!m) return false;
   const v = m[1];
-  return v === '20261127000000' || v === '20270120000000' || v === '20270120000001' || (v >= '20261226000000' && v <= '20261231999999');
+  return v === '20261127000000' || v === '20270120000000' || v === '20270120000001' || v === '20270120000002' || (v >= '20261226000000' && v <= '20261231999999');
 };
 
 const seriesFiles = fs.readdirSync(MIGRATIONS).filter(inSeries).sort();
@@ -88,8 +88,8 @@ function inventory(): Inventory {
 const inv = inventory();
 
 describe('ORCH-STACK — the migration series the manifest is checked against', () => {
-  it('is exactly the 21 release migrations, and the verifier names the same list', () => {
-    expect(seriesFiles).toHaveLength(21);
+  it('is exactly the 22 release migrations, and the verifier names the same list', () => {
+    expect(seriesFiles).toHaveLength(22);
     expect(parity.STACK_MIGRATIONS).toEqual(seriesFiles);
   });
 

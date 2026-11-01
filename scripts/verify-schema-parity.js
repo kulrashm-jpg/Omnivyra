@@ -1022,6 +1022,7 @@ const STACK_MIGRATIONS = [
   '20261231000010_rpa_legacy_session_invalidation.sql',
   '20270120000000_orchestration_journey_decisions.sql',
   '20270120000001_pi_email_content_evidence.sql',
+  '20270120000002_whatsapp_broadcast_recipient_unique.sql',
 ];
 
 /**
@@ -1162,6 +1163,7 @@ const STACK_INDEXES = [
   { table: 'outreach_bridge_handoffs', index: 'ix_outreach_bridge_handoffs_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id'] },
   { table: 'outreach_bridge_handoffs', index: 'ix_outreach_bridge_handoffs_subject', unique: false, partial: false, keys: ['organization_id', 'subject_kind', 'subject_id'] },
   // 20261230000000_orchestration_engine_requests.sql:74
+  { table: 'whatsapp_broadcast_recipients', index: 'unique_broadcast_recipient', unique: true, partial: false, keys: ['broadcast_id', 'hashed_phone'] },
   { table: 'email_outreach_content_evidence', index: 'ix_email_outreach_content_evidence_org', unique: false, partial: false, keys: ['organization_id', 'created_at'] },
   { table: 'execution_journey_decisions', index: 'ix_execution_journey_decisions_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id', 'decided_at'] },
   { table: 'execution_journey_decisions', index: 'ix_execution_journey_decisions_needs_human', unique: false, partial: true, keys: ['organization_id', 'decided_at'], predicate: ["'needs_human'"] },
