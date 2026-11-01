@@ -22,6 +22,16 @@ import { executeAction } from '../../../backend/services/communityAiActionExecut
 import { incrementReplyLike } from '../../../backend/services/responsePerformanceService';
 import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
+import {
+  readClientIdempotencyKey,
+  computeRequestFingerprint,
+  requestActorId,
+  inspectEngagementRequest,
+  reserveEngagementRequest,
+  classifyExecutionOutcome,
+  finalizeEngagementRequest,
+  replayAnswer,
+} from '../../../backend/services/engagementRequestIdempotency';
 
 type LikeBody = {
   organization_id?: string;
@@ -53,6 +63,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!platform) {
       return res.status(400).json({ error: 'platform required' });
     }
+    const clientIdempotency = readClientIdempotencyKey(req);
+    if (clientIdempotency.ok === false) {
+      return res.status(400).json({
+        error: 'Idempotency-Key must be 8-200 characters of [A-Za-z0-9._:-]',
+        code: clientIdempotency.error,
+      });
+    }
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
@@ -64,6 +81,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       allowedRoles: [...COMMUNITY_AI_CAPABILITIES.EXECUTE_ACTIONS],
     });
     if (!roleGate) return;
+
+    // ── Request-level idempotency (durable; engagementRequestIdempotency) ──
+    //    Read-only check FIRST: a replay / key-reuse / in-progress / uncertain
+    //    request is answered before any gate runs or any state changes.
+    const idem = {
+      db: supabase,
+      organizationId,
+      actorId: requestActorId(roleGate.userId),
+      scope: 'like' as const,
+      clientKey: clientIdempotency.key,
+      fingerprint: computeRequestFingerprint({
+        scope: 'like',
+        platform,
+        messageId,
+        account: organizationId,
+      }),
+    };
+    const early = await inspectEngagementRequest(idem);
+    if (early) return res.status(early.status).json(early.body);
 
     const capability = resolveEngagementCapability(platform, 'like');
     if (capability.status !== 'api_verified') {
@@ -123,24 +159,53 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // comment_likes is upserted only after the platform confirms — same
     // invariant as reply: local state only reflects platform-acknowledged
     // actions. Upsert is idempotent so this is safe on retry.
-    const actionId = crypto.randomUUID();
-    const result = await executeAction(
-      {
-        id: actionId,
-        tenant_id: organizationId,
-        organization_id: organizationId,
-        platform,
-        action_type: 'like',
-        target_id: message.platform_message_id ?? messageId,
-        suggested_text: null,
-        playbook_id: null,
-        execution_mode: capability.mode ?? 'api',
-        // Attribution: operator who initiated the like (server-derived).
-        acting_user_id: roleGate.userId ?? null,
-      },
-      true,
-      { source: 'manual', persist: true, auto_insert: true }
-    );
+    //
+    // Atomic reservation BEFORE any external call: exactly one concurrent
+    // caller proceeds; the others are answered from the record.
+    const likeTargetId = String(message.platform_message_id ?? messageId);
+    const reservation = await reserveEngagementRequest({
+      ...idem,
+      platform,
+      actionType: 'like',
+      targetId: likeTargetId,
+    });
+    if (reservation.kind === 'answer') {
+      return res.status(reservation.answer.status).json(reservation.answer.body);
+    }
+    const actionId = reservation.actionId;
+    let result: Awaited<ReturnType<typeof executeAction>>;
+    try {
+      result = await executeAction(
+        {
+          id: actionId,
+          tenant_id: organizationId,
+          organization_id: organizationId,
+          platform,
+          action_type: 'like',
+          target_id: likeTargetId,
+          suggested_text: null,
+          playbook_id: null,
+          execution_mode: capability.mode ?? 'api',
+          // Attribution: operator who initiated the like (server-derived).
+          acting_user_id: roleGate.userId ?? null,
+        },
+        true,
+        { source: 'manual', persist: true, auto_insert: true }
+      );
+    } catch (execErr) {
+      // A throw may follow a platform call: uncertain unless provably not acted.
+      await finalizeEngagementRequest(supabase, reservation.record, classifyExecutionOutcome(undefined, execErr));
+      throw execErr;
+    }
+    const outcome = classifyExecutionOutcome(result);
+    await finalizeEngagementRequest(supabase, reservation.record, outcome);
+
+    // The attempt's action row already existed (a reconciled/fenced attempt):
+    // nothing was liked; answer from the live row, never act again.
+    if ((result as { deduplicated?: boolean }).deduplicated === true) {
+      const replay = await replayAnswer(supabase, reservation.record);
+      return res.status(replay.status).json(replay.body);
+    }
 
     if (!result.ok || result.status !== 'executed') {
       return res.status(502).json({
@@ -148,6 +213,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         code: 'PLATFORM_EXECUTION_FAILED',
         status: result.status,
         response: result.response,
+        // failed_not_acted: provably never reached the platform — the SAME
+        // Idempotency-Key may be retried. uncertain: never resent.
+        request_state: outcome.state,
+        retry_with_same_key: outcome.state === 'failed_not_acted',
       });
     }
 

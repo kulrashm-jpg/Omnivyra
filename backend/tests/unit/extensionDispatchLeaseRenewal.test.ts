@@ -13,6 +13,8 @@
  * no message, no platform id, no counter, no opportunity transition.
  */
 
+import { describeWithExtensionSource } from '../helpers/extensionSourceRoot';
+
 interface Row { [k: string]: unknown }
 const db: Record<string, Row[]> = { community_ai_actions: [], engagement_messages: [] };
 
@@ -227,41 +229,46 @@ describe('backend renewal — fail-closed refusals', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('re-offer rule is gated on PROVEN client capability', () => {
+describe('re-offer rule: no client is ever re-offered a claimed command', () => {
+  // 20261231000005_extension_dispatch_safety removed the legacy lapsed-lease
+  // re-offer that v1.3.9 (no renewal) relied on: a lapsed claim may have acted,
+  // so it is reaped to 'uncertain' and its late result recorded, never handed
+  // to another session. The renewal header no longer changes what is offered.
   const commandsSrc = require('fs').readFileSync('pages/api/extension/commands.ts', 'utf8');
 
-  it('a renewal-capable client is only offered never-claimed work', () => {
-    expect(commandsSrc).toContain("x-omnivyra-dispatch-renewal");
-    expect(commandsSrc).toMatch(/supportsRenewal[\s\S]{0,200}is\('dispatch_lease_id',\s*null\)/);
+  it('every client is only offered never-claimed work', () => {
+    expect(commandsSrc).toMatch(/\.eq\('execution_mode', 'browser'\)\s*\.is\('dispatch_lease_id', null\)/);
+    expect(commandsSrc).not.toMatch(/supportsRenewal/);
   });
 
-  it('legacy clients keep the lapsed-lease behaviour so they are not stranded', () => {
-    expect(commandsSrc).toMatch(/else[\s\S]{0,300}dispatch_lease_expires_at\.lt\./);
+  it('legacy clients no longer get the lapsed-lease re-offer', () => {
+    expect(commandsSrc).not.toContain('dispatch_lease_expires_at.lt.');
   });
 
-  it('capability is never inferred from the capability-map version', () => {
-    // That header self-heals (the loader adopts the server's value), so it
-    // identifies schema, not client build. Using it here would silently opt
-    // v1.3.9 into a protocol it cannot honour.
-    const gate = commandsSrc.slice(
-      commandsSrc.indexOf('const supportsRenewal'),
-      commandsSrc.indexOf('let query = supabase'),
+  it('offer rule is never inferred from the capability-map version', () => {
+    const offer = commandsSrc.slice(
+      commandsSrc.indexOf('const query = supabase'),
+      commandsSrc.indexOf('.limit(10)'),
     );
-    expect(gate).not.toContain('CAPABILITY_MAP_VERSION');
-    expect(gate).not.toContain('clientCapabilityVersion');
+    expect(offer).not.toContain('CAPABILITY_MAP_VERSION');
+    expect(offer).not.toContain('clientCapabilityVersion');
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('extension side — renewal before EVERY attempt', () => {
-  const procSrc = require('fs').readFileSync(
-    'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/core/commandProcessor.js',
-    'utf8',
-  );
-  const apiSrc = require('fs').readFileSync(
-    'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/core/apiClient.js',
-    'utf8',
-  );
+// Needs the external extension source: OMNIVYRA_EXTENSION_ROOT (see
+// backend/tests/helpers/extensionSourceRoot.ts). Unset → this block is
+// reported SKIPPED; every other block in this file still runs.
+describeWithExtensionSource(
+  'extension side — renewal before EVERY attempt',
+  [['core', 'commandProcessor.js'], ['core', 'apiClient.js'], ['manifest.json']],
+  (ext) => {
+  let procSrc = '';
+  let apiSrc = '';
+  beforeAll(() => {
+    procSrc = ext.read('core', 'commandProcessor.js');
+    apiSrc = ext.read('core', 'apiClient.js');
+  });
 
   it('renewal sits INSIDE the retry loop, not once before it', () => {
     const loopStart = procSrc.indexOf('for (let attempt = 1');
@@ -305,12 +312,8 @@ describe('extension side — renewal before EVERY attempt', () => {
   });
 
   it('the extension release version was incremented — v1.3.9 is NOT fixed', () => {
-    const manifest = JSON.parse(
-      require('fs').readFileSync(
-        'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/manifest.json',
-        'utf8',
-      ),
-    );
+    const manifest = JSON.parse(ext.read('manifest.json'));
     expect(manifest.version).not.toBe('1.3.9');
   });
-});
+  },
+);

@@ -41,6 +41,26 @@ on:
       - 'backend/services/prospectProvenance/**'
       - 'pages/api/lead-intelligence/**'
       - 'backend/tests/realschema/pi_prov_*'
+      # Orchestration / execution-safety stack (d51360b0..aa5e6966). These modules
+      # are exercised against the real schema by backend/tests/realschema/
+      # orch_campaign_targets.test.ts directly or through its import graph
+      # (prospectLists -> prospectCampaigns -> orchestration/campaignEnrollment ->
+      # executionInstances/executionPlans/workflows/workflowExecution/outreachBridge;
+      # orchestration/communityIdentityProof -> identityVerification, executionSubject).
+      # Community link/identity stores live in backend/services/orchestration/.
+      - 'backend/services/prospectLists/**'
+      - 'backend/services/prospectCampaigns/**'
+      - 'backend/services/orchestration/**'
+      - 'backend/services/executionInstances/**'
+      - 'backend/services/executionPlans/**'
+      - 'backend/services/executionSubject/**'
+      - 'backend/services/workflows/**'
+      - 'backend/services/workflowExecution/**'
+      - 'backend/services/outreachBridge/**'
+      - 'backend/services/identityVerification/**'
+      - 'pages/api/prospect-lists/**'
+      - 'pages/api/prospect-campaigns/**'
+      - 'pages/api/execution-instances/**'
       - 'jest.realschema.config.js'
       - '.github/workflows/real-schema-ci.yml'
   push:
@@ -50,6 +70,21 @@ on:
       - 'supabase/_schema/**'
       - 'scripts/ci/**'
       - 'backend/tests/realschema/**'
+      # Same orchestration / execution-safety surface as the pull_request
+      # filter above, so a direct push to main that changes it still replays.
+      - 'backend/services/prospectLists/**'
+      - 'backend/services/prospectCampaigns/**'
+      - 'backend/services/orchestration/**'
+      - 'backend/services/executionInstances/**'
+      - 'backend/services/executionPlans/**'
+      - 'backend/services/executionSubject/**'
+      - 'backend/services/workflows/**'
+      - 'backend/services/workflowExecution/**'
+      - 'backend/services/outreachBridge/**'
+      - 'backend/services/identityVerification/**'
+      - 'pages/api/prospect-lists/**'
+      - 'pages/api/prospect-campaigns/**'
+      - 'pages/api/execution-instances/**'
   workflow_dispatch:
 
 concurrency:

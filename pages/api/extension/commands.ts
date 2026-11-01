@@ -11,9 +11,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *  - Validation (capability + payload schema) runs BEFORE the CAS claim, so
  *    a permanently-invalid row does not get claimed-and-dropped on every
  *    90-second cycle.
- *  - On claim, the row transitions pending → dispatched and stamps
- *    dispatch_lease_id, dispatch_lease_expires_at, dispatch_lease_holder_id.
- *    Only the same holder (derived from session) may submit the result.
+ *  - On claim (claim_community_ai_browser_command, one atomic UPDATE) the
+ *    row stays pending and is stamped with dispatch_lease_id,
+ *    dispatch_lease_expires_at, dispatch_lease_holder_id. Only the same
+ *    holder (derived from session) may submit the result.
+ *  - A claimed command is never offered again, to any client. Cancellation,
+ *    the platform kill switch and approval are enforced at the claim.
  *
  * Response:
  *   { success: true, commands: Command[] }
@@ -29,6 +32,7 @@ import { isCurrentlyDisabled } from '@/backend/services/extensionReliabilityServ
 import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/services/extensionCommandSchema';
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
+import { dmSendRefusal, wouldDispatchDm, INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED } from '@/backend/services/dmDispatchSafety';
 
 const LEASE_TTL_SECONDS = 90; // longer than the extension's 30s handler timeout + retries
 
@@ -139,40 +143,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   })();
 
   try {
-    const nowIso = new Date().toISOString();
-    // ── Re-offer rule, gated on proven client capability ──────────────────
+    // ── Offer rule: never re-offer a claimed command — to ANY client ───────
     //   A browser command is "queued" solely by this row, and the irreversible
     //   platform action happens outside any database transaction. Re-offering a
-    //   command whose lease lapsed therefore hands a second session a live claim
-    //   for work the first may still be performing — the duplicate-DM path.
-    //
-    //   A renewal-capable client keeps its lease alive for as long as it is
-    //   genuinely executing, so a lapsed lease from such a client means the
-    //   client is gone. We still must not re-offer: the platform action may
-    //   already have happened and no result was ever recorded. Those rows
-    //   become `claimed / delivery unknown` and go to operator recovery.
-    //
-    //   v1.3.9 cannot renew. Applying the strict rule to it would strand every
-    //   command 90s after claim, so it keeps the legacy behaviour until the
-    //   renewal-capable build is published. The capability is PROVEN by an
-    //   explicit request header, never inferred from the capability-map version
-    //   (which self-heals and therefore cannot identify a client build).
-    const supportsRenewal = String(req.headers['x-omnivyra-dispatch-renewal'] || '').trim() === '1';
-
-    let query = supabase
+    //   command whose lease lapsed hands a second session a live claim for work
+    //   the first may still be performing (the duplicate-DM path; the extension
+    //   worst case is ~96s against a 90s lease). So ONLY never-claimed work is
+    //   offered, regardless of whether the client advertises
+    //   x-omnivyra-dispatch-renewal. A lapsed lease is reaped to 'uncertain'
+    //   (reap_community_ai_action_leases) and its late result is still
+    //   recorded by /api/extension/action-result. Cancelled rows are skipped
+    //   here as an optimisation; the claim RPC below is the authority for
+    //   cancellation, the platform kill switch and approval.
+    const query = supabase
       .from('community_ai_actions')
       .select('id, platform, action_type, target_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index')
       .eq('organization_id', session.orgId)
       .eq('status', 'pending')
-      .eq('execution_mode', 'browser');
-
-    if (supportsRenewal) {
-      // Strict: only work that has NEVER been claimed is offered.
-      query = query.is('dispatch_lease_id', null);
-    } else {
-      // Legacy (v1.3.9): unclaimed, or claimed with a lapsed lease.
-      query = query.or(`dispatch_lease_expires_at.is.null,dispatch_lease_expires_at.lt.${nowIso}`);
-    }
+      .eq('execution_mode', 'browser')
+      .is('dispatch_lease_id', null)
+      .is('cancel_requested_at', null);
 
     const { data, error } = await query
       .order('created_at', { ascending: false })
@@ -189,7 +179,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       hmacNonce: session.hmacNonce as string,
     });
     const leaseId = `lease-${randomBytes(8).toString('hex')}`;
-    const leaseExpiresAt = new Date(Date.now() + LEASE_TTL_SECONDS * 1000).toISOString();
     const commands: any[] = [];
 
     for (const row of data || []) {
@@ -218,45 +207,61 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (cap.status !== 'api_verified') continue;
       if (isCurrentlyDisabled(row.platform, topAction)) continue;
 
-      // Instagram DM business-tier enforcement. Instagram Direct is only
-      // usable on business accounts via the browser runtime; dispatch a
-      // DM command to a non-business tier would guarantee failure at the
-      // composer. We short-circuit here so the command never gets claimed.
-      if (row.platform === 'instagram' && capabilityAction === 'dm') {
-        const tier = await resolveAccountTier({
-          organization_id: session.orgId,
-          platform: 'instagram',
-          action_metadata: null,
-        });
-        if (tier !== 'business') {
-          console.warn('[extension/commands] instagram DM rejected: tier=', tier, 'actionId=', row.id);
-          // Mark the row failed via the central pipeline so it doesn't
-          // keep getting considered. A correlation id is generated by
-          // the executor's persist helper to satisfy the audit trigger.
+      const extensionAction = mapCapabilityActionToExtensionAction(capabilityAction);
+
+      // ── DM send policy (dmDispatchSafety) — BEFORE any claim ─────────────
+      //    Applies to the ROW (top action 'dm' / 'direct_message' with any
+      //    chain step except read-only sync_dm_inbox, or no chain at all — the
+      //    bare row would go out as continue_thread into the open thread) and
+      //    to a DM command smuggled onto a non-DM row. The old gate keyed on
+      //    the CURRENT chain step === 'dm', so every executor-built chain
+      //    (open_thread / continue_thread / start_new_dm) skipped the Instagram
+      //    tier check. No authoritative person -> thread mapping exists, so the
+      //    row is refused; Instagram additionally needs a SERVER-VERIFIED
+      //    business tier (resolveAccountTier; client-declared tiers are ignored).
+      if (wouldDispatchDm(topAction, extensionAction ?? capabilityAction)) {
+        const platformLc = String(row.platform || '').toLowerCase();
+        const verifiedTier = platformLc === 'instagram'
+          ? await resolveAccountTier({ organization_id: session.orgId, platform: 'instagram', action_metadata: null })
+          : null;
+        const dmRefusal = dmSendRefusal({ platform: platformLc, verifiedInstagramTier: verifiedTier });
+        if (dmRefusal) {
+          console.warn('[extension/commands] DM refused before claim:', dmRefusal, 'actionId=', row.id);
+          // Fail the still-unclaimed row via the central pipeline so it is not
+          // reconsidered. Never claimed => provably not acted.
           try {
             const { persistExecutionResult } = await import('@/backend/services/communityAiExecutionResultService');
-            const { randomUUID } = await import('crypto');
             await persistExecutionResult({
               actionId: row.id,
               organizationId: session.orgId,
-              correlationId: randomUUID(),
+              correlationId: (row as any).execution_correlation_id ?? randomUUID(),
               result: {
                 ok: false,
                 status: 'failed',
-                error: 'ACCOUNT_TYPE_NOT_SUPPORTED',
-                response: { source: 'executor', reason: 'instagram_dm_requires_business_tier', detected_tier: tier ?? 'unknown' },
+                error: dmRefusal,
+                may_have_acted: false,
+                response: {
+                  source: 'executor',
+                  reason: dmRefusal === INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED
+                    ? 'instagram_dm_requires_verified_business_tier'
+                    : 'dm_recipient_mapping_unavailable',
+                  detected_tier: platformLc === 'instagram' ? (verifiedTier ?? 'unknown') : undefined,
+                },
                 execution_mode: 'browser',
               },
-              rowHint: { platform: 'instagram', action_type: 'dm', target_id: row.target_id ?? null },
+              rowHint: { platform: row.platform ?? null, action_type: row.action_type ?? null, target_id: row.target_id ?? null },
+              // Only a still-unclaimed pending row may be failed here; a row
+              // another session claimed meanwhile is in flight and untouched.
+              expectedFromStatuses: ['pending'],
+              requireUnleased: true,
             });
           } catch (err: any) {
-            console.warn('[extension/commands] tier-rejection persist failed:', err?.message || err);
+            console.warn('[extension/commands] DM refusal persist failed:', err?.message || err);
           }
           continue;
         }
       }
 
-      const extensionAction = mapCapabilityActionToExtensionAction(capabilityAction);
       if (!extensionAction) continue;
 
       const platformSlug = row.platform === 'x' ? 'twitter' : row.platform;
@@ -296,6 +301,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               action_type: row.action_type ?? null,
               target_id: row.target_id ?? null,
             },
+            expectedFromStatuses: ['pending'],
+            requireUnleased: true,
           });
         } catch (persistErr: any) {
           console.warn('[extension/commands] payload validation failure persist failed:', persistErr?.message || persistErr);
@@ -303,28 +310,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         continue;
       }
 
-      // ── Claim via CAS on (id, prior lease expiry, status=pending) ────────
-      const priorExpiry = (row as any).dispatch_lease_expires_at as string | null;
-      let update = supabase
-        .from('community_ai_actions')
-        .update({
-          dispatch_lease_id: leaseId,
-          dispatch_lease_expires_at: leaseExpiresAt,
-          dispatch_lease_holder_id: holderId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', row.id)
-        .eq('status', 'pending');
-      update = priorExpiry == null
-        ? update.is('dispatch_lease_expires_at', null)
-        : update.eq('dispatch_lease_expires_at', priorExpiry);
-
-      const { data: claimed, error: claimErr } = await update.select('id').maybeSingle();
+      // ── Atomic claim (authoritative boundary) ───────────────────────────
+      //    One conditional UPDATE ... RETURNING inside
+      //    claim_community_ai_browser_command enforces tenant, status=pending,
+      //    execution_mode=browser, never-claimed (dispatch_lease_id IS NULL),
+      //    cancel_requested_at IS NULL, the platform kill switch
+      //    (community_ai_platform_policy.execution_enabled) and approval.
+      //    Zero rows ⇒ not claimed. An RPC error fails CLOSED (not offered).
+      const { data: claimedRows, error: claimErr } = await supabase.rpc('claim_community_ai_browser_command', {
+        p_action_id: row.id,
+        p_organization_id: session.orgId,
+        p_lease_id: leaseId,
+        p_holder_id: holderId,
+        p_lease_ttl_seconds: LEASE_TTL_SECONDS,
+      });
       if (claimErr) {
-        console.warn('[extension/commands] claim update failed for', row.id, claimErr.message);
+        console.warn('[extension/commands] claim rpc failed for', row.id, claimErr.message);
         continue;
       }
-      if (!claimed || !claimed.id) continue; // another worker won the claim
+      const claimed = (Array.isArray(claimedRows) ? claimedRows[0] : claimedRows) as
+        | { id?: string; dispatch_lease_expires_at?: string | null }
+        | null
+        | undefined;
+      if (!claimed || !claimed.id) continue; // not claimable now (claimed, cancelled, kill switch, approval)
+      const leaseExpiresAt = claimed.dispatch_lease_expires_at
+        ? new Date(claimed.dispatch_lease_expires_at).toISOString()
+        : new Date(Date.now() + LEASE_TTL_SECONDS * 1000).toISOString();
 
       commands.push({
         id: row.id,

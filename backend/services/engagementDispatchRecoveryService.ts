@@ -211,8 +211,9 @@ export type ClaimedUnknownDispatch = {
  *
  * They are deliberately excluded from every automatic path:
  *   - the recovery sweep above refuses them (it requires lease_id IS NULL);
- *   - a renewal-capable client is never re-offered them;
- *   - they are NOT marked failed, because that would imply nothing was sent;
+ *   - no client is ever re-offered them (the claim requires an unclaimed row);
+ *   - they are NOT marked failed (the reaper marks them uncertain), because
+ *     failed would imply nothing was sent;
  *   - they are NOT retried, because that would risk sending twice.
  *
  * This function only lists them so an operator can decide. It performs no
@@ -225,23 +226,41 @@ export async function listClaimedUnknownDispatches(options?: {
   const limit = Math.min(500, Math.max(1, options?.limit ?? 100));
   const nowIso = new Date().toISOString();
 
-  let query = supabase
-    .from('community_ai_actions')
-    .select('id, organization_id, platform, action_type, target_id, created_at, dispatch_lease_expires_at, dispatch_acknowledged_at')
-    .eq('status', 'pending')
-    .eq('execution_mode', 'browser')
-    .not('dispatch_lease_id', 'is', null)      // claimed — the distinguishing fact
-    .lt('dispatch_lease_expires_at', nowIso)   // and no longer being worked on
-    .order('dispatch_lease_expires_at', { ascending: true })
-    .limit(limit);
+  const base = () => {
+    let q = supabase
+      .from('community_ai_actions')
+      .select('id, organization_id, status, platform, action_type, target_id, created_at, dispatch_lease_expires_at, dispatch_acknowledged_at')
+      .eq('execution_mode', 'browser')
+      .not('dispatch_lease_id', 'is', null);    // claimed — the distinguishing fact
+    if (options?.organizationId) q = q.eq('organization_id', options.organizationId);
+    return q;
+  };
 
-  if (options?.organizationId) query = query.eq('organization_id', options.organizationId);
+  // (a) claimed, lease lapsed, not yet reaped; (b) reaped to 'uncertain' by
+  // reap_community_ai_action_leases (lease id/holder are kept for
+  // reconciliation). Both are claimed-but-unknown.
+  const [lapsed, reaped] = await Promise.all([
+    base()
+      .eq('status', 'pending')
+      .lt('dispatch_lease_expires_at', nowIso)   // and no longer being worked on
+      .order('dispatch_lease_expires_at', { ascending: true })
+      .limit(limit),
+    base()
+      .eq('status', 'uncertain')
+      .order('dispatch_lease_expires_at', { ascending: true })
+      .limit(limit),
+  ]);
 
-  const { data, error } = await query;
+  const error = lapsed.error ?? reaped.error;
   if (error) {
     console.warn('[engagementDispatchRecovery] claimed-unknown listing failed:', error.message);
     return [];
   }
+
+  const data = [...(lapsed.data ?? []), ...(reaped.data ?? [])]
+    .sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
+      String(a.dispatch_lease_expires_at ?? '').localeCompare(String(b.dispatch_lease_expires_at ?? '')))
+    .slice(0, limit);
 
   return (data ?? []).map((r: Record<string, unknown>) => ({
     action_id: String(r.id),
@@ -264,8 +283,9 @@ export async function listClaimedUnknownDispatches(options?: {
  * risk sending the same DM twice, which is the one outcome this whole design
  * exists to prevent. Those rows need an operator decision, not a timer.
  *
- * Related pre-existing behaviour worth knowing about: /api/extension/commands
- * re-offers rows whose dispatch_lease_expires_at has passed, so a claimed-then-
- * lost action can already be re-claimed after the 90s lease TTL. That is
- * outside this service and is reported as a finding rather than changed here.
+ * /api/extension/commands never re-offers a claimed row (the claim requires
+ * dispatch_lease_id IS NULL) and the lease reaper moves a lapsed claim to
+ * 'uncertain', keeping its lease id/holder so a late result is recorded as
+ * reconciliation evidence. Both states are listed by
+ * listClaimedUnknownDispatches above.
  */

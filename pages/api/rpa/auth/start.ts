@@ -2,8 +2,9 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 /**
  * POST /api/rpa/auth/start
  *
- * Returns an HMAC-signed session_token the operator's browser must carry
- * back to /api/rpa/auth/save-session with the captured storageState. Also
+ * Returns an HMAC-signed, user-bound, single-use session_token the operator's
+ * browser must carry back to /api/rpa/auth/save-session (or /complete) with
+ * the captured storageState. Requires the connector-management role. Also
  * returns the platform's public login URL so the caller can open it in a
  * real (non-headless) browser tab or desktop window.
  *
@@ -14,6 +15,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { resolveUserContext, enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { enforceRole } from '../../../../backend/services/rbacService';
+import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
 import { issueRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
 import { isSigningSecretUnavailable } from '../../../../backend/auth/signingSecrets';
 
@@ -48,8 +51,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
 
-    const userId = (user as { userId?: string })?.userId ?? null;
-    const issued = issueRpaAuthToken({ organization_id: organizationId, platform, user_id: userId });
+    // Replacing the organization's RPA browser session decides which platform
+    // account every RPA action runs as. Membership alone is not enough: the
+    // caller must hold the connector-management capability (the same role set
+    // that manages community connectors). The token is bound to THIS user and
+    // redemption re-checks the role and consumes the token exactly once.
+    const roleGate = await enforceRole({
+      req,
+      res,
+      companyId: organizationId,
+      allowedRoles: [...COMMUNITY_AI_CAPABILITIES.MANAGE_CONNECTORS],
+    });
+    if (!roleGate) return;
+
+    const issued = issueRpaAuthToken({ organization_id: organizationId, platform, user_id: roleGate.userId });
 
     return res.status(200).json({
       success: true,

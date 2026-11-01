@@ -41,6 +41,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
+import type { SubjectRef } from '../executionSubject/subjectRef';
 import type { OutreachTask, PersonAnchorSource } from './types';
 
 /**
@@ -96,8 +97,14 @@ async function safeDb<T>(op: () => PromiseLike<{ data?: T; error?: unknown }>): 
  * needs already exists — `leads.unified_person_id` — so this resolves it rather
  * than inventing a second identity link.
  *
- * TENANT-SCOPED: the lead is read with `company_id` as the FIRST predicate, so a
- * leadId belonging to another tenant resolves to nothing rather than to their
+ * 024 — SUBJECT-AWARE. `resolveSubjectPersonId` chooses the table from the
+ * subject kind: `lead` reads `leads.unified_person_id`, `prospect` reads
+ * `canonical_leads.unified_person_id`. Both relationships already existed and are
+ * composite tenant-safe foreign keys, so this resolves them rather than inventing
+ * a second identity link. An unknown kind FAILS CLOSED.
+ *
+ * TENANT-SCOPED: the subject is read with `company_id` as the FIRST predicate, so
+ * an id belonging to another tenant resolves to nothing rather than to their
  * person.
  *
  * FAILS CLOSED via the `ok` flag. An unreadable `leads` row means we cannot know
@@ -109,25 +116,59 @@ async function safeDb<T>(op: () => PromiseLike<{ data?: T; error?: unknown }>): 
  * `governanceService` still re-exports it, so existing callers and the LI-3D
  * tests are unaffected.
  */
-export async function resolveLeadPersonId(
+export async function resolveSubjectPersonId(
   companyId: string,
-  leadId: string | null,
+  subject: SubjectRef | null,
 ): Promise<{ ok: boolean; personId: string | null }> {
-  if (!companyId || !leadId) return { ok: true, personId: null };
+  if (!companyId || !subject || !subject.id) return { ok: true, personId: null };
+
+  // 024 — the table is chosen by the subject's KIND, never assumed. Before 024
+  // this read `leads` unconditionally, so a canonical prospect id matched
+  // nothing and the person came back null, reported as "not a failure". That
+  // silent degradation is the defect the subject contract removes.
+  let table: string;
+  switch (subject.kind) {
+    case 'lead':
+      table = 'leads';
+      break;
+    case 'prospect':
+      table = 'canonical_leads';
+      break;
+    default:
+      // FAIL CLOSED on an unknown kind: `ok: false` so governance degrades to a
+      // refusal rather than to "nobody is governed".
+      return { ok: false, personId: null };
+  }
 
   const res = await safeDb<Row[]>(() =>
-    ownedDbTable('leads')
+    ownedDbTable(table)
       .select('id, unified_person_id')
       .eq('company_id', companyId)          // TENANT FIRST, always
-      .eq('id', leadId)
+      .eq('id', subject.id)
       .limit(1),
   );
   if (res.error) return { ok: false, personId: null };
 
   const row = Array.isArray(res.data) ? res.data[0] : null;
-  // No lead, or a lead not yet canonicalised, is not a failure: it simply has no
-  // person anchor and target matching remains in force.
+  // No subject row, or one not yet canonicalised, is not a failure: it simply
+  // has no person anchor and target matching remains in force.
   return { ok: true, personId: row ? str(row.unified_person_id) : null };
+}
+
+/**
+ * The pre-024 name, preserved for the WEBSITE LEAD path only.
+ *
+ * Every caller that holds a `leads.id` keeps working, and says so explicitly by
+ * routing through `leadSubject`. It is deliberately NOT a generic shim: it
+ * asserts the `lead` kind, so it cannot be used to smuggle a prospect id
+ * through the old assumption.
+ */
+export async function resolveLeadPersonId(
+  companyId: string,
+  leadId: string | null,
+): Promise<{ ok: boolean; personId: string | null }> {
+  if (!companyId || !leadId) return { ok: true, personId: null };
+  return resolveSubjectPersonId(companyId, { kind: 'lead', id: leadId });
 }
 
 const resolved = (personId: string, source: PersonAnchorSource): PersonAnchorResolution =>

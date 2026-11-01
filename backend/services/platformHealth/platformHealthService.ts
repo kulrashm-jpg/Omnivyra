@@ -4,6 +4,7 @@ import {
   getPlatformsWithTokensForOrg,
 } from '../platformTokenService';
 import { resolveEngagementCapability } from '../engagementCapabilityMap';
+import { checkRpaSessionRow, type RpaSessionReauthReason } from '../rpaWorker/rpaSessionStore';
 
 /**
  * Per-org platform-health resolver.
@@ -17,8 +18,15 @@ import { resolveEngagementCapability } from '../engagementCapabilityMap';
  *   - API connected     → community_ai_platform_tokens has an access_token
  *                         (+ social_accounts fallback, via
  *                          getPlatformsWithTokensForOrg).
- *   - RPA session       → rpa_sessions row exists for (org, platform) AND
- *                         expires_at is null or in the future.
+ *   - RPA session       → rpa_sessions row for (org, platform) that is a
+ *                         valid encrypted envelope, unexpired, decrypting
+ *                         with the current key and bound to this org +
+ *                         platform (checkRpaSessionRow — the worker's own
+ *                         test). A legacy plaintext, invalidated, expired,
+ *                         undecryptable or mis-bound row is NOT connected:
+ *                         rpa_session = 'reauth_required' (egress rpa
+ *                         stays 'no_session', which drives the re-login
+ *                         prompt in the strip).
  *   - Extension         → at least one `execution_success` metric event
  *                         in the last 30 days with execution_mode='browser'
  *                         for that platform. Absence → 'unverified'.
@@ -54,8 +62,15 @@ export type PlatformHealth = {
   egress: Record<ActionKey, PerActionEgress>;
   ingress: Record<IngressMechanism, IngressStatus>;
   overall: 'green' | 'orange' | 'red';
+  /** Stored RPA session state: 'connected' only for a usable encrypted
+   *  session; 'reauth_required' when a row exists but cannot be used. */
+  rpa_session: RpaSessionHealth;
+  /** Non-secret reason when rpa_session is 'reauth_required'. */
+  rpa_session_reason: RpaSessionReauthReason | null;
   observed_at: string;
 };
+
+export type RpaSessionHealth = 'connected' | 'reauth_required' | 'none';
 
 // Platforms that have an API connector for engagement actions.
 const API_CONNECTOR_PLATFORMS = new Set<string>([
@@ -101,26 +116,59 @@ function normalize(p: string): string {
 }
 
 /**
- * Fetch RPA session presence + freshness per platform for this org.
- * Returns set of normalized platforms with a session that isn't expired.
+ * Classify this org's stored RPA sessions per platform.
+ *
+ * Only the envelope's `format`, `alg` and `ciphertext` are selected (JSON
+ * projection) — a legacy plaintext row's cookies are never fetched here. A
+ * row counts as connected only when checkRpaSessionRow says so; that check
+ * decrypts the ciphertext (one AES-256-GCM open per row, a handful of rows
+ * per org) because only the GCM tag + binding check can tell a usable
+ * session from one sealed under a rotated key or copied from another tenant.
+ * The decrypted state is discarded inside the check and never logged.
+ *
+ * Tenant isolation: rows are filtered by organization_id AND each row's
+ * ciphertext must be bound to that same organization + platform.
  */
-async function loadRpaSessionPlatforms(organizationId: string): Promise<Set<string>> {
-  const out = new Set<string>();
+async function loadRpaSessionPlatforms(organizationId: string): Promise<{
+  connected: Set<string>;
+  reauth: Map<string, RpaSessionReauthReason>;
+}> {
+  const connected = new Set<string>();
+  const reauth = new Map<string, RpaSessionReauthReason>();
   try {
-    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
     const { data } = await supabase
       .from('rpa_sessions')
-      .select('platform, expires_at')
+      .select('platform, expires_at, ss_format:storage_state->>format, ss_alg:storage_state->>alg, ss_ciphertext:storage_state->>ciphertext')
       .eq('organization_id', organizationId);
-    for (const row of (data || []) as Array<{ platform?: string; expires_at?: string | null }>) {
+    type Row = {
+      platform?: string;
+      expires_at?: string | null;
+      ss_format?: string | null;
+      ss_alg?: string | null;
+      ss_ciphertext?: string | null;
+    };
+    for (const row of (data || []) as Row[]) {
       if (!row.platform) continue;
-      if (row.expires_at && row.expires_at < nowIso) continue;
-      out.add(normalize(row.platform));
+      const platform = normalize(row.platform);
+      const verdict = checkRpaSessionRow(
+        {
+          storage_state: { format: row.ss_format, alg: row.ss_alg, ciphertext: row.ss_ciphertext },
+          expires_at: row.expires_at ?? null,
+        },
+        organizationId,
+        // The ciphertext is bound to the stored (lower-cased) platform name.
+        row.platform.toLowerCase(),
+        nowMs,
+      );
+      if (verdict.status === 'connected') connected.add(platform);
+      else if (!reauth.has(platform)) reauth.set(platform, verdict.reason);
     }
+    for (const p of Array.from(connected)) reauth.delete(p);
   } catch {
     /* treat as absent */
   }
-  return out;
+  return { connected, reauth };
 }
 
 /**
@@ -337,13 +385,17 @@ export async function getPlatformHealth(organizationId: string): Promise<Platfor
     if (normalized === 'instagram') connectedPlatforms.add('threads');
   }
   for (const p of connectedApi) connectedPlatforms.add(normalize(p));
-  for (const p of rpaSessions) connectedPlatforms.add(p);
+  for (const p of rpaSessions.connected) connectedPlatforms.add(p);
+  // A stored-but-unusable session keeps the platform visible so the strip
+  // can prompt for a fresh login; it never counts as a live connection.
+  for (const p of Array.from(rpaSessions.reauth.keys())) connectedPlatforms.add(p);
   for (const p of extVerified) connectedPlatforms.add(p);
 
   const out: PlatformHealth[] = [];
   for (const platform of Array.from(connectedPlatforms).sort()) {
     const apiConnected = connectedApi.map(normalize).includes(platform);
-    const rpaOk = rpaSessions.has(platform);
+    const rpaOk = rpaSessions.connected.has(platform);
+    const rpaReauthReason = rpaSessions.reauth.get(platform) ?? null;
     const extVerifiedFlag = extVerified.has(platform);
     const extConnectedFlag = extConnected.has(platform);
     const extOk = extVerifiedFlag || extConnectedFlag;
@@ -387,6 +439,8 @@ export async function getPlatformHealth(organizationId: string): Promise<Platfor
       egress,
       ingress,
       overall: scoreOverall(egress, ingress),
+      rpa_session: rpaOk ? 'connected' : rpaReauthReason ? 'reauth_required' : 'none',
+      rpa_session_reason: rpaOk ? null : rpaReauthReason,
       observed_at: new Date().toISOString(),
     });
   }
