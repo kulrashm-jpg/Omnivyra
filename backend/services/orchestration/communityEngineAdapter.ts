@@ -63,6 +63,8 @@ import { ownedDbTable } from '../../db/writeOwner';
 import { normalizePlatform } from '../../constants/platforms';
 import {
   buildDmCommandChain,
+  claimCommunityActionForExecution,
+  dmCommandChainRefusal,
   executeAction,
   loadHistoryMetrics,
   resolveExecutionMode,
@@ -105,6 +107,8 @@ export type CommunityActionType = 'reply' | 'like' | 'share' | 'follow' | 'dm';
  *   follow  twitter only (facebook/instagram/reddit refuse; linkedin has none)
  *   dm      browser extension only (RPA refuses DMs), on the platforms whose
  *           thread URLs the engine recognises, and only with an explicit target.
+ *           The engine's DM policy currently refuses all of them (dmDispatchSafety),
+ *           so classifyCommunityAction reports every DM as unsupported.
  */
 export const SUPPORTED_COMMUNITY_ACTIONS: Readonly<Record<CommunityActionType, readonly string[]>> = {
   reply: ['linkedin', 'facebook', 'twitter', 'instagram', 'youtube', 'reddit'],
@@ -156,6 +160,17 @@ export function classifyCommunityAction(row: CommunityActionRow): SupportVerdict
     if (!addressed) {
       return { supported: false, code: 'unsupported_dm_target', reason: 'the engine would send this DM without an explicit thread or recipient (e.g. into the open LinkedIn thread)' };
     }
+    // The engine's own DM policy (dmDispatchSafety), asked before any claim: its
+    // refusal comes after the claim and would consume the approved row to `failed`.
+    const dmRefusal = dmCommandChainRefusal(toEngineAction(row));
+    if (dmRefusal) {
+      return { supported: false, code: `dm_refused:${dmRefusal}`, reason: 'the engine refuses this direct message; nothing is claimed or sent' };
+    }
+  }
+  if (mode === 'rpa') {
+    // One opaque browser session per (org, platform): nothing proves which account
+    // acts. Refused for journeys until the acting account is proven.
+    return { supported: false, code: 'unsupported_mode:rpa', reason: 'an RPA session does not prove which account would act' };
   }
   if (type === 'reply' && !textOf(row)) {
     return { supported: false, code: 'reply_text_missing', reason: 'a reply needs approved text' };
@@ -174,6 +189,7 @@ export interface CommunityActionRow {
   target_id: string | null;
   suggested_text?: string | null;
   final_text?: string | null;
+  cancel_requested_at?: string | null;
   playbook_id?: string | null;
   requires_approval?: boolean | null;
   requires_human_approval?: boolean | null;
@@ -493,15 +509,11 @@ export const defaultCommunityDeps: CommunityAdapterDeps = {
     return (res.data as CommunityActionRow | null) ?? null;
   },
 
-  async claimAction(organizationId, actionId, now) {
-    // The same transition the execute route makes before calling the engine.
-    const res = await ownedDbTable(COMMUNITY_ACTIONS_TABLE)
-      .update({ status: 'executing', updated_at: now })
-      .eq('organization_id', organizationId)
-      .eq('id', actionId)
-      .eq('status', 'approved')
-      .select('id');
-    return !res.error && Array.isArray(res.data) && res.data.length === 1;
+  async claimAction(organizationId, actionId) {
+    // The engine's own claim: tenant-scoped, and refuses a cancel-requested row.
+    // A bound action's tenant_id equals its organization_id (checked before this).
+    const { claimed } = await claimCommunityActionForExecution({ actionId, tenantId: organizationId, organizationId });
+    return claimed;
   },
 
   preflight: (row) => enginePreflight(row),
@@ -743,6 +755,8 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
           return result(status || 'unknown', 'needs_human', `the action already ended ${status || 'without a status'}; it is not re-run`, row.id);
       }
       if (!row.approved_at) return result('approval_unproven', 'needs_human', 'the action is approved without an approval time', row.id);
+      // The engine's claim refuses this row, so `action_moved` would wait on it for good.
+      if (row.cancel_requested_at) return result('cancel_requested', 'needs_human', 'a cancel was requested for this action; a person must settle the step', row.id);
       if (row.scheduled_at) return result('scheduled', 'wait', 'the community scheduler owns this action', row.id);
 
       // ── The engine's own gates, before anything is claimed ─────────────────
