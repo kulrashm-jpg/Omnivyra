@@ -95,9 +95,6 @@ export interface EmailProviderPort {
   send(request: EmailProviderRequest): Promise<EmailProviderResponse>;
 }
 
-/**
- * Default provider: the platform's existing transactional-email Edge Function.
- *
 /** The shape of what `functions.invoke` returns as `error`. Read, never constructed. */
 interface EdgeInvokeError {
   name?: string;
@@ -123,6 +120,9 @@ const isDefinitiveRefusal = (error: EdgeInvokeError): boolean => {
   return typeof status === 'number' && status >= 400 && status < 500 && status !== 408;
 };
 
+/**
+ * Default provider: the platform's existing transactional-email Edge Function.
+ *
  * Reuses the seam `emailService` already uses rather than introducing a second
  * path to SES. The function is invoked with a `lead_outreach` payload type;
  * see the module note in the implementation report — the Edge Function must
@@ -218,6 +218,7 @@ export function createEmailTransport(
     channel: 'email',
     provider: provider.name,
     external: true,
+    isAvailable: () => enabled(),
 
     async send(request: TransportRequest): Promise<TransportResult> {
       const base = { provider: provider.name, providerMessageId: null, duplicate: false } as const;

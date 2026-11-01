@@ -206,6 +206,19 @@ export async function dispatchInternalOutreachTask(
     return result(taskId, 'skipped_no_transport', `no transport serves the "${task.channel}" channel`, startedMs, { status: task.status });
   }
 
+  // A switched-off transport can do nothing, so nothing is attempted. This comes
+  // before governance because evaluating governance appends a decision row, and a
+  // sweep re-enters here every run: rows and quota (a raw attempt count) would
+  // grow for as long as the switch is off. The task keeps the state it was in.
+  if (transport.isAvailable?.() === false) {
+    recordDispatchOutcome('skipped');
+    recordStageOutcome('transport', 'skipped');
+    recordExternalOutcome(transport.external, 'disabled');
+    return result(taskId, 'skipped_transport_disabled', `the "${task.channel}" transport is disabled; nothing was attempted`, startedMs, {
+      status: task.status, provider: transport.provider, transportOutcome: 'disabled',
+    });
+  }
+
   recordDispatchOutcome('started');
 
   // ── 1. GOVERNANCE, before anything is touched ────────────────────────────

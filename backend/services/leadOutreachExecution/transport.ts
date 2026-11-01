@@ -78,6 +78,13 @@ export interface OutreachTransport {
   /** True when the transport leaves the platform. Drives extra caution. */
   readonly external: boolean;
   /**
+   * False when `send` would refuse everything right now (switched off). Optional:
+   * absent means available. `dispatch` asks before it writes anything, so a
+   * switched-off transport costs no rows and no quota. `send` still enforces its
+   * own gate; this is an early answer, not a second authority.
+   */
+  isAvailable?(): boolean;
+  /**
    * Attempt delivery. MUST NOT throw — every failure is a classified outcome,
    * because a thrown transport is a transport whose evidence never got written.
    */
@@ -110,7 +117,7 @@ export function __clearTransportsForTests(): void {
 }
 
 /**
- * Deterministic provider idempotency key.
+ * Deterministic idempotency key.
  *
  * Derived ONLY from identity — tenant, task and attempt number. No timestamp,
  * no random component, no hostname. A repeated request for the same attempt
