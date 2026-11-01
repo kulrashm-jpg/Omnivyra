@@ -25,7 +25,9 @@ jest.mock('@/config', () => ({ config: {}, getValidatedConfig: () => ({}) }));
 
 import { buildBackgroundLayerSvg, BACKGROUND_IMAGE_MIN_OPACITY, BACKGROUND_IMAGE_MAX_OPACITY } from '../../services/creator/infographicDataCards';
 
-const sharp = require('sharp') as typeof import('sharp');
+// sharp 0.35's ESM types expose the factory as `.default`; require() still returns the
+// CJS factory itself (same annotation as creatorAssetRendererContracts.ts).
+const sharp = require('sharp') as typeof import('sharp').default;
 
 const W = 240;
 const H = 300;
