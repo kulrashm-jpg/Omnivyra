@@ -34,7 +34,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *
  * ─── NO PERSONAL DATA IN RESPONSES OR AUDIT ───────────────────────────────
  * Errors are reported by code only. The reason is a fixed code plus an optional
- * ticket reference that cannot contain '@' or spaces. The completion audit
+ * ticket key (uppercase prefix, hyphen, number: ERASURE_REFERENCE_RE). The completion audit
  * event names the REQUEST id, never the person.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -44,6 +44,7 @@ import { PROSPECT_PERSON_ERASE } from '../../../../shared/contracts/security';
 import {
   ERASURE_REASON_CODES,
   ERASURE_REFERENCE_RE,
+  ERASURE_REFERENCE_SHAPE,
   erasureReason,
   isUuid,
   listErasureRequests,
@@ -98,7 +99,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const reference = body.reference;
   if (reference !== undefined && reference !== null
       && (typeof reference !== 'string' || !ERASURE_REFERENCE_RE.test(reference))) {
-    return res.status(400).json({ error: 'reference must match [A-Za-z0-9._:/-]{1,64}' });
+    return res.status(400).json({ error: `reference must be ${ERASURE_REFERENCE_SHAPE}` });
   }
 
   const outcome = await startPersonErasure({

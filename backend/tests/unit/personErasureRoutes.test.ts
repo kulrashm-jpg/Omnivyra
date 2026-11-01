@@ -140,6 +140,9 @@ describe('validation', () => {
     ['personId not a uuid', { body: { personId: 'abc', reasonCode: 'data_subject_request' } }, 400],
     ['free-text reason refused', { body: { personId: PERSON, reasonCode: 'because Jane asked' } }, 400],
     ['reference carrying an address refused', { body: { personId: PERSON, reasonCode: 'data_subject_request', reference: 'jane@example.com' } }, 400],
+    ['name-like reference refused (Jane.Doe)', { body: { personId: PERSON, reasonCode: 'data_subject_request', reference: 'Jane.Doe' } }, 400],
+    ['name-like reference refused (jane_doe)', { body: { personId: PERSON, reasonCode: 'data_subject_request', reference: 'jane_doe' } }, 400],
+    ['reference without a ticket number refused (JANE-DOE)', { body: { personId: PERSON, reasonCode: 'data_subject_request', reference: 'JANE-DOE' } }, 400],
     ['unsupported method', { method: 'DELETE' }, 405],
   ])('%s → %s', async (_l, over, code) => {
     const r = await call(collection, over);

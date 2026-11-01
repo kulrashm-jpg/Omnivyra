@@ -106,6 +106,12 @@ describe('input validation helpers', () => {
     expect(svc.ERASURE_REFERENCE_RE.test('TICKET-123')).toBe(true);
     expect(svc.ERASURE_REFERENCE_RE.test('jane@example.com')).toBe(false);
     expect(svc.ERASURE_REFERENCE_RE.test('Jane Doe')).toBe(false);
+    // review L-1: ticket-key shape only; name-like values are refused
+    for (const ok of ['DSR-1', 'PRIV-42', 'T-1', 'TICKET-1234567890', 'A1B2-7']) expect(svc.ERASURE_REFERENCE_RE.test(ok)).toBe(true);
+    for (const bad of ['Jane.Doe', 'jane_doe', 'JaneDoe', 'JANE-DOE', 'jane-1', 'DSR_1', 'DSR-1/2', 'DSR:1', '1DSR-1',
+      'ABCDEFGHIJKLMNOPQ-1', 'DSR-12345678901', '', 'DSR-']) {
+      expect(svc.ERASURE_REFERENCE_RE.test(bad)).toBe(false);
+    }
     expect(svc.erasureReason('data_subject_request', 'T-1')).toBe('data_subject_request ref=T-1');
   });
 });

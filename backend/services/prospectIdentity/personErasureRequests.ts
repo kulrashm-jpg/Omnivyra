@@ -48,8 +48,17 @@ export const ERASURE_REASON_CODES = [
 ] as const;
 export type ErasureReasonCode = typeof ERASURE_REASON_CODES[number];
 
-/** An optional operator ticket reference. No '@', no spaces: it cannot carry an address or a name. */
-export const ERASURE_REFERENCE_RE = /^[A-Za-z0-9._:/-]{1,64}$/;
+/**
+ * An optional operator ticket reference, stored in the ledger's `reason` (which
+ * OUTLIVES the erasure). Restricted to a ticket-key shape: an uppercase project
+ * prefix, a hyphen and a number (e.g. `DSR-1234`, `PRIV-42`). No lower case, no
+ * '@', '.', '_', ':', '/' or spaces, and the number part is mandatory, so free
+ * text such as `Jane.Doe`, `jane_doe` or an address is refused. The shape alone
+ * cannot prove the prefix is not a name: operators must use the ticket key and
+ * nothing else.
+ */
+export const ERASURE_REFERENCE_RE = /^[A-Z][A-Z0-9]{0,15}-[0-9]{1,10}$/;
+export const ERASURE_REFERENCE_SHAPE = 'an uppercase ticket key such as DSR-1234 (^[A-Z][A-Z0-9]{0,15}-[0-9]{1,10}$)';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v);
