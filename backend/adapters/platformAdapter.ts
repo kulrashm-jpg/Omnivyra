@@ -21,7 +21,9 @@ import { supabase } from '../db/supabaseClient';
 import { getToken, isTokenExpiringSoon, markSocialAccountNeedsReauth } from '../auth/tokenStore';
 import { refreshPlatformToken, refreshTwitterTokenIfNeeded } from '../auth/tokenRefresh';
 import { getScheduledPost, getSocialAccount } from '../db/queries';
+import { config } from '@/config';
 import { resolveCertFakePublisher } from './certFakePublisher';
+import { mockPlatformsRefusals } from './mockPlatformGuard';
 import { publishToLinkedIn } from './linkedinAdapter';
 import { publishToX } from './xAdapter';
 import { publishToInstagram } from './instagramAdapter';
@@ -116,6 +118,23 @@ export async function publishToPlatform(
           delivery: 'not_sent',
         },
       };
+    }
+
+    // Mock mode would answer with a mock_* id that reads as published. Before the
+    // account and token steps, so a refused post touches nothing.
+    if (config.USE_MOCK_PLATFORMS === true) {
+      const refusals = mockPlatformsRefusals();
+      if (refusals.length > 0) {
+        return {
+          success: false,
+          error: {
+            code: 'MOCK_PLATFORMS_REFUSED',
+            message: `USE_MOCK_PLATFORMS is set in production; nothing was published (${refusals.join('; ')})`,
+            retryable: false,
+            delivery: 'not_sent',
+          },
+        };
+      }
     }
 
     // Closure-014 (G): certification-only fake provider. Consulted BEFORE the
@@ -251,7 +270,18 @@ export async function publishToPlatform(
         result = await publishToPinterest(scheduledPost, socialAccount, token);
         break;
       default:
-        throw new Error(`Unsupported platform: ${platform}`);
+        // No adapter, so no request was made. This cannot share the escaped-throw
+        // path below: `dispatched` is already set, and a post that was never sent
+        // would be recorded as possibly live and sent to a person to reconcile.
+        return {
+          success: false,
+          error: {
+            code: 'PLATFORM_ADAPTER_MISSING',
+            message: `Unsupported platform: ${platform}`,
+            retryable: false,
+            delivery: 'not_sent',
+          },
+        };
     }
 
     return result;

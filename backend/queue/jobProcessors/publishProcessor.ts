@@ -32,7 +32,7 @@
  * because these paths run in more than one runtime.
  */
 
-import { Job } from 'bullmq';
+import { Job, UnrecoverableError } from 'bullmq';
 import { supabase } from '../../db/supabaseClient';
 import {
   getQueueJob,
@@ -81,6 +81,7 @@ import { createUserNotification } from '../../services/userNotificationService';
 // It remains a planning/diagnostic metric (Campaign Board, growth guidance,
 // campaign health); publication is authorized per post by this predicate.
 import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
+import { resolveEngagementCapability } from '../../../lib/engagementCapabilities';
 import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
 import { runJob } from '../../services/jobRunner';
 import { RETRY_STATE_EXHAUSTED, retryStateAfterFailedDelivery } from '../publishRetryState';
@@ -216,7 +217,7 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
       throw new Error(String(outcome.error));
     }
   } catch (deliveryError) {
-    await recordRetryStateForFailedDelivery(jobId as string, job);
+    await recordRetryStateForFailedDelivery(jobId as string, job, deliveryError);
     throw deliveryError;
   }
 }
@@ -239,8 +240,12 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
 async function recordRetryStateForFailedDelivery(
   jobId: string,
   job: Pick<Job<PublishJobData>, 'attemptsMade' | 'opts'>,
+  deliveryError: unknown,
 ): Promise<void> {
-  const retryState = retryStateAfterFailedDelivery(job.attemptsMade, job.opts?.attempts);
+  // BullMQ will not retry an UnrecoverableError, whatever attempts remain.
+  const retryState = deliveryError instanceof UnrecoverableError
+    ? RETRY_STATE_EXHAUSTED
+    : retryStateAfterFailedDelivery(job.attemptsMade, job.opts?.attempts);
   let outcome: Awaited<ReturnType<typeof recordQueueJobRetryState>>;
   try {
     outcome = await recordQueueJobRetryState(jobId, retryState);
@@ -605,6 +610,24 @@ async function processPublishJobInner(params: {
       heldClaimFromErrorCode = claim.fromErrorCode;
     }
 
+    // Step 4a.1: Publish capability — the check the manual path already makes
+    // (pages/api/social/publish.ts). Permanent for this post, so not retried.
+    const publishCapability = resolveEngagementCapability(scheduledPost.platform, 'post_create');
+    if (publishCapability.status !== 'api_verified') {
+      const capabilityMessage = publishCapability.reason ?? `Publishing is not supported on ${scheduledPost.platform}.`;
+      await updateQueueJobStatus(jobId as string, 'failed', {
+        error_message: capabilityMessage,
+        error_code: 'ACTION_NOT_SUPPORTED',
+      });
+      await updateScheduledPostOnFailure(scheduled_post_id, capabilityMessage, undefined, 'ACTION_NOT_SUPPORTED').catch(() => {});
+      await createQueueJobLog(jobId as string, 'warn', 'Publish blocked: platform has no verified publish capability', {
+        code: 'ACTION_NOT_SUPPORTED', platform: scheduledPost.platform,
+      });
+      const unsupportedError: Error & { skipQueueStatusUpdate?: true } = new UnrecoverableError('ACTION_NOT_SUPPORTED');
+      unsupportedError.skipQueueStatusUpdate = true;
+      throw unsupportedError;
+    }
+
     // Step 4b: Centralized publish-readiness gate (Round-4 item 1) — the
     // SAME validator the manual path uses (scheduled↔manual parity, no
     // duplicate logic). Runs AFTER the idempotency short-circuits (job
@@ -914,6 +937,11 @@ async function processPublishJobInner(params: {
         })
         .eq('id', scheduled_post_id);
 
+      // The adapter's explicit `retryable: false` is honoured here, where the
+      // outcome is already known to be 'not_created'. It is never read as
+      // evidence that a retry is safe; see the ambiguous branch above.
+      const nonRetryable = result.error?.retryable === false;
+
       // Calculate next retry time (exponential backoff)
       const attempts = queueJob.attempts || 0;
       const backoffDelay = Math.pow(2, attempts) * 60000; // 2^attempts minutes
@@ -922,7 +950,7 @@ async function processPublishJobInner(params: {
       await updateQueueJobStatus(jobId as string, 'failed', {
         error_message: platformError.user_message,
         error_code: platformError.code,
-        next_retry_at: nextRetryAt.toISOString(),
+        ...(nonRetryable ? {} : { next_retry_at: nextRetryAt.toISOString() }),
       });
 
       await createQueueJobLog(
@@ -933,7 +961,7 @@ async function processPublishJobInner(params: {
       );
 
       console.error(`❌ Post publish failed: ${platformError.user_message}`);
-      throw new Error(platformError.user_message);
+      throw nonRetryable ? new UnrecoverableError(platformError.user_message) : new Error(platformError.user_message);
     }
   } catch (error: any) {
     console.error(`❌ Error processing job ${jobId}:`, error.message);
@@ -1027,7 +1055,7 @@ async function processPublishJobInner(params: {
       }
       // BETA-007 (RULE 5): on the FINAL failed attempt, push a user notification so a
       // failed publish reaches the NotificationBell (retries don't spam). Best-effort.
-      if (isFinalAttempt) {
+      if (isFinalAttempt || error instanceof UnrecoverableError) {
         await createUserNotification({
           userId: user_id,
           type: 'post_publish_failed',
