@@ -7,6 +7,30 @@
 -- revoked: production held those before the forward migration too. Function
 -- bodies, owners, SECURITY flags and triggers are never touched.
 -- Re-widening is deliberate: it is the exact pre-migration production state.
+--
+-- ORDER (review L-3): run this ONLY in reverse version order, i.e. after every
+-- later migration that touches a listed function has itself been rolled back:
+--   20270115000000 -> 20270112000005 .. 20270112000000 -> 20270111000004 (H-3)
+--   -> THIS FILE -> 20270111000002 .. 20270111000000.
+-- Why it matters:
+--   * public.ws3_reject_mutation(): privacy/erasure 20270112000005 recreates it
+--     (CREATE OR REPLACE) and its postcondition ASSERTS this migration's pin
+--     (search_path = pg_catalog, public; SECURITY INVOKER). Below, this file
+--     RESETs that search_path and GRANTs EXECUTE back to PUBLIC, anon and
+--     authenticated (the pre-SEC-B production ACL). Run while 05 is still
+--     applied, it silently removes the pin 05 relies on: the trigger function
+--     then resolves names through the caller's session search_path, and clients
+--     regain EXECUTE on it (harmless for a trigger-only function, which refuses
+--     a direct call, but no longer the state 05 verified). Roll 05 back first;
+--     its rollback restores the pre-05 body, after which this file restores the
+--     exact pre-SEC-B state.
+--   * public.prospect_score_evaluations_immutable(): privacy/erasure
+--     20270112000002 turns it into a SECURITY DEFINER (state S2). This file
+--     re-grants authenticated EXECUTE ONLY while the function is still the
+--     INVOKER original (S1; X-1 block below), so it never re-widens a definer
+--     in either order. Re-applying the forward migration after 20270112000002
+--     aborts in its $preflight$ (it reviews S1 only): do not re-run SEC-B once
+--     erasure 02 is applied.
 
 BEGIN;
 
