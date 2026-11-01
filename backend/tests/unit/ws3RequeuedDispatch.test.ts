@@ -36,6 +36,8 @@ jest.mock('../../db/writeOwner', () => ({
       st.filters.every(([c, v]) => {
         if (c.startsWith('__gte__')) return String(r[c.slice(7)] ?? '') >= String(v);
         if (c.startsWith('__is__')) return (r[c.slice(6)] ?? null) === v;
+        // The canonical contact-governance read, which an email task reaches.
+        if (c.startsWith('__in__')) return Array.isArray(v) && (v as unknown[]).includes(r[c.slice(6)]);
         return r[c] === v;
       });
 
@@ -74,6 +76,7 @@ jest.mock('../../db/writeOwner', () => ({
       eq: (c: string, v: unknown) => { st.filters.push([c, v]); return b; },
       gte: (c: string, v: unknown) => { st.filters.push([`__gte__${c}`, v]); return b; },
       is: (c: string, v: unknown) => { st.filters.push([`__is__${c}`, v]); return b; },
+      in: (c: string, v: unknown[]) => { st.filters.push([`__in__${c}`, v]); return b; },
       order: () => b,
       limit: () => exec('many'),
       maybeSingle: () => exec('maybe'),
@@ -97,8 +100,16 @@ jest.mock('../../queue/bullmqClient', () => ({
   getSharedRedisClient: () => fakeRedis,
 }));
 
+const mockInvoke = jest.fn();
+jest.mock('../../db/supabaseClient', () => ({
+  supabase: { functions: { invoke: (...args: unknown[]) => mockInvoke(...args) } },
+}));
+
+import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@supabase/functions-js';
 import { registry } from '../../observability/registry';
 import {
+  createEmailTransport,
+  supabaseEdgeEmailProvider,
   EXECUTION_RUNTIME_VERSION,
   GOVERNANCE_VERSION,
   INTERNAL_CHANNEL,
@@ -193,6 +204,56 @@ beforeEach(() => {
   __resetQuotaRedisForTests();
   __clearTransportsForTests();
   registerDefaultTransports({ emailProvider: { name: 'stub', async send() { throw new Error('email must not be called in this suite'); } } });
+});
+
+// G-1 — the real default provider and transport over the real dispatcher, with
+// only the Supabase client stubbed: the whole path from an invoke error to the
+// decision about a second send.
+describe('WS-3 requeued dispatch (G-1) — an invoke error that may have acted is never sent again', () => {
+  const emailTask = () => approvedTask({ channel: 'email', kind: 'outreach', planTaskId: 'task-email' });
+  const opts = { now: NOW, recipient: 'person@example.test' };
+  const priorKeys = process.env.OUTREACH_UNSUBSCRIBE_TOKEN_KEYS;
+
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    process.env.OUTREACH_UNSUBSCRIBE_TOKEN_KEYS = `c1:${'c'.repeat(40)}`;
+    configureTenant({ enabled_channels: ['email'] });
+    registerTransport(createEmailTransport(supabaseEdgeEmailProvider, {
+      enabled: () => true, unsubscribeBaseUrl: () => 'https://app.example.test',
+    }));
+  });
+  afterAll(() => {
+    if (priorKeys === undefined) delete process.env.OUTREACH_UNSUBSCRIBE_TOKEN_KEYS;
+    else process.env.OUTREACH_UNSUBSCRIBE_TOKEN_KEYS = priorKeys;
+  });
+
+  it.each([
+    ['a network failure', () => new FunctionsFetchError(new Error('socket hang up'))],
+    ['a relay error', () => new FunctionsRelayError(new Response(null, { status: 502 }))],
+    ['a 500', () => new FunctionsHttpError(new Response(null, { status: 500 }))],
+  ])('%s: one provider call, then blocked_prior_attempt', async (_label, error) => {
+    mockInvoke.mockResolvedValue({ data: null, error: error() });
+    const id = await emailTask();
+
+    const first = await dispatchInternalOutreachTask('co-a', id, opts);
+    expect(first).toMatchObject({ outcome: 'failed', transportOutcome: 'provider_error' });
+    expect(await status(id)).toBe('queued');
+
+    const again = await dispatchInternalOutreachTask('co-a', id, opts);
+    expect(again.outcome).toBe('blocked_prior_attempt');
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(await listAttempts('co-a', id)).toHaveLength(1);
+  });
+
+  it('control: a 4xx proves nothing was sent, so a later dispatch may proceed', async () => {
+    mockInvoke.mockResolvedValueOnce({ data: null, error: new FunctionsHttpError(new Response(null, { status: 400 })) });
+    mockInvoke.mockResolvedValueOnce({ data: { ok: true, messageId: 'ses-1' }, error: null });
+    const id = await emailTask();
+
+    expect((await dispatchInternalOutreachTask('co-a', id, opts)).outcome).toBe('rejected');
+    expect((await dispatchInternalOutreachTask('co-a', id, opts)).outcome).toBe('sent');
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('WS-3 requeued dispatch (1) — a deferred or failed task is dispatchable again', () => {
