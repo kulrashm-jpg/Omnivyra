@@ -137,6 +137,7 @@ const SAFETY_SUITE_REGISTRY = [
   'backend/tests/unit/networkActionCandidateService.test.ts',
   'backend/tests/unit/orchestrationCommunityAdapterGates.test.ts',
   'backend/tests/unit/outreachFutureEngineCompatibility.test.ts',
+  'backend/tests/unit/orchestrationExecutionContract.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */
