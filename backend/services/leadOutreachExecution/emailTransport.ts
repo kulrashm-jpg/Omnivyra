@@ -80,7 +80,10 @@ export interface EmailProviderResponse {
   messageId: string | null;
   /** Provider-side rejection reason, when it rejected. */
   rejectionReason?: string | null;
-  /** True when the provider recognised the idempotency key as a repeat. */
+  /**
+   * True when the provider recognised the idempotency key as a repeat. The
+   * default provider's function never does: it ignores the key.
+   */
   duplicate?: boolean;
   /** Structured provider response, already free of message content. */
   raw?: Record<string, unknown>;

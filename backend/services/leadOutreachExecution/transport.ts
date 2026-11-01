@@ -37,9 +37,10 @@ export interface TransportRequest {
   attemptId: string | null;
   attemptNumber: number;
   /**
-   * Deterministic provider idempotency key. Derived from identity, never from
-   * time or randomness, so a repeated request for the same attempt carries the
-   * same key and the provider can refuse the duplicate itself.
+   * Deterministic idempotency key. Derived from identity, never from time or
+   * randomness, so a repeated request for the same attempt carries the same key.
+   * Recorded on the attempt. Not a duplicate guard at the provider: see
+   * `buildIdempotencyKey`.
    */
   idempotencyKey: string;
   /** Resolved recipient. Absent for channels that do not address a person. */
@@ -113,9 +114,14 @@ export function __clearTransportsForTests(): void {
  *
  * Derived ONLY from identity — tenant, task and attempt number. No timestamp,
  * no random component, no hostname. A repeated request for the same attempt
- * therefore produces a byte-identical key, so a provider that honours
- * idempotency keys will refuse the duplicate even if every guard above it
- * somehow failed. That is the last line of defence against a double send.
+ * therefore produces a byte-identical key, and the attempt's unique index on it
+ * stops our own second record of that attempt.
+ *
+ * It is NOT a defence at the provider. The `send-transactional-email` function
+ * receives this key and ignores it, and passes nothing like it to SES, so a
+ * repeated call sends a second email. Each new attempt also gets a new key. What
+ * prevents a double send is the guards before the call: the compare-and-set claim
+ * and `dispatch`'s refusal to repeat an attempt that may have acted.
  */
 export function buildIdempotencyKey(companyId: string, taskId: string, attemptNumber: number): string {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
