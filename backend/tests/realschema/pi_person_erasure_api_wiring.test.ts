@@ -584,13 +584,16 @@ it('fixture sanity: newLead helper still links a prospect to a person (shared ha
 
 
 describe('deploy-order gate (review M-1): erasureSchemaReady against the real schema', () => {
-  it('the full chain is ready; the probes leave no ledger row behind', async () => {
+  it('the full chain is ready; the probes leave no ledger, inventory or verification row behind', async () => {
     await inRollback(async () => {
       await seedTenants();
+      const counts = async () => (await one(
+        `SELECT (SELECT count(*) FROM public.person_erasure_requests) r,
+                (SELECT count(*) FROM public.person_erasure_inventories) i,
+                (SELECT count(*) FROM public.person_erasure_verifications) v`));
+      const before = await counts();
       expect(await svc.erasureSchemaReady(ORG_A)).toBe(true);
-      expect(Number((await one('SELECT count(*) n FROM public.person_erasure_requests')).n)).toBe(0);
-      expect(Number((await one('SELECT count(*) n FROM public.person_erasure_inventories')).n)).toBe(0);
-      expect(Number((await one('SELECT count(*) n FROM public.person_erasure_verifications')).n)).toBe(0);
+      expect(await counts()).toEqual(before);
     });
   });
 
