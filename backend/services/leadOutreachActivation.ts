@@ -310,6 +310,10 @@ export async function runOutreachActivation(
  * compare-and-set transitions that make a contested approval safe. The
  * approver's identity is required: an approval with no attributable decider is
  * not an approval.
+ *
+ * `auditFailed` means the task did move to `approved` and its record in the
+ * append-only log was not written. That is not `ok`: a caller reading only `ok`
+ * must not take it for a recorded approval, and `status` still says what happened.
  */
 export async function approveOutreachTaskForOperator(
   companyId: string,
@@ -317,16 +321,17 @@ export async function approveOutreachTaskForOperator(
   approverUserId: string,
   reason: string,
   notes: string | null = null,
-): Promise<{ ok: boolean; status?: string; reason?: string }> {
+): Promise<{ ok: boolean; status?: string; reason?: string; auditFailed?: boolean }> {
   const submitted = await submitForApproval(companyId, taskId);
   if (!submitted.ok && submitted.status !== 'awaiting_approval') {
     return { ok: false, status: submitted.status, reason: submitted.reason ? String(submitted.reason) : 'submission refused' };
   }
   const decided = await approveOutreachTask(companyId, taskId, { approverUserId, reason, notes });
   return {
-    ok: decided.ok === true,
+    ok: decided.ok === true && decided.auditFailed !== true,
     status: decided.status ? String(decided.status) : undefined,
     reason: decided.reason ? String(decided.reason) : undefined,
+    ...(decided.auditFailed === true ? { auditFailed: true } : {}),
   };
 }
 

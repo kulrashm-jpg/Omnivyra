@@ -427,3 +427,22 @@ describe('WS-3 recovery sweep (6) — dry run for non-production validation', ()
     expect(db.queries).toHaveLength(0);
   });
 });
+
+describe('G-9a / B-16 — an operator approval with no record is not reported ok', () => {
+  it('passes auditFailed through, with ok false and the status that took effect', async () => {
+    const id = (await insertOutreachTask(newTask())).data!.id as string;
+    db.failTable = 'outreach_approvals';
+    const res = await activation.approveOutreachTaskForOperator('co-a', id, 'approver-1', 'reviewed');
+    db.failTable = null;
+
+    expect(res).toMatchObject({ ok: false, status: 'approved', auditFailed: true });
+    expect(await status(id)).toBe('approved');
+  });
+
+  it('a recorded approval is ok and carries no flag', async () => {
+    const id = (await insertOutreachTask(newTask())).data!.id as string;
+    const res = await activation.approveOutreachTaskForOperator('co-a', id, 'approver-1', 'reviewed');
+    expect(res.ok).toBe(true);
+    expect(res).not.toHaveProperty('auditFailed');
+  });
+});

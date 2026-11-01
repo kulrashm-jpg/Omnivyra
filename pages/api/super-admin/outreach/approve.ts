@@ -74,6 +74,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     str(body.notes),
   );
 
+  // The decision took effect and its audit record did not. Not a success and not
+  // a conflict: the operator is told both facts, not the database's error text.
+  if (result.auditFailed) {
+    return res.status(500).json({
+      ok: false,
+      status: result.status,
+      auditFailed: true,
+      reason: 'the task moved to approved but the approval record could not be written',
+    });
+  }
+
   return res.status(result.ok ? 200 : 409).json({ ok: result.ok, status: result.status, reason: result.reason });
 }
 
