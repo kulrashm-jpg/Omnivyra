@@ -9,6 +9,10 @@
  * pi_person_erasure_api_wiring realschema). The gates are doubled SEPARATELY,
  * so each can be failed on its own and the order between them is observable.
  */
+// A module, not a script: its top-level names (order, call, route, ...) must not
+// collide with other suites' globals in the backend-tests type surface.
+export {};
+
 jest.mock('@/config', () => ({ config: {}, getValidatedConfig: () => ({}) }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 

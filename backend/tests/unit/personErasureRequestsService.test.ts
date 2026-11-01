@@ -7,6 +7,10 @@
  * procedure + real ledger + real verification run end to end in
  * backend/tests/realschema/pi_person_erasure_api_wiring.test.ts.
  */
+// A module, not a script: its top-level names (ORG, PERSON, REQ, row, ...) must
+// not collide with other suites' globals in the backend-tests type surface.
+export {};
+
 const tables: Record<string, Array<{ data: unknown; error: unknown }>> = {};
 const tableCalls: Array<{ table: string; filters: Array<[string, unknown]> }> = [];
 const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
