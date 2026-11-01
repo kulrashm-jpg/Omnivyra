@@ -30,10 +30,22 @@ import {
   loadTenantGovernanceRecords,
   normalizeGovernanceTarget,
 } from './prospectIdentity/contactGovernanceRepository';
+import { isLeadOutreachGloballyDisabled, loadTenantGovernanceConfig } from './leadOutreachExecution/governanceService';
 
 const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
+
+const RECIPIENT_ID_PAGE = 1000;
+
+/** How the orchestration adapter names a broadcast it creates for a journey step (`wf:<task>`). */
+export const JOURNEY_BROADCAST_PREFIX = 'wf:';
+
+/**
+ * A journey recipient a send-time check refused. Terminal, and never picked up by
+ * `retryFailed`. The cause is in `error_message`. Text status: the column has no CHECK.
+ */
+export const BLOCKED_SEND_CONTROL = 'blocked_send_control';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -213,19 +225,30 @@ export async function enqueueBroadcast(
   const { getContentQueue } = await import('../queue/contentGenerationQueues');
   const queue = getContentQueue('whatsapp-broadcast');
 
-  let offset = 0;
-  let batchIndex = 0;
-
-  while (offset < totalCount) {
-    const { data: recipients } = await ownedDbTable('whatsapp_broadcast_recipients')
+  // Every id is read BEFORE the first job is queued, and paged by key. Batch 0 has no
+  // delay, so a worker moves rows out of `pending` while this runs: an offset over that
+  // shrinking set skips recipients, and they are never queued.
+  const pendingIds: string[] = [];
+  for (;;) {
+    let page = ownedDbTable('whatsapp_broadcast_recipients')
       .select('id')
       .eq('broadcast_id', broadcastId)
-      .eq('status', 'pending')
-      .range(offset, offset + batch_size - 1);
+      .eq('status', 'pending');
+    if (pendingIds.length > 0) page = page.gt('id', pendingIds[pendingIds.length - 1]);
 
+    const { data: recipients, error: readError } = await page
+      .order('id', { ascending: true })
+      .limit(RECIPIENT_ID_PAGE);
+    if (readError) throw new Error(`Broadcast recipients unreadable: ${readError.message}`);
+    // Until an empty page: the server's row cap may be lower than the page asked for.
     if (!recipients?.length) break;
+    pendingIds.push(...recipients.map((r) => r.id as string));
+  }
 
-    const recipientIds = recipients.map((r) => r.id);
+  let batchIndex = 0;
+
+  for (let i = 0; i < pendingIds.length; i += batch_size) {
+    const recipientIds = pendingIds.slice(i, i + batch_size);
 
     await enqueueOrThrow(
       queue,
@@ -241,13 +264,72 @@ export async function enqueueBroadcast(
       },
     );
 
-    offset     += batch_size;
     batchIndex += 1;
   }
 
   await ownedDbTable('whatsapp_broadcasts')
     .update({ status: 'running', started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('id', broadcastId);
+}
+
+// ── Send-time checks for journey broadcasts (B-17) ───────────────────────────
+
+/**
+ * The WS-3 tenant controls for this channel: null when it may be used, otherwise why
+ * not. A failed read gives `configured: false`, so it refuses.
+ */
+export async function whatsappChannelRefusal(companyId: string): Promise<string | null> {
+  if (isLeadOutreachGloballyDisabled()) return 'global_kill_switch';
+  const config = await loadTenantGovernanceConfig(companyId);
+  if (!config.configured || !config.enabled) return 'tenant_not_enabled';
+  if (config.killSwitch) return 'tenant_kill_switch';
+  if (!config.enabledChannels.includes('whatsapp')) return 'channel_not_enabled';
+  return null;
+}
+
+/**
+ * Has this number written to the tenant since the broadcast was created? The webhook
+ * processor keys threads as wa:<account>:<digits>. Read against every WhatsApp account
+ * of the tenant, as journeyResponses does. Not a verdict on the journey, which the next
+ * sweep settles: only a reason not to send now. Fails closed.
+ */
+async function inboundRefusal(broadcast: any, phone: string): Promise<string | null> {
+  const unreadable = 'inbound_unreadable';
+  const createdMs = Date.parse(String(broadcast.created_at));
+  if (!Number.isFinite(createdMs)) return unreadable;
+  // Meta's timestamps have no milliseconds, so a reply in the same second must still count.
+  const since = new Date(Math.floor(createdMs / 1000) * 1000).toISOString();
+  const digits = phone.replace(/\D/g, '');
+
+  try {
+    const accounts = await ownedDbTable('social_accounts')
+      .select('id')
+      .eq('company_id', broadcast.company_id)
+      .eq('platform', 'whatsapp');
+    if (accounts.error) return unreadable;
+    const threadKeys = (accounts.data ?? []).map((a) => `wa:${String(a.id)}:${digits}`);
+    if (threadKeys.length === 0) return null;
+
+    const threads = await ownedDbTable('engagement_threads')
+      .select('id')
+      .eq('organization_id', broadcast.company_id)
+      .eq('platform', 'whatsapp')
+      .in('platform_thread_id', threadKeys);
+    if (threads.error) return unreadable;
+    const threadIds = (threads.data ?? []).map((t) => String(t.id));
+    if (threadIds.length === 0) return null;
+
+    const messages = await ownedDbTable('engagement_messages')
+      .select('id')
+      .in('thread_id', threadIds)
+      .eq('direction', 'inbound')
+      .gte('created_at', since)
+      .limit(1);
+    if (messages.error) return unreadable;
+    return (messages.data ?? []).length > 0 ? 'inbound_since_broadcast' : null;
+  } catch {
+    return unreadable;
+  }
 }
 
 // ── Process a single batch (called by queue processor) ───────────────────────
@@ -262,6 +344,25 @@ export async function processBatch(
     .single();
 
   if (!broadcast) throw new Error(`Broadcast not found: ${broadcastId}`);
+
+  // B-17. The adapter checks the tenant controls before a journey broadcast exists, but
+  // the job can wait in the queue, so a kill switch thrown or a reply received meanwhile
+  // must still stop it. Journey broadcasts only: these are lead-outreach controls, and a
+  // tenant with no config row would otherwise have every operator broadcast refused.
+  const isJourney = typeof broadcast.name === 'string' && broadcast.name.startsWith(JOURNEY_BROADCAST_PREFIX);
+
+  if (isJourney) {
+    const refusal = await whatsappChannelRefusal(broadcast.company_id);
+    if (refusal !== null) {
+      const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
+        .update({ status: BLOCKED_SEND_CONTROL, error_code: null, error_message: `send_control: ${refusal}` })
+        .in('id', recipientIds)
+        .eq('status', 'pending');
+      // Nothing was sent; the job retries and the row stays `pending` until it is recorded.
+      if (blockError) throw new Error(`send control block could not be recorded: ${blockError.message}`);
+      return;
+    }
+  }
 
   const accessToken = await getValidAccessToken(broadcast.social_account_id);
 
@@ -320,6 +421,20 @@ export async function processBatch(
         .eq('status', 'pending');
       failedCount++;
       continue;
+    }
+
+    // After governance, which outranks it, so a recorded opt-out still reads as one.
+    if (isJourney) {
+      const refusal = await inboundRefusal(broadcast, phone);
+      if (refusal !== null) {
+        const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
+          .update({ status: BLOCKED_SEND_CONTROL, error_code: null, error_message: `send_control: ${refusal}` })
+          .eq('id', recipient.id)
+          .eq('status', 'pending');
+        if (blockError) throw new Error(`send control block could not be recorded: ${blockError.message}`);
+        failedCount++;
+        continue;
+      }
     }
 
     // ── CLAIM before the external send (compare-and-set) ──────────────────
@@ -443,9 +558,28 @@ export async function retryFailed(broadcastId: string): Promise<void> {
 
 // ── Update delivery status (called by deliveryTracker) ───────────────────────
 
+/**
+ * The statuses each webhook event may move a recipient FROM, so status only goes
+ * forward. Meta does not order its webhooks and a job can replay them, so without this
+ * a late `sent` rewrites `delivered`, and a late `failed` makes a delivered message
+ * eligible for `retryFailed`: a duplicate. `failed` can still be overtaken: evidence
+ * that it arrived outranks it. A row only has a message id once `processBatch` wrote
+ * `sent`, so a `sent` event never has anything to advance, and `pending` or `sending`
+ * here mean a retry is in flight and the id belongs to the previous attempt.
+ */
+const DELIVERY_ADVANCES_FROM: Record<RecipientDeliveryUpdate['status'], readonly string[]> = {
+  sent:      [],
+  failed:    ['sent'],
+  delivered: ['sent', 'failed'],
+  read:      ['sent', 'failed', 'delivered'],
+};
+
 export async function updateRecipientDelivery(update: RecipientDeliveryUpdate): Promise<void> {
+  const advancesFrom = DELIVERY_ADVANCES_FROM[update.status];
+  if (advancesFrom.length === 0) return;
+
   // No status_at: that column is on engagement_messages. Writing it here failed every
-  // delivery update, silently, because the result below reads as 'no such recipient'.
+  // delivery update, silently, because the result below read as 'no such recipient'.
   const updateData: Record<string, unknown> = {
     status:    update.status,
   };
@@ -455,12 +589,19 @@ export async function updateRecipientDelivery(update: RecipientDeliveryUpdate): 
   if (update.error_code)             updateData.error_code   = update.error_code;
   if (update.error_message)          updateData.error_message = update.error_message;
 
-  const { data: recipient } = await ownedDbTable('whatsapp_broadcast_recipients')
+  // Not `.single()`: wa_message_id has no unique key on the chain, and zero rows is the
+  // normal answer for a message that is not ours or an event that has nothing to advance.
+  const { data: moved, error } = await ownedDbTable('whatsapp_broadcast_recipients')
     .update(updateData)
     .eq('wa_message_id', update.wa_message_id)
-    .select('broadcast_id')
-    .single();
+    .in('status', [...advancesFrom])
+    .select('broadcast_id');
 
+  // Thrown so the webhook job is retried. Only rows that moved are counted below, so
+  // replaying an event that did apply cannot count it twice.
+  if (error) throw new Error(`[wa-delivery] delivery update failed: ${error.message}`);
+
+  const recipient = moved?.[0];
   if (!recipient) return;
 
   // Increment broadcast aggregate counter

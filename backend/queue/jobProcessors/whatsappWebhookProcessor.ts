@@ -27,6 +27,13 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
 
   const entries: any[] = payload?.entry ?? [];
 
+  // The kinds of event that failed. A failure never stops the rest of the payload, and
+  // the job fails after the loop so its attempts apply. Replaying the whole payload is
+  // safe because each event is idempotent: delivery status only moves forward and counts
+  // only what moved, opt-outs collapse on the governance store's canonical key, inbound
+  // messages upsert on (thread_id, platform_message_id), template events set final state.
+  const failed: string[] = [];
+
   for (const entry of entries) {
     for (const change of entry?.changes ?? []) {
       const value = change?.value;
@@ -46,6 +53,7 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
           }
         } catch (err) {
           console.error('[wa-webhook-processor] status update failed', err);
+          failed.push('status');
         }
       }
 
@@ -55,6 +63,7 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
           await handleInboundMessage(value.metadata?.phone_number_id, message);
         } catch (err) {
           console.error('[wa-webhook-processor] inbound message failed', err);
+          failed.push('inbound');
         }
       }
 
@@ -69,9 +78,15 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
           });
         } catch (err) {
           console.error('[wa-webhook-processor] template status failed', err);
+          failed.push('template');
         }
       }
     }
+  }
+
+  // Kinds and a count only: this reaches logs and dead letters, so never a number or text.
+  if (failed.length > 0) {
+    throw new Error(`[wa-webhook-processor] ${failed.length} event(s) failed: ${[...new Set(failed)].join(', ')}`);
   }
 }
 
@@ -90,33 +105,45 @@ function mapMetaStatus(status: string): 'sent' | 'delivered' | 'read' | 'failed'
 async function handleInboundMessage(phoneNumberId: string, message: any): Promise<void> {
   if (!phoneNumberId || !message?.from || !message?.id) return;
 
-  const { data: account } = await supabase
+  // Not `.single()`: phone_number_id is not unique, and two rows read as "no account",
+  // which dropped the message and any STOP in it. A read failure is not "no account".
+  const { data: rows, error: accountError } = await supabase
     .from('social_accounts')
-    .select('id, company_id')
-    .eq('phone_number_id', phoneNumberId)
-    .single();
+    .select('id, company_id, is_active')
+    .eq('platform', 'whatsapp')
+    .eq('phone_number_id', phoneNumberId);
 
-  if (!account) return;
+  if (accountError) throw new Error(`account lookup failed: ${accountError.code ?? 'unknown'}`);
+  if (!rows?.length) return;
+
+  // The live account answers for the number; a number on a deactivated account still
+  // resolves, because a STOP must not depend on the account being connected. Ordered so
+  // that a replay lands on the same thread.
+  const active = rows.filter((r: any) => r.is_active === true);
+  const candidates = [...(active.length > 0 ? active : rows)].sort((a: any, b: any) => (String(a.id) < String(b.id) ? -1 : 1));
+  const firstPerTenant = candidates.filter((r: any, i: number) => candidates.findIndex((c: any) => c.company_id === r.company_id) === i);
+
+  const optOut = detectWhatsAppOptOut(message?.text?.body ?? message?.button?.text ?? message?.interactive?.button_reply?.title);
+
+  if (firstPerTenant.length > 1) {
+    // Whose conversation this is cannot be known, so no tenant is given the text. A STOP
+    // binds every tenant holding the number: that only ever narrows contact. The job then
+    // fails, so the event survives to the dead letter for a person to resolve.
+    console.error('[wa-webhook-processor] phone_number_id held by more than one tenant', {
+      accounts: firstPerTenant.map((r: any) => r.id), waMessageId: message.id,
+    });
+    if (optOut) {
+      for (const holder of firstPerTenant) await recordOptOut(holder, message, optOut.keyword);
+    }
+    throw new Error('phone_number_id held by more than one tenant');
+  }
+
+  const account = firstPerTenant[0];
 
   // Opt-out first, so a failed thread write below can never swallow it. The
-  // conversation record is still kept: the message is stored as usual.
-  const optOut = detectWhatsAppOptOut(message?.text?.body ?? message?.button?.text ?? message?.interactive?.button_reply?.title);
-  if (optOut) {
-    const recorded = await recordWhatsAppOptOut({
-      organizationId:  account.company_id,
-      waId:            String(message.from),
-      waMessageId:     String(message.id),
-      keyword:         optOut.keyword,
-      socialAccountId: account.id ?? null,
-    });
-    if (recorded.status !== 'recorded' && recorded.status !== 'already_present') {
-      // Never the number or the text — a code, the tenant and the message id.
-      console.error('[wa-webhook-processor] opt-out NOT recorded', {
-        status: recorded.status, reason: recorded.reason, attempts: recorded.attempts,
-        companyId: account.company_id, waMessageId: message.id,
-      });
-    }
-  }
+  // conversation record is still kept: the message is stored as usual, and only then
+  // does an opt-out that could still succeed fail the job for another attempt.
+  const retryOptOut = optOut ? (await recordOptOut(account, message, optOut.keyword)) === 'retry' : false;
 
   const platformThreadId = `wa:${account.id}:${message.from}`;
   const windowExpiresAt  = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -137,7 +164,7 @@ async function handleInboundMessage(phoneNumberId: string, message: any): Promis
 
   if (threadError || !thread?.id) {
     console.error('[wa-webhook-processor] thread upsert failed', threadError);
-    return;
+    throw new Error('thread upsert failed');
   }
 
   const textBody = message?.text?.body
@@ -145,7 +172,7 @@ async function handleInboundMessage(phoneNumberId: string, message: any): Promis
     ?? message?.interactive?.button_reply?.title
     ?? '[non-text message]';
 
-  await supabase
+  const { error: messageError } = await supabase
     .from('engagement_messages')
     .upsert({
       thread_id:           thread.id,
@@ -168,4 +195,29 @@ async function handleInboundMessage(phoneNumberId: string, message: any): Promis
       //      makes that structurally impossible: a different tenant's copy
       //      lives in a different thread, so it never matches.
     }, { onConflict: 'thread_id,platform_message_id' });
+
+  if (messageError) throw new Error(`message upsert failed: ${messageError.code ?? 'unknown'}`);
+  if (retryOptOut) throw new Error('opt-out not recorded');
+}
+
+/**
+ * Records one opt-out. 'retry' only for a failure another attempt could fix: a terminal
+ * writer refusal or an invalid sender would fail the same way every time, so those stay
+ * logged, not retried.
+ */
+async function recordOptOut(account: any, message: any, keyword: string): Promise<'done' | 'retry'> {
+  const recorded = await recordWhatsAppOptOut({
+    organizationId:  account.company_id,
+    waId:            String(message.from),
+    waMessageId:     String(message.id),
+    keyword,
+    socialAccountId: account.id ?? null,
+  });
+  if (recorded.status === 'recorded' || recorded.status === 'already_present') return 'done';
+  // Never the number or the text — a code, the tenant and the message id.
+  console.error('[wa-webhook-processor] opt-out NOT recorded', {
+    status: recorded.status, reason: recorded.reason, attempts: recorded.attempts,
+    companyId: account.company_id, waMessageId: message.id,
+  });
+  return recorded.status === 'retryable_failure' ? 'retry' : 'done';
 }
