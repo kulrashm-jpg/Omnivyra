@@ -463,6 +463,37 @@ describe('frequency policy counts contact, not bookkeeping', () => {
   });
 });
 
+describe('frequency policy does not hold back a step that contacts nobody', () => {
+  it('an internal step right after an email is not deferred, and a second email is', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      await enableOutreach(ORG_A, ['email', 'internal']);
+      const actor = await newUser();
+      const { prospectId } = await newProspect(ORG_A, { email: 'g@example.test' });
+      await openLedger(ORG_A, prospectId);
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, {
+        policy: { min_hours_between_actions: 48 },
+        steps: [EMAIL_STEP('intro'), human('note', 'internal'), EMAIL_STEP('again')],
+      });
+      await sweep();
+      expect((await ws3.approveOutreachTask(ORG_A, (await handoffTasks(instanceId))[0].id, { approverUserId: actor })).ok).toBe(true);
+      await sweep();
+      expect(sent).toHaveLength(1);
+
+      let r = await sweep();                             // the internal step is due right after contact
+      expect(r.counters.tasks_deferred_frequency).toBe(0);
+      expect((await handoffTasks(instanceId)).map((t) => t.status)).toEqual(['sent', 'awaiting_approval']);
+      expect((await ws3.approveOutreachTask(ORG_A, (await handoffTasks(instanceId))[1].id, { approverUserId: actor })).ok).toBe(true);
+      await sweep();
+
+      r = await sweep();                                 // the next email is real contact, within 48h
+      expect(r.counters.tasks_deferred_frequency).toBe(1);
+      expect(sent).toHaveLength(1);
+      expect((await handoffTasks(instanceId))).toHaveLength(2);
+    });
+  });
+});
+
 describe('execution_journey_decisions as PostgreSQL holds it', () => {
   it('is append-only, unique per decision, closed to client roles, and tenant-scoped on read', async () => {
     await inRollback(async () => {
