@@ -77,7 +77,7 @@ const cronReq = () => ({ method: 'POST', headers: { authorization: 'Bearer cron-
 
 const due = (id: string): Row => ({
   id, user_id: 'u-1', social_account_id: 'acct-1', platform: 'linkedin',
-  campaign_id: null, status: 'scheduled', social_accounts: { company_id: 'org-1' },
+  campaign_id: null, status: 'scheduled', content: 'body', social_accounts: { company_id: 'org-1' },
 });
 
 const ORIGINAL_SECRET = process.env.CRON_SECRET;
