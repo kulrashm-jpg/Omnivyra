@@ -243,6 +243,37 @@ describe('WhatsApp engine, real service and webhook processor; Meta HTTP stubbed
     });
   });
 
+  it('a kill switch thrown after queuing stops the send, and the journey does not complete', async () => {
+    await inRollback(async () => {
+      const { instanceId } = await scene([wa('intro')]);
+      await sweep(waAdapters());
+      await db.query('UPDATE public.outreach_governance_config SET kill_switch = true WHERE company_id = $1', [ORG_A]);
+      await runQueuedJobs();
+      expect(metaCalls).toHaveLength(0);
+      expect((await recipientStatus(instanceId))?.status).toBe('blocked_send_control');
+
+      await db.query('UPDATE public.outreach_governance_config SET kill_switch = false WHERE company_id = $1', [ORG_A]);
+      await sweep(waAdapters());
+      expect(await instanceState(instanceId)).toBe('active');
+      expect(metaCalls).toHaveLength(0);
+    });
+  });
+
+  it('a reply received after queuing stops the send, and the next sweep ends the journey', async () => {
+    await inRollback(async () => {
+      const { instanceId } = await scene([wa('intro')]);
+      await sweep(waAdapters());
+      await processWhatsAppWebhookJob({ data: { payload: inbound('yes, tell me more') } });
+      await runQueuedJobs();
+      expect(metaCalls).toHaveLength(0);
+      expect((await recipientStatus(instanceId))?.status).toBe('blocked_send_control');
+
+      const r = await sweep(waAdapters());
+      expect(r.counters.journeys_exited).toBe(1);
+      expect(await instanceState(instanceId)).toBe('cancelled');
+    });
+  });
+
   it('a send whose result is unknown is never retried, and goes to a person', async () => {
     await inRollback(async () => {
       const { instanceId } = await scene([wa('intro')]);

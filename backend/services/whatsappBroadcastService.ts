@@ -30,12 +30,22 @@ import {
   loadTenantGovernanceRecords,
   normalizeGovernanceTarget,
 } from './prospectIdentity/contactGovernanceRepository';
+import { isLeadOutreachGloballyDisabled, loadTenantGovernanceConfig } from './leadOutreachExecution/governanceService';
 
 const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
 
 const RECIPIENT_ID_PAGE = 1000;
+
+/** How the orchestration adapter names a broadcast it creates for a journey step (`wf:<task>`). */
+export const JOURNEY_BROADCAST_PREFIX = 'wf:';
+
+/**
+ * A journey recipient a send-time check refused. Terminal, and never picked up by
+ * `retryFailed`. The cause is in `error_message`. Text status: the column has no CHECK.
+ */
+export const BLOCKED_SEND_CONTROL = 'blocked_send_control';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -262,6 +272,66 @@ export async function enqueueBroadcast(
     .eq('id', broadcastId);
 }
 
+// ── Send-time checks for journey broadcasts (B-17) ───────────────────────────
+
+/**
+ * The WS-3 tenant controls for this channel: null when it may be used, otherwise why
+ * not. A failed read gives `configured: false`, so it refuses.
+ */
+export async function whatsappChannelRefusal(companyId: string): Promise<string | null> {
+  if (isLeadOutreachGloballyDisabled()) return 'global_kill_switch';
+  const config = await loadTenantGovernanceConfig(companyId);
+  if (!config.configured || !config.enabled) return 'tenant_not_enabled';
+  if (config.killSwitch) return 'tenant_kill_switch';
+  if (!config.enabledChannels.includes('whatsapp')) return 'channel_not_enabled';
+  return null;
+}
+
+/**
+ * Has this number written to the tenant since the broadcast was created? The webhook
+ * processor keys threads as wa:<account>:<digits>. Read against every WhatsApp account
+ * of the tenant, as journeyResponses does. Not a verdict on the journey, which the next
+ * sweep settles: only a reason not to send now. Fails closed.
+ */
+async function inboundRefusal(broadcast: any, phone: string): Promise<string | null> {
+  const unreadable = 'inbound_unreadable';
+  const createdMs = Date.parse(String(broadcast.created_at));
+  if (!Number.isFinite(createdMs)) return unreadable;
+  // Meta's timestamps have no milliseconds, so a reply in the same second must still count.
+  const since = new Date(Math.floor(createdMs / 1000) * 1000).toISOString();
+  const digits = phone.replace(/\D/g, '');
+
+  try {
+    const accounts = await ownedDbTable('social_accounts')
+      .select('id')
+      .eq('company_id', broadcast.company_id)
+      .eq('platform', 'whatsapp');
+    if (accounts.error) return unreadable;
+    const threadKeys = (accounts.data ?? []).map((a) => `wa:${String(a.id)}:${digits}`);
+    if (threadKeys.length === 0) return null;
+
+    const threads = await ownedDbTable('engagement_threads')
+      .select('id')
+      .eq('organization_id', broadcast.company_id)
+      .eq('platform', 'whatsapp')
+      .in('platform_thread_id', threadKeys);
+    if (threads.error) return unreadable;
+    const threadIds = (threads.data ?? []).map((t) => String(t.id));
+    if (threadIds.length === 0) return null;
+
+    const messages = await ownedDbTable('engagement_messages')
+      .select('id')
+      .in('thread_id', threadIds)
+      .eq('direction', 'inbound')
+      .gte('created_at', since)
+      .limit(1);
+    if (messages.error) return unreadable;
+    return (messages.data ?? []).length > 0 ? 'inbound_since_broadcast' : null;
+  } catch {
+    return unreadable;
+  }
+}
+
 // ── Process a single batch (called by queue processor) ───────────────────────
 
 export async function processBatch(
@@ -274,6 +344,25 @@ export async function processBatch(
     .single();
 
   if (!broadcast) throw new Error(`Broadcast not found: ${broadcastId}`);
+
+  // B-17. The adapter checks the tenant controls before a journey broadcast exists, but
+  // the job can wait in the queue, so a kill switch thrown or a reply received meanwhile
+  // must still stop it. Journey broadcasts only: these are lead-outreach controls, and a
+  // tenant with no config row would otherwise have every operator broadcast refused.
+  const isJourney = typeof broadcast.name === 'string' && broadcast.name.startsWith(JOURNEY_BROADCAST_PREFIX);
+
+  if (isJourney) {
+    const refusal = await whatsappChannelRefusal(broadcast.company_id);
+    if (refusal !== null) {
+      const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
+        .update({ status: BLOCKED_SEND_CONTROL, error_code: null, error_message: `send_control: ${refusal}` })
+        .in('id', recipientIds)
+        .eq('status', 'pending');
+      // Nothing was sent; the job retries and the row stays `pending` until it is recorded.
+      if (blockError) throw new Error(`send control block could not be recorded: ${blockError.message}`);
+      return;
+    }
+  }
 
   const accessToken = await getValidAccessToken(broadcast.social_account_id);
 
@@ -332,6 +421,20 @@ export async function processBatch(
         .eq('status', 'pending');
       failedCount++;
       continue;
+    }
+
+    // After governance, which outranks it, so a recorded opt-out still reads as one.
+    if (isJourney) {
+      const refusal = await inboundRefusal(broadcast, phone);
+      if (refusal !== null) {
+        const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
+          .update({ status: BLOCKED_SEND_CONTROL, error_code: null, error_message: `send_control: ${refusal}` })
+          .eq('id', recipient.id)
+          .eq('status', 'pending');
+        if (blockError) throw new Error(`send control block could not be recorded: ${blockError.message}`);
+        failedCount++;
+        continue;
+      }
     }
 
     // ── CLAIM before the external send (compare-and-set) ──────────────────
